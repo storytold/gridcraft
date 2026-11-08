@@ -43,6 +43,16 @@ pub struct Ctx<'a> {
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
     /// The code of the workbook's Python cells, from its Python part.
     pub python: crate::python_part::ScriptsIn,
+    /// Table file id → (table name, column file id → column header name), for resolving slicers.
+    pub file_tables: HashMap<u32, (String, HashMap<u32, String>)>,
+    /// Slicer cache name → (table file id, column file id, sourceName).
+    pub slicer_caches: HashMap<String, (Option<u32>, Option<u32>, String)>,
+    /// Current sheet's slicer definitions: slicer name → (cache name, caption, column count).
+    pub sheet_slicer_defs: HashMap<String, (String, String, u32)>,
+    /// Current sheet's drawing slicer frames: (slicer name, anchor).
+    pub sheet_slicer_frames: Vec<(String, gridcraft_model::Anchor)>,
+    /// Slicers to attach after all sheets and tables are read: (sheet index, cache name, caption, anchor, columns).
+    pub pending_slicers: Vec<(usize, String, String, gridcraft_model::Anchor, u32)>,
 }
 
 impl Ctx<'_> {
@@ -261,6 +271,11 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         shared_formula_bytes: 0,
         known_function,
         python: Default::default(),
+        file_tables: Default::default(),
+        slicer_caches: Default::default(),
+        sheet_slicer_defs: Default::default(),
+        sheet_slicer_frames: Default::default(),
+        pending_slicers: Default::default(),
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -291,6 +306,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
             }
         }
     }
+    read_slicer_caches(&mut cx, &wb_rels)?;
 
     read_workbook_properties(&mut cx, &mut wb, &wb_xml);
     let view_el = selected_workbook_view(&wb_xml);
@@ -352,8 +368,10 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
             _ => Visibility::Visible,
         };
         file_to_model.push(Some(wb.sheets.len()));
+        collect_sheet_slicers(&mut cx, wb.sheets.len());
         wb.sheets.push(Arc::new(sheet));
     }
+    attach_pending_slicers(&mut cx, &mut wb);
     if wb.sheets.is_empty() {
         cx.warn("the workbook has no worksheets; added an empty sheet");
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
@@ -537,4 +555,61 @@ pub fn parse_print_titles(text: &str) -> (TitleSpan, TitleSpan) {
         }
     }
     (rows, cols)
+}
+
+fn read_slicer_caches(cx: &mut Ctx<'_>, wb_rels: &[crate::package::Rel]) -> Result<(), IoError> {
+    for r in wb_rels.iter().filter(|r| r.kind.eq_ignore_ascii_case("slicerCache")).cloned().collect::<Vec<_>>() {
+        if let Some(x) = cx.optional_xml(&r.target)?
+            && let Some(name) = x.attr("name").filter(|s| !s.is_empty())
+        {
+            let source_name = xml::decode_xstring(x.attr("sourceName").unwrap_or(""));
+            let tsc = x.child("extLst").and_then(|el| el.kids("ext").find_map(|e| e.child("tableSlicerCache")));
+            let table_id = tsc.and_then(|t| t.attr_u32("tableId"));
+            let col_id = tsc.and_then(|t| t.attr_u32("column"));
+            cx.slicer_caches.insert(name.to_string(), (table_id, col_id, source_name));
+        }
+    }
+    Ok(())
+}
+
+fn collect_sheet_slicers(cx: &mut Ctx<'_>, sheet_idx: usize) {
+    for (sname, anchor) in std::mem::take(&mut cx.sheet_slicer_frames) {
+        let def = cx
+            .sheet_slicer_defs
+            .get(&sname)
+            .cloned()
+            .or_else(|| (cx.sheet_slicer_defs.len() == 1).then(|| cx.sheet_slicer_defs.values().next().cloned()).flatten());
+        if let Some((cache_name, caption, columns)) = def {
+            cx.pending_slicers.push((sheet_idx, cache_name, caption, anchor, columns));
+        }
+    }
+}
+
+fn attach_pending_slicers(cx: &mut Ctx<'_>, wb: &mut Workbook) {
+    for (sheet_idx, cache_name, caption, anchor, columns) in std::mem::take(&mut cx.pending_slicers) {
+        let Some((table_id, col_id, source_name)) = cx.slicer_caches.get(&cache_name).cloned() else { continue };
+        let resolved = table_id
+            .and_then(|tid| cx.file_tables.get(&tid))
+            .map(|(tname, cols)| {
+                let col = col_id.and_then(|cid| cols.get(&cid).cloned()).filter(|s| !s.is_empty()).unwrap_or_else(|| source_name.clone());
+                (tname.clone(), col)
+            })
+            .or_else(|| {
+                (!source_name.is_empty()).then(|| {
+                    wb.sheets
+                        .iter()
+                        .flat_map(|s| &s.tables)
+                        .find_map(|t| t.columns.iter().find(|c| c.name.eq_ignore_ascii_case(&source_name)).map(|c| (t.name.clone(), c.name.clone())))
+                })?
+            });
+        if let Some((table, column)) = resolved
+            && !table.is_empty()
+            && !column.is_empty()
+            && let Some(sh) = wb.sheets.get_mut(sheet_idx)
+        {
+            let id = cx.next_object_id();
+            let caption = if caption.is_empty() { column.clone() } else { caption };
+            Arc::make_mut(sh).slicers.push(gridcraft_model::Slicer { id, table, column, caption, anchor, selected: None, columns });
+        }
+    }
 }

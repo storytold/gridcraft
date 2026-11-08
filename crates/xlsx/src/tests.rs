@@ -76,3 +76,39 @@ pub fn minimal(sheet_body: &str, extra_parts: &[(&str, &str)], wb_extra_rels: &s
     }
     make_zip(&parts)
 }
+
+#[test]
+fn cross_sheet_table_slicer_imports_without_skipped_object_warning() {
+    let wb_xml = r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Dashboard" sheetId="1" r:id="rId1"/><sheet name="Tracker" sheetId="2" r:id="rId2"/></sheets></workbook>"#;
+    let wb_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.microsoft.com/office/2007/relationships/slicerCache" Target="slicerCaches/slicerCache1.xml"/></Relationships>"#;
+    let sheet1 = r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData/><drawing r:id="rId1"/></worksheet>"#;
+    let sheet1_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/><Relationship Id="rId2" Type="http://schemas.microsoft.com/office/2007/relationships/slicer" Target="../slicers/slicer1.xml"/></Relationships>"#;
+    let drawing1 = r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:sle="http://schemas.microsoft.com/office/drawing/2010/slicer"><xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>10</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="10" name="Date for Slicer_1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/drawing/2010/slicer"><sle:slicer name="Date for Slicer_1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#;
+    let slicer1 = r#"<?xml version="1.0"?><slicers xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><slicer name="Date for Slicer_1" cache="SlicerCache_Table_3_Col_36" caption="Date for Slicer" columnCount="2"/></slicers>"#;
+    let slicer_cache1 = r#"<?xml version="1.0"?><slicerCacheDefinition xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main" name="SlicerCache_Table_3_Col_36" sourceName="Date for Slicer"><extLst><ext uri="{2F2917AC-EB37-4324-AD4E-5DD8C200BD13}"><x15:tableSlicerCache tableId="3" column="36"/></ext></extLst></slicerCacheDefinition>"#;
+    let sheet2 = r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Date for Slicer</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>2026-Q1</t></is></c></row></sheetData><tableParts count="1"><tablePart r:id="rId1"/></tableParts></worksheet>"#;
+    let sheet2_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table3.xml"/></Relationships>"#;
+    let table3 = r#"<?xml version="1.0"?><table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="3" name="Table_3" displayName="Table_3" ref="A1:A2"><tableColumns count="1"><tableColumn id="36" name="Date for Slicer"/></tableColumns></table>"#;
+    let zip = make_zip(&[
+        ("[Content_Types].xml", CT.as_bytes()),
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("xl/workbook.xml", wb_xml.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", wb_rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet1.as_bytes()),
+        ("xl/worksheets/_rels/sheet1.xml.rels", sheet1_rels.as_bytes()),
+        ("xl/drawings/drawing1.xml", drawing1.as_bytes()),
+        ("xl/slicers/slicer1.xml", slicer1.as_bytes()),
+        ("xl/slicerCaches/slicerCache1.xml", slicer_cache1.as_bytes()),
+        ("xl/worksheets/sheet2.xml", sheet2.as_bytes()),
+        ("xl/worksheets/_rels/sheet2.xml.rels", sheet2_rels.as_bytes()),
+        ("xl/tables/table3.xml", table3.as_bytes()),
+    ]);
+    let (wb, report) = crate::read_xlsx(&zip).unwrap();
+    assert!(!report.warnings.iter().any(|w| w.contains("skipped")), "expected no skipped warnings, got: {:?}", report.warnings);
+    assert_eq!(wb.sheets[0].slicers.len(), 1);
+    let sl = &wb.sheets[0].slicers[0];
+    assert_eq!(sl.table, "Table_3");
+    assert_eq!(sl.column, "Date for Slicer");
+    assert_eq!(sl.caption, "Date for Slicer");
+    assert_eq!(sl.columns, 2);
+}

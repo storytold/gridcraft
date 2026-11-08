@@ -85,3 +85,19 @@ fn one_long_line_widens_the_editor_but_keeps_the_row_height() {
     assert!(ed.width() > cell.width() + 1.0, "long text widens the editor: {ed:?} vs {cell:?}");
     assert!((ed.height() - cell.height()).abs() < 0.01, "one line keeps the row height: {ed:?} vs {cell:?}");
 }
+
+#[test]
+fn ctrl_b_while_editing_in_cell_toggles_bold_and_keeps_editor_open() {
+    let mut h = harness();
+    click_cell(&mut h, "B2");
+    type_text(&mut h, "hello");
+    assert!(h.state().editor.is_some());
+    let m = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    h.input_mut().events.push(Event::Key { key: egui::Key::B, physical_key: None, pressed: true, repeat: false, modifiers: m });
+    h.run_steps(3);
+    assert!(h.state().editor.is_some(), "Ctrl+B must keep the in-cell editor open");
+    let wb = &h.state().session.active().unwrap().wb;
+    let sh = wb.active().unwrap();
+    let st = wb.styles.get(sh.style_id(CellRef::parse("B2").unwrap()));
+    assert!(st.font.bold, "Ctrl+B while editing must bold the edited cell");
+}

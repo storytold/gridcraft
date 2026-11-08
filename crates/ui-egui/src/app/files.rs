@@ -41,6 +41,11 @@ impl SheetApp {
             self.notice = None;
             return;
         }
+        // The info bar below the ribbon surfaces open-time warnings, so clear any duplicate
+        // modal alert box queued by `file.open`.
+        if self.message.as_ref().is_some_and(|(_, m)| msgs.iter().any(|w| m.contains(w))) {
+            self.message = None;
+        }
         let vba: Vec<&str> = msgs.iter().copied().filter(|m| m.to_lowercase().contains("macro") || m.contains("VBA")).collect();
         if !vba.is_empty() {
             // The reader says "dropped" when the VBA project was missing or unreadable; never promise to keep it then.

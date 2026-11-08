@@ -54,20 +54,29 @@ fn emit_craft_fonts() {
     let mut src = String::new();
     let _ = writeln!(src, "pub static CRAFT_FONTS_REQUIRED: bool = {required};");
     src.push_str("pub static CRAFT_FONTS: &[CraftFont] = &[\n");
+    let mut latin_src = String::from("pub static CRAFT_LATIN_FONTS: &[(&str, &str, &[u8])] = &[\n");
     match std::env::var_os("CRAFT_FONTS_DIR").map(std::path::PathBuf::from) {
-        Some(dir) => match craft_fonts(&dir, wasm, required) {
-            Ok(entries) => src.push_str(&entries),
-            Err(e) if required => {
-                println!("cargo::error=CRAFT_FONTS_DIR={}: {e}", dir.display());
+        Some(dir) => {
+            match craft_fonts(&dir, wasm, required) {
+                Ok(entries) => src.push_str(&entries),
+                Err(e) if required => {
+                    println!("cargo::error=CRAFT_FONTS_DIR={}: {e}", dir.display());
+                }
+                Err(e) => println!("cargo::warning=building without craft-fonts: CRAFT_FONTS_DIR={}: {e}", dir.display()),
             }
-            Err(e) => println!("cargo::warning=building without craft-fonts: CRAFT_FONTS_DIR={}: {e}", dir.display()),
-        },
+            match latin_role_fonts(&dir) {
+                Ok(entries) => latin_src.push_str(&entries),
+                Err(e) => println!("cargo::warning=skipping optional Latin role fonts: {e}"),
+            }
+        }
         None if required => {
             println!("cargo::error=CRAFT_FONTS_REQUIRED=1 requires CRAFT_FONTS_DIR (an absolute craft-fonts checkout)");
         }
         None => {}
     }
     src.push_str("];\n");
+    latin_src.push_str("];\n");
+    src.push_str(&latin_src);
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("craft_fonts.rs");
     if let Err(e) = std::fs::write(&out, src) {
         println!("cargo::error=writing {}: {e}", out.display());
@@ -131,6 +140,34 @@ fn chinese_font_rows(dir: &std::path::Path, required: bool) -> Result<Vec<craft_
         },
         Err(e) => optional(e.to_string()),
     }
+}
+
+/// Optional OFL Latin role faces (`Carlito` for sans/cell/UI and `Caladea` for serif/math) from
+/// `fonts/latin-manifest.txt`, used when no host font is installed (including `wasm32`).
+fn latin_role_fonts(dir: &std::path::Path) -> Result<String, String> {
+    let manifest = dir.join("fonts/latin-manifest.txt");
+    println!("cargo::rerun-if-changed={}", manifest.display());
+    let text = std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    let rows = craft_fonts_policy::parse_manifest(&text)?;
+    let mut out = String::new();
+    for (family, style) in [
+        ("Carlito", "Regular"),
+        ("Carlito", "Bold"),
+        ("Carlito", "Italic"),
+        ("Carlito", "Bold Italic"),
+        ("Caladea", "Regular"),
+        ("Caladea", "Bold"),
+        ("Caladea", "Italic"),
+        ("Caladea", "Bold Italic"),
+    ] {
+        let Some(row) = rows.iter().find(|r| r.family == family && r.style == style && !craft_fonts_policy::barred(&r.family)) else {
+            continue;
+        };
+        let path = dir.join(&row.file).canonicalize().map_err(|e| format!("{}: {e}", row.file))?;
+        println!("cargo::rerun-if-changed={}", path.display());
+        let _ = writeln!(out, "    ({family:?}, {style:?}, include_bytes!({path:?})),");
+    }
+    Ok(out)
 }
 
 fn read<T>(path: &std::path::Path, fallback: &str, parse: impl Fn(&str) -> Result<T, String>) -> Option<T> {

@@ -402,7 +402,11 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         };
         let y = wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z);
         let text_clip = wrapped_text_clip(p, *rect, &galley, y, st.align.v);
-        p.with_clip_rect(text_clip).galley(pos2(x, y), galley, color);
+        let cp = p.with_clip_rect(text_clip);
+        cp.galley(pos2(x, y), galley.clone(), color);
+        if st.font.bold && !theme::has_bold_face(p.ctx(), &st.font.name, st.font.italic) {
+            cp.galley(pos2(x + (0.55 * z).max(0.5), y), galley, color);
+        }
         return;
     }
     // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.
@@ -515,9 +519,23 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         shape.angle = angle;
         cp.add(shape);
     } else {
-        cp.galley(pos2(x, y), galley.clone(), color);
+        paint_upright_galley(&cp, pos2(x, y), &galley, color, &st.font, z);
     }
     paint_text_decorations(&cp, TextDecoration { x, y, width: w, height: gh, color, underline: st.font.underline, strike: st.font.strike });
+}
+
+fn paint_upright_galley(
+    cp: &Painter,
+    pos: Pos2,
+    galley: &std::sync::Arc<egui::Galley>,
+    color: Color32,
+    font: &gridcraft_engine::model::Font,
+    z: f32,
+) {
+    cp.galley(pos, galley.clone(), color);
+    if font.bold && !theme::has_bold_face(cp.ctx(), &font.name, font.italic) {
+        cp.galley(pos2(pos.x + (0.55 * z).max(0.5), pos.y), galley.clone(), color);
+    }
 }
 
 struct TextDecoration {
