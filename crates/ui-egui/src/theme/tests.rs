@@ -312,7 +312,7 @@ fn with_installed_latin_font() -> std::io::Result<FontDefinitions> {
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("Ubuntu-Light.ttf");
     std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT)?;
-    let face = crate::fonts::Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into()], path, index: 0, weight: 300.0, italic: false };
+    let face = crate::fonts::Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into()], zh: String::new(), path, index: 0, weight: 300.0, italic: false };
     let fonts = font_definitions_impl(Language::En, vec![("Ubuntu".into(), vec![face])], true);
     std::fs::remove_dir_all(&dir)?;
     Ok(fonts)
@@ -347,7 +347,9 @@ fn installed_latin_fonts_keep_system_script_fallbacks() {
     for (family, chain) in installed_latin_chains(&fonts) {
         let chain = chain.expect("bound fixture family");
         for key in &loaded {
-            assert!(chain.iter().any(|k| k == key), "{family:?} lost the {key} fallback");
+            // Non-first faces carry a baseline-alignment variant key (`face@first`); match on the
+            // base key.
+            assert!(chain.iter().any(|k| k.split_once('@').map_or(k.as_str(), |(b, _)| b) == *key), "{family:?} lost the {key} fallback");
         }
         if fonts.font_data.contains_key("sys-arabic") {
             assert!(chain_covers(&fonts, chain, 'ع'), "{family:?} has no glyph for ع");
