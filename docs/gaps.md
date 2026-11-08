@@ -171,8 +171,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 20. Multiple windows; pen pressure (H)
 - Desktop windows done: a native window per workbook window, New Window on the same workbook,
-  Switch Windows, Arrange All. Left: Arrange All across monitors, one window on the web, no
-  pressure or tilt in ink. **Estimate:** 5–8 h.
+  Switch Windows, Arrange All. Left: Arrange All across monitors, one window on the web; ink
+  accepts a per-point pressure array that the fountain and brush pens paint with, but the pointer
+  capture does not send device pressure or tilt yet. **Estimate:** 5–8 h.
   [hardware-parity.md](hardware-parity.md)
 
 ### 21. Automation and add-ins (F)

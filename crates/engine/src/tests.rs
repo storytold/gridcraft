@@ -3536,7 +3536,7 @@ fn ink_any_colour_effect_and_pressure_are_stored() {
     // A solid stroke has scale 1 and no effect.
     assert_eq!(sh.ink.as_ref().map(|i| i.scale), Some(0.5));
     let first = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
-    assert_eq!(first.ink.as_ref().map(|i| i.effect), Some(None));
+    assert_eq!(first.ink.as_ref().and_then(|i| i.effect), None);
     assert_eq!(first.ink.as_ref().map(|i| i.scale), Some(1.0));
 }
 
