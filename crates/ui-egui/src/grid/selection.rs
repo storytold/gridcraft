@@ -59,12 +59,25 @@ fn range_in_pane(r: RangeRef, rows: (u32, u32), cols: (u32, u32)) -> bool {
 
 /// The portion of `r` that belongs to one visible pane. Its endpoints must stay on the same side
 /// of each freeze boundary before `Geo::range_rect` maps them to screen coordinates; otherwise a
-/// spill spanning frozen and scrolling columns can form a rectangle with reversed edges.
-fn range_in_visible_pane(r: RangeRef, rows: (u32, u32), cols: (u32, u32)) -> Option<RangeRef> {
+/// spill spanning frozen and scrolling columns can form a rectangle with reversed edges. The
+/// visible rows and columns merely decide whether the pane intersects `r`: the painter's clip,
+/// rather than this range, hides off-screen edges and corners.
+fn range_in_visible_pane(geo: &Geo, r: RangeRef, rows: (u32, u32), cols: (u32, u32)) -> Option<RangeRef> {
     if !range_in_pane(r, rows, cols) {
         return None;
     }
-    Some(RangeRef::new(CellRef::new(r.start.row.max(rows.0), r.start.col.max(cols.0)), CellRef::new(r.end.row.min(rows.1), r.end.col.min(cols.1))))
+    let frozen_rows = rows.0 < geo.fr;
+    let frozen_cols = cols.0 < geo.fc;
+    Some(RangeRef::new(
+        CellRef::new(
+            if frozen_rows { r.start.row } else { r.start.row.max(geo.fr) },
+            if frozen_cols { r.start.col } else { r.start.col.max(geo.fc) },
+        ),
+        CellRef::new(
+            if frozen_rows { r.end.row.min(geo.fr.saturating_sub(1)) } else { r.end.row },
+            if frozen_cols { r.end.col.min(geo.fc.saturating_sub(1)) } else { r.end.col },
+        ),
+    ))
 }
 
 /// The four sides of a `width` wide outline centred on `rect`, cut to `clip` (a little beyond it).
@@ -121,7 +134,7 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
                 continue;
             }
             let r = crate::editor::resolved_formula_range(sh, r, spill);
-            let Some(r) = range_in_visible_pane(r, rows, cols) else { continue };
+            let Some(r) = range_in_visible_pane(geo, r, rows, cols) else { continue };
             let rr = geo.range_rect(sh, r);
             let col = Tokens::get(p.ctx()).ref_color(idx, true);
             p.rect_filled(rr, 0.0, col.gamma_multiply(0.12));
@@ -136,7 +149,7 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
     if app.editor.is_none()
         && sel.is_single_cell()
         && let Some(spill) = sh.spill_ranges.get(&sel.active).copied()
-        && let Some(spill) = range_in_visible_pane(spill, rows, cols)
+        && let Some(spill) = range_in_visible_pane(geo, spill, rows, cols)
     {
         let rr = geo.range_rect(sh, spill);
         p.rect_stroke(rr, 0.0, Stroke::new(1.5, t.sel_border), StrokeKind::Inside);
@@ -322,10 +335,22 @@ mod pane_tests {
 
     #[test]
     fn range_crossing_a_freeze_line_is_split_for_each_pane() {
+        let mut sh = Sheet::new("S");
+        let geo = frozen_geo(&mut sh);
         let spill = rng(5, 0, 7, 6);
-        assert_eq!(range_in_visible_pane(spill, (2, 20), (0, 1)), Some(rng(5, 0, 7, 1)));
-        assert_eq!(range_in_visible_pane(spill, (2, 20), (2, 10)), Some(rng(5, 2, 7, 6)));
-        assert_eq!(range_in_visible_pane(spill, (0, 1), (0, 1)), None);
+        assert_eq!(range_in_visible_pane(&geo, spill, (2, 20), (0, 1)), Some(rng(5, 0, 7, 1)));
+        assert_eq!(range_in_visible_pane(&geo, spill, (2, 20), (2, 10)), Some(rng(5, 2, 7, 6)));
+        assert_eq!(range_in_visible_pane(&geo, spill, (0, 1), (0, 1)), None);
+    }
+
+    #[test]
+    fn range_edges_stay_real_when_the_scrolling_pane_shows_only_part_of_it() {
+        let mut sh = Sheet::new("S");
+        let geo = frozen_geo(&mut sh);
+        let spill = rng(5, 2, 40, 6);
+        // Rows 11:20 are visible, but the spill's real top and bottom stay outside this pane's
+        // clip. Keeping them prevents a false border or corner from appearing at row 11 or 20.
+        assert_eq!(range_in_visible_pane(&geo, spill, (10, 19), (2, 10)), Some(spill));
     }
 
     #[test]
