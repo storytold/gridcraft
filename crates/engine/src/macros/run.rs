@@ -1064,6 +1064,7 @@ struct Saved {
     hide_ruler: bool,
     windows: (Vec<crate::WindowState>, Option<u64>, u64, u64),
     draw: (String, String, f32),
+    lasso: Option<crate::cmd::draw::LassoSelection>,
     comments_pane: bool,
     show_all_notes: bool,
 }
@@ -1092,6 +1093,7 @@ impl Saved {
             hide_ruler: s.hide_ruler,
             windows: (s.windows.clone(), s.active_window, s.next_window, s.activation),
             draw: (s.draw_tool.clone(), s.draw_color.clone(), s.draw_width),
+            lasso: s.lasso.clone(),
             comments_pane: s.comments_pane,
             show_all_notes: s.show_all_notes,
         };
@@ -1126,6 +1128,7 @@ impl Saved {
         s.hide_ruler = self.hide_ruler;
         (s.windows, s.active_window, s.next_window, s.activation) = self.windows;
         (s.draw_tool, s.draw_color, s.draw_width) = self.draw;
+        s.lasso = self.lasso;
         s.comments_pane = self.comments_pane;
         s.show_all_notes = self.show_all_notes;
     }

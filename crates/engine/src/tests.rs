@@ -3469,6 +3469,148 @@ fn ink_strokes_and_ink_to_shape() {
 }
 
 #[test]
+fn the_lasso_selects_ink_inside_the_loop_and_moves_recolours_and_deletes_it() {
+    let mut s = s();
+    s.execute("draw.stroke", json!({"points": [[120.0, 120.0], [150.0, 125.0], [180.0, 120.0]], "color": "#112233", "width": 2})).unwrap();
+    s.execute("draw.stroke", json!({"points": [[400.0, 400.0], [450.0, 420.0], [500.0, 400.0]], "color": "#445566"})).unwrap();
+    let (inside_id, outside_id) = {
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        (sh.shapes[0].id, sh.shapes[1].id)
+    };
+    let before = s.doc().unwrap().wb.active().unwrap().shapes.clone();
+    // Picking up the tool changes no ink.
+    let r = s.execute("draw.lasso", json!({})).unwrap();
+    assert_eq!(r["tool"], "lasso");
+    assert_eq!(s.draw_tool, "lasso");
+    // A loop around the first stroke picks only it.
+    let r = s.execute("draw.lassoSelect", json!({"points": [[100.0, 100.0], [210.0, 100.0], [210.0, 210.0], [100.0, 210.0]]})).unwrap();
+    assert_eq!(r["count"], 1);
+    assert_eq!(r["selected"], json!([inside_id]));
+    assert_ne!(r["selected"], json!([outside_id]));
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes, before, "selecting changes no ink");
+    let q = s.execute("draw.lassoSelection", json!({})).unwrap();
+    assert_eq!(q["selected"], json!([inside_id]));
+    assert_eq!(q["count"], 1);
+    // Move: one undo step; the anchor moves and the points (relative to it) do not.
+    let steps = s.doc().unwrap().undo.len();
+    s.execute("draw.moveSelection", json!({"dx": 25.0, "dy": -10.0})).unwrap();
+    assert_eq!(s.doc().unwrap().undo.len(), steps + 1);
+    let moved = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    assert!((moved.anchor.dx - (before[0].anchor.dx + 25.0)).abs() < 0.001, "dx {} != {}", moved.anchor.dx, before[0].anchor.dx + 25.0);
+    assert!((moved.anchor.dy - (before[0].anchor.dy - 10.0)).abs() < 0.001);
+    assert_eq!(moved.text, before[0].text, "the stroke's geometry relative to its anchor is unchanged");
+    assert_eq!(moved.anchor.width, before[0].anchor.width);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0], before[0]);
+    // The selection survives the move and its undo (it is a view state).
+    assert_eq!(s.execute("draw.lassoSelection", json!({})).unwrap()["selected"], json!([inside_id]));
+    // Recolour: one undo step.
+    let steps = s.doc().unwrap().undo.len();
+    s.execute("draw.recolorSelection", json!({"color": "#ABCDEF"})).unwrap();
+    assert_eq!(s.doc().unwrap().undo.len(), steps + 1);
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].line, gridcraft_model::Color::from_hex("#ABCDEF").unwrap());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].line, before[0].line);
+    // Delete: one undo step, and the selection is dropped.
+    let steps = s.doc().unwrap().undo.len();
+    let r = s.execute("draw.deleteSelection", json!({})).unwrap();
+    assert_eq!(r["deleted"], 1);
+    assert_eq!(s.doc().unwrap().undo.len(), steps + 1);
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert_eq!(sh.shapes.len(), 1);
+    assert_eq!(sh.shapes[0].id, outside_id);
+    assert_eq!(s.execute("draw.lassoSelection", json!({})).unwrap()["count"], 0);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes, before, "undo puts the deleted stroke back");
+}
+
+#[test]
+fn the_lasso_needs_most_of_a_stroke_inside_its_loop() {
+    let mut s = s();
+    // Half in, half out: not selected.
+    let crossing: Vec<[f64; 2]> = (45..=305).step_by(10).map(|x| [f64::from(x), 150.0]).collect();
+    s.execute("draw.stroke", json!({"points": crossing})).unwrap();
+    // Mostly inside: selected.
+    let inside: Vec<[f64; 2]> = (115..=275).step_by(10).map(|x| [f64::from(x), 170.0]).collect();
+    s.execute("draw.stroke", json!({"points": inside})).unwrap();
+    let r = s.execute("draw.lassoSelect", json!({"points": [[100.0, 100.0], [240.0, 100.0], [240.0, 220.0], [100.0, 220.0]]})).unwrap();
+    assert_eq!(r["count"], 1, "only the stroke mostly inside the loop is selected: {r}");
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(r["selected"], json!([sh.shapes[1].id]));
+    // A stroke that encloses the loop is not inside it.
+    s.execute(
+        "draw.stroke",
+        json!({"points": (80..=260).step_by(20).flat_map(|y| [[60.0, f64::from(y)], [280.0, f64::from(y)]]).collect::<Vec<_>>()}),
+    )
+    .unwrap();
+    let r = s.execute("draw.lassoSelect", json!({"points": [[100.0, 100.0], [240.0, 100.0], [240.0, 220.0], [100.0, 220.0]]})).unwrap();
+    assert_eq!(r["count"], 1);
+}
+
+#[test]
+fn the_lasso_ignores_objects_that_are_not_ink() {
+    let mut s = s();
+    s.execute("insert.shape", json!({"kind": "rectangle", "at": "A1", "width": 200.0, "height": 150.0})).unwrap();
+    s.execute("draw.stroke", json!({"points": [[120.0, 120.0], [180.0, 120.0], [180.0, 160.0], [120.0, 160.0], [120.0, 120.0]]})).unwrap();
+    let ink_id = s.doc().unwrap().wb.active().unwrap().shapes[1].id;
+    let loop_pts = json!([[0.0, 0.0], [400.0, 0.0], [400.0, 400.0], [0.0, 400.0]]);
+    let r = s.execute("draw.lassoSelect", json!({"points": loop_pts})).unwrap();
+    assert_eq!(r["selected"], json!([ink_id]), "only ink is picked, never a rectangle");
+    // Ink converted to a shape is no longer ink and is not picked.
+    s.execute("draw.inkToShape", json!({"id": ink_id})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[1].kind, gridcraft_model::ShapeKind::Rectangle);
+    let r = s.execute("draw.lassoSelect", json!({"points": loop_pts})).unwrap();
+    assert_eq!(r["count"], 0);
+    assert_eq!(s.execute("draw.lassoSelection", json!({})).unwrap()["count"], 0);
+}
+
+#[test]
+fn lasso_loops_are_bounded_and_need_three_points() {
+    let mut s = s();
+    s.execute("draw.stroke", json!({"points": [[100.0, 100.0], [120.0, 110.0], [100.0, 130.0]]})).unwrap();
+    // Fewer than three points: no loop to test against.
+    assert!(s.execute("draw.lassoSelect", json!({"points": [[0.0, 0.0], [10.0, 0.0]]})).is_err());
+    // Missing points entirely is an error, not a panicking unwrap.
+    assert!(s.execute("draw.lassoSelect", json!({})).is_err());
+    // A hostile non-finite coordinate is dropped, leaving too few points.
+    let nan = json!({"points": [[0.0, 0.0], [f64::NAN, 0.0], [10.0, 10.0]]});
+    assert!(s.execute("draw.lassoSelect", nan).is_err());
+    // A huge loop is kept within bounds and still selects the stroke.
+    let huge = json!([[-1.0e12, -1.0e12], [1.0e12, -1.0e12], [1.0e12, 1.0e12], [-1.0e12, 1.0e12]]);
+    let r = s.execute("draw.lassoSelect", json!({"points": huge})).unwrap();
+    assert_eq!(r["count"], 1);
+    // A huge number of points is thinned out rather than tested one by one.
+    let many: Vec<[f64; 2]> = (0..10_000)
+        .map(|i| {
+            let a = f64::from(i) / 10_000.0 * std::f64::consts::TAU;
+            [150.0 + 60.0 * a.cos(), 150.0 + 60.0 * a.sin()]
+        })
+        .collect();
+    let r = s.execute("draw.lassoSelect", json!({"points": many})).unwrap();
+    assert_eq!(r["count"], 1);
+    // A loop around nothing clears the selection.
+    let r = s.execute("draw.lassoSelect", json!({"points": [[900.0, 900.0], [950.0, 900.0], [950.0, 950.0], [900.0, 950.0]]})).unwrap();
+    assert_eq!(r["count"], 0);
+    assert_eq!(s.execute("draw.lassoSelection", json!({})).unwrap()["count"], 0);
+}
+
+#[test]
+fn selection_commands_without_a_selection_are_errors() {
+    let mut s = s();
+    s.execute("draw.stroke", json!({"points": [[10.0, 10.0], [50.0, 20.0], [80.0, 10.0]]})).unwrap();
+    for (id, params) in [
+        ("draw.moveSelection", json!({"dx": 1.0, "dy": 1.0})),
+        ("draw.recolorSelection", json!({"color": "#00FF00"})),
+        ("draw.deleteSelection", json!({})),
+    ] {
+        let e = s.execute(id, params).unwrap_err();
+        assert!(format!("{e}").contains("nothing is selected with the lasso"), "{id}: {e}");
+    }
+    // Clearing an absent selection is fine.
+    assert_eq!(s.execute("draw.lassoSelect", json!({"clear": true})).unwrap()["count"], 0);
+}
+
+#[test]
 fn xlsb_import_keeps_cached_values_and_reports_limits() {
     let bytes = xlsb_fixture();
     assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Xlsb);

@@ -122,6 +122,32 @@ fn ordinary_shape_text_is_not_mistaken_for_ink_points() {
 }
 
 #[test]
+fn lasso_moved_ink_keeps_its_geometry_after_saving() {
+    let mut session = workbook();
+    session.execute("draw.stroke", json!({"points": [[130.5, 45.25], [172.5, 86.25], [151.5, 112.25]], "color": "#A12BCD", "width": 3})).unwrap();
+    let original = shapes(&session)[0].clone();
+    let picked = session.execute("draw.lassoSelect", json!({"points": [[100, 20], [260, 20], [260, 140], [100, 140]]})).unwrap();
+    assert_eq!(picked["count"], 1);
+    assert_eq!(picked["selected"], json!([original.id]));
+    session.execute("draw.moveSelection", json!({"dx": 40, "dy": 25})).unwrap();
+    let moved = shapes(&session)[0].clone();
+    assert_eq!(moved.text, original.text, "moving changes the anchor, not the stroke's own points");
+    assert!((moved.anchor.dx - (original.anchor.dx + 40.0)).abs() < 0.001);
+    assert!((moved.anchor.dy - (original.anchor.dy + 25.0)).abs() < 0.001);
+    // The stroke paints where it was moved to.
+    let sheet = session.doc().unwrap().wb.active().unwrap().clone();
+    let absolute = |s: &Shape| (sheet.col_left(s.anchor.cell.col) as f32 + s.anchor.dx, sheet.row_top(s.anchor.cell.row) as f32 + s.anchor.dy);
+    let (ox, oy) = absolute(&original);
+    let (nx, ny) = absolute(&moved);
+    assert!((nx - (ox + 40.0)).abs() < 0.01, "moved x {nx} != {}", ox + 40.0);
+    assert!((ny - (oy + 25.0)).abs() < 0.01, "moved y {ny} != {}", oy + 25.0);
+    for _ in 0..2 {
+        session = reopen(&mut session);
+        assert_ink(&shapes(&session)[0], &moved);
+    }
+}
+
+#[test]
 fn horizontal_vertical_and_signed_highlighter_strokes_survive_reopening() {
     for points in [vec![[25.1, 50.2], [140.3, 50.2]], vec![[40.2, 10.1], [40.2, 100.3]], vec![[-12.3, -4.2], [20.1, 10.2], [80.3, -1.4]]] {
         let mut session = workbook();

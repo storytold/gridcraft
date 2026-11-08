@@ -276,6 +276,10 @@ pub struct GridState {
     pub pane: Option<String>,
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
+    /// The lasso loop being drawn (sheet points); committed with `draw.lassoSelect` on release.
+    pub lasso: Vec<[f32; 2]>,
+    /// Dragging the lasso selection: the pointer's last position in sheet points.
+    pub ink_move: Option<[f32; 2]>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
     pub pages: Option<PagesCache>,
     /// The PivotTable Fields pane's `pivot.fields` answer, cached per (doc uid, revision, pivot):

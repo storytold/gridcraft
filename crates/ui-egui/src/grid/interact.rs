@@ -218,30 +218,100 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
     let ctx = input.context.clone();
     if !app.session.draw_tool.is_empty() && in_cells {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
+        // A sheet point under the pointer: through the cell under it, so frozen panes and
+        // scrolled pages map right.
+        let sheet_point = |p: Pos2| {
+            let c = geo.cell_at(sh, p);
+            [sh.col_left(c.col) as f32 + (p.x - geo.x(sh, c.col)) / geo.z, sh.row_top(c.row) as f32 + (p.y - geo.y(sh, c.row)) / geo.z]
+        };
+        let screen_point = |q: &[f32; 2]| {
+            let (col, row) = (sh.col_at(f64::from(q[0]).max(0.0)), sh.row_at(f64::from(q[1]).max(0.0)));
+            geo.mirror_pos(pos2(geo.x(sh, col) + (q[0] - sh.col_left(col) as f32) * geo.z, geo.y(sh, row) + (q[1] - sh.row_top(row) as f32) * geo.z))
+        };
+        if app.session.draw_tool == "lasso" {
+            if resp.drag_started() {
+                // A press on already selected ink starts moving the selection; anywhere else
+                // starts a new loop.
+                let at = input.press_origin.map(|p| geo.mirror_pos(p)).or(pos);
+                let on_selection = at
+                    .and_then(|p| crate::chartview::hit(app, geo, sh, p))
+                    .is_some_and(|(o, _)| o.kind == ObjKind::Shape && app.session.lasso_selected(input.workbook.active_sheet(), o.id));
+                app.grid.lasso.clear();
+                app.grid.ink_move = at.filter(|_| on_selection).map(sheet_point);
+                if !on_selection {
+                    // The press's own point is the loop's first corner.
+                    if let Some(p) = at {
+                        app.grid.lasso.push(sheet_point(p));
+                    }
+                    if let Some(q) = pos.map(sheet_point)
+                        && app.grid.lasso.last() != Some(&q)
+                    {
+                        app.grid.lasso.push(q);
+                    }
+                }
+            }
+            if app.grid.ink_move.is_some() {
+                if resp.dragged()
+                    && let Some(p) = pos
+                    && let Some(last) = app.grid.ink_move
+                {
+                    let now = sheet_point(p);
+                    app.grid.ink_move = Some(now);
+                    let (dx, dy) = (now[0] - last[0], now[1] - last[1]);
+                    if dx != 0.0 || dy != 0.0 {
+                        let _ = app.run("draw.moveSelection", json!({"dx": dx, "dy": dy}));
+                        // Every frame's move is part of the one drag: keep one undo step.
+                        coalesce_last_undo(app);
+                    }
+                }
+                if resp.drag_stopped() {
+                    app.grid.ink_move = None;
+                }
+                return true;
+            }
+            if resp.dragged()
+                && let Some(p) = pos
+            {
+                let q = sheet_point(p);
+                if app.grid.lasso.last() != Some(&q) {
+                    app.grid.lasso.push(q);
+                }
+            }
+            if app.grid.lasso.len() >= 2 {
+                // The loop under the pointer, closing back to its first point.
+                let mut pts: Vec<Pos2> = app.grid.lasso.iter().map(&screen_point).collect();
+                if let Some(&first) = pts.first() {
+                    pts.push(first);
+                }
+                let t = crate::theme::Tokens::get(&ctx);
+                input.ui.painter().extend(egui::Shape::dashed_line(&pts, Stroke::new(1.5, t.accent), 4.0, 3.0));
+            }
+            if resp.drag_stopped() {
+                let pts = std::mem::take(&mut app.grid.lasso);
+                if pts.len() >= 3 {
+                    let _ = app.run("draw.lassoSelect", json!({"points": pts}));
+                }
+            }
+            if primary_clicked && app.grid.lasso.is_empty() && app.grid.ink_move.is_none() {
+                let on_selection = pos
+                    .and_then(|p| crate::chartview::hit(app, geo, sh, p))
+                    .is_some_and(|(o, _)| o.kind == ObjKind::Shape && app.session.lasso_selected(input.workbook.active_sheet(), o.id));
+                if !on_selection {
+                    let _ = app.run("draw.lassoSelect", json!({"clear": true}));
+                }
+            }
+            return true;
+        }
         if app.session.draw_tool == "pen" {
             if let Some(p) = pos
                 && resp.dragged()
             {
-                // Through the cell under the pointer, so frozen panes and pages map right.
-                let c = geo.cell_at(sh, p);
-                let sx = sh.col_left(c.col) as f32 + (p.x - geo.x(sh, c.col)) / geo.z;
-                let sy = sh.row_top(c.row) as f32 + (p.y - geo.y(sh, c.row)) / geo.z;
+                let [sx, sy] = sheet_point(p);
                 app.grid.ink.push([sx, sy]);
             }
             if !app.grid.ink.is_empty() {
                 // Live preview.
-                let pts: Vec<Pos2> = app
-                    .grid
-                    .ink
-                    .iter()
-                    .map(|q| {
-                        let (col, row) = (sh.col_at(q[0].max(0.0) as f64), sh.row_at(q[1].max(0.0) as f64));
-                        geo.mirror_pos(pos2(
-                            geo.x(sh, col) + (q[0] - sh.col_left(col) as f32) * geo.z,
-                            geo.y(sh, row) + (q[1] - sh.row_top(row) as f32) * geo.z,
-                        ))
-                    })
-                    .collect();
+                let pts: Vec<Pos2> = app.grid.ink.iter().map(&screen_point).collect();
                 // The line under the pointer is the ink the stroke will commit (#1786).
                 let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
                 let (color, width) = pen_ink(&app.session.draw_color, app.session.draw_width, &theme);
