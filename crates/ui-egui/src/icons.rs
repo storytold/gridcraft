@@ -71,6 +71,7 @@ pub enum Icon {
     Sum,
     FillDown,
     Eraser,
+    Lasso,
     SortFilter,
     Find,
     Undo,
@@ -484,6 +485,18 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
         Icon::Eraser => {
             g.poly(&[(2.0, 10.0), (8.0, 4.0), (12.0, 8.0), (6.0, 14.0)], red.gamma_multiply(0.55));
             g.poly(&[(8.0, 4.0), (10.5, 1.5), (14.5, 5.5), (12.0, 8.0)], red);
+        }
+        Icon::Lasso => {
+            // A freehand loop with its rope end.
+            let loop_pts: Vec<(f32, f32)> = (0..=12)
+                .map(|i| {
+                    let a = i as f32 / 12.0 * std::f32::consts::TAU - 0.6;
+                    (8.0 + 4.8 * a.cos(), 7.0 + 3.6 * a.sin())
+                })
+                .collect();
+            g.stroke(&loop_pts, c);
+            g.line(&[(11.6, 10.0), (13.5, 13.5), (12.0, 14.5)], blue, 1.4);
+            g.circle(8.0, 7.0, 0.9, Some(c), None);
         }
         Icon::SortFilter => {
             g.text(4.5, 4.5, "A", 6.0, c, (false, false));

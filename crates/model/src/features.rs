@@ -649,6 +649,124 @@ pub enum ShapeKind {
     Equation,
 }
 
+/// A brush kind of the Draw tab (Excel's Add menu).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InkTool {
+    #[default]
+    Pen,
+    Pencil,
+    Highlighter,
+    FountainPen,
+    BrushPen,
+}
+
+/// A pen texture (Excel's eight effects). The stroke's `line` colour is the texture's base colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InkEffect {
+    Rainbow,
+    Galaxy,
+    Lava,
+    Ocean,
+    RoseGold,
+    Gold,
+    Silver,
+    Bronze,
+}
+
+/// A brush kind of the Draw tab (Excel's Add menu).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InkStyle {
+    pub tool: InkTool,
+    /// Stroke width in cm (InkML `width`).
+    pub width_cm: f32,
+    /// Stroke height in cm (InkML `height`): the brush's thickness across the stroke; a Pencil is
+    /// six times and a Highlighter twice its width.
+    pub height_cm: f32,
+    /// A pen texture; `None` is a solid stroke.
+    pub effect: Option<InkEffect>,
+    /// Texture phase (InkML `anchorX`/`anchorY`), in the texture's own units.
+    pub anchor: [f32; 2],
+    /// Texture scale (InkML `scaleFactor`).
+    pub scale: f32,
+    /// Pressure per point (`0..=32767`); empty when the device did not record any.
+    pub pressure: Vec<u16>,
+    /// Draw order, for Ink Replay.
+    pub order: u32,
+    /// GridCraft's own texture: a content-addressed id into the workbook's texture store. Excel
+    /// has no equivalent and drops it; the bytes live once on the workbook, not on every stroke.
+    pub texture: Option<String>,
+    /// How the texture repeats along the stroke.
+    pub texture_scale: f32,
+    /// The stroke's stable `a16:creationId` GUID (braces included), assigned when the stroke is
+    /// created and never changed: moving or recolouring it keeps the key. Excel preserves the
+    /// GUID across saves, so a map keyed by it survives an Excel round trip.
+    pub key: Option<String>,
+}
+
+impl Default for InkStyle {
+    fn default() -> Self {
+        InkStyle {
+            tool: InkTool::default(),
+            width_cm: 0.05,
+            height_cm: 0.05,
+            effect: None,
+            anchor: [0.0, 0.0],
+            scale: 1.0,
+            pressure: Vec::new(),
+            order: 0,
+            texture: None,
+            texture_scale: 1.0,
+            key: None,
+        }
+    }
+}
+
+/// A stroke's stable key: `existing` when it is a plausible GUID, else a fresh deterministic one
+/// (a SHA-256 of a process-wide counter, so tests and repeated runs agree and no clock is read).
+pub fn ink_creation_id(existing: Option<&str>) -> String {
+    if let Some(k) = existing {
+        let k = k.trim();
+        if (2..=80).contains(&k.len())
+            && k.starts_with('{')
+            && k.ends_with('}')
+            && k.bytes().all(|b| b.is_ascii_hexdigit() || matches!(b, b'{' | b'}' | b'-'))
+        {
+            return k.to_string();
+        }
+    }
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let mut h = sha2::Sha256::new();
+    use sha2::Digest as _;
+    h.update(b"gridcraft-ink-key");
+    h.update(n.to_le_bytes());
+    let d = h.finalize();
+    let b = |i: usize| d.get(i).copied().unwrap_or(0);
+    format!(
+        "{{{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-4{:01X}{:02X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
+        b(0),
+        b(1),
+        b(2),
+        b(3),
+        b(4),
+        b(5),
+        b(6) & 0x0f,
+        b(7),
+        (b(8) & 0x3f) | 0x80,
+        b(9),
+        b(10),
+        b(11),
+        b(12),
+        b(13),
+        b(14),
+        b(15)
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
     pub id: u32,
@@ -663,6 +781,10 @@ pub struct Shape {
     /// An equation's layout, rebuilt from `text` and never saved.
     #[serde(skip)]
     pub math: EquationCache,
+    /// A native Office ink stroke's brush; `None` for the legacy DrawingML polyline an older
+    /// GridCraft wrote (and for every non-ink shape).
+    #[serde(default)]
+    pub ink: Option<InkStyle>,
 }
 
 /// The laid-out form of an equation's LaTeX source. It is derived data: rebuilt by
@@ -1131,6 +1253,65 @@ mod tests {
         let legacy: Chart = serde_json::from_value(json).expect("deserialize legacy chart");
         assert_eq!(legacy.hole_size, 50, "documents saved before hole_size existed keep the old 50% hole");
         assert_eq!(chart.hole_size, 75, "new charts keep Excel's 75% default");
+    }
+
+    #[test]
+    fn ink_style_round_trips_through_json_and_older_shapes_default_to_none() {
+        let key = "{11111111-2222-4333-8444-555555555555}";
+        let shape = Shape {
+            id: 3,
+            kind: ShapeKind::Ink,
+            anchor: Anchor::default(),
+            fill: Color::Rgb(2 << 16),
+            line: Color::Rgb(0xA12BCD),
+            text: "0,0;40,20".into(),
+            format: ShapeFormat::default(),
+            math: EquationCache::default(),
+            ink: Some(InkStyle {
+                tool: InkTool::BrushPen,
+                width_cm: 0.35,
+                height_cm: 0.35,
+                effect: Some(InkEffect::Galaxy),
+                anchor: [-1303.866_2, -1016.0],
+                scale: 0.5,
+                pressure: vec![0, 32_767],
+                order: 7,
+                texture: Some("tex-1".into()),
+                texture_scale: 2.0,
+                key: Some(key.into()),
+            }),
+        };
+        let json = serde_json::to_string(&shape).expect("serialize ink");
+        let back: Shape = serde_json::from_str(&json).expect("deserialize ink");
+        assert_eq!(back, shape);
+        assert_eq!(back.ink.as_ref().and_then(|i| i.key.as_deref()), Some(key));
+
+        let mut legacy = serde_json::to_value(&shape).expect("serialize ink");
+        legacy.as_object_mut().expect("object").remove("ink");
+        let old: Shape = serde_json::from_value(legacy).expect("older shape");
+        assert!(old.ink.is_none(), "a shape saved before InkStyle keeps opening");
+
+        // With no serialized fields at all, InkStyle takes its usable defaults.
+        let bare: InkStyle = serde_json::from_str("{}").expect("bare ink style");
+        assert_eq!((bare.tool, bare.effect, bare.texture, bare.key), (InkTool::Pen, None, None, None));
+        assert_eq!(bare.scale, 1.0);
+        assert_eq!(bare.texture_scale, 1.0);
+        assert!(bare.width_cm > 0.0);
+    }
+
+    #[test]
+    fn ink_creation_id_keeps_a_valid_key_and_mints_unique_ones() {
+        let valid = "{11111111-2222-4333-8444-555555555555}";
+        assert_eq!(ink_creation_id(Some(valid)), valid);
+        let a = ink_creation_id(None);
+        let b = ink_creation_id(None);
+        assert_ne!(a, b);
+        for k in [a, b] {
+            assert!(k.starts_with('{') && k.ends_with('}'), "{k}");
+        }
+        // Anything that is not GUID-shaped is replaced rather than trusted.
+        assert_ne!(ink_creation_id(Some("not a guid")), "not a guid");
+        assert_ne!(ink_creation_id(Some(&"x".repeat(200))), "x".repeat(200));
     }
 }
 

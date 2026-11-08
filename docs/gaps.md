@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-07 · **Change:** minor (§17: ink brushes and textures; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -146,8 +146,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   conversion; cloud storage requested (#86). **Estimate:** 35–55 h (co-authoring scope needs the owner).
 
 ### 17. Insert objects (F)
-- Ink strokes now survive XLSX save/reopen as editable polylines. Inserted icons still lose their
-  identity/artwork on save (#551); native Office InkML import is not implemented.
+- Ink strokes now survive XLSX save/reopen as Office InkML contentParts: brush kind, thickness,
+  colour, the eight textures (with anchor/scale) and recorded pressure, plus a PNG fallback. The
+  Draw tab draws the gallery's pens, thickness steps, any colour, textures and custom pens in code.
+  Inserted icons still lose their identity/artwork on save (#551); ink replay, lasso editing and
+  Ink to Math remain their own gaps.
 - SmartArt, WordArt, signature line, objects, 3-D models, screenshot; 8 shape kinds vs ~170;
   pictures in cells (#61, PR #105). Equations exist (LaTeX source with a live preview, Office Math in xlsx); there is
   no structured (WYSIWYG) equation editing and no ink equations. **Estimate:** 25–40 h.
@@ -163,8 +166,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 20. Multiple windows; pen pressure (H)
 - Desktop windows done: a native window per workbook window, New Window on the same workbook,
-  Switch Windows, Arrange All. Left: Arrange All across monitors, one window on the web, no
-  pressure or tilt in ink. **Estimate:** 5–8 h.
+  Switch Windows, Arrange All. Left: Arrange All across monitors, one window on the web; ink
+  accepts a per-point pressure array that the fountain and brush pens paint with, but the pointer
+  capture does not send device pressure or tilt yet. **Estimate:** 5–8 h.
   [hardware-parity.md](hardware-parity.md)
 
 ### 21. Automation and add-ins (F)

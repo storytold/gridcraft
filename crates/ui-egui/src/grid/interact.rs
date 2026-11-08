@@ -244,7 +244,7 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                     .collect();
                 // The line under the pointer is the ink the stroke will commit (#1786).
                 let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
-                let (color, width) = pen_ink(&app.session.draw_color, app.session.draw_width, &theme);
+                let (color, width) = pen_ink(&app.session.draw_color, app.session.draw_width, &app.session.draw_brush, &theme);
                 input.ui.painter().add(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(width * geo.z, color)));
             }
             if resp.drag_stopped() && app.grid.ink.len() >= 2 {
@@ -266,15 +266,24 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
     false
 }
 
-/// The colour and width (points) of the ink a pen stroke commits, as `draw.stroke` stores it (the
-/// pen's colour, pen blue by default; its width, 2 pt by default, kept to 0.5–40 pt and stored
-/// whole) and as Ink shapes paint it (a highlighter, over 8 pt, is translucent).
-pub(crate) fn pen_ink(color: &str, width: f32, theme: &gridcraft_engine::model::Theme) -> (Color32, f32) {
+/// The colour and width (sheet points) of the ink a pen stroke commits, as `draw.stroke` stores
+/// it: the pen's colour and its thickness in millimetres converted to points, translucent for a
+/// highlighter and muted for a pencil.
+pub(crate) fn pen_ink(color: &str, width_mm: f32, brush: &str, theme: &gridcraft_engine::model::Theme) -> (Color32, f32) {
+    use gridcraft_engine::model::InkTool;
+    let tool = gridcraft_engine::cmd::draw::parse_tool(brush).unwrap_or(InkTool::Pen);
     let pen_blue = gridcraft_engine::model::Color::rgb(0x1F, 0x5F, 0xC9);
     let line = gridcraft_engine::model::Color::from_hex(color).unwrap_or(pen_blue);
-    let width = if width <= 0.0 { 2.0 } else { width }.clamp(0.5, 40.0).round().max(1.0);
-    let color = line.resolve(theme).map(crate::theme::color32).unwrap_or(Color32::from_rgb(0x1F, 0x5F, 0xC9));
-    (crate::chartview::ink_color(color, width), width)
+    let mm = if width_mm <= 0.0 { 0.5 } else { width_mm }.clamp(0.05, 20.0);
+    let (w_cm, _) = gridcraft_engine::cmd::draw::ink_size_cm(tool, mm);
+    let width = gridcraft_engine::cmd::draw::cm_to_px(w_cm).max(1.0);
+    let base = line.resolve(theme).map(crate::theme::color32).unwrap_or(Color32::from_rgb(0x1F, 0x5F, 0xC9));
+    let color = match tool {
+        InkTool::Highlighter => Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 115),
+        InkTool::Pencil => base.gamma_multiply(0.85),
+        _ => base,
+    };
+    (color, width)
 }
 
 fn handle_header_autofit(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
