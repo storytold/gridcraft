@@ -565,4 +565,20 @@ mod tests {
         assert_eq!(modified(0), "1970-01-01");
         assert_eq!(modified(1_700_000_000_000), "2023-11-14");
     }
+
+    #[test]
+    fn the_recording_status_names_the_script_it_saved() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let mut app = crate::SheetApp::new(session, crate::Services::default());
+        let dir = std::env::temp_dir().join(format!("gridcraft-office-scripts-{}-name", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        app.session.scripts_dir = Some(dir.display().to_string());
+        toggle_recording(&mut app);
+        toggle_recording(&mut app);
+        // The person finds the new recording in the list by the name the status gives.
+        let status = app.office_scripts.status.as_ref().map(|s| s.text.clone()).unwrap_or_default();
+        assert!(status.contains("Recorded 0 steps into `Recorded Script`"), "{status}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

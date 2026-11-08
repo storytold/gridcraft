@@ -915,6 +915,47 @@ mod tests {
     }
 
     #[test]
+    fn a_recorded_range_write_keeps_the_formula_it_wrote() {
+        let mut s = session("record-formula");
+        s.execute("cell.set", json!({"cell": "B1", "input": 1})).unwrap();
+        s.execute("cell.set", json!({"cell": "B2", "input": 2})).unwrap();
+        s.execute("script.record", json!({"on": true})).unwrap();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["=SUM(B1:B2)"]]})).unwrap();
+        let stopped = s.execute("script.record", json!({"on": false})).unwrap();
+        let code = stopped["code"].as_str().unwrap_or_default();
+        // A1 holds 3 now, but the recording replays the formula, so changing B1:B2 recalculates it.
+        assert!(code.contains("setValues([[\"=SUM(B1:B2)\"]]);"), "{code}");
+        assert!(!code.contains("setValues([[3]])"), "{code}");
+    }
+
+    #[test]
+    fn a_recorded_range_write_holds_only_the_cells_the_values_cover() {
+        let mut s = session("record-cells");
+        s.execute("script.record", json!({"on": true})).unwrap();
+        // A range larger than the values: the command writes the 2x2 block, not the whole
+        // declared range, so the recording must hold two rows and not pad to C1:C3.
+        s.execute("range.setValues", json!({"range": "A1:C3", "values": [[1, 2], [3, 4]]})).unwrap();
+        // The other way round: one declared cell, four values written from it.
+        s.execute("range.setValues", json!({"range": "E1", "values": [[5, 6], [7, 8]]})).unwrap();
+        let stopped = s.execute("script.record", json!({"on": false})).unwrap();
+        let code = stopped["code"].as_str().unwrap_or_default();
+        assert!(code.contains("getRange(\"A1:C3\").setValues([[1, 2], [3, 4]]);"), "{code}");
+        assert!(code.contains("getRange(\"E1\").setValues([[5, 6], [7, 8]]);"), "{code}");
+    }
+
+    #[test]
+    fn a_recording_reports_the_name_it_saved() {
+        let mut s = session("record-name");
+        s.execute("script.record", json!({"on": true})).unwrap();
+        let first = s.execute("script.record", json!({"on": false})).unwrap();
+        assert_eq!(first["name"], "Recorded Script");
+        s.execute("script.record", json!({"on": true})).unwrap();
+        let second = s.execute("script.record", json!({"on": false})).unwrap();
+        // The pane's status names this, so a second recording is told apart from the first.
+        assert_eq!(second["name"], "Recorded Script 2");
+    }
+
+    #[test]
     fn a_very_hidden_request_is_refused() {
         let mut s = session("very-hidden");
         s.execute("home.insertSheet", json!({"name": "Data"})).unwrap();
