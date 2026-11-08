@@ -18,6 +18,7 @@ gridcraft-chart = { workspace = true }
 # this feature. The UI draws ✕, ◀, ↘ and 📋 as text; without these faces the strict kittest
 # harness (and a host with no symbol font) renders them as tofu.
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
+egui_extras = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
