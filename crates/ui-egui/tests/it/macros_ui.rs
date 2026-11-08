@@ -41,6 +41,26 @@ fn dialog_name(h: &Harness) -> Option<String> {
     h.state().dialog.as_ref().map(|d| d.name().to_string())
 }
 
+/// The #3563 review: in the window too, `view.macros` is the script query and nothing about its
+/// params opens a dialog by accident. `{}` and `null` are the query; `{"dialog": true}` is the
+/// explicit request the Developer tab's Macros button makes, and it still answers the query.
+#[test]
+fn view_macros_answers_the_script_list_and_opens_the_dialog_only_when_asked() {
+    let mut h = harness("Developer");
+    h.state_mut().run("automate.newScript", json!({"name": "One", "commands": []})).unwrap();
+    let list = json!([{"name": "One", "steps": 0, "trusted": true}]);
+    for params in [serde_json::Value::Null, json!({}), json!({"dialogs": true}), json!({"dialog": false}), json!({"unrelated": [1, 2]})] {
+        let got = h.state_mut().run("view.macros", params.clone()).expect("the query");
+        h.run_steps(2);
+        assert_eq!(got, list, "{params}");
+        assert_eq!(dialog_name(&h), None, "{params} must not open the Macros dialog");
+    }
+    let got = h.state_mut().run("view.macros", json!({"dialog": true})).expect("the dialog request still answers the query");
+    h.run_steps(2);
+    assert_eq!(got, list, "the list comes back with the dialog");
+    assert_eq!(dialog_name(&h).as_deref(), Some("macros"), "the explicit flag opens the dialog");
+}
+
 #[test]
 fn record_from_the_ribbon_and_stop_from_the_status_bar() {
     let mut h = harness("Automate");

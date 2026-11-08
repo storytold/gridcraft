@@ -54,6 +54,13 @@ impl SheetApp {
         {
             return r;
         }
+        // view.macros is the query that answers with the workbook's scripts. UI callers that want
+        // the Macros dialog ask for it explicitly (`{"dialog": true}`, as the Developer tab's
+        // Macros button does); the command still answers the query, so every caller gets the list.
+        // `{}` and `null` are the query alone and never open anything.
+        if id == "view.macros" && params.get("dialog").and_then(Json::as_bool) == Some(true) {
+            self.open_dialog("macros", json!({}));
+        }
         let before = self.session.active_window();
         let zoom_from = matches!(id, "view.zoom" | "view.zoom100" | "view.zoomToSelection").then(|| crate::grid::Trace::key(self));
         let r = self.session.run(id, params);
@@ -125,11 +132,6 @@ impl SheetApp {
             self.ui.ribbon_collapsed = false;
             self.open_switch_windows = true;
             return;
-        }
-        // Developer › Macros (also its Alt+F8 analogue) opens the Macros dialog; programmatic
-        // callers of `run` still get the workbook's scripts back from the query.
-        if id == "view.macros" && params.as_object().is_some_and(serde_json::Map::is_empty) {
-            return self.open_dialog("macros", json!({}));
         }
         match self.run(id, params) {
             // A refused cell draft already shows its own message (with the rule's title).

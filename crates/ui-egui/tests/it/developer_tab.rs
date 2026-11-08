@@ -1,7 +1,7 @@
 //! Developer tab: Excel's group layout, its real Macros command, and its disabled stubs.
 
 use egui::accesskit::Role;
-use egui::{Event, Modifiers, PointerButton, vec2};
+use egui::{Event, Key, Modifiers, PointerButton, vec2};
 use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -38,6 +38,15 @@ fn developer_at(width: f32) -> Harness {
     let mut app = crate::common::app(session);
     app.ui.ribbon_tab = "Developer".into();
     crate::common::harness_with(crate::common::builder().with_size(vec2(width, 700.0)), app, 4)
+}
+
+fn key_event(key: Key, pressed: bool) -> Event {
+    Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE }
+}
+
+fn press(h: &mut Harness, key: Key) {
+    h.input_mut().events.extend([key_event(key, true), key_event(key, false)]);
+    h.run_steps(2);
 }
 
 fn click_at(h: &mut Harness, at: egui::Pos2) {
@@ -119,4 +128,51 @@ fn developer_macros_opens_the_macros_dialog() {
     h.get_by_role_and_label(Role::Button, "Macros").click();
     h.run_steps(3);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("macros"));
+}
+
+/// The tab's keytip is Alt+L (Excel's documented Developer access key), so the held-Alt chord
+/// must reach it — not only the F10 keytip mode that `keytips_generated.rs::keytip_l_` drives.
+#[test]
+fn alt_l_switches_to_the_developer_tab() {
+    let mut h = developer_at(1440.0);
+    h.state_mut().ui.ribbon_tab = "Home".into();
+    h.run_steps(2);
+    let alt = Modifiers::ALT;
+    h.input_mut().events.extend([
+        Event::Key { key: Key::AltLeft, physical_key: None, pressed: true, repeat: false, modifiers: alt },
+        Event::ModifiersChanged(alt),
+        Event::Key { key: Key::L, physical_key: None, pressed: true, repeat: false, modifiers: alt },
+        Event::Key { key: Key::L, physical_key: None, pressed: false, repeat: false, modifiers: alt },
+        Event::Key { key: Key::AltLeft, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+        Event::ModifiersChanged(Modifiers::NONE),
+    ]);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.ribbon_tab, "Developer", "Alt+L must switch to the Developer tab");
+    assert!(h.query_by_role_and_label(Role::Button, "Macros").is_some(), "the tab's controls are drawn");
+}
+
+/// The #3563 review: the stubs are inert to the keyboard as well as the mouse. A disabled control
+/// never takes keyboard focus, and Enter/Space (which activate the focused control) therefore run
+/// nothing; Macros, the one live control, is the positive control for the same path.
+#[test]
+fn developer_stubs_stay_inert_under_keyboard_activation() {
+    let mut h = developer_at(1440.0);
+    for label in STUBS {
+        h.get_by_role_and_label(Role::Button, label).focus();
+        h.run_steps(2);
+        assert!(!h.get_by_role_and_label(Role::Button, label).is_focused(), "{label} must not take keyboard focus");
+        press(&mut h, Key::Enter);
+        press(&mut h, Key::Space);
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), None, "keyboard activation of {label} must open nothing");
+        assert!(!h.state().session.is_recording(), "{label} must not start recording");
+        assert_eq!(h.state().ui.ribbon_tab, "Developer", "{label} must not switch tabs");
+    }
+    // The same focus + Enter does open Macros: the keyboard path itself works.
+    let mut h = developer_at(1440.0);
+    h.get_by_role_and_label(Role::Button, "Macros").focus();
+    h.run_steps(2);
+    assert!(h.get_by_role_and_label(Role::Button, "Macros").is_focused(), "the live control takes focus");
+    press(&mut h, Key::Enter);
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("macros"), "Enter on Macros opens the Macros dialog");
 }

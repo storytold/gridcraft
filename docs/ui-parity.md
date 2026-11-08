@@ -249,6 +249,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | minor | Developer tab review (#3563): `view.macros` takes an explicit `{"dialog": true}` (with `{}`/`null` documented as the query), the 17 stub ids are registered with `status: not_implemented` and answer `NOT_IMPLEMENTED` instead of counting towards parity, one id convention per Developer control, and tests for Alt+L, the narrow-window tab row and keyboard-inert stubs. See [developer-tab.md](developer-tab.md) |
 | 2026-11-07 | minor | Developer ribbon tab (#2960): Excel's observed groups and order (Code, Add-ins, Controls, XML; Excel 16.0 build 20527). Macros runs `view.macros` and opens the Macros dialog; every other entry is a disabled stub whose tooltip names #2960. Keytip Alt+L (<kbd>L</kbd>), as Excel documents; catalog 281 / 296 → 281 / 313. See [developer-tab.md](developer-tab.md) |
 | 2026-11-02 | minor | Form controls: buttons, sliders (scroll bars) and spin buttons placed, worked, selected and edited on the sheet (Insert › Controls, Assign Action, Format Control); catalog 281 / 296 |
 | 2026-11-03 | minor | Highlight the active cell's row: a global preference that tints the whole row, off by default |

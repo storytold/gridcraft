@@ -36,7 +36,7 @@ separator lines the rest of the ribbon uses.
 
 | Entry | State | Notes |
 |---|---|---|
-| **Macros** | **Real** | Runs `view.macros`; with no parameters the UI maps that to the Macros dialog (also Alt+F8), which lists this workbook's macros and scripts. `run` still returns the script list to programmatic callers |
+| **Macros** | **Real** | Runs `view.macros` with `{"dialog": true}`, which opens the Macros dialog (also Alt+F8) and still answers with the workbook's script list. `{}` and `null` are the query alone: they return the list and open nothing, so a programmatic caller never has to guess |
 | Visual Basic | Stub | Disabled; the editor is not implemented (#2960) |
 | Record Macro | Stub | Disabled here; recording works from the Automate tab today (#2960 covers owning it here) |
 | Use Relative References | Stub | Disabled; the Automate tab has the working toggle (#2960) |
@@ -69,18 +69,56 @@ macros, which replay recorded command arrays, not TypeScript (#3527). Because Ex
 has no language control, this tab does not invent one; the reserved engines are documented here and
 tracked in #2960.
 
-## Catalog and keytips
+## Commands: `view.macros`, the reserved ids and the one id convention
 
-`crates/engine/src/catalog.rs` lists the tab's Excel commands with `developer.*` ids (the ids a
-future implementation will register) so `cargo xtask parity` reports them as missing until they
-land. `Macros` is already catalogued as `view.macros` under View, and the implemented form controls
-are catalogued as `insert.button`, `insert.spinButton`, `insert.slider` and `control.format` under
-Developer › Controls. The tab's keytip is **Alt+L** (`L`), Excel's documented Developer tab access
-key, added to `crates/ui-egui/src/keytips/keytips.json`; deeper Developer letters are left for when
-the entries run commands.
+`view.macros` is the tab's only live command and its schema is the same in the ribbon and in a
+programmatic call (`dialog` is a UI request: with no UI attached the query answers and no dialog
+opens, as with every other dialog-opening command):
+
+```text
+{"dialog": true}                          → the list, and the Macros dialog opens
+{} / null / no params / other params      → the list, and nothing opens
+the list: [{"name", "steps", "trusted"} | {"name": "(VBA)", "kind": "vba", "size", "executed": false}]
+```
+
+`dialog: true` is the explicit request the Macros button makes; it opens the Macros dialog as well
+as answering the query. Any other params are ignored, so `{}`, `null` and unrelated params are
+unambiguously the query.
+
+One id convention holds for the whole tab (`crates/engine/src/catalog.rs`, enforced by
+`developer_rows_use_one_namespace_convention`):
+
+- A control whose command already exists keeps that command's id and does not get a second
+  `developer.*` name: `view.macros` (the Macros dialog, also Alt+F8) and the form controls
+  `insert.button`, `insert.spinButton`, `insert.slider` and `control.format` (Properties).
+  `catalog::DEVELOPER_SHARED` records where each is shared from.
+- An entry with no implementation yet reserves a `developer.*` id. `catalog::RESERVED` lists the
+  17; they are registered as commands with `status: "not_implemented"` (not a second set of
+  catalog rows), so a programmatic call answers a defined error instead of "unknown command":
+
+```console
+$ gridcraft-cli run --cmd 'developer.visualBasic={}'
+gridcraft-cli: step 1 (--cmd, developer.visualBasic): NOT_IMPLEMENTED: `developer.visualBasic` is reserved for a feature that is not built yet (#2960)
+```
+
+`engine.commands` reports each of them with `status: "not_implemented"` and `enabled: false` (with
+that reason in `disabled_reason`), they appear in no menu, and `cargo xtask parity` counts them as
+missing — reserving an id never inflates the checklist.
+
+The tab's keytip is **Alt+L** (`L`), Excel's documented Developer tab access key, added to
+`crates/ui-egui/src/keytips/keytips.json`; deeper Developer letters are left for when the entries
+run commands.
 
 ## Tests
 
 `crates/ui-egui/tests/it/developer_tab.rs` holds the tab to these promises: every entry renders,
 the groups keep Excel's order and the card fits, all stubs are disabled and clicking one opens
-nothing or starts no recording, the tooltips name #2960, and `Macros` opens the Macros dialog.
+nothing or starts no recording, keyboard activation reaches none of them (a disabled control takes
+no focus; `developer_stubs_stay_inert_under_keyboard_activation`), the tooltips name #2960,
+`Macros` opens the Macros dialog by mouse or Enter, and **Alt+L** switches to the tab
+(`alt_l_switches_to_the_developer_tab`). `crates/ui-egui/tests/it/ribbon_layout.rs`
+(`a_narrow_window_scrolls_the_tab_row_to_its_last_tab`) scrolls the tab row in a 600 px window and
+clicks the Developer tab at its end. `crates/ui-egui/tests/it/macros_ui.rs`
+(`view_macros_answers_the_script_list_and_opens_the_dialog_only_when_asked`) covers the parameter
+forms above, and the engine's `view_macros_answers_the_script_list_for_every_params_form` covers
+them with no UI at all.

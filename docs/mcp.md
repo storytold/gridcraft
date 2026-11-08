@@ -40,7 +40,7 @@ with a file open.
 | Tool | Arguments | Does |
 |---|---|---|
 | `execute_command` | `command`, `params?` | Runs **any** engine command (`cell.set`, `home.bold`, `data.removeDuplicates`, …). |
-| `list_commands` | `search?` | Command ids, labels, ribbon paths, shortcuts and parameter docs. |
+| `list_commands` | `search?` | Command ids, labels, ribbon paths, shortcuts, parameter docs and `status` (`implemented`, or `not_implemented` for a reserved id that answers `NOT_IMPLEMENTED`). |
 | `list_windows` | — | Open windows: window id, workbook (`doc`) id, title ("Book1", or "Book1:2" for a workbook's second window), unsaved changes, active, hidden. |
 | `inspect_workbook` | — | Sheets, used ranges, tables, charts, names, selection, history. |
 | `read_range` | `range?`, `sheet?`, `formulas?`, `formatted?` | Rows of values (default: the used range). |

@@ -4,8 +4,9 @@
 //! Code (Visual Basic, Macros, Record Macro, Use Relative References, Macro Security), Add-ins
 //! (Add-ins, Excel Add-ins, COM Add-ins), Controls (Insert, Design Mode, Properties, View Code,
 //! Run Dialog) and XML (Source, Map Properties, Expansion Packs, Refresh Data, Import, Export).
-//! Macros is the one real control — it runs `view.macros`, which opens the Macros dialog. Every
-//! other entry is a disabled stub whose tooltip names #2960: the features are tracked there.
+//! Macros is the one real control — it runs `view.macros` with `{"dialog": true}`, opening the
+//! Macros dialog and answering with the script list. Every other entry is a disabled stub whose
+//! tooltip names #2960: the features are tracked there.
 //! Office Scripts are not supported; the Automate tab runs GridCraft's own recorded macros.
 
 use super::controls::{act, control_keytip, sep};
@@ -22,7 +23,8 @@ pub(super) fn developer(app: &mut SheetApp, ui: &mut Ui) {
     let macros = big_button(ui, Icon::Macro, "Macros", "Macros and scripts in this workbook (Alt+F8)", false);
     control_keytip(app, ui, &macros, "view.macros");
     if macros.clicked() {
-        act(app, "view.macros", json!({}));
+        // The explicit dialog flag: `{}` is the programmatic query and must not open anything.
+        act(app, "view.macros", json!({"dialog": true}));
     }
     ui.vertical(|ui| {
         stub(ui, Icon::Record, "Record Macro", IN_DEVELOPMENT);

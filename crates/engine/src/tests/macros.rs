@@ -1532,6 +1532,23 @@ fn macros_are_saved_listed_renamed_and_deleted() {
     assert!(s.execute("macro.rename", json!({"name": "THIRD", "to": "a\nb"})).is_err());
 }
 
+/// The #3563 review: `view.macros` is the script query whatever the params. `{}` and `null` are
+/// the documented query form, and a UI caller asks for the dialog with an explicit
+/// `{"dialog": true}` (the dialog is a UI affordance the engine never opens), so no programmatic
+/// caller has to guess whether it gets a list or a dialog.
+#[test]
+fn view_macros_answers_the_script_list_for_every_params_form() {
+    let mut s = s();
+    s.execute("automate.newScript", json!({"name": "One", "commands": [{"command": "cell.set", "params": {"cell": "A1", "input": "1"}}]})).unwrap();
+    let list = json!([{"name": "One", "steps": 1, "trusted": true}]);
+    for params in [Json::Null, json!({}), json!({"dialog": true}), json!({"dialog": false}), json!({"unrelated": [1, 2]}), json!([1, 2])] {
+        assert_eq!(s.execute("view.macros", params.clone()).unwrap(), list, "{params}");
+    }
+    // The schema the docs publish: the query returns the list, and `dialog` is the only flag.
+    let doc = crate::find_command("view.macros").map(|c| c.params).unwrap_or_default();
+    assert!(doc.contains("dialog?"), "{doc}");
+}
+
 #[test]
 fn macros_and_automate_scripts_live_side_by_side() {
     let mut s = s();
