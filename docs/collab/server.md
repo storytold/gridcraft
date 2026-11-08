@@ -118,15 +118,18 @@ GET    /v1/sessions/{id}/ws    WebSocket
 
 - **TLS** терминируется на входном прокси (RFC §4.1); бинарь слушает HTTP/WS.
 - **Метрики латентности `op→applied`**, reconnect rate и размер журнала — следующий срез.
-- **Клиентская часть** (feature-флаг `collab`, preview/откат, presence, viewer) — PR 5.
-- **Коммит в кабинет** через server-to-server callback — вместе с клиентом.
+- **Коммит в кабинет** через server-to-server callback: HTTP `commit` есть, исходящего
+  вызова кабинета пока нет.
 - **Периодический снапшот по времени** (5 минут) — сейчас только по числу операций и на
   shutdown; `flush` вызывается из graceful shutdown.
+- **Redo и отмена структурных правок** — v2 (undo merge-шагов есть).
+
+Клиент: `docs/collab/client.md` (feature `collab`, `GRIDCRAFT_COLLAB_URL`/`_TOKEN`).
 
 ## Проверка
 
 ```bash
-cargo test -p gridcraft-collab-server      # unit + 6 socket + 3 восстановление/догон
+cargo test -p gridcraft-collab-server      # unit + 6 socket + 3 восстановление + 5 приёмка
 cargo clippy -p gridcraft-collab-server --all-targets -- -D warnings
 cargo xtask layers
 ```

@@ -297,24 +297,27 @@ OT не используется: сервер применяет к head (ADR-0
 
 ## 10. Клиент
 
+Собран в `crates/collab-client` (native-only, tokio + tungstenite) и подключён к UI через
+трейт `ui_egui::collab::Collab`; подробности — `docs/collab/client.md`.
+
 - **Feature flag**: Cargo-feature `collab` (по умолчанию **выключен**); при выключенном
-  флаге ни сетевого кода, ни изменений поведения. Runtime-включение:
-  native — `GRIDCRAFT_COLLAB_URL`; web — host-сообщение `<app>:session`
-  (`INTEGRATION.md` §6) или `?collab=<wsUrl>` для отладки.
-- **Нормализация команды**: перехват после `Session::execute` — берём `(id, params)`,
-  подставляем явные `sheet`/`range` из `Selection`/`CommandInfo`, чистим запрещённое;
-  при отказе сервера preview откатывается и применяется дельта.
-- **Применение чужой операции**: новый путь в движке — `Session::apply_remote(...)`,
-  который **не** пишет журнал и **не** пушит undo, но делает `refresh_equations`,
-  `sync_headers`, `check_arrays`/`check_protection`-эквивалент на сервере уже выполнен,
-  и пересчитывает (`cells_changed`). Это engine API, а не user-команда — house rule
-  «everything is a command» касается пользовательских действий, не сетевого слоя.
-- **UI**: оверлей выделений участников в `crates/ui-egui/src/grid/*`, список
-  участников и индикатор синхронизации в статус-баре; viewer — `Session` в режиме
-  только для чтения + отключённые команды.
-- **Web**: `web-sys` WebSocket (сейчас в зависимостях нет; добавляется под
-  `cfg(target_arch="wasm32")`), токен из host-сообщения; TCP control-канал в wasm
-  не используется.
+  флаге ни сетевого кода, ни изменений поведения. Runtime-включение: native —
+  `GRIDCRAFT_COLLAB_URL` + `GRIDCRAFT_COLLAB_TOKEN`; web — host-сообщение `<app>:session`
+  (`INTEGRATION.md` §6), адаптер повторяет `Synced`.
+- **Нормализация команды**: `Synced::execute` подставляет явные `sheet` (session key) и
+  `cell`/`range` из `Selection`, повторяя правило сервера; merge применяется локально
+  (preview), structural — нет. Отказ сервера откатывает preview через `edit.undo`.
+- **Применение чужой операции**: `Session::apply_remote` (без журнала и undo) + новый
+  `Session::apply_values` — дельта правит только кэш значений; формулы и структура уже
+  пришли из нормализованной команды. Для undo — `Session::restore_cells` (значение,
+  формула, стиль) с пересборкой графа и пересчётом.
+- **Undo**: `undo{opId}` → `Room::undo`; шаги per-actor (≤200), проверка «ячейка всё ещё
+  та, что оставил шаг», ответ — новая версия с дельтой. Redo и структурная отмена — v2.
+- **UI**: рамки выделений участников поверх сетки, список участников и индикатор
+  `Live · vN · N` в статус-баре; viewer не превьюит и не меняет книгу, сервер отказывает
+  до движка.
+- **Web**: `web-sys` WebSocket под `cfg(target_arch="wasm32")` не добавлен; протокол тот же,
+  транспорт — host.
 - **Комментарии/заметки**: автор из JWT; существующие команды `review.*` остаются.
 
 ## 11. Тесты
