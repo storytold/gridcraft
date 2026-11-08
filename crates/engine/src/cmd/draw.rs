@@ -475,7 +475,7 @@ fn delete_pen(s: &mut Session, p: &Json) -> Result<Json> {
         && (s.draw_width - pen.width).abs() < 0.01
         && s.draw_effect == pen.effect.clone().unwrap_or_default()
         && s.draw_texture == pen.texture.clone().unwrap_or_default()
-        && (s.draw_texture.is_empty() || texture_scale(s.draw_texture_scale) == texture_scale(pen.texture_scale))
+        && texture_scale(s.draw_texture_scale) == texture_scale(pen.texture_scale)
     {
         // Deleting the pen in hand puts the default pen back in hand.
         s.draw_brush = "pen".into();

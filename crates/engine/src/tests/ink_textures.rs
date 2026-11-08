@@ -208,3 +208,20 @@ fn a_file_read_is_bounded_before_a_texture_import_parses_it() {
     assert!(crate::io::read_file_limited(&p, 3).is_err(), "a file over the cap is refused before it is read whole");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn deleting_an_untextured_pen_with_another_scale_leaves_the_pen_in_hand_alone() {
+    // Two untextured pens that differ only in their repeat size are still different pens:
+    // deleting the one that is not in hand must not reset the pen being drawn with.
+    let mut s = s();
+    let other = s.execute("draw.addPen", json!({"brush": "pen", "textureScale": 2})).unwrap()["pen"].as_u64().unwrap();
+    let in_hand = s.execute("draw.addPen", json!({"brush": "pen", "textureScale": 7})).unwrap()["pen"].as_u64().unwrap();
+    assert_ne!(other, in_hand);
+    s.execute("draw.deletePen", json!({"id": other})).unwrap();
+    let list = s.execute("draw.textureList", json!({})).unwrap();
+    assert_eq!(list["selected"], "", "no texture");
+    assert_eq!(list["scale"], 7.0, "the pen in hand keeps its repeat size");
+    // Deleting the pen that is in hand does put the default pen back.
+    s.execute("draw.deletePen", json!({"id": in_hand})).unwrap();
+    assert_eq!(s.execute("draw.textureList", json!({})).unwrap()["scale"], 8.0, "the default pen's repeat size");
+}
