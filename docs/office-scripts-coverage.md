@@ -4,7 +4,7 @@
 > (names extracted from Microsoft's public ExcelScript reference index, names only) and
 > `crates/script/data/implemented.txt`. Do not edit by hand; run the command.
 
-**146/1932 interface members implemented (7.6%)**, **14/168 interface types with any implemented member** (315 types including enums). 1175 enum values are `not-applicable` (they are type values, not operations). Every `not-yet` member throws a typed `notSupported` error naming the class and member.
+**146/1932 interface members implemented (7.6%)**, **14/168 interface types with any implemented member** (315 types including enums). 1175 enum values are `not-applicable` (they are type values, not operations). Every `not-yet` member of an interface object throws a typed `notSupported` error naming the class and member.
 
 Status meanings: **implemented** = a real engine operation backs it; **not-yet** = in the reference, refused with a typed error; **not-applicable** = an enum value, not an operation. Members of the plain data objects the bridge returns (for example `DataValidationRule`) are read as data: a member the object does not carry reads as `undefined`, not as a thrown error.
 

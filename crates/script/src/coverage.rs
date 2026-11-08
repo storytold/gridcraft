@@ -101,7 +101,10 @@ impl Coverage {
         }
         members.sort_by(|a, b| a.class.cmp(b.class).then_with(|| a.name.cmp(b.name)));
         members.dedup_by(|a, b| a.class == b.class && a.name == b.name);
-        let names: std::collections::HashSet<String> = members.iter().map(|m| format!("{}.{}", m.class, m.name)).collect();
+        // Only methods can be implemented: an enum value in the list would pass a name check and
+        // then be counted as not-applicable, drifting silently.
+        let names: std::collections::HashSet<String> =
+            members.iter().filter(|m| m.kind == MemberKind::Method).map(|m| format!("{}.{}", m.class, m.name)).collect();
         let mut impls = Vec::new();
         for line in implemented.lines() {
             let line = line.trim();
@@ -109,7 +112,7 @@ impl Coverage {
                 continue;
             }
             if !names.contains(line) {
-                return Err(format!("`{line}` is not in the ExcelScript reference list"));
+                return Err(format!("`{line}` is not a method in the ExcelScript reference list"));
             }
             impls.push(line);
         }
@@ -168,8 +171,8 @@ impl Coverage {
             out,
             "**{}/{} interface members implemented ({:.1}%)**, **{}/{} interface types with any implemented \
              member** ({} types including enums). {} enum values are `not-applicable` (they are type values, \
-             not operations). Every `not-yet` member throws a typed `notSupported` error naming the class and \
-             member.\n",
+             not operations). Every `not-yet` member of an interface object throws a typed `notSupported` error \
+             naming the class and member.\n",
             n.methods_implemented,
             n.methods,
             n.percent_methods(),
@@ -226,11 +229,14 @@ mod tests {
     fn every_implemented_name_is_in_the_reference() {
         let coverage = Coverage::parse(API, IMPLEMENTED).unwrap();
         assert!(!coverage.members.is_empty());
-        assert_eq!(
-            coverage.members.iter().filter(|m| m.kind == MemberKind::Method).count()
-                + coverage.members.iter().filter(|m| m.kind == MemberKind::Field).count(),
-            coverage.members.len()
-        );
+        // Every listed name is a method the reference has, and it counts as implemented.
+        assert_eq!(coverage.numbers().methods_implemented, coverage.implemented.len());
+    }
+
+    #[test]
+    fn an_enum_value_in_the_implemented_list_is_an_error() {
+        // A field (enum value) cannot be implemented: it is data, not an operation.
+        assert!(Coverage::parse("Mode\tfield\tvalue\n", "Mode.value\n").is_err());
     }
 
     #[test]
