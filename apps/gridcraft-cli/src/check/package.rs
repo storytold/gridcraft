@@ -11,8 +11,8 @@ const MAX_ENTRIES: usize = 200_000;
 const RELATIONSHIP_BUDGET: u64 = 512 * 1024 * 1024;
 
 /// Relationship kinds (lower case) whose absence after a save isn't a loss: the calculation chain is
-/// a cache Excel rebuilds, and large pivot record snapshots or dynamic-array metadata are rebuilt on load.
-pub(super) const REBUILT_KINDS: [&str; 3] = ["calcchain", "pivotcacherecords", "workbookmetadata"];
+/// a cache Excel rebuilds, and large pivot record snapshots are rebuilt on load when `refreshOnLoad` is set.
+pub(super) const REBUILT_KINDS: [&str; 2] = ["calcchain", "pivotcacherecords"];
 
 // ---------------------------------------------------------------- package validation
 

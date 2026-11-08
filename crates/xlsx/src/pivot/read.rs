@@ -121,6 +121,8 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
                 let gi = g.child("groupItems").map(|gi| gi.children.iter().map(|e| item_label_el(e, sys)).collect()).unwrap_or_default();
                 (base, by, gi)
             });
+            // Excel disambiguates duplicate source column headers in a PivotCache by appending
+            // case-insensitive 2, 3, … suffixes (`Col`, `Col2`, `Col3`).
             let raw_name = f.attr("name").unwrap_or("").trim().to_string();
             let key = raw_name.to_ascii_lowercase();
             let mut name = raw_name.clone();

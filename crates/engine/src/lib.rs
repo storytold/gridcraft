@@ -297,9 +297,11 @@ impl DocState {
         calc.recalc_all(&mut wb);
         Self::with_calc(wb, calc, path, title, trust)
     }
-    /// A workbook as its file saved it: the dependency graph is built but nothing is
-    /// evaluated, so every value is the one the file holds until an edit reaches it. `trust`
-    /// is as for [`DocState::new`].
+    /// A workbook as its file saved it: the dependency graph is built and stored cell values are
+    /// kept as-is, except that any PivotTable whose worksheet target area is blank (`last_range`
+    /// is `None` or contains no content, as in `refreshOnLoad` exports with an unpopulated placeholder
+    /// location) is refreshed from its source and triggers a workbook recalculation when refreshed.
+    /// `trust` is as for [`DocState::new`].
     pub fn from_saved(mut wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
         let mut calc = Calc::new();
         calc.rebuild(&wb);

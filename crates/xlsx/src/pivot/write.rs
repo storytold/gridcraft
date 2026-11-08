@@ -100,6 +100,10 @@ struct Cache {
     records: Option<(u64, String)>,
 }
 
+/// Whether two PivotTables can share one `<pivotCacheDefinition>` part: same imported cache group,
+/// same worksheet source range, and identical cache field definitions/shared items/groupings.
+/// `axis_map` is per-PivotTable (`rowFields`/`colFields` indexing) and `records` is deterministic
+/// from `(source_sheet, source_range, fields)`, so neither needs to be compared here.
 fn cache_compatible(a: &Cache, b: &Cache) -> bool {
     a.cache_id == b.cache_id
         && a.source_sheet == b.source_sheet

@@ -143,7 +143,9 @@ pub struct PivotTable {
     pub cache_id: PivotCacheId,
 }
 
-/// Imported pivot-cache group id (ignored in logical [`PivotTable`] equality).
+/// Imported pivot-cache group id. Compares equal for any two values in [`PartialEq`] so that
+/// workbook round-trip assertions comparing logical [`PivotTable`] models ignore package-level
+/// cache numbering while the XLSX writer still preserves intentional cache separation via `self.0`.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct PivotCacheId(pub Option<u32>);
