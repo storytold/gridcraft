@@ -896,6 +896,13 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
 /// saving needs write permission in its folder, not only in the link's. A link that is dangling
 /// or loops resolves to nothing: with `expected` the save is refused; without it (Save As onto
 /// such a path) the file is written at the link's own place, replacing the link.
+///
+/// The check and the write use the same resolved path, not `path` again: the temporary file is
+/// created and renamed onto `destination`, which has no symlink in it when it is resolved. A link
+/// retargeted after the check therefore cannot redirect this save to another file; it still
+/// writes the file the user opened, and the next save reports the change. What is left is a
+/// directory above `destination` swapped for a link between the check and the rename, which
+/// needs write access to that directory, and so the access to replace the workbook anyway.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file_expecting(path: &str, bytes: &[u8], expected: Option<&std::path::Path>) -> Result<std::path::PathBuf> {
     use std::io::Write;
