@@ -22,6 +22,7 @@ gridcraft-xlsx = { path = "crates/xlsx" }
 gridcraft-chart = { path = "crates/chart" }
 gridcraft-engine = { path = "crates/engine" }
 gridcraft-collab = { path = "crates/collab" }
+gridcraft-collab-client = { path = "crates/collab-client" }
 gridcraft-ui-egui = { path = "crates/ui-egui" }
 gridcraft-mcp = { path = "crates/mcp" }
 gridcraft-pdf = { path = "crates/pdf" }
