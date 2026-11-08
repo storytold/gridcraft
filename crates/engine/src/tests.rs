@@ -2807,6 +2807,44 @@ fn overlapping_spills_keep_the_one_that_exists_whichever_anchor_is_first() {
 }
 
 #[test]
+fn a_spill_growing_into_another_and_back_matches_a_full_recalc_at_every_step() {
+    use gridcraft_core::CellError::Spill;
+    // Both arrays already spill; F8 (first in reading order) grows down over E10's spill, takes
+    // its cells, shrinks back and lets it spill again, then the steps are undone, redone, edited
+    // inside the contested area and cleared. Every state must match a full recalc.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "H1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F8", "input": "=SEQUENCE(H1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E10", "input": "=SEQUENCE(1,3)*10"})).unwrap();
+    assert_eq!(v(&s, "G10"), Value::Number(30.0));
+    assert_matches_full_recalc(&s);
+    let steps: [(&str, serde_json::Value); 9] = [
+        ("cell.set", json!({"cell": "H1", "input": "5"})),
+        ("cell.set", json!({"cell": "E10", "input": "=SEQUENCE(1,2)*10"})),
+        ("cell.set", json!({"cell": "H1", "input": "1"})),
+        ("edit.undo", json!({})),
+        ("edit.undo", json!({})),
+        ("edit.redo", json!({})),
+        ("cell.set", json!({"cell": "F11", "input": "x"})),
+        ("cell.set", json!({"cell": "H1", "input": "2"})),
+        ("edit.clearContents", json!({"range": "E8:F10"})),
+    ];
+    for (i, (id, params)) in steps.iter().enumerate() {
+        s.execute(id, params.clone()).unwrap();
+        assert_matches_full_recalc(&s);
+        if i == 0 {
+            // Both held a spill: reading order gives F8 the cells.
+            assert_eq!(v(&s, "F12"), Value::Number(5.0));
+            assert_eq!(v(&s, "E10"), Value::Error(Spill));
+        }
+        if i == 2 {
+            assert_eq!(v(&s, "E10"), Value::Number(10.0));
+            assert_eq!(v(&s, "F10"), Value::Number(20.0));
+        }
+    }
+}
+
+#[test]
 fn overlapping_spills_with_no_history_go_to_the_earlier_anchor() {
     use gridcraft_core::CellError::Spill;
     // A workbook calculated for the first time (a file that carries no layout) has no entry
