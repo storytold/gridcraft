@@ -184,10 +184,10 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("NSA", Entry::Finish(Action::Control("insert.chart.statistic"))), // Excel: Statistical Chart; Statistical chart (kind TBD)
     ("NSB", Entry::Finish(Action::Command("insert.spinButton"))), // Excel: Spin Button (Form Control)
     ("NSC", Entry::Finish(Action::Pending("insert.screenshot"))), // pending; Excel: Screenshot Menu; Screenshot; reserved until the command lands
-    ("NSD", Entry::Finish(Action::Command("insert.chart"))), // Excel: Combo Chart; Combo (kind TBD)
-    ("NSF", Entry::Finish(Action::Command("insert.slicer"))), // Excel: Slicer; insert.slicer missing (gap #8); reserved until the command lands
-    ("NSH", Entry::Finish(Action::Command("insert.shape"))), // Excel: Shapes
-    ("NSL", Entry::Finish(Action::Command("insert.slider"))), // Excel: Scroll Bar (Form Control)
+    ("NSD", Entry::Finish(Action::Command("insert.chart"))),   // Excel: Combo Chart; Combo (kind TBD)
+    ("NSF", Entry::Finish(Action::Command("insert.slicer"))),  // Excel: Slicer; insert.slicer missing (gap #8); reserved until the command lands
+    ("NSH", Entry::Finish(Action::Command("insert.shape"))),   // Excel: Shapes
+    ("NSL", Entry::Finish(Action::Command("insert.slider"))),  // Excel: Scroll Bar (Form Control)
     ("NSP", Entry::Finish(Action::Command("insert.recommendedPivotTables"))), // Excel: Recommended PivotTables
     ("NST", Entry::Finish(Action::Pending("insert.timeline"))), // pending; Excel: Timeline; insert.timeline missing (gap #8); reserved until the command lands
     ("NSZ", Entry::Finish(Action::Command("insert.pivotChart"))), // Excel: PivotChart; PivotChart; reserved until the command lands

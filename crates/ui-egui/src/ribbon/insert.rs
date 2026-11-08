@@ -1,6 +1,7 @@
 use super::controls::{act, anchor_keytip, control_keytip, invoke, keytip, keytip_group, popup_command, sep};
 use super::{
-    Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, big_split_button, icons, json, keytip_table, pos2, small_button, small_toggle_button, vec2,
+    Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, big_split_button, icons, json, keytip_table, pos2, small_button,
+    small_toggle_button, vec2,
 };
 
 /// Draws the Insert tab: PivotTable, Table, Pictures, Shapes, Icons, charts, slicer, sparklines, form controls (button, slider, spin button), checkbox, links, comments, text box, header/footer and symbols.
