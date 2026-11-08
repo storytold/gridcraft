@@ -340,27 +340,29 @@ fn legacy_custgeom_ink_still_round_trips_without_an_ink_style() {
 }
 
 #[test]
-fn a_fountain_pen_without_pressure_stays_a_fountain_pen_and_keeps_an_empty_pressure() {
-    let sheet = Sheet {
-        shapes: vec![Shape {
-            id: 9,
-            kind: ShapeKind::Ink,
-            anchor: Anchor { cell: CellRef::parse("B2").unwrap(), dx: 0.0, dy: 0.0, width: 60.0, height: 30.0, mode: AnchorMode::Absolute },
-            fill: Color::Rgb(2 << 16),
-            line: Color::Rgb(0x1F5FC9),
-            text: "0,0;30,20".into(),
-            format: Default::default(),
-            math: Default::default(),
-            ink: Some(InkStyle { tool: InkTool::FountainPen, key: Some("{AAAAAAAA-1111-4111-8111-111111111111}".into()), ..InkStyle::default() }),
-        }],
-        ..Sheet::new("Pen")
-    };
-    let wb = Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() };
-    let (back, _) = read(&write_xlsx(&wb).unwrap());
-    let ink = back.sheets[0].shapes[0].ink.as_ref().expect("editable ink");
-    assert_eq!(ink.tool, InkTool::FountainPen);
-    assert!(ink.pressure.is_empty(), "no F channel was recorded, so none comes back: {:?}", ink.pressure);
-    assert_eq!(ink.key.as_deref(), Some("{AAAAAAAA-1111-4111-8111-111111111111}"));
+fn a_fountain_or_brush_pen_without_pressure_keeps_its_tool_and_an_empty_pressure() {
+    for tool in [InkTool::FountainPen, InkTool::BrushPen] {
+        let sheet = Sheet {
+            shapes: vec![Shape {
+                id: 9,
+                kind: ShapeKind::Ink,
+                anchor: Anchor { cell: CellRef::parse("B2").unwrap(), dx: 0.0, dy: 0.0, width: 60.0, height: 30.0, mode: AnchorMode::Absolute },
+                fill: Color::Rgb(2 << 16),
+                line: Color::Rgb(0x1F5FC9),
+                text: "0,0;30,20".into(),
+                format: Default::default(),
+                math: Default::default(),
+                ink: Some(InkStyle { tool, key: Some("{AAAAAAAA-1111-4111-8111-111111111111}".into()), ..InkStyle::default() }),
+            }],
+            ..Sheet::new("Pen")
+        };
+        let wb = Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() };
+        let (back, _) = read(&write_xlsx(&wb).unwrap());
+        let ink = back.sheets[0].shapes[0].ink.as_ref().expect("editable ink");
+        assert_eq!(ink.tool, tool, "the GridCraft-only brush property keeps the subtype");
+        assert!(ink.pressure.is_empty(), "no F channel was recorded, so none comes back: {:?}", ink.pressure);
+        assert_eq!(ink.key.as_deref(), Some("{AAAAAAAA-1111-4111-8111-111111111111}"));
+    }
 }
 
 #[test]
@@ -421,10 +423,9 @@ fn thousandths(shape: &Shape) -> Vec<[i64; 2]> {
 fn excel_compact_values_without_whitespace_decode() {
     // The two strings Excel 365 itself wrote (observed in a file saved by Excel, gc_ink_rt.xlsx):
     // no whitespace before the prefixed or signed values of the second and later points.
-    for (trace, points) in [
-        ("0 0,'2117'529,\"-1\"-1058", vec![[0, 0], [2117, 529], [4233, 0]]),
-        ("0 0,'2646'1058,\"0\"-2116", vec![[0, 0], [2646, 1058], [5292, 0]]),
-    ] {
+    for (trace, points) in
+        [("0 0,'2117'529,\"-1\"-1058", vec![[0, 0], [2117, 529], [4233, 0]]), ("0 0,'2646'1058,\"0\"-2116", vec![[0, 0], [2646, 1058], [5292, 0]])]
+    {
         let (wb, _) = read(&package(trace, false, PEN_PROPS, true, true, true));
         assert_eq!(thousandths(ink_shape(&wb)), points, "{trace}");
     }
@@ -454,4 +455,37 @@ fn a_compact_package_round_trips_as_editable_ink_not_the_fallback() {
     assert!(report.warnings.iter().all(|w| !w.contains("ink part")), "{:?}", report.warnings);
     assert!(back.sheets[0].images.is_empty(), "a GridCraft save stays editable ink");
     assert_eq!(thousandths(ink_shape(&back)), vec![[0, 0], [2117, 529], [4233, 0]]);
+}
+
+#[test]
+fn excel_brush_properties_infer_pen_pencil_and_highlighter_without_a_channel() {
+    // The six brush-property sets Excel 365 wrote in research_brushes.xlsx (observed file): a
+    // Galaxy pen, a plain Red pen, a Pencil, a Highlighter, a Fountain Pen and a Brush Pen. Excel
+    // writes an F channel for every plain pen, so the channel says nothing about the tool.
+    let galaxy = concat!(
+        r##"<inkml:brushProperty name="width" value="0.035" units="cm"/><inkml:brushProperty name="height" value="0.035" units="cm"/>"##,
+        r##"<inkml:brushProperty name="color" value="#AE198D"/><inkml:brushProperty name="inkEffects" value="galaxy"/>"##,
+        r##"<inkml:brushProperty name="anchorX" value="0"/><inkml:brushProperty name="anchorY" value="0"/><inkml:brushProperty name="scaleFactor" value="0.5"/>"##,
+    );
+    let red = r##"<inkml:brushProperty name="width" value="0.035" units="cm"/><inkml:brushProperty name="height" value="0.035" units="cm"/><inkml:brushProperty name="color" value="#E71224"/>"##;
+    let pencil = r##"<inkml:brushProperty name="width" value="0.05" units="cm"/><inkml:brushProperty name="height" value="0.3" units="cm"/><inkml:brushProperty name="color" value="#849398"/><inkml:brushProperty name="ignorePressure" value="1"/><inkml:brushProperty name="inkEffects" value="pencil"/>"##;
+    let highlighter = r##"<inkml:brushProperty name="width" value="0.3" units="cm"/><inkml:brushProperty name="height" value="0.6" units="cm"/><inkml:brushProperty name="color" value="#FFFC00"/><inkml:brushProperty name="tip" value="rectangle"/><inkml:brushProperty name="rasterOp" value="maskPen"/><inkml:brushProperty name="ignorePressure" value="1"/>"##;
+    let fountain = r##"<inkml:brushProperty name="width" value="0.1" units="cm"/><inkml:brushProperty name="height" value="0.1" units="cm"/><inkml:brushProperty name="color" value="#004F8B"/>"##;
+    let brush_pen = r##"<inkml:brushProperty name="width" value="0.1" units="cm"/><inkml:brushProperty name="height" value="0.1" units="cm"/><inkml:brushProperty name="color" value="#008C3A"/>"##;
+    let cases = [
+        (galaxy, true, InkTool::Pen, Some(InkEffect::Galaxy), 0.035),
+        (red, true, InkTool::Pen, None, 0.035),
+        (pencil, false, InkTool::Pencil, None, 0.05),
+        (highlighter, false, InkTool::Highlighter, None, 0.3),
+        (fountain, true, InkTool::Pen, None, 0.1),
+        (brush_pen, true, InkTool::Pen, None, 0.1),
+    ];
+    for (props, f, tool, effect, width) in cases {
+        let trace = if f { "0 0 0,'1000 1000 1000" } else { "0 0,'1000 1000" };
+        let (wb, _) = read(&package(trace, f, props, true, true, true));
+        let ink = ink_shape(&wb).ink.as_ref().expect("editable ink").clone();
+        assert_eq!(ink.tool, tool, "{props}");
+        assert_eq!(ink.effect, effect, "{props}");
+        close(ink.width_cm, width);
+    }
 }

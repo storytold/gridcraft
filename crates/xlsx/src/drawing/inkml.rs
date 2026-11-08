@@ -87,7 +87,7 @@ pub(super) fn read(
     }
     let definitions = root.child("definitions")?;
     let (points, pressure) = decode(root.child("trace")?, definitions)?;
-    let (mut image, color) = brush(definitions, !pressure.is_empty());
+    let (mut image, color) = brush(definitions);
     image.key = creation_id_of(content_part);
     image.pressure = pressure;
     let anchor = anchor_for(content_part, anchor, sheet)?;
@@ -308,12 +308,11 @@ fn referenced<'a>(definitions: &'a El, name: &'a str, reference: Option<&str>) -
 
 /// The brush's style and colour. Excel writes one `brush` per part; missing properties take the
 /// defaults a plain Pen has.
-fn brush(definitions: &El, has_f: bool) -> (InkStyle, Color) {
+fn brush(definitions: &El) -> (InkStyle, Color) {
     let mut style = InkStyle::default();
     let mut color = Color::rgb(0, 0, 0);
     let mut gridcraft_tool = None;
     let mut ink_effects = None;
-    let mut ignore_pressure = false;
     let mut mask_pen = false;
     let Some(brush) = definitions.child("brush") else { return (style, color) };
     for p in brush.kids("brushProperty") {
@@ -322,7 +321,6 @@ fn brush(definitions: &El, has_f: bool) -> (InkStyle, Color) {
             "width" => style.width_cm = brush_cm(value).unwrap_or(style.width_cm),
             "height" => style.height_cm = brush_cm(value).unwrap_or(style.height_cm),
             "color" => color = Color::from_hex(value).unwrap_or(color),
-            "ignorePressure" => ignore_pressure = matches!(value.trim(), "1" | "true"),
             "tip" => mask_pen |= value.trim() == "rectangle",
             "rasterOp" => mask_pen |= value.trim() == "maskPen",
             "inkEffects" => ink_effects = Some(value.trim().to_ascii_lowercase()),
@@ -338,6 +336,10 @@ fn brush(definitions: &El, has_f: bool) -> (InkStyle, Color) {
         style.height_cm = style.width_cm;
     }
     style.effect = ink_effects.as_deref().and_then(effect);
+    // Excel writes an F (pressure) channel for every plain pen, so it says nothing about the
+    // tool: Fountain Pen and Brush Pen are indistinguishable in an Excel file. Without a
+    // GridCraft `gridcraftTool`, an inkEffects pencil is a Pencil, a rectangle maskPen is a
+    // Highlighter, a texture is a Pen with that effect, and everything else is a Pen.
     style.tool = match gridcraft_tool.as_deref() {
         Some("pencil") => InkTool::Pencil,
         Some("highlighter") => InkTool::Highlighter,
@@ -346,8 +348,6 @@ fn brush(definitions: &El, has_f: bool) -> (InkStyle, Color) {
         Some(_) => InkTool::Pen,
         None if ink_effects.as_deref() == Some("pencil") => InkTool::Pencil,
         None if mask_pen => InkTool::Highlighter,
-        None if ignore_pressure => InkTool::Pencil,
-        None if has_f => InkTool::FountainPen,
         _ => InkTool::Pen,
     };
     (style, color)
@@ -518,17 +518,18 @@ fn inkml_xml(ink: &InkStyle, color: &[u8; 3], f: bool, trace: &str) -> String {
             short(scale)
         ));
     }
-    // GridCraft's own round-trip data (Excel drops unknown brush properties on save). The tool
-    // is always written: Fountain Pen and Brush Pen are otherwise indistinguishable, and a Pen
-    // that records pressure would read back as a Fountain Pen.
+    // GridCraft's own round-trip data (Excel drops unknown brush properties on save). Only the
+    // tools Excel cannot represent carry it: Fountain Pen and Brush Pen are indistinguishable
+    // there, and a Pencil with a texture loses its `inkEffects=pencil` marker to the texture.
     let tool = match ink.tool {
-        InkTool::Pen => "pen",
-        InkTool::Pencil => "pencil",
-        InkTool::Highlighter => "highlighter",
-        InkTool::FountainPen => "fountainPen",
-        InkTool::BrushPen => "brushPen",
+        InkTool::FountainPen => Some("fountainPen"),
+        InkTool::BrushPen => Some("brushPen"),
+        InkTool::Pencil if ink.effect.is_some() => Some("pencil"),
+        _ => None,
     };
-    props.push_str(&format!("<inkml:brushProperty name=\"gridcraftTool\" value=\"{tool}\"/>"));
+    if let Some(tool) = tool {
+        props.push_str(&format!("<inkml:brushProperty name=\"gridcraftTool\" value=\"{tool}\"/>"));
+    }
     props.push_str(&format!("<inkml:brushProperty name=\"gridcraftOrder\" value=\"{}\"/>", ink.order));
 
     let mut channels = String::from(
