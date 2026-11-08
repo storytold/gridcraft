@@ -37,10 +37,18 @@ pub(super) use validation::{move_rule_formula, remove_validation_cells};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!("data.sortAscending", "Sort A to Z", ["Data", "Sort & Filter"], None, "{range?, column?: \"B\"}", has_doc, |s, p| quick_sort(
-            s, p, true
+        cmd!(
+            "data.sortAscending",
+            "Sort A to Z",
+            ["Data", "Sort & Filter"],
+            None,
+            "{range?, column?: \"B\", filter?: bool (sorts the AutoFilter range, its first row the header, as the filter drop-down does)}",
+            has_doc,
+            |s, p| quick_sort(s, p, true)
+        ),
+        cmd!("data.sortDescending", "Sort Z to A", ["Data", "Sort & Filter"], None, "{range?, column?, filter?: bool}", has_doc, |s, p| quick_sort(
+            s, p, false
         )),
-        cmd!("data.sortDescending", "Sort Z to A", ["Data", "Sort & Filter"], None, "{range?, column?}", has_doc, |s, p| quick_sort(s, p, false)),
         cmd!(
             "data.sort",
             "Sort…",

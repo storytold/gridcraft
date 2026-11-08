@@ -546,3 +546,93 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+/// A sheet shaped like #3544's workbook: a numeric header row over text, an AutoFilter on
+/// A1:E9, and the active cell at J16, outside the data, as the file was saved.
+fn numeric_header_filter_sheet() -> Session {
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([[1, 2, 3, 4, 5], ["d", 4], ["z", 26], ["a", 1], ["n", 14], ["b", 2], ["g", 7], ["c", 3], ["f", 6]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:E9"})).unwrap();
+    s.execute("selection.set", json!({"range": "J16"})).unwrap();
+    s
+}
+
+fn column_text(s: &Session, col: &str, rows: std::ops::RangeInclusive<u32>) -> Vec<String> {
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    rows.map(|r| sh.value(CellRef::parse(&format!("{col}{r}")).unwrap()).display()).collect()
+}
+
+fn autofilter_a1(s: &Session) -> Option<String> {
+    s.doc().unwrap().wb.active().unwrap().autofilter.as_ref().map(|a| a.range.a1())
+}
+
+#[test]
+fn filter_menu_sort_sorts_the_autofilter_range_whatever_the_active_cell() {
+    // #3544: with the cursor outside the data, the drop-down's sort sorted the cursor's cell.
+    let mut s = numeric_header_filter_sheet();
+    s.execute("data.sortAscending", json!({"column": "A", "filter": true})).unwrap();
+    assert_eq!(column_text(&s, "A", 2..=9), ["a", "b", "c", "d", "f", "g", "n", "z"]);
+    // Whole rows move: each letter keeps its number.
+    assert_eq!(column_text(&s, "B", 2..=9), ["1", "2", "3", "4", "6", "7", "14", "26"]);
+    s.execute("data.sortDescending", json!({"column": "A", "filter": true})).unwrap();
+    assert_eq!(column_text(&s, "A", 2..=9), ["z", "n", "g", "f", "d", "c", "b", "a"]);
+    // As in Excel, the active cell does not move.
+    assert_eq!(s.doc().unwrap().selection.active, CellRef::parse("J16").unwrap());
+}
+
+#[test]
+fn filter_menu_sort_descending_keeps_a_numeric_header_row_in_place() {
+    // #3544: the header guess saw numbers over text, called row 1 data, and Sort Descending
+    // dragged it to the bottom. The cursor sits inside the data so the old range was right and
+    // only the header decision is under test.
+    let mut s = numeric_header_filter_sheet();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("data.sortDescending", json!({"column": "A", "filter": true})).unwrap();
+    assert_eq!(column_text(&s, "A", 1..=9), ["1", "z", "n", "g", "f", "d", "c", "b", "a"]);
+    assert_eq!(column_text(&s, "E", 1..=1), ["5"]);
+    assert_eq!(autofilter_a1(&s), Some("A1:E9".to_string()));
+}
+
+#[test]
+fn filter_menu_sort_includes_a_row_appended_below_the_filter() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Qty"], ["d", 4], ["b", 2], ["c", 3]]})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:B4"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A5", "values": [["a", 1]]})).unwrap();
+    assert_eq!(autofilter_a1(&s), Some("A1:B5".to_string()));
+    // A selection still on the original block: the sort follows the filter, not the selection.
+    s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
+    s.execute("data.sortAscending", json!({"column": "A", "filter": true})).unwrap();
+    assert_eq!(column_text(&s, "A", 1..=5), ["Name", "a", "b", "c", "d"]);
+    assert_eq!(column_text(&s, "B", 2..=5), ["1", "2", "3", "4"]);
+}
+
+#[test]
+fn sorts_outside_the_filter_menu_still_guess_the_header() {
+    // Only the drop-down's sort pins the filter's header; the ribbon's buttons keep sorting the
+    // region at the cursor and guessing, even on a sheet that has an AutoFilter.
+    let mut s = numeric_header_filter_sheet();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("data.sortDescending", json!({"column": "A"})).unwrap();
+    assert_eq!(column_text(&s, "A", 1..=9), ["z", "n", "g", "f", "d", "c", "b", "a", "1"], "numbers over text: no header");
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Qty"], ["b", 2], ["a", 1]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("data.sortAscending", json!({"column": "A"})).unwrap();
+    assert_eq!(column_text(&s, "A", 1..=3), ["Name", "a", "b"], "text over numbers: a header");
+}
+
+#[test]
+fn filter_menu_sort_without_an_autofilter_is_an_error_and_changes_nothing() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["b"], ["a"]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    assert!(s.execute("data.sortAscending", json!({"column": "A", "filter": true})).is_err());
+    assert!(s.execute("data.sortAscending", json!({"column": "A", "filter": true, "range": "A1:A3"})).is_err());
+    assert_eq!(column_text(&s, "A", 1..=3), ["Name", "b", "a"]);
+}
