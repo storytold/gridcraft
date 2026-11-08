@@ -164,20 +164,33 @@ fn step_call(step: &JournalStep) -> Option<(BridgeCall, String)> {
 /// A range call: the method, the address, the sheet when the step names one, and the operation's
 /// own parameter.
 fn range_call(method: &str, step: &JournalStep, range: &str, key: &str, value: Json) -> BridgeCall {
+    let (sheet, address) = split_target(step, range);
     let mut params = serde_json::Map::new();
-    params.insert("range".into(), Json::String(range.to_string()));
+    params.insert("range".into(), Json::String(address));
     params.insert(key.into(), value);
-    if let Some(sheet) = step.params.get("sheet").and_then(Json::as_str) {
-        params.insert("sheet".into(), Json::String(sheet.to_string()));
+    if let Some(sheet) = sheet {
+        params.insert("sheet".into(), Json::String(sheet));
     }
     BridgeCall::new(method, Json::Object(params))
 }
 
+/// The sheet and the address a range names: an explicit `sheet` parameter wins, then a `Data!A1`
+/// prefix on the range itself (which the bridge's `getRange` does not take).
+fn split_target(step: &JournalStep, range: &str) -> (Option<String>, String) {
+    if let Some(sheet) = step.params.get("sheet").and_then(Json::as_str) {
+        return (Some(sheet.to_string()), range.to_string());
+    }
+    match range.split_once('!') {
+        Some((sheet, address)) => (Some(sheet.trim_matches('\'').to_string()), address.to_string()),
+        None => (None, range.to_string()),
+    }
+}
+
 /// The JavaScript expression naming the range, on the step's sheet when it names one.
 fn target(step: &JournalStep, range: &str) -> String {
-    match step.params.get("sheet").and_then(Json::as_str) {
-        Some(sheet) => format!("workbook.getWorksheet({}).getRange({})", js_string(sheet), js_string(range)),
-        None => format!("workbook.getActiveWorksheet().getRange({})", js_string(range)),
+    match split_target(step, range) {
+        (Some(sheet), address) => format!("workbook.getWorksheet({}).getRange({})", js_string(&sheet), js_string(&address)),
+        (None, address) => format!("workbook.getActiveWorksheet().getRange({})", js_string(&address)),
     }
 }
 
@@ -357,6 +370,20 @@ mod tests {
         let rows = record(&[step("range.setValues", json!({"range": "A1:B1", "values": [[1, 2]]}))]);
         assert!(rows.code.contains("setValues([[1, 2]]);"), "{}", rows.code);
         assert!(rows.skipped.is_empty());
+    }
+
+    #[test]
+    fn a_qualified_range_names_its_sheet_in_the_script_and_the_call() {
+        let r = record(&[step("cell.set", json!({"cell": "Data!A1", "input": 1}))]);
+        assert!(r.code.contains("workbook.getWorksheet(\"Data\").getRange(\"A1\").setValue(1);"), "{}", r.code);
+        assert_eq!(r.calls[0].params["sheet"], json!("Data"));
+        assert_eq!(r.calls[0].params["range"], json!("A1"));
+        // A quoted name keeps its spaces; an explicit `sheet` still wins.
+        let quoted = record(&[step("cell.set", json!({"cell": "'My Data'!B2", "input": 1}))]);
+        assert_eq!(quoted.calls[0].params["sheet"], json!("My Data"));
+        let explicit = record(&[step("cell.set", json!({"sheet": "Other", "cell": "Data!A1", "input": 1}))]);
+        assert_eq!(explicit.calls[0].params["sheet"], json!("Other"));
+        assert_eq!(explicit.calls[0].params["range"], json!("Data!A1"));
     }
 
     #[test]

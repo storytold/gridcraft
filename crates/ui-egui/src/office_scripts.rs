@@ -274,7 +274,9 @@ fn editor(app: &mut SheetApp, ui: &mut Ui, open: &mut bool) {
             *open = false;
         }
         ui.label(
-            RichText::new("Every script runs as one undo step; an error or timeout changes nothing.").small().color(Tokens::get(ui.ctx()).text_dim),
+            RichText::new("Every script runs as one undo step; a failed run or timeout rolls back workbook changes, not external ones.")
+                .small()
+                .color(Tokens::get(ui.ctx()).text_dim),
         );
     });
 }
