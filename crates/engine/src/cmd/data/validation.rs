@@ -176,7 +176,7 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     }
     let style = sh.style_id(at);
     let num_fmt = wb.styles.get(style).num_fmt.as_str();
-    let order = gridcraft_core::parse::date_order_from_format(num_fmt).unwrap_or(gridcraft_core::DateOrder::Mdy);
+    let order = gridcraft_numfmt::NumberFormat::parse(num_fmt).date_order().unwrap_or(gridcraft_core::DateOrder::Mdy);
     let v = gridcraft_core::parse::parse_input_with_order(input, wb.date_system, order).value;
     // The formulas are written for the first cell of the range and see the value being entered,
     // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).

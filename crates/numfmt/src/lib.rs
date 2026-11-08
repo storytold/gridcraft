@@ -193,50 +193,28 @@ impl NumberFormat {
         self.num_sections().iter().any(|s| s.kind == SecKind::Date)
     }
 
-    /// For a date or time format, whether the section that formats `value` shows calendar parts (year, month,
-    /// day) and whether it shows time parts, as `(date, time)`. `None` for any other format and for
-    /// elapsed-time codes like `[h]:mm`, whose value is a duration, not a moment.
-    pub fn date_shape(&self, value: f64) -> Option<(bool, bool)> {
-        let s = self.select(value).map(|(s, _)| s).filter(|s| s.kind == SecKind::Date)?;
-        let parts = || s.toks.iter().filter_map(|t| if let Tok::Date(d) = t { Some(*d) } else { None });
-        if parts().any(|d| matches!(d, DatePart::ElapsedH(_) | DatePart::ElapsedM(_) | DatePart::ElapsedS(_))) {
-            return None;
-        }
-        Some((parts().any(DatePart::is_calendar), parts().any(|d| !d.is_calendar())))
-    }
-
     /// Calendar date order (MDY, DMY, YMD) if this format contains calendar date tokens.
     pub fn date_order(&self) -> Option<gridcraft_core::DateOrder> {
         let s = self.inner.sections.first().filter(|s| s.kind == SecKind::Date)?;
+        if !s.toks.iter().any(|t| matches!(t, Tok::Date(DatePart::Day(_) | DatePart::Year(_)))) {
+            return None;
+        }
         let mut first = None;
         let mut second = None;
         for t in &s.toks {
             if let Tok::Date(d) = t
                 && d.is_calendar()
             {
-                match d {
-                    DatePart::Day(_) => {
-                        if first.is_none() {
-                            first = Some('d');
-                        } else if second.is_none() && first != Some('d') {
-                            second = Some('d');
-                        }
-                    }
-                    DatePart::Month(_) => {
-                        if first.is_none() {
-                            first = Some('m');
-                        } else if second.is_none() && first != Some('m') {
-                            second = Some('m');
-                        }
-                    }
-                    DatePart::Year(_) => {
-                        if first.is_none() {
-                            first = Some('y');
-                        } else if second.is_none() && first != Some('y') {
-                            second = Some('y');
-                        }
-                    }
-                    _ => {}
+                let part = match d {
+                    DatePart::Day(_) => 'd',
+                    DatePart::Month(_) => 'm',
+                    DatePart::Year(_) => 'y',
+                    _ => continue,
+                };
+                if first.is_none() {
+                    first = Some(part);
+                } else if second.is_none() && first != Some(part) {
+                    second = Some(part);
                 }
             }
         }
@@ -247,6 +225,18 @@ impl NumberFormat {
             (Some('y'), _) => Some(gridcraft_core::DateOrder::Ymd),
             _ => None,
         }
+    }
+
+    /// For a date or time format, whether the section that formats `value` shows calendar parts (year, month,
+    /// day) and whether it shows time parts, as `(date, time)`. `None` for any other format and for
+    /// elapsed-time codes like `[h]:mm`, whose value is a duration, not a moment.
+    pub fn date_shape(&self, value: f64) -> Option<(bool, bool)> {
+        let s = self.select(value).map(|(s, _)| s).filter(|s| s.kind == SecKind::Date)?;
+        let parts = || s.toks.iter().filter_map(|t| if let Tok::Date(d) = t { Some(*d) } else { None });
+        if parts().any(|d| matches!(d, DatePart::ElapsedH(_) | DatePart::ElapsedM(_) | DatePart::ElapsedS(_))) {
+            return None;
+        }
+        Some((parts().any(DatePart::is_calendar), parts().any(|d| !d.is_calendar())))
     }
 
     pub fn is_percent(&self) -> bool {

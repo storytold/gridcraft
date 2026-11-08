@@ -61,18 +61,23 @@ pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let raw = sheet.input_text(c);
     let Some(cell) = sheet.cell(c) else { return raw };
     let code = wb.styles.get(cell.style).num_fmt.as_str();
-    let order = gridcraft_core::parse::date_order_from_format(code).unwrap_or(gridcraft_core::DateOrder::Mdy);
-    if let Value::Text(t) = &cell.value
-        && cell.formula.is_none()
-        && code != "@"
-        && text_needs_quote_prefix(t, wb.date_system, order)
-    {
-        return format!("'{raw}");
-    }
-    let Value::Number(n) = &cell.value else { return raw };
-    if cell.formula.is_some() || !parsed(code).is_date() {
+    let Value::Number(n) = &cell.value else {
+        if let Value::Text(t) = &cell.value
+            && cell.formula.is_none()
+            && code != "@"
+        {
+            let order = gridcraft_numfmt::NumberFormat::parse(code).date_order().unwrap_or(gridcraft_core::DateOrder::Mdy);
+            if text_needs_quote_prefix(t, wb.date_system, order) {
+                return format!("'{raw}");
+            }
+        }
+        return raw;
+    };
+    let numfmt = parsed(code);
+    if cell.formula.is_some() || !numfmt.is_date() {
         return raw;
     }
+    let order = numfmt.date_order().unwrap_or(gridcraft_core::DateOrder::Mdy);
     let reads_back =
         |s: &str| matches!(gridcraft_core::parse::parse_input_with_order(s, wb.date_system, order).value, Value::Number(m) if (m - n).abs() < 1e-9);
     let shown = format(&cell.value, code, wb).text;

@@ -41,10 +41,12 @@ pub fn parse_input_with_order(s: &str, sys: DateSystem, order: DateOrder) -> Par
     if let Some((n, f)) = parse_numeric(t, sys, order) {
         return Parsed { value: Value::number(n), format: f };
     }
-    // Day-first fallback is a convenience for typed cell entry, not arithmetic coercion.
+    // General cell entry accepts unambiguous DMY dates; numeric coercion does not.
     if order == DateOrder::Mdy
         && let Some((n, f)) = parse_numeric(t, sys, DateOrder::Dmy)
-        && f.is_some_and(|f| matches!(f, "dd/mm/yyyy" | "dd-mm-yyyy" | "dd.mm.yyyy" | "dd/mm/yyyy h:mm" | "dd-mm-yyyy h:mm" | "dd.mm.yyyy h:mm"))
+        && f.is_some_and(|f| {
+            matches!(f, "dd/mm/yyyy" | "dd-mm-yyyy" | "dd.mm.yyyy" | "dd/mm/yyyy h:mm" | "dd-mm-yyyy h:mm" | "dd.mm.yyyy h:mm" | "d-mmm")
+        })
     {
         return Parsed { value: Value::number(n), format: f };
     }
@@ -286,85 +288,80 @@ fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
 /// Determines the calendar date order (`Dmy`, `Mdy`, `Ymd`) from a number format code.
 /// Returns `None` if the format does not specify a calendar date order.
 pub fn date_order_from_format(code: &str) -> Option<DateOrder> {
-    if code.trim().eq_ignore_ascii_case("general") {
+    let code = code.split(';').next().unwrap_or(code).trim();
+    if code.eq_ignore_ascii_case("general") {
         return None;
     }
-    let mut in_bracket = false;
-    let mut in_quotes = false;
-    let mut escape = false;
-    let mut first_cal = None;
-    let mut second_cal = None;
+    let bytes = code.as_bytes();
+    let mut first = None;
+    let mut second = None;
     let mut has_day_or_year = false;
     let mut after_h = false;
-
-    let chars: Vec<char> = code.chars().collect();
+    let mut quoted = false;
+    let mut bracketed = false;
+    let mut escaped = false;
     let mut i = 0usize;
-    while i < chars.len() {
-        let Some(&c) = chars.get(i) else { break };
-        if escape {
-            escape = false;
+    while let Some(&b) = bytes.get(i) {
+        if !b.is_ascii() {
+            i += 1;
+            continue;
+        }
+        let c = b as char;
+        if escaped {
+            escaped = false;
             i += 1;
             continue;
         }
         if c == '\\' {
-            escape = true;
+            escaped = true;
             i += 1;
             continue;
         }
         if c == '"' {
-            in_quotes = !in_quotes;
+            quoted = !quoted;
             i += 1;
             continue;
         }
-        if in_quotes {
+        if quoted {
             i += 1;
             continue;
         }
         if c == '[' {
-            in_bracket = true;
+            bracketed = true;
             i += 1;
             continue;
         }
         if c == ']' {
-            in_bracket = false;
+            bracketed = false;
             i += 1;
             continue;
         }
-        if in_bracket {
+        if bracketed {
             i += 1;
             continue;
         }
         if c == ';' {
             break;
         }
+        let tail = bytes.get(i..);
+        if (c.eq_ignore_ascii_case(&'a') || c.eq_ignore_ascii_case(&'p'))
+            && (tail.is_some_and(|s| s.len() >= 5 && s.get(..5).is_some_and(|t| t.eq_ignore_ascii_case(b"am/pm")))
+                || tail.is_some_and(|s| s.len() >= 3 && s.get(..3).is_some_and(|t| t.eq_ignore_ascii_case(b"a/p"))))
+        {
+            i += if tail.is_some_and(|s| s.len() >= 5 && s.get(..5).is_some_and(|t| t.eq_ignore_ascii_case(b"am/pm"))) { 5 } else { 3 };
+            continue;
+        }
+        if c.eq_ignore_ascii_case(&'g') && tail.is_some_and(|s| s.len() >= 7 && s.get(..7).is_some_and(|t| t.eq_ignore_ascii_case(b"general"))) {
+            i += 7;
+            continue;
+        }
         let lc = c.to_ascii_lowercase();
-        if (lc == 'a' || lc == 'p') && (i + 4 < chars.len()) {
-            let tail: String = chars.get(i..i + 5).unwrap_or(&[]).iter().flat_map(|x| x.to_lowercase()).collect();
-            if tail == "am/pm" {
-                i += 5;
-                continue;
-            }
-        }
-        if (lc == 'a' || lc == 'p') && (i + 2 < chars.len()) {
-            let tail: String = chars.get(i..i + 3).unwrap_or(&[]).iter().flat_map(|x| x.to_lowercase()).collect();
-            if tail == "a/p" {
-                i += 3;
-                continue;
-            }
-        }
-        if lc == 'g' && i + 6 < chars.len() {
-            let tail: String = chars.get(i..i + 7).unwrap_or(&[]).iter().flat_map(|x| x.to_lowercase()).collect();
-            if tail == "general" {
-                i += 7;
-                continue;
-            }
-        }
         if lc == 'h' {
             after_h = true;
-        } else if lc == 'd' || lc == 'y' {
+        } else if matches!(lc, 'd' | 'y') {
             after_h = false;
         }
-        let cal_part = match lc {
+        let part = match lc {
             'y' => {
                 has_day_or_year = true;
                 Some('y')
@@ -376,24 +373,22 @@ pub fn date_order_from_format(code: &str) -> Option<DateOrder> {
             'm' if !after_h => Some('m'),
             _ => None,
         };
-        if let Some(part) = cal_part {
-            while chars.get(i + 1).is_some_and(|&d| d.to_ascii_lowercase() == lc) {
+        if let Some(part) = part {
+            while bytes.get(i + 1).is_some_and(|next| (*next as char).eq_ignore_ascii_case(&lc)) {
                 i += 1;
             }
-            if first_cal.is_none() {
-                first_cal = Some(part);
-            } else if second_cal.is_none() && first_cal != Some(part) {
-                second_cal = Some(part);
+            if first.is_none() {
+                first = Some(part);
+            } else if second.is_none() && first != Some(part) {
+                second = Some(part);
             }
         }
         i += 1;
     }
-
     if !has_day_or_year {
         return None;
     }
-
-    match (first_cal, second_cal) {
+    match (first, second) {
         (Some('d'), _) => Some(DateOrder::Dmy),
         (Some('m'), _) => Some(DateOrder::Mdy),
         (Some('y'), Some('d')) => Some(DateOrder::Dmy),
@@ -498,13 +493,6 @@ fn parse_date(t: &str, sys: DateSystem, order: DateOrder) -> Option<(f64, &'stat
                 return valid_ymd(sys, y_val, x, 1).map(|s| (s, "mmm-yy"));
             }
             if order == DateOrder::Dmy {
-                // Two components in an explicitly formatted DMY cell stay day-first.
-                if (1..=12).contains(&y_val)
-                    && (1..=31).contains(&x)
-                    && let Some(s) = valid_ymd(sys, y, y_val, x)
-                {
-                    return Some((s, "d-mmm"));
-                }
                 // Primary: Day = x, Month = y_val
                 if (1..=12).contains(&y_val)
                     && (1..=31).contains(&x)
@@ -906,23 +894,39 @@ mod tests {
         // Two-part dates
         let cur_y = current_year();
         let s25_9 = serial_from_ymd(DateSystem::D1900, cur_y, 9, 25).unwrap_or(0.0);
+        let s_apr5 = serial_from_ymd(DateSystem::D1900, cur_y, 4, 5).unwrap_or(0.0);
+        let s_may4 = serial_from_ymd(DateSystem::D1900, cur_y, 5, 4).unwrap_or(0.0);
+        assert_eq!(parse_input_with_order("05/04", DateSystem::D1900, DateOrder::Dmy).value, Value::Number(s_apr5));
+        assert_eq!(parse_input_with_order("05/04", DateSystem::D1900, DateOrder::Mdy).value, Value::Number(s_may4));
         assert_eq!(parse_input_with_order("25/09", DateSystem::D1900, DateOrder::Dmy).value, Value::Number(s25_9));
         assert_eq!(parse_input_with_order("25/09", DateSystem::D1900, DateOrder::Mdy).value, Value::Number(s25_9));
     }
 
     #[test]
     fn date_order_detection_from_format_code() {
-        assert_eq!(date_order_from_format("dd/mm/yyyy"), Some(DateOrder::Dmy));
-        assert_eq!(date_order_from_format("d/m/yyyy"), Some(DateOrder::Dmy));
-        assert_eq!(date_order_from_format("dd.mm.yyyy"), Some(DateOrder::Dmy));
-        assert_eq!(date_order_from_format("dd-mm-yyyy"), Some(DateOrder::Dmy));
-        assert_eq!(date_order_from_format("d-mmm-yy"), Some(DateOrder::Dmy));
-        assert_eq!(date_order_from_format("[$-409]dd/mm/yyyy;@"), Some(DateOrder::Dmy));
-        assert_eq!(date_order_from_format("m/d/yyyy"), Some(DateOrder::Mdy));
-        assert_eq!(date_order_from_format("mm/dd/yyyy"), Some(DateOrder::Mdy));
-        assert_eq!(date_order_from_format("yyyy-mm-dd"), Some(DateOrder::Ymd));
-        assert_eq!(date_order_from_format("General"), None);
-        assert_eq!(date_order_from_format("0.00"), None);
-        assert_eq!(date_order_from_format("h:mm:ss AM/PM"), None);
+        let cases = [
+            ("dd/mm/yyyy", Some(DateOrder::Dmy)),
+            ("d/m/yyyy", Some(DateOrder::Dmy)),
+            ("dd.mm.yyyy", Some(DateOrder::Dmy)),
+            ("dd-mm-yyyy", Some(DateOrder::Dmy)),
+            ("d-mmm-yy", Some(DateOrder::Dmy)),
+            ("[$-409]dd/mm/yyyy;@", Some(DateOrder::Dmy)),
+            ("m/d/yyyy", Some(DateOrder::Mdy)),
+            ("mm/dd/yyyy", Some(DateOrder::Mdy)),
+            ("yyyy-mm-dd", Some(DateOrder::Ymd)),
+            ("General", None),
+            ("0.00", None),
+            ("h:mm:ss AM/PM", None),
+            ("mmm", None),
+            ("hh:mm", None),
+            ("[h]:mm", None),
+            ("\"d/m/yyyy\" 0", None),
+            (r"d\/m\/yyyy", Some(DateOrder::Dmy)),
+            ("yyyy/mm/dd;mm/dd/yyyy", Some(DateOrder::Ymd)),
+        ];
+        for (code, expected) in cases {
+            let parsed_order = date_order_from_format(code);
+            assert_eq!(parsed_order, expected, "{code}");
+        }
     }
 }
