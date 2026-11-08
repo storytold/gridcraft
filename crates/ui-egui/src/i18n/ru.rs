@@ -106,6 +106,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Find Next" => "Найти далее",
         "Replace All" => "Заменить всё",
         "Replace" => "Заменить",
+        "Nothing found" => "Ничего не найдено",
         "Nothing found for “{}”" => "Ничего не найдено для “{}”",
         "{count} cell(s) found" => "{count} cell(s) найдено",
         "Go To…" => "Перейти…",

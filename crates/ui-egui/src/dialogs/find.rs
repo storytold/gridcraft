@@ -1,7 +1,9 @@
 use super::show::ok_cancel;
 use super::{Dialog, Json, Key, SheetApp, json};
 
-/// Draws the Find/Replace form with case, whole-cell and workbook options, requests field focus once, and runs find/replace with the current parameters.
+/// Draws the Find/Replace form with case, whole-cell and workbook options, requests field focus once, and runs find/replace with the current
+/// parameters. Find All keeps its hit list in the dialog's results area; a search that finds nothing, and an empty query that is not a search at all,
+/// report a no-result line there instead of a message box, while other errors - a missing workbook, a failing Replace All - keep the message-box path.
 pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     let lang = app.ui.language;
     ui.horizontal(|ui| {
@@ -77,41 +79,58 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
             }
         }
         if ui.button(lang.tr("Find All")).clicked() {
-            let mut p = base.clone();
-            p["all"] = json!(true);
-            match app.run("edit.find", p) {
-                Ok(r) => {
-                    d.result = Some(r);
-                    d.values.insert("notFound".into(), json!(false));
-                    d.values.remove("foundFor");
+            if what.is_empty() {
+                // An empty query is not a search, so the engine's bad-params error never reaches
+                // the user as a message box: the results area says nothing was found.
+                d.result = None;
+                d.values.insert("notFound".into(), json!(true));
+                d.values.remove("foundFor");
+            } else {
+                let mut p = base.clone();
+                p["all"] = json!(true);
+                match app.run("edit.find", p) {
+                    Ok(r) => {
+                        d.result = Some(r);
+                        d.values.insert("notFound".into(), json!(false));
+                        d.values.remove("foundFor");
+                    }
+                    Err(e) if e.starts_with("We couldn't find what you were looking for: ") => {
+                        // Only the engine's no-match is reported here: the stale list goes, the
+                        // dialog's own results area says it instead of a message box, and the line
+                        // quotes the query this search actually ran, not whatever the field holds later.
+                        d.result = None;
+                        d.values.insert("notFound".into(), json!(true));
+                        d.values.insert("foundFor".into(), json!(what.clone()));
+                    }
+                    // No open workbook is an error, not a no-result, and keeps the message-box path.
+                    Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
                 }
-                Err(e) if e.starts_with("We couldn't find what you were looking for: ") => {
-                    // Only the engine's no-match is reported here: the stale list goes, the
-                    // dialog's own results area says it instead of a message box, and the line
-                    // quotes the query this search actually ran, not whatever the field holds later.
-                    d.result = None;
-                    d.values.insert("notFound".into(), json!(true));
-                    d.values.insert("foundFor".into(), json!(what.clone()));
-                }
-                // An empty query or no open workbook is an error, not a no-result, and keeps the message-box path.
-                Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
             }
         }
         if ui.button(lang.tr("Find Next")).clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
-            match app.run("edit.find", base.clone()) {
-                Ok(_) => {
-                    d.values.insert("notFound".into(), json!(false));
-                    d.values.remove("foundFor");
+            if what.is_empty() {
+                d.values.insert("notFound".into(), json!(true));
+                d.values.remove("foundFor");
+            } else {
+                match app.run("edit.find", base.clone()) {
+                    Ok(_) => {
+                        d.values.insert("notFound".into(), json!(false));
+                        d.values.remove("foundFor");
+                    }
+                    Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
                 }
-                Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
+                app.grid.ensure_visible = true;
             }
-            app.grid.ensure_visible = true;
         }
     });
     let t = crate::theme::Tokens::get(ui.ctx());
     if d.values.get("notFound").and_then(Json::as_bool) == Some(true) {
         ui.separator();
-        ui.colored_label(t.danger, lang.tr("Nothing found for “{}”").replace("{}", d.values.get("foundFor").and_then(Json::as_str).unwrap_or("")));
+        // A query was searched: quote it; an empty query has nothing to quote, so the plain line says it.
+        match d.values.get("foundFor").and_then(Json::as_str) {
+            Some(q) => ui.colored_label(t.danger, lang.tr("Nothing found for “{}”").replace("{}", q)),
+            None => ui.colored_label(t.danger, lang.tr("Nothing found")),
+        };
     } else if let Some(r) = &d.result
         && let Some(list) = r["results"].as_array()
     {

@@ -42,17 +42,28 @@ fn find_all_says_there_is_nothing_to_report() {
 }
 
 #[test]
-fn an_empty_find_all_query_is_an_error_not_a_no_result() {
+fn an_empty_find_all_query_says_nothing_was_found() {
     let mut h = open_find_and_type("");
     h.get_by_label("Find All").click();
     h.run();
     let state = h.state();
-    assert!(state.message.is_some(), "an empty query reaches the message box");
-    assert_eq!(state.message.as_ref().unwrap().0, "Find and Replace");
-    assert_eq!(state.message.as_ref().unwrap().1, "missing `what`");
+    assert!(state.message.is_none(), "an empty query reports in the dialog, not in a message box");
     let d = state.dialog.as_ref().unwrap();
-    assert!(d.values.get("notFound").is_none(), "the dialog says no results only for a genuine no-match");
-    assert!(h.query_all_by_value("Nothing found for “”").next().is_none(), "no no-result line for an empty query");
+    assert!(d.result.is_none(), "the results list is cleared, not left stale");
+    assert_eq!(d.values.get("notFound").and_then(serde_json::Value::as_bool), Some(true));
+    assert!(h.query_all_by_value("Nothing found").next().is_some(), "the plain line says it");
+    assert!(h.query_all_by_value("Nothing found for “”").next().is_none(), "an empty query is not quoted");
+}
+
+#[test]
+fn an_empty_find_next_says_nothing_was_found() {
+    let mut h = open_find_and_type("");
+    h.get_by_label("Find Next").click();
+    h.run();
+    let state = h.state();
+    assert!(state.message.is_none(), "an empty query reports in the dialog, not in a message box");
+    assert_eq!(state.dialog.as_ref().unwrap().values.get("notFound").and_then(serde_json::Value::as_bool), Some(true));
+    assert!(h.query_all_by_value("Nothing found").next().is_some(), "the plain line says it");
 }
 
 #[test]
@@ -65,6 +76,12 @@ fn find_all_no_match_renders_in_the_interface_language() {
     h.get_by_label("Найти всё").click();
     h.run();
     assert!(h.query_all_by_value("Ничего не найдено для “absent”").next().is_some(), "the no-match line renders in Russian");
+    // The empty query takes the same path, with nothing to quote.
+    h.state_mut().dialog.as_mut().unwrap().values.insert("what".into(), json!(""));
+    h.get_by_label("Найти всё").click();
+    h.run();
+    assert!(h.state().message.is_none(), "the Russian dialog reports an empty query without a message box");
+    assert!(h.query_all_by_value("Ничего не найдено").next().is_some(), "the plain line renders in Russian");
 }
 
 #[test]
