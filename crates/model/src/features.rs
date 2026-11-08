@@ -780,7 +780,7 @@ pub fn ink_creation_id(existing: Option<&str>) -> String {
 /// key to a second stroke would put two `a16:creationId`s in one file and quietly break the map the
 /// key exists for. `taken` answers from the workbook's own strokes, a finite set, so the loop only
 /// moves the counter forward and ends.
-pub fn ink_creation_id_free(taken: impl Fn(&str) -> bool) -> String {
+pub fn ink_creation_id_free(mut taken: impl FnMut(&str) -> bool) -> String {
     loop {
         let key = ink_creation_id(None);
         if !taken(&key) {
