@@ -639,13 +639,36 @@ fn export(s: &mut Session, p: &Json) -> Result<Json> {
     // Write beside the target and rename: a sync client or a concurrent `script.list` must never
     // see a half-written `.osts`, and a failed write must not lose the file that was there.
     let target = std::path::Path::new(path);
-    let temp = target.with_extension("osts.tmp");
-    std::fs::write(&temp, &text).map_err(|e| bad("script.export", format!("{e}")))?;
+    let (temp, mut file) = export_temp(target).map_err(|e| bad("script.export", e))?;
+    let written = std::io::Write::write_all(&mut file, text.as_bytes()).and_then(|()| std::io::Write::flush(&mut file));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&temp);
+        return Err(bad("script.export", format!("{e}")));
+    }
+    drop(file);
     if let Err(e) = std::fs::rename(&temp, target) {
         let _ = std::fs::remove_file(&temp);
         return Err(bad("script.export", format!("{e}")));
     }
     Ok(json!({"path": path, "bytes": text.len()}))
+}
+
+/// A sibling temporary file for an export, created exclusively: two exports in one folder never
+/// share a name, so one can never rename the other's content into its own destination.
+fn export_temp(target: &std::path::Path) -> std::result::Result<(std::path::PathBuf, std::fs::File), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    let stem = target.file_stem().and_then(|s| s.to_str()).unwrap_or("script");
+    for _ in 0..8 {
+        let name = format!("{stem}.{}.{}.osts.tmp", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed));
+        let temp = target.with_file_name(name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&temp) {
+            Ok(file) => return Ok((temp, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("{e}")),
+        }
+    }
+    Err("could not make a temporary file beside the export".to_string())
 }
 
 #[cfg(test)]

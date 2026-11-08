@@ -200,10 +200,16 @@ fn list(app: &mut SheetApp, ui: &mut Ui) {
     {
         match app.session.run("script.delete", json!({"id": id})) {
             Ok(_) => {
-                app.office_scripts.selected = None;
-                app.office_scripts.name.clear();
-                app.office_scripts.code.clear();
-                app.office_scripts.dirty = false;
+                // The editor is empty afterwards: clear everything that belonged to the script, so
+                // no stale error marker or output survives the delete.
+                let pane = &mut app.office_scripts;
+                pane.selected = None;
+                pane.name.clear();
+                pane.code.clear();
+                pane.dirty = false;
+                pane.error_line = None;
+                pane.output.clear();
+                pane.calls = 0;
                 refresh(app);
                 app.office_scripts.status = Some(Status::ok("Deleted."));
             }
