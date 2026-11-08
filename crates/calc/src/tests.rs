@@ -1842,6 +1842,9 @@ fn lookup_of_an_empty_cell_stays_blank() {
         ("D8", "=VLOOKUP(\"k\",A1:B2,2,0)", Value::Number(0.0)),
         // Arithmetic still reads the blank as 0.
         ("D9", "=VLOOKUP(\"k\",A1:B2,2,0)+1", Value::Number(1.0)),
+        // A blank lookup given as an argument is still given, not omitted.
+        ("D10", "=FILTER(1,FALSE,VLOOKUP(\"k\",A1:B2,2,FALSE))", Value::Number(0.0)),
+        ("D11", "=XLOOKUP(\"z\",A1:A2,B1:B2,VLOOKUP(\"k\",A1:B2,2,0))", Value::Number(0.0)),
     ] {
         t.set(at, f);
         assert_eq!(t.get(at), want, "{f}");

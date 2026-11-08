@@ -50,12 +50,7 @@ fn reject_multi_cell_refs(spec: &FnSpec, args: &[Arg]) -> Option<Vec<Arg>> {
     if !args.iter().enumerate().any(|(i, a)| multi(i, a)) {
         return None;
     }
-    Some(
-        args.iter()
-            .enumerate()
-            .map(|(i, a)| if multi(i, a) { Arg { value: Value::Error(CellError::Value), from_ref: false } } else { a.clone() })
-            .collect(),
-    )
+    Some(args.iter().enumerate().map(|(i, a)| if multi(i, a) { Arg::val(Value::Error(CellError::Value)) } else { a.clone() }).collect())
 }
 
 /// Lookups whose every call searches a lookup vector from its start, so a call lifted over `n`
