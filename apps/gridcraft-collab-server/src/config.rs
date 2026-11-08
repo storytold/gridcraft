@@ -44,6 +44,8 @@ pub struct Config {
     pub max_participants: usize,
     /// How often a snapshot would be written (reserved; storage lands in PR 4c).
     pub snapshot_ops: u64,
+    /// How often a background snapshot runs even without enough operations (RFC §9).
+    pub snapshot_interval: Duration,
 }
 
 impl Default for Config {
@@ -61,6 +63,7 @@ impl Default for Config {
             max_frame: 1024 * 1024,
             max_participants: 5,
             snapshot_ops: 500,
+            snapshot_interval: Duration::from_secs(5 * 60),
         }
     }
 }
@@ -68,8 +71,8 @@ impl Default for Config {
 impl Config {
     /// Reads the environment. `GRIDCRAFT_COLLAB_ADDR`, `..._PUBLIC_URL`, `..._AUDIENCE`,
     /// `..._APP`, `..._SERVICE_TOKEN`, `..._LEASE_SECS`, `..._HELLO_SECS`,
-    /// `..._MAX_PARTICIPANTS`, `..._SNAPSHOT_OPS`. The store path is read by the binary, which
-    /// also restores the sessions from it.
+    /// `..._MAX_PARTICIPANTS`, `..._SNAPSHOT_OPS`, `..._SNAPSHOT_SECS`. The store path is read by
+    /// the binary, which also restores the sessions from it.
     pub fn from_env() -> Result<Config, ConfigError> {
         let mut cfg = Config::default();
         if let Some(value) = var("GRIDCRAFT_COLLAB_ADDR")? {
@@ -96,6 +99,9 @@ impl Config {
         }
         if let Some(value) = var("GRIDCRAFT_COLLAB_SNAPSHOT_OPS")? {
             cfg.snapshot_ops = positive(&value, "GRIDCRAFT_COLLAB_SNAPSHOT_OPS")?;
+        }
+        if let Some(value) = var("GRIDCRAFT_COLLAB_SNAPSHOT_SECS")? {
+            cfg.snapshot_interval = Duration::from_secs(positive(&value, "GRIDCRAFT_COLLAB_SNAPSHOT_SECS")?);
         }
         if let Some(value) = var("GRIDCRAFT_COLLAB_MAX_PARTICIPANTS")? {
             let n = positive(&value, "GRIDCRAFT_COLLAB_MAX_PARTICIPANTS")?;

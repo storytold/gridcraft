@@ -24,6 +24,7 @@
 | `GRIDCRAFT_COLLAB_HELLO_SECS` | нет | `10` | сколько ждать `hello` |
 | `GRIDCRAFT_COLLAB_MAX_PARTICIPANTS` | нет | `5` | участников на документ (v1) |
 | `GRIDCRAFT_COLLAB_SNAPSHOT_OPS` | нет | `500` | операций между снапшотами |
+| `GRIDCRAFT_COLLAB_SNAPSHOT_SECS` | нет | `300` | период фонового снапшота по времени |
 
 Лимиты транспорта: входящий кадр ≤ 1 MiB, сообщение ≤ 9 MiB (`applied` ≤ 8 MiB по RFC §4.1),
 чанк снапшота 768 КиБ до base64.
@@ -43,9 +44,10 @@ $GRIDCRAFT_COLLAB_STORE/sessions/<fileId>/
   сохраняются ридером/писателем, второго сериализатора нет.
 - Ключи листов привязаны к имени: `SheetUid` не переживает рестарт, имена уникальны, а
   переименование попадает в следующий снапшот; исчезнувшее имя — надгробие.
-- Снапшот: при открытии, каждые `SNAPSHOT_OPS` операций, на graceful shutdown. Запись
-  атомарная (tmp + rename), идёт в `spawn_blocking` с COW-копией книги; после успеха журнал
-  обрезается, операции во время записи остаются.
+- Снапшот: при открытии, каждые `SNAPSHOT_OPS` операций, каждые `SNAPSHOT_SECS`
+  секунд (фоновый тик; комнату без новых операций не трогает), на graceful shutdown.
+  Запись атомарная (tmp + rename), идёт в `spawn_blocking` с COW-копией книги; после
+  успеха журнал обрезается, операции во время записи остаются.
 - Рестарт: `restore()` читает каталоги, грузит базу через `DocState::from_saved`, применяет
   хвост через `Room::apply`, сверяет версию с `meta.json`. Повреждённый каталог логируется и
   пропускается.
@@ -107,9 +109,19 @@ GET    /v1/sessions/{id}/ws    WebSocket
 
 - `GET /healthz` → `200 ok`;
 - `GET /readyz` → `200 ready`;
-- `GET /metrics` → Prometheus: `gridcraft_collab_sessions_open`, `participants`, `leases`,
-  `connections`, `ops_total`, `applied_total`, `commits_total`, `auth_failures_total`,
-  `dropped_frames_total`, `rejections_total{code}`.
+- `GET /metrics` → Prometheus:
+  - счётчики: `ops_total`, `applied_total`, `commits_total`, `snapshots_total`,
+    `resumes_total` (соединения, вернувшиеся с известной версией — reconnect rate),
+    `catchups_total` (догон по хвосту журнала), `resync_snapshots_total` (догон по книге),
+    `auth_failures_total`, `dropped_frames_total`, `rejections_total{code}`;
+  - гистограмма `op_latency_seconds` — от кадра `op` до отправленного `applied`
+    (бакеты 1–1000 мс, `_sum`/`_count`);
+  - гейджи: `sessions_open`, `participants`, `leases`, `connections`, `journal_ops`
+    (операций в памяти), `journal_bytes` и `base_bytes` (размер файлов на томе),
+    `last_snapshot_timestamp_seconds`.
+
+Латентность — это время сервера, а не общий RTT клиента; reconnect rate считается как
+`rate(resumes_total)` при скрейпе.
 
 Логи содержат только `fileId`, `sessionId`, `actorId`, версию и код — ни значений ячеек, ни
 токенов.
@@ -117,12 +129,11 @@ GET    /v1/sessions/{id}/ws    WebSocket
 ## Чего ещё нет
 
 - **TLS** терминируется на входном прокси (RFC §4.1); бинарь слушает HTTP/WS.
-- **Метрики латентности `op→applied`**, reconnect rate и размер журнала — следующий срез.
 - **Коммит в кабинет** через server-to-server callback: HTTP `commit` есть, исходящего
   вызова кабинета пока нет.
-- **Периодический снапшот по времени** (5 минут) — сейчас только по числу операций и на
-  shutdown; `flush` вызывается из graceful shutdown.
 - **Отмена структурных правок** — v2 (undo и redo merge-шагов есть).
+- **Логгер в бинаре** не инициализирован: `log::*` из библиотеки сейчас уходит в никуда;
+  метрики и `/healthz` это не затрагивает.
 
 Клиент: `docs/collab/client.md` (feature `collab`, `GRIDCRAFT_COLLAB_URL`/`_TOKEN`).
 

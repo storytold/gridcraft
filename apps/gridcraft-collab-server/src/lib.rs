@@ -21,6 +21,7 @@ pub mod store;
 mod ws;
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::Json;
@@ -39,7 +40,7 @@ pub use lease::Lease;
 pub use store::{JournalEntry, Store, StoreError, StoredMeta};
 
 use crate::lease::Leases;
-use crate::metrics::Metrics;
+use crate::metrics::{Gauges, Metrics};
 
 /// The base64 alphabet of the wire: `initialBytes` and commit `bytes`.
 pub(crate) const B64: base64::engine::general_purpose::GeneralPurpose = base64::engine::general_purpose::STANDARD;
@@ -378,7 +379,8 @@ impl App {
     }
 
     /// Writes the authoritative state to the volume and trims the journal it covers. Called every
-    /// `snapshot_ops` operations, at shutdown, and once when a session opens.
+    /// `snapshot_ops` operations, on the periodic tick (`snapshot_interval`), at shutdown, and once
+    /// when a session opens.
     pub async fn snapshot(&self, session_id: &str) -> Result<(), StoreError> {
         let Some(store) = self.store.clone() else { return Ok(()) };
         let snapshot = {
@@ -404,6 +406,9 @@ impl App {
             store.write_journal(file_id, journal)?;
         }
         inner.snapshot_version.insert(session_id.to_string(), version);
+        drop(inner);
+        self.metrics.snapshots.fetch_add(1, Ordering::Relaxed);
+        self.metrics.last_snapshot_at.store(now_secs(), Ordering::Relaxed);
         Ok(())
     }
 
@@ -473,7 +478,8 @@ impl App {
         restored
     }
 
-    /// Snapshots every session that has operations the base does not cover. Called on shutdown.
+    /// Snapshots every session that has operations the base does not cover. Called on the
+    /// periodic tick and on shutdown.
     pub async fn flush(&self) -> usize {
         if self.store.is_none() {
             return 0;
@@ -495,10 +501,32 @@ impl App {
         for id in ids {
             match self.snapshot(&id).await {
                 Ok(()) => saved += 1,
-                Err(e) => log::error!("snapshot on shutdown failed session={id}: {e}"),
+                Err(e) => log::error!("snapshot failed session={id}: {e}"),
             }
         }
         saved
+    }
+
+    /// Writes a snapshot of every changed session every `cfg.snapshot_interval`, so a room idle
+    /// on the operation count still bounds what a restart has to replay. The first tick is
+    /// skipped: opening a session already writes its base.
+    pub fn spawn_snapshots(self: &Arc<App>) -> tokio::task::JoinHandle<()> {
+        let app = self.clone();
+        // `interval` panics on a zero period; the configuration never produces one, but a caller
+        // constructing `Config` by hand can.
+        let every = if self.cfg.snapshot_interval.is_zero() { std::time::Duration::from_secs(5 * 60) } else { self.cfg.snapshot_interval };
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(every);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let saved = app.flush().await;
+                if saved > 0 {
+                    log::info!("periodic snapshot: {saved} sessions");
+                }
+            }
+        })
     }
 
     /// `GET /v1/sessions/{id}`.
@@ -566,14 +594,27 @@ impl App {
         Ok(())
     }
 
-    /// The `/metrics` body, with the gauges read under the state lock.
+    /// The `/metrics` body, with the gauges read under the state lock. File sizes come from the
+    /// volume; reading a few directory entries per scrape is cheap next to the page itself.
     pub async fn metrics_page(&self) -> String {
-        let (sessions, participants, leases) = {
+        let (files, mut gauges) = {
             let inner = self.inner.lock().await;
             let now = now_secs();
-            (inner.sessions.len() as u64, inner.participants_total(), inner.leases.live_leases(now).len() as u64)
+            let gauges = Gauges {
+                sessions: inner.sessions.len() as u64,
+                participants: inner.participants_total(),
+                leases: inner.leases.live_leases(now).len() as u64,
+                journal_ops: inner.journal.values().map(|entries| entries.len() as u64).sum(),
+                ..Gauges::default()
+            };
+            let files: Vec<i64> = inner.sessions.values().map(|meta| meta.file_id).collect();
+            (files, gauges)
         };
-        self.metrics.render(sessions, participants, leases, env!("CARGO_PKG_VERSION"))
+        if let Some(store) = &self.store {
+            gauges.journal_bytes = files.iter().filter_map(|file_id| store.journal_size(*file_id).ok().flatten()).sum();
+            gauges.base_bytes = files.iter().filter_map(|file_id| store.base_size(*file_id).ok().flatten()).sum();
+        }
+        self.metrics.render(&gauges, env!("CARGO_PKG_VERSION"))
     }
 }
 

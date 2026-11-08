@@ -7,7 +7,7 @@ use base64::Engine;
 use futures_util::SinkExt;
 use gridcraft_collab::Role;
 use serde_json::{Value, json};
-use support::{SERVICE, create, http, next, now, op, open, sheet_key, start};
+use support::{SERVICE, create, http, next, now, op, open, open_at, sheet_key, start};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -136,5 +136,35 @@ async fn health_and_metrics_are_open_to_the_supervisor() {
     let (status, body) = http(&server, "GET", "/metrics", None, None).await;
     assert_eq!(status, 200);
     assert!(body.contains("gridcraft_collab_sessions_open"));
+    assert!(body.contains("gridcraft_collab_journal_ops"));
+    assert!(body.contains("gridcraft_collab_op_latency_seconds_count"));
     assert!(!body.contains("test-secret"));
+}
+
+#[tokio::test]
+async fn metrics_count_op_latency_and_reconnects() {
+    let server = start().await;
+    let session = create(&server, 13, false).await;
+    let mut ann = open(&server, &session, "ann", Role::Editor, 13).await;
+    let sheet = sheet_key(&next(&mut ann).await);
+    ann.send(Message::text(op("op-1", "cell.set", json!({ "input": 1 }), &sheet, "A1"))).await.unwrap();
+    assert_eq!(next(&mut ann).await["applied"]["version"], 1);
+
+    // A client that comes back with the version it has needs no catch-up.
+    let mut bob = open_at(&server, &session, "bob", Role::Editor, 13, 1).await;
+    assert_eq!(next(&mut bob).await["type"], "welcome");
+
+    // One that is behind catches up from the journal tail.
+    let mut cy = open_at(&server, &session, "cy", Role::Editor, 13, 0).await;
+    assert_eq!(next(&mut cy).await["type"], "welcome");
+    assert_eq!(next(&mut cy).await["applied"]["version"], 1);
+    assert_eq!(next(&mut cy).await["type"], "resynced");
+
+    let (status, page) = http(&server, "GET", "/metrics", None, None).await;
+    assert_eq!(status, 200, "{page}");
+    assert!(page.contains("gridcraft_collab_resumes_total 1"), "{page}");
+    assert!(page.contains("gridcraft_collab_catchups_total 1"), "{page}");
+    assert!(page.contains("gridcraft_collab_resync_snapshots_total 0"), "{page}");
+    assert!(page.contains("gridcraft_collab_op_latency_seconds_count 1"), "{page}");
+    assert!(page.contains("gridcraft_collab_op_latency_seconds_bucket{le=\"+Inf\"} 1"), "{page}");
 }

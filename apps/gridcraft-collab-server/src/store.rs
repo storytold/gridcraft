@@ -225,6 +225,24 @@ impl Store {
         Ok(out)
     }
 
+    /// Size of `journal.jsonl` in bytes; `None` when the session has no journal yet.
+    pub fn journal_size(&self, file_id: i64) -> Result<Option<u64>, StoreError> {
+        self.file_size(file_id, JOURNAL)
+    }
+
+    /// Size of `base.xlsx` in bytes; `None` when the session has no base yet.
+    pub fn base_size(&self, file_id: i64) -> Result<Option<u64>, StoreError> {
+        self.file_size(file_id, BASE)
+    }
+
+    fn file_size(&self, file_id: i64, name: &str) -> Result<Option<u64>, StoreError> {
+        match fs::metadata(self.dir(file_id).join(name)) {
+            Ok(meta) => Ok(Some(meta.len())),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Removes a session after the cabinet closed it or committed it.
     pub fn remove(&self, file_id: i64) -> Result<(), StoreError> {
         match fs::remove_dir_all(self.dir(file_id)) {

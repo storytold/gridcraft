@@ -66,6 +66,19 @@ pub async fn start_stored(root: &Path) -> Server {
     server
 }
 
+/// A stored server with a custom configuration; the address and service token are filled in.
+pub async fn start_stored_config(root: &Path, mut cfg: Config) -> Server {
+    cfg.addr = "127.0.0.1:0".parse().unwrap();
+    if cfg.service_token.is_none() {
+        cfg.service_token = Some(SERVICE.into());
+    }
+    let app = Arc::new(App::with_store(cfg, jwt(), Store::open(root).unwrap()));
+    let restored = app.restore().await;
+    let mut server = launch(app).await;
+    server.restored = restored;
+    server
+}
+
 impl Server {
     pub async fn stop(self) {
         self.task.abort();

@@ -3,6 +3,7 @@
 //! ```text
 //! GRIDCRAFT_COLLAB_JWT_SECRET=... \
 //! GRIDCRAFT_COLLAB_SERVICE_TOKEN=... \
+//! GRIDCRAFT_COLLAB_STORE=/var/lib/gridcraft-collab \
 //! GRIDCRAFT_COLLAB_ADDR=127.0.0.1:8787 \
 //! gridcraft-collab-server
 //! ```
@@ -37,6 +38,7 @@ async fn run() -> Result<(), String> {
     let addr = cfg.addr;
     let app = Arc::new(App::with_store(cfg, jwt, store));
     let restored = app.restore().await;
+    let _snapshots = app.spawn_snapshots();
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| format!("cannot bind {addr}: {e}"))?;
     eprintln!("gridcraft-collab-server listening on {addr} ({restored} sessions restored)");
     axum::serve(listener, router(app.clone())).with_graceful_shutdown(shutdown(app)).await.map_err(|e| format!("the server stopped: {e}"))

@@ -30,6 +30,9 @@ pub(crate) async fn run(app: Arc<App>, session_id: String, mut socket: WebSocket
             return;
         }
     };
+    if last_version > 0 {
+        app.metrics.resumes.fetch_add(1, Ordering::Relaxed);
+    }
     let (tx, mut rx) = mpsc::channel::<ServerMessage>(OUTBOX);
     let (conn_id, others, participants) = register(&app, &session_id, &connection.actor, tx.clone()).await;
     if send(&mut socket, &welcome).await.is_err() {
@@ -149,7 +152,10 @@ const SNAPSHOT_CHUNK: usize = 768 * 1024;
 async fn resync(app: &Arc<App>, session_id: &str, conn_id: &u64, tx: &mpsc::Sender<ServerMessage>, socket: &mut WebSocket, from: u64) -> bool {
     let (head, base) = unregister(app, session_id, conn_id).await;
     let mut sent = from;
+    let mut used_snapshot = false;
     if from > head || from < base {
+        used_snapshot = true;
+        app.metrics.resync_snapshots.fetch_add(1, Ordering::Relaxed);
         let Some((version, epoch, workbook)) = snapshot_source(app, session_id).await else { return false };
         let written = tokio::task::spawn_blocking(move || gridcraft_xlsx::write_xlsx(&workbook)).await;
         let bytes = match written {
@@ -175,6 +181,9 @@ async fn resync(app: &Arc<App>, session_id: &str, conn_id: &u64, tx: &mpsc::Send
         };
         if entries.is_empty() {
             let (version, epoch) = re_register(app, session_id, conn_id, tx).await;
+            if !used_snapshot {
+                app.metrics.catchups.fetch_add(1, Ordering::Relaxed);
+            }
             return send(socket, &ServerMessage::Resynced { version, epoch }).await.is_ok();
         }
         for applied in &entries {
@@ -266,6 +275,7 @@ async fn pump(
     socket: &mut WebSocket,
     text: &str,
 ) -> bool {
+    let started = tokio::time::Instant::now();
     let Ok(message) = serde_json::from_str::<ClientMessage>(text) else {
         return send(socket, &ServerMessage::Error { code: "invalid".into(), message: "a frame is one JSON message".into(), retryable: false })
             .await
@@ -341,6 +351,7 @@ async fn pump(
             });
         }
     }
+    let mut replied = false;
     for message in handled {
         match &message {
             ServerMessage::Applied { .. } => {
@@ -348,6 +359,7 @@ async fn pump(
                 if send(socket, &message).await.is_err() {
                     return false;
                 }
+                replied = true;
             }
             ServerMessage::Presence { .. } => {
                 // Presence is state of a connection, not of the document: the sender already
@@ -360,6 +372,9 @@ async fn pump(
                 }
             }
         }
+    }
+    if replied {
+        app.metrics.op_latency.observe(started.elapsed());
     }
     true
 }
