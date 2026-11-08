@@ -6199,6 +6199,14 @@ fn action_pen_recognises_consecutive_strokes_as_one_entry() {
 }
 
 #[test]
+fn action_pen_accepts_a_tap_as_a_one_point_stroke() {
+    let mut s = ink_session(".");
+    let r = s.execute("draw.actionPenInk", json!({"points": [[12.0, 8.0]], "cell": "B2"})).unwrap();
+    assert_eq!(r["text"], json!("."));
+    assert_eq!(v(&s, "B2"), Value::text("."));
+}
+
+#[test]
 fn action_pen_targets_the_cell_under_the_strokes_first_point() {
     let mut s = ink_session("7");
     let sh = s.doc().unwrap().wb.active().unwrap();
@@ -6342,13 +6350,29 @@ fn ink_status_reports_the_model_contract() {
     assert!(s.execute("ink.modelImport", json!({"path": dir.display().to_string()})).is_err());
 }
 
+/// A directory this test created itself. `create_dir` fails when the name is taken, so a path
+/// someone else already made (including a symlink planted in a shared temp directory) is skipped
+/// instead of followed — `ink.modelRemove` must only ever delete test-owned files.
+fn exclusive_scratch(tag: &str) -> Option<std::path::PathBuf> {
+    let base = std::env::temp_dir();
+    for nonce in 0..64u32 {
+        let dir = base.join(format!("gridcraft-{tag}-{}-{nonce}", std::process::id()));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return Some(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
 #[test]
 fn ink_commands_never_panic_on_empty_or_hostile_params() {
     let mut s = s();
-    // A scratch directory this process owns: `ink.modelRemove` deletes `<root>/trocr-small-handwritten`,
-    // and the shared temp directory may hold a developer's own model.
-    let scratch = std::env::temp_dir().join(format!("gridcraft-ink-hostile-{}", std::process::id()));
-    s.models_dir = Some(scratch.display().to_string());
+    // `ink.modelRemove` deletes `<root>/trocr-small-handwritten`: the root must be a directory
+    // this test created, never the shared temp directory with a developer's own model in it.
+    let scratch = exclusive_scratch("ink-hostile");
+    s.models_dir = scratch.as_ref().map(|dir| dir.display().to_string());
     for id in ["draw.actionPen", "draw.actionPenInk", "ink.status", "ink.modelImport", "ink.modelRemove"] {
         for p in [json!({}), json!([]), json!(7), json!("x"), json!({"points": "no", "path": "\u{0}../..", "on": "yes"})] {
             let r = s.execute(id, p);
@@ -6356,5 +6380,8 @@ fn ink_commands_never_panic_on_empty_or_hostile_params() {
             let asked = s.execute("ink.status", json!({"accelerator": "openvino"}));
             assert!(!matches!(asked, Err(crate::EngineError::Internal(..))), "ink.status panicked: {asked:?}");
         }
+    }
+    if let Some(dir) = scratch {
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -277,6 +277,20 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                     let _ = app.run("draw.stroke", json!({"points": pts}));
                 }
             }
+            // A tap is a one-point stroke: a decimal point or the dot of an "i" is a click, never
+            // a drag, and would otherwise be discarded. `clicked_by` is false after a drag, so a
+            // dragged stroke is never recognised twice.
+            if primary_clicked
+                && !resp.dragged()
+                && app.session.draw_tool == "actionPen"
+                && let Some(p) = pos
+            {
+                let c = geo.cell_at(sh, p);
+                let sx = sh.col_left(c.col) as f32 + (p.x - geo.x(sh, c.col)) / geo.z;
+                let sy = sh.row_top(c.row) as f32 + (p.y - geo.y(sh, c.row)) / geo.z;
+                let at = crate::clock::monotonic_ms();
+                app.run_or_alert("draw.actionPenInk", json!({"points": [[sx, sy]], "cell": c.a1(), "startedAt": at, "endedAt": at}));
+            }
             return true;
         }
         if app.session.draw_tool == "eraser" && (primary_clicked || resp.dragged()) {
