@@ -125,6 +125,55 @@ pub struct UiState {
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
     #[serde(deserialize_with = "lenient_interface_scale")]
     pub interface_scale: u16,
+    /// File ▸ Options ▸ Linux display server (`options.displayServer`): read by the desktop app
+    /// before the window opens, so a change applies at the next launch. An unknown or malformed
+    /// saved value reads as Automatic.
+    #[serde(deserialize_with = "lenient_display_server")]
+    pub display_server: DisplayServer,
+}
+
+/// How the desktop app connects to the display on Linux and the BSDs. `GRIDCRAFT_WAYLAND`
+/// overrides it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DisplayServer {
+    /// The app's own choice: XWayland whenever there's an X server, for file drag-and-drop.
+    #[default]
+    Auto,
+    Wayland,
+    X11,
+}
+
+impl DisplayServer {
+    /// In menu order.
+    pub const ALL: [DisplayServer; 3] = [DisplayServer::Auto, DisplayServer::Wayland, DisplayServer::X11];
+
+    /// The value saved in `ui.json` and taken by `options.displayServer`.
+    pub fn code(self) -> &'static str {
+        match self {
+            DisplayServer::Auto => "auto",
+            DisplayServer::Wayland => "wayland",
+            DisplayServer::X11 => "x11",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<DisplayServer> {
+        DisplayServer::ALL.into_iter().find(|d| d.code().eq_ignore_ascii_case(code.trim()))
+    }
+
+    /// The English label; only Automatic is translated, the others are names.
+    pub fn label(self) -> &'static str {
+        match self {
+            DisplayServer::Auto => "Automatic",
+            DisplayServer::Wayland => "Wayland",
+            DisplayServer::X11 => "X11 (XWayland)",
+        }
+    }
+}
+
+fn lenient_display_server<'de, D: serde::Deserializer<'de>>(d: D) -> Result<DisplayServer, D::Error> {
+    let v = Json::deserialize(d)?;
+    Ok(v.as_str().and_then(DisplayServer::from_code).unwrap_or_default())
 }
 
 pub const INTERFACE_SCALE_MIN: u16 = 75;
@@ -160,6 +209,7 @@ impl Default for UiState {
             keytip_invoke_next: None,
             language: i18n::Language::En,
             interface_scale: 100,
+            display_server: DisplayServer::Auto,
         }
     }
 }

@@ -221,6 +221,17 @@ impl SheetApp {
                     None => Err(format!("missing `percent` ({INTERFACE_SCALE_MIN}–{INTERFACE_SCALE_MAX}, or \"auto\")")),
                 }
             }
+            "options.displayServer" => {
+                // File › Options › Linux display server: `value` `auto`, `wayland` or `x11`; no
+                // value reads it. The desktop app reads it at the next launch.
+                if let Some(v) = p.get("value") {
+                    match v.as_str().and_then(crate::DisplayServer::from_code) {
+                        Some(d) => self.ui.display_server = d,
+                        None => return Some(Err(format!("unknown display server {v}; use auto, wayland or x11"))),
+                    }
+                }
+                Ok(json!({"displayServer": self.ui.display_server.code()}))
+            }
             "app.language.set" => {
                 // `{"language": "ja"}`; `code` is accepted as an alias.
                 let code = p.get("language").or_else(|| p.get("code")).and_then(Json::as_str).unwrap_or("");
