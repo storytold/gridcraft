@@ -174,16 +174,16 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   `RangeBorder` (font bold/italic/underline/size/name/colour/strikethrough, fill, number format,
   one border by side), `Table`/`TableColumn`, `Chart` (type, name, position, delete), `Comment`,
   `DataValidation`, `NamedItem`, `ExcelScript` enums and `console`. Still missing:
-  - worksheet and workbook events (`onChanged`, `onActivated`, …)
-  - `Range.getUsedRange` variants (`getUsedRangeOrNullObject`, `getSurroundingRegion`) and
-    `getSpecialCells`
+  - `Range.getSurroundingRegion` and `getSpecialCells`, and the `getUsedRange` variants beyond the
+    worksheet
   - chart axes, series, legends and data labels as objects (chart *elements* exist as commands)
   - table rows, filters and sort, and table style options
   - alignment, wrap and indent setters (`RangeFormat.setHorizontalAlignment`, …)
   - `getCellProperties`, hyperlinks, conditional formatting and pivot tables
   - `ExcelScript` enums that only those setters take (`HorizontalAlignment`, `VerticalAlignment`)
-  Office Add-ins are a different technology, and there is no plugin or custom-function API: that is
-  a separate work item ([roadmap.md](roadmap.md)), not part of the ExcelScript subset.
+  Office Add-ins are a different technology: worksheet and workbook events (`onChanged`,
+  `onActivated`, …), `getUsedRangeOrNullObject` and the plugin/custom-function API belong to that
+  work item ([roadmap.md](roadmap.md)), not to the ExcelScript subset.
   **Estimate:** 10–20 h for the rest of ExcelScript; Add-ins and a plugin/custom-function API need
   an owner decision.
 
