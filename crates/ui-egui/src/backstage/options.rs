@@ -1,7 +1,8 @@
 use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, vec2};
 
 /// Excel's File › Options page: General (display theme, interface language and Show formula bar),
-/// Editing (AutoComplete) and Save (the autosave checkbox toggling `app.ui.autosave`), plus Formulas
+/// Editing (AutoComplete), Save (the autosave checkbox toggling `app.ui.autosave`) and, on Linux and
+/// the BSDs, the display server, plus Formulas
 /// (calculation mode and iterative calculation) and the display options for this workbook (sheet
 /// tabs and scroll bars) when a document is active. Theme, language, formula
 /// bar, AutoComplete and calculation changes run their commands through `run_or_alert`; calculation
@@ -30,6 +31,11 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     let mut autosave = app.ui.autosave;
     if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
         app.toggle_autosave();
+    }
+    if cfg!(all(unix, not(target_os = "macos"))) {
+        ui.add_space(18.0);
+        section(ui, lang, "Linux display server");
+        display_server_picker(app, ui, lang);
     }
     let Some((calc, view)) = app.session.active().map(|d| (d.wb.calc.clone(), d.wb.view)) else { return };
     ui.add_space(18.0);
@@ -91,6 +97,29 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             .labelled_by(label.id);
         ui.end_row();
     });
+}
+
+/// Linux display server: Automatic, Wayland or X11 (XWayland). The desktop app reads it before
+/// the window opens, so a change applies at the next launch.
+fn display_server_picker(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
+    use crate::DisplayServer;
+    let name = |d: DisplayServer| if d == DisplayServer::Auto { lang.tr(d.label()) } else { d.label() };
+    ui.horizontal(|ui| {
+        let label = ui.label(lang.tr("Display server"));
+        craft_ui::ComboBox::from_id_salt("backstage_display_server")
+            .width(160.0)
+            .selected_text(name(app.ui.display_server))
+            .show_ui(ui, |ui| {
+                for d in DisplayServer::ALL {
+                    if ui.selectable_label(app.ui.display_server == d, name(d)).clicked() {
+                        app.run_or_alert("options.displayServer", json!({"value": d.code()}));
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
+    });
+    dim(ui, lang.tr("Applies the next time GridCraft starts."));
 }
 
 /// The calculation mode, and iterative calculation, of the active workbook.
