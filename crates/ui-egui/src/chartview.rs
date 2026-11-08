@@ -1,5 +1,5 @@
 //! Floating objects on the sheet: charts (rendered by `gridcraft-chart` into primitives that
-//! we paint with egui), pictures, shapes, equations and slicers.
+//! we paint with egui), pictures, shapes, equations, slicers and form controls (`form_controls.rs`).
 
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
@@ -381,6 +381,18 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         done(start, r);
     }
     paint_slicers(p, geo, wb, si, sh);
+    // Form controls sit above every other object.
+    let hover = p.ctx().input(|i| i.pointer.hover_pos()).map(|h| geo.mirror_pos(h)).filter(|h| geo.in_cells(*h));
+    for c in &sh.controls {
+        let r = anchor_rect(geo, sh, &c.anchor);
+        // A slider's value shows beside it while it is dragged.
+        if !r.expand(24.0).intersects(p.clip_rect()) {
+            continue;
+        }
+        let start = p.add(egui::Shape::Noop);
+        crate::form_controls::paint(p, r, c, geo.z, crate::form_controls::look(app, geo, c, r, hover));
+        done(start, r);
+    }
     // The selected object's frame and handles go over every object, and move with it on a
     // right-to-left sheet.
     if let Some(r) = app.selected_object.and_then(|o| object_rect(geo, sh, o))
@@ -638,12 +650,18 @@ pub fn selected_handle(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option
     crate::objects::handle_at(r, p).map(|h| (o, r, h))
 }
 
-/// The topmost object under `p` and its rect: slicers paint on top, so they are hit first, then
-/// charts, pictures and shapes (equations included), each from the top of its stack. Nothing is hit outside the cell
-/// area or while objects are hidden.
+/// The topmost object under `p` and its rect: form controls paint on top, so they are hit first,
+/// then slicers, charts, pictures and shapes (equations included), each from the top of its stack.
+/// Nothing is hit outside the cell area or while objects are hidden.
 pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect)> {
     if !geo.cells.contains(p) || app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
         return None;
+    }
+    for c in sh.controls.iter().rev() {
+        let r = anchor_rect(geo, sh, &c.anchor);
+        if r.contains(p) {
+            return Some((ObjRef::new(ObjKind::Control, c.id), r));
+        }
     }
     for sl in sh.slicers.iter().rev() {
         let r = anchor_rect(geo, sh, &sl.anchor);
@@ -689,6 +707,8 @@ fn line_endpoints(f: &ShapeFormat, r: Rect, h: f32) -> (Pos2, Pos2) {
 
 #[cfg(test)]
 mod tests {
+    use gridcraft_chart::Measure;
+
     use super::*;
 
     #[test]
@@ -721,5 +741,25 @@ mod tests {
         let flip_v = ShapeFormat { flip_v: true, ..Default::default() };
         let (a, b) = line_endpoints(&flip_v, r, 60.0);
         assert!(a.y > b.y, "flipV turns the diagonal up: {a:?} {b:?}");
+    }
+
+    /// The production measure is not monotone for labels with a line break: egui lays the text out
+    /// line by line, so ending a prefix with `\n…` can be narrower than the shorter `iii…`. The
+    /// chart's label fitting must not assume otherwise (#1152).
+    #[test]
+    fn egui_measure_shrinks_when_a_prefix_ends_in_a_line_break() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(theme::pinned_font_definitions());
+        let mut checked = false;
+        // Fonts are ready from the second pass on.
+        for _ in 0..2 {
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                let m = EguiMeasure { painter: ui.painter(), z: 1.0 };
+                let (short, long) = (m.text_width("iii…", 11.0, false), m.text_width("iiii\n…", 11.0, false));
+                checked = long < short;
+            });
+            out.textures_delta.clear();
+        }
+        assert!(checked);
     }
 }
