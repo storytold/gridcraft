@@ -82,3 +82,20 @@ fn deleting_an_unrelated_sheet_keeps_legacy_arrays() {
     run(&mut s, "home.deleteSheet", json!({"sheet": "Spare"}));
     assert_eq!(formula(&s, "Sheet1", "C1").array, Some(RangeRef::parse("C1:C2").unwrap()));
 }
+
+/// A reference compares sheet names the way `Workbook::sheet_index` resolves them, folding case in
+/// any script: `лист1!A1` reaches the sheet named `Лист1`, so a structural edit on that sheet moves
+/// it, a rename renames it, and a delete gives `#REF!` instead of leaving a stale name behind.
+#[test]
+fn a_case_variant_sheet_reference_follows_structural_edits() {
+    let mut s = workbook();
+    run(&mut s, "sheet.rename", json!({"sheet": "Other", "name": "Лист1"}));
+    put_raw(&mut s, "C1", "лист1!A1");
+    run(&mut s, "sheet.activate", json!({"sheet": "Лист1"}));
+    run(&mut s, "home.insertRows", json!({"rows": "1:1"}));
+    assert_eq!(formula(&s, "Sheet1", "C1").text, "лист1!A2");
+    run(&mut s, "sheet.rename", json!({"sheet": "Лист1", "name": "Данные"}));
+    assert_eq!(formula(&s, "Sheet1", "C1").text, "Данные!A2");
+    run(&mut s, "home.deleteSheet", json!({"sheet": "Данные"}));
+    assert_eq!(formula(&s, "Sheet1", "C1").text, "#REF!");
+}

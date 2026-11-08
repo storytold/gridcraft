@@ -219,6 +219,20 @@ fn moves_and_renames() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Sheet names fold across scripts (`лист1` = `Лист1`), as `Workbook::sheet_index` resolves them.
+/// A structural edit and a rename must reach such a reference, and a delete must not leave it
+/// behind as a stale name that only turns into `#REF!` on recalculation.
+#[test]
+fn sheet_references_follow_case_folded_names() -> Result<(), Box<dyn std::error::Error>> {
+    let ins = Edit::Insert { axis: Axis::Rows, at: 0, count: 1 };
+    assert_eq!(print(&adjust(parse("лист1!A1+Лист1!B2")?, "Sheet1", "Лист1", &ins)), "лист1!A2+Лист1!B3");
+    assert_eq!(print(&rename_sheet(parse("лист1!A1+Лист1!B2")?, "Лист1", "Данные")), "Данные!A1+Данные!B2");
+    assert_eq!(print(&rename_sheet(parse("ЛИСТ1!MyName")?, "Лист1", "Данные")), "Данные!MyName");
+    let order: Vec<String> = ["Sheet1", "Лист1", "Spare"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(print(&crate::adjust::delete_sheet(parse("SUM(лист1!A1)")?, "Лист1", &order)), "SUM(#REF!)");
+    Ok(())
+}
+
 #[test]
 fn rename_sheet_updates_qualified_names() -> Result<(), Box<dyn std::error::Error>> {
     let e = parse("Data!MyName+MyName+Other!MyName")?;

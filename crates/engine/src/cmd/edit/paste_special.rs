@@ -564,7 +564,9 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
         if keys.is_empty() {
             continue;
         }
-        let on_target = moves_arrays && host.eq_ignore_ascii_case(target);
+        // Array ranges move with the lines only on the edited sheet; names compare case-folded, as
+        // `Workbook::sheet_index` resolves a reference to this sheet.
+        let on_target = moves_arrays && gridcraft_formula::same_name(&host, target);
         let Some(sheet) = wb.sheet_mut(si) else { continue };
         for (c, f) in keys {
             // Borrows the tree and copies and prints only the formulas the edit changes. A formula
