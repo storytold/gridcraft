@@ -617,6 +617,29 @@ fn imported_scalar_range_name_does_not_spill_when_opened_and_saved() {
 }
 
 #[test]
+fn imported_scalar_range_name_intersects_before_arithmetic() {
+    use gridcraft_model::{Cell, DefinedName, Formula, Workbook};
+
+    let mut wb = Workbook::new();
+    wb.names.push(DefinedName { name: "Offering".into(), scope: None, formula: "Data!$A$1:$A$2".into(), comment: String::new(), hidden: false });
+    let sheet = wb.sheet_mut(0).unwrap();
+    sheet.name = "Data".into();
+    sheet.cells.set(CellRef::parse("A1").unwrap(), Cell::value(Value::Number(5.0)));
+    sheet.cells.set(CellRef::parse("A2").unwrap(), Cell::value(Value::Number(6.0)));
+    for (cell, text) in [("B2", "Offering+1"), ("C2", "SUM(Offering)+1")] {
+        let mut formula = Formula::new(text);
+        formula.preserve_scalar = true;
+        sheet.cells.set(CellRef::parse(cell).unwrap(), Cell::formula(formula));
+    }
+    let source = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let (loaded, _) = gridcraft_xlsx::read_xlsx(&source).unwrap();
+    let doc = crate::DocState::new(loaded, None, "Imported".into(), crate::Trust::FromFile);
+    let sheet = doc.wb.sheet(0).unwrap();
+    assert_eq!(sheet.value(CellRef::parse("B2").unwrap()), Value::Number(7.0));
+    assert_eq!(sheet.value(CellRef::parse("C2").unwrap()), Value::Number(12.0));
+}
+
+#[test]
 fn rich_clipboard_copies_selected_displayed_cells_and_styles() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "outside selection"})).unwrap();

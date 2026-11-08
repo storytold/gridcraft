@@ -145,6 +145,8 @@ pub struct Evaluator<'h> {
     /// runs out of work after the same number of calls that a legitimately wide one could
     /// make, instead of an amount of work that squares with array nesting (#2382).
     fuel: u64,
+    /// Imported ordinary formulas intersect range operands before scalar operators consume them.
+    scalar_operators: bool,
 }
 
 struct FnCtx<'a, 'h> {
@@ -193,6 +195,7 @@ impl Ctx for FnCtx<'_, '_> {
             calls: self.ev.calls,
             stack_top: self.ev.stack_top,
             fuel: self.ev.fuel,
+            scalar_operators: self.ev.scalar_operators,
         };
         let v = matches!(ev.value(&shifted).scalar().to_bool(), Ok(true));
         // The child's spend counts against this cell's budget.
@@ -216,7 +219,7 @@ impl Ctx for FnCtx<'_, '_> {
 
 impl<'h> Evaluator<'h> {
     pub fn new(host: &'h mut dyn Host, sheet: usize, at: CellRef) -> Self {
-        Evaluator { host, sheet, at, env: Vec::new(), depth: 0, calls: 0, stack_top: 0, fuel: LAMBDA_FUEL }
+        Evaluator { host, sheet, at, env: Vec::new(), depth: 0, calls: 0, stack_top: 0, fuel: LAMBDA_FUEL, scalar_operators: false }
     }
 
     /// Evaluates to a value (references are dereferenced; multi-cell → array).
@@ -229,8 +232,27 @@ impl<'h> Evaluator<'h> {
     /// Keep the reference until `@` chooses a row or column; taking an array's first value
     /// afterwards would give the wrong result for a formula below the first row of a range.
     pub fn scalar_value(&mut self, e: &Expr) -> Value {
+        self.scalar_operators = true;
         let ev = self.unary(UnOp::At, e);
+        self.scalar_operators = false;
         self.deref(ev)
+    }
+
+    /// Keep references intact until a scalar operator needs their cell-relative value.
+    fn operator_value(&mut self, e: &Expr) -> Value {
+        if !self.scalar_operators {
+            return self.value(e);
+        }
+        match self.eval(e) {
+            Ev::R(areas) => match areas.as_slice() {
+                [area] => match self.implicit_intersect(area) {
+                    Some(cell) => self.host.cell_value(area.sheet, cell),
+                    None => Value::Error(CellError::Value),
+                },
+                _ => Value::Error(CellError::Value),
+            },
+            ev => self.deref(ev).scalar(),
+        }
     }
 
     fn resolve_sheet(&self, s: &SheetSel) -> Result<Vec<usize>, CellError> {
@@ -525,7 +547,7 @@ impl<'h> Evaluator<'h> {
                 l => l,
             };
         }
-        let v = self.value(x);
+        let v = self.operator_value(x);
         let sys = self.host.workbook().date_system;
         Ev::V(map_unary(
             &v,
@@ -620,9 +642,9 @@ impl<'h> Evaluator<'h> {
                     rest.push((*o, r.as_ref()));
                     left = l.as_ref();
                 }
-                let mut acc = self.value(left);
+                let mut acc = self.operator_value(left);
                 while let Some((o, r)) = rest.pop() {
-                    let y = self.value(r);
+                    let y = self.operator_value(r);
                     acc = binary_values(o, &acc, &y, self.host.workbook().date_system);
                 }
                 Ev::V(acc)

@@ -13,9 +13,10 @@ support comes from `crates/engine/src/io.rs` (`FileKind`), `crates/xlsx/src` and
 
 Legacy scalar `INDEX(range, MATCH(...))` formulas remain ordinary formulas on save, including when
 shared formulas are expanded during import (`array_export.rs`, #1505).
-Imported ordinary formulas retain scalar semantics on export; rich-value metadata for in-cell
-images is written in Excel-compatible form. Together these prevent Excel from removing defined
-names when opening the affected workbooks (#1429).
+Imported ordinary formulas retain scalar semantics on export and intersect named ranges at the
+formula cell before scalar arithmetic; aggregate functions still receive the full range.
+Rich-value metadata for in-cell images is written in Excel-compatible form. Together these
+prevent Excel from removing defined names when opening the affected workbooks (#1429).
 
 ## Workbook window settings
 
