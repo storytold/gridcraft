@@ -312,6 +312,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
     let mut pivot_caches = crate::pivot::CachesIn::new(&wb_xml, &wb_rels);
     let sheet_els: Vec<El> = wb_xml.child("sheets").map(|s| s.kids("sheet").cloned().collect()).unwrap_or_default();
     let mut names = SheetNames::default();
+    let mut ink_data: Option<crate::ink_sheet::InkSheetData> = None;
     for (i, se) in sheet_els.iter().enumerate() {
         let name = se.attr("name").unwrap_or("").to_string();
         let rel = se.attr("id").and_then(|id| wb_rels.iter().find(|r| r.id == id)).cloned();
@@ -339,6 +340,22 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
                 (Sheet::new(name.clone()), Default::default())
             }
         };
+        sheet.visibility = match se.attr("state") {
+            Some("hidden") => Visibility::Hidden,
+            Some("veryHidden") => Visibility::VeryHidden,
+            _ => Visibility::Visible,
+        };
+        // GridCraft's own veryHidden ink sheet: read for the textures and per-stroke data Excel
+        // can't hold, then dropped from the model (it is written again on save only while that
+        // data exists), so it never shows as a sheet and never reaches the passthrough.
+        if crate::ink_sheet::is_ink_sheet(&sheet) {
+            match crate::ink_sheet::parse(&sheet) {
+                Some(data) => ink_data = Some(data),
+                None => cx.warn("the GridCraft ink sheet has an unknown layout; its ink data was skipped"),
+            }
+            file_to_model.push(None);
+            continue;
+        }
         match crate::pivot::read_pivots(&mut cx, &mut pivot_caches, &rel.target, &name) {
             Ok(p) => sheet.pivots = p,
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
@@ -346,11 +363,6 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         }
         sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &read_controls);
         sheet.file_id = se.attr_u32("sheetId").unwrap_or(0);
-        sheet.visibility = match se.attr("state") {
-            Some("hidden") => Visibility::Hidden,
-            Some("veryHidden") => Visibility::VeryHidden,
-            _ => Visibility::Visible,
-        };
         file_to_model.push(Some(wb.sheets.len()));
         wb.sheets.push(Arc::new(sheet));
     }
@@ -359,6 +371,9 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
     }
     wb.set_active_sheet(file_to_model.get(active_tab).copied().flatten().unwrap_or(0));
+    if let Some(data) = ink_data {
+        crate::ink_sheet::apply_to_workbook(&mut wb, &data);
+    }
 
     // Defined names. Chartex parts refer to their data through hidden `_xlchart.*` names.
     let mut chart_names: Vec<(String, String)> = vec![];

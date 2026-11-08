@@ -43,10 +43,16 @@ that would be skipped as defaults are excluded before charging the limit. Excess
 the existing file-too-large error; accepted overlaps retain their existing last-wins behavior
 (#1022).
 
-Ink created with Draw is written as standard, unfilled DrawingML polylines, without visible point
-captions or private metadata. Supported numeric polylines reopen as editable ink, retaining points,
-colour, integer width and anchor. Curves, filled paths, transforms and unsupported line styles are
-not interpreted as ink. This does not implement Office InkML or fix inserted icons (#551).
+Ink created with Draw is written as Office InkML in a DrawingML content part (Excel-valid:
+base colour and, where one applies, the nearest built-in effect), with the rendered stroke PNG as
+`mc:Fallback`, so Excel shows and edits it as native ink. The stroke's `a16:creationId` is kept
+across saves. GridCraft-only ink data — user-imported brush textures, their repeat scale and the
+brush subtype Excel cannot tell apart — travels in a veryHidden `GridCraft Ink` worksheet, written
+only while such data exists and read back on open; Excel preserves that sheet and its cell values,
+so a textured stroke survives save → Excel open/save → reopen here. Files whose ink Excel can
+represent whole never gain the sheet. Legacy DrawingML polylines still open as editable ink
+(points, colour, integer width and anchor); curves, filled paths and transforms are not
+interpreted as ink. Inserted icons still lose their identity/artwork on save (#551).
 Command and package tests cover repeated saves and unrelated cell edits; external Excel rendering
 and repair-free opening remain unverified.
 
@@ -158,6 +164,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | XLSX ink: strokes are written as Office InkML (base colour plus the nearest built-in effect) with a rendered PNG fallback, so Excel shows and edits them as native ink. Imported brush textures, their repeat scale and the GridCraft-only brush subtype travel in a veryHidden `GridCraft Ink` worksheet (base64 textures chunked under the cell limit, per-stroke data keyed by `a16:creationId`), written only while that data exists and read back on open; Excel preserves the sheet across open/save, so a textured stroke survives a round trip while Excel sees the base stroke |
 | 2026-11-02 | minor | XLSX: buttons, scroll bars and spin buttons read and written (control properties parts, `<controls>`, VML `x:ClientData`); other form controls stay with pass-through; a button's command, fixed input or output cell travels in a hidden defined name and comes back only while the file still assigns the button's macro (or none, for a command) |
 | 2026-11-03 | minor | SYLK (`.slk`) import: values, R1C1 formulas as A1 (shared formulas too) with cached results, number formats and column widths; import only (#1481) |
 | 2026-11-03 | minor | Opening a web page (HTML) reads its first table as a sheet, whatever the file is called: a web app's "Export to Excel" saved as `.xls` no longer opens as lines of markup. Values read as in a CSV (or as text with `csvAsText`), `<th>` cells are bold and centred, `<x:Name>` names the sheet, and a page not named `.htm`/`.html` opens with a warning (#3166) |

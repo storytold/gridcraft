@@ -4,10 +4,11 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-mod b64;
+pub mod b64;
 pub mod cell;
 mod cellmap;
 pub mod features;
+pub mod ink;
 pub mod macros;
 pub mod password;
 pub mod preserved;
@@ -19,6 +20,7 @@ pub mod workbook;
 
 pub use cell::{Cell, CellPicture, Formula};
 pub use features::*;
+pub use ink::{InkTexture, MAX_INK_TEXTURE_BYTES, MAX_INK_TEXTURE_NAME_CHARS, MAX_INK_TEXTURE_PIXELS, MAX_INK_TEXTURE_SIDE, MAX_INK_TEXTURES};
 pub use macros::*;
 pub use password::PasswordHash;
 pub use preserved::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml};

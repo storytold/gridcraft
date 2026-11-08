@@ -509,6 +509,10 @@ pub struct Session {
     pub draw_tool: String,
     pub draw_color: String,
     pub draw_width: f32,
+    /// Draw tab pen: the imported texture it paints with (an id in `Workbook::ink_textures`,
+    /// empty for none) and the size in sheet points one repeat covers.
+    pub draw_texture: String,
+    pub draw_texture_scale: f32,
     /// Review › Show Comments: the Comments pane is open.
     pub comments_pane: bool,
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting

@@ -1106,6 +1106,7 @@ impl Dialog {
                 dialog.picture_target = app.view_key();
                 dialog
             }
+            "importTexture" => Dialog::form("importTexture", "Import Brush Texture", "draw.textureImport", vec![], json!({"path": ""})),
             "pickList" => Dialog::custom("pickList", "Pick From List", json!({})),
             "assignAction" => return crate::control_ui::open_assign(app, &params),
             "formatControl" => return crate::control_ui::open_format(app, &params),

@@ -6114,6 +6114,7 @@ fn a_script_cannot_switch_windows() {
 
 mod controls;
 mod equation;
+mod ink_textures;
 mod macros;
 mod objects;
 mod python_cells;

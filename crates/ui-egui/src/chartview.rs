@@ -322,7 +322,21 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                     gridcraft_engine::cmd::draw::ink_points(sp).iter().map(|q| pos2(r.left() + q[0] * geo.z, r.top() + q[1] * geo.z)).collect();
                 if pts.len() >= 2 {
                     let col = ink_color(line, pt);
-                    p.add(PathShape::line(pts, PathStroke::new(w, col)));
+                    // A textured pen repeats the imported image along the stroke; the brush colour
+                    // tints it and the alpha rules still apply. A removed texture paints plainly.
+                    let textured = sp.ink.as_ref().and_then(|ink| {
+                        let texture = wb.ink_texture(ink.texture.as_deref()?)?;
+                        let handle = crate::ink_textures::texture(p.ctx(), texture)?;
+                        let aspect = texture.height.max(1) as f32 / texture.width.max(1) as f32;
+                        Some((handle, aspect, gridcraft_engine::cmd::draw::texture_scale(ink.texture_scale)))
+                    });
+                    match textured {
+                        Some((handle, aspect, scale)) => {
+                            let mesh = crate::ink_textures::stroke_mesh(&pts, w, col, handle.id(), aspect, w * scale);
+                            p.add(egui::Shape::mesh(mesh));
+                        }
+                        None => p.add(PathShape::line(pts, PathStroke::new(w, col))),
+                    }
                 }
                 label = false;
             }

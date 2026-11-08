@@ -246,6 +246,18 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         return Err(IoError::Format("a static cell picture cannot also contain a formula".into()));
     }
     check_sheet_names(wb)?;
+    // GridCraft-only ink data (imported textures, a stroke's texture/subtype) has no place in
+    // InkML: Excel drops it. It travels in a veryHidden worksheet, added to a copy of the workbook
+    // and only while there is such data, so a workbook Excel can represent whole is written as
+    // Excel would write it.
+    let mut with_ink;
+    let mut wb = wb;
+    if let Some(data) = crate::ink_sheet::from_workbook(wb) {
+        let name = crate::ink_sheet::unique_name(wb);
+        with_ink = wb.clone();
+        with_ink.sheets.push(std::sync::Arc::new(crate::ink_sheet::build(&name, &data)));
+        wb = &with_ink;
+    }
     let mut out = Out {
         parts: vec![],
         overrides: vec![],

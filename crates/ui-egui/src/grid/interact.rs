@@ -245,11 +245,21 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                 // The line under the pointer is the ink the stroke will commit (#1786).
                 let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
                 let (color, width) = pen_ink(&app.session.draw_color, app.session.draw_width, &theme);
-                input.ui.painter().add(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(width * geo.z, color)));
+                match pen_texture(app, input.workbook).and_then(|(texture, scale)| {
+                    let handle = crate::ink_textures::texture(&ctx, texture)?;
+                    let aspect = texture.height.max(1) as f32 / texture.width.max(1) as f32;
+                    let mesh = crate::ink_textures::stroke_mesh(&pts, width * geo.z, color, handle.id(), aspect, width * geo.z * scale);
+                    Some(mesh)
+                }) {
+                    Some(mesh) => input.ui.painter().add(egui::Shape::mesh(mesh)),
+                    None => input.ui.painter().add(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(width * geo.z, color))),
+                }
             }
             if resp.drag_stopped() && app.grid.ink.len() >= 2 {
                 let pts: Vec<[f32; 2]> = std::mem::take(&mut app.grid.ink);
-                let _ = app.run("draw.stroke", json!({"points": pts}));
+                let texture = app.session.draw_texture.clone();
+                let scale = app.session.draw_texture_scale;
+                let _ = app.run("draw.stroke", json!({"points": pts, "texture": texture, "textureScale": scale}));
             }
             return true;
         }
@@ -275,6 +285,17 @@ pub(crate) fn pen_ink(color: &str, width: f32, theme: &gridcraft_engine::model::
     let width = if width <= 0.0 { 2.0 } else { width }.clamp(0.5, 40.0).round().max(1.0);
     let color = line.resolve(theme).map(crate::theme::color32).unwrap_or(Color32::from_rgb(0x1F, 0x5F, 0xC9));
     (crate::chartview::ink_color(color, width), width)
+}
+
+/// The imported texture the pen paints with and its repeat scale, when the workbook still holds
+/// it (a removed texture leaves the pen with a plain stroke).
+pub(crate) fn pen_texture<'a>(app: &SheetApp, wb: &'a gridcraft_engine::model::Workbook) -> Option<(&'a gridcraft_engine::model::InkTexture, f32)> {
+    let id = &app.session.draw_texture;
+    if id.is_empty() {
+        return None;
+    }
+    let texture = wb.ink_texture(id)?;
+    Some((texture, gridcraft_engine::cmd::draw::texture_scale(app.session.draw_texture_scale)))
 }
 
 fn handle_header_autofit(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {

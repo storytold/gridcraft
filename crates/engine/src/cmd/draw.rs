@@ -1,20 +1,51 @@
 //! Draw tab: pen and eraser tools, ink strokes, Ink to Shape.
 
 use gridcraft_core::CellRef;
-use gridcraft_model::{Anchor, Color, Shape, ShapeKind};
+use gridcraft_model::{Anchor, Color, InkTexture, MAX_INK_TEXTURES, Shape, ShapeKind};
 use serde_json::{Value as Json, json};
 
 use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, ok, str_param, u32_param};
 
+/// The size in sheet points one repeat of a pen texture covers when the pen doesn't say.
+pub const DEFAULT_TEXTURE_SCALE: f32 = 8.0;
+/// The smallest and largest repeat size a pen texture may use, in sheet points.
+pub const MIN_TEXTURE_SCALE: f32 = 0.5;
+pub const MAX_TEXTURE_SCALE: f32 = 512.0;
+
+/// A repeat size from a parameter or the pen's state, kept finite and within
+/// [`MIN_TEXTURE_SCALE`]–[`MAX_TEXTURE_SCALE`].
+pub fn texture_scale(v: f32) -> f32 {
+    if v.is_finite() && v > 0.0 { v.clamp(MIN_TEXTURE_SCALE, MAX_TEXTURE_SCALE) } else { DEFAULT_TEXTURE_SCALE }
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(noundo "draw.pen", "Pen", ["Draw", "Tools"], None, "{on?: bool, color?: hex, width?: 2}", has_doc, pen),
+        cmd!(noundo "draw.pen", "Pen", ["Draw", "Tools"], None, "{on?: bool, color?: hex, width?: 2, texture?: id | \"\" (none), textureScale?: 8}", has_doc, pen),
         cmd!(noundo "draw.eraser", "Eraser", ["Draw", "Tools"], None, "{on?: bool}", has_doc, eraser),
         cmd!(noundo "draw.lasso", "Lasso Select", ["Draw", "Tools"], None, "{} (selects ink by dragging; same as Select Objects)", has_doc, |s, _| {
             s.draw_tool = String::new();
             ok()
         }),
-        cmd!("draw.stroke", "Ink Stroke", [], None, "{points: [[x,y],…] in sheet points, color?: hex, width?: 2}", has_doc, stroke),
+        cmd!(
+            "draw.stroke",
+            "Ink Stroke",
+            [],
+            None,
+            "{points: [[x,y],…] in sheet points, color?: hex, width?: 2, texture?: id, textureScale?: 8}",
+            has_doc,
+            stroke
+        ),
+        cmd!(
+            "draw.textureImport",
+            "Import Brush Texture",
+            ["Draw", "Tools"],
+            None,
+            "{path} | {name, base64} → {id, name, width, height, added}; a PNG or JPEG up to 16 MiB and 8192 px a side. Importing the same bytes again reuses the entry.",
+            has_doc,
+            texture_import
+        ),
+        cmd!("draw.textureRemove", "Remove Brush Texture", ["Draw", "Tools"], None, "{id} → {removed}", has_doc, texture_remove),
+        cmd!(query "draw.textureList", "Brush Textures", [], None, "{} → {textures: [{id, name, mime, width, height, bytes}], selected, scale}", has_doc, texture_list),
         cmd!(
             "draw.inkToShape",
             "Ink to Shape",
@@ -36,13 +67,126 @@ fn pen(s: &mut Session, p: &Json) -> Result<Json> {
     if let Some(w) = f64_param(p, "width") {
         s.draw_width = w.clamp(0.5, 40.0) as f32;
     }
-    Ok(json!({"tool": s.draw_tool, "color": s.draw_color, "width": s.draw_width}))
+    if let Some(id) = p.get("texture").and_then(Json::as_str) {
+        if !id.is_empty() && s.doc()?.wb.ink_texture(id).is_none() {
+            return Err(bad("draw.pen", "no imported texture has that id"));
+        }
+        s.draw_texture = id.to_string();
+    }
+    if let Some(v) = f64_param(p, "textureScale") {
+        s.draw_texture_scale = texture_scale(v as f32);
+    }
+    Ok(json!({
+        "tool": s.draw_tool,
+        "color": s.draw_color,
+        "width": s.draw_width,
+        "texture": s.draw_texture,
+        "textureScale": texture_scale(s.draw_texture_scale),
+    }))
 }
 
 fn eraser(s: &mut Session, p: &Json) -> Result<Json> {
     let on = bool_param(p, "on").unwrap_or(s.draw_tool != "eraser");
     s.draw_tool = if on { "eraser".into() } else { String::new() };
     Ok(json!({"tool": s.draw_tool}))
+}
+
+/// Validate an imported texture before mutating the workbook: header dimensions alone do not
+/// prove the pixels decode, and a hostile image must not get to the store.
+fn validate_texture(data: &[u8]) -> Result<(&'static str, u32, u32)> {
+    use gridcraft_model::{MAX_INK_TEXTURE_BYTES, MAX_INK_TEXTURE_PIXELS, MAX_INK_TEXTURE_SIDE};
+    if data.is_empty() {
+        return Err(bad("draw.textureImport", "the image is empty"));
+    }
+    if data.len() > MAX_INK_TEXTURE_BYTES {
+        return Err(bad("draw.textureImport", "brush textures must be at most 16 MiB"));
+    }
+    let format = image::guess_format(data).map_err(|_| bad("draw.textureImport", "choose a valid PNG or JPEG image"))?;
+    let mime = match format {
+        image::ImageFormat::Png => "image/png",
+        image::ImageFormat::Jpeg => "image/jpeg",
+        _ => return Err(bad("draw.textureImport", "brush textures support PNG and JPEG")),
+    };
+    let (width, height) = image::ImageReader::with_format(std::io::Cursor::new(data), format)
+        .into_dimensions()
+        .map_err(|_| bad("draw.textureImport", "invalid image dimensions"))?;
+    if width == 0
+        || height == 0
+        || width > MAX_INK_TEXTURE_SIDE
+        || height > MAX_INK_TEXTURE_SIDE
+        || u64::from(width) * u64::from(height) > MAX_INK_TEXTURE_PIXELS
+    {
+        return Err(bad("draw.textureImport", "brush textures are limited to 8192 pixels a side and 16 million pixels"));
+    }
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(data), format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_INK_TEXTURE_SIDE);
+    limits.max_image_height = Some(MAX_INK_TEXTURE_SIDE);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    reader.decode().map_err(|_| bad("draw.textureImport", "the image cannot be decoded within the 64 MiB limit"))?;
+    Ok((mime, width, height))
+}
+
+fn texture_import(s: &mut Session, p: &Json) -> Result<Json> {
+    let (name, data) = if let Some(b) = str_param(p, "base64") {
+        // Check the encoded length first, so a hostile parameter is refused before decoding.
+        let longest = gridcraft_model::MAX_INK_TEXTURE_BYTES.div_ceil(3) * 4 + 4;
+        if b.len() > longest {
+            return Err(bad("draw.textureImport", "brush textures must be at most 16 MiB"));
+        }
+        let data = crate::io::base64_decode(b).ok_or_else(|| bad("draw.textureImport", "invalid base64"))?;
+        (str_param(p, "name").unwrap_or("Texture").to_string(), data)
+    } else if let Some(path) = str_param(p, "path") {
+        let data = crate::io::read_file(path)?;
+        let name = str_param(p, "name")
+            .map(str::to_string)
+            .unwrap_or_else(|| path.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or("Texture").to_string());
+        (name, data)
+    } else {
+        return Err(bad("draw.textureImport", "give `path`, or `name` and `base64`"));
+    };
+    let (mime, width, height) = validate_texture(&data)?;
+    let texture = InkTexture::new(&name, mime, std::sync::Arc::new(data), width, height)
+        .ok_or_else(|| bad("draw.textureImport", "the image cannot be stored"))?;
+    let id = texture.id.clone();
+    let name = texture.name.clone();
+    let d = s.doc()?;
+    if d.wb.ink_textures.len() >= MAX_INK_TEXTURES && d.wb.ink_texture(&id).is_none() {
+        return Err(bad("draw.textureImport", "the workbook already holds the most brush textures it can (1024)"));
+    }
+    edit(s, |cx| {
+        let (index, added) = cx.wb.add_ink_texture(texture);
+        Ok(json!({"id": id, "name": name, "width": width, "height": height, "index": index, "added": added}))
+    })
+}
+
+fn texture_remove(s: &mut Session, p: &Json) -> Result<Json> {
+    let id = str_param(p, "id").ok_or_else(|| bad("draw.textureRemove", "missing `id`"))?.to_string();
+    if s.doc()?.wb.ink_texture(&id).is_none() {
+        return Ok(json!({"removed": false}));
+    }
+    if s.draw_texture == id {
+        s.draw_texture.clear();
+    }
+    edit(s, |cx| {
+        let removed = cx.wb.remove_ink_texture(&id).is_some();
+        Ok(json!({"removed": removed}))
+    })
+}
+
+fn texture_list(s: &mut Session, _p: &Json) -> Result<Json> {
+    let d = s.doc()?;
+    let textures: Vec<Json> =
+        d.wb.ink_textures
+            .iter()
+            .map(|t| json!({"id": t.id, "name": t.name, "mime": t.mime, "width": t.width, "height": t.height, "bytes": t.data.len()}))
+            .collect();
+    Ok(json!({
+        "textures": textures,
+        "selected": s.draw_texture,
+        "scale": texture_scale(s.draw_texture_scale),
+    }))
 }
 
 fn parse_points(t: &str) -> Vec<[f32; 2]> {

@@ -146,8 +146,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   conversion; cloud storage requested (#86). **Estimate:** 35–55 h (co-authoring scope needs the owner).
 
 ### 17. Insert objects (F)
-- Ink strokes now survive XLSX save/reopen as editable polylines. Inserted icons still lose their
-  identity/artwork on save (#551); native Office InkML import is not implemented.
+- Ink strokes survive XLSX save/reopen as native Office InkML (base colour and built-in effect, so
+  Excel shows them as ink) with the legacy DrawingML polyline still read. Imported brush textures
+  are a GridCraft extension: they are kept in a veryHidden `GridCraft Ink` worksheet that Excel
+  preserves, while Excel itself sees the base stroke. Inserted icons still lose their
+  identity/artwork on save (#551).
 - SmartArt, WordArt, signature line, objects, 3-D models, screenshot; 8 shape kinds vs ~170;
   pictures in cells (#61, PR #105). Equations exist (LaTeX source with a live preview, Office Math in xlsx); there is
   no structured (WYSIWYG) equation editing and no ink equations. **Estimate:** 25–40 h.
