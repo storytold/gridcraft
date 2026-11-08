@@ -33,8 +33,13 @@ fn content_types(ink: bool, png: bool) -> String {
 
 /// An Excel-shaped drawing part: one `twoCellAnchor` whose `AlternateContent` names the ink part.
 fn drawing(creation: &str) -> String {
+    drawing_with_off(creation, 1_905_000, 952_500)
+}
+
+/// The same drawing with its `xdr14:xfrm` `a:off` at an arbitrary sheet position, in EMU.
+fn drawing_with_off(creation: &str, ox: i64, oy: i64) -> String {
     format!(
-        r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="{XDR}" xmlns:a="{A}" xmlns:r="{NS_REL}"><xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>3</xdr:col><xdr:colOff>76200</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>228600</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><mc:AlternateContent xmlns:mc="{MC}"><mc:Choice xmlns:xdr14="{XDR14}" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" Requires="xdr14 aink"><xdr:contentPart r:id="rId1"><xdr14:nvContentPartPr><xdr14:cNvPr id="3" name="Ink 2"><a:extLst><a:ext uri="{{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}}"><a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="{creation}"/></a:ext></a:extLst></xdr14:cNvPr><xdr14:cNvContentPartPr/></xdr14:nvContentPartPr><xdr14:nvPr macro=""/><xdr14:xfrm><a:off x="1905000" y="952500"/><a:ext cx="762000" cy="381000"/></xdr14:xfrm></xdr:contentPart></mc:Choice><mc:Fallback><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="Ink 2"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="762000" cy="381000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic></mc:Fallback></mc:AlternateContent><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#
+        r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="{XDR}" xmlns:a="{A}" xmlns:r="{NS_REL}"><xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>3</xdr:col><xdr:colOff>76200</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>228600</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><mc:AlternateContent xmlns:mc="{MC}"><mc:Choice xmlns:xdr14="{XDR14}" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" Requires="xdr14 aink"><xdr:contentPart r:id="rId1"><xdr14:nvContentPartPr><xdr14:cNvPr id="3" name="Ink 2"><a:extLst><a:ext uri="{{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}}"><a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="{creation}"/></a:ext></a:extLst></xdr14:cNvPr><xdr14:cNvContentPartPr/></xdr14:nvContentPartPr><xdr14:nvPr macro=""/><xdr14:xfrm><a:off x="{ox}" y="{oy}"/><a:ext cx="762000" cy="381000"/></xdr14:xfrm></xdr:contentPart></mc:Choice><mc:Fallback><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="Ink 2"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="762000" cy="381000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic></mc:Fallback></mc:AlternateContent><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#
     )
 }
 
@@ -81,6 +86,8 @@ struct Extra<'a> {
     extra_markup: Option<&'a str>,
     /// The drawing's `a16:creationId`, when a test needs an invalid or differently-cased one.
     creation_id: Option<&'a str>,
+    /// The drawing's `xdr14:xfrm` `a:off`, in EMU, when a test needs a stroke far down the sheet.
+    off: Option<(i64, i64)>,
 }
 
 /// The same package. With `damage_ink`, the ink part is stored uncompressed and one byte of it is
@@ -100,7 +107,10 @@ fn package_with(trace: &str, f: bool, props: &str, ink: bool, declared: bool, me
     );
     let root = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
     let ct = content_types(declared, media);
-    let drawing = drawing(extra.creation_id.unwrap_or(GUIDE));
+    let drawing = match extra.off {
+        Some((x, y)) => drawing_with_off(extra.creation_id.unwrap_or(GUIDE), x, y),
+        None => drawing(extra.creation_id.unwrap_or(GUIDE)),
+    };
     let mut ink_part = inkml(trace, f, props);
     if let Some(markup) = extra.extra_markup {
         ink_part = ink_part.replace("</inkml:ink>", &format!("{markup}</inkml:ink>"));
@@ -186,6 +196,21 @@ fn excel_content_part_is_read_as_editable_ink_with_its_brush() {
     close(s.anchor.dy, 0.0);
     close(s.anchor.width, 80.0);
     close(s.anchor.height, 40.0);
+}
+
+#[test]
+fn an_absolute_offset_below_the_old_clamp_keeps_its_row() {
+    // Row 600,001 at the default 20 px row height is 12,000,020 px: past the 1e7 px (row 500,000)
+    // point an offset conversion must not stop at, and still inside the sheet's 1,048,576 rows.
+    let extra = Extra { off: Some((1_905_000, 114_300_190_500)), ..Extra::default() };
+    let (wb, _) = read(&package_with("!0 !0,'1000 '1000", false, PEN_PROPS, true, true, true, extra));
+    let s = ink_shape(&wb);
+    assert_eq!(s.anchor.cell.a1(), "D600002", "the absolute offset keeps its row");
+    close(s.anchor.dx, 8.0);
+    close(s.anchor.dy, 0.0);
+    // The row survives a save and a re-read: `xdr:from` and `xdr14:xfrm` describe the same box.
+    let (back, _) = read(&write_xlsx(&wb).unwrap());
+    assert_eq!(ink_shape(&back).anchor.cell.a1(), "D600002");
 }
 
 #[test]

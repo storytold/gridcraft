@@ -179,6 +179,14 @@ fn read_traces(
     Some(shapes)
 }
 
+/// An `a:off` value in sheet points. An offset is a position, not an extent, so it is not clamped
+/// the way [`emu_px`] bounds a size: a stroke below the 1e7 px mark that conversion stops at (row
+/// 500,000 at the default height) keeps its row, and the sheet's own limits bound the cell it lands
+/// in. A missing `off` is 0 — the all-zero anchor Excel writes for a stroke placed by `from`/`to`.
+fn offset_px(v: Option<i64>) -> f64 {
+    v.map_or(0.0, |e| e as f64 / EMU_PER_PX)
+}
+
 /// The ink's box from `xdr14:xfrm` (`a:off`/`a:ext`, EMU). Excel writes the same box in the
 /// anchor's `from`/`to`, so `base` is the fallback when the transform is missing or unusable. A
 /// non-zero `off` is the absolute sheet position; an all-zero one is relative to the anchor.
@@ -188,10 +196,10 @@ fn anchor_for(content_part: &El, base: gridcraft_model::Anchor, sheet: &Sheet) -
     let width = ext.map(|e| emu_px(e.attr_i64("cx"))).unwrap_or(0.0);
     let height = ext.map(|e| emu_px(e.attr_i64("cy"))).unwrap_or(0.0);
     let off = xf.child("off");
-    let x = off.map(|o| emu_px(o.attr_i64("x"))).unwrap_or(0.0);
-    let y = off.map(|o| emu_px(o.attr_i64("y"))).unwrap_or(0.0);
+    let x = offset_px(off.and_then(|o| o.attr_i64("x")));
+    let y = offset_px(off.and_then(|o| o.attr_i64("y")));
     let (cell, dx, dy) = if x > 0.0 || y > 0.0 {
-        let (x, y) = (x.max(0.0) as f64, y.max(0.0) as f64);
+        let (x, y) = (x.max(0.0), y.max(0.0));
         let (col, row) = (sheet.col_at(x), sheet.row_at(y));
         (gridcraft_core::CellRef::new(row, col), (x - sheet.col_left(col)) as f32, (y - sheet.row_top(row)) as f32)
     } else {
