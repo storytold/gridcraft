@@ -18,6 +18,7 @@ const XDR14: &str = "http://schemas.microsoft.com/office/excel/2010/spreadsheetD
 
 const GUIDE: &str = "{11111111-2222-4333-8444-555555555555}";
 
+/// The `[Content_Types].xml` of the test package, declaring the ink part and the picture.
 fn content_types(ink: bool, png: bool) -> String {
     let mut s = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>"#.to_string();
     if png {
@@ -30,12 +31,14 @@ fn content_types(ink: bool, png: bool) -> String {
     s
 }
 
+/// An Excel-shaped drawing part: one `twoCellAnchor` whose `AlternateContent` names the ink part.
 fn drawing() -> String {
     format!(
         r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="{XDR}" xmlns:a="{A}" xmlns:r="{NS_REL}"><xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>3</xdr:col><xdr:colOff>76200</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>228600</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><mc:AlternateContent xmlns:mc="{MC}"><mc:Choice xmlns:xdr14="{XDR14}" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" Requires="xdr14 aink"><xdr:contentPart r:id="rId1"><xdr14:nvContentPartPr><xdr14:cNvPr id="3" name="Ink 2"><a:extLst><a:ext uri="{{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}}"><a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="{GUIDE}"/></a:ext></a:extLst></xdr14:cNvPr><xdr14:cNvContentPartPr/></xdr14:nvContentPartPr><xdr14:nvPr macro=""/><xdr14:xfrm><a:off x="1905000" y="952500"/><a:ext cx="762000" cy="381000"/></xdr14:xfrm></xdr:contentPart></mc:Choice><mc:Fallback><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="Ink 2"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="762000" cy="381000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic></mc:Fallback></mc:AlternateContent><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#
     )
 }
 
+/// An InkML part with the given trace, pressure channel and brush properties.
 fn inkml(trace: &str, f: bool, props: &str) -> String {
     let mut channels = String::from(
         r#"<inkml:channel name="X" type="integer" min="-2.14748E9" max="2.14748E9" units="cm"/><inkml:channel name="Y" type="integer" min="-2.14748E9" max="2.14748E9" units="cm"/>"#,
@@ -52,6 +55,7 @@ fn inkml(trace: &str, f: bool, props: &str) -> String {
     )
 }
 
+/// A one-pixel transparent PNG, the picture fallback an Excel file carries.
 fn tiny_png() -> Vec<u8> {
     let mut out = Vec::new();
     {
@@ -66,13 +70,20 @@ fn tiny_png() -> Vec<u8> {
 
 /// A minimal one-sheet package with an Excel-shaped ink drawing.
 fn package(trace: &str, f: bool, props: &str, ink: bool, declared: bool, media: bool) -> Vec<u8> {
-    package_with(trace, f, props, ink, declared, media, false)
+    package_with(trace, f, props, ink, declared, media, Extra::default())
+}
+
+/// What a test adds to the package: a damaged ink entry, or a second stroke in the same part.
+#[derive(Clone, Copy, Default)]
+struct Extra<'a> {
+    damage_ink: bool,
+    second_trace: Option<&'a str>,
 }
 
 /// The same package. With `damage_ink`, the ink part is stored uncompressed and one byte of it is
 /// flipped, so the entry fails partway (a bad CRC) while the archive and the picture after it stay
 /// intact: what a damaged InkML part costs a reader.
-fn package_with(trace: &str, f: bool, props: &str, ink: bool, declared: bool, media: bool, damage_ink: bool) -> Vec<u8> {
+fn package_with(trace: &str, f: bool, props: &str, ink: bool, declared: bool, media: bool, extra: Extra<'_>) -> Vec<u8> {
     let wb = r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
     let wb_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
     let sheet = format!(
@@ -87,7 +98,12 @@ fn package_with(trace: &str, f: bool, props: &str, ink: bool, declared: bool, me
     let root = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
     let ct = content_types(declared, media);
     let drawing = drawing();
-    let ink_part = inkml(trace, f, props);
+    let mut ink_part = inkml(trace, f, props);
+    if let Some(second) = extra.second_trace {
+        // A second trace in the same part: same context and brush, its own points.
+        ink_part =
+            ink_part.replace("</inkml:ink>", &format!("<inkml:trace contextRef=\"#ctx0\" brushRef=\"#br0\">{second}</inkml:trace></inkml:ink>"));
+    }
     let png = tiny_png();
     let mut parts: Vec<(&str, &[u8])> = vec![
         ("[Content_Types].xml", ct.as_bytes()),
@@ -105,7 +121,7 @@ fn package_with(trace: &str, f: bool, props: &str, ink: bool, declared: bool, me
     if media {
         parts.push(("xl/media/image1.png", &png));
     }
-    if !damage_ink {
+    if !extra.damage_ink {
         return make_zip(&parts);
     }
     use std::io::Write as _;
@@ -127,20 +143,24 @@ fn package_with(trace: &str, f: bool, props: &str, ink: bool, declared: bool, me
 
 const PEN_PROPS: &str = r##"<inkml:brushProperty name="width" value="0.05" units="cm"/><inkml:brushProperty name="height" value="0.05" units="cm"/><inkml:brushProperty name="color" value="#1F5FC9"/>"##;
 
+/// Reads the test package, failing the test when the workbook does not open.
 fn read(bytes: &[u8]) -> (Workbook, crate::ReadReport) {
     read_xlsx(bytes).unwrap()
 }
 
+/// The one ink shape the test package holds.
 fn ink_shape(wb: &Workbook) -> &Shape {
     let shapes = &wb.sheets[0].shapes;
     assert_eq!(shapes.len(), 1, "{shapes:?}");
     &shapes[0]
 }
 
+/// The stroke's points as sheet points.
 fn points(shape: &Shape) -> Vec<[f32; 2]> {
     shape.text.split(';').filter_map(|p| p.split_once(',').and_then(|(x, y)| Some([x.parse().ok()?, y.parse().ok()?]))).collect()
 }
 
+/// Asserts two brush measurements agree to the millimetre.
 fn close(a: f32, b: f32) {
     assert!((a - b).abs() < 0.001, "{a} != {b}");
 }
@@ -358,7 +378,7 @@ fn a_wildcard_keeps_the_second_difference_order_too() {
 fn a_damaged_ink_part_costs_only_its_own_allowance() {
     // The ink entry fails partway (a bad CRC) inside an intact archive. The read is optional, so
     // the failure is charged to the ink part and the fallback picture still opens.
-    let (wb, report) = read(&package_with("!0 !0,'1000 '1000", false, PEN_PROPS, true, true, true, true));
+    let (wb, report) = read(&package_with("!0 !0,'1000 '1000", false, PEN_PROPS, true, true, true, Extra { damage_ink: true, ..Extra::default() }));
     assert!(wb.sheets[0].shapes.is_empty(), "the damaged ink is not read");
     assert_eq!(wb.sheets[0].images.len(), 1, "the fallback picture still loads");
     assert!(report.warnings.iter().any(|w| w.contains("ink part")), "{:?}", report.warnings);
@@ -538,4 +558,25 @@ fn excel_brush_properties_infer_pen_pencil_and_highlighter_without_a_channel() {
         assert_eq!(ink.effect, effect, "{props}");
         close(ink.width_cm, width);
     }
+}
+
+#[test]
+fn a_part_with_two_traces_reads_as_two_strokes() {
+    // An InkML trace is a stroke: a part that holds two of them is two editable strokes, not one
+    // first stroke and a silently dropped second.
+    let second = "!500 !500,'50'50";
+    let (wb, _) = read(&package_with("!0 !0,'100'100", false, PEN_PROPS, true, true, true, Extra { second_trace: Some(second), ..Extra::default() }));
+    let shapes = &wb.sheets[0].shapes;
+    assert_eq!(shapes.len(), 2, "{shapes:?}");
+    assert_eq!(thousandths(&shapes[0]), vec![[0, 0], [100, 100]]);
+    assert_eq!(thousandths(&shapes[1]), vec![[500, 500], [550, 550]]);
+    let (a, b) = (shapes[0].ink.as_ref().expect("ink"), shapes[1].ink.as_ref().expect("ink"));
+    assert_eq!(a.width_cm, b.width_cm, "both keep the part's brush");
+    assert_eq!(shapes[0].line, shapes[1].line, "both keep the part's colour");
+    assert_ne!(a.key, b.key, "each stroke keeps its own creation id");
+    // Saving writes one part per stroke, and reopening finds both again.
+    let (back, _) = read(&write_xlsx(&wb).unwrap());
+    assert_eq!(back.sheets[0].shapes.len(), 2);
+    let keys: std::collections::HashSet<String> = back.sheets[0].shapes.iter().filter_map(|s| s.ink.as_ref()?.key.clone()).collect();
+    assert_eq!(keys.len(), 2, "{keys:?}");
 }

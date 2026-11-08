@@ -182,6 +182,16 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             sh.shapes.iter_mut().for_each(|o| o.id = fresh());
             sh.slicers.iter_mut().for_each(|o| o.id = fresh());
             sh.controls.iter_mut().for_each(|o| o.id = fresh());
+            // A stroke's `a16:creationId` names it in the saved file, so the copy's ink gets keys
+            // free of every key the workbook holds and of the copies made here.
+            let mut held: std::collections::HashSet<String> =
+                cx.wb.sheets.iter().flat_map(|s| s.shapes.iter()).filter_map(|x| x.ink.as_ref()).filter_map(|i| i.key.clone()).collect();
+            for shape in sh.shapes.iter_mut() {
+                let Some(ink) = shape.ink.as_mut() else { continue };
+                let key = gridcraft_model::ink_creation_id_free(|k| held.contains(k));
+                held.insert(key.clone());
+                ink.key = Some(key);
+            }
             let at = to.min(n);
             // The copy gets its own copies of the sheet's names, referring to the copy.
             let copies: Vec<gridcraft_model::DefinedName> = cx

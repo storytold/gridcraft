@@ -135,6 +135,7 @@ fn mime_for(name: &str) -> &'static str {
     }
 }
 
+/// Reads a sheet's drawing part into the sheet: pictures, charts, shapes, equations and native ink.
 pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(), IoError> {
     let Some(x) = cx.optional_xml(part)? else { return Ok(()) };
     let rels = cx.pkg.rels(part)?;
@@ -168,9 +169,12 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
             }
         }
         if let Some(cp) = content_part {
-            if let Some(s) = inkml::read(cx, &rels, cp, sheet, anchor, &ink_parts) {
-                let id = cx.next_object_id();
-                sheet.shapes.push(Shape { id, ..s });
+            let strokes = inkml::read(cx, &rels, cp, sheet, anchor, &ink_parts);
+            if !strokes.is_empty() {
+                for s in strokes {
+                    let id = cx.next_object_id();
+                    sheet.shapes.push(Shape { id, ..s });
+                }
                 continue;
             }
             cx.warn(format!("an ink part could not be read, so its fallback was used ({part}, object {n})"));
