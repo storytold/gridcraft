@@ -281,6 +281,8 @@ fn form_control_event(app: &mut SheetApp, sh: &Sheet, ev: &egui::Event) -> bool 
             false
         }
         _ => false,
+    }
+}
 
 /// Keys that move or extend the selection: with the Format Painter armed, Excel pastes the
 /// format onto the cells the keyboard lands on, as a click would (arrows, Shift and Ctrl/Cmd
@@ -289,14 +291,7 @@ fn painter_moves(app: &SheetApp, key: egui::Key, m: egui::Modifiers) -> bool {
     use egui::Key;
     app.session.format_painter.is_some()
         && match key {
-            Key::ArrowUp
-            | Key::ArrowDown
-            | Key::ArrowLeft
-            | Key::ArrowRight
-            | Key::PageUp
-            | Key::PageDown
-            | Key::Home
-            | Key::End => true,
+            Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight | Key::PageUp | Key::PageDown | Key::Home | Key::End => true,
             // Shift+Space selects the row and Ctrl+Space the column; plain Space types a space.
             Key::Space => m.shift || m.ctrl || m.command,
             // Only select all; a plain A starts a cell edit.
