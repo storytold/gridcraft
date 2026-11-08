@@ -2945,7 +2945,7 @@ fn getpivotdata_reads_pivot_table_and_plain_cell_reports() {
     t.set("N4", "25");
     t.set("O4", "35");
     t.set("P1", "=GETPIVOTDATA(\"Revenue\",$L$1,\"Destination\",\"North\",\"Origin\",\"South\")");
-    // Unrelated third-column cell (T4) outside a 2-column report (R1:S3) must not bridge into R5:S5,
+    // Unrelated third-column cell (T6) outside a 2-column report (R1:S5) must not bridge into R7:S7,
     // and a dependent formula in S3 reading an active GETPIVOTDATA cell (U1) must not record #CIRC!.
     t.set("R1", "Department");
     t.set("S1", "Sales");
@@ -2965,4 +2965,142 @@ fn getpivotdata_reads_pivot_table_and_plain_cell_reports() {
     assert!(t.calc.circular.is_empty());
     assert_eq!((t.num("J1"), t.num("J2"), t.num("P1")), (140.0, 85.0, 25.0));
     assert_eq!((t.get("J3"), t.get("J4"), t.get("J5")), (Value::Error(CellError::Ref), Value::Error(CellError::Ref), Value::Error(CellError::Ref)));
+}
+
+#[test]
+fn getpivotdata_covers_outline_tabular_compact_multi_values_subtotals_and_grand_total_flags() {
+    use gridcraft_model::{PivotField, PivotFunc, PivotLayout, PivotTable, PivotValue};
+    let mut t = T::new();
+    // 1. Tabular layout with 2 row fields (Category, Sub), bottom subtotals, and 2 value fields on columns:
+    // Row 1: A1="Category", B1="Sub", C1="Sum of Sales", D1="Count of Sales"
+    // Row 2: A2="Bikes",    B2="Road", C2=100,           D2=2
+    // Row 3: A3="",         B3="Mtn",  C3=150,           D3=3
+    // Row 4: A4="Bikes Total", B4="",  C4=250,           D4=5
+    // Row 5: A5="Grand Total", B5="",  C5=250,           D5=5
+    for (cell, val) in [
+        ("A1", "Category"),
+        ("B1", "Sub"),
+        ("C1", "Sum of Sales"),
+        ("D1", "Count of Sales"),
+        ("A2", "Bikes"),
+        ("B2", "Road"),
+        ("C2", "100"),
+        ("D2", "2"),
+        ("B3", "Mtn"),
+        ("C3", "150"),
+        ("D3", "3"),
+        ("A4", "Bikes Total"),
+        ("C4", "250"),
+        ("D4", "5"),
+        ("A5", "Grand Total"),
+        ("C5", "250"),
+        ("D5", "5"),
+    ] {
+        t.set(cell, val);
+    }
+    t.wb.sheet_mut(0).unwrap().pivots.push(PivotTable {
+        id: 1,
+        name: "TabularPT".into(),
+        source: "Data!$A$1:$C$5".into(),
+        anchor: CellRef::parse("A1").unwrap(),
+        last_range: gridcraft_core::RangeRef::parse("A1:D5"),
+        layout: PivotLayout::Tabular,
+        grand_totals_rows: true,
+        grand_totals_cols: true,
+        subtotals: true,
+        subtotals_top: false,
+        show_headers: true,
+        rows: vec![PivotField { source_col: "Category".into(), ..Default::default() }, PivotField { source_col: "Sub".into(), ..Default::default() }],
+        columns: vec![],
+        values: vec![
+            PivotValue { source_col: "Sales".into(), func: PivotFunc::Sum, name: "Sum of Sales".into(), ..Default::default() },
+            PivotValue { source_col: "Sales".into(), func: PivotFunc::Count, name: "Count of Sales".into(), ..Default::default() },
+        ],
+        ..Default::default()
+    });
+    t.set("F1", "=GETPIVOTDATA(\"Sum of Sales\",$A$1,\"Category\",\"Bikes\",\"Sub\",\"Mtn\")");
+    t.set("F2", "=GETPIVOTDATA(\"Count of Sales\",$A$1,\"Category\",\"Bikes\",\"Sub\",\"Road\")");
+    t.set("F3", "=GETPIVOTDATA(\"Sum of Sales\",$A$1,\"Category\",\"Bikes\")");
+    t.set("F4", "=GETPIVOTDATA(\"Count of Sales\",$A$1)");
+    t.set("F5", "=GETPIVOTDATA(\"Sum of Sales\",$A$1,\"Category\",\"Missing\")");
+    assert_eq!((t.num("F1"), t.num("F2"), t.num("F3"), t.num("F4")), (150.0, 2.0, 250.0, 5.0));
+    assert_eq!(t.get("F5"), Value::Error(CellError::Ref));
+
+    // 2. Outline layout with top subtotals and grand_totals_cols = false:
+    // Row 8:  A8="Category", B8="Sub", C8="Sum of Sales"
+    // Row 9:  A9="Bikes",    B9="",    C9=250 (top subtotal on the outer item's header row)
+    // Row 10: A10="",        B10="Road", C10=100
+    for (cell, val) in [("A8", "Category"), ("B8", "Sub"), ("C8", "Sum of Sales"), ("A9", "Bikes"), ("C9", "250"), ("B10", "Road"), ("C10", "100")] {
+        t.set(cell, val);
+    }
+    t.wb.sheet_mut(0).unwrap().pivots.push(PivotTable {
+        id: 2,
+        name: "OutlinePT".into(),
+        source: "Data!$A$1:$C$5".into(),
+        anchor: CellRef::parse("A8").unwrap(),
+        last_range: gridcraft_core::RangeRef::parse("A8:C10"),
+        layout: PivotLayout::Outline,
+        grand_totals_rows: false,
+        grand_totals_cols: false,
+        subtotals: true,
+        subtotals_top: true,
+        show_headers: true,
+        rows: vec![PivotField { source_col: "Category".into(), ..Default::default() }, PivotField { source_col: "Sub".into(), ..Default::default() }],
+        columns: vec![],
+        values: vec![PivotValue { source_col: "Sales".into(), func: PivotFunc::Sum, name: "Sum of Sales".into(), ..Default::default() }],
+        ..Default::default()
+    });
+    t.set("G1", "=GETPIVOTDATA(\"Sum of Sales\",$A$8,\"Category\",\"Bikes\")");
+    t.set("G2", "=GETPIVOTDATA(\"Sum of Sales\",$A$8,\"Category\",\"Bikes\",\"Sub\",\"Road\")");
+    t.set("G3", "=GETPIVOTDATA(\"Sum of Sales\",$A$8)");
+    assert_eq!((t.num("G1"), t.num("G2")), (250.0, 100.0));
+    assert_eq!(t.get("G3"), Value::Error(CellError::Ref), "grand total disabled must return #REF!");
+
+    // 3. Compact layout with values_on_rows = true:
+    // Row 13: A13="Row Labels",     B13="Value"
+    // Row 14: A14="Bikes",          B14=""
+    // Row 15: A15="Sum of Sales",   B15=250
+    // Row 16: A16="Count of Sales", B16=5
+    // Row 17: A17="Total Sum of Sales", B17=250
+    // Row 18: A18="Total Count of Sales", B18=5
+    for (cell, val) in [
+        ("A13", "Row Labels"),
+        ("B13", "Value"),
+        ("A14", "Bikes"),
+        ("A15", "Sum of Sales"),
+        ("B15", "250"),
+        ("A16", "Count of Sales"),
+        ("B16", "5"),
+        ("A17", "Total Sum of Sales"),
+        ("B17", "250"),
+        ("A18", "Total Count of Sales"),
+        ("B18", "5"),
+    ] {
+        t.set(cell, val);
+    }
+    t.wb.sheet_mut(0).unwrap().pivots.push(PivotTable {
+        id: 3,
+        name: "CompactValuesOnRowsPT".into(),
+        source: "Data!$A$1:$C$5".into(),
+        anchor: CellRef::parse("A13").unwrap(),
+        last_range: gridcraft_core::RangeRef::parse("A13:B18"),
+        layout: PivotLayout::Compact,
+        grand_totals_rows: true,
+        grand_totals_cols: true,
+        subtotals: true,
+        subtotals_top: true,
+        show_headers: true,
+        values_on_rows: true,
+        rows: vec![PivotField { source_col: "Category".into(), ..Default::default() }],
+        columns: vec![],
+        values: vec![
+            PivotValue { source_col: "Sales".into(), func: PivotFunc::Sum, name: "Sum of Sales".into(), ..Default::default() },
+            PivotValue { source_col: "Sales".into(), func: PivotFunc::Count, name: "Count of Sales".into(), ..Default::default() },
+        ],
+        ..Default::default()
+    });
+    t.set("H1", "=GETPIVOTDATA(\"Sum of Sales\",$A$13,\"Category\",\"Bikes\")");
+    t.set("H2", "=GETPIVOTDATA(\"Count of Sales\",$A$13,\"Category\",\"Bikes\")");
+    t.set("H3", "=GETPIVOTDATA(\"Count of Sales\",$A$13)");
+    assert_eq!((t.num("H1"), t.num("H2"), t.num("H3")), (250.0, 5.0, 5.0));
 }
