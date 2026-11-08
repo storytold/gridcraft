@@ -219,7 +219,18 @@ impl Language {
             "es" => Some(Self::Es),
             "el" => Some(Self::El),
             "zh" => {
-                let traditional = parts.any(|part| matches!(part.to_ascii_lowercase().as_str(), "tw" | "hk" | "mo" | "hant"));
+                // A script subtag decides; the region only when no script is given. `zh-Hans-HK`
+                // and `zh-Hans-MO` are Simplified Chinese in Hong Kong and Macau, both valid macOS
+                // identifiers, so their `hk`/`mo` region must not select Traditional.
+                let parts: Vec<String> = parts.map(|part| part.to_ascii_lowercase()).collect();
+                let has = |p: &str| parts.iter().any(|part| part == p);
+                let traditional = if has("hant") {
+                    true
+                } else if has("hans") {
+                    false
+                } else {
+                    has("tw") || has("hk") || has("mo")
+                };
                 Some(if traditional { Self::ZhTw } else { Self::Zh })
             }
             "ja" => Some(Self::Ja),
@@ -675,6 +686,11 @@ mod tests {
         assert_eq!(Language::from_tag("zh-Hans-CN"), Some(Language::Zh));
         assert_eq!(Language::from_tag("zh-Hant-TW"), Some(Language::ZhTw));
         assert_eq!(Language::from_tag("zh_HK.UTF-8"), Some(Language::ZhTw));
+        // A script subtag outranks the region: Hong Kong and Macau are also valid macOS locales
+        // for Simplified Chinese.
+        assert_eq!(Language::from_tag("zh-Hans-HK"), Some(Language::Zh));
+        assert_eq!(Language::from_tag("zh-Hans-MO"), Some(Language::Zh));
+        assert_eq!(Language::from_tag("zh-Hant-HK"), Some(Language::ZhTw));
         assert_eq!(Language::from_tag("ko-KR"), Some(Language::Ko));
         assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));
         assert_eq!(Language::from_tag("de-DE"), Some(Language::De));

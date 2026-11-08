@@ -152,8 +152,9 @@ separators, number/date formats, machine translation with agent review, and scri
 | Turkish | tr | 382 (~17%) | no | Latin: yes | yes | menus only | 4–8 h |
 | Vietnamese | vi | 398 (~18%) | no | Latin with stacked diacritics: unverified | no | menus, File view | 5–9 h |
 
-Russian is described in the current update above. Other shipped languages in this historical table include German (de), Czech (cs), French (fr) and Turkish (tr).
-Russian is described in the current update above. Historical counts for German (de) and Dutch (nl) below predate the current Russian catalog.
+Russian is described in the current update above. Other shipped languages in this historical table
+include German (de), Czech (cs), French (fr) and Turkish (tr); the German (de) and Dutch (nl) counts
+below predate the current Russian catalog.
 
 **Total:** catalog work 10–20 h + languages 92–144 h ≈ **100–165 h**. Parallelizes almost fully
 once the catalog covers dialogs and commands. **Needs a human:** native-speaker review of every

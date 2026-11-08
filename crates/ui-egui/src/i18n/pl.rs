@@ -878,7 +878,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save the workbook as a web page." => "Zapisz skoroszyt jako stronę sieci Web.",
         "Options|General" => "Ogólne",
         "Options|Save" => "Zapisywanie",
-        "Options|Editing" => "Editing",
+        "Options|Editing" => "Edytowanie",
         "Show formula bar" => "Pokaż pasek formuły",
         "Enable AutoComplete for cell values" => "Włącz Autouzupełnianie dla wartości komórek",
         "Save .xlsx workbooks automatically after every change" => "Automatycznie zapisuj skoroszyty .xlsx po każdej zmianie",

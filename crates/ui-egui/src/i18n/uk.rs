@@ -473,7 +473,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "New Name" => "Нове ім’я",
         "Format Cells" => "Формат клітинок",
         "Find and Replace" => "Знайти й замінити",
-        "Go To" => "Go To",
+        "Go To" => "Перейти",
         "Insert Calculated Field" => "Вставити обчислюване поле",
         "Go To Special" => "Виділити групу клітинок",
         "Name Manager" => "Диспетчер імен",

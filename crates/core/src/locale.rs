@@ -22,7 +22,8 @@ const DE_MONTHS: [&str; 12] = ["Januar", "Februar", "März", "April", "Mai", "Ju
 const DE_MONTHS_SHORT: [&str; 12] = ["Jan", "Feb", "Mrz", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
 /// Full German weekday names, in the order of [`WEEKDAYS`] (index 0 = Sunday).
 const DE_WEEKDAYS: [&str; 7] = ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"];
-/// Three-letter German weekday names, the first three characters of [`DE_WEEKDAYS`].
+/// Two-letter German weekday names, the forms German Excel shows for `ddd` (`So`, `Mo`, `Di`):
+/// not the first characters of [`DE_WEEKDAYS`], which would read `Son`, `Mon`, `Die`.
 const DE_WEEKDAYS_SHORT: [&str; 7] = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 /// Three-letter English weekday names, the first three characters of [`WEEKDAYS`].
 const EN_WEEKDAYS_SHORT: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
