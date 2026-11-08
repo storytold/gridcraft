@@ -3,6 +3,7 @@
 
 use gridcraft_engine::Session;
 use serde_json::json;
+use std::sync::Arc;
 
 fn workbook() -> Session {
     let mut session = Session::new();
@@ -70,6 +71,65 @@ fn replay_order_survives_save_and_reopen() {
         })
         .collect();
     assert!(cols.windows(2).all(|w| w[0] < w[1]), "strokes keep their drawing order after reopening: {cols:?}");
+    // The order itself came from the file (`gridcraftOrder`), not from the reading order.
+    for (i, stroke) in list.iter().enumerate() {
+        assert_eq!(stroke["order"], i);
+    }
+}
+
+#[test]
+fn replay_follows_recorded_order_over_document_order() {
+    let mut session = workbook();
+    for x in [10.0, 200.0, 400.0] {
+        session.execute("draw.stroke", json!({"points": [[x, 10.0], [x + 40.0, 30.0]]})).unwrap();
+    }
+    // The drawing is stored in the reverse document order: the recorded order must win.
+    let d = session.doc_mut().unwrap();
+    Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().shapes.reverse();
+    let r = session.execute("draw.inkReplay", json!({})).unwrap();
+    let list = r["strokes"].as_array().unwrap();
+    assert_eq!(list.len(), 3);
+    let shapes = &session.doc().unwrap().wb.active().unwrap().shapes;
+    let cols: Vec<u32> = list
+        .iter()
+        .map(|stroke| {
+            let id = u32::try_from(stroke["id"].as_u64().unwrap()).unwrap();
+            shapes.iter().find(|s| s.id == id).unwrap().anchor.cell.col
+        })
+        .collect();
+    assert!(cols.windows(2).all(|w| w[0] < w[1]), "the recorded draw order wins over document order: {cols:?}");
+}
+
+#[test]
+fn replay_falls_back_to_document_order_without_a_recorded_order() {
+    // Ink from Excel: no order recorded. Legacy DrawingML ink: no `InkStyle` at all.
+    for legacy in [false, true] {
+        let mut session = workbook();
+        for x in [10.0, 200.0, 400.0] {
+            session.execute("draw.stroke", json!({"points": [[x, 10.0], [x + 40.0, 30.0]]})).unwrap();
+        }
+        let d = session.doc_mut().unwrap();
+        let sh = Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap();
+        for sp in &mut sh.shapes {
+            match (&mut sp.ink, legacy) {
+                (Some(ink), false) => ink.order = 0,
+                (ink, true) => *ink = None,
+                (None, false) => {}
+            }
+        }
+        sh.shapes.reverse();
+        let r = session.execute("draw.inkReplay", json!({})).unwrap();
+        let list = r["strokes"].as_array().unwrap();
+        let shapes = &session.doc().unwrap().wb.active().unwrap().shapes;
+        let cols: Vec<u32> = list
+            .iter()
+            .map(|stroke| {
+                let id = u32::try_from(stroke["id"].as_u64().unwrap()).unwrap();
+                shapes.iter().find(|s| s.id == id).unwrap().anchor.cell.col
+            })
+            .collect();
+        assert!(cols.windows(2).all(|w| w[0] > w[1]), "no recorded order (legacy: {legacy}) replays in document order: {cols:?}");
+    }
 }
 
 #[test]

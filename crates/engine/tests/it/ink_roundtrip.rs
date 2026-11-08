@@ -43,8 +43,9 @@ fn assert_ink(actual: &Shape, expected: &Shape) {
     assert_eq!(actual_points.len(), expected_points.len());
     for (actual, expected) in actual_points.iter().zip(&expected_points) {
         for axis in 0..2 {
-            // DrawingML quantizes coordinates to integer EMUs (9,525 per model unit).
-            assert!((actual[axis] - expected[axis]).abs() < 0.001, "point {actual:?} != {expected:?}");
+            // Native ink stores coordinates in InkML's 1/1000 cm units: 1/26.46 px, so a point
+            // lands within 0.02 px of where it was drawn (well under a device pixel).
+            assert!((actual[axis] - expected[axis]).abs() < 0.05, "point {actual:?} != {expected:?}");
         }
     }
     assert_eq!(actual.line, expected.line);
@@ -132,4 +133,28 @@ fn horizontal_vertical_and_signed_highlighter_strokes_survive_reopening() {
             assert_ink(&shapes(&session)[0], &expected);
         }
     }
+}
+
+#[test]
+fn engine_strokes_keep_their_ink_style_and_key_across_save_and_open() {
+    let mut session = workbook();
+    session.execute("draw.stroke", json!({"points": [[130.5, 45.25], [172.5, 86.25], [151.5, 112.25]], "color": "#A12BCD", "width": 3})).unwrap();
+    let before = shapes(&session)[0].clone();
+    let ink = before.ink.as_ref().expect("the engine creates native ink");
+    assert_eq!(ink.tool, gridcraft_engine::model::InkTool::Pen);
+    assert!(ink.key.as_deref().is_some_and(|k| k.starts_with('{') && k.ends_with('}')), "{:?}", ink.key);
+    assert!(ink.width_cm > 0.0);
+
+    let reopened = reopen(&mut session);
+    // No fallback picture leaks in as a separate object.
+    assert!(reopened.doc().unwrap().wb.active().unwrap().images.is_empty());
+    let after = &shapes(&reopened)[0];
+    let after_ink = after.ink.as_ref().expect("editable ink after reopen");
+    assert_eq!(after_ink.tool, ink.tool);
+    assert_eq!(after_ink.width_cm, ink.width_cm);
+    assert_eq!(after_ink.height_cm, ink.height_cm);
+    assert_eq!(after_ink.effect, ink.effect);
+    assert_eq!(after_ink.order, ink.order);
+    assert_eq!(after_ink.key, ink.key, "the key is assigned once and survives saves");
+    assert_eq!(after.line, before.line);
 }
