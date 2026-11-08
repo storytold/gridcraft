@@ -515,6 +515,31 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Anzeigen",
         "Collapse dialog" => "Dialogfeld reduzieren",
         "Expand dialog" => "Dialogfeld erweitern",
+        "Numerical Count" => "Numerische Zählung",
+        "Minimum" => "Minimum",
+        "Maximum" => "Maximum",
+        "Circular References: {cell}" => "Zirkelbezüge: {cell}",
+        "Width: {chars} ({pixels} pixels)" => "Breite: {chars} ({pixels} Pixel)",
+        "Height: {points} ({pixels} pixels)" => "Höhe: {points} ({pixels} Pixel)",
+        "Picture in cell" => "Bild in Zelle",
+        "Picture: {alt}" => "Bild: {alt}",
+        "Format Control: {name}" => "Steuerelement formatieren: {name}",
+        "Error at character {position}: {message}" => "Fehler bei Zeichen {position}: {message}",
+        "Saved macro “{name}” ({steps} step)" => "Makro „{name}“ gespeichert ({steps} Schritt)",
+        "Saved macro “{name}” ({steps} steps)" => "Makro „{name}“ gespeichert ({steps} Schritte)",
+        "without {key}: another macro took it while recording" => {
+            "ohne {key}: ein anderes Makro hat die Tastenkombination während der Aufzeichnung übernommen"
+        }
+        "Recording stopped" => "Aufzeichnung beendet",
+        "Macro “{name}” stopped: {message}" => "Makro „{name}“ angehalten: {message}",
+        "Ran macro “{name}” ({steps} step)" => "Makro „{name}“ ausgeführt ({steps} Schritt)",
+        "Ran macro “{name}” ({steps} steps)" => "Makro „{name}“ ausgeführt ({steps} Schritte)",
+        "Average" => "Mittelwert",
+        "Count" => "Anzahl",
+        "Sum" => "Summe",
+        "Goal Seeking found a solution: {value}" => "Zielwertsuche hat eine Lösung gefunden: {value}",
+        "Sheets: {sheets}" => "Blätter: {sheets}",
+        "Hidden: {sheets}" => "Ausgeblendet: {sheets}",
         _ => return None,
     })
 }

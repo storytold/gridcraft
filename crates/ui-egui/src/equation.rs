@@ -129,6 +129,16 @@ fn insert_snippet(ctx: &egui::Context, id: egui::Id, text: &mut String, snippet:
     ctx.data_mut(|m| m.insert_temp(id.with("refocus"), true));
 }
 
+/// The line under the equation source for a parse error: where it is (the 1-based character),
+/// then the message, both in the interface language.
+fn parse_error_text(lang: crate::i18n::Language, position: Option<usize>, message: &str) -> String {
+    let message = lang.tr_error(message);
+    match position {
+        Some(p) => lang.tr_fill("Error at character {position}: {message}", &[("position", &p.to_string()), ("message", &message)]),
+        None => message,
+    }
+}
+
 /// The editor's body: quick-insert buttons, the LaTeX source with its error underlined, a live
 /// preview on a sheet-coloured card, and OK/Cancel.
 pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
@@ -164,10 +174,7 @@ pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
     ui.add_space(4.0);
     match &pv.result {
         Err(e) if !text.trim().is_empty() => {
-            let msg = match e.char_pos(&text) {
-                Some(p) => format!("Error at character {p}: {}", e.message),
-                None => e.message.clone(),
-            };
+            let msg = parse_error_text(app.ui.language, e.char_pos(&text), &e.message);
             ui.colored_label(t.danger, msg);
         }
         _ => {
@@ -499,6 +506,18 @@ fn triangulate(pts: &[Pos2]) -> Vec<[usize; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_errors_follow_the_interface_language() {
+        use crate::i18n::Language;
+        assert_eq!(parse_error_text(Language::En, Some(3), "Missing }"), "Error at character 3: Missing }");
+        assert_eq!(parse_error_text(Language::En, None, "Empty {group}"), "Empty {group}");
+        let it = Language::It;
+        // The message is filled in once: its own `{message}` stays as it is.
+        let want = it.tr("Error at character {position}: {message}").replace("{position}", "3").replace("{message}", "Bad {message}");
+        assert_eq!(parse_error_text(it, Some(3), "Bad {message}"), want);
+        assert!(!want.starts_with("Error at character"));
+    }
 
     #[test]
     fn ear_clipping_covers_a_concave_polygon() {

@@ -1016,6 +1016,23 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Unprotect Sheet…", "シート保護の解除…"),
     ("Collapse dialog", "ダイアログを折りたたむ"),
     ("Expand dialog", "ダイアログを展開する"),
+    ("Numerical Count", "数値の個数"),
+    ("Minimum", "最小値"),
+    ("Maximum", "最大値"),
+    ("Circular References: {cell}", "循環参照: {cell}"),
+    ("Width: {chars} ({pixels} pixels)", "幅: {chars} ({pixels} ピクセル)"),
+    ("Height: {points} ({pixels} pixels)", "高さ: {points} ({pixels} ピクセル)"),
+    ("Picture in cell", "セル内の画像"),
+    ("Picture: {alt}", "画像: {alt}"),
+    ("Format Control: {name}", "コントロールの書式設定: {name}"),
+    ("Error at character {position}: {message}", "{position} 文字目でエラー: {message}"),
+    ("Saved macro “{name}” ({steps} step)", "マクロ「{name}」を保存しました ({steps} ステップ)"),
+    ("Saved macro “{name}” ({steps} steps)", "マクロ「{name}」を保存しました ({steps} ステップ)"),
+    ("without {key}: another macro took it while recording", "{key} なし: 記録中に別のマクロに割り当てられました"),
+    ("Recording stopped", "記録を終了しました"),
+    ("Macro “{name}” stopped: {message}", "マクロ「{name}」が停止しました: {message}"),
+    ("Ran macro “{name}” ({steps} step)", "マクロ「{name}」を実行しました ({steps} ステップ)"),
+    ("Ran macro “{name}” ({steps} steps)", "マクロ「{name}」を実行しました ({steps} ステップ)"),
 ];
 
 /// Labels of the ribbon menus, pop-ups and palettes that the reference catalog does not cover (the
