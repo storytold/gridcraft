@@ -1054,7 +1054,12 @@ try {
   if (typeof entry !== "function") {
     throw new Error("an Office Script needs a main function: function main(workbook: ExcelScript.Workbook) { ... }");
   }
-  entry(workbook);
+  const returned = entry(workbook);
+  // Office Scripts often declare `async function main`: await it, so a rejection inside it is
+  // caught here and the completion line is only written when the script actually finished.
+  if (returned && typeof returned.then === "function") {
+    await returned;
+  }
   // The parent commits the run only when this line arrives: a script that exits early, or a
   // runtime that crashes after editing the workbook, must not leave half a run behind.
   writeLine(JSON.stringify({ done: true }));

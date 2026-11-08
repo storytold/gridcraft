@@ -101,7 +101,11 @@ fn step_call(step: &JournalStep) -> Option<(BridgeCall, String)> {
             let cell = p.get("cell").and_then(Json::as_str)?;
             let value = p.get("input")?;
             let literal = js_literal(value)?;
-            let call = range_call("Range.setValue", step, cell, "value", value.clone());
+            let mut call = range_call("Range.setValue", step, cell, "value", value.clone());
+            // Typed input stays typed: the bridge parses the recorded text the way the cell did.
+            if let Json::Object(map) = &mut call.params {
+                map.insert("parse".into(), Json::Bool(true));
+            }
             Some((call, format!("{}.setValue({literal});", target(step, cell))))
         }
         "range.setValues" => {
@@ -284,6 +288,8 @@ mod tests {
         assert_eq!(r.calls.len(), 4);
         assert_eq!(r.calls[3].method, "Range.setValues");
         assert_eq!(r.calls[0].params["value"], json!(42));
+        assert_eq!(r.calls[0].params["parse"], json!(true), "typed input is replayed as typed");
+        assert!(r.calls[3].params.get("parse").is_none(), "a verbatim range write stays verbatim");
         assert_eq!(r.calls[1].params["value"], json!("Sales"));
         assert!(r.skipped.is_empty());
     }

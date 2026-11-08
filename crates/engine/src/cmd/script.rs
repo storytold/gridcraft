@@ -861,6 +861,34 @@ mod tests {
     }
 
     #[test]
+    fn a_parsed_set_value_replays_typed_input_as_a_number() {
+        let mut s = session("parse-set");
+        {
+            let mut bridge = crate::script::SessionBridge { session: &mut s };
+            let parsed = BridgeCall::new("Range.setValue", json!({"range": "A1", "value": "42", "parse": true}));
+            gridcraft_script::BridgeExecutor::execute(&mut bridge, &parsed).unwrap();
+            let verbatim = BridgeCall::new("Range.setValue", json!({"range": "B1", "value": "42"}));
+            gridcraft_script::BridgeExecutor::execute(&mut bridge, &verbatim).unwrap();
+        }
+        assert_eq!(value(&s, 0, "A1"), Value::Number(42.0), "typed input stays a number");
+        assert_eq!(value(&s, 0, "B1"), Value::Text("42".into()), "a verbatim write stays text");
+    }
+
+    #[test]
+    fn a_table_is_found_on_another_worksheet() {
+        let mut s = session("table-other-sheet");
+        s.execute("home.insertSheet", json!({"name": "Data"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": "Name"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A2", "input": "x"})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:A2", "header": true})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        let mut bridge = crate::script::SessionBridge { session: &mut s };
+        let call = BridgeCall::new("Table.getHeaderRowRange", json!({"table": "Table1"}));
+        let range = gridcraft_script::BridgeExecutor::execute(&mut bridge, &call).unwrap();
+        assert_eq!(range, json!({"address": "A1", "sheet": "Data"}), "the header cell, found on the sheet that owns the table");
+    }
+
+    #[test]
     fn a_table_columns_header_range_is_one_cell() {
         let mut s = session("table-header-range");
         for (cell, text) in [("A1", "Name"), ("B1", "Qty"), ("A2", "x"), ("B2", "1")] {

@@ -178,3 +178,24 @@ function main(workbook: ExcelScript.Workbook) {
     let report = host.run(script, &Limits::default(), &mut calls).expect("the script runs");
     assert_eq!(report.output, vec!["Visible true true".to_string()]);
 }
+
+#[test]
+#[ignore = "needs Bun; set GRIDCRAFT_BUN"]
+fn an_async_main_that_throws_fails_the_run() {
+    let Some(host) = host() else { return };
+    // An `async function main` returns a Promise: a rejection inside it must fail the run (and
+    // roll it back), not be reported as a finished script.
+    let script = r#"
+async function main(workbook: ExcelScript.Workbook) {
+  const sheet = workbook.getWorksheet("Data");
+  sheet.getRange("A1").setValue(1);
+  await Promise.resolve();
+  sheet.getRange("A2").setValue(2);
+  throw new Error("after two calls");
+}
+"#;
+    let mut calls = Calls { calls: Vec::new() };
+    let error = host.run(script, &Limits::default(), &mut calls).expect_err("a rejected async main fails the run");
+    assert!(error.message.contains("after two calls"), "{}", error.message);
+    assert_eq!(calls.calls.len(), 2, "both calls ran before the failure");
+}

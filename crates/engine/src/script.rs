@@ -933,7 +933,10 @@ fn range_set(s: &mut Session, method: &str, params: &Json) -> Result<Json, Bridg
             if !values.is_array() {
                 return Err(BridgeError::invalid_argument("setValues takes rows of values"));
             }
-            command(s, "range.setValues", json!({"sheet": sheet, "range": range, "values": values, "parse": false}))?;
+            // `parse` keeps typed input typed: a recorded `cell.set` replays "42" as the number the
+            // person typed, while a verbatim `setValues` write stays text.
+            let parse = params.get("parse").and_then(Json::as_bool).unwrap_or(false);
+            command(s, "range.setValues", json!({"sheet": sheet, "range": range, "values": values, "parse": parse}))?;
         }
         "Range.setFormula" | "Range.setFormulas" => {
             let key = if method == "Range.setFormula" { "formula" } else { "formulas" };
@@ -976,12 +979,22 @@ fn formula(text: &str) -> String {
 
 fn table_info(s: &mut Session, params: &Json) -> Result<Json, BridgeError> {
     let name = member_str(params, "table")?;
-    let tables = command(s, "script.tables", json!({}))?;
-    tables
-        .as_array()
-        .and_then(|a| a.iter().find(|t| t["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(&name))))
-        .cloned()
-        .ok_or_else(|| BridgeError::invalid_argument(format!("there is no table called `{name}`")))
+    // A script's table collection is workbook-wide: a table the shim returned may live on another
+    // worksheet, so look on every one instead of only the active sheet.
+    for sheet in sheet_names(s)? {
+        let tables = command(s, "script.tables", json!({"sheet": sheet}))?;
+        let found = tables.as_array().and_then(|a| a.iter().find(|t| t["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(&name))));
+        if let Some(table) = found {
+            return Ok(table.clone());
+        }
+    }
+    Err(BridgeError::invalid_argument(format!("there is no table called `{name}`")))
+}
+
+/// Every worksheet's name, in workbook order.
+fn sheet_names(s: &mut Session) -> Result<Vec<String>, BridgeError> {
+    let sheets = command(s, "script.sheets", json!({}))?;
+    Ok(sheets["sheets"].as_array().map(|a| a.iter().filter_map(|x| x["name"].as_str().map(str::to_string)).collect()).unwrap_or_default())
 }
 
 fn table_column_info(s: &mut Session, params: &Json) -> Result<(Json, Json), BridgeError> {
@@ -1002,7 +1015,8 @@ fn tables_row_range(table: &Json, header: bool) -> Json {
     }
     let Some(range) = table["range"].as_str().and_then(RangeRef::parse) else { return Json::Null };
     let row = if header { range.start.row } else { range.end.row };
-    Json::String(RangeRef::rows(row, row).a1())
+    // The table's own columns: a whole worksheet row would clear or read everything beside it.
+    Json::String(RangeRef::new(gridcraft_core::CellRef::new(row, range.start.col), gridcraft_core::CellRef::new(row, range.end.col)).a1())
 }
 
 fn data_body_range(table: &Json) -> Json {
@@ -1012,7 +1026,7 @@ fn data_body_range(table: &Json) -> Json {
     if start > end {
         return Json::Null;
     }
-    Json::String(RangeRef::rows(start, end).a1())
+    Json::String(RangeRef::new(gridcraft_core::CellRef::new(start, range.start.col), gridcraft_core::CellRef::new(end, range.end.col)).a1())
 }
 
 /// ExcelScript `DataValidationType` → the engine's type name.
@@ -1088,12 +1102,15 @@ fn chart_name_known(name: &str) -> bool {
 
 fn chart_info(s: &mut Session, params: &Json) -> Result<Json, BridgeError> {
     let id = member_u32(params, "id")?;
-    let charts = command(s, "script.charts", json!({}))?;
-    charts
-        .as_array()
-        .and_then(|a| a.iter().find(|c| c["id"].as_u64() == Some(u64::from(id))))
-        .cloned()
-        .ok_or_else(|| BridgeError::invalid_argument(format!("there is no chart with id {id}")))
+    // As with tables: the chart a script holds may be on any worksheet.
+    for sheet in sheet_names(s)? {
+        let charts = command(s, "script.charts", json!({"sheet": sheet}))?;
+        let found = charts.as_array().and_then(|a| a.iter().find(|c| c["id"].as_u64() == Some(u64::from(id))));
+        if let Some(chart) = found {
+            return Ok(chart.clone());
+        }
+    }
+    Err(BridgeError::invalid_argument(format!("there is no chart with id {id}")))
 }
 
 fn chart_id(s: &mut Session, params: &Json) -> Result<u32, BridgeError> {
@@ -1280,11 +1297,11 @@ mod tests {
     #[test]
     fn table_row_ranges_follow_the_flags() {
         let table = json!({"range": "A1:C5", "headerRow": true, "totalsRow": true});
-        assert_eq!(tables_row_range(&table, true), Json::String("1:1".into()));
-        assert_eq!(tables_row_range(&table, false), Json::String("5:5".into()));
-        assert_eq!(data_body_range(&table), Json::String("2:4".into()));
+        assert_eq!(tables_row_range(&table, true), Json::String("A1:C1".into()));
+        assert_eq!(tables_row_range(&table, false), Json::String("A5:C5".into()));
+        assert_eq!(data_body_range(&table), Json::String("A2:C4".into()));
         let plain = json!({"range": "A1:C5", "headerRow": false, "totalsRow": false});
-        assert_eq!(data_body_range(&plain), Json::String("1:5".into()));
+        assert_eq!(data_body_range(&plain), Json::String("A1:C5".into()));
     }
 
     #[test]

@@ -182,8 +182,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   - alignment, wrap and indent setters (`RangeFormat.setHorizontalAlignment`, …)
   - `getCellProperties`, hyperlinks, conditional formatting and pivot tables
   - `ExcelScript` enums that only those setters take (`HorizontalAlignment`, `VerticalAlignment`)
-  Office Add-ins are a different technology. **Estimate:** 10–20 h for the rest of ExcelScript;
-  Add-ins need an owner decision.
+  Office Add-ins are a different technology, and there is no plugin or custom-function API: that is
+  a separate work item ([roadmap.md](roadmap.md)), not part of the ExcelScript subset.
+  **Estimate:** 10–20 h for the rest of ExcelScript; Add-ins and a plugin/custom-function API need
+  an owner decision.
 
 ### 22. AI features (F)
 - No in-app assistant, natural-language formulas or Analyze Data; agent control via MCP is
