@@ -66,6 +66,13 @@ fn tiny_png() -> Vec<u8> {
 
 /// A minimal one-sheet package with an Excel-shaped ink drawing.
 fn package(trace: &str, f: bool, props: &str, ink: bool, declared: bool, media: bool) -> Vec<u8> {
+    package_with(trace, f, props, ink, declared, media, false)
+}
+
+/// The same package. With `damage_ink`, the ink part is stored uncompressed and one byte of it is
+/// flipped, so the entry fails partway (a bad CRC) while the archive and the picture after it stay
+/// intact: what a damaged InkML part costs a reader.
+fn package_with(trace: &str, f: bool, props: &str, ink: bool, declared: bool, media: bool, damage_ink: bool) -> Vec<u8> {
     let wb = r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
     let wb_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
     let sheet = format!(
@@ -98,7 +105,24 @@ fn package(trace: &str, f: bool, props: &str, ink: bool, declared: bool, media: 
     if media {
         parts.push(("xl/media/image1.png", &png));
     }
-    make_zip(&parts)
+    if !damage_ink {
+        return make_zip(&parts);
+    }
+    use std::io::Write as _;
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, data) in &parts {
+        let opts = if name.ends_with("ink1.xml") {
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)
+        } else {
+            zip::write::SimpleFileOptions::default()
+        };
+        w.start_file(*name, opts).unwrap();
+        w.write_all(data).unwrap();
+    }
+    let mut z = w.finish().unwrap().into_inner();
+    let at = z.windows(9).position(|x| x == b"<inkml:in").expect("the stored ink markup");
+    z[at + 8] ^= 0x20;
+    z
 }
 
 const PEN_PROPS: &str = r##"<inkml:brushProperty name="width" value="0.05" units="cm"/><inkml:brushProperty name="height" value="0.05" units="cm"/><inkml:brushProperty name="color" value="#1F5FC9"/>"##;
@@ -312,6 +336,32 @@ fn a_missing_or_undeclared_ink_part_falls_back_to_the_picture() {
         assert_eq!(wb.sheets[0].images.len(), 1, "{name}: the picture is used");
         assert!(report.warnings.iter().any(|w| w.contains("ink") || w.contains("picture")), "{name}: {:?}", report.warnings);
     }
+}
+
+#[test]
+fn a_wildcard_keeps_the_difference_order_for_a_later_unprefixed_value() {
+    // `*` repeats the value and leaves the channel in first-difference mode, so the next value
+    // written without a prefix (`1`, then `2`) still applies to a nought first difference.
+    let (wb, _) = read(&package("0 0,'5'3,*1,2 1", false, PEN_PROPS, true, true, true));
+    assert_eq!(thousandths(ink_shape(&wb)), vec![[0, 0], [5, 3], [5, 4], [7, 5]]);
+}
+
+#[test]
+fn a_wildcard_keeps_the_second_difference_order_too() {
+    // Second differences 1 and 1 put X at 11 and Y at 7; `*` repeats X and zeroes its first
+    // difference, while Y keeps adding its written second differences.
+    let (wb, _) = read(&package("0 0,'5'3,\"1\"1,*2,1 1", false, PEN_PROPS, true, true, true));
+    assert_eq!(thousandths(ink_shape(&wb)), vec![[0, 0], [5, 3], [11, 7], [11, 13], [12, 20]]);
+}
+
+#[test]
+fn a_damaged_ink_part_costs_only_its_own_allowance() {
+    // The ink entry fails partway (a bad CRC) inside an intact archive. The read is optional, so
+    // the failure is charged to the ink part and the fallback picture still opens.
+    let (wb, report) = read(&package_with("!0 !0,'1000 '1000", false, PEN_PROPS, true, true, true, true));
+    assert!(wb.sheets[0].shapes.is_empty(), "the damaged ink is not read");
+    assert_eq!(wb.sheets[0].images.len(), 1, "the fallback picture still loads");
+    assert!(report.warnings.iter().any(|w| w.contains("ink part")), "{:?}", report.warnings);
 }
 
 #[test]

@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use gridcraft_model::{Color, InkEffect, InkStyle, InkTool, Shape, ShapeKind, Sheet, Theme};
 
 use super::emu_px;
-use crate::package::{Rel, normalize};
+use crate::package::{MAX_PART, Rel, normalize};
 use crate::read::Ctx;
 use crate::tables::EMU_PER_PX;
 use crate::xml::{self, El, esc_attr};
@@ -77,7 +77,9 @@ pub(super) fn read(
     if rel.kind != REL_CUSTOM_XML || !declared.contains(&normalize(&rel.target)) {
         return None;
     }
-    let bytes = match cx.pkg.read(&rel.target) {
+    // The part is optional: the fallback picture is read after it, so a read that fails partway is
+    // charged to this part's allowance rather than ending the package's budget.
+    let bytes = match cx.pkg.read_optional_limited(&rel.target, MAX_PART) {
         Ok(Some(b)) => b,
         _ => return None,
     };
@@ -141,7 +143,9 @@ fn creation_id_of(content_part: &El) -> Option<String> {
     (id.len() <= 80 && id.starts_with('{') && id.ends_with('}')).then(|| id.to_string())
 }
 
-/// One channel's difference-decoding state.
+/// One channel's difference-decoding state: its last value, its last first difference, and the
+/// difference order written for that value. A `*` stores nothing here: it repeats the value and
+/// changes no order.
 #[derive(Clone, Copy, Default)]
 struct Channel {
     value: i64,
@@ -191,18 +195,23 @@ fn decode(trace: &El, definitions: &El) -> Option<(Vec<[f64; 2]>, Vec<u16>)> {
         let mut rest = point;
         let mut values = Vec::with_capacity(channels.len());
         for st in state.iter_mut() {
-            let (prefix, raw, tail) = scan_value(rest)?;
+            let (written, raw, tail) = scan_value(rest)?;
             rest = tail;
-            let prefix = prefix.or(st.prefix).unwrap_or('!');
-            let raw = match (prefix, raw) {
-                ('*', None) => 0,
-                // A value with no number only repeats; an inherited `*` that carries one is not
-                // valid InkML.
-                ('*', Some(_)) | (_, None) => return None,
-                (_, Some(n)) => n,
-            };
+            if written == Some('*') {
+                // `*` repeats the value and leaves the channel's difference order as it was, so the
+                // first difference is nought from here on and a later unprefixed value still
+                // applies its own number to it.
+                st.diff = 0;
+                if st.value.unsigned_abs() > MAX_COORD as u64 {
+                    return None;
+                }
+                values.push(st.value);
+                continue;
+            }
+            // A value with no prefix of its own carries the channel's previous difference order.
+            let prefix = written.or(st.prefix).unwrap_or('!');
+            let raw = raw?;
             let value = match prefix {
-                '*' => st.value,
                 '!' => raw,
                 '\'' => st.value.checked_add(raw)?,
                 '"' => st.value.checked_add(st.diff.checked_add(raw)?)?,
