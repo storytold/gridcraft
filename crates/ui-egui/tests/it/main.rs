@@ -30,6 +30,7 @@ mod dialog_confirm;
 mod dialog_focus;
 mod dialog_move;
 mod drag_cursor;
+mod draw_tools;
 mod equation_editor;
 mod error_checking_menu;
 mod file_menu;
