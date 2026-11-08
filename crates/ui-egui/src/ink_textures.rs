@@ -85,10 +85,13 @@ impl Tier {
                 self.bytes = self.bytes.saturating_sub(entry.bytes);
             }
         }
-        if self.entries.len() < self.max_items && self.bytes.saturating_add(bytes) <= self.max_bytes {
-            self.bytes = self.bytes.saturating_add(bytes);
-            self.entries.insert(key, Entry { texture: texture.clone(), bytes, used: frame });
-        }
+        // Entries drawn this frame or the last cannot be evicted, so a frame that fills the budget
+        // leaves no room to trim. Keep the new upload anyway: dropping it would decode and upload
+        // the same texture again on every frame it stays on screen, which is the thrash the cache
+        // exists to prevent. The next insert once those textures leave the screen trims back to the
+        // budget.
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.entries.insert(key, Entry { texture: texture.clone(), bytes, used: frame });
         texture
     }
 }
@@ -406,6 +409,29 @@ mod tests {
         for (t, id) in strokes.iter().zip(ids) {
             assert_eq!(c.stroke(&ctx, t).expect("still cached").id(), id, "the canvas's texture is the same upload");
         }
+    }
+
+    /// A texture the frame is painting is kept even when the budget is full of textures the frame
+    /// is also painting: dropping it would decode and upload it again on every repaint.
+    #[test]
+    fn a_full_budget_keeps_a_texture_the_frame_is_painting() {
+        let ctx = egui::Context::default();
+        let mut tier = Tier::new(THUMB_SIDE, usize::MAX, 1);
+        let a = distinct(32, 32, 1);
+        let b = distinct(32, 32, 2);
+        let key = |t: &InkTexture| (t.id.clone(), t.data.len());
+        advance(&ctx);
+        assert!(tier.texture(&ctx, key(&a), &a.data).is_some());
+        assert!(tier.texture(&ctx, key(&b), &b.data).is_some()); // no entry can be trimmed yet
+        assert_eq!(tier.entries.len(), 2, "both uploads stay while the frame paints them");
+        // The next frame paints only `b`, so a tile nothing draws any more can go.
+        advance(&ctx);
+        tier.texture(&ctx, key(&b), &b.data);
+        advance(&ctx);
+        let c = distinct(32, 32, 3);
+        assert!(tier.texture(&ctx, key(&c), &c.data).is_some());
+        assert!(!tier.entries.contains_key(&key(&a)), "a texture no frame draws any more is dropped");
+        assert!(tier.entries.contains_key(&key(&c)), "and the one just painted takes its room");
     }
 
     /// Eviction takes the preview no frame has drawn for longest, keeping the ones still on screen.

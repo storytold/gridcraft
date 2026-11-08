@@ -927,7 +927,9 @@ pub fn read_file_limited(path: &str, max: u64) -> Result<Vec<u8>> {
         return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
     }
     let mut buf = Vec::new();
-    let mut limited = (&f).take(max + 1);
+    // `max` is the caller's cap, so the sentinel byte saturates rather than overflowing: a
+    // `u64::MAX` cap means "as much as the file holds".
+    let mut limited = (&f).take(max.saturating_add(1));
     limited.read_to_end(&mut buf).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     if buf.len() as u64 > max {
         return Err(EngineError::Other(format!("{path}: larger than {max} bytes")));

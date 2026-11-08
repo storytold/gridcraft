@@ -1008,7 +1008,7 @@ pub struct FormControl {
 }
 
 impl Default for FormControl {
-    /// A control with no action that is printed and left unlocked.
+    /// A control with no action that is printed and locked when the sheet is protected.
     fn default() -> Self {
         FormControl {
             id: 0,
