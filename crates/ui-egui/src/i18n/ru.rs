@@ -108,7 +108,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Replace" => "Заменить",
         "Nothing found" => "Ничего не найдено",
         "Nothing found for “{}”" => "Ничего не найдено для “{}”",
-        "{count} cell(s) found" => "{count} cell(s) найдено",
+        "{count} cell(s) found" => "Найдено ячеек: {count}",
         "Go To…" => "Перейти…",
         "Go To Special…" => "Выделить группу ячеек…",
         "PivotTable" => "Сводная таблица",

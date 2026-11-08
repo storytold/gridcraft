@@ -67,7 +67,7 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                 p["all"] = json!(true);
                 match app.run("edit.replace", p) {
                     Ok(r) => app.toast = Some((format!("All done. We made {} replacements.", r["replaced"]), crate::now_ms())),
-                    Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
+                    Err(e) => app.message = Some((lang.tr("Find and Replace").to_string(), crate::clean_error(&e))),
                 }
             }
             if ui.button(lang.tr("Replace")).clicked() {
@@ -103,7 +103,7 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                         d.values.insert("foundFor".into(), json!(what.clone()));
                     }
                     // No open workbook is an error, not a no-result, and keeps the message-box path.
-                    Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
+                    Err(e) => app.message = Some((lang.tr("Find and Replace").to_string(), crate::clean_error(&e))),
                 }
             }
         }
@@ -117,7 +117,16 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                         d.values.insert("notFound".into(), json!(false));
                         d.values.remove("foundFor");
                     }
-                    Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
+                    Err(e) => {
+                        // A failed Find Next keeps the message box, but the engine's "couldn't find"
+                        // error is shown as the dialog's own quoted no-result line, so it reads in the
+                        // interface language instead of untranslated English.
+                        let body = match e.strip_prefix("We couldn't find what you were looking for: ") {
+                            Some(q) => lang.tr("Nothing found for “{}”").replace("{}", q),
+                            None => crate::clean_error(&e),
+                        };
+                        app.message = Some((lang.tr("Find and Replace").to_string(), body));
+                    }
                 }
                 app.grid.ensure_visible = true;
             }
