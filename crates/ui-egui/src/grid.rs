@@ -297,6 +297,14 @@ pub struct GridState {
     pub hf_start: bool,
     /// The grid geometry of the last frame (hit-testing for agents and tests).
     pub geo: Option<Geo>,
+    /// A form control being worked with the pointer.
+    pub control: Option<crate::form_controls::Gesture>,
+    /// The form control that takes the arrow keys (the one last worked).
+    pub focused_control: Option<u32>,
+    /// Insert › Controls: the kind a click or drag on the grid places, and where the drag began
+    /// (logical position).
+    pub placing: Option<gridcraft_engine::model::ControlKind>,
+    pub place_start: Option<Pos2>,
     /// The horizontal scrollbar's track in the sheet tab bar (hit-testing for tests).
     pub hscroll: Option<Rect>,
     /// The handle between the sheet tabs and the horizontal scrollbar (hit-testing for tests).

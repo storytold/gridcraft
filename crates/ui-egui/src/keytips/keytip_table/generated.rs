@@ -153,6 +153,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("HW", Entry::Continue),  // Excel: Wrap Text Menu; group level: containment(Wrap Text)
     ("HWW", Entry::Finish(Action::Command("home.wrapText"))), // Excel: Wrap Text
     ("HX", Entry::Finish(Action::Command("edit.cut"))), // Excel: Cut
+    ("NBU", Entry::Finish(Action::Command("insert.button"))), // Excel: Button (Form Control)
     ("NC1", Entry::Finish(Action::Control("insert.chart.column"))), // Excel: Column Chart; Column chart (kind TBD)
     ("NC2", Entry::Finish(Action::Command("review.newComment"))), // Excel: New Comment
     ("NCM", Entry::Finish(Action::Dialog("comment"))), // Excel: Excel: New Comment (modern)
@@ -180,10 +181,12 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("NQ", Entry::Finish(Action::Control("insert.chart.pie"))), // Excel: Pie Chart; Pie (kind TBD)
     ("NR", Entry::Finish(Action::Command("insert.recommendedCharts"))), // Excel: Recommended Charts
     ("NSA", Entry::Finish(Action::Control("insert.chart.statistic"))), // Excel: Statistical Chart; Statistical chart (kind TBD)
+    ("NSB", Entry::Finish(Action::Command("insert.spinButton"))), // Excel: Spin Button (Form Control)
     ("NSC", Entry::Finish(Action::Pending("insert.screenshot"))), // pending; Excel: Screenshot Menu; Screenshot; reserved until the command lands
     ("NSD", Entry::Finish(Action::Command("insert.chart"))), // Excel: Combo Chart; Combo (kind TBD)
     ("NSF", Entry::Finish(Action::Command("insert.slicer"))), // Excel: Slicer; insert.slicer missing (gap #8); reserved until the command lands
     ("NSH", Entry::Finish(Action::Command("insert.shape"))), // Excel: Shapes
+    ("NSL", Entry::Finish(Action::Command("insert.slider"))), // Excel: Scroll Bar (Form Control)
     ("NSP", Entry::Finish(Action::Command("insert.recommendedPivotTables"))), // Excel: Recommended PivotTables
     ("NST", Entry::Finish(Action::Pending("insert.timeline"))), // pending; Excel: Timeline; insert.timeline missing (gap #8); reserved until the command lands
     ("NSZ", Entry::Finish(Action::Command("insert.pivotChart"))), // Excel: PivotChart; PivotChart; reserved until the command lands

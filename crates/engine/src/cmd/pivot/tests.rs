@@ -168,6 +168,19 @@ fn filters_and_report_filter_rows() {
     assert!(s.execute("pivot.filter", json!({"field": "Product", "selected": []})).is_err());
 }
 
+/// A selection of the most labels allowed (100,000) is looked up once per record, not scanned: the
+/// report still filters case-insensitively.
+#[test]
+fn a_huge_filter_selection_is_matched_through_a_set() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Product"], "values": ["Sales"], "filters": ["Region"]})).unwrap();
+    let mut selected: Vec<String> = (0..99_999).map(|i| format!("Region {i}")).collect();
+    selected.push("EAST".into());
+    s.execute("pivot.filter", json!({"field": "Region", "selected": selected})).unwrap();
+    let gt = find_row(&s, "Grand Total").unwrap();
+    assert_eq!(val(&s, &CellRef::new(gt, 1).a1()), Value::Number(415.0));
+}
+
 #[test]
 fn show_values_as() {
     let mut s = sales();
