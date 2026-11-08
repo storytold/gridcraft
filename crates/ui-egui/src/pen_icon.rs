@@ -295,7 +295,9 @@ pub fn pen_tile(ui: &mut Ui, tile: PenTile<'_>) -> (Response, Response) {
     if tile.selected {
         p.rect_stroke(rect, 5.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
     }
-    let label = tool_label(tile.tool);
+    // Each tile is its own pen ("Galaxy pen", "Red pen", …), so the tool's generic name would
+    // leave the six default pens and every custom one indistinguishable to a screen reader.
+    let label = tile.tip;
     main.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     chevron.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), format!("{label} options")));
     let tip = tile.tip.to_string();

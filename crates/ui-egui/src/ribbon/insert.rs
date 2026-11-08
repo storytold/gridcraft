@@ -267,7 +267,9 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "draw.lasso", json!({}));
     }
-    let __k = big_button(ui, Icon::Lasso, "Lasso\nSelect", "Select ink with a freehand loop", false);
+    // `draw.lasso` selects ink the way Select Objects does; there is no freehand loop yet, so the
+    // tooltip must not promise one.
+    let __k = big_button(ui, Icon::Lasso, "Lasso\nSelect", "Select and move ink and shapes, as Select Objects does", false);
     if __k.clicked() {
         act(app, "draw.lasso", json!({}));
     }
