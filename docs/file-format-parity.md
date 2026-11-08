@@ -57,9 +57,9 @@ Highlighter, and everything else a Pen. The two tools Excel cannot write (Founta
 Pen) and the draw order ride in GridCraft-only `brushProperty` names that Excel drops on save; the
 tool name is written only for those two (and for a Pencil whose texture would hide its marker).
 Excel preserves the `a16:creationId` GUID, which is
-the stroke's stable key, and one id names one stroke in the workbook: a file that stores an id on
-two strokes, or that leaves a stroke to a minted id another part already holds, is healed on open —
-the first holder keeps its id and every later one gets a free key. Legacy DrawingML polylines
+the stroke's stable key, and one id names one stroke in the workbook: an id the file stores is never
+replaced, and a stroke left without one — a later trace of a part, a stroke whose id was malformed,
+or a second holder of an id the file reused — is minted a free key once every sheet is read. Legacy DrawingML polylines
 written by older GridCraft versions still read,
 and are written for ink shapes without an `InkStyle`; curves, filled paths, transforms and
 unsupported line styles are not interpreted as ink. A contentPart is only trusted when

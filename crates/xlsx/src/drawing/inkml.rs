@@ -54,23 +54,32 @@ const MAX_PRESSURE: i64 = 32_767;
 
 // ---------------------------------------------------------------- reading
 
-/// Gives every stroke in the workbook a creation id no other stroke holds. A save writes each
-/// stroke's key as its `a16:creationId`, and two strokes with one id is a workbook that names one
-/// stroke twice. The parts are read in sheet order, so the first holder keeps its id and every
-/// later duplicate gets a free one; whichever order the parts were read in, the workbook ends with
-/// one holder per id. A file that already stores one id on two strokes is healed here too — a
-/// stroke with a malformed id never reaches this point, since the reader mints it a key already.
+/// Gives every stroke in the workbook a creation id of its own, and never changes an id the file
+/// stores. A save writes each stroke's key as its `a16:creationId`, and two strokes with one id is a
+/// workbook that names one stroke twice.
+///
+/// The first pass keeps the first holder of each id the file stores and clears every later duplicate;
+/// the second mints a free key for every stroke left without one, against the ids already kept. A
+/// part's first trace is the only stroke that keeps a key from the read, so what the file stored always
+/// wins over anything minted, whichever order the parts were read in.
 pub(crate) fn unique_keys(wb: &mut Workbook) {
     let mut seen: HashSet<String> = HashSet::new();
     for sheet in wb.sheets.iter_mut() {
         for ink in Arc::make_mut(sheet).shapes.iter_mut().filter_map(|s| s.ink.as_mut()) {
-            let Some(key) = ink.key.as_deref() else { continue };
-            if seen.insert(key.to_owned()) {
-                continue;
+            if let Some(key) = ink.key.as_deref()
+                && !seen.insert(key.to_owned())
+            {
+                ink.key = None;
             }
-            let fresh = gridcraft_model::ink_creation_id_free(|k| seen.contains(k));
-            seen.insert(fresh.clone());
-            ink.key = Some(fresh);
+        }
+    }
+    for sheet in wb.sheets.iter_mut() {
+        for ink in Arc::make_mut(sheet).shapes.iter_mut().filter_map(|s| s.ink.as_mut()) {
+            if ink.key.is_none() {
+                let fresh = gridcraft_model::ink_creation_id_free(|k| seen.contains(k));
+                seen.insert(fresh.clone());
+                ink.key = Some(fresh);
+            }
         }
     }
 }
@@ -161,7 +170,7 @@ fn read_traces(
     let anchor = anchor_for(content_part, anchor, sheet)?;
     let width_px = (style.width_cm * PX_PER_CM as f32).clamp(1.0, 255.0).round();
     let fill = Color::Rgb((width_px as u32) << 16);
-    let mut keys: Vec<String> = creation_id_of(content_part).into_iter().collect();
+    let part_key = creation_id_of(content_part);
     let mut total = 0usize;
     let mut shapes = Vec::new();
     for (i, trace) in traces(&root)?.into_iter().enumerate() {
@@ -171,16 +180,10 @@ fn read_traces(
             return None;
         }
         let mut image = style.clone();
-        // The part's GUID names the first stroke; the others in one part get free keys of their own,
-        // so a gridcraft save writes one part per stroke and never repeats a creation id.
-        image.key = match (i, keys.first()) {
-            (0, Some(first)) => Some(first.clone()),
-            _ => {
-                let key = gridcraft_model::ink_creation_id_free(|k| keys.iter().any(|held| held == k));
-                keys.push(key.clone());
-                Some(key)
-            }
-        };
+        // The part's GUID names the first stroke only: the others in one part are left without a key
+        // and [`unique_keys`] mints them one once every part is read, so an id the file stores is
+        // never replaced by a key minted for a stroke that happened to be read earlier.
+        image.key = if i == 0 { part_key.clone() } else { None };
         image.pressure = pressure;
         // The part carries one brush; successive strokes keep their drawing order.
         image.order = style.order.saturating_add(i as u32);

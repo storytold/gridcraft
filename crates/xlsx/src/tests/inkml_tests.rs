@@ -17,6 +17,7 @@ const A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const XDR14: &str = "http://schemas.microsoft.com/office/excel/2010/spreadsheetDrawing";
 
 const GUIDE: &str = "{11111111-2222-4333-8444-555555555555}";
+const GUIDE2: &str = "{22222222-3333-4444-8555-666666666666}";
 
 /// The `[Content_Types].xml` of the test package, declaring the ink part and the picture.
 fn content_types(ink: bool, png: bool) -> String {
@@ -32,11 +33,7 @@ fn content_types(ink: bool, png: bool) -> String {
 }
 
 /// An Excel-shaped drawing part: one `twoCellAnchor` whose `AlternateContent` names the ink part.
-fn drawing(creation: &str) -> String {
-    drawing_with_off(creation, 1_905_000, 952_500)
-}
-
-/// The same drawing with its `xdr14:xfrm` `a:off` at an arbitrary sheet position, in EMU.
+/// `ox`/`oy` are its `xdr14:xfrm` `a:off`, in EMU.
 fn drawing_with_off(creation: &str, ox: i64, oy: i64) -> String {
     format!(
         r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="{XDR}" xmlns:a="{A}" xmlns:r="{NS_REL}"><xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>3</xdr:col><xdr:colOff>76200</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>228600</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><mc:AlternateContent xmlns:mc="{MC}"><mc:Choice xmlns:xdr14="{XDR14}" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" Requires="xdr14 aink"><xdr:contentPart r:id="rId1"><xdr14:nvContentPartPr><xdr14:cNvPr id="3" name="Ink 2"><a:extLst><a:ext uri="{{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}}"><a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="{creation}"/></a:ext></a:extLst></xdr14:cNvPr><xdr14:cNvContentPartPr/></xdr14:nvContentPartPr><xdr14:nvPr macro=""/><xdr14:xfrm><a:off x="{ox}" y="{oy}"/><a:ext cx="762000" cy="381000"/></xdr14:xfrm></xdr:contentPart></mc:Choice><mc:Fallback><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="Ink 2"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="762000" cy="381000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic></mc:Fallback></mc:AlternateContent><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#
@@ -88,18 +85,24 @@ struct Extra<'a> {
     creation_id: Option<&'a str>,
     /// The drawing's `xdr14:xfrm` `a:off`, in EMU, when a test needs a stroke far down the sheet.
     off: Option<(i64, i64)>,
-    /// The anchor written twice, both naming the same ink part with the same creation id.
-    second_anchor: bool,
+    /// A second anchor in the same drawing part, with its own `a16:creationId`.
+    second_anchor: Option<&'a str>,
 }
 
-/// The same drawing part with its anchor written twice: two contentParts that name one InkML part
-/// and carry the same `a16:creationId`, the broken file a save has to heal.
-fn duplicate_anchor(drawing: &str) -> String {
+/// The `<xdr:twoCellAnchor>` of a drawing part.
+fn anchor_of(drawing: &str) -> &str {
     let start = drawing.find("<xdr:twoCellAnchor").expect("the anchor");
-    let end = drawing.find("</xdr:twoCellAnchor>").expect("the anchor's end") + "</xdr:twoCellAnchor>".len();
-    let (head, rest) = drawing.split_at(start);
-    let (anchor, tail) = rest.split_at(end - start);
-    format!("{head}{anchor}{anchor}{tail}")
+    let len = drawing[start..].find("</xdr:twoCellAnchor>").expect("the anchor's end") + "</xdr:twoCellAnchor>".len();
+    &drawing[start..start + len]
+}
+
+/// One drawing part holding both anchors: two contentParts that name the same InkML part.
+fn two_anchors(first: &str, second: &str) -> String {
+    let start = first.find("<xdr:twoCellAnchor").expect("the anchor");
+    let anchor = anchor_of(first);
+    let (head, rest) = first.split_at(start);
+    let tail = &rest[anchor.len()..];
+    format!("{head}{anchor}{}{tail}", anchor_of(second))
 }
 
 /// The same package. With `damage_ink`, the ink part is stored uncompressed and one byte of it is
@@ -119,11 +122,11 @@ fn package_with(trace: &str, f: bool, props: &str, ink: bool, declared: bool, me
     );
     let root = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
     let ct = content_types(declared, media);
-    let drawing = match extra.off {
-        Some((x, y)) => drawing_with_off(extra.creation_id.unwrap_or(GUIDE), x, y),
-        None => drawing(extra.creation_id.unwrap_or(GUIDE)),
-    };
-    let drawing = if extra.second_anchor { duplicate_anchor(&drawing) } else { drawing };
+    let (ox, oy) = extra.off.unwrap_or((1_905_000, 952_500));
+    let mut drawing = drawing_with_off(extra.creation_id.unwrap_or(GUIDE), ox, oy);
+    if let Some(second) = extra.second_anchor {
+        drawing = two_anchors(&drawing, &drawing_with_off(second, ox, oy));
+    }
     let mut ink_part = inkml(trace, f, props);
     if let Some(markup) = extra.extra_markup {
         ink_part = ink_part.replace("</inkml:ink>", &format!("{markup}</inkml:ink>"));
@@ -214,8 +217,8 @@ fn excel_content_part_is_read_as_editable_ink_with_its_brush() {
 #[test]
 fn one_creation_id_names_one_stroke_in_the_workbook() {
     // Two contentParts naming the same ink part with the same `a16:creationId`: one creation id
-    // must name one stroke, so the reader keeps the first and mints the second a free key.
-    let extra = Extra { second_anchor: true, ..Extra::default() };
+    // must name one stroke, so the first anchor keeps the stored id and the second gets a free key.
+    let extra = Extra { second_anchor: Some(GUIDE), ..Extra::default() };
     let (wb, _) = read(&package_with("!0 !0,'1000 '1000", false, PEN_PROPS, true, true, true, extra));
     let shapes = &wb.sheets[0].shapes;
     assert_eq!(shapes.len(), 2, "{shapes:?}");
@@ -223,6 +226,16 @@ fn one_creation_id_names_one_stroke_in_the_workbook() {
     assert_eq!(keys.len(), 2, "both strokes carry a key");
     assert_eq!(keys[0], GUIDE, "the first holder keeps the id the file stores");
     assert_ne!(keys[1], GUIDE, "the second stroke is minted a key of its own");
+}
+
+#[test]
+fn a_stored_creation_id_is_never_changed() {
+    // Two strokes the file names: the reader must keep both ids exactly, in either order, and mint
+    // nothing — a key the file stores is an identity, not a candidate for replacement.
+    let extra = Extra { second_anchor: Some(GUIDE2), ..Extra::default() };
+    let (wb, _) = read(&package_with("!0 !0,'1000 '1000", false, PEN_PROPS, true, true, true, extra));
+    let keys: Vec<&str> = wb.sheets[0].shapes.iter().filter_map(|s| s.ink.as_ref()?.key.as_deref()).collect();
+    assert_eq!(keys, [GUIDE, GUIDE2]);
 }
 
 #[test]
