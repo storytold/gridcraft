@@ -666,3 +666,30 @@ fn rounded_rect_points(r: Rect, radius: f32) -> Vec<Pos2> {
         .flat_map(|(o, from)| (0..=8).map(move |i| (from + i as f32 * 90.0 / 8.0).to_radians()).map(move |a| o + vec2(a.cos(), a.sin()) * rad))
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use gridcraft_chart::Measure;
+
+    use super::*;
+
+    /// The production measure is not monotone for labels with a line break: egui lays the text out
+    /// line by line, so ending a prefix with `\n…` can be narrower than the shorter `iii…`. The
+    /// chart's label fitting must not assume otherwise (#1152).
+    #[test]
+    fn egui_measure_shrinks_when_a_prefix_ends_in_a_line_break() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(theme::pinned_font_definitions());
+        let mut checked = false;
+        // Fonts are ready from the second pass on.
+        for _ in 0..2 {
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                let m = EguiMeasure { painter: ui.painter(), z: 1.0 };
+                let (short, long) = (m.text_width("iii…", 11.0, false), m.text_width("iiii\n…", 11.0, false));
+                checked = long < short;
+            });
+            out.textures_delta.clear();
+        }
+        assert!(checked);
+    }
+}
