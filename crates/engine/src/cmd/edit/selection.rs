@@ -85,9 +85,9 @@ pub(super) fn selection_move(s: &mut Session, p: &Json) -> Result<Json> {
         if !extend && let Some(m) = sheet.merge_at(from) {
             // Leaving a merged cell moves from its edge.
             if dr > 0 {
-                t = CellRef::new(m.end.offset_clamped(dr, 0).row, from.col);
+                t = CellRef::new(m.end.offset_clamped(dr, 0).row, t.col);
             } else if dc > 0 {
-                t = CellRef::new(from.row, m.end.offset_clamped(0, dc).col);
+                t = CellRef::new(t.row, m.end.offset_clamped(0, dc).col);
             }
         }
         let mut guard = 0;

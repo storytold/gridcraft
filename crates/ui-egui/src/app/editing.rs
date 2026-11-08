@@ -537,5 +537,13 @@ mod merged_cell_enter_tests {
         assert_eq!(sel(&app), "D2");
         app.move_after_enter(1, 0);
         assert_eq!(sel(&app), "A3");
+        // Enter straight from the merged cell in a Tab run leaves it below its bottom edge and
+        // still goes back to the run's start column.
+        app.tab_run = None;
+        app.run("selection.set", json!({"cell": "A2"})).unwrap();
+        app.move_after_enter(0, 1);
+        assert_eq!(sel(&app), "B2:C3");
+        app.move_after_enter(1, 0);
+        assert_eq!(sel(&app), "A4");
     }
 }
