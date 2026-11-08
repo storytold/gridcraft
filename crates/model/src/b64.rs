@@ -65,6 +65,27 @@ pub mod shared {
     }
 }
 
+/// Base64 for the ink-texture store: the encoded length is checked before the decode, so a hostile
+/// or hand-edited file cannot make the reader allocate an image larger than the store allows.
+pub mod capped {
+    use std::sync::Arc;
+
+    use serde::{Deserialize as _, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &Arc<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        super::serialize(v, s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Arc<Vec<u8>>, D::Error> {
+        let s = String::deserialize(d)?;
+        // Four characters per three bytes, rounded up: the largest encoding the store accepts.
+        if s.len() > crate::ink::MAX_INK_TEXTURE_BYTES.div_ceil(3) * 4 {
+            return Err(serde::de::Error::custom("ink texture data is larger than the store allows"));
+        }
+        super::decode(&s).map(Arc::new).ok_or_else(|| serde::de::Error::custom("invalid base64"))
+    }
+}
+
 /// Base64 for optional shared byte blobs (VBA projects): `null`/missing stays `None`.
 pub mod opt {
     use std::sync::Arc;

@@ -28,7 +28,7 @@ pub const MAX_INK_TEXTURES: usize = 1024;
 const ID_CHARS: usize = 32;
 
 /// A repeating brush texture: an imported PNG or JPEG, decoded once and kept encoded here.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct InkTexture {
     /// Content-derived identity ([`InkTexture::id_for`]); strokes name it in `InkStyle::texture`.
     pub id: String,
@@ -43,6 +43,72 @@ pub struct InkTexture {
     pub width: u32,
     /// Decoded height in pixels.
     pub height: u32,
+}
+
+/// A stored texture is read back through [`InkTexture::from_parts`], so a hand-edited or hostile
+/// JSON file cannot put an id, mime, size or payload the store refuses into the workbook.
+impl<'de> Deserialize<'de> for InkTexture {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Stored {
+            id: String,
+            #[serde(default)]
+            name: String,
+            mime: String,
+            #[serde(with = "crate::b64::capped")]
+            data: Arc<Vec<u8>>,
+            width: u32,
+            height: u32,
+        }
+        let stored = Stored::deserialize(d)?;
+        InkTexture::from_parts(stored.id, &stored.name, &stored.mime, stored.data, stored.width, stored.height)
+            .ok_or_else(|| serde::de::Error::custom("ink texture outside the store's caps"))
+    }
+}
+
+/// Reads the workbook's stored textures: an entry that no longer satisfies the caps (or does not
+/// look like a texture at all) is dropped rather than failing the open, and the list stops at
+/// [`MAX_INK_TEXTURES`] as it is read, so a hostile file cannot grow the store past its cap.
+pub(crate) fn deserialize_store<'de, D>(d: D) -> Result<Vec<InkTexture>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{IgnoredAny, SeqAccess, Visitor};
+
+    /// One stored entry: a texture the caps accept, or anything else, consumed and forgotten.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        Texture(InkTexture),
+        Ignored(IgnoredAny),
+    }
+
+    struct Textures;
+
+    impl<'de> Visitor<'de> for Textures {
+        type Value = Vec<InkTexture>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a list of imported brush textures")
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut textures = Vec::new();
+            while textures.len() < MAX_INK_TEXTURES {
+                match seq.next_element::<Stored>()? {
+                    Some(Stored::Texture(texture)) => textures.push(texture),
+                    Some(Stored::Ignored(_)) => {}
+                    None => break,
+                }
+            }
+            // Nothing past the cap is kept, but the sequence is read to its end: a reader that
+            // wants one fully consumed list (serde_json's) still accepts it.
+            while seq.next_element::<IgnoredAny>()?.is_some() {}
+            Ok(textures)
+        }
+    }
+
+    d.deserialize_seq(Textures)
 }
 
 impl InkTexture {
@@ -120,6 +186,51 @@ mod tests {
     }
 
     /// An id is derived from the bytes and is always the fixed length the store expects.
+    /// A workbook field carrying the stored textures, as JSON loading reads it.
+    #[derive(Deserialize)]
+    struct Store {
+        #[serde(default, deserialize_with = "deserialize_store")]
+        textures: Vec<InkTexture>,
+    }
+
+    /// The one texture a test stores.
+    fn stored() -> InkTexture {
+        InkTexture::new("a.png", "image/png", Arc::new(png_bytes()), 4, 2).expect("stores")
+    }
+
+    #[test]
+    fn json_keeps_a_valid_texture_and_its_fields() {
+        let texture = stored();
+        let json = serde_json::json!({"textures": [serde_json::to_value(&texture).expect("serialises")]});
+        let store: Store = serde_json::from_value(json).expect("reads");
+        assert_eq!(store.textures, vec![texture]);
+    }
+
+    #[test]
+    fn json_textures_outside_the_caps_are_dropped_not_fatal() {
+        let good = serde_json::to_value(stored()).expect("serialises");
+        let mut forged = good.clone();
+        forged["id"] = serde_json::json!("not-an-id");
+        let mut gif = good.clone();
+        gif["mime"] = serde_json::json!("image/gif");
+        let mut zero = good.clone();
+        zero["width"] = serde_json::json!(0);
+        let mut huge = good.clone();
+        huge["data"] = serde_json::json!("A".repeat(MAX_INK_TEXTURE_BYTES.div_ceil(3) * 4 + 4));
+        let store: Store = serde_json::from_value(serde_json::json!({"textures": [good.clone(), forged, gif, zero, huge, 7, "junk"]}))
+            .expect("a list with junk still reads");
+        assert_eq!(store.textures.len(), 1, "only the entry inside the caps is kept");
+        assert_eq!(store.textures.first().map(|t| t.id.as_str()), good["id"].as_str());
+    }
+
+    #[test]
+    fn json_stops_at_the_texture_count_limit() {
+        let one = serde_json::to_value(stored()).expect("serialises");
+        let list = vec![one; MAX_INK_TEXTURES + 5];
+        let store: Store = serde_json::from_value(serde_json::json!({"textures": list})).expect("reads");
+        assert_eq!(store.textures.len(), MAX_INK_TEXTURES, "the store cannot grow past its cap");
+    }
+
     #[test]
     fn id_is_content_derived_and_fixed_length() {
         let a = InkTexture::id_for(b"abc");

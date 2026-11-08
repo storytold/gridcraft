@@ -517,7 +517,10 @@ fn import_texture(app: &mut SheetApp, d: &mut Dialog, ui: &mut egui::Ui, confirm
         ui.label("Image file path (PNG or JPEG):");
         let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
         if ui.text_edit_singleline(&mut path).changed() {
+            // A typed path replaces a picked file: both its bytes and its name, which would
+            // otherwise label the texture with the name of the file picked before.
             d.values.remove("base64");
+            d.values.remove("name");
             d.values.insert("path".into(), json!(path));
         }
     }

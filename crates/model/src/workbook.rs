@@ -241,7 +241,7 @@ pub struct Workbook {
     /// names one by id in its `InkStyle`, so the same image serves every stroke and an undo step
     /// shares it. A GridCraft extension: XLSX keeps them in a veryHidden `GridCraft Ink` sheet,
     /// written only while this list (or per-stroke ink data Excel can't hold) is not empty.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, deserialize_with = "crate::ink::deserialize_store", skip_serializing_if = "Vec::is_empty")]
     pub ink_textures: Vec<crate::ink::InkTexture>,
     /// VBA project (`xl/vbaProject.bin`) carried through unchanged. GridCraft does not run
     /// macros; the blob is preserved so that saving a macro-enabled workbook never destroys the
