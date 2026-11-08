@@ -144,6 +144,8 @@ pub fn is_ink(sh: &Shape) -> bool {
 
 // --- Lasso -------------------------------------------------------------------------------
 
+/// Draw › Lasso Select: pick up (or, with `on: false`, put down) the lasso tool. A selection
+/// already made stays.
 fn lasso(s: &mut Session, p: &Json) -> Result<Json> {
     let on = bool_param(p, "on").unwrap_or(s.draw_tool != "lasso");
     s.draw_tool = if on { "lasso".into() } else { String::new() };
