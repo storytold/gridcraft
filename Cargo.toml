@@ -25,10 +25,11 @@ gridcraft-ui-egui = { path = "crates/ui-egui" }
 gridcraft-mcp = { path = "crates/mcp" }
 gridcraft-pdf = { path = "crates/pdf" }
 gridcraft-math = { path = "crates/math" }
-# Every craft-libs crate (craft-update and craft-window here, craft-ui in ui-egui, craft-print in
-# the app) comes from one storytold/craft-libs revision.
+# craft-window (here), craft-ui (ui-egui) and craft-print (the app) come from one
+# storytold/craft-libs revision. craft-update is newer so a Windows update restarts with the
+# file that was opened.
 # craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", version = "=0.1.0", features = ["egui"] }
+craft-update = { git = "https://github.com/storytold/craft-libs", rev = "37c845c4343bdad45ce455118807a5b62a765e2c", version = "=0.1.0", features = ["egui"] }
 
 # foundation
 thiserror = "2"
@@ -70,7 +71,7 @@ skrifa = { version = "0.44", default-features = false, features = ["std"] }
 # Real font bytes for tests (Ubuntu Light, compiled into epaint).
 epaint_default_fonts = "0.37"
 # One native window per workbook: the window list, Window menu titles and the immediate-viewport
-# driver. Same craft-libs revision as craft-update above.
+# driver. Same storytold/craft-libs revision as craft-ui and craft-print. craft-update above is newer.
 craft-window = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", default-features = false, features = ["egui"] }
 
 [workspace.lints.rust]
