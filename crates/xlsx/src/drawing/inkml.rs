@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use gridcraft_model::{Color, InkEffect, InkStyle, InkTool, Shape, ShapeKind, Sheet, Theme};
 
 use super::emu_px;
-use crate::package::{Rel, normalize};
+use crate::package::{MAX_PART, Rel, normalize};
 use crate::read::Ctx;
 use crate::tables::EMU_PER_PX;
 use crate::xml::{self, El, esc_attr};
@@ -77,7 +77,9 @@ pub(super) fn read(
     if rel.kind != REL_CUSTOM_XML || !declared.contains(&normalize(&rel.target)) {
         return None;
     }
-    let bytes = match cx.pkg.read(&rel.target) {
+    // The part is optional: the fallback picture is read after it, so a read that fails partway is
+    // charged to this part's allowance rather than ending the package's budget.
+    let bytes = match cx.pkg.read_optional_limited(&rel.target, MAX_PART) {
         Ok(Some(b)) => b,
         _ => return None,
     };
@@ -87,7 +89,7 @@ pub(super) fn read(
     }
     let definitions = root.child("definitions")?;
     let (points, pressure) = decode(root.child("trace")?, definitions)?;
-    let (mut image, color) = brush(definitions, !pressure.is_empty());
+    let (mut image, color) = brush(definitions);
     image.key = creation_id_of(content_part);
     image.pressure = pressure;
     let anchor = anchor_for(content_part, anchor, sheet)?;
@@ -141,7 +143,9 @@ fn creation_id_of(content_part: &El) -> Option<String> {
     (id.len() <= 80 && id.starts_with('{') && id.ends_with('}')).then(|| id.to_string())
 }
 
-/// One channel's difference-decoding state.
+/// One channel's difference-decoding state: its last value, its last first difference, and the
+/// difference order written for that value. A `*` stores nothing here: it repeats the value and
+/// changes no order.
 #[derive(Clone, Copy, Default)]
 struct Channel {
     value: i64,
@@ -191,18 +195,23 @@ fn decode(trace: &El, definitions: &El) -> Option<(Vec<[f64; 2]>, Vec<u16>)> {
         let mut rest = point;
         let mut values = Vec::with_capacity(channels.len());
         for st in state.iter_mut() {
-            let (prefix, raw, tail) = scan_value(rest)?;
+            let (written, raw, tail) = scan_value(rest)?;
             rest = tail;
-            let prefix = prefix.or(st.prefix).unwrap_or('!');
-            let raw = match (prefix, raw) {
-                ('*', None) => 0,
-                // A value with no number only repeats; an inherited `*` that carries one is not
-                // valid InkML.
-                ('*', Some(_)) | (_, None) => return None,
-                (_, Some(n)) => n,
-            };
+            if written == Some('*') {
+                // `*` repeats the value and leaves the channel's difference order as it was, so the
+                // first difference is nought from here on and a later unprefixed value still
+                // applies its own number to it.
+                st.diff = 0;
+                if st.value.unsigned_abs() > MAX_COORD as u64 {
+                    return None;
+                }
+                values.push(st.value);
+                continue;
+            }
+            // A value with no prefix of its own carries the channel's previous difference order.
+            let prefix = written.or(st.prefix).unwrap_or('!');
+            let raw = raw?;
             let value = match prefix {
-                '*' => st.value,
                 '!' => raw,
                 '\'' => st.value.checked_add(raw)?,
                 '"' => st.value.checked_add(st.diff.checked_add(raw)?)?,
@@ -308,12 +317,11 @@ fn referenced<'a>(definitions: &'a El, name: &'a str, reference: Option<&str>) -
 
 /// The brush's style and colour. Excel writes one `brush` per part; missing properties take the
 /// defaults a plain Pen has.
-fn brush(definitions: &El, has_f: bool) -> (InkStyle, Color) {
+fn brush(definitions: &El) -> (InkStyle, Color) {
     let mut style = InkStyle::default();
     let mut color = Color::rgb(0, 0, 0);
     let mut gridcraft_tool = None;
     let mut ink_effects = None;
-    let mut ignore_pressure = false;
     let mut mask_pen = false;
     let Some(brush) = definitions.child("brush") else { return (style, color) };
     for p in brush.kids("brushProperty") {
@@ -322,7 +330,6 @@ fn brush(definitions: &El, has_f: bool) -> (InkStyle, Color) {
             "width" => style.width_cm = brush_cm(value).unwrap_or(style.width_cm),
             "height" => style.height_cm = brush_cm(value).unwrap_or(style.height_cm),
             "color" => color = Color::from_hex(value).unwrap_or(color),
-            "ignorePressure" => ignore_pressure = matches!(value.trim(), "1" | "true"),
             "tip" => mask_pen |= value.trim() == "rectangle",
             "rasterOp" => mask_pen |= value.trim() == "maskPen",
             "inkEffects" => ink_effects = Some(value.trim().to_ascii_lowercase()),
@@ -338,6 +345,10 @@ fn brush(definitions: &El, has_f: bool) -> (InkStyle, Color) {
         style.height_cm = style.width_cm;
     }
     style.effect = ink_effects.as_deref().and_then(effect);
+    // Excel writes an F (pressure) channel for every plain pen, so it says nothing about the
+    // tool: Fountain Pen and Brush Pen are indistinguishable in an Excel file. Without a
+    // GridCraft `gridcraftTool`, an inkEffects pencil is a Pencil, a rectangle maskPen is a
+    // Highlighter, a texture is a Pen with that effect, and everything else is a Pen.
     style.tool = match gridcraft_tool.as_deref() {
         Some("pencil") => InkTool::Pencil,
         Some("highlighter") => InkTool::Highlighter,
@@ -346,8 +357,6 @@ fn brush(definitions: &El, has_f: bool) -> (InkStyle, Color) {
         Some(_) => InkTool::Pen,
         None if ink_effects.as_deref() == Some("pencil") => InkTool::Pencil,
         None if mask_pen => InkTool::Highlighter,
-        None if ignore_pressure => InkTool::Pencil,
-        None if has_f => InkTool::FountainPen,
         _ => InkTool::Pen,
     };
     (style, color)
@@ -518,17 +527,18 @@ fn inkml_xml(ink: &InkStyle, color: &[u8; 3], f: bool, trace: &str) -> String {
             short(scale)
         ));
     }
-    // GridCraft's own round-trip data (Excel drops unknown brush properties on save). The tool
-    // is always written: Fountain Pen and Brush Pen are otherwise indistinguishable, and a Pen
-    // that records pressure would read back as a Fountain Pen.
+    // GridCraft's own round-trip data (Excel drops unknown brush properties on save). Only the
+    // tools Excel cannot represent carry it: Fountain Pen and Brush Pen are indistinguishable
+    // there, and a Pencil with a texture loses its `inkEffects=pencil` marker to the texture.
     let tool = match ink.tool {
-        InkTool::Pen => "pen",
-        InkTool::Pencil => "pencil",
-        InkTool::Highlighter => "highlighter",
-        InkTool::FountainPen => "fountainPen",
-        InkTool::BrushPen => "brushPen",
+        InkTool::FountainPen => Some("fountainPen"),
+        InkTool::BrushPen => Some("brushPen"),
+        InkTool::Pencil if ink.effect.is_some() => Some("pencil"),
+        _ => None,
     };
-    props.push_str(&format!("<inkml:brushProperty name=\"gridcraftTool\" value=\"{tool}\"/>"));
+    if let Some(tool) = tool {
+        props.push_str(&format!("<inkml:brushProperty name=\"gridcraftTool\" value=\"{tool}\"/>"));
+    }
     props.push_str(&format!("<inkml:brushProperty name=\"gridcraftOrder\" value=\"{}\"/>", ink.order));
 
     let mut channels = String::from(
