@@ -10,7 +10,7 @@
 //! and the formulas that read one are evaluated again until the loop settles
 //! (`PassHost::iterate_loops`).
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
@@ -64,11 +64,62 @@ pub struct Calc {
     pub last_recalc_cells: usize,
     /// WEBSERVICE's fetcher, when the workbook may reach the web.
     pub web: Option<WebFetch>,
+    /// The cells whose value is `#SPILL!`, kept so that finding the formulas an emptied cell or a
+    /// freed spill area may unblock doesn't walk every formula or window of cells. Filled in
+    /// `rebuild`, kept up to date by `cells_changed` and by the write-back of a run; an entry is
+    /// always checked against the workbook before it is used.
+    spill_errors: SpillErrors,
+}
+
+/// A set of cells by row, each row's columns in their own set: a window of rows and columns is
+/// found by one column range per row that has an entry, so the cost follows the cells in the
+/// window, not those to the side of it in the same rows.
+#[derive(Clone, Debug, Default)]
+struct SpillErrors {
+    rows: BTreeMap<(usize, u32), BTreeSet<u32>>,
+}
+
+impl SpillErrors {
+    fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.rows.clear();
+    }
+
+    fn insert(&mut self, (sheet, c): Key) {
+        self.rows.entry((sheet, c.row)).or_default().insert(c.col);
+    }
+
+    fn remove(&mut self, (sheet, c): &Key) {
+        if let Some(cols) = self.rows.get_mut(&(*sheet, c.row)) {
+            cols.remove(&c.col);
+            if cols.is_empty() {
+                self.rows.remove(&(*sheet, c.row));
+            }
+        }
+    }
+
+    /// The cells of `sheet` in `rows` x `cols` (both inclusive), in row-major order.
+    fn range(&self, sheet: usize, rows: (u32, u32), cols: (u32, u32)) -> impl Iterator<Item = CellRef> + '_ {
+        self.rows
+            .range((sheet, rows.0)..=(sheet, rows.1))
+            .flat_map(move |(&(_, row), set)| set.range(cols.0..=cols.1).map(move |&col| CellRef::new(row, col)))
+    }
 }
 
 impl Default for Calc {
     fn default() -> Self {
-        Calc { graph: Graph::default(), rng: 0x9E37_79B9_7F4A_7C15, fixed_now: None, circular: vec![], last_recalc_cells: 0, web: None }
+        Calc {
+            graph: Graph::default(),
+            rng: 0x9E37_79B9_7F4A_7C15,
+            fixed_now: None,
+            circular: vec![],
+            last_recalc_cells: 0,
+            spill_errors: SpillErrors::default(),
+            web: None,
+        }
     }
 }
 
@@ -152,8 +203,12 @@ impl Calc {
     pub fn rebuild(&mut self, wb: &Workbook) {
         self.graph = Graph::default();
         let mut circ = Vec::new();
+        self.spill_errors.clear();
         for (si, sheet) in wb.sheets.iter().enumerate() {
             for (c, cell) in sheet.cells.iter() {
+                if cell.value == Value::Error(CellError::Spill) {
+                    self.spill_errors.insert((si, c));
+                }
                 if let Some(f) = &cell.formula
                     && let Some((areas, dynamic)) = f.with_expr(|e| precedents(wb, si, e))
                 {
@@ -214,6 +269,20 @@ impl Calc {
         out
     }
 
+    /// The cells of `sheet` in `rows` x `cols` (inclusive, `cols` a lower and an upper column) that
+    /// show `#SPILL!`, in row-major order.
+    fn spill_errors_in(&self, wb: &Workbook, sheet: usize, rows: (u32, u32), cols: (u32, u32)) -> Vec<CellRef> {
+        let Some(sh) = wb.sheet(sheet) else { return Vec::new() };
+        self.spill_errors.range(sheet, rows, cols).filter(|c| sh.cells.get(*c).is_some_and(|x| x.value == Value::Error(CellError::Spill))).collect()
+    }
+
+    /// The formulas showing `#SPILL!` on `sheet` at or above and to the left of `end`: what a
+    /// cell emptied or a spill area freed there may unblock.
+    fn unblock_candidates(&self, wb: &Workbook, sheet: usize, end: CellRef) -> Vec<Key> {
+        let cells = self.spill_errors_in(wb, sheet, (0, end.row), (0, end.col));
+        cells.into_iter().filter(|c| self.graph.nodes.contains_key(&(sheet, *c))).map(|c| (sheet, c)).collect()
+    }
+
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
         self.rebuild(wb);
@@ -235,6 +304,11 @@ impl Calc {
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
         for &k in changed {
+            if wb.sheet(k.0).and_then(|s| s.cell(k.1)).is_some_and(|c| c.value == Value::Error(CellError::Spill)) {
+                self.spill_errors.insert(k);
+            } else {
+                self.spill_errors.remove(&k);
+            }
             let precedent =
                 wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.with_expr(|e| precedents(wb, k.0, e)));
             let py = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref());
@@ -275,6 +349,7 @@ impl Calc {
                         && cell.formula.is_some()
                     {
                         cell.value = Value::Error(CellError::Name);
+                        self.spill_errors.remove(&k);
                     }
                 }
             }
@@ -321,10 +396,9 @@ impl Calc {
                         }
                     }
                 }
-                for (c, cell) in sh.cells.iter_range(RangeRef::new(CellRef::new(k.1.row.saturating_sub(64), k.1.col.saturating_sub(64)), k.1)) {
-                    if c != k.1 && cell.value == Value::Error(CellError::Spill) {
-                        seeds.push((k.0, c));
-                    }
+                if !self.spill_errors.is_empty() {
+                    let (r0, c0) = (k.1.row.saturating_sub(64), k.1.col.saturating_sub(64));
+                    seeds.extend(self.spill_errors_in(wb, k.0, (r0, k.1.row), (c0, k.1.col)).into_iter().filter(|c| *c != k.1).map(|c| (k.0, c)));
                 }
                 if !sh.cells.has(k.1) {
                     match emptied.iter_mut().find(|x| x.0 == k.0) {
@@ -336,11 +410,7 @@ impl Calc {
         }
         // An emptied cell can unblock an anchor any distance above or to the left of it.
         for (si, end) in emptied {
-            for &(s, c) in self.graph.nodes.keys() {
-                if s == si && c.row <= end.row && c.col <= end.col && wb.sheet(s).is_some_and(|sh| sh.value(c) == Value::Error(CellError::Spill)) {
-                    seeds.push((s, c));
-                }
-            }
+            seeds.extend(self.unblock_candidates(wb, si, end));
         }
         // Spill areas of changed anchors also change. They stay rectangles: one seed per spilled
         // cell listed the formulas reading the area once per cell.
@@ -505,10 +575,15 @@ impl Calc {
         let mut freed = Vec::new();
         for (key, value) in results {
             let Some(sheet) = wb.sheet_mut(key.0) else { continue };
-            if let Some(cell) = sheet.cells.get_mut(key.1)
-                && cell.value != value
-            {
-                cell.value = value;
+            if let Some(cell) = sheet.cells.get_mut(key.1) {
+                if value == Value::Error(CellError::Spill) {
+                    self.spill_errors.insert(key);
+                } else {
+                    self.spill_errors.remove(&key);
+                }
+                if cell.value != value {
+                    cell.value = value;
+                }
             }
         }
         for key in dirty {
@@ -538,6 +613,7 @@ impl Calc {
                 if blocked {
                     if let Some(cell) = sheet.cells.get_mut(key.1) {
                         cell.value = Value::Error(CellError::Spill);
+                        self.spill_errors.insert(*key);
                     }
                     let mut blocked_dependents = Vec::new();
                     self.graph.dependents_of_range(key.0, range, &mut blocked_dependents);
@@ -564,14 +640,7 @@ impl Calc {
             }
         }
         for (sheet_index, range) in freed {
-            for &(sheet, cell) in self.graph.nodes.keys() {
-                let was_blocked_cell = cell.row <= range.end.row
-                    && cell.col <= range.end.col
-                    && wb.sheet(sheet).is_some_and(|sheet| sheet.value(cell) == Value::Error(CellError::Spill));
-                if sheet == sheet_index && was_blocked_cell {
-                    spill_changes.push((sheet, cell));
-                }
-            }
+            spill_changes.extend(self.unblock_candidates(wb, sheet_index, range.end));
         }
         spill_changes
     }
