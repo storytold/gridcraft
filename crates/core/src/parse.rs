@@ -285,8 +285,26 @@ fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
     Some((time_fraction(h, m, s), parts.len() == 3, ampm.is_some()))
 }
 
-/// Determines the calendar date order (`Dmy`, `Mdy`, `Ymd`) from a number format code.
+/// Returns the number of bytes in an escaped format literal at the cursor.
+fn format_literal_token_len(tail: &[u8]) -> Option<usize> {
+    if tail.starts_with(b"am/pm") || tail.starts_with(b"a/p") {
+        return Some(if tail.get(2).is_some_and(|b| b.eq_ignore_ascii_case(&b'/')) && tail.len() >= 5 { 5 } else { 3 });
+    }
+    tail.starts_with(b"general").then_some(7)
+}
+
+fn calendar_format_part(c: char, after_h: bool) -> Option<char> {
+    match c {
+        'y' => Some('y'),
+        'd' => Some('d'),
+        'm' if !after_h => Some('m'),
+        _ => None,
+    }
+}
+
+/// Determines the calendar date order (`Dmy`, `Mdy`, `Ymd`, `Ydm`) from a number format code.
 /// Returns `None` if the format does not specify a calendar date order.
+#[allow(clippy::cognitive_complexity)]
 pub fn date_order_from_format(code: &str) -> Option<DateOrder> {
     let code = code.split(';').next().unwrap_or(code).trim();
     if code.eq_ignore_ascii_case("general") {
@@ -343,16 +361,8 @@ pub fn date_order_from_format(code: &str) -> Option<DateOrder> {
         if c == ';' {
             break;
         }
-        let tail = bytes.get(i..);
-        if (c.eq_ignore_ascii_case(&'a') || c.eq_ignore_ascii_case(&'p'))
-            && (tail.is_some_and(|s| s.len() >= 5 && s.get(..5).is_some_and(|t| t.eq_ignore_ascii_case(b"am/pm")))
-                || tail.is_some_and(|s| s.len() >= 3 && s.get(..3).is_some_and(|t| t.eq_ignore_ascii_case(b"a/p"))))
-        {
-            i += if tail.is_some_and(|s| s.len() >= 5 && s.get(..5).is_some_and(|t| t.eq_ignore_ascii_case(b"am/pm"))) { 5 } else { 3 };
-            continue;
-        }
-        if c.eq_ignore_ascii_case(&'g') && tail.is_some_and(|s| s.len() >= 7 && s.get(..7).is_some_and(|t| t.eq_ignore_ascii_case(b"general"))) {
-            i += 7;
+        if let Some(token_len) = format_literal_token_len(bytes.get(i..).unwrap_or_default()) {
+            i += token_len;
             continue;
         }
         let lc = c.to_ascii_lowercase();
@@ -361,19 +371,44 @@ pub fn date_order_from_format(code: &str) -> Option<DateOrder> {
         } else if matches!(lc, 'd' | 'y') {
             after_h = false;
         }
-        let part = match lc {
-            'y' => {
-                has_day_or_year = true;
-                Some('y')
-            }
-            'd' => {
-                has_day_or_year = true;
-                Some('d')
-            }
-            'm' if !after_h => Some('m'),
-            _ => None,
-        };
+        let part = calendar_format_part(lc, after_h);
+        has_day_or_year |= matches!(part, Some('d' | 'y'));
         if let Some(part) = part {
+            let mut run_end = i + 1;
+            while bytes.get(run_end).is_some_and(|next| (*next as char).eq_ignore_ascii_case(&lc)) {
+                run_end += 1;
+            }
+            if part == 'y' {
+                let mut j = run_end;
+                while bytes.get(j).is_some_and(u8::is_ascii_whitespace) {
+                    j += 1;
+                }
+                if bytes.get(j).is_some_and(|b| matches!(*b, b'-' | b'/' | b'.')) {
+                    j += 1;
+                    while bytes.get(j).is_some_and(u8::is_ascii_whitespace) {
+                        j += 1;
+                    }
+                    while bytes.get(j).is_some_and(u8::is_ascii_alphabetic) {
+                        let letter = bytes.get(j).copied().unwrap_or_default().to_ascii_lowercase();
+                        if letter == b'd' {
+                            second = Some('d');
+                        }
+                        if letter == b'm' && second == Some('d') {
+                            break;
+                        }
+                        j += 1;
+                    }
+                    if second == Some('d') && bytes.get(j).is_some_and(|b| matches!(*b, b'-' | b'/' | b'.')) {
+                        j += 1;
+                        while bytes.get(j).is_some_and(u8::is_ascii_whitespace) {
+                            j += 1;
+                        }
+                        if bytes.get(j).is_some_and(|b| b.eq_ignore_ascii_case(&b'm')) {
+                            return Some(DateOrder::Ydm);
+                        }
+                    }
+                }
+            }
             while bytes.get(i + 1).is_some_and(|next| (*next as char).eq_ignore_ascii_case(&lc)) {
                 i += 1;
             }
@@ -417,9 +452,12 @@ fn parse_date(t: &str, sys: DateSystem, order: DateOrder) -> Option<(f64, &'stat
         if a.len() == 4
             && let (Some(y), Some(m), Some(d)) = (num(a), num(b), num(c))
         {
+            if order == DateOrder::Ydm {
+                return valid_ymd(sys, y, d, m).map(|s| (s, "yyyy-dd-mm"));
+            }
             return valid_ymd(sys, y, m, d).map(|s| (s, "yyyy-mm-dd"));
         }
-        if order == DateOrder::Ymd
+        if matches!(order, DateOrder::Ymd | DateOrder::Ydm)
             && a.len() <= 2
             && let (Some(y), Some(m), Some(d)) = (num(a), num(b), num(c))
         {
@@ -440,6 +478,10 @@ fn parse_date(t: &str, sys: DateSystem, order: DateOrder) -> Option<(f64, &'stat
         }
         if let (Some(x), Some(y_val), Some(y)) = (num(a), num(b), num(c)) {
             let y = expand_year(c, y);
+            if order == DateOrder::Ydm {
+                let year = if a.len() <= 2 { expand_year(a, x) } else { x };
+                return valid_ymd(sys, year, y_val, y).map(|serial| (serial, "yyyy-dd-mm"));
+            }
             if order == DateOrder::Dmy {
                 let separator = t.as_bytes().get(a.len()).copied();
                 let fmt = match separator {
@@ -885,6 +927,11 @@ mod tests {
         assert_eq!(ymd.value, Value::Number(46117.0));
         assert_eq!(ymd.format, Some("yyyy-mm-dd"));
 
+        let ydm = parse_input_with_order("2026/25/09", DateSystem::D1900, DateOrder::Ydm);
+        let sep25 = serial_from_ymd(DateSystem::D1900, 2026, 9, 25).unwrap_or(0.0);
+        assert_eq!(ydm.value, Value::Number(sep25));
+        assert_eq!(ydm.format, Some("yyyy-dd-mm"));
+
         // Dashed and dotted forms
         assert_eq!(parse_input_with_order("25-09-2026", DateSystem::D1900, DateOrder::Dmy).value, Value::Number(46290.0));
         assert_eq!(parse_input_with_order("25-09-2026", DateSystem::D1900, DateOrder::Dmy).format, Some("dd-mm-yyyy"));
@@ -914,6 +961,11 @@ mod tests {
             ("m/d/yyyy", Some(DateOrder::Mdy)),
             ("mm/dd/yyyy", Some(DateOrder::Mdy)),
             ("yyyy-mm-dd", Some(DateOrder::Ymd)),
+            ("yyyy-dd-mm", Some(DateOrder::Ydm)),
+            ("yyyy/dd/mm", Some(DateOrder::Ydm)),
+            ("yyyy/mm/dd", Some(DateOrder::Ymd)),
+            ("yyyy/mm/dd;mm/dd/yyyy", Some(DateOrder::Ymd)),
+            ("hh:mm yyyy-dd-mm", Some(DateOrder::Ydm)),
             ("General", None),
             ("0.00", None),
             ("h:mm:ss AM/PM", None),

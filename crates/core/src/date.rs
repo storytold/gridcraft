@@ -20,6 +20,7 @@ pub enum DateOrder {
     Mdy,
     Dmy,
     Ymd,
+    Ydm,
 }
 
 /// A calendar date and time of day.

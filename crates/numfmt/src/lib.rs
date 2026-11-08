@@ -201,6 +201,7 @@ impl NumberFormat {
         }
         let mut first = None;
         let mut second = None;
+        let mut third = None;
         for t in &s.toks {
             if let Tok::Date(d) = t
                 && d.is_calendar()
@@ -215,16 +216,22 @@ impl NumberFormat {
                     first = Some(part);
                 } else if second.is_none() && first != Some(part) {
                     second = Some(part);
+                } else if third.is_none() && second != Some(part) {
+                    third = Some(part);
                 }
             }
         }
-        match (first, second) {
+        let mut result = match (first, second) {
             (Some('d'), _) => Some(gridcraft_core::DateOrder::Dmy),
             (Some('m'), _) => Some(gridcraft_core::DateOrder::Mdy),
             (Some('y'), Some('d')) => Some(gridcraft_core::DateOrder::Dmy),
             (Some('y'), _) => Some(gridcraft_core::DateOrder::Ymd),
             _ => None,
+        };
+        if first == Some('y') && second == Some('d') && third == Some('m') {
+            result = Some(gridcraft_core::DateOrder::Ydm);
         }
+        result
     }
 
     /// For a date or time format, whether the section that formats `value` shows calendar parts (year, month,
