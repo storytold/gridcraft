@@ -146,6 +146,76 @@ fn sent_to(sent: &[(ViewportId, ViewportCommand)], vp: ViewportId, cmd: &Viewpor
     sent.iter().any(|(id, c)| *id == vp && c == cmd)
 }
 
+/// The formula bar's cached line count and animation must belong to the workbook window,
+/// including when another window gets an extra paint or takes over the root viewport (#3614).
+#[test]
+fn formula_bar_heights_settle_independently_in_multiple_windows() {
+    let mut desk = Desk::new(true);
+    desk.ctx.set_fonts(gridcraft_ui_egui::theme::pinned_font_definitions());
+    desk.app.use_prepared_fonts();
+    for _ in 0..2 {
+        desk.app.run("file.new", json!({})).unwrap();
+        desk.frames(2);
+    }
+    let windows = [desk.window_of(0), desk.window_of(1), desk.window_of(2)];
+    desk.frames(30);
+    let tops: Vec<f32> = windows
+        .iter()
+        .map(|&w| {
+            desk.app.enter_window(w);
+            desk.app.grid.rect.unwrap().top()
+        })
+        .collect();
+    let row_h = desk.ctx.fonts_mut(|f| f.row_height(&gridcraft_ui_egui::theme::ui_font(13.0)));
+    for (window, text) in windows.into_iter().zip(["one\ntwo\nthree\nfour", "one", ""]) {
+        desk.app.enter_window(window);
+        desk.app.run("cell.set", json!({"cell": "A1", "input": text})).unwrap();
+    }
+    desk.frames(30);
+
+    let check = |desk: &mut Desk, extra: [usize; 3], shown: &[u64]| {
+        for (i, &window) in windows.iter().enumerate().filter(|(_, w)| shown.contains(w)) {
+            desk.app.enter_window(window);
+            let top = desk.app.grid.rect.unwrap().top();
+            let expected = tops[i] + extra[i] as f32 * row_h;
+            assert!((top - expected).abs() < 0.5, "window {window}: grid top {top}, expected {expected}");
+        }
+    };
+    for frame in 0..30 {
+        desk.frames(1);
+        if frame % 3 == 0 {
+            // Native windows can repaint at different rates. Paint only the second window
+            // once more, using the same context and its real viewport and application state.
+            let vp = desk.viewport(windows[1]);
+            let mut input = RawInput { viewport_id: vp, ..Default::default() };
+            input.viewports.entry(vp).or_default();
+            let out = desk.ctx.clone().run_ui(input, |ui| {
+                desk.app.show_window(windows[1]);
+                desk.app.ui(ui);
+            });
+            record(out);
+        }
+        check(&mut desk, [3, 0, 0], &windows);
+    }
+
+    // Changing one window's selection height must not move either neighbor.
+    desk.app.enter_window(windows[1]);
+    desk.app.run("cell.set", json!({"cell": "A1", "input": "one\ntwo"})).unwrap();
+    desk.frames(30);
+    check(&mut desk, [3, 1, 0], &windows);
+
+    // Closing the root's saved workbook moves a remaining window into the root viewport.
+    // Its formula-bar state follows the workbook window, rather than the old viewport owner.
+    desk.app.enter_window(windows[0]);
+    let d = desk.app.session.doc_mut().unwrap();
+    d.saved = d.wb.clone();
+    desk.close(windows[0]);
+    check(&mut desk, [3, 1, 0], &windows[1..]);
+    desk.frames(30);
+    assert_eq!(desk.windows.shown_windows().len(), 2);
+    check(&mut desk, [3, 1, 0], &windows[1..]);
+}
+
 #[test]
 fn each_window_keeps_its_own_selection_and_draft() {
     let mut desk = Desk::new(true);

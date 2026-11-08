@@ -101,7 +101,7 @@ fn drag(h: &mut Harness, from: egui::Pos2, to: egui::Pos2) {
 }
 
 fn bar(h: &Harness) -> gridcraft_ui_egui::formula_bar::BarLayout {
-    gridcraft_ui_egui::formula_bar::BarLayout::get(&h.ctx)
+    gridcraft_ui_egui::formula_bar::BarLayout::get(&h.ctx, h.state().ui_window())
 }
 
 #[test]

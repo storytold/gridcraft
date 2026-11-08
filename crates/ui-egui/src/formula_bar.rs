@@ -68,14 +68,15 @@ impl Default for BarLayout {
 }
 
 impl BarLayout {
-    /// Returns the stable widget id used for the formula-bar layout state.
-    pub fn id() -> egui::Id {
-        egui::Id::unique("formula_bar.layout")
+    /// The layout belongs to the workbook window, which can move to another viewport when
+    /// the root window closes. Context data is shared by all viewports (#3614).
+    pub fn id(window: Option<u64>) -> egui::Id {
+        egui::Id::unique(("formula_bar.layout", window))
     }
 
-    /// Last frame's layout.
-    pub fn get(ctx: &egui::Context) -> BarLayout {
-        ctx.data(|d| d.get_temp(Self::id())).unwrap_or_default()
+    /// Last frame's layout for this workbook window.
+    pub fn get(ctx: &egui::Context, window: Option<u64>) -> BarLayout {
+        ctx.data(|d| d.get_temp(Self::id(window))).unwrap_or_default()
     }
 }
 
@@ -91,14 +92,15 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let font = theme::ui_font(13.0);
     let row_h = ui.ctx().fonts_mut(|f| f.row_height(&font));
-    let last = BarLayout::get(ui.ctx());
+    let window = app.ui_window();
+    let last = BarLayout::get(ui.ctx(), window);
     // Height follows the content's line count (last frame's), 1 to MAX_LINES; expanded (the
     // chevron), it is the height the bottom edge was dragged to. It eases only when that target
     // changes.
     let most = max_lines(ui.ctx().content_rect().height(), ui.available_rect_before_wrap().height(), row_h);
     let lines = if app.ui.formula_bar_expanded { app.ui.formula_bar_lines.clamp(1, most) } else { last.lines.clamp(1, MAX_LINES) };
     let target = one_line(row_h) + (lines - 1) as f32 * row_h;
-    let h = ui.ctx().animate_value_with_time(egui::Id::unique("formula_bar.height"), target, EASE_SECONDS);
+    let h = ui.ctx().animate_value_with_time(egui::Id::unique(("formula_bar.height", window)), target, EASE_SECONDS);
     let mut layout = BarLayout { height: h, ..Default::default() };
     let panel = egui::Panel::top("formula_bar")
         .exact_size(h)
@@ -178,7 +180,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             });
         });
     layout.handle = resize_handle(app, ui, panel.response.rect, row_h, most);
-    ui.ctx().data_mut(|d| d.insert_temp(BarLayout::id(), layout));
+    ui.ctx().data_mut(|d| d.insert_temp(BarLayout::id(window), layout));
 }
 
 /// The most lines the bar takes in a window `window_h` tall with `room` left under the ribbon:

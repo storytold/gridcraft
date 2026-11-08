@@ -52,7 +52,7 @@ fn alt_enter(h: &mut Harness) {
 }
 
 fn layout(h: &Harness) -> BarLayout {
-    BarLayout::get(&h.ctx)
+    BarLayout::get(&h.ctx, h.state().ui_window())
 }
 
 fn row_height(h: &Harness) -> f32 {
