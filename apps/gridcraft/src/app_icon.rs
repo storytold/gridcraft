@@ -23,16 +23,22 @@ pub fn window_icon() -> egui::IconData {
 /// Whether the window gets [`window_icon`] at runtime: everywhere except inside a macOS app
 /// bundle. There the Dock shows the bundle's icon, which macOS renders in its own style
 /// (Liquid Glass, dark and tinted) and which users can customize in Finder; a runtime PNG
-/// would replace it while the app runs. `exe` is the running executable.
-pub fn sets_runtime_icon(exe: Option<&std::path::Path>) -> bool {
-    !(cfg!(target_os = "macos") && exe.is_some_and(in_app_bundle))
+/// would replace it while the app runs. `exe` is the running executable. The platform is a
+/// parameter so tests cover the macOS case on every CI platform.
+fn sets_runtime_icon_on(macos: bool, exe: Option<&std::path::Path>) -> bool {
+    !(macos && exe.is_some_and(in_app_bundle))
 }
 
-/// Value for [`egui::ViewportBuilder::with_icon`]: [`window_icon`] when [`sets_runtime_icon`]
-/// is true; otherwise [`egui::IconData::default`], so eframe does not substitute its own
-/// default glyph on the Dock after the window opens (PhotoCraft #7253).
+/// Value for [`egui::ViewportBuilder::with_icon`]: [`window_icon`] when the window gets a
+/// runtime icon; otherwise [`egui::IconData::default`], so eframe does not substitute its own
+/// default glyph on the Dock after the window opens (storytold/photocraft#7253).
 pub fn viewport_icon(exe: Option<&std::path::Path>) -> egui::IconData {
-    if sets_runtime_icon(exe) { window_icon() } else { egui::IconData::default() }
+    viewport_icon_on(cfg!(target_os = "macos"), exe)
+}
+
+/// [`viewport_icon`] for the given platform; see [`sets_runtime_icon_on`].
+fn viewport_icon_on(macos: bool, exe: Option<&std::path::Path>) -> egui::IconData {
+    if sets_runtime_icon_on(macos, exe) { window_icon() } else { egui::IconData::default() }
 }
 
 /// Whether `exe` is an app bundle's executable: `…/Name.app/Contents/MacOS/binary`.
@@ -61,22 +67,24 @@ mod tests {
         assert!(!in_app_bundle(Path::new("/opt/Contents/MacOS/gridcraft")), "not inside a .app");
         assert!(!in_app_bundle(Path::new("/.app/Contents/MacOS/gridcraft")), "a bare `.app` is no bundle name");
         assert!(!in_app_bundle(Path::new("gridcraft")));
-        assert!(sets_runtime_icon(None));
-        assert!(sets_runtime_icon(Some(Path::new("/usr/bin/gridcraft"))));
-        assert_eq!(sets_runtime_icon(Some(Path::new("/Applications/GridCraft.app/Contents/MacOS/gridcraft"))), !cfg!(target_os = "macos"));
+        for macos in [true, false] {
+            assert!(sets_runtime_icon_on(macos, None));
+            assert!(sets_runtime_icon_on(macos, Some(Path::new("/usr/bin/gridcraft"))));
+        }
+        let bundled = Some(Path::new("/Applications/GridCraft.app/Contents/MacOS/gridcraft"));
+        assert!(!sets_runtime_icon_on(true, bundled), "macOS keeps the bundle's icon");
+        assert!(sets_runtime_icon_on(false, bundled), "other platforms always set the runtime icon");
     }
 
-    /// Inside a bundle the viewport gets an empty `IconData`, so eframe neither sets a runtime icon
-    /// nor paints its default glyph on the Dock (storytold/photocraft#7253).
+    /// Inside a bundle on macOS the viewport gets an empty `IconData`, so eframe neither sets a
+    /// runtime icon nor paints its default glyph on the Dock (storytold/photocraft#7253). Other
+    /// platforms get the full icon.
     #[test]
     fn viewport_icon_blocks_eframe_default_when_runtime_icon_is_skipped() {
         let bundled = Some(Path::new("/Applications/GridCraft.app/Contents/MacOS/gridcraft"));
-        if sets_runtime_icon(bundled) {
-            let icon = viewport_icon(bundled);
-            assert!(icon.width >= 256 && icon.width == icon.height);
-        } else {
-            assert_eq!(viewport_icon(bundled), egui::IconData::default());
-        }
+        assert_eq!(viewport_icon_on(true, bundled), egui::IconData::default());
+        let icon = viewport_icon_on(false, bundled);
+        assert!(icon.width >= 256 && icon.width == icon.height);
     }
 
     /// The embedded PNG decodes to a square, non-blank icon of at least 256 px.
@@ -84,7 +92,7 @@ mod tests {
     fn window_icon_decodes() {
         let icon = window_icon();
         assert!(icon.width >= 256 && icon.width == icon.height);
-        assert_eq!(icon.rgba.len(), (icon.width * icon.height * 4) as usize);
+        assert_eq!(icon.rgba.len(), icon.width as usize * icon.height as usize * 4);
         assert!(icon.rgba.iter().skip(3).step_by(4).any(|&alpha| alpha > 0), "the icon is not blank");
     }
 }
