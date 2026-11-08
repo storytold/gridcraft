@@ -134,19 +134,26 @@ impl InkTexture {
     /// bytes.
     pub fn new(name: &str, mime: &str, data: Arc<Vec<u8>>, width: u32, height: u32) -> Option<InkTexture> {
         let id = Self::id_for(&data);
-        Self::from_parts(id, name, mime, data, width, height)
+        Self::store(id, name, mime, data, width, height)
     }
 
     /// A texture with a given id, from data read back from a file.
     ///
-    /// Answers `None` for an id of the wrong shape, a mime, payload or size the store can't hold:
-    /// the caps are checked here too, so nothing (an engine command, a file read back) slips past
-    /// them.
+    /// Answers `None` for an id of the wrong shape or one that is not the id of `data`, and for a
+    /// mime, payload or size the store can't hold: the caps are checked here too, so nothing (an
+    /// engine command, a file read back) slips past them, and a file that labels one image with
+    /// another's id cannot make a stroke paint the wrong picture.
     pub fn from_parts(id: String, name: &str, mime: &str, data: Arc<Vec<u8>>, width: u32, height: u32) -> Option<InkTexture> {
-        let mime = Self::normalize_mime(mime)?;
-        if !Self::is_valid_id(&id) {
+        if !Self::is_valid_id(&id) || id != Self::id_for(&data) {
             return None;
         }
+        Self::store(id, name, mime, data, width, height)
+    }
+
+    /// The entry itself, once its id is known to be the payload's own: the mime, size and name caps
+    /// applied.
+    fn store(id: String, name: &str, mime: &str, data: Arc<Vec<u8>>, width: u32, height: u32) -> Option<InkTexture> {
+        let mime = Self::normalize_mime(mime)?;
         if data.is_empty() || data.len() > MAX_INK_TEXTURE_BYTES {
             return None;
         }
@@ -264,6 +271,17 @@ mod tests {
     }
 
     /// A read-back texture with an id of the wrong shape is refused.
+    #[test]
+    fn from_parts_refuses_an_id_that_is_not_the_bytes() {
+        let data = Arc::new(png_bytes());
+        // A well-formed id, but of another image: accepting it would let a stroke paint the wrong
+        // picture for the id it names.
+        let foreign = InkTexture::id_for(b"another image");
+        assert!(InkTexture::is_valid_id(&foreign));
+        assert!(InkTexture::from_parts(foreign, "a.png", "image/png", data.clone(), 4, 2).is_none());
+        assert!(InkTexture::from_parts(InkTexture::id_for(&data), "a.png", "image/png", data, 4, 2).is_some());
+    }
+
     #[test]
     fn from_parts_refuses_a_forged_id() {
         let data = Arc::new(png_bytes());
