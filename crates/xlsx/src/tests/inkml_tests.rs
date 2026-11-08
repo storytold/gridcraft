@@ -670,3 +670,29 @@ fn an_invalid_stored_key_is_replaced_before_it_is_written() {
     let (back, _) = read(&saved);
     assert_eq!(back.sheets[0].shapes[0].ink.as_ref().unwrap().key.as_deref(), Some(id));
 }
+
+#[test]
+fn the_content_types_part_is_read_once_for_the_whole_workbook() {
+    // `[Content_Types].xml` is a whole-part decompression and parse, and every read spends the
+    // package's budget. Two sheets with ink are two drawing parts: the declared InkML set is read
+    // once, not once per drawing, and a drawing without a contentPart reads it not at all.
+    let ink = |id: u32| Shape {
+        id,
+        kind: ShapeKind::Ink,
+        anchor: Anchor { cell: CellRef::parse("B2").unwrap(), dx: 0.0, dy: 0.0, width: 60.0, height: 30.0, mode: AnchorMode::Absolute },
+        fill: Color::Rgb(2 << 16),
+        line: Color::Rgb(0x1F5FC9),
+        text: "0,0;30,20".into(),
+        format: Default::default(),
+        math: Default::default(),
+        ink: Some(InkStyle { tool: InkTool::Pen, width_cm: 0.05, height_cm: 0.05, key: Some(GUIDE.into()), ..InkStyle::default() }),
+    };
+    let wb = Workbook {
+        sheets: vec![Arc::new(Sheet { shapes: vec![ink(1)], ..Sheet::new("One") }), Arc::new(Sheet { shapes: vec![ink(2)], ..Sheet::new("Two") })],
+        ..Default::default()
+    };
+    let (back, report) = read(&write_xlsx(&wb).unwrap());
+    assert_eq!(back.sheets.len(), 2);
+    assert!(back.sheets.iter().all(|s| s.shapes.len() == 1 && s.shapes[0].kind == ShapeKind::Ink), "both drawings keep their ink");
+    assert_eq!(report.content_types_reads, 1, "read once per package, not once per drawing");
+}

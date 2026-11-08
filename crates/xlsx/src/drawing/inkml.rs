@@ -15,6 +15,7 @@
 //! write: the model has no per-stroke time, and a clock would make saves non-deterministic.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use gridcraft_model::{Color, InkEffect, InkStyle, InkTool, Shape, ShapeKind, Sheet, Theme};
 
@@ -63,6 +64,22 @@ pub(super) fn declared_parts(cx: &mut Ctx<'_>) -> Option<HashSet<String>> {
     };
     let root = xml::parse(&bytes).ok()?;
     Some(root.kids("Override").filter(|o| o.attr("ContentType") == Some(CT)).filter_map(|o| o.attr("PartName").map(normalize)).collect())
+}
+
+/// The parts `[Content_Types].xml` declares as InkML, read at most once per package: it is a
+/// whole-part decompression and parse, so a workbook with many drawings must not repeat it for
+/// every one of them (each read also spends the package's decompression budget).
+pub(super) fn ink_parts(cx: &mut Ctx<'_>) -> Arc<HashSet<String>> {
+    if let Some(parts) = &cx.inkml_parts {
+        return Arc::clone(parts);
+    }
+    #[cfg(test)]
+    {
+        cx.report.content_types_reads += 1;
+    }
+    let parts = Arc::new(declared_parts(cx).unwrap_or_default());
+    cx.inkml_parts = Some(Arc::clone(&parts));
+    parts
 }
 
 /// Reads the InkML part behind `content_part` into editable ink shapes: one per `<trace>`, since

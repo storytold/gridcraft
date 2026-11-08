@@ -75,6 +75,10 @@ pub enum IoError {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ReadReport {
     pub warnings: Vec<String>,
+    /// How many times the reader decompressed `[Content_Types].xml` to find the InkML parts, so a
+    /// test can keep that lookup to one read per package.
+    #[cfg(test)]
+    pub content_types_reads: u32,
 }
 
 impl ReadReport {

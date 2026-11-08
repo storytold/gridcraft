@@ -139,8 +139,6 @@ fn mime_for(name: &str) -> &'static str {
 pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(), IoError> {
     let Some(x) = cx.optional_xml(part)? else { return Ok(()) };
     let rels = cx.pkg.rels(part)?;
-    // Ink parts are only trusted when `[Content_Types].xml` declares them as InkML.
-    let ink_parts = inkml::declared_parts(cx).unwrap_or_default();
     for (n, a) in x.children.iter().enumerate() {
         let Some(anchor) = read_anchor(a, sheet) else { continue };
         let n = n + 1;
@@ -169,7 +167,10 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
             }
         }
         if let Some(cp) = content_part {
-            let strokes = inkml::read(cx, &rels, cp, sheet, anchor, &ink_parts);
+            // Ink parts are only trusted when `[Content_Types].xml` declares them as InkML; the
+            // set is read once per package, and only by a drawing that actually has one.
+            let parts = inkml::ink_parts(cx);
+            let strokes = inkml::read(cx, &rels, cp, sheet, anchor, &parts);
             if !strokes.is_empty() {
                 for s in strokes {
                     let id = cx.next_object_id();
