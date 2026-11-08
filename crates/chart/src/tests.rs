@@ -5,6 +5,7 @@ use gridcraft_model::{Anchor, Chart, ChartKind, Color, LegendPos, Series, Sparkl
 
 use crate::*;
 
+mod budget;
 mod data_table;
 
 const ALL_KINDS: [ChartKind; 26] = [
