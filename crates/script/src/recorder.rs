@@ -175,13 +175,41 @@ fn range_call(method: &str, step: &JournalStep, range: &str, key: &str, value: J
 }
 
 /// The sheet and the address a range names: an explicit `sheet` parameter wins, then a `Data!A1`
-/// prefix on the range itself (which the bridge's `getRange` does not take).
+/// prefix on the range itself. The address never keeps the prefix, because the bridge's `getRange`
+/// takes an address alone.
 fn split_target(step: &JournalStep, range: &str) -> (Option<String>, String) {
-    if let Some(sheet) = step.params.get("sheet").and_then(Json::as_str) {
-        return (Some(sheet.to_string()), range.to_string());
+    let explicit = step.params.get("sheet").and_then(Json::as_str).map(str::to_string);
+    let (prefix, address) = split_range(range);
+    match explicit {
+        Some(sheet) => (Some(sheet), address),
+        None => (prefix, address),
     }
-    match range.split_once('!') {
-        Some((sheet, address)) => (Some(sheet.trim_matches('\'').to_string()), address.to_string()),
+}
+
+/// `Sheet!A1` → its sheet and address. A quoted name keeps its spaces and a `''` inside it is one
+/// quote (`'O''Brien'!A1`), as Excel writes names; an unquoted name ends at the last `!`.
+fn split_range(range: &str) -> (Option<String>, String) {
+    if let Some(rest) = range.strip_prefix('\'') {
+        let mut name = String::new();
+        let mut chars = rest.char_indices();
+        while let Some((i, c)) = chars.next() {
+            if c == '\'' {
+                if rest.get(i + 1..).is_some_and(|tail| tail.starts_with('\'')) {
+                    name.push('\'');
+                    chars.next();
+                    continue;
+                }
+                return match rest.get(i + 1..).and_then(|tail| tail.strip_prefix('!')) {
+                    Some(address) => (Some(name), address.to_string()),
+                    None => (None, range.to_string()),
+                };
+            }
+            name.push(c);
+        }
+        return (None, range.to_string());
+    }
+    match range.rsplit_once('!') {
+        Some((sheet, address)) => (Some(sheet.to_string()), address.to_string()),
         None => (None, range.to_string()),
     }
 }
@@ -383,7 +411,13 @@ mod tests {
         assert_eq!(quoted.calls[0].params["sheet"], json!("My Data"));
         let explicit = record(&[step("cell.set", json!({"sheet": "Other", "cell": "Data!A1", "input": 1}))]);
         assert_eq!(explicit.calls[0].params["sheet"], json!("Other"));
-        assert_eq!(explicit.calls[0].params["range"], json!("Data!A1"));
+        assert_eq!(explicit.calls[0].params["range"], json!("A1"));
+        // Excel's quoting: `''` is one quote, and a quoted name may hold a `!`.
+        let apostrophe = record(&[step("cell.set", json!({"cell": "'O''Brien'!A1", "input": 1}))]);
+        assert_eq!(apostrophe.calls[0].params["sheet"], json!("O'Brien"));
+        let bang = record(&[step("cell.set", json!({"cell": "'Q1!Totals'!B2", "input": 1}))]);
+        assert_eq!(bang.calls[0].params["sheet"], json!("Q1!Totals"));
+        assert_eq!(bang.calls[0].params["range"], json!("B2"));
     }
 
     #[test]

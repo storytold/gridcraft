@@ -116,9 +116,10 @@ pub fn toggle_recording(app: &mut SheetApp) {
                 let skipped = result.get("skipped").and_then(Json::as_array).map_or(0, Vec::len);
                 // A dirty draft is the person's work: the recording is saved and listed, but the
                 // editor keeps what it had instead of being overwritten by the recorded code.
+                let saved = result.get("name").and_then(Json::as_str).unwrap_or("the new script");
                 if app.office_scripts.dirty {
                     app.office_scripts.status =
-                        Some(Status::ok(format!("Recorded {steps} steps; {skipped} skipped. Saved as a new script; the draft is unsaved.")));
+                        Some(Status::ok(format!("Recorded {steps} steps into `{saved}`; {skipped} skipped. The draft is unsaved.")));
                     return;
                 }
                 if let Some(id) = result.get("id").and_then(Json::as_str) {
@@ -126,7 +127,8 @@ pub fn toggle_recording(app: &mut SheetApp) {
                 }
                 app.office_scripts.code = code.to_string();
                 app.office_scripts.dirty = false;
-                app.office_scripts.status = Some(Status::ok(format!("Recorded {steps} steps; {skipped} skipped (see the comments in the script).")));
+                app.office_scripts.status =
+                    Some(Status::ok(format!("Recorded {steps} steps into `{saved}`; {skipped} skipped (see the comments in the script).")));
             } else {
                 app.office_scripts.status = Some(Status::ok("Recording stopped."));
             }
@@ -274,7 +276,7 @@ fn editor(app: &mut SheetApp, ui: &mut Ui, open: &mut bool) {
             *open = false;
         }
         ui.label(
-            RichText::new("Every script runs as one undo step; a failed run or timeout rolls back workbook changes, not external ones.")
+            RichText::new(lang.tr("Every script runs as one undo step; a failed run or timeout rolls back workbook changes, not external ones."))
                 .small()
                 .color(Tokens::get(ui.ctx()).text_dim),
         );
