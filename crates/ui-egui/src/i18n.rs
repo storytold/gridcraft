@@ -482,11 +482,11 @@ mod tests {
     fn every_catalog_has_distinct_diagram_and_decorative_text() {
         for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
             let code = language.code();
-            let diagram = language.translated("Diagram");
+            let diagram = language.raw("Diagram");
             assert!(diagram.is_some(), "{code}: Diagram");
-            assert!(language.translated("Decorative Text").is_some(), "{code}: Decorative Text");
+            assert!(language.raw("Decorative Text").is_some(), "{code}: Decorative Text");
             for chart in ["Chart", "Charts"] {
-                if let Some(chart_text) = language.translated(chart) {
+                if let Some(chart_text) = language.raw(chart) {
                     assert_ne!(diagram, Some(chart_text), "{code}: Diagram equals {chart}");
                 }
             }
@@ -496,9 +496,9 @@ mod tests {
     /// Ukrainian Chart uses the shared craft-i18n term, which is not the Diagram word.
     #[test]
     fn ukrainian_chart_uses_the_shared_term() {
-        assert_eq!(Language::Uk.translated("Chart"), Some("Діаграма"));
-        assert_eq!(Language::Uk.translated("Insert Chart"), Some("Вставити діаграму"));
-        assert_eq!(Language::Uk.translated("Diagram"), Some("Схема"));
+        assert_eq!(Language::Uk.raw("Chart"), Some("Діаграма"));
+        assert_eq!(Language::Uk.raw("Insert Chart"), Some("Вставити діаграму"));
+        assert_eq!(Language::Uk.raw("Diagram"), Some("Схема"));
     }
 
     /// Help tables are sorted and unique: lookups binary-search them.
