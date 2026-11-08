@@ -178,19 +178,19 @@ pub(crate) fn execute_call(s: &mut Session, method: &str, params: &Json) -> Resu
                 .unwrap_or(Json::Null))
         }
         "Worksheet.getVisibility" => {
-            let sheets = command(s, "script.sheets", json!({}))?;
             let sheet = sheet_name(s, params)?;
-            let visible = sheets["sheets"]
-                .as_array()
-                .and_then(|a| a.iter().find(|x| x["name"].as_str() == Some(sheet.as_str())))
-                .and_then(|x| x.get("visible").and_then(Json::as_bool))
-                .unwrap_or(true);
-            Ok(Json::String(if visible { "visible".into() } else { "hidden".into() }))
+            let visibility = s
+                .doc()
+                .ok()
+                .and_then(|d| d.wb.sheet_index(&sheet).and_then(|index| d.wb.sheets.get(index)).map(|sh| sh.visibility))
+                .unwrap_or_default();
+            // Three states, as ExcelScript has: a VeryHidden sheet (an imported one) is not Hidden.
+            Ok(Json::String(visibility_name(visibility).into()))
         }
         "Worksheet.setVisibility" => {
             let visibility = member_str(params, "visibility")?.to_ascii_lowercase();
-            // ExcelScript has Visible, Hidden and VeryHidden; the engine models two states, so a
-            // VeryHidden request is refused instead of quietly saving an ordinary hidden sheet.
+            // The workbook models VeryHidden (an imported sheet can be), but no command sets it, so
+            // a VeryHidden request is refused instead of quietly saving an ordinary hidden sheet.
             if visibility == "veryhidden" {
                 return Err(BridgeError::not_supported("Worksheet.setVisibility(veryHidden)"));
             }
@@ -875,6 +875,15 @@ fn font_get(s: &mut Session, method: &str, params: &Json) -> Result<Json, Bridge
     Ok(style_field(&info, key))
 }
 
+/// The bridge's name for a sheet's visibility: three states, as ExcelScript has.
+fn visibility_name(visibility: gridcraft_model::Visibility) -> &'static str {
+    match visibility {
+        gridcraft_model::Visibility::Visible => "visible",
+        gridcraft_model::Visibility::Hidden => "hidden",
+        gridcraft_model::Visibility::VeryHidden => "veryhidden",
+    }
+}
+
 fn border_get(s: &mut Session, method: &str, params: &Json) -> Result<Json, BridgeError> {
     let info = range_info(s, params)?;
     let side = member_str(params, "side")?.to_ascii_lowercase();
@@ -1301,6 +1310,13 @@ mod tests {
     fn formulas_get_one_equals_sign() {
         assert_eq!(formula("SUM(A1:A2)"), "=SUM(A1:A2)");
         assert_eq!(formula("=SUM(A1:A2)"), "=SUM(A1:A2)");
+    }
+
+    #[test]
+    fn a_very_hidden_sheet_has_its_own_visibility_name() {
+        assert_eq!(visibility_name(gridcraft_model::Visibility::Visible), "visible");
+        assert_eq!(visibility_name(gridcraft_model::Visibility::Hidden), "hidden");
+        assert_eq!(visibility_name(gridcraft_model::Visibility::VeryHidden), "veryhidden");
     }
 
     #[test]

@@ -460,6 +460,14 @@ fn import_bun(app: &mut SheetApp) {
 }
 
 fn save(app: &mut SheetApp) {
+    // Saving under another script's name would replace that script: refuse and say so.
+    let name = app.office_scripts.name.trim().to_string();
+    if let Some(existing) = app.office_scripts.list.iter().find(|record| record.name.eq_ignore_ascii_case(&name))
+        && app.office_scripts.selected.as_deref() != Some(existing.id.as_str())
+    {
+        app.office_scripts.status = Some(Status::failed(format!("A script called `{}` already exists; choose another name.", existing.name)));
+        return;
+    }
     let params = json!({"name": app.office_scripts.name, "code": app.office_scripts.code});
     match app.session.run("script.save", params) {
         Ok(saved) => {
