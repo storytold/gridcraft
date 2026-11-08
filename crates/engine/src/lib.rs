@@ -507,6 +507,9 @@ pub struct Session {
     /// The sheet each journal entry named, resolved when the command ran (beside `journal`): a
     /// recording uses it so a later insert or delete cannot move the sheet a step means.
     pub(crate) sheet_names: Vec<Option<String>>,
+    /// The values a `range.setValues` entry actually wrote, read back when the command ran: typed
+    /// input and the destination format decide the value, and a recording must replay that value.
+    pub(crate) write_values: Vec<Option<Json>>,
     /// The recording buffer while a recorder runs ([`Session::start_recording`]): top-level
     /// commands with the place they ran in, kept apart from the journal.
     pub recorder: Option<record::Recorder>,
@@ -657,9 +660,16 @@ impl Session {
         if self.sheet_names.len() != self.journal.len() {
             self.sheet_names = vec![None; self.journal.len()];
         }
+        if self.write_values.len() != self.journal.len() {
+            self.write_values = vec![None; self.journal.len()];
+        }
+        // A recorded range write replays the values the command stored, not the text it was given:
+        // the destination format and typed input decide the value.
+        let written = if id == "range.setValues" { self.written_values(&entry.1) } else { None };
         self.journal.push(entry);
         self.journal_sizes.push(entry_size);
         self.sheet_names.push(sheet);
+        self.write_values.push(written);
         self.journal_bytes = self.journal_bytes.saturating_add(entry_size);
         let len = self.journal.len();
         let mut n = if len > JOURNAL_MAX_ENTRIES { len - JOURNAL_MAX_ENTRIES / 2 } else { 0 };
@@ -675,9 +685,40 @@ impl Session {
             self.journal.drain(..n);
             self.journal_sizes.drain(..n);
             self.sheet_names.drain(..n.min(self.sheet_names.len()));
+            self.write_values.drain(..n.min(self.write_values.len()));
             self.journal_bytes = kept;
             self.recording = self.recording.map(|r| r.saturating_sub(n));
             self.script_recording = self.script_recording.map(|r| r.saturating_sub(n));
+        }
+    }
+
+    /// The values a `range.setValues` entry wrote, read back from the cells it covered.
+    fn written_values(&self, params: &Json) -> Option<Json> {
+        let Ok(d) = self.doc() else { return None };
+        let sheet = match params.get("sheet").and_then(Json::as_u64) {
+            Some(index) => d.wb.sheets.get(index as usize)?,
+            None => d.wb.sheet(d.wb.active_sheet())?,
+        };
+        let range = params.get("range").and_then(Json::as_str).and_then(gridcraft_core::RangeRef::parse)?;
+        let mut rows = Vec::new();
+        for row in range.start.row..=range.end.row {
+            let mut cells = Vec::new();
+            for col in range.start.col..=range.end.col {
+                cells.push(Self::whole_number(crate::cmd::inspect::value_json(&sheet.value(gridcraft_core::CellRef::new(row, col)))));
+            }
+            rows.push(Json::Array(cells));
+        }
+        Some(Json::Array(rows))
+    }
+
+    /// A whole number as an integer, so a recorded literal reads `2` rather than `2.0`.
+    fn whole_number(value: Json) -> Json {
+        match value {
+            Json::Number(n) => match n.as_f64() {
+                Some(f) if f.fract() == 0.0 && f.abs() < 9_007_199_254_740_992.0 => Json::Number(serde_json::Number::from(f as i64)),
+                _ => Json::Number(n),
+            },
+            other => other,
         }
     }
 
@@ -689,6 +730,7 @@ impl Session {
         }
         self.journal.truncate(keep);
         self.sheet_names.truncate(keep);
+        self.write_values.truncate(keep);
         self.recording = self.recording.map(|r| r.min(self.journal.len()));
         self.script_recording = self.script_recording.map(|r| r.min(self.journal.len()));
     }
