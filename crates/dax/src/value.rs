@@ -185,6 +185,9 @@ impl Scalar {
     pub fn to_dax_text(&self) -> String {
         match self {
             Scalar::Decimal(value) if value.is_finite() && value.fract() == 0.0 => {
+                // DAX prints zero as `0`, never `-0`: ordinary arithmetic (`ROUND ( -0.4, 0 )`,
+                // `0 * -1`) produces a negative zero, and its sign must not reach the text.
+                let value = if *value == 0.0 { 0.0 } else { *value };
                 // DAX switches to exponent form for very large whole numbers instead of printing
                 // every digit.
                 if value.abs() >= 1.0e15 {
@@ -581,6 +584,16 @@ mod tests {
         assert_ne!(distinct_key(&Scalar::Integer(2)), distinct_key(&Scalar::Integer(3)));
         // A non-finite serial prints as itself, not as a fabricated calendar date.
         assert_eq!(Scalar::DateTime(f64::NAN).to_dax_text(), "NaN");
+    }
+
+    #[test]
+    fn negative_zero_prints_as_zero() {
+        // Ordinary arithmetic reaches -0.0 — `ROUND ( -0.4, 0 )` and `0 * -1` both produce it —
+        // and DAX prints zero, never `-0`, so `&` and the text functions must agree.
+        assert_eq!(Scalar::Decimal(-0.0).to_dax_text(), "0");
+        assert_eq!(Scalar::Decimal(0.0).to_dax_text(), "0");
+        // A small negative fraction still prints its sign, so only a zero loses it.
+        assert_eq!(Scalar::Decimal(-0.5).to_dax_text(), "-0.5");
     }
 
     #[test]
