@@ -374,3 +374,44 @@ fn escaping_a_resize_drag_leaves_redo_history_as_it_was() {
         }
     }
 }
+
+#[test]
+fn escaping_a_resize_drag_keeps_a_pending_copy_and_format_painter() {
+    // Esc cancels the drag only: the marked copy and Format Painter stay, whether the release comes
+    // in a later frame or in the same frame as Esc.
+    for rows in [false, true] {
+        for (same_frame, modifiers) in [(false, Modifiers::NONE), (true, Modifiers::NONE), (false, Modifiers::SHIFT)] {
+            let mut h = harness(if rows { "1:3" } else { "A:C" });
+            h.state_mut().session.execute("edit.copy", json!({"range": "A1:B2"})).unwrap();
+            h.state_mut().session.execute("edit.formatPainter", json!({"sticky": true})).unwrap();
+            h.run_steps(2);
+            assert!(h.state().session.clipboard.is_some() && h.state().session.format_painter.is_some());
+            let before = sizes(&h, rows);
+            let (start, _) = edge(&h, rows, 1);
+            let delta = if rows { vec2(0.0, 30.0) } else { vec2(30.0, 0.0) };
+            button(&mut h, start, true);
+            h.input_mut().events.push(Event::PointerMoved(start + delta / 2.0));
+            h.step();
+            h.input_mut().events.push(Event::PointerMoved(start + delta));
+            h.step();
+            assert_ne!(sizes(&h, rows), before, "the drag previews");
+            let pos = start + delta;
+            let esc = Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers };
+            if same_frame {
+                h.input_mut().events.extend([esc, Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers }]);
+            } else {
+                h.input_mut().events.push(esc);
+                h.step();
+                h.input_mut()
+                    .events
+                    .extend([Event::PointerMoved(pos), Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers }]);
+            }
+            h.step();
+            h.run_steps(2);
+            let what = format!("rows: {rows}, same frame: {same_frame}, modifiers: {modifiers:?}");
+            assert_eq!(sizes(&h, rows), before, "the drag is cancelled ({what})");
+            assert!(h.state().session.clipboard.is_some(), "the copy is still marked ({what})");
+            assert!(h.state().session.format_painter.is_some(), "Format Painter is still on ({what})");
+        }
+    }
+}

@@ -634,8 +634,18 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
     let (geo, sh, wb, sel, pos) = (input.geo, input.sheet, input.workbook, &input.selection, input.position);
     let resp = input.response;
     // Esc during a header-boundary drag cancels it: undo the preview, ignore the release. egui
-    // aborts the drag on Esc, so `resp.dragged()` is already false in this frame.
-    if matches!(app.grid.drag, Drag::ResizeCol { .. } | Drag::ResizeRow { .. }) && input.context.input(|i| i.key_pressed(egui::Key::Escape)) {
+    // aborts the drag on Esc, so `resp.dragged()` is already false in this frame. The key is
+    // spent on the drag, so the grid's Esc doesn't also drop a pending copy or Format Painter.
+    if matches!(app.grid.drag, Drag::ResizeCol { .. } | Drag::ResizeRow { .. })
+        && input.context.input_mut(|i| {
+            let pressed = i.key_pressed(egui::Key::Escape);
+            if pressed {
+                // With any modifiers, as before: the drag is cancelled and every Esc press spent.
+                i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. }));
+            }
+            pressed
+        })
+    {
         // Undo back to where the drag began, but never past it into an earlier edit.
         let steps = resize_steps(app);
         if steps > 0 {
