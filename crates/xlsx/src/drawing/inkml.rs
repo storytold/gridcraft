@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use gridcraft_model::{Color, InkEffect, InkStyle, InkTool, Shape, ShapeKind, Sheet, Theme};
 
 use super::emu_px;
-use crate::package::{Rel, normalize};
+use crate::package::{MAX_PART, Rel, normalize};
 use crate::read::Ctx;
 use crate::tables::EMU_PER_PX;
 use crate::xml::{self, El, esc_attr};
@@ -36,6 +36,8 @@ const PX_PER_CM: f64 = 96.0 / 2.54;
 const THOUSANDTHS_PER_PX: f64 = 1000.0 / PX_PER_CM;
 /// Most points a stroke may hold (the same cap as the legacy polyline writer).
 pub(crate) const MAX_POINTS: usize = 20_000;
+/// Most traces one InkML part may hold: a mark, not a whole drawing.
+const MAX_TRACES: usize = 1_024;
 /// Largest coordinate magnitude in the trace's units (Excel's traceFormat min/max).
 const MAX_COORD: i64 = 2_147_483_647;
 /// Largest brush dimension accepted, in cm.
@@ -61,9 +63,9 @@ pub(super) fn declared_parts(cx: &mut Ctx<'_>) -> Option<HashSet<String>> {
     Some(root.kids("Override").filter(|o| o.attr("ContentType") == Some(CT)).filter_map(|o| o.attr("PartName").map(normalize)).collect())
 }
 
-/// Reads the InkML part behind `content_part` into an editable ink shape. `None` when the
-/// relationship, the part, its content type or the markup cannot be used; the caller warns and
-/// falls back to the picture.
+/// Reads the InkML part behind `content_part` into editable ink shapes: one per `<trace>`, since
+/// an InkML trace is a stroke. Empty when the relationship, the part, its content type or the
+/// markup cannot be used; the caller warns and falls back to the picture.
 pub(super) fn read(
     cx: &mut Ctx<'_>,
     rels: &[Rel],
@@ -71,13 +73,43 @@ pub(super) fn read(
     sheet: &Sheet,
     anchor: gridcraft_model::Anchor,
     declared: &HashSet<String>,
-) -> Option<Shape> {
+) -> Vec<Shape> {
+    read_traces(cx, rels, content_part, sheet, anchor, declared).unwrap_or_default()
+}
+
+/// The traces of a part: a bare `<trace>` and the traces of a `<traceGroup>`, in document order.
+/// A part with more than [`MAX_TRACES`] strokes is refused: it is a drawing, not a mark.
+fn traces(root: &El) -> Option<Vec<&El>> {
+    let mut out = Vec::new();
+    for child in &root.children {
+        match child.name.as_str() {
+            "trace" => out.push(child),
+            "traceGroup" => out.extend(child.kids("trace")),
+            _ => {}
+        }
+        if out.len() > MAX_TRACES {
+            return None;
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+fn read_traces(
+    cx: &mut Ctx<'_>,
+    rels: &[Rel],
+    content_part: &El,
+    sheet: &Sheet,
+    anchor: gridcraft_model::Anchor,
+    declared: &HashSet<String>,
+) -> Option<Vec<Shape>> {
     let rid = content_part.attr("id")?;
     let rel = rels.iter().find(|r| r.id == rid && !r.external)?;
     if rel.kind != REL_CUSTOM_XML || !declared.contains(&normalize(&rel.target)) {
         return None;
     }
-    let bytes = match cx.pkg.read(&rel.target) {
+    // The part is optional: the fallback picture is read after it, so a read that fails partway is
+    // charged to this part's allowance rather than ending the package's budget.
+    let bytes = match cx.pkg.read_optional_limited(&rel.target, MAX_PART) {
         Ok(Some(b)) => b,
         _ => return None,
     };
@@ -86,25 +118,48 @@ pub(super) fn read(
         return None;
     }
     let definitions = root.child("definitions")?;
-    let (points, pressure) = decode(root.child("trace")?, definitions)?;
-    let (mut image, color) = brush(definitions, !pressure.is_empty());
-    image.key = creation_id_of(content_part);
-    image.pressure = pressure;
+    let (style, color) = brush(definitions);
     let anchor = anchor_for(content_part, anchor, sheet)?;
-    let width_px = (image.width_cm * PX_PER_CM as f32).clamp(1.0, 255.0).round();
-    let text = points.iter().map(|p| format!("{},{}", p[0] as f32, p[1] as f32)).collect::<Vec<_>>().join(";");
-    Some(Shape {
-        id: 0,
-        kind: ShapeKind::Ink,
-        anchor,
-        // The legacy red-channel width, for readers that do not know `ink`.
-        fill: Color::Rgb((width_px as u32) << 16),
-        line: color,
-        text,
-        format: Default::default(),
-        math: Default::default(),
-        ink: Some(image),
-    })
+    let width_px = (style.width_cm * PX_PER_CM as f32).clamp(1.0, 255.0).round();
+    let fill = Color::Rgb((width_px as u32) << 16);
+    let mut keys: Vec<String> = creation_id_of(content_part).into_iter().collect();
+    let mut total = 0usize;
+    let mut shapes = Vec::new();
+    for (i, trace) in traces(&root)?.into_iter().enumerate() {
+        let (points, pressure) = decode(trace, definitions)?;
+        total = total.checked_add(points.len())?;
+        if total > MAX_POINTS {
+            return None;
+        }
+        let mut image = style.clone();
+        // The part's GUID names the first stroke; the others in one part get free keys of their own,
+        // so a gridcraft save writes one part per stroke and never repeats a creation id.
+        image.key = match (i, keys.first()) {
+            (0, Some(first)) => Some(first.clone()),
+            _ => {
+                let key = gridcraft_model::ink_creation_id_free(|k| keys.iter().any(|held| held == k));
+                keys.push(key.clone());
+                Some(key)
+            }
+        };
+        image.pressure = pressure;
+        // The part carries one brush; successive strokes keep their drawing order.
+        image.order = style.order.saturating_add(i as u32);
+        let text = points.iter().map(|p| format!("{},{}", p[0] as f32, p[1] as f32)).collect::<Vec<_>>().join(";");
+        shapes.push(Shape {
+            id: 0,
+            kind: ShapeKind::Ink,
+            anchor,
+            // The legacy red-channel width, for readers that do not know `ink`.
+            fill,
+            line: color,
+            text,
+            format: Default::default(),
+            math: Default::default(),
+            ink: Some(image),
+        });
+    }
+    Some(shapes)
 }
 
 /// The ink's box from `xdr14:xfrm` (`a:off`/`a:ext`, EMU). Excel writes the same box in the
@@ -141,7 +196,9 @@ fn creation_id_of(content_part: &El) -> Option<String> {
     (id.len() <= 80 && id.starts_with('{') && id.ends_with('}')).then(|| id.to_string())
 }
 
-/// One channel's difference-decoding state.
+/// One channel's difference-decoding state: its last value, its last first difference, and the
+/// difference order written for that value. A `*` stores nothing here: it repeats the value and
+/// changes no order.
 #[derive(Clone, Copy, Default)]
 struct Channel {
     value: i64,
@@ -185,23 +242,38 @@ fn decode(trace: &El, definitions: &El) -> Option<(Vec<[f64; 2]>, Vec<u16>)> {
     let mut points: Vec<[f64; 2]> = Vec::new();
     let mut pressure: Vec<u16> = Vec::new();
     for point in trace.text.split(',') {
-        let point = point.trim();
-        if point.is_empty() {
+        if point.trim().is_empty() {
             continue;
         }
-        let mut tokens = value_tokens(point).into_iter();
+        let mut rest = point;
         let mut values = Vec::with_capacity(channels.len());
         for st in state.iter_mut() {
-            let (prefix, body) = split_prefix(tokens.next()?);
-            let prefix = prefix.or(st.prefix).unwrap_or('!');
-            let raw = if prefix == '*' { 0 } else { body.parse::<i64>().ok()? };
+            let (written, raw, tail) = scan_value(rest)?;
+            rest = tail;
+            if written == Some('*') {
+                // `*` repeats the value and leaves the channel's difference order as it was, so the
+                // first difference is nought from here on and a later unprefixed value still
+                // applies its own number to it.
+                st.diff = 0;
+                if st.value.unsigned_abs() > MAX_COORD as u64 {
+                    return None;
+                }
+                values.push(st.value);
+                continue;
+            }
+            // A value with no prefix of its own carries the channel's previous difference order.
+            let prefix = written.or(st.prefix).unwrap_or('!');
+            let raw = raw?;
             let value = match prefix {
-                '*' => st.value,
                 '!' => raw,
                 '\'' => st.value.checked_add(raw)?,
                 '"' => st.value.checked_add(st.diff.checked_add(raw)?)?,
                 _ => return None,
             };
+            // `unsigned_abs` so i64::MIN cannot panic or wrap past the cap.
+            if value.unsigned_abs() > MAX_COORD as u64 {
+                return None;
+            }
             let diff = match prefix {
                 '!' => {
                     let d = value.checked_sub(st.value)?;
@@ -211,13 +283,10 @@ fn decode(trace: &El, definitions: &El) -> Option<(Vec<[f64; 2]>, Vec<u16>)> {
                 '"' => st.diff.checked_add(raw)?,
                 _ => st.diff,
             };
-            if value.abs() > MAX_COORD {
-                return None;
-            }
             *st = Channel { value, diff, prefix: Some(prefix) };
             values.push(value);
         }
-        if tokens.next().is_some() || points.len() == MAX_POINTS {
+        if !rest.bytes().all(is_wsp) || points.len() == MAX_POINTS {
             return None;
         }
         let x = values.get(xi).copied().unwrap_or(0) as f64 / res.get(xi).copied().unwrap_or(1000.0) * PX_PER_CM;
@@ -236,44 +305,62 @@ fn decode(trace: &El, definitions: &El) -> Option<(Vec<[f64; 2]>, Vec<u16>)> {
     Some((points, pressure))
 }
 
-/// A point's values. W3C InkML separates them with whitespace, but Excel writes a compact form
-/// that also concatenates them: `'4233'794` is two first differences, and `-5821-793` two
-/// negative second differences, with no space between. A value therefore also starts at a prefix
-/// character or at a `-` following a digit.
-fn value_tokens(point: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    for token in point.split_whitespace() {
-        let bytes = token.as_bytes();
-        let mut start = 0;
-        for i in 0..bytes.len() {
-            if i == start {
-                continue;
-            }
-            let boundary = match bytes[i] {
-                b'!' | b'\'' | b'"' | b'*' => true,
-                b'-' => bytes[i - 1].is_ascii_digit(),
-                _ => false,
-            };
-            if boundary {
-                out.push(&token[start..i]);
-                start = i;
-            }
-        }
-        if start < bytes.len() {
-            out.push(&token[start..]);
-        }
-    }
-    out
+/// An ASCII whitespace byte, as the trace grammar allows it between values.
+fn is_wsp(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\r' | b'\n')
 }
 
-/// `!`, `'`, `"` or `*` and the value after it; no prefix when the token starts with anything
-/// else (a negative number starts with `-`).
-fn split_prefix(token: &str) -> (Option<char>, &str) {
-    let mut chars = token.chars();
-    match chars.next() {
-        Some(c @ ('!' | '\'' | '"' | '*')) => (Some(c), chars.as_str()),
-        _ => (None, token),
+/// Scans one value of a trace point as the InkML grammar allows it: an optional difference-order
+/// prefix (`!`, `'`, `"` or `*`), optional whitespace, an optional minus sign and the digits
+/// (`value ::= difference_order? wsp* "-"? wsp* integer`). Whitespace before a value is optional,
+/// so Excel's compact `'2117'529` holds two values; a prefix, a sign or whitespace separates them.
+/// Returns the prefix (when written), its number (`None` for `*`) and the rest of the point.
+fn scan_value(s: &str) -> Option<(Option<char>, Option<i64>, &str)> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && is_wsp(bytes[i]) {
+        i += 1;
     }
+    let prefix = match bytes.get(i) {
+        Some(b @ (b'!' | b'\'' | b'"' | b'*')) => {
+            i += 1;
+            Some(*b as char)
+        }
+        _ => None,
+    };
+    while i < bytes.len() && is_wsp(bytes[i]) {
+        i += 1;
+    }
+    let rest = s.get(i..)?;
+    if prefix == Some('*') {
+        return Some((prefix, None, rest));
+    }
+    let b = rest.as_bytes();
+    let neg = b.first() == Some(&b'-');
+    let mut j = usize::from(neg);
+    while j < b.len() && is_wsp(b[j]) {
+        j += 1;
+    }
+    let digits = j;
+    while j < b.len() && b[j].is_ascii_digit() {
+        j += 1;
+    }
+    if j == digits {
+        return None;
+    }
+    // Parse the sign with the digits (keeps i64::MIN representable); whitespace between them,
+    // which Excel never writes, needs a tiny copy.
+    let n = if digits == usize::from(neg) {
+        rest.get(..j)?.parse::<i64>().ok()?
+    } else {
+        let mut t = String::with_capacity(j - digits + 1);
+        if neg {
+            t.push('-');
+        }
+        t.push_str(rest.get(digits..j)?);
+        t.parse::<i64>().ok()?
+    };
+    Some((prefix, Some(n), rest.get(j..)?))
 }
 
 /// The definition element (`context`, `brush`) named by a `#id` reference.
@@ -284,12 +371,11 @@ fn referenced<'a>(definitions: &'a El, name: &'a str, reference: Option<&str>) -
 
 /// The brush's style and colour. Excel writes one `brush` per part; missing properties take the
 /// defaults a plain Pen has.
-fn brush(definitions: &El, has_f: bool) -> (InkStyle, Color) {
+fn brush(definitions: &El) -> (InkStyle, Color) {
     let mut style = InkStyle::default();
     let mut color = Color::rgb(0, 0, 0);
     let mut gridcraft_tool = None;
     let mut ink_effects = None;
-    let mut ignore_pressure = false;
     let mut mask_pen = false;
     let Some(brush) = definitions.child("brush") else { return (style, color) };
     for p in brush.kids("brushProperty") {
@@ -298,7 +384,6 @@ fn brush(definitions: &El, has_f: bool) -> (InkStyle, Color) {
             "width" => style.width_cm = brush_cm(value).unwrap_or(style.width_cm),
             "height" => style.height_cm = brush_cm(value).unwrap_or(style.height_cm),
             "color" => color = Color::from_hex(value).unwrap_or(color),
-            "ignorePressure" => ignore_pressure = matches!(value.trim(), "1" | "true"),
             "tip" => mask_pen |= value.trim() == "rectangle",
             "rasterOp" => mask_pen |= value.trim() == "maskPen",
             "inkEffects" => ink_effects = Some(value.trim().to_ascii_lowercase()),
@@ -314,6 +399,10 @@ fn brush(definitions: &El, has_f: bool) -> (InkStyle, Color) {
         style.height_cm = style.width_cm;
     }
     style.effect = ink_effects.as_deref().and_then(effect);
+    // Excel writes an F (pressure) channel for every plain pen, so it says nothing about the
+    // tool: Fountain Pen and Brush Pen are indistinguishable in an Excel file. Without a
+    // GridCraft `gridcraftTool`, an inkEffects pencil is a Pencil, a rectangle maskPen is a
+    // Highlighter, a texture is a Pen with that effect, and everything else is a Pen.
     style.tool = match gridcraft_tool.as_deref() {
         Some("pencil") => InkTool::Pencil,
         Some("highlighter") => InkTool::Highlighter,
@@ -322,21 +411,23 @@ fn brush(definitions: &El, has_f: bool) -> (InkStyle, Color) {
         Some(_) => InkTool::Pen,
         None if ink_effects.as_deref() == Some("pencil") => InkTool::Pencil,
         None if mask_pen => InkTool::Highlighter,
-        None if ignore_pressure => InkTool::Pencil,
-        None if has_f => InkTool::FountainPen,
         _ => InkTool::Pen,
     };
     (style, color)
 }
 
+/// A brush dimension in cm, clamped to the range Excel accepts; a value that is not a finite
+/// number leaves the default in place.
 fn brush_cm(v: &str) -> Option<f32> {
     finite(v).map(|v| v.clamp(0.001, MAX_BRUSH_CM))
 }
 
+/// The first finite `f32` in `v`, ignoring surrounding whitespace.
 fn finite(v: &str) -> Option<f32> {
     v.trim().parse::<f32>().ok().filter(|v| v.is_finite())
 }
 
+/// The pen texture an `inkEffects` name stands for; an unknown name is a solid stroke.
 fn effect(name: &str) -> Option<InkEffect> {
     match name {
         "rainbow" => Some(InkEffect::Rainbow),
@@ -373,7 +464,10 @@ pub(crate) fn parts(shape: &Shape, theme: &Theme) -> Option<Parts> {
     } else {
         Vec::new()
     };
-    let use_f = !pressure.is_empty() || matches!(ink.tool, InkTool::FountainPen | InkTool::BrushPen);
+    // Only recorded pressure gets an F channel: a Fountain/Pen brush with none must read back
+    // with an empty pressure vector, not a run of zeros. The tool still round-trips through
+    // `gridcraftTool`.
+    let use_f = !pressure.is_empty();
     let color = shape.line.resolve(theme).unwrap_or([0, 0, 0]);
     let trace = encode_trace(&points, use_f.then_some(pressure.as_slice()));
     let xml = inkml_xml(ink, &color, use_f, &trace);
@@ -406,6 +500,7 @@ fn parse_points(text: &str) -> Option<Vec<[i64; 2]>> {
     Some(out)
 }
 
+/// A sheet-point coordinate in the trace's 1/1000 cm units, or `None` past Excel's range.
 fn trace_units(px: f64) -> Option<i64> {
     let v = (px * THOUSANDTHS_PER_PX).round();
     if !v.is_finite() || v.abs() > MAX_COORD as f64 {
@@ -440,7 +535,8 @@ fn encode_trace(points: &[[i64; 2]], pressure: Option<&[i64]>) -> String {
     tokens.join(",")
 }
 
-/// The second difference at index `i`: `(v[i] - v[i-1]) - (v[i-1] - v[i-2])`.
+/// The second difference at index `i`: `(v[i] - v[i-1]) - (v[i-1] - v[i-2])`, saturating so a
+/// point at the cap cannot wrap.
 fn second(points: &[[i64; 2]], pressure: Option<&[i64]>, channel: usize, i: usize) -> i64 {
     let v = |k: usize| -> i64 {
         if channel < 2 { points.get(k).map_or(0, |q| q[channel]) } else { pressure.and_then(|f| f.get(k).copied()).unwrap_or(0) }
@@ -448,6 +544,7 @@ fn second(points: &[[i64; 2]], pressure: Option<&[i64]>, channel: usize, i: usiz
     v(i).saturating_sub(v(i.saturating_sub(1))).saturating_sub(v(i.saturating_sub(1)).saturating_sub(v(i.saturating_sub(2))))
 }
 
+/// The whole InkML part: one context with the trace format, one brush, one trace.
 fn inkml_xml(ink: &InkStyle, color: &[u8; 3], f: bool, trace: &str) -> String {
     let width = ink.width_cm.clamp(0.001, MAX_BRUSH_CM);
     let height = ink.height_cm.clamp(0.001, MAX_BRUSH_CM);
@@ -484,17 +581,18 @@ fn inkml_xml(ink: &InkStyle, color: &[u8; 3], f: bool, trace: &str) -> String {
             short(scale)
         ));
     }
-    // GridCraft's own round-trip data (Excel drops unknown brush properties on save). The tool
-    // is always written: Fountain Pen and Brush Pen are otherwise indistinguishable, and a Pen
-    // that records pressure would read back as a Fountain Pen.
+    // GridCraft's own round-trip data (Excel drops unknown brush properties on save). Only the
+    // tools Excel cannot represent carry it: Fountain Pen and Brush Pen are indistinguishable
+    // there, and a Pencil with a texture loses its `inkEffects=pencil` marker to the texture.
     let tool = match ink.tool {
-        InkTool::Pen => "pen",
-        InkTool::Pencil => "pencil",
-        InkTool::Highlighter => "highlighter",
-        InkTool::FountainPen => "fountainPen",
-        InkTool::BrushPen => "brushPen",
+        InkTool::FountainPen => Some("fountainPen"),
+        InkTool::BrushPen => Some("brushPen"),
+        InkTool::Pencil if ink.effect.is_some() => Some("pencil"),
+        _ => None,
     };
-    props.push_str(&format!("<inkml:brushProperty name=\"gridcraftTool\" value=\"{tool}\"/>"));
+    if let Some(tool) = tool {
+        props.push_str(&format!("<inkml:brushProperty name=\"gridcraftTool\" value=\"{tool}\"/>"));
+    }
     props.push_str(&format!("<inkml:brushProperty name=\"gridcraftOrder\" value=\"{}\"/>", ink.order));
 
     let mut channels = String::from(
@@ -513,6 +611,7 @@ fn inkml_xml(ink: &InkStyle, color: &[u8; 3], f: bool, trace: &str) -> String {
     )
 }
 
+/// The `inkEffects` name Excel writes for a texture.
 fn effect_name(e: InkEffect) -> &'static str {
     match e {
         InkEffect::Rainbow => "rainbow",
@@ -530,9 +629,9 @@ fn effect_name(e: InkEffect) -> &'static str {
 /// the shape id (so a keyless stroke from an older file keeps one id across saves).
 pub fn creation_id(shape: &Shape) -> String {
     if let Some(key) = shape.ink.as_ref().and_then(|i| i.key.as_deref()) {
-        let key = gridcraft_model::ink_creation_id(Some(key));
-        if key.len() > 2 {
-            return key;
+        let key = key.trim();
+        if key.len() <= 80 && key.starts_with('{') && key.ends_with('}') {
+            return key.to_string();
         }
     }
     let id = u64::from(shape.id);

@@ -675,7 +675,7 @@ pub enum InkEffect {
     Bronze,
 }
 
-/// A brush kind of the Draw tab (Excel's Add menu).
+/// A stroke's brush: the Draw-tab kind, its size, texture and the per-point data the file keeps.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InkStyle {
@@ -726,6 +726,11 @@ impl Default for InkStyle {
 
 /// A stroke's stable key: `existing` when it is a plausible GUID, else a fresh deterministic one
 /// (a SHA-256 of a process-wide counter, so tests and repeated runs agree and no clock is read).
+///
+/// The GUID is spelled out here rather than taken from a UUID crate because the key must be
+/// reproducible: a save with no edit has to produce the same bytes, and a wasm build has no random
+/// source to seed a v4 from. The key is only unique within one process, though — see
+/// [`ink_creation_id_free`] before assigning one to a new stroke.
 pub fn ink_creation_id(existing: Option<&str>) -> String {
     if let Some(k) = existing {
         let k = k.trim();
@@ -765,6 +770,23 @@ pub fn ink_creation_id(existing: Option<&str>) -> String {
         b(14),
         b(15)
     )
+}
+
+/// A fresh key for a new stroke: the first one [`ink_creation_id`] mints that `taken` does not
+/// already hold.
+///
+/// The counter behind [`ink_creation_id`] starts at zero in every process, so a reopened workbook
+/// carries keys from the earlier process whose first fresh key is the same GUID again. Handing that
+/// key to a second stroke would put two `a16:creationId`s in one file and quietly break the map the
+/// key exists for. `taken` answers from the workbook's own strokes, a finite set, so the loop only
+/// moves the counter forward and ends.
+pub fn ink_creation_id_free(mut taken: impl FnMut(&str) -> bool) -> String {
+    loop {
+        let key = ink_creation_id(None);
+        if !taken(&key) {
+            return key;
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1272,7 +1294,7 @@ mod tests {
                 width_cm: 0.35,
                 height_cm: 0.35,
                 effect: Some(InkEffect::Galaxy),
-                anchor: [-1_303.866_2, -1_016.0],
+                anchor: [-1_303.866_2, -1016.0],
                 scale: 0.5,
                 pressure: vec![0, 32_767],
                 order: 7,
@@ -1312,6 +1334,25 @@ mod tests {
         // Anything that is not GUID-shaped is replaced rather than trusted.
         assert_ne!(ink_creation_id(Some("not a guid")), "not a guid");
         assert_ne!(ink_creation_id(Some(&"x".repeat(200))), "x".repeat(200));
+    }
+
+    #[test]
+    fn a_new_key_is_minted_past_the_keys_the_workbook_already_holds() {
+        // A reopened workbook holds keys minted by an earlier process, whose counter started at
+        // zero: the first keys this process mints are very likely among them. Refusing the first
+        // three stands in for that workbook and pins the retry.
+        let mut held: Vec<String> = Vec::new();
+        let key = ink_creation_id_free(|k| {
+            let refuse = held.len() < 3;
+            if refuse {
+                held.push(k.to_string());
+            }
+            refuse
+        });
+        assert_eq!(held.len(), 3, "the mint retried past the keys the workbook holds");
+        assert!(!held.iter().any(|h| h == &key), "a held key was handed out again: {key}");
+        // A key nothing holds is used straight away.
+        assert!(!held.iter().any(|h| h == &ink_creation_id_free(|_| false)));
     }
 }
 

@@ -599,6 +599,7 @@ fn parse_points(t: &str) -> Vec<[f32; 2]> {
     t.split(';').filter_map(|pt| pt.split_once(',').and_then(|(x, y)| Some([x.parse().ok()?, y.parse().ok()?]))).collect()
 }
 
+/// `draw.stroke`: a freehand stroke of `points` in sheet points, with its brush and draw order.
 fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     let pts: Vec<[f64; 2]> = p
         .get("points")
@@ -677,6 +678,11 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     // The texture's phase follows the stroke's place on the sheet (Excel's anchorX/anchorY are
     // negative multiples of the texture's cell); scaleFactor 0.5 is Excel's default.
     let anchor = [-minx as f32, -miny as f32];
+    // A reopened workbook holds keys minted by an earlier process, whose counter started at zero,
+    // so a freshly minted key can be one the workbook already uses: mint past those.
+    let held: Vec<&str> =
+        d.wb.sheets.iter().flat_map(|sheet| sheet.shapes.iter()).filter_map(|x| x.ink.as_ref()).filter_map(|i| i.key.as_deref()).collect();
+    let key = gridcraft_model::ink_creation_id_free(|k| held.contains(&k));
     let shape = Shape {
         math: Default::default(),
         id,
@@ -705,7 +711,7 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
             order,
             texture,
             texture_scale,
-            key: Some(gridcraft_model::ink_creation_id(None)),
+            key: Some(key),
         }),
     };
     edit(s, |cx| {
@@ -735,6 +741,7 @@ pub fn ink_height(sh: &Shape) -> f32 {
     ink_width(sh)
 }
 
+/// The stroke's points in sheet points, relative to its anchor, as `draw.stroke` took them.
 pub fn ink_points(sh: &Shape) -> Vec<[f32; 2]> {
     parse_points(&sh.text)
 }

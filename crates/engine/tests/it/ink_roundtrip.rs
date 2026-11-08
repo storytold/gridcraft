@@ -158,3 +158,40 @@ fn engine_strokes_keep_their_ink_style_and_key_across_save_and_open() {
     assert_eq!(after_ink.key, ink.key, "the key is assigned once and survives saves");
     assert_eq!(after.line, before.line);
 }
+
+#[test]
+fn a_stroke_drawn_in_a_reopened_workbook_takes_a_key_no_other_stroke_holds() {
+    let mut session = workbook();
+    session.execute("draw.stroke", json!({"points": [[100.0, 100.0], [140.0, 150.0]], "width": 3})).unwrap();
+    let first_key = shapes(&session)[0].ink.as_ref().and_then(|i| i.key.clone()).expect("the first stroke has a key");
+    session = reopen(&mut session);
+    assert_eq!(shapes(&session)[0].ink.as_ref().and_then(|i| i.key.clone()), Some(first_key.clone()), "a save keeps the stroke's key");
+    session.execute("draw.stroke", json!({"points": [[300.0, 120.0], [360.0, 170.0]], "width": 3})).unwrap();
+    let keys: Vec<String> = shapes(&session).iter().filter_map(|s| s.ink.as_ref()?.key.clone()).collect();
+    assert_eq!(keys.len(), 2, "{keys:?}");
+    assert_ne!(keys[0], keys[1], "two strokes share a creation id: {keys:?}");
+    // The second save writes both, and reopening still tells them apart.
+    session = reopen(&mut session);
+    let keys: std::collections::HashSet<String> = shapes(&session).iter().filter_map(|s| s.ink.as_ref()?.key.clone()).collect();
+    assert_eq!(keys.len(), 2, "the keys stay distinct after another save");
+}
+
+#[test]
+fn a_copied_sheet_rekeys_its_ink_strokes() {
+    let mut session = workbook();
+    session.execute("draw.stroke", json!({"points": [[100.0, 100.0], [140.0, 150.0]], "width": 3})).unwrap();
+    let original = shapes(&session)[0].ink.as_ref().and_then(|i| i.key.clone()).expect("a stroke has a key");
+    session.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    let keys: Vec<String> =
+        session.doc().unwrap().wb.sheets.iter().flat_map(|s| s.shapes.iter()).filter_map(|x| x.ink.as_ref()?.key.clone()).collect();
+    assert_eq!(keys.len(), 2, "{keys:?}");
+    assert_eq!(keys[0], original, "the original keeps its key");
+    assert_ne!(keys[0], keys[1], "the copy takes a key of its own");
+    // The save writes both sheets, and no creation id appears twice.
+    let saved = session.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let mut reopened = Session::new();
+    reopened.execute("file.open", json!({"name": "copy.xlsx", "base64": saved["base64"]})).unwrap();
+    let keys: std::collections::HashSet<String> =
+        reopened.doc().unwrap().wb.sheets.iter().flat_map(|s| s.shapes.iter()).filter_map(|x| x.ink.as_ref()?.key.clone()).collect();
+    assert_eq!(keys.len(), 2, "the saved copy keeps two distinct creation ids");
+}

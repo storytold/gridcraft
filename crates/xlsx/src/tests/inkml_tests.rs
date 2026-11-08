@@ -18,6 +18,7 @@ const XDR14: &str = "http://schemas.microsoft.com/office/excel/2010/spreadsheetD
 
 const GUIDE: &str = "{11111111-2222-4333-8444-555555555555}";
 
+/// The `[Content_Types].xml` of the test package, declaring the ink part and the picture.
 fn content_types(ink: bool, png: bool) -> String {
     let mut s = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>"#.to_string();
     if png {
@@ -30,12 +31,14 @@ fn content_types(ink: bool, png: bool) -> String {
     s
 }
 
+/// An Excel-shaped drawing part: one `twoCellAnchor` whose `AlternateContent` names the ink part.
 fn drawing() -> String {
     format!(
         r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="{XDR}" xmlns:a="{A}" xmlns:r="{NS_REL}"><xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>3</xdr:col><xdr:colOff>76200</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>228600</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><mc:AlternateContent xmlns:mc="{MC}"><mc:Choice xmlns:xdr14="{XDR14}" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" Requires="xdr14 aink"><xdr:contentPart r:id="rId1"><xdr14:nvContentPartPr><xdr14:cNvPr id="3" name="Ink 2"><a:extLst><a:ext uri="{{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}}"><a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="{GUIDE}"/></a:ext></a:extLst></xdr14:cNvPr><xdr14:cNvContentPartPr/></xdr14:nvContentPartPr><xdr14:nvPr macro=""/><xdr14:xfrm><a:off x="1905000" y="952500"/><a:ext cx="762000" cy="381000"/></xdr14:xfrm></xdr:contentPart></mc:Choice><mc:Fallback><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="Ink 2"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="762000" cy="381000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic></mc:Fallback></mc:AlternateContent><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#
     )
 }
 
+/// An InkML part with the given trace, pressure channel and brush properties.
 fn inkml(trace: &str, f: bool, props: &str) -> String {
     let mut channels = String::from(
         r#"<inkml:channel name="X" type="integer" min="-2.14748E9" max="2.14748E9" units="cm"/><inkml:channel name="Y" type="integer" min="-2.14748E9" max="2.14748E9" units="cm"/>"#,
@@ -52,6 +55,7 @@ fn inkml(trace: &str, f: bool, props: &str) -> String {
     )
 }
 
+/// A one-pixel transparent PNG, the picture fallback an Excel file carries.
 fn tiny_png() -> Vec<u8> {
     let mut out = Vec::new();
     {
@@ -66,6 +70,20 @@ fn tiny_png() -> Vec<u8> {
 
 /// A minimal one-sheet package with an Excel-shaped ink drawing.
 fn package(trace: &str, f: bool, props: &str, ink: bool, declared: bool, media: bool) -> Vec<u8> {
+    package_with(trace, f, props, ink, declared, media, Extra::default())
+}
+
+/// What a test adds to the package: a damaged ink entry, or a second stroke in the same part.
+#[derive(Clone, Copy, Default)]
+struct Extra<'a> {
+    damage_ink: bool,
+    second_trace: Option<&'a str>,
+}
+
+/// The same package. With `damage_ink`, the ink part is stored uncompressed and one byte of it is
+/// flipped, so the entry fails partway (a bad CRC) while the archive and the picture after it stay
+/// intact: what a damaged InkML part costs a reader.
+fn package_with(trace: &str, f: bool, props: &str, ink: bool, declared: bool, media: bool, extra: Extra<'_>) -> Vec<u8> {
     let wb = r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
     let wb_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
     let sheet = format!(
@@ -80,7 +98,12 @@ fn package(trace: &str, f: bool, props: &str, ink: bool, declared: bool, media: 
     let root = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
     let ct = content_types(declared, media);
     let drawing = drawing();
-    let ink_part = inkml(trace, f, props);
+    let mut ink_part = inkml(trace, f, props);
+    if let Some(second) = extra.second_trace {
+        // A second trace in the same part: same context and brush, its own points.
+        ink_part =
+            ink_part.replace("</inkml:ink>", &format!("<inkml:trace contextRef=\"#ctx0\" brushRef=\"#br0\">{second}</inkml:trace></inkml:ink>"));
+    }
     let png = tiny_png();
     let mut parts: Vec<(&str, &[u8])> = vec![
         ("[Content_Types].xml", ct.as_bytes()),
@@ -98,25 +121,46 @@ fn package(trace: &str, f: bool, props: &str, ink: bool, declared: bool, media: 
     if media {
         parts.push(("xl/media/image1.png", &png));
     }
-    make_zip(&parts)
+    if !extra.damage_ink {
+        return make_zip(&parts);
+    }
+    use std::io::Write as _;
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, data) in &parts {
+        let opts = if name.ends_with("ink1.xml") {
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)
+        } else {
+            zip::write::SimpleFileOptions::default()
+        };
+        w.start_file(*name, opts).unwrap();
+        w.write_all(data).unwrap();
+    }
+    let mut z = w.finish().unwrap().into_inner();
+    let at = z.windows(9).position(|x| x == b"<inkml:in").expect("the stored ink markup");
+    z[at + 8] ^= 0x20;
+    z
 }
 
 const PEN_PROPS: &str = r##"<inkml:brushProperty name="width" value="0.05" units="cm"/><inkml:brushProperty name="height" value="0.05" units="cm"/><inkml:brushProperty name="color" value="#1F5FC9"/>"##;
 
+/// Reads the test package, failing the test when the workbook does not open.
 fn read(bytes: &[u8]) -> (Workbook, crate::ReadReport) {
     read_xlsx(bytes).unwrap()
 }
 
+/// The one ink shape the test package holds.
 fn ink_shape(wb: &Workbook) -> &Shape {
     let shapes = &wb.sheets[0].shapes;
     assert_eq!(shapes.len(), 1, "{shapes:?}");
     &shapes[0]
 }
 
+/// The stroke's points as sheet points.
 fn points(shape: &Shape) -> Vec<[f32; 2]> {
     shape.text.split(';').filter_map(|p| p.split_once(',').and_then(|(x, y)| Some([x.parse().ok()?, y.parse().ok()?]))).collect()
 }
 
+/// Asserts two brush measurements agree to the millimetre.
 fn close(a: f32, b: f32) {
     assert!((a - b).abs() < 0.001, "{a} != {b}");
 }
@@ -141,23 +185,6 @@ fn excel_content_part_is_read_as_editable_ink_with_its_brush() {
     close(s.anchor.dy, 0.0);
     close(s.anchor.width, 80.0);
     close(s.anchor.height, 40.0);
-}
-
-#[test]
-fn excel_compact_values_without_spaces_decode() {
-    // Excel 365 re-encodes a stroke as `0 0,'4233'794,"-2116"1587,-5821-793`: the channel values
-    // are concatenated with no space, with prefixes and negative signs separating them.
-    let (wb, _) = read(&package("0 0,'4233'794,\"-2116\"1587,-5821-793", false, PEN_PROPS, true, true, true));
-    let s = ink_shape(&wb);
-    let ink = s.ink.as_ref().expect("editable ink");
-    let pts = points(s);
-    assert_eq!(pts.len(), 4, "every point decodes: {pts:?}");
-    assert!(ink.pressure.is_empty());
-    // 1/1000 cm: X 0, 4233, 6350 (second difference), 2646; Y 0, 794, 3175, 4763.
-    close(pts[1][0], 4.233 * 37.795_276);
-    close(pts[2][0], 6.35 * 37.795_276);
-    close(pts[3][0], 2.646 * 37.795_276);
-    close(pts[3][1], 4.763 * 37.795_276);
 }
 
 #[test]
@@ -187,7 +214,7 @@ fn pressure_and_effects_survive_a_read_and_a_gridcraft_save() {
     // F's last prefix is `'` (no `"` in the fixture for F), so the third value repeats the first difference.
     assert_eq!(ink.pressure, vec![1000, 2000, 2000]);
     close(ink.anchor[0], -1_303.866_2);
-    close(ink.anchor[1], -1_016.0);
+    close(ink.anchor[1], -1016.0);
     close(ink.scale, 0.5);
 
     // Reopen what GridCraft writes: the brush, pressure and key come back unchanged.
@@ -231,7 +258,7 @@ fn every_tool_and_effect_round_trips_through_gridcraft() {
                     width_cm: 0.1,
                     height_cm: if tool == InkTool::Pencil { 0.6 } else { 0.1 },
                     effect,
-                    anchor: [-1_303.866_2, -1_016.0],
+                    anchor: [-1_303.866_2, -1016.0],
                     scale: 0.5,
                     pressure: vec![100, 2000, 32767],
                     order: id,
@@ -298,6 +325,7 @@ fn malformed_or_oversized_ink_is_refused_without_a_panic() {
         ("too many channels", "!0 !0 0", false),
         ("not a number", "!x !0", false),
         ("over the coordinate cap", huge.as_str(), false),
+        ("i64::MIN under the cap", "!-9223372036854775808 !0", false),
         ("over the point cap", many.as_str(), false),
         ("empty", "", false),
     ];
@@ -331,6 +359,32 @@ fn a_missing_or_undeclared_ink_part_falls_back_to_the_picture() {
 }
 
 #[test]
+fn a_wildcard_keeps_the_difference_order_for_a_later_unprefixed_value() {
+    // `*` repeats the value and leaves the channel in first-difference mode, so the next value
+    // written without a prefix (`1`, then `2`) still applies to a nought first difference.
+    let (wb, _) = read(&package("0 0,'5'3,*1,2 1", false, PEN_PROPS, true, true, true));
+    assert_eq!(thousandths(ink_shape(&wb)), vec![[0, 0], [5, 3], [5, 4], [7, 5]]);
+}
+
+#[test]
+fn a_wildcard_keeps_the_second_difference_order_too() {
+    // Second differences 1 and 1 put X at 11 and Y at 7; `*` repeats X and zeroes its first
+    // difference, while Y keeps adding its written second differences.
+    let (wb, _) = read(&package("0 0,'5'3,\"1\"1,*2,1 1", false, PEN_PROPS, true, true, true));
+    assert_eq!(thousandths(ink_shape(&wb)), vec![[0, 0], [5, 3], [11, 7], [11, 13], [12, 20]]);
+}
+
+#[test]
+fn a_damaged_ink_part_costs_only_its_own_allowance() {
+    // The ink entry fails partway (a bad CRC) inside an intact archive. The read is optional, so
+    // the failure is charged to the ink part and the fallback picture still opens.
+    let (wb, report) = read(&package_with("!0 !0,'1000 '1000", false, PEN_PROPS, true, true, true, Extra { damage_ink: true, ..Extra::default() }));
+    assert!(wb.sheets[0].shapes.is_empty(), "the damaged ink is not read");
+    assert_eq!(wb.sheets[0].images.len(), 1, "the fallback picture still loads");
+    assert!(report.warnings.iter().any(|w| w.contains("ink part")), "{:?}", report.warnings);
+}
+
+#[test]
 fn legacy_custgeom_ink_still_round_trips_without_an_ink_style() {
     let sheet = Sheet {
         shapes: vec![Shape {
@@ -353,4 +407,176 @@ fn legacy_custgeom_ink_still_round_trips_without_an_ink_style() {
     assert!(s.ink.is_none());
     assert_eq!(s.line, Color::Rgb(0xA12BCD));
     assert_eq!(s.text, "0,0;40,20;90,10");
+}
+
+#[test]
+fn a_fountain_or_brush_pen_without_pressure_keeps_its_tool_and_an_empty_pressure() {
+    for tool in [InkTool::FountainPen, InkTool::BrushPen] {
+        let sheet = Sheet {
+            shapes: vec![Shape {
+                id: 9,
+                kind: ShapeKind::Ink,
+                anchor: Anchor { cell: CellRef::parse("B2").unwrap(), dx: 0.0, dy: 0.0, width: 60.0, height: 30.0, mode: AnchorMode::Absolute },
+                fill: Color::Rgb(2 << 16),
+                line: Color::Rgb(0x1F5FC9),
+                text: "0,0;30,20".into(),
+                format: Default::default(),
+                math: Default::default(),
+                ink: Some(InkStyle { tool, key: Some("{AAAAAAAA-1111-4111-8111-111111111111}".into()), ..InkStyle::default() }),
+            }],
+            ..Sheet::new("Pen")
+        };
+        let wb = Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() };
+        let (back, _) = read(&write_xlsx(&wb).unwrap());
+        let ink = back.sheets[0].shapes[0].ink.as_ref().expect("editable ink");
+        assert_eq!(ink.tool, tool, "the GridCraft-only brush property keeps the subtype");
+        assert!(ink.pressure.is_empty(), "no F channel was recorded, so none comes back: {:?}", ink.pressure);
+        assert_eq!(ink.key.as_deref(), Some("{AAAAAAAA-1111-4111-8111-111111111111}"));
+    }
+}
+
+#[test]
+fn the_fallback_picture_is_a_transparent_png_in_the_stroke_colour() {
+    let sheet = Sheet {
+        shapes: vec![Shape {
+            id: 4,
+            kind: ShapeKind::Ink,
+            anchor: Anchor { cell: CellRef::parse("B2").unwrap(), dx: 0.0, dy: 0.0, width: 90.0, height: 45.0, mode: AnchorMode::Absolute },
+            fill: Color::Rgb(2 << 16),
+            line: Color::Rgb(0xA12BCD),
+            text: "10,10;80,35".into(),
+            format: Default::default(),
+            math: Default::default(),
+            ink: Some(InkStyle { tool: InkTool::Pen, width_cm: 0.1, height_cm: 0.1, key: Some(GUIDE.into()), ..InkStyle::default() }),
+        }],
+        ..Sheet::new("Picture")
+    };
+    let wb = Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() };
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut file = archive.by_name("xl/media/image1.png").expect("the fallback picture");
+    let mut png = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut png).unwrap();
+
+    let decoder = png::Decoder::new(std::io::Cursor::new(png));
+    let mut reader = decoder.read_info().expect("a valid PNG");
+    let (width, height, color_type) = {
+        let info = reader.info();
+        (info.width, info.height, info.color_type)
+    };
+    assert_eq!((width, height), (90, 45), "the picture keeps the anchor's aspect");
+    assert_eq!(color_type, png::ColorType::Rgba);
+    let size = reader.output_buffer_size().expect("allocated size");
+    let mut pixels = vec![0; size];
+    let frame = reader.next_frame(&mut pixels).expect("one frame");
+    let pixel = |x: usize, y: usize| -> [u8; 4] {
+        let i = y * width as usize * 4 + x * 4;
+        [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+    };
+    assert_eq!(pixel(0, 0)[3], 0, "the background is transparent");
+    let painted = (0..height as usize).flat_map(|y| (0..width as usize).map(move |x| (x, y))).map(|(x, y)| pixel(x, y)).find(|p| p[3] > 0);
+    let painted = painted.expect("the stroke is drawn");
+    assert_eq!(&painted[..3], &[0xA1, 0x2B, 0xCD], "the stroke uses its colour");
+    assert_eq!(frame.color_type, png::ColorType::Rgba);
+}
+
+/// The decoded points back in the trace's 1/1000 cm units (what Excel wrote).
+fn thousandths(shape: &Shape) -> Vec<[i64; 2]> {
+    const PX_PER_CM: f64 = 96.0 / 2.54;
+    points(shape)
+        .iter()
+        .map(|p| [(f64::from(p[0]) / PX_PER_CM * 1000.0).round() as i64, (f64::from(p[1]) / PX_PER_CM * 1000.0).round() as i64])
+        .collect()
+}
+
+#[test]
+fn excel_compact_values_without_whitespace_decode() {
+    // The two strings Excel 365 itself wrote (observed in a file saved by Excel, gc_ink_rt.xlsx):
+    // no whitespace before the prefixed or signed values of the second and later points.
+    for (trace, points) in
+        [("0 0,'2117'529,\"-1\"-1058", vec![[0, 0], [2117, 529], [4233, 0]]), ("0 0,'2646'1058,\"0\"-2116", vec![[0, 0], [2646, 1058], [5292, 0]])]
+    {
+        let (wb, _) = read(&package(trace, false, PEN_PROPS, true, true, true));
+        assert_eq!(thousandths(ink_shape(&wb)), points, "{trace}");
+    }
+}
+
+#[test]
+fn excel_compact_three_channel_values_with_pressure_decode() {
+    let trace = "2748 1756 24575,'0'0'0,\"29\"0\"0,53 0 0,30 4 0";
+    let (wb, _) = read(&package(trace, true, PEN_PROPS, true, true, true));
+    let shape = ink_shape(&wb);
+    assert_eq!(thousandths(shape), vec![[2748, 1756], [2748, 1756], [2777, 1756], [2859, 1756], [2971, 1760]]);
+    assert_eq!(shape.ink.as_ref().unwrap().pressure, vec![24575; 5]);
+}
+
+#[test]
+fn the_wildcard_repeats_a_channel_in_compact_form() {
+    let (wb, _) = read(&package("!10 !20,**", false, PEN_PROPS, true, true, true));
+    assert_eq!(thousandths(ink_shape(&wb)), vec![[10, 20], [10, 20]]);
+}
+
+#[test]
+fn a_compact_package_round_trips_as_editable_ink_not_the_fallback() {
+    let (wb, _) = read(&package("0 0,'2117'529,\"-1\"-1058", false, PEN_PROPS, true, true, true));
+    assert!(wb.sheets[0].images.is_empty(), "the fallback is not read when the ink parses");
+    assert_eq!(wb.sheets[0].shapes.len(), 1);
+    let (back, report) = read(&write_xlsx(&wb).unwrap());
+    assert!(report.warnings.iter().all(|w| !w.contains("ink part")), "{:?}", report.warnings);
+    assert!(back.sheets[0].images.is_empty(), "a GridCraft save stays editable ink");
+    assert_eq!(thousandths(ink_shape(&back)), vec![[0, 0], [2117, 529], [4233, 0]]);
+}
+
+#[test]
+fn excel_brush_properties_infer_pen_pencil_and_highlighter_without_a_channel() {
+    // The six brush-property sets Excel 365 wrote in research_brushes.xlsx (observed file): a
+    // Galaxy pen, a plain Red pen, a Pencil, a Highlighter, a Fountain Pen and a Brush Pen. Excel
+    // writes an F channel for every plain pen, so the channel says nothing about the tool.
+    let galaxy = concat!(
+        r##"<inkml:brushProperty name="width" value="0.035" units="cm"/><inkml:brushProperty name="height" value="0.035" units="cm"/>"##,
+        r##"<inkml:brushProperty name="color" value="#AE198D"/><inkml:brushProperty name="inkEffects" value="galaxy"/>"##,
+        r##"<inkml:brushProperty name="anchorX" value="0"/><inkml:brushProperty name="anchorY" value="0"/><inkml:brushProperty name="scaleFactor" value="0.5"/>"##,
+    );
+    let red = r##"<inkml:brushProperty name="width" value="0.035" units="cm"/><inkml:brushProperty name="height" value="0.035" units="cm"/><inkml:brushProperty name="color" value="#E71224"/>"##;
+    let pencil = r##"<inkml:brushProperty name="width" value="0.05" units="cm"/><inkml:brushProperty name="height" value="0.3" units="cm"/><inkml:brushProperty name="color" value="#849398"/><inkml:brushProperty name="ignorePressure" value="1"/><inkml:brushProperty name="inkEffects" value="pencil"/>"##;
+    let highlighter = r##"<inkml:brushProperty name="width" value="0.3" units="cm"/><inkml:brushProperty name="height" value="0.6" units="cm"/><inkml:brushProperty name="color" value="#FFFC00"/><inkml:brushProperty name="tip" value="rectangle"/><inkml:brushProperty name="rasterOp" value="maskPen"/><inkml:brushProperty name="ignorePressure" value="1"/>"##;
+    let fountain = r##"<inkml:brushProperty name="width" value="0.1" units="cm"/><inkml:brushProperty name="height" value="0.1" units="cm"/><inkml:brushProperty name="color" value="#004F8B"/>"##;
+    let brush_pen = r##"<inkml:brushProperty name="width" value="0.1" units="cm"/><inkml:brushProperty name="height" value="0.1" units="cm"/><inkml:brushProperty name="color" value="#008C3A"/>"##;
+    let cases = [
+        (galaxy, true, InkTool::Pen, Some(InkEffect::Galaxy), 0.035),
+        (red, true, InkTool::Pen, None, 0.035),
+        (pencil, false, InkTool::Pencil, None, 0.05),
+        (highlighter, false, InkTool::Highlighter, None, 0.3),
+        (fountain, true, InkTool::Pen, None, 0.1),
+        (brush_pen, true, InkTool::Pen, None, 0.1),
+    ];
+    for (props, f, tool, effect, width) in cases {
+        let trace = if f { "0 0 0,'1000 1000 1000" } else { "0 0,'1000 1000" };
+        let (wb, _) = read(&package(trace, f, props, true, true, true));
+        let ink = ink_shape(&wb).ink.as_ref().expect("editable ink").clone();
+        assert_eq!(ink.tool, tool, "{props}");
+        assert_eq!(ink.effect, effect, "{props}");
+        close(ink.width_cm, width);
+    }
+}
+
+#[test]
+fn a_part_with_two_traces_reads_as_two_strokes() {
+    // An InkML trace is a stroke: a part that holds two of them is two editable strokes, not one
+    // first stroke and a silently dropped second.
+    let second = "!500 !500,'50'50";
+    let (wb, _) = read(&package_with("!0 !0,'100'100", false, PEN_PROPS, true, true, true, Extra { second_trace: Some(second), ..Extra::default() }));
+    let shapes = &wb.sheets[0].shapes;
+    assert_eq!(shapes.len(), 2, "{shapes:?}");
+    assert_eq!(thousandths(&shapes[0]), vec![[0, 0], [100, 100]]);
+    assert_eq!(thousandths(&shapes[1]), vec![[500, 500], [550, 550]]);
+    let (a, b) = (shapes[0].ink.as_ref().expect("ink"), shapes[1].ink.as_ref().expect("ink"));
+    assert_eq!(a.width_cm, b.width_cm, "both keep the part's brush");
+    assert_eq!(shapes[0].line, shapes[1].line, "both keep the part's colour");
+    assert_ne!(a.key, b.key, "each stroke keeps its own creation id");
+    // Saving writes one part per stroke, and reopening finds both again.
+    let (back, _) = read(&write_xlsx(&wb).unwrap());
+    assert_eq!(back.sheets[0].shapes.len(), 2);
+    let keys: std::collections::HashSet<String> = back.sheets[0].shapes.iter().filter_map(|s| s.ink.as_ref()?.key.clone()).collect();
+    assert_eq!(keys.len(), 2, "{keys:?}");
 }
