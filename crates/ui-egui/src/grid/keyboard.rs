@@ -193,7 +193,7 @@ fn form_control_event(app: &mut SheetApp, sh: &Sheet, ev: &egui::Event) -> bool 
 
 /// Keys that move or extend the selection: with the Format Painter armed, Excel pastes the
 /// format onto the cells the keyboard lands on, as a click would (arrows, Shift and Ctrl/Cmd
-/// arrows, Page Up/Down, Home/End, Shift+Space, Ctrl+Space, select all).
+/// arrows, Page Up/Down, Home/End, Shift+Space, Ctrl+Space).
 fn painter_moves(app: &SheetApp, key: egui::Key, m: egui::Modifiers) -> bool {
     use egui::Key;
     app.session.format_painter.is_some()
@@ -201,8 +201,8 @@ fn painter_moves(app: &SheetApp, key: egui::Key, m: egui::Modifiers) -> bool {
             Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight | Key::PageUp | Key::PageDown | Key::Home | Key::End => true,
             // Shift+Space selects the row and Ctrl+Space the column; plain Space types a space.
             Key::Space => m.shift || m.ctrl || m.command,
-            // Only select all; a plain A starts a cell edit.
-            Key::A => m.command,
+            // Select all doesn't paint: like a click on the corner, which only selects, the
+            // whole sheet would need a sheet-wide format rather than per-cell styles.
             _ => false,
         }
 }
@@ -216,6 +216,15 @@ fn selection_now(app: &SheetApp) -> Option<(usize, super::RangeRef)> {
 fn paint_after_move(app: &mut SheetApp, before: Option<(usize, super::RangeRef)>) {
     let Some((sheet, range)) = before else { return };
     if selection_now(app).is_some_and(|(s, r)| s == sheet && r != range) {
+        // Painting resets the selection to the painted range; keep the anchor and active cell
+        // so the next Shift+arrow goes on extending from the same corner.
+        let kept = app.session.active().map(|d| d.selection.clone());
         super::interact::format_painter_apply(app);
+        if let (Some(kept), Some(d)) = (kept, app.session.active_mut())
+            && d.wb.active_sheet() == sheet
+            && d.selection.current() == kept.current()
+        {
+            d.selection = kept;
+        }
     }
 }

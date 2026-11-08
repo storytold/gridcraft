@@ -236,3 +236,38 @@ fn a_kept_painter_paints_every_cell_the_keyboard_moves_to() {
     }
     assert!(h.state().session.format_painter.is_some(), "a double-click painter stays armed");
 }
+
+#[test]
+fn shift_arrow_keeps_extending_from_the_same_anchor_after_painting() {
+    let mut h = harness();
+    let source = style(&h, "A1");
+    let session = &mut h.state_mut().session;
+    session.execute("edit.formatPainter", json!({"sticky": true})).unwrap();
+    session.execute("selection.set", json!({"cell": "D5"})).unwrap();
+    h.run_steps(2);
+
+    for _ in 0..2 {
+        h.key_press_modifiers(Modifiers::SHIFT, egui::Key::ArrowLeft);
+        h.run_steps(2);
+    }
+    assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "B5:D5");
+    for a1 in ["B5", "C5", "D5"] {
+        assert_eq!(style(&h, a1), source, "{a1} must take A1's format");
+    }
+}
+
+#[test]
+fn select_all_does_not_paint() {
+    let mut h = harness();
+    let session = &mut h.state_mut().session;
+    session.execute("edit.formatPainter", json!({})).unwrap();
+    session.execute("selection.set", json!({"cell": "C3"})).unwrap();
+    h.run_steps(2);
+    let plain = style(&h, "C3");
+
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(2);
+    assert_eq!(style(&h, "C3"), plain, "select all only selects");
+    assert_eq!(stored_cells(&h), 1, "no cell takes a style");
+    assert!(h.state().session.format_painter.is_some(), "the painter stays armed");
+}
