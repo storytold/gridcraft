@@ -144,9 +144,8 @@ impl Calc {
         for (si, sheet) in wb.sheets.iter().enumerate() {
             for (c, cell) in sheet.cells.iter() {
                 if let Some(f) = &cell.formula
-                    && let Some(e) = f.expr()
+                    && let Some((areas, dynamic)) = f.with_expr(|e| precedents(wb, si, e))
                 {
-                    let (areas, dynamic) = precedents(wb, si, &e);
                     self.graph.insert((si, c), Node { areas, dynamic });
                     if cell.value == Value::Error(CellError::Circ) {
                         circ.push((si, c));
@@ -225,14 +224,14 @@ impl Calc {
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
         for &k in changed {
-            let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.clone());
+            let precedent =
+                wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.with_expr(|e| precedents(wb, k.0, e)));
             let py = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref());
             let python = py.is_some();
             // A Python cell whose result (if any) is not an array spills nothing.
             let spills = py.and_then(|p| p.result_value()).is_some_and(|v| matches!(v, Value::Array(_)));
-            match formula.and_then(|f| f.expr()) {
-                Some(e) => {
-                    let (areas, dynamic) = precedents(wb, k.0, &e);
+            match precedent {
+                Some((areas, dynamic)) => {
                     self.graph.insert(k, Node { areas, dynamic });
                 }
                 // See `rebuild`: its spill is laid out again from its result when it is calculated.
