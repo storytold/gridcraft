@@ -169,7 +169,8 @@ fn pressure_and_effects_survive_a_read_and_a_gridcraft_save() {
     let original = ink_shape(&wb).clone();
     let ink = original.ink.as_ref().unwrap();
     assert_eq!(ink.effect, Some(InkEffect::RoseGold));
-    assert_eq!(ink.pressure, vec![1000, 2000, 3000]);
+    // F's last prefix is `'` (no `"` in the fixture for F), so the third value repeats the first difference.
+    assert_eq!(ink.pressure, vec![1000, 2000, 2000]);
     close(ink.anchor[0], -1303.866_2);
     close(ink.anchor[1], -1016.0);
     close(ink.scale, 0.5);
@@ -255,15 +256,17 @@ fn a_second_save_is_byte_stable_for_ink_strokes() {
         (0..z.len()).map(|i| z.by_index(i).unwrap().name().to_string()).collect()
     };
     assert_eq!(names(&first), names(&second), "{:?}", report.warnings);
-    let part = |b: &[u8], name: &str| -> String {
+    let part = |b: &[u8], name: &str| -> Vec<u8> {
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(b.to_vec())).unwrap();
         let mut f = z.by_name(name).unwrap();
-        let mut out = String::new();
-        std::io::Read::read_to_string(&mut f, &mut out).unwrap();
+        let mut out = Vec::new();
+        std::io::Read::read_to_end(&mut f, &mut out).unwrap();
         out
     };
     for name in names(&first) {
-        assert_eq!(part(&first, &name), part(&second, &name), "part {name}");
+        let (a, b) = (part(&first, &name), part(&second, &name));
+        assert_eq!(String::from_utf8_lossy(&a), String::from_utf8_lossy(&b), "part {name}");
+        assert_eq!(a, b, "part {name} (bytes)");
     }
     assert_eq!(first, second);
 }

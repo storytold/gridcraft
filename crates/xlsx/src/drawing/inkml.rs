@@ -87,7 +87,7 @@ pub(super) fn read(
     }
     let definitions = root.child("definitions")?;
     let (points, pressure) = decode(root.child("trace")?, definitions)?;
-    let (mut image, color) = brush(definitions);
+    let (mut image, color) = brush(definitions, !pressure.is_empty());
     image.key = creation_id_of(content_part);
     image.pressure = pressure;
     let anchor = anchor_for(content_part, anchor, sheet)?;
@@ -254,7 +254,7 @@ fn referenced<'a>(definitions: &'a El, name: &'a str, reference: Option<&str>) -
 
 /// The brush's style and colour. Excel writes one `brush` per part; missing properties take the
 /// defaults a plain Pen has.
-fn brush(definitions: &El) -> (InkStyle, Color) {
+fn brush(definitions: &El, has_f: bool) -> (InkStyle, Color) {
     let mut style = InkStyle::default();
     let mut color = Color::rgb(0, 0, 0);
     let mut gridcraft_tool = None;
@@ -290,10 +290,10 @@ fn brush(definitions: &El) -> (InkStyle, Color) {
         Some("fountainPen") | Some("fountainpen") => InkTool::FountainPen,
         Some("brushPen") | Some("brushpen") => InkTool::BrushPen,
         Some(_) => InkTool::Pen,
-        None if style.effect.is_some() => InkTool::Pen,
         None if ink_effects.as_deref() == Some("pencil") => InkTool::Pencil,
         None if mask_pen => InkTool::Highlighter,
         None if ignore_pressure => InkTool::Pencil,
+        None if has_f => InkTool::FountainPen,
         _ => InkTool::Pen,
     };
     (style, color)
@@ -401,8 +401,8 @@ fn encode_trace(points: &[[i64; 2]], pressure: Option<&[i64]>) -> String {
             match i {
                 0 => point.push_str(&format!("!{}", value(i, c))),
                 1 => point.push_str(&format!("'{}", value(i, c).saturating_sub(value(0, c)))),
-                2 => point.push_str(&format!("\"{}", second(points, pressure, c, 1))),
-                _ => point.push_str(&format!("{}", second(points, pressure, c, i - 1))),
+                2 => point.push_str(&format!("\"{}", second(points, pressure, c, 2))),
+                _ => point.push_str(&format!("{}", second(points, pressure, c, i))),
             }
         }
         tokens.push(point);
@@ -421,11 +421,11 @@ fn second(points: &[[i64; 2]], pressure: Option<&[i64]>, channel: usize, i: usiz
 fn inkml_xml(ink: &InkStyle, color: &[u8; 3], f: bool, trace: &str) -> String {
     let width = ink.width_cm.clamp(0.001, MAX_BRUSH_CM);
     let height = ink.height_cm.clamp(0.001, MAX_BRUSH_CM);
-    let cm = |v: f32| v.to_string();
+    let short = |v: f32| v.to_string();
     let mut props = format!(
         "<inkml:brushProperty name=\"width\" value=\"{}\" units=\"cm\"/><inkml:brushProperty name=\"height\" value=\"{}\" units=\"cm\"/><inkml:brushProperty name=\"color\" value=\"#{:02X}{:02X}{:02X}\"/>",
-        cm(width),
-        cm(height),
+        short(width),
+        short(height),
         color[0],
         color[1],
         color[2]
@@ -433,7 +433,7 @@ fn inkml_xml(ink: &InkStyle, color: &[u8; 3], f: bool, trace: &str) -> String {
     match ink.tool {
         InkTool::Pencil => props.push_str("<inkml:brushProperty name=\"ignorePressure\" value=\"1\"/>"),
         InkTool::Highlighter => props.push_str(
-            "<inkml:brushProperty name=\"ignorePressure\" value=\"1\"/><inkml:brushProperty name=\"tip\" value=\"rectangle\"/><inkml:brushProperty name=\"rasterOp\" value=\"maskPen\"/>",
+            "<inkml:brushProperty name=\"tip\" value=\"rectangle\"/><inkml:brushProperty name=\"rasterOp\" value=\"maskPen\"/><inkml:brushProperty name=\"ignorePressure\" value=\"1\"/>",
         ),
         _ => {}
     }
@@ -441,22 +441,30 @@ fn inkml_xml(ink: &InkStyle, color: &[u8; 3], f: bool, trace: &str) -> String {
     if ink.tool == InkTool::Pencil && effect_name.is_none() {
         props.push_str("<inkml:brushProperty name=\"inkEffects\" value=\"pencil\"/>");
     }
-    if let Some(name) = effect_name {
+    let phase = ink.anchor != [0.0, 0.0] || (ink.scale - 1.0).abs() > f32::EPSILON;
+    if effect_name.is_some() || phase {
+        if let Some(name) = effect_name {
+            props.push_str(&format!("<inkml:brushProperty name=\"inkEffects\" value=\"{name}\"/>"));
+        }
         let scale = if ink.scale > 0.0 { ink.scale } else { 1.0 };
         props.push_str(&format!(
-            "<inkml:brushProperty name=\"inkEffects\" value=\"{name}\"/><inkml:brushProperty name=\"anchorX\" value=\"{}\"/><inkml:brushProperty name=\"anchorY\" value=\"{}\"/><inkml:brushProperty name=\"scaleFactor\" value=\"{}\"/>",
-            cm(ink.anchor[0]),
-            cm(ink.anchor[1]),
-            cm(scale)
+            "<inkml:brushProperty name=\"anchorX\" value=\"{}\"/><inkml:brushProperty name=\"anchorY\" value=\"{}\"/><inkml:brushProperty name=\"scaleFactor\" value=\"{}\"/>",
+            short(ink.anchor[0]),
+            short(ink.anchor[1]),
+            short(scale)
         ));
     }
-    // GridCraft's own round-trip data (Excel drops unknown brush properties on save).
-    match ink.tool {
-        InkTool::Pencil => props.push_str("<inkml:brushProperty name=\"gridcraftTool\" value=\"pencil\"/>"),
-        InkTool::FountainPen => props.push_str("<inkml:brushProperty name=\"gridcraftTool\" value=\"fountainPen\"/>"),
-        InkTool::BrushPen => props.push_str("<inkml:brushProperty name=\"gridcraftTool\" value=\"brushPen\"/>"),
-        _ => {}
-    }
+    // GridCraft's own round-trip data (Excel drops unknown brush properties on save). The tool
+    // is always written: Fountain Pen and Brush Pen are otherwise indistinguishable, and a Pen
+    // that records pressure would read back as a Fountain Pen.
+    let tool = match ink.tool {
+        InkTool::Pen => "pen",
+        InkTool::Pencil => "pencil",
+        InkTool::Highlighter => "highlighter",
+        InkTool::FountainPen => "fountainPen",
+        InkTool::BrushPen => "brushPen",
+    };
+    props.push_str(&format!("<inkml:brushProperty name=\"gridcraftTool\" value=\"{tool}\"/>"));
     props.push_str(&format!("<inkml:brushProperty name=\"gridcraftOrder\" value=\"{}\"/>", ink.order));
 
     let mut channels = String::from(
@@ -510,16 +518,25 @@ fn fallback_png(shape: &Shape, ink: &InkStyle, points: &[[i64; 2]], color: [u8; 
     let pw = ((w * scale).round() as u32).clamp(1, MAX_PNG as u32);
     let ph = ((h * scale).round() as u32).clamp(1, MAX_PNG as u32);
     let mut rgba = vec![0u8; (pw as usize) * (ph as usize) * 4];
-    let radius = (f64::from(ink.width_cm) * PX_PER_CM * scale / 2.0).clamp(0.5, 64.0);
+    let radius = (f64::from(ink.width_cm) * PX_PER_CM * scale / 2.0).clamp(0.5, 24.0);
+    // Bound the raster work a hostile stroke can ask for: the picture is a fallback, not art.
+    let mut budget = 100_000usize;
     let pts: Vec<[f64; 2]> = points.iter().map(|p| [p[0] as f64 / THOUSANDTHS_PER_PX * scale, p[1] as f64 / THOUSANDTHS_PER_PX * scale]).collect();
     if pts.len() == 1 {
         stamp(&mut rgba, pw, ph, pts[0][0], pts[0][1], radius, color);
     }
     for pair in pts.windows(2) {
+        if budget == 0 {
+            break;
+        }
         let (a, b) = (pair[0], pair[1]);
         let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
-        let steps = (len / 0.5).ceil().clamp(1.0, 8192.0) as usize;
+        let steps = (len / 0.5).ceil().clamp(1.0, 512.0) as usize;
         for i in 0..=steps {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
             let t = i as f64 / steps as f64;
             stamp(&mut rgba, pw, ph, a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, radius, color);
         }
