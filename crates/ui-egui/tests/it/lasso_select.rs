@@ -85,4 +85,17 @@ fn a_lasso_loop_selects_the_ink_inside_it_and_dragging_it_moves_it() {
     assert_eq!(after.text, before.text, "moving changes the anchor, not the stroke's own points");
     assert_eq!(h.state().session.doc().unwrap().undo.len(), steps + 1, "a drag is one undo step");
     assert_eq!(selected(&mut h), vec![inside], "the selection stays after the move");
+
+    // A second drag is a step of its own: one Undo reverts only it, never both drags.
+    let mid = ink(&h, inside);
+    let (from2, to2) = (screen(&h, 210.0, 175.0), screen(&h, 240.0, 185.0));
+    drag(&mut h, &[from2, to2]);
+    let end = ink(&h, inside);
+    assert!((end.anchor.dx - (mid.anchor.dx + 30.0)).abs() < 1.0, "dx {} -> {}", mid.anchor.dx, end.anchor.dx);
+    assert!((end.anchor.dy - (mid.anchor.dy + 10.0)).abs() < 1.0, "dy {} -> {}", mid.anchor.dy, end.anchor.dy);
+    assert_eq!(h.state().session.doc().unwrap().undo.len(), steps + 2, "each drag is one undo step");
+    h.state_mut().session.execute("edit.undo", json!({})).unwrap();
+    let back = ink(&h, inside);
+    assert!((back.anchor.dx - mid.anchor.dx).abs() < 0.01, "Undo reverts only the second drag: dx {} != {}", back.anchor.dx, mid.anchor.dx);
+    assert!((back.anchor.dy - mid.anchor.dy).abs() < 0.01, "Undo reverts only the second drag: dy {} != {}", back.anchor.dy, mid.anchor.dy);
 }

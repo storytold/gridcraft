@@ -238,6 +238,7 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                     .is_some_and(|(o, _)| o.kind == ObjKind::Shape && app.session.lasso_selected(input.workbook.active_sheet(), o.id));
                 app.grid.lasso.clear();
                 app.grid.ink_move = at.filter(|_| on_selection).map(sheet_point);
+                app.grid.ink_move_stepped = false;
                 if !on_selection {
                     // The press's own point is the loop's first corner.
                     if let Some(p) = at {
@@ -258,10 +259,12 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                     let now = sheet_point(p);
                     app.grid.ink_move = Some(now);
                     let (dx, dy) = (now[0] - last[0], now[1] - last[1]);
-                    if dx != 0.0 || dy != 0.0 {
-                        let _ = app.run("draw.moveSelection", json!({"dx": dx, "dy": dy}));
-                        // Every frame's move is part of the one drag: keep one undo step.
-                        coalesce_last_undo(app);
+                    if (dx != 0.0 || dy != 0.0) && app.run("draw.moveSelection", json!({"dx": dx, "dy": dy})).is_ok() {
+                        // The first move makes this drag's undo step; later frames merge into
+                        // it, never into the step of an earlier drag.
+                        if std::mem::replace(&mut app.grid.ink_move_stepped, true) {
+                            coalesce_last_undo(app);
+                        }
                     }
                 }
                 if resp.drag_stopped() {

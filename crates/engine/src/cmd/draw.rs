@@ -21,9 +21,26 @@ const MAX_MOVE: f64 = 100_000.0;
 /// the loop that picked them (sheet points).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LassoSelection {
+    /// `DocState::uid` of the workbook the ids belong to: ids are per workbook, so in another
+    /// workbook the same ids would name other ink.
+    pub doc: u64,
+    /// The sheet's runtime id ([`gridcraft_model::SheetUid::get`]); a sheet index points at
+    /// another sheet once sheets are inserted, deleted or moved.
+    pub sheet_uid: u64,
+    /// The sheet's index in `doc` when the selection was made (kept for readers).
     pub sheet: usize,
     pub ids: Vec<u32>,
     pub polygon: Vec<[f32; 2]>,
+}
+
+/// Where the selection's sheet is in the active document now, when the selection still belongs
+/// to it: `None` when the person switched workbook or the sheet is gone.
+fn lasso_sheet(s: &Session, sel: &LassoSelection) -> Option<usize> {
+    let d = s.active()?;
+    if d.uid != sel.doc {
+        return None;
+    }
+    (0..d.wb.sheets.len()).find(|i| d.wb.sheet(*i).is_some_and(|sh| sh.uid.get() == sel.sheet_uid))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -202,21 +219,25 @@ fn lasso_select(s: &mut Session, p: &Json) -> Result<Json> {
         return Ok(json!({"selected": [], "count": 0}));
     }
     let poly = lasso_polygon(p)?;
-    let si = s.doc()?.wb.active_sheet();
+    let (doc, sheet_uid, si) = {
+        let d = s.doc()?;
+        let si = d.wb.active_sheet();
+        (d.uid, d.wb.sheet(si).ok_or(EngineError::NoDocument)?.uid.get(), si)
+    };
     let ids = {
         let d = s.doc()?;
         let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
         sh.shapes.iter().filter(|x| is_ink(x) && stroke_inside(x, sh, &poly)).map(|x| x.id).collect::<Vec<_>>()
     };
     let polygon: Vec<[f32; 2]> = poly.iter().map(|q| [q[0] as f32, q[1] as f32]).collect();
-    s.lasso = (!ids.is_empty()).then(|| LassoSelection { sheet: si, ids: ids.clone(), polygon });
+    s.lasso = (!ids.is_empty()).then(|| LassoSelection { doc, sheet_uid, sheet: si, ids: ids.clone(), polygon });
     Ok(json!({"sheet": si, "count": ids.len(), "selected": ids}))
 }
 
 /// The lasso selection on the active sheet, for the UI to paint and for scripts to read.
 fn lasso_selection(s: &mut Session, _: &Json) -> Result<Json> {
     let si = s.doc()?.wb.active_sheet();
-    let sel = s.lasso.as_ref().filter(|l| l.sheet == si);
+    let sel = s.lasso.as_ref().filter(|l| lasso_sheet(s, l) == Some(si));
     let (ids, polygon) = match sel {
         Some(l) => (l.ids.clone(), json!(l.polygon)),
         None => (Vec::new(), json!([])),
@@ -224,9 +245,20 @@ fn lasso_selection(s: &mut Session, _: &Json) -> Result<Json> {
     Ok(json!({"sheet": si, "count": ids.len(), "selected": ids, "polygon": polygon}))
 }
 
-/// The ids picked with the lasso, or an error when nothing is selected.
-fn selection_required(s: &Session, cmd: &str) -> Result<LassoSelection> {
-    s.lasso.clone().ok_or_else(|| bad(cmd, "nothing is selected with the lasso"))
+/// The ids picked with the lasso, or an error when nothing is selected. A selection whose
+/// workbook or sheet is gone is dropped: its ids would name other ink.
+fn selection_required(s: &mut Session, cmd: &str) -> Result<LassoSelection> {
+    let mut sel = s.lasso.clone().ok_or_else(|| bad(cmd, "nothing is selected with the lasso"))?;
+    match lasso_sheet(s, &sel) {
+        Some(si) => {
+            sel.sheet = si;
+            Ok(sel)
+        }
+        None => {
+            s.lasso = None;
+            Err(bad(cmd, "nothing is selected with the lasso"))
+        }
+    }
 }
 
 /// Move the lasso-selected ink by (`dx`, `dy`) sheet points (one undo step). The anchor's offset

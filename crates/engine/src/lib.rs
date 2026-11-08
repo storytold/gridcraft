@@ -560,9 +560,11 @@ impl Session {
         self.docs.get(self.active)
     }
     /// Whether ink `id` on `sheet` is picked with the lasso (a view state; see
-    /// [`Session::lasso`]).
+    /// [`Session::lasso`]). The selection only marks ink of its own workbook and the same sheet:
+    /// ids are per workbook, and a sheet's index shifts when sheets are inserted, deleted or moved.
     pub fn lasso_selected(&self, sheet: usize, id: u32) -> bool {
-        self.lasso.as_ref().is_some_and(|l| l.sheet == sheet && l.ids.contains(&id))
+        let (Some(d), Some(l)) = (self.active(), self.lasso.as_ref()) else { return false };
+        d.uid == l.doc && d.wb.sheet(sheet).is_some_and(|sh| sh.uid.get() == l.sheet_uid) && l.ids.contains(&id)
     }
     /// Where the open workbook with this [`DocState::uid`] is in [`Session::documents`].
     pub fn document_index(&self, uid: u64) -> Option<usize> {

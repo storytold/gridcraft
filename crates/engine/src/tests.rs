@@ -3611,6 +3611,63 @@ fn selection_commands_without_a_selection_are_errors() {
 }
 
 #[test]
+fn a_lasso_selection_belongs_to_its_workbook_and_sheet() {
+    let mut s = s();
+    s.execute("draw.stroke", json!({"points": [[120.0, 120.0], [150.0, 125.0], [180.0, 120.0]]})).unwrap();
+    let book1 = s.doc().unwrap().uid;
+    let inside_id = s.doc().unwrap().wb.active().unwrap().shapes[0].id;
+    let loop_pts = json!([[100.0, 100.0], [210.0, 100.0], [210.0, 210.0], [100.0, 210.0]]);
+    assert_eq!(s.execute("draw.lassoSelect", json!({"points": loop_pts.clone()})).unwrap()["count"], 1);
+    assert!(s.lasso_selected(0, inside_id));
+
+    // Object ids are per workbook: in another workbook the same ids name other ink, so the
+    // selection must not mark, move, recolour or delete it.
+    s.execute("file.new", json!({})).unwrap();
+    s.execute("draw.stroke", json!({"points": [[120.0, 120.0], [150.0, 125.0], [180.0, 120.0]]})).unwrap();
+    let other_id = s.doc().unwrap().wb.active().unwrap().shapes[0].id;
+    assert!(!s.lasso_selected(0, other_id), "a selection from another workbook marks no ink");
+    assert_eq!(s.execute("draw.lassoSelection", json!({})).unwrap()["count"], 0);
+    let before = s.doc().unwrap().wb.active().unwrap().shapes.clone();
+    for (id, params) in [
+        ("draw.moveSelection", json!({"dx": 10.0, "dy": 10.0})),
+        ("draw.recolorSelection", json!({"color": "#00FF00"})),
+        ("draw.deleteSelection", json!({})),
+    ] {
+        let e = s.execute(id, params).unwrap_err();
+        assert!(format!("{e}").contains("nothing is selected with the lasso"), "{id}: {e}");
+    }
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes, before, "the other workbook's ink is untouched");
+
+    // Back in the first workbook the stale selection was dropped instead of kept (the move above
+    // found it no longer matched); selecting again works.
+    s.execute("window.activate", json!({"doc": book1})).unwrap();
+    assert_eq!(s.execute("draw.lassoSelection", json!({})).unwrap()["count"], 0);
+    assert_eq!(s.execute("draw.lassoSelect", json!({"points": loop_pts.clone()})).unwrap()["selected"], json!([inside_id]));
+
+    // A sheet index points at another sheet once sheets are inserted or moved: the selection
+    // follows its sheet's identity.
+    s.execute("home.insertSheet", json!({"name": "Aside"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active_sheet(), 1);
+    assert_eq!(s.execute("draw.lassoSelection", json!({})).unwrap()["count"], 0, "another sheet shows no selection");
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("sheet.move", json!({"sheet": 0, "to": 2})).unwrap();
+    let ink_sheet = s.doc().unwrap().wb.sheets.iter().position(|sh| sh.name == "Sheet1").unwrap();
+    assert_eq!(ink_sheet, 1, "Sheet1 moved to the end");
+    s.execute("sheet.activate", json!({"sheet": ink_sheet})).unwrap();
+    assert!(s.lasso_selected(ink_sheet, inside_id), "the selection follows its sheet");
+    assert_eq!(s.execute("draw.lassoSelection", json!({})).unwrap()["count"], 1);
+    let dx = s.doc().unwrap().wb.active().unwrap().shapes[0].anchor.dx;
+    s.execute("draw.moveSelection", json!({"dx": 30.0, "dy": 0.0})).unwrap();
+    let moved = s.doc().unwrap().wb.active().unwrap().shapes[0].anchor.dx;
+    assert!((moved - (dx + 30.0)).abs() < 0.001, "the move lands on the selection's own sheet");
+    // Deleting that sheet drops the selection: nothing is left to mark or change.
+    s.execute("home.deleteSheet", json!({"sheet": ink_sheet})).unwrap();
+    assert_eq!(s.execute("draw.lassoSelection", json!({})).unwrap()["count"], 0);
+    assert!(!s.lasso_selected(0, inside_id));
+    assert!(s.execute("draw.moveSelection", json!({"dx": 1.0, "dy": 1.0})).is_err());
+}
+
+#[test]
 fn xlsb_import_keeps_cached_values_and_reports_limits() {
     let bytes = xlsb_fixture();
     assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Xlsb);
