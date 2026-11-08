@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 struct Scratch(PathBuf);
 
 impl Scratch {
+    /// An empty folder for `name`, apart from the folders of parallel tests.
     fn new(name: &str) -> Self {
         // The process id separates parallel test binaries; the counter separates parallel
         // tests in this one. A failed run leaves nothing behind: `Drop` cleans up too.
@@ -19,10 +20,12 @@ impl Scratch {
         Self(dir)
     }
 
+    /// The folder itself.
     fn path(&self) -> &Path {
         &self.0
     }
 
+    /// `file` inside the folder.
     fn join(&self, file: &str) -> PathBuf {
         self.0.join(file)
     }
@@ -34,16 +37,19 @@ impl Drop for Scratch {
     }
 }
 
+/// `path` as the commands' JSON takes it.
 fn p(path: &std::path::Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// A workbook with one blank sheet, inside the shared strict harness.
 fn app() -> gridcraft_ui_egui::SheetApp {
     let mut session = Session::new();
     session.new_workbook();
     crate::common::app(session)
 }
 
+/// A new workbook that is saved joins Recent, newest first and once, including Save As.
 #[test]
 fn saving_a_new_workbook_records_it_in_recent() {
     let dir = Scratch::new("save");
@@ -66,6 +72,7 @@ fn saving_a_new_workbook_records_it_in_recent() {
     assert_eq!(app.ui.recent, vec![p(&first), p(&second)], "saving as an earlier file moves it to the front");
 }
 
+/// A PDF print or a CSV copy is not the workbook's own file, so neither joins Recent.
 #[test]
 fn a_copy_that_is_not_the_workbook_file_is_not_recent() {
     let dir = Scratch::new("copy");
@@ -83,6 +90,7 @@ fn a_copy_that_is_not_the_workbook_file_is_not_recent() {
     assert_eq!(app.ui.recent, vec![p(&own)], "the workbook's own file is recent");
 }
 
+/// A Save As or Save that fails leaves Recent as it was.
 #[test]
 fn a_failed_save_does_not_touch_recent() {
     let dir = Scratch::new("failed");
@@ -107,6 +115,7 @@ fn a_failed_save_does_not_touch_recent() {
     assert_eq!(app.ui.recent, vec![p(&good)], "a failed Save leaves Recent alone");
 }
 
+/// The twenty-entry cap holds on the save path too: the newest stay, the oldest go.
 #[test]
 fn saving_more_than_twenty_workbooks_keeps_the_twenty_newest() {
     let dir = Scratch::new("cap");
@@ -123,6 +132,7 @@ fn saving_more_than_twenty_workbooks_keeps_the_twenty_newest() {
     assert_eq!(app.ui.recent, expected, "the twenty newest, oldest dropped");
 }
 
+/// AutoSave saves through the session, so it does not move a workbook to the front of Recent.
 #[test]
 fn a_save_through_the_session_does_not_reorder_recent() {
     let dir = Scratch::new("autosave");
