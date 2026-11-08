@@ -1,6 +1,6 @@
 //! An in-process engine session that answers the engine-level control-channel methods itself.
 
-use gridcraft_engine::Session;
+use gridcraft_engine::{Session, Target};
 use serde_json::{Value, json};
 
 use crate::backend::Backend;
@@ -33,9 +33,9 @@ impl Headless {
         Self { session }
     }
 
-    fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
+    fn execute(&mut self, target: Target, id: &str, params: Value) -> Result<Value, String> {
         // Programmatic calls never open dialogs; anything a command queued for a UI is dropped.
-        self.session.execute_headless(id, params).map_err(|e| e.to_string())
+        self.session.execute_headless_in(target, id, params).map_err(|e| e.to_string())
     }
 
     fn commands(&self, params: &Value) -> Value {
@@ -68,14 +68,28 @@ impl Backend for Headless {
                 if !(p.is_object() || p.is_null()) {
                     return Err(format!("engine.execute: `params` of `{id}` must be an object"));
                 }
-                self.execute(&id, p)
+                let target = Target::from_json(&params).map_err(|e| e.to_string())?;
+                self.execute(target, &id, p)
             }
             "engine.commands" => Ok(self.commands(&params)),
             "engine.journal" => Ok(Value::Array(self.session.journal.iter().map(|(id, p)| json!({"command": id, "params": p})).collect())),
             m if m.starts_with("ui.") || m.starts_with("app.screenshot") => Err(format!("{m}: {NO_UI}")),
             // Read-only engine methods (`document.inspect`, `sheet.read`, `cell.get`, …) are
             // commands with the same id.
-            m if gridcraft_engine::find_command(m).is_some() => self.execute(m, params),
+            // Their params may name a `window` or `doc` to act in, except for the window commands,
+            // whose own params those are.
+            m if gridcraft_engine::find_command(m).is_some() => {
+                if gridcraft_engine::windows::is_window_command(m) {
+                    return self.execute(Target::Active, m, params);
+                }
+                let target = Target::from_json(&params).map_err(|e| e.to_string())?;
+                let mut params = params;
+                if let Some(o) = params.as_object_mut() {
+                    o.remove("window");
+                    o.remove("doc");
+                }
+                self.execute(target, m, params)
+            }
             other => Err(format!("unknown method `{other}`")),
         }
     }

@@ -1,11 +1,15 @@
 //! Desktop spooler adapter. Discovery and submission never run on the UI thread.
 use gridcraft_ui_egui::printing::{Discover, Duplex, Printer, Settings, Submit};
 
+/// Returns a printer-discovery closure that enumerates `craft_print::printers()` on a named background thread and sends the mapped list through a channel.
 pub fn discover() -> Discover {
     Box::new(|| {
         let (sender, receiver) = std::sync::mpsc::channel();
         let _ = std::thread::Builder::new().name("print-discovery".into()).spawn(move || {
-            let printers = craft_print::printers().into_iter().map(|printer| Printer { name: printer.name, default: printer.default }).collect();
+            let printers = craft_print::printers()
+                .into_iter()
+                .map(|printer| Printer { name: printer.name, label: printer.description, default: printer.default })
+                .collect();
             let _ = sender.send(printers);
         });
         receiver
@@ -17,7 +21,7 @@ pub fn discover() -> Discover {
 static JOBS: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>> = std::sync::Mutex::new(Vec::new());
 
 pub fn finish_pending_jobs() {
-    let workers = std::mem::take(&mut *JOBS.lock().unwrap_or_else(|poison| poison.into_inner()));
+    let workers = std::mem::take(&mut *JOBS.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     for worker in workers {
         if worker.join().is_err() {
             log::error!("the print worker stopped unexpectedly during shutdown");
@@ -45,7 +49,7 @@ pub fn submit() -> Submit {
             let _ = sender.send(craft_print::submit(&bytes, &job).map_err(|error| error.to_string()));
         });
         if let Ok(worker) = worker {
-            let mut jobs = JOBS.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut jobs = JOBS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             jobs.retain(|job| !job.is_finished());
             jobs.push(worker);
         }

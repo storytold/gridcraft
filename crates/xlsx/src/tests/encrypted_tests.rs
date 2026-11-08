@@ -56,7 +56,8 @@ fn schemes_no_password_opens_are_named_before_asking_for_one() {
     let file = |info: &[u8]| compound_file(&[("EncryptionInfo", info), ("EncryptedPackage", &[0; 8])]);
     assert_eq!(check_encryption(&file(&[3, 0, 2, 0, 4, 0, 0, 0])), unsupported("RC4"));
     assert_eq!(check_encryption(&file(&[4, 0, 3, 0, 0, 0, 0, 0])), unsupported("Extensible"));
-    let cert = agile_info("pw", 1000).replace("keyEncryptor/password", "keyEncryptor/certificate");
+    let cert =
+        agile_info("pw", 1000, "AAAAAAAAAAAAAAAAAAAAAA==", "AAAAAAAAAAAAAAAAAAAAAA==").replace("keyEncryptor/password", "keyEncryptor/certificate");
     assert_eq!(check_encryption(&file(&with_agile_header(&cert))), unsupported("certificate"));
     assert!(matches!(check_encryption(&file(&[4, 0])), Err(DecryptError::Malformed(_))));
     // Rights management (IRM) keeps an EncryptedPackage but no EncryptionInfo.
