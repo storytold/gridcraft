@@ -293,6 +293,7 @@ pub struct Validation {
 }
 
 impl Default for Validation {
+    /// A blank validation with no rule and no message shown.
     fn default() -> Self {
         Validation {
             ranges: vec![],
@@ -557,6 +558,7 @@ pub struct ChartDataTable {
 }
 
 impl Default for ChartDataTable {
+    /// Excel's default data table: keys shown, every border on.
     fn default() -> Self {
         Self { show_keys: true, horizontal_border: true, vertical_border: true, outline: true }
     }
@@ -707,6 +709,7 @@ pub struct InkStyle {
 }
 
 impl Default for InkStyle {
+    /// An untooled, untextured swatch: the shape's own colour and no pressure or key.
     fn default() -> Self {
         InkStyle {
             tool: InkTool::default(),
@@ -1005,6 +1008,7 @@ pub struct FormControl {
 }
 
 impl Default for FormControl {
+    /// A control with no action that is printed and left unlocked.
     fn default() -> Self {
         FormControl {
             id: 0,
@@ -1296,6 +1300,7 @@ mod tests {
         assert_eq!(chart.hole_size, 75, "new charts keep Excel's 75% default");
     }
 
+    /// An ink style round trips through JSON, and older files without one read as no style.
     #[test]
     fn ink_style_round_trips_through_json_and_older_shapes_default_to_none() {
         let key = "{11111111-2222-4333-8444-555555555555}";
@@ -1340,6 +1345,7 @@ mod tests {
         assert!(bare.width_cm > 0.0);
     }
 
+    /// A valid creation id is kept as it is, and a minted one is unique.
     #[test]
     fn ink_creation_id_keeps_a_valid_key_and_mints_unique_ones() {
         let valid = "{11111111-2222-4333-8444-555555555555}";
@@ -1363,6 +1369,7 @@ mod tests {
         assert_eq!(ink_guid(" {abcdef01-2345-6789-abcd-ef0123456789} ").as_deref(), Some("{abcdef01-2345-6789-abcd-ef0123456789}"));
     }
 
+    /// A new key is minted past every key the workbook already holds.
     #[test]
     fn a_new_key_is_minted_past_the_keys_the_workbook_already_holds() {
         // A reopened workbook holds keys minted by an earlier process, whose counter started at

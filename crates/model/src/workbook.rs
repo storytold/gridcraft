@@ -625,6 +625,7 @@ mod tests {
         Ok(())
     }
 
+    /// Importing bytes the workbook already holds reuses that entry instead of adding a second.
     #[test]
     fn ink_textures_reuse_an_entry_with_the_same_bytes() {
         use crate::ink::InkTexture;

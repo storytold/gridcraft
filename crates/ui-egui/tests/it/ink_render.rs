@@ -22,6 +22,7 @@ fn painted_ink(h: &egui_kittest::Harness<'static, SheetApp>, width: f32) -> Opti
     })
 }
 
+/// A highlighter's translucency belongs to the brush and does not change with the zoom.
 #[test]
 fn ink_translucency_follows_the_brush_not_the_zoom() {
     // A highlighter is translucent and a pen opaque, whatever the zoom: the committed stroke

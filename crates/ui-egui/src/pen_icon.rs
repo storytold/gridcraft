@@ -104,6 +104,7 @@ pub fn effect_mid(effect: &str) -> Color32 {
     bands.get(bands.len() / 2).copied().unwrap_or_else(|| effect_base(effect))
 }
 
+/// The point `t` of the way from `a` to `b`.
 fn lerp(a: Pos2, b: Pos2, t: f32) -> Pos2 {
     pos2(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
 }

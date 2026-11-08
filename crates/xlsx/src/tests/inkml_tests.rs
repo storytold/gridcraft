@@ -166,6 +166,7 @@ fn close(a: f32, b: f32) {
     assert!((a - b).abs() < 0.001, "{a} != {b}");
 }
 
+/// An Excel InkML content part reads as an editable ink stroke carrying its brush.
 #[test]
 fn excel_content_part_is_read_as_editable_ink_with_its_brush() {
     let (wb, _) = read(&package("!0 !0,'1000 '1000,\"0 \"-2000,0 0", false, PEN_PROPS, true, true, true));
@@ -188,6 +189,7 @@ fn excel_content_part_is_read_as_editable_ink_with_its_brush() {
     close(s.anchor.height, 40.0);
 }
 
+/// Every numeric prefix Excel writes (`!` absolute, `'` difference, `"` second difference) and the `*` wildcard decode to the points they mean.
 #[test]
 fn all_trace_prefixes_and_the_wildcard_decode() {
     // X: 0, 1000, 2000, 3000 (thousandths of a cm) and Y: 0, 1000, 0, -1000.
@@ -201,6 +203,7 @@ fn all_trace_prefixes_and_the_wildcard_decode() {
     }
 }
 
+/// Pressure and the brush's effects survive a read and a GridCraft save.
 #[test]
 fn pressure_and_effects_survive_a_read_and_a_gridcraft_save() {
     let trace = "!0 !0 !1000,'1000 '1000 '1000,\"0 \"-2000 0";
@@ -226,6 +229,7 @@ fn pressure_and_effects_survive_a_read_and_a_gridcraft_save() {
     assert!(back.sheets[0].images.is_empty());
 }
 
+/// Every brush and effect GridCraft offers round trips through the stored form.
 #[test]
 fn every_tool_and_effect_round_trips_through_gridcraft() {
     let tools = [InkTool::Pen, InkTool::Pencil, InkTool::Highlighter, InkTool::FountainPen, InkTool::BrushPen];
@@ -288,6 +292,7 @@ fn every_tool_and_effect_round_trips_through_gridcraft() {
     assert!(back.sheets[0].images.is_empty());
 }
 
+/// Saving a workbook read from Excel gives the same bytes the second time.
 #[test]
 fn a_second_save_is_byte_stable_for_ink_strokes() {
     let (wb, _) = read(&package("!0 !0,'1000 '1000,\"0 \"-2000", false, PEN_PROPS, true, true, true));
@@ -314,6 +319,7 @@ fn a_second_save_is_byte_stable_for_ink_strokes() {
     assert_eq!(first, second);
 }
 
+/// Oversized and malformed trace values are refused without a panic or an unbounded allocation.
 #[test]
 fn malformed_or_oversized_ink_is_refused_without_a_panic() {
     let huge = format!("!0 !0,{} 0", "9".repeat(30));
@@ -349,6 +355,7 @@ fn malformed_or_oversized_ink_is_refused_without_a_panic() {
     assert_eq!(ink.tool, InkTool::Pen);
 }
 
+/// A missing or undeclared ink part falls back to the drawing's picture.
 #[test]
 fn a_missing_or_undeclared_ink_part_falls_back_to_the_picture() {
     for (name, ink, declared) in [("part missing", false, true), ("no content type", true, false)] {
@@ -359,6 +366,7 @@ fn a_missing_or_undeclared_ink_part_falls_back_to_the_picture() {
     }
 }
 
+/// The `*` wildcard leaves the channel in difference order, so a later unprefixed value still applies to the next step.
 #[test]
 fn a_wildcard_keeps_the_difference_order_for_a_later_unprefixed_value() {
     // `*` repeats the value and leaves the channel in first-difference mode, so the next value
@@ -367,6 +375,7 @@ fn a_wildcard_keeps_the_difference_order_for_a_later_unprefixed_value() {
     assert_eq!(thousandths(ink_shape(&wb)), vec![[0, 0], [5, 3], [5, 4], [7, 5]]);
 }
 
+/// The `*` wildcard repeats a value and zeroes its first difference while second differences keep adding.
 #[test]
 fn a_wildcard_keeps_the_second_difference_order_too() {
     // Second differences 1 and 1 put X at 11 and Y at 7; `*` repeats X and zeroes its first
@@ -375,6 +384,7 @@ fn a_wildcard_keeps_the_second_difference_order_too() {
     assert_eq!(thousandths(ink_shape(&wb)), vec![[0, 0], [5, 3], [11, 7], [11, 13], [12, 20]]);
 }
 
+/// A damaged ink entry is charged to its own allowance, so the fallback picture still opens.
 #[test]
 fn a_damaged_ink_part_costs_only_its_own_allowance() {
     // The ink entry fails partway (a bad CRC) inside an intact archive. The read is optional, so
@@ -385,6 +395,7 @@ fn a_damaged_ink_part_costs_only_its_own_allowance() {
     assert!(report.warnings.iter().any(|w| w.contains("ink part")), "{:?}", report.warnings);
 }
 
+/// A legacy custGeom ink shape without an ink style still round trips.
 #[test]
 fn legacy_custgeom_ink_still_round_trips_without_an_ink_style() {
     let sheet = Sheet {
@@ -410,6 +421,7 @@ fn legacy_custgeom_ink_still_round_trips_without_an_ink_style() {
     assert_eq!(s.text, "0,0;40,20;90,10");
 }
 
+/// A fountain or brush pen with no pressure keeps its tool and writes an empty pressure rather than a fabricated one.
 #[test]
 fn a_fountain_or_brush_pen_without_pressure_keeps_its_tool_and_an_empty_pressure() {
     for tool in [InkTool::FountainPen, InkTool::BrushPen] {
@@ -436,6 +448,7 @@ fn a_fountain_or_brush_pen_without_pressure_keeps_its_tool_and_an_empty_pressure
     }
 }
 
+/// The fallback picture is a transparent PNG tinted with the stroke's colour.
 #[test]
 fn the_fallback_picture_is_a_transparent_png_in_the_stroke_colour() {
     let sheet = Sheet {
@@ -490,6 +503,7 @@ fn thousandths(shape: &Shape) -> Vec<[i64; 2]> {
         .collect()
 }
 
+/// The compact values Excel 365 writes, with no whitespace before prefixes or signs, decode to the same points.
 #[test]
 fn excel_compact_values_without_whitespace_decode() {
     // The two strings Excel 365 itself wrote (observed in a file saved by Excel, gc_ink_rt.xlsx):
@@ -502,6 +516,7 @@ fn excel_compact_values_without_whitespace_decode() {
     }
 }
 
+/// Compact three-channel values with pressure decode to points and pressures.
 #[test]
 fn excel_compact_three_channel_values_with_pressure_decode() {
     let trace = "2748 1756 24575,'0'0'0,\"29\"0\"0,53 0 0,30 4 0";
@@ -511,12 +526,14 @@ fn excel_compact_three_channel_values_with_pressure_decode() {
     assert_eq!(shape.ink.as_ref().unwrap().pressure, vec![24575; 5]);
 }
 
+/// The `*` wildcard repeats a channel's value in the compact form too.
 #[test]
 fn the_wildcard_repeats_a_channel_in_compact_form() {
     let (wb, _) = read(&package("!10 !20,**", false, PEN_PROPS, true, true, true));
     assert_eq!(thousandths(ink_shape(&wb)), vec![[10, 20], [10, 20]]);
 }
 
+/// A compact package reads as editable ink and does not fall back to its picture.
 #[test]
 fn a_compact_package_round_trips_as_editable_ink_not_the_fallback() {
     let (wb, _) = read(&package("0 0,'2117'529,\"-1\"-1058", false, PEN_PROPS, true, true, true));
@@ -528,6 +545,7 @@ fn a_compact_package_round_trips_as_editable_ink_not_the_fallback() {
     assert_eq!(thousandths(ink_shape(&back)), vec![[0, 0], [2117, 529], [4233, 0]]);
 }
 
+/// Excel's brush properties alone infer pen, pencil and highlighter, with no channel saying so.
 #[test]
 fn excel_brush_properties_infer_pen_pencil_and_highlighter_without_a_channel() {
     // The six brush-property sets Excel 365 wrote in research_brushes.xlsx (observed file): a
@@ -561,6 +579,7 @@ fn excel_brush_properties_infer_pen_pencil_and_highlighter_without_a_channel() {
     }
 }
 
+/// A part holding two traces reads as two editable strokes, not one.
 #[test]
 fn a_part_with_two_traces_reads_as_two_strokes() {
     // An InkML trace is a stroke: a part that holds two of them is two editable strokes, not one
@@ -584,6 +603,7 @@ fn a_part_with_two_traces_reads_as_two_strokes() {
     assert_eq!(keys.len(), 2, "{keys:?}");
 }
 
+/// Every trace under nested trace groups is a stroke, in the order the part writes them.
 #[test]
 fn nested_trace_groups_read_every_stroke_in_document_order() {
     // A group names a brush and may hold other groups: every trace below it, at any depth, is a
@@ -609,6 +629,7 @@ fn nested_trace_groups_read_every_stroke_in_document_order() {
     assert_eq!(back.sheets[0].shapes.len(), 4, "a save writes one part per stroke");
 }
 
+/// The bytes of one part of a written package.
 fn zip_part(bytes: &[u8], name: &str) -> Vec<u8> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
     let mut file = archive.by_name(name).unwrap();
@@ -617,6 +638,7 @@ fn zip_part(bytes: &[u8], name: &str) -> Vec<u8> {
     out
 }
 
+/// A malformed stored creation id is replaced with a valid one.
 #[test]
 fn a_malformed_creation_id_is_replaced_with_a_valid_one() {
     let extra = Extra { creation_id: Some("{x}"), ..Extra::default() };
@@ -626,6 +648,7 @@ fn a_malformed_creation_id_is_replaced_with_a_valid_one() {
     assert_ne!(key, "{x}");
 }
 
+/// A valid creation id is lowercased rather than duplicated.
 #[test]
 fn a_valid_creation_id_is_normalised_to_lowercase_not_duplicated() {
     let upper = "{ABCDEF01-2345-6789-ABCD-EF0123456789}";
@@ -637,6 +660,7 @@ fn a_valid_creation_id_is_normalised_to_lowercase_not_duplicated() {
     }
 }
 
+/// A key that reached the model from JSON or a hand edit is replaced before it becomes an invalid creation id.
 #[test]
 fn an_invalid_stored_key_is_replaced_before_it_is_written() {
     // A key can reach the model from JSON or a hand edit; it must never become an invalid
@@ -671,6 +695,7 @@ fn an_invalid_stored_key_is_replaced_before_it_is_written() {
     assert_eq!(back.sheets[0].shapes[0].ink.as_ref().unwrap().key.as_deref(), Some(id));
 }
 
+/// The content-types part is read once for the whole workbook, not once per drawing part.
 #[test]
 fn the_content_types_part_is_read_once_for_the_whole_workbook() {
     // `[Content_Types].xml` is a whole-part decompression and parse, and every read spends the
@@ -697,6 +722,7 @@ fn the_content_types_part_is_read_once_for_the_whole_workbook() {
     assert_eq!(report.content_types_reads, 1, "read once per package, not once per drawing");
 }
 
+/// A key minted for a stroke no other stroke in the workbook holds, across parts.
 #[test]
 fn minted_ink_keys_never_repeat_a_workbook_id() {
     // A second trace in a part needs a new creation id. Minting against a set that lives for the

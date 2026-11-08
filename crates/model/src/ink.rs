@@ -111,6 +111,7 @@ impl InkTexture {
 mod tests {
     use super::*;
 
+    /// A few bytes that carry a PNG's magic; enough for the store, which never decodes.
     fn png_bytes() -> Vec<u8> {
         // The magic and a tail are enough for the store: decoding is the engine's job.
         let mut v = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -118,6 +119,7 @@ mod tests {
         v
     }
 
+    /// An id is derived from the bytes and is always the fixed length the store expects.
     #[test]
     fn id_is_content_derived_and_fixed_length() {
         let a = InkTexture::id_for(b"abc");
@@ -129,6 +131,7 @@ mod tests {
         assert!(!InkTexture::is_valid_id("abc"));
     }
 
+    /// The same bytes give the same id, so a second import reuses the entry.
     #[test]
     fn new_reuses_the_id_of_the_same_bytes() {
         let data = Arc::new(png_bytes());
@@ -138,6 +141,7 @@ mod tests {
         assert_eq!(b.mime, "image/png");
     }
 
+    /// The byte, side and pixel caps are enforced when a texture is made.
     #[test]
     fn caps_are_enforced() {
         let data = Arc::new(png_bytes());
@@ -148,6 +152,7 @@ mod tests {
         assert!(InkTexture::new("a.png", "image/png", Arc::new(vec![]), 4, 2).is_none());
     }
 
+    /// A read-back texture with an id of the wrong shape is refused.
     #[test]
     fn from_parts_refuses_a_forged_id() {
         let data = Arc::new(png_bytes());
@@ -157,6 +162,7 @@ mod tests {
         assert!(InkTexture::from_parts(good, "a.png", "image/png", data, 4, 2).is_some());
     }
 
+    /// Names are cut to the cap and never stored blank.
     #[test]
     fn names_are_bounded_and_never_blank() {
         let data = Arc::new(png_bytes());

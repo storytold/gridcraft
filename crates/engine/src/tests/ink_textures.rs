@@ -6,6 +6,7 @@ use serde_json::json;
 
 use super::s;
 
+/// A solid PNG of `w`×`h`, enough for the store to accept and the engine to bound.
 fn png(w: u32, h: u32) -> Vec<u8> {
     let image = image::RgbaImage::from_pixel(w, h, image::Rgba([30, 120, 200, 255]));
     let mut bytes = Cursor::new(Vec::new());
@@ -13,10 +14,12 @@ fn png(w: u32, h: u32) -> Vec<u8> {
     bytes.into_inner()
 }
 
+/// The base64 a `draw.textureImport` call takes.
 fn b64(bytes: &[u8]) -> String {
     crate::io::base64_encode(bytes)
 }
 
+/// Importing the same bytes twice lists one texture and reports the second import as not added.
 #[test]
 fn an_imported_texture_is_listed_and_reused() {
     let mut s = s();
@@ -37,6 +40,7 @@ fn an_imported_texture_is_listed_and_reused() {
     assert_eq!(list["textures"][0]["bytes"].as_u64().unwrap() as usize, bytes.len());
 }
 
+/// Removing a texture drops it from the workbook and clears it from the pen that painted with it.
 #[test]
 fn removing_a_texture_forgets_it_and_clears_the_pen() {
     let mut s = s();
@@ -53,6 +57,7 @@ fn removing_a_texture_forgets_it_and_clears_the_pen() {
     assert!(s.execute("draw.pen", json!({"texture": id})).is_err());
 }
 
+/// An import and the pen change it makes undo as a single step.
 #[test]
 fn importing_is_one_undo_step() {
     let mut s = s();
@@ -65,6 +70,7 @@ fn importing_is_one_undo_step() {
     assert_eq!(s.doc().unwrap().wb.ink_textures.len(), 1);
 }
 
+/// Invalid base64, non-image bytes and oversized images are refused with a message and leave the store untouched.
 #[test]
 fn hostile_imports_are_refused() {
     let mut s = s();
@@ -81,6 +87,7 @@ fn hostile_imports_are_refused() {
     assert_eq!(s.doc().unwrap().wb.ink_textures.len(), 0);
 }
 
+/// The pen's repeat size is clamped to its documented range rather than trusted.
 #[test]
 fn the_pen_scale_is_kept_within_its_limits() {
     let mut s = s();
@@ -91,6 +98,7 @@ fn the_pen_scale_is_kept_within_its_limits() {
     assert_eq!(s.execute("draw.pen", json!({"texture": ""})).unwrap()["texture"], "", "an empty id clears the texture");
 }
 
+/// Setting only a pen's texture or repeat size still counts as selecting that pen.
 #[test]
 fn choosing_a_texture_keeps_the_pen_in_hand() {
     // A command that only sets the pen's texture or its repeat size is still selecting the pen:
@@ -103,6 +111,7 @@ fn choosing_a_texture_keeps_the_pen_in_hand() {
     assert_eq!(s.execute("draw.pen", json!({"on": false})).unwrap()["tool"], "", "an explicit off still puts it down");
 }
 
+/// A stroke whose texture was undone still commits, painting plainly instead of failing on the stale id.
 #[test]
 fn a_texture_undone_from_the_workbook_paints_plainly() {
     // The pen keeps its texture id in session state, which undo does not restore. A stroke must
@@ -121,6 +130,7 @@ fn a_texture_undone_from_the_workbook_paints_plainly() {
     assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [40, 40]], "texture": id})).is_err());
 }
 
+/// Imported textures and their ids survive a save to and read from the JSON format.
 #[test]
 fn textures_travel_in_the_workbook_json() {
     let mut s = s();
@@ -134,6 +144,7 @@ fn textures_travel_in_the_workbook_json() {
     assert_eq!(list["textures"][0]["name"], "json.png");
 }
 
+/// A texture imports from a file path as well as from base64 bytes.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn a_texture_imports_from_a_path() {
@@ -148,6 +159,7 @@ fn a_texture_imports_from_a_path() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Every brush's across width — pen width, highlighter height, pencil taper — is what its textured stroke and its preview both measure.
 #[test]
 fn the_across_width_is_what_each_brush_paints() {
     use crate::cmd::draw::{across_cm, ink_across, ink_height, ink_size_cm, ink_width};
@@ -177,6 +189,7 @@ fn the_across_width_is_what_each_brush_paints() {
     assert_eq!(ink_across(&legacy), ink_width(&legacy));
 }
 
+/// Changing or deleting a pen that differs only in repeat size leaves the scale the person draws at untouched.
 #[test]
 fn another_pens_scale_or_deletion_leaves_the_pen_in_hand_alone() {
     // Two pens on the same texture at different repeat sizes are not the same pen: changing or
@@ -196,6 +209,7 @@ fn another_pens_scale_or_deletion_leaves_the_pen_in_hand_alone() {
     assert_eq!(list["scale"], 9.0);
 }
 
+/// A path import larger than the texture cap is refused before the bytes are decoded.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn a_file_read_is_bounded_before_a_texture_import_parses_it() {
@@ -209,6 +223,7 @@ fn a_file_read_is_bounded_before_a_texture_import_parses_it() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Deleting an untextured pen that is not in hand does not reset the pen being drawn with.
 #[test]
 fn deleting_an_untextured_pen_with_another_scale_leaves_the_pen_in_hand_alone() {
     // Two untextured pens that differ only in their repeat size are still different pens:

@@ -9,10 +9,12 @@ use gridcraft_model::{Anchor, AnchorMode, Color, InkStyle, InkTool, Shape, Shape
 use crate::ink_sheet::{INK_SHEET_NAME, InkExtras, InkSheetData, build, is_ink_sheet, parse, unique_name};
 use crate::{read_xlsx, write_xlsx};
 
+/// A texture holding `bytes`, whose id those bytes give it.
 fn texture(name: &str, bytes: Vec<u8>, w: u32, h: u32) -> InkTexture {
     InkTexture::new(name, "image/png", Arc::new(bytes), w, h).expect("a texture within the caps")
 }
 
+/// Sheet data with two textures and one stroke's extras.
 fn sample() -> InkSheetData {
     InkSheetData {
         textures: vec![texture("a.png", vec![1, 2, 3, 4, 5], 2, 1), texture("b.png", vec![9; 1000], 40, 25)],
@@ -30,6 +32,7 @@ fn sample() -> InkSheetData {
     }
 }
 
+/// The hidden sheet is built very hidden and reads back the same textures and stroke extras.
 #[test]
 fn round_trips_textures_and_extras() {
     let data = sample();
@@ -40,6 +43,7 @@ fn round_trips_textures_and_extras() {
     assert_eq!(back, data);
 }
 
+/// A texture too large for one cell's text limit spans several chunks and still reads back.
 #[test]
 fn a_large_texture_spans_cells() {
     // 100 KiB of base64 is four chunks under the 30,000-character cell limit.
@@ -54,6 +58,7 @@ fn a_large_texture_spans_cells() {
     assert_eq!(back.textures[0].data.as_ref(), &bytes);
 }
 
+/// A sheet without our marker is not read, while a built one is.
 #[test]
 fn a_sheet_without_the_marker_is_not_ours() {
     let mut sheet = Sheet::new(INK_SHEET_NAME);
@@ -69,6 +74,7 @@ fn a_sheet_without_the_marker_is_not_ours() {
     assert!(!is_ink_sheet(&renamed));
 }
 
+/// A sheet written by a newer layout version is recognised as ours but not parsed.
 #[test]
 fn an_unknown_version_is_not_read() {
     let mut sheet = build(INK_SHEET_NAME, &sample());
@@ -77,6 +83,7 @@ fn an_unknown_version_is_not_read() {
     assert!(parse(&sheet).is_none(), "a newer layout must not be half-read");
 }
 
+/// Rows with malformed or missing fields are skipped without failing the read.
 #[test]
 fn hostile_rows_are_skipped_not_fatal() {
     let mut sheet = build(INK_SHEET_NAME, &sample());
@@ -106,6 +113,7 @@ fn hostile_rows_are_skipped_not_fatal() {
     assert_eq!(back.ink.len(), 2, "the malformed extra is skipped");
 }
 
+/// Out-of-range extras are clamped on the way in and blank ones are dropped.
 #[test]
 fn extras_are_clamped_and_blank_ones_dropped() {
     let mut sheet = build(INK_SHEET_NAME, &sample());
@@ -126,6 +134,7 @@ fn extras_are_clamped_and_blank_ones_dropped() {
     assert_eq!(extras.texture.as_deref(), Some("abababababababababababababababab"));
 }
 
+/// The hidden sheet's name gains a suffix rather than colliding with a person's sheet.
 #[test]
 fn unique_name_steps_around_a_sheet_of_the_same_name() {
     let mut wb = Workbook::new();
@@ -138,6 +147,7 @@ fn unique_name_steps_around_a_sheet_of_the_same_name() {
 
 // ---------------------------------------------------------------- end to end through xlsx
 
+/// An ink shape anchored at A1 that carries `key`.
 fn ink_shape(id: u32, key: &str) -> Shape {
     Shape {
         id,
@@ -152,12 +162,14 @@ fn ink_shape(id: u32, key: &str) -> Shape {
     }
 }
 
+/// A one-sheet workbook holding `shape`.
 fn with_shape(shape: Shape) -> Workbook {
     let mut wb = Workbook::new();
     Arc::make_mut(&mut wb.sheets[0]).shapes.push(shape);
     wb
 }
 
+/// The sheet names a written workbook declares.
 fn sheet_names(bytes: &[u8]) -> Vec<String> {
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).expect("a zip");
     let mut xml = String::new();
@@ -165,6 +177,7 @@ fn sheet_names(bytes: &[u8]) -> Vec<String> {
     xml.split("<sheet name=\"").skip(1).filter_map(|s| s.split('"').next()).map(str::to_string).collect()
 }
 
+/// A workbook with no textures and no stroke extras gains no hidden sheet when saved.
 #[test]
 fn a_workbook_without_extension_data_gains_no_ink_sheet() {
     let wb = with_shape(ink_shape(1, "{11111111-2222-3333-4444-555555555555}"));
@@ -175,6 +188,7 @@ fn a_workbook_without_extension_data_gains_no_ink_sheet() {
     assert!(back.ink_textures.is_empty());
 }
 
+/// Imported textures survive a save and reopen with their ids and scales.
 #[test]
 fn textures_survive_a_save_and_reopen() {
     let mut wb = with_shape(ink_shape(1, "{11111111-2222-3333-4444-555555555555}"));
@@ -192,6 +206,7 @@ fn textures_survive_a_save_and_reopen() {
     assert_eq!(back.ink_textures[0].data.as_ref(), &vec![7u8; 400]);
 }
 
+/// A stroke keeps its texture id and brush subtype through a save and reopen.
 #[test]
 fn a_stroke_texture_and_subtype_survive_a_save_and_reopen() {
     let key = "{11111111-2222-3333-4444-555555555555}";
@@ -218,6 +233,7 @@ fn a_stroke_texture_and_subtype_survive_a_save_and_reopen() {
     assert_eq!(back.ink_textures.len(), 1);
 }
 
+/// Saving a workbook that was just read keeps the extension rather than dropping it.
 #[test]
 fn a_second_save_after_reading_keeps_the_extension() {
     let texture = texture("a.png", vec![9, 8, 7], 3, 3);
@@ -236,6 +252,7 @@ fn a_second_save_after_reading_keeps_the_extension() {
     assert_eq!(again.sheets[0].shapes[0].ink.as_ref().and_then(|i| i.texture.as_deref()), Some(id.as_str()));
 }
 
+/// A sheet from a newer version is kept as it is, so the next save cannot delete textures this version cannot read.
 #[test]
 fn an_unreadable_ink_sheet_is_kept_so_a_save_does_not_delete_it() {
     // A newer GridCraft writes a layout version this one does not read. Dropping the sheet on
@@ -260,6 +277,7 @@ fn an_unreadable_ink_sheet_is_kept_so_a_save_does_not_delete_it() {
     assert_eq!(kept.cells.get(CellRef::new(0, 1)).and_then(|c| c.value.as_f64()), Some(2.0));
 }
 
+/// A stroke with no key keeps its texture by the creation id the writer mints for it.
 #[test]
 fn a_stroke_without_a_key_keeps_its_texture_by_its_emitted_id() {
     // The drawing writer mints a deterministic creation id when the stroke's key is missing or

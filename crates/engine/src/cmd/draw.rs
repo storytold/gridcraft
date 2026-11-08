@@ -179,6 +179,7 @@ pub fn px_to_cm(px: f32) -> f32 {
     px / PX_PER_CM
 }
 
+/// Every `draw.*` command the CLI and the host can call, with its parameter shapes.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -250,6 +251,8 @@ fn stroke_color(color: Option<&str>, effect: Option<InkEffect>, fallback: &str) 
     parse_color(pick).unwrap_or(Color::rgb(0x1F, 0x5F, 0xC9))
 }
 
+/// `draw.pen`: turn the pen on or off, or take a gallery pen's brush, colour, width, effect and
+/// texture into the hand that paints.
 fn pen(s: &mut Session, p: &Json) -> Result<Json> {
     s.ensure_draw_pens();
     let selecting = ["brush", "kind", "color", "width", "effect", "texture", "textureScale", "pen"].iter().any(|k| p.get(*k).is_some());
@@ -321,6 +324,8 @@ fn pen(s: &mut Session, p: &Json) -> Result<Json> {
     }))
 }
 
+/// `draw.addPen`: add a pen to the gallery from a brush and optional colour, width, effect and
+/// texture, and answer the pen it minted.
 fn add_pen(s: &mut Session, p: &Json) -> Result<Json> {
     s.ensure_draw_pens();
     let name = str_param(p, "brush").or_else(|| str_param(p, "kind")).unwrap_or("pen");
@@ -387,6 +392,8 @@ fn add_pen(s: &mut Session, p: &Json) -> Result<Json> {
     }))
 }
 
+/// `draw.updatePen`: change the gallery pen whose id is given, leaving the fields it did not name
+/// as they were; the pen in hand follows when it is the one changed.
 fn update_pen(s: &mut Session, p: &Json) -> Result<Json> {
     s.ensure_draw_pens();
     let id = u32_param(p, "id").ok_or_else(|| bad("draw.updatePen", "the id of the pen to change is required"))?;
@@ -458,6 +465,8 @@ fn update_pen(s: &mut Session, p: &Json) -> Result<Json> {
     }))
 }
 
+/// `draw.deletePen`: drop a gallery pen, refusing Excel's built-in ones and putting the default
+/// pen back in hand when the deleted pen was the one painting.
 fn delete_pen(s: &mut Session, p: &Json) -> Result<Json> {
     s.ensure_draw_pens();
     let id = u32_param(p, "id").ok_or_else(|| bad("draw.deletePen", "the id of the pen to delete is required"))?;
@@ -488,6 +497,7 @@ fn delete_pen(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"removed": removed}))
 }
 
+/// `draw.eraser`: turn the eraser on or off, which turns the pen off when it comes on.
 fn eraser(s: &mut Session, p: &Json) -> Result<Json> {
     let on = bool_param(p, "on").unwrap_or(s.draw_tool != "eraser");
     s.draw_tool = if on { "eraser".into() } else { String::new() };
@@ -605,6 +615,7 @@ fn texture_list(s: &mut Session, _p: &Json) -> Result<Json> {
     }))
 }
 
+/// The stroke's `x,y;x,y` text as points, skipping any pair that is not two numbers.
 fn parse_points(t: &str) -> Vec<[f32; 2]> {
     t.split(';').filter_map(|pt| pt.split_once(',').and_then(|(x, y)| Some([x.parse().ok()?, y.parse().ok()?]))).collect()
 }
@@ -778,6 +789,8 @@ pub fn ink_points(sh: &Shape) -> Vec<[f32; 2]> {
     parse_points(&sh.text)
 }
 
+/// `draw.inkToShape`: convert a stroke (the given shape id, or the last one drawn) into the
+/// geometry that best fits it.
 fn ink_to_shape(s: &mut Session, p: &Json) -> Result<Json> {
     let si = s.doc()?.wb.active_sheet();
     let id = u32_param(p, "id");

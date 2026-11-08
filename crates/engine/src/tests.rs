@@ -3468,6 +3468,7 @@ fn ink_strokes_and_ink_to_shape() {
     assert!(s.execute("draw.stroke", json!({"points": [[1.0, 1.0]]})).is_err());
 }
 
+/// A brush's tool, width and colour are stored on the pen and reported back.
 #[test]
 fn ink_brushes_store_their_tool_width_and_colour() {
     use gridcraft_model::{Color, InkTool};
@@ -3508,6 +3509,7 @@ fn ink_brushes_store_their_tool_width_and_colour() {
     assert!(undo.doc().unwrap().wb.active().unwrap().shapes.is_empty());
 }
 
+/// Any colour, an effect and the stroke's pressure are stored as given.
 #[test]
 fn ink_any_colour_effect_and_pressure_are_stored() {
     use gridcraft_model::{InkEffect, InkTool};
@@ -3540,6 +3542,7 @@ fn ink_any_colour_effect_and_pressure_are_stored() {
     assert_eq!(first.ink.as_ref().map(|i| i.scale), Some(1.0));
 }
 
+/// A custom pen can be added, selected, changed and deleted.
 #[test]
 fn ink_custom_pens_add_select_change_and_delete() {
     let mut s = s();
@@ -3580,6 +3583,7 @@ fn ink_custom_pens_add_select_change_and_delete() {
     assert!(s.execute("draw.pen", json!({"pen": id})).is_err(), "a deleted pen cannot be selected");
 }
 
+/// Hostile parameters reach a typed error rather than a panic.
 #[test]
 fn ink_commands_are_safe_with_hostile_params() {
     let mut s = s();
@@ -3604,6 +3608,7 @@ fn ink_commands_are_safe_with_hostile_params() {
     assert!(s.execute("draw.updatePen", json!({"id": 42})).is_err());
 }
 
+/// Every tool and effect survives a save and reopen.
 #[test]
 fn ink_every_tool_and_effect_survives_xlsx() {
     use gridcraft_model::{InkEffect, InkTool};

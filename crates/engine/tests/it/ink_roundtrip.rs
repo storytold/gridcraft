@@ -135,6 +135,7 @@ fn horizontal_vertical_and_signed_highlighter_strokes_survive_reopening() {
     }
 }
 
+/// A stroke keeps its brush, colour, width, pressure and creation key through a save and reopen.
 #[test]
 fn engine_strokes_keep_their_ink_style_and_key_across_save_and_open() {
     let mut session = workbook();
@@ -159,6 +160,7 @@ fn engine_strokes_keep_their_ink_style_and_key_across_save_and_open() {
     assert_eq!(after.line, before.line);
 }
 
+/// A stroke drawn after reopening mints a key that no stroke already in the file holds.
 #[test]
 fn a_stroke_drawn_in_a_reopened_workbook_takes_a_key_no_other_stroke_holds() {
     let mut session = workbook();
@@ -176,6 +178,7 @@ fn a_stroke_drawn_in_a_reopened_workbook_takes_a_key_no_other_stroke_holds() {
     assert_eq!(keys.len(), 2, "the keys stay distinct after another save");
 }
 
+/// A copied sheet gives its strokes fresh keys, so the two sheets' strokes stay distinct.
 #[test]
 fn a_copied_sheet_rekeys_its_ink_strokes() {
     let mut session = workbook();

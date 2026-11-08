@@ -224,6 +224,7 @@ fn tool_name(tool: InkTool) -> &'static str {
     }
 }
 
+/// The brush a stored `tool` name means; `None` for a name this version does not know.
 fn tool_from_name(name: &str) -> Option<InkTool> {
     Some(match name {
         "pen" => InkTool::Pen,

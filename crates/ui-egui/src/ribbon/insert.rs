@@ -253,6 +253,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// The Draw tab: the pen and eraser, the pen gallery, the lasso and the ink-to-shape command.
 pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
     use crate::pen_icon;
 
@@ -505,6 +506,7 @@ fn apply_pen_texture(app: &mut SheetApp, id: u32, tool: &str, color: &str, width
 mod tests {
     use super::*;
 
+    /// Two pens that differ only in their texture are not both shown as selected.
     #[test]
     fn two_pens_that_differ_only_in_their_texture_are_not_both_selected() {
         use gridcraft_engine::cmd::draw::DrawPen;
@@ -535,6 +537,7 @@ mod tests {
         assert!(pen_in_hand(&s, &plain), "an untextured pen in hand is its own tile");
     }
 
+    /// Choosing one of Excel's built-in effects clears the imported texture, which would otherwise win when painting.
     #[test]
     fn choosing_a_built_in_effect_clears_an_imported_texture() {
         // An imported texture wins over a built-in effect when both are set, so the effect tile

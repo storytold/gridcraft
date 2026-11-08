@@ -128,6 +128,8 @@ fn traces(root: &El) -> Option<Vec<&El>> {
     Some(out)
 }
 
+/// The ink shapes a drawing's InkML part holds, anchored where `anchor` says: `None` when the
+/// part is missing, undeclared or unreadable, so the caller falls back to the picture.
 fn read_traces(
     cx: &mut Ctx<'_>,
     rels: &[Rel],

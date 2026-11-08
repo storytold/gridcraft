@@ -5,6 +5,7 @@ use egui::{Shape, TextureId};
 use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
 
+/// A two-colour pattern, so a painted stroke shows real repeats rather than a flat fill.
 fn png(w: u32, h: u32) -> Vec<u8> {
     // A two-colour pattern, so the render shows actual repeats rather than a flat fill.
     let image =
@@ -20,6 +21,7 @@ fn png(w: u32, h: u32) -> Vec<u8> {
     bytes.into_inner()
 }
 
+/// A blank four-column sheet harness to draw ink on.
 fn harness() -> egui_kittest::Harness<'static, SheetApp> {
     crate::support::blank_harness(4)
 }
@@ -36,6 +38,7 @@ fn textured_meshes(h: &egui_kittest::Harness<'static, SheetApp>) -> Vec<(Texture
         .collect()
 }
 
+/// An imported texture paints a textured mesh along the stroke, and the stroke is snapshotted with it.
 #[test]
 fn an_imported_texture_paints_a_stroke_and_is_snapshotted() {
     let mut h = harness();
@@ -63,6 +66,7 @@ fn an_imported_texture_paints_a_stroke_and_is_snapshotted() {
     eprintln!("ink texture snapshot: {}", path.display());
 }
 
+/// A stroke whose texture was removed paints as a plain line rather than disappearing.
 #[test]
 fn a_removed_texture_falls_back_to_a_plain_stroke() {
     let mut h = harness();
@@ -99,6 +103,7 @@ fn textured_mesh_extents(h: &egui_kittest::Harness<'static, SheetApp>) -> Vec<f3
     extents
 }
 
+/// A textured highlighter commits as wide as its preview, not at the narrower pen width.
 #[test]
 fn a_textured_highlighter_commits_as_wide_as_its_preview() {
     // The preview measures a highlighter at its height (twice the pen width); the committed

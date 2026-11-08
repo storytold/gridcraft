@@ -8,6 +8,7 @@ use gridcraft_ui_egui::SheetApp;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
+/// A harness on the Draw tab, sized to show the pen gallery.
 fn draw_tab() -> Harness {
     let mut session = Session::new();
     session.new_workbook();
@@ -25,6 +26,7 @@ fn draw_tab() -> Harness {
     h
 }
 
+/// Each default pen tile answers with its own accessible name, so a screen reader can tell them apart.
 #[test]
 fn every_pen_tile_carries_its_own_name() {
     // The six default pens are all `pen` or their own tool, so naming a tile after the tool gave
@@ -38,6 +40,7 @@ fn every_pen_tile_carries_its_own_name() {
     assert!(h.query_by_label("Pen").is_none(), "no tile falls back to the tool's generic name");
 }
 
+/// The lasso tooltip promises what the command does — selecting ink — not a freehand loop the grid cannot draw.
 #[test]
 fn the_lasso_button_describes_what_it_really_does() {
     // `draw.lasso` selects ink the way Select Objects does (its spec says so); the grid has no

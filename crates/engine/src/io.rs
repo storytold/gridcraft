@@ -941,6 +941,8 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
+/// The browser build has no local file larger than a fetch, so it reads the whole file and
+/// leaves the size to the caller's own check.
 #[cfg(target_arch = "wasm32")]
 pub fn read_file_limited(path: &str, _max: u64) -> Result<Vec<u8>> {
     read_file(path)
