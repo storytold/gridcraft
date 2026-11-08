@@ -323,6 +323,47 @@ mod tests {
         assert_eq!(s.execute("edit.goTo", json!({"reference": "Table1"})).unwrap()["selection"], "A2:B3");
     }
 
+    #[test]
+    fn table_rename_updates_unshadowed_bare_custom_totals() {
+        for (formula, expected) in [
+            ("SUM(Prices)", "SUM(PriceList)"),
+            ("SUM(prices)", "SUM(PriceList)"),
+            ("LET(Prices,2,Prices+SUM(Prices[Price]))", "LET(Prices,2,Prices+SUM(PriceList[Price]))"),
+            ("LET(Prices,SUM(Prices),Prices)", "LET(Prices,SUM(PriceList),Prices)"),
+            ("LET(x,SUM(Prices),Prices,2,x+Prices)", "LET(x,SUM(PriceList),Prices,2,x+Prices)"),
+            ("LAMBDA(Prices,Prices+SUM(Prices[Price]))(2)", "LAMBDA(Prices,Prices+SUM(PriceList[Price]))(2)"),
+            ("SUM(Prices)+LAMBDA(Prices,Prices)(2)+SUM(Prices)", "SUM(PriceList)+LAMBDA(Prices,Prices)(2)+SUM(PriceList)"),
+            ("LET(x,LET(Prices,2,Prices),SUM(Prices))", "LET(x,LET(Prices,2,Prices),SUM(PriceList))"),
+        ] {
+            let mut s = Session::new();
+            s.new_workbook();
+            for (range, name) in [("A1:B4", "Prices"), ("D1:E4", "Orders")] {
+                s.execute("range.setValues", json!({"range": range, "values": [["Sku", "Price"], [101, 5], [102, 7], ["", ""]]})).unwrap();
+                s.execute("insert.table", json!({"range": range, "header": true, "name": name})).unwrap();
+            }
+            for table in &mut std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().tables {
+                table.totals_row = true;
+                table.columns[0].totals_label = Some(formula.into());
+                table.columns[1].totals = gridcraft_model::TotalsFn::Custom;
+                table.columns[1].totals_label = Some(formula.into());
+            }
+            let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+            s.doc_mut().unwrap().wb = std::sync::Arc::new(gridcraft_xlsx::read_xlsx(&bytes).unwrap().0);
+            let before = s.doc().unwrap().wb.clone();
+            s.execute("table.rename", json!({"table": "Prices", "name": "PriceList"})).unwrap();
+            let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+            let (back, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+            for table in &back.sheet(0).unwrap().tables {
+                assert_eq!(table.columns[1].totals_label.as_deref(), Some(expected), "{formula}");
+                assert_eq!(table.columns[0].totals_label.as_deref(), Some(formula));
+            }
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(s.doc().unwrap().wb, before);
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().tables[1].columns[1].totals_label.as_deref(), Some(expected));
+        }
+    }
+
     /// Custom totals share the structured references in #3389, but are not calculated columns.
     #[test]
     fn renames_update_custom_totals_without_changing_labels() {
