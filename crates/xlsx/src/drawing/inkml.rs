@@ -15,8 +15,9 @@
 //! write: the model has no per-stroke time, and a clock would make saves non-deterministic.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
-use gridcraft_model::{Color, InkEffect, InkStyle, InkTool, Shape, ShapeKind, Sheet, Theme};
+use gridcraft_model::{Color, InkEffect, InkStyle, InkTool, Shape, ShapeKind, Sheet, Theme, Workbook};
 
 use super::emu_px;
 use crate::package::{MAX_PART, Rel, normalize};
@@ -52,6 +53,27 @@ const MAX_PNG: f64 = 1024.0;
 const MAX_PRESSURE: i64 = 32_767;
 
 // ---------------------------------------------------------------- reading
+
+/// Gives every stroke in the workbook a creation id no other stroke holds. A save writes each
+/// stroke's key as its `a16:creationId`, and two strokes with one id is a workbook that names one
+/// stroke twice. The parts are read in sheet order, so the first holder keeps its id and every
+/// later duplicate gets a free one; whichever order the parts were read in, the workbook ends with
+/// one holder per id. A file that already stores one id on two strokes is healed here too — a
+/// stroke with a malformed id never reaches this point, since the reader mints it a key already.
+pub(crate) fn unique_keys(wb: &mut Workbook) {
+    let mut seen: HashSet<String> = HashSet::new();
+    for sheet in wb.sheets.iter_mut() {
+        for ink in Arc::make_mut(sheet).shapes.iter_mut().filter_map(|s| s.ink.as_mut()) {
+            let Some(key) = ink.key.as_deref() else { continue };
+            if seen.insert(key.to_owned()) {
+                continue;
+            }
+            let fresh = gridcraft_model::ink_creation_id_free(|k| seen.contains(k));
+            seen.insert(fresh.clone());
+            ink.key = Some(fresh);
+        }
+    }
+}
 
 /// The parts declared as `application/inkml+xml` in `[Content_Types].xml`, normalized.
 ///

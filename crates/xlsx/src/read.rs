@@ -358,6 +358,9 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         cx.warn("the workbook has no worksheets; added an empty sheet");
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
     }
+    // One creation id names one stroke in the workbook. A file that stores one id twice, or a read
+    // that minted a key another part already held, is healed once every sheet is in.
+    crate::drawing::unique_keys(&mut wb);
     wb.set_active_sheet(file_to_model.get(active_tab).copied().flatten().unwrap_or(0));
 
     // Defined names. Chartex parts refer to their data through hidden `_xlchart.*` names.

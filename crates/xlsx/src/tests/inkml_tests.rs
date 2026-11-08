@@ -88,6 +88,18 @@ struct Extra<'a> {
     creation_id: Option<&'a str>,
     /// The drawing's `xdr14:xfrm` `a:off`, in EMU, when a test needs a stroke far down the sheet.
     off: Option<(i64, i64)>,
+    /// The anchor written twice, both naming the same ink part with the same creation id.
+    second_anchor: bool,
+}
+
+/// The same drawing part with its anchor written twice: two contentParts that name one InkML part
+/// and carry the same `a16:creationId`, the broken file a save has to heal.
+fn duplicate_anchor(drawing: &str) -> String {
+    let start = drawing.find("<xdr:twoCellAnchor").expect("the anchor");
+    let end = drawing.find("</xdr:twoCellAnchor>").expect("the anchor's end") + "</xdr:twoCellAnchor>".len();
+    let (head, rest) = drawing.split_at(start);
+    let (anchor, tail) = rest.split_at(end - start);
+    format!("{head}{anchor}{anchor}{tail}")
 }
 
 /// The same package. With `damage_ink`, the ink part is stored uncompressed and one byte of it is
@@ -111,6 +123,7 @@ fn package_with(trace: &str, f: bool, props: &str, ink: bool, declared: bool, me
         Some((x, y)) => drawing_with_off(extra.creation_id.unwrap_or(GUIDE), x, y),
         None => drawing(extra.creation_id.unwrap_or(GUIDE)),
     };
+    let drawing = if extra.second_anchor { duplicate_anchor(&drawing) } else { drawing };
     let mut ink_part = inkml(trace, f, props);
     if let Some(markup) = extra.extra_markup {
         ink_part = ink_part.replace("</inkml:ink>", &format!("{markup}</inkml:ink>"));
@@ -196,6 +209,20 @@ fn excel_content_part_is_read_as_editable_ink_with_its_brush() {
     close(s.anchor.dy, 0.0);
     close(s.anchor.width, 80.0);
     close(s.anchor.height, 40.0);
+}
+
+#[test]
+fn one_creation_id_names_one_stroke_in_the_workbook() {
+    // Two contentParts naming the same ink part with the same `a16:creationId`: one creation id
+    // must name one stroke, so the reader keeps the first and mints the second a free key.
+    let extra = Extra { second_anchor: true, ..Extra::default() };
+    let (wb, _) = read(&package_with("!0 !0,'1000 '1000", false, PEN_PROPS, true, true, true, extra));
+    let shapes = &wb.sheets[0].shapes;
+    assert_eq!(shapes.len(), 2, "{shapes:?}");
+    let keys: Vec<&str> = shapes.iter().filter_map(|s| s.ink.as_ref()?.key.as_deref()).collect();
+    assert_eq!(keys.len(), 2, "both strokes carry a key");
+    assert_eq!(keys[0], GUIDE, "the first holder keeps the id the file stores");
+    assert_ne!(keys[1], GUIDE, "the second stroke is minted a key of its own");
 }
 
 #[test]

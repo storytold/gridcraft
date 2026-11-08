@@ -20,7 +20,7 @@ mod ink;
 mod inkml;
 
 pub use inkml::creation_id;
-pub(crate) use inkml::{CT as CT_INKML, Parts as InkParts};
+pub(crate) use inkml::{CT as CT_INKML, Parts as InkParts, unique_keys};
 
 /// The InkML part and fallback picture for a native ink stroke (see [`inkml`]).
 pub(crate) fn ink_parts(shape: &Shape, theme: &Theme) -> Option<InkParts> {
