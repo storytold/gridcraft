@@ -75,7 +75,7 @@ not implemented throw a typed `OfficeScriptsError` whose message names the class
 | `Worksheet` | `script.sheets`, `script.tables`, `script.charts`, `sheet.*` | getRange, getCell, getRangeByIndexes, getUsedRange, name/get/set, activate, delete, standard height/width, visibility, tables, charts |
 | `Range` | `script.rangeInfo`, `range.setValues`, `home.*`, `edit.clear*`, `home.insert/deleteCells`, `home.merge*`, `selection.set` | values/text/formulas/number formats (get and set), address, dimensions, row/column index, getCell, offset, entire row/column, bounding rect, tables, data validation, format, insert/delete/clear/merge/unmerge/select |
 | `RangeFormat`, `RangeFont`, `RangeFill`, `RangeBorder` | `script.rangeInfo` style facts; `home.bold/italic/underline/fontSize/fontName/fontColor/fillColor/numberFormat/home.drawBorder` | font bold/italic/underline/size/name/color/strikethrough, fill colour, number format, alignment reads, one border by side |
-| `RangeAreas` | `script.selection` | areas, address, format |
+| `RangeAreas` | `script.selection` | areas, address (format applies to one area only, so it is `not-yet`) |
 | `Table`, `TableColumn` | `script.tables`, `table.*` | range/header/total/body ranges, name, columns, column ranges/index/name, headers/totals, style, convert, delete |
 | `Chart` | `script.charts`, `chart.set/changeType/delete` | type, name, left/top/width/height, setPosition, delete (active worksheet) |
 | `Comment` | `cell.get`, `review.newComment/deleteComment` | content, author name, set content, delete |

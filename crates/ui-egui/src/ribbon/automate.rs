@@ -4,6 +4,16 @@ use crate::theme::Tokens;
 use crate::widgets::{big_split_button, small_button, small_toggle_button};
 use egui::vec2;
 
+/// Opens the Office Scripts pane, or says what happened in a message box when another dialog is
+/// open: that dialog's fields may be unsaved, so it is never replaced.
+fn open_pane_or_message(app: &mut SheetApp, text: String) {
+    if app.dialog.is_some() {
+        app.message = Some(("Office Scripts".to_string(), text));
+    } else {
+        app.open_dialog("officeScripts", json!({}));
+    }
+}
+
 pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
     // Macros: the Macros dialog; Record Macro (Stop Recording while recording), Use Relative
     // References; Run Macro, whose main part runs the last macro and whose menu lists them all.
@@ -93,18 +103,24 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
             if app.office_scripts.runtime.is_none() {
                 crate::office_scripts::refresh(app);
             }
-            // Without Bun a run can only fail with a message in a pane that is closed: open the
-            // pane, which shows what to install, instead of running into nothing.
+            // Without Bun a run can only fail with a message in a pane that is closed: show the
+            // pane, which has the setup controls, instead of running into nothing.
             let missing = app.office_scripts.runtime.as_ref().is_none_or(|runtime| !runtime.found);
             if missing || app.office_scripts.code.trim().is_empty() {
-                app.open_dialog("officeScripts", json!({}));
+                let text = if missing {
+                    app.office_scripts.runtime.as_ref().map(|runtime| runtime.message.clone()).unwrap_or_else(|| "Bun is not installed.".to_string())
+                } else {
+                    "Write or select a script first.".to_string()
+                };
+                open_pane_or_message(app, text);
             } else {
                 crate::office_scripts::run(app);
-                // A run from the ribbon may happen with the pane closed: open it when there is a
-                // failure or console output the person has to see.
+                // A run from the ribbon may happen with the pane closed: show the result when the
+                // run failed or logged output.
                 let show = app.office_scripts.status.as_ref().is_some_and(|status| status.error) || !app.office_scripts.output.is_empty();
                 if show {
-                    app.open_dialog("officeScripts", json!({}));
+                    let text = app.office_scripts.status.as_ref().map(|status| status.text.clone()).unwrap_or_default();
+                    open_pane_or_message(app, text);
                 }
             }
         }

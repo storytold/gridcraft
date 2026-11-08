@@ -654,8 +654,12 @@ class TableColumn {
     const info = bridge("TableColumn.getDataBodyRange", this.params({}));
     return new Range(String(info.address), String(info.sheet));
   }
-  getTotalsRowRange(): Range {
+  getTotalRowRange(): Range {
     const info = bridge("TableColumn.getTotalRowRange", this.params({}));
+    return new Range(String(info.address), String(info.sheet));
+  }
+  getRangeBetweenHeaderAndTotal(): Range {
+    const info = bridge("TableColumn.getRangeBetweenHeaderAndTotal", this.params({}));
     return new Range(String(info.address), String(info.sheet));
   }
   getName(): string {
@@ -685,7 +689,7 @@ class Table {
     const info = bridge("Table.getDataBodyRange", this.params({}));
     return new Range(String(info.address), String(info.sheet));
   }
-  getTotalsRowRange(): Range {
+  getTotalRowRange(): Range {
     const info = bridge("Table.getTotalRowRange", this.params({}));
     return new Range(String(info.address), String(info.sheet));
   }
@@ -704,10 +708,10 @@ class Table {
     const info = bridge("Table.getColumn", this.params({ name }));
     return new TableColumn(this.tableName, String(info.name), Number(info.index));
   }
-  getStyle(): string {
+  getPredefinedTableStyle(): string {
     return String(bridge("Table.getPredefinedTableStyle", this.params({})) ?? "");
   }
-  setStyle(style: string): void {
+  setPredefinedTableStyle(style: string): void {
     bridge("Table.setPredefinedTableStyle", this.params({ style }));
   }
   getShowHeaders(): boolean {
@@ -852,10 +856,10 @@ class Workbook {
     const info = bridge("Workbook.getSelectedRange", {});
     return new Range(String(info.address), String(info.sheet));
   }
-  getSelectedRangeAreas(): RangeAreas {
+  getSelectedRanges(): RangeAreas[] {
     const info = bridge("Workbook.getSelectedRanges", {});
     const areas = (info.areas as any[]).map((a) => String(a.address));
-    return new RangeAreas(areas, String(info.sheet));
+    return [new RangeAreas(areas, String(info.sheet))];
   }
   getName(): string {
     return String(bridge("Workbook.getName", {}));
@@ -1154,6 +1158,22 @@ impl Drop for TempShim {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_implemented_name_is_a_method_the_shim_exposes() {
+        // The coverage report calls a member implemented, so a script must be able to call the
+        // documented name; this keeps `implemented.txt` and the shim from drifting apart.
+        let missing: Vec<&str> = include_str!("../../script/data/implemented.txt")
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .filter(|line| {
+                let name = line.split('.').nth(1).unwrap_or("");
+                !BOOTSTRAP.contains(&format!("{name}("))
+            })
+            .collect();
+        assert!(missing.is_empty(), "the shim does not expose {missing:?}");
+    }
 
     #[test]
     fn the_shim_lives_in_a_private_folder_of_its_own() {

@@ -71,7 +71,6 @@ Range.setValues
 Range.unmerge
 RangeAreas.getAddress
 RangeAreas.getAreas
-RangeAreas.getFormat
 RangeBorder.getColor
 RangeBorder.getSideIndex
 RangeBorder.getStyle
