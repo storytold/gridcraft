@@ -245,6 +245,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         d.picture_inbox = None;
                         // Empty bytes are a pick the browser refused to read for its size.
                         if bytes.is_empty() || bytes.len() > 16 * 1024 * 1024 {
+                            // The rejected pick replaces the earlier one, so OK cannot import it.
+                            d.values.remove("base64");
+                            d.values.remove("alt");
                             app.message = Some((d.title.clone(), "Choose a PNG or JPEG no larger than 16 MB.".into()));
                         } else {
                             d.values.remove("path");
@@ -506,6 +509,9 @@ fn import_texture(app: &mut SheetApp, d: &mut Dialog, ui: &mut egui::Ui, confirm
         d.picture_inbox = None;
         // Empty bytes are a pick the browser refused to read for its size.
         if bytes.is_empty() || bytes.len() > 16 * 1024 * 1024 {
+            // The rejected pick replaces the earlier one, so OK cannot import it.
+            d.values.remove("base64");
+            d.values.remove("name");
             app.message = Some((d.title.clone(), "Choose a PNG or JPEG no larger than 16 MB.".into()));
         } else {
             d.values.remove("path");
