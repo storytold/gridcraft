@@ -1176,13 +1176,23 @@ mod tests {
 
     #[test]
     fn the_pen_preview_is_the_ink_the_stroke_commits() {
-        // #1786: the preview was always blue at 2 pt, whatever the pen.
+        // #1786: the preview was always blue at 2 pt, whatever the pen. It now follows the brush,
+        // its colour and its thickness in millimetres (converted to sheet points).
         let theme = gridcraft_engine::model::Theme::default();
-        assert_eq!(pen_ink("#C00000", 3.0, &theme), (Color32::from_rgb(0xC0, 0, 0), 3.0));
-        assert_eq!(pen_ink("", 0.0, &theme), (Color32::from_rgb(0x1F, 0x5F, 0xC9), 2.0), "no pen chosen yet: pen blue, 2 pt");
-        assert_eq!(pen_ink("not a colour", 0.2, &theme), (Color32::from_rgb(0x1F, 0x5F, 0xC9), 1.0));
+        let px = gridcraft_engine::cmd::draw::cm_to_px;
+        let (c, w) = pen_ink("#C00000", 3.0, "pen", &theme);
+        assert_eq!(c, Color32::from_rgb(0xC0, 0, 0));
+        assert!((w - px(0.3)).abs() < 0.01, "{w}");
+        let (c, w) = pen_ink("", 0.0, "", &theme);
+        assert_eq!(c, Color32::from_rgb(0x1F, 0x5F, 0xC9), "no pen chosen yet: pen blue");
+        assert!((w - px(0.05)).abs() < 0.01, "{w}");
+        let (c, w) = pen_ink("not a colour", 0.2, "pen", &theme);
+        assert_eq!(c, Color32::from_rgb(0x1F, 0x5F, 0xC9));
+        assert!((w - 1.0).abs() < 0.01, "a hairline is at least a pixel: {w}");
         // A highlighter is wide and translucent, as the committed ink is painted.
-        let (c, w) = pen_ink("#FFFF00", 12.0, &theme);
-        assert_eq!((c, w), (Color32::from_rgb(0xFF, 0xFF, 0).gamma_multiply(0.45), 12.0));
+        let (c, w) = pen_ink("#FFFF00", 12.0, "highlighter", &theme);
+        assert_eq!(Color32::from_rgb(c.r(), c.g(), c.b()), Color32::from_rgb(0xFF, 0xFF, 0));
+        assert_eq!(c.a(), 115);
+        assert!((w - px(1.2)).abs() < 0.01, "{w}");
     }
 }
