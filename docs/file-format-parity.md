@@ -22,7 +22,9 @@ the fixed UUID `{9189856B-82B7-4F3C-895E-34A918DB704C}`. Its namespace is
 `https://getartcraft.com/ns/gridcraft/pivot-filter-order/1`, under ArtCraft's official domain.
 Readers that do not recognise it can use the standard PivotTable fields. GridCraft applies it
 only when it names every reconstructed filter exactly once; it caps parsing at one entry beyond
-the native filter count. This extension shares the definition's single `extLst` with Excel's
+the native filter and axis-field count. An `allSelected` marker retains an explicit all-items
+axis selection that SpreadsheetML would otherwise represent as no hidden items. This extension
+shares the definition's single `extLst` with Excel's
 `hideValuesRow` extension when both are present.
 
 ## Workbook window settings

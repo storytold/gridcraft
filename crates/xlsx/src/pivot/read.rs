@@ -330,11 +330,29 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         .find(|ext| ext.attr("uri") == Some(EXT_FILTER_ORDER))
         .and_then(|ext| ext.child("filterOrder"))
     {
-        // Read at most one item beyond the native count, even from hostile extension XML.
-        let names: Vec<Option<&str>> = order.kids("field").take(filters.len().saturating_add(1)).map(|field| field.attr("name")).collect();
-        if names.len() == filters.len() && names.iter().all(Option::is_some) {
-            let mut remaining = filters.clone();
-            let mut ordered = Vec::with_capacity(filters.len());
+        // An all-selected axis filter has no hidden native items, so recover it only when
+        // our metadata names an actual axis field. Bound extension entries by native fields.
+        let limit = filters.len().saturating_add(pt.rows.len()).saturating_add(pt.columns.len()).min(MAX_FIELDS);
+        let entries: Vec<&El> = order.kids("field").take(limit.saturating_add(1)).collect();
+        let mut candidate = filters.clone();
+        for entry in &entries {
+            let Some(name) = entry.attr("name") else { continue };
+            if !entry.flag("allSelected", false) || candidate.iter().any(|filter| same(&filter.source_col, name)) {
+                continue;
+            }
+            if pt.rows.iter().chain(pt.columns.iter()).any(|field| same(&field.source_col, name))
+                && let Some(field) = cache.fields.iter().find(|field| same(&field.name, name))
+            {
+                let labels = field.labels().to_vec();
+                if !labels.is_empty() {
+                    candidate.push(PivotFilter { source_col: name.to_string(), selected: Some(labels) });
+                }
+            }
+        }
+        let names: Vec<Option<&str>> = entries.iter().map(|field| field.attr("name")).collect();
+        if names.len() == candidate.len() && names.iter().all(Option::is_some) {
+            let mut remaining = candidate;
+            let mut ordered = Vec::with_capacity(remaining.len());
             for name in names {
                 if let Some(pos) = remaining.iter().position(|filter| same(&filter.source_col, name.unwrap_or_default())) {
                     ordered.push(remaining.remove(pos));

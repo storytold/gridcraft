@@ -729,7 +729,16 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
         if pt.filters.len() > 1 {
             let _ = write!(s, "<ext uri=\"{EXT_FILTER_ORDER}\" xmlns:gc=\"{NS_FILTER_ORDER}\"><gc:filterOrder>");
             for filter in &pt.filters {
-                let _ = write!(s, "<gc:field name=\"{}\"/>", esc_attr(&filter.source_col));
+                let all_selected = pt.rows.iter().chain(pt.columns.iter()).any(|field| same(&field.source_col, &filter.source_col))
+                    && c.fields.iter().find(|field| same(&field.name, &filter.source_col)).is_some_and(|field| {
+                        let labels = field.item_labels();
+                        filter.selected.as_ref().is_some_and(|selected| {
+                            !labels.is_empty()
+                                && selected.len() == labels.len()
+                                && labels.iter().all(|label| selected.iter().any(|item| same(item, label)))
+                        })
+                    });
+                let _ = write!(s, "<gc:field name=\"{}\"{} />", esc_attr(&filter.source_col), if all_selected { " allSelected=\"1\"" } else { "" });
             }
             s.push_str("</gc:filterOrder></ext>");
         }

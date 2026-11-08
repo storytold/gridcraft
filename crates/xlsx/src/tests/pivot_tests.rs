@@ -256,6 +256,19 @@ fn pivot_filter_order_round_trips_across_axis_and_page_fields() {
 }
 
 #[test]
+fn pivot_filter_order_keeps_explicit_all_items_axis_selection() {
+    let mut wb = workbook();
+    let expected = vec![
+        PivotFilter { source_col: "Product".into(), selected: Some(vec!["A".into(), "B".into(), "C".into()]) },
+        PivotFilter { source_col: "Region".into(), selected: Some(vec!["East".into()]) },
+        PivotFilter { source_col: "Channel".into(), selected: Some(vec!["Online".into()]) },
+    ];
+    wb.sheet_mut(1).unwrap().pivots[0].filters = expected.clone();
+    let (reopened, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(reopened.sheet(1).unwrap().pivots[0].filters, expected);
+}
+
+#[test]
 fn pivot_package_structure() {
     let parts = unzip(&write_xlsx(&workbook()).unwrap());
     assert_pivot_content_types(&parts);
