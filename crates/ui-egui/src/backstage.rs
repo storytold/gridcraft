@@ -371,6 +371,9 @@ fn new_tiles(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outc
                 bs.templates.refresh();
             }
         });
+        #[cfg(target_arch = "wasm32")]
+        dim(ui, "Personal template folders are available in the desktop app.");
+        #[cfg(not(target_arch = "wasm32"))]
         match bs.templates.known(ui.ctx(), folder) {
             None => {
                 if bs.templates.folder != folder {

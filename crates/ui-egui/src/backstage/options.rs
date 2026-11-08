@@ -40,7 +40,7 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
             egui::TextEdit::singleline(&mut location).id(id.with("edit")).desired_width(360.0).hint_text("Folder containing .xltx and .xltm files"),
         );
         ui.data_mut(|data| data.insert_temp(id, location.clone()));
-        if response.lost_focus() {
+        if response.lost_focus() || (response.changed() && !response.has_focus()) {
             app.run_or_alert("options.personalTemplatesLocation", json!({"location": location}));
             ui.data_mut(|data| data.remove::<String>(id));
         }
