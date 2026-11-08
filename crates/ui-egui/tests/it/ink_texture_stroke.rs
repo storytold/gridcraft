@@ -80,3 +80,41 @@ fn a_removed_texture_falls_back_to_a_plain_stroke() {
     let has_plain_ink = h.output().shapes.iter().any(|s| matches!(&s.shape, Shape::Path(p) if p.points.len() == 3));
     assert!(has_plain_ink);
 }
+
+/// The vertical extent of each textured mesh in the last frame, smallest first.
+fn textured_mesh_extents(h: &egui_kittest::Harness<'static, SheetApp>) -> Vec<f32> {
+    let mut extents: Vec<f32> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            Shape::Mesh(mesh) if mesh.texture_id != TextureId::default() && mesh.vertices.len() >= 4 => {
+                let (lo, hi) = mesh.vertices.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| (lo.min(v.pos.y), hi.max(v.pos.y)));
+                Some(hi - lo)
+            }
+            _ => None,
+        })
+        .collect();
+    extents.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    extents
+}
+
+#[test]
+fn a_textured_highlighter_commits_as_wide_as_its_preview() {
+    // The preview measures a highlighter at its height (twice the pen width); the committed
+    // textured branch measured every tool at its pen width, so the image narrowed on release.
+    let mut h = harness();
+    let id = h
+        .state_mut()
+        .run("draw.textureImport", json!({"name": "tiles.png", "base64": gridcraft_engine::io::base64_encode(&png(16, 16))}))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    h.state_mut().run("draw.stroke", json!({"points": [[80, 80], [280, 80]], "texture": id, "width": 6, "brush": "pen"})).unwrap();
+    h.state_mut().run("draw.stroke", json!({"points": [[80, 160], [280, 160]], "texture": id, "width": 6, "brush": "highlighter"})).unwrap();
+    h.run_steps(4);
+    let extents = textured_mesh_extents(&h);
+    assert_eq!(extents.len(), 2, "both strokes are painted as textured meshes");
+    assert!((extents[1] / extents[0] - 2.0).abs() < 0.01, "a highlighter paints at its height, twice the pen width: {extents:?}");
+}

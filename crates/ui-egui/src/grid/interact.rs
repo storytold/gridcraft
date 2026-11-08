@@ -293,14 +293,9 @@ pub(crate) fn pen_ink(color: &str, width_mm: f32, brush: &str, theme: &gridcraft
     let line = gridcraft_engine::model::Color::from_hex(color).unwrap_or(pen_blue);
     let mm = if width_mm <= 0.0 { 0.5 } else { width_mm }.clamp(0.05, 20.0);
     let (w_cm, h_cm) = gridcraft_engine::cmd::draw::ink_size_cm(tool, mm);
-    // `paint_ink` paints a highlighter `height_cm` across the stroke and a pencil at 0.8x its
-    // width, so the preview has to measure the same way to be as wide as the committed ink.
-    let across = match tool {
-        InkTool::Highlighter => h_cm,
-        InkTool::Pencil => w_cm * 0.8,
-        _ => w_cm,
-    };
-    let width = gridcraft_engine::cmd::draw::cm_to_px(across).max(1.0);
+    // A Highlighter previews at its height and a Pencil at 0.8 of its width, as the committed ink
+    // is painted; `across_cm` is the one measure all three use.
+    let width = gridcraft_engine::cmd::draw::cm_to_px(gridcraft_engine::cmd::draw::across_cm(tool, w_cm, h_cm)).max(1.0);
     let base = line.resolve(theme).map(crate::theme::color32).unwrap_or(Color32::from_rgb(0x1F, 0x5F, 0xC9));
     let color = match tool {
         InkTool::Highlighter => Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 115),

@@ -31,6 +31,8 @@ struct Cache {
 }
 
 impl Cache {
+    /// The upload for `key`, decoded on first use and kept until the budget drops it. The newest
+    /// frame that drew it is stamped so eviction takes the least recently painted textures.
     fn texture(&mut self, ctx: &egui::Context, key: (String, usize), data: &[u8]) -> Option<TextureHandle> {
         let frame = ctx.cumulative_frame_nr();
         if let Some(entry) = self.entries.get_mut(&key) {
@@ -63,6 +65,7 @@ impl Cache {
     }
 }
 
+/// The cache this context owns, so offscreen, native and browser contexts never share handles.
 fn cache(ctx: &egui::Context) -> Arc<Mutex<Cache>> {
     ctx.data_mut(|data| data.get_temp_mut_or_default::<Arc<Mutex<Cache>>>(egui::Id::unique("gridcraft.ink_textures")).clone())
 }
@@ -74,6 +77,8 @@ pub(crate) fn texture(ctx: &egui::Context, ink: &InkTexture) -> Option<TextureHa
     cache(ctx).lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(ctx, key, &ink.data)
 }
 
+/// Decodes an imported image into RGBA at no more than [`MAX_SIDE`] a side; `None` for bytes the
+/// store never should have accepted, or an image over the engine's own caps.
 fn decode(data: &[u8]) -> Option<egui::ColorImage> {
     let format = image::guess_format(data).ok()?;
     let (w, h) = image::ImageReader::with_format(Cursor::new(data), format).into_dimensions().ok()?;
@@ -106,7 +111,8 @@ pub(crate) fn stroke_mesh(pts: &[Pos2], width: f32, tint: Color32, tex_id: Textu
     let aspect = if tex_aspect.is_finite() && tex_aspect > 0.0 { tex_aspect } else { 1.0 };
     let half = width / 2.0;
     let across_repeats = width / (tile * aspect);
-    // A normal per point: the average of its neighbouring segments, so joins have no gap.
+    // A normal per point: across the average of its neighbouring segments, so joins have no gap.
+    // (The average direction is the tangent at the join; the ribbon is built perpendicular to it.)
     let mut normals: Vec<egui::Vec2> = Vec::with_capacity(pts.len());
     for i in 0..pts.len() {
         let prev = if i > 0 { pts[i] - pts[i - 1] } else { pts[i + 1] - pts[i] };
@@ -116,10 +122,10 @@ pub(crate) fn stroke_mesh(pts: &[Pos2], width: f32, tint: Color32, tex_id: Textu
             if len.is_finite() && len > 1e-6 { v / len } else { egui::Vec2::X }
         };
         let (a, b) = (unit(prev), unit(next));
-        let mut n = a + b;
-        let len = n.length();
-        n = if len.is_finite() && len > 1e-6 { n / len } else { egui::vec2(-b.y, b.x) };
-        normals.push(n);
+        let mut tangent = a + b;
+        let len = tangent.length();
+        tangent = if len.is_finite() && len > 1e-6 { tangent / len } else { b };
+        normals.push(egui::vec2(-tangent.y, tangent.x));
     }
     let mut along = 0.0;
     for i in 0..pts.len() - 1 {
@@ -240,6 +246,12 @@ mod tests {
         let m = stroke_mesh(&pts, 4.0, Color32::WHITE, TextureId::Managed(1), 1.0, 5.0);
         assert_eq!(m.vertices.len(), 8, "two points per segment end");
         assert_eq!(m.indices.len(), 12, "two triangles per segment");
+        // The ribbon is as wide as the stroke: 4 points across, centred on the line. (A mesh built
+        // along the tangent instead of across it collapsed to a line, so nothing showed.)
+        let (lo, hi) = m.vertices.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| (lo.min(v.pos.y), hi.max(v.pos.y)));
+        assert!((hi - lo - 4.0).abs() < 1e-5, "across the stroke: {lo}..{hi}");
+        let (xlo, xhi) = m.vertices.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| (lo.min(v.pos.x), hi.max(v.pos.x)));
+        assert!((xlo - 0.0).abs() < 1e-5 && (xhi - 10.0).abs() < 1e-5, "the ribbon runs the stroke, not across it: {xlo}..{xhi}");
         // Two repeats along 20 points with a 5-point tile; one repeat across a 4-point width.
         assert!((m.vertices[4].uv.x - 1.0).abs() < 1e-5);
         assert!((m.vertices[6].uv.x - 2.0).abs() < 1e-5);
@@ -259,5 +271,17 @@ mod tests {
         // A 2:1 (tall) image repeats half as often across the same width.
         let m = stroke_mesh(&pts, 4.0, Color32::WHITE, TextureId::Managed(1), 2.0, 5.0);
         assert!((m.vertices[1].uv.y - 0.4).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_diagonal_ribbon_is_as_wide_as_the_stroke() {
+        // The ribbon is built across the stroke whatever its direction: every vertex lies one
+        // half-width from the line, so a diagonal is a band, not a line.
+        let pts = [egui::pos2(0.0, 0.0), egui::pos2(10.0, 10.0)];
+        let m = stroke_mesh(&pts, 2.0, Color32::WHITE, TextureId::Managed(1), 1.0, 5.0);
+        let half_diag = 2.0_f32.sqrt();
+        for v in &m.vertices {
+            assert!((v.pos.x - v.pos.y).abs() - half_diag < 1e-4, "{:?} is not one half-width off the line", v.pos);
+        }
     }
 }

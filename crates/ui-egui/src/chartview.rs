@@ -331,7 +331,9 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                         match imported {
                             Some((handle, aspect, scale)) => {
                                 use gridcraft_engine::model::InkTool;
-                                let pt = gridcraft_engine::cmd::draw::ink_width(sp);
+                                // A Highlighter and a Pencil paint wider than their pen width:
+                                // the preview measures them through the same helper.
+                                let pt = gridcraft_engine::cmd::draw::ink_across(sp);
                                 let w = pt * geo.z;
                                 let tint = match ink.tool {
                                     InkTool::Highlighter => Color32::from_rgba_unmultiplied(line.r(), line.g(), line.b(), 115),
@@ -616,16 +618,18 @@ pub(crate) fn ink_color(line: Color32, width_pt: f32) -> Color32 {
 fn paint_ink(p: &Painter, pts: &[Pos2], sp: &gridcraft_engine::model::Shape, ink: &gridcraft_engine::model::InkStyle, line: Color32, z: f32) {
     use gridcraft_engine::model::InkTool;
     let width = gridcraft_engine::cmd::draw::ink_width(sp) * z;
-    let tall = gridcraft_engine::cmd::draw::ink_height(sp) * z;
+    // A Highlighter paints at its height and a Pencil at 0.8 of its width; the same measure the
+    // live preview and a textured stroke use.
+    let across = gridcraft_engine::cmd::draw::ink_across(sp) * z;
     let translucent = |c: Color32, a: u8| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a);
     match ink.tool {
         InkTool::Highlighter => {
-            p.add(PathShape::line(pts.to_vec(), PathStroke::new(tall.max(2.0), translucent(line, 115))));
+            p.add(PathShape::line(pts.to_vec(), PathStroke::new(across.max(2.0), translucent(line, 115))));
         }
         InkTool::Pencil => {
             // Flat and a touch translucent, like graphite.
             for pair in pts.windows(2) {
-                p.line_segment([pair[0], pair[1]], Stroke::new((width * 0.8).max(1.0), translucent(line, 215)));
+                p.line_segment([pair[0], pair[1]], Stroke::new(across.max(1.0), translucent(line, 215)));
             }
         }
         InkTool::FountainPen | InkTool::BrushPen => paint_tapered(p, pts, width, &ink.pressure, line),
@@ -634,7 +638,7 @@ fn paint_ink(p: &Painter, pts: &[Pos2], sp: &gridcraft_engine::model::Shape, ink
         }
     }
     if let Some(effect) = ink.effect {
-        paint_ink_texture(p, pts, if ink.tool == InkTool::Highlighter { tall } else { width }, effect, ink.anchor, z);
+        paint_ink_texture(p, pts, if ink.tool == InkTool::Highlighter { across } else { width }, effect, ink.anchor, z);
     }
 }
 

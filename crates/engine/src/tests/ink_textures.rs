@@ -147,3 +147,32 @@ fn a_texture_imports_from_a_path() {
     assert_eq!(r["width"], 9);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn the_across_width_is_what_each_brush_paints() {
+    use crate::cmd::draw::{across_cm, ink_across, ink_height, ink_size_cm, ink_width};
+    use crate::model::{Anchor, AnchorMode, Color, InkStyle, InkTool, Shape, ShapeKind};
+    let shape = |tool: InkTool, (w_cm, h_cm): (f32, f32)| Shape {
+        id: 1,
+        kind: ShapeKind::Ink,
+        anchor: Anchor { cell: gridcraft_core::CellRef::new(0, 0), dx: 0.0, dy: 0.0, width: 10.0, height: 10.0, mode: AnchorMode::Absolute },
+        fill: Color::Auto,
+        line: Color::Auto,
+        text: "0,0;10,10".into(),
+        format: Default::default(),
+        math: Default::default(),
+        ink: Some(InkStyle { tool, width_cm: w_cm, height_cm: h_cm, ..InkStyle::default() }),
+    };
+    assert_eq!(across_cm(InkTool::Pen, 0.6, 0.6), 0.6);
+    assert_eq!(across_cm(InkTool::Highlighter, 0.6, 1.2), 1.2, "a highlighter paints at its height");
+    assert!((across_cm(InkTool::Pencil, 0.6, 3.6) - 0.48).abs() < 1e-6, "a pencil paints at 0.8 of its width");
+    let pen = shape(InkTool::Pen, ink_size_cm(InkTool::Pen, 6.0));
+    assert_eq!(ink_across(&pen), ink_width(&pen));
+    let hl = shape(InkTool::Highlighter, ink_size_cm(InkTool::Highlighter, 6.0));
+    assert_eq!(ink_across(&hl), ink_height(&hl), "twice the pen width");
+    let pencil = shape(InkTool::Pencil, ink_size_cm(InkTool::Pencil, 6.0));
+    assert!((ink_across(&pencil) - ink_width(&pencil) * 0.8).abs() < 0.01);
+    // A legacy stroke without an InkStyle paints its legacy width.
+    let legacy = Shape { ink: None, ..shape(InkTool::Pen, (0.6, 0.6)) };
+    assert_eq!(ink_across(&legacy), ink_width(&legacy));
+}

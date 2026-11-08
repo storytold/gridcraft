@@ -529,6 +529,9 @@ fn validate_texture(data: &[u8]) -> Result<(&'static str, u32, u32)> {
     Ok((mime, width, height))
 }
 
+/// `draw.textureImport`: stores an imported PNG or JPEG in the workbook's texture store, or reuses
+/// the entry the same bytes already made. The command is one undo step, and a refused image leaves
+/// the workbook untouched.
 fn texture_import(s: &mut Session, p: &Json) -> Result<Json> {
     let (name, data) = if let Some(b) = str_param(p, "base64") {
         // Check the encoded length first, so a hostile parameter is refused before decoding.
@@ -562,6 +565,8 @@ fn texture_import(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// `draw.textureRemove`: drops a texture from the workbook and takes it out of the pen in hand and
+/// of every gallery pen, so nothing keeps painting with an image the store no longer holds.
 fn texture_remove(s: &mut Session, p: &Json) -> Result<Json> {
     let id = str_param(p, "id").ok_or_else(|| bad("draw.textureRemove", "missing `id`"))?.to_string();
     if s.doc()?.wb.ink_texture(&id).is_none() {
@@ -581,6 +586,8 @@ fn texture_remove(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// `draw.textureList`: the workbook's textures (with their encoded byte length), the texture the
+/// pen in hand paints with and the repeat size it uses.
 fn texture_list(s: &mut Session, _p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let textures: Vec<Json> =
@@ -742,6 +749,25 @@ pub fn ink_height(sh: &Shape) -> f32 {
         return cm_to_px(ink.height_cm).max(1.0);
     }
     ink_width(sh)
+}
+
+/// The width a brush paints across its stroke, in cm: a Highlighter is its height (twice the pen
+/// width), a Pencil 0.8 of its width, and every other brush paints its width. The live preview,
+/// the committed stroke and their texture tiles all measure the stroke this way.
+pub fn across_cm(tool: InkTool, width_cm: f32, height_cm: f32) -> f32 {
+    match tool {
+        InkTool::Highlighter => height_cm,
+        InkTool::Pencil => width_cm * 0.8,
+        _ => width_cm,
+    }
+}
+
+/// [`across_cm`] for a committed stroke, in sheet points.
+pub fn ink_across(sh: &Shape) -> f32 {
+    match &sh.ink {
+        Some(ink) => cm_to_px(across_cm(ink.tool, ink.width_cm, ink.height_cm)).max(1.0),
+        None => ink_width(sh),
+    }
 }
 
 /// The stroke's points in sheet points, relative to its anchor, as `draw.stroke` took them.

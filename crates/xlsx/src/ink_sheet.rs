@@ -104,6 +104,7 @@ pub fn unique_name(wb: &Workbook) -> String {
     (2..).map(|n| format!("{INK_SHEET_NAME} {n}")).find(|name| wb.sheet_index(name).is_none()).unwrap_or_else(|| INK_SHEET_NAME.to_string())
 }
 
+/// Puts one value at `row`/`col` of the sheet the layout draws.
 fn put(sheet: &mut Sheet, row: u32, col: u32, value: Value) {
     sheet.set_value(CellRef::new(row, col), value);
 }

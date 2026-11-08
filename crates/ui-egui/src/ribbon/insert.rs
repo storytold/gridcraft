@@ -412,16 +412,17 @@ fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::dr
                     ui.painter().rect_stroke(r.expand(1.0), 2.0, Stroke::new(2.0, Tokens::get(ui.ctx()).accent), StrokeKind::Outside);
                 }
                 if resp.on_hover_text(tr.tr(pen_icon::effect_label(name))).clicked() {
-                    apply_pen_change(app, id, tool, pen_icon_base(Some(name)), width, Some(name));
+                    // A built-in effect replaces an imported texture, which wins over it in
+                    // painting; the tile would otherwise look chosen while strokes stay textured.
+                    act(app, "draw.updatePen", pen_change(id, tool, pen_icon_base(Some(name)), width, name, Some(""), None));
                     ui.close();
                 }
             }
         });
     }
     if ui.button(tr.tr("Solid")).clicked() {
-        apply_pen_change(app, id, tool, color, width, None);
-        // Solid means no imported pattern either.
-        act(app, "draw.updatePen", json!({"id": id, "brush": tool, "color": color, "width": width, "effect": "", "texture": ""}));
+        // Solid means no built-in effect and no imported pattern either.
+        act(app, "draw.updatePen", pen_change(id, tool, color, width, "", Some(""), None));
         ui.close();
     }
     // The person's imported patterns, in the same list as Excel's eight built-in textures; each
@@ -471,17 +472,50 @@ fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::dr
     }
 }
 
+/// The `draw.updatePen` parameters for a pen-dropdown choice. `texture` is sent only when the
+/// choice sets it — a built-in effect passes `Some("")`, since the command keeps a pen's imported
+/// texture when the key is absent and an imported texture wins over an effect when both are set.
+fn pen_change(id: u32, tool: &str, color: &str, width: f32, effect: &str, texture: Option<&str>, texture_scale: Option<f32>) -> serde_json::Value {
+    let mut p = json!({"id": id, "brush": tool, "color": color, "width": width, "effect": effect});
+    if let Some(texture) = texture {
+        p["texture"] = json!(texture);
+    }
+    if let Some(scale) = texture_scale {
+        p["textureScale"] = json!(scale);
+    }
+    p
+}
+
 /// Applies a dropdown choice to the gallery pen in place; the pen in hand follows it.
 fn apply_pen_change(app: &mut SheetApp, id: u32, tool: &str, color: &str, width: f32, effect: Option<&str>) {
-    act(app, "draw.updatePen", json!({"id": id, "brush": tool, "color": color, "width": width, "effect": effect.unwrap_or("")}));
+    act(app, "draw.updatePen", pen_change(id, tool, color, width, effect.unwrap_or(""), None, None));
 }
 
 /// Makes an imported texture the pen's pattern, at the pen's repeat size; the pen's colour tints
 /// it. A built-in effect gives way, since an imported texture wins when both are set.
 fn apply_pen_texture(app: &mut SheetApp, id: u32, tool: &str, color: &str, width: f32, texture: &str, scale: f32) {
-    act(
-        app,
-        "draw.updatePen",
-        json!({"id": id, "brush": tool, "color": color, "width": width, "effect": "", "texture": texture, "textureScale": scale}),
-    );
+    act(app, "draw.updatePen", pen_change(id, tool, color, width, "", Some(texture), Some(scale)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn choosing_a_built_in_effect_clears_an_imported_texture() {
+        // An imported texture wins over a built-in effect when both are set, so the effect tile
+        // must clear it or the tile shows a texture the strokes still paint with.
+        let p = pen_change(3, "pen", "#C00000", 1.5, "galaxy", Some(""), None);
+        assert_eq!(p["effect"], "galaxy");
+        assert_eq!(p["texture"], "", "the built-in effect replaces the imported texture");
+        // Thickness, colour and other choices leave the pen's texture alone.
+        let p = pen_change(3, "pen", "#C00000", 1.5, "", None, None);
+        assert!(p.get("texture").is_none());
+        assert!(p.get("textureScale").is_none());
+        // Choosing an imported texture replaces the effect, at the given repeat size.
+        let p = pen_change(3, "pen", "#C00000", 1.5, "", Some("abc"), Some(4.0));
+        assert_eq!(p["effect"], "");
+        assert_eq!(p["texture"], "abc");
+        assert_eq!(p["textureScale"], 4.0);
+    }
 }
