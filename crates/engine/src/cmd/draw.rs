@@ -170,6 +170,9 @@ pub fn ink_in_draw_order(sh: &Sheet) -> impl Iterator<Item = &Shape> {
     ink.into_iter()
 }
 
+/// `draw.inkReplay`: starts (or with `on: false` stops) replaying the active sheet's ink, and
+/// answers the strokes in drawing order for the front end to animate. No document edit and no
+/// undo step: only [`Session::ink_replay`] changes.
 fn ink_replay(s: &mut Session, p: &Json) -> Result<Json> {
     let on = bool_param(p, "on").unwrap_or(!s.ink_replay);
     if !on {

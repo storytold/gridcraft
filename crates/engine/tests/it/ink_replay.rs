@@ -5,12 +5,15 @@ use gridcraft_engine::Session;
 use serde_json::json;
 use std::sync::Arc;
 
+/// A fresh session with one empty sheet.
 fn workbook() -> Session {
     let mut session = Session::new();
     session.new_workbook();
     session
 }
 
+/// Strokes are reported in the order they were drawn, with their id and point count, and empty
+/// parameters toggle the replay off.
 #[test]
 fn replay_reports_strokes_in_draw_order() {
     let mut session = workbook();
@@ -37,6 +40,7 @@ fn replay_reports_strokes_in_draw_order() {
     assert!(r["strokes"].as_array().unwrap().is_empty());
 }
 
+/// No ink is a typed error, and hostile parameters are ignored rather than trusted.
 #[test]
 fn replay_needs_ink_and_ignores_hostile_params() {
     let mut session = workbook();
@@ -49,6 +53,8 @@ fn replay_needs_ink_and_ignores_hostile_params() {
     assert_eq!(session.execute("draw.inkReplay", json!({"on": false})).unwrap()["replaying"], false);
 }
 
+/// The recorded order is written to the file and read back: a reopened workbook replays in the
+/// order its strokes were drawn, not the order the drawing stores them in.
 #[test]
 fn replay_order_survives_save_and_reopen() {
     let mut session = workbook();
@@ -77,6 +83,7 @@ fn replay_order_survives_save_and_reopen() {
     }
 }
 
+/// A stroke's recorded order wins over its position in the drawing's shape list.
 #[test]
 fn replay_follows_recorded_order_over_document_order() {
     let mut session = workbook();
@@ -100,6 +107,8 @@ fn replay_follows_recorded_order_over_document_order() {
     assert!(cols.windows(2).all(|w| w[0] < w[1]), "the recorded draw order wins over document order: {cols:?}");
 }
 
+/// Without any recorded order (InkML from Excel records none; legacy DrawingML ink has no
+/// `InkStyle` at all) the replay keeps document order.
 #[test]
 fn replay_falls_back_to_document_order_without_a_recorded_order() {
     // Ink from Excel: no order recorded. Legacy DrawingML ink: no `InkStyle` at all.
@@ -132,6 +141,7 @@ fn replay_falls_back_to_document_order_without_a_recorded_order() {
     }
 }
 
+/// Replaying never edits the document and leaves no undo step behind.
 #[test]
 fn replay_leaves_the_document_alone() {
     let mut session = workbook();
