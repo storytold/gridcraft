@@ -1021,6 +1021,21 @@ mod contrast_tests {
     }
 
     #[test]
+    fn ink_authored_on_white_is_held_against_the_dark_surface_actually_painted() {
+        // Chart text, border-preview lines and cell text on an unfilled cell are authored on white
+        // and painted on ink(white), the dark sheet's grey: the guard measures them there.
+        let d = Tokens::palette(false, true);
+        assert_eq!(ink(Color32::WHITE), d.grid_bg);
+        for c in [rgb(0x0000FF), rgb(0x1F4E79), rgb(0xFF0000), rgb(0x00B050), rgb(0x7F7F7F), Color32::BLACK] {
+            for min in [INK_TEXT_MIN, INK_LINE_MIN] {
+                let target = min.min(contrast(c, Color32::WHITE));
+                let got = contrast(d.on_sheet_over(c, Color32::WHITE, min), d.grid_bg);
+                assert!(got >= target - 0.05, "{c:?}: {got:.2} on the dark sheet, needs {target:.2}");
+            }
+        }
+    }
+
+    #[test]
     fn every_guarded_pair_reads_at_least_as_well_as_authored_or_at_the_minimum() {
         let colours: Vec<Color32> = (0..=255u8)
             .step_by(51)

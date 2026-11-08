@@ -34,6 +34,11 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut dark_pictures, lang.tr("Dark pictures")).on_hover_text(hint).changed() {
         app.run_or_alert("view.darkPictures", json!({"on": dark_pictures}));
     }
+    // Shown, not only as tooltips, so keyboard, touch and screen-reader users get it too.
+    dim(
+        ui,
+        lang.tr("Dark sheet, charts and pictures invert their colours on screen only, separately from Display theme. Saving, printing and PDFs are unchanged."),
+    );
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
     let mut autocomplete = app.ui.autocomplete;

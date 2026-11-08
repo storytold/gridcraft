@@ -216,6 +216,27 @@ mod tests {
     }
 
     #[test]
+    fn the_dark_texture_is_an_entry_of_its_own_beside_the_light_one() {
+        let ctx = egui::Context::default();
+        let mut cache = Cache::default();
+        let data = png(64, 32, [255, 255, 255, 128]);
+        let light = key(1, 1, &data);
+        let dark = Key { dark: true, ..light };
+        let light_tex = cache.texture(&ctx, light, &data, 64).unwrap().id();
+        let dark_tex = cache.texture(&ctx, dark, &data, 64).unwrap().id();
+        assert_ne!(dark_tex, light_tex, "the dark-pictures setting decodes a texture of its own");
+        assert_eq!(cache.entries.len(), 2, "both kept, so switching back and forth decodes nothing");
+        assert_eq!(cache.bytes, 2 * 64 * 32 * 4, "both counted against the budget");
+        frame(&ctx);
+        assert_eq!(cache.texture(&ctx, light, &data, 64).unwrap().id(), light_tex);
+        assert_eq!(cache.texture(&ctx, dark, &data, 64).unwrap().id(), dark_tex);
+        // A closed workbook gives both back.
+        cache.forget_closed(&[2]);
+        assert!(cache.entries.is_empty());
+        assert_eq!(cache.bytes, 0);
+    }
+
+    #[test]
     fn the_cache_stays_within_its_budget_but_keeps_what_is_on_screen() {
         let ctx = egui::Context::default();
         let mut cache = Cache::default();
