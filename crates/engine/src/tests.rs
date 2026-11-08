@@ -5090,6 +5090,246 @@ fn precision_as_displayed_rounds_numbers_written_to_a_new_sheet() {
     assert!(rounded > 0, "the histogram's formatted cells should be rounded");
 }
 
+/// #1101: repeating one cell or row down a filtered selection (paste, Ctrl+Enter, Fill Down) skips
+/// the rows the filter hides, as in Excel. A taller pasted block goes straight down, and rows
+/// hidden by hand are written, also as in Excel (each case measured in Excel for Microsoft 365).
+#[test]
+fn fills_and_single_row_pastes_skip_filtered_rows() {
+    let fresh = s;
+    let filtered = || {
+        let mut s = fresh();
+        let mut rows = vec![json!(["Val", "Tag"])];
+        for i in 2..=11 {
+            rows.push(json!([format!("v{i}"), if [3, 5, 7, 9].contains(&i) { "hide" } else { "keep" }]));
+        }
+        s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+        s.execute("range.setValues", json!({"range": "E1", "values": [["X", "W"], ["Y", ""]]})).unwrap();
+        s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+        s.execute("data.filter", json!({})).unwrap();
+        assert_eq!(s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap()["hiddenRows"], 4);
+        s
+    };
+    let col = |s: &Session, c: &str| -> Vec<Value> { (2..=11).map(|r| v(s, &format!("{c}{r}"))).collect() };
+    let skipped =
+        |x: &str| -> Vec<Value> { (2..=11).map(|r| Value::from(if [3, 5, 7, 9].contains(&r) { format!("v{r}") } else { x.to_string() })).collect() };
+
+    // One cell pasted over the filtered rows.
+    let mut s = filtered();
+    s.execute("edit.copy", json!({"range": "E1"})).unwrap();
+    s.execute("selection.set", json!({"range": "A2:A11"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(col(&s, "A"), skipped("X"));
+
+    // One row (two cells) pasted over the filtered rows.
+    let mut s = filtered();
+    s.execute("edit.copy", json!({"range": "E1:F1"})).unwrap();
+    s.execute("selection.set", json!({"range": "A2:B11"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(col(&s, "A"), skipped("X"));
+    assert_eq!(v(&s, "B3"), Value::from("hide"));
+    assert_eq!(v(&s, "B4"), Value::from("W"));
+
+    // A two-row block is pasted straight down, hidden rows included.
+    let mut s = filtered();
+    s.execute("edit.copy", json!({"range": "E1:E2"})).unwrap();
+    s.execute("selection.set", json!({"range": "A2:A11"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(col(&s, "A"), ["X", "Y", "X", "Y", "X", "Y", "X", "Y", "X", "Y"].map(Value::from));
+
+    // Ctrl+Enter.
+    let mut s = filtered();
+    s.execute("selection.set", json!({"range": "A2:A11"})).unwrap();
+    s.execute("range.fill", json!({"input": "Z"})).unwrap();
+    assert_eq!(col(&s, "A"), skipped("Z"));
+
+    // Fill Down, and a formula filled down still adjusts to the row it lands in.
+    let mut s = filtered();
+    s.execute("edit.fillDown", json!({"range": "A2:A11"})).unwrap();
+    assert_eq!(col(&s, "A"), skipped("v2"));
+    s.execute("cell.set", json!({"cell": "C2", "input": "=ROW()"})).unwrap();
+    s.execute("edit.fillDown", json!({"range": "C2:C11"})).unwrap();
+    assert_eq!(v(&s, "C4"), Value::Number(4.0));
+    assert!(v(&s, "C3").is_empty());
+
+    // Fill Up and Fill Right skip them too.
+    let mut s = filtered();
+    s.execute("edit.fillUp", json!({"range": "A2:A11"})).unwrap();
+    assert_eq!(col(&s, "A"), skipped("v11"));
+    let mut s = filtered();
+    s.execute("range.setValues", json!({"range": "C2", "values": [["c2"], ["c3"], ["c4"]]})).unwrap();
+    s.execute("edit.fillRight", json!({"range": "A2:C4"})).unwrap();
+    assert_eq!([v(&s, "C2"), v(&s, "C3"), v(&s, "C4")], [Value::from("v2"), Value::from("c3"), Value::from("v4")]);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "C4"), Value::from("c4"));
+
+    // Copying the filtered range takes only the rows showing, formulas as their values; a cut
+    // still moves every row.
+    let mut s = filtered();
+    s.execute("cell.set", json!({"cell": "C2", "input": "=ROW()"})).unwrap();
+    s.execute("edit.fillDown", json!({"range": "C2:C11"})).unwrap();
+    let r = s.execute("edit.copy", json!({"range": "A1:C11"})).unwrap();
+    assert_eq!(
+        r["text"],
+        "Val	Tag	
+v2	keep	2
+v4	keep	4
+v6	keep	6
+v8	keep	8
+v10	keep	10
+v11	keep	11
+"
+    );
+    s.execute("edit.paste", json!({"at": "H20"})).unwrap();
+    let pasted: Vec<Value> = (20..=27).map(|r| v(&s, &format!("H{r}"))).collect();
+    assert_eq!(pasted, ["Val", "v2", "v4", "v6", "v8", "v10", "v11"].map(Value::from).into_iter().chain([Value::Empty]).collect::<Vec<_>>());
+    assert_eq!(v(&s, "J22"), Value::Number(4.0));
+    assert!(s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("J22").unwrap()).unwrap().formula.is_none());
+    let mut s = filtered();
+    s.execute("edit.cut", json!({"range": "A1:B11"})).unwrap();
+    s.execute("edit.paste", json!({"at": "H20"})).unwrap();
+    assert_eq!(v(&s, "H22"), Value::from("v3"));
+
+    // Rows hidden by hand (no filter) are written, as in Excel.
+    let mut s = fresh();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["a"], ["b"], ["c"]]})).unwrap();
+    s.execute("home.hideRows", json!({"rows": "2:2"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:A3"})).unwrap();
+    s.execute("range.fill", json!({"input": "Z"})).unwrap();
+    assert_eq!(v(&s, "A2"), Value::from("Z"));
+}
+
+/// A table of ten rows (A1:B11) with a link on every value cell, four of its rows hidden by a
+/// filter (3, 5, 7, 9), and a spare corner at E1 to copy from.
+fn filtered_rows_with_links() -> Session {
+    let mut s = s();
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=11 {
+        rows.push(json!([format!("v{i}"), if [3, 5, 7, 9].contains(&i) { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("range.setValues", json!({"range": "E1", "values": [["X"]]})).unwrap();
+    let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    for r in 2..=11u32 {
+        sh.hyperlinks
+            .insert(CellRef::new(r - 1, 0), gridcraft_model::Hyperlink { target: format!("https://example.com/{r}"), tooltip: None, external: true });
+    }
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+    s
+}
+
+fn cell_link_target(s: &Session, cell: &str) -> Option<String> {
+    s.doc().unwrap().wb.active().unwrap().hyperlinks.get(&CellRef::parse(cell).unwrap()).map(|h| h.target.clone())
+}
+
+fn cell_validation(s: &Session, cell: &str) -> Option<String> {
+    let c = CellRef::parse(cell).unwrap();
+    s.doc().unwrap().wb.active().unwrap().validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(c))).map(|d| d.f1.clone())
+}
+
+/// Copying a filtered range packs the rows showing into one block; their links and validation
+/// rules travel with them, and those of the hidden rows are left behind.
+#[test]
+fn filtered_copy_pastes_links_and_validation_of_the_rows_showing_only() {
+    let mut s = filtered_rows_with_links();
+    for (cell, source) in [("A3", "\"hidden\""), ("A4", "\"showing\""), ("A9", "\"hidden too\"")] {
+        s.execute("data.validation", json!({"range": cell, "type": "list", "formula1": source})).unwrap();
+    }
+    s.execute("edit.copy", json!({"range": "A1:B11"})).unwrap();
+    s.execute("edit.paste", json!({"at": "H20"})).unwrap();
+    let links: Vec<Option<String>> = (20..=26).map(|r| cell_link_target(&s, &format!("H{r}"))).collect();
+    let expected: Vec<Option<String>> =
+        [None, Some(2u32), Some(4), Some(6), Some(8), Some(10), Some(11)].iter().map(|n| n.map(|n| format!("https://example.com/{n}"))).collect();
+    assert_eq!(links, expected);
+    let rules: Vec<Option<String>> = (20..=26).map(|r| cell_validation(&s, &format!("H{r}"))).collect();
+    assert_eq!(rules, [None, None, Some("\"showing\"".to_string()), None, None, None, None]);
+    // The source keeps its own links and rules where they were.
+    assert_eq!(cell_link_target(&s, "A3").as_deref(), Some("https://example.com/3"));
+    assert_eq!(cell_validation(&s, "A3").as_deref(), Some("\"hidden\""));
+}
+
+/// One cell pasted over a filtered column leaves the rules of the rows the filter hides alone, and
+/// does not give them the copied rule, with or without Skip Blanks.
+#[test]
+fn single_row_paste_over_filtered_rows_leaves_their_validation_alone() {
+    for skip_blanks in [false, true] {
+        let mut s = filtered_rows_with_links();
+        s.execute("data.validation", json!({"range": "E1", "type": "list", "formula1": "\"copied\""})).unwrap();
+        s.execute("data.validation", json!({"range": "A2:A5", "type": "list", "formula1": "\"old\""})).unwrap();
+        s.execute("edit.copy", json!({"range": "E1"})).unwrap();
+        s.execute("selection.set", json!({"range": "A2:A11"})).unwrap();
+        s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": skip_blanks})).unwrap();
+        let rules: Vec<Option<String>> = (2..=11).map(|r| cell_validation(&s, &format!("A{r}"))).collect();
+        let showing = Some("\"copied\"".to_string());
+        let old = Some("\"old\"".to_string());
+        assert_eq!(
+            rules,
+            [showing.clone(), old.clone(), showing.clone(), old, showing.clone(), None, showing.clone(), None, showing.clone(), showing],
+            "skip blanks: {skip_blanks}"
+        );
+    }
+}
+
+/// Insert Copied Cells after a filtered copy of whole rows makes room for the rows copied, not for
+/// the rows that were selected.
+#[test]
+fn insert_copied_cells_after_a_filtered_row_copy_inserts_only_the_rows_showing() {
+    let mut s = filtered_rows_with_links();
+    s.execute("cell.set", json!({"cell": "A30", "input": "below"})).unwrap();
+    s.execute("edit.copy", json!({"range": "1:11"})).unwrap();
+    s.execute("selection.set", json!({"range": "A20"})).unwrap();
+    s.execute("home.insertCopiedCells", json!({})).unwrap();
+    // Seven rows were copied (the header and six rows showing).
+    assert_eq!(v(&s, "A37"), Value::from("below"));
+    assert_eq!(v(&s, "A20"), Value::from("Val"));
+    assert_eq!(v(&s, "A26"), Value::from("v11"));
+    assert_eq!(v(&s, "A27"), Value::Empty);
+}
+
+/// Copying a filtered range with many separate runs of rows showing moves each row's note, link and
+/// merge with it, and leaves the hidden rows' behind.
+#[test]
+fn filtered_copy_with_many_runs_moves_notes_and_merges_with_their_rows() {
+    let mut s = s();
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=2001 {
+        rows.push(json!([format!("v{i}"), if i % 2 == 1 { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    for r in 2..=2001u32 {
+        let note = gridcraft_model::Comment {
+            author: "a".into(),
+            text: format!("note {r}"),
+            replies: vec![],
+            threaded: false,
+            resolved: false,
+            visible: false,
+            dates: vec![],
+            note_box: None,
+        };
+        sh.comments.insert(CellRef::new(r - 1, 0), note);
+    }
+    sh.merges.push(gridcraft_core::RangeRef::new(CellRef::new(3, 1), CellRef::new(3, 2)));
+    sh.merges.push(gridcraft_core::RangeRef::new(CellRef::new(2, 1), CellRef::new(2, 2)));
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:C2001"})).unwrap();
+    s.execute("edit.paste", json!({"at": "H1"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let note = |row: u32| sh.comments.get(&CellRef::new(row - 1, 7)).map(|c| c.text.clone());
+    assert_eq!(note(1), None);
+    assert_eq!(note(2).as_deref(), Some("note 2"));
+    assert_eq!(note(3).as_deref(), Some("note 4"));
+    assert_eq!(note(1001).as_deref(), Some("note 2000"));
+    assert_eq!(sh.comments.keys().filter(|c| c.col == 7).count(), 1000);
+    // Only the merge on a row showing (row 4) came along, packed to the row it landed in (row 3).
+    assert!(sh.merges.contains(&gridcraft_core::RangeRef::new(CellRef::new(2, 8), CellRef::new(2, 9))));
+    assert_eq!(sh.merges.iter().filter(|m| m.start.col >= 7).count(), 1);
+}
+
 #[test]
 fn editing_quote_prefixed_text_keeps_it_text() {
     let mut s = s();
@@ -5348,6 +5588,32 @@ fn paste_validation_skip_blanks_large_populated_paste() {
     s.execute("edit.copy", json!({"range": "A1:A100002"})).unwrap();
     s.execute("edit.pasteSpecial", json!({"what": "validation", "skipBlanks": true, "at": "C1"})).unwrap();
     assert!(validation_areas(&s).is_empty());
+}
+
+/// A whole-column copy of a filtered range takes only the rows showing, also when they form one
+/// block (the hidden rows are all at the end) and the selection covers the whole column.
+#[test]
+fn whole_column_copy_of_a_filtered_range_leaves_the_hidden_rows_out() {
+    for hidden_tail in [false, true] {
+        let mut s = s();
+        let mut rows = vec![json!(["Val", "Tag"])];
+        for i in 2..=11 {
+            let hide = if hidden_tail { i >= 8 } else { [3, 5, 7, 9].contains(&i) };
+            rows.push(json!([format!("v{i}"), if hide { "hide" } else { "keep" }]));
+        }
+        s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+        s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+        s.execute("data.filter", json!({})).unwrap();
+        s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+        s.execute("cell.set", json!({"cell": "H30", "input": "old"})).unwrap();
+        s.execute("edit.copy", json!({"range": "A:B"})).unwrap();
+        s.execute("edit.paste", json!({"at": "H1"})).unwrap();
+        let col: Vec<Value> = (1..=11).map(|r| v(&s, &format!("H{r}"))).collect();
+        let want: Vec<&str> =
+            if hidden_tail { vec!["Val", "v2", "v3", "v4", "v5", "v6", "v7"] } else { vec!["Val", "v2", "v4", "v6", "v8", "v10", "v11"] };
+        let want: Vec<Value> = want.into_iter().map(Value::from).chain(std::iter::repeat(Value::Empty)).take(11).collect();
+        assert_eq!(col, want, "hidden rows stay out of a whole-column copy (hidden tail: {hidden_tail})");
+    }
 }
 
 /// Open a workbook by path, and `CELL("filename")` names the file it came from, as Excel does;
