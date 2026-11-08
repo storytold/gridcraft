@@ -18,17 +18,29 @@ fn same_text(a: &str, b: &str) -> bool {
 }
 
 /// A number matches an item with that value (dates as serials) or with that label; anything
-/// else matches the label as text.
-fn item_matches(item: &PivotItemRef, v: &Value) -> bool {
-    if let (Value::Number(n), Value::Number(x)) = (v, &item.value)
-        && n == x
-    {
-        return true;
+/// else matches the label as text. With `exact`, a number matches only an item of that value.
+fn item_matches(item: &PivotItemRef, v: &Value, exact: bool) -> bool {
+    if let Value::Number(n) = v {
+        if let Value::Number(x) = &item.value
+            && n == x
+        {
+            return true;
+        }
+        if exact {
+            return false;
+        }
     }
     if let Value::Bool(b) = v {
         return item.value == Value::Bool(*b);
     }
     v.to_text().is_ok_and(|t| same_text(&t, &item.label))
+}
+
+/// Whether `cell` is the value field asked for with exactly these items.
+fn cell_matches(cell: &PivotDataCell, data_field: &str, pairs: &[(String, Value)], exact: bool) -> bool {
+    (same_text(&cell.data_field, data_field) || same_text(&cell.source_col, data_field))
+        && cell.items.len() == pairs.len()
+        && pairs.iter().all(|(f, v)| cell.items.iter().any(|it| same_text(&it.field, f) && item_matches(it, v, exact)))
 }
 
 fn is_axis_field(pt: &PivotTable, field: &str) -> bool {
@@ -37,23 +49,26 @@ fn is_axis_field(pt: &PivotTable, field: &str) -> bool {
 
 /// The value cell whose value field and items are exactly those asked for. Text items hit the
 /// hash index; numbers and booleans also match by value, which a miss falls back to scanning for.
+/// A number prefers the item of that value: two numeric items can show the same label (0.6 and 1
+/// formatted as `0`), so a label hit counts only when no item has the exact value.
 fn find<'a>(cells: &'a PivotLookup, data_field: &str, pairs: &[(String, Value)]) -> Option<&'a PivotDataCell> {
     let labels: Option<Vec<(&str, String, bool)>> =
         pairs.iter().map(|(f, v)| v.to_text().ok().map(|t| (f.as_str(), t, matches!(v, Value::Bool(_))))).collect();
-    if let Some(labels) = &labels {
+    let hit = labels.as_ref().and_then(|labels| {
         let refs: Vec<(&str, &str, bool)> = labels.iter().map(|(f, t, b)| (*f, t.as_str(), *b)).collect();
-        if let Some(c) = cells.find(data_field, &refs) {
-            return Some(c);
-        }
-    }
+        cells.find(data_field, &refs)
+    });
     if pairs.iter().all(|(_, v)| matches!(v, Value::Text(_))) {
-        return None;
+        return hit;
     }
-    cells.cells()?.iter().find(|cell| {
-        (same_text(&cell.data_field, data_field) || same_text(&cell.source_col, data_field))
-            && cell.items.len() == pairs.len()
-            && pairs.iter().all(|(f, v)| cell.items.iter().any(|it| same_text(&it.field, f) && item_matches(it, v)))
-    })
+    if let Some(c) = hit.filter(|c| cell_matches(c, data_field, pairs, true)) {
+        return Some(c);
+    }
+    let all = cells.cells()?;
+    all.iter()
+        .find(|cell| cell_matches(cell, data_field, pairs, true))
+        .or(hit)
+        .or_else(|| all.iter().find(|cell| cell_matches(cell, data_field, pairs, false)))
 }
 
 impl Evaluator<'_> {

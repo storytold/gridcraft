@@ -812,6 +812,93 @@ fn getpivotdata_report_filter() {
     assert_eq!(val(&s, "H2"), Value::Error(CellError::Ref));
 }
 
+/// A workbook whose Sheet1 holds `rows` under a two-column header, with a PivotTable of the first
+/// column (rows) and the second (sum) on a new sheet; the report sheet is active.
+fn two_column_pivot(header: [&str; 2], rows: Json, key_format: Option<&str>) -> Session {
+    let mut s = Session::new();
+    s.new_workbook();
+    let n = rows.as_array().map_or(0, Vec::len);
+    let mut all = vec![json!(header)];
+    all.extend(rows.as_array().cloned().unwrap_or_default());
+    s.execute("range.setValues", json!({"range": "A1", "values": all})).unwrap();
+    if let Some(code) = key_format {
+        s.execute("home.numberFormat", json!({"range": format!("A2:A{}", n + 1), "code": code})).unwrap();
+    }
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": [header[0]], "values": [header[1]]})).unwrap();
+    s
+}
+
+/// The value the report shows for the row item `label` (one value field: the report's last column).
+fn shown(s: &Session, label: &str) -> Value {
+    let r = pt(s).last_range.unwrap();
+    let row = find_row(s, label).unwrap_or_else(|| panic!("{label} is not in the report"));
+    val(s, &CellRef::new(row, r.end.col).a1())
+}
+
+/// Inserting or deleting rows or columns inside a report keeps GETPIVOTDATA on the requested
+/// item's cell (the stored offsets move with the cells), and undo restores the old positions.
+#[test]
+fn getpivotdata_follows_rows_and_columns_edited_inside_the_report() {
+    let mut s = two_column_pivot(["Region", "Sales"], json!([["East", 10], ["North", 30], ["West", 20]]), None);
+    assert_eq!(pt(&s).last_range.unwrap().start.a1(), "A3");
+    s.execute("cell.set", json!({"cell": "K1", "input": r#"=GETPIVOTDATA("Sales",A3,"Region","West")"#})).unwrap();
+    s.execute("cell.set", json!({"cell": "K2", "input": r#"=GETPIVOTDATA("Sales",A3,"Region","North")"#})).unwrap();
+    assert_eq!(val(&s, "K1"), Value::Number(20.0));
+    // Row 4 splits the header from the items; column B splits the labels from the values (and
+    // moves the formulas from K to L).
+    for (cmd, lines, west, north) in
+        [("home.insertRows", json!({"rows": "4:4"}), "K1", "K2"), ("home.insertColumns", json!({"cols": "B:B"}), "L1", "L2")]
+    {
+        s.execute(cmd, lines).unwrap();
+        assert_eq!(shown(&s, "West"), Value::Number(20.0), "{cmd}");
+        assert_eq!(val(&s, west), shown(&s, "West"), "{cmd}");
+        assert_eq!(val(&s, north), shown(&s, "North"), "{cmd}");
+    }
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(pt(&s).last_range.unwrap().start.a1(), "A3");
+    s.execute("cell.set", json!({"cell": "K3", "input": r#"=GETPIVOTDATA("Sales",A3,"Region","West")"#})).unwrap();
+    assert_eq!(val(&s, "K3"), Value::Number(20.0), "undo restores the report and its offsets");
+    // Deleting North's row moves West up; North itself is gone from the report.
+    let north = find_row(&s, "North").unwrap() + 1;
+    s.execute("home.deleteRows", json!({"rows": format!("{north}:{north}")})).unwrap();
+    s.execute("cell.set", json!({"cell": "K1", "input": r#"=GETPIVOTDATA("Sales",A3,"Region","West")"#})).unwrap();
+    s.execute("cell.set", json!({"cell": "K2", "input": r#"=GETPIVOTDATA("Sales",A3,"Region","North")"#})).unwrap();
+    assert_eq!(val(&s, "K1"), Value::Number(20.0));
+    assert_eq!(val(&s, "K1"), shown(&s, "West"));
+    assert_eq!(val(&s, "K2"), Value::Error(CellError::Ref), "a deleted value cell is not read from its old place");
+    // Lines inserted at the report's first line move the whole report, and lines right after it
+    // leave it alone; either way the offsets stay what they were.
+    for rows in ["3:3", "9:9"] {
+        s.execute("home.insertRows", json!({"rows": rows})).unwrap();
+        let at = pt(&s).last_range.unwrap().start.a1();
+        s.execute("cell.set", json!({"cell": "K1", "input": format!(r#"=GETPIVOTDATA("Sales",{at},"Region","West")"#)})).unwrap();
+        assert_eq!(val(&s, "K1"), Value::Number(20.0), "insert {rows}");
+        assert_eq!(val(&s, "K1"), shown(&s, "West"), "insert {rows}");
+    }
+}
+
+/// Numeric items whose formatted labels collide are told apart by value: an exact numeric item
+/// wins over another item that only displays the same label.
+#[test]
+fn getpivotdata_matches_numeric_items_by_value_before_label() {
+    let mut s = two_column_pivot(["Key", "Sales"], json!([[0.6, 10], [1, 20]]), Some("0"));
+    let p = pt(&s);
+    let labels: Vec<&str> = p.data_index.cells().unwrap().iter().flat_map(|c| c.items.iter().map(|i| i.label.as_str())).collect();
+    assert_eq!(labels, ["1", "1"], "both items display as 1");
+    s.execute("cell.set", json!({"cell": "K1", "input": r#"=GETPIVOTDATA("Sales",A3,"Key",1)"#})).unwrap();
+    s.execute("cell.set", json!({"cell": "K2", "input": r#"=GETPIVOTDATA("Sales",A3,"Key",0.6)"#})).unwrap();
+    assert_eq!(val(&s, "K1"), Value::Number(20.0));
+    assert_eq!(val(&s, "K2"), Value::Number(10.0));
+    // Dates: two times on one day show the same date label; each serial finds its own item.
+    let mut s = two_column_pivot(["Day", "Sales"], json!([[45000, 10], [45000.25, 20]]), Some("m/d/yyyy"));
+    s.execute("cell.set", json!({"cell": "K1", "input": r#"=GETPIVOTDATA("Sales",A3,"Day",45000.25)"#})).unwrap();
+    s.execute("cell.set", json!({"cell": "K2", "input": r#"=GETPIVOTDATA("Sales",A3,"Day",45000)"#})).unwrap();
+    assert_eq!(val(&s, "K1"), Value::Number(20.0));
+    assert_eq!(val(&s, "K2"), Value::Number(10.0));
+}
+
 #[test]
 fn replace_protection() {
     let mut s = sales();
