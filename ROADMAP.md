@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-05 · **Change:** minor (dark sheet, dark charts and dark pictures: opt-in View settings, separate from Display theme; earlier: form controls: buttons, sliders and spin buttons; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-08 · **Change:** minor (dark sheet, dark charts and dark pictures: opt-in View settings, separate from Display theme; earlier: form controls: buttons, sliders and spin buttons; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -135,7 +135,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
-| 2026-11-05 | Dark sheet, dark charts and dark pictures: three checkboxes in the View tab and File › Options › General, off by default and separate from Display theme, show the cells, the charts and the pictures light-on-dark with WordCraft's colour rule and a WCAG 2 contrast guard (#1264). Screen only: saving, printing and exports keep the authored colours |
+| 2026-11-08 | Dark sheet, dark charts and dark pictures: three checkboxes in the View tab and File › Options › General, off by default and separate from Display theme, show the cells, the charts and the pictures light-on-dark with WordCraft's colour rule and a WCAG 2 contrast guard (#1264). Screen only: saving, printing and exports keep the authored colours |
+| 2026-11-06 | A sheet keeps its own scroll position when sheets are inserted, deleted or moved before it: a new PivotTable or inserted sheet opens at the top instead of where its neighbour was scrolled; a closed window's positions are let go (#3485) |
 | 2026-11-02 | Form controls: Insert › Controls places buttons, sliders (scroll bars) and spin buttons on the sheet. A slider or spin button holds a whole number from 0 to 30000 in a linked cell (a drag or a held arrow is one undo step, and editing the cell moves the control); a button runs a macro or one command through the macro policy, asking first in a workbook opened from a file; Assign Action and Format Control edit them, and XLSX files read and write them (control properties, `<controls>` and VML), alongside the form controls GridCraft keeps unchanged |
 | 2026-11-02 | Dialogs take ranges by selection on the grid: reference boxes (RefEdit) with a collapse button that shrinks the dialog while the person selects, in Goal Seek, Solver (including the Model Range of Load/Save) and Data Analysis; while collapsed, the arrow keys move the selection and Shift+arrow extends it, and F4 cycles a reference's anchors |
 | 2026-11-02 | Python mode in the formula bar: Ctrl+Alt+Shift+P, `=PY` then Tab, or editing a Python cell edits its code in the formula bar, with Enter for a new line, Tab to indent and Ctrl+Enter to commit through `python.set`. The code still doesn't run |
@@ -178,6 +179,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-15 | File › Options › Formulas: Maximum Iterations and Maximum Change fields for iterative calculation, disabled while it is off, with Excel's limits (1 to 32767, 0 or more) |
 | 2026-10-15 | Function help follows the interface language: argument hints, autocomplete, Insert Function (search and readable categories) and the Formulas-tab menus read per-language tables of descriptions and argument names; Spanish keeps its 10 functions in the new format |
 | 2026-10-15 | Row auto-fit counts a cell's line breaks only when the cell wraps, as Excel does: a file whose unwrapped cells hold multi-line text no longer opens with tall rows (typing a break still turns wrap on and grows the row) |
+| 2026-10-14 | Set precision as displayed is applied: with the option on, formula results, spills and numbers typed or reformatted are stored as their number format shows them and formulas calculate from those values; `formulas.calculationOptions` gains `precisionAsDisplayed` (turning it on rounds existing constants; locked constants on a protected sheet keep their value; numbers written to a new sheet are rounded too) (#1343) |
 | 2026-10-14 | Lookups (MATCH, XMATCH, VLOOKUP, HLOOKUP, XLOOKUP, LOOKUP) compare numbers exactly like Excel, so a computed key such as `=0.1+0.2` no longer finds 0.3; `=` and COUNTIF/SUMIF keep their 15-digit comparison |
 | 2026-10-14 | Functions: EOMONTH, EDATE, WORKDAY, NETWORKDAYS, YEARFRAC, WEEKNUM, the bond and coupon functions, DISC, BIN2DEC, IM* and the other Analysis ToolPak functions give `#VALUE!` for a reference to more than one cell in a value argument, as Excel 365 does, instead of spilling; array constants and computed arrays still lift |
 | 2026-10-14 | Protect Sheet on a protected sheet: Home › Format, its keytips (HOP, RPS) and the tab menu now read Unprotect Sheet… and unprotect (straight away without a password); a protected sheet that forbids selecting locked (or unlocked) cells is enforced for clicks, arrows and Go To, and the Protect Sheet dialog has the select options (#1346) |
@@ -196,6 +198,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | Conditional formatting: a rule gathers range statistics only when it reads them (top/bottom, above average, duplicates, scales, bars, icons) and borrows them instead of copying them per cell, so the per-frame lookup of an expression or cell-value rule no longer visits its whole range (#1098, part 1) |
 | 2026-10-12 | Next/previous sheet navigation stops at the first/last visible worksheet instead of activating a hidden boundary sheet; the current selection is retained |
 | 2026-10-21 | Macro engine ([macros.md](docs/macros.md)): typed, declarative macros saved in the workbook (a JSON field; hidden names in xlsx); declared inputs checked with messages that name the cells; tokens (`Input.col(2)`, `Row`, `Output`, `Name:Total`, `{{…}}` in formulas); one undo step with full rollback; a footprint dry run with ask, fail, overwrite, shift down or shift right; a policy that keeps macros away from files and the app, with approval for macros in opened files; Repeat, If and Stop steps; a debugger; a relative recorder; `macro.*` commands beside the unchanged Automate scripts |
+| 2026-10-13 | Charts: one combo plot-kind rule for resolving and drawing; ticks of a scale off the step grid keep their own values (#1146) |
 | 2026-10-12 | Security: the `--control` server requires an auth token (random, kept in a 0600 file or chosen with `GRIDCRAFT_CONTROL_TOKEN`) on each connection's first line and closes bad connections (#777) |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
 | 2026-10-12 | Number formats: parsing a format code is linear in its length (long runs of `[`, `,` or `/` no longer take quadratic time), and an unclosed `[` is a literal when splitting sections as well as when tokenizing (#810) |
@@ -259,7 +262,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | minor | Progress log: dark sheet, dark charts and dark pictures |
+| 2026-11-08 | minor | Progress log: dark sheet, dark charts and dark pictures |
+| 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |
 | 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |
 | 2026-11-02 | minor | Progress log: RefEdit reference boxes in dialogs |
 | 2026-11-02 | minor | Progress log: Python mode in the formula bar |
@@ -290,6 +294,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-16 | minor | Progress log: floating pictures' textures bounded and kept per workbook |
 | 2026-10-16 | trivial | Progress log: web preferences kept between visits (#1562) |
 | 2026-10-16 | minor | Progress log: interface fonts held once instead of twice |
+| 2026-10-14 | minor | Progress log: Set precision as displayed applied in calculation (#1343) |
 | 2026-10-14 | minor | Progress log: `.xls` import reads cell formatting |
 | 2026-10-14 | minor | Progress log: lookups compare numbers exactly |
 | 2026-10-14 | minor | Progress log: Analysis ToolPak value arguments reject multi-cell references |
