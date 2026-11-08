@@ -171,7 +171,15 @@ fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
 fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     let fmt = str_param(p, "format").unwrap_or("xlsx");
     let d = s.doc()?;
-    let name = format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or("Book"));
+    // A template title is already the complete stem (`Forecast.v2`, not `Forecast.v2.xltx`).
+    // Taking `file_stem` from it again would discard the part after its final period.
+    let title = d.display_title();
+    let stem = if d.wb.source_path.as_ref().is_some_and(|p| is_template_path(&p.to_string_lossy())) {
+        title
+    } else {
+        std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book").to_string()
+    };
+    let name = format!("{stem}.{fmt}");
     // The file name goes into a PivotChart's link to its PivotTable.
     let bytes = crate::io::save_bytes(&d.wb, &name)?;
     Ok(json!({"name": name, "base64": crate::io::base64_encode(&bytes), "bytes": bytes.len()}))

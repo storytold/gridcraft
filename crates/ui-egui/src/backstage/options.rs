@@ -34,11 +34,10 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.label("Default personal templates location:");
-        ui.add(
-            egui::TextEdit::singleline(&mut app.ui.personal_templates_location)
-                .desired_width(360.0)
-                .hint_text("Folder containing .xltx and .xltm files"),
-        );
+        let mut location = app.ui.personal_templates_location.clone();
+        if ui.add(egui::TextEdit::singleline(&mut location).desired_width(360.0).hint_text("Folder containing .xltx and .xltm files")).changed() {
+            app.run_or_alert("options.personalTemplatesLocation", json!({"location": location}));
+        }
     });
     dim(ui, "Templates create a new workbook; the original template is never overwritten.");
     let Some((calc, view)) = app.session.active().map(|d| (d.wb.calc.clone(), d.wb.view)) else { return };

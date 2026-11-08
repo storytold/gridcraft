@@ -20,13 +20,14 @@ fn v(s: &Session, a: &str) -> Value {
 
 #[test]
 fn opening_a_template_creates_an_unsaved_workbook_with_a_stem_title() {
-    let bytes = crate::io::save_bytes(&gridcraft_model::Workbook::new(), "Personal.xltx").unwrap();
+    let bytes = crate::io::save_bytes(&gridcraft_model::Workbook::new(), "Forecast.v2.xltx").unwrap();
     let mut s = s();
-    let result = s.execute("file.open", json!({"name": "Personal.xltx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    let result = s.execute("file.open", json!({"name": "Forecast.v2.xltx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
 
-    assert_eq!(result["title"], "Personal");
-    assert_eq!(s.doc().unwrap().display_title(), "Personal");
+    assert_eq!(result["title"], "Forecast.v2");
+    assert_eq!(s.doc().unwrap().display_title(), "Forecast.v2");
     assert!(s.doc().unwrap().path.is_none(), "Save must ask for a destination instead of replacing the template");
+    assert_eq!(s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["name"], "Forecast.v2.xlsx");
 }
 
 #[test]
