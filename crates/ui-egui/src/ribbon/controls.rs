@@ -105,7 +105,7 @@ pub(crate) fn editable_combo(
     anchor: &egui::Response,
     salt: &'static str,
     current_value: &str,
-    items: &[(&str, String)],
+    items: &[(&str, &str)],
     forced: bool,
 ) -> ComboResult {
     combo_popup(ui, anchor, salt, current_value, items, ComboPopupOptions { forced, filter: true, under: None })
@@ -120,7 +120,7 @@ pub(super) fn list_combo(
     under: Rect,
     salt: &'static str,
     current_value: &str,
-    items: &[(&str, String)],
+    items: &[(&str, &str)],
 ) -> ComboResult {
     combo_popup(ui, anchor, salt, current_value, items, ComboPopupOptions { forced: false, filter: false, under: Some(under) })
 }
@@ -142,7 +142,7 @@ struct ComboPopupOptions {
 
 /// Arrow and Enter keys (taken out of the input so a filter field never sees them), the filter
 /// field when `text` is given, and the rows its text matches.
-fn combo_head(ui: &mut Ui, text: Option<(&mut String, egui::Id)>, open_now: bool, sel: i32, items: &[(&str, String)]) -> ComboHead {
+fn combo_head(ui: &mut Ui, text: Option<(&mut String, egui::Id)>, open_now: bool, sel: i32, items: &[(&str, &str)]) -> ComboHead {
     let (mut down, mut up, mut enter) = (false, false, false);
     ui.input(|i| {
         down = i.key_pressed(egui::Key::ArrowDown);
@@ -186,7 +186,7 @@ fn combo_head(ui: &mut Ui, text: Option<(&mut String, egui::Id)>, open_now: bool
 }
 
 /// The rows of a combo popup. Returns the picked value and the highlighted row.
-fn combo_rows(ui: &mut Ui, head: ComboHead, items: &[(&str, String)], row_w: f32) -> (Option<String>, i32) {
+fn combo_rows(ui: &mut Ui, head: ComboHead, items: &[(&str, &str)], row_w: f32) -> (Option<String>, i32) {
     let ComboHead { filtered, mut sel, down, up, enter } = head;
     let mut picked = None;
     if enter && !filtered.is_empty() {
@@ -194,7 +194,7 @@ fn combo_rows(ui: &mut Ui, head: ComboHead, items: &[(&str, String)], row_w: f32
         picked = Some(items[idx].0.to_string());
     }
     for (pos, i) in filtered.iter().enumerate() {
-        let (value, disp) = &items[*i];
+        let (value, disp) = items[*i];
         let row = ui.add(egui::Button::selectable(pos as i32 == sel, egui::RichText::new(disp)).min_size(vec2(row_w, 20.0)));
         if (down || up) && pos as i32 == sel && !ui.clip_rect().contains_rect(row.rect) {
             row.scroll_to_me(Some(if down { egui::Align::Max } else { egui::Align::Min }));
@@ -217,7 +217,7 @@ fn combo_popup(
     anchor: &egui::Response,
     salt: &'static str,
     current_value: &str,
-    items: &[(&str, String)],
+    items: &[(&str, &str)],
     options: ComboPopupOptions,
 ) -> ComboResult {
     let ComboPopupOptions { forced, filter, under } = options;
@@ -228,20 +228,27 @@ fn combo_popup(
         egui::Popup::open_id(ui.ctx(), popup_id);
     }
     let open_now = egui::Popup::is_id_open(ui.ctx(), popup_id);
-    let values: Vec<String> = items.iter().map(|(v, _)| (*v).to_owned()).collect();
-    if open_now && (!st.was_open || st.values != values) {
-        if !st.was_open {
-            st.text = String::new();
-            // The reset lands on the frame AFTER the popup opens, which usually has no input of
-            // its own — without a repaint request the stale filtered list stays on screen.
-            ui.ctx().request_repaint();
+    if open_now {
+        // Change detection without allocating: the item values are compared against the stored
+        // ones in place, and the stored copy is only rebuilt when the list actually changed.
+        // A closed popup skips this entirely — reopening rematches anyway (see `!st.was_open`).
+        let changed = st.values.len() != items.len() || st.values.iter().zip(items.iter()).any(|(old, (v, _))| old.as_str() != *v);
+        if !st.was_open || changed {
+            if !st.was_open {
+                st.text = String::new();
+                // The reset lands on the frame AFTER the popup opens, which usually has no input of
+                // its own — without a repaint request the stale filtered list stays on screen.
+                ui.ctx().request_repaint();
+            }
+            // Rematch on a changed list too, not just on open: the font list grows when the
+            // background font scan lands, and a highlight left at its old index would sit on a
+            // different row, so Enter would apply that row instead of the current value.
+            st.sel = items.iter().position(|(v, _)| *v == current_value).map(|i| i as i32).unwrap_or(0);
+            if changed {
+                st.values = items.iter().map(|(v, _)| (*v).to_owned()).collect();
+            }
         }
-        // Rematch on a changed list too, not just on open: the font list grows when the
-        // background font scan lands, and a highlight left at its old index would sit on a
-        // different row, so Enter would apply that row instead of the current value.
-        st.sel = items.iter().position(|(v, _)| *v == current_value).map(|i| i as i32).unwrap_or(0);
     }
-    st.values = values;
     st.was_open = open_now;
     // Below `under` and as wide as it, or below the anchor itself.
     let mut field = anchor.clone();
