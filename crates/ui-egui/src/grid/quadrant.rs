@@ -278,6 +278,9 @@ fn paint_cell_decorations(q: &QuadrantPaint<'_>, c: CellRef, rect: Rect, lk: &Lo
     false
 }
 
+/// Most repeats of a fill character laid out in one cell.
+const MAX_FILL_REPEATS: usize = 8192;
+
 fn paint_data_bar(p: &egui::Painter, rect: Rect, frac: f32, rgb: [u8; 3], gradient: bool) {
     let bar = Rect::from_min_size(pos2(rect.left() + 2.0, rect.top() + 2.0), vec2((rect.width() - 4.0) * frac, rect.height() - 4.0));
     let col = theme::color32(rgb);
@@ -432,7 +435,8 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     {
         let base_w = w;
         let cw = p.layout_no_wrap(ch.to_string(), font.clone(), color).size().x.max(1.0);
-        let n = (((avail_w - 2.0 * pad) - base_w) / cw).floor().max(0.0) as usize;
+        // A merged cell's width counts offscreen columns: no screen shows more repeats than this.
+        let n = ((((avail_w - 2.0 * pad) - base_w) / cw).floor().max(0.0) as usize).min(MAX_FILL_REPEATS);
         let mut s = first_line.clone();
         if first_line.is_char_boundary(pos) {
             s.insert_str(pos, &ch.to_string().repeat(n));

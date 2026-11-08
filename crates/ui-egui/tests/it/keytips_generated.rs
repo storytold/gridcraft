@@ -1103,6 +1103,13 @@ fn keytip_hx_() {
 }
 
 #[test]
+fn keytip_nbu_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "NBU", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "insert.button"), "NBU must journal insert.button");
+}
+
+#[test]
 fn keytip_nc1_() {
     let mut h = harness(blank());
     sequence(&mut h, "NC1", false);
@@ -1315,6 +1322,13 @@ fn keytip_nsa_() {
 }
 
 #[test]
+fn keytip_nsb_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "NSB", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "insert.spinButton"), "NSB must journal insert.spinButton");
+}
+
+#[test]
 fn keytip_nsc_() {
     let mut h = harness(blank());
     sequence(&mut h, "NSC", false);
@@ -1343,6 +1357,13 @@ fn keytip_nsh_() {
     let mut h = harness(blank());
     sequence(&mut h, "NSH", false);
     assert!(h.state().session.journal.iter().any(|(id, _)| id == "insert.shape"), "NSH must journal insert.shape");
+}
+
+#[test]
+fn keytip_nsl_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "NSL", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "insert.slider"), "NSL must journal insert.slider");
 }
 
 #[test]
@@ -3084,7 +3105,7 @@ fn keytip_q_() {
 
 #[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 412;
+    const EXPECTED: usize = 413;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 
