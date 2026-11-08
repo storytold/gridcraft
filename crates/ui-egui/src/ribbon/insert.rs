@@ -1,5 +1,7 @@
 use super::controls::{act, anchor_keytip, control_keytip, invoke, popup_command, sep, sep_wide};
-use super::{Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, big_split_button, icons, json, small_button, small_toggle_button, vec2};
+use super::{
+    Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, big_split_button, icons, json, small_button, small_toggle_button, vec2,
+};
 
 /// The card width below which the Insert tab tightens its group separators and spacing. The tab
 /// carries Excel's full set of groups; with the CI fonts' wider labels the last ones (Equation,
