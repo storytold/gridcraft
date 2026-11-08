@@ -325,9 +325,17 @@ impl<'a> Binder<'a> {
                 if fixed_slot {
                     return true;
                 }
-                let named = self.model.table_index(keyword).is_some() || self.model.measure_index(keyword).is_some();
-                let variable = vars.iter().any(|var| var.eq_ignore_ascii_case(keyword));
-                !named && !variable
+                if self.model.table_index(keyword).is_some() || self.model.measure_index(keyword).is_some() {
+                    return false;
+                }
+                // The interval and calendar-flag slots are documented enumerations that the catalog
+                // types as `Text`, so they reach this filter instead of the fixed-slot branch. A
+                // variable must not capture them — `DATEADD ( dates, 1, YEAR )` stays a year even
+                // inside `VAR YEAR = 1` — while any other word there is still a name.
+                if interval_keyword(spec.name, index, keyword) {
+                    return true;
+                }
+                !vars.iter().any(|var| var.eq_ignore_ascii_case(keyword))
             });
             if let Some(keyword) = keyword {
                 args.push(BoundExpr::Keyword(keyword));
@@ -384,6 +392,27 @@ const WINDOW_KEYWORDS: &[&str] = &["ASC", "DESC", "ABS", "REL", "DEFAULT", "FIRS
 fn clause_keyword(expr: &Expr, allowed: &[&str]) -> Option<String> {
     let word = keyword_name(expr)?;
     allowed.iter().any(|candidate| word.eq_ignore_ascii_case(candidate)).then_some(word)
+}
+
+/// Whether `word` is a documented time-intelligence interval or calendar flag at the 0-based
+/// `index` of its call.
+///
+/// Those slots are enumerations the catalog types as `Text`, so they reach the name filter instead
+/// of the fixed-slot branch; a variable of the same spelling must still not shadow them. A word
+/// outside the set is left to normal name binding, so a typo or a genuine variable reports as one.
+fn interval_keyword(function: &str, index: usize, word: &str) -> bool {
+    let allowed: &[&str] = match (function, index) {
+        // `DATEADD ( <Dates>, <NumberOfIntervals>, <Interval>[, <Extension>[, <Truncation>]] )`
+        ("DATEADD", 2) => &["DAY", "MONTH", "QUARTER", "YEAR"],
+        ("DATEADD", 3) | ("DATEADD", 4) => &["EXTENDING", "ANCHORED", "PRECISE"],
+        // `DATESINPERIOD ( <Dates>, <StartDate>, <NumberOfIntervals>, <Interval>[, <EndBehavior>] )`
+        ("DATESINPERIOD", 3) => &["DAY", "WEEK", "MONTH", "QUARTER", "YEAR"],
+        ("DATESINPERIOD", 4) => &["PRECISE", "ENDALIGNED"],
+        // `PARALLELPERIOD ( <Dates>, <NumberOfIntervals>, <Interval> )`
+        ("PARALLELPERIOD", 2) => &["MONTH", "QUARTER", "YEAR"],
+        _ => return false,
+    };
+    allowed.iter().any(|candidate| word.eq_ignore_ascii_case(candidate))
 }
 
 fn collect_measure_names(model: &DataModel, expr: &BoundExpr, out: &mut BTreeSet<String>) {

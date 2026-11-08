@@ -255,12 +255,41 @@ fn documented_keyword_arguments_bind_instead_of_resolving_as_names() {
 #[test]
 fn an_interval_keyword_is_not_shadowed_by_a_variable() {
     let model = sample_model();
-    // A variable in scope must not turn the documented interval argument into a name: `YEAR` here
-    // is DATEDIFF's interval, and the binder keeps it a keyword.
-    let bound = bind(&model, "VAR YEAR = 1 RETURN DATEDIFF ( Sales[Amount], Sales[Amount], YEAR )");
-    let debug = format!("{bound:?}");
-    assert!(debug.contains("Keyword(\"YEAR\")"), "{debug}");
-    // A variable still wins where the parameter is documented as text: RANKX's Ties argument.
+    // A variable in scope must not turn a documented interval into a name. `DATEDIFF` catalogues
+    // its interval as `Any` while `DATEADD`, `DATESINPERIOD` and `PARALLELPERIOD` catalogue theirs
+    // as `Text`; the shadowing rule has to hold for both spellings, or a variable called `YEAR`
+    // silently replaces the interval and the call no longer shifts dates.
+    let calls: [(&str, usize, &[&str]); 4] = [
+        ("DATEDIFF ( Sales[Amount], Sales[Amount], {interval} )", 2, &["DAY", "MONTH", "QUARTER", "YEAR"]),
+        ("DATEADD ( Date[Date], 1, {interval} )", 2, &["DAY", "MONTH", "QUARTER", "YEAR"]),
+        ("DATESINPERIOD ( Date[Date], Date[Date], -12, {interval} )", 3, &["DAY", "WEEK", "MONTH", "QUARTER", "YEAR"]),
+        ("PARALLELPERIOD ( Date[Date], 1, {interval} )", 2, &["MONTH", "QUARTER", "YEAR"]),
+    ];
+    for (template, position, intervals) in calls {
+        for interval in intervals {
+            let call = template.replace("{interval}", interval);
+            let body = match bind(&model, &format!("VAR {interval} = 1 RETURN {call}")) {
+                BoundExpr::VarReturn { body, .. } => *body,
+                other => panic!("{call}: expected a VAR block, got {other:?}"),
+            };
+            let args = match body {
+                BoundExpr::Call { args, .. } => args,
+                other => panic!("{call}: expected a call, got {other:?}"),
+            };
+            assert!(
+                matches!(&args[position], BoundExpr::Keyword(word) if word.eq_ignore_ascii_case(interval)),
+                "{call}: the interval must stay `{interval}`, got {:?}",
+                args[position]
+            );
+        }
+    }
+    // The other direction: a word that is not a documented enumeration stays a name, so the
+    // variable binds — `PARALLELPERIOD` has no `DAY` interval, and neither does a genuine text
+    // parameter (RANKX's Ties).
+    let bound = bind(&model, "VAR DAY = 1 RETURN PARALLELPERIOD ( Date[Date], 1, DAY )");
+    assert!(format!("{bound:?}").contains("Variable"), "{bound:?}");
+    let bound = bind(&model, "VAR Tertial = 1 RETURN DATEADD ( Date[Date], 1, Tertial )");
+    assert!(format!("{bound:?}").contains("Variable"), "{bound:?}");
     let bound = bind(&model, "VAR DENSE = 1 RETURN RANKX ( Sales, Sales[Amount], 42, DENSE )");
     assert!(format!("{bound:?}").contains("Variable"), "{bound:?}");
 }
