@@ -157,6 +157,18 @@ The messages and both transports are the shared contract of [`craft-web-host`](h
 - **Files from the host are untrusted input.** An opened file goes through the same reading as one picked with File ▸ Open or dropped on the window, with the same format limits; before it is copied into the app's memory, its size is checked against the host open limit (512 MiB) and a larger file is refused, and a name is cut to 255 characters.
 - **The event and message names are the interface.** `gridcraft:ready`, `gridcraft:open`, `gridcraft:save`, `gridcraft:dirty` and `gridcraft:failed`, and the fields they carry (the same as the `?host=parent` messages), stay stable; changing one is a breaking change.
 
+### Driving it from the page (`window.gridcraft`)
+
+Every GridCraft web build puts `window.gridcraft` on the page, from [`craft-web-api`](https://github.com/storytold/craft-libs/tree/main/crates/web-api) (storytold/craft-libs#413), the same shape in every Craft app. `gridcraft.request(method, params)` calls any method of the control channel the desktop app serves (`docs/control-protocol.md`), and `execute(command, params)`, `commands()`, `docInspect(params)`, `uiInspect(params)` and `screenshot(params)` are shortcuts for the common ones. Each returns a Promise that resolves with the method's result and rejects with an `Error`; a call the app does not answer within 30 seconds rejects, and the app skips it if it has not started it; a call the app has already taken still finishes, so a retry after a timeout can apply a command twice.
+
+```js
+const book = await gridcraft.docInspect();               // sheets, used ranges, tables, charts, names, selection
+await gridcraft.execute("cell.set", { cell: "A1", input: "Total" });
+const { data } = await gridcraft.screenshot();          // the canvas as PNG (base64)
+```
+
+The API is there in every mode, with or without a host. Opening a workbook, handing a saved or exported file to the page, the file name and the unsaved flag stay with the host messages above.
+
 ## Renderer selection
 
 GridCraft's web build is the same egui app as the desktop one, compiled to wasm
