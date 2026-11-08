@@ -86,6 +86,36 @@ fn visible_row_runs(range: RangeRef, hidden: &std::collections::BTreeSet<u32>) -
     runs
 }
 
+/// The validation rules of `src` cut into the areas of a packed block: one rule per area a rule
+/// touches, over that area's part moved by the area's shift. `sorted` areas run in order.
+fn pack_validations(src: &gridcraft_model::Sheet, sorted: &[RangeRef], shifts: &[(i64, i64)], across: bool) -> Vec<gridcraft_model::Validation> {
+    let key = |c: CellRef| if across { c.col } else { c.row };
+    let mut packed_rules = Vec::new();
+    for dv in &src.validations {
+        let Some(from) = dv.ranges.first().map(|r| r.start) else { continue };
+        // The areas each of the rule's ranges touches lie side by side in the sorted list.
+        let end_key = |a: &RangeRef| if across { a.end.col } else { a.end.row };
+        let mut by_area: std::collections::BTreeMap<usize, Vec<RangeRef>> = Default::default();
+        for r in &dv.ranges {
+            let first = sorted.partition_point(|a| end_key(a) < key(r.start));
+            for (i, a) in sorted.iter().enumerate().skip(first).take_while(|(_, a)| key(a.start) <= end_key(r)) {
+                let (dr, dc) = shifts[i];
+                let moved = r.intersection(a).and_then(|x| Some(RangeRef::new(x.start.offset(dr, dc)?, x.end.offset(dr, dc)?)));
+                by_area.entry(i).or_default().extend(moved);
+            }
+        }
+        for ranges in by_area.into_values() {
+            let Some(to) = ranges.first().map(|r| r.start) else { continue };
+            let mut rule = dv.clone();
+            rule.f1 = super::super::data::move_rule_formula(&dv.f1, from, to);
+            rule.f2 = dv.f2.as_ref().map(|f| super::super::data::move_rule_formula(f, from, to));
+            rule.ranges = ranges;
+            packed_rules.push(rule);
+        }
+    }
+    packed_rules
+}
+
 /// Excel copies a multi-area selection only when the areas line up: all cover the same rows (they
 /// slide together side by side, left to right) or all cover the same columns (stacked, top to
 /// bottom), without overlapping. Returns a copy of the workbook whose sheet holds the areas packed
@@ -122,18 +152,33 @@ fn slide_together(wb: &gridcraft_model::Workbook, sheet: usize, areas: &[RangeRe
     dst.comments.retain(|c, _| !block.contains(*c));
     dst.hyperlinks.retain(|c, _| !block.contains(*c));
     super::super::data::remove_validation_cells(&mut dst.validations, &[block]);
-    let mut packed_rules = Vec::new();
     dst.merges.retain(|m| !m.intersects(&block));
     if across {
         dst.cols.retain(|c, _| !(block.start.col..=block.end.col).contains(c));
     } else {
         dst.rows.retain(|r, _| !(block.start.row..=block.end.row).contains(r));
     }
+    // Where each area lands: the shift of its cells, and its first row or column in the block.
+    let key = |c: CellRef| if across { c.col } else { c.row };
     let mut next = if across { anchor.col } else { anchor.row };
+    let mut shifts: Vec<(i64, i64)> = Vec::with_capacity(sorted.len());
     for a in &sorted {
-        let (dr, dc) = if across { (0, i64::from(next) - i64::from(a.start.col)) } else { (i64::from(next) - i64::from(a.start.row), 0) };
-        let cells = src.cells.iter_range(*a).map(|(c, _)| c).chain(src.spill.keys().copied().filter(|c| a.contains(*c)));
-        for c in cells {
+        let to = i64::from(next);
+        shifts.push(if across { (0, to - i64::from(a.start.col)) } else { (to - i64::from(a.start.row), 0) });
+        next = next.saturating_add(if across { a.width() } else { a.height() });
+    }
+    // The areas never overlap and run in order, so the area holding a cell is found by search:
+    // each map below is read once, whatever the number of areas.
+    let area_of = |c: CellRef| -> Option<usize> {
+        let i = sorted.partition_point(|a| key(a.start) <= key(c)).checked_sub(1)?;
+        sorted.get(i)?.contains(c).then_some(i)
+    };
+    let moved = |c: CellRef| -> Option<CellRef> {
+        let (dr, dc) = shifts[area_of(c)?];
+        c.offset(dr, dc)
+    };
+    for (a, &(dr, dc)) in sorted.iter().zip(&shifts) {
+        for (c, _) in src.cells.iter_range(*a) {
             let Some(to) = c.offset(dr, dc) else { continue };
             let style = src.cell(c).map(|x| x.style).unwrap_or_default();
             dst.set_cell(to, Cell { value: src.value(c), formula: None, style, py: None });
@@ -141,38 +186,38 @@ fn slide_together(wb: &gridcraft_model::Workbook, sheet: usize, areas: &[RangeRe
                 dst.cell_pictures.insert(to, picture.clone());
             }
         }
-        // Links and validation rules follow their cells too, so a row the filter hides leaves its
-        // own behind.
-        for (c, link) in src.hyperlinks.range(a.start..=a.end).filter(|(c, _)| a.contains(**c)) {
-            if let Some(to) = c.offset(dr, dc) {
-                dst.hyperlinks.insert(to, link.clone());
-            }
+    }
+    for c in src.spill.keys().copied() {
+        let Some(to) = moved(c) else { continue };
+        let style = src.cell(c).map(|x| x.style).unwrap_or_default();
+        dst.set_cell(to, Cell { value: src.value(c), formula: None, style, py: None });
+        if let Some(picture) = src.cell_pictures.get(&c) {
+            dst.cell_pictures.insert(to, picture.clone());
         }
-        for dv in &src.validations {
-            let ranges: Vec<RangeRef> = dv
-                .ranges
-                .iter()
-                .filter_map(|r| r.intersection(a))
-                .filter_map(|r| Some(RangeRef::new(r.start.offset(dr, dc)?, r.end.offset(dr, dc)?)))
-                .collect();
-            let (Some(from), Some(to)) = (dv.ranges.first().map(|r| r.start), ranges.first().map(|r| r.start)) else { continue };
-            let mut rule = dv.clone();
-            rule.f1 = super::super::data::move_rule_formula(&dv.f1, from, to);
-            rule.f2 = dv.f2.as_ref().map(|f| super::super::data::move_rule_formula(f, from, to));
-            rule.ranges = ranges;
-            packed_rules.push(rule);
+    }
+    // Links and validation rules follow their cells too, so a row the filter hides leaves its own
+    // behind.
+    for (c, link) in &src.hyperlinks {
+        if let Some(to) = moved(*c) {
+            dst.hyperlinks.insert(to, link.clone());
         }
-        for (c, comment) in src.comments.iter().filter(|(c, _)| a.contains(**c)) {
-            if let Some(to) = c.offset(dr, dc) {
-                dst.comments.insert(to, comment.clone());
-            }
+    }
+    let packed_rules = pack_validations(src, &sorted, &shifts, across);
+    for (c, comment) in &src.comments {
+        if let Some(to) = moved(*c) {
+            dst.comments.insert(to, comment.clone());
         }
-        for m in src.merges.iter().filter(|m| a.contains_range(m)) {
-            if let (Some(s), Some(e)) = (m.start.offset(dr, dc), m.end.offset(dr, dc)) {
-                dst.merges.push(RangeRef::new(s, e));
-            }
+    }
+    for m in &src.merges {
+        let Some(i) = area_of(m.start).filter(|&i| sorted[i].contains_range(m)) else { continue };
+        let (dr, dc) = shifts[i];
+        if let (Some(s), Some(e)) = (m.start.offset(dr, dc), m.end.offset(dr, dc)) {
+            dst.merges.push(RangeRef::new(s, e));
         }
-        // Column widths (side by side) or row heights and hidden rows (stacked) follow their cells.
+    }
+    // Column widths (side by side) or row heights and hidden rows (stacked) follow their cells.
+    let mut next = if across { anchor.col } else { anchor.row };
+    for a in &sorted {
         if across {
             for (c, info) in src.cols.range(a.start.col..=a.end.col) {
                 dst.cols.insert(next.saturating_add(c.saturating_sub(a.start.col)), *info);

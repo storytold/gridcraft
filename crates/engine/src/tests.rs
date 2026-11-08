@@ -5181,6 +5181,49 @@ fn insert_copied_cells_after_a_filtered_row_copy_inserts_only_the_rows_showing()
     assert_eq!(v(&s, "A27"), Value::Empty);
 }
 
+/// Copying a filtered range with many separate runs of rows showing moves each row's note, link and
+/// merge with it, and leaves the hidden rows' behind.
+#[test]
+fn filtered_copy_with_many_runs_moves_notes_and_merges_with_their_rows() {
+    let mut s = s();
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=2001 {
+        rows.push(json!([format!("v{i}"), if i % 2 == 1 { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    for r in 2..=2001u32 {
+        let note = gridcraft_model::Comment {
+            author: "a".into(),
+            text: format!("note {r}"),
+            replies: vec![],
+            threaded: false,
+            resolved: false,
+            visible: false,
+            dates: vec![],
+            note_box: None,
+        };
+        sh.comments.insert(CellRef::new(r - 1, 0), note);
+    }
+    sh.merges.push(gridcraft_core::RangeRef::new(CellRef::new(3, 1), CellRef::new(3, 2)));
+    sh.merges.push(gridcraft_core::RangeRef::new(CellRef::new(2, 1), CellRef::new(2, 2)));
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:C2001"})).unwrap();
+    s.execute("edit.paste", json!({"at": "H1"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let note = |row: u32| sh.comments.get(&CellRef::new(row - 1, 7)).map(|c| c.text.clone());
+    assert_eq!(note(1), None);
+    assert_eq!(note(2).as_deref(), Some("note 2"));
+    assert_eq!(note(3).as_deref(), Some("note 4"));
+    assert_eq!(note(1001).as_deref(), Some("note 2000"));
+    assert_eq!(sh.comments.keys().filter(|c| c.col == 7).count(), 1000);
+    // Only the merge on a row showing (row 4) came along, packed to the row it landed in (row 3).
+    assert!(sh.merges.contains(&gridcraft_core::RangeRef::new(CellRef::new(2, 8), CellRef::new(2, 9))));
+    assert_eq!(sh.merges.iter().filter(|m| m.start.col >= 7).count(), 1);
+}
+
 #[test]
 fn editing_quote_prefixed_text_keeps_it_text() {
     let mut s = s();
