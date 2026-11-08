@@ -200,7 +200,8 @@ fn painter_moves(app: &SheetApp, key: egui::Key, m: egui::Modifiers) -> bool {
         && match key {
             Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight | Key::PageUp | Key::PageDown | Key::Home | Key::End => true,
             // Shift+Space selects the row and Ctrl+Space the column; plain Space types a space.
-            Key::Space => m.shift || m.ctrl || m.command,
+            // Ctrl/Cmd+Shift+Space selects all, which doesn't paint (below).
+            Key::Space => m.shift != (m.ctrl || m.command),
             // Select all doesn't paint: like a click on the corner, which only selects, the
             // whole sheet would need a sheet-wide format rather than per-cell styles.
             _ => false,
