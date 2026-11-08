@@ -626,7 +626,13 @@ fn imported_scalar_range_name_intersects_before_arithmetic() {
     sheet.name = "Data".into();
     sheet.cells.set(CellRef::parse("A1").unwrap(), Cell::value(Value::Number(5.0)));
     sheet.cells.set(CellRef::parse("A2").unwrap(), Cell::value(Value::Number(6.0)));
-    for (cell, text) in [("B2", "Offering+1"), ("C2", "SUM(Offering)+1")] {
+    for (cell, text) in [
+        ("B2", "Offering+1"),
+        ("C2", "SUM(Offering)+1"),
+        ("D2", "SUMPRODUCT(--(A1:A2>0))"),
+        ("E2", "ABS(Offering+1)"),
+        ("F2", "SUMPRODUCT(Offering+1)"),
+    ] {
         let mut formula = Formula::new(text);
         formula.preserve_scalar = true;
         sheet.cells.set(CellRef::parse(cell).unwrap(), Cell::formula(formula));
@@ -637,6 +643,9 @@ fn imported_scalar_range_name_intersects_before_arithmetic() {
     let sheet = doc.wb.sheet(0).unwrap();
     assert_eq!(sheet.value(CellRef::parse("B2").unwrap()), Value::Number(7.0));
     assert_eq!(sheet.value(CellRef::parse("C2").unwrap()), Value::Number(12.0));
+    assert_eq!(sheet.value(CellRef::parse("D2").unwrap()), Value::Number(2.0));
+    assert_eq!(sheet.value(CellRef::parse("E2").unwrap()), Value::Number(7.0));
+    assert_eq!(sheet.value(CellRef::parse("F2").unwrap()), Value::Number(13.0));
 }
 
 #[test]

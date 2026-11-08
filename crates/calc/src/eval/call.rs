@@ -312,7 +312,14 @@ impl<'h> Evaluator<'h> {
             _ => None,
         };
         for (i, a) in args.iter().enumerate() {
+            // Array parameters keep element-wise arithmetic even when the enclosing imported
+            // formula uses implicit intersection (for example SUMPRODUCT(--(A1:A2>0))).
+            let scalar_operators = self.scalar_operators;
+            if !spec.is_scalar_arg(i) {
+                self.scalar_operators = false;
+            }
             let mut ev = self.eval(a);
+            self.scalar_operators = scalar_operators;
             if lambda_at == Some(i)
                 && let Ev::L(l) = &ev
             {
@@ -365,7 +372,9 @@ impl<'h> Evaluator<'h> {
         let mut acc = Acc::default();
         let mut first_error = None;
         for a in args {
+            let scalar_operators = std::mem::replace(&mut self.scalar_operators, false);
             let ev = self.eval(a);
+            self.scalar_operators = scalar_operators;
             let steps = match ev {
                 Ev::R(areas) => areas.iter().map(|area| self.aggregate_area(kind, area, &mut acc)).collect(),
                 ev => {
