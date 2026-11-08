@@ -355,6 +355,9 @@ fn style_json(wb: &gridcraft_model::Workbook, sh: &gridcraft_model::Sheet, at: g
             "bottom": border(&st.borders.bottom),
             "left": border(&st.borders.left),
             "right": border(&st.borders.right),
+            // The diagonal borders `BorderIndex.diagonalDown`/`diagonalUp` name.
+            "diagonalDown": border(&st.borders.diag_down),
+            "diagonalUp": border(&st.borders.diag_up),
         },
         "numberFormat": st.num_fmt.as_str(),
         "horizontalAlignment": format!("{:?}", st.align.h),

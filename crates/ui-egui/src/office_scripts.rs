@@ -160,6 +160,9 @@ pub fn run(app: &mut SheetApp) {
             let text = clean_error(&e);
             let pane = &mut app.office_scripts;
             pane.error_line = error_line(&text).and_then(|n| u32::try_from(n).ok());
+            // The previous run's console output is not this run's: clear it with the failure.
+            pane.output.clear();
+            pane.calls = 0;
             pane.status = Some(Status::failed(text));
         }
     }

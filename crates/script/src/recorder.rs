@@ -112,7 +112,12 @@ fn step_call(step: &JournalStep) -> Option<(BridgeCall, String)> {
             let range = p.get("range").and_then(Json::as_str)?;
             let values = p.get("values")?.as_array()?;
             let literal = js_rows(values)?;
-            let call = range_call("Range.setValues", step, range, "values", p.get("values")?.clone());
+            let mut call = range_call("Range.setValues", step, range, "values", p.get("values")?.clone());
+            // `range.setValues` parses typed text by default (`parse: false` opts out); the replay
+            // must do the same, or a recorded "2.500" comes back as text.
+            if let Json::Object(map) = &mut call.params {
+                map.insert("parse".into(), Json::Bool(p.get("parse").and_then(Json::as_bool).unwrap_or(true)));
+            }
             Some((call, format!("{}.setValues({literal});", target(step, range))))
         }
         "home.bold" => {
@@ -289,7 +294,7 @@ mod tests {
         assert_eq!(r.calls[3].method, "Range.setValues");
         assert_eq!(r.calls[0].params["value"], json!(42));
         assert_eq!(r.calls[0].params["parse"], json!(true), "typed input is replayed as typed");
-        assert!(r.calls[3].params.get("parse").is_none(), "a verbatim range write stays verbatim");
+        assert_eq!(r.calls[3].params["parse"], json!(true), "a range write parses as the command did");
         assert_eq!(r.calls[1].params["value"], json!("Sales"));
         assert!(r.skipped.is_empty());
     }
