@@ -117,7 +117,37 @@ fn a_text_warp_on_a_filled_ellipse_does_not_make_it_word_art() {
         .replace(r#"anchor="t"/>"#, r#"anchor="t"><a:prstTxWarp prst="textTriangle"><a:avLst/></a:prstTxWarp></a:bodyPr>"#);
     let wb = read_drawing(&drawing);
     assert_eq!(wb.sheet(0).unwrap().shapes[0].kind, ShapeKind::Ellipse);
-    // The marker the writer uses still reads back as WordArt.
-    let marked = drawing.replace("textTriangle", "textNoShape");
-    assert_eq!(read_drawing(&marked).sheet(0).unwrap().shapes[0].kind, ShapeKind::WordArt);
+}
+
+/// `textNoShape` is the standard "no text warp" value, so on its own it does not make an ordinary
+/// shape WordArt: a filled ellipse that carries it reads and saves as the same filled ellipse.
+#[test]
+fn an_explicit_no_warp_on_a_filled_ellipse_stays_an_ellipse() {
+    let drawing = ARABIC_TEXT_BOX
+        .replace(r#"<xdr:cNvSpPr txBox="1"/>"#, "<xdr:cNvSpPr/>")
+        .replace(
+            r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#,
+            r#"<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#,
+        )
+        .replace(r#"anchor="t"/>"#, r#"anchor="t"><a:prstTxWarp prst="textNoShape"><a:avLst/></a:prstTxWarp></a:bodyPr>"#);
+    let wb = read_drawing(&drawing);
+    let shape = &wb.sheet(0).unwrap().shapes[0];
+    assert_eq!(shape.kind, ShapeKind::Ellipse);
+    assert_eq!(shape.fill, Color::Rgb(0xFF0000));
+    let xml = written_drawing(&wb);
+    assert!(xml.contains(r#"<a:prstGeom prst="ellipse">"#), "{xml}");
+    assert!(xml.contains(r#"<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#), "{xml}");
+    assert!(!xml.contains(r#"txBox="1""#), "{xml}");
+    let (reopened, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(reopened.sheet(0).unwrap().shapes[0].kind, ShapeKind::Ellipse);
+    // The same warp on a filled rectangle that is not a text box keeps it a rectangle too.
+    let rect = drawing.replace(r#"prst="ellipse""#, r#"prst="rect""#);
+    assert_eq!(read_drawing(&rect).sheet(0).unwrap().shapes[0].kind, ShapeKind::Rectangle);
+    // WordArt as written (a text box) or as a fill-less, line-less rectangle still reads as WordArt.
+    let text_box = ARABIC_TEXT_BOX.replace(r#"anchor="t"/>"#, r#"anchor="t"><a:prstTxWarp prst="textNoShape"><a:avLst/></a:prstTxWarp></a:bodyPr>"#);
+    assert_eq!(read_drawing(&text_box).sheet(0).unwrap().shapes[0].kind, ShapeKind::WordArt);
+    let bare = text_box
+        .replace(r#"<xdr:cNvSpPr txBox="1"/>"#, "<xdr:cNvSpPr/>")
+        .replace(r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/>"#);
+    assert_eq!(read_drawing(&bare).sheet(0).unwrap().shapes[0].kind, ShapeKind::WordArt);
 }

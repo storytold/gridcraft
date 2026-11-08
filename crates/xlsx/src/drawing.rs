@@ -221,9 +221,14 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     let tx_box = obj.path(&["nvSpPr", "cNvSpPr"]).is_some_and(|c| c.flag("txBox", false));
     let ln = sp.child("ln");
     let arrow = ln.is_some_and(|l| l.child("tailEnd").or_else(|| l.child("headEnd")).is_some_and(|t| t.attr("type").is_some_and(|v| v != "none")));
-    // WordArt: our marker, a text body with the non-warping text warp `textNoShape`. Any other warp
-    // (Excel puts one on ordinary filled shapes too) leaves the shape what its geometry says.
-    let word_art = obj.path(&["txBody", "bodyPr", "prstTxWarp"]).is_some_and(|w| w.attr("prst") == Some("textNoShape"));
+    // WordArt: our marker, a text body with the non-warping text warp `textNoShape`, on a rectangle
+    // that is a text box (as the writer saves it) or has no fill and no outline of its own (as
+    // WordArt usually comes). `textNoShape` is the standard "no warp" value, so on an ordinary
+    // shape (an ellipse, a filled rectangle) it, like any other warp, leaves the shape what its
+    // geometry says.
+    let word_art = prst == "rect"
+        && (tx_box || (sp.child("noFill").is_some() && !ln.is_some_and(|l| l.child("solidFill").is_some())))
+        && obj.path(&["txBody", "bodyPr", "prstTxWarp"]).is_some_and(|w| w.attr("prst") == Some("textNoShape"));
     let kind = match prst {
         _ if word_art => ShapeKind::WordArt,
         _ if tx_box => ShapeKind::TextBox,
