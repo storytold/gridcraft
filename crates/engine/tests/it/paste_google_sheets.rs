@@ -234,3 +234,15 @@ fn sheets_dates_follow_the_workbook_date_system() {
     s.execute("edit.paste", json!({"at": "A1", "text": "28/10/2026", "html": sheets_table(&typed("46323", "dd/mm/yyyy", "28/10/2026"))})).unwrap();
     assert_eq!(shown(&s, "A1"), "28/10/2026", "the converted serial shows the date Sheets showed");
 }
+
+/// A Sheets page opened as a file reads the text it shows, as any other web page does: the typed
+/// number is for paste, which knows to give it the format.
+#[test]
+fn a_sheets_page_opened_as_a_file_keeps_the_displayed_date() {
+    let html = sheets_table(&typed("46323", "dd/mm/yyyy", "28/10/2026"));
+    let (wb, _) = gridcraft_engine::io::open_bytes("sheet.html", html.as_bytes()).unwrap();
+    let sheet = wb.sheet(0).unwrap();
+    let cell = sheet.cell(at("A1")).unwrap();
+    assert_eq!(cell.value, Value::number(46323.0), "28 October 2026, read from the text shown");
+    assert_ne!(cell_text(&wb, sheet, at("A1")), "46323", "shown as a date, not a bare serial");
+}
