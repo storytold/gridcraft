@@ -189,6 +189,52 @@ fn filter_menu_uses_the_table_whose_header_was_clicked() {
     assert_eq!(filter_table_range(&deg, 0, 0), None);
 }
 
+/// The `("Label", "id")` keys written in `src`, without separators.
+fn menu_labels(src: &str) -> Vec<&str> {
+    src.split("(\"").skip(1).filter_map(|rest| rest.split_once("\", \"").map(|(label, _)| label)).filter(|label| *label != "-").collect()
+}
+
+/// The source of `menus.rs` from `start` to the first `end` after it.
+fn menu_source<'a>(src: &'a str, start: &str, end: &str) -> &'a str {
+    let from = src.find(start).unwrap_or_else(|| panic!("{start:?} not in menus.rs"));
+    let rest = &src[from..];
+    &rest[..rest.find(end).unwrap_or_else(|| panic!("{end:?} not after {start:?}"))]
+}
+
+/// German read "Einfügen" for Paste and "Einfügen…"/"Einfügen" for Insert in the same menu
+/// (#2874): no two items of the cell, row header or column header menu may read alike, ignoring
+/// case and a trailing ellipsis. The items are read from `menus.rs`, so new ones are checked too.
+#[test]
+fn german_context_menus_have_no_two_items_alike() {
+    use crate::i18n::Language;
+    let src = include_str!("menus.rs");
+    let cell = menu_labels(menu_source(src, "fn context_menu(", "let lang ="));
+    let (rows, columns) =
+        menu_source(src, "fn header_menu(", "let lang =").split_once("} else {").expect("header menu has a rows and a columns list");
+    let insert_copied = menu_labels(menu_source(src, "fn insert_copied_item(", "\n}"));
+    assert_eq!(insert_copied.len(), 3, "{insert_copied:?}");
+    for (menu, keys) in [("cell", cell), ("row header", menu_labels(rows)), ("column header", menu_labels(columns))] {
+        assert!(keys.contains(&"Paste") && keys.len() > 8, "{menu} menu not read from menus.rs: {keys:?}");
+        // A menu holds at most one Insert Copied/Cut Cells entry.
+        for extra in &insert_copied {
+            let mut seen: Vec<(String, &str)> = Vec::new();
+            for key in keys.iter().chain([extra]) {
+                let shown = Language::De.tr(key).trim_end_matches('…').trim().to_lowercase();
+                if let Some((_, other)) = seen.iter().find(|(text, _)| *text == shown) {
+                    panic!("German {menu} menu shows {key:?} and {other:?} both as {shown:?}");
+                }
+                seen.push((shown, key));
+            }
+        }
+    }
+    assert_eq!(Language::De.tr("Insert…"), "Zellen einfügen…");
+    assert_eq!(Language::De.tr("Header Menu|Insert"), "Zellen einfügen");
+    // Only German changed: the header menu's Insert reads as the plain Insert everywhere else.
+    for language in Language::ALL.into_iter().filter(|l| *l != Language::De) {
+        assert_eq!(language.tr("Header Menu|Insert"), language.tr("Insert"), "{}", language.code());
+    }
+}
+
 #[test]
 fn cell_text_y_moves_monotonically_in_standard_and_tall_rows() {
     let rect_std = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 20.0));
