@@ -48,7 +48,8 @@ an `xdr:contentPart` pointing at an InkML part (`xl/ink/inkN.xml`, `application/
 a `customXml` relationship) and whose fallback is a deterministic PNG of the stroke in its colour.
 The InkML part carries Excel's shape (definitions, context, traceFormat, channelProperties, brush,
 trace) with the W3C difference encoding, and the trace points are read back with all prefixes (`!`,
-`'`, `"`, `*`, inheritance) and 1/1000 cm resolution. Brush kind, width and height, colour, effect
+`'`, `"`, `*`, inheritance) and 1/1000 cm resolution. A part that holds several `<trace>`s, or a
+`<traceGroup>`, reads as one stroke per trace, each with its own creation id and the part's brush. Brush kind, width and height, colour, effect
 and its phase and scale, pressure and draw order survive save→open. A stroke's tool is read from
 the brush, since Excel writes the pressure channel for every plain pen: `inkEffects=pencil` is a
 Pencil, a texture is a Pen with that effect, `tip=rectangle` with `rasterOp=maskPen` is a
