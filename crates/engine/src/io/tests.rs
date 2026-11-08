@@ -361,6 +361,29 @@ fn full_sync_tolerates_only_unsupported_errors() {
     assert!(!full_sync_unsupported(&Error::from_raw_os_error(5)), "EIO");
 }
 
+/// Apple's ENOTSUP is 45 (EOPNOTSUPP is 102), and std maps only the latter to
+/// `ErrorKind::Unsupported`: F_FULLFSYNC refused with ENOTSUP must still save. Elsewhere 45 is
+/// another error (EL2NSYNC on Linux) and stays a failed save.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn full_sync_tolerates_apple_enotsup() {
+    use std::io::Error;
+    let enotsup = Error::from_raw_os_error(45);
+    assert!(flush_unsupported_on(&enotsup, true, true), "ENOTSUP on Apple");
+    assert!(!flush_unsupported_on(&enotsup, true, false), "45 on other Unix");
+    assert!(!flush_unsupported_on(&enotsup, false, false), "45 on Windows");
+    assert!(flush_unsupported_on(&Error::from_raw_os_error(25), true, true), "ENOTTY on Apple");
+    assert!(!flush_unsupported_on(&Error::from_raw_os_error(5), true, true), "EIO on Apple");
+    assert!(!flush_unsupported_on(&Error::from_raw_os_error(28), true, true), "ENOSPC on Apple");
+}
+
+/// The real helper on an Apple host: a raw ENOTSUP from F_FULLFSYNC is tolerated.
+#[cfg(target_vendor = "apple")]
+#[test]
+fn full_sync_tolerates_raw_enotsup_on_apple() {
+    assert!(full_sync_unsupported(&std::io::Error::from_raw_os_error(45)));
+}
+
 /// While a script runs (#2178), file reads and writes are refused whatever command or
 /// parameter asked for them; nesting and dropping the sandbox restore access.
 #[cfg(not(target_arch = "wasm32"))]

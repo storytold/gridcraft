@@ -864,11 +864,21 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
 }
 
 /// True when a flush failed only because the file system cannot do it: on Unix ENOTTY (25, what
-/// `fcntl(F_FULLFSYNC)` returns on such volumes; on Windows 25 is ERROR_SEEK, a real failure) or an
-/// unsupported-operation error (ENOTSUP/EOPNOTSUPP/ENOSYS). Any other error is a real failure.
+/// `fcntl(F_FULLFSYNC)` returns on such volumes; on Windows 25 is ERROR_SEEK, a real failure), on
+/// Apple targets ENOTSUP (45, which std leaves uncategorized there), or an unsupported-operation
+/// error (EOPNOTSUPP/ENOSYS, and ENOTSUP where it equals EOPNOTSUPP). Any other error is a real
+/// failure.
 #[cfg(not(target_arch = "wasm32"))]
 fn full_sync_unsupported(e: &std::io::Error) -> bool {
-    (cfg!(unix) && e.raw_os_error() == Some(25)) || e.kind() == std::io::ErrorKind::Unsupported
+    flush_unsupported_on(e, cfg!(unix), cfg!(target_vendor = "apple"))
+}
+
+/// [`full_sync_unsupported`] for a given platform, so each platform's raw codes can be tested
+/// on any host.
+#[cfg(not(target_arch = "wasm32"))]
+fn flush_unsupported_on(e: &std::io::Error, unix: bool, apple: bool) -> bool {
+    let raw = e.raw_os_error();
+    (unix && raw == Some(25)) || (apple && raw == Some(45)) || e.kind() == std::io::ErrorKind::Unsupported
 }
 
 #[cfg(target_arch = "wasm32")]
