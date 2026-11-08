@@ -1150,6 +1150,13 @@ impl TableStorage {
             if value.is_blank() {
                 continue;
             }
+            // NaN takes part in no ordering: `compare` answers `None` against every value, so a
+            // NaN that arrives first would stick as the extremum and hide the real one. Skip it,
+            // as the row-based MIN/MAX path does when it builds its candidate list. Infinities
+            // still order normally and remain candidates.
+            if matches!(&value, Scalar::Decimal(number) | Scalar::DateTime(number) if number.is_nan()) {
+                continue;
+            }
             let replace = match &best {
                 None => true,
                 Some(current) => value.compare(current).is_some_and(|ordering| ordering == want),

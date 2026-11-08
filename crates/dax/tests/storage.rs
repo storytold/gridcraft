@@ -290,6 +290,41 @@ fn blank_columns_handle_every_aggregate() {
 }
 
 #[test]
+fn min_and_max_skip_nan_and_blank_cells() {
+    // NaN takes part in no ordering: `compare` answers `None` against every value, so a NaN cell
+    // must neither win the scan nor stick as the extremum and hide the real one. BLANK is not an
+    // observation either. This is the same rule the row-based MIN/MAX path applies by filtering
+    // NaN out of its numeric candidates.
+    let table = match TableStorage::from_rows(
+        "Readings",
+        vec!["Value".to_string(), "Shadowed".to_string()],
+        vec![
+            vec![Scalar::Decimal(f64::NAN), Scalar::Decimal(f64::NAN)],
+            vec![Scalar::Blank, Scalar::Blank],
+            vec![Scalar::Decimal(5.5), Scalar::Blank],
+            vec![Scalar::Decimal(-2.25), Scalar::Blank],
+            vec![Scalar::Decimal(f64::NAN), Scalar::Blank],
+        ],
+    ) {
+        Ok(table) => table,
+        Err(error) => panic!("Readings table builds: {error}"),
+    };
+    let value = column_index(&table, "Value");
+    let shadowed = column_index(&table, "Shadowed");
+    let all_rows: Vec<usize> = (0..table.row_count()).collect();
+
+    assert_eq!(table.min(value, &all_rows), Ok(Scalar::Decimal(-2.25)));
+    assert_eq!(table.max(value, &all_rows), Ok(Scalar::Decimal(5.5)));
+    // Selection order does not matter: the NaN at either end is not a candidate.
+    assert_eq!(table.min(value, &[4, 2, 0, 3, 1]), Ok(Scalar::Decimal(-2.25)));
+    assert_eq!(table.max(value, &[4, 2, 0, 3, 1]), Ok(Scalar::Decimal(5.5)));
+
+    // Only NaN and BLANK is no observation at all, exactly like an empty selection.
+    assert_eq!(table.min(shadowed, &all_rows), Ok(Scalar::Blank));
+    assert_eq!(table.max(shadowed, &all_rows), Ok(Scalar::Blank));
+}
+
+#[test]
 fn relationship_indexes_map_keys_to_row_ids() {
     let storage = storage();
     assert_eq!(storage.relationships().len(), 1);
