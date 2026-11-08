@@ -258,7 +258,15 @@ impl EditState {
         }
         let u = word.to_ascii_uppercase();
         // Not after a column letter of a reference like A1 (digits follow) – fine either way.
-        self.autocomplete = names.iter().filter(|n| n.starts_with(&u)).take(12).cloned().collect();
+        self.autocomplete = names
+            .iter()
+            .filter(|n| {
+                let upper = n.to_ascii_uppercase();
+                upper.starts_with(&u) || upper.split(|c: char| !c.is_ascii_alphanumeric()).any(|part| part.starts_with(&u))
+            })
+            .take(12)
+            .cloned()
+            .collect();
         if self.autocomplete.len() == 1 && self.autocomplete[0] == u {
             self.autocomplete.clear();
         }
@@ -520,6 +528,14 @@ mod tests {
         assert_eq!(e.text, "=SUM(");
         let e = EditState::new(1, 0, CellRef::new(0, 0), "=IF(A1>0,SUM(B1,".into(), true, false);
         assert_eq!(e.current_function(), Some(("SUM".into(), 1)));
+    }
+
+    #[test]
+    fn autocomplete_matches_a_delimited_name_segment() {
+        let names = vec!["BI_WDVSchedule".to_string()];
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=wdv".into(), true, false);
+        e.update_autocomplete(&names);
+        assert_eq!(e.autocomplete, names);
     }
 
     #[test]

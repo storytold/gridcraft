@@ -574,12 +574,23 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         ed.point_anchor = None;
         // Typing ends the pointing: the next arrow starts again from the edited cell, as in Excel.
         ed.point_cell = None;
-        let names: Vec<String> = function_names()
+        let mut names: Vec<String> = function_names()
             .iter()
             .map(|name| {
                 app.session.active().map(|d| crate::formula_locale::completion_name(name, ed.locale, &d.wb, ed.sheet)).unwrap_or(name).to_string()
             })
             .collect();
+        if let Some(d) = app.session.active() {
+            names.extend(
+                d.wb.names
+                    .iter()
+                    .filter(|n| n.scope.is_none() || n.scope == Some(ed.sheet))
+                    .filter(|n| custom_lambda(&d.wb, ed.sheet, &n.name).is_some())
+                    .map(|n| n.name.clone()),
+            );
+        }
+        names.sort_by_cached_key(|n| n.to_ascii_uppercase());
+        names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
         ed.update_autocomplete(&names);
         app.session.mode = if ed.can_point() {
             gridcraft_engine::Mode::Point
@@ -902,6 +913,28 @@ pub fn function_description(name: &str) -> Option<String> {
     function_info(name).and_then(|f| f["description"].as_str().map(str::to_string))
 }
 
+fn custom_lambda(wb: &gridcraft_engine::model::Workbook, sheet: usize, name: &str) -> Option<(String, String)> {
+    let n = wb.name(name, sheet)?;
+    let gridcraft_engine::formula::Expr::Call(head, args) = gridcraft_engine::formula::parse_name(&n.formula).ok()? else { return None };
+    if !head.eq_ignore_ascii_case("LAMBDA") {
+        return None;
+    }
+    let params: Vec<String> = args
+        .iter()
+        .take(args.len().saturating_sub(1))
+        .filter_map(|arg| match arg {
+            gridcraft_engine::formula::Expr::Name(p) => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+    Some((format!("{}({})", n.name, params.join(", ")), n.comment.clone()))
+}
+
+fn custom_lambda_here(app: &SheetApp, ed: &crate::editor::EditState, name: &str) -> Option<(String, String)> {
+    let d = app.session.active()?;
+    custom_lambda(&d.wb, ed.sheet, name)
+}
+
 #[cfg(test)]
 mod spill_tests {
     use super::*;
@@ -1151,11 +1184,16 @@ fn show_editor_suggestions(ui: &mut egui::Ui, suggestion: EditorSuggestion<'_>) 
                         if r.clicked() {
                             pick = Some(i);
                         }
-                        if sel && let Some(desc) = crate::formula_locale::description(n, ed.locale, language) {
+                        if sel
+                            && let Some(desc) =
+                                crate::formula_locale::description(n, ed.locale, language).or_else(|| custom_lambda_here(app, ed, n).map(|(_, d)| d))
+                        {
                             r.on_hover_text(desc);
                         }
                     }
-                    if let Some(desc) = ed.autocomplete.get(ed.ac_index).and_then(|n| crate::formula_locale::description(n, ed.locale, language)) {
+                    if let Some(desc) = ed.autocomplete.get(ed.ac_index).and_then(|n| {
+                        crate::formula_locale::description(n, ed.locale, language).or_else(|| custom_lambda_here(app, ed, n).map(|(_, d)| d))
+                    }) {
                         ui.separator();
                         ui.add(egui::Label::new(egui::RichText::new(desc).small()).wrap());
                     }
@@ -1165,7 +1203,8 @@ fn show_editor_suggestions(ui: &mut egui::Ui, suggestion: EditorSuggestion<'_>) 
                         ed.request_focus = true;
                     }
                 } else if let Some((name, arg)) = ed.current_function()
-                    && let Some(sig) = crate::formula_locale::signature(&name, ed.locale, language)
+                    && let Some(sig) =
+                        crate::formula_locale::signature(&name, ed.locale, language).or_else(|| custom_lambda_here(app, ed, &name).map(|(s, _)| s))
                 {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
@@ -1185,7 +1224,9 @@ fn show_editor_suggestions(ui: &mut egui::Ui, suggestion: EditorSuggestion<'_>) 
                     });
                     // The description too, so values an argument takes (DATEDIF's units, #363) show
                     // while it's typed; wrapped to the hint's width.
-                    if let Some(desc) = crate::formula_locale::description(&name, ed.locale, language) {
+                    if let Some(desc) =
+                        crate::formula_locale::description(&name, ed.locale, language).or_else(|| custom_lambda_here(app, ed, &name).map(|(_, d)| d))
+                    {
                         ui.set_max_width(ui.min_rect().width().max(220.0));
                         ui.separator();
                         ui.add(egui::Label::new(egui::RichText::new(desc).small()).wrap());
