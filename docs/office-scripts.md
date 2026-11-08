@@ -149,6 +149,11 @@ controls are left out) into a script. It writes only what the bridge can replay:
 | `home.insertSheet` | `workbook.addWorksheet("Name")` |
 | `home.deleteSheet` | `workbook.getWorksheet("Name").delete()` |
 
+A range write records the block its values cover: a declared `A1:C3` given two rows of two values
+records `getRange("A1:B2").setValues(…)`, so the script names exactly the cells the command wrote.
+The values are the ones the write stored — typed input and the destination format applied, a formula
+kept as a formula — and above 10,000 cells the original values stand in.
+
 With an unsaved draft in the editor, stopping the recorder saves the recording and lists it but
 leaves the draft alone. Save the draft under a name of its own — check the recording's
 name in the list, since a `Recorded Script` that already exists makes the new one `Recorded Script

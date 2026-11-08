@@ -260,6 +260,12 @@ fn record(s: &mut Session, p: &Json) -> Result<Json> {
                 && let Some(values) = s.write_values.get(start + offset).cloned().flatten()
                 && let Json::Object(map) = &mut params
             {
+                // The declared range can cover cells the values leave alone: the script names the
+                // block they cover (`A1:C3` with two rows of two values is `A1:B2`), which is what
+                // the command wrote.
+                if let Some(address) = written_address(map.get("range").and_then(Json::as_str), &values) {
+                    map.insert("range".into(), Json::String(address));
+                }
                 // The values the command stored (typed input and the cell's format applied).
                 map.insert("values".into(), values);
                 map.remove("parse");
@@ -280,6 +286,28 @@ fn record(s: &mut Session, p: &Json) -> Result<Json> {
         "steps": recording.calls.len(),
         "skipped": skipped,
     }))
+}
+
+/// The address `values` cover from the start of `range`, keeping the sheet prefix as written: a
+/// declared `A1:C3` with two rows of two values is `A1:B2`, and one value stays its cell. `None`
+/// when the range is not an address this can narrow (a multi-area range, a named range).
+fn written_address(range: Option<&str>, values: &Json) -> Option<String> {
+    let range = range?;
+    let rows = values.as_array()?;
+    let cols = rows.iter().map(|row| row.as_array().map_or(1, Vec::len)).max()?;
+    if rows.is_empty() || cols == 0 {
+        return None;
+    }
+    // Everything up to the last `!` is the sheet as the command wrote it (a quoted name may hold
+    // one), so the prefix is kept verbatim.
+    let (prefix, address) = match range.rsplit_once('!') {
+        Some((sheet, address)) => (&range[..sheet.len() + 1], address),
+        None => ("", range),
+    };
+    let start = gridcraft_core::RangeRef::parse(address)?.start;
+    let end = start.offset(rows.len() as i64 - 1, cols as i64 - 1)?;
+    let block = if start.row == end.row && start.col == end.col { start.a1() } else { format!("{}:{}", start.a1(), end.a1()) };
+    Some(format!("{prefix}{block}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -933,14 +961,18 @@ mod tests {
         let mut s = session("record-cells");
         s.execute("script.record", json!({"on": true})).unwrap();
         // A range larger than the values: the command writes the 2x2 block, not the whole
-        // declared range, so the recording must hold two rows and not pad to C1:C3.
+        // declared range, so the script names that block and holds two rows, not a padded grid.
         s.execute("range.setValues", json!({"range": "A1:C3", "values": [[1, 2], [3, 4]]})).unwrap();
         // The other way round: one declared cell, four values written from it.
         s.execute("range.setValues", json!({"range": "E1", "values": [[5, 6], [7, 8]]})).unwrap();
+        // A sheet-qualified range keeps its sheet and narrows the same way.
+        s.execute("home.insertSheet", json!({"name": "Data"})).unwrap();
+        s.execute("range.setValues", json!({"range": "Data!A1:C3", "values": [[1, 2], [3, 4]]})).unwrap();
         let stopped = s.execute("script.record", json!({"on": false})).unwrap();
         let code = stopped["code"].as_str().unwrap_or_default();
-        assert!(code.contains("getRange(\"A1:C3\").setValues([[1, 2], [3, 4]]);"), "{code}");
-        assert!(code.contains("getRange(\"E1\").setValues([[5, 6], [7, 8]]);"), "{code}");
+        assert!(code.contains("getRange(\"A1:B2\").setValues([[1, 2], [3, 4]]);"), "{code}");
+        assert!(code.contains("getRange(\"E1:F2\").setValues([[5, 6], [7, 8]]);"), "{code}");
+        assert!(code.contains("workbook.getWorksheet(\"Data\").getRange(\"A1:B2\").setValues([[1, 2], [3, 4]]);"), "{code}");
     }
 
     #[test]
