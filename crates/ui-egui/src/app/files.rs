@@ -105,23 +105,88 @@ impl SheetApp {
     /// `logic` so a hidden or logic-only frame still saves; the monotonic timestamp check keeps a
     /// forced hidden UI pass from saving the same change twice.
     pub(super) fn autosave(&mut self, ctx: &egui::Context) {
-        let dirty_xlsx = self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")));
+        // Framed by a page that stores saves in place: a workbook the page has a name for (an
+        // .xlsx it opened or saved) is handed to it, as a Save does, since there is no file to write.
+        let host = self.host_autosaves();
+        let dirty_xlsx = self.session.active().is_some_and(|d| {
+            d.is_dirty() && if host { d.display_title().ends_with(".xlsx") } else { d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")) }
+        });
         let now = crate::monotonic_ms();
         let autosave_due =
             self.ui.autosave && self.editor.is_none() && self.text_box_editor.is_none() && now - self.grid.last_autosave > 2000.0 && dirty_xlsx;
         if autosave_due {
             self.grid.last_autosave = now;
             self.store_view_state();
-            let _ = self.session.run("file.save", json!({}));
+            if host {
+                self.autosave_to_host();
+            } else {
+                let _ = self.session.run("file.save", json!({}));
+            }
         } else if self.ui.autosave && dirty_xlsx {
             // Keep checking even when no input arrives while the window is hidden.
             ctx.request_repaint_after(std::time::Duration::from_secs(2));
         }
     }
 
+    /// Whether the page that frames the app said it stores every save in place (`host` message).
+    pub(crate) fn host_autosaves(&self) -> bool {
+        self.services.download.is_some() && self.services.host_autosave.as_ref().is_some_and(|c| c.get())
+    }
+
+    /// AutoSave in a hosting page: encode the workbook and hand it over like a Save. The page
+    /// bridge then counts the workbook as saved (it clears the dirty flag after the frame).
+    fn autosave_to_host(&mut self) {
+        let Ok(r) = self.session.run("file.saveBytes", json!({"format": "xlsx"})) else { return };
+        let (Some(b), Some(dl)) = (r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode), &self.services.download) else {
+            return;
+        };
+        let name = r.get("name").and_then(Json::as_str).unwrap_or("Book.xlsx").to_string();
+        dl(&name, &b);
+    }
+
     /// Flip AutoSave (title-bar switch / Options ▸ Save). Persisted with the other UI
     /// preferences, so it stays as the user left it across restarts (#1901).
     pub fn toggle_autosave(&mut self) {
         self.ui.autosave = !self.ui.autosave;
+    }
+}
+
+#[cfg(test)]
+mod host_autosave_tests {
+    use super::*;
+    use gridcraft_engine::Session;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    fn hosted(told: bool) -> (SheetApp, Rc<RefCell<Vec<String>>>) {
+        let mut session = Session::new();
+        session.new_workbook();
+        session.active_mut().unwrap().title = "Budget.xlsx".into();
+        let mut app = SheetApp::new(session, Default::default());
+        let got = Rc::new(RefCell::new(Vec::new()));
+        let seen = got.clone();
+        app.services.download = Some(Box::new(move |name: &str, _bytes: &[u8]| seen.borrow_mut().push(name.to_string())));
+        app.services.host_autosave = Some(Rc::new(Cell::new(told)));
+        app.ui.autosave = true;
+        app.grid.last_autosave = -10_000.0;
+        app.run("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+        (app, got)
+    }
+
+    /// Framed by a page that said it stores saves in place, AutoSave hands a changed .xlsx
+    /// workbook to the page (there is no file to write), under its own name.
+    #[test]
+    fn hosted_autosave_hands_a_changed_workbook_to_the_page() {
+        let (mut app, got) = hosted(true);
+        app.autosave(&egui::Context::default());
+        assert_eq!(*got.borrow(), ["Budget.xlsx"]);
+    }
+
+    /// Until the page says so, the browser has no file to write to: nothing is handed over.
+    #[test]
+    fn autosave_waits_for_the_page_to_say_it_stores_saves_in_place() {
+        let (mut app, got) = hosted(false);
+        app.autosave(&egui::Context::default());
+        assert!(got.borrow().is_empty());
     }
 }
