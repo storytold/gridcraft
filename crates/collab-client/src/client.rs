@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
-use gridcraft_collab::{Applied, ClientMessage, ClientOp, Participant, Rejected, Role, ServerMessage, SheetName};
+use gridcraft_collab::{ClientMessage, ClientOp, Presence, ServerMessage};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -40,62 +40,7 @@ pub struct Config {
     pub reconnect: Option<Duration>,
 }
 
-/// The first message a session gets.
-#[derive(Clone, Debug)]
-pub struct Welcome {
-    pub session_id: String,
-    pub actor_id: String,
-    pub role: Role,
-    pub version: u64,
-    pub epoch: u64,
-    pub sheets: Vec<SheetName>,
-    pub participants: Vec<Participant>,
-}
-
-/// What happened to the session, in order.
-#[derive(Clone, Debug)]
-pub enum Event {
-    Applied(Applied),
-    Rejected(Rejected),
-    Presence(Vec<Participant>),
-    /// The catch-up is over: the local document is at `version`.
-    Resynced {
-        version: u64,
-        epoch: u64,
-    },
-    /// The whole authoritative workbook (`.xlsx` bytes) at `version`.
-    Snapshot {
-        version: u64,
-        epoch: u64,
-        bytes: Vec<u8>,
-    },
-    /// The socket came back; catch-up frames follow.
-    Reconnected {
-        version: u64,
-    },
-    Disconnected {
-        reason: String,
-    },
-    Error {
-        code: String,
-        message: String,
-        retryable: bool,
-    },
-    Closed,
-}
-
-/// The state of the session, cheap to clone and safe to read from another thread.
-#[derive(Clone, Debug, Default)]
-pub struct State {
-    pub session_id: String,
-    pub actor: String,
-    pub role: Option<Role>,
-    pub version: u64,
-    pub epoch: u64,
-    pub sheets: Vec<SheetName>,
-    pub participants: Vec<Participant>,
-    pub connected: bool,
-}
+use crate::link::{Event, Link, State, Welcome};
 
 /// Why a session could not be opened.
 #[derive(Debug)]
@@ -192,6 +137,28 @@ impl Client {
     pub async fn close(self) {
         self.task.abort();
         let _ = self.task.await;
+    }
+}
+
+impl Link for Client {
+    fn state(&self) -> State {
+        Client::state(self)
+    }
+
+    fn send(&self, op: ClientOp) -> bool {
+        Client::send(self, op)
+    }
+
+    fn send_message(&self, message: ClientMessage) -> bool {
+        Client::send_message(self, message)
+    }
+
+    fn send_presence(&self, presence: Presence) -> bool {
+        Client::send_presence(self, presence)
+    }
+
+    fn poll(&mut self) -> Option<Event> {
+        Client::poll(self)
     }
 }
 

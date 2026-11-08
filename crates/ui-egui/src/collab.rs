@@ -61,8 +61,21 @@ pub enum SyncStatus {
     Error(String),
 }
 
+/// One participant as the host bridge reports them (`session-state`/`presence`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionParticipant {
+    pub client_id: String,
+    pub role: String,
+    pub color: Option<String>,
+}
+
 /// What the collaboration layer does for the UI.
 pub trait Collab {
+    /// Who is in the session. The web shell sends it to the cabinet; a
+    /// desktop session (no host) leaves the default.
+    fn session_participants(&self) -> Vec<SessionParticipant> {
+        Vec::new()
+    }
     /// Takes a command over when it travels in the session. `None` runs it locally as usual.
     fn execute(&mut self, session: &mut Session, id: &str, params: Json) -> Option<Result<Json, String>>;
     /// Delivers what arrived since the last frame and returns where the others are.

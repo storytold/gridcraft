@@ -26,6 +26,22 @@ impl SheetApp {
         if matches!(id, "file.save" | "file.saveAs" | "file.saveBytes") {
             self.store_view_state();
         }
+        // A live session behind the host bridge: the cabinet owns the file, so
+        // Save asks it to commit (`gridcraft:commit`) instead of downloading a
+        // possibly stale local copy. Save As and exports stay local.
+        if id == "file.save"
+            && let Some(session) = self.host_session_id.clone()
+            && let Some(commit) = self.host_commit.as_ref()
+        {
+            let result = commit(&session, None);
+            return match result {
+                Ok(()) => {
+                    self.message = Some(("GridCraft".into(), "Committing…".into()));
+                    Ok(json!({ "committed": true }))
+                }
+                Err(error) => Err(error),
+            };
+        }
         if matches!(
             id,
             "sheet.activate"

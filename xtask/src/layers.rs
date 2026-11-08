@@ -46,6 +46,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("cli", Class::Layer(7)),
     ("web", Class::Layer(7)),
     ("collab-client", Class::Layer(7)),
+    ("collab-web", Class::Layer(7)),
     ("collab-server", Class::Layer(7)),
     ("xtask", Class::Exempt),
 ];

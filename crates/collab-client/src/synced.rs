@@ -21,7 +21,7 @@ use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
 use serde_json::{Value as Json, json};
 
-use crate::client::{Client, Event, Welcome};
+use crate::link::{Event, Link, State, Welcome};
 
 /// A command the caller ran, and whether a local preview of it exists.
 struct Pending {
@@ -57,7 +57,7 @@ impl std::error::Error for EditError {}
 
 /// One local document and the session it belongs to.
 pub struct Synced {
-    client: Client,
+    link: Box<dyn Link>,
     actor: String,
     doc: String,
     /// Sheet key ↔ index of the local workbook, kept from `welcome` and every structural answer.
@@ -73,15 +73,24 @@ pub struct Synced {
 }
 
 impl Synced {
-    pub fn new(client: Client, welcome: &Welcome) -> Synced {
+    /// A desktop session over the native client.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new(client: crate::Client, welcome: &Welcome) -> Synced {
+        Synced::with_link(Box::new(client), welcome, format!("{}-{}", welcome.actor_id, now_millis()))
+    }
+
+    /// A session over any transport. The browser build passes its own `WebSocket`
+    /// link and an id from the page's clock; the desktop `new` wraps the native
+    /// client the same way.
+    pub fn with_link(link: Box<dyn Link>, welcome: &Welcome, client_id: String) -> Synced {
         let mut synced = Synced {
-            client,
+            link,
             actor: welcome.actor_id.clone(),
             doc: welcome.session_id.clone(),
             keys: BTreeMap::new(),
             names: BTreeMap::new(),
             seq: 0,
-            client_id: format!("{}-{}", welcome.actor_id, now_millis()),
+            client_id,
             pending: Vec::new(),
             own: VecDeque::new(),
             notice: None,
@@ -90,8 +99,14 @@ impl Synced {
         synced
     }
 
-    pub fn state(&self) -> crate::client::State {
-        self.client.state()
+    pub fn state(&self) -> State {
+        self.link.state()
+    }
+
+    /// Replaces the sheet map after `welcome` (the first one carries the keys,
+    /// and every structural answer may rename or reorder them).
+    pub fn set_sheets(&mut self, sheets: &[SheetName]) {
+        self.apply_sheets(sheets);
     }
 
     pub fn actor(&self) -> &str {
@@ -117,13 +132,13 @@ impl Synced {
     /// without a command echo (the server broadcasts the restored cells as a delta), so every
     /// replica, this one included, patches them the same way.
     pub fn undo(&mut self) -> Result<Json, EditError> {
-        if self.client.state().role == Some(Role::Viewer) {
+        if self.link.state().role == Some(Role::Viewer) {
             return Err(EditError::Viewer);
         }
         let Some(op_id) = self.own.back().cloned() else {
             return Err(EditError::Engine("there is nothing to undo".into()));
         };
-        if !self.client.send_message(ClientMessage::Undo { op_id: Some(op_id) }) {
+        if !self.link.send_message(ClientMessage::Undo { op_id: Some(op_id) }) {
             return Err(EditError::Disconnected);
         }
         Ok(Json::Null)
@@ -131,10 +146,10 @@ impl Synced {
 
     /// Puts back the step this participant last undid.
     pub fn redo(&mut self) -> Result<Json, EditError> {
-        if self.client.state().role == Some(Role::Viewer) {
+        if self.link.state().role == Some(Role::Viewer) {
             return Err(EditError::Viewer);
         }
-        if !self.client.send_message(ClientMessage::Redo { op_id: None }) {
+        if !self.link.send_message(ClientMessage::Redo { op_id: None }) {
             return Err(EditError::Disconnected);
         }
         Ok(Json::Null)
@@ -157,7 +172,7 @@ impl Synced {
         if id == "edit.redo" {
             return self.redo();
         }
-        let state = self.client.state();
+        let state = self.link.state();
         if state.role == Some(Role::Viewer) {
             return Err(EditError::Viewer);
         }
@@ -185,7 +200,7 @@ impl Synced {
             payload: Payload { cmd: id.to_string(), params: params.clone() },
             preview: None,
         };
-        if !self.client.send(op) {
+        if !self.link.send(op) {
             if previewed {
                 let _ = session.execute("edit.undo", json!({}));
             }
@@ -197,13 +212,13 @@ impl Synced {
 
     /// Tells the other participants where this one is looking.
     pub fn send_presence(&self, presence: Presence) {
-        self.client.send_presence(presence);
+        self.link.send_presence(presence);
     }
 
     /// Applies every event the connection delivered and hands them to the caller.
     pub fn poll(&mut self, session: &mut Session) -> Vec<Event> {
         let mut out = Vec::new();
-        while let Some(event) = self.client.poll() {
+        while let Some(event) = self.link.poll() {
             match &event {
                 Event::Applied(applied) => {
                     self.apply(session, applied);
@@ -233,7 +248,7 @@ impl Synced {
                         if rejected.retryable && rejected.code == RejectCode::Stale {
                             // The address moved under the preview: the safest answer is a fresh
                             // document from the server.
-                            self.client.send_message(ClientMessage::Resync { from: self.client.state().version });
+                            self.link.send_message(ClientMessage::Resync { from: self.link.state().version });
                         }
                     }
                 }
@@ -246,7 +261,7 @@ impl Synced {
                             "session.xlsx".into(),
                             gridcraft_engine::Trust::FromFile,
                         ));
-                        let sheets = self.client.state().sheets;
+                        let sheets = self.link.state().sheets;
                         self.apply_sheets(&sheets);
                         self.pending.clear();
                     }
@@ -337,6 +352,7 @@ fn normalise(params: &mut Json, cmd: &str, sheet: &str, a1: &str) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn now_millis() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
