@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (dark worksheet rendering merged with current main; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-09 · **Change:** minor (dark worksheet conflicts reconciled with frozen-pane geometry and form-control tokens; earlier: dark worksheet rendering merged with current main; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -241,6 +241,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | minor | Preserved theme-aware sheet styling alongside upstream frozen-pane overflow geometry and contrasting dark form-control tokens |
 | 2026-11-03 | minor | Resolved dark-mode branch conflicts with current main, retaining both rendering and feature histories |
 | 2026-11-02 | minor | Reconciled worksheet dark-mode rendering and regression tests with the shared module layout and current UI changes; Page Layout header/footer text and Page Break Preview labels follow worksheet ink |
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |

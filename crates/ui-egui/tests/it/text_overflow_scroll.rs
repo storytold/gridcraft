@@ -54,6 +54,18 @@ fn text_clips(h: &Harness, text: &str) -> Vec<Rect> {
         .collect()
 }
 
+/// Painted extents of the text shapes whose text is `text`, cut to their clip rects.
+fn text_visible_rects(h: &Harness, text: &str) -> Vec<Rect> {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            Shape::Text(t) if t.galley.job.text == text => Some(t.visual_bounding_rect().intersect(s.clip_rect)),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Locate a cell in the current scrolled pane for painted-clip assertions.
 fn cell_rect(h: &Harness, cell: &str) -> Rect {
     let app = h.state();
@@ -492,4 +504,81 @@ fn wrapped_text_clipping_survives_partial_vertical_scroll() {
         "clip must respect viewport and complete-line limits: \
          clip={clip:?}, expected={expected_bottom:.2}"
     );
+}
+
+/// Issue #2544: text in a frozen column keeps its whole cell while the other columns scroll.
+#[test]
+fn frozen_column_text_keeps_its_cell_when_scrolled() {
+    for dark in [false, true] {
+        let mut h = harness(|s| {
+            s.execute("cell.set", json!({"cell": "A1", "input": LEFT})).unwrap();
+            s.execute("cell.set", json!({"cell": "C1", "input": "v"})).unwrap();
+            s.execute("view.freezeFirstColumn", json!({})).unwrap();
+        });
+        h.state_mut().ui.dark = dark;
+        for col in [1, 2, 3, 8] {
+            scroll_to_col(&mut h, col);
+            let a1 = cell_rect(&h, "A1");
+            let clips = text_clips(&h, LEFT);
+            assert_eq!(clips.len(), 1, "A1 is drawn once: {clips:?}");
+            assert!(
+                (clips[0].left() - a1.left()).abs() <= 0.5 && (clips[0].right() - a1.right()).abs() <= 0.5,
+                "A1's text spans A1 at column {col}: {clips:?} vs {a1:?}"
+            );
+            let visible = text_visible_rects(&h, LEFT);
+            assert!(visible.len() == 1 && visible[0].is_positive(), "A1's text shows inside its clip at column {col}: {visible:?}");
+        }
+    }
+}
+
+/// Issue #2544: with two frozen columns, A1's text keeps overflowing across the whole of empty B1.
+#[test]
+fn frozen_text_overflows_to_the_freeze_line_when_scrolled() {
+    for dark in [false, true] {
+        let mut h = harness(|s| {
+            s.execute("cell.set", json!({"cell": "A1", "input": LEFT})).unwrap();
+            s.execute("view.freezePanes", json!({"cell": "C1"})).unwrap();
+        });
+        h.state_mut().ui.dark = dark;
+        for col in [2, 3, 4, 10] {
+            scroll_to_col(&mut h, col);
+            let (a1, b1) = (cell_rect(&h, "A1"), cell_rect(&h, "B1"));
+            let clips = text_clips(&h, LEFT);
+            assert_eq!(clips.len(), 1, "A1 is drawn once: {clips:?}");
+            assert!(
+                (clips[0].left() - a1.left()).abs() <= 0.5 && (clips[0].right() - b1.right()).abs() <= 0.5,
+                "A1's text spans A1:B1 at column {col}: {clips:?} vs {a1:?} {b1:?}"
+            );
+        }
+    }
+}
+
+/// Issue #2544: the frozen columns' gridlines reach the freeze line, and none is drawn inside
+/// them at a scrolled column's edge.
+#[test]
+fn frozen_column_gridlines_stay_put_when_scrolled() {
+    for dark in [false, true] {
+        let mut h = harness(|s| {
+            s.execute("view.freezePanes", json!({"cell": "C1"})).unwrap();
+        });
+        h.state_mut().ui.dark = dark;
+        scroll_to_col(&mut h, 6);
+        let (a5, b5) = (cell_rect(&h, "A5"), cell_rect(&h, "B5"));
+        let frozen = |s: &egui::epaint::ClippedShape| s.clip_rect.right() <= b5.right() + 0.5 && s.clip_rect.left() <= a5.left();
+        let segments: Vec<[egui::Pos2; 2]> = h
+            .output()
+            .shapes
+            .iter()
+            .filter(|s| frozen(s))
+            .filter_map(|s| match &s.shape {
+                Shape::LineSegment { points, .. } => Some(*points),
+                _ => None,
+            })
+            .collect();
+        let row5 = segments.iter().find(|p| (p[0].y - (a5.top() - 0.5).round()).abs() <= 1.0 && p[0].y == p[1].y);
+        assert!(row5.is_some_and(|p| p[1].x >= b5.right() - 1.0), "row 5's gridline reaches the freeze line: {row5:?} vs {b5:?}");
+        let verticals: Vec<f32> = segments.iter().filter(|p| p[0].x == p[1].x && p[0].y < b5.bottom()).map(|p| p[0].x).collect();
+        let expected = [a5.left(), a5.right(), b5.right()].map(|x| x.round() - 0.5);
+        assert!(verticals.iter().all(|x| expected.iter().any(|e| (x - e).abs() <= 0.5)), "only A and B's edges: {verticals:?} vs {expected:?}");
+    }
 }
