@@ -6,6 +6,10 @@ use gridcraft_engine::core::{CellRef, RangeRef};
 /// How many distinct reference colours a formula cycles through (`Tokens::ref_colors`).
 pub const REF_COLOR_COUNT: usize = 8;
 
+fn is_formula_name_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '.' | '$' | '\\' | '?')
+}
+
 #[derive(Clone, Debug)]
 pub struct EditState {
     /// The workbook (`DocState::uid`) the draft belongs to: it is drawn and committed only there.
@@ -251,8 +255,7 @@ impl EditState {
             return;
         }
         let before = self.text.get(..self.byte_caret()).unwrap_or("");
-        let word: String =
-            before.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+        let word: String = before.chars().rev().take_while(|c| is_formula_name_char(*c)).collect::<String>().chars().rev().collect();
         if word.is_empty() || word.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             return;
         }
@@ -262,7 +265,7 @@ impl EditState {
             .iter()
             .filter(|n| {
                 let upper = n.to_ascii_uppercase();
-                upper.starts_with(&u) || upper.split(|c: char| !c.is_ascii_alphanumeric()).any(|part| part.starts_with(&u))
+                upper.starts_with(&u) || upper.split(|c: char| !c.is_alphanumeric()).any(|part| part.starts_with(&u))
             })
             .take(12)
             .cloned()
@@ -278,7 +281,7 @@ impl EditState {
         let Some(name) = self.autocomplete.get(self.ac_index).cloned() else { return false };
         let caret_b = self.byte_caret();
         let before = self.text.get(..caret_b).unwrap_or("");
-        let wlen: usize = before.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').map(char::len_utf8).sum();
+        let wlen: usize = before.chars().rev().take_while(|c| is_formula_name_char(*c)).map(char::len_utf8).sum();
         let start = caret_b - wlen;
         let (Some(a), Some(b)) = (self.text.get(..start), self.text.get(caret_b..)) else { return false };
         self.text = format!("{a}{name}({b}");
@@ -534,6 +537,14 @@ mod tests {
     fn autocomplete_matches_a_delimited_name_segment() {
         let names = vec!["BI_WDVSchedule".to_string()];
         let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=wdv".into(), true, false);
+        e.update_autocomplete(&names);
+        assert_eq!(e.autocomplete, names);
+    }
+
+    #[test]
+    fn autocomplete_keeps_unicode_letters_in_names() {
+        let names = vec!["BI_Économie".to_string()];
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=BI_É".into(), true, false);
         e.update_autocomplete(&names);
         assert_eq!(e.autocomplete, names);
     }
