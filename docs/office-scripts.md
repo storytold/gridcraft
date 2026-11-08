@@ -150,8 +150,9 @@ controls are left out) into a script. It writes only what the bridge can replay:
 | `home.deleteSheet` | `workbook.getWorksheet("Name").delete()` |
 
 With an unsaved draft in the editor, stopping the recorder saves the recording and lists it but
-leaves the draft alone: save the draft (or clear it) and select the recorded script before running
-it, or Run executes the draft.
+leaves the draft alone. Save the draft under a name of its own (saving it as `Recorded Script` would
+replace the recording), then select the recorded script before running it: Run executes the draft,
+not the recording.
 
 Anything else becomes a comment naming the command and why it was skipped (including a command
 that used the active selection without naming a range). A command targeting a sheet records the
