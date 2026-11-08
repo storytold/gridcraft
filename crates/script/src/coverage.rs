@@ -178,7 +178,9 @@ impl Coverage {
             n.classes,
             n.fields
         );
-        out.push_str("Status meanings: **implemented** = a real engine operation backs it; **not-yet** = in the reference, refused with a typed error; **not-applicable** = an enum value, not an operation.\n\n");
+        out.push_str(
+            "Status meanings: **implemented** = a real engine operation backs it; **not-yet** = in the reference, refused with a typed error; **not-applicable** = an enum value, not an operation. Members of the plain data objects the bridge returns (for example `DataValidationRule`) are read as data: a member the object does not carry reads as `undefined`, not as a thrown error.\n\n",
+        );
         out.push_str("| Measure | Value |\n|---|---|\n");
         let _ = writeln!(out, "| Types in the reference | {} |", n.classes);
         let _ = writeln!(out, "| Interface types (classes) | {} |", n.interface_types);
