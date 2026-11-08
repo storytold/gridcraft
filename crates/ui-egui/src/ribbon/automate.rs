@@ -101,9 +101,8 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
             // instead of leaving the ribbon action silent (an open dialog is never replaced).
             if let Some(status) = app.office_scripts.status.as_ref().filter(|status| status.error) {
                 let text = status.text.clone();
-                if app.dialog.is_none() {
-                    open_pane_or_message(app, text);
-                }
+                // `open_pane_or_message` already keeps an open dialog and uses a message box.
+                open_pane_or_message(app, text);
             }
         }
         let r = small_button(ui, Icon::Play, "Run Script", "Run the script in Office Scripts", false);
@@ -127,7 +126,11 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
                 // run failed or logged output.
                 let show = app.office_scripts.status.as_ref().is_some_and(|status| status.error) || !app.office_scripts.output.is_empty();
                 if show {
-                    let text = app.office_scripts.status.as_ref().map(|status| status.text.clone()).unwrap_or_default();
+                    let mut text = app.office_scripts.status.as_ref().map(|status| status.text.clone()).unwrap_or_default();
+                    for line in &app.office_scripts.output {
+                        text.push('\n');
+                        text.push_str(line);
+                    }
                     open_pane_or_message(app, text);
                 }
             }
