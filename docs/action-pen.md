@@ -66,11 +66,13 @@ The same layout and the same order serve every Craft app's models.
 
 ## Installing it: two ways, both user-initiated
 
-- **Download, from Draw › Action Pen.** The button opens the model panel (name, licence, size,
-  source, folder, status) with a Download button. Only that click starts a download: HTTPS to the
-  URLs in the manifest, streamed into a `.part` file, checked for its exact size and SHA-256, then
-  renamed into place. A damaged or truncated download is deleted, not installed. There is no
-  automatic retry, no background refresh and no telemetry.
+- **Download, from Draw › Action Pen.** **Model…** in the Draw tab opens the model panel (name,
+  licence, size, source, folder, status) with Download, Import… and Remove; the Action Pen button
+  opens the same panel while the model is unavailable and toggles the tool once it is ready. Only
+  the Download click starts a download: HTTPS to the URLs in the manifest, streamed into a `.part`
+  file, checked for its exact size and SHA-256, then renamed into place. A damaged or truncated
+  download is deleted, not installed. There is no automatic retry, no background refresh and no
+  telemetry.
 - **By hand.** Download the three files from the Hugging Face page in a browser and put them in
   the folder (or copy them from another machine). `Import…` in the same panel copies them through
   a temporary file and verifies each one; copying them into the folder directly works too — the

@@ -6345,7 +6345,10 @@ fn ink_status_reports_the_model_contract() {
 #[test]
 fn ink_commands_never_panic_on_empty_or_hostile_params() {
     let mut s = s();
-    s.models_dir = Some(std::env::temp_dir().display().to_string());
+    // A scratch directory this process owns: `ink.modelRemove` deletes `<root>/trocr-small-handwritten`,
+    // and the shared temp directory may hold a developer's own model.
+    let scratch = std::env::temp_dir().join(format!("gridcraft-ink-hostile-{}", std::process::id()));
+    s.models_dir = Some(scratch.display().to_string());
     for id in ["draw.actionPen", "draw.actionPenInk", "ink.status", "ink.modelImport", "ink.modelRemove"] {
         for p in [json!({}), json!([]), json!(7), json!("x"), json!({"points": "no", "path": "\u{0}../..", "on": "yes"})] {
             let r = s.execute(id, p);
