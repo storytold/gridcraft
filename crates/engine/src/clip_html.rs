@@ -309,7 +309,7 @@ fn r1c1_token(rest: &str, at: CellRef) -> Option<(&str, String)> {
     let tail = rest.get(end..)?;
     // `R[1]:R[3]`, `R2:R4`, `C[-1]`: references to whole rows and columns.
     let whole = matches!(word.as_bytes().first(), Some(b'R' | b'C'))
-        && (tail.starts_with('[') || word.get(1..).is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())));
+        && ((word.len() == 1 && tail.starts_with('[')) || word.get(1..).is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())));
     if whole {
         return None;
     }
@@ -807,6 +807,11 @@ mod tests {
             "names that only start like a reference stay"
         );
         assert_eq!(conv("=RCOUNT(1)+COUNTA(RC[-1])").as_deref(), Some("=RCOUNT(1)+COUNTA(B3)"));
+        assert_eq!(
+            conv("=SUM(Costs[Amount])+Revenue[Q1]").as_deref(),
+            Some("=SUM(Costs[Amount])+Revenue[Q1]"),
+            "a table name is not a whole-axis reference"
+        );
         // Whole rows and columns, and cells off the sheet, can't be written.
         for f in ["=SUM(R2:R3)", "=SUM(C[-1])", "=R[-3]C[0]", "=RC[-3]", "=R1048577C1", "=R1C16385", "=R0C1", "=R[99999999999999999999]C1"] {
             assert_eq!(conv(f), None, "{f}");
