@@ -13,18 +13,59 @@ type Harness = egui_kittest::Harness<'static, SheetApp>;
 const SHARE: &str =
     "https://onedrive.live.com/:f:/g/personal/0123456789ABCDEF/EaBcDe?resid=0123456789ABCDEF%21123&ithint=folder&redeem=aHR0cHM6Ly9l#a=1&b=2";
 
-/// A real file the local-link tests can point at.
-fn local_file() -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!("gridcraft-ui-link-{}.txt", std::process::id()));
+/// A unique temporary directory that is removed when it goes out of scope, so a test leaves
+/// nothing behind and no two tests share a path.
+struct TempDir(std::path::PathBuf);
+
+impl TempDir {
+    fn new(tag: &str) -> Self {
+        #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("gridcraft-ui-{tag}-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A harness that owns the temporary directory holding the file its links point at.
+struct Fixture {
+    h: Harness,
+    _dir: TempDir,
+}
+
+impl std::ops::Deref for Fixture {
+    type Target = Harness;
+    fn deref(&self) -> &Harness {
+        &self.h
+    }
+}
+
+impl std::ops::DerefMut for Fixture {
+    fn deref_mut(&mut self) -> &mut Harness {
+        &mut self.h
+    }
+}
+
+/// A real file, inside a temporary directory of its own, that the local-link tests can point at.
+fn local_file(dir: &TempDir) -> std::path::PathBuf {
+    let path = dir.0.join("link.txt");
     std::fs::write(&path, "x").unwrap();
     path
 }
 
-fn harness() -> Harness {
+/// The test workbook, with a link of each kind, and the directory its file link points into.
+fn harness() -> Fixture {
+    let dir = TempDir::new("link");
     let mut session = Session::new();
     session.new_workbook();
     session.execute("cell.set", json!({"cell": "B6", "input": "file"})).unwrap();
-    session.execute("insert.link", json!({"cell": "B6", "target": local_file().to_str().unwrap()})).unwrap();
+    session.execute("insert.link", json!({"cell": "B6", "target": local_file(&dir).to_str().unwrap()})).unwrap();
     session.execute("cell.set", json!({"cell": "B8", "input": "=HYPERLINK(\"https://example.org/h\",\"go\")"})).unwrap();
     session.execute("cell.set", json!({"cell": "B12", "input": "share"})).unwrap();
     session.execute("insert.link", json!({"cell": "B12", "target": SHARE})).unwrap();
@@ -34,7 +75,7 @@ fn harness() -> Harness {
     session.execute("insert.link", json!({"cell": "B2", "target": "https://example.org/a"})).unwrap();
     session.execute("cell.set", json!({"cell": "B4", "input": "jump"})).unwrap();
     session.execute("insert.link", json!({"cell": "B4", "target": "Sheet1!F9"})).unwrap();
-    show(session)
+    Fixture { h: show(session), _dir: dir }
 }
 
 /// Renders a session's grid in a test harness.
@@ -165,10 +206,8 @@ fn confirming_a_folder_share_link_hands_the_whole_url_to_the_system() {
 #[test]
 /// A formula link to a sibling file opens the path resolved from the saved workbook's folder.
 fn a_formula_link_to_a_sibling_file_opens_the_resolved_path_of_a_saved_workbook() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let dir = std::env::temp_dir().join(format!("gridcraft-ui-sibling-{}-{nonce}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = TempDir::new("sibling");
+    let dir = guard.0.clone();
     std::fs::write(dir.join("target.txt"), "x").unwrap();
     let mut session = Session::new();
     session.new_workbook();
@@ -189,5 +228,4 @@ fn a_formula_link_to_a_sibling_file_opens_the_resolved_path_of_a_saved_workbook(
     h.get_by_label("   OK   ").click();
     h.run_steps(4);
     assert_eq!(*opened.borrow(), [expected]);
-    std::fs::remove_dir_all(dir).unwrap();
 }

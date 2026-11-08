@@ -299,6 +299,22 @@ const PROGRAMS: &[&str] = &[
     "rb",
     "pkg",
     "dmg",
+    // Excel add-ins and web queries, diagnostics and search packages, MSIX packages, PowerShell
+    // formats and console files, and Windows Script components.
+    "xll",
+    "xla",
+    "xlam",
+    "iqy",
+    "diagcab",
+    "library-ms",
+    "search-ms",
+    "msix",
+    "msixbundle",
+    "ps1xml",
+    "psc1",
+    "wsc",
+    "ws",
+    "msh",
 ];
 
 /// Whether the name has an extension that runs code when the system opens it ([`PROGRAMS`]).
@@ -533,6 +549,13 @@ mod tests {
             "docs/setup.jnlp",
             "docs/Snap.MSC",
             "docs/tool.settingcontent-ms",
+            "docs/addin.xll",
+            "docs/addin.XLAM",
+            "docs/query.iqy",
+            "docs/pack.msixbundle",
+            "docs/Search.search-ms",
+            "docs/Lib.library-ms",
+            "docs/script.ws",
             // Decoding comes before the checks.
             "docs/app%2Eexe",
             "%5C%5Cserver/share/doc.txt",
