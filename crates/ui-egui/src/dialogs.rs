@@ -554,7 +554,10 @@ impl Dialog {
             // resolved full path.
             "openLink" => {
                 let url = params.get("url").and_then(Json::as_str).unwrap_or_default().to_string();
-                let local = params.get("local").and_then(Json::as_bool).unwrap_or(false);
+                // The warning follows what OK will do ([`Session::open_confirmed_link`]), not a
+                // caller's flag: a full path or a target the engine classifies as local is a file.
+                let local = gridcraft_engine::links::is_full_path(&url)
+                    || matches!(gridcraft_engine::links::classify(&url), gridcraft_engine::links::LinkKind::Local(_));
                 let ask = if local {
                     "This workbook asks to open the file or folder below with the program your computer uses for it. Files can contain harmful content: open it only if you trust the workbook."
                 } else {
@@ -1216,6 +1219,26 @@ mod tests {
         let bad = Dialog::open(&mut app, "openLink", json!({"url": "file://host/etc/passwd"})).unwrap();
         assert!(open_confirmed_link(&mut app, &bad).is_err());
         assert_eq!(opened.borrow().len(), 1);
+    }
+
+    /// The Open Hyperlink warning follows the address, not a caller's `local` flag: a path or `file:`
+    /// address says it opens a file even when the caller leaves the flag out, and a web address
+    /// keeps the web warning even when the flag is set.
+    #[test]
+    fn open_hyperlink_warning_follows_the_address() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, crate::Services::default());
+        let note = |app: &mut SheetApp, params: Json| match Dialog::open(app, "openLink", params).unwrap().fields.first() {
+            Some(crate::dialogs::Field::Note(text)) => text.clone(),
+            _ => String::new(),
+        };
+        for url in ["/tmp/a.txt", "file:///tmp/a.txt", "./notes.txt"] {
+            assert!(note(&mut app, json!({"url": url})).contains("file or folder"), "{url}");
+        }
+        for url in ["https://example.org/a", "mailto:a@example.org"] {
+            assert!(note(&mut app, json!({"url": url, "local": true})).contains("open the address"), "{url}");
+        }
     }
 
     /// #2181: an OK that arrives with synthetic control-channel input (`ui.key` Enter, `ui.click`
