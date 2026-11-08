@@ -115,6 +115,12 @@ pub trait Host {
     fn visit_range(&mut self, _sheet: usize, _range: RangeRef, _f: &mut dyn FnMut(&Value) -> bool) -> bool {
         false
     }
+    /// `(sum, count)` of the numbers in a block that holds nothing but constants (no formula,
+    /// error or spilled value), added row-major from `0.0` exactly as `visit_range` would hand
+    /// them over. `None`: the block isn't like that, or this host can't tell.
+    fn range_sum(&mut self, _sheet: usize, _range: RangeRef) -> Option<(f64, u64)> {
+        None
+    }
     /// While a formula is calculated on demand inside another one: `stack_position()` where the
     /// outermost one started, which the stack budget is counted from.
     fn stack_top(&self) -> Option<usize> {
@@ -216,6 +222,14 @@ impl<'h> Evaluator<'h> {
     /// Evaluates to a value (references are dereferenced; multi-cell → array).
     pub fn value(&mut self, e: &Expr) -> Value {
         let ev = self.eval(e);
+        self.deref(ev)
+    }
+
+    /// Evaluates an imported ordinary formula with Excel's implicit intersection at its cell.
+    /// Keep the reference until `@` chooses a row or column; taking an array's first value
+    /// afterwards would give the wrong result for a formula below the first row of a range.
+    pub fn scalar_value(&mut self, e: &Expr) -> Value {
+        let ev = self.unary(UnOp::At, e);
         self.deref(ev)
     }
 

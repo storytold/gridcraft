@@ -587,6 +587,36 @@ fn copy_paste_shifts_formulas() {
 }
 
 #[test]
+fn imported_scalar_range_name_does_not_spill_when_opened_and_saved() {
+    use gridcraft_model::{Cell, DefinedName, Formula, Workbook};
+
+    let mut wb = Workbook::new();
+    wb.names.push(DefinedName { name: "Offering".into(), scope: None, formula: "Data!$A$1:$A$2".into(), comment: String::new(), hidden: false });
+    let sheet = wb.sheet_mut(0).unwrap();
+    sheet.name = "Data".into();
+    sheet.cells.set(CellRef::parse("A1").unwrap(), Cell::value(Value::Number(5.0)));
+    sheet.cells.set(CellRef::parse("A2").unwrap(), Cell::value(Value::Number(6.0)));
+    let b2 = CellRef::parse("B2").unwrap();
+    let mut formula = Formula::new("Offering");
+    formula.preserve_scalar = true;
+    sheet.cells.set(b2, Cell { value: Value::Number(6.0), ..Cell::formula(formula) });
+
+    let source = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let (loaded, _) = gridcraft_xlsx::read_xlsx(&source).unwrap();
+    let doc = crate::DocState::new(loaded, None, "Imported".into(), crate::Trust::FromFile);
+    let sheet = doc.wb.sheet(0).unwrap();
+    assert_eq!(sheet.value(b2), Value::Number(6.0));
+    assert!(!sheet.spill_ranges.contains_key(&b2));
+
+    let saved = gridcraft_xlsx::write_xlsx(&doc.wb).unwrap();
+    let (reopened, _) = gridcraft_xlsx::read_xlsx(&saved).unwrap();
+    let formula = reopened.sheet(0).unwrap().cell(b2).unwrap().formula.as_ref().unwrap();
+    assert!(formula.preserve_scalar);
+    assert!(!formula.dynamic);
+    assert!(formula.array.is_none());
+}
+
+#[test]
 fn rich_clipboard_copies_selected_displayed_cells_and_styles() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "outside selection"})).unwrap();
