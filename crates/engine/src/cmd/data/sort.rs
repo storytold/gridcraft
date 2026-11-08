@@ -35,8 +35,7 @@ fn sort_target(s: &Session, p: &Json) -> Result<(usize, RangeRef)> {
 /// this here, rather than in `data_range`, keeps the other data commands' range rules unchanged,
 /// and taking the range from the engine's own `autofilter` (rather than a range the UI sends)
 /// means a row appended below the filter, which `grow_autofilter` already took in, is sorted too.
-fn filter_sort_target(s: &Session, p: &Json) -> Result<(usize, RangeRef, bool)> {
-    let cmd = "data.sort";
+fn filter_sort_target(s: &Session, p: &Json, cmd: &str) -> Result<(usize, RangeRef, bool)> {
     // The filter is the range; a second one would leave it unclear which the caller meant.
     if p.get("range").is_some() {
         return Err(bad(cmd, "`filter` sorts the AutoFilter range and takes no `range`"));
@@ -57,14 +56,20 @@ fn filter_sort_target(s: &Session, p: &Json) -> Result<(usize, RangeRef, bool)> 
 pub(super) fn quick_sort(s: &mut Session, p: &Json, asc: bool) -> Result<Json> {
     let filter = bool_param(p, "filter").unwrap_or(false);
     let (sheet, r, header) = if filter {
-        filter_sort_target(s, p)?
+        filter_sort_target(s, p, if asc { "data.sortAscending" } else { "data.sortDescending" })?
     } else {
         let (sheet, r) = sort_target(s, p)?;
         let d = s.doc()?;
         let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
         (sheet, r, guess_header(&d.wb, sh, r))
     };
-    let col = col_param(p.get("column"), r.start.col).unwrap_or(s.doc()?.selection.active.col).clamp(r.start.col, r.end.col);
+    // A filter sort names its column or takes the filter's first: the active cell is no guide
+    // there — it may sit outside the filter, where clamping it in would silently pick a column.
+    let col = match col_param(p.get("column"), r.start.col) {
+        Some(c) => c.clamp(r.start.col, r.end.col),
+        None if filter => r.start.col,
+        None => s.doc()?.selection.active.col.clamp(r.start.col, r.end.col),
+    };
     do_sort(s, sheet, r, header, vec![SortKey { col, desc: !asc, by: "values".into(), list: None }], false, false)
 }
 

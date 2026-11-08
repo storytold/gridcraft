@@ -632,7 +632,57 @@ fn filter_menu_sort_without_an_autofilter_is_an_error_and_changes_nothing() {
     s.new_workbook();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["b"], ["a"]]})).unwrap();
     s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    let undo_before = s.doc().unwrap().undo.len();
     assert!(s.execute("data.sortAscending", json!({"column": "A", "filter": true})).is_err());
     assert!(s.execute("data.sortAscending", json!({"column": "A", "filter": true, "range": "A1:A3"})).is_err());
     assert_eq!(column_text(&s, "A", 1..=3), ["Name", "b", "a"]);
+    // The refusal happens before anything is touched: no undo step, same selection, no filter.
+    assert_eq!(s.doc().unwrap().undo.len(), undo_before);
+    assert_eq!(s.doc().unwrap().selection.active.a1(), "A1");
+    assert_eq!(autofilter_a1(&s), None);
+}
+
+#[test]
+fn filter_menu_sort_with_a_range_is_an_error_even_with_a_filter() {
+    // The `range` guard, not the missing filter, must be what refuses this call: on a sheet
+    // with a filter it is the only error left, and it changes nothing either.
+    let mut s = numeric_header_filter_sheet();
+    let undo_before = s.doc().unwrap().undo.len();
+    assert!(s.execute("data.sortAscending", json!({"column": "A", "filter": true, "range": "A1:E9"})).is_err());
+    assert_eq!(column_text(&s, "A", 1..=9), ["1", "d", "z", "a", "n", "b", "g", "c", "f"]);
+    assert_eq!(autofilter_a1(&s).as_deref(), Some("A1:E9"));
+    assert_eq!(s.doc().unwrap().undo.len(), undo_before);
+    assert_eq!(s.doc().unwrap().selection.active.a1(), "J16");
+}
+
+#[test]
+fn filter_menu_sort_without_a_column_sorts_by_the_filters_first_column() {
+    // No column named: the filter's first column drives, not the active cell clamped into the
+    // filter (J16 would clamp to E, whose data cells are all empty and would sort nothing).
+    let mut s = numeric_header_filter_sheet();
+    s.execute("data.sortAscending", json!({"filter": true})).unwrap();
+    assert_eq!(column_text(&s, "A", 2..=9), ["a", "b", "c", "d", "f", "g", "n", "z"]);
+}
+
+#[test]
+fn filter_menu_sort_on_a_table_keeps_the_totals_row_and_uses_the_tables_header_flag() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["zzz", "Qty"], ["b", 2], ["a", 1], ["c", 3]]})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:B5"})).unwrap();
+    let made = s.execute("home.formatAsTable", json!({"range": "A1:B4"})).unwrap();
+    let tname = made["table"].as_str().unwrap().to_string();
+    s.execute("table.totalRow", json!({"table": tname, "on": true})).unwrap();
+    // The table now spans A1:B5, the same range as the filter, with a totals row at the bottom.
+    let totals_row = column_text(&s, "A", 5..=5);
+    s.execute("selection.set", json!({"range": "J16"})).unwrap();
+    s.execute("data.sortAscending", json!({"column": "A", "filter": true})).unwrap();
+    // The table's header row stays on top and the totals row at the bottom; the data sorts.
+    assert_eq!(column_text(&s, "A", 1..=4), ["zzz", "a", "b", "c"]);
+    assert_eq!(column_text(&s, "A", 5..=5), totals_row);
+    // With the table's header row off, the first row is data and sorts with the rest.
+    s.execute("table.headerRow", json!({"table": tname, "on": false})).unwrap();
+    s.execute("data.sortDescending", json!({"column": "A", "filter": true})).unwrap();
+    assert_eq!(column_text(&s, "A", 1..=4), ["zzz", "c", "b", "a"]);
+    assert_eq!(column_text(&s, "A", 5..=5), totals_row);
 }
