@@ -65,6 +65,9 @@ pub const MAX_CODE_BYTES: usize = 64 * 1024 * 1024;
 /// Most bytes of raw XML kept from around the environment. Extensions are small; more than this is
 /// dropped with a warning.
 const MAX_KEPT_XML_BYTES: usize = 4 * 1024 * 1024;
+/// Every failure before `read_environment` must disclose what overwriting the workbook would lose,
+/// even when there are no Python cells to trigger the separate missing-script warning.
+const UNREAD_ENVIRONMENT_WARNING: &str = "any unread Python initialization code and environment metadata will be omitted on save";
 
 /// The scripts read from a workbook's Python part, and what the cells took from them.
 #[derive(Default)]
@@ -91,24 +94,24 @@ impl ScriptsIn {
 }
 
 /// Reads the workbook's Python part, if it has one. A damaged part is a warning: its cells keep
-/// their values.
+/// their values. If the environment cannot be read, the warning also discloses its loss on save.
 pub fn read(cx: &mut Ctx<'_>, rels: &[crate::package::Rel]) -> Result<ScriptsIn, IoError> {
     let mut out = ScriptsIn { budget: MAX_CODE_BYTES, ..ScriptsIn::default() };
     let Some(rel) = rels.iter().find(|r| !r.external && r.kind.eq_ignore_ascii_case(REL_KIND)) else { return Ok(out) };
     let bytes = match cx.pkg.read_optional_limited(&rel.target, MAX_PART_BYTES) {
         Ok(Some(b)) => b,
         Ok(None) => {
-            cx.warn(format!("missing part {}", rel.target));
+            cx.warn(format!("missing part {}; {UNREAD_ENVIRONMENT_WARNING}", rel.target));
             return Ok(out);
         }
         Err(IoError::TooLarge(m)) => {
-            cx.warn(format!("the Python part is too large ({m}); Python cells kept only their values"));
+            cx.warn(format!("the Python part is too large ({m}); Python cells kept only their values; {UNREAD_ENVIRONMENT_WARNING}"));
             return Ok(out);
         }
         // A damaged entry (a bad checksum or compressed stream) is a damaged part: its cells keep
         // their values, as when the part is missing.
         Err(e) => {
-            cx.warn(format!("the Python part is damaged ({e}); Python cells kept only their values"));
+            cx.warn(format!("the Python part is damaged ({e}); Python cells kept only their values; {UNREAD_ENVIRONMENT_WARNING}"));
             return Ok(out);
         }
     };
@@ -123,11 +126,11 @@ pub fn read(cx: &mut Ctx<'_>, rels: &[crate::package::Rel]) -> Result<ScriptsIn,
     });
     match parsed {
         Ok(root) if root.name != "python" => {
-            cx.warn(format!("the Python part has the root <{}>; Python cells kept only their values", root.name));
+            cx.warn(format!("the Python part has the root <{}>; Python cells kept only their values; {UNREAD_ENVIRONMENT_WARNING}", root.name));
             out.scripts.clear();
         }
         Ok(root) => out.environment = read_environment(cx, &root, &bytes),
-        Err(e) => cx.warn(format!("the Python part is damaged ({e}); kept {} scripts", out.scripts.len())),
+        Err(e) => cx.warn(format!("the Python part is damaged ({e}); kept {} scripts; {UNREAD_ENVIRONMENT_WARNING}", out.scripts.len())),
     }
     if over > 0 {
         cx.warn(format!("the Python part holds more than {MAX_SCRIPTS} scripts; {over} were not read"));
@@ -561,6 +564,101 @@ mod tests {
 
     fn scripts(list: &[&str]) -> ScriptsIn {
         ScriptsIn { scripts: list.iter().map(|s| s.to_string()).collect(), budget: MAX_CODE_BYTES, ..ScriptsIn::default() }
+    }
+
+    /// An environment-only workbook, with an ordinary cell to check that opening can continue.
+    fn environment_package(part: Option<&str>) -> Vec<u8> {
+        let parts: Vec<_> = part.map(|part| (PART, part)).into_iter().collect();
+        crate::tests::minimal(
+            "<sheetData><row r=\"1\"><c r=\"A1\"><v>42</v></c></row></sheetData>",
+            &parts,
+            &format!("<Relationship Id=\"py\" Type=\"{REL}\" Target=\"python.xml\"/>"),
+            "",
+        )
+    }
+
+    /// Failed environment reads must disclose what the next save cannot keep, even with no cells
+    /// that could produce the separate missing-script warning.
+    fn assert_environment_loss(bytes: &[u8], cause: &str) {
+        let (wb, report) = crate::read_xlsx(bytes).unwrap();
+        assert!(wb.python_env.is_none());
+        assert_eq!(wb.sheet(0).unwrap().value(gridcraft_core::CellRef::new(0, 0)), gridcraft_core::Value::Number(42.0));
+        assert!(
+            report.warnings.iter().any(|w| {
+                w.contains(cause) && w.contains("any unread Python initialization code and environment metadata will be omitted on save")
+            }),
+            "{report:?}"
+        );
+        let saved = crate::write_xlsx(&wb).unwrap();
+        assert!(!crate::package::Package::open(&saved).unwrap().has(PART));
+    }
+
+    #[test]
+    fn damaged_environment_only_part_discloses_loss_on_save() {
+        let env = PyEnvironment {
+            code: "sentinel = 42".into(),
+            user_modified: true,
+            id: Some("{AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE}".into()),
+            ..PyEnvironment::default()
+        };
+        let part = write(&[], Some(&env));
+        // A valid environment with no Python cells keeps its code and metadata without a Python warning.
+        let (wb, report) = crate::read_xlsx(&environment_package(Some(&part))).unwrap();
+        assert_eq!(wb.python_env.as_deref(), Some(&env));
+        assert!(!report.warnings.iter().any(|w| w.contains("Python")), "{report:?}");
+        let saved = crate::write_xlsx(&wb).unwrap();
+        assert_eq!(crate::read_xlsx(&saved).unwrap().0.python_env.as_deref(), Some(&env));
+        // A late error leaves even the already-complete definition unread. The warning must say
+        // what an overwrite would lose, not just how many cell scripts were recovered.
+        let damaged = part.replace("</environmentDefinition>", "</environmentDefinition><!--");
+        assert_environment_loss(&environment_package(Some(&damaged)), "the Python part is damaged");
+    }
+
+    #[test]
+    fn missing_oversized_and_wrong_root_parts_disclose_environment_loss() {
+        assert_environment_loss(&environment_package(None), "missing part xl/python.xml");
+        let oversized = " ".repeat(MAX_PART_BYTES as usize + 1);
+        assert_environment_loss(&environment_package(Some(&oversized)), "the Python part is too large");
+        let wrong_root = format!("<other xmlns=\"{NS}\"><environmentDefinition/></other>");
+        assert_environment_loss(&environment_package(Some(&wrong_root)), "the Python part has the root <other>");
+        // The namespace parser rejects this before it can return a root to the caller.
+        assert_environment_loss(&environment_package(Some("<python xmlns=\"urn:other\"/>")), "the Python part is damaged");
+    }
+
+    #[test]
+    fn damaged_zip_entry_discloses_environment_loss() {
+        let part = write(&[], Some(&PyEnvironment { code: "sentinel = 42".into(), ..Default::default() }));
+        let mut bytes = environment_package(Some(&part));
+        let start = {
+            let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+            zip.by_name(PART).unwrap().data_start() as usize
+        };
+        // Damage the Python entry only, leaving the directory and other parts readable.
+        bytes[start] ^= 0xff;
+        assert_environment_loss(&bytes, "the Python part is damaged (the file is not a valid zip package:");
+    }
+
+    #[test]
+    fn damaged_part_keeps_completed_scripts_and_discloses_environment_loss() {
+        let env = PyEnvironment { code: "sentinel = 42".into(), ..Default::default() };
+        let part = write(&["1 + 1".into()], Some(&env)).replace("</python>", "<!--</python>");
+        let bytes = crate::tests::minimal(
+            "<sheetData><row r=\"1\"><c r=\"A1\"><f>_xlfn._xlws.PY(0,0)</f><v>2</v></c></row></sheetData>",
+            &[(PART, &part)],
+            &format!("<Relationship Id=\"py\" Type=\"{REL}\" Target=\"python.xml\"/>"),
+            "",
+        );
+        let (wb, report) = crate::read_xlsx(&bytes).unwrap();
+        let cell = wb.sheet(0).unwrap().cells.get(gridcraft_core::CellRef::new(0, 0)).unwrap();
+        assert_eq!(cell.py.as_ref().unwrap().code, "1 + 1");
+        assert_eq!(cell.value, gridcraft_core::Value::Number(2.0));
+        assert!(wb.python_env.is_none());
+        assert!(
+            report.warnings.iter().any(|w| {
+                w.contains("kept 1 scripts") && w.contains("any unread Python initialization code and environment metadata will be omitted on save")
+            }),
+            "{report:?}"
+        );
     }
 
     #[test]
