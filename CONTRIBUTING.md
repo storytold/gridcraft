@@ -3,8 +3,9 @@
 ## Welcome
 
 Thanks for helping improve GridCraft. Bug fixes, Excel compatibility work, features, tests,
-documentation and localization are all welcome. Start with [AGENTS.md](AGENTS.md) for the
-project's rules and [docs/architecture.md](docs/architecture.md) for the workspace layout.
+documentation and localization are all welcome. Start with [AGENTS.md](AGENTS.md) and
+[CLAUDE.md](CLAUDE.md) for the project's rules, and [docs/architecture.md](docs/architecture.md)
+for the workspace layout.
 The [roadmap](ROADMAP.md) and [ranked gaps](docs/gaps.md) describe current priorities.
 
 Some references in the agent instructions point to `storytold/craftrules` or gitignored
@@ -19,14 +20,14 @@ Search existing [issues](https://github.com/storytold/gridcraft/issues) and
 existing report when it describes the same problem. For questions and general discussion,
 visit the [ArtCraft Discord](https://discord.gg/artcraft).
 
-The issue forms suggest these title styles. Replace `area` with the affected component;
-these are recommendations, not enforced naming rules.
+Use a short, descriptive issue title. These examples are recommendations, not enforced
+naming rules.
 
 | Report | Suggested title |
 |---|---|
-| Bug | `fix(area): concise description` |
+| Bug | `Short description of the problem` |
 | Excel compatibility gap | `Parity: concise description` |
-| Feature request | `feat(area): concise description` |
+| Feature request | `Short description of the proposed improvement` |
 
 ## Reporting bugs and parity gaps
 
@@ -55,26 +56,9 @@ Before submitting, verify the reported behavior and the result of the fix.
 
 ## Development and validation
 
-Use a current stable Rust toolchain with rustfmt and clippy. The CI toolchain also includes
-`wasm32-unknown-unknown`. From the repository root:
-
-```sh
-cargo run --release -p gridcraft -- --sample sales
-cargo fmt --all -- --check
-cargo xtask ci
-```
-
-GridCraft is a Rust-only Cargo workspace: calculation and workbook crates feed the engine,
-with separate UI, MCP and app crates. Follow the layering in [docs/architecture.md](docs/architecture.md).
-User-visible actions go through engine commands; keep the UI thin and programmatic calls free
-of dialogs. Preserve WASM compatibility; do not add handwritten JavaScript or TypeScript.
-
-The gate required by [AGENTS.md](AGENTS.md) before every commit is `cargo xtask ci`: formatting,
-clippy with warnings denied, workspace tests, asset attribution, layering, WASM, and the parity
-and keytip checks implemented in `xtask`. The [CI workflow](.github/workflows/ci.yml) runs it on PRs.
-Add tests for behavior changes; every crash fix needs a regression test. Production code must
-avoid panics and unsafe code, return errors through `Result`, validate untrusted input, and
-bound allocations and recursion as described in the Never Crash rules.
+Follow [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md) for the authoritative toolchain,
+development, safety and validation rules, and [docs/architecture.md](docs/architecture.md)
+for layering. The [CI workflow](.github/workflows/ci.yml) defines the checks run on PRs.
 
 For documentation and GitHub configuration, also check Markdown, links, YAML and the
 [Issue Forms syntax](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/syntax-for-issue-forms).
@@ -85,9 +69,9 @@ PR and distinguish it from checks that passed.
 
 Keep each PR focused on one task, with clear commits that identify it. Explain the problem,
 the resulting behavior and the checks you actually ran. Link fully resolved issues with
-`Fixes #123`; use `Refs #123` for related or partial work. For UI changes, include a GridCraft
-screenshot made with synthetic data; the offscreen snapshot example is documented in
-[AGENTS.md](AGENTS.md). Respond to review feedback and rerun relevant checks after changes.
+`Fixes #123`; use `Refs #123` for related or partial work. Follow the validation and UI evidence
+requirements in [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md). Respond to review feedback
+and rerun relevant checks after changes.
 
 Disclose AI assistance in the PR; the contributor remains responsible for correctness, tests
 and licensing. [Contributor credits](docs/contributors.md) include models named in

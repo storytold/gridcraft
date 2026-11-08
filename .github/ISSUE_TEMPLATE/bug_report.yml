@@ -1,11 +1,10 @@
 name: Bug report
 description: Report a reproducible problem in GridCraft.
-title: "fix(area): "
 body:
   - type: markdown
     attributes:
       value: |
-        Search existing issues and PRs first. Replace `area` in the title with the affected component.
+        Search existing issues and PRs first. Use a short, descriptive issue title.
         Use synthetic data only; do not attach real customer files, personal data, credentials or confidential material.
   - type: input
     id: version
@@ -15,12 +14,26 @@ body:
     validations:
       required: true
   - type: input
-    id: environment
+    id: os
     attributes:
       label: Operating system and platform
       description: Include the OS version; for the web build, also include browser and version.
     validations:
       required: true
+  - type: textarea
+    id: system-info
+    attributes:
+      label: System information
+      description: Optional diagnostic details from GridCraft. Review and remove sensitive information before submitting.
+    validations:
+      required: false
+  - type: textarea
+    id: document-info
+    attributes:
+      label: Document information
+      description: Optional metadata such as file format, sheet count and size. Do not include document contents, personal data or file paths.
+    validations:
+      required: false
   - type: textarea
     id: problem
     attributes:

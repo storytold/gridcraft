@@ -1,11 +1,10 @@
 name: Feature request
 description: Suggest an improvement or new capability for GridCraft.
-title: "feat(area): "
 body:
   - type: markdown
     attributes:
       value: |
-        Search existing issues and PRs first. Replace `area` in the title with the affected component.
+        Search existing issues and PRs first. Use a short, descriptive issue title.
         Keep examples synthetic and remove personal or confidential information from attachments.
   - type: textarea
     id: problem
