@@ -491,12 +491,14 @@ impl Sheet {
     /// sheet AutoFilter while it has criteria, or a hidden data row of a filtered table.
     /// Other hidden rows were hidden by hand.
     pub fn is_row_filtered(&self, row: u32) -> bool {
-        if !self.is_row_hidden(row) {
-            return false;
-        }
-        let in_sheet_filter =
-            self.autofilter.as_ref().is_some_and(|af| !af.criteria.is_empty() && row > af.range.start.row && row <= af.range.end.row);
-        in_sheet_filter || self.tables.iter().any(|t| !t.filter.is_empty() && t.data_range().is_some_and(|r| row >= r.start.row && row <= r.end.row))
+        self.is_row_hidden(row) && self.filter_row_spans().iter().any(|&(first, last)| row >= first && row <= last)
+    }
+    /// The row spans (first, last) an applied filter can hide: the data rows of the sheet
+    /// AutoFilter while it has criteria, and of each filtered table.
+    pub fn filter_row_spans(&self) -> Vec<(u32, u32)> {
+        let sheet = self.autofilter.as_ref().filter(|af| !af.criteria.is_empty()).map(|af| (af.range.start.row.saturating_add(1), af.range.end.row));
+        let tables = self.tables.iter().filter(|t| !t.filter.is_empty()).filter_map(|t| t.data_range()).map(|r| (r.start.row, r.end.row));
+        sheet.into_iter().chain(tables).collect()
     }
     pub fn is_col_hidden(&self, col: u32) -> bool {
         self.cols.get(&col).is_some_and(|r| r.hidden)
