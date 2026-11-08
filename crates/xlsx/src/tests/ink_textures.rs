@@ -235,3 +235,27 @@ fn a_second_save_after_reading_keeps_the_extension() {
     assert_eq!(again.ink_textures.len(), 1);
     assert_eq!(again.sheets[0].shapes[0].ink.as_ref().and_then(|i| i.texture.as_deref()), Some(id.as_str()));
 }
+
+#[test]
+fn an_unreadable_ink_sheet_is_kept_so_a_save_does_not_delete_it() {
+    // A newer GridCraft writes a layout version this one does not read. Dropping the sheet on
+    // open would make the next save delete every texture and per-stroke extra it holds, so the
+    // sheet stays an ordinary (veryHidden) model sheet and round-trips until the version that
+    // understands it opens the file again.
+    let mut wb = with_shape(ink_shape(1, "{33333333-2222-3333-4444-555555555555}"));
+    let mut newer = build(INK_SHEET_NAME, &sample());
+    newer.set_value(CellRef::new(0, 1), Value::number(2.0));
+    wb.sheets.push(Arc::new(newer));
+    let bytes = write_xlsx(&wb).expect("writes");
+    let (back, report) = read_xlsx(&bytes).expect("reads");
+    assert!(report.warnings.iter().any(|w| w.contains("unknown layout")), "the reader warns: {:?}", report.warnings);
+    let kept = back.sheets.iter().find(|s| s.name.starts_with(INK_SHEET_NAME)).expect("the unreadable sheet is kept");
+    assert_eq!(kept.visibility, Visibility::VeryHidden);
+    assert_eq!(kept.cells.get(CellRef::new(0, 1)).and_then(|c| c.value.as_f64()), Some(2.0), "its cells come through the ordinary sheet reader");
+    assert!(back.ink_textures.is_empty(), "nothing is read out of a layout this version does not know");
+    // The next save writes it back: the sheet (and its cells) survives a second open/save cycle.
+    let second = write_xlsx(&back).expect("writes");
+    let (again, _) = read_xlsx(&second).expect("reads");
+    let kept = again.sheets.iter().find(|s| s.name.starts_with(INK_SHEET_NAME)).expect("still there after the second save");
+    assert_eq!(kept.cells.get(CellRef::new(0, 1)).and_then(|c| c.value.as_f64()), Some(2.0));
+}

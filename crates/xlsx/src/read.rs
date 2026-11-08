@@ -362,11 +362,16 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         };
         // GridCraft's own veryHidden ink sheet: read for the textures and per-stroke data Excel
         // can't hold, then dropped from the model (it is written again on save only while that
-        // data exists), so it never shows as a sheet and never reaches the passthrough.
-        if let Some(ours) = read_ink_sheet(&mut cx, &sheet) {
-            ink_data = ours.or(ink_data);
-            file_to_model.push(None);
-            continue;
+        // data exists), so it never shows as a sheet and never reaches the passthrough. One this
+        // version cannot read (a damaged layout, or one a newer GridCraft wrote) stays an ordinary
+        // model sheet, so saving here never deletes data a later version still understands.
+        match read_ink_sheet(&mut cx, &sheet) {
+            Some(Some(data)) => {
+                ink_data = ink_data.or(Some(data));
+                file_to_model.push(None);
+                continue;
+            }
+            Some(None) | None => {}
         }
         match crate::pivot::read_pivots(&mut cx, &mut pivot_caches, &rel.target, &name) {
             Ok(p) => sheet.pivots = p,

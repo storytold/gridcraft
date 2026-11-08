@@ -92,6 +92,36 @@ fn the_pen_scale_is_kept_within_its_limits() {
 }
 
 #[test]
+fn choosing_a_texture_keeps_the_pen_in_hand() {
+    // A command that only sets the pen's texture or its repeat size is still selecting the pen:
+    // without that, the pen was put down at the moment its texture was chosen.
+    let mut s = s();
+    let id = s.execute("draw.textureImport", json!({"name": "a.png", "base64": b64(&png(4, 4))})).unwrap()["id"].as_str().unwrap().to_string();
+    assert_eq!(s.execute("draw.pen", json!({"texture": id, "textureScale": 4})).unwrap()["tool"], "pen");
+    assert_eq!(s.execute("draw.pen", json!({"texture": id})).unwrap()["tool"], "pen", "texture alone selects the pen");
+    assert_eq!(s.execute("draw.pen", json!({"textureScale": 2})).unwrap()["tool"], "pen", "the repeat size alone selects it too");
+    assert_eq!(s.execute("draw.pen", json!({"on": false})).unwrap()["tool"], "", "an explicit off still puts it down");
+}
+
+#[test]
+fn a_texture_undone_from_the_workbook_paints_plainly() {
+    // The pen keeps its texture id in session state, which undo does not restore. A stroke must
+    // still commit (plainly) rather than fail on an id the workbook no longer holds.
+    let mut s = s();
+    let id = s.execute("draw.textureImport", json!({"name": "a.png", "base64": b64(&png(4, 4))})).unwrap()["id"].as_str().unwrap().to_string();
+    s.execute("draw.pen", json!({"texture": id})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.execute("draw.textureList", json!({})).unwrap()["textures"].as_array().unwrap().len(), 0);
+    assert_eq!(s.execute("draw.textureList", json!({})).unwrap()["selected"], id, "the session still names the gone texture");
+    s.execute("draw.stroke", json!({"points": [[0, 0], [40, 40]]})).unwrap();
+    let d = s.doc().unwrap();
+    let shape = d.wb.sheets[0].shapes.last().expect("the stroke was committed");
+    assert_eq!(shape.ink.as_ref().and_then(|i| i.texture.as_deref()), None, "the stroke paints plainly");
+    // A caller that names a missing texture itself is still refused.
+    assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [40, 40]], "texture": id})).is_err());
+}
+
+#[test]
 fn textures_travel_in_the_workbook_json() {
     let mut s = s();
     let bytes = png(6, 4);

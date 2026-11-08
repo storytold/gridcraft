@@ -252,7 +252,7 @@ fn stroke_color(color: Option<&str>, effect: Option<InkEffect>, fallback: &str) 
 
 fn pen(s: &mut Session, p: &Json) -> Result<Json> {
     s.ensure_draw_pens();
-    let selecting = ["brush", "kind", "color", "width", "effect", "pen"].iter().any(|k| p.get(*k).is_some());
+    let selecting = ["brush", "kind", "color", "width", "effect", "texture", "textureScale", "pen"].iter().any(|k| p.get(*k).is_some());
     let on = bool_param(p, "on").unwrap_or(selecting || s.draw_tool != "pen");
     s.draw_tool = if on { "pen".into() } else { String::new() };
 
@@ -651,20 +651,23 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
         .and_then(Json::as_array)
         .map(|a| a.iter().filter_map(Json::as_f64).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 32767.0).round() as u16).take(pts.len()).collect())
         .unwrap_or_default();
-    let texture = p
-        .get("texture")
-        .and_then(Json::as_str)
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string)
-        .or_else(|| (!s.draw_texture.is_empty()).then(|| s.draw_texture.clone()));
+    // A texture the caller names and one the pen carries are different promises: an explicit id
+    // must exist (a typo is an error), while the pen's is session state — undo can take the
+    // imported texture away and another workbook never held it — so a stale one paints plainly.
+    let explicit = p.get("texture").and_then(Json::as_str).map(str::trim).filter(|id| !id.is_empty()).map(str::to_string);
+    let from_session = explicit.is_none();
+    let mut texture = explicit.or_else(|| (!s.draw_texture.is_empty()).then(|| s.draw_texture.clone()));
     let texture_scale = f64_param(p, "textureScale").map(|v| texture_scale(v as f32)).unwrap_or_else(|| texture_scale(s.draw_texture_scale));
 
     let d = s.doc()?;
     if let Some(id) = &texture
         && d.wb.ink_texture(id).is_none()
     {
-        return Err(bad("draw.stroke", "no imported texture has that id"));
+        if !from_session {
+            return Err(bad("draw.stroke", "no imported texture has that id"));
+        }
+        // The pen's texture is not in this workbook (undone, or another workbook): paint plainly.
+        texture = None;
     }
     let si = d.wb.active_sheet();
     let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;

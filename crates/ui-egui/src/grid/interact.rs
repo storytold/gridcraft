@@ -260,9 +260,13 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
             }
             if resp.drag_stopped() && app.grid.ink.len() >= 2 {
                 let pts: Vec<[f32; 2]> = std::mem::take(&mut app.grid.ink);
-                let texture = app.session.draw_texture.clone();
-                let scale = app.session.draw_texture_scale;
-                let _ = app.run("draw.stroke", json!({"points": pts, "texture": texture, "textureScale": scale}));
+                // Name the texture only when this workbook still holds it: a stale session id
+                // (undone import, another workbook) would be refused as a caller's typo.
+                let params = match pen_texture(app, input.workbook) {
+                    Some((texture, scale)) => json!({"points": pts, "texture": texture.id.clone(), "textureScale": scale}),
+                    None => json!({"points": pts}),
+                };
+                let _ = app.run("draw.stroke", params);
             }
             return true;
         }

@@ -151,10 +151,12 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   polylines still read, but they stay polylines: they carry no `InkStyle`, so reopening and saving
   an older workbook does not upgrade its ink to InkML). A part with several `<trace>`s, or a
   `<traceGroup>`, reads as one stroke per trace. Excel drops GridCraft's own draw-order and
-  pen-subtype properties on save, so after an Excel round trip Ink Replay falls back to document
-  order, which can differ from the recorded order. Imported brush textures and the brush subtype
-  are a GridCraft extension kept in a veryHidden `GridCraft Ink` worksheet that Excel preserves;
-  Excel itself sees the base stroke (colour plus the nearest built-in effect). Inserted icons
+  pen-subtype `brushProperty` names on save; the draw order, the brush subtype (Pencil, Fountain
+  Pen, Brush Pen) and imported brush textures also travel in a veryHidden `GridCraft Ink`
+  worksheet that Excel preserves, so they come back after an Excel round trip; Excel itself sees
+  the base stroke (colour plus the nearest built-in effect). A worksheet whose layout a newer
+  GridCraft wrote is kept as an ordinary hidden sheet rather than dropped, so this version's save
+  never deletes it. Inserted icons
   still lose their identity/artwork on save (#551).
 - SmartArt, WordArt, signature line, objects, 3-D models, screenshot; 8 shape kinds vs ~170;
   pictures in cells (#61, PR #105). Equations exist (LaTeX source with a live preview, Office Math in xlsx); there is
@@ -195,7 +197,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-08 | minor | §17: Excel's compact ink traces decode, its brush decides the tool (the pressure channel says nothing), `*` keeps the difference order, a damaged InkML part no longer stops the workbook opening, a multi-trace part reads as one stroke per trace, and a copied sheet's ink is rekeyed; legacy DrawingML ink is not upgraded on save and Excel drops the draw-order property |
+| 2026-11-08 | minor | §17: brushes paint with a repeating image the person imports (PNG/JPEG, content-addressed workbook store, `draw.textureImport`/`draw.textureRemove`/`draw.textureList`), tiled along and across the stroke and tinted by the brush colour; the textures, each stroke's texture id and repeat size, the brush subtype and the draw order travel in a veryHidden `GridCraft Ink` worksheet Excel preserves, written only while such data exists and kept (not dropped) when a newer layout is opened here |
+| 2026-11-08 | minor | §17: Excel's compact ink traces decode, its brush decides the tool (the pressure channel says nothing), `*` keeps the difference order, a damaged InkML part no longer stops the workbook opening, a multi-trace part reads as one stroke per trace, and a copied sheet's ink is rekeyed; legacy DrawingML ink is not upgraded on save and Excel drops the private draw-order brush property (the `GridCraft Ink` sheet returns it) |
 | 2026-11-07 | minor | §17: native Office InkML ink in xlsx (`xdr:contentPart` + InkML part + PNG fallback); brush kind, effect, pressure and draw order round-trip |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
