@@ -155,24 +155,129 @@ fn eval_list_in(wb: &Workbook, sheet: usize, formula: &str, limit: usize, depth:
     }
 }
 
-/// Whether a series formula of `ch` calls a function whose result changes between evaluations
-/// (`NOW`, `TODAY`, `RAND`, `RANDBETWEEN`, `RANDARRAY`), so a result resolved earlier is stale.
-pub fn has_volatile_series(ch: &Chart) -> bool {
-    const VOLATILE: [&str; 5] = ["NOW", "TODAY", "RAND", "RANDBETWEEN", "RANDARRAY"];
-    let calls_volatile = |f: &str| {
-        // Formulas read from a file may carry the `_xlfn.` prefix of newer functions.
-        let up = f.to_ascii_uppercase().replace("_XLFN.", "");
-        VOLATILE.iter().any(|name| {
-            up.match_indices(name).any(|(i, _)| {
-                let before = up[..i].chars().next_back();
-                let after = up[i + name.len()..].trim_start();
-                before.is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == '.')) && after.starts_with('(')
-            })
-        })
-    };
+/// Whether a series formula of `ch` (chart of `sheet`) calls a function whose result changes
+/// between evaluations (`NOW`, `TODAY`, `RAND`, `RANDBETWEEN`, `RANDARRAY`), so a result resolved
+/// earlier is stale. Defined names the formulas use (`=FreshClock`, `Sheet1!Rates`, a LAMBDA name)
+/// are followed into their own formulas, the way the evaluator looks them up; each name once per
+/// chart, so a cycle ends. Names nested deeper than [`MAX_NAME_DEPTH`], or more than
+/// [`MAX_NAMES_FOLLOWED`] distinct names, count as volatile: a chart whose stability isn't
+/// established is not cached.
+pub fn has_volatile_series(wb: &Workbook, sheet: usize, ch: &Chart) -> bool {
+    let mut seen = Seen::new();
     ch.series.iter().any(|s| {
-        [s.name.as_deref(), s.categories.as_deref(), Some(s.values.as_str()), s.bubble_sizes.as_deref()].into_iter().flatten().any(calls_volatile)
+        [s.name.as_deref(), s.categories.as_deref(), Some(s.values.as_str()), s.bubble_sizes.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(|f| formula_volatile(wb, sheet, f, 0, &mut seen))
     })
+}
+
+/// Names followed inside names before a formula counts as volatile.
+const MAX_NAME_DEPTH: u32 = 8;
+/// Distinct defined names followed per chart before the chart counts as volatile.
+const MAX_NAMES_FOLLOWED: usize = 64;
+
+/// Defined names already followed for one chart, each with the sheet its formula is read on.
+type Seen<'a> = Vec<(&'a gridcraft_model::DefinedName, usize)>;
+
+fn formula_volatile<'a>(wb: &'a Workbook, sheet: usize, f: &str, depth: u32, seen: &mut Seen<'a>) -> bool {
+    if calls_volatile(f) {
+        return true;
+    }
+    name_tokens(f).into_iter().any(|t| {
+        let Some((n, at)) = defined_name(wb, sheet, t) else { return false };
+        // Followed already, or being followed (a cycle): a volatile call in it is found there.
+        if seen.iter().any(|&(m, s)| std::ptr::eq(m, n) && s == at) {
+            return false;
+        }
+        if depth >= MAX_NAME_DEPTH || seen.len() >= MAX_NAMES_FOLLOWED {
+            return true;
+        }
+        seen.push((n, at));
+        formula_volatile(wb, at, &n.formula, depth + 1, seen)
+    })
+}
+
+/// Whether formula text `f` calls one of the volatile functions by name.
+fn calls_volatile(f: &str) -> bool {
+    const VOLATILE: [&str; 5] = ["NOW", "TODAY", "RAND", "RANDBETWEEN", "RANDARRAY"];
+    // Formulas read from a file may carry the `_xlfn.` prefix of newer functions.
+    let up = f.to_ascii_uppercase().replace("_XLFN.", "");
+    VOLATILE.iter().any(|name| {
+        up.match_indices(name).any(|(i, _)| {
+            let before = up[..i].chars().next_back();
+            let after = up[i + name.len()..].trim_start();
+            before.is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == '.')) && after.starts_with('(')
+        })
+    })
+}
+
+fn is_ident_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '.' || c == '\\'
+}
+
+/// End of the identifier starting at byte `from` of `f`.
+fn ident_end(f: &str, from: usize) -> usize {
+    f[from..].char_indices().find(|&(_, c)| !is_ident_char(c)).map_or(f.len(), |(j, _)| from + j)
+}
+
+/// End (past the closing quote) of the `q`-quoted text opening at byte `from`; a doubled quote
+/// is an escaped one. `None` when it is not closed.
+fn quoted_end(f: &str, from: usize, q: char) -> Option<usize> {
+    let mut i = from + q.len_utf8();
+    loop {
+        let j = i + f[i..].find(q)?;
+        if f[j + q.len_utf8()..].starts_with(q) {
+            i = j + 2 * q.len_utf8();
+        } else {
+            return Some(j + q.len_utf8());
+        }
+    }
+}
+
+/// The words of formula text `f` that may be defined names: `Name`, `Sheet1!Name`,
+/// `'Bob''s'!Name`. String literals and numbers are skipped; function names, column letters and
+/// the like come along too and simply aren't found as names.
+fn name_tokens(f: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(c) = f[i..].chars().next() {
+        let start = i;
+        let end = match c {
+            '"' => {
+                i = quoted_end(f, i, '"').unwrap_or(f.len());
+                continue;
+            }
+            '\'' => quoted_end(f, i, '\'').unwrap_or(f.len()),
+            c if is_ident_char(c) => ident_end(f, i),
+            c => {
+                i += c.len_utf8();
+                continue;
+            }
+        };
+        i = end;
+        if f[end..].starts_with('!') {
+            let e = ident_end(f, end + 1);
+            if e > end + 1 {
+                out.push(&f[start..e]);
+            }
+            i = e;
+        } else if c != '\'' && !c.is_ascii_digit() {
+            out.push(&f[start..end]);
+        }
+    }
+    out
+}
+
+/// The defined name `t` (`Name` or `Sheet1!Name`) seen from `sheet`, and the sheet its own
+/// formula is read on.
+fn defined_name<'a>(wb: &'a Workbook, sheet: usize, t: &str) -> Option<(&'a gridcraft_model::DefinedName, usize)> {
+    // `'Bob''s'!Name`: the sheet is unquoted as everywhere else (#2012).
+    let (at, bare) = match gridcraft_core::split_sheet(t) {
+        (Some(s), bare) => (wb.sheet_index(&s)?, bare),
+        (None, bare) => (sheet, bare),
+    };
+    wb.name(bare, at).map(|n| (n, n.scope.unwrap_or(at)))
 }
 
 fn to_num(v: &Value) -> Option<f64> {
@@ -278,11 +383,7 @@ fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str, limi
 /// Whether `t` names a defined name seen from `sheet` (`Name`, or `Sheet1!Name` looked up on
 /// that sheet), the way the evaluator looks names up.
 fn is_defined_name(wb: &Workbook, sheet: usize, t: &str) -> bool {
-    // `'Bob''s'!Name`: the sheet is unquoted as everywhere else (#2012).
-    match gridcraft_core::split_sheet(t) {
-        (Some(s), bare) => wb.sheet_index(&s).is_some_and(|i| wb.name(bare, i).is_some()),
-        (None, _) => wb.name(t, sheet).is_some(),
-    }
+    defined_name(wb, sheet, t).is_some()
 }
 
 /// A series name: a reference/formula or a defined name (`[0]!Title` in a file) is evaluated,
