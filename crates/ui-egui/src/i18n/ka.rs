@@ -394,6 +394,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Options|General" => "ზოგადი",
         "Options|Save" => "შენახვა",
         "Show formula bar" => "ფორმულათა ზოლის ჩვენება",
+        "Highlight the active cell's row" => "აქტიური უჯრის სტრიქონის გამოკვეთა",
+        "Display options for this workbook" => "ამ სამუშაო წიგნის ჩვენების პარამეტრები",
+        "Show horizontal scroll bar" => "ჰორიზონტალური გადახვევის ზოლის ჩვენება",
+        "Show vertical scroll bar" => "ვერტიკალური გადახვევის ზოლის ჩვენება",
+        "Show sheet tabs" => "ფურცლების ჩანართების ჩვენება",
+        "Edit Hyperlink…" => "ბმულის რედაქტირება…",
+        "Edit Hyperlink" => "ბმულის რედაქტირება",
+        "Open Hyperlink" => "ბმულის გახსნა",
+        "Remove Hyperlink" => "ბმულის მოხსნა",
+        "Resize formula bar" => "ფორმულათა ზოლის ზომის შეცვლა",
         "Save .xlsx workbooks automatically after every change" => ".xlsx სამუშაო წიგნების ავტომატური შენახვა ყოველი ცვლილების შემდეგ",
         "Workbook calculation" => "სამუშაო წიგნის გამოთვლა",
         "Enable iterative calculation" => "იტერაციული გამოთვლის ჩართვა",
@@ -1217,6 +1227,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Doughnut hole size" => "რგოლის ხვრელის ზომა",
         "Draw a button that runs a macro or a command" => "მაკროსის ან ბრძანების გამშვები ღილაკის დახატვა",
         "Draw a slider that sets a whole number in a linked cell" => "დაკავშირებულ უჯრაში მთელი რიცხვის დამყენებელი სლაიდერის დახატვა",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "დაკავშირებულ უჯრაში მთელი რიცხვის ბიჯით შემცვლელი ისრიანი მთვლელის დახატვა"
+        }
         "Edit Text" => "ტექსტის რედაქტირება",
         "First slice angle" => "პირველი სექტორის კუთხე",
         "Format Control…" => "მართვის ელემენტის ფორმატირება…",
