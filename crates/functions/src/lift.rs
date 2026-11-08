@@ -115,6 +115,8 @@ pub(crate) fn call_lifted(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Val
                 {
                     let v = arr.get_broadcast(r, c);
                     slot.value = if let Value::Array(inner) = &v { inner.data.first().cloned().unwrap_or(Value::Empty) } else { v };
+                    // A blank element of a written array argument is given, as a scalar blank is.
+                    slot.blank_value = !slot.from_ref && matches!(slot.value, Value::Empty);
                 }
             }
             let out = (spec.imp)(&cell_args, ctx);
