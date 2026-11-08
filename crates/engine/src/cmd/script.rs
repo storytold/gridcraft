@@ -586,8 +586,18 @@ fn folder(s: &mut Session, p: &Json) -> Result<Json> {
     std::fs::create_dir_all(path).map_err(|e| bad("script.folder", format!("the folder cannot be made: {e}")))?;
     // Writability: a folder a script cannot be saved in is not a scripts folder. The probe is
     // removed before returning, and a script's own save is the real write.
-    let probe = path.join(".gridcraft-write-test");
-    std::fs::write(&probe, b"gridcraft").map_err(|e| bad("script.folder", format!("the folder is not writable: {e}")))?;
+    // A unique name, created exclusively: a symlink planted in a synced folder is never followed,
+    // and an existing file never blocks the probe.
+    let probe = path.join(format!(".gridcraft-write-test-{}", std::process::id()));
+    {
+        use std::io::Write;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+            .and_then(|mut file| file.write_all(b"gridcraft"))
+            .map_err(|e| bad("script.folder", format!("the folder is not writable: {e}")))?;
+    }
     let _ = std::fs::remove_file(&probe);
     let text = path.display().to_string();
     s.scripts_dir = Some(text.clone());

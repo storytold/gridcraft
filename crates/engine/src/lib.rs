@@ -236,6 +236,9 @@ const JOURNAL_MAX_ENTRIES: usize = 10_000;
 /// `engine.journal`), and a `file.open` holds the whole file as base64: without a size cap a
 /// few opens of a large workbook keep tens of MB alive.
 pub(crate) const JOURNAL_MAX_BYTES: usize = 64 * 1024 * 1024;
+/// The most cells a recorded range write keeps the written values for (the raw values stand in
+/// above it).
+const MAX_CAPTURED_CELLS: usize = 10_000;
 const UNDO_BYTES_LIMIT: usize = 128 * 1024 * 1024;
 
 fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
@@ -692,21 +695,35 @@ impl Session {
         }
     }
 
-    /// The values a `range.setValues` entry wrote, read back from the cells it covered.
-    fn written_values(&self, params: &Json) -> Option<Json> {
-        let Ok(d) = self.doc() else { return None };
-        let sheet = match params.get("sheet").and_then(Json::as_u64) {
-            Some(index) => d.wb.sheets.get(index as usize)?,
-            None => d.wb.sheet(d.wb.active_sheet())?,
-        };
-        let range = params.get("range").and_then(Json::as_str).and_then(gridcraft_core::RangeRef::parse)?;
+    /// The values a `range.setValues` entry wrote, read back from the cells it covered: the same
+    /// sheet and starting cell the command used, the rows and columns it was given, a formula where
+    /// one was written and the stored value otherwise. `None` when the write is too large to keep.
+    fn written_values(&mut self, params: &Json) -> Option<Json> {
+        let values = params.get("values")?.as_array()?;
+        let cells: usize = values.iter().map(|row| row.as_array().map_or(1, Vec::len)).sum();
+        if cells > MAX_CAPTURED_CELLS {
+            return None;
+        }
+        let sheet_index = crate::cmd::target_sheet(self, params).ok()?;
+        let start = crate::cmd::target_range(self, params).ok()?.start;
+        let d = self.doc().ok()?;
+        let sheet = d.wb.sheet(sheet_index)?;
         let mut rows = Vec::new();
-        for row in range.start.row..=range.end.row {
-            let mut cells = Vec::new();
-            for col in range.start.col..=range.end.col {
-                cells.push(Self::whole_number(crate::cmd::inspect::value_json(&sheet.value(gridcraft_core::CellRef::new(row, col)))));
+        for (ri, row) in values.iter().enumerate() {
+            let row_cells: Vec<&Json> = match row.as_array() {
+                Some(cells) => cells.iter().collect(),
+                None => vec![row],
+            };
+            let mut out = Vec::new();
+            for ci in 0..row_cells.len() {
+                let at = start.offset(ri as i64, ci as i64)?;
+                let value = match sheet.cell(at).and_then(|cell| cell.formula.as_ref()) {
+                    Some(formula) => Json::String(format!("={}", formula.text)),
+                    None => Self::whole_number(crate::cmd::inspect::value_json(&sheet.value(at))),
+                };
+                out.push(value);
             }
-            rows.push(Json::Array(cells));
+            rows.push(Json::Array(out));
         }
         Some(Json::Array(rows))
     }

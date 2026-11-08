@@ -90,12 +90,18 @@ fn skip_reason(step: &JournalStep) -> String {
             "it inserted the sheet at a position, which the bridge cannot replay".into()
         }
         "home.deleteSheet" => "it did not name the sheet".into(),
+        _ if step.params.get("sheet").is_some_and(Json::is_number) => "its sheet index could not be resolved".into(),
         _ => "it could not be recorded".into(),
     }
 }
 
 fn step_call(step: &JournalStep) -> Option<(BridgeCall, String)> {
     let p = &step.params;
+    // A journal entry that still holds a sheet index cannot be replayed: the script would target
+    // the active sheet instead of the one the command edited.
+    if p.get("sheet").is_some_and(Json::is_number) {
+        return None;
+    }
     match step.id.as_str() {
         "cell.set" => {
             let cell = p.get("cell").and_then(Json::as_str)?;
@@ -351,6 +357,15 @@ mod tests {
         let rows = record(&[step("range.setValues", json!({"range": "A1:B1", "values": [[1, 2]]}))]);
         assert!(rows.code.contains("setValues([[1, 2]]);"), "{}", rows.code);
         assert!(rows.skipped.is_empty());
+    }
+
+    #[test]
+    fn a_step_with_a_sheet_index_is_skipped() {
+        // A journal step that still holds a sheet index cannot be replayed: the script would
+        // target the active sheet instead of the one the command edited.
+        let r = record(&[step("cell.set", json!({"sheet": 1, "cell": "A1", "input": 1}))]);
+        assert!(r.calls.is_empty(), "{:?}", r.calls);
+        assert!(r.code.contains("its sheet index could not be resolved"), "{}", r.code);
     }
 
     #[test]

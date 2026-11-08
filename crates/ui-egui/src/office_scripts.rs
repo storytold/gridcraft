@@ -61,7 +61,6 @@ pub fn open(app: &mut SheetApp) -> Dialog {
 /// Re-reads the script list and the runtime's state. Called when the pane opens and after an
 /// action that can change either.
 pub fn refresh(app: &mut SheetApp) {
-    ensure_host(app);
     let list = app.session.run("script.list", json!({})).ok().and_then(|v| serde_json::from_value::<Vec<ScriptRecord>>(v).ok()).unwrap_or_default();
     let runtime = app.session.run("script.runtime", json!({})).ok().and_then(|v| serde_json::from_value::<RuntimeInfo>(v).ok());
     let folder = app.session.run("script.folder", json!({})).ok().and_then(|v| v.get("folder").and_then(Json::as_str).map(str::to_string));
@@ -76,7 +75,8 @@ pub fn refresh(app: &mut SheetApp) {
 }
 
 /// Finds the runtime again when the pane opens or the user installed Bun while GridCraft runs.
-fn ensure_host(app: &mut SheetApp) {
+/// `refresh` does not do this: a save or a delete must not spawn `bun --version` on the UI thread.
+pub fn ensure_host(app: &mut SheetApp) {
     if let Some(make) = &app.services.bun_host {
         app.session.script_host = make();
     }
@@ -85,7 +85,7 @@ fn ensure_host(app: &mut SheetApp) {
 /// Loads a saved script into the editor. A dirty draft is not replaced: the person saves it (or
 /// clears it) first, so switching scripts never loses edits.
 fn select(app: &mut SheetApp, id: &str) {
-    if app.office_scripts.dirty && app.office_scripts.selected.as_deref() != Some(id) {
+    if app.office_scripts.dirty {
         app.office_scripts.status = Some(Status::failed("Save the draft before opening another script."));
         return;
     }
@@ -171,6 +171,7 @@ pub fn run(app: &mut SheetApp) {
 /// The pane's body. `open` closes the dialog.
 pub fn pane(app: &mut SheetApp, ui: &mut Ui, _d: &mut Dialog, open: &mut bool) {
     if !app.office_scripts.loaded {
+        ensure_host(app);
         refresh(app);
     }
     ui.horizontal_top(|ui| {
@@ -305,6 +306,7 @@ fn runtime_row(app: &mut SheetApp, ui: &mut Ui) {
                 import_bun(app);
             }
             if ui.button(lang.tr("Check Again")).clicked() {
+                ensure_host(app);
                 refresh(app);
             }
         }
@@ -353,9 +355,17 @@ fn folder_row(app: &mut SheetApp, ui: &mut Ui) {
                 Ok(record) => {
                     if let Some(id) = record.get("id").and_then(Json::as_str).map(str::to_string) {
                         refresh(app);
-                        select(app, &id);
+                        if app.office_scripts.dirty {
+                            // `select` would refuse and set its own message: say what happened.
+                            app.office_scripts.status =
+                                Some(Status::ok("Script imported; it is in the list. The draft is unsaved, so the editor keeps it."));
+                        } else {
+                            select(app, &id);
+                            app.office_scripts.status = Some(Status::ok("Script imported."));
+                        }
+                    } else {
+                        app.office_scripts.status = Some(Status::ok("Script imported."));
                     }
-                    app.office_scripts.status = Some(Status::ok("Script imported."));
                 }
                 Err(e) => app.office_scripts.status = Some(Status::failed(clean_error(&e))),
             }
@@ -407,6 +417,7 @@ fn download_bun(app: &mut SheetApp) {
     if let Some(install) = &app.services.install_bun {
         match install() {
             Ok(_) => {
+                ensure_host(app);
                 refresh(app);
                 app.office_scripts.status = Some(Status::ok("Bun installed."));
             }
