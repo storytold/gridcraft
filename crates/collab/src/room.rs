@@ -9,6 +9,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use gridcraft_engine::Session;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
 use crate::delta::delta_for;
@@ -33,6 +34,17 @@ impl RoomError {
     }
 }
 
+/// What a store writes down to restore a room: its counters and its dedup window. The workbook
+/// and the sheet keys travel separately (the store owns their format).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RoomState {
+    pub version: u64,
+    pub epoch: u64,
+    /// The most recent answers, oldest first. Bounded by [`DEDUP_WINDOW`] when it is written.
+    #[serde(default)]
+    pub seen: Vec<Applied>,
+}
+
 /// The authoritative state of one shared document.
 pub struct Room {
     keys: SheetKeys,
@@ -52,6 +64,22 @@ impl Room {
             keys.sync(&d.wb);
         }
         Room { keys, version: 0, epoch: 0, seen: HashMap::new(), order: VecDeque::new() }
+    }
+
+    /// Rebuilds a room from a stored state: counters, dedup window and the sheet keys issued
+    /// before the restart. The caller has already loaded the workbook the state belongs to.
+    pub fn restore(keys: SheetKeys, state: RoomState) -> Room {
+        let mut room = Room { keys, version: state.version, epoch: state.epoch, seen: HashMap::new(), order: VecDeque::new() };
+        for applied in state.seen {
+            room.remember(applied);
+        }
+        room
+    }
+
+    /// The state a store keeps across a restart.
+    pub fn state(&self) -> RoomState {
+        let seen = self.order.iter().filter_map(|id| self.seen.get(id).cloned()).collect();
+        RoomState { version: self.version, epoch: self.epoch, seen }
     }
 
     pub fn version(&self) -> u64 {

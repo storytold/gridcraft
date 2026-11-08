@@ -1,123 +1,15 @@
 //! End-to-end tests over a real socket: two clients, a viewer, a bad token, the lease and a
 //! commit, against the routes the cabinet calls.
-//!
-//! HTTP is spoken by hand so the test does not pull a client library; WebSocket uses the same
-//! tungstenite version the server does.
 
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
+mod support;
 
 use base64::Engine;
-use futures_util::{SinkExt, StreamExt};
-use gridcraft_collab::{Claims, Role};
-use gridcraft_collab_server::http::router;
-use gridcraft_collab_server::{App, Config, JwtConfig};
-use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+use futures_util::SinkExt;
+use gridcraft_collab::Role;
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio_tungstenite::MaybeTlsStream;
-use tokio_tungstenite::WebSocketStream;
+use support::{SERVICE, create, http, next, now, op, open, sheet_key, start};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-
-const SECRET: &[u8] = b"test-secret";
-const SERVICE: &str = "service-token";
-
-type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
-
-struct Server {
-    addr: SocketAddr,
-}
-
-async fn start() -> Server {
-    let cfg =
-        Config { addr: "127.0.0.1:0".parse().unwrap(), service_token: Some(SERVICE.into()), lease_ttl: Duration::from_secs(60), ..Config::default() };
-    let app = Arc::new(App::new(cfg, JwtConfig::hs256(SECRET).unwrap()));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router(app)).await;
-    });
-    Server { addr }
-}
-
-fn now() -> u64 {
-    u64::try_from(chrono::Utc::now().timestamp()).unwrap_or(0)
-}
-
-fn token(actor: &str, role: Role, file_id: i64, session_id: &str) -> String {
-    let claims = Claims {
-        iss: "mail.lzmkm.ru".into(),
-        sub: actor.into(),
-        aud: "office-sync".into(),
-        file_id,
-        app: "gridcraft".into(),
-        role,
-        session_id: session_id.into(),
-        iat: now(),
-        exp: now() + 3_600,
-    };
-    encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(SECRET)).unwrap()
-}
-
-async fn http(server: &Server, method: &str, path: &str, auth: Option<&str>, body: Option<&str>) -> (u16, String) {
-    let mut stream = TcpStream::connect(server.addr).await.unwrap();
-    let body = body.unwrap_or("");
-    let auth = auth.map(|token| format!("Authorization: Bearer {token}\r\n")).unwrap_or_default();
-    let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{auth}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    stream.write_all(request.as_bytes()).await.unwrap();
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).await.unwrap();
-    let text = String::from_utf8_lossy(&response).to_string();
-    let status = text.lines().next().and_then(|line| line.split(' ').nth(1)).and_then(|code| code.parse().ok()).unwrap_or(0);
-    let body = text.split_once("\r\n\r\n").map(|(_, rest)| rest.to_string()).unwrap_or_default();
-    (status, body)
-}
-
-async fn create(server: &Server, file_id: i64, takeover: bool) -> String {
-    let body = json!({ "fileId": file_id, "app": "gridcraft", "owner": "ann", "initialName": "plan.xlsx", "takeover": takeover });
-    let (status, response) = http(server, "POST", "/v1/sessions", Some(SERVICE), Some(&body.to_string())).await;
-    assert_eq!(status, 201, "{response}");
-    serde_json::from_str::<Value>(&response).unwrap()["sessionId"].as_str().unwrap().to_string()
-}
-
-async fn open(server: &Server, session_id: &str, who: &str, role: Role, file_id: i64) -> Socket {
-    let request = format!("ws://{}/v1/sessions/{session_id}/ws", server.addr).into_client_request().unwrap();
-    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
-    let hello = json!({ "type": "hello", "token": token(who, role, file_id, session_id), "name": who, "lastVersion": 0 });
-    socket.send(Message::text(hello.to_string())).await.unwrap();
-    socket
-}
-
-async fn next(socket: &mut Socket) -> Value {
-    let frame = tokio::time::timeout(Duration::from_secs(5), socket.next()).await.unwrap().unwrap().unwrap();
-    serde_json::from_str(frame.to_text().unwrap()).unwrap()
-}
-
-fn sheet_key(welcome: &Value) -> String {
-    welcome["sheets"][0]["key"].as_str().unwrap().to_string()
-}
-
-fn op(op_id: &str, cmd: &str, params: Value, sheet: &str, a1: &str) -> String {
-    json!({
-        "type": "op",
-        "op": {
-            "opId": op_id,
-            "doc": "book",
-            "baseVersion": 0,
-            "epoch": 0,
-            "kind": "command",
-            "target": { "sheet": sheet, "a1": a1 },
-            "payload": { "cmd": cmd, "params": params }
-        }
-    })
-    .to_string()
-}
 
 #[tokio::test]
 async fn two_editors_converge_on_one_book() {

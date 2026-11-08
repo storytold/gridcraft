@@ -11,7 +11,7 @@ use gridcraft_engine::Session;
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::{Applied, ClientOp, RejectCode, Rejected};
-use crate::room::{Room, RoomError};
+use crate::room::{Room, RoomError, RoomState};
 
 /// What a participant may do (ADR-0008).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -108,6 +108,32 @@ impl Hub {
     /// Whether a document is open.
     pub fn is_open(&self, doc: &str) -> bool {
         self.documents.contains_key(doc)
+    }
+
+    /// Adds a document whose room and sheet keys were restored from a store (a restart, or a
+    /// takeover of a persisted session). Returns `false` when the document already exists.
+    pub fn open_restored(&mut self, doc: &str, session: Session, keys: crate::SheetKeys, state: RoomState) -> bool {
+        if self.documents.contains_key(doc) {
+            return false;
+        }
+        let room = Room::restore(keys, state);
+        self.documents.insert(doc.to_string(), Document { session, room, participants: BTreeMap::new() });
+        true
+    }
+
+    /// The authoritative workbook of a document, for a snapshot.
+    pub fn workbook(&self, doc: &str) -> Option<std::sync::Arc<gridcraft_model::Workbook>> {
+        self.documents.get(doc)?.session.active().map(|d| d.wb.clone())
+    }
+
+    /// The keys issued in this session, for a snapshot.
+    pub fn sheet_keys(&self, doc: &str) -> Option<crate::SheetKeys> {
+        self.documents.get(doc).map(|d| d.room.sheet_keys().clone())
+    }
+
+    /// The room counters and dedup window, for a snapshot.
+    pub fn room_state(&self, doc: &str) -> Option<RoomState> {
+        self.documents.get(doc).map(|d| d.room.state())
     }
 
     /// Drops a document and its room. The caller has already told the participants (a takeover by

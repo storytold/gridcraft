@@ -110,13 +110,20 @@ Denylist — свойство **сервера**, не клиента: кома�
 
 ### 3.3. Документ на сервере (ADR-0005)
 
-- **База**: JSON `Workbook` (`serde_json`) + **opaque-блоб `preserved`** и `source_dir`
-  из исходного файла + карта ключей `{sheetKey, SheetUid, file_id, name}` + `version`.
-  Без блоба JSON-снапшот теряет custom XML, внешние ссылки, connections, query tables,
-  form/ActiveX, OLE, фон листа, printer settings (`preserved` помечен `#[serde(skip)]`).
-- **Хвост**: журнал операций после базы (op, версия, actor, время), обрезается снапшотом.
-- **Восстановление**: загрузить базу → `Calc::rebuild(&wb)` → применить хвост.
-- **Commit** — отдельная операция: `write_xlsx(&wb)` из базы+хвоста, не из снапшота.
+- **База**: авторитетный `.xlsx`, который пишет сам сервер (`write_xlsx`) — тот же файл,
+  что отдаёт `commit`. Так снапшот сохраняет всё, что уже умеет round-trip ридера/писателя:
+  `preserved`-части (custom XML, внешние ссылки, connections, query tables, form/ActiveX, OLE,
+  фон листа, printer settings), кэшированные значения формул и стили, — без второго
+  сериализатора и без риска разойтись с `commit`. JSON-модель как формат снапшота отклонена:
+  `Preserved` не сериализуется (`serde(skip)`), и её пришлось бы дублировать вручную.
+- **Ключи листов**: `keys.json` — `{next, live: [(key, имя листа)], dead: [key]}`. `SheetUid`
+  живёт только в процессе, поэтому карта привязана к имени (имена уникальны; переименование
+  попадает в следующий снапшот); исчезнувшее имя становится надгробием.
+- **Хвост**: журнал операций после базы (op, `applied`, версия, actor, время), обрезается
+  снапшотом. Окно дедупа (`seen.json`) пишется вместе с базой и переживает compaction.
+- **Восстановление**: база → `DocState::from_saved` (граф без пересчёта) → применить хвост
+  через `Room::apply`; версия и epoch должны совпасть с `meta.json`.
+- **Commit** — отдельная операция: `write_xlsx(&wb)` из живого состояния, не из снапшота.
 
 ## 4. Протокол
 
@@ -132,14 +139,15 @@ WebSocket, WSS. Один фрейм — один JSON-объект. Лимиты
 
 | Тип | Направление | Поля | Семантика |
 |---|---|---|---|
-| `hello` | C→S | `v, app:"gridcraft", doc, jwt, client{name,ver}, lastVersion?` | auth + join; токен только здесь |
-| `welcome` | S→C | `sessionId, actorId, role, lease, version, epoch, keys[], participants, capabilities` | старт; `keys` — карта `sheetKey ↔ имя` |
+| `hello` | C→S | `token, name, lastVersion` | auth + join; подписанный токен только здесь, не в URL |
+| `welcome` | S→C | `sessionId, actorId, role, version, epoch, sheets[], participants, lease` | старт; `sheets` — карта `sheetKey ↔ имя` |
 | `op` | C→S | `opId, doc, baseVersion, epoch, kind, target, payload, preview?` | операция |
 | `applied` | S→C | `opId, version, epoch, result{command?,delta?}, actorId` | авторитетный результат |
 | `rejected` | S→C | `opId, code, retryable, hint{version,epoch}, details?` | отказ |
 | `presence` | C↔S | `sheetKey, active, ranges[], viewport, editing?` | эфемерно |
 | `resync` | C→S | `from` | запрос базы/хвоста |
-| `snapshot` | S→C | `mode, version, seq, bytes/chunk` | база и/или хвост |
+| `snapshot` | S→C | `mode:"base", version, epoch, total, seq, bytes(base64)` | авторитетная книга чанками по 768 КиБ |
+| `resynced` | S→C | `version, epoch` | догон закончен; дальше идут живые `applied` |
 | `commit` / `commit-result` | C↔S / S→C | `expectedVersion?` / `bytes, sha256, version, warnings[]` | сборка файла |
 | `ping`/`pong` | C↔S | `nonce` | heartbeat и продление lease |
 | `error` | S→C | `code, message, retryable` | фатальная ошибка соединения |
@@ -179,22 +187,32 @@ OT не используется: сервер применяет к head (ADR-0
 
 ### 4.5. Reconnect и догон
 
-1. Клиент присылает `lastVersion`; если он в хвосте — `applied`-операции с `lastVersion+1`.
-2. Если версия вытеснена — `resync` → `snapshot{mode:"base+tail"}` чанками, затем
-   непринятая очередь повторяется с теми же `opId`.
-3. Оптимистичный preview сверяется с дельтой: при расхождении preview отбрасывается,
+1. `hello.lastVersion` < head — сервер сам делает догон, не дожидаясь `resync`: клиент
+   получает `welcome`, затем недостающие `applied` или `snapshot`, затем `resynced{version}`
+   и только после этого — живые операции.
+2. Если версия в хвосте (`lastVersion ≥ baseVersion`) — присылаются `applied` с
+   `lastVersion+1`; иначе — `snapshot{mode:"base"}` чанками (base64, 768 КиБ), после чего
+   хвост, накопленный за время сборки снапшота.
+3. Соединение на время догона снимается с рассылки, чтобы дельта не обогнала снапшот; после
+   последнего недостающего кадра возвращается, и в том же захвате локa фиксируется head —
+   разрыва между хвостом и живым потоком нет.
+4. Непринятая очередь повторяется с теми же `opId`; повтор попадает в окно дедупа и получает
+   тот же `applied`.
+5. Оптимистичный preview сверяется с дельтой: при расхождении preview отбрасывается,
    применяется серверная дельта.
-4. Таймаут реконнекта и backoff — на клиенте; сервер держит комнату TTL сессии.
+6. Таймаут реконнекта и backoff — на клиенте; сервер держит комнату TTL сессии.
 
 ### 4.6. Снапшоты и compaction (ADR-0005)
 
-- Снапшот = база (JSON `Workbook` + блоб `preserved`/`source_dir` + карта ключей) +
-  метаданные `{version, epoch, savedAt, sha256 исходника}`.
-- Частота: каждые 500 операций или 5 минут, и обязательно при подключении нового
-  участника, если хвост длиннее порога. Хранится 2 снапшота.
-- Compaction: журнал обрезается по версии снапшота; окно дедупа хранится отдельно.
-- Тест приёмки: «снапшот + хвост → commit» даёт `.xlsx`, у которого pass-through-части
-  совпадают с исходными по sha256, а модель — с моделью после реплея.
+- Снапшот = `base.xlsx` (авторитетная книга) + `keys.json` + `seen.json` (версия, epoch,
+  окно дедупа) + `meta.json`; файлы пишутся атомарно (tmp + rename).
+- Частота: при открытии сессии, каждые 500 операций, при graceful shutdown. Снапшот
+  запускается вне замка состояния: книга — COW-`Arc`, запись идёт в `spawn_blocking`.
+- Compaction: после успешной записи журнал обрезается по версии снапшота; операции,
+  пришедшие во время записи, остаются. Окно дедупа хранится в `seen.json` и переживает
+  compaction, поэтому повтор `opId` после рестарта не исполняется второй раз.
+- Тест приёмки: «снапшот → рестарт → хвост → commit» даёт `.xlsx`, у которого ячейки и
+  pass-through-части совпадают с книгой до рестарта.
 
 ## 5. Presence (ADR-0006)
 
@@ -262,12 +280,14 @@ OT не используется: сервер применяет к head (ADR-0
   журнал, снапшоты, метрики).
 - **Воркер**: один `Session` на документ в процессе; вход — `execute_headless`,
   выход — дельта из `Ctx.changed`/`CellStore::diff`; commit — `write_xlsx`.
-- **Хранилище** (volume): `sessions/<fileId>/base.json`, `preserved.bin`,
-  `keys.json`, `journal.jsonl`, `snapshots/<version>/`, `meta.json`. Файловый
-  store в v1; Redis/Postgres — для lease и списка сессий кабинета.
-- **Восстановление**: `meta` → база → `Calc::rebuild` → хвост журнала; снапшот
-  каждые N операций; при отсутствии базы — `resync` невозможен, сессия закрывается
-  с `error{code:"internal"}` и записью в метрику.
+- **Хранилище** (volume, `GRIDCRAFT_COLLAB_STORE`): `sessions/<fileId>/base.xlsx`,
+  `keys.json`, `seen.json`, `journal.jsonl`, `meta.json`. Файловый store в v1;
+  Redis/Postgres — для lease и списка сессий кабинета. Каталог обязателен: без него
+  процесс не стартует (в памяти — только тесты).
+- **Восстановление**: `meta` → `base.xlsx` → `DocState::from_saved` → хвост журнала;
+  снапшот при открытии, каждые 500 операций и на shutdown. Повреждённый каталог
+  логируется и пропускается, остальные сессии обслуживаются. `DELETE /v1/sessions/{id}`
+  удаляет каталог: кабинет забрал файл или отказался от несохранённых правок (§5.2).
 - **Лимиты**: документ ≤ 512 MB (как ридер), операция ≤ 1 MiB, дельта ≤ 8 MiB,
   участников ≤ 5 (v1), presence ≤ 10 Гц, сессий на процесс — по памяти.
 - **Метрики**: активные сессии, участники, латентность `op→applied`, размер базы и

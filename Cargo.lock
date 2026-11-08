@@ -2166,6 +2166,8 @@ dependencies = [
  "futures-util",
  "gridcraft-collab",
  "gridcraft-engine",
+ "gridcraft-model",
+ "gridcraft-xlsx",
  "http-body-util",
  "jsonwebtoken",
  "log",

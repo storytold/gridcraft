@@ -47,6 +47,14 @@ pub struct SheetName {
     pub name: String,
 }
 
+/// How a snapshot travels to a client that cannot be caught up from the journal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SnapshotMode {
+    /// The whole authoritative workbook; the client replaces its document with it.
+    Base,
+}
+
 /// The lease of the file (ADR-0007 §1): who holds the one active session and until when. The
 /// transport re-reads it on every `ping` and operation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +84,23 @@ pub enum ServerMessage {
     },
     Rejected {
         rejected: Rejected,
+    },
+    /// One chunk of the authoritative workbook. `bytes` is base64; `total` is the number of
+    /// chunks of this snapshot and `seq` counts from 0. A client that receives the last chunk and
+    /// then `resynced` has the document at `version`.
+    Snapshot {
+        mode: SnapshotMode,
+        version: u64,
+        epoch: u64,
+        total: u32,
+        seq: u32,
+        bytes: String,
+    },
+    /// The catch-up is over: whatever came before (`applied` frames or a snapshot) is the state
+    /// at `version`.
+    Resynced {
+        version: u64,
+        epoch: u64,
     },
     Presence {
         participants: Vec<Participant>,
@@ -165,7 +190,7 @@ impl Gateway {
             },
             ClientMessage::Resync { from } => vec![ServerMessage::Error {
                 code: "resync".into(),
-                message: format!("no snapshot after version {from} in v1; reopen the document"),
+                message: format!("resync is served by the transport, not the room (from {from})"),
                 retryable: true,
             }],
             ClientMessage::Ping { nonce } => vec![ServerMessage::Pong { nonce }],

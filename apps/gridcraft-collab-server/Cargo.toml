@@ -12,6 +12,8 @@ workspace = true
 [dependencies]
 gridcraft-collab = { workspace = true }
 gridcraft-engine = { workspace = true }
+gridcraft-model = { workspace = true }
+gridcraft-xlsx = { workspace = true }
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
 jsonwebtoken = "9.3"

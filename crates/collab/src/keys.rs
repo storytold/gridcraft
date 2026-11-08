@@ -9,6 +9,23 @@
 use std::collections::{BTreeMap, HashSet};
 
 use gridcraft_model::Workbook;
+use serde::{Deserialize, Serialize};
+
+/// The persisted form of a key map. A [`SheetUid`] is a runtime identity and is never in a file,
+/// so the map is written by sheet **name**: names are unique in a workbook, a rename keeps the
+/// key (the snapshot after it stores the new name), and a deleted sheet leaves a tombstone.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyFile {
+    /// The last key issued.
+    pub next: u64,
+    /// Key → the name of the sheet it belongs to at the time of the snapshot.
+    #[serde(default)]
+    pub live: Vec<(u64, String)>,
+    /// Keys whose sheet is gone.
+    #[serde(default)]
+    pub dead: Vec<u64>,
+}
 
 /// Keys of the sheets of one session.
 #[derive(Clone, Debug, Default)]
@@ -69,5 +86,42 @@ impl SheetKeys {
     /// How many keys the session has issued.
     pub fn issued(&self) -> u64 {
         self.next
+    }
+
+    /// The persisted form: keys by sheet name, plus the tombstones.
+    pub fn to_file(&self, wb: &Workbook) -> KeyFile {
+        let live = self
+            .uid_of_key
+            .iter()
+            .filter_map(|(key, uid)| {
+                let sheet = wb.sheets.iter().find(|sheet| sheet.uid.get() == *uid)?;
+                Some((*key, sheet.name.clone()))
+            })
+            .collect();
+        KeyFile { next: self.next, live, dead: self.dead.iter().copied().collect() }
+    }
+
+    /// Rebuilds a key map over `wb` from its persisted form. A key whose sheet is not in this
+    /// workbook becomes a tombstone: the operation addressed to it is refused rather than
+    /// resurrecting a sheet that now has that name.
+    pub fn from_file(wb: &Workbook, file: KeyFile) -> SheetKeys {
+        let mut keys = SheetKeys { next: file.next, ..SheetKeys::default() };
+        for (key, name) in file.live {
+            match wb.sheets.iter().find(|sheet| sheet.name == name) {
+                Some(sheet) => {
+                    keys.key_of_uid.insert(sheet.uid.get(), key);
+                    keys.uid_of_key.insert(key, sheet.uid.get());
+                    keys.next = keys.next.max(key);
+                }
+                None => {
+                    keys.dead.insert(key);
+                }
+            }
+        }
+        for key in file.dead {
+            keys.dead.insert(key);
+            keys.next = keys.next.max(key);
+        }
+        keys
     }
 }

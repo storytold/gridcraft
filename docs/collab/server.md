@@ -15,6 +15,7 @@
 | `GRIDCRAFT_COLLAB_JWT_PEM` | да, если нет секрета | — | публичный ключ кабинета в PEM |
 | `GRIDCRAFT_COLLAB_JWT_ALG` | нет | `EdDSA` | `ES256`, `ES384` или `EdDSA` для PEM |
 | `GRIDCRAFT_COLLAB_SERVICE_TOKEN` | **да** | — | Bearer для `/v1/*`; без него сервер не стартует |
+| `GRIDCRAFT_COLLAB_STORE` | **да** | — | каталог состояния (журнал, снапшоты); без него сервер не стартует |
 | `GRIDCRAFT_COLLAB_ADDR` | нет | `127.0.0.1:8787` | адрес слушателя |
 | `GRIDCRAFT_COLLAB_PUBLIC_URL` | нет | `ws://{ADDR}` | база `wsUrl` в ответе кабинета |
 | `GRIDCRAFT_COLLAB_AUDIENCE` | нет | `office-sync` | `aud` токена сессии |
@@ -22,8 +23,34 @@
 | `GRIDCRAFT_COLLAB_LEASE_SECS` | нет | `1800` | TTL lease файла |
 | `GRIDCRAFT_COLLAB_HELLO_SECS` | нет | `10` | сколько ждать `hello` |
 | `GRIDCRAFT_COLLAB_MAX_PARTICIPANTS` | нет | `5` | участников на документ (v1) |
+| `GRIDCRAFT_COLLAB_SNAPSHOT_OPS` | нет | `500` | операций между снапшотами |
 
-Лимиты транспорта: входящий кадр ≤ 1 MiB, сообщение ≤ 9 MiB (`applied` ≤ 8 MiB по RFC §4.1).
+Лимиты транспорта: входящий кадр ≤ 1 MiB, сообщение ≤ 9 MiB (`applied` ≤ 8 MiB по RFC §4.1),
+чанк снапшота 768 КиБ до base64.
+
+## Хранилище
+
+```text
+$GRIDCRAFT_COLLAB_STORE/sessions/<fileId>/
+  base.xlsx       авторитетная книга на версии base_version
+  keys.json       ключи листов {next, live:[(key, имя)], dead:[key]}
+  seen.json       {version, epoch, окно дедупа} на base_version
+  journal.jsonl   применённые операции после base_version
+  meta.json       fileId, sessionId, owner, name, version, epoch, base_version
+```
+
+- `base.xlsx` — тот же файл, что отдаёт `commit`: pass-through-части и кэш значений формул
+  сохраняются ридером/писателем, второго сериализатора нет.
+- Ключи листов привязаны к имени: `SheetUid` не переживает рестарт, имена уникальны, а
+  переименование попадает в следующий снапшот; исчезнувшее имя — надгробие.
+- Снапшот: при открытии, каждые `SNAPSHOT_OPS` операций, на graceful shutdown. Запись
+  атомарная (tmp + rename), идёт в `spawn_blocking` с COW-копией книги; после успеха журнал
+  обрезается, операции во время записи остаются.
+- Рестарт: `restore()` читает каталоги, грузит базу через `DocState::from_saved`, применяет
+  хвост через `Room::apply`, сверяет версию с `meta.json`. Повреждённый каталог логируется и
+  пропускается.
+- `DELETE /v1/sessions/{id}` удаляет каталог; takeover продолжает **сохранённую** сессию,
+  а не присланные кабинетом байты.
 
 ## HTTP
 
@@ -65,6 +92,10 @@ GET    /v1/sessions/{id}/ws    WebSocket
 и в причине close-кадра: `token-invalid`, `token-expired`, `token-audience`, `token-app`,
 `token-file`, `token-session`, `lease`, `too-many`, `session-unknown`, `hello-timeout`.
 
+Догон: если `lastVersion` меньше head, сервер сам снимает соединение с рассылки, шлёт хвост
+журнала (если он покрывает версию) или `snapshot{mode:"base"}` чанками, затем `resynced`;
+после этого соединение возвращается в рассылку. Тот же путь — по `resync{from}`.
+
 Дальше — сообщения `op`, `presence`, `ping`, `leave` из `rfc.md` §4.2. `applied` и `presence`
 рассылаются всем соединениям документа (`presence` — кроме автора), `rejected`/`pong`/`error`
 получает только отправитель. Каждое сообщение соединения продлевает lease файла.
@@ -85,16 +116,17 @@ GET    /v1/sessions/{id}/ws    WebSocket
 
 ## Чего ещё нет
 
-- **Журнал и снапшоты** (PR 4c): документы живут в памяти процесса; после рестарта сессии
-  теряются. `resync` сейчас отвечает `error{code:"resync"}` — клиент переоткрывает книгу.
 - **TLS** терминируется на входном прокси (RFC §4.1); бинарь слушает HTTP/WS.
-- **Метрики латентности `op→applied`** и `reconnect rate` — вместе с журналом.
-- **Host-сообщения кабинета** и клиентская часть — PR 5.
+- **Метрики латентности `op→applied`**, reconnect rate и размер журнала — следующий срез.
+- **Клиентская часть** (feature-флаг `collab`, preview/откат, presence, viewer) — PR 5.
+- **Коммит в кабинет** через server-to-server callback — вместе с клиентом.
+- **Периодический снапшот по времени** (5 минут) — сейчас только по числу операций и на
+  shutdown; `flush` вызывается из graceful shutdown.
 
 ## Проверка
 
 ```bash
-cargo test -p gridcraft-collab-server      # unit + 6 сценариев через сокет
+cargo test -p gridcraft-collab-server      # unit + 6 socket + 3 восстановление/догон
 cargo clippy -p gridcraft-collab-server --all-targets -- -D warnings
 cargo xtask layers
 ```

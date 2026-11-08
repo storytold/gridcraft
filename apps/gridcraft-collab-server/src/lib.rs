@@ -17,6 +17,7 @@ pub mod http;
 mod jwt;
 pub mod lease;
 pub mod metrics;
+pub mod store;
 mod ws;
 
 use std::collections::BTreeMap;
@@ -26,7 +27,7 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
-use gridcraft_collab::{Gateway, ServerMessage};
+use gridcraft_collab::{Applied, ClientOp, Gateway, Room, RoomState, ServerMessage, SheetKeys};
 use gridcraft_engine::{DocState, Session, Trust};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -35,6 +36,7 @@ use tokio::sync::{Mutex, mpsc};
 pub use config::{Config, ConfigError};
 pub use jwt::{JwtConfig, VerifyError};
 pub use lease::Lease;
+pub use store::{JournalEntry, Store, StoreError, StoredMeta};
 
 use crate::lease::Leases;
 use crate::metrics::Metrics;
@@ -118,6 +120,11 @@ impl ApiError {
     pub fn invalid(message: impl Into<String>) -> ApiError {
         ApiError::new(StatusCode::BAD_REQUEST, "invalid", message)
     }
+
+    /// A failure of this server (storage, replay). The message is a code or a path, never content.
+    pub fn internal(message: impl std::fmt::Display) -> ApiError {
+        ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", message.to_string())
+    }
 }
 
 impl IntoResponse for ApiError {
@@ -138,6 +145,15 @@ pub(crate) struct DocMeta {
     pub updated_at: u64,
 }
 
+/// A session read back from the volume, replayed to its head.
+struct Loaded {
+    session: Session,
+    keys: SheetKeys,
+    state: RoomState,
+    journal: Vec<JournalEntry>,
+    meta: StoredMeta,
+}
+
 /// State behind one mutex: the protocol, the documents and the sockets. A command runs under this
 /// lock, because a room applies to one engine session in process order (ADR-0003).
 pub(crate) struct Inner {
@@ -147,6 +163,11 @@ pub(crate) struct Inner {
     pub conns: BTreeMap<String, BTreeMap<u64, mpsc::Sender<ServerMessage>>>,
     pub actors: BTreeMap<String, BTreeMap<String, usize>>,
     pub next_conn: u64,
+    /// The applied operations after the base on disk, kept in memory for catch-up and trimmed by
+    /// every snapshot.
+    pub journal: BTreeMap<String, Vec<JournalEntry>>,
+    /// The version `base.xlsx` is at.
+    pub snapshot_version: BTreeMap<String, u64>,
 }
 
 impl Inner {
@@ -158,6 +179,8 @@ impl Inner {
             conns: BTreeMap::new(),
             actors: BTreeMap::new(),
             next_conn: 0,
+            journal: BTreeMap::new(),
+            snapshot_version: BTreeMap::new(),
         }
     }
 
@@ -168,11 +191,22 @@ impl Inner {
         self.sessions.remove(session_id);
         self.actors.remove(session_id);
         self.leases.release(session_id);
+        self.journal.remove(session_id);
+        self.snapshot_version.remove(session_id);
         self.conns.remove(session_id).map(|senders| senders.into_values().collect()).unwrap_or_default()
     }
 
     pub fn participants_total(&self) -> u64 {
         self.actors.values().map(|actors| actors.len() as u64).sum()
+    }
+
+    /// The operations after `from`, oldest first. Empty when the journal was compacted past it;
+    /// the caller then sends a snapshot.
+    pub fn journal_after(&self, session_id: &str, from: u64) -> Vec<Applied> {
+        self.journal
+            .get(session_id)
+            .map(|entries| entries.iter().filter(|entry| entry.applied.version > from).map(|entry| entry.applied.clone()).collect())
+            .unwrap_or_default()
     }
 }
 
@@ -180,17 +214,27 @@ impl Inner {
 pub struct App {
     pub cfg: Config,
     pub jwt: JwtConfig,
+    pub store: Option<Store>,
     pub(crate) inner: Mutex<Inner>,
     pub metrics: Metrics,
 }
 
 impl App {
+    /// A server without a volume: everything lives in the process (tests, local runs).
     pub fn new(cfg: Config, jwt: JwtConfig) -> App {
-        App { cfg, jwt, inner: Mutex::new(Inner::new()), metrics: Metrics::default() }
+        App { cfg, jwt, store: None, inner: Mutex::new(Inner::new()), metrics: Metrics::default() }
+    }
+
+    /// A server that keeps its sessions on `store` and restores them at startup.
+    pub fn with_store(cfg: Config, jwt: JwtConfig, store: Store) -> App {
+        App { cfg, jwt, store: Some(store), inner: Mutex::new(Inner::new()), metrics: Metrics::default() }
     }
 
     /// Opens a session for a file (ADR-0007 §1): loads the workbook, takes the lease and adds a
     /// room. An existing live session of the same file is `409` unless `takeover`.
+    ///
+    /// When the volume already holds this file, that state is authoritative: the cabinet's
+    /// `initialBytes` may be older than the room, so a takeover continues the stored document.
     pub async fn create_session(&self, request: CreateSession, now: u64) -> Result<CreatedSession, ApiError> {
         if request.app != self.cfg.app {
             return Err(ApiError::invalid(format!("this server serves {}", self.cfg.app)));
@@ -198,8 +242,21 @@ impl App {
         if request.file_id <= 0 {
             return Err(ApiError::invalid("fileId must be positive"));
         }
-        let name = request.initial_name.clone().unwrap_or_else(|| format!("Book{}", request.file_id));
-        let session = self.load(&name, request.initial_bytes.as_deref())?;
+        let requested_name = request.initial_name.clone().unwrap_or_else(|| format!("Book{}", request.file_id));
+        let stored = self.load_stored(request.file_id).map_err(ApiError::internal)?;
+        let (session, keys, state, journal, created_at, name, base_version) = match stored {
+            Some(loaded) => (
+                loaded.session,
+                Some(loaded.keys),
+                Some(loaded.state),
+                loaded.journal,
+                loaded.meta.created_at,
+                loaded.meta.name,
+                loaded.meta.base_version,
+            ),
+            None => (self.load(&requested_name, request.initial_bytes.as_deref())?, None, None, Vec::new(), now, requested_name, 0),
+        };
+        let fresh = keys.is_none();
         let session_id = new_session_id(request.file_id, &request.owner, now);
         let ttl = self.cfg.lease_ttl.as_secs();
 
@@ -215,7 +272,14 @@ impl App {
                 }
                 closed = inner.drop_session(&lease.session_id);
             }
-            inner.gateway.hub_mut().open(&session_id, session);
+            match (keys, state) {
+                (Some(keys), Some(state)) => {
+                    inner.gateway.hub_mut().open_restored(&session_id, session, keys, state);
+                }
+                _ => {
+                    inner.gateway.hub_mut().open(&session_id, session);
+                }
+            }
             let lease = inner
                 .leases
                 .acquire(request.file_id, &session_id, &request.owner, now, ttl, request.takeover)
@@ -227,10 +291,12 @@ impl App {
                     app: request.app.clone(),
                     owner: request.owner.clone(),
                     name: name.clone(),
-                    created_at: now,
+                    created_at,
                     updated_at: now,
                 },
             );
+            inner.journal.insert(session_id.clone(), journal);
+            inner.snapshot_version.insert(session_id.clone(), base_version);
             lease.expires_at
         };
         for sender in closed {
@@ -240,7 +306,15 @@ impl App {
                 retryable: false,
             });
         }
-        log::info!("session opened fileId={} session={}", request.file_id, session_id);
+        if self.store.is_some() {
+            // A new session writes its base at once, so a crash before the first periodic
+            // snapshot still leaves a restorable room. A continued one only needs its id updated.
+            let persisted = if fresh { self.snapshot(&session_id).await } else { self.write_meta(&session_id).await };
+            if let Err(e) = persisted {
+                log::error!("session {} not persisted: {e}", session_id);
+            }
+        }
+        log::info!("session opened fileId={} session={} fresh={fresh}", request.file_id, session_id);
         Ok(CreatedSession { ws_url: format!("{}/v1/sessions/{session_id}/ws", self.cfg.public_url.trim_end_matches('/')), session_id, expires_at })
     }
 
@@ -260,6 +334,171 @@ impl App {
             }
         }
         Ok(session)
+    }
+
+    /// A session the volume remembers, replayed to its head: the base `.xlsx`, the sheet keys,
+    /// the room counters and the journal after the base.
+    fn load_stored(&self, file_id: i64) -> Result<Option<Loaded>, StoreError> {
+        let Some(store) = &self.store else { return Ok(None) };
+        let Some(meta) = store.read_meta(file_id)? else { return Ok(None) };
+        let bytes = store.read_base(file_id)?.ok_or_else(|| StoreError::Load(format!("fileId {file_id} has meta but no base")))?;
+        let (workbook, _warnings) = gridcraft_engine::io::open_bytes(&meta.name, &bytes).map_err(|e| StoreError::Xlsx(e.to_string()))?;
+        let keys = store.read_keys(file_id)?.ok_or_else(|| StoreError::Load(format!("fileId {file_id} has no sheet keys")))?;
+        let keys = SheetKeys::from_file(&workbook, keys);
+        let state = store.read_state(file_id)?.unwrap_or_default();
+        let mut session = Session::new();
+        session.add_document(DocState::from_saved(workbook, None, meta.name.clone(), Trust::FromFile));
+        let mut room = Room::restore(keys, state);
+        let journal = store.read_journal(file_id)?;
+        for entry in &journal {
+            if entry.applied.version <= meta.base_version {
+                continue;
+            }
+            room.apply(&mut session, entry.op.clone(), &entry.actor)
+                .map_err(|e| StoreError::Load(format!("replay of version {} refused: {}", entry.applied.version, e.rejected().code.code())))?;
+        }
+        if room.version() != meta.version {
+            return Err(StoreError::Load(format!("fileId {file_id}: journal ends at {}, meta says {}", room.version(), meta.version)));
+        }
+        Ok(Some(Loaded { session, keys: room.sheet_keys().clone(), state: room.state(), journal, meta }))
+    }
+
+    /// Writes `meta.json` for a live session without rebuilding the base (a takeover changed only
+    /// the session id).
+    async fn write_meta(&self, session_id: &str) -> Result<(), StoreError> {
+        let Some(store) = &self.store else { return Ok(()) };
+        let meta = {
+            let inner = self.inner.lock().await;
+            let Some(meta) = inner.sessions.get(session_id) else { return Ok(()) };
+            let version = inner.gateway.hub().version(session_id).unwrap_or(0);
+            let epoch = inner.gateway.hub().epoch(session_id).unwrap_or(0);
+            stored_meta(session_id, meta, version, epoch, inner.snapshot_version.get(session_id).copied().unwrap_or(0))
+        };
+        store.write_meta(meta.file_id, &meta)
+    }
+
+    /// Writes the authoritative state to the volume and trims the journal it covers. Called every
+    /// `snapshot_ops` operations, at shutdown, and once when a session opens.
+    pub async fn snapshot(&self, session_id: &str) -> Result<(), StoreError> {
+        let Some(store) = self.store.clone() else { return Ok(()) };
+        let snapshot = {
+            let inner = self.inner.lock().await;
+            let Some(meta) = inner.sessions.get(session_id) else { return Ok(()) };
+            let Some(workbook) = inner.gateway.hub().workbook(session_id) else { return Ok(()) };
+            let Some(keys) = inner.gateway.hub().sheet_keys(session_id) else { return Ok(()) };
+            let Some(state) = inner.gateway.hub().room_state(session_id) else { return Ok(()) };
+            let base_version = state.version;
+            store::Snapshot { meta: stored_meta(session_id, meta, state.version, state.epoch, base_version), workbook, keys, state }
+        };
+        let file_id = snapshot.meta.file_id;
+        let version = snapshot.meta.version;
+        let writer = store.clone();
+        tokio::task::spawn_blocking(move || writer.write_snapshot(&snapshot))
+            .await
+            .map_err(|e| StoreError::Load(format!("snapshot task: {e}")))??;
+        let mut inner = self.inner.lock().await;
+        if let Some(journal) = inner.journal.get_mut(session_id) {
+            // Operations applied while the snapshot was being written stay: the file is
+            // rewritten atomically, so either the old journal or the trimmed one is on disk.
+            journal.retain(|entry| entry.applied.version > version);
+            store.write_journal(file_id, journal)?;
+        }
+        inner.snapshot_version.insert(session_id.to_string(), version);
+        Ok(())
+    }
+
+    /// Appends one applied operation to the journal. Returns whether a periodic snapshot is due.
+    /// The journal is kept even without a volume: catch-up inside the process needs it.
+    pub(crate) async fn record(&self, session_id: &str, actor: &str, op: &ClientOp, applied: &Applied, now: u64) -> bool {
+        let mut inner = self.inner.lock().await;
+        let Some(file_id) = inner.sessions.get(session_id).map(|meta| meta.file_id) else { return false };
+        let Some(journal) = inner.journal.get_mut(session_id) else { return false };
+        if journal.last().is_some_and(|entry| applied.version <= entry.applied.version) {
+            return false;
+        }
+        let entry = JournalEntry { at: now, actor: actor.to_string(), op: op.clone(), applied: applied.clone() };
+        if let Some(store) = &self.store
+            && let Err(e) = store.append_journal(file_id, &entry)
+        {
+            log::error!("journal append failed fileId={file_id}: {e}");
+            return false;
+        }
+        journal.push(entry);
+        if self.store.is_none() {
+            return false;
+        }
+        let base = inner.snapshot_version.get(session_id).copied().unwrap_or(0);
+        applied.version.saturating_sub(base) >= self.cfg.snapshot_ops
+    }
+
+    /// Reopens the sessions the volume kept. A damaged directory is logged and skipped: one bad
+    /// file must not stop the server from serving the others.
+    pub async fn restore(&self) -> usize {
+        let Some(store) = &self.store else { return 0 };
+        let metas = match store.sessions() {
+            Ok(metas) => metas,
+            Err(e) => {
+                log::error!("store scan failed: {e}");
+                return 0;
+            }
+        };
+        let mut restored = 0;
+        for scanned in metas {
+            match self.load_stored(scanned.file_id) {
+                Ok(Some(loaded)) => {
+                    let now = now_secs();
+                    let mut inner = self.inner.lock().await;
+                    if inner.gateway.hub_mut().open_restored(&scanned.session_id, loaded.session, loaded.keys, loaded.state) {
+                        inner.sessions.insert(
+                            scanned.session_id.clone(),
+                            DocMeta {
+                                file_id: scanned.file_id,
+                                app: scanned.app.clone(),
+                                owner: scanned.owner.clone(),
+                                name: scanned.name.clone(),
+                                created_at: scanned.created_at,
+                                updated_at: now,
+                            },
+                        );
+                        inner.journal.insert(scanned.session_id.clone(), loaded.journal);
+                        inner.snapshot_version.insert(scanned.session_id.clone(), scanned.base_version);
+                        restored += 1;
+                        log::info!("session restored fileId={} session={}", scanned.file_id, scanned.session_id);
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => log::error!("session {} not restored: {e}", scanned.session_id),
+            }
+        }
+        restored
+    }
+
+    /// Snapshots every session that has operations the base does not cover. Called on shutdown.
+    pub async fn flush(&self) -> usize {
+        if self.store.is_none() {
+            return 0;
+        }
+        let ids: Vec<String> = {
+            let inner = self.inner.lock().await;
+            inner
+                .sessions
+                .keys()
+                .filter(|id| {
+                    let base = inner.snapshot_version.get(*id).copied().unwrap_or(0);
+                    let head = inner.gateway.hub().version(id).unwrap_or(0);
+                    head > base
+                })
+                .cloned()
+                .collect()
+        };
+        let mut saved = 0;
+        for id in ids {
+            match self.snapshot(&id).await {
+                Ok(()) => saved += 1,
+                Err(e) => log::error!("snapshot on shutdown failed session={id}: {e}"),
+            }
+        }
+        saved
     }
 
     /// `GET /v1/sessions/{id}`.
@@ -306,16 +545,22 @@ impl App {
 
     /// `DELETE /v1/sessions/{id}`: the cabinet closes the session and its lease.
     pub async fn close_session(&self, session_id: &str) -> Result<(), ApiError> {
-        let senders = {
+        let (senders, file_id) = {
             let mut inner = self.inner.lock().await;
-            if !inner.sessions.contains_key(session_id) {
+            let Some(meta) = inner.sessions.get(session_id) else {
                 return Err(ApiError::not_found("no such session"));
-            }
-            inner.drop_session(session_id)
+            };
+            let file_id = meta.file_id;
+            (inner.drop_session(session_id), file_id)
         };
         for sender in senders {
             let _ =
                 sender.try_send(ServerMessage::Error { code: "session-closed".into(), message: "the session was closed".into(), retryable: false });
+        }
+        if let Some(store) = &self.store
+            && let Err(e) = store.remove(file_id)
+        {
+            log::error!("session {session_id} closed but its files stayed: {e}");
         }
         log::info!("session closed session={session_id}");
         Ok(())
@@ -329,6 +574,22 @@ impl App {
             (inner.sessions.len() as u64, inner.participants_total(), inner.leases.live_leases(now).len() as u64)
         };
         self.metrics.render(sessions, participants, leases, env!("CARGO_PKG_VERSION"))
+    }
+}
+
+/// The `meta.json` of a live session.
+fn stored_meta(session_id: &str, meta: &DocMeta, version: u64, epoch: u64, base_version: u64) -> StoredMeta {
+    StoredMeta {
+        session_id: session_id.to_string(),
+        file_id: meta.file_id,
+        app: meta.app.clone(),
+        owner: meta.owner.clone(),
+        name: meta.name.clone(),
+        created_at: meta.created_at,
+        updated_at: meta.updated_at,
+        version,
+        epoch,
+        base_version,
     }
 }
 

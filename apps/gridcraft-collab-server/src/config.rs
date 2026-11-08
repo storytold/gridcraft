@@ -67,7 +67,9 @@ impl Default for Config {
 
 impl Config {
     /// Reads the environment. `GRIDCRAFT_COLLAB_ADDR`, `..._PUBLIC_URL`, `..._AUDIENCE`,
-    /// `..._APP`, `..._SERVICE_TOKEN`, `..._LEASE_SECS`, `..._HELLO_SECS`, `..._MAX_PARTICIPANTS`.
+    /// `..._APP`, `..._SERVICE_TOKEN`, `..._LEASE_SECS`, `..._HELLO_SECS`,
+    /// `..._MAX_PARTICIPANTS`, `..._SNAPSHOT_OPS`. The store path is read by the binary, which
+    /// also restores the sessions from it.
     pub fn from_env() -> Result<Config, ConfigError> {
         let mut cfg = Config::default();
         if let Some(value) = var("GRIDCRAFT_COLLAB_ADDR")? {
@@ -91,6 +93,9 @@ impl Config {
         }
         if let Some(value) = var("GRIDCRAFT_COLLAB_HELLO_SECS")? {
             cfg.hello_timeout = Duration::from_secs(positive(&value, "GRIDCRAFT_COLLAB_HELLO_SECS")?);
+        }
+        if let Some(value) = var("GRIDCRAFT_COLLAB_SNAPSHOT_OPS")? {
+            cfg.snapshot_ops = positive(&value, "GRIDCRAFT_COLLAB_SNAPSHOT_OPS")?;
         }
         if let Some(value) = var("GRIDCRAFT_COLLAB_MAX_PARTICIPANTS")? {
             let n = positive(&value, "GRIDCRAFT_COLLAB_MAX_PARTICIPANTS")?;
