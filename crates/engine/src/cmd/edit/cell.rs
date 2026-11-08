@@ -254,10 +254,13 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                         style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default(),
                         py: None,
                     }),
-                    // Text as given: no date or number reading, and a leading `'` is part of the
-                    // text rather than the marker that makes it text. A formula is still a
-                    // formula, which is what the ticket asks for and what `=` means in a cell.
+                    // Text as given: no date or number reading. A leading `'` is part of the text,
+                    // except before a string that would otherwise read as a formula: there it is
+                    // the marker that keeps the text a text (`'=1+1`), as typed input writes it.
+                    // A formula is still a formula, which is what the ticket asks for and what `=`
+                    // means in a cell.
                     Json::String(text) if !parse && !text.starts_with('=') => {
+                        let text = text.strip_prefix('\'').filter(|rest| is_formula_input(rest)).unwrap_or(text.as_str());
                         if text.is_empty() {
                             // An empty string clears the cell, as `null` and the default path do:
                             // an empty text cell is not blank, and a script clearing cells with
@@ -269,7 +272,7 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                             if text.contains('\n') && !cx.wb.styles.get(style).align.wrap {
                                 style = cx.wb.styles.derive(style, |s| s.align.wrap = true);
                             }
-                            Some(Cell { value: Value::Text(text.as_str().into()), formula: None, style, py: None })
+                            Some(Cell { value: Value::Text(text.into()), formula: None, style, py: None })
                         }
                     }
                     _ => input_to_cell(&input, sheet, at, &mut cx.wb)?,

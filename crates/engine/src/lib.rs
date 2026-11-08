@@ -719,7 +719,12 @@ impl Session {
                 let at = start.offset(ri as i64, ci as i64)?;
                 let value = match sheet.cell(at).and_then(|cell| cell.formula.as_ref()) {
                     Some(formula) => Json::String(format!("={}", formula.text)),
-                    None => Self::whole_number(crate::cmd::inspect::value_json(&sheet.value(at))),
+                    None => match Self::whole_number(crate::cmd::inspect::value_json(&sheet.value(at))) {
+                        // Text that a replay would read as a formula goes back with the
+                        // apostrophe that marks it text (`'=1+1`), so the cell stays text.
+                        Json::String(text) if crate::cmd::edit::is_formula_input(&text) => Json::String(format!("'{text}")),
+                        other => other,
+                    },
                 };
                 out.push(value);
             }

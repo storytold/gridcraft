@@ -80,6 +80,9 @@ fn skip_reason(step: &JournalStep) -> String {
     match step.id.as_str() {
         "cell.set" if step.params.get("cell").and_then(Json::as_str).is_none() => "it used the active cell, which the recording does not know".into(),
         "cell.set" if js_literal(step.params.get("input").unwrap_or(&Json::Null)).is_none() => "its value is not a number, text or true/false".into(),
+        "range.setValues" if step.params.get("uncaptured").and_then(Json::as_bool) == Some(true) => {
+            "its stored values are above the 10,000-cell capture bound".into()
+        }
         "range.setValues" if step.params.get("range").and_then(Json::as_str).is_none() => "it used the selection without a range".into(),
         "range.setValues" => "its values are not rows of numbers, text or true/false".into(),
         "home.bold" if step.params.get("range").and_then(Json::as_str).is_none() => "it used the selection without a range".into(),
@@ -100,6 +103,11 @@ fn step_call(step: &JournalStep) -> Option<(BridgeCall, String)> {
     // A journal entry that still holds a sheet index cannot be replayed: the script would target
     // the active sheet instead of the one the command edited.
     if p.get("sheet").is_some_and(Json::is_number) {
+        return None;
+    }
+    // A range write whose stored values were not captured has no faithful replay: the inputs may
+    // have read as other values, so the step is skipped with its reason instead.
+    if step.id == "range.setValues" && p.get("uncaptured").and_then(Json::as_bool) == Some(true) {
         return None;
     }
     match step.id.as_str() {

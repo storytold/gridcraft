@@ -257,18 +257,30 @@ fn record(s: &mut Session, p: &Json) -> Result<Json> {
             let name = s.sheet_names.get(start + offset).cloned().flatten();
             let mut params = crate::script::resolve_recorded_sheet_named(params, name.as_deref());
             if id == "range.setValues"
-                && let Some(values) = s.write_values.get(start + offset).cloned().flatten()
                 && let Json::Object(map) = &mut params
             {
-                // The declared range can cover cells the values leave alone: the script names the
-                // block they cover (`A1:C3` with two rows of two values is `A1:B2`), which is what
-                // the command wrote.
-                if let Some(address) = written_address(map.get("range").and_then(Json::as_str), &values) {
+                // The values the command stored (typed input and the cell's format applied). The
+                // range narrows to the block the values cover either way, so a declared `A1:C3`
+                // with an uncaptured 2x2 write still records `A1:B2`.
+                let captured = s.write_values.get(start + offset).cloned().flatten();
+                let shape = captured.as_ref().or_else(|| map.get("values"));
+                let address = map.get("range").and_then(Json::as_str).and_then(|range| written_address(Some(range), shape?));
+                if let Some(address) = address {
                     map.insert("range".into(), Json::String(address));
                 }
-                // The values the command stored (typed input and the cell's format applied).
-                map.insert("values".into(), values);
-                map.remove("parse");
+                match captured {
+                    Some(values) => {
+                        map.insert("values".into(), values);
+                        // The values are the cells' stored values, not typed input: a replay stores
+                        // them as they are (`'=1+1` is text, a number stays a number).
+                        map.insert("parse".into(), Json::Bool(false));
+                    }
+                    // Above the capture bound the stored values are unknown: the recorder leaves
+                    // the step out instead of replaying inputs that may have read differently.
+                    None => {
+                        map.insert("uncaptured".into(), Json::Bool(true));
+                    }
+                }
             }
             JournalStep::new(id.clone(), params)
         })
@@ -973,6 +985,36 @@ mod tests {
         assert!(code.contains("getRange(\"A1:B2\").setValues([[1, 2], [3, 4]]);"), "{code}");
         assert!(code.contains("getRange(\"E1:F2\").setValues([[5, 6], [7, 8]]);"), "{code}");
         assert!(code.contains("workbook.getWorksheet(\"Data\").getRange(\"A1:B2\").setValues([[1, 2], [3, 4]]);"), "{code}");
+    }
+
+    #[test]
+    fn a_recorded_range_write_keeps_text_that_looks_like_a_formula() {
+        let mut s = session("record-text-formula");
+        s.execute("script.record", json!({"on": true})).unwrap();
+        // A typed apostrophe stores the text `=1+1`; the recording must not replay it as a formula.
+        s.execute("range.setValues", json!({"range": "A1", "values": [["'=1+1"]]})).unwrap();
+        let stopped = s.execute("script.record", json!({"on": false})).unwrap();
+        let code = stopped["code"].as_str().unwrap_or_default();
+        assert!(code.contains("setValues([[\"'=1+1\"]]);"), "{code}");
+        // The generated call, through the bridge: the marked text is stored as text.
+        let mut replay = session("record-text-formula-replay");
+        replay.execute("range.setValues", json!({"range": "A1", "values": [["'=1+1"]], "parse": false})).unwrap();
+        assert_eq!(value(&replay, 0, "A1"), Value::Text("=1+1".into()));
+    }
+
+    #[test]
+    fn a_range_write_above_the_capture_bound_is_skipped() {
+        let mut s = session("record-uncaptured");
+        s.execute("script.record", json!({"on": true})).unwrap();
+        let row = Json::Array((0..10_001).map(|i| json!(i)).collect());
+        s.execute("range.setValues", json!({"range": "A1", "values": [row]})).unwrap();
+        let stopped = s.execute("script.record", json!({"on": false})).unwrap();
+        let code = stopped["code"].as_str().unwrap_or_default();
+        // The stored values are unknown above the bound, so the step is left out with its reason.
+        assert!(code.contains("// Skipped: range.setValues (its stored values are above the 10,000-cell capture bound)."), "{code}");
+        assert!(!code.contains("setValues("), "{code}");
+        assert_eq!(stopped["steps"], 0);
+        assert_eq!(stopped["skipped"][0]["id"], "range.setValues");
     }
 
     #[test]

@@ -150,9 +150,13 @@ controls are left out) into a script. It writes only what the bridge can replay:
 | `home.deleteSheet` | `workbook.getWorksheet("Name").delete()` |
 
 A range write records the block its values cover: a declared `A1:C3` given two rows of two values
-records `getRange("A1:B2").setValues(…)`, so the script names exactly the cells the command wrote.
-The values are the ones the write stored — typed input and the destination format applied, a formula
-kept as a formula — and above 10,000 cells the original values stand in.
+records `getRange("A1:B2").setValues(…)`, so the script names the cells the values reach. Rows of
+different lengths record their bounding block and the rows as given, which Excel refuses — write
+such data as a rectangle. Above 10,000 cells the stored values are not captured, so the step is
+left out with a comment saying why: split a large write into blocks of at most 10,000 cells. The
+values are the ones the write stored — typed input and the destination format applied, a formula
+kept as a formula, and text that would read as a formula written back with the apostrophe that
+keeps it text (`'=1+1`).
 
 With an unsaved draft in the editor, stopping the recorder saves the recording and lists it but
 leaves the draft alone. Save the draft under a name of its own — check the recording's
