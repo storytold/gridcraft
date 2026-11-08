@@ -567,19 +567,19 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
         let on_target = moves_arrays && host.eq_ignore_ascii_case(target);
         let Some(sheet) = wb.sheet_mut(si) else { continue };
         for (c, f) in keys {
-            let Some(expr) = f.expr() else { continue };
-            let new = gridcraft_formula::adjust::adjust(expr, &host, target, e);
-            let text = gridcraft_formula::print(&new);
+            // Borrows the tree and copies and prints only the formulas the edit changes. A formula
+            // the edit leaves alone keeps its stored text, even if that text is not canonical.
+            let Some(new) = f.with_expr(|x| gridcraft_formula::adjust::adjust_if_changed(x, &host, target, e)) else { continue };
             let array = match f.array {
                 Some(a) if on_target => crate::cmd::sheet::map_range(a, e),
                 a => a,
             };
-            if (text != f.text || array != f.array)
-                && let Some(cell) = sheet.cells.get_mut(c)
-            {
-                let mut nf = Formula::from_expr(new);
-                nf.array = array;
-                nf.dynamic = f.dynamic;
+            let nf = match new {
+                Some(new) => Formula { array, dynamic: f.dynamic, ..Formula::from_expr(new) },
+                None if array != f.array => Formula { array, ..(*f).clone() },
+                None => continue,
+            };
+            if let Some(cell) = sheet.cells.get_mut(c) {
                 cell.formula = Some(std::sync::Arc::new(nf));
             }
         }
