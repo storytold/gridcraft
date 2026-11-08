@@ -358,9 +358,14 @@ fn folder_row(app: &mut SheetApp, ui: &mut Ui) {
             }
         }
         let exportable = app.office_scripts.selected.clone();
-        if ui.add_enabled(exportable.is_some(), egui::Button::new(lang.tr("Export Script…"))).clicked()
-            && let (Some(id), Some(pick)) = (exportable, app.services.pick_save.as_ref())
-        {
+        if ui.add_enabled(exportable.is_some(), egui::Button::new(lang.tr("Export Script…"))).clicked() && app.services.pick_save.is_some() {
+            // Export writes the saved record, not the editor: save a dirty draft first so the
+            // `.osts` file holds what is on screen.
+            if app.office_scripts.dirty {
+                save(app);
+            }
+            let Some(id) = app.office_scripts.selected.clone() else { return };
+            let Some(pick) = app.services.pick_save.as_ref() else { return };
             let name = app.office_scripts.name.clone();
             let suggested = if name.trim().is_empty() { "Script.osts".to_string() } else { format!("{}.osts", name.trim()) };
             if let Some(mut path) = pick(&suggested) {

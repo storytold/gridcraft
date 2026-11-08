@@ -444,7 +444,7 @@ class DataValidation {
   setIgnoreBlanks(ignoreBlanks: boolean): void {
     bridge("DataValidation.setIgnoreBlanks", this.params({ ignoreBlanks: !!ignoreBlanks }));
   }
-  delete(): void {
+  clear(): void {
     bridge("DataValidation.clear", this.params({}));
   }
 }
@@ -704,8 +704,10 @@ class Table {
     const list = bridge("Table.getColumns", this.params({})) as any[];
     return list.map((c) => new TableColumn(this.tableName, String(c.name), Number(c.index)));
   }
-  getColumn(name: string): TableColumn {
+  getColumn(name: string): TableColumn | undefined {
+    // ExcelScript returns `undefined` for a column the table does not have.
     const info = bridge("Table.getColumn", this.params({ name }));
+    if (!info) return undefined;
     return new TableColumn(this.tableName, String(info.name), Number(info.index));
   }
   getPredefinedTableStyle(): string {
@@ -801,6 +803,9 @@ class NamedItem {
   getRefersTo(): string {
     return String(bridge("NamedItem.getFormula", this.params({})) ?? "");
   }
+  getFormula(): string {
+    return String(bridge("NamedItem.getFormula", this.params({})) ?? "");
+  }
   getScope(): string {
     return String(bridge("NamedItem.getScope", this.params({})) ?? "");
   }
@@ -856,10 +861,10 @@ class Workbook {
     const info = bridge("Workbook.getSelectedRange", {});
     return new Range(String(info.address), String(info.sheet));
   }
-  getSelectedRanges(): RangeAreas[] {
+  getSelectedRanges(): RangeAreas {
     const info = bridge("Workbook.getSelectedRanges", {});
     const areas = (info.areas as any[]).map((a) => String(a.address));
-    return [new RangeAreas(areas, String(info.sheet))];
+    return new RangeAreas(areas, String(info.sheet));
   }
   getName(): string {
     return String(bridge("Workbook.getName", {}));
@@ -1160,19 +1165,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_implemented_name_is_a_method_the_shim_exposes() {
+    fn every_implemented_name_is_a_method_its_class_exposes() {
         // The coverage report calls a member implemented, so a script must be able to call the
-        // documented name; this keeps `implemented.txt` and the shim from drifting apart.
+        // documented name on the documented class (not merely somewhere in the shim).
+        let classes = shim_classes();
         let missing: Vec<&str> = include_str!("../../script/data/implemented.txt")
             .lines()
             .map(str::trim)
             .filter(|line| !line.is_empty() && !line.starts_with('#'))
             .filter(|line| {
-                let name = line.split('.').nth(1).unwrap_or("");
-                !BOOTSTRAP.contains(&format!("{name}("))
+                let (class, name) = line.split_once('.').unwrap_or((line, ""));
+                // The format family's JS classes drop the `Range` prefix; a script reaches them
+                // through `getFormat()`, `getFont()`, `getFill()` and `getBorder()`.
+                let class = match class {
+                    "RangeFormat" => "Format",
+                    "RangeFont" => "Font",
+                    "RangeFill" => "Fill",
+                    "RangeBorder" => "Border",
+                    other => other,
+                };
+                classes.get(class).is_none_or(|methods| !methods.iter().any(|method| method == name))
             })
             .collect();
         assert!(missing.is_empty(), "the shim does not expose {missing:?}");
+    }
+
+    /// `class Name {` … `}` → the methods declared at the class's own two-space indent.
+    fn shim_classes() -> std::collections::BTreeMap<String, Vec<String>> {
+        let mut out: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+        let mut current: Option<String> = None;
+        for line in BOOTSTRAP.lines() {
+            if let Some(rest) = line.strip_prefix("class ") {
+                let name = rest.split(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or("").to_string();
+                out.insert(name.clone(), Vec::new());
+                current = Some(name);
+                continue;
+            }
+            if line == "}" {
+                current = None;
+                continue;
+            }
+            let (Some(class), Some(rest)) = (&current, line.strip_prefix("  ")) else { continue };
+            if rest.starts_with(' ') {
+                continue;
+            }
+            let name = rest.split('(').next().unwrap_or("").trim();
+            if !name.is_empty()
+                && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                && let Some(methods) = out.get_mut(class)
+            {
+                methods.push(name.to_string());
+            }
+        }
+        out
     }
 
     #[test]

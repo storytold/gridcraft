@@ -32,6 +32,8 @@ pub enum OstsError {
     TooLarge(usize),
     #[error("the script file is not Office Scripts JSON: {0}")]
     Json(String),
+    #[error("{0}")]
+    Name(String),
     #[error("the script file has no `{0}` field")]
     Missing(&'static str),
     #[error("the script file is version {0}; GridCraft reads 0.x Office Scripts files")]
@@ -292,10 +294,10 @@ fn has_main(body: &str) -> bool {
 pub fn check_description(name: &str) -> Result<String, OstsError> {
     let trimmed = name.trim();
     if trimmed.chars().count() > MAX_NAME_CHARS {
-        return Err(OstsError::Json(format!("a script name can be at most {MAX_NAME_CHARS} characters")));
+        return Err(OstsError::Name(format!("a script name can be at most {MAX_NAME_CHARS} characters")));
     }
     if trimmed.chars().any(char::is_control) {
-        return Err(OstsError::Json("a script name can't hold control characters".into()));
+        return Err(OstsError::Name("a script name can't hold control characters".into()));
     }
     Ok(trimmed.to_string())
 }
@@ -303,6 +305,12 @@ pub fn check_description(name: &str) -> Result<String, OstsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_description_is_a_name_error_not_a_json_error() {
+        let long = "x".repeat(MAX_NAME_CHARS + 1);
+        assert!(matches!(check_description(&long), Err(OstsError::Name(_))));
+    }
 
     const BODY: &str = "function main(workbook: ExcelScript.Workbook) {\r\n  workbook.getActiveWorksheet().getRange(\"A1\").setValue(1);\r\n}\r\n";
 

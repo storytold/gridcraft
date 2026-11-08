@@ -530,7 +530,11 @@ pub(crate) fn execute_call(s: &mut Session, method: &str, params: &Json) -> Resu
         "Table.getColumn" => {
             let table = table_info(s, params)?;
             let name = member_str(params, "name")?;
-            let col = table["columns"].as_array().and_then(|a| a.iter().find(|c| c["name"].as_str() == Some(name.as_str()))).cloned();
+            // ExcelScript matches the column key ignoring case, as `table_column_info` does.
+            let col = table["columns"]
+                .as_array()
+                .and_then(|a| a.iter().find(|c| c["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(&name))))
+                .cloned();
             Ok(col.map(|c| json!({"name": c["name"], "index": c["index"], "table": table["name"]})).unwrap_or(Json::Null))
         }
         "Table.getStyle" | "Table.getPredefinedTableStyle" => Ok(table_info(s, params)?["style"].clone()),

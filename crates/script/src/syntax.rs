@@ -67,6 +67,8 @@ struct Scan {
     previous: Option<char>,
     /// The run of identifier characters ending at `previous`, so a keyword can be recognised.
     word: String,
+    /// Whitespace was seen since the last identifier character: the next one starts a new word.
+    word_gap: bool,
     saw_code: bool,
 }
 
@@ -91,6 +93,7 @@ pub fn check(code: &str) -> Result<(), SyntaxError> {
         opened_at: (1, 1),
         previous: None,
         word: String::new(),
+        word_gap: false,
         saw_code: false,
     };
     s.run()?;
@@ -113,9 +116,14 @@ impl Scan {
     fn note(&mut self, c: char) {
         self.previous = Some(c);
         if c.is_alphanumeric() || c == '_' || c == '$' {
+            if self.word_gap {
+                self.word.clear();
+                self.word_gap = false;
+            }
             self.word.push(c);
         } else {
             self.word.clear();
+            self.word_gap = false;
         }
     }
 
@@ -258,7 +266,11 @@ impl Scan {
             }
             _ => {
                 self.bump();
-                if !c.is_whitespace() {
+                if c.is_whitespace() {
+                    // `else return /x/`: whitespace separates two words, so the next identifier
+                    // starts a new one instead of joining `elsereturn`.
+                    self.word_gap = true;
+                } else {
                     self.saw_code = true;
                     self.note(c);
                 }
@@ -357,6 +369,12 @@ pub(crate) fn check_name(name: &str) -> Result<&str, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_keyword_after_whitespace_is_still_a_keyword() {
+        ok("function main() { if (a) {} else return /\"/.test(s); }");
+        ok("function main() { yield await /a/; }");
+    }
 
     #[test]
     fn a_regex_after_a_keyword_is_not_a_string() {

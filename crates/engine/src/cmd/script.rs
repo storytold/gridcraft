@@ -374,26 +374,27 @@ fn underline_name(u: gridcraft_model::Underline) -> &'static str {
 
 fn border_style_name(s: gridcraft_model::BorderStyle) -> &'static str {
     match s {
-        gridcraft_model::BorderStyle::None => "none",
-        gridcraft_model::BorderStyle::Dashed | gridcraft_model::BorderStyle::MediumDashed => "dash",
-        gridcraft_model::BorderStyle::Dotted => "dot",
-        gridcraft_model::BorderStyle::DashDot | gridcraft_model::BorderStyle::MediumDashDot => "dashDot",
-        gridcraft_model::BorderStyle::DashDotDot | gridcraft_model::BorderStyle::MediumDashDotDot => "dashDotDot",
-        gridcraft_model::BorderStyle::SlantDashDot => "slantDashDot",
-        gridcraft_model::BorderStyle::Double => "double",
-        _ => "continuous",
+        // The PascalCase values `ExcelScriptNs` defines, so a comparison with the enum matches.
+        gridcraft_model::BorderStyle::None => "None",
+        gridcraft_model::BorderStyle::Dashed | gridcraft_model::BorderStyle::MediumDashed => "Dash",
+        gridcraft_model::BorderStyle::Dotted => "Dot",
+        gridcraft_model::BorderStyle::DashDot | gridcraft_model::BorderStyle::MediumDashDot => "DashDot",
+        gridcraft_model::BorderStyle::DashDotDot | gridcraft_model::BorderStyle::MediumDashDotDot => "DashDotDot",
+        gridcraft_model::BorderStyle::SlantDashDot => "SlantDashDot",
+        gridcraft_model::BorderStyle::Double => "Double",
+        _ => "Continuous",
     }
 }
 
 fn border_weight(s: gridcraft_model::BorderStyle) -> &'static str {
     match s {
-        gridcraft_model::BorderStyle::Hair => "hairline",
+        gridcraft_model::BorderStyle::Hair => "Hairline",
         gridcraft_model::BorderStyle::Medium
         | gridcraft_model::BorderStyle::MediumDashed
         | gridcraft_model::BorderStyle::MediumDashDot
-        | gridcraft_model::BorderStyle::MediumDashDotDot => "medium",
-        gridcraft_model::BorderStyle::Thick => "thick",
-        _ => "thin",
+        | gridcraft_model::BorderStyle::MediumDashDotDot => "Medium",
+        gridcraft_model::BorderStyle::Thick => "Thick",
+        _ => "Thin",
     }
 }
 

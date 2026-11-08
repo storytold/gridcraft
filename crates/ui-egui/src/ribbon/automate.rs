@@ -97,6 +97,14 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
         control_keytip(app, ui, &r, "script.record");
         if r.clicked() {
             crate::office_scripts::toggle_recording(app);
+            // The pane shows why a recording could not be saved; with it closed, show the failure
+            // instead of leaving the ribbon action silent (an open dialog is never replaced).
+            if let Some(status) = app.office_scripts.status.as_ref().filter(|status| status.error) {
+                let text = status.text.clone();
+                if app.dialog.is_none() {
+                    open_pane_or_message(app, text);
+                }
+            }
         }
         let r = small_button(ui, Icon::Play, "Run Script", "Run the script in Office Scripts", false);
         if r.clicked() {

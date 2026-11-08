@@ -15,7 +15,8 @@ in-workbook script format.
 
 Saving in GridCraft writes a `.json` record in that folder, not an `.osts` file, so a script written
 here reaches Excel only after **Export Script…** (`script.export`) writes the `.osts`; **Import
-Script…** (`script.import`) brings an Excel script back. An `.osts` file dropped into the folder is
+Script…** (`script.import`) brings an Excel script back; save the draft before **Export Script…**,
+which writes the saved record. An `.osts` file dropped into the folder is
 listed without an import step, but a saved record wins over an `.osts` with the same name or slug:
 edits made later in Excel's editor do not appear until the file is imported again.
 

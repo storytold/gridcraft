@@ -122,6 +122,9 @@ impl ScriptStore {
                 continue;
             }
             match read_record(path) {
+                // A copy such as `band-copy.json` holding `"id": "band"` would be listed twice and
+                // could never be loaded or deleted by id: skip it, as an invalid id is skipped.
+                Ok(record) if record.id != id => log::warn!("ignoring script file {}: its id is `{}`", path.display(), record.id),
                 Ok(record) => out.push(record),
                 Err(e) => log::warn!("ignoring damaged script file {}: {e}", path.display()),
             }
@@ -535,6 +538,18 @@ mod tests {
         let mut record = ScriptRecord::new("big", "Big", code("1"), now_millis());
         record.code = "x".repeat(2 * crate::osts::MAX_OSTS_BYTES + 1);
         assert!(matches!(s.write(&record), Err(StoreError::Invalid(_))), "the store refuses what list would skip");
+    }
+
+    #[test]
+    fn a_record_whose_id_is_not_its_file_name_is_skipped() {
+        let s = store("copy");
+        let a = s.save("Band", &code("1")).unwrap();
+        // A synced folder can leave a copy: its id no longer matches its file name, so it could
+        // never be loaded or deleted by id.
+        std::fs::copy(s.root().join(format!("{}.json", a.id)), s.root().join("band-copy.json")).unwrap();
+        let list = s.list().unwrap();
+        assert_eq!(list.len(), 1, "{list:?}");
+        assert_eq!(list[0].id, a.id);
     }
 
     #[test]

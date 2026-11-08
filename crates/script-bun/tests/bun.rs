@@ -25,6 +25,7 @@ impl BridgeExecutor for Calls {
             "Range.getValues" => json!([["€".repeat(30_000)]]),
             "Worksheet.getVisibility" => Json::String("visible".into()),
             "Workbook.getWorksheets" => json!([{"name": "Data"}]),
+            "Worksheet.getTables" => json!([{"name": "Table1"}]),
             "Workbook.addWorksheet" => json!({"sheet": "Nope"}),
             _ => Json::Null,
         })
@@ -236,4 +237,21 @@ function main(workbook: ExcelScript.Workbook) {
         ]
     );
     assert_eq!(report.output, vec!["Data undefined".to_string(), "Data".to_string()]);
+}
+
+#[test]
+#[ignore = "needs Bun; set GRIDCRAFT_BUN"]
+fn a_missing_table_column_is_undefined() {
+    let Some(host) = host() else { return };
+    // `table.getColumn("Nope") ?? …` is the documented way to look a column up.
+    let script = r#"
+function main(workbook: ExcelScript.Workbook) {
+  const table = workbook.getWorksheet("Data").getTables()[0];
+  const missing = table.getColumn("Nope");
+  console.log(missing === undefined ? "undefined" : "object");
+}
+"#;
+    let mut calls = Calls { calls: Vec::new() };
+    let report = host.run(script, &Limits::default(), &mut calls).expect("the script runs");
+    assert_eq!(report.output, vec!["undefined".to_string()]);
 }
