@@ -217,6 +217,59 @@ fn formula_bar_heights_settle_independently_in_multiple_windows() {
 }
 
 #[test]
+fn formula_bar_expansion_and_remembered_height_belong_to_each_window() {
+    use gridcraft_ui_egui::formula_bar::{BarLayout, MAX_LINES, one_line};
+
+    let mut desk = Desk::new(true);
+    desk.ctx.set_fonts(gridcraft_ui_egui::theme::pinned_font_definitions());
+    desk.app.use_prepared_fonts();
+    let first = desk.window_of(0);
+    desk.app.run("view.expandFormulaBar", json!({"lines": 8})).unwrap();
+    desk.app.run("file.new", json!({})).unwrap();
+    let second = desk.window_of(1);
+    assert!(!desk.app.ui.formula_bar_expanded, "a new workbook starts collapsed");
+    assert_eq!(desk.app.ui.formula_bar_lines, MAX_LINES);
+    desk.app.run("view.expandFormulaBar", json!({"lines": 3})).unwrap();
+    desk.app.run("view.expandFormulaBar", json!({"on": false})).unwrap();
+    // A second view of the same workbook has its own bar too.
+    desk.app.run("view.newWindow", json!({})).unwrap();
+    let third = desk.app.session.active_window().unwrap();
+    assert_eq!(desk.app.ui.formula_bar_lines, MAX_LINES, "a new view does not inherit another window's dragged height");
+    desk.app.run("view.expandFormulaBar", json!({"lines": 6})).unwrap();
+    desk.frames(30);
+
+    let row_h = desk.ctx.fonts_mut(|f| f.row_height(&gridcraft_ui_egui::theme::ui_font(13.0)));
+    let check = |desk: &mut Desk, states: &[(u64, bool, usize)]| {
+        for &(window, expanded, lines) in states {
+            desk.app.enter_window(window);
+            assert_eq!(desk.app.ui.formula_bar_expanded, expanded, "window {window}'s expansion");
+            assert_eq!(desk.app.ui.formula_bar_lines, lines, "window {window}'s remembered height");
+            let height = BarLayout::get(&desk.ctx, Some(window)).height;
+            let expected = one_line(row_h) + if expanded { (lines - 1) as f32 * row_h } else { 0.0 };
+            assert!((height - expected).abs() < 0.5, "window {window}: height {height}, expected {expected}");
+        }
+    };
+    for _ in 0..3 {
+        desk.frames(1);
+        check(&mut desk, &[(first, true, 8), (second, false, 3), (third, true, 6)]);
+    }
+
+    desk.app.enter_window(second);
+    assert_eq!(desk.app.run("view.expandFormulaBar", json!({})).unwrap(), json!({"on": true}));
+    desk.app.enter_window(first);
+    assert_eq!(desk.app.run("view.expandFormulaBar", json!({"lines": 1})).unwrap(), json!({"on": false, "lines": 8}));
+    desk.app.enter_window(third);
+    desk.app.run("view.expandFormulaBar", json!({"on": false})).unwrap();
+    desk.frames(30);
+    check(&mut desk, &[(first, false, 8), (second, true, 3), (third, false, 6)]);
+
+    desk.close(first);
+    check(&mut desk, &[(second, true, 3), (third, false, 6)]);
+    desk.frames(30);
+    check(&mut desk, &[(second, true, 3), (third, false, 6)]);
+}
+
+#[test]
 fn each_window_keeps_its_own_selection_and_draft() {
     let mut desk = Desk::new(true);
     desk.app.run("file.new", json!({})).unwrap();
