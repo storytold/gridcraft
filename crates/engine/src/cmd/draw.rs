@@ -62,6 +62,7 @@ fn parse_points(t: &str) -> Vec<[f32; 2]> {
     t.split(';').filter_map(|pt| pt.split_once(',').and_then(|(x, y)| Some([x.parse().ok()?, y.parse().ok()?]))).collect()
 }
 
+/// `draw.stroke`: a freehand stroke of `points` in sheet points, with its brush and draw order.
 fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     let pts: Vec<[f64; 2]> = p
         .get("points")
@@ -94,6 +95,11 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     let id = d.wb.next_object_id();
     let order = sh.shapes.iter().filter_map(|x| x.ink.as_ref()).map(|i| i.order).max().map_or(0, |o| o.saturating_add(1));
     let width_cm = px_to_cm(width);
+    // A reopened workbook holds keys minted by an earlier process, whose counter started at zero,
+    // so a freshly minted key can be one the workbook already uses: mint past those.
+    let held: Vec<&str> =
+        d.wb.sheets.iter().flat_map(|sheet| sheet.shapes.iter()).filter_map(|x| x.ink.as_ref()).filter_map(|i| i.key.as_deref()).collect();
+    let key = gridcraft_model::ink_creation_id_free(|k| held.contains(&k));
     let shape = Shape {
         math: Default::default(),
         id,
@@ -111,14 +117,7 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
         line: Color::from_hex(&color).unwrap_or(Color::rgb(0x1F, 0x5F, 0xC9)),
         text,
         format: Default::default(),
-        ink: Some(InkStyle {
-            tool: InkTool::Pen,
-            width_cm,
-            height_cm: width_cm,
-            order,
-            key: Some(gridcraft_model::ink_creation_id(None)),
-            ..InkStyle::default()
-        }),
+        ink: Some(InkStyle { tool: InkTool::Pen, width_cm, height_cm: width_cm, order, key: Some(key), ..InkStyle::default() }),
     };
     edit(s, |cx| {
         cx.sheet_mut(si)?.shapes.push(shape);
@@ -141,14 +140,17 @@ pub fn ink_width(sh: &Shape) -> f32 {
 /// Excel's ink measurements are cm; a sheet point is 1/96 inch.
 const PX_PER_CM: f32 = 96.0 / 2.54;
 
+/// A brush width in sheet points as the centimetres InkML stores, bounded.
 fn px_to_cm(px: f32) -> f32 {
     (px / PX_PER_CM).clamp(0.001, 100.0)
 }
 
+/// A brush width in centimetres as sheet points, bounded.
 fn cm_to_px(cm: f32) -> f32 {
     (cm * PX_PER_CM).clamp(0.1, 10_000.0)
 }
 
+/// The stroke's points in sheet points, relative to its anchor, as `draw.stroke` took them.
 pub fn ink_points(sh: &Shape) -> Vec<[f32; 2]> {
     parse_points(&sh.text)
 }

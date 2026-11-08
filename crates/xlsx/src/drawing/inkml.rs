@@ -185,16 +185,22 @@ fn decode(trace: &El, definitions: &El) -> Option<(Vec<[f64; 2]>, Vec<u16>)> {
     let mut points: Vec<[f64; 2]> = Vec::new();
     let mut pressure: Vec<u16> = Vec::new();
     for point in trace.text.split(',') {
-        let point = point.trim();
-        if point.is_empty() {
+        if point.trim().is_empty() {
             continue;
         }
-        let mut tokens = point.split_whitespace();
+        let mut rest = point;
         let mut values = Vec::with_capacity(channels.len());
         for st in state.iter_mut() {
-            let (prefix, body) = split_prefix(tokens.next()?);
+            let (prefix, raw, tail) = scan_value(rest)?;
+            rest = tail;
             let prefix = prefix.or(st.prefix).unwrap_or('!');
-            let raw = if prefix == '*' { 0 } else { body.parse::<i64>().ok()? };
+            let raw = match (prefix, raw) {
+                ('*', None) => 0,
+                // A value with no number only repeats; an inherited `*` that carries one is not
+                // valid InkML.
+                ('*', Some(_)) | (_, None) => return None,
+                (_, Some(n)) => n,
+            };
             let value = match prefix {
                 '*' => st.value,
                 '!' => raw,
@@ -202,6 +208,10 @@ fn decode(trace: &El, definitions: &El) -> Option<(Vec<[f64; 2]>, Vec<u16>)> {
                 '"' => st.value.checked_add(st.diff.checked_add(raw)?)?,
                 _ => return None,
             };
+            // `unsigned_abs` so i64::MIN cannot panic or wrap past the cap.
+            if value.unsigned_abs() > MAX_COORD as u64 {
+                return None;
+            }
             let diff = match prefix {
                 '!' => {
                     let d = value.checked_sub(st.value)?;
@@ -211,13 +221,10 @@ fn decode(trace: &El, definitions: &El) -> Option<(Vec<[f64; 2]>, Vec<u16>)> {
                 '"' => st.diff.checked_add(raw)?,
                 _ => st.diff,
             };
-            if value.abs() > MAX_COORD {
-                return None;
-            }
             *st = Channel { value, diff, prefix: Some(prefix) };
             values.push(value);
         }
-        if tokens.next().is_some() || points.len() == MAX_POINTS {
+        if !rest.bytes().all(is_wsp) || points.len() == MAX_POINTS {
             return None;
         }
         let x = values.get(xi).copied().unwrap_or(0) as f64 / res.get(xi).copied().unwrap_or(1000.0) * PX_PER_CM;
@@ -236,14 +243,61 @@ fn decode(trace: &El, definitions: &El) -> Option<(Vec<[f64; 2]>, Vec<u16>)> {
     Some((points, pressure))
 }
 
-/// `!`, `'`, `"` or `*` and the value after it; no prefix when the token starts with anything
-/// else (a negative number starts with `-`).
-fn split_prefix(token: &str) -> (Option<char>, &str) {
-    let mut chars = token.chars();
-    match chars.next() {
-        Some(c @ ('!' | '\'' | '"' | '*')) => (Some(c), chars.as_str()),
-        _ => (None, token),
+fn is_wsp(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\r' | b'\n')
+}
+
+/// Scans one value of a trace point as the InkML grammar allows it: an optional difference-order
+/// prefix (`!`, `'`, `"` or `*`), optional whitespace, an optional minus sign and the digits
+/// (`value ::= difference_order? wsp* "-"? wsp* integer`). Whitespace before a value is optional,
+/// so Excel's compact `'2117'529` holds two values; a prefix, a sign or whitespace separates them.
+/// Returns the prefix (when written), its number (`None` for `*`) and the rest of the point.
+fn scan_value(s: &str) -> Option<(Option<char>, Option<i64>, &str)> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && is_wsp(bytes[i]) {
+        i += 1;
     }
+    let prefix = match bytes.get(i) {
+        Some(b @ (b'!' | b'\'' | b'"' | b'*')) => {
+            i += 1;
+            Some(*b as char)
+        }
+        _ => None,
+    };
+    while i < bytes.len() && is_wsp(bytes[i]) {
+        i += 1;
+    }
+    let rest = s.get(i..)?;
+    if prefix == Some('*') {
+        return Some((prefix, None, rest));
+    }
+    let b = rest.as_bytes();
+    let neg = b.first() == Some(&b'-');
+    let mut j = usize::from(neg);
+    while j < b.len() && is_wsp(b[j]) {
+        j += 1;
+    }
+    let digits = j;
+    while j < b.len() && b[j].is_ascii_digit() {
+        j += 1;
+    }
+    if j == digits {
+        return None;
+    }
+    // Parse the sign with the digits (keeps i64::MIN representable); whitespace between them,
+    // which Excel never writes, needs a tiny copy.
+    let n = if digits == usize::from(neg) {
+        rest.get(..j)?.parse::<i64>().ok()?
+    } else {
+        let mut t = String::with_capacity(j - digits + 1);
+        if neg {
+            t.push('-');
+        }
+        t.push_str(rest.get(digits..j)?);
+        t.parse::<i64>().ok()?
+    };
+    Some((prefix, Some(n), rest.get(j..)?))
 }
 
 /// The definition element (`context`, `brush`) named by a `#id` reference.
@@ -299,14 +353,18 @@ fn brush(definitions: &El, has_f: bool) -> (InkStyle, Color) {
     (style, color)
 }
 
+/// A brush dimension in cm, clamped to the range Excel accepts; a value that is not a finite
+/// number leaves the default in place.
 fn brush_cm(v: &str) -> Option<f32> {
     finite(v).map(|v| v.clamp(0.001, MAX_BRUSH_CM))
 }
 
+/// The first finite `f32` in `v`, ignoring surrounding whitespace.
 fn finite(v: &str) -> Option<f32> {
     v.trim().parse::<f32>().ok().filter(|v| v.is_finite())
 }
 
+/// The pen texture an `inkEffects` name stands for; an unknown name is a solid stroke.
 fn effect(name: &str) -> Option<InkEffect> {
     match name {
         "rainbow" => Some(InkEffect::Rainbow),
@@ -379,6 +437,7 @@ fn parse_points(text: &str) -> Option<Vec<[i64; 2]>> {
     Some(out)
 }
 
+/// A sheet-point coordinate in the trace's 1/1000 cm units, or `None` past Excel's range.
 fn trace_units(px: f64) -> Option<i64> {
     let v = (px * THOUSANDTHS_PER_PX).round();
     if !v.is_finite() || v.abs() > MAX_COORD as f64 {
@@ -413,7 +472,8 @@ fn encode_trace(points: &[[i64; 2]], pressure: Option<&[i64]>) -> String {
     tokens.join(",")
 }
 
-/// The second difference at index `i`: `(v[i] - v[i-1]) - (v[i-1] - v[i-2])`.
+/// The second difference at index `i`: `(v[i] - v[i-1]) - (v[i-1] - v[i-2])`, saturating so a
+/// point at the cap cannot wrap.
 fn second(points: &[[i64; 2]], pressure: Option<&[i64]>, channel: usize, i: usize) -> i64 {
     let v = |k: usize| -> i64 {
         if channel < 2 { points.get(k).map_or(0, |q| q[channel]) } else { pressure.and_then(|f| f.get(k).copied()).unwrap_or(0) }
@@ -421,6 +481,7 @@ fn second(points: &[[i64; 2]], pressure: Option<&[i64]>, channel: usize, i: usiz
     v(i).saturating_sub(v(i.saturating_sub(1))).saturating_sub(v(i.saturating_sub(1)).saturating_sub(v(i.saturating_sub(2))))
 }
 
+/// The whole InkML part: one context with the trace format, one brush, one trace.
 fn inkml_xml(ink: &InkStyle, color: &[u8; 3], f: bool, trace: &str) -> String {
     let width = ink.width_cm.clamp(0.001, MAX_BRUSH_CM);
     let height = ink.height_cm.clamp(0.001, MAX_BRUSH_CM);
@@ -486,6 +547,7 @@ fn inkml_xml(ink: &InkStyle, color: &[u8; 3], f: bool, trace: &str) -> String {
     )
 }
 
+/// The `inkEffects` name Excel writes for a texture.
 fn effect_name(e: InkEffect) -> &'static str {
     match e {
         InkEffect::Rainbow => "rainbow",

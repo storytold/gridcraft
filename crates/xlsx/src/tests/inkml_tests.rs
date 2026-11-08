@@ -281,6 +281,7 @@ fn malformed_or_oversized_ink_is_refused_without_a_panic() {
         ("too many channels", "!0 !0 0", false),
         ("not a number", "!x !0", false),
         ("over the coordinate cap", huge.as_str(), false),
+        ("i64::MIN under the cap", "!-9223372036854775808 !0", false),
         ("over the point cap", many.as_str(), false),
         ("empty", "", false),
     ];
@@ -405,4 +406,52 @@ fn the_fallback_picture_is_a_transparent_png_in_the_stroke_colour() {
     let painted = painted.expect("the stroke is drawn");
     assert_eq!(&painted[..3], &[0xA1, 0x2B, 0xCD], "the stroke uses its colour");
     assert_eq!(frame.color_type, png::ColorType::Rgba);
+}
+
+/// The decoded points back in the trace's 1/1000 cm units (what Excel wrote).
+fn thousandths(shape: &Shape) -> Vec<[i64; 2]> {
+    const PX_PER_CM: f64 = 96.0 / 2.54;
+    points(shape)
+        .iter()
+        .map(|p| [(f64::from(p[0]) / PX_PER_CM * 1000.0).round() as i64, (f64::from(p[1]) / PX_PER_CM * 1000.0).round() as i64])
+        .collect()
+}
+
+#[test]
+fn excel_compact_values_without_whitespace_decode() {
+    // The two strings Excel 365 itself wrote (observed in a file saved by Excel, gc_ink_rt.xlsx):
+    // no whitespace before the prefixed or signed values of the second and later points.
+    for (trace, points) in [
+        ("0 0,'2117'529,\"-1\"-1058", vec![[0, 0], [2117, 529], [4233, 0]]),
+        ("0 0,'2646'1058,\"0\"-2116", vec![[0, 0], [2646, 1058], [5292, 0]]),
+    ] {
+        let (wb, _) = read(&package(trace, false, PEN_PROPS, true, true, true));
+        assert_eq!(thousandths(ink_shape(&wb)), points, "{trace}");
+    }
+}
+
+#[test]
+fn excel_compact_three_channel_values_with_pressure_decode() {
+    let trace = "2748 1756 24575,'0'0'0,\"29\"0\"0,53 0 0,30 4 0";
+    let (wb, _) = read(&package(trace, true, PEN_PROPS, true, true, true));
+    let shape = ink_shape(&wb);
+    assert_eq!(thousandths(shape), vec![[2748, 1756], [2748, 1756], [2777, 1756], [2859, 1756], [2971, 1760]]);
+    assert_eq!(shape.ink.as_ref().unwrap().pressure, vec![24575; 5]);
+}
+
+#[test]
+fn the_wildcard_repeats_a_channel_in_compact_form() {
+    let (wb, _) = read(&package("!10 !20,**", false, PEN_PROPS, true, true, true));
+    assert_eq!(thousandths(ink_shape(&wb)), vec![[10, 20], [10, 20]]);
+}
+
+#[test]
+fn a_compact_package_round_trips_as_editable_ink_not_the_fallback() {
+    let (wb, _) = read(&package("0 0,'2117'529,\"-1\"-1058", false, PEN_PROPS, true, true, true));
+    assert!(wb.sheets[0].images.is_empty(), "the fallback is not read when the ink parses");
+    assert_eq!(wb.sheets[0].shapes.len(), 1);
+    let (back, report) = read(&write_xlsx(&wb).unwrap());
+    assert!(report.warnings.iter().all(|w| !w.contains("ink part")), "{:?}", report.warnings);
+    assert!(back.sheets[0].images.is_empty(), "a GridCraft save stays editable ink");
+    assert_eq!(thousandths(ink_shape(&back)), vec![[0, 0], [2117, 529], [4233, 0]]);
 }
