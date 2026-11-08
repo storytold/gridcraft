@@ -367,6 +367,7 @@ impl SheetApp {
         // The requests belong to the window the command left active.
         self.follow_active_window();
         self.prune_selected_object();
+        self.prune_views();
         for req in self.session.take_ui_requests() {
             match req {
                 UiRequest::Dialog(name, params) => self.open_dialog(&name, params),
@@ -392,7 +393,7 @@ impl SheetApp {
     }
 
     /// Whether the active sheet of the active document is protected (drives the Protect/Unprotect
-    /// Sheet labels and actions). While a dialog's reference boxes have picked, it is the dialog's
+    /// Sheet labels and actions). While a dialog with reference boxes is open, it is the dialog's
     /// own sheet: Protect Sheet ends the pick and acts on that sheet, so the label says so too.
     pub fn active_sheet_protected(&self) -> bool {
         if let Some(protected) = self.dialog.as_ref().and_then(|d| d.home_sheet_protected(self)) {

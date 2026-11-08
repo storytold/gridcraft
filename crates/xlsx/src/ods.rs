@@ -470,6 +470,14 @@ impl Import {
             None => return Err(IoError::TooLarge("ODS row exceeds worksheet width".into())),
         };
         if kept {
+            // Charge the text a row keeps before the row is done, so a row of many long cells is
+            // refused as it grows; finish_row charges the row's repeats beyond the first.
+            if let Value::Text(t) = &cell.value {
+                self.text = self.text.saturating_add(u64::from(draft.repeat).saturating_mul(t.len() as u64));
+                if self.text > MAX_TEXT {
+                    return Err(IoError::TooLarge("ODS expands beyond the import limit (64 MiB of text)".into()));
+                }
+            }
             row.cells.push(RepeatedCell { col: row.col, repeat: draft.repeat, width, height, cell });
         }
         row.col = end;
@@ -537,7 +545,8 @@ impl Import {
             if !entry.cell.is_blank() {
                 self.cells = self.cells.saturating_add(count);
                 if let Value::Text(t) = &entry.cell.value {
-                    self.text = self.text.saturating_add(count.saturating_mul(t.len() as u64));
+                    let repeats = count.saturating_sub(u64::from(entry.repeat));
+                    self.text = self.text.saturating_add(repeats.saturating_mul(t.len() as u64));
                 }
             }
             let merged = entry.width > 1 || entry.height > 1;
