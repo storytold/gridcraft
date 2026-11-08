@@ -294,8 +294,9 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
     }
     let forced = invoke(app, "draw.inkReplay");
     if replay.clicked() || forced {
-        // The command toggles and reports the strokes in drawing order; a second click stops.
-        match app.run("draw.inkReplay", json!({})) {
+        // The clicked state is the truth, not the engine's: command search can have run the
+        // command and left the session switch on with no animation behind it.
+        match app.run("draw.inkReplay", json!({"on": !playing})) {
             Ok(report) if report["replaying"].as_bool() == Some(true) => {
                 if !crate::ink::start(app, &report) {
                     crate::ink::stop(app);

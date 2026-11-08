@@ -23,6 +23,14 @@ fn session_with(strokes: &[[[i32; 2]; 2]]) -> Session {
     session
 }
 
+/// A session whose only stroke is `points` sheet points.
+fn session_with_one(points: &[[i32; 2]]) -> Session {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("draw.stroke", json!({"points": points, "color": "#A12BCD", "width": 2})).unwrap();
+    session
+}
+
 /// The Draw tab on screen, ready for the Ink Replay button.
 fn harness(session: Session) -> Harness {
     let mut app = crate::common::app(session);
@@ -137,4 +145,38 @@ fn replay_paints_a_stroke_at_the_sheets_own_width() {
     h.get_by_label("Ink Replay").click();
     h.run_steps(60);
     assert_eq!(ink_widths(&h), before, "the replay paints the stroke at the sheet's own width");
+}
+
+/// The points of the painted ink paths, in painting order.
+fn ink_points(h: &Harness) -> Vec<Vec<egui::Pos2>> {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            Shape::Path(p) if p.points.len() >= 2 && p.stroke.color == ColorMode::Solid(INK) => Some(p.points.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A right-to-left sheet moves a floating object as a whole instead of reflecting it. Replayed ink
+/// is the same object, so it lands on exactly the committed stroke's points — an L-shaped stroke
+/// would open the other way if the mirror pass reflected it.
+#[test]
+fn replay_moves_ink_with_a_right_to_left_sheet() {
+    // An L: reflection turns it into a mirrored L, which differs from moving it.
+    let mut session = session_with_one(&[[40, 40], [160, 40], [160, 120]]);
+    session.execute("draw.stroke", json!({"points": [[220, 40], [320, 40], [320, 140]], "color": "#A12BCD", "width": 2})).unwrap();
+    std::sync::Arc::make_mut(&mut session.doc_mut().unwrap().wb).sheet_mut(0).unwrap().right_to_left = true;
+    let mut h = harness(session);
+    h.run_steps(2);
+    let committed = ink_points(&h);
+    assert_eq!(committed.len(), 2, "both strokes are painted on the mirrored sheet");
+    assert!(committed.iter().all(|p| p.len() == 3), "each stroke keeps its three points");
+
+    h.get_by_label("Ink Replay").click();
+    h.run_steps(1);
+    assert!(h.state().grid.replay.is_some(), "the button starts the replay on a mirrored sheet");
+    h.run_steps(60);
+    assert_eq!(ink_points(&h), committed, "replayed ink lands where the committed ink does, not reflected");
 }

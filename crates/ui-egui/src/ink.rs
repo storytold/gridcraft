@@ -157,7 +157,17 @@ fn path_len(points: &[[f32; 2]]) -> f32 {
 }
 
 /// The replayed ink so far: finished strokes whole, the current one up to where it has got.
-pub(crate) fn paint_replay(p: &egui::Painter, geo: &crate::grid::Geo, sh: &Sheet, r: &Replay) {
+///
+/// `done` records the shape range one stroke painted and its anchor rectangle, so a
+/// right-to-left sheet moves a replayed stroke as a whole exactly as it moves the committed one;
+/// without it the mirror pass would reflect the points and flip the stroke.
+pub(crate) fn paint_replay(
+    p: &egui::Painter,
+    geo: &crate::grid::Geo,
+    sh: &Sheet,
+    r: &Replay,
+    done: &mut dyn FnMut(egui::layers::ShapeIdx, egui::Rect),
+) {
     for stroke in r.strokes.iter().filter(|s| s.start <= r.t) {
         let rect = chartview::anchor_rect(geo, sh, &stroke.anchor);
         let width = (stroke.width * geo.z).max(1.0);
@@ -165,32 +175,34 @@ pub(crate) fn paint_replay(p: &egui::Painter, geo: &crate::grid::Geo, sh: &Sheet
         if !rect.expand(width).intersects(p.clip_rect()) {
             continue;
         }
+        let start = p.add(egui::Shape::Noop);
         let frac = if stroke.dur > 0.0 { ((r.t - stroke.start) / stroke.dur).clamp(0.0, 1.0) } else { 1.0 };
         let map = |q: [f32; 2]| egui::pos2(rect.left() + q[0] * geo.z, rect.top() + q[1] * geo.z);
         if stroke.points.len() == 1 {
             p.circle_filled(map(stroke.points[0]), width / 2.0, stroke.color);
-            continue;
-        }
-        let mut left = stroke.length * frac;
-        let mut pts: Vec<egui::Pos2> = Vec::new();
-        for w in stroke.points.windows(2) {
-            let (a, b) = (w[0], w[1]);
-            if pts.is_empty() {
-                pts.push(map(a));
+        } else {
+            let mut left = stroke.length * frac;
+            let mut pts: Vec<egui::Pos2> = Vec::new();
+            for w in stroke.points.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                if pts.is_empty() {
+                    pts.push(map(a));
+                }
+                let seg = (b[0] - a[0]).hypot(b[1] - a[1]);
+                if seg <= left {
+                    pts.push(map(b));
+                    left -= seg;
+                } else {
+                    let f = if seg > 0.0 { left / seg } else { 0.0 };
+                    pts.push(map([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]));
+                    break;
+                }
             }
-            let seg = (b[0] - a[0]).hypot(b[1] - a[1]);
-            if seg <= left {
-                pts.push(map(b));
-                left -= seg;
-            } else {
-                let f = if seg > 0.0 { left / seg } else { 0.0 };
-                pts.push(map([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]));
-                break;
+            if pts.len() >= 2 {
+                p.add(PathShape::line(pts, PathStroke::new(width, stroke.color)));
             }
         }
-        if pts.len() >= 2 {
-            p.add(PathShape::line(pts, PathStroke::new(width, stroke.color)));
-        }
+        done(start, rect);
     }
 }
 

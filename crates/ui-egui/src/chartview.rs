@@ -359,7 +359,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         done(start, r);
     }
     if let Some(replay) = replay {
-        crate::ink::paint_replay(p, geo, sh, replay);
+        crate::ink::paint_replay(p, geo, sh, replay, &mut done);
     }
     for im in &sh.images {
         let r = anchor_rect(geo, sh, &im.anchor);
