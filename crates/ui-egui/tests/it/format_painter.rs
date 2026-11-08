@@ -278,3 +278,22 @@ fn select_all_does_not_paint() {
     assert_eq!(stored_cells(&h), 1, "no cell takes a style");
     assert!(h.state().session.format_painter.is_some(), "the painter stays armed");
 }
+
+#[test]
+fn a_kept_painter_refuses_a_keyboard_selection_too_large_to_paint() {
+    let mut h = harness();
+    let session = &mut h.state_mut().session;
+    session.execute("edit.formatPainter", json!({"sticky": true})).unwrap();
+    session.execute("selection.set", json!({"range": "B2:Z2"})).unwrap();
+    h.run_steps(2);
+    let plain = style(&h, "B2");
+
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::ArrowDown);
+    h.run_steps(2);
+    let r = h.state().session.active().unwrap().selection.current();
+    assert!(r.count() > 2_000_000 && !r.is_full_rows() && !r.is_full_cols(), "{} is a huge plain range", r.a1());
+    assert_eq!(style(&h, "B2"), plain, "nothing is painted, not even the first cells");
+    assert_eq!(stored_cells(&h), 1, "no cell takes a style");
+    assert!(h.state().message.is_some(), "the refusal is reported");
+    assert!(h.state().session.format_painter.is_some(), "the painter stays armed");
+}

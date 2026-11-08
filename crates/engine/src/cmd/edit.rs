@@ -445,7 +445,10 @@ fn format_painter(s: &mut Session, p: &Json) -> Result<Json> {
                 *cx.sel = crate::Selection::range(dest);
                 return Ok(());
             }
-            for c in dest.iter().take(2_000_000) {
+            if dest.count() > 2_000_000 {
+                return Err(bad("edit.formatPainter", "selection too large"));
+            }
+            for c in dest.iter() {
                 let sc = CellRef::new(src.start.row + (c.row - dest.start.row) % h, src.start.col + (c.col - dest.start.col) % w);
                 let st = src_sheet.style_id(sc);
                 let st = if same { st } else { cx.wb.styles.intern(wb.styles.get(st).clone()) };

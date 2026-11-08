@@ -208,6 +208,7 @@ fn painter_moves(app: &SheetApp, key: egui::Key, m: egui::Modifiers) -> bool {
         }
 }
 
+/// The active sheet and its selection, to tell whether a key moved the selection.
 fn selection_now(app: &SheetApp) -> Option<(usize, super::RangeRef)> {
     app.session.active().map(|d| (d.wb.active_sheet(), d.selection.current()))
 }
