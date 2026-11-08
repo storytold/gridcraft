@@ -761,25 +761,76 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     assert!(!t.contains("hideValuesRow"), "{t}");
 }
 
-#[test]
-fn distinct_count_is_saved_as_count_and_keeps_its_name() {
-    // The file format's subtotal list has no distinct count: the file stays valid and the field
-    // keeps its caption, but it reads back as Count.
+/// The "Trend" pivot of [`workbook`] with `values` as its value fields, written; returns the file
+/// and its PivotTable and cache parts.
+fn trend_with(values: impl FnOnce(&PivotValue) -> Vec<PivotValue>) -> (Vec<u8>, String, String) {
     let mut wb = workbook();
     let pivot = wb.sheet_mut(1).unwrap().pivots.iter_mut().find(|p| p.name == "Trend").unwrap();
-    let distinct = PivotValue { func: PivotFunc::DistinctCount, name: "Distinct Count of Sales".into(), ..pivot.values[0].clone() };
-    pivot.values = vec![distinct];
+    pivot.values = values(&pivot.values[0]);
     let bytes = write_xlsx(&wb).unwrap();
     let parts = unzip(&bytes);
-    let table = parts
+    let (path, table) = parts
         .iter()
         .filter(|(path, _)| path.starts_with("xl/pivotTables/pivotTable"))
-        .map(|(_, xml)| String::from_utf8_lossy(xml))
-        .find(|xml| xml.contains("name=\"Trend\""))
+        .map(|(path, xml)| (path.clone(), String::from_utf8_lossy(xml).into_owned()))
+        .find(|(_, xml)| xml.contains("name=\"Trend\""))
         .unwrap();
-    assert!(table.contains("<dataField name=\"Distinct Count of Sales\" fld=\"4\" subtotal=\"count\""), "{table}");
-    let (back, report) = read_xlsx(&bytes).unwrap();
+    let n = path.trim_start_matches("xl/pivotTables/pivotTable").trim_end_matches(".xml");
+    let cache_part = format!("xl/pivotCache/pivotCacheDefinition{n}.xml");
+    let rels = String::from_utf8_lossy(&parts[&format!("xl/pivotTables/_rels/pivotTable{n}.xml.rels")]).into_owned();
+    assert!(rels.contains(&format!("../pivotCache/pivotCacheDefinition{n}.xml")), "{rels}");
+    let cache = String::from_utf8_lossy(&parts[&cache_part]).into_owned();
+    (bytes, table, cache)
+}
+
+fn trend_values(bytes: &[u8]) -> Vec<PivotValue> {
+    let (back, report) = read_xlsx(bytes).unwrap();
     assert!(report.warnings.iter().all(|w| !w.to_lowercase().contains("pivot")), "{:?}", report.warnings);
-    let value = &back.sheet(1).unwrap().pivots.iter().find(|p| p.name == "Trend").unwrap().values[0];
-    assert_eq!((value.func, value.name.as_str()), (PivotFunc::Count, "Distinct Count of Sales"));
+    back.sheet(1).unwrap().pivots.iter().find(|p| p.name == "Trend").unwrap().values.clone()
+}
+
+const GC_DISTINCT: &str = "<ext uri=\"{80B1AD42-0C9F-45FF-B109-D57FB0F4F0B4}\" xmlns:gc=\"https://github.com/storytold/gridcraft/ns/pivot/2026\"><gc:summary func=\"distinctCount\"/></ext>";
+
+#[test]
+fn distinct_count_round_trips_through_a_gridcraft_extension() {
+    // The file format's subtotal list has no distinct count: the field is written as Count, which
+    // other readers use, with a GridCraft marker that brings Distinct Count back on open.
+    let (bytes, table, cache) =
+        trend_with(|v| vec![PivotValue { func: PivotFunc::DistinctCount, name: "Distinct Count of Sales".into(), ..v.clone() }]);
+    assert!(table.contains("<dataField name=\"Distinct Count of Sales\" fld=\"4\" subtotal=\"count\""), "{table}");
+    assert!(table.contains(&format!("<extLst>{GC_DISTINCT}</extLst></dataField>")), "{table}");
+    // A refresh on open would recompute it as Count in Excel, over the values on the sheet.
+    assert!(!cache.contains("refreshOnLoad"), "{cache}");
+    let values = trend_values(&bytes);
+    assert_eq!((values[0].func, values[0].name.as_str()), (PivotFunc::DistinctCount, "Distinct Count of Sales"));
+}
+
+#[test]
+fn rank_and_distinct_count_write_one_extension_each() {
+    let (bytes, table, _) = trend_with(|v| {
+        vec![PivotValue { func: PivotFunc::DistinctCount, show_as: PivotShowAs::Rank, name: "Rank of Distinct Sales".into(), ..v.clone() }]
+    });
+    let rank = "<ext uri=\"{E15A36E0-9728-4e99-A89B-3F7291B0FE68}\" xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\"><x14:dataField pivotShowAs=\"rankDescending\"/></ext>";
+    assert!(table.contains(&format!("<extLst>{rank}{GC_DISTINCT}</extLst></dataField>")), "{table}");
+    let values = trend_values(&bytes);
+    assert_eq!((values[0].func, values[0].show_as), (PivotFunc::DistinctCount, PivotShowAs::Rank));
+}
+
+#[test]
+fn count_without_the_gridcraft_extension_reads_as_count() {
+    // Plain `subtotal="count"`, as Excel writes it, stays Count; so does a stale marker on a field
+    // whose function was changed to something else.
+    let (bytes, table, cache) = trend_with(|v| vec![PivotValue { func: PivotFunc::Count, name: "Count of Sales".into(), ..v.clone() }]);
+    assert!(!table.contains("extLst"), "{table}");
+    assert!(cache.contains("refreshOnLoad=\"1\""), "{cache}");
+    assert_eq!(trend_values(&bytes)[0].func, PivotFunc::Count);
+    let marked = |subtotal: &str| {
+        format!(
+            r#"<pivotTableDefinition name="P" cacheId="1"><location ref="C1:D4"/><pivotFields><pivotField/><pivotField dataField="1"/></pivotFields><dataFields><dataField name="V" fld="1"{subtotal}><extLst>{GC_DISTINCT}</extLst></dataField></dataFields></pivotTableDefinition>"#
+        )
+    };
+    let func = |table: &str| read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap().0.sheet(0).unwrap().pivots[0].values[0].func;
+    assert_eq!(func(&marked(" subtotal=\"count\"")), PivotFunc::DistinctCount);
+    assert_eq!(func(&marked("")), PivotFunc::Sum);
+    assert_eq!(func(&marked(" subtotal=\"max\"")), PivotFunc::Max);
 }

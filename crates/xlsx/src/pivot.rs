@@ -7,6 +7,14 @@
 //! grouping, `fieldGroup` group items) so the table's `<items>` can refer to them. The report
 //! cells the engine wrote stay on the sheet as plain cells.
 //!
+//! Distinct Count: SpreadsheetML's subtotal list has no distinct count (Excel has one only for
+//! PivotTables on its Data Model, whose binary model part we don't write). Such a value field is
+//! written as `subtotal="count"` with a GridCraft `extLst` marker ([`EXT_GC_DATA_FIELD`]) that
+//! GridCraft reads back as Distinct Count; other readers ignore the unknown extension. The cache
+//! of a PivotTable with a Distinct Count field is written without `refreshOnLoad`, so Excel opens
+//! it showing the distinct counts already on the sheet. A Refresh in Excel recomputes the field as
+//! Count.
+//!
 //! Reading: the cache's source and field names plus the table's areas, functions, show-values-as,
 //! layout flags, grand totals and style become a model [`PivotTable`]. Anything we don't model
 //! (OLAP sources, calculated fields, numeric grouping…) becomes a warning.
@@ -48,6 +56,10 @@ const MAX_FIELDS: usize = 16_384;
 const EXT_X14_DATA_FIELD: &str = "{E15A36E0-9728-4e99-A89B-3F7291B0FE68}";
 const EXT_X14_PIVOT_TABLE: &str = "{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}";
 const NS_X14: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
+/// GridCraft's `dataField` extension: `<gc:summary func="distinctCount"/>` marks a value field
+/// written as `subtotal="count"` as a Distinct Count (see the module documentation).
+const EXT_GC_DATA_FIELD: &str = "{80B1AD42-0C9F-45FF-B109-D57FB0F4F0B4}";
+const NS_GC: &str = "https://github.com/storytold/gridcraft/ns/pivot/2026";
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -79,7 +91,8 @@ fn func_name(f: PivotFunc) -> &'static str {
         PivotFunc::Product => "product",
         PivotFunc::CountNumbers => "countNums",
         // The file format's subtotal list has no distinct count (Excel keeps it in a Data Model
-        // extension), so the nearest function is written and the value field keeps its name.
+        // extension), so the nearest function is written, with a GridCraft extension that marks
+        // the field as Distinct Count (see the module documentation).
         PivotFunc::DistinctCount => "count",
         PivotFunc::StdDev => "stdDev",
         PivotFunc::StdDevP => "stdDevp",

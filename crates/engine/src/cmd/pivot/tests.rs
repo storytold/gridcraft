@@ -1105,3 +1105,36 @@ fn distinct_count_counts_each_different_value_once_per_cell_and_in_the_totals() 
     let distinct: Vec<Value> = ["E4", "E5", "E6"].iter().map(|a| val(&s, a)).collect();
     assert_eq!(distinct, [2.0, 2.0, 3.0].map(Value::Number), "East has Alice and Bob, West Alice and Charlie, 3 in all");
 }
+
+#[test]
+fn distinct_count_survives_an_xlsx_round_trip_and_a_refresh() {
+    // #3385: saving wrote Distinct Count as Count, so Alice, Bob, Alice became 3 after reopening
+    // and refreshing. The sheet keeps the computed distinct counts for other readers too.
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([["Region", "Customer"], ["East", "Alice"], ["East", "Bob"], ["East", "alice"], ["West", "Alice"], ["West", "Charlie"]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    let make = json!({"source": "Sheet1!$A$1:$B$6", "destination": "Sheet1!D3", "rows": ["Region"], "values": ["Customer"]});
+    s.execute("insert.pivotTable", make).unwrap();
+    s.execute("pivot.valueSettings", json!({"index": 0, "func": "distinctCount"})).unwrap();
+    let cells = ["E4", "E5", "E6"];
+    let expected = [2.0, 2.0, 3.0].map(Value::Number);
+    assert_eq!(cells.map(|a| val(&s, a)), expected);
+    let bytes = crate::io::save_bytes(&s.doc().unwrap().wb, "book.xlsx").unwrap();
+
+    // The written sheet holds the distinct counts, and the cache doesn't ask for a refresh on open.
+    let (written, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+    let sheet = written.sheet(0).unwrap();
+    assert_eq!(cells.map(|a| sheet.value(CellRef::parse(a).unwrap())), expected);
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut cache = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("xl/pivotCache/pivotCacheDefinition1.xml").unwrap(), &mut cache).unwrap();
+    assert!(!cache.contains("refreshOnLoad"), "{cache}");
+
+    let mut back = Session::new();
+    back.execute("file.open", json!({"name": "book.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    assert_eq!(pt(&back).values[0].func, gridcraft_model::PivotFunc::DistinctCount);
+    back.execute("pivot.refresh", json!({"pivot": "PivotTable1"})).unwrap();
+    assert_eq!(text(&back, "E3"), "Distinct Count of Customer");
+    assert_eq!(cells.map(|a| val(&back, a)), expected, "a refresh after reopening still counts distinct customers");
+}
