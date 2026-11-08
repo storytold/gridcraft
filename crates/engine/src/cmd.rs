@@ -639,27 +639,56 @@ pub(crate) fn locked_cell_error(sh: &gridcraft_model::Sheet, c: CellRef, unlocke
 /// formula cell, while the array stays (Excel: "You can't change part of an array."). The array
 /// would show its value there while the file kept the new content. Cells shifted by row and
 /// column edits aren't edits of their content, so structural commits aren't checked.
+///
+/// An array a merged cell blocks shows #SPILL! and spills nothing, but its range is still the
+/// array's: the file writes it as the array's range, and reading it back drops whatever else was
+/// in it (#3397). Sheets with merged cells also look for such arrays by their formula.
 fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
+    let refused = || Err(EngineError::Other("You can't change part of an array.".into()));
     for sh in &old.sheets {
-        if sh.spill.is_empty() {
+        let Some(after) = new.sheet_index(&sh.name).and_then(|i| new.sheets.get(i)) else { continue };
+        let may_be_blocked = !sh.merges.is_empty() || !after.merges.is_empty();
+        if sh.spill.is_empty() && !may_be_blocked {
             continue;
         }
-        let Some(after) = new.sheet_index(&sh.name).and_then(|i| new.sheets.get(i)) else { continue };
         if std::sync::Arc::ptr_eq(sh, after) {
             continue;
         }
+        // Edited cells no spilled array holds, to look for in blocked arrays.
+        let mut unspilled = Vec::new();
         for c in sh.cells.diff(&after.cells) {
             let filled = after.cell(c).is_some_and(gridcraft_model::Cell::has_content);
-            if !filled || !sh.spill.contains_key(&c) || same_content(sh.cell(c), after.cell(c)) {
+            if !filled || same_content(sh.cell(c), after.cell(c)) {
                 continue;
             }
-            let in_array = sh.spill_ranges.keys().any(|&anchor| {
-                anchor != c
-                    && after.cell(anchor).and_then(|x| x.formula.as_ref()).and_then(|f| f.array).is_some_and(|a| a.start == anchor && a.contains(c))
-            });
+            let in_array = sh.spill.contains_key(&c)
+                && sh.spill_ranges.keys().any(|&anchor| {
+                    anchor != c
+                        && after
+                            .cell(anchor)
+                            .and_then(|x| x.formula.as_ref())
+                            .and_then(|f| f.array)
+                            .is_some_and(|a| a.start == anchor && a.contains(c))
+                });
             if in_array {
-                return Err(EngineError::Other("You can't change part of an array.".into()));
+                return refused();
             }
+            if may_be_blocked {
+                unspilled.push(c);
+            }
+        }
+        let Some(last_row) = unspilled.iter().map(|c| c.row).max() else { continue };
+        let last_col = unspilled.iter().map(|c| c.col).max().unwrap_or(0);
+        // An array's formula is in its top-left cell, so only cells above and left of an edit
+        // can hold one that covers it.
+        let reach = RangeRef::new(CellRef::new(0, 0), CellRef::new(last_row, last_col));
+        let arrays: Vec<(CellRef, RangeRef)> = after
+            .cells
+            .iter_range(reach)
+            .filter_map(|(anchor, x)| x.formula.as_ref().and_then(|f| f.array).filter(|a| a.start == anchor && !a.is_single()).map(|a| (anchor, a)))
+            .collect();
+        if unspilled.iter().any(|&c| arrays.iter().any(|&(anchor, a)| anchor != c && a.contains(c))) {
+            return refused();
         }
     }
     Ok(())

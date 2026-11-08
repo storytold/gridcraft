@@ -2285,6 +2285,54 @@ fn part_of_a_legacy_array_cant_be_changed() {
 }
 
 #[test]
+fn part_of_an_array_in_merged_cells_cant_be_changed() {
+    // Found by the command-sequence fuzzer (#3397, seed 76): the merged cells blocked the array,
+    // so it spilled nothing and the guard above let the edit through. The workbook showed -5.89
+    // in L9, but the file kept the array's range there, and reading it back lost the value.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"sample": "budget"})).unwrap();
+    s.execute("selection.set", json!({"range": "J9:M14"})).unwrap();
+    s.execute("home.mergeCells", json!({})).unwrap();
+    s.execute("cell.set", json!({"array": true, "cell": "K11", "input": "=E18&\"-\"&G14"})).unwrap();
+    let range = gridcraft_core::RangeRef::parse("J9:M14").unwrap();
+    let array = |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().cell(range.start).and_then(|c| c.formula.as_ref()).and_then(|f| f.array);
+    assert_eq!(array(&s), Some(range), "the array takes the merged range");
+    let e = s.execute("cell.set", json!({"cell": "L9", "input": "-5.89", "sheet": 0})).unwrap_err();
+    assert!(e.to_string().contains("part of an array"), "{e}");
+    let values = |s: &Session| -> Vec<Value> {
+        let sh = s.doc().unwrap().wb.sheet(0).unwrap();
+        range.iter().map(|c| sh.value(c)).collect()
+    };
+    let before = values(&s);
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().value(CellRef::parse("L9").unwrap()), Value::Empty);
+    // The round-trip invariant the fuzzer checks: what the workbook holds is what the file keeps.
+    reopen(&mut s);
+    assert_eq!(array(&s), Some(range));
+    assert_eq!(values(&s), before);
+}
+
+#[test]
+fn part_of_an_array_blocked_by_a_later_merge_cant_be_changed() {
+    // #3397 the other way round: merging cells over part of an existing array blocks it too, and a
+    // cell of the array outside the merged cells is still the array's.
+    let mut s = s();
+    s.execute("selection.set", json!({"range": "A1:A4"})).unwrap();
+    s.execute("cell.set", json!({"input": "=5", "array": true})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    let e = s.execute("range.setValues", json!({"range": "A3", "values": [[13]]})).unwrap_err();
+    assert!(e.to_string().contains("part of an array"), "{e}");
+    assert_eq!(v(&s, "A3"), Value::Empty);
+    // Cells beside the array can still be changed.
+    s.execute("cell.set", json!({"cell": "C3", "input": "7"})).unwrap();
+    assert_eq!(v(&s, "C3"), Value::Number(7.0));
+    s.execute("cell.set", json!({"cell": "B2", "input": "8"})).unwrap();
+    assert_eq!(v(&s, "B2"), Value::Number(8.0));
+    // Replacing the whole array is fine.
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3], [4]]})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::Number(3.0));
+}
+
+#[test]
 fn create_names_from_selection() {
     let names = |s: &Session| -> Vec<(String, String)> {
         let mut v: Vec<_> = s.doc().unwrap().wb.names.iter().map(|n| (n.name.clone(), n.formula.clone())).collect();
