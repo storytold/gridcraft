@@ -834,7 +834,14 @@ class Workbook {
   getWorksheets(): Worksheet[] {
     return (bridge("Workbook.getWorksheets", {}) as any[]).map((s) => new Worksheet(String(s.name)));
   }
-  getWorksheet(name: string): Worksheet {
+  getWorksheet(name: string): Worksheet | undefined {
+    // ExcelScript returns `undefined` for a name the workbook does not have, so
+    // `workbook.getWorksheet("Report") ?? workbook.addWorksheet("Report")` works.
+    const sheets = bridge("Workbook.getWorksheets", {}) as any[];
+    const wanted = String(name).toLowerCase();
+    if (!sheets.some((sheet) => String(sheet.name).toLowerCase() === wanted)) {
+      return undefined;
+    }
     return new Worksheet(String(name));
   }
   getActiveCell(): Range {

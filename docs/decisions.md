@@ -55,7 +55,9 @@ GridCraft is offline-first: the script store is a folder on the local disk, by d
 `<config>/scripts`, and `script.folder` can point it at any local folder, such as a synced
 `OneDrive/Documents/Office Scripts` or a SharePoint-synced library. Excel requires scripts to be in
 OneDrive/SharePoint (or associated with a workbook); pointing both at the same synced folder is
-the interop path. No network call is made to list, save or run a script.
+the interop path. No network call is made to list, save or run a script: GridCraft itself needs no
+connection, but a script is native code and can reach the network if it tries (see the trust model
+in [office-scripts.md](office-scripts.md)).
 
 The transfer format is Office Scripts' `.osts` JSON (version 0.3.0): `body` with CRLF,
 `description`, `noCodeMetadata`, `parameterInfo` and `apiInfo` as JSON strings, and unknown fields

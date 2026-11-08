@@ -188,7 +188,7 @@ editor, where it can be edited, run, saved and exported.
 | `Chart` | axes, series, titles, legend, plot area, data labels, styles |
 | `Comment` | replies, resolved state, rich content, mentions |
 | `DataValidation` | `getValid`/`getInvalidCells`, list helpers |
-| Office-host-only families (bindings, custom XML, slicers, PivotTables, shapes/images, named sheet views) | out of scope until their engine models grow; each member stays a typed `notYet` error |
+| Office-host-only families (bindings, custom XML, slicers, PivotTables, shapes/images, named sheet views) | out of scope until their engine models grow; each member stays a typed `notSupported` error |
 
 ## Commands
 

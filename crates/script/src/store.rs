@@ -272,6 +272,9 @@ impl ScriptStore {
         std::fs::create_dir_all(&self.root)?;
         let path = self.path_for(&record.id)?;
         let bytes = serde_json::to_vec_pretty(record).map_err(|e| StoreError::Damaged(e.to_string()))?;
+        if bytes.len() > MAX_RECORD_BYTES {
+            return Err(StoreError::Invalid(format!("the script record would be {} bytes; at most {MAX_RECORD_BYTES} are kept", bytes.len())));
+        }
         // A temporary file of our own, created exclusively and unique per save: a desktop save and
         // a CLI save of the same script can never rename each other's content.
         let (temp, mut file) = self.temp_file(&path)?;
@@ -326,11 +329,13 @@ pub fn open_regular(path: &Path) -> std::io::Result<std::fs::File> {
     Ok(file)
 }
 
+/// The largest record the store writes and reads: the code (bounded at 100,000 characters) plus an
+/// imported `.osts`'s metadata, which is itself bounded at `MAX_OSTS_BYTES` but can grow when it is
+/// pretty-printed. A record over this is refused on save, so `list`/`load` never skip one the
+/// store wrote.
+const MAX_RECORD_BYTES: usize = 2 * crate::osts::MAX_OSTS_BYTES;
+
 fn read_record(path: &Path) -> Result<ScriptRecord, StoreError> {
-    // A record holds the code (bounded at 100,000 characters) and an imported `.osts`'s metadata
-    // (bounded at `MAX_OSTS_BYTES`); the read is bounded so a huge file in a synced folder cannot
-    // exhaust memory before the parse rejects it.
-    const MAX_RECORD_BYTES: usize = 2 * crate::osts::MAX_OSTS_BYTES;
     let mut bytes = Vec::new();
     let limit = MAX_RECORD_BYTES as u64 + 1;
     open_regular(path).and_then(|file| std::io::Read::read_to_end(&mut file.take(limit), &mut bytes))?;
@@ -522,6 +527,14 @@ mod tests {
         let error = s.delete("excel-script").unwrap_err().to_string();
         assert!(error.contains(".osts") && error.contains("excel-script"), "{error}");
         assert!(matches!(s.delete("no-such-script"), Err(StoreError::NotFound(_))));
+    }
+
+    #[test]
+    fn a_record_over_the_limit_is_refused_on_save() {
+        let s = store("record-refused");
+        let mut record = ScriptRecord::new("big", "Big", code("1"), now_millis());
+        record.code = "x".repeat(2 * crate::osts::MAX_OSTS_BYTES + 1);
+        assert!(matches!(s.write(&record), Err(StoreError::Invalid(_))), "the store refuses what list would skip");
     }
 
     #[test]

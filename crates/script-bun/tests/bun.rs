@@ -24,6 +24,8 @@ impl BridgeExecutor for Calls {
             // inside one of them.
             "Range.getValues" => json!([["€".repeat(30_000)]]),
             "Worksheet.getVisibility" => Json::String("visible".into()),
+            "Workbook.getWorksheets" => json!([{"name": "Data"}]),
+            "Workbook.addWorksheet" => json!({"sheet": "Nope"}),
             _ => Json::Null,
         })
     }
@@ -60,9 +62,10 @@ function main(workbook: ExcelScript.Workbook) {
     let mut calls = Calls { calls: Vec::new() };
     let report = host.run(script, &Limits::default(), &mut calls).expect("the script runs");
     let methods: Vec<&str> = calls.calls.iter().map(|c| c.method.as_str()).collect();
-    assert_eq!(methods, ["Range.setValues", "Range.setValue", "Range.setNumberFormat", "RangeFont.setBold"]);
-    assert_eq!(calls.calls[1].params["value"], json!(42));
-    assert_eq!(calls.calls[0].params["sheet"], json!("Data"));
+    // `getWorksheet` checks the name against the workbook first.
+    assert_eq!(methods, ["Workbook.getWorksheets", "Range.setValues", "Range.setValue", "Range.setNumberFormat", "RangeFont.setBold"]);
+    assert_eq!(calls.calls[2].params["value"], json!(42));
+    assert_eq!(calls.calls[1].params["sheet"], json!("Data"));
     assert_eq!(report.output, vec!["done 42".to_string()]);
 }
 
@@ -106,10 +109,13 @@ function main(workbook: ExcelScript.Workbook) {
     let methods: Vec<&str> = calls.calls.iter().map(|c| c.method.as_str()).collect();
     // `getRangeBorder` builds the Border in the shim; `console.log` is answered by the host
     // without reaching the engine.
-    assert_eq!(methods, ["Worksheet.activate", "Worksheet.getName", "Range.setValue", "RangeBorder.setColor", "Worksheet.getName"]);
-    assert_eq!(calls.calls[1].params["sheet"], json!("Data"), "activate kept the worksheet name");
-    assert_eq!(calls.calls[2].params["value"], json!("EdgeTop"), "the enum reaches the bridge as its value");
-    assert_eq!(calls.calls[3].params["side"], json!("EdgeTop"));
+    assert_eq!(
+        methods,
+        ["Workbook.getWorksheets", "Worksheet.activate", "Worksheet.getName", "Range.setValue", "RangeBorder.setColor", "Worksheet.getName"]
+    );
+    assert_eq!(calls.calls[2].params["sheet"], json!("Data"), "activate kept the worksheet name");
+    assert_eq!(calls.calls[3].params["value"], json!("EdgeTop"), "the enum reaches the bridge as its value");
+    assert_eq!(calls.calls[4].params["side"], json!("EdgeTop"));
     assert_eq!(report.output, vec!["name Data".to_string()]);
 }
 
@@ -122,7 +128,7 @@ fn an_unknown_excel_script_enum_is_a_typed_error() {
         "function main(workbook: ExcelScript.Workbook) { workbook.getWorksheet(\"Data\").getRange(\"A1\").setValue(ExcelScript.Nope.value); }";
     let error = host.run(script, &Limits::default(), &mut calls).expect_err("an unknown enum is refused");
     assert!(error.message.contains("ExcelScript.Nope"), "{}", error.message);
-    assert!(calls.calls.is_empty(), "nothing reaches the bridge");
+    assert_eq!(calls.calls.len(), 1, "only the sheet lookup reaches the bridge");
 }
 
 #[test]
@@ -197,5 +203,37 @@ async function main(workbook: ExcelScript.Workbook) {
     let mut calls = Calls { calls: Vec::new() };
     let error = host.run(script, &Limits::default(), &mut calls).expect_err("a rejected async main fails the run");
     assert!(error.message.contains("after two calls"), "{}", error.message);
-    assert_eq!(calls.calls.len(), 2, "both calls ran before the failure");
+    assert_eq!(calls.calls.len(), 3, "the sheet lookup and both calls ran before the failure");
+}
+
+#[test]
+#[ignore = "needs Bun; set GRIDCRAFT_BUN"]
+fn get_worksheet_returns_undefined_for_a_missing_sheet() {
+    let Some(host) = host() else { return };
+    // `workbook.getWorksheet("Nope") ?? workbook.addWorksheet("Nope")` is a common Office Scripts
+    // pattern: the `??` branch must run when the sheet does not exist.
+    let script = r#"
+function main(workbook: ExcelScript.Workbook) {
+  const found = workbook.getWorksheet("Data");
+  const missing = workbook.getWorksheet("Nope");
+  console.log(found ? found.getName() : "no found", missing === undefined ? "undefined" : "object");
+  const created = workbook.getWorksheet("Nope") ?? workbook.addWorksheet("Nope");
+  console.log(created.getName());
+}
+"#;
+    let mut calls = Calls { calls: Vec::new() };
+    let report = host.run(script, &Limits::default(), &mut calls).expect("the script runs");
+    let methods: Vec<&str> = calls.calls.iter().map(|c| c.method.as_str()).collect();
+    assert_eq!(
+        methods,
+        [
+            "Workbook.getWorksheets",
+            "Workbook.getWorksheets",
+            "Worksheet.getName",
+            "Workbook.getWorksheets",
+            "Workbook.addWorksheet",
+            "Worksheet.getName"
+        ]
+    );
+    assert_eq!(report.output, vec!["Data undefined".to_string(), "Data".to_string()]);
 }

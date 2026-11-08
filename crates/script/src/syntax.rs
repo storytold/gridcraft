@@ -65,6 +65,8 @@ struct Scan {
     /// The last character that was not whitespace and not part of a comment, for the `/`
     /// regular-expression heuristic.
     previous: Option<char>,
+    /// The run of identifier characters ending at `previous`, so a keyword can be recognised.
+    word: String,
     saw_code: bool,
 }
 
@@ -88,6 +90,7 @@ pub fn check(code: &str) -> Result<(), SyntaxError> {
         open: Vec::new(),
         opened_at: (1, 1),
         previous: None,
+        word: String::new(),
         saw_code: false,
     };
     s.run()?;
@@ -104,6 +107,16 @@ impl Scan {
 
     fn peek_next(&self) -> Option<char> {
         self.chars.get(self.at.saturating_add(1)).copied()
+    }
+
+    /// Remembers the last significant character and the identifier it ends, for the `/` heuristic.
+    fn note(&mut self, c: char) {
+        self.previous = Some(c);
+        if c.is_alphanumeric() || c == '_' || c == '$' {
+            self.word.push(c);
+        } else {
+            self.word.clear();
+        }
     }
 
     /// Consumes the current character, keeping line and column.
@@ -142,7 +155,7 @@ impl Scan {
                         self.bump();
                     } else if (self.mode == Mode::Single && c == '\'') || (self.mode == Mode::Double && c == '"') {
                         self.mode = Mode::Normal;
-                        self.previous = Some(c);
+                        self.note(c);
                     } else if c == '\n' {
                         return Err(SyntaxError::new("unterminated string", self.opened_at.0, self.opened_at.1));
                     }
@@ -151,7 +164,7 @@ impl Scan {
                     if c == '`' {
                         self.bump();
                         self.mode = self.template_return.pop().unwrap_or(Mode::Normal);
-                        self.previous = Some('`');
+                        self.note('`');
                     } else if c == '\\' {
                         self.bump();
                         self.bump();
@@ -161,7 +174,7 @@ impl Scan {
                         self.bump();
                         self.open.push(Open { ch: '{', line, column, template: true, return_mode: Mode::Template });
                         self.mode = Mode::Normal;
-                        self.previous = Some('{');
+                        self.note('{');
                     } else {
                         self.bump();
                     }
@@ -174,7 +187,7 @@ impl Scan {
                         self.regex_class()?;
                     } else if c == '/' {
                         self.mode = Mode::Normal;
-                        self.previous = Some('/');
+                        self.note('/');
                     } else if c == '\n' {
                         return Err(SyntaxError::new("unterminated regular expression", self.opened_at.0, self.opened_at.1));
                     }
@@ -214,7 +227,7 @@ impl Scan {
                 self.mode = Mode::BlockComment;
                 self.opened_at = (line, column);
             }
-            '/' if regex_starts(self.previous) => {
+            '/' if regex_starts(self.previous, &self.word) => {
                 self.bump();
                 self.mode = Mode::Regex;
                 self.opened_at = (line, column);
@@ -235,19 +248,19 @@ impl Scan {
                 self.bump();
                 self.open.push(Open { ch: c, line, column, template: false, return_mode: Mode::Normal });
                 self.saw_code = true;
-                self.previous = Some(c);
+                self.note(c);
             }
             ')' | ']' | '}' => {
                 self.bump();
                 self.saw_code = true;
                 self.close(c, line, column)?;
-                self.previous = Some(c);
+                self.note(c);
             }
             _ => {
                 self.bump();
                 if !c.is_whitespace() {
                     self.saw_code = true;
-                    self.previous = Some(c);
+                    self.note(c);
                 }
             }
         }
@@ -268,7 +281,7 @@ impl Scan {
         }
         if top.template {
             self.mode = top.return_mode;
-            self.previous = Some('}');
+            self.note('}');
         }
         Ok(())
     }
@@ -298,10 +311,31 @@ impl Scan {
 
 /// Whether a `/` after `previous` starts a regular expression rather than a division. The
 /// character list is the set of places JavaScript's grammar allows an expression.
-fn regex_starts(previous: Option<char>) -> bool {
+fn regex_starts(previous: Option<char>, word: &str) -> bool {
     match previous {
         None => true,
-        Some(c) => "([{=,:;!&|?+-*%<>~^".contains(c),
+        Some(c) => {
+            // A keyword is followed by an expression, so `/` starts a regular expression:
+            // `return /"/.test(s)`, `typeof /x/`.
+            "([{=,:;!&|?+-*%<>~^".contains(c)
+                || matches!(
+                    word,
+                    "return"
+                        | "typeof"
+                        | "case"
+                        | "delete"
+                        | "void"
+                        | "in"
+                        | "of"
+                        | "new"
+                        | "throw"
+                        | "else"
+                        | "do"
+                        | "instanceof"
+                        | "yield"
+                        | "await"
+                )
+        }
     }
 }
 
@@ -323,6 +357,14 @@ pub(crate) fn check_name(name: &str) -> Result<&str, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_regex_after_a_keyword_is_not_a_string() {
+        ok("function main() { return /\"/.test('x'); }");
+        ok("const x = typeof /a/;");
+        ok("const y = a / b;");
+        ok("const z = a / b / c;");
+    }
 
     fn ok(code: &str) {
         assert_eq!(check(code), Ok(()), "{code}");

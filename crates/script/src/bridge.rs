@@ -308,11 +308,25 @@ pub fn parse_response(line: &str) -> Result<Response, BridgeError> {
         return Err(BridgeError::protocol("an empty line is not a reply"));
     }
     parse_bounded(line)?;
-    let response: Response = serde_json::from_str(line).map_err(|e| BridgeError::protocol(format!("not a bridge reply: {e}")))?;
-    if response.result.is_none() && response.error.is_none() {
+    // A `null` result is a result: serde reads it as `None`, so the rule is about the key.
+    let value: Json = serde_json::from_str(line).map_err(|e| BridgeError::protocol(format!("not a bridge reply: {e}")))?;
+    if value.get("result").is_none() && value.get("error").is_none() {
         return Err(BridgeError::protocol("a reply carries a result or an error"));
     }
-    Ok(response)
+    serde_json::from_value(value).map_err(|e| BridgeError::protocol(format!("not a bridge reply: {e}")))
+}
+
+#[cfg(test)]
+mod null_reply_tests {
+    use super::*;
+
+    #[test]
+    fn a_null_result_round_trips_through_parse_response() {
+        let line = Response::ok(1, serde_json::Value::Null).to_line();
+        let parsed = parse_response(&line).unwrap();
+        assert!(parsed.error.is_none());
+        assert!(parsed.result.is_none(), "a null result is still a result");
+    }
 }
 
 fn parse_bounded(line: &str) -> Result<(), BridgeError> {
