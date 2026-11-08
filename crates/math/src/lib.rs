@@ -235,7 +235,7 @@ const MACRO_DEFINERS: &[&str] =
 
 /// One open `\begin…\end` environment, counted from the source text.
 struct Grid {
-    /// Rows ended so far (by `\\` or `\cr`).
+    /// Rows ended so far (by `\\`, `\cr` or `\newline`).
     rows: usize,
     /// Cells in the current row.
     cells: usize,
@@ -315,7 +315,8 @@ fn check_caps(latex: &str) -> Result<(), MathError> {
                         }
                         None
                     }
-                    "cr" => {
+                    // RaTeX reads `\newline` as `\\`, so it ends a row like `\cr` does.
+                    "cr" | "newline" => {
                         if let Some(g) = grids.last_mut() {
                             g.end_row();
                         }
@@ -800,5 +801,21 @@ mod tests {
     fn empty_source_is_an_empty_list() {
         let l = layout("").unwrap();
         assert!(l.items.is_empty());
+    }
+
+    #[test]
+    fn newline_rows_count_toward_the_matrix_cap() {
+        // RaTeX reads `\newline` as `\\`, so it ends a row like `\cr` does.
+        for brk in ["\\newline ", "\\cr ", "\\\\"] {
+            let src = format!("\\begin{{matrix}}{}{}\\end{{matrix}}", format!("a{brk}").repeat(250), "a&".repeat(700) + "a");
+            assert!(src.len() < MAX_SOURCE_BYTES);
+            let e = check_caps(&src).unwrap_err();
+            assert!(e.message.contains("matrix cells"), "{brk}: {e}");
+            let s = src.clone();
+            let (l, o) = within(10, move || (layout(&s).unwrap_err(), to_omml(&s, 11.0, None).unwrap_err()));
+            assert!(l.message.contains("matrix cells") && o.message.contains("matrix cells"), "{brk}");
+        }
+        assert!(check_caps("\\begin{matrix}a&b\\newline c&d\\end{matrix}").is_ok());
+        assert!(layout("\\begin{matrix}a&b\\newline c&d\\end{matrix}").is_ok());
     }
 }
