@@ -367,18 +367,19 @@ fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, 
             objs.push(Obj::Chart(ch, rid));
         }
         for sh in &sheet.shapes {
-            if sh.kind == ShapeKind::Ink && sh.ink.is_some() {
-                if let Some(parts) = crate::drawing::ink_parts(sh, &wb.theme) {
-                    out.inks += 1;
-                    let ink_name = format!("xl/ink/ink{}.xml", out.inks);
-                    out.part(&ink_name, Some(crate::drawing::CT_INKML), parts.xml.into_bytes());
-                    let content = drels.add("customXml", &format!("../ink/ink{}.xml", out.inks));
-                    out.default_type("png", "image/png");
-                    let file = out.image_part("png", &parts.png);
-                    let image = drels.add("image", &format!("../media/{file}"));
-                    objs.push(Obj::Ink(sh, crate::drawing::InkRefs { content, image, creation_id: parts.creation_id }));
-                    continue;
-                }
+            if sh.kind == ShapeKind::Ink
+                && sh.ink.is_some()
+                && let Some(parts) = crate::drawing::ink_parts(sh, &wb.theme)
+            {
+                out.inks += 1;
+                let ink_name = format!("xl/ink/ink{}.xml", out.inks);
+                out.part(&ink_name, Some(crate::drawing::CT_INKML), parts.xml.into_bytes());
+                let content = drels.add("customXml", &format!("../ink/ink{}.xml", out.inks));
+                out.default_type("png", "image/png");
+                let file = out.image_part("png", &parts.png);
+                let image = drels.add("image", &format!("../media/{file}"));
+                objs.push(Obj::Ink(sh, crate::drawing::InkRefs { content, image, creation_id: parts.creation_id }));
+                continue;
             }
             objs.push(Obj::Shape(sh));
         }

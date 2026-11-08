@@ -145,7 +145,7 @@ fn engine_strokes_keep_their_ink_style_and_key_across_save_and_open() {
     assert!(ink.key.as_deref().is_some_and(|k| k.starts_with('{') && k.ends_with('}')), "{:?}", ink.key);
     assert!(ink.width_cm > 0.0);
 
-    let mut reopened = reopen(&mut session);
+    let reopened = reopen(&mut session);
     // No fallback picture leaks in as a separate object.
     assert!(reopened.doc().unwrap().wb.active().unwrap().images.is_empty());
     let after = &shapes(&reopened)[0];

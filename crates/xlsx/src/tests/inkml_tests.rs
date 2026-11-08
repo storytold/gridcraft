@@ -19,9 +19,7 @@ const XDR14: &str = "http://schemas.microsoft.com/office/excel/2010/spreadsheetD
 const GUIDE: &str = "{11111111-2222-4333-8444-555555555555}";
 
 fn content_types(ink: bool, png: bool) -> String {
-    let mut s = format!(
-        r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>"#
-    );
+    let mut s = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>"#.to_string();
     if png {
         s.push_str(r#"<Default Extension="png" ContentType="image/png"/>"#);
     }
@@ -171,7 +169,7 @@ fn pressure_and_effects_survive_a_read_and_a_gridcraft_save() {
     assert_eq!(ink.effect, Some(InkEffect::RoseGold));
     // F's last prefix is `'` (no `"` in the fixture for F), so the third value repeats the first difference.
     assert_eq!(ink.pressure, vec![1000, 2000, 2000]);
-    close(ink.anchor[0], -1303.866_2);
+    close(ink.anchor[0], -1_303.866_2);
     close(ink.anchor[1], -1016.0);
     close(ink.scale, 0.5);
 
@@ -216,7 +214,7 @@ fn every_tool_and_effect_round_trips_through_gridcraft() {
                     width_cm: 0.1,
                     height_cm: if tool == InkTool::Pencil { 0.6 } else { 0.1 },
                     effect,
-                    anchor: [-1303.866_2, -1016.0],
+                    anchor: [-1_303.866_2, -1016.0],
                     scale: 0.5,
                     pressure: vec![100, 2000, 32767],
                     order: id,
@@ -338,4 +336,28 @@ fn legacy_custgeom_ink_still_round_trips_without_an_ink_style() {
     assert!(s.ink.is_none());
     assert_eq!(s.line, Color::Rgb(0xA12BCD));
     assert_eq!(s.text, "0,0;40,20;90,10");
+}
+
+#[test]
+fn a_fountain_pen_without_pressure_stays_a_fountain_pen_and_keeps_an_empty_pressure() {
+    let sheet = Sheet {
+        shapes: vec![Shape {
+            id: 9,
+            kind: ShapeKind::Ink,
+            anchor: Anchor { cell: CellRef::parse("B2").unwrap(), dx: 0.0, dy: 0.0, width: 60.0, height: 30.0, mode: AnchorMode::Absolute },
+            fill: Color::Rgb(2 << 16),
+            line: Color::Rgb(0x1F5FC9),
+            text: "0,0;30,20".into(),
+            format: Default::default(),
+            math: Default::default(),
+            ink: Some(InkStyle { tool: InkTool::FountainPen, key: Some("{AAAAAAAA-1111-4111-8111-111111111111}".into()), ..InkStyle::default() }),
+        }],
+        ..Sheet::new("Pen")
+    };
+    let wb = Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() };
+    let (back, _) = read(&write_xlsx(&wb).unwrap());
+    let ink = back.sheets[0].shapes[0].ink.as_ref().expect("editable ink");
+    assert_eq!(ink.tool, InkTool::FountainPen);
+    assert!(ink.pressure.is_empty(), "no F channel was recorded, so none comes back: {:?}", ink.pressure);
+    assert_eq!(ink.key.as_deref(), Some("{AAAAAAAA-1111-4111-8111-111111111111}"));
 }
