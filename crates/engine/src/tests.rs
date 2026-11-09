@@ -6668,12 +6668,15 @@ fn ink_status_reports_the_model_contract() {
     assert!(s.execute("ink.status", json!({"accelerator": "quantum"})).is_err());
 
     // A configured directory with no files is "not installed" and every command says so.
-    let dir = std::env::temp_dir().join(format!("gridcraft-ink-engine-{}", std::process::id()));
-    s.models_dir = Some(dir.display().to_string());
+    // The directory is one this test created itself (see `exclusive_scratch` below), never the
+    // shared temp directory: `ink.modelRemove` must only ever delete test-owned files.
+    let scratch = exclusive_scratch("ink-engine").expect("a private scratch directory");
+    s.models_dir = Some(scratch.display().to_string());
     let st = s.execute("ink.status", json!({})).unwrap();
     assert_eq!(st["filesPresent"], json!(false));
     assert!(s.execute("ink.modelRemove", json!({})).is_err());
-    assert!(s.execute("ink.modelImport", json!({"path": dir.display().to_string()})).is_err());
+    assert!(s.execute("ink.modelImport", json!({"path": scratch.display().to_string()})).is_err());
+    let _ = std::fs::remove_dir_all(&scratch);
 }
 
 /// A directory this test created itself. `create_dir` fails when the name is taken, so a path
