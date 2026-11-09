@@ -107,9 +107,6 @@ impl SheetApp {
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.ensure_text_width(ctx);
-        for path in std::mem::take(&mut self.startup_files) {
-            self.open_path(&path);
-        }
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped. One
         // made with a switch to the control's tab waits, with its window, for the next `ui` of
@@ -119,6 +116,13 @@ impl SheetApp {
         let open: Vec<u64> = self.session.documents().iter().map(|d| d.uid).collect();
         floating_pictures::forget_closed(ctx, &open);
         self.apply_font_state(ctx);
+        // Files named on the command line wait for the font set: measuring wrapped text before
+        // egui has its fonts would panic, and before the set applies it would measure with others.
+        if self.fonts_ready && !self.fonts_rebind {
+            for path in std::mem::take(&mut self.startup_files) {
+                self.open_path(&path);
+            }
+        }
         if let Some(answer) = self.desktop_theme.take_change() {
             self.desktop_dark = Some(answer);
         }
@@ -357,6 +361,28 @@ mod lifecycle_tests {
     /// Returns raw input with a screen rect at the given size.
     fn raw_with_size(size: egui::Vec2) -> egui::RawInput {
         egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() }
+    }
+
+    #[test]
+    /// Files named on the command line wait for the fonts: the first pass only applies the font
+    /// set, and measuring wrapped text before egui has fonts would panic.
+    fn startup_files_wait_for_the_fonts() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        let path = std::env::temp_dir().join(format!("gridcraft-startup-{}.xlsx", std::process::id()));
+        std::fs::write(&path, gridcraft_xlsx::write_xlsx(&app.session.active().unwrap().wb).unwrap()).unwrap();
+        app.open_on_first_frame(vec![path.to_string_lossy().into_owned()]);
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+        assert!(!app.fonts_ready, "the first pass applies the font set");
+        assert_eq!(app.startup_files.len(), 1, "the file waits for the fonts");
+        assert!(app.message.is_none());
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+        let _ = std::fs::remove_file(&path);
+        assert!(app.fonts_ready);
+        assert!(app.startup_files.is_empty(), "the file opens once the fonts are ready");
+        assert!(app.message.is_none(), "{:?}", app.message);
+        let d = app.session.active().unwrap();
+        assert_eq!(d.path.as_deref(), Some(path.to_string_lossy().as_ref()), "the file opened");
     }
 
     #[test]

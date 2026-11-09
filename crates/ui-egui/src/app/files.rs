@@ -1,9 +1,9 @@
 use super::{Json, Notice, NoticeKind, OpenWindow, SheetApp, clean_error, json};
 
 impl SheetApp {
-    /// Opens `paths` on the first frame, as [`Self::open_path`] does, once the grid's text measure
-    /// is installed: files named on the command line arrive before there is a window, and rows of
-    /// wrapped text fit on open with the fonts the grid draws with.
+    /// Opens `paths` on the first frame whose fonts are ready, as [`Self::open_path`] does, with the
+    /// grid's text measure installed: files named on the command line arrive before there is a
+    /// window, and rows of wrapped text fit on open with the fonts the grid draws with.
     pub fn open_on_first_frame(&mut self, paths: Vec<String>) {
         self.startup_files.extend(paths);
     }
