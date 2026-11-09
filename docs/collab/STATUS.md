@@ -107,9 +107,10 @@ these crates and was last run for the web host-bridge slice.
 
 The clippy run uses `1.95.0`, the toolchain the branch is built with, where
 `fetch_update` is not deprecated. Under the host's default `1.99.1` the same run
-reports that one pre-existing deprecation in
-`apps/gridcraft-collab-server/src/metrics.rs` (main's code, untouched here), so
-the earlier record excluded it with `-A deprecated`.
+reported one pre-existing deprecation in
+`apps/gridcraft-collab-server/src/metrics.rs` (main's code); §15 removes it, so
+the `1.99.1` clippy is now clean and the earlier `-A deprecated` is no longer
+needed.
 
 Earlier, after the rebase (before this slice), the same branch passed
 `cargo +1.95.0 test -p gridcraft-engine --lib` (898) and the full `cargo
@@ -673,3 +674,58 @@ cargo fmt --all -- --check                                 clean
 ```
 
 The crates below the server are unchanged, so their gates from §13 still stand.
+
+## 15. Host gate under Rust 1.99.1: `try_update` in the metrics histogram (2026-11-09)
+
+`cargo clippy --workspace --all-targets -- -D warnings` on the build host's default toolchain
+(`rustc 1.99.1 (58cf8f9c3 2026-10-13)`, the same edition of the compiler CI uses) failed on one
+line that predates this branch:
+
+```text
+error: use of deprecated method `std::sync::atomic::Atomic::<u64>::fetch_update`:
+       renamed to `try_update` for consistency
+  --> apps/gridcraft-collab-server/src/metrics.rs:46:33
+   = note: `-D deprecated` implied by `-D warnings`
+```
+
+`Histogram::observe` accumulates the `_sum` of the op latency histogram; the accumulation must
+saturate rather than wrap. The method is now `try_update`, with the same signature and the same
+`Result<previous, current>` answer:
+
+```rust
+let updated = self.sum_micros.try_update(Ordering::Relaxed, Ordering::Relaxed, |sum| Some(sum.saturating_add(micros)));
+debug_assert!(updated.is_ok(), "the sum_micros closure always returns Some");
+```
+
+The closure always returns `Some`, so the update cannot be refused: `try_update` yields `Ok(previous)`.
+The `Err(current)` arm is unreachable and the check makes that explicit instead of discarding the
+answer. In a release build the behaviour is identical to `fetch_update` before (`Relaxed`,
+`saturating_add`, one atomic RMW); the existing unit test pins it: `latency_buckets_are_cumulative`
+observes 500 µs + 3 ms + 700 ms and requires `latency_seconds_sum 0.703500` (703 500 µs).
+
+Run on the remote host with the default `1.99.1` (2026-11-09):
+
+```text
+cargo fmt --all -- --check                                        exit 0
+cargo clippy --workspace --all-targets -j 8 -- -D warnings        exit 0, Finished (no errors)
+cargo test --workspace -j 8 --no-fail-fast                        every target ok except three
+                                                                  host-environment tests below
+```
+
+Test totals: `gridcraft-collab` 45, `gridcraft-collab-client` 13 converge + 5 parts,
+`gridcraft-collab-server` 34 unit + 8 socket + 9 persistence + 5 acceptance + 6 callback + 2
+logging, `gridcraft-collab-web` 6, plus calc 116, chart 80, cli 27+11, core 40, formula 108,
+functions 35, model 164, xlsx 364, engine 898, ui-egui 1180 and the remaining crates — all passed.
+
+The three failures are not caused by this change (the diff is one file, `metrics.rs`) and are
+host-environment tests that also failed before it:
+
+1. `gridcraft-engine --lib`, `io::tests::save_keeps_the_destination_access_restrictions`: the
+   build host's temporary directory yields mode `664`, the test wants the destination's
+   restrictions (§10). 898 other engine tests pass.
+2. `gridcraft-ui-egui --test it`, `interaction::column_autocomplete_folds_case_beyond_ascii` and
+   `interaction::language_switch_renders_the_ribbon_and_persists`: the patched egui panics on a
+   glyph the host's fonts lack (`ẞ` U+1E9E and `ẻ` U+1EBB); the other 1180 integration tests pass.
+
+No CI file is touched, nothing is pushed to `storytold/*`; the commit stays on
+`feature/realtime-collaboration`.
