@@ -1,4 +1,4 @@
-//! Opening and saving files: XLSX, legacy XLS import, XLSB and ODS data import, CSV/TSV, JSON (debug), HTML export.
+//! Opening and saving files: XLSX, legacy XLS import, XLSB and ODS data import, SYLK import, CSV/TSV, JSON (debug), HTML export.
 
 use std::fmt::Write as _;
 
@@ -6,6 +6,8 @@ use gridcraft_core::{CellRef, RangeRef};
 use gridcraft_model::{Sheet, Workbook};
 
 use crate::{EngineError, Result};
+
+mod sylk;
 
 /// The function library's answers to what the XLSX reader and writer need to know about functions
 /// (which names are built in, which parameters take a single value).
@@ -26,6 +28,8 @@ pub enum FileKind {
     Tsv,
     Json,
     Html,
+    /// SYLK symbolic link text (import only).
+    Sylk,
 }
 
 impl FileKind {
@@ -40,6 +44,7 @@ impl FileKind {
             "tsv" | "tab" | "txt" => FileKind::Tsv,
             "json" | "scjson" => FileKind::Json,
             "html" | "htm" => FileKind::Html,
+            "slk" => FileKind::Sylk,
             _ => return None,
         })
     }
@@ -125,12 +130,13 @@ fn decrypt_message(name: &str, e: gridcraft_xlsx::DecryptError) -> String {
     }
 }
 
-/// Parses bytes that aren't encrypted, then takes the workbook's macros out of their hidden names
-/// and adopts the Python cells they hold (see [`adopt_python`]) within the limits of
-/// [`enforce_python_limits`].
+/// Parses bytes that aren't encrypted, then takes the workbook's macros, and the button actions
+/// xlsx has no place for, out of their hidden names, and adopts the Python cells they hold (see
+/// [`adopt_python`]) within the limits of [`enforce_python_limits`].
 fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
     let (mut wb, mut warnings) = read_plain(name, bytes, csv_as_text)?;
     warnings.extend(crate::macros::load(&mut wb));
+    crate::cmd::controls::load_action_names(&mut wb);
     warnings.extend(adopt_python(&mut wb));
     warnings.extend(enforce_python_limits(&mut wb));
     Ok((wb, warnings))
@@ -299,6 +305,9 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             })?;
         return Ok((wb, report.warnings));
     }
+    if let Some(read) = read_html_table(name, kind, bytes, csv_as_text) {
+        return read;
+    }
     match kind {
         Some(FileKind::Json) => {
             let mut wb: Workbook = serde_json::from_slice(bytes).map_err(|e| EngineError::Other(format!("not a GridCraft JSON workbook: {e}")))?;
@@ -316,6 +325,11 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             if dropped > 0 {
                 warnings.push(format!("{name}: {dropped} cells outside the 1,048,576 × 16,384 grid were dropped"));
             }
+            Ok((wb, warnings))
+        }
+        Some(FileKind::Sylk) => {
+            let (mut wb, warnings) = sylk::read(name, bytes)?;
+            rename_first_sheet(&mut wb, name);
             Ok((wb, warnings))
         }
         Some(FileKind::Tsv) => {
@@ -354,9 +368,112 @@ fn part_too_large_message(name: &str, part: &str, size: u64) -> String {
     )
 }
 
+/// How much of a text file is read to tell whether it is a web page.
+const HTML_SNIFF_BYTES: usize = 64 << 10;
+
+/// A web page that holds a table, whatever its extension: a web app's "Export to Excel" is often
+/// HTML saved as `.xls` (#3166). Excel opens its table as a sheet (after warning that the format
+/// and extension don't match): the cells read like typed input (or as text with `csv_as_text`),
+/// header cells (`<th>`) are bold and centred, and the sheet takes the name the page gives it
+/// (`<x:Name>`) or the file's. `None` when the bytes aren't such a page.
+fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text: bool) -> Option<Result<(Workbook, Vec<String>)>> {
+    // Every other text file (CSV, TSV, JSON) passes through here: look at the start only, and decode
+    // the whole file once it is known to be a page within the size a text import takes.
+    if matches!(kind, Some(FileKind::Json)) || bytes.len() > gridcraft_xlsx::MAX_CSV_BYTES {
+        return None;
+    }
+    let start = gridcraft_xlsx::decode_text(bytes.get(..HTML_SNIFF_BYTES).unwrap_or(bytes));
+    // Comments an exporter writes before the page (`<!-- ... -->`) don't make it something else.
+    let mut rest = start.trim_start_matches('\u{feff}').trim_start();
+    while let Some(after) = rest.strip_prefix("<!--") {
+        match after.find("-->").and_then(|end| after.get(end + 3..)) {
+            Some(more) => rest = more.trim_start(),
+            None => break,
+        }
+    }
+    let head: String = rest.chars().take(16).collect::<String>().to_ascii_lowercase();
+    if !["<!doctype html", "<html", "<table", "<head", "<body", "<meta"].iter().any(|t| head.starts_with(t)) {
+        return None;
+    }
+    // Decoded as a CSV is (BOM, UTF-8, else Windows-1252/1256), so a legacy page keeps its letters.
+    let text = gridcraft_xlsx::decode_text(bytes);
+    let rows = crate::clip_html::table_cells(&text, gridcraft_core::MAX_ROWS as usize, gridcraft_core::MAX_COLS as usize);
+    if rows.iter().all(Vec::is_empty) {
+        return None;
+    }
+    // The cells go through the CSV reader, so numbers, dates and text read exactly as they do there.
+    let mut tsv = String::new();
+    for row in &rows {
+        let fields: Vec<String> = row
+            .iter()
+            .map(|cell| {
+                // The number the page recorded (`x:num`) only when values are read; as text, the
+                // cell keeps the text it shows.
+                let field = match cell.num.filter(|_| !csv_as_text) {
+                    Some(n) => gridcraft_core::number_to_text(n),
+                    // Whitespace is already collapsed; non-breaking spaces stay, as in Excel.
+                    None => cell.text.clone(),
+                };
+                if field.contains(['\t', '\n', '\r', '"']) { format!("\"{}\"", field.replace('"', "\"\"")) } else { field }
+            })
+            .collect();
+        tsv.push_str(&fields.join("\t"));
+        tsv.push('\n');
+    }
+    let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', parse_values: !csv_as_text, ..Default::default() };
+    let read = gridcraft_xlsx::read_csv_with_report(tsv.as_bytes(), &opts).map_err(|e| EngineError::Other(e.to_string()));
+    Some(read.map(|(mut wb, report)| {
+        wb.csv_delimiter = None;
+        // Header cells are bold and centred on top of the style the CSV reader gave them, so a
+        // date in a header keeps its date format.
+        let headers: Vec<CellRef> = rows
+            .iter()
+            .enumerate()
+            .flat_map(|(r, row)| row.iter().enumerate().filter(|(_, cell)| cell.header && !cell.text.trim().is_empty()).map(move |(c, _)| CellRef::new(r as u32, c as u32)))
+            .collect();
+        let mut bold: std::collections::HashMap<gridcraft_model::StyleId, gridcraft_model::StyleId> = std::collections::HashMap::new();
+        for at in headers {
+            let Some(base) = wb.sheet(0).map(|sh| sh.style_id(at)) else { continue };
+            let id = *bold.entry(base).or_insert_with(|| {
+                wb.styles.derive(base, |st| {
+                    st.font.bold = true;
+                    st.align.h = gridcraft_model::HAlign::Center;
+                })
+            });
+            if let Some(sh) = wb.sheet_mut(0) {
+                sh.set_style(at, id);
+            }
+        }
+        let page_name = find_between(&text, "<x:Name>", "</x:Name>").map(|n| crate::clip_html::normalized(n.trim()));
+        match page_name.filter(|n| !n.is_empty()) {
+            Some(sheet) => set_first_sheet_name(&mut wb, &sheet),
+            None => rename_first_sheet(&mut wb, name),
+        }
+        let mut warnings = report.warnings;
+        if !matches!(kind, Some(FileKind::Html)) {
+            warnings.insert(0, format!("'{name}' is a web page (HTML), not a workbook in the format its name says: its table was opened as a sheet. Save as .xlsx to keep your changes."));
+        }
+        (wb, warnings)
+    }))
+}
+
+/// The text between the first `open` and the `close` after it, matched case-insensitively.
+fn find_between<'a>(text: &'a str, open: &str, close: &str) -> Option<&'a str> {
+    let lower = text.to_ascii_lowercase();
+    let start = lower.find(&open.to_ascii_lowercase())?.checked_add(open.len())?;
+    let len = lower.get(start..)?.find(&close.to_ascii_lowercase())?;
+    text.get(start..start.checked_add(len)?)
+}
+
 /// A CSV opens as a sheet named after the file (like Excel).
 fn rename_first_sheet(wb: &mut Workbook, path: &str) {
     let stem = std::path::Path::new(path).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Sheet1");
+    set_first_sheet_name(wb, stem);
+}
+
+/// Names the first sheet `name`, without the characters a sheet name can't hold and cut to 31
+/// characters; an empty or reserved result keeps the default name.
+fn set_first_sheet_name(wb: &mut Workbook, stem: &str) {
     let clean: String = stem.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).take(31).collect();
     let clean = clean.trim_matches('\'').to_string();
     // "History" is reserved (see `Workbook::check_sheet_name`): keep the default name instead.
@@ -385,9 +502,13 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
     match kind {
         // The extension picks the package kind; only the macro-enabled kinds (.xlsm, .xltm) carry
         // the VBA project, so any other name saves without it, as Excel does.
-        // Macros travel in hidden names.
+        // Macros, and button actions xlsx has no place for, travel in hidden names.
         FileKind::Xlsx => {
             let named = crate::macros::with_names(wb)?;
+            let named = match crate::cmd::controls::with_action_names(named.as_ref().unwrap_or(wb))? {
+                Some(w) => Some(w),
+                None => named,
+            };
             let book = std::path::Path::new(path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default();
             gridcraft_xlsx::write_xlsx_named_with(named.as_ref().unwrap_or(wb), gridcraft_xlsx::XlsxKind::from_path(path), book, XLSX_FUNCTIONS)
                 .map_err(|e| EngineError::Other(e.to_string()))
@@ -397,6 +518,9 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
         }
         FileKind::Xlsb => Err(EngineError::Other("XLSB is supported for data import only. Save as .xlsx or another supported export format.".into())),
         FileKind::Ods => Err(EngineError::Other("ODS is supported for data import only. Save as .xlsx or another supported export format.".into())),
+        FileKind::Sylk => {
+            Err(EngineError::Other("SYLK (.slk) is supported for import only. Save as .xlsx or another supported export format.".into()))
+        }
         // A workbook read from CSV keeps the separator it was read with (a `;` file stays `;`).
         FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, wb.csv_delimiter.unwrap_or(b','))).transpose().map(Option::unwrap_or_default),
         FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, b'\t')).transpose().map(Option::unwrap_or_default),
