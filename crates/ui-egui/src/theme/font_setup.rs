@@ -1,6 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
 use super::Blob;
-use super::font_fallback::load_fallback;
+use super::font_fallback::{load_fallback, load_preferred_arabic};
 use super::{Arc, Color32, FontData, FontDefinitions, FontFamily, FontId};
 
 /// A font from the optional craft-fonts build input (`CRAFT_FONTS_DIR` at build time; see
@@ -40,6 +40,14 @@ pub const CELL_BOLD_ITALIC: &str = "cell-bold-italic";
 pub const SERIF: &str = "serif";
 
 pub const MONO: &str = "mono";
+
+/// Equation faces: a maths font (upright letters, operators, Greek, double-struck and script
+/// letters), its italic for variables, and a bold. System fonts only; nothing is bundled.
+pub const MATH: &str = "math";
+
+pub const MATH_ITALIC: &str = "math-italic";
+
+pub const MATH_BOLD: &str = "math-bold";
 
 pub fn ui_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(UI.into()))
@@ -144,7 +152,7 @@ fn font_file(path: &str, index: u32) -> Option<Blob> {
         let bytes: &[u8] = (**blob).as_ref();
         return font_parses(bytes, index).then(|| std::sync::Arc::clone(blob));
     }
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = crate::fonts::read_font(std::path::Path::new(path))?;
     if !font_parses(&bytes, index) {
         log::warn!("skipping font {path} (face {index}): not a font file egui can read");
         return None;
@@ -365,6 +373,43 @@ pub(super) fn candidates(role: &str) -> Vec<(String, u32)> {
             add("/usr/share/fonts/liberation-serif-fonts/LiberationSerif-Regular.ttf".into(), 0);
             add("/usr/share/fonts/dejavu-serif-fonts/DejaVuSerif.ttf".into(), 0);
         }
+        "math" => {
+            add(format!("{mac_sup}/STIXTwoMath.otf"), 0);
+            add(format!("{win}\\cambria.ttc"), 1);
+            for p in in_dirs(
+                &lin,
+                &[
+                    "opentype/stix/STIXTwoMath-Regular.otf",
+                    "stix/STIXTwoMath-Regular.otf",
+                    "opentype/lmodern/latinmodern-math.otf",
+                    "dejavu/DejaVuSerif.ttf",
+                    "liberation/LiberationSerif-Regular.ttf",
+                ],
+            ) {
+                add(p, 0);
+            }
+            add(format!("{mac_sup}/Times New Roman.ttf"), 0);
+            add(format!("{win}\\times.ttf"), 0);
+        }
+        "math-italic" => {
+            add(format!("{mac_sup}/STIXTwoText-Italic.ttf"), 0);
+            add(format!("{mac_sup}/Times New Roman Italic.ttf"), 0);
+            add(format!("{win}\\cambriai.ttf"), 0);
+            add(format!("{win}\\timesi.ttf"), 0);
+            for p in
+                in_dirs(&lin, &["opentype/stix/STIXTwoText-Italic.otf", "liberation/LiberationSerif-Italic.ttf", "dejavu/DejaVuSerif-Italic.ttf"])
+            {
+                add(p, 0);
+            }
+        }
+        "math-bold" => {
+            add(format!("{mac_sup}/Times New Roman Bold.ttf"), 0);
+            add(format!("{win}\\cambriab.ttf"), 0);
+            add(format!("{win}\\timesbd.ttf"), 0);
+            for p in in_dirs(&lin, &["opentype/stix/STIXTwoText-Bold.otf", "liberation/LiberationSerif-Bold.ttf", "dejavu/DejaVuSerif-Bold.ttf"]) {
+                add(p, 0);
+            }
+        }
         "mono" => {
             add(format!("{mac_sys}/SFNSMono.ttf"), 0);
             add(format!("{mac_sys}/Menlo.ttc"), 0);
@@ -421,36 +466,44 @@ pub fn font_definitions_for_language(language: crate::i18n::Language) -> FontDef
 /// machine see the same font set. Craft-fonts remains a pinned build input rather than a repository
 /// asset; without it only egui's bundled faces are available, which is the documented no-font mode.
 pub fn pinned_font_definitions() -> FontDefinitions {
-    font_definitions_impl(crate::i18n::Language::En, &[], false)
+    font_definitions_impl(crate::i18n::Language::En, Vec::new(), false)
 }
 
 /// [`font_definitions_for_language`] that also binds the workbook fonts in `used` that are
 /// installed, so cells set in them render with them; the rest fall back to the roles. The bound
 /// families are recorded in [`crate::fonts`] so [`cell_family`] only names a family egui has.
 pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -> FontDefinitions {
-    font_definitions_impl(language, used, true)
+    let installed = crate::fonts::installed_among(used).into_iter().map(|family| {
+        let faces = crate::fonts::faces_of(&family);
+        (family, faces)
+    });
+    font_definitions_impl(language, installed.collect(), true)
 }
 
 /// Builds the role font chains, script fallbacks, installed workbook fonts and optional craft-font faces, drops unparseable data and records which families were bound.
-fn font_definitions_impl(language: crate::i18n::Language, used: &[String], system: bool) -> FontDefinitions {
+pub(super) fn font_definitions_impl(
+    language: crate::i18n::Language,
+    installed: Vec<(String, Vec<crate::fonts::Face>)>,
+    system: bool,
+) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let base_prop: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let base_mono: Vec<String> = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
     let mut bound: Vec<String> = Vec::new();
     // The non-Latin fallback faces have to sit at the end of each chain: a Latin font owns Latin,
     // and epaint picks the first face that has the glyph, so they only catch their own scripts.
-    let fallback = if system { load_fallback(&mut fonts, HanOrder::of(language)) } else { Vec::new() };
+    let fallback = if system {
+        let mut fallback = load_preferred_arabic(&mut fonts);
+        fallback.extend(load_fallback(&mut fonts, HanOrder::of(language)));
+        fallback
+    } else {
+        Vec::new()
+    };
     let hack = fonts.font_data.contains_key(HACK).then_some(HACK);
-    for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
+    for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO, MATH, MATH_ITALIC, MATH_BOLD] {
         let chain = build_role_chain(&mut fonts, role, &base_prop, &base_mono, &fallback, hack, system);
         fonts.families.insert(FontFamily::Name(role.into()), chain);
         bound.push(role.to_string());
-    }
-    // Installed workbook fonts, so a cell's chosen font actually renders in it.
-    if system {
-        for family in crate::fonts::installed_among(used) {
-            bound.extend(crate::fonts::bind_family(&mut fonts, &family));
-        }
     }
     // Interface text (formula bar, name box, dialogs) falls back to the cell font before the
     // script faces: whatever a cell can draw, the formula bar can draw too, even where no script
@@ -459,6 +512,11 @@ fn font_definitions_impl(language: crate::i18n::Language, used: &[String], syste
     // Default proportional text in widgets uses the UI font.
     if let Some(ui) = fonts.families.get(&FontFamily::Name(UI.into())).cloned() {
         fonts.families.insert(FontFamily::Proportional, ui);
+    }
+    // Installed workbook fonts, so a cell's chosen font actually renders in it. They are bound
+    // after the proportional chain has the script faces, which their chains end with.
+    for (family, faces) in installed {
+        bound.extend(crate::fonts::bind_faces(&mut fonts, &family, &faces));
     }
     // The optional craft-fonts faces go at the very end of every family: a system or bundled face
     // that has the script keeps its glyph shapes, while the permitted OFL faces cover scripts and
@@ -502,6 +560,14 @@ fn build_role_chain(
         chain.push(format!("sys-{UI}"));
     } else if role.starts_with("cell-") {
         chain.push(format!("sys-{CELL}"));
+    }
+    // Equation faces fall back to the maths font (for the symbols a text face lacks), then to the
+    // serif face.
+    if role == MATH_ITALIC || role == MATH_BOLD {
+        chain.push(format!("sys-{MATH}"));
+    }
+    if role.starts_with("math") {
+        chain.push(format!("sys-{SERIF}"));
     }
     chain.extend(if role == MONO { base_mono.to_vec() } else { base_prop.to_vec() });
     // egui bundles Hack, a monospace face rich in arrows, triangles and keyboard symbols, but

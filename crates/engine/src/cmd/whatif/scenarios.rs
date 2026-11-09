@@ -160,7 +160,7 @@ pub(super) fn scenario_show(s: &mut Session, p: &Json) -> Result<Json> {
             let cell = match v.as_f64() {
                 Some(n) => {
                     let style = cx.wb.sheet(si).map(|sh| sh.style_id(*c)).unwrap_or_default();
-                    Some(Cell { value: Value::Number(n), formula: None, style })
+                    Some(Cell { value: Value::Number(n), formula: None, style, py: None })
                 }
                 None => crate::cmd::edit::input_to_cell(&crate::cmd::edit::json_to_input(v), si, *c, &mut cx.wb)?,
             };
@@ -245,7 +245,7 @@ pub(super) fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
         let bold = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.font.bold = true);
         let mut sheet = Sheet::new(name.clone());
         let put = |sheet: &mut Sheet, row: u32, col: u32, v: Value, style: StyleId| {
-            sheet.set_cell(CellRef::new(row, col), Cell { value: v, formula: None, style });
+            sheet.set_cell(CellRef::new(row, col), Cell { value: v, formula: None, style, py: None });
         };
         put(&mut sheet, 1, 1, Value::text("Scenario Summary"), bold);
         put(&mut sheet, 2, 2, Value::text("Current Values:"), bold);

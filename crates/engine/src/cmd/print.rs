@@ -1,20 +1,20 @@
 //! Printing: Page Setup, pagination and PDF output (File › Print, File › Export › PDF).
 //!
-//! Sheets are paginated like Excel's default "down, then over": the print area (or the used
-//! range plus drawing objects) is split into bands of rows and columns that fit the printable
-//! area at the page scale, honouring manual breaks, repeated title rows/columns, headings, Fit
-//! To and centring. Each page is drawn into a PDF with `gridcraft-pdf`: fills, gridlines,
-//! borders, formatted text (fonts mapped to the standard 14 PDF fonts), merged cells, wrapping,
-//! overflow into empty neighbours, conditional formats, table styles, charts, images, shapes and
-//! sparklines. Headers and footers support `&L`/`&C`/`&R` sections and the `&P &N &D &T &A &F &Z`
-//! codes.
+//! Sheets are paginated like Excel: the print area (or the used range plus drawing objects) is
+//! split into bands of rows and columns that fit the printable area at the page scale, honouring
+//! manual breaks, repeated title rows/columns, headings, Fit To and centring, and the pages follow
+//! the sheet's page order ("down, then over" by default, or "over, then down"). Each page is
+//! drawn into a PDF with `gridcraft-pdf`: fills, gridlines, borders, formatted text (fonts mapped
+//! to the standard 14 PDF fonts), merged cells, wrapping, overflow into empty neighbours,
+//! conditional formats, table styles, charts, images, shapes and sparklines. Headers and footers
+//! support `&L`/`&C`/`&R` sections and the `&P &N &D &T &A &F &Z` codes.
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 #[cfg(test)]
 use gridcraft_model::{Alignment, Image, SheetViewMode};
 use gridcraft_model::{
-    Anchor, BorderLine, BorderStyle, Borders, Color, HAlign, Orientation, PatternType, PrintSettings, ShapeKind, Sheet, Style, StyleId, StyleTable,
-    Underline, VAlign, Visibility, Workbook,
+    Anchor, BorderLine, BorderStyle, Borders, Color, HAlign, Orientation, PageOrder, PatternType, PrintSettings, ShapeKind, Sheet, Style, StyleId,
+    StyleTable, Underline, VAlign, Visibility, Workbook,
 };
 use gridcraft_pdf::{Font, Page, PdfDoc, Point, Rect, Rgb};
 use serde_json::{Value as Json, json};
@@ -69,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Print Preview",
             ["File"],
             None,
-            "{page? (1-based), sheets?: active|all, range?, fitToPage?} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, width, height}]}",
+            "{page? (1-based), sheets?: active|all, range?, fitToPage?} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, pageOrder, width, height}]} in print order",
             has_doc,
             print_preview
         ),
@@ -78,7 +78,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Page Setup…",
             ["Page Layout", "Page Setup"],
             None,
-            "{sheet?, orientation?: portrait|landscape, paper?: Letter|Legal|A4|A3|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3 (B4/B5/B6 are the JIS sizes), margins?: {left,right,top,bottom,header,footer} (inches; also accepted as top-level keys), scale?: 10..400, fitWidth?, fitHeight? (pages; 0 = automatic), fitToPage?: bool, centerH?, centerV?, gridlines?, headings?, header?: \"&L&A&RPage &P of &N\", footer?, printArea?: \"A1:F50\" (\"\" clears), titleRows?: \"1:2\", titleCols?: \"A:A\", rowBreaks?: [46, 91], colBreaks?: [\"K\"]} → the sheet's print settings",
+            "{sheet?, orientation?: portrait|landscape, paper?: Letter|Legal|A4|A3|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3 (B4/B5/B6 are the JIS sizes), margins?: {left,right,top,bottom,header,footer} (inches; also accepted as top-level keys), scale?: 10..400, fitWidth?, fitHeight? (pages; 0 = automatic), fitToPage?: bool, centerH?, centerV?, gridlines?, headings?, header?: \"&L&A&RPage &P of &N\", footer?, printArea?: \"A1:F50\" (\"\" clears), titleRows?: \"1:2\", titleCols?: \"A:A\", rowBreaks?: [46, 91], colBreaks?: [\"K\"], pageOrder?: downThenOver|overThenDown} → the sheet's print settings",
             has_doc,
             page_setup
         ),
@@ -222,6 +222,7 @@ fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
                 "scale": (lay.scale * 1000.0).round() / 10.0,
                 "paper": lay.settings.paper,
                 "orientation": if lay.settings.orientation == Orientation::Landscape { "landscape" } else { "portrait" },
+                "pageOrder": lay.settings.page_order.id(),
                 "width": lay.page_w,
                 "height": lay.page_h,
             }));
@@ -243,6 +244,16 @@ fn page_setup(s: &mut Session, p: &Json) -> Result<Json> {
         Some("portrait") => Some(Orientation::Portrait),
         Some("landscape") => Some(Orientation::Landscape),
         Some(o) => return Err(bad(CMD, format!("orientation must be portrait or landscape, not `{o}`"))),
+    };
+    let page_order = match p.get("pageOrder") {
+        None => None,
+        Some(v) => match v.as_str().and_then(PageOrder::parse) {
+            Some(o) => Some(o),
+            None => {
+                let shown = v.as_str().map_or_else(|| v.to_string(), str::to_string);
+                return Err(bad(CMD, format!("pageOrder must be downThenOver or overThenDown, not `{shown}`")));
+            }
+        },
     };
     let paper = match str_param(p, "paper") {
         None => None,
@@ -384,6 +395,9 @@ fn page_setup(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(b) = &col_breaks {
             pr.col_breaks = b.clone();
+        }
+        if let Some(o) = page_order {
+            pr.page_order = o;
         }
         Ok(())
     })?;

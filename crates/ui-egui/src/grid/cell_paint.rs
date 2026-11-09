@@ -59,6 +59,9 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
         if st.num_fmt.as_str() != "General" {
             style.num_fmt = st.num_fmt.clone();
         }
+        if st.align.reading_order.is_some() {
+            style.align.reading_order = st.align.reading_order;
+        }
         for (dst, src) in [
             (&mut style.borders.left, st.borders.left),
             (&mut style.borders.right, st.borders.right),
@@ -194,7 +197,7 @@ pub(super) fn merged_edges(wb: &Workbook, si: usize, sh: &Sheet, geo: &Geo, area
         if sh.col_width(col) == 0.0 {
             continue;
         }
-        let (x0, x1) = (geo.x(sh, col), geo.x(sh, col.saturating_add(1)));
+        let (x0, x1) = (geo.x(sh, col), geo.x_end(sh, col));
         let top = look(wb, si, sh, CellRef::new(m.start.row, col), cf).0.style.borders.top;
         let bottom = look(wb, si, sh, CellRef::new(m.end.row, col), cf).0.style.borders.bottom;
         out.push((top, [pos2(x0, rect.top()), pos2(x1, rect.top())]));
@@ -205,7 +208,7 @@ pub(super) fn merged_edges(wb: &Workbook, si: usize, sh: &Sheet, geo: &Geo, area
         if sh.row_height(row) == 0.0 {
             continue;
         }
-        let (y0, y1) = (geo.y(sh, row), geo.y(sh, row.saturating_add(1)));
+        let (y0, y1) = (geo.y(sh, row), geo.y_end(sh, row));
         let left = look(wb, si, sh, CellRef::new(row, m.start.col), cf).0.style.borders.left;
         let right = look(wb, si, sh, CellRef::new(row, m.end.col), cf).0.style.borders.right;
         out.push((left, [pos2(rect.left(), y0), pos2(rect.left(), y1)]));

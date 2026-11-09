@@ -1,9 +1,12 @@
 //! Reading the workbook part and everything hanging off it.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
-use gridcraft_model::{CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook};
+use gridcraft_model::{
+    CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
+};
 
 use crate::package::{Package, Rel};
 use crate::styles::{StylesIn, read_styles};
@@ -32,6 +35,14 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    /// Bytes charged so far for shared formulas expanded into dependent cells (see
+    /// [`crate::sheet_read::MAX_SHARED_FORMULA_BYTES`]).
+    pub shared_formula_bytes: u64,
+    /// Whether GridCraft calculates a function, when the caller says: cell formulas wrapped by
+    /// Google Sheets' export are then read as the formula inside (see [`crate::read_xlsx_with`]).
+    pub known_function: Option<&'a dyn Fn(&str) -> bool>,
+    /// The code of the workbook's Python cells, from its Python part.
+    pub python: crate::python_part::ScriptsIn,
 }
 
 impl Ctx<'_> {
@@ -193,6 +204,7 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
         if p.flag("date1904", false) {
             cx.date_system = DateSystem::D1904;
         }
+        wb.remove_personal_info = p.flag("filterPrivacy", false);
         wb.show_objects = match p.attr("showObjects") {
             Some("none") => ShowObjects::None,
             Some("placeholders") => ShowObjects::Placeholders,
@@ -214,6 +226,7 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
             wb.calc.set_max_change(d);
         }
         wb.calc.precision_as_displayed = !c.flag("fullPrecision", true);
+        wb.calc.r1c1 = c.attr("refMode") == Some("R1C1");
     }
     if let Some(p) = xml.child("workbookProtection") {
         wb.protected_structure = p.flag("lockStructure", false);
@@ -221,7 +234,14 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
     }
 }
 
-pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
+/// The single window modelled by GridCraft: prefer the first visible window,
+/// including the format's default visibility, and otherwise retain the first one.
+fn selected_workbook_view(workbook: &El) -> Option<&El> {
+    let views = workbook.child("bookViews")?;
+    views.kids("workbookView").find(|view| view.attr("visibility").unwrap_or("visible") == "visible").or_else(|| views.child("workbookView"))
+}
+
+pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) -> bool>) -> Result<(Workbook, ReadReport), IoError> {
     let pkg = Package::open(bytes)?;
     let mut cx = Ctx {
         pkg,
@@ -238,6 +258,9 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],
+        shared_formula_bytes: 0,
+        known_function,
+        python: Default::default(),
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -251,6 +274,8 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             vec![]
         }
     };
+    // The code of Python cells, which their formulas name by index.
+    cx.python = crate::python_part::read(&mut cx, &wb_rels)?;
     let mut wb = Workbook::new();
     wb.sheets.clear();
 
@@ -268,12 +293,25 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     }
 
     read_workbook_properties(&mut cx, &mut wb, &wb_xml);
-    let active_tab = wb_xml.path(&["bookViews", "workbookView"]).and_then(|v| v.attr_u32("activeTab")).unwrap_or(0) as usize;
+    let view_el = selected_workbook_view(&wb_xml);
+    let active_tab = view_el.and_then(|v| v.attr_u32("activeTab")).unwrap_or(0) as usize;
+    if let Some(v) = view_el {
+        // The window's display settings (Excel's "Display options for this workbook").
+        // Absent attributes take the format's defaults, which is also what a workbook
+        // without a <workbookView> gets.
+        wb.view = WorkbookView {
+            show_sheet_tabs: v.flag("showSheetTabs", true),
+            show_horizontal_scroll: v.flag("showHorizontalScroll", true),
+            show_vertical_scroll: v.flag("showVerticalScroll", true),
+            tab_ratio: v.attr_u32("tabRatio").unwrap_or(600).min(WorkbookView::MAX_TAB_RATIO),
+        };
+    }
 
     // Sheets. `file_to_model[i]` maps the i-th <sheet> to a model sheet index.
     let mut file_to_model: Vec<Option<usize>> = vec![];
     let mut pivot_caches = crate::pivot::CachesIn::new(&wb_xml, &wb_rels);
     let sheet_els: Vec<El> = wb_xml.child("sheets").map(|s| s.kids("sheet").cloned().collect()).unwrap_or_default();
+    let mut names = SheetNames::default();
     for (i, se) in sheet_els.iter().enumerate() {
         let name = se.attr("name").unwrap_or("").to_string();
         let rel = se.attr("id").and_then(|id| wb_rels.iter().find(|r| r.id == id)).cloned();
@@ -292,13 +330,13 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             file_to_model.push(None);
             continue;
         }
-        let name = unique_name(&wb, &name, i);
-        let mut sheet = match crate::sheet_read::read_sheet(&mut cx, &rel.target, &name) {
+        let name = names.unique(&name, i);
+        let (mut sheet, read_controls) = match crate::sheet_read::read_sheet(&mut cx, &rel.target, &name) {
             Ok(s) => s,
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
             Err(e) => {
                 cx.warn(format!("sheet \"{name}\" could not be read: {e}"));
-                Sheet::new(name.clone())
+                (Sheet::new(name.clone()), Default::default())
             }
         };
         match crate::pivot::read_pivots(&mut cx, &mut pivot_caches, &rel.target, &name) {
@@ -306,7 +344,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
             Err(e) => cx.warn(format!("PivotTables on sheet \"{name}\" could not be read: {e}")),
         }
-        sheet.preserved = kept.sheet(&mut cx, &rel.target, &name);
+        sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &read_controls);
         sheet.file_id = se.attr_u32("sheetId").unwrap_or(0);
         sheet.visibility = match se.attr("state") {
             Some("hidden") => Visibility::Hidden,
@@ -415,6 +453,9 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         }
     }
     wb.preserved = kept.workbook(&mut cx, &wb_part, &wb_xml, &file_to_model);
+    if let Some(w) = cx.python.warning() {
+        cx.warn(w);
+    }
     // Calls of LAMBDA names are spelled like the names (the parser upper-cases them).
     wb.apply_name_call_case();
     wb.styles = cx.styles;
@@ -422,15 +463,44 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     Ok((wb, cx.report))
 }
 
-pub(crate) fn unique_name(wb: &Workbook, name: &str, i: usize) -> String {
-    let mut base: String = name.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).take(31).collect();
-    if base.trim().is_empty() {
-        base = format!("Sheet{}", i + 1);
+/// The sheet names an import has assigned so far, for repairing repeated ones.
+#[derive(Default)]
+pub(crate) struct SheetNames {
+    /// Assigned names, ASCII-lowercased.
+    taken: HashSet<String>,
+    /// For each lowercased stem, the next suffix to try: a file full of repeated names would
+    /// otherwise retry every occupied suffix for every sheet.
+    next: HashMap<String, u64>,
+}
+
+impl SheetNames {
+    pub(crate) fn of(wb: &Workbook) -> Self {
+        SheetNames { taken: wb.sheets.iter().map(|s| s.name.to_ascii_lowercase()).collect(), next: HashMap::new() }
     }
-    if wb.sheet_index(&base).is_none() {
-        return base;
+
+    /// A valid name for the i-th sheet, unique among the names assigned so far, which it joins.
+    pub(crate) fn unique(&mut self, name: &str, i: usize) -> String {
+        let mut base: String = name.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).take(31).collect();
+        if base.trim().is_empty() {
+            base = format!("Sheet{}", i + 1);
+        }
+        let name = if self.taken.contains(&base.to_ascii_lowercase()) {
+            let stem: String = base.chars().take(25).collect();
+            let next = self.next.entry(stem.to_ascii_lowercase()).or_insert(2);
+            let found = (*next..).find(|n| !self.taken.contains(&format!("{stem} ({n})").to_ascii_lowercase()));
+            match found {
+                Some(n) => {
+                    *next = n + 1;
+                    format!("{stem} ({n})")
+                }
+                None => base,
+            }
+        } else {
+            base
+        };
+        self.taken.insert(name.to_ascii_lowercase());
+        name
     }
-    (2..).map(|n| format!("{} ({n})", base.chars().take(25).collect::<String>())).find(|n| wb.sheet_index(n).is_none()).unwrap_or(base)
 }
 
 /// Strips a sheet qualifier (`'My Sheet'!$A$1` → `$A$1`).

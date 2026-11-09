@@ -174,8 +174,8 @@ pub(super) fn go_to_special(s: &mut Session, p: &Json) -> Result<Json> {
         let v = sheet.value(c);
         let ok = match kind {
             "blanks" => v.is_empty(),
-            "constants" => cell.is_some_and(|x| x.formula.is_none() && !x.value.is_empty()),
-            "formulas" => cell.is_some_and(|x| x.formula.is_some()),
+            "constants" => cell.is_some_and(|x| x.formula.is_none() && x.py.is_none() && !x.value.is_empty()),
+            "formulas" => cell.is_some_and(|x| x.formula.is_some() || x.py.is_some()),
             "comments" | "notes" => sheet.comments.contains_key(&c),
             "errors" => v.is_error(),
             "numbers" => v.is_number(),

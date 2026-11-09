@@ -10,7 +10,7 @@
 //! `(gap + j·(page_w + gap), gap + i·(page_h + gap))`, and its cells start at its top-left margin.
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
-use gridcraft_model::{LineIndex, Sheet, Workbook};
+use gridcraft_model::{LineIndex, PageOrder, Sheet, Workbook};
 
 use crate::cmd::print::{self, PX_TO_PT, PrintOptions};
 
@@ -45,6 +45,8 @@ pub struct PageGrid {
     /// Bands holding printed data: `[first, last]` row bands and column bands.
     pub data_rows: (usize, usize),
     pub data_cols: (usize, usize),
+    /// The sheet's page order, which numbers the printed pages.
+    pub page_order: PageOrder,
     ri: LineIndex,
     ci: LineIndex,
 }
@@ -96,6 +98,7 @@ impl PageGrid {
             col_bands,
             data_rows,
             data_cols,
+            page_order: printed.settings.page_order,
             ri: LineIndex::new(&sh.rows, sh.default_row_height, MAX_ROWS),
             ci: LineIndex::new(&sh.cols, sh.default_col_width, MAX_COLS),
         })
@@ -206,14 +209,14 @@ impl PageGrid {
     pub fn is_data_page(&self, i: usize, j: usize) -> bool {
         (self.data_rows.0..=self.data_rows.1).contains(&i) && (self.data_cols.0..=self.data_cols.1).contains(&j)
     }
-    /// Printed page number of page `(i, j)` (down, then over) and the printed page count.
+    /// Printed page number of page `(i, j)` (in the sheet's page order) and the printed page count.
     pub fn page_number(&self, i: usize, j: usize) -> Option<(usize, usize)> {
         if !self.is_data_page(i, j) {
             return None;
         }
         let rows = self.data_rows.1 - self.data_rows.0 + 1;
         let cols = self.data_cols.1 - self.data_cols.0 + 1;
-        Some(((j - self.data_cols.0) * rows + (i - self.data_rows.0) + 1, rows * cols))
+        Some((self.page_order.index(i - self.data_rows.0, j - self.data_cols.0, rows, cols) + 1, rows * cols))
     }
 
     /// Page rows and columns overlapping the layout rectangle `[x0, x1] × [y0, y1]`.
@@ -310,6 +313,21 @@ mod tests {
         assert_eq!(g.page_number(0, 0), Some((1, 1)));
         assert_eq!(g.page_number(0, 1), None);
         assert!(g.is_data_page(0, 0) && !g.is_data_page(1, 0));
+    }
+
+    #[test]
+    fn page_numbers_follow_the_page_order() {
+        // Two pages tall and two wide, as printed; the pages beyond are "Click to add data" pages.
+        let mut wb = wb_with(60, 15);
+        let numbers = |wb: &Workbook| {
+            let g = PageGrid::build(wb, 0, 200, 60).unwrap();
+            assert_eq!((g.data_rows, g.data_cols), ((0, 1), (0, 1)));
+            assert_eq!((g.page_number(2, 0), g.page_number(0, 2)), (None, None));
+            [(0, 0), (1, 0), (0, 1), (1, 1)].map(|(i, j)| g.page_number(i, j).unwrap())
+        };
+        assert_eq!(numbers(&wb), [(1, 4), (2, 4), (3, 4), (4, 4)]);
+        wb.sheet_mut(0).unwrap().print.page_order = PageOrder::OverThenDown;
+        assert_eq!(numbers(&wb), [(1, 4), (3, 4), (2, 4), (4, 4)]);
     }
 
     #[test]
