@@ -323,6 +323,7 @@ mod tests {
         assert_eq!(s.execute("edit.goTo", json!({"reference": "Table1"})).unwrap()["selection"], "A2:B3");
     }
 
+    /// Imported custom totals obey LET/LAMBDA scope through table rename, XLSX readback and undo/redo.
     #[test]
     fn table_rename_updates_unshadowed_bare_custom_totals() {
         for (formula, expected) in [

@@ -569,7 +569,7 @@ fn rename_total_table_refs(expr: &mut gridcraft_formula::Expr, old: &str, new: &
                                 // A LET binding starts after its own initializer, not inside it.
                                 pending.push((value, local.0, local.1));
                                 local.0 |= matches!(declaration, Expr::Name(n) if n.eq_ignore_ascii_case(old));
-                                local.1 |= matches!(declaration, Expr::Name(n) if n.eq_ignore_ascii_case(new));
+                                local.1 |= matches!(declaration, Expr::Name(n) if gridcraft_formula::same_name(n, new));
                             }
                         }
                         pending.push((body, local.0, local.1));
@@ -578,7 +578,7 @@ fn rename_total_table_refs(expr: &mut gridcraft_formula::Expr, old: &str, new: &
                 "LAMBDA" => {
                     if let Some((body, params)) = args.split_last_mut() {
                         let old_local = old_bound || params.iter().any(|p| matches!(p, Expr::Name(n) if n.eq_ignore_ascii_case(old)));
-                        let new_local = new_bound || params.iter().any(|p| matches!(p, Expr::Name(n) if n.eq_ignore_ascii_case(new)));
+                        let new_local = new_bound || params.iter().any(|p| matches!(p, Expr::Name(n) if gridcraft_formula::same_name(n, new)));
                         pending.push((body, old_local, new_local));
                     }
                 }
@@ -600,6 +600,7 @@ fn rename_total_table_refs(expr: &mut gridcraft_formula::Expr, old: &str, new: &
     hit
 }
 
+/// Rename a table and its dependent references while preserving defined names and lexical bindings.
 fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, ti) = find_table(s, p)?;
     let name = str_param(p, "name").ok_or_else(|| bad("table.rename", "missing `name`"))?.to_string();
@@ -2037,6 +2038,29 @@ mod tests {
         assert_eq!(other["value"], json!(20.0));
     }
 
+    /// Destination bindings must leave renamed tables explicit after printing and reparsing.
+    #[test]
+    fn custom_total_rename_avoids_unicode_destination_bindings() {
+        use gridcraft_formula::Expr;
+        for (source, destination, binding) in [("Prices", "PriceList", "pricelist"), ("Prices", "Café", "CAFÉ")] {
+            for formula in [format!("LET({binding},2,SUM({source}))"), format!("LAMBDA({binding},SUM({source}))(2)")] {
+                let mut expr = gridcraft_formula::parse(&formula).unwrap();
+                assert!(rename_total_table_refs(&mut expr, source, destination, false));
+                let printed = gridcraft_formula::print(&expr);
+                assert!(printed.contains(&format!("SUM({destination}[])")), "{printed}");
+                let back = gridcraft_formula::parse(&printed).unwrap();
+                let call = match &back {
+                    Expr::Invoke(callee, _) => callee.as_ref(),
+                    other => other,
+                };
+                let Expr::Call(_, args) = call else { panic!("expected LET or LAMBDA: {printed}") };
+                let Some(Expr::Call(_, sum_args)) = args.last() else { panic!("expected SUM: {printed}") };
+                assert!(matches!(sum_args.as_slice(), [Expr::Struct(st)] if st.table == destination), "{printed}");
+            }
+        }
+    }
+
+    /// Defined names remain names and long custom-total chains can be renamed without recursive traversal.
     #[test]
     fn custom_total_rename_preserves_defined_names_and_long_chains() {
         let mut expr = gridcraft_formula::parse("SUM(Prices)+SUM(Prices[Price])").unwrap();
