@@ -585,6 +585,7 @@ struct SheetCellData<'a> {
     dynamic: &'a BTreeMap<CellRef, RangeRef>,
 }
 
+/// Write worksheet cell rows with workbook context for formula spelling and shared strings.
 fn write_sheet_data(s: &mut String, data: SheetCellData<'_>, sid: &dyn Fn(gridcraft_model::StyleId) -> u32, out: &mut Out) {
     let SheetCellData { workbook, index, sheet, overrides, extra, dynamic } = data;
     // Cell storage is already row-major; sort only when extra cells need merging.
@@ -739,6 +740,7 @@ fn write_sheet_views(s: &mut String, sheet: &Sheet, selected: bool) {
     s.push_str("</sheetView></sheetViews>");
 }
 
+/// Serialize one cell, spelling formulas with the visible names and tables of its worksheet.
 fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_model::StyleId) -> u32, out: &mut Out) {
     let CellWriteInput { workbook, sheet_index, reference: c, cell, picture, header_override: ov, spill_value: extra, dynamic_range: dynamic } =
         input;

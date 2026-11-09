@@ -6,10 +6,12 @@ use gridcraft_model::{Cell, Formula, Table, TableColumn, TotalsFn, Workbook};
 use crate::package::Package;
 use crate::{read_xlsx, write_xlsx};
 
+/// Parse an asserted synthetic cell address.
 fn at(text: &str) -> CellRef {
     CellRef::parse(text).unwrap()
 }
 
+/// Build an original workbook with a Prices table for bare-reference export checks.
 fn workbook() -> Workbook {
     let mut wb = Workbook::new();
     let sheet = wb.sheet_mut(0).unwrap();
@@ -36,6 +38,7 @@ fn workbook() -> Workbook {
     wb
 }
 
+/// Bare table references become explicit data references and survive repeated XLSX saves.
 #[test]
 fn a_bare_table_worksheet_reference_exports_as_explicit_data_reference() {
     let mut wb = workbook();
@@ -61,10 +64,12 @@ fn a_bare_table_worksheet_reference_exports_as_explicit_data_reference() {
     assert_eq!(reopened.sheet(0).unwrap().cells.get(at("D1")).unwrap().formula.as_ref().unwrap().text, "SUM(Prices[])");
 }
 
+/// Store a formula at an asserted address in the requested worksheet.
 fn put_formula(wb: &mut Workbook, sheet: usize, address: &str, text: &str) {
     wb.sheet_mut(sheet).unwrap().cells.set(at(address), Cell::formula(Formula::new(text)));
 }
 
+/// Read the serialized formula for one worksheet cell from an exported XLSX package.
 fn file_formula(wb: &Workbook, sheet: usize, address: &str) -> String {
     let bytes = write_xlsx(wb).unwrap();
     let mut package = Package::open(&bytes).unwrap();
@@ -82,6 +87,7 @@ fn file_formula(wb: &Workbook, sheet: usize, address: &str) -> String {
         .clone()
 }
 
+/// LET initializers and LAMBDA bodies preserve lexical scope during export.
 #[test]
 fn table_export_respects_let_and_lambda_binding_boundaries() {
     let cases = [
@@ -105,6 +111,7 @@ fn table_export_respects_let_and_lambda_binding_boundaries() {
     }
 }
 
+/// Visible defined names remain names instead of being rewritten as table references.
 #[test]
 fn visible_defined_names_keep_precedence_over_table_names() {
     let mut wb = workbook();
@@ -119,6 +126,7 @@ fn visible_defined_names_keep_precedence_over_table_names() {
     }
 }
 
+/// Qualified references resolve in their sheet scope while unknown sheets remain unchanged.
 #[test]
 fn table_export_uses_the_qualified_name_scope_and_preserves_unknown_sheets() {
     let mut wb = workbook();
@@ -142,6 +150,7 @@ fn table_export_uses_the_qualified_name_scope_and_preserves_unknown_sheets() {
     }
 }
 
+/// Unicode-equivalent local bindings take precedence over matching table names.
 #[test]
 fn unicode_local_binding_is_not_captured_by_a_matching_table() {
     let mut wb = workbook();
@@ -150,6 +159,7 @@ fn unicode_local_binding_is_not_captured_by_a_matching_table() {
     assert_eq!(file_formula(&wb, 0, "D1"), "_xlfn.LET(_xlpm.Δ,3,_xlpm.δ)");
 }
 
+/// Long operator chains export table references without recursive traversal.
 #[test]
 fn a_long_table_formula_exports_without_recursive_chain_growth() {
     let input = vec!["SUM(Prices)"; 400].join("+");
@@ -160,6 +170,7 @@ fn a_long_table_formula_exports_without_recursive_chain_growth() {
     assert_eq!(wb.sheet(0).unwrap().cells.get(at("D1")).unwrap().formula.as_ref().unwrap().text, input);
 }
 
+/// An empty table retains its existing formula error rather than becoming a different reference.
 #[test]
 fn empty_table_names_keep_their_existing_error_semantics() {
     for totals_row in [false, true] {

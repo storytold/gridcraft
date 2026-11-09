@@ -31,6 +31,7 @@ struct CellScope<'a> {
 }
 
 impl CellScope<'_> {
+    /// Resolve a bare name to a table only when no visible defined name takes precedence.
     fn table(&self, name: &str) -> Option<&Table> {
         // Match calculation's name resolution: a qualified sheet must exist, and a visible
         // defined name wins over a table. The table's own spelling is workbook-global.
@@ -148,6 +149,7 @@ fn expr_to_file(e: Expr) -> String {
     expr_to_file_with(e, None)
 }
 
+/// Print an expression using Excel file syntax and optional worksheet name resolution.
 fn expr_to_file_with(e: Expr, context: Option<&CellScope<'_>>) -> String {
     let e = prefix_params(e, &[], context);
     let e = e.map(&mut |x| match x {
