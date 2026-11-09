@@ -183,7 +183,12 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
         Ok(Json::Null)
     })?;
     let v = s.doc()?.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
-    Ok(json!({"cell": at.a1(), "value": v.display()}))
+    // The recorder replays the stored value, not the typed text: a formula (`=…`) and
+    // formula-like typed text (`+SUM(1)`, `+123`, `'=1+1`) replay parsed, so the script keeps
+    // the value the cell read; anything else replays verbatim. The decision is made here,
+    // where typed input ran, so the recorder only carries it.
+    let parse = is_formula_input(&input) || is_signed_number_text(&input) || input.starts_with('\'');
+    Ok(json!({"cell": at.a1(), "value": v.display(), "parse": parse}))
 }
 
 pub(crate) fn json_to_input(v: &Json) -> String {
@@ -270,10 +275,8 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                     // the text it is given, so the marker is never stripped there. A formula is
                     // still a formula, which is what `=` means in a cell.
                     Json::String(text) if !parse && !text.starts_with('=') => {
-                        let text = (!verbatim)
-                            .then(|| text.strip_prefix('\'').filter(|rest| is_formula_input(rest)))
-                            .flatten()
-                            .unwrap_or(text.as_str());
+                        let text =
+                            (!verbatim).then(|| text.strip_prefix('\'').filter(|rest| is_formula_input(rest))).flatten().unwrap_or(text.as_str());
                         if text.is_empty() {
                             // An empty string clears the cell, as `null` and the default path do:
                             // an empty text cell is not blank, and a script clearing cells with

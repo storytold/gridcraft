@@ -79,6 +79,9 @@ impl Default for Recorder {
 pub(crate) fn with_toggle_state(id: &str, mut params: Json, result: &Json) -> Json {
     let state = match id {
         "python.output" => result.get("output").filter(|o| o.is_string()).map(|o| ("mode", o)),
+        // `cell.set` records whether the typed input was parsed, so the script replays the
+        // value the cell read rather than re-parsing the typed text.
+        "cell.set" => result.get("parse").filter(|o| o.is_boolean()).map(|o| ("parse", o)),
         _ => result.get("on").filter(|o| o.is_boolean()).map(|o| ("on", o)),
     };
     if let Some((key, state)) = state {

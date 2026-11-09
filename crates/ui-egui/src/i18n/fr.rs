@@ -482,6 +482,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Collapse dialog" => "Réduire la boîte de dialogue",
         "Expand dialog" => "Développer la boîte de dialogue",
         "Office Scripts" => "Scripts Office",
+        "Office\nScripts" => {
+            "Scripts
+Office"
+        }
+        "Record" => "Enregistrer",
         "Scripts" => "Scripts",
         "Run Script" => "Exécuter le script",
         "Record Script" => "Enregistrer le script",

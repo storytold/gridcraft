@@ -478,6 +478,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Collapse dialog" => "折叠对话框",
         "Expand dialog" => "展开对话框",
         "Office Scripts" => "Office 脚本",
+        "Office\nScripts" => {
+            "Office
+脚本"
+        }
+        "Record" => "录制",
         "Scripts" => "脚本",
         "Run Script" => "运行脚本",
         "Record Script" => "录制脚本",

@@ -490,6 +490,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Collapse dialog" => "Свернуть диалоговое окно",
         "Expand dialog" => "Развернуть диалоговое окно",
         "Office Scripts" => "Сценарии Office",
+        "Office\nScripts" => {
+            "Сценарии
+Office"
+        }
+        "Record" => "Запись",
         "Scripts" => "Сценарии",
         "Run Script" => "Запустить сценарий",
         "Record Script" => "Записать сценарий",

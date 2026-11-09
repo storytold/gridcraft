@@ -72,9 +72,11 @@ GridCraft does not invent an in-workbook script format.
 mechanically from Microsoft's public reference index (names only) and the members GridCraft
 implements. `cargo xtask office-scripts-coverage` writes it, `--check` and a crate test fail when
 it is stale, and the xtask step runs in `cargo xtask ci`. Enum values are `not-applicable`; every
-other unimplemented member of the object-model classes is `not-yet` and returns a typed
-`notSupported` error naming it. The plain data objects the bridge returns (`DataValidationRule`,
-for one) are data, not classes: a member they do not carry reads as `undefined`. This keeps the
+other unimplemented member of the object-model classes is `not-yet`: calling it throws a typed
+`notSupported` error naming the class and member (an unknown member is refused by the shim's
+guard; a known bridge method that is not implemented is refused by the bridge). The plain data
+objects the bridge returns (`DataValidationRule`, for one) are data, not classes: a member they
+do not carry reads as `undefined`. This keeps the
 claim honest as the object model grows.
 
 ## Scripts live beside the settings, never in the workbook

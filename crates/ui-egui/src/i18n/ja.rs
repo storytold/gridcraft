@@ -1170,6 +1170,8 @@ pub(super) const EXTRA: &[(&str, &str)] = &[
         "ドラッグしてセルをオートフィルします。セルの内側からドラッグすると範囲を選択します。",
     ),
     ("Office Scripts", "Office スクリプト"),
+    ("Office\nScripts", "Office\nスクリプト"),
+    ("Record", "記録"),
     ("Scripts", "スクリプト"),
     ("Run Script", "スクリプトの実行"),
     ("Record Script", "スクリプトの記録"),

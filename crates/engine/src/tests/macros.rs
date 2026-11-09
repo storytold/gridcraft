@@ -1548,7 +1548,7 @@ fn macros_and_automate_scripts_live_side_by_side() {
     assert_eq!(r["skipped"], json!(["automate.recordActions", "automate.recordActions"]));
     let m = crate::macros::parse_macro(&s.execute("macro.get", json!({"name": "Recorded"})).unwrap()).unwrap();
     let ids: Vec<String> = crate::macros::command_steps(&m.steps).iter().map(|(_, id, p)| format!("{id} {p}")).collect();
-    assert_eq!(ids, ["cell.set {\"cell\":\"A1\",\"input\":\"typed\"}", "cell.set {\"cell\":\"B1\",\"input\":\"from script\"}"]);
+    assert_eq!(ids, ["cell.set {\"cell\":\"A1\",\"input\":\"typed\",\"parse\":false}", "cell.set {\"cell\":\"B1\",\"input\":\"from script\",\"parse\":false}"]);
     // Both lists keep their own entries, under the same name if need be.
     let scripts = s.execute("automate.allScripts", json!({})).unwrap();
     assert_eq!(scripts, json!([{"name": "Empty", "steps": 0, "trusted": true}, {"name": "Inner", "steps": 1, "trusted": true}]));
@@ -1617,12 +1617,12 @@ fn a_relative_recording_plays_back_on_another_block() {
         steps,
         vec![
             ("selection.set".to_string(), json!({"cell": "Input.cell(1,4)"})),
-            ("cell.set".into(), json!({"cell": "Input.cell(1,4)", "input": "Total"})),
-            ("cell.set".into(), json!({"cell": "Input.cell(2,4)", "input": "=SUM({{Input.rows(2..).col(2)}})"})),
+            ("cell.set".into(), json!({"cell": "Input.cell(1,4)", "input": "Total", "parse": false})),
+            ("cell.set".into(), json!({"cell": "Input.cell(2,4)", "input": "=SUM({{Input.rows(2..).col(2)}})", "parse": true})),
             ("home.bold".into(), json!({"range": "Input.row(1)", "on": true})),
             ("selection.set".into(), json!({"cell": "Input.cell(3,2)"})),
             ("home.italic".into(), json!({"on": true})),
-            ("cell.set".into(), json!({"cell": "Input.col(2).below", "input": "end"})),
+            ("cell.set".into(), json!({"cell": "Input.col(2).below", "input": "end", "parse": false})),
             ("cell.set".into(), json!({"cell": "A20", "input": "plain"})),
         ]
     );
@@ -1676,10 +1676,10 @@ fn an_absolute_recording_keeps_its_references() {
             "home.insertSheet {\"name\":\"Two\"}",
             "sheet.activate {\"sheet\":\"Two\"}",
             "selection.set {\"active\":\"A1\",\"range\":\"A1\"}",
-            "cell.set {\"cell\":\"B2\",\"input\":\"x\"}",
+            "cell.set {\"cell\":\"B2\",\"input\":\"x\",\"parse\":false}",
             "sheet.activate {\"sheet\":\"Sheet1\"}",
             "selection.set {\"active\":\"A1\",\"range\":\"A1\"}",
-            "cell.set {\"cell\":\"C3\",\"input\":\"y\"}",
+            "cell.set {\"cell\":\"C3\",\"input\":\"y\",\"parse\":false}",
         ]
     );
     // Stopping when nothing records says so.
@@ -1734,7 +1734,7 @@ fn a_recording_is_kept_when_saving_it_fails() {
     let r = s.execute("macro.record", json!({"stop": true, "name": "Good"})).unwrap();
     assert_eq!(r["saved"], "Good");
     assert!(!s.is_recording());
-    assert_eq!(recorded(&mut s, "Good"), ["cell.set {\"cell\":\"A1\",\"input\":\"typed\"}", "cell.set {\"cell\":\"A2\",\"input\":\"more\"}"]);
+    assert_eq!(recorded(&mut s, "Good"), ["cell.set {\"cell\":\"A1\",\"input\":\"typed\",\"parse\":false}", "cell.set {\"cell\":\"A2\",\"input\":\"more\",\"parse\":false}"]);
 
     // A workbook at its macro limit: freeing a slot and stopping again saves it.
     s.execute("macro.record", json!({"relative": false})).unwrap();
@@ -1756,7 +1756,7 @@ fn a_recording_is_kept_when_saving_it_fails() {
     wb.macros.pop();
     d.wb = Arc::new(wb);
     s.execute("macro.record", json!({"stop": true, "name": "Late"})).unwrap();
-    assert_eq!(recorded(&mut s, "Late"), ["cell.set {\"cell\":\"B1\",\"input\":\"full\"}"]);
+    assert_eq!(recorded(&mut s, "Late"), ["cell.set {\"cell\":\"B1\",\"input\":\"full\",\"parse\":false}"]);
 }
 
 #[test]
@@ -1774,8 +1774,8 @@ fn a_relative_recording_keeps_references_on_another_sheet() {
     set(&mut s, "D2", "=SUM(C3:C5)");
     s.execute("macro.record", json!({"stop": true, "name": "Both"})).unwrap();
     let steps = recorded(&mut s, "Both");
-    assert!(steps.contains(&"cell.set {\"cell\":\"C4\",\"input\":\"x\"}".to_string()), "{steps:?}");
-    assert!(steps.contains(&"cell.set {\"cell\":\"D2\",\"input\":\"=SUM(C3:C5)\"}".to_string()), "{steps:?}");
+    assert!(steps.contains(&"cell.set {\"cell\":\"C4\",\"input\":\"x\",\"parse\":false}".to_string()), "{steps:?}");
+    assert!(steps.contains(&"cell.set {\"cell\":\"D2\",\"input\":\"=SUM(C3:C5)\",\"parse\":true}".to_string()), "{steps:?}");
     // Played back on another block of Sheet1, it writes Two's cells.
     set(&mut s, "C4", "");
     set(&mut s, "D2", "");
@@ -1807,8 +1807,8 @@ fn a_step_that_names_another_sheet_keeps_its_references() {
     s.execute("cell.set", json!({"sheet": "Sheet1", "cell": "C4", "input": "90"})).unwrap();
     s.execute("macro.record", json!({"stop": true, "name": "Named"})).unwrap();
     let steps = recorded(&mut s, "Named");
-    assert!(steps.contains(&"cell.set {\"cell\":\"C4\",\"input\":\"x\",\"sheet\":\"Two\"}".to_string()), "{steps:?}");
-    assert!(steps.contains(&"cell.set {\"cell\":\"Input.cell(3,2)\",\"input\":\"90\",\"sheet\":\"Sheet1\"}".to_string()), "{steps:?}");
+    assert!(steps.contains(&"cell.set {\"cell\":\"C4\",\"input\":\"x\",\"parse\":false,\"sheet\":\"Two\"}".to_string()), "{steps:?}");
+    assert!(steps.contains(&"cell.set {\"cell\":\"Input.cell(3,2)\",\"input\":\"90\",\"parse\":false,\"sheet\":\"Sheet1\"}".to_string()), "{steps:?}");
 }
 
 #[test]
@@ -1938,7 +1938,7 @@ fn a_recorded_script_run_leaves_out_the_steps_a_macro_may_not_run() {
     s.execute("automate.runScript", json!({"name": "Mixed"})).unwrap();
     let r = s.execute("macro.record", json!({"stop": true, "name": "Rec"})).unwrap();
     assert_eq!(r["skipped"], json!(["app.commands", "macro.list"]));
-    assert_eq!(recorded(&mut s, "Rec"), ["cell.set {\"cell\":\"B1\",\"input\":\"kept\"}"]);
+    assert_eq!(recorded(&mut s, "Rec"), ["cell.set {\"cell\":\"B1\",\"input\":\"kept\",\"parse\":false}"]);
     s.execute("macro.run", json!({"name": "Rec", "onConflict": "overwrite"})).unwrap();
 }
 
@@ -1959,7 +1959,7 @@ fn a_recorded_script_run_keeps_the_steps_that_ran() {
     let steps = recorded(&mut s, "Rec");
     assert_eq!(
         steps.get(..2),
-        Some(&["cell.set {\"cell\":\"B1\",\"input\":\"first\"}".to_string(), "cell.set {\"cell\":\"B1\",\"input\":\"kept\"}".to_string()][..]),
+        Some(&["cell.set {\"cell\":\"B1\",\"input\":\"first\",\"parse\":false}".to_string(), "cell.set {\"cell\":\"B1\",\"input\":\"kept\",\"parse\":false}".to_string()][..]),
         "{steps:?}"
     );
     assert!(!r["skipped"].as_array().unwrap().contains(&json!("automate.runScript")), "{r}");
@@ -1983,7 +1983,7 @@ fn a_recording_is_saved_in_the_workbook_where_it_started() {
     let m = crate::macros::parse_macro(&s.execute("macro.get", json!({"name": "Here"})).unwrap()).unwrap();
     // The input's shape comes from the workbook where recording started.
     assert!(m.inputs[0].header);
-    assert_eq!(recorded(&mut s, "Here"), ["cell.set {\"cell\":\"Input.cell(1,4)\",\"input\":\"Total\"}"]);
+    assert_eq!(recorded(&mut s, "Here"), ["cell.set {\"cell\":\"Input.cell(1,4)\",\"input\":\"Total\",\"parse\":false}"]);
 
     // When that workbook was closed, stopping says so and ends the recording.
     s.execute("macro.record", json!({})).unwrap();
@@ -2008,7 +2008,7 @@ fn a_name_given_when_recording_stops_never_replaces_a_macro() {
     let kept = crate::macros::parse_macro(&s.execute("macro.get", json!({"name": "Tidy"})).unwrap()).unwrap();
     assert_eq!((kept.name.as_str(), kept.description.as_str(), kept.steps.len()), ("Tidy", "keep me", 1));
     assert_eq!(recorded(&mut s, "Tidy"), ["cell.set {\"cell\":\"Z9\",\"input\":\"mine\"}"]);
-    assert_eq!(recorded(&mut s, "tidy (2)"), ["cell.set {\"cell\":\"A1\",\"input\":\"recorded\"}"]);
+    assert_eq!(recorded(&mut s, "tidy (2)"), ["cell.set {\"cell\":\"A1\",\"input\":\"recorded\",\"parse\":false}"]);
 }
 
 #[test]
@@ -2049,7 +2049,7 @@ fn a_recording_waits_while_a_macro_in_its_workbook_is_debugged() {
     debug(&mut s, json!({"action": "stop"}));
     let r = s.execute("macro.record", json!({"stop": true, "name": "Typed"})).unwrap();
     assert_eq!(r["saved"], "Typed");
-    assert_eq!(recorded(&mut s, "Typed"), ["cell.set {\"cell\":\"Z1\",\"input\":\"typed\"}"]);
+    assert_eq!(recorded(&mut s, "Typed"), ["cell.set {\"cell\":\"Z1\",\"input\":\"typed\",\"parse\":false}"]);
 }
 
 /// Opens a JSON workbook whose `macros` field holds `macros`, as a file the person opened.
@@ -2153,7 +2153,7 @@ fn a_script_step_that_only_opened_a_dialog_is_left_out_of_the_recording() {
     s.execute("automate.runScript", json!({"name": "EditThenAsk"})).unwrap();
     assert!(s.take_ui_requests().iter().any(|q| matches!(q, crate::UiRequest::Dialog(..))));
     s.execute("macro.record", json!({"stop": true, "name": "Rec"})).unwrap();
-    assert_eq!(recorded(&mut s, "Rec"), ["cell.set {\"cell\":\"B1\",\"input\":\"1\"}"]);
+    assert_eq!(recorded(&mut s, "Rec"), ["cell.set {\"cell\":\"B1\",\"input\":\"1\",\"parse\":false}"]);
     set(&mut s, "B1", "");
     s.execute("macro.run", json!({"name": "Rec", "onConflict": "overwrite"})).unwrap();
     assert_eq!(v(&s, "B1").display(), "1");
@@ -2183,7 +2183,7 @@ fn a_rolled_back_script_run_takes_what_it_ran_out_of_the_recording() {
     assert_eq!((rec.steps.len(), rec.ran.keys().copied().collect::<Vec<_>>()), (1, vec![0]));
     s.execute("automate.runScript", json!({"name": "Mark"})).unwrap();
     s.execute("macro.record", json!({"stop": true, "name": "Rec"})).unwrap();
-    let a1 = "cell.set {\"cell\":\"A1\",\"input\":\"m\"}";
+    let a1 = "cell.set {\"cell\":\"A1\",\"input\":\"m\",\"parse\":false}";
     assert_eq!(recorded(&mut s, "Rec"), [a1, a1]);
 }
 
@@ -2354,7 +2354,7 @@ fn undo_while_recording_keeps_the_undone_step_as_excel_does() {
     s.execute("edit.undo", json!({})).unwrap();
     let r = s.execute("macro.record", json!({"stop": true, "name": "Rec"})).unwrap();
     assert_eq!(r["skipped"], json!(["edit.undo"]), "{r}");
-    assert_eq!(recorded(&mut s, "Rec"), ["cell.set {\"cell\":\"A1\",\"input\":\"typed\"}"]);
+    assert_eq!(recorded(&mut s, "Rec"), ["cell.set {\"cell\":\"A1\",\"input\":\"typed\",\"parse\":false}"]);
     s.execute("macro.run", json!({"name": "Rec", "onConflict": "overwrite"})).unwrap();
     assert_eq!(v(&s, "A1").display(), "typed");
 }

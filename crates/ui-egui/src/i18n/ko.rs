@@ -486,6 +486,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Collapse dialog" => "대화 상자 축소",
         "Expand dialog" => "대화 상자 확장",
         "Office Scripts" => "Office 스크립트",
+        "Office\nScripts" => {
+            "Office
+스크립트"
+        }
+        "Record" => "기록",
         "Scripts" => "스크립트",
         "Run Script" => "스크립트 실행",
         "Record Script" => "스크립트 기록",

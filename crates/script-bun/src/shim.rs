@@ -629,10 +629,6 @@ class RangeAreas {
   getAddress(): string {
     return String(bridge("RangeAreas.getAddress", this.params({})));
   }
-  getFormat(): Format {
-    const first = this.areas[0] ?? "A1";
-    return new Format(new Range(first, this.sheetName));
-  }
 }
 
 class TableColumn {

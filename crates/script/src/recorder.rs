@@ -114,15 +114,13 @@ fn step_call(step: &JournalStep) -> Option<(BridgeCall, String)> {
         "cell.set" => {
             let cell = p.get("cell").and_then(Json::as_str)?;
             let value = p.get("input")?;
-            // The replay parses the text the way the cell did (`parse: true`), so the literal is
-            // the text typed: formula-like text keeps its apostrophe marker, and a typed leading
-            // apostrophe is itself text, doubled so the replay keeps it.
-            let text = value.as_str().map(recorded_literal).map(Json::String).unwrap_or_else(|| value.clone());
-            let literal = js_literal(&text)?;
-            let mut call = range_call("Range.setValue", step, cell, "value", text.clone());
-            // Typed input stays typed: the bridge parses the recorded text the way the cell did.
+            // The literal is the recorded value as-is; the engine resolves what the cell stored
+            // and records whether the replay parses (the journal's `parse`, decided where typed
+            // input ran), so the script replays the stored value either way.
+            let literal = js_literal(value)?;
+            let mut call = range_call("Range.setValue", step, cell, "value", value.clone());
             if let Json::Object(map) = &mut call.params {
-                map.insert("parse".into(), Json::Bool(true));
+                map.insert("parse".into(), Json::Bool(p.get("parse").and_then(Json::as_bool).unwrap_or(true)));
             }
             Some((call, format!("{}.setValue({literal});", target(step, cell))))
         }
@@ -170,46 +168,6 @@ fn step_call(step: &JournalStep) -> Option<(BridgeCall, String)> {
             Some((call, format!("workbook.getWorksheet({}).delete();", js_string(name))))
         }
         _ => None,
-    }
-}
-
-/// The `cell.set` literal: the text typed, so a replay that parses it reads the same value. A
-/// typed leading apostrophe is itself text, so it is kept verbatim (the replay strips one only
-/// before formula-like text); any other formula-like text keeps the marker the cell wrote
-/// (`+SUM(1)` → `'+SUM(1)`), and signed numbers typed input reads as text (`+123`) keep theirs
-/// too, so the replay does not turn them into a formula.
-fn recorded_literal(input: &str) -> String {
-    if input.starts_with('\'') || is_formula_like(input) || is_signed_number_text(input) {
-        format!("'{input}")
-    } else {
-        input.to_string()
-    }
-}
-
-/// Whether typed input reads `input` as signed numeric text: `+123` stays text when typed, but
-/// the replay would read it as a formula without the marker.
-fn is_signed_number_text(input: &str) -> bool {
-    let tail = input.strip_prefix('+').or_else(|| input.strip_prefix('-'));
-    tail.is_some_and(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()))
-}
-
-/// Whether typed input would read `input` as a formula: `=…`, or `+…`/`-…` Excel takes as one
-/// (`+SUM(1)`), but not signed numbers (`+123`).
-fn is_formula_like(input: &str) -> bool {
-    if input.starts_with('=') {
-        return true;
-    }
-    let rest = input.strip_prefix('+').or_else(|| input.strip_prefix('-'));
-    match rest {
-        Some(tail) if !tail.is_empty() => {
-            let mut chars = tail.chars();
-            match chars.next() {
-                Some('(') => true,
-                Some(c) if c.is_ascii_alphabetic() => true,
-                _ => false,
-            }
-        }
-        _ => false,
     }
 }
 
@@ -513,21 +471,19 @@ mod tests {
 
     #[test]
     fn typed_inputs_keep_their_reading_in_literal_form() {
-        // `cell.set` with typed input records the text typed, so the replay parses it the way
-        // the cell did: a number stays a number, a date stays a date, and signed text that is
-        // not a number stays the text typed.
-        let r = record(&[step("cell.set", json!({"cell": "A1", "input": "42"}))]);
+        // The journal carries whether the typed input was parsed, decided in the command where
+        // typed input ran: a parsed value (`42`) replays parsed, verbatim text (`Sales`) replays
+        // as-is, so the script keeps what the cell stored either way.
+        let r = record(&[step("cell.set", json!({"cell": "A1", "input": "42", "parse": true}))]);
         assert!(r.code.contains("setValue(\"42\");"), "{}", r.code);
         assert_eq!(r.calls[0].params["value"], json!("42"));
         assert_eq!(r.calls[0].params["parse"], json!(true));
-        // Text that Excel would read as a formula is recorded with the apostrophe that keeps it
-        // text, so the replay does not turn it into a formula.
-        let formula_like = record(&[step("cell.set", json!({"cell": "A1", "input": "+123"}))]);
-        assert!(formula_like.code.contains("setValue(\"'+123\");"), "{}", formula_like.code);
-        // A leading apostrophe the person typed is itself text: it is recorded doubled, so the
-        // replay keeps the apostrophe instead of reading the rest as a formula.
-        let literal = record(&[step("cell.set", json!({"cell": "A1", "input": "'=1+1"}))]);
-        assert!(literal.code.contains("setValue(\"''=1+1\");"), "{}", literal.code);
+        let verbatim = record(&[step("cell.set", json!({"cell": "B1", "input": "Sales", "parse": false}))]);
+        assert!(verbatim.code.contains("setValue(\"Sales\");"), "{}", verbatim.code);
+        assert_eq!(verbatim.calls[0].params["parse"], json!(false));
+        // An old entry without the flag replays parsed, as before.
+        let legacy = record(&[step("cell.set", json!({"cell": "C1", "input": "42"}))]);
+        assert_eq!(legacy.calls[0].params["parse"], json!(true));
     }
 
     #[test]

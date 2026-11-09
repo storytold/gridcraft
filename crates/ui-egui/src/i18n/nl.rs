@@ -557,6 +557,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Collapse dialog" => "Dialoogvenster samenvouwen",
         "Expand dialog" => "Dialoogvenster uitvouwen",
         "Office Scripts" => "Office-scripts",
+        "Office\nScripts" => {
+            "Office-
+scripts"
+        }
+        "Record" => "Opnemen",
         "Scripts" => "Scripts",
         "Run Script" => "Script uitvoeren",
         "Record Script" => "Script opnemen",

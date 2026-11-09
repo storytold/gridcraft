@@ -752,11 +752,6 @@ pub(crate) fn execute_call(s: &mut Session, method: &str, params: &Json) -> Resu
             Ok(Json::Array(areas.iter().map(|a| json!({"sheet": sheet, "address": a})).collect()))
         }
         "RangeAreas.getAddress" => Ok(Json::String(member_array(params, "areas")?.join(","))),
-        "RangeAreas.getFormat" => {
-            let first = member_array(params, "areas")?.first().cloned().unwrap_or_else(|| "A1".into());
-            let sheet = sheet_name(s, params)?;
-            Ok(json!({"kind": "format", "sheet": sheet, "range": first}))
-        }
 
         // ---------------------------------------------------------------- console
         "console.log" => Ok(Json::Null),
