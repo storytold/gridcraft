@@ -69,6 +69,14 @@ Never reuse an account namespace for a different account.
    `download` is a terminal fallback result that does not acknowledge provider persistence.
    These outcomes keep unsaved work open. A serialization/filename rejection emits `saveFailed`.
 
+Drafts parked in another window of the workbook are committed before capture. If a command closed
+that window while the workbook remained open, its draft is retained and recovered in a separate
+window of that same workbook. This never replaces another window's cell or text-box draft. A
+successful recovery is included in the package and its temporary window closes; a validation or
+text-box refusal leaves the recovery window and draft open for correction. Closing the workbook
+itself keeps the ordinary close/discard behavior. Replies for older captures cannot mark a workbook
+clean while a later draft remains parked, including one whose original window closed.
+
 A device choice uses the browser's local download service. Accepting that service only starts
 the picker or download: it never marks a workbook clean, including a workbook not yet bound to
 a provider. It does not replace an existing provider binding. A later picker cancellation or

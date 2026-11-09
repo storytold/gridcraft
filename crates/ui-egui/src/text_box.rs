@@ -18,6 +18,10 @@ pub struct EditState {
 }
 
 impl EditState {
+    pub(crate) fn view_key(&self) -> (u64, usize) {
+        (self.uid, self.sheet)
+    }
+
     pub(crate) fn belongs_to(&self, uid: u64) -> bool {
         self.uid == uid
     }

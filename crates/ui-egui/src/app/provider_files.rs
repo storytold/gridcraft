@@ -71,7 +71,9 @@ impl SheetApp {
         let Command::Save { request, doc, destination, name, save_as } = command else { return };
         if let Err(error) = self.settle_provider_drafts(doc) {
             host.failed(&request, &error);
-            self.alert(error);
+            if !self.message.as_ref().is_some_and(|(_, message)| *message == error) {
+                self.alert(error);
+            }
             return;
         }
         let encoded = self
@@ -266,6 +268,236 @@ mod tests {
         let first_index = app.session.documents().iter().position(|doc| doc.uid == first).unwrap();
         assert!(app.session.documents()[first_index].is_dirty());
     }
+
+    #[test]
+    fn provider_save_recovers_closed_cell_windows_before_and_after_the_ui_switch() {
+        for close_before_ui_switch in [false, true] {
+            let (mut app, host) = app();
+            app.follow_active_window();
+            let closed = app.session.active_window().unwrap();
+            assert!(app.choose_provider_save(false));
+            let request = host.take_events().remove(0).metadata["requestId"].as_str().unwrap().to_owned();
+            app.begin_edit(Some("Draft in the closed window".into()), false);
+            let survivor = app.session.new_window().unwrap();
+            if !close_before_ui_switch {
+                app.follow_active_window();
+            }
+            let result = app.session.run("window.close", json!({"window":closed})).unwrap();
+            assert_eq!(result["document"], false);
+            assert_eq!(app.session.active_window(), Some(survivor));
+            app.follow_active_window();
+            app.follow_active_window();
+            app.session.run("selection.set", json!({"cell":"B1"})).unwrap();
+            app.begin_edit(Some("Draft in the surviving window".into()), false);
+            host.resolve_dialog(&request, "provider", "Recovered.xlsx").unwrap();
+            app.provider_tick();
+            let event = host.take_events().into_iter().find(|event| event.metadata["type"] == "save").unwrap();
+            let (workbook, _) = gridcraft_engine::io::open_bytes("Recovered.xlsx", event.bytes.as_ref().unwrap()).unwrap();
+            assert_eq!(workbook.sheets[0].cell(gridcraft_engine::core::CellRef::new(0, 0)).unwrap().input_text(), "Draft in the closed window");
+            assert_eq!(workbook.sheets[0].cell(gridcraft_engine::core::CellRef::new(0, 1)).unwrap().input_text(), "Draft in the surviving window");
+            assert_eq!(app.session.active_window(), Some(survivor));
+            assert_eq!(app.session.windows().len(), 1, "successful recovery leaves no temporary window");
+            assert!(app.parked_window_with_draft().is_none());
+            assert!(app.editor.is_none());
+            assert!(app.session.active().unwrap().is_dirty());
+            host.result(request, "saved".into(), "recovered-cells".into()).unwrap();
+            app.provider_tick();
+            assert!(!app.session.active().unwrap().is_dirty());
+            assert_eq!(host.snapshot()["documents"][0]["dirty"], false);
+        }
+    }
+
+    #[test]
+    fn provider_save_recovers_a_closed_text_box_on_its_own_sheet_and_preserves_refusals() {
+        for refuse_first in [false, true] {
+            let (mut app, host) = app();
+            app.follow_active_window();
+            std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().wb)
+                .sheets
+                .push(std::sync::Arc::new(gridcraft_engine::model::Sheet::new("Notes")));
+            app.session.run("sheet.activate", json!({"sheet":1})).unwrap();
+            let shape = app.session.run("insert.textBox", json!({"at":"C3","text":"Original note"})).unwrap()["shape"].as_u64().unwrap() as u32;
+            let closed = app.session.active_window().unwrap();
+            assert!(app.choose_provider_save(false));
+            let mut request = host.take_events().remove(0).metadata["requestId"].as_str().unwrap().to_owned();
+            assert!(app.begin_text_box_edit(shape));
+            app.text_box_editor.as_mut().unwrap().text = "Recovered text-box note".into();
+            let survivor = app.session.new_window().unwrap();
+            app.follow_active_window();
+            if refuse_first {
+                app.session.run("review.protectSheet", json!({})).unwrap();
+            }
+            app.session.run("sheet.activate", json!({"sheet":0})).unwrap();
+            app.session.run("window.close", json!({"window":closed})).unwrap();
+            app.follow_active_window();
+            host.resolve_dialog(&request, "provider", "Notes.xlsx").unwrap();
+            app.provider_tick();
+            let events = host.take_events();
+            let bytes = if refuse_first {
+                assert!(events.iter().all(|event| event.metadata["type"] != "save"));
+                assert!(events.iter().any(|event| event.metadata["type"] == "saveFailed"));
+                assert_eq!(app.text_box_editor.as_ref().unwrap().text, "Recovered text-box note");
+                assert_ne!(app.session.active_window(), Some(closed));
+                assert_ne!(app.session.active_window(), Some(survivor));
+                assert_eq!(app.session.active().unwrap().wb.active_sheet(), 1);
+                assert!(!host.pending_for(app.session.active().unwrap().uid));
+                app.session.run("review.unprotectSheet", json!({})).unwrap();
+                let (retry, bytes) = save(&mut app, &host);
+                request = retry;
+                bytes
+            } else {
+                assert_eq!(app.session.active_window(), Some(survivor));
+                assert_eq!(app.session.active().unwrap().wb.active_sheet(), 0);
+                assert_eq!(app.session.windows().len(), 1);
+                events.into_iter().find(|event| event.metadata["type"] == "save").unwrap().bytes.unwrap()
+            };
+            let (workbook, _) = gridcraft_engine::io::open_bytes("Notes.xlsx", &bytes).unwrap();
+            assert_eq!(workbook.sheets[1].shapes.len(), 1);
+            assert_eq!(workbook.sheets[1].shapes[0].kind, gridcraft_engine::model::ShapeKind::TextBox);
+            assert_eq!(workbook.sheets[1].shapes[0].text, "Recovered text-box note");
+            assert!(workbook.sheets[0].shapes.is_empty());
+            assert!(app.text_box_editor.is_none());
+            assert!(app.session.active().unwrap().is_dirty());
+            host.result(request, "saved".into(), "recovered-notes".into()).unwrap();
+            app.provider_tick();
+            assert!(!app.session.active().unwrap().is_dirty());
+        }
+    }
+
+    #[test]
+    fn a_refused_recovered_cell_draft_stays_editable_and_retries_through_normal_save() {
+        let (mut app, host) = app();
+        app.follow_active_window();
+        app.session
+            .run(
+                "data.validation",
+                json!({"range":"A1","type":"whole","operator":"between","formula1":"1","formula2":"2",
+            "errorStyle":"stop","errorTitle":"Quantity rule","errorMessage":"Use one or two"}),
+            )
+            .unwrap();
+        let closed = app.session.active_window().unwrap();
+        assert!(app.choose_provider_save(false));
+        let request = host.take_events().remove(0).metadata["requestId"].as_str().unwrap().to_owned();
+        app.begin_edit(Some("9".into()), false);
+        app.session.new_window().unwrap();
+        app.follow_active_window();
+        app.session.run("window.close", json!({"window":closed})).unwrap();
+        host.resolve_dialog(&request, "provider", "Quantity.xlsx").unwrap();
+        app.provider_tick();
+        let events = host.take_events();
+        assert!(events.iter().all(|event| event.metadata["type"] != "save"));
+        assert!(events.iter().any(|event| event.metadata["type"] == "saveFailed"));
+        assert_eq!(app.message, Some(("Quantity rule".into(), "Use one or two".into())));
+        let recovered = app.session.active_window().unwrap();
+        assert_ne!(recovered, closed);
+        assert_eq!(app.editor.as_ref().unwrap().window, Some(recovered));
+        assert_eq!(app.editor.as_ref().unwrap().text, "9");
+        assert_eq!(app.session.windows().len(), 2, "a refused draft needs a real, editable recovery window");
+        app.editor.as_mut().unwrap().text = "2".into();
+        let (request, bytes) = save(&mut app, &host);
+        let (workbook, _) = gridcraft_engine::io::open_bytes("Workbook.xlsx", &bytes).unwrap();
+        assert_eq!(workbook.sheets[0].cell(gridcraft_engine::core::CellRef::new(0, 0)).unwrap().input_text(), "2");
+        assert!(app.editor.is_none());
+        assert_eq!(app.session.active_window(), Some(recovered));
+        host.result(request, "saved".into(), "recovered-quantity".into()).unwrap();
+        app.provider_tick();
+        assert!(!app.session.active().unwrap().is_dirty());
+    }
+
+    #[test]
+    fn an_old_ack_keeps_a_closed_window_draft_dirty_and_recovery_preserves_another_workbook() {
+        let (mut app, host) = app();
+        app.follow_active_window();
+        let first = app.session.active().unwrap().uid;
+        let closed = app.session.active_window().unwrap();
+        let (old, _) = save(&mut app, &host);
+        app.begin_edit(Some("After the captured revision".into()), false);
+        let survivor = app.session.new_window().unwrap();
+        app.follow_active_window();
+        app.session.run("window.close", json!({"window":closed})).unwrap();
+        app.follow_active_window();
+        host.result(old, "saved".into(), "owned-workbook".into()).unwrap();
+        app.provider_tick();
+        assert!(app.session.active().unwrap().is_dirty());
+        assert_eq!(host.snapshot()["documents"][0]["dirty"], true);
+        assert!(app.provider_drafts_for(first));
+
+        assert!(app.choose_provider_save(false));
+        let request = host.take_events().into_iter().find(|event| event.metadata["type"] == "saveDialog").unwrap().metadata["requestId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        app.session.run("file.new", json!({})).unwrap();
+        app.follow_active_window();
+        let second = app.session.active().unwrap().uid;
+        let second_window = app.session.active_window().unwrap();
+        app.begin_edit(Some("Unrelated workbook draft".into()), false);
+        host.resolve_dialog(&request, "provider", "Owned.xlsx").unwrap();
+        app.provider_tick();
+        let event = host.take_events().into_iter().find(|event| event.metadata["type"] == "save").unwrap();
+        assert_eq!(event.metadata["namespace"], "account");
+        let (workbook, _) = gridcraft_engine::io::open_bytes("Owned.xlsx", event.bytes.as_ref().unwrap()).unwrap();
+        assert_eq!(workbook.sheets[0].cell(gridcraft_engine::core::CellRef::new(0, 0)).unwrap().input_text(), "After the captured revision");
+        assert_eq!(app.session.active_window(), Some(second_window));
+        assert_eq!(app.session.active().unwrap().uid, second);
+        assert_eq!(app.editor.as_ref().unwrap().text, "Unrelated workbook draft");
+        assert!(app.session.window(survivor).is_some());
+        assert_eq!(app.session.windows().len(), 2);
+        host.result(request, "saved".into(), "owned-workbook".into()).unwrap();
+        app.provider_tick();
+        assert!(!app.session.documents().iter().find(|doc| doc.uid == first).unwrap().is_dirty());
+        assert!(app.provider_drafts_for(second));
+        assert_eq!(app.editor.as_ref().unwrap().text, "Unrelated workbook draft");
+        assert!(!host.bound(second));
+    }
+
+    #[test]
+    fn closing_the_workbook_drops_its_parked_draft_without_resurrecting_a_document() {
+        let (mut app, host) = app();
+        app.follow_active_window();
+        let closed_doc = app.session.active().unwrap().uid;
+        let closed_window = app.session.active_window().unwrap();
+        assert!(app.choose_provider_save(false));
+        let request = host.take_events().remove(0).metadata["requestId"].as_str().unwrap().to_owned();
+        app.begin_edit(Some("Explicitly discarded with the workbook".into()), false);
+        app.session.run("file.new", json!({})).unwrap();
+        app.follow_active_window();
+        let survivor = app.session.active_window().unwrap();
+        app.begin_edit(Some("Surviving workbook draft".into()), false);
+        assert_eq!(app.session.run("window.close", json!({"window":closed_window,"force":true})).unwrap()["document"], true);
+        app.follow_active_window();
+        host.resolve_dialog(&request, "provider", "Closed.xlsx").unwrap();
+        app.provider_tick();
+        assert!(host.take_events().iter().all(|event| event.metadata["type"] != "save"));
+        assert_eq!(app.session.documents().len(), 1);
+        assert_eq!(app.session.active_window(), Some(survivor));
+        assert_eq!(app.editor.as_ref().unwrap().text, "Surviving workbook draft");
+        assert!(!app.provider_drafts_for(closed_doc));
+        assert!(app.parked_window_with_draft().is_none());
+    }
+
+    #[test]
+    fn quit_recovers_a_closed_parked_draft_before_asking_to_save_without_a_provider() {
+        let (mut app, _) = app();
+        app.services.file_providers = None;
+        app.follow_active_window();
+        let closed = app.session.active_window().unwrap();
+        app.begin_edit(Some("Recovered before Quit".into()), false);
+        app.session.new_window().unwrap();
+        app.follow_active_window();
+        app.session.run("window.close", json!({"window":closed})).unwrap();
+        app.follow_active_window();
+        app.request_quit(&egui::Context::default());
+        assert_eq!(
+            app.session.active().unwrap().wb.sheets[0].cell(gridcraft_engine::core::CellRef::new(0, 0)).unwrap().input_text(),
+            "Recovered before Quit"
+        );
+        assert!(app.parked_window_with_draft().is_none());
+        assert!(app.editor.is_none());
+        assert!(app.dialog.as_ref().is_some_and(|dialog| dialog.name() == "saveChanges"));
+        assert!(!app.allow_close);
+    }
+
     #[test]
     fn an_uncommitted_cell_after_capture_is_not_acknowledged_as_saved() {
         let (mut app, host) = app();
