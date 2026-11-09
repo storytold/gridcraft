@@ -15,7 +15,7 @@ gridcraft-engine = { workspace = true }
 gridcraft-model = { workspace = true }
 gridcraft-xlsx = { workspace = true }
 axum = { version = "0.8", features = ["ws"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal", "io-util"] }
 jsonwebtoken = "9.3"
 serde = { workspace = true }
 serde_json = { workspace = true }

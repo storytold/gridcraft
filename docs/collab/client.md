@@ -90,7 +90,10 @@ cargo run -p gridcraft --features collab -- book.xlsx
 Статус и участники уходят в кабинет как `session-state` (по изменению) и
 `presence` (10 Гц); `gridcraft:committed` возвращает version/etag. Save в
 живой сессии — это `gridcraft:commit` без байтов: файл собирает и хранит
-кабинет; Save As и экспорт остаются локальными.
+кабинет; Save As и экспорт остаются локальными. Когда комната публикует файл в
+кабинет сама (`COLLAB_CABINET_URL`), каждый подписчик получает кадр
+`committed{version, sha256, cabinet:{version, etag}}` — версию и etag кабинета,
+а не локальный дайджест; `cabinet` в ответе HTTP `commit` несёт то же самое.
 
 `craft-web-host`/`craft-web-api` — из `copoka/craft-libs` rev
 `7666e2b100d8cf12998f9b57d3b036964cc3189c` (ADR-0016 §3), пока

@@ -181,6 +181,9 @@ impl SessionLink {
                     self.events.push_back(Event::Snapshot { version, epoch, bytes });
                 }
             }
+            ServerMessage::Committed { version, sha256, cabinet } => {
+                self.events.push_back(Event::Committed { version, sha256, cabinet });
+            }
             ServerMessage::Pong { .. } => {}
             ServerMessage::Error { code, message, retryable } => {
                 if code == "resync" {

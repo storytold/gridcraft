@@ -99,6 +99,13 @@ pub struct Metrics {
     /// Catch-ups that needed the whole workbook.
     pub resync_snapshots: AtomicU64,
     pub snapshots: AtomicU64,
+    /// Commits the cabinet accepted (`INTEGRATION.md` §5.2).
+    pub cabinet_published: AtomicU64,
+    /// Commits the cabinet refused with `409` (the file changed elsewhere).
+    pub cabinet_conflicts: AtomicU64,
+    /// Commits the cabinet did not store: a wrong token, a size refusal, an exhausted retry or any
+    /// other refusal.
+    pub cabinet_errors: AtomicU64,
     /// Unix seconds of the last written snapshot; `0` when none has been written.
     pub last_snapshot_at: AtomicU64,
     /// `op` frame → `applied` written back to its sender.
@@ -140,6 +147,12 @@ impl Metrics {
         out.push_str(&format!("gridcraft_collab_commits_total {}\n", self.commits.load(Ordering::Relaxed)));
         counter(&mut out, "gridcraft_collab_snapshots_total", "Snapshots written.");
         out.push_str(&format!("gridcraft_collab_snapshots_total {}\n", self.snapshots.load(Ordering::Relaxed)));
+        counter(&mut out, "gridcraft_collab_cabinet_published_total", "Commits the cabinet accepted.");
+        out.push_str(&format!("gridcraft_collab_cabinet_published_total {}\n", self.cabinet_published.load(Ordering::Relaxed)));
+        counter(&mut out, "gridcraft_collab_cabinet_conflicts_total", "Commits refused by the cabinet as an external edit.");
+        out.push_str(&format!("gridcraft_collab_cabinet_conflicts_total {}\n", self.cabinet_conflicts.load(Ordering::Relaxed)));
+        counter(&mut out, "gridcraft_collab_cabinet_errors_total", "Commits the cabinet did not store.");
+        out.push_str(&format!("gridcraft_collab_cabinet_errors_total {}\n", self.cabinet_errors.load(Ordering::Relaxed)));
         counter(&mut out, "gridcraft_collab_resumes_total", "Connections that returned with a known version (reconnects).");
         out.push_str(&format!("gridcraft_collab_resumes_total {}\n", self.resumes.load(Ordering::Relaxed)));
         counter(&mut out, "gridcraft_collab_catchups_total", "Reconnects caught up from the journal tail.");

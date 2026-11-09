@@ -25,6 +25,13 @@
 | `GRIDCRAFT_COLLAB_MAX_PARTICIPANTS` | нет | `5` | участников на документ (v1) |
 | `GRIDCRAFT_COLLAB_SNAPSHOT_OPS` | нет | `500` | операций между снапшотами |
 | `GRIDCRAFT_COLLAB_SNAPSHOT_SECS` | нет | `300` | период фонового снапшота по времени |
+| `COLLAB_CABINET_URL` | нет | — | endpoint коммита кабинета; `{sessionId}` и `{fileId}` подставляются; без него коммит остаётся серверным |
+| `COLLAB_CABINET_TOKEN` | да, если есть URL | — | Bearer исходящего вызова; в логи, метрики и URL не попадает |
+| `COLLAB_CABINET_TIMEOUT_MS` | нет | `10000` | предел одного запроса к кабинету |
+| `COLLAB_CABINET_ATTEMPTS` | нет | `3` | попыток при `5xx`/сети; `409`/`401`/`413` не повторяются |
+
+Имена `COLLAB_CABINET_*` — общие из `INTEGRATION.md` §5.2; те же переменные с префиксом
+`GRIDCRAFT_COLLAB_` (`GRIDCRAFT_COLLAB_CABINET_URL` и т. д.) принимаются как синонимы.
 
 Лимиты транспорта: входящий кадр ≤ 1 MiB, сообщение ≤ 9 MiB; образ структурного
 undo/redo (`{book, images}`: листы, preserved-блоки листов, defined names, защита
@@ -41,7 +48,8 @@ $GRIDCRAFT_COLLAB_STORE/sessions/<fileId>/
   keys.json       ключи листов {next, live:[(key, имя)], dead:[key]}
   seen.json       {version, epoch, окно дедупа} на base_version
   journal.jsonl   применённые версии после base_version: операции, undo и redo
-  meta.json       fileId, sessionId, owner, name, version, epoch, base_version
+  meta.json       fileId, sessionId, owner, name, version, epoch, base_version,
+                  cabinet {version, etag} после принятого коммита кабинета
 ```
 
 - `base.xlsx` — тот же файл, что отдаёт `commit`: pass-through-части и кэш значений формул
@@ -80,7 +88,8 @@ POST   /v1/sessions            {fileId, app, owner, initialName?, initialBytes?,
 GET    /v1/sessions/{id}       → {sessionId, fileId, app, owner, name, state, version, epoch,
                                   participants[], createdAt, updatedAt}
 POST   /v1/sessions/{id}/commit?expectedVersion=N
-                               → {name, bytes(base64), sha256, version, warnings[]}
+                               → {name, bytes(base64), sha256, version, warnings[],
+                                  cabinet?: {version, etag}}
 DELETE /v1/sessions/{id}       → 204
 GET    /v1/sessions/{id}/ws    WebSocket
 ```
@@ -92,6 +101,39 @@ GET    /v1/sessions/{id}/ws    WebSocket
   старую комнату и открывает новую; старые соединения получают `error{code:"session-closed"}`.
 - `commit` собирает файл из авторитетной книги сервера, не из копии клиента (ADR-0009);
   `expectedVersion` ≠ head → `409 conflict`.
+
+## Коммит в кабинет (M87, `INTEGRATION.md` §4.1/§5.2)
+
+С `COLLAB_CABINET_URL` комната сама публикует собранный `.xlsx` в кабинет: файл не идёт через
+браузер, закрытая вкладка не теряет сохранение, версию, аудит и антивирус ведёт кабинет.
+
+```text
+POST {COLLAB_CABINET_URL с {sessionId} и {fileId}}
+Authorization: Bearer <COLLAB_CABINET_TOKEN>
+{ fileId, bytes(base64 .xlsx), sha256, version, expectedVersion? }
+
+→ 200 {version, etag}   кабинет сохранил файл
+→ 409                   файл изменился вне сессии: не перезаписывать
+→ 401/403              неверный токен колбэка
+→ 413                   кабинет отказал по размеру
+→ 408/425/429/5xx/сеть  повтор с тем же телом (200 мс, затем 800 мс)
+```
+
+- `version` — версия документа комнаты (кабинет пишет её только в текст ошибки);
+  `expectedVersion` — `etag` прошлого принятого коммита. Он лежит в `meta.json`
+  (поле `cabinet: {version, etag}`), поэтому рестарт не теряет проверку, а первый коммит
+  комнаты ничего не ожидает.
+- `200`: ответ `{version, etag}` уходит вызывающему в `CommitReply.cabinet`, сохраняется в
+  `meta.json` и рассылается всем подписчикам кадром `committed{version, sha256, cabinet}`.
+- `409`: `meta.json` не меняется, кабинет не перезаписывается; вызывающий получает
+  `409 cabinetConflict`, подписчики — `error{code:"cabinetConflict", retryable:true}`.
+- `401/403` → `403 cabinetUnauthorized`, `413` → `413 cabinetTooLarge`, исчерпанные повторы
+  `5xx`/сети → `502 cabinetUnavailable`. Это ошибки публикации, а не документа: комната живёт,
+  следующий коммит повторяет попытку с тем же `expectedVersion`.
+- Без `COLLAB_CABINET_URL` поведение прежнее: файл собирается и отдаётся вызывающему, поле
+  `cabinet` отсутствует, подписчики ничего не получают.
+- Токен и содержимое книги не попадают ни в одну запись журнала; в лог идут `fileId`, статус
+  и причина отказа.
 
 ## WebSocket
 
@@ -126,7 +168,10 @@ GET    /v1/sessions/{id}/ws    WebSocket
   - счётчики: `ops_total`, `applied_total`, `commits_total`, `snapshots_total`,
     `resumes_total` (соединения, вернувшиеся с известной версией — reconnect rate),
     `catchups_total` (догон по хвосту журнала), `resync_snapshots_total` (догон по книге),
-    `auth_failures_total`, `dropped_frames_total`, `rejections_total{code}`;
+    `auth_failures_total`, `dropped_frames_total`, `rejections_total{code}`,
+    `cabinet_published_total` (коммиты, принятые кабинетом), `cabinet_conflicts_total`
+    (`409` — файл изменился вне сессии), `cabinet_errors_total` (неверный токен, размер,
+    исчерпанные повторы, прочий отказ);
   - гистограмма `op_latency_seconds` — от кадра `op` до отправленного `applied`
     (бакеты 1–1000 мс, `_sum`/`_count`);
   - гейджи: `sessions_open`, `participants`, `leases`, `connections`, `journal_ops`
@@ -175,8 +220,6 @@ ANSI-escape не выводятся никогда (у `env_logger` выключ
 ## Чего ещё нет
 
 - **TLS** терминируется на входном прокси (RFC §4.1); бинарь слушает HTTP/WS.
-- **Коммит в кабинет** через server-to-server callback: HTTP `commit` есть, исходящего
-  вызова кабинета пока нет.
 - **Отмена структурных правок** — v2 (undo и redo merge-шагов есть).
 
 Клиент: `docs/collab/client.md` (feature `collab`, `GRIDCRAFT_COLLAB_URL`/`_TOKEN`).
@@ -184,7 +227,7 @@ ANSI-escape не выводятся никогда (у `env_logger` выключ
 ## Проверка
 
 ```bash
-cargo test -p gridcraft-collab-server      # 24 unit + 7 socket + 9 восстановление + 5 приёмка + 2 логгер
+cargo test -p gridcraft-collab-server      # 33 unit + 7 socket + 9 восстановление + 5 приёмка + 6 колбэк + 2 логгер
 cargo clippy -p gridcraft-collab-server --all-targets -- -D warnings
 cargo xtask layers
 ```

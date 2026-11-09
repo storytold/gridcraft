@@ -12,6 +12,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod cabinet;
 pub mod config;
 pub mod http;
 mod jwt;
@@ -29,7 +30,7 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
-use gridcraft_collab::{Applied, Gateway, Room, RoomState, ServerMessage, SheetKeys};
+use gridcraft_collab::{Applied, CabinetCommit, Gateway, Room, RoomState, ServerMessage, SheetKeys};
 use gridcraft_engine::{DocState, Session, Trust};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -40,6 +41,7 @@ pub use jwt::{JwtConfig, VerifyError};
 pub use lease::Lease;
 pub use store::{JournalEntry, JournalOp, Store, StoreError, StoredMeta};
 
+use crate::cabinet::{Cabinet, Publication, PublishError, Published};
 use crate::lease::Leases;
 use crate::metrics::{Gauges, Metrics};
 
@@ -99,6 +101,10 @@ pub struct CommitReply {
     pub sha256: String,
     pub version: u64,
     pub warnings: Vec<String>,
+    /// The cabinet's copy, when the room posted the file itself (`INTEGRATION.md` §5.2). Absent
+    /// without a callback: the host owns the stored file then.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cabinet: Option<CabinetCommit>,
 }
 
 /// What can go wrong on the HTTP side. The body is `{code, message}`; no message quotes a token
@@ -145,6 +151,9 @@ pub(crate) struct DocMeta {
     pub name: String,
     pub created_at: u64,
     pub updated_at: u64,
+    /// The cabinet's copy of the last accepted commit: the etag the next commit is checked
+    /// against. Written with `meta.json`, so a restart keeps the conflict check.
+    pub cabinet: Option<Published>,
 }
 
 /// A session read back from the volume, replayed to its head.
@@ -219,6 +228,8 @@ pub struct App {
     pub cfg: Config,
     pub jwt: JwtConfig,
     pub store: Option<Store>,
+    /// The cabinet commit callback, when configured (`INTEGRATION.md` §5.2).
+    cabinet: Option<Cabinet>,
     pub(crate) inner: Mutex<Inner>,
     pub metrics: Metrics,
 }
@@ -226,12 +237,14 @@ pub struct App {
 impl App {
     /// A server without a volume: everything lives in the process (tests, local runs).
     pub fn new(cfg: Config, jwt: JwtConfig) -> App {
-        App { cfg, jwt, store: None, inner: Mutex::new(Inner::new()), metrics: Metrics::default() }
+        let cabinet = cfg.cabinet.as_ref().map(Cabinet::new);
+        App { cfg, jwt, store: None, cabinet, inner: Mutex::new(Inner::new()), metrics: Metrics::default() }
     }
 
     /// A server that keeps its sessions on `store` and restores them at startup.
     pub fn with_store(cfg: Config, jwt: JwtConfig, store: Store) -> App {
-        App { cfg, jwt, store: Some(store), inner: Mutex::new(Inner::new()), metrics: Metrics::default() }
+        let cabinet = cfg.cabinet.as_ref().map(Cabinet::new);
+        App { cfg, jwt, store: Some(store), cabinet, inner: Mutex::new(Inner::new()), metrics: Metrics::default() }
     }
 
     /// Opens a session for a file (ADR-0007 §1): loads the workbook, takes the lease and adds a
@@ -248,7 +261,7 @@ impl App {
         }
         let requested_name = request.initial_name.clone().unwrap_or_else(|| format!("Book{}", request.file_id));
         let stored = self.load_stored(request.file_id).map_err(ApiError::internal)?;
-        let (session, keys, state, journal, created_at, name, base_version) = match stored {
+        let (session, keys, state, journal, created_at, name, base_version, cabinet) = match stored {
             Some(loaded) => (
                 loaded.session,
                 Some(loaded.keys),
@@ -257,8 +270,9 @@ impl App {
                 loaded.meta.created_at,
                 loaded.meta.name,
                 loaded.meta.base_version,
+                loaded.meta.cabinet,
             ),
-            None => (self.load(&requested_name, request.initial_bytes.as_deref())?, None, None, Vec::new(), now, requested_name, 0),
+            None => (self.load(&requested_name, request.initial_bytes.as_deref())?, None, None, Vec::new(), now, requested_name, 0, None),
         };
         let fresh = keys.is_none();
         let session_id = new_session_id(request.file_id, &request.owner, now);
@@ -297,6 +311,7 @@ impl App {
                     name: name.clone(),
                     created_at,
                     updated_at: now,
+                    cabinet,
                 },
             );
             inner.journal.insert(session_id.clone(), journal);
@@ -497,6 +512,7 @@ impl App {
                                 name: scanned.name.clone(),
                                 created_at: scanned.created_at,
                                 updated_at: now,
+                                cabinet: scanned.cabinet.clone(),
                             },
                         );
                         inner.journal.insert(scanned.session_id.clone(), loaded.journal);
@@ -587,8 +603,13 @@ impl App {
 
     /// `POST /v1/sessions/{id}/commit` (ADR-0009): the file is written from the authoritative
     /// workbook, not from any client's copy. `expectedVersion` guards against a stale caller.
+    ///
+    /// With `COLLAB_CABINET_URL` set the built file is posted to the cabinet (`INTEGRATION.md`
+    /// §5.2): the cabinet owns the file version, and its `{version, etag}` is returned to the
+    /// caller, stored with the snapshot and shown to every subscriber. Without it the host owns
+    /// the commit and only the built file's digest travels back.
     pub async fn commit(&self, session_id: &str, expected_version: Option<u64>) -> Result<CommitReply, ApiError> {
-        let (name, version, bytes) = {
+        let (name, version, bytes, file_id, expected) = {
             let inner = self.inner.lock().await;
             let meta = inner.sessions.get(session_id).ok_or_else(|| ApiError::not_found("no such session"))?;
             let version = inner.gateway.hub().version(session_id).unwrap_or(0);
@@ -599,10 +620,82 @@ impl App {
             }
             let bytes =
                 inner.gateway.hub().commit(session_id).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", format!("{e:?}")))?;
-            (meta.name.clone(), version, bytes)
+            (meta.name.clone(), version, bytes, meta.file_id, meta.cabinet.as_ref().map(|published| published.etag.clone()))
         };
         self.metrics.commits.fetch_add(1, Ordering::Relaxed);
-        Ok(CommitReply { name, bytes: B64.encode(&bytes), sha256: hex(&Sha256::digest(&bytes)), version, warnings: Vec::new() })
+        let sha256 = hex(&Sha256::digest(&bytes));
+        let published = match &self.cabinet {
+            Some(cabinet) => {
+                let file = file_id.to_string();
+                let publication = Publication { session_id, file_id: &file, bytes: &bytes, sha256: &sha256, version, expected: expected.as_deref() };
+                match cabinet.publish(&publication).await {
+                    Ok(published) => Some(published),
+                    Err(PublishError::Conflict(message)) => {
+                        self.metrics.cabinet_conflicts.fetch_add(1, Ordering::Relaxed);
+                        log::warn!("cabinet refused the commit of fileId={file_id} as a conflict: {message}");
+                        let notice = ServerMessage::Error {
+                            code: "cabinetConflict".into(),
+                            message: format!("{message}; reopen the file to continue"),
+                            retryable: true,
+                        };
+                        self.notify(session_id, &notice).await;
+                        return Err(ApiError::new(StatusCode::CONFLICT, "cabinetConflict", message));
+                    }
+                    Err(error) => {
+                        self.metrics.cabinet_errors.fetch_add(1, Ordering::Relaxed);
+                        // The token and the body stay out of the log; the status does not.
+                        log::warn!("cabinet did not store the commit of fileId={file_id}: {error}");
+                        return Err(cabinet_error(error));
+                    }
+                }
+            }
+            None => None,
+        };
+        let cabinet = match published {
+            Some(published) => {
+                self.metrics.cabinet_published.fetch_add(1, Ordering::Relaxed);
+                self.remember_commit(session_id, &published, expected.as_deref()).await;
+                let wire = CabinetCommit { version: published.version, etag: published.etag };
+                let notice = ServerMessage::Committed { version, sha256: sha256.clone(), cabinet: wire.clone() };
+                self.notify(session_id, &notice).await;
+                Some(wire)
+            }
+            None => None,
+        };
+        Ok(CommitReply { name, bytes: B64.encode(&bytes), sha256, version, warnings: Vec::new(), cabinet })
+    }
+
+    /// Stores the cabinet's answer with the session and with the snapshot, so the next commit —
+    /// after a restart too — sends the etag it expects. Two commits may await the cabinet at once;
+    /// only the answer that still matches the etag this one started from replaces it.
+    async fn remember_commit(&self, session_id: &str, published: &Published, expected: Option<&str>) {
+        let stored = {
+            let mut inner = self.inner.lock().await;
+            match inner.sessions.get_mut(session_id) {
+                Some(meta) if meta.cabinet.as_ref().map(|current| current.etag.as_str()) == expected => {
+                    meta.cabinet = Some(published.clone());
+                    true
+                }
+                _ => false,
+            }
+        };
+        if stored && let Err(e) = self.write_meta(session_id).await {
+            log::error!("cabinet etag not stored session={session_id}: {e}");
+        }
+    }
+
+    /// Queues one message for every socket of the session. The room lock is not held: a slow
+    /// subscriber loses the frame, the document is unaffected.
+    async fn notify(&self, session_id: &str, message: &ServerMessage) {
+        let senders: Vec<mpsc::Sender<ServerMessage>> = {
+            let inner = self.inner.lock().await;
+            inner.conns.get(session_id).map(|senders| senders.values().cloned().collect()).unwrap_or_default()
+        };
+        for sender in senders {
+            if sender.try_send(message.clone()).is_err() {
+                self.metrics.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
 
     /// `DELETE /v1/sessions/{id}`: the cabinet closes the session and its lease.
@@ -652,6 +745,21 @@ impl App {
     }
 }
 
+/// What a failed callback means for the caller of the commit endpoint. The cabinet's answer is
+/// reported as a gateway failure of the commit itself: `409` stays a conflict, a refused token and
+/// a size refusal keep their own codes, and a spent retry is a bad gateway. The message never
+/// quotes the token or the file.
+fn cabinet_error(error: PublishError) -> ApiError {
+    let (status, code) = match &error {
+        PublishError::Unauthorized(_) => (StatusCode::FORBIDDEN, "cabinetUnauthorized"),
+        PublishError::TooLarge(_) => (StatusCode::PAYLOAD_TOO_LARGE, "cabinetTooLarge"),
+        PublishError::Unavailable(_) => (StatusCode::BAD_GATEWAY, "cabinetUnavailable"),
+        PublishError::Refused(_) => (StatusCode::BAD_GATEWAY, "cabinetRefused"),
+        PublishError::Conflict(_) => (StatusCode::CONFLICT, "cabinetConflict"),
+    };
+    ApiError::new(status, code, error.to_string())
+}
+
 /// The `meta.json` of a live session.
 fn stored_meta(session_id: &str, meta: &DocMeta, version: u64, epoch: u64, base_version: u64) -> StoredMeta {
     StoredMeta {
@@ -665,6 +773,7 @@ fn stored_meta(session_id: &str, meta: &DocMeta, version: u64, epoch: u64, base_
         version,
         epoch,
         base_version,
+        cabinet: meta.cabinet.clone(),
     }
 }
 

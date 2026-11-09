@@ -23,6 +23,8 @@ use gridcraft_collab::{Applied, ClientOp, KeyFile};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::cabinet::Published;
+
 const BASE: &str = "base.xlsx";
 const KEYS: &str = "keys.json";
 const SEEN: &str = "seen.json";
@@ -71,6 +73,11 @@ pub struct StoredMeta {
     pub epoch: u64,
     /// Version of `base.xlsx`; the journal holds the operations after it.
     pub base_version: u64,
+    /// The last commit the cabinet accepted (`INTEGRATION.md` §5.2). The etag is what the next
+    /// commit sends as `expectedVersion`, so a restart does not lose the conflict check. Absent
+    /// when the room never published or its volume predates the callback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cabinet: Option<Published>,
 }
 
 /// What a snapshot write needs, captured under the server lock and written without it.
@@ -365,11 +372,40 @@ mod tests {
             version: 3,
             epoch: 1,
             base_version: 3,
+            cabinet: None,
         };
         store.write_meta(7, &meta).unwrap();
         assert_eq!(store.read_base(7).unwrap().unwrap(), b"PK\x03\x04not-really");
         assert_eq!(store.read_meta(7).unwrap().unwrap(), meta);
         assert_eq!(store.sessions().unwrap(), vec![meta]);
+    }
+
+    #[test]
+    fn the_cabinet_etag_survives_a_restart() {
+        let store = store();
+        let meta = StoredMeta {
+            session_id: "s".into(),
+            file_id: 8,
+            app: "gridcraft".into(),
+            owner: "ann".into(),
+            name: "plan.xlsx".into(),
+            created_at: 1,
+            updated_at: 2,
+            version: 4,
+            epoch: 0,
+            base_version: 4,
+            cabinet: Some(Published { version: 42, etag: "1794186677".into() }),
+        };
+        store.write_meta(8, &meta).unwrap();
+        let loaded = store.read_meta(8).unwrap().expect("meta");
+        assert_eq!(loaded.cabinet, Some(Published { version: 42, etag: "1794186677".into() }), "the next commit expects the cabinet's etag");
+        // A meta written before the callback existed still reads.
+        let legacy = serde_json::json!({
+            "sessionId": "s", "fileId": 8, "app": "gridcraft", "owner": "ann", "name": "plan.xlsx",
+            "createdAt": 1, "updatedAt": 2, "version": 4, "epoch": 0, "baseVersion": 4
+        });
+        std::fs::write(store.dir(8).join(META), legacy.to_string()).unwrap();
+        assert_eq!(store.read_meta(8).unwrap().map(|meta| meta.cabinet), Some(None));
     }
 
     #[test]

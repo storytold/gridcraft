@@ -181,6 +181,19 @@ mod sheet_value {
     }
 }
 
+/// The cabinet's copy of a committed file (`INTEGRATION.md` §5.2): the version the cabinet
+/// stores and the etag the next commit is checked against. The room posts the built `.xlsx`
+/// itself when `COLLAB_CABINET_URL` names the cabinet; every subscriber then sees this answer
+/// instead of claiming a save the cabinet did not take.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CabinetCommit {
+    /// The cabinet's file version.
+    pub version: u64,
+    /// What the next commit must send as `expectedVersion`.
+    pub etag: String,
+}
+
 /// A confirmed operation: the only thing a client applies.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

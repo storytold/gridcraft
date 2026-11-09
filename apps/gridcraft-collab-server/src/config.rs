@@ -7,6 +7,8 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
+use crate::cabinet::{CabinetConfig, DEFAULT_ATTEMPTS, DEFAULT_TIMEOUT_MS};
+
 /// Why the environment does not describe a usable server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError(pub String);
@@ -46,6 +48,9 @@ pub struct Config {
     pub snapshot_ops: u64,
     /// How often a background snapshot runs even without enough operations (RFC §9).
     pub snapshot_interval: Duration,
+    /// The cabinet commit callback (`INTEGRATION.md` §5.2). `None` keeps the commit server-side
+    /// only: the file is built and the host owns the storage.
+    pub cabinet: Option<CabinetConfig>,
 }
 
 impl Default for Config {
@@ -64,6 +69,7 @@ impl Default for Config {
             max_participants: 5,
             snapshot_ops: 500,
             snapshot_interval: Duration::from_secs(5 * 60),
+            cabinet: None,
         }
     }
 }
@@ -107,7 +113,51 @@ impl Config {
             let n = positive(&value, "GRIDCRAFT_COLLAB_MAX_PARTICIPANTS")?;
             cfg.max_participants = usize::try_from(n).map_err(|_| ConfigError("GRIDCRAFT_COLLAB_MAX_PARTICIPANTS is too large".into()))?;
         }
+        cfg.cabinet = cabinet_from_env()?;
         Ok(cfg)
+    }
+}
+
+/// The commit callback from the environment. The shared names of `INTEGRATION.md` §5.2 are
+/// canonical; the `GRIDCRAFT_COLLAB_`-prefixed aliases serve deployments that keep every setting of
+/// this process in one namespace. The token is a secret: it is read here, kept in
+/// [`CabinetConfig`] (whose `Debug` redacts it) and never written to a log, a metric or a URL.
+fn cabinet_from_env() -> Result<Option<CabinetConfig>, ConfigError> {
+    let Some(url) = first_of("GRIDCRAFT_COLLAB_CABINET_URL", "COLLAB_CABINET_URL")? else {
+        return Ok(None);
+    };
+    let url = url.trim().to_string();
+    if !url.starts_with("http://") {
+        return Err(ConfigError("COLLAB_CABINET_URL must start with http:// (TLS is terminated by the ingress; https:// is not supported)".into()));
+    }
+    if !url.contains("{sessionId}") {
+        return Err(ConfigError(
+            "COLLAB_CABINET_URL must contain {sessionId}: the endpoint is /api/v1/internal/office/sessions/{sessionId}/commit".into(),
+        ));
+    }
+    let Some(token) = first_of("GRIDCRAFT_COLLAB_CABINET_TOKEN", "COLLAB_CABINET_TOKEN")? else {
+        return Err(ConfigError("COLLAB_CABINET_TOKEN is required with COLLAB_CABINET_URL".into()));
+    };
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        return Err(ConfigError("COLLAB_CABINET_TOKEN is required with COLLAB_CABINET_URL".into()));
+    }
+    let timeout_ms = match first_of("GRIDCRAFT_COLLAB_CABINET_TIMEOUT_MS", "COLLAB_CABINET_TIMEOUT_MS")? {
+        Some(value) => positive(&value, "COLLAB_CABINET_TIMEOUT_MS")?,
+        None => DEFAULT_TIMEOUT_MS,
+    };
+    let attempts = match first_of("GRIDCRAFT_COLLAB_CABINET_ATTEMPTS", "COLLAB_CABINET_ATTEMPTS")? {
+        Some(value) => positive(&value, "COLLAB_CABINET_ATTEMPTS")?,
+        None => u64::from(DEFAULT_ATTEMPTS),
+    };
+    Ok(Some(CabinetConfig { url, token, timeout: Duration::from_millis(timeout_ms), attempts: u32::try_from(attempts).unwrap_or(u32::MAX) }))
+}
+
+/// The first of two environment names that is set.
+fn first_of(primary: &str, fallback: &str) -> Result<Option<String>, ConfigError> {
+    match var(primary)? {
+        Some(value) => Ok(Some(value)),
+        None => var(fallback),
     }
 }
 

@@ -219,3 +219,51 @@ pub fn op(op_id: &str, cmd: &str, params: Value, sheet: &str, a1: &str) -> Strin
     })
     .to_string()
 }
+
+/// A cabinet on loopback: each accepted connection is answered with the next reply (`None` closes
+/// without an answer, a lost response) and its request text is queued for the test. The URL keeps
+/// `{sessionId}` for the server to substitute.
+pub async fn fake_cabinet(replies: Vec<Option<&'static str>>) -> (String, tokio::sync::mpsc::Receiver<String>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let (sender, receiver) = tokio::sync::mpsc::channel(16);
+    tokio::spawn(async move {
+        for reply in replies {
+            let Ok((mut stream, _)) = listener.accept().await else { return };
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 8192];
+            while let Ok(n) = stream.read(&mut chunk).await {
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..n]);
+                if let Some(split) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&request[..split]).to_ascii_lowercase();
+                    let length = head
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:").map(|value| value.trim().parse::<usize>().unwrap_or(0)))
+                        .unwrap_or(0);
+                    if request.len() >= split + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let _ = sender.send(String::from_utf8_lossy(&request).to_string()).await;
+            if let Some(reply) = reply {
+                let _ = stream.write_all(reply.as_bytes()).await;
+            }
+        }
+    });
+    (format!("http://{address}/api/v1/internal/office/sessions/{{sessionId}}/commit"), receiver)
+}
+
+/// A complete `200` answer for the fake cabinet; `Content-Length` must match the body.
+pub fn cabinet_reply(body: &'static str) -> &'static str {
+    Box::leak(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).into_boxed_str())
+}
+
+/// One request body of the callback (everything after the head).
+pub fn request_body(request: &str) -> String {
+    request.split_once("\r\n\r\n").map(|(_, body)| body.to_string()).unwrap_or_default()
+}

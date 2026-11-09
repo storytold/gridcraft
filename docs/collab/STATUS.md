@@ -147,14 +147,16 @@ keeps the new optional fields.
 | 2 | command size limit | server accepts messages up to 9 MiB, frames up to 1 MiB (`GRIDCRAFT_COLLAB_*` config, `server.md`); a structural undo/redo image over one frame travels in `applied{more:true}` / `imagePart` parts of 512 KiB before base64 (ADR-0013), assembled by the client before it is applied; the parts carry the whole `{book, images}` payload, so the workbook-level state is not repeated per frame; one operation is bounded to 32 MiB (RFC §4.1) and a step image over it is refused `too_large` before mutation; a single *command* above the message limit is still refused — client-side splitting of a large command is not implemented |
 | 3 | structural queue | FIFO per document: operations pass one room mutex in arrival order; `structural` must have `baseVersion == head` and bumps `epoch` |
 | 4 | snapshot cost | snapshot is the authoritative `.xlsx` written by the real writer, not a JSON model; chunked resync of 768 KiB per frame (RFC §3.3/§4.6/§9) |
-| 5 | host contract | `INTEGRATION.md` §6 implemented in the app: `gridcraft:session`, `session-state`, `presence`, `commit`, `committed`; the cabinet-side page and the server-to-server commit callback are outside this repository |
+| 5 | host contract | `INTEGRATION.md` §6 implemented in the app: `gridcraft:session`, `session-state`, `presence`, `commit`, `committed`; the server-to-server commit callback is implemented too (`COLLAB_CABINET_URL`, §13); the cabinet-side page is outside this repository |
 | 6 | several windows | decided and implemented (RFC §13.6, §12 below): one `actorId` per user, one `windowId` per window; participants and presence are per window, undo/redo stay on the actor |
 | 7 | CSV/TSV | collaboration is `.xlsx` only, as in `INTEGRATION.md` |
 
 ## 6. Known gaps
 
-1. The cabinet's server-to-server commit callback: the HTTP `commit` endpoint exists,
-   the outgoing call is integration work.
+1. ~~The cabinet's server-to-server commit callback~~ — implemented (§13): the room posts the
+   built `.xlsx` to `COLLAB_CABINET_URL`, stores the cabinet's etag with the snapshot and shows
+   its version to every subscriber. The cabinet-side endpoint and its deployment remain outside
+   this repository.
 2. Structural undo (row/sheet insert-delete) is one operation with whole-sheet
    images (`applied.images`) and the workbook-level state of the same boundary
    (`applied.book`: defined names, structure protection, package and workbook kept
@@ -558,6 +560,66 @@ cargo +1.95.0 clippy -p gridcraft-collab -p gridcraft-collab-client -p gridcraft
 cargo +1.95.0 clippy -p gridcraft --features collab --all-targets -j 8 -- -D warnings   clean
 cargo fmt --all -- --check                           clean
 cargo check -p gridcraft-web --target wasm32-unknown-unknown   ok
+```
+
+No CI file is touched and nothing is pushed to `storytold/*`.
+
+## 13. Commit callback to the cabinet (M87, 2026-11-09)
+
+A commit no longer stops at this process when a cabinet endpoint is configured: the room builds
+the authoritative `.xlsx`, posts it to the cabinet and records the version the cabinet stores.
+
+- `apps/gridcraft-collab-server/src/cabinet.rs`: the callback client. Only `http://` (TLS is the
+  ingress's job), one request per attempt, `Connection: close`; the body is the shared contract
+  `{fileId, bytes(base64), sha256, version, expectedVersion?}`. `{sessionId}` and `{fileId}` in
+  the URL are substituted. The token is a secret: `CabinetConfig`'s `Debug` redacts it, and
+  neither it nor the document reaches a log line.
+- Status handling follows the contract: `200 {version, etag}` is a stored version; `409` is an
+  external edit and is never retried; `401`/`403` and `413` are refused at once; `408`/`425`/
+  `429`/`5xx`/a lost answer are retried with the same body after 200 ms and 800 ms
+  (`COLLAB_CABINET_ATTEMPTS`, default 3).
+- `COLLAB_CABINET_URL`, `COLLAB_CABINET_TOKEN`, `COLLAB_CABINET_TIMEOUT_MS` and
+  `COLLAB_CABINET_ATTEMPTS` are read at start-up (the `GRIDCRAFT_COLLAB_`-prefixed aliases are
+  accepted). Without a URL the old behaviour is unchanged: `CommitReply` has no `cabinet` field
+  and subscribers receive nothing extra.
+- On `200` the answer is returned in `CommitReply.cabinet`, written to `meta.json` as
+  `cabinet: {version, etag}` and broadcast to every socket as
+  `committed{version, sha256, cabinet}` (`crates/collab`, `crates/collab-client`,
+  `crates/collab-web`). The etag is what the next commit sends as `expectedVersion`; it survives
+  a restart and a failure leaves it alone.
+- `409` answers the caller `409 cabinetConflict` and sends every subscriber a retryable
+  `error{code:"cabinetConflict"}`; the file is not overwritten. A wrong token is
+  `403 cabinetUnauthorized`, a refused size `413 cabinetTooLarge`, a spent retry
+  `502 cabinetUnavailable`.
+- New metrics: `cabinet_published_total`, `cabinet_conflicts_total`, `cabinet_errors_total`.
+
+Tests (`tests/commit_callback.rs`, a loopback cabinet, no real service):
+
+```text
+a_commit_is_published_to_the_cabinet_and_every_peer_sees_its_version
+a_cabinet_conflict_is_not_retried_and_leaves_the_stored_etag_alone
+a_transient_cabinet_failure_is_retried_with_the_same_body
+a_refused_token_and_a_size_refusal_keep_their_meaning
+a_spent_retry_is_a_gateway_failure_and_publishes_nothing
+the_etag_survives_a_restart_so_the_next_commit_still_checks_it
+```
+
+`cabinet.rs` unit tests cover the status classes, the exact body, the URL substitution, a
+chunked answer and that a `409` is a single attempt. `store.rs` covers the etag round-trip and
+a `meta.json` written before this slice.
+
+Run (remote host, `+1.95.0`):
+
+```text
+cargo +1.95.0 test -p gridcraft-collab                       45 passed
+cargo +1.95.0 test -p gridcraft-collab-client                 13 converge + 5 parts passed
+cargo +1.95.0 test -p gridcraft-collab-server                 33 unit + 7 socket + 9 persistence + 5 acceptance + 6 callback + 2 logging
+cargo +1.95.0 test -p gridcraft-collab-web                    6 passed
+cargo +1.95.0 clippy -p gridcraft-collab -p gridcraft-collab-client
+  -p gridcraft-collab-server -p gridcraft-collab-web --all-targets -j 8 -- -D warnings   clean
+cargo fmt --all -- --check                                    clean
+cargo +1.95.0 check -p gridcraft --features collab --all-targets                        ok
+cargo +1.95.0 check -p gridcraft-collab-web -p gridcraft-web --target wasm32-unknown-unknown  ok
 ```
 
 No CI file is touched and nothing is pushed to `storytold/*`.

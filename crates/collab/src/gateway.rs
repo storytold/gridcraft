@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::{AuthError, Claims, Expected};
 use crate::hub::{Hub, HubError, Participant, Presence, Role, viewer_rejection};
-use crate::protocol::{Applied, ClientOp, Rejected, SheetName};
+use crate::protocol::{Applied, CabinetCommit, ClientOp, Rejected, SheetName};
 
 /// One message from a client.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -113,6 +113,15 @@ pub enum ServerMessage {
     },
     Presence {
         participants: Vec<Participant>,
+    },
+    /// A commit became a cabinet file version (`INTEGRATION.md` §5.2). `version` is the room's
+    /// document version at the commit; `sha256` is the digest of the built `.xlsx`; `cabinet`
+    /// carries the version and etag the cabinet stored, so every peer shows the stored file
+    /// rather than a local digest pretending to be one.
+    Committed {
+        version: u64,
+        sha256: String,
+        cabinet: CabinetCommit,
     },
     Pong {
         nonce: u64,

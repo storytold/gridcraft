@@ -407,7 +407,7 @@ impl CollabTrait for Collab {
                 Event::Resynced { version, .. } => {
                     self.status = SyncStatus::Online { version: *version, participants: state.participants.len() };
                 }
-                Event::Presence(_) | Event::Closed => {}
+                Event::Presence(_) | Event::Committed { .. } | Event::Closed => {}
             }
         }
         self.views(&state);

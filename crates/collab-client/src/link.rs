@@ -6,7 +6,7 @@
 //! same [`Event`]s to the same state machine, so a local document is kept in
 //! step identically in the desktop app and behind the host bridge.
 
-use gridcraft_collab::{Applied, ClientMessage, ClientOp, Participant, Presence, Rejected, Role, SheetName};
+use gridcraft_collab::{Applied, CabinetCommit, ClientMessage, ClientOp, Participant, Presence, Rejected, Role, SheetName};
 
 /// The first message a session gets.
 #[derive(Clone, Debug)]
@@ -36,6 +36,13 @@ pub enum Event {
         version: u64,
         epoch: u64,
         bytes: Vec<u8>,
+    },
+    /// The room's commit was stored by the cabinet (`INTEGRATION.md` §5.2): `cabinet` is the
+    /// version and etag the next commit is checked against. The document is unchanged.
+    Committed {
+        version: u64,
+        sha256: String,
+        cabinet: CabinetCommit,
     },
     /// The socket came back; catch-up frames follow.
     Reconnected {

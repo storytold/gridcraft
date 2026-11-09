@@ -361,6 +361,9 @@ fn handle(message: ServerMessage, shared: &Arc<Mutex<State>>, events: &mpsc::Unb
                 let _ = events.send(Event::Snapshot { version, epoch, bytes });
             }
         }
+        ServerMessage::Committed { version, sha256, cabinet } => {
+            let _ = events.send(Event::Committed { version, sha256, cabinet });
+        }
         ServerMessage::Pong { .. } => {}
         ServerMessage::Error { code, message, retryable } => {
             if code == "resync" {

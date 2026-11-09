@@ -338,7 +338,12 @@ impl Synced {
                 Event::Reconnected { .. } => {
                     // Catch-up frames follow; the pending queue is resent by the transport.
                 }
-                Event::Presence(_) | Event::Resynced { .. } | Event::Disconnected { .. } | Event::Error { .. } | Event::Closed => {}
+                Event::Presence(_)
+                | Event::Committed { .. }
+                | Event::Resynced { .. }
+                | Event::Disconnected { .. }
+                | Event::Error { .. }
+                | Event::Closed => {}
             }
             out.push(event);
         }
