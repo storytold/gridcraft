@@ -524,6 +524,12 @@ pub struct Session {
     /// The native backend the host injected. `None` means no model is loaded; commands then
     /// report an actionable state and write nothing.
     pub translate_backend: Option<Arc<dyn gridcraft_translate::Backend>>,
+    /// Reopens the installed model for the session's model root (the native opener the host
+    /// installed at startup). `Session::execute` never loads weights itself — inference crates
+    /// are native-only and the engine stays wasm-clean — so after `translate.modelImport` or
+    /// `translate.modelDownload` succeeds, the command calls this to refresh `translate_backend`
+    /// on the session that ran it; without it a model-less session keeps reporting no-model.
+    pub translate_backend_opener: Option<Arc<dyn Fn(&Session) -> Option<Option<Arc<dyn gridcraft_translate::Backend>>> + Send + Sync>>,
     /// User-initiated model download transport (native host only; never used during inference).
     pub translate_fetcher: Option<Arc<dyn gridcraft_translate::ModelFetcher>>,
     /// Translation jobs, shared with their worker threads.

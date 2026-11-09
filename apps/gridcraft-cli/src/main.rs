@@ -186,6 +186,12 @@ fn install_translate(session: &mut Session) {
     let root = gridcraft_translate_candle::models_root();
     session.translate_models_dir = root.display().to_string();
     session.translate_backend = gridcraft_translate_candle::installed_backend(&root);
+    // Same opener the desktop installs: the engine's install commands refresh the running
+    // session's backend through it after their own verified install.
+    session.translate_backend_opener = Some(std::sync::Arc::new(|s: &Session| {
+        (!s.translate_models_dir.trim().is_empty())
+            .then(|| gridcraft_translate_candle::installed_backend(std::path::Path::new(&s.translate_models_dir)))
+    }));
 }
 
 fn activate_sheet(s: &mut Session, sheet: Option<&str>) -> Result<(), String> {

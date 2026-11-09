@@ -644,6 +644,13 @@ fn translate(app: &mut SheetApp, ui: &mut Ui) {
                             ui.label(text);
                         }
                     }
+                    ui.label(
+                        egui::RichText::new(
+                            lang.tr("Translated cells keep their cell formatting, but rich-text runs inside one cell (XLSX import flattens them) are not preserved."),
+                        )
+                        .small()
+                        .color(t.text_dim),
+                    );
                     ui.horizontal(|ui| {
                         if ui.button(lang.tr("Copy")).clicked() {
                             match app.run("translate.copy", json!({"job": job_id})) {

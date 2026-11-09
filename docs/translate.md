@@ -11,10 +11,10 @@ channel, `gridcraft-cli run --cmd` and MCP see, because every action is a normal
 
 ## What it does and does not translate
 
-- Translates **text cells** in the selection. A formula, a Python cell, a number, a date, a
-  boolean, an error and an empty cell are skipped, with the reason reported per cell.
-- Never touches formula syntax and never writes a formula: `translate.insert` writes
-  `Value::Text` directly, so a translation that begins `=`, `+`, `-` or `@` stays text.
+- Translates **text cells** in the selection. A formula, a Python cell, a number, a date, a boolean, an error and an empty cell are skipped, with the reason reported per cell.
+- Translated cells keep their cell-level style, but rich-text runs inside one cell are not
+  preserved: XLSX import flattens shared-string runs to plain text before translation, so a
+  translated insert cannot restore per-run formatting.
 - Segments by line and sentence, protects numbers, dates, times, URLs, e-mail addresses and
   placeholder tokens (`{name}`, `{{name}}`, `${name}`, `%s`, `%1$s`), and verifies every marker
   comes back before a translated string is accepted.
@@ -55,8 +55,8 @@ WASM backend ships in v1.
 | `translate.insert` | `{range?, job? \| values?, mode?: "replace"\|"emptyOnly"}` | `{cells, skipped}` | Journaled, one undo step, all-or-nothing on errors. `values` is `[{cell, text}]` or rows of text from `range`. |
 | `translate.copy` | `{job, cells?}` | `{chars, cells}` | Puts the translated lines on the engine clipboard (`Session::translate_clipboard`); the pane copies them to the system clipboard on the explicit Copy action. |
 | `translate.models` | `{}` | `{models, active, modelsDir, accelerators}` | Installed/available models, state, licence, hashes and the model directory. |
-| `translate.modelImport` | `{path, id?, consent: true}` | model record | Copies and verifies a folder; refuses without consent. |
-| `translate.modelDownload` | `{id, consent: true}` | model record | URL comes from the shipped manifest, never from the caller; refuses without consent and without a host transport. |
+| `translate.modelImport` | `{path, id?, consent: true}` | model record | Copies and verifies a folder; refuses without consent. On the session that ran it, refreshes the backend through the host's opener, so the model is usable right away. |
+| `translate.modelDownload` | `{id, consent: true}` | model record | URL comes from the shipped manifest, never from the caller; refuses without consent and without a host transport. On the session that ran it, refreshes the backend through the host's opener, so the model is usable right away. |
 | `translate.modelRemove` | `{id}` | `{removed}` | Removes the model directory; unknown or traversing ids are refused. |
 
 Only `review.translate` is a ribbon-catalog entry, so it is the one that moves from missing to

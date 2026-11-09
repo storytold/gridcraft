@@ -31,7 +31,7 @@ Weights are never committed and never bundled. The repository contains only the 
 revision, files, byte sizes, SHA-256, licence, URLs). The person downloads the model in the app
 after a consent screen that names the source, size, licence and SHA-256, or places the files in the
 documented model directory; both paths are verified the same way before use. `translate.modelDownload`
-refuses without `consent: true` and without a host-installed HTTPS transport. The 1.8 GB default is
+refuses without `consent: true` and without a host-installed transport; the desktop host's transport is HTTPS. The 1.8 GB default is
 shown honestly (above the 2 GB refusal threshold is not reached, but it is not a casual download);
 the 0.6B row is the smaller choice.
 

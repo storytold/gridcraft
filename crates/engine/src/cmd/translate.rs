@@ -939,6 +939,7 @@ fn model_import(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("importing a model from a folder needs the desktop build".into()));
     }
     install_from_folder(s, m, source).map_err(EngineError::Other)?;
+    refresh_installed_backend(s, m);
     Ok(model_record(s, m))
 }
 
@@ -948,7 +949,7 @@ fn model_download(s: &mut Session, p: &Json) -> Result<Json> {
     let m = manifest::find(id).ok_or_else(|| EngineError::Other(format!("`{id}` is not a known translation model; known ids: {}", known_ids())))?;
     let _ = models_dir(s)?;
     if cfg!(target_arch = "wasm32") {
-        return Err(EngineError::Other("downloading a model needs the desktop build; place the files in the model directory instead".into()));
+        return Err(EngineError::Other("downloading a model needs the desktop build; place the model files in the model directory instead".into()));
     }
     let fetcher = s.translate_fetcher.clone().ok_or_else(|| {
         EngineError::Other(
@@ -956,8 +957,27 @@ fn model_download(s: &mut Session, p: &Json) -> Result<Json> {
         )
     })?;
     install_from_download(s, m, fetcher.as_ref()).map_err(EngineError::Other)?;
+    refresh_installed_backend(s, m);
     Ok(model_record(s, m))
 }
+
+/// The `Session::execute` path never loads model weights: the pane keeps its own download
+/// session, and headless callers (CLI, MCP, the control channel) inject the backend at startup.
+/// After either install command succeeds on the session that ran it, that session can use the
+/// model right away: the host's opener (installed at startup next to the model root) reopens
+/// the verified install, and the refreshed `translate_backend` replaces the old one. Without
+/// it a model-less session keeps reporting no-model after its own import or download.
+#[cfg(not(target_arch = "wasm32"))]
+fn refresh_installed_backend(s: &mut Session, m: &ModelManifest) {
+    if let Some(reopened) = s.translate_backend_opener.as_ref().and_then(|open| open(s)) {
+        if reopened.as_ref().is_some_and(|b| b.model_id() == m.id) {
+            s.translate_backend = reopened;
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn refresh_installed_backend(_s: &mut Session, _m: &ModelManifest) {}
 
 fn model_remove(s: &mut Session, p: &Json) -> Result<Json> {
     let id = str_param(p, "id").ok_or_else(|| bad("translate.modelRemove", "missing `id`"))?;
@@ -1215,5 +1235,61 @@ mod tests {
         let err = s.execute("translate.run", json!({"range": "A1:B4", "from": "en", "to": "es"})).unwrap_err().to_string();
         assert!(err.contains("no translation model"), "{err}");
         assert!(Arc::ptr_eq(&before, &s.doc().expect("doc").wb));
+    }
+
+    #[test]
+    fn a_successful_install_refreshes_the_session_backend_through_the_opener() {
+        // The failing case this guards: a model-less session imports a model and still gets
+        // the no-model error because nothing refreshed `translate_backend` on the session
+        // that ran the install. The opener stands in for the host's `installed_backend`.
+        let mut s = session();
+        s.translate_backend = None;
+        let opened: Arc<dyn gridcraft_translate::Backend> = Arc::new(FixedBackend::new());
+        let probe = Arc::clone(&opened);
+        s.translate_backend_opener = Some(Arc::new(move |_: &Session| Some(Some(Arc::clone(&probe)))));
+        let m = manifest::find("qwen3-1.7b").expect("manifest");
+        refresh_installed_backend(&mut s, m);
+        assert!(s.translate_backend.as_ref().is_some_and(|b| b.model_id() == opened.model_id()));
+    }
+
+    #[test]
+    fn install_refresh_ignores_a_backend_for_another_model() {
+        // A session mid-install for one model must not pick up a stale backend for another id:
+        // without the model-id check the pane would show "ready" for the wrong model.
+        struct Other;
+        impl gridcraft_translate::Backend for Other {
+            fn model_id(&self) -> &str {
+                "qwen3-0.6b"
+            }
+            fn supports(&self, _: &LangTag, _: &LangTag) -> bool {
+                false
+            }
+            fn translate(
+                &self,
+                req: &gridcraft_translate::BatchRequest<'_>,
+                _: &gridcraft_translate::Cancel,
+            ) -> std::result::Result<Vec<String>, gridcraft_translate::BackendError> {
+                Ok(req.texts.iter().map(|_| String::new()).collect())
+            }
+        }
+        let mut s = session();
+        s.translate_backend = None;
+        let other: Arc<dyn gridcraft_translate::Backend> = Arc::new(Other);
+        s.translate_backend_opener = Some(Arc::new(move |_: &Session| Some(Some(Arc::clone(&other)))));
+        let m = manifest::find("qwen3-1.7b").expect("manifest");
+        refresh_installed_backend(&mut s, m);
+        assert!(s.translate_backend.is_none());
+    }
+
+    #[test]
+    fn install_without_an_opener_changes_no_backend() {
+        // The wasm build installs no opener: a successful install there leaves the session
+        // exactly as it was, and translation still reports no-model.
+        let mut s = session();
+        s.translate_backend = None;
+        assert!(s.translate_backend_opener.is_none());
+        let m = manifest::find("qwen3-1.7b").expect("manifest");
+        refresh_installed_backend(&mut s, m);
+        assert!(s.translate_backend.is_none());
     }
 }

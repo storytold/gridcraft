@@ -82,10 +82,16 @@ impl ModelFetcher for HttpFetcher {
 }
 
 /// Resolves the model root, installs the download transport and injects a lazy backend when the
-/// model directory exists. Called once at startup and again after an install/removal.
+/// model directory exists. Called once at startup and again after an install/removal. Also
+/// installs the opener the engine's install commands call to refresh the running session's
+/// backend after their own verified install, so a model-less session translates right away.
 pub fn refresh(session: &mut Session) {
     let root = gridcraft_translate_candle::models_root();
     session.translate_models_dir = root.display().to_string();
     session.translate_fetcher = Some(Arc::new(HttpFetcher));
     session.translate_backend = gridcraft_translate_candle::installed_backend(&root);
+    session.translate_backend_opener = Some(Arc::new(|s: &Session| {
+        (!s.translate_models_dir.trim().is_empty())
+            .then(|| gridcraft_translate_candle::installed_backend(std::path::Path::new(&s.translate_models_dir)))
+    }));
 }
