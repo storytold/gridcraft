@@ -262,13 +262,13 @@ pub fn validate_package(bytes: &[u8]) -> Result<Vec<String>, String> {
 /// namespaces) in the package's relationship parts, keyed in lower case. Relationships that carry
 /// nothing are left out, as a save may rightly drop them: a link to a place in the workbook
 /// (`#Sheet1!A1`, written as a cell's `location`) and a target part with nothing in it.
-pub(super) fn relationship_kinds(bytes: &[u8]) -> Result<BTreeMap<String, String>, String> {
-    relationship_kinds_within(bytes, RELATIONSHIP_BUDGET)
+pub(super) fn relationship_kinds(bytes: &[u8], refresh_replaces_records: bool) -> Result<BTreeMap<String, String>, String> {
+    relationship_kinds_within(bytes, RELATIONSHIP_BUDGET, refresh_replaces_records)
 }
 
 /// [`relationship_kinds`] reading at most `budget` decompressed bytes. `Err` once the relationship
 /// parts alone need more: their kinds can't be listed completely.
-fn relationship_kinds_within(bytes: &[u8], mut budget: u64) -> Result<BTreeMap<String, String>, String> {
+fn relationship_kinds_within(bytes: &[u8], mut budget: u64, refresh_replaces_records: bool) -> Result<BTreeMap<String, String>, String> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a zip package: {e}"))?;
     let names = zip_names(&mut zip);
     let by_key: HashMap<String, &String> = names.iter().map(|n| (part_key(n), n)).collect();
@@ -302,7 +302,10 @@ fn relationship_kinds_within(bytes: &[u8], mut budget: u64) -> Result<BTreeMap<S
                 if !holds_something(&mut zip, part, kind, &mut verdicts, &mut budget) {
                     continue;
                 }
-                if kind.eq_ignore_ascii_case("pivotCacheDefinition") && holds_something(&mut zip, part, "refreshonload", &mut verdicts, &mut budget) {
+                if refresh_replaces_records
+                    && kind.eq_ignore_ascii_case("pivotCacheDefinition")
+                    && holds_something(&mut zip, part, "refreshonload", &mut verdicts, &mut budget)
+                {
                     kinds.entry("pivotcacherecords".to_string()).or_insert_with(|| "pivotCacheRecords".to_string());
                 }
             }
@@ -408,8 +411,8 @@ mod tests {
     fn relationship_parts_count_against_the_decompression_budget() {
         // Each part fits the per-part allowance, but together they need more than the budget.
         let bytes = many_rels(8, 64 * 1024);
-        assert!(relationship_kinds_within(&bytes, 256 * 1024).is_err());
-        let kinds = relationship_kinds_within(&bytes, 1024 * 1024).unwrap();
+        assert!(relationship_kinds_within(&bytes, 256 * 1024, false).is_err());
+        let kinds = relationship_kinds_within(&bytes, 1024 * 1024, false).unwrap();
         assert_eq!(kinds.get("custom").map(String::as_str), Some("custom"));
     }
 }
