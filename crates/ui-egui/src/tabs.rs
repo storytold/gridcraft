@@ -338,6 +338,8 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                 avail.left()
             };
             let track = Rect::from_min_max(pos2(track_left, avail.center().y - 7.0), pos2(right, avail.center().y + 7.0));
+            let window = ui.input(|i| i.viewport_rect());
+            let track = crate::ribbon::dodge_resize_bands(track, window, crate::ribbon::frame_resize_margin(ui));
             crate::grid::horizontal_scrollbar(app, ui, track, &t);
         });
     });

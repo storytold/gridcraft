@@ -379,16 +379,81 @@ fn resize_cursor(direction: egui::ResizeDirection) -> egui::CursorIcon {
     }
 }
 
+/// Which side of the window a scrollbar edge is measured against.
+enum ResizeSide {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+/// How far `outer` reaches into the resize band on `side`. Zero when the edge is already clear,
+/// or when `margin` is zero (no resize frame).
+fn resize_clearance(outer: f32, window: egui::Rect, side: ResizeSide, margin: f32) -> f32 {
+    if margin <= 0.0 {
+        return 0.0;
+    }
+    let overlap = match side {
+        ResizeSide::Right => outer - (window.right() - margin),
+        ResizeSide::Left => (window.left() + margin) - outer,
+        ResizeSide::Bottom => outer - (window.bottom() - margin),
+        ResizeSide::Top => (window.top() + margin) - outer,
+    };
+    overlap.max(0.0)
+}
+
+/// The vertical scrollbar's x span. When its outer edge meets the window, the whole `bar` moves
+/// inward by the resize margin instead of losing that strip of its width. A bar that stops short
+/// of the frame (a task pane owns the edge) stays where it is.
+pub(crate) fn vertical_scrollbar_x(available: egui::Rect, window: egui::Rect, rtl: bool, bar: f32, margin: f32) -> (f32, f32) {
+    let bar = bar.max(0.0);
+    if rtl {
+        let left = (available.left() + resize_clearance(available.left(), window, ResizeSide::Left, margin)).min(available.right());
+        let right = (left + bar).min(available.right());
+        (left, right.max(left))
+    } else {
+        let right = (available.right() - resize_clearance(available.right(), window, ResizeSide::Right, margin)).max(available.left());
+        let left = (right - bar).max(available.left());
+        (left, right.max(left))
+    }
+}
+
+/// Pull `track` off every window edge that carries a resize band. Edges the track does not reach
+/// stay put, so a scrollbar already inside the frame is unchanged. The bands themselves stay.
+pub(crate) fn dodge_resize_bands(track: egui::Rect, window: egui::Rect, margin: f32) -> egui::Rect {
+    if margin <= 0.0 {
+        return track;
+    }
+    let left = track.left() + resize_clearance(track.left(), window, ResizeSide::Left, margin);
+    let right = track.right() - resize_clearance(track.right(), window, ResizeSide::Right, margin);
+    let top = track.top() + resize_clearance(track.top(), window, ResizeSide::Top, margin);
+    let bottom = track.bottom() - resize_clearance(track.bottom(), window, ResizeSide::Bottom, margin);
+    if left >= right || top >= bottom {
+        return egui::Rect::from_min_max(pos2(left, top), pos2(left, top));
+    }
+    egui::Rect::from_min_max(pos2(left, top), pos2(right, bottom))
+}
+
+/// Whether this window is drawing resize bands. Same conditions as [`resize_frame`].
+fn resize_frame_active(window: egui::Rect, maximized: bool, fullscreen: bool) -> bool {
+    INTEGRATED_CAPTION && window.width() >= 1.0 && window.height() >= 1.0 && !maximized && !fullscreen
+}
+
+/// Width of the resize band a scrollbar must stay out of. Zero when the bands are not drawn
+/// (another desktop, or a maximized or full-screen window).
+pub(crate) fn frame_resize_margin(ui: &egui::Ui) -> f32 {
+    let (window, maximized, fullscreen) =
+        ui.input(|i| (i.viewport_rect(), i.viewport().maximized.unwrap_or(false), i.viewport().fullscreen.unwrap_or(false)));
+    if resize_frame_active(window, maximized, fullscreen) { RESIZE_EDGE } else { 0.0 }
+}
+
 /// Edge and corner drags of a window with no native frame. No-op except on Windows, and no-op
 /// while the window is maximized or full screen (the frame is gone, and a band would steal
 /// clicks from the caption buttons' top edge).
 pub(crate) fn resize_frame(ui: &Ui, window: egui::Rect) {
-    if !INTEGRATED_CAPTION || window.width() < 1.0 || window.height() < 1.0 {
-        return;
-    }
     let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
     let fullscreen = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
-    if maximized || fullscreen {
+    if !resize_frame_active(window, maximized, fullscreen) {
         return;
     }
     let bar = egui::Rect::from_min_size(window.min, vec2(window.width(), TITLE_BAR_H.min(window.height())));
@@ -453,6 +518,23 @@ fn paint_title(ui: &Ui, center: egui::Pos2, title: &str, dirty: bool, max_w: f32
 #[cfg(test)]
 mod title_bar_tests {
     use super::*;
+
+    #[test]
+    fn vertical_scrollbar_stays_clear_of_the_resize_band() {
+        let window = egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(200.0, 400.0));
+        let (left, right) = vertical_scrollbar_x(window, window, false, 14.0, RESIZE_EDGE);
+        assert!((right - left - 14.0).abs() < 0.01, "the bar keeps its width, got {}", right - left);
+        assert!((window.right() - right - RESIZE_EDGE).abs() < 0.01, "the east band stays clear");
+        let (left, right) = vertical_scrollbar_x(window, window, true, 14.0, RESIZE_EDGE);
+        assert!((left - RESIZE_EDGE).abs() < 0.01, "the west band stays clear");
+        assert!((right - left - 14.0).abs() < 0.01);
+        // A bar that stops short of the frame (a task pane owns the edge) is not moved.
+        let inner = egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(150.0, 400.0));
+        let (_, right) = vertical_scrollbar_x(inner, window, false, 14.0, RESIZE_EDGE);
+        assert!((right - 150.0).abs() < 0.01);
+        let (left, right) = vertical_scrollbar_x(window, window, false, 14.0, 0.0);
+        assert!((right - 200.0).abs() < 0.01 && (left - 186.0).abs() < 0.01);
+    }
 
     #[test]
     fn mac_title_bar_centres_and_clears_the_traffic_lights() {
