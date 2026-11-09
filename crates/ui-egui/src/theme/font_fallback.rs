@@ -35,7 +35,14 @@ pub(super) fn load_faces(fonts: &mut FontDefinitions, faces: Vec<(&'static str, 
             if loaded.contains(path) {
                 break; // a face loaded for an earlier script already covers this one
             }
-            if let Some(fd) = try_load(&[(path.as_str(), *index)]) {
+            if let Some(mut fd) = try_load(&[(path.as_str(), *index)]) {
+                // A script face carries running text, so its glyphs share the baseline of the face
+                // they interrupt. epaint centres a fallback's row box by default, which suits icons
+                // but leaves Latin digits floating above the Thai, Hebrew or CJK around them (#502,
+                // #1265). The symbol faces draw glyphs that fill their row, so they stay centred.
+                if !key.starts_with("sys-symbols") {
+                    fd.tweak.set_baseline_fallback(true);
+                }
                 fonts.font_data.insert(key.to_string(), Arc::new(fd));
                 keys.push(key.to_string());
                 loaded.push(path.clone());

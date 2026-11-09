@@ -118,6 +118,30 @@ fn interface_families_fall_back_to_the_cell_font() {
 }
 
 #[test]
+/// Script fallback faces sit on the first face's baseline; the symbol faces stay centred in their row.
+fn script_fallback_faces_sit_on_the_baseline() {
+    // Latin digits among Thai, Hebrew or CJK text sit on the first face's baseline, and the script
+    // glyphs sit where their face's fallback alignment puts them. epaint's default centres the
+    // fallback's row box, which floats the digits above the script (#502, #1265).
+    use egui::epaint::text::FallbackAlign;
+    let fonts = font_definitions_for_language(Language::En);
+    let mut checked = 0;
+    for (key, _) in fallback_faces(HanOrder::Chinese) {
+        let Some(data) = fonts.font_data.get(key) else { continue };
+        let want = if key.starts_with("sys-symbols") { FallbackAlign::Center } else { FallbackAlign::Baseline };
+        assert_eq!(data.tweak.fallback_align, want, "{key}");
+        checked += 1;
+    }
+    for (key, font) in craft_font_faces() {
+        let Some(data) = fonts.font_data.get(&key) else { continue };
+        let want = if font.scripts.contains(&"Zsym") { FallbackAlign::Center } else { FallbackAlign::Baseline };
+        assert_eq!(data.tweak.fallback_align, want, "{key}");
+        checked += 1;
+    }
+    eprintln!("checked the alignment of {checked} fallback face(s)");
+}
+
+#[test]
 fn language_reorders_only_the_han_faces() {
     let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
     assert_eq!(
