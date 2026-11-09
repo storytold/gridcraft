@@ -15,6 +15,7 @@ mod el;
 mod es;
 mod es_functions;
 mod fr;
+mod he;
 mod it;
 mod ja;
 mod ko;
@@ -53,10 +54,11 @@ pub enum Language {
     Vi,
     Nl,
     Ro,
+    He,
 }
 
 impl Language {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::En,
         Self::Es,
         Self::El,
@@ -76,6 +78,7 @@ impl Language {
         Self::Nl,
         Self::Ro,
         Self::Tr,
+        Self::He,
     ];
 
     /// Every language in the order the switcher lists them: English first (the source language),
@@ -109,6 +112,7 @@ impl Language {
             Self::Vi => "Tiếng Việt",
             Self::Nl => "Nederlands",
             Self::Ro => "Română",
+            Self::He => "עברית",
         }
     }
 
@@ -134,6 +138,7 @@ impl Language {
             Self::Vi => "vi",
             Self::Nl => "nl",
             Self::Ro => "ro",
+            Self::He => "he",
         }
     }
 
@@ -168,6 +173,8 @@ impl Language {
             "vi" => Some(Self::Vi),
             "nl" => Some(Self::Nl),
             "ro" => Some(Self::Ro),
+            // `iw` is the code Hebrew had before ISO 639 changed it (1989); some systems still report it.
+            "he" | "iw" => Some(Self::He),
             _ => None,
         }
     }
@@ -219,6 +226,7 @@ impl Language {
             Self::Vi => vi::translate(text),
             Self::Nl => nl::translate(text),
             Self::Ro => ro::translate(text),
+            Self::He => he::translate(text),
         }
     }
 
@@ -544,5 +552,22 @@ mod tests {
         let keys: Vec<String> = order[1..].iter().map(|l| name_sort_key(l.name())).collect();
         assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
         assert_eq!(name_sort_key("Čeština"), "cestina");
+    }
+
+    #[test]
+    fn hebrew_is_offered_and_translated() {
+        for tag in ["he", "he-IL", "he_IL.UTF-8", "HE", "iw", "iw_IL"] {
+            assert_eq!(Language::parse(tag), Some(Language::He), "{tag}");
+        }
+        assert_eq!(Language::He.code(), "he");
+        assert_eq!(Language::He.name(), "עברית");
+        assert!(Language::for_picker().contains(&Language::He));
+        assert_eq!(Language::He.tr("Paste"), "הדבקה");
+        assert_eq!(Language::He.tr("Page Layout|Orientation"), "כיוון הדף");
+        // A key that reads the same in Hebrew falls back to the English.
+        assert_eq!(Language::He.tr("100%"), "100%");
+        // The saved code reads back as Hebrew.
+        let saved: Language = serde_json::from_value(serde_json::json!("he")).unwrap();
+        assert_eq!(saved, Language::He);
     }
 }
