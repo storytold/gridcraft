@@ -1,11 +1,18 @@
 use super::*;
 use crate::i18n::Language;
 
+/// A chain key without the interface-family suffix used to align its fallback (`sys-cjk-han-ja@ui`).
+fn base_key(key: &str) -> &str {
+    key.split_once('@').map_or(key, |(key, _)| key)
+}
+
 #[test]
-/// Loaded script-fallback faces end each role chain just before the craft fonts, in the language's order.
+/// Loaded script-fallback faces come after the Latin/default text faces and before the bundled
+/// emoji/icon and craft faces, in the language's order.
 fn fallback_faces_are_appended_to_every_family() {
-    // Structural: whatever loaded, the non-Latin fallback keys must sit at the end of each chain
-    // (after the Latin/default fonts) so Latin still wins for Latin text, in the language's order.
+    // Structural: whatever loaded, the non-Latin fallback keys must sit after the Latin/default
+    // text faces (so Latin still wins for Latin text) and before the bundled emoji/icon faces (so
+    // a full-width form they also carry is drawn by the script's face), in the language's order.
     for han in [HanOrder::Chinese, HanOrder::Japanese] {
         let language = if han == HanOrder::Japanese { Language::Ja } else { Language::Zh };
         let fonts = font_definitions_for_language(language);
@@ -15,10 +22,24 @@ fn fallback_faces_are_appended_to_every_family() {
         }
         for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO, MATH, MATH_ITALIC, MATH_BOLD] {
             let chain = fonts.families.get(&FontFamily::Name(role.into())).map(Vec::as_slice).unwrap_or_default();
-            // The optional craft-fonts faces follow the system fallbacks at the very end.
-            let end = chain.iter().rposition(|k| !k.starts_with("craft-")).map_or(0, |i| i + 1);
-            assert!(end >= fb_keys.len(), "{role} chain too short for its fallback");
-            assert_eq!(&chain[end - fb_keys.len()..end], fb_keys.as_slice(), "{role} must end its non-craft chain with the fallback faces");
+            let at = chain
+                .iter()
+                .position(|k| fb_keys.iter().any(|fb| fb == base_key(k)))
+                .unwrap_or_else(|| panic!("{role}: no script fallback face: {chain:?}"));
+            let end = at + fb_keys.len();
+            assert!(
+                chain[at..end].iter().map(|k| base_key(k)).eq(fb_keys.iter().map(String::as_str)),
+                "{role} must carry the fallback faces in the language's order"
+            );
+            assert!(
+                chain[..at].iter().all(|k| !fb_keys.iter().any(|fb| fb == base_key(k))),
+                "{role}: a fallback face is repeated before the chain's fallbacks"
+            );
+            assert!(
+                chain[end..].iter().all(|k| is_bundled_emoji(base_key(k)) || base_key(k).starts_with("craft-")),
+                "{role}: only bundled emoji/icon and craft faces may follow the script fallbacks: {:?}",
+                &chain[end..]
+            );
         }
     }
 }
@@ -26,8 +47,8 @@ fn fallback_faces_are_appended_to_every_family() {
 #[test]
 /// Every font family ends with exactly the permitted craft faces in manifest order.
 fn craft_fonts_are_the_last_fallback_in_every_family() {
-    // Ordering: app/bundled faces, Hack/emoji, system script fallbacks, permitted craft faces.
-    // A craft face must never displace a system face that already covers a glyph.
+    // Ordering: app/bundled text faces, Hack, system script fallbacks, bundled emoji/icon faces,
+    // permitted craft faces. A craft face must never displace a system face that covers a glyph.
     let fonts = font_definitions_for_language(Language::En);
     let expected: Vec<String> = craft_font_faces().into_iter().map(|(key, _)| key).collect();
     if expected.is_empty() {
@@ -35,7 +56,11 @@ fn craft_fonts_are_the_last_fallback_in_every_family() {
     }
     for (family, chain) in &fonts.families {
         let first = chain.iter().position(|k| k.starts_with("craft-")).unwrap_or(chain.len());
-        assert_eq!(&chain[first..], expected.as_slice(), "{family:?} must end with exactly the permitted craft faces in manifest order");
+        assert_eq!(
+            chain[first..].iter().map(|k| base_key(k)).collect::<Vec<_>>(),
+            expected.iter().map(String::as_str).collect::<Vec<_>>(),
+            "{family:?} must end with exactly the permitted craft faces in manifest order"
+        );
     }
 }
 
@@ -112,7 +137,7 @@ fn interface_families_fall_back_to_the_cell_font() {
         let chain = fonts.families.get(&family).cloned().unwrap_or_default();
         let at = chain.iter().position(|k| *k == cell);
         assert!(at.is_some(), "{family:?} lacks the cell face: {chain:?}");
-        let first_fb = chain.iter().position(|k| fb.contains(k)).unwrap_or(chain.len());
+        let first_fb = chain.iter().position(|k| fb.iter().any(|fb| fb == base_key(k))).unwrap_or(chain.len());
         assert!(at.unwrap_or(usize::MAX) < first_fb, "{family:?}: cell face must precede the script faces");
     }
 }
@@ -291,7 +316,7 @@ fn installed_latin_fonts_keep_system_script_fallbacks() {
     for (family, chain) in installed_latin_chains(&fonts) {
         let chain = chain.expect("bound fixture family");
         for key in &loaded {
-            assert!(chain.iter().any(|k| k == key), "{family:?} lost the {key} fallback");
+            assert!(chain.iter().any(|k| base_key(k) == *key), "{family:?} lost the {key} fallback");
         }
         if fonts.font_data.contains_key("sys-arabic") {
             assert!(chain_covers(&fonts, chain, 'ع'), "{family:?} has no glyph for ع");
@@ -344,8 +369,8 @@ fn the_fontconfig_arabic_choice_comes_first() {
     if fontconfig_arabic().is_some() {
         let fonts = font_definitions();
         for (family, chain) in fonts.families.iter().filter(|(_, chain)| chain.iter().any(|key| key.starts_with("sys-"))) {
-            let preferred = chain.iter().position(|key| key == PREFERRED_ARABIC);
-            let other_arabic = chain.iter().position(|key| key == "sys-arabic" || key.starts_with("craft-"));
+            let preferred = chain.iter().position(|key| base_key(key) == PREFERRED_ARABIC);
+            let other_arabic = chain.iter().position(|key| base_key(key) == "sys-arabic" || key.starts_with("craft-"));
             assert!(preferred.is_some(), "{family:?} lacks the preferred Arabic face");
             assert!(other_arabic.is_none_or(|other| preferred < Some(other)), "{family:?} puts another Arabic face first");
         }
