@@ -426,13 +426,13 @@ fn translate(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     }
-    let record = shown_id
-        .as_str()
-        .is_empty()
-        .then(Json::Null)
-        .or_else(|| list.iter().find(|r| r["id"].as_str() == Some(shown_id.as_str())).cloned())
-        .or_else(|| list.first().cloned())
-        .unwrap_or(Json::Null);
+    let record = if shown_id.as_str().is_empty() {
+        Json::Null
+    } else if let Some(found) = list.iter().find(|r| r["id"].as_str() == Some(shown_id.as_str())).cloned() {
+        found
+    } else {
+        list.first().cloned().unwrap_or(Json::Null)
+    };
     let id = record["id"].as_str().unwrap_or("qwen3-1.7b").to_string();
     let pairs = record["pairs"].as_array().cloned().unwrap_or_default();
     let sources: Vec<String> = pairs.iter().filter_map(|p| p["from"].as_str()).map(str::to_string).collect();
