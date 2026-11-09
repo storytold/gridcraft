@@ -31,11 +31,52 @@ pub struct Geo {
     pub paper: Option<Arc<gridcraft_engine::paper::PageGrid>>,
 }
 
+/// The column headings' height on `sh`, at its zoom (none when headings are hidden).
+pub(crate) fn header_height(sh: &Sheet) -> f32 {
+    let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
+    if sh.show_headings { (COL_HEADER_H * zoom.max(0.75)).round() } else { 0.0 }
+}
+
+/// The height of `n` default rows on `sh`, at its zoom.
+pub(crate) fn default_rows_height(sh: &Sheet, n: f32) -> f32 {
+    let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
+    n * sh.default_row_height * zoom * DISPLAY_SCALE
+}
+
+/// The outline bands' thickness (left, top) for outlines `row_levels` and `col_levels` deep, next
+/// to headings `header_w` wide and `header_h` tall.
+fn outline_bands(sh: &Sheet, row_levels: u8, col_levels: u8, header_w: f32, header_h: f32) -> (f32, f32) {
+    // Show Outline Symbols off: no bands (the outline's hidden lines stay hidden).
+    if !sh.show_outline_symbols {
+        return (0.0, 0.0);
+    }
+    let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
+    let mut band_w = crate::outline::band(row_levels, zoom);
+    let mut band_h = crate::outline::band(col_levels, zoom);
+    // Without headings the level buttons still need a corner to sit in.
+    if row_levels > 0 && header_h == 0.0 {
+        band_h = band_h.max(crate::outline::lane(zoom) + 3.0);
+    }
+    if col_levels > 0 && header_w == 0.0 {
+        band_w = band_w.max(crate::outline::lane(zoom) + 3.0);
+    }
+    (band_w, band_h)
+}
+
+/// What sits above the first row on `sh`: the column outline's band and the column headings.
+pub(crate) fn top_of_cells(sh: &Sheet) -> f32 {
+    let header_h = header_height(sh);
+    let levels = |rows| gridcraft_engine::outline::max_level(if rows { &sh.rows } else { &sh.cols });
+    // The row headings' width only matters to the corner without headings, where it is 0 too.
+    let header_w = if sh.show_headings { 1.0 } else { 0.0 };
+    outline_bands(sh, levels(true), levels(false), header_w, header_h).1 + header_h
+}
+
 impl Geo {
     pub fn new(sh: &Sheet, rect: Rect, scroll: egui::Vec2) -> Geo {
         let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
         let z = zoom * DISPLAY_SCALE;
-        let header_h = if sh.show_headings { (COL_HEADER_H * zoom.max(0.75)).round() } else { 0.0 };
+        let header_h = header_height(sh);
         let ri = std::sync::Arc::new(LineIndex::new(&sh.rows, sh.default_row_height, MAX_ROWS));
         let ci = std::sync::Arc::new(LineIndex::new(&sh.cols, sh.default_col_width, MAX_COLS));
         let last_row = ri.at((scroll.y + rect.height() / z) as f64 + 200.0) + 1;
@@ -46,17 +87,7 @@ impl Geo {
         let frozen_h = (ri.start(fr) as f32) * z;
         let row_outline = Arc::new(crate::outline::Axis::of(sh, true));
         let col_outline = Arc::new(crate::outline::Axis::of(sh, false));
-        // Show Outline Symbols off: no bands (the outline's hidden lines stay hidden).
-        let symbols = sh.show_outline_symbols;
-        let mut band_w = if symbols { crate::outline::band(row_outline.levels, zoom) } else { 0.0 };
-        let mut band_h = if symbols { crate::outline::band(col_outline.levels, zoom) } else { 0.0 };
-        // Without headings the level buttons still need a corner to sit in.
-        if symbols && row_outline.levels > 0 && header_h == 0.0 {
-            band_h = band_h.max(crate::outline::lane(zoom) + 3.0);
-        }
-        if symbols && col_outline.levels > 0 && header_w == 0.0 {
-            band_w = band_w.max(crate::outline::lane(zoom) + 3.0);
-        }
+        let (band_w, band_h) = outline_bands(sh, row_outline.levels, col_outline.levels, header_w, header_h);
         let cells = Rect::from_min_max(pos2(rect.left() + band_w + header_w, rect.top() + band_h + header_h), rect.max);
         Geo {
             rect,

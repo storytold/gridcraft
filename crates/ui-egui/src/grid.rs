@@ -45,6 +45,7 @@ pub use editor::validation_arrow;
 #[cfg(test)]
 use editor::{editor_slack, editor_width, list_picker_height};
 pub use geo::Geo;
+pub(crate) use geo::{default_rows_height, top_of_cells};
 pub use interact::{follow_link, freeze_handles, point_move};
 pub(crate) use quadrant::{QuadrantPaint, paint_quadrant};
 pub use selection::selection_fill;
