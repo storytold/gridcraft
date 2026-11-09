@@ -217,9 +217,9 @@ fn rtl_sheet_sparkline_reflects_with_cell_geometry() {
         markers: false,
     });
     let options = PrintOptions { range: RangeRef::parse("A1:B2"), ..PrintOptions::default() };
-    let ltr = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().0;
+    let ltr = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().bytes;
     wb.sheet_mut(0).unwrap().right_to_left = true;
-    let rtl = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().0;
+    let rtl = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().bytes;
     let points = |pdf: &[u8]| {
         let pdf = String::from_utf8_lossy(pdf);
         let after = pdf.split("1 0 0 RG\n").nth(1).unwrap();
