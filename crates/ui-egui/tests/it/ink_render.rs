@@ -65,9 +65,7 @@ fn painted_segments(h: &egui_kittest::Harness<'static, SheetApp>) -> Vec<Seg> {
         .shapes
         .iter()
         .filter_map(|s| match &s.shape {
-            Shape::LineSegment { points, stroke } => {
-                Some(Seg { width: stroke.width, color: stroke.color, len: (points[1] - points[0]).length() })
-            }
+            Shape::LineSegment { points, stroke } => Some(Seg { width: stroke.width, color: stroke.color, len: (points[1] - points[0]).length() }),
             _ => None,
         })
         .collect()
@@ -104,7 +102,8 @@ fn every_brush_branch_paints_with_its_own_colour_and_width() {
     let zoom = |segs: &[Seg], sheet_len: f32| segs.iter().map(|s| s.len).sum::<f32>() / sheet_len;
 
     // A solid pencil: one segment per point pair, flat, at 0.8x its width and 215 alpha.
-    let h = harness_for(json!({"points": [[40, 40], [80, 40], [120, 40], [160, 40], [200, 40]], "brush": "pencil", "width": 2.0, "color": "#333333"}));
+    let h =
+        harness_for(json!({"points": [[40, 40], [80, 40], [120, 40], [160, 40], [200, 40]], "brush": "pencil", "width": 2.0, "color": "#333333"}));
     let segs: Vec<Seg> = painted_segments(&h).into_iter().filter(|s| s.color.a() == 215).collect();
     assert!(segs.len() >= 4, "a pencil paints per-segment: {}", segs.len());
     let z = zoom(&segs, 160.0);
@@ -115,7 +114,9 @@ fn every_brush_branch_paints_with_its_own_colour_and_width() {
     }
 
     // A solid fountain pen: pressure-tapered, so the segments vary and none is wider than the brush.
-    let h = harness_for(json!({"points": [[40, 40], [80, 40], [120, 40], [160, 40], [200, 40]], "brush": "fountainPen", "width": 2.0, "color": "#1F3864"}));
+    let h = harness_for(
+        json!({"points": [[40, 40], [80, 40], [120, 40], [160, 40], [200, 40]], "brush": "fountainPen", "width": 2.0, "color": "#1F3864"}),
+    );
     let nib = egui::Color32::from_rgb(0x1F, 0x38, 0x64);
     let segs: Vec<Seg> = painted_segments(&h).into_iter().filter(|s| same_rgb(&s.color, &nib)).collect();
     assert!(segs.len() >= 4, "a tapered stroke is drawn per segment: {}", segs.len());
@@ -125,14 +126,13 @@ fn every_brush_branch_paints_with_its_own_colour_and_width() {
     assert!(segs.iter().any(|s| s.width < fw * z - 0.01), "the ends taper");
 
     // A textured highlighter: translucent bands, not the pen colour.
-    let h = harness_for(json!({"points": [[40, 40], [80, 40], [120, 40], [160, 40], [200, 40]], "brush": "highlighter", "width": 4.0, "effect": "ocean"}));
+    let h = harness_for(
+        json!({"points": [[40, 40], [80, 40], [120, 40], [160, 40], [200, 40]], "brush": "highlighter", "width": 4.0, "effect": "ocean"}),
+    );
     let bands = gridcraft_ui_egui::pen_icon::effect_colors("ocean");
     // egui stores Colour32 premultiplied, so a translucent band is compared at its own alpha.
     let tinted = |b: &egui::Color32| egui::Color32::from_rgba_unmultiplied(b.r(), b.g(), b.b(), 115);
-    let segs: Vec<Seg> = painted_segments(&h)
-        .into_iter()
-        .filter(|s| s.color.a() == 115 && bands.iter().any(|b| tinted(b) == s.color))
-        .collect();
+    let segs: Vec<Seg> = painted_segments(&h).into_iter().filter(|s| s.color.a() == 115 && bands.iter().any(|b| tinted(b) == s.color)).collect();
     assert!(segs.len() >= 4, "a textured band is drawn per segment: {}", segs.len());
     let z = zoom(&segs, 160.0);
     let (_, hh) = width_of("highlighter", 4.0);
@@ -142,8 +142,7 @@ fn every_brush_branch_paints_with_its_own_colour_and_width() {
     for (brush, mm, effect) in [("brushPen", 1.0, "lava"), ("pen", 1.0, "gold")] {
         let h = harness_for(json!({"points": [[40, 40], [80, 40], [120, 40], [160, 40], [200, 40]], "brush": brush, "width": mm, "effect": effect}));
         let bands = gridcraft_ui_egui::pen_icon::effect_colors(effect);
-        let segs: Vec<Seg> =
-            painted_segments(&h).into_iter().filter(|s| s.color.a() == 255 && bands.iter().any(|b| same_rgb(b, &s.color))).collect();
+        let segs: Vec<Seg> = painted_segments(&h).into_iter().filter(|s| s.color.a() == 255 && bands.iter().any(|b| same_rgb(b, &s.color))).collect();
         assert!(!segs.is_empty(), "{brush} paints bands");
         let z = zoom(&segs, 160.0);
         let (bw, _) = width_of(brush, mm);

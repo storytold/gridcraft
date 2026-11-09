@@ -684,7 +684,8 @@ fn fallback_png(shape: &Shape, ink: &InkStyle, points: &[[i64; 2]], color: [u8; 
     let pw = pw.clamp(1, MAX_PNG as u32);
     let ph = ph.clamp(1, MAX_PNG as u32);
     let mut rgba = vec![0u8; (pw as usize) * (ph as usize) * 4];
-    let pts: Vec<[f64; 2]> = points.iter().map(|p| [p[0] as f64 / THOUSANDTHS_PER_PX * (pw as f64 / w), p[1] as f64 / THOUSANDTHS_PER_PX * (ph as f64 / h)]).collect();
+    let pts: Vec<[f64; 2]> =
+        points.iter().map(|p| [p[0] as f64 / THOUSANDTHS_PER_PX * (pw as f64 / w), p[1] as f64 / THOUSANDTHS_PER_PX * (ph as f64 / h)]).collect();
     let dab = Dab::new(radius);
     if pts.len() == 1 {
         dab.blit(&mut rgba, pw, ph, pts[0][0], pts[0][1], color);

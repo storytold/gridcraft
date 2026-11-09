@@ -135,4 +135,3 @@ fn update_pen_clears_a_texture_when_only_a_solid_colour_is_sent() {
     assert_eq!(textured["effect"], serde_json::json!("galaxy"), "texture applies: {textured:?}");
     assert_eq!(textured["color"], serde_json::json!("#5B3EA8"), "colour resets to the texture base");
 }
-

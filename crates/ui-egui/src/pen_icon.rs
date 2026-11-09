@@ -43,7 +43,9 @@ pub fn effect_label(effect: &str) -> &'static str {
 pub fn effect_base(effect: &str) -> Color32 {
     // Single source: the model's texture table (which the engine and xlsx use too). An unknown
     // name falls back to pen blue.
-    let color = gridcraft_engine::model::InkEffect::from_name(effect).map(|e| e.base_color()).unwrap_or_else(|| gridcraft_engine::model::Color::rgb(0x1F, 0x5F, 0xC9));
+    let color = gridcraft_engine::model::InkEffect::from_name(effect)
+        .map(|e| e.base_color())
+        .unwrap_or_else(|| gridcraft_engine::model::Color::rgb(0x1F, 0x5F, 0xC9));
     color.resolve(&gridcraft_engine::model::Theme::default()).map(crate::theme::color32).unwrap_or(Color32::from_rgb(0x1F, 0x5F, 0xC9))
 }
 

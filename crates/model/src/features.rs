@@ -701,8 +701,16 @@ pub enum InkEffect {
 
 impl InkEffect {
     /// The eight textures, in Excel's palette order.
-    pub const ALL: [InkEffect; 8] =
-        [InkEffect::Rainbow, InkEffect::Galaxy, InkEffect::Lava, InkEffect::Ocean, InkEffect::RoseGold, InkEffect::Gold, InkEffect::Silver, InkEffect::Bronze];
+    pub const ALL: [InkEffect; 8] = [
+        InkEffect::Rainbow,
+        InkEffect::Galaxy,
+        InkEffect::Lava,
+        InkEffect::Ocean,
+        InkEffect::RoseGold,
+        InkEffect::Gold,
+        InkEffect::Silver,
+        InkEffect::Bronze,
+    ];
 
     /// The canonical JSON name (`InkStyle`'s `camelCase` spelling), for the Draw tab and commands.
     pub fn name(self) -> &'static str {

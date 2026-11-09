@@ -19,8 +19,8 @@ use crate::xml::{El, esc, esc_attr};
 mod ink;
 mod inkml;
 
-pub use inkml::{MAX_SAVE_INK_PIXELS, creation_id};
 pub(crate) use inkml::{CT as CT_INKML, Parts as InkParts};
+pub use inkml::{MAX_SAVE_INK_PIXELS, creation_id};
 
 /// The InkML part and fallback picture for a native ink stroke (see [`inkml`]).
 pub(crate) fn ink_parts(shape: &Shape, theme: &Theme, budget: &mut u64) -> Option<InkParts> {

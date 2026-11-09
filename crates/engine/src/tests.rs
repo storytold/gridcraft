@@ -3768,7 +3768,8 @@ fn ink_names_accept_aliases_and_the_default_pens_are_excel_s() {
     assert_eq!(crate::cmd::draw::parse_effect("rose_gold"), Some(InkEffect::RoseGold));
     // The six default pens: Galaxy, red, Pencil, Highlighter, Fountain Pen, Brush Pen.
     let pens = crate::cmd::draw::default_pens();
-    let summary: Vec<(&str, &str, f32, Option<&str>)> = pens.iter().map(|p| (p.tool.as_str(), p.color.as_str(), p.width, p.effect.as_deref())).collect();
+    let summary: Vec<(&str, &str, f32, Option<&str>)> =
+        pens.iter().map(|p| (p.tool.as_str(), p.color.as_str(), p.width, p.effect.as_deref())).collect();
     assert_eq!(
         summary,
         vec![

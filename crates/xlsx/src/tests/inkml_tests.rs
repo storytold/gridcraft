@@ -678,7 +678,9 @@ fn two_ink_parts_cannot_share_a_creation_id() {
     let wb_rels = format!(
         r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="{NS_REL}/worksheet" Target="worksheets/sheet2.xml"/></Relationships>"#
     );
-    let sheet = format!(r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="{NS_REL}"><sheetData/><drawing r:id="rId1"/></worksheet>"#);
+    let sheet = format!(
+        r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="{NS_REL}"><sheetData/><drawing r:id="rId1"/></worksheet>"#
+    );
     let sheet_rels = |drawing: &str| {
         format!(
             r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/drawing" Target="../drawings/{drawing}.xml"/></Relationships>"#

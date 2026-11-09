@@ -355,13 +355,11 @@ fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::dr
     // The thickness slider: Excel's steps for the brush. Its own label names it for a screen
     // reader, and the value shown is the pen's real width when it is between steps.
     let mut idx = steps.iter().enumerate().min_by(|a, b| (a.1 - width).abs().total_cmp(&(b.1 - width).abs())).map_or(0, |(i, _)| i);
-    let slider = egui::Slider::new(&mut idx, 0..=steps.len().saturating_sub(1))
-        .text(tr.tr("Thickness"))
-        .custom_formatter(move |v, _| {
-            let step = steps.get(v as usize).copied().unwrap_or(width);
-            let mm = if (step - width).abs() > 0.01 { width } else { step };
-            format!("{mm} mm")
-        });
+    let slider = egui::Slider::new(&mut idx, 0..=steps.len().saturating_sub(1)).text(tr.tr("Thickness")).custom_formatter(move |v, _| {
+        let step = steps.get(v as usize).copied().unwrap_or(width);
+        let mm = if (step - width).abs() > 0.01 { width } else { step };
+        format!("{mm} mm")
+    });
     if ui.add(slider).changed()
         && let Some(mm) = steps.get(idx).copied()
     {
@@ -418,9 +416,7 @@ fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::dr
                 if resp.on_hover_text(label).clicked() {
                     // The engine resets the colour when only the effect changes, so carry the
                     // texture's base colour from the model's single table.
-                    let base = gridcraft_engine::model::InkEffect::from_name(name)
-                        .map(|e| e.base_hex())
-                        .unwrap_or("#1F5FC9");
+                    let base = gridcraft_engine::model::InkEffect::from_name(name).map(|e| e.base_hex()).unwrap_or("#1F5FC9");
                     apply_pen_change(app, id, tool, base, width, Some(name));
                     ui.close();
                 }
