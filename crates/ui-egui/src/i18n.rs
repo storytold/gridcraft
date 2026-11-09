@@ -254,10 +254,11 @@ impl Language {
             message.to_owned()
         };
 
-        let translated = self.tr(&message);
-        let fallback = message.rsplit_once('|').map_or(message.as_str(), |(_, label)| label);
-
-        if translated != fallback {
+        // A hit in the catalog is the answer, even when the translation reads exactly like the
+        // English: a shared word (`Maximum`), or a `context|label` key whose translation is the
+        // label itself (`AutoSum|MAX` => `MAX`). Comparing the rendered text with the English
+        // would drop such a translation and show the raw `context|` key instead.
+        if let Some(translated) = self.translation(&message) {
             return translated.to_owned();
         }
         error_templates::format_message(&message, self).unwrap_or_else(|| original_parameters.map_or(message, str::to_owned))
@@ -388,6 +389,18 @@ mod tests {
         assert_eq!(Language::PtBr.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
         assert_eq!(Language::PtBr.tr_error("Printer Office: permission denied"), "Printer Office: permission denied");
         assert_eq!(Language::parse("xx"), None);
+    }
+
+    /// A catalog hit decides the answer, even when the translation reads like the English: a
+    /// shared word, or a `context|label` key whose translation is the label itself. Deciding by
+    /// comparing the rendered text with the English showed the raw `context|` key instead.
+    #[test]
+    fn a_translation_that_reads_like_english_is_still_a_translation() {
+        assert_eq!(Language::Es.tr_error("Options|General"), "General");
+        assert_eq!(Language::Cs.tr_error("AutoSum|MAX"), "MAX");
+        assert_eq!(Language::Uk.tr_error("Tab|Insert"), "Insert");
+        // An untranslated message is still shown whole, prefix and all.
+        assert_eq!(Language::PtBr.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
     }
 
     /// A catalog whose translations slip onto their neighbours' keys still covers every key, so
