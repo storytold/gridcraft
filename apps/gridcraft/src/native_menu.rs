@@ -1,9 +1,14 @@
 //! macOS: the native menu bar (File, Edit, View, Insert, Format, Tools, Data, Window, Help), as
 //! a desktop spreadsheet has on the Mac. Items run the same commands as the ribbon.
+//!
+//! Titles and labels go through [`Language::tr`] like the rest of the interface, so the menu bar
+//! follows the interface language. A language change rebuilds the bar while keeping the original
+//! event channel.
 
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, channel};
 
+use gridcraft_ui_egui::i18n::Language;
 use gridcraft_ui_egui::{OpenWindow, SheetApp};
 use muda::accelerator::Accelerator;
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
@@ -192,9 +197,14 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
 }
 
 pub struct NativeMenu {
-    _menu: Menu,
     events: Receiver<MenuEvent>,
+    bar: MenuBar,
+}
+
+struct MenuBar {
+    _menu: Menu,
     theme_items: Vec<(&'static str, CheckMenuItem)>,
+    language: Language,
     window_menu: Option<Submenu>,
     /// The Window menu's window items and what they last showed.
     window_items: Vec<CheckMenuItem>,
@@ -219,11 +229,11 @@ fn select_theme(app: &mut SheetApp, id: &str) -> bool {
     true
 }
 
-impl NativeMenu {
-    pub fn install(ctx: &egui::Context) -> NativeMenu {
+impl MenuBar {
+    fn install(language: Language) -> Self {
         let menu = Menu::new();
         let app_menu = Submenu::new("GridCraft", true);
-        let about = MenuItem::with_id("dialog:about", "About GridCraft", true, None);
+        let about = MenuItem::with_id("dialog:about", language.tr("About GridCraft"), true, None);
         let _ = app_menu.append_items(&[
             &about,
             &PredefinedMenuItem::separator(),
@@ -233,22 +243,24 @@ impl NativeMenu {
             &PredefinedMenuItem::hide_others(None),
             &PredefinedMenuItem::show_all(None),
             &PredefinedMenuItem::separator(),
-            &MenuItem::with_id(QUIT, "Quit GridCraft", true, Accelerator::from_str("CMD+Q").ok()),
+            &MenuItem::with_id(QUIT, language.tr("Quit GridCraft"), true, Accelerator::from_str("CMD+Q").ok()),
         ]);
         let _ = menu.append(&app_menu);
         let mut theme_items = Vec::new();
         let mut window_menu = None;
         for (title, entries) in tree() {
-            let sub = Submenu::new(title, true);
+            let sub = Submenu::new(language.tr(title), true);
             for (label, id, acc) in entries {
                 if label == "-" {
                     let _ = sub.append(&PredefinedMenuItem::separator());
                     continue;
                 }
                 if id == "view.theme" {
-                    let themes = Submenu::new(label, true);
+                    // `Display Theme` in the bar, then the modes; both go through the catalog so a
+                    // translation can word them in the interface's own terms.
+                    let themes = Submenu::new(language.tr(label), true);
                     for (mode, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
-                        let item = CheckMenuItem::with_id(format!("theme:{mode}"), label, true, false, None);
+                        let item = CheckMenuItem::with_id(format!("theme:{mode}"), language.tr(label), true, false, None);
                         let _ = themes.append(&item);
                         theme_items.push((mode, item));
                     }
@@ -256,7 +268,7 @@ impl NativeMenu {
                     continue;
                 }
                 let accel = acc.and_then(|a| Accelerator::from_str(a).ok());
-                let item = MenuItem::with_id(id, label, true, accel);
+                let item = MenuItem::with_id(id, language.tr(label), true, accel);
                 let _ = sub.append(&item);
             }
             let _ = menu.append(&sub);
@@ -271,13 +283,7 @@ impl NativeMenu {
         if let Some(window) = &window_menu {
             window.set_as_windows_menu_for_nsapp();
         }
-        let (tx, rx) = channel();
-        let ctx = ctx.clone();
-        MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
-            let _ = tx.send(e);
-            ctx.request_repaint();
-        }));
-        NativeMenu { _menu: menu, events: rx, theme_items, window_menu, window_items: Vec::new(), windows: Vec::new() }
+        Self { _menu: menu, theme_items, language, window_menu, window_items: Vec::new(), windows: Vec::new() }
     }
 
     /// Keeps the Window menu's list of open windows (title, unsaved bullet, active check) in
@@ -310,6 +316,19 @@ impl NativeMenu {
                 item.set_checked(w.active);
             }
         }
+    }
+}
+
+impl NativeMenu {
+    pub fn install(ctx: &egui::Context, language: Language) -> Self {
+        let (tx, events) = channel();
+        let ctx = ctx.clone();
+        // Muda accepts only the first event handler. The receiver outlives every menu bar rebuild.
+        MenuEvent::set_event_handler(Some(move |event| {
+            let _ = tx.send(event);
+            ctx.request_repaint();
+        }));
+        Self { events, bar: MenuBar::install(language) }
     }
 
     /// Runs the chosen menu items. Commands go to the active window, the most recently focused;
@@ -378,17 +397,21 @@ impl NativeMenu {
                 app.run_or_alert(&id, json!({}));
             }
         }
-        for (mode, item) in &self.theme_items {
+        if self.bar.language != app.ui.language {
+            self.bar = MenuBar::install(app.ui.language);
+        }
+        for (mode, item) in &self.bar.theme_items {
             let checked = app.ui.theme_mode() == *mode;
             if item.is_checked() != checked {
                 item.set_checked(checked);
             }
         }
-        self.sync_windows(app);
+        self.bar.sync_windows(app);
     }
 }
 
 #[cfg(test)]
+#[allow(dead_code, unused_imports)]
 mod tests {
     // No `use super::*`: tests/mac_menu_appkit.rs builds this file with cfg(test) but no test
     // harness, so the #[test] functions are left out and a module-level import would be unused.
