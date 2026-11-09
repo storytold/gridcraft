@@ -111,7 +111,13 @@ fn validate_call_at(call: &Call, call_span: Span) -> Vec<ValidationError> {
 }
 
 fn arity_error(spec: &FunctionSpec, arity: usize, span: Span) -> ValidationError {
-    let expected = if spec.min_args == spec.max_args { format!("{}", spec.min_args) } else { format!("{} to {}", spec.min_args, spec.max_args) };
+    let expected = if spec.min_args == spec.max_args {
+        format!("{}", spec.min_args)
+    } else if spec.max_args == usize::MAX {
+        format!("at least {}", spec.min_args)
+    } else {
+        format!("{} to {}", spec.min_args, spec.max_args)
+    };
     ValidationError {
         function: spec.name,
         kind: ValidationErrorKind::Arity,

@@ -229,6 +229,17 @@ fn every_example_parses_and_validates() {
 }
 
 #[test]
+fn open_ended_arity_errors_name_the_minimum_without_usize_max() {
+    for (src, expected) in
+        [("SWITCH ( 1 )", "SWITCH expects at least 3 argument(s), found 1"), ("COALESCE ( 1 )", "COALESCE expects at least 2 argument(s), found 1")]
+    {
+        let errors = assert_invalid_kind(src, ValidationErrorKind::Arity);
+        assert_eq!(errors.len(), 1, "{src:?} should report exactly one arity error: {errors:?}");
+        assert_eq!(errors[0].message, expected, "{src:?} message");
+        assert!(!errors[0].message.contains("18446744073709551615"), "{src:?} leaks usize::MAX: {}", errors[0].message);
+    }
+}
+#[test]
 fn arity_boundaries_accept_and_reject_the_right_calls() {
     for src in [
         "AND ( TRUE, FALSE )",
