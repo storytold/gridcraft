@@ -241,9 +241,7 @@ fn paint_cells(
     for cell in looks.iter().chain(outside) {
         let font = &cell.2.style.font;
         let faux_bold = font.bold
-            && !*bold_faces
-                .entry((font.name.clone(), font.italic))
-                .or_insert_with(|| theme::has_bold_face(q.painter.ctx(), &font.name, font.italic));
+            && !*bold_faces.entry((font.name.clone(), font.italic)).or_insert_with(|| theme::has_bold_face(q.painter.ctx(), &font.name, font.italic));
         paint_cell(q, cell, merges, faux_bold);
     }
 }
