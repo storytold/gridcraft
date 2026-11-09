@@ -289,10 +289,7 @@ impl<'a> Binder<'a> {
                 // RANKX's Order argument is catalogued as a Scalar too, but it is `ASC`/`DESC`.
                 "RANKX" if index == 3 => clause_keyword(arg, &["ASC", "DESC"]),
                 // DATEDIFF's interval is a documented enumeration the catalog types as `Any`.
-                "DATEDIFF" if index == 2 => clause_keyword(
-                    arg,
-                    &["SECOND", "MINUTE", "HOUR", "DAY", "WEEK", "MONTH", "QUARTER", "YEAR"],
-                ),
+                "DATEDIFF" if index == 2 => clause_keyword(arg, &["SECOND", "MINUTE", "HOUR", "DAY", "WEEK", "MONTH", "QUARTER", "YEAR"]),
                 // TOPN's `(expression, Order)` pairs: ASC/DESC sit at every odd index from 3.
                 "TOPN" if index >= 3 && index % 2 == 1 => clause_keyword(arg, &["ASC", "DESC"]),
                 "CROSSFILTER" if index == 2 => {
