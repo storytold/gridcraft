@@ -21,6 +21,8 @@ gridcraft-calc = { path = "crates/calc" }
 gridcraft-xlsx = { path = "crates/xlsx" }
 gridcraft-chart = { path = "crates/chart" }
 gridcraft-engine = { path = "crates/engine" }
+gridcraft-script = { path = "crates/script" }
+gridcraft-script-bun = { path = "crates/script-bun" }
 gridcraft-ui-egui = { path = "crates/ui-egui" }
 gridcraft-mcp = { path = "crates/mcp" }
 gridcraft-pdf = { path = "crates/pdf" }

@@ -1,0 +1,20 @@
+[package]
+name = "gridcraft-script"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft Office Scripts: script storage, syntax checks, the ExcelScript bridge protocol and the recorder"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+web-time = { workspace = true }
+log = { workspace = true }
+
+# Nonblocking, no-follow opens for the scripts folder (a FIFO must not block `script.list`).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

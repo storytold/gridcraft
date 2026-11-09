@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-07 · **Change:** minor (§21: Office Scripts on Bun, the ExcelScript subset and the recorder; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -143,9 +143,6 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 15. Remaining functions and an oracle suite (F)
 - 18 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 16–26 h.
-- 20 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 17–29 h.
-- 21 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 18–30 h.
-- 18 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 18–30 h.
   [function-parity.md](function-parity.md)
 
 ### 16. Collaboration and review (F)
@@ -175,8 +172,24 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   [hardware-parity.md](hardware-parity.md)
 
 ### 21. Automation and add-ins (F)
-- VBA out of scope (dropped on open, #6); no Office Scripts compatibility; no plugin or custom
-  function API. **Estimate:** 25–40 h plus an owner decision.
+- VBA is out of scope (dropped on open, #6). Office Scripts run as a documented ExcelScript subset
+  on user-installed Bun (`script.*`, [office-scripts.md](office-scripts.md)). Implemented today:
+  `Workbook`, `Worksheet`, `Range`, `RangeAreas`, `RangeFormat`/`RangeFont`/`RangeFill`/
+  `RangeBorder` (font bold/italic/underline/size/name/colour/strikethrough, fill, number format,
+  one border by side), `Table`/`TableColumn`, `Chart` (type, name, position, delete), `Comment`,
+  `DataValidation`, `NamedItem`, `ExcelScript` enums and `console`. Still missing:
+  - `Range.getSurroundingRegion` and `getSpecialCells`, and the `getUsedRange` variants beyond the
+    worksheet
+  - chart axes, series, legends and data labels as objects (chart *elements* exist as commands)
+  - table rows, filters and sort, and table style options
+  - alignment, wrap and indent setters (`RangeFormat.setHorizontalAlignment`, …)
+  - `getCellProperties`, hyperlinks, conditional formatting and pivot tables
+  - `ExcelScript` enums that only those setters take (`HorizontalAlignment`, `VerticalAlignment`)
+  Office Add-ins are a different technology: worksheet and workbook events (`onChanged`,
+  `onActivated`, …), `getUsedRangeOrNullObject` and the plugin/custom-function API belong to that
+  work item ([roadmap.md](roadmap.md)), not to the ExcelScript subset.
+  **Estimate:** 10–20 h for the rest of ExcelScript; Add-ins and a plugin/custom-function API need
+  an owner decision.
 
 ### 22. AI features (F)
 - No in-app assistant, natural-language formulas or Analyze Data; agent control via MCP is
@@ -193,6 +206,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | §21: Office Scripts (ExcelScript subset on user-installed Bun, `script.*`, recorder); the remaining gap is the rest of the ExcelScript model and Add-ins |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |

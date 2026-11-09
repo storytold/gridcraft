@@ -1,6 +1,12 @@
 use super::printing;
 
 type PickSave = Box<dyn Fn(&str) -> Option<String>>;
+/// A fresh Office Scripts host, after Bun was installed while the app was running.
+type BunHost = Box<dyn Fn() -> Option<std::sync::Arc<dyn gridcraft_script::ScriptHost>>>;
+/// Download Bun into the runtime folder and return its path, when the shell can fetch it.
+type InstallBun = Box<dyn Fn() -> Result<String, String>>;
+/// Copy a Bun executable the user picked into the runtime folder and return its path.
+type ImportBun = Box<dyn Fn(&str) -> Result<String, String>>;
 type OpenUrl = Box<dyn Fn(&str)>;
 type CopyHtml = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 type Download = Box<dyn Fn(&str, &[u8])>;
@@ -14,13 +20,29 @@ pub struct Services {
     /// Desktop: submit the PDF with the chosen settings on a worker.
     pub print_native: Option<printing::Submit>,
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Native `.osts` picker (Import Script), separate from workbook opening.
+    pub pick_script: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Native executable picker (Import Bun).
+    pub pick_bun: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<PickSave>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.
     pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Native folder picker (the Office Scripts folder).
+    pub pick_folder: Option<Box<dyn Fn() -> Option<String>>>,
     /// Browser picture picker. Each dialog owns its inbox, so canceled picks cannot
     /// insert into a subsequent dialog or open the image as a workbook.
     pub pick_picture_async: Option<Box<dyn Fn(Inbox)>>,
     pub open_url: Option<OpenUrl>,
+    /// Native shell: make a fresh Office Scripts host (finds Bun again). The pane calls it when
+    /// it opens and after the user installs Bun, so a runtime added while GridCraft runs works
+    /// without a restart. `None` when the shell has no Office Scripts support (the web build).
+    pub bun_host: Option<BunHost>,
+    /// Native shell: download Bun into `<model root>/runtimes/bun` (user-initiated, HTTPS) and
+    /// return the executable's path. `None`: the pane offers the download page and Import.
+    pub install_bun: Option<InstallBun>,
+    /// Native shell: copy a Bun the user downloaded into the runtime folder. `None` disables
+    /// Import.
+    pub import_bun: Option<ImportBun>,
     /// Publish HTML and its plain-text alternative together. `Ok` means the host owns the
     /// write (including any asynchronous fallback); an immediate error uses egui's text path.
     pub copy_html: Option<CopyHtml>,

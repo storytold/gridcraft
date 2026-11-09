@@ -489,6 +489,27 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Показать",
         "Collapse dialog" => "Свернуть диалоговое окно",
         "Expand dialog" => "Развернуть диалоговое окно",
+        "Office Scripts" => "Сценарии Office",
+        "Office\nScripts" => {
+            "Сценарии
+Office"
+        }
+        "Record" => "Запись",
+        "One undo step per run." => "Одна отмена на запуск.",
+        "A failed run or timeout rolls back workbook changes, not external ones." => {
+            "Неудачный запуск или тайм-аут откатывает изменения книги, а не внешние."
+        }
+        "Scripts" => "Сценарии",
+        "Run Script" => "Запустить сценарий",
+        "Record Script" => "Записать сценарий",
+        "Bun is not installed" => "Bun не установлен",
+        "Download Bun…" => "Скачать Bun…",
+        "Import Bun…" => "Импортировать Bun…",
+        "Check Again" => "Проверить снова",
+        "Change Folder…" => "Изменить папку…",
+        "Reset Folder" => "Сбросить папку",
+        "Import Script…" => "Импортировать сценарий…",
+        "Export Script…" => "Экспортировать сценарий…",
         _ => return None,
     })
 }

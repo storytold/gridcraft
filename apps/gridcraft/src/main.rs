@@ -125,6 +125,9 @@ fn load_prefs(app: &mut SheetApp) {
         && let Ok(p) = serde_json::from_slice(&b)
     {
         app.session.prefs = p;
+        if let Some(scripts) = app.session.prefs.scripts_dir.clone() {
+            app.session.scripts_dir = Some(scripts);
+        }
     }
 }
 
@@ -183,6 +186,17 @@ fn services() -> Services {
                 .pick_file()
                 .and_then(|p| p.to_str().map(str::to_string))
         })),
+        pick_folder: Some(Box::new(|| rfd::FileDialog::new().pick_folder().and_then(|p| p.to_str().map(str::to_string)))),
+        pick_script: Some(Box::new(|| {
+            rfd::FileDialog::new().add_filter("Office Script (.osts)", &["osts"]).pick_file().and_then(|p| p.to_str().map(str::to_string))
+        })),
+        pick_bun: Some(Box::new(|| {
+            // A Bun download is `bun.exe` on Windows and `bun` (no extension) elsewhere.
+            let dialog = rfd::FileDialog::new();
+            #[cfg(windows)]
+            let dialog = dialog.add_filter("Bun (bun.exe)", &["exe"]);
+            dialog.pick_file().and_then(|p| p.to_str().map(str::to_string))
+        })),
         pick_picture: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"])
@@ -192,22 +206,135 @@ fn services() -> Services {
         pick_save: Some(Box::new(|suggested: &str| {
             let path = std::path::Path::new(suggested);
             let stem = path.file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
-            // The suggested name's type (an export asks for .pdf, .csv or .html) comes first.
-            const TYPES: [(&str, &str); 4] =
-                [("Excel Workbook (.xlsx)", "xlsx"), ("CSV UTF-8 (.csv)", "csv"), ("Web Page (.html)", "html"), ("PDF (.pdf)", "pdf")];
+            // The suggested name's type (an export asks for .pdf, .csv, .html or .osts) comes first.
+            const TYPES: [(&str, &str); 5] = [
+                ("Excel Workbook (.xlsx)", "xlsx"),
+                ("CSV UTF-8 (.csv)", "csv"),
+                ("Web Page (.html)", "html"),
+                ("PDF (.pdf)", "pdf"),
+                ("Office Script (.osts)", "osts"),
+            ];
             let ext = path.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).filter(|e| TYPES.iter().any(|(_, x)| x == e));
             let ext = ext.unwrap_or_else(|| "xlsx".to_string());
             let mut dialog = rfd::FileDialog::new().set_file_name(format!("{stem}.{ext}"));
-            for (label, x) in TYPES.iter().filter(|(_, x)| *x == ext).chain(TYPES.iter().filter(|(_, x)| *x != ext)) {
+            // `.osts` is offered only when a script export asked for it: a workbook has no
+            // `.osts` writer, so Save As must not offer that type for `Book1.xlsx`.
+            for (label, x) in TYPES.iter().filter(|(_, x)| *x == ext).chain(TYPES.iter().filter(|(_, x)| *x != ext && *x != "osts")) {
                 dialog = dialog.add_filter(*label, &[*x]);
             }
             dialog.save_file().and_then(|p| p.to_str().map(str::to_string))
         })),
         open_url: Some(Box::new(|url: &str| open_with_system(url))),
+        bun_host: Some(Box::new(|| Some(gridcraft_script_bun::script_host()))),
+        import_bun: Some(Box::new(|path: &str| install_bun_from(path))),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
         ..Default::default()
     }
+}
+
+/// Copies a Bun executable the user downloaded into `<model root>/runtimes/bun`.
+fn install_bun_from(path: &str) -> Result<String, String> {
+    let source = std::path::Path::new(path);
+    if !source.is_file() {
+        return Err(format!("{path} is not a file."));
+    }
+    let target = gridcraft_script_bun::discover::expected_path();
+    let dir = target.parent().ok_or_else(|| format!("{} has no folder to go in.", target.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("could not make {}: {e}", dir.display()))?;
+    // Copy into a folder of our own, made fresh for this import: the runtime folder can be a
+    // shared install's, where another user could pre-create the staged name as a symlink and a
+    // plain copy would write through it.
+    let staging = staging_dir(dir)?;
+    let staged = staged_path(&staging, &target);
+    let placed = stage_and_replace(source, &staged, &target, path);
+    let _ = std::fs::remove_dir_all(&staging);
+    placed
+}
+
+/// Copies `source` to `staged`, makes it executable and checks that it answers as Bun; only then
+/// replaces the runtime discovery finds. A wrong or partial copy never becomes the runtime.
+fn stage_and_replace(source: &std::path::Path, staged: &std::path::Path, target: &std::path::Path, shown: &str) -> Result<String, String> {
+    if let Err(e) = copy_executable(source, staged) {
+        let _ = std::fs::remove_file(staged);
+        return Err(e);
+    }
+    if gridcraft_script_bun::discover::version_of(staged, std::time::Duration::from_secs(3)).is_none() {
+        let _ = std::fs::remove_file(staged);
+        return Err(format!("{shown} did not answer as Bun (`--version`)."));
+    }
+    if let Err(e) = replace_file(staged, target) {
+        let _ = std::fs::remove_file(staged);
+        return Err(e);
+    }
+    Ok(target.display().to_string())
+}
+
+/// A folder inside `dir`, created exclusively for one import and readable only by this user on
+/// unix, so nobody else can pre-create its contents.
+fn staging_dir(dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    for attempt in 0..8 {
+        let path = dir.join(format!(".bun-import-{}-{attempt}", std::process::id()));
+        match make_private_dir(&path) {
+            Ok(()) => return Ok(path),
+            // A folder an earlier import of this process left behind: try the next name.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("could not make {}: {e}", path.display())),
+        }
+    }
+    Err(format!("could not make a staging folder in {}", dir.display()))
+}
+
+/// Creates one folder nobody else can write: `0700` on unix, the user's own profile on Windows.
+fn make_private_dir(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().mode(0o700).create(path)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir(path)
+    }
+}
+
+/// The temporary name an import is staged under inside its staging folder: the target's file name
+/// with `-part` before the extension, so Windows still sees an `.exe` it can start for the
+/// version check.
+fn staged_path(staging: &std::path::Path, target: &std::path::Path) -> std::path::PathBuf {
+    let stem = target.file_stem().and_then(|s| s.to_str()).unwrap_or("bun");
+    match target.extension().and_then(|e| e.to_str()) {
+        Some(ext) => staging.join(format!("{stem}-part.{ext}")),
+        None => staging.join(format!("{stem}-part")),
+    }
+}
+
+/// Copies `source` to `target`, executable, and reports a failed `chmod` instead of ignoring it.
+/// `create_new` refuses a path that already exists — a symlink included — instead of writing
+/// through it.
+fn copy_executable(source: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    let mut from = std::fs::File::open(source).map_err(|e| format!("could not read {}: {e}", source.display()))?;
+    {
+        let mut to = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(target)
+            .map_err(|e| format!("could not copy Bun to {}: {e}", target.display()))?;
+        std::io::copy(&mut from, &mut to).map_err(|e| format!("could not copy Bun to {}: {e}", target.display()))?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o755)).map_err(|e| format!("could not make Bun executable: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Replaces `target` with `staged`. `fs::rename` replaces the target on every platform
+/// (`MOVEFILE_REPLACE_EXISTING` on Windows) and never follows a link at either path, so a failed
+/// import leaves the working runtime in place instead of removing it first.
+fn replace_file(staged: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    std::fs::rename(staged, target).map_err(|e| format!("could not place Bun at {}: {e}", target.display()))
 }
 
 /// Opens a URL or file with the system's default application.
@@ -313,6 +440,16 @@ fn main() -> eframe::Result<()> {
         }
     }
     let mut session = Session::new();
+    // Office Scripts keep their own folder next to the settings (never in the workbook), and use
+    // Bun when this machine has one. The pane can pick one up installed while GridCraft runs.
+    // Runs without preferences (agents' test runs) keep no folder of their own either: recording
+    // a script would otherwise write into the user's settings folder.
+    if let Some(dir) = config_dir().filter(|_| prefs_enabled()) {
+        let scripts = dir.join("scripts").display().to_string();
+        session.scripts_dir_default = Some(scripts.clone());
+        session.scripts_dir = Some(scripts);
+    }
+    session.script_host = Some(gridcraft_script_bun::script_host());
     if let Some(s) = &sample
         && let Err(e) = session.execute("file.new", json!({"sample": s}))
     {
@@ -430,6 +567,7 @@ fn main() -> eframe::Result<()> {
 
 #[cfg(test)]
 mod packaging_tests {
+    use crate::{copy_executable, replace_file, staged_path, staging_dir};
     use gridcraft_engine::io::FileKind;
 
     /// The text between `start` and `end` that follows each `marker` in `text`, sorted (e.g. the
@@ -454,5 +592,43 @@ mod packaging_tests {
         for ext in &mac {
             assert!(FileKind::from_path(&format!("book.{ext}")).is_some(), "GridCraft doesn't open .{ext}");
         }
+    }
+
+    /// Import Bun stages the file beside the runtime and replaces it only once it is there:
+    /// a failed copy never leaves a broken executable where discovery looks, and the staged name
+    /// lives where nobody else can pre-create it as a symlink.
+    #[test]
+    fn an_import_is_staged_alone_and_only_then_replaces_the_runtime() {
+        let base = std::env::temp_dir().join(format!("gridcraft-bun-install-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let target = base.join(gridcraft_script_bun::discover::bun_exe_name());
+        std::fs::write(&target, b"old").unwrap();
+        let staging = staging_dir(&base).unwrap();
+        assert_eq!(staging.parent(), Some(base.as_path()), "the staging folder sits beside the runtime");
+        assert_ne!(staging, base);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&staging).unwrap().permissions().mode() & 0o777, 0o700, "only this user can write the staging folder");
+        }
+        let staged = staged_path(&staging, &target);
+        assert_eq!(staged.parent(), Some(staging.as_path()));
+        assert_ne!(staged.file_name(), target.file_name());
+        let download = base.join("download");
+        std::fs::write(&download, b"new").unwrap();
+        // A name that already exists — a symlink planted there in the old layout — is refused,
+        // never written through.
+        std::fs::write(&staged, b"planted").unwrap();
+        assert!(copy_executable(&download, &staged).is_err(), "an existing staged path is refused");
+        assert_eq!(std::fs::read(&staged).unwrap(), b"planted");
+        std::fs::remove_file(&staged).unwrap();
+        copy_executable(&download, &staged).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"old", "the old runtime stays until the staged copy is ready");
+        replace_file(&staged, &target).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        assert!(!staged.exists());
+        let _ = std::fs::remove_dir_all(&staging);
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

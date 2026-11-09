@@ -556,6 +556,27 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Weergeven",
         "Collapse dialog" => "Dialoogvenster samenvouwen",
         "Expand dialog" => "Dialoogvenster uitvouwen",
+        "Office Scripts" => "Office-scripts",
+        "Office\nScripts" => {
+            "Office-
+scripts"
+        }
+        "Record" => "Opnemen",
+        "One undo step per run." => "Eén stap ongedaan maken per uitvoering.",
+        "A failed run or timeout rolls back workbook changes, not external ones." => {
+            "Een mislukte of getimede uitvoering draait werkmapwijzigingen terug, geen externe."
+        }
+        "Scripts" => "Scripts",
+        "Run Script" => "Script uitvoeren",
+        "Record Script" => "Script opnemen",
+        "Bun is not installed" => "Bun is niet geïnstalleerd",
+        "Download Bun…" => "Bun downloaden…",
+        "Import Bun…" => "Bun importeren…",
+        "Check Again" => "Opnieuw controleren",
+        "Change Folder…" => "Map wijzigen…",
+        "Reset Folder" => "Map herstellen",
+        "Import Script…" => "Script importeren…",
+        "Export Script…" => "Script exporteren…",
         _ => return None,
     })
 }

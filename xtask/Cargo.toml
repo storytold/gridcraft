@@ -18,3 +18,4 @@ engine = ["dep:gridcraft-engine"]
 [dependencies]
 serde_json = { workspace = true }
 gridcraft-engine = { workspace = true, optional = true }
+gridcraft-script = { workspace = true }

@@ -1022,6 +1022,27 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Mostrar",
         "Collapse dialog" => "Recolher caixa de diálogo",
         "Expand dialog" => "Expandir caixa de diálogo",
+        "Office Scripts" => "Scripts do Office",
+        "Office\nScripts" => {
+            "Scripts
+do Office"
+        }
+        "Record" => "Gravar",
+        "One undo step per run." => "Uma anulação por execução.",
+        "A failed run or timeout rolls back workbook changes, not external ones." => {
+            "Uma execução falhada ou expirada reverte as alterações do livro, não as externas."
+        }
+        "Scripts" => "Scripts",
+        "Run Script" => "Executar script",
+        "Record Script" => "Gravar script",
+        "Bun is not installed" => "O Bun não está instalado",
+        "Download Bun…" => "Baixar o Bun…",
+        "Import Bun…" => "Importar o Bun…",
+        "Check Again" => "Verificar novamente",
+        "Change Folder…" => "Alterar pasta…",
+        "Reset Folder" => "Redefinir pasta",
+        "Import Script…" => "Importar script…",
+        "Export Script…" => "Exportar script…",
         _ => return None,
     })
 }

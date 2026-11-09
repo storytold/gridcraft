@@ -477,6 +477,25 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "显示",
         "Collapse dialog" => "折叠对话框",
         "Expand dialog" => "展开对话框",
+        "Office Scripts" => "Office 脚本",
+        "Office\nScripts" => {
+            "Office
+脚本"
+        }
+        "Record" => "录制",
+        "One undo step per run." => "每次运行一个撤消步骤。",
+        "A failed run or timeout rolls back workbook changes, not external ones." => "运行失败或超时会回滚工作簿更改，而非外部更改。",
+        "Scripts" => "脚本",
+        "Run Script" => "运行脚本",
+        "Record Script" => "录制脚本",
+        "Bun is not installed" => "未安装 Bun",
+        "Download Bun…" => "下载 Bun…",
+        "Import Bun…" => "导入 Bun…",
+        "Check Again" => "重新检查",
+        "Change Folder…" => "更改文件夹…",
+        "Reset Folder" => "重置文件夹",
+        "Import Script…" => "导入脚本…",
+        "Export Script…" => "导出脚本…",
         _ => return None,
     })
 }

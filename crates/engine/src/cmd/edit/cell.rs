@@ -18,6 +18,13 @@ pub(crate) fn is_formula_input(input: &str) -> bool {
             && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
 }
 
+/// Whether typed input reads `input` as signed numeric text: `+123` stays text when typed (it is
+/// a number with its sign), but a verbatim replay would read it as a formula without the marker.
+pub(crate) fn is_signed_number_text(input: &str) -> bool {
+    let tail = input.strip_prefix('+').or_else(|| input.strip_prefix('-'));
+    tail.is_some_and(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()))
+}
+
 /// What typing `input` into a cell produces (constant or formula, plus an automatic number
 /// format). Inherits the destination's cell, row or column style, including its number
 /// format, before parsing. Errors when the formula can't be parsed.
@@ -218,12 +225,14 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     // A string is run through typed input by default, which reads it with en-US rules: a caller
     // sending "05.04.2026" from a dd.mm.yyyy export got 4 May, and "2.500" became 2.5, in silence
     // (#2255). `parse: false` stores a string as the text it is; numbers, booleans and formulas
-    // are unaffected either way.
+    // are unaffected either way. `verbatim: true` (the `setText`/`setTexts` path) additionally
+    // keeps a leading apostrophe as text instead of reading it as the marker from typed input.
     let parse = match p.get("parse") {
         None | Some(Json::Null) => true,
         Some(Json::Bool(b)) => *b,
         Some(other) => return Err(bad("range.setValues", format!("parse {other}: true or false"))),
     };
+    let verbatim = p.get("verbatim").and_then(Json::as_bool).unwrap_or(false);
     if rows.len() > MAX_ROWS as usize {
         return Err(bad("range.setValues", "too many rows"));
     }
@@ -254,10 +263,31 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                         style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default(),
                         py: None,
                     }),
-                    // Text as given: no date or number reading, and a leading `'` is part of the
-                    // text rather than the marker that makes it text. A formula is still a
-                    // formula, which is what the ticket asks for and what `=` means in a cell.
-                    Json::String(text) if !parse && !text.starts_with('=') => {
+                    // Text as given: no date or number reading. With `parse: false` a leading `'`
+                    // before formula-like text is the marker that keeps it a text (`'=1+1`),
+                    // as typed input writes it; before anything else it is text itself, so it
+                    // stays (`'abc` → `'abc`). The `setText`/`setTexts` path (`verbatim`) stores
+                    // the text it is given, so the marker is never stripped there and a leading
+                    // `=` is text rather than a formula, as `setText` means.
+                    Json::String(text) if !parse && (verbatim || !text.starts_with('=')) => {
+                        // One coherent encoding with the capture: a leading `'` before
+                        // formula-like or signed text is the marker that keeps it a text
+                        // (`'=1+1` → `=1+1`); a doubled `''` is a literal apostrophe, so one
+                        // comes back off (`''abc` → `'abc`). `setText`/`setTexts` (`verbatim`)
+                        // stores the text given, so the marker is never stripped there.
+                        let text = if verbatim {
+                            text.as_str()
+                        } else if text.starts_with("''") {
+                            // A doubled `''` is a literal apostrophe: strip one, keep the rest,
+                            // whatever it reads as (`''abc` → `'abc`).
+                            &text[1..]
+                        } else if let Some(rest) = text.strip_prefix('\'') {
+                            // Otherwise the marker strips only before formula-like or signed
+                            // text (`'=1+1` → `=1+1`); before anything else it is text itself.
+                            if is_formula_input(rest) || is_signed_number_text(rest) { rest } else { text.as_str() }
+                        } else {
+                            text.as_str()
+                        };
                         if text.is_empty() {
                             // An empty string clears the cell, as `null` and the default path do:
                             // an empty text cell is not blank, and a script clearing cells with
@@ -269,7 +299,7 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                             if text.contains('\n') && !cx.wb.styles.get(style).align.wrap {
                                 style = cx.wb.styles.derive(style, |s| s.align.wrap = true);
                             }
-                            Some(Cell { value: Value::Text(text.as_str().into()), formula: None, style, py: None })
+                            Some(Cell { value: Value::Text(text.into()), formula: None, style, py: None })
                         }
                     }
                     _ => input_to_cell(&input, sheet, at, &mut cx.wb)?,

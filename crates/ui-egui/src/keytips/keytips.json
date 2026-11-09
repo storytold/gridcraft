@@ -61,6 +61,11 @@
    "target": "View"
   },
   {
+   "seq": "U",
+   "kind": "tab",
+   "target": "Automate"
+  },
+  {
    "seq": "E",
    "kind": "tab",
    "target": "Home",

@@ -4,6 +4,16 @@ use crate::theme::Tokens;
 use crate::widgets::{big_split_button, small_button, small_toggle_button};
 use egui::vec2;
 
+/// Opens the Office Scripts pane, or says what happened in a message box when another dialog is
+/// open: that dialog's fields may be unsaved, so it is never replaced.
+fn open_pane_or_message(app: &mut SheetApp, text: String) {
+    if app.dialog.is_some() {
+        app.message = Some(("Office Scripts".to_string(), text));
+    } else {
+        app.open_dialog("officeScripts", json!({}));
+    }
+}
+
 pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
     // Macros: the Macros dialog; Record Macro (Stop Recording while recording), Use Relative
     // References; Run Macro, whose main part runs the last macro and whose menu lists them all.
@@ -67,6 +77,65 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
         ui.separator();
         if ui.add(egui::Button::new(app.ui.language.tr("Macros…")).frame(false).min_size(vec2(200.0, 22.0))).clicked() {
             app.open_dialog("macros", json!({}));
+        }
+    });
+    sep(ui);
+    // Office Scripts: TypeScript through the ExcelScript object model, with the recorder. The
+    // pane (not a menu command) owns the editor; Run uses its draft so an unsaved script runs.
+    let __k = big_button(ui, Icon::Script, "Office\nScripts", "Write and run TypeScript Office Scripts", false);
+    if __k.clicked() {
+        app.open_dialog("officeScripts", json!({}));
+    }
+    ui.vertical(|ui| {
+        let recording = app.office_scripts.recording;
+        let (label, tip) = if recording {
+            ("Stop", "Stop recording and save the steps as an Office Script")
+        } else {
+            ("Record", "Record your actions into an Office Script")
+        };
+        let r = small_button(ui, Icon::Record, label, tip, false);
+        control_keytip(app, ui, &r, "script.record");
+        if r.clicked() {
+            crate::office_scripts::toggle_recording(app);
+            // The pane shows why a recording could not be saved; with it closed, show the failure
+            // instead of leaving the ribbon action silent (an open dialog is never replaced).
+            if let Some(status) = app.office_scripts.status.as_ref().filter(|status| status.error) {
+                let text = status.text.clone();
+                // `open_pane_or_message` already keeps an open dialog and uses a message box.
+                open_pane_or_message(app, text);
+            }
+        }
+        let r = small_button(ui, Icon::Play, "Run Script", "Run the script in Office Scripts", false);
+        if r.clicked() {
+            if app.office_scripts.runtime.is_none() {
+                // The first check from the ribbon finds the runtime; `refresh` alone does not.
+                crate::office_scripts::ensure_host(app);
+                crate::office_scripts::refresh(app);
+            }
+            // Without Bun a run can only fail with a message in a pane that is closed: show the
+            // pane, which has the setup controls, instead of running into nothing.
+            let missing = app.office_scripts.runtime.as_ref().is_none_or(|runtime| !runtime.found);
+            if missing || app.office_scripts.code.trim().is_empty() {
+                let text = if missing {
+                    app.office_scripts.runtime.as_ref().map(|runtime| runtime.message.clone()).unwrap_or_else(|| "Bun is not installed.".to_string())
+                } else {
+                    "Write or select a script first.".to_string()
+                };
+                open_pane_or_message(app, text);
+            } else {
+                crate::office_scripts::run(app);
+                // A run from the ribbon may happen with the pane closed: show the result when the
+                // run failed or logged output.
+                let show = app.office_scripts.status.as_ref().is_some_and(|status| status.error) || !app.office_scripts.output.is_empty();
+                if show {
+                    let mut text = app.office_scripts.status.as_ref().map(|status| status.text.clone()).unwrap_or_default();
+                    for line in &app.office_scripts.output {
+                        text.push('\n');
+                        text.push_str(line);
+                    }
+                    open_pane_or_message(app, text);
+                }
+            }
         }
     });
     sep(ui);

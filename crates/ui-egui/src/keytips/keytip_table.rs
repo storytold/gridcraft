@@ -197,11 +197,11 @@ mod tests {
             ("Data", "A"),
             ("Review", "R"),
             ("View", "W"),
+            ("Automate", "U"),
             ("Draw", "JI"), // two-letter unit, shown as one badge
         ] {
             assert_eq!(tab_sequence(tab), Some(letter), "tab {tab}");
         }
-        assert_eq!(tab_sequence("Automate"), None);
     }
 
     #[test]

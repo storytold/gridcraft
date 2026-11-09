@@ -33,11 +33,15 @@ pub const TABLE: &[(&str, Class)] = &[
     ("functions", Class::Layer(1)),
     // Equation layout (LaTeX to glyphs, rules and paths) and OMML, on top of RaTeX.
     ("math", Class::Layer(1)),
+    // Office Scripts: script storage, the bridge protocol, the recorder. No JavaScript runtime.
+    ("script", Class::Layer(1)),
     ("model", Class::Layer(2)),
     ("calc", Class::Layer(2)),
     ("xlsx", Class::Layer(2)),
     ("chart", Class::Layer(3)),
     ("engine", Class::Layer(5)),
+    // The Office Scripts runtime: finds Bun and drives it over the bridge.
+    ("script-bun", Class::Layer(6)),
     ("ui-egui", Class::Layer(6)),
     ("mcp", Class::Layer(6)),
     // L7 apps (exempt) and tooling (unchecked)

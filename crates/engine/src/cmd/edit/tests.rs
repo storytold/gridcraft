@@ -174,7 +174,12 @@ fn set_values_can_store_strings_as_the_text_they_are() {
             assert!(got["formula"].is_null(), "{cell} is not a formula: {got}");
         }
     }
-    // Numbers and booleans are untouched either way.
+    // Signed and apostrophe-prefixed text round-trips through the capture encoding: the marker
+    // the encoder added comes back off on replay, and a literal apostrophe stays one.
+    s.execute("range.setValues", json!({"range": "A11", "parse": false, "values": [["'+123", "''abc", "'=1+1"]]})).unwrap();
+    assert_eq!(get(&mut s, "A11")["value"], json!("+123"), "a signed marker strips on replay");
+    assert_eq!(get(&mut s, "B11")["value"], json!("'abc"), "a literal apostrophe stays one");
+    assert_eq!(get(&mut s, "C11")["value"], json!("=1+1"), "a formula-like marker strips on replay");
     s.execute("range.setValues", json!({"range": "A5", "parse": false, "values": [[12.5, true, null]]})).unwrap();
     assert_eq!(get(&mut s, "A5")["value"], json!(12.5));
     assert_eq!(get(&mut s, "B5")["value"], json!(true));

@@ -23,6 +23,7 @@ pub mod pivot_calc;
 pub mod recent;
 pub mod record;
 pub mod sample;
+pub mod script;
 pub mod selection;
 pub mod tables;
 pub mod windows;
@@ -235,6 +236,9 @@ const JOURNAL_MAX_ENTRIES: usize = 10_000;
 /// `engine.journal`), and a `file.open` holds the whole file as base64: without a size cap a
 /// few opens of a large workbook keep tens of MB alive.
 pub(crate) const JOURNAL_MAX_BYTES: usize = 64 * 1024 * 1024;
+/// The most cells a recorded range write keeps the written values for (the raw values stand in
+/// above it).
+const MAX_CAPTURED_CELLS: usize = 10_000;
 const UNDO_BYTES_LIMIT: usize = 128 * 1024 * 1024;
 
 fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
@@ -398,6 +402,10 @@ pub struct Prefs {
     /// (at most [`recent::MAX`]; see [`recent`]). An application list, as in Excel.
     #[serde(deserialize_with = "recent::lenient")]
     pub recent_functions: Vec<String>,
+    /// Where Office Scripts live, when the user chose a folder (`script.folder`). `None` means
+    /// the app's own `<config>/scripts`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scripts_dir: Option<String>,
 }
 
 /// The selection statistics shown on the status bar, set with `view.statusBar`. Excel turns on
@@ -433,6 +441,7 @@ impl Default for Prefs {
             formula_bar: true,
             status_bar: StatusBarStats::default(),
             recent_functions: recent::defaults(),
+            scripts_dir: None,
         }
     }
 }
@@ -489,6 +498,26 @@ pub struct Session {
     pub hide_ruler: bool,
     /// Journal position where Automate › Record Actions started.
     pub recording: Option<usize>,
+    /// The Office Scripts runtime (`script.run`, `script.runtime`). `None` in a build with none
+    /// (wasm) or before a host installs one; the commands then say what is missing.
+    pub script_host: Option<Arc<dyn gridcraft_script::ScriptHost>>,
+    /// Where saved Office Scripts live. `None` disables the `script.*` storage commands.
+    pub scripts_dir: Option<String>,
+    /// The app's own scripts folder, for `script.folder {path: ""}` (reset). Host code sets it.
+    pub scripts_dir_default: Option<String>,
+    /// Journal position where `script.record` started recording into an Office Script.
+    pub script_recording: Option<usize>,
+    /// The sheet each journal entry named, resolved when the command ran (beside `journal`): a
+    /// recording uses it so a later insert or delete cannot move the sheet a step means.
+    pub(crate) sheet_names: Vec<Option<String>>,
+    /// The values a `range.setValues` entry actually wrote, read back when the command ran: typed
+    /// input and the destination format decide the value, and a recording must replay that value.
+    pub(crate) write_values: Vec<Option<Json>>,
+    /// The value a `cell.set` entry stored, read back when the command ran: like a range write's
+    /// values, a recording replays what the cell stored (a number stays a number), because the
+    /// shim drops `parse`. Reading at stop time would let a later edit to the same cell rewrite
+    /// an earlier step.
+    pub(crate) cell_inputs: Vec<Option<Json>>,
     /// The recording buffer while a recorder runs ([`Session::start_recording`]): top-level
     /// commands with the place they ran in, kept apart from the journal.
     pub recorder: Option<record::Recorder>,
@@ -629,8 +658,33 @@ impl Session {
         }
         let entry = (id.to_string(), params);
         let entry_size = size(&entry);
+        // Resolve a numeric `sheet` now: the recording must name the sheet the command edited,
+        // not whatever sits at that index when recording stops.
+        let sheet = entry
+            .1
+            .get("sheet")
+            .and_then(Json::as_u64)
+            .and_then(|index| self.doc().ok().and_then(|d| d.wb.sheets.get(index as usize)).map(|sh| sh.name.clone()));
+        if self.sheet_names.len() != self.journal.len() {
+            self.sheet_names = vec![None; self.journal.len()];
+        }
+        if self.write_values.len() != self.journal.len() {
+            self.write_values = vec![None; self.journal.len()];
+        }
+        if self.cell_inputs.len() != self.journal.len() {
+            self.cell_inputs = vec![None; self.journal.len()];
+        }
+        // A recorded range write replays the values the command stored, not the text it was given:
+        // the destination format and typed input decide the value. A recorded `cell.set` replays
+        // what its own command stored, read now: reading at stop time would let a later edit to
+        // the same cell rewrite this step.
+        let written = if id == "range.setValues" { self.written_values(&entry.1) } else { None };
+        let stored = if id == "cell.set" { Self::stored_cell_value(self, &entry.1) } else { None };
         self.journal.push(entry);
         self.journal_sizes.push(entry_size);
+        self.sheet_names.push(sheet);
+        self.write_values.push(written);
+        self.cell_inputs.push(stored);
         self.journal_bytes = self.journal_bytes.saturating_add(entry_size);
         let len = self.journal.len();
         let mut n = if len > JOURNAL_MAX_ENTRIES { len - JOURNAL_MAX_ENTRIES / 2 } else { 0 };
@@ -645,8 +699,96 @@ impl Session {
         if n > 0 {
             self.journal.drain(..n);
             self.journal_sizes.drain(..n);
+            self.sheet_names.drain(..n.min(self.sheet_names.len()));
+            self.write_values.drain(..n.min(self.write_values.len()));
+            self.cell_inputs.drain(..n.min(self.cell_inputs.len()));
             self.journal_bytes = kept;
             self.recording = self.recording.map(|r| r.saturating_sub(n));
+            self.script_recording = self.script_recording.map(|r| r.saturating_sub(n));
+        }
+    }
+
+    /// The values a `range.setValues` entry wrote, read back from the cells it covered: the same
+    /// sheet and starting cell the command used, the rows and columns it was given, a formula where
+    /// one was written, the stored value otherwise and an empty string for a blank cell. `None`
+    /// when the write is too large to keep.
+    fn written_values(&mut self, params: &Json) -> Option<Json> {
+        let values = params.get("values")?.as_array()?;
+        let cells: usize = values.iter().map(|row| row.as_array().map_or(1, Vec::len)).sum();
+        if cells > MAX_CAPTURED_CELLS {
+            return None;
+        }
+        let sheet_index = crate::cmd::target_sheet(self, params).ok()?;
+        let start = crate::cmd::target_range(self, params).ok()?.start;
+        let d = self.doc().ok()?;
+        let sheet = d.wb.sheet(sheet_index)?;
+        let mut rows = Vec::new();
+        for (ri, row) in values.iter().enumerate() {
+            let row_cells: Vec<&Json> = match row.as_array() {
+                Some(cells) => cells.iter().collect(),
+                None => vec![row],
+            };
+            let mut out = Vec::new();
+            for ci in 0..row_cells.len() {
+                let at = start.offset(ri as i64, ci as i64)?;
+                // A blank cell has no stored entry (the write removed it) and records as an empty
+                // string, which the replay clears with. One blank must not make the whole write
+                // uncaptured.
+                out.push(Self::encoded_cell_value(sheet, at).unwrap_or_else(|| Json::String(String::new())));
+            }
+            rows.push(Json::Array(out));
+        }
+        Some(Json::Array(rows))
+    }
+
+    /// One cell's stored value as a recording replays it: the formula where one was written,
+    /// the stored value otherwise — whole numbers as integers, formula-like or signed text with
+    /// the apostrophe that marks it text, a stored leading apostrophe doubled, an empty string
+    /// for a blank cell. The replay (`range_set_values`) decodes this one encoding. `None` when
+    /// the sheet has no entry for the cell at all.
+    fn encoded_cell_value(sheet: &gridcraft_model::Sheet, at: gridcraft_core::CellRef) -> Option<Json> {
+        let cell = sheet.cell(at)?;
+        if let Some(formula) = cell.formula.as_ref() {
+            return Some(Json::String(format!("={}", formula.text)));
+        }
+        let stored = Self::whole_number(crate::cmd::inspect::value_json(&sheet.value(at)));
+        // A blank cell goes back as an empty string, not `null`: `setValues` takes strings,
+        // numbers and booleans, and Excel reads a `null` entry as "leave this cell alone", so
+        // the exported script would keep the old value.
+        if stored.is_null() {
+            return Some(Json::String(String::new()));
+        }
+        let stored = match stored {
+            // Text the replay would read as a formula goes back with the apostrophe
+            // that marks it text; a stored leading apostrophe is itself text, so it
+            // goes back doubled (the replay strips one).
+            Json::String(text) if crate::cmd::edit::is_formula_input(&text) => Json::String(format!("'{text}")),
+            Json::String(text) if crate::cmd::edit::is_signed_number_text(&text) => Json::String(format!("'{text}")),
+            Json::String(text) if text.starts_with('\'') => Json::String(format!("'{text}")),
+            other => other,
+        };
+        Some(stored)
+    }
+
+    /// The value a `cell.set` entry stored, read back from the cell the command wrote, in the
+    /// recording's one encoding. `None` when the cell cannot be read: the recorder then replays
+    /// the typed text as before.
+    fn stored_cell_value(&self, params: &Json) -> Option<Json> {
+        let sheet_index = crate::cmd::target_sheet(self, params).ok()?;
+        let at = crate::cmd::cell_param_on(self, params, "cell", sheet_index).ok()??;
+        let doc = self.doc().ok()?;
+        let sheet = doc.wb.sheet(sheet_index)?;
+        Self::encoded_cell_value(sheet, at)
+    }
+
+    /// A whole number as an integer, so a recorded literal reads `2` rather than `2.0`.
+    fn whole_number(value: Json) -> Json {
+        match value {
+            Json::Number(n) => match n.as_f64() {
+                Some(f) if f.fract() == 0.0 && f.abs() < 9_007_199_254_740_992.0 => Json::Number(serde_json::Number::from(f as i64)),
+                _ => Json::Number(n),
+            },
+            other => other,
         }
     }
 
@@ -657,7 +799,11 @@ impl Session {
             self.journal_bytes = self.journal_sizes.iter().sum();
         }
         self.journal.truncate(keep);
+        self.sheet_names.truncate(keep);
+        self.write_values.truncate(keep);
+        self.cell_inputs.truncate(keep);
         self.recording = self.recording.map(|r| r.min(self.journal.len()));
+        self.script_recording = self.script_recording.map(|r| r.min(self.journal.len()));
     }
 
     pub fn commands(&self) -> Vec<CommandInfo> {

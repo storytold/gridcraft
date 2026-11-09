@@ -44,6 +44,7 @@ pub mod keytips;
 pub mod macro_editor;
 pub mod macro_ui;
 pub mod objects;
+pub mod office_scripts;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -300,6 +301,8 @@ pub struct SheetApp {
     tab_run: Option<(u64, usize, u32, CellRef)>,
     /// Automate › Macros: relative recording, recent macros, a macro's question.
     pub macros: macro_ui::MacroUi,
+    /// Automate › Office Scripts: the script list, the draft and the runtime's state.
+    pub office_scripts: office_scripts::Pane,
     pub started: f64,
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
