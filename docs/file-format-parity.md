@@ -43,6 +43,20 @@ that would be skipped as defaults are excluded before charging the limit. Excess
 the existing file-too-large error; accepted overlaps retain their existing last-wins behavior
 (#1022).
 
+A worksheet row's cells are read in the shape Excel writes them: ascending column order, all in
+the row's own row, one element per row number — Excel writes exactly that (an Excel 16 save of
+cells entered in a scrambled order came back `<row r="1">A1,B1` then `r="3"`, `r="5"`, `r="7"`).
+Against hand-built files Excel 16 repairs a cell that repeats an address inside a row, a column
+that runs backwards, a cell naming another row and a row element that goes back to a row number
+already read ("Removed Records: Cell information from /xl/worksheets/sheet1.xml part"), leaving
+the records GridCraft keeps: the first value read for an address, the cells before the break in
+column order, and nothing on the row that went back. Placing the others as written silently moved
+values, let a later duplicate shadow an earlier cell and landed an unaddressed cell on an
+unrelated column. The one shape Excel does not repair is a row element repeating the row number
+it just wrote: Excel merges it without a word — later value wins, its new cells and its row
+formatting join the row — so GridCraft merges it the same way. One import warning per sheet
+reports how many cells were dropped or replaced (#2531).
+
 Ink created with Draw is written as standard, unfilled DrawingML polylines, without visible point
 captions or private metadata. Supported numeric polylines reopen as editable ink, retaining points,
 colour, integer width and anchor. Curves, filled paths, transforms and unsupported line styles are
@@ -179,6 +193,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-11-01 | trivial | XLSX selects the first visible workbook view as one unit and bounds imported/exported tab ratios; isolated attributes and sheet-edit round trips covered, with firstSheet left to #2264 (#3057) |
 | 2026-10-31 | minor | CSV and text open detects each column's date order: a value that reads only day first (`31/05/2026`) makes the column day first, a value that reads only month first (`12/31/2026`) makes it month first, an all-ambiguous column keeps month first with a warning, and a column with both kinds stays text with a warning (#2765) |
 | 2026-10-31 | minor | XLSX open reads Google Sheets' `IFERROR(__xludf.DUMMYFUNCTION("…"),cached)` export wrapper as the formula inside when GridCraft calculates every function in it (plain, shared and array formulas, whole or nested; Google-only functions and unparseable, over-long or over-deep inner text keep the wrapper and the cached value) and keeps the cached value; saving writes the real formula with Excel's `_xlfn.` prefixes (#2871) |
+| 2026-10-25 | minor | XLSX worksheet rows: a cell that repeats an address, runs backwards or names a row other than its `<row>`, and the cells of a row element that goes back to a row number already read, are dropped instead of being placed silently; a row element repeating the row number already read is merged instead, as Excel 16 opens it (later value wins, its new cells and row formatting join the row). One import warning per sheet names the count of cells dropped or replaced, and an unaddressed cell follows the last cell that was kept (#2531), checked against Excel 16 (`malformed.rs`) |
 | 2026-10-21 | minor | HTML (Save as Web Page) writes pictures (`data:` URI `<img>`) and charts (inline SVG from the chart crate's drawing primitives, text included) at their anchors; the table uses the sheet's column widths and row heights when the sheet has either, and output for sheets without pictures or charts is unchanged |
 | 2026-10-20 | trivial | XLSX shared strings: Japanese phonetic runs (ふりがな, `<rPh sb="…" eb="…">` with `<phoneticPr>`) are read into the workbook and written back next to the string with the same text, so an open + save no longer deletes them; bad offsets and readings are dropped with a warning, a `<phoneticPr>` without runs is kept on its own, and when duplicate `<si>` items share a text but not a reading only the first reading is written (reported on open) (`phonetic_tests.rs`) |
 | 2026-10-20 | minor | A workbook theme's major/minor per-script typefaces (`<a:font script="Arab" typeface="…"/>`, also Hebr, Jpan and the rest) are read and written back in file order after `<a:cs>`; they were dropped before. A hostile file is held to 64 entries of 256 characters |
