@@ -332,13 +332,25 @@ pub struct WheelZoom {
     pub time: f64,
     /// The step the zoom is gliding to, and the percentage set last on the way.
     pub glide: Option<(u16, u16)>,
+    /// What to keep under the pointer once the sheet shows the percentage set last.
+    pub anchor: Option<ZoomAnchor>,
+}
+
+/// Ctrl+wheel zooms around the pointer: the sheet point under it (`Geo::scrolled_point` at the
+/// logical position `at`) goes back under it on the first frame that shows `zoom` percent.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ZoomAnchor {
+    pub zoom: u16,
+    pub at: Pos2,
+    pub point: (Option<f32>, Option<f32>),
 }
 
 impl WheelZoom {
     /// The state for `place` showing `zoom` percent: fresh for another document or sheet, and
     /// without its glide if the zoom was changed some other way since the glide set it.
     fn at(app: &SheetApp, place: (u64, usize), zoom: u16, now: f64) -> WheelZoom {
-        let mut w = app.grid.wheel_zoom.filter(|w| w.place == place).unwrap_or(WheelZoom { place, notches: 0.0, time: now, glide: None });
+        let fresh = WheelZoom { place, notches: 0.0, time: now, glide: None, anchor: None };
+        let mut w = app.grid.wheel_zoom.filter(|w| w.place == place).unwrap_or(fresh);
         if w.glide.is_some_and(|(_, shown)| shown != zoom) {
             w.glide = None;
         }

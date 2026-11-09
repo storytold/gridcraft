@@ -113,7 +113,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         }
         view.scroll -= d / z;
     }
-    update_zoom_glide(app, ui, place, sh.zoom, now);
+    update_zoom_glide(app, ui, place, sh.zoom, now, &mut view.scroll, &make_geo);
     view.scroll = view.scroll.max(egui::Vec2::ZERO);
     let (mut max_x, mut max_y) = (sh.col_left(MAX_COLS - 20) as f32, sh.row_top(MAX_ROWS - 40) as f32);
     if paper {
@@ -357,19 +357,38 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
     error_check_tag(app, ui, geo, sh);
 }
 
-fn update_zoom_glide(app: &mut SheetApp, ui: &egui::Ui, place: (u64, usize), zoom: u16, now: f64) {
+fn update_zoom_glide(
+    app: &mut SheetApp,
+    ui: &egui::Ui,
+    place: (u64, usize),
+    zoom: u16,
+    now: f64,
+    scroll: &mut egui::Vec2,
+    make_geo: &impl Fn(&mut SheetApp, egui::Vec2) -> Geo,
+) {
     let mut zooming = WheelZoom::at(app, place, zoom, now);
+    // The first frame at the new zoom puts the sheet point that was under the pointer back under it.
+    if let Some(a) = zooming.anchor.take().filter(|a| a.zoom == zoom) {
+        // Rows first: the row-header width follows the visible rows, and the columns start after it.
+        scroll.y = make_geo(app, *scroll).scroll_keeping(a.at, a.point).y.max(0.0);
+        scroll.x = make_geo(app, *scroll).scroll_keeping(a.at, a.point).x;
+    }
     if let Some((to, shown)) = zooming.glide {
         let glides = app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight();
         let share = egui::emath::exponential_smooth_factor(0.9, 0.1, ui.input(|i| i.stable_dt).min(0.1));
         let z = if glides { zoom_glide_step(shown, to, share) } else { to };
+        // Zoom around the pointer: note the sheet point under it (this frame still shows the old zoom).
+        if let Some(at) = ui.input(|i| i.pointer.hover_pos()).filter(|_| z != zoom) {
+            zooming.anchor = make_geo(app, *scroll).zoom_anchor(at, z);
+        }
         let from = Trace::key(app);
         let _ = app.session.run("view.zoom", json!({"percent": z}));
         Trace::keep_through_zoom(app, from);
         zooming.glide = (z != to).then_some((to, z));
         ui.ctx().request_repaint();
     }
-    if app.grid.wheel_zoom.is_some_and(|w| w.glide.is_some()) {
+    // Store a glide's progress, or that it stopped, or that its anchor was used.
+    if app.grid.wheel_zoom.is_some_and(|w| w.glide.is_some() || w.anchor.is_some()) {
         app.grid.wheel_zoom = Some(zooming);
     }
 }

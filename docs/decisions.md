@@ -67,7 +67,9 @@ The wheel's turning is counted in notches (egui eases each notch in over several
 fine-grained wheels send parts of one); a notch steps once 60% of it has turned. With animations
 on, the zoom then glides to the step over about a tenth of a second (as egui eases a scroll notch),
 and a notch turned during a glide steps on from the step it's going to. With View › Animations off
-it goes to the step at once. Whether the zoom glide should have a setting of its own is left to the
+it goes to the step at once. The zoom keeps the sheet point under the pointer where it is (#1851),
+except over frozen panes, which don't scroll, and where that would scroll past the first row or
+column. Whether the zoom glide should have a setting of its own is left to the
 maintainers.
 
 Before, each frame multiplied the whole-number zoom by egui's eased factor and rounded, so a notch
