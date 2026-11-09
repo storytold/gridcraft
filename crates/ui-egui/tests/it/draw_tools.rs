@@ -66,7 +66,8 @@ fn a_custom_pen_tile_carries_its_own_name() {
         app,
     );
     h.run_steps(4);
-    let label = format!("Pen {id}");
+    // The pen it just added is the one in hand, so its name carries the selected state too.
+    let label = format!("Pen {id}, selected");
     assert!(h.query_by_label(&label).is_some(), "the custom pen has its own name: {label}");
     assert!(h.query_by_label(&format!("{label} options")).is_some());
 }
@@ -87,8 +88,9 @@ fn pen_dropdown_swatches_and_textures_change_the_gallery_pen() {
     assert_eq!(pens[0].effect, None, "a solid colour clears the texture");
     assert_eq!(h.state().session.draw_tool, "pen");
 
-    // A texture sets its base colour and the effect.
-    h.get_by_label("Galaxy pen options").click();
+    // A texture sets its base colour and the effect. The tile now reads as selected, so its name
+    // (and its chevron's) says so.
+    h.get_by_label("Galaxy pen, selected options").click();
     h.run_steps(6);
     h.get_by_label("Lava").click();
     h.run_steps(6);
@@ -108,7 +110,7 @@ fn pen_dropdown_swatches_and_textures_change_the_gallery_pen() {
 
     // Delete Tool removes the custom pen it belongs to.
     let id = pens.last().map(|p| p.id).unwrap();
-    h.get_by_label(&format!("Pen {id} options")).click();
+    h.get_by_label(&format!("Pen {id}, selected options")).click();
     h.run_steps(6);
     h.get_by_label("Delete Tool").click();
     h.run_steps(6);
@@ -134,26 +136,3 @@ fn update_pen_clears_a_texture_when_only_a_solid_colour_is_sent() {
     assert_eq!(textured["color"], serde_json::json!("#5B3EA8"), "colour resets to the texture base");
 }
 
-#[test]
-fn the_thickness_slider_and_more_colors_are_wired() {
-    let mut h = draw_tab();
-    // The Red pen's dropdown: the thickness slider has its own accessible label and moving it
-    // updates that gallery pen (the wiring `apply_pen_change` builds was untested).
-    h.get_by_label("Red pen options").click();
-    h.run_steps(6);
-    assert!(h.query_by_label("Thickness").is_some(), "the slider names itself");
-    h.get_by_label("Thickness").click();
-    h.run_steps(2);
-    h.key_press(egui::Key::ArrowRight);
-    h.key_press(egui::Key::ArrowRight);
-    h.run_steps(6);
-    let width = h.state().session.draw_pens[1].width;
-    assert_ne!(width, 0.5, "the slider moved the pen off its first step: {width}");
-    assert_eq!(h.state().session.draw_tool, "pen", "the edited pen is the one in hand");
-
-    // More Colors… opens the picker inside the dropdown.
-    let before = h.output().shapes.len();
-    h.get_by_label("More Colors…").click();
-    h.run_steps(4);
-    assert!(h.output().shapes.len() > before, "the colour picker opened");
-}

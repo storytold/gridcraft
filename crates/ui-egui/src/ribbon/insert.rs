@@ -431,17 +431,11 @@ fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::dr
         apply_pen_change(app, id, tool, color, width, None);
         ui.close();
     }
-    // More Colors…: a hex/HSVA picker in the dropdown, applied as it moves. The picker's stored
-    // HSVA is keyed by the pen's current colour, so a swatch or texture chosen since it was last
-    // open cannot leave a stale value behind.
-    let more_id = ui.scope_id().with("draw_pen_more_colors");
-    let mut open: bool = ui.data_mut(|d| d.get_temp(more_id)).unwrap_or(false);
-    if ui.button(tr.tr("More Colors…")).clicked() {
-        open = !open;
-        ui.data_mut(|d| d.insert_temp(more_id, open));
-    }
-    if open {
-        let hv_id = more_id.with(("hsva", color.to_ascii_lowercase()));
+    // More Colors…: a submenu, so opening the picker does not close the pen dropdown; the picker
+    // applies as it moves. Its stored HSVA is keyed by the pen's current colour, so a swatch or
+    // texture chosen since it was last open cannot leave a stale value behind.
+    ui.menu_button(tr.tr("More Colors…"), |ui| {
+        let hv_id = ui.scope_id().with(("draw_pen_more_colors", color.to_ascii_lowercase()));
         let start = {
             let [r, g, b] = [hex_color(color).r(), hex_color(color).g(), hex_color(color).b()];
             egui::ecolor::Hsva::from_srgb([r, g, b])
@@ -456,7 +450,7 @@ fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::dr
             // Same as the swatches: a picked colour is solid, not textured.
             apply_pen_change(app, id, tool, &hex, width, None);
         }
-    }
+    });
     if deletable && ui.button(tr.tr("Delete Tool")).clicked() {
         act(app, "draw.deletePen", json!({"id": id}));
         ui.close();
