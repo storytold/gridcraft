@@ -132,6 +132,20 @@ pub struct ChartData {
     /// Workbook-theme colours for the points of pie-like charts, repeating (point `j` uses entry `j % len`); empty uses the default theme.
     #[serde(default)]
     pub palette: Vec<Rgba>,
+    /// Up/down bars to draw between the first and last line series.
+    #[serde(default)]
+    pub up_down: Option<UpDownBars>,
+}
+
+/// Up/down bars resolved for drawing.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UpDownBars {
+    /// The gap between bars as a percentage of a bar's width.
+    pub gap: f32,
+    /// Fill where the last series is higher than the first.
+    pub up: Rgba,
+    /// Fill where it is lower.
+    pub down: Rgba,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

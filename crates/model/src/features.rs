@@ -546,6 +546,19 @@ fn default_hole_size() -> u8 {
     50
 }
 
+/// Up/down bars of a line chart (`c:upDownBars`): in each category, a bar from the first series'
+/// value to the last's, light where the last is higher and dark where it is lower, as Excel draws
+/// them.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChartUpDownBars {
+    /// The gap between bars as a percentage of a bar's width, 0 to 500 (Excel's default is 150).
+    pub gap_width: u16,
+    /// Fill of a bar where the last series is higher; `None` is Excel's default, near white.
+    pub up: Option<Color>,
+    /// Fill of a bar where the last series is lower; `None` is Excel's default, dark grey.
+    pub down: Option<Color>,
+}
+
 /// A chart's data table (`c:dTable`), independent of the chart legend.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -591,6 +604,9 @@ pub struct Chart {
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]
     pub pivot: Option<String>,
+    /// Up/down bars between the first and last line series.
+    #[serde(default)]
+    pub up_down_bars: Option<ChartUpDownBars>,
 }
 
 impl Chart {
@@ -1125,6 +1141,7 @@ mod tests {
             source: None,
             by_rows: false,
             pivot: None,
+            up_down_bars: None,
         };
         let mut json = serde_json::to_value(&chart).expect("serialize chart");
         json.as_object_mut().expect("chart object").remove("hole_size");

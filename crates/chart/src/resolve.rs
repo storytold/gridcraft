@@ -366,7 +366,17 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
     let categories = categories.unwrap_or_else(|| (1..=n).map(|i| i.to_string()).collect());
     let palette = default_palette(&wb.theme, n.min(PALETTE_CYCLE));
-    ChartData { categories, category_levels, series, palette }
+    // Excel's defaults: near-white bars up, dark grey bars down.
+    let rgba = |c: Option<gridcraft_model::Color>, d: [u8; 3]| {
+        let [r, g, b] = c.and_then(|c| c.resolve(&wb.theme)).unwrap_or(d);
+        [r, g, b, 255]
+    };
+    let up_down = chart.up_down_bars.map(|u| crate::UpDownBars {
+        gap: f32::from(u.gap_width.min(500)),
+        up: rgba(u.up, [0xF9, 0xF9, 0xF9]),
+        down: rgba(u.down, [0x3F, 0x3F, 0x3F]),
+    });
+    ChartData { categories, category_levels, series, palette, up_down }
 }
 
 #[cfg(test)]

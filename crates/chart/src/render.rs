@@ -134,6 +134,7 @@ fn sanitize_vals(v: &[Option<f64>]) -> Vec<Option<f64>> {
 
 pub(crate) fn sanitize(d: &ChartData) -> ChartData {
     ChartData {
+        up_down: d.up_down,
         palette: d.palette.iter().take(MAX_POINTS).copied().collect(),
         categories: d.categories.iter().take(MAX_POINTS).cloned().collect(),
         category_levels: d.category_levels.iter().take(3).map(|l| l.iter().take(MAX_POINTS).cloned().collect()).collect(),

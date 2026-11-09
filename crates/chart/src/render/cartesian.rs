@@ -334,6 +334,9 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     // Area labels wait until every area is filled, so a later (stacked) area can't paint over them.
     let mut area_labels = Vec::new();
 
+    // The plotted points of the lines, in series order, with whether each is on the secondary axis:
+    // up/down bars join the first and last primary ones.
+    let mut line_pts: Vec<(bool, Vec<Option<[f32; 2]>>)> = Vec::new();
     // Areas first, then columns, then lines on top.
     for pass in 0..3 {
         for (i, s) in data.series.iter().enumerate() {
@@ -423,6 +426,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 _ => {
                     let pts: Vec<Option<[f32; 2]>> = row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j), vpos(t, &sc)])).collect();
                     draw_runs(ctx, &pts, s.color, 2.25, s.smooth.then_some(plot));
+                    line_pts.push((sec.get(i).copied().unwrap_or(false), pts.clone()));
                     let k = kinds.get(i).copied().unwrap_or(ChartKind::Line);
                     if k == ChartKind::LineMarkers && cw >= 3.0 {
                         draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
@@ -440,6 +444,9 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         for (x, y, t) in area_labels.drain(..) {
             ctx.text(x, y, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
         }
+    }
+    if !horizontal && let Some(ud) = data.up_down {
+        up_down_bars(ctx, &ud, &line_pts, cw);
     }
     // Trendlines on top: x is the category number 1..n.
     let mut trend_labels = Vec::new();
@@ -555,6 +562,26 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (xs.min, xs.max));
     }
     draw_trend_labels(ctx, plot, &trend_labels);
+}
+
+/// Up/down bars over the lines, as Excel draws them: in each category where both have a point, a bar
+/// from the first line series to the last, `cw / (1 + gap / 100)` wide and outlined in black, light
+/// where the last is higher and dark where it is lower; equal values give a black line.
+fn up_down_bars(ctx: &mut Ctx, ud: &crate::UpDownBars, lines: &[(bool, Vec<Option<[f32; 2]>>)], cw: f32) {
+    const OUTLINE: Rgba = [0, 0, 0, 0xFF];
+    let primary: Vec<&Vec<Option<[f32; 2]>>> = lines.iter().filter(|(secondary, _)| !secondary).map(|(_, p)| p).collect();
+    let [first, .., last] = primary.as_slice() else { return };
+    let w = cw / (1.0 + ud.gap.clamp(0.0, 500.0) / 100.0);
+    for (a, b) in first.iter().zip(last.iter()) {
+        let (Some(a), Some(b)) = (a, b) else { continue };
+        let (top, bottom) = (a[1].min(b[1]), a[1].max(b[1]));
+        if bottom - top < 0.5 {
+            ctx.hline(a[0] - w / 2.0, a[0] + w / 2.0, a[1], OUTLINE, 1.0);
+        } else {
+            let fill = if b[1] < a[1] { ud.up } else { ud.down };
+            ctx.rect(a[0] - w / 2.0, top, w, bottom - top, fill, Some((OUTLINE, 0.75)));
+        }
+    }
 }
 
 #[cfg(test)]
