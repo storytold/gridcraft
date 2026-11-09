@@ -505,10 +505,12 @@ pub struct Session {
     pub macro_debug: Option<macros::debug::Debugger>,
     /// Where the macro recorder started (beside `recorder`, its buffer).
     pub macro_recording: Option<macros::recorder::RecordingStart>,
-    /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour and width.
+    /// Draw tab tool: "" (select), "pen", "eraser" or "lasso"; pen colour and width.
     pub draw_tool: String,
     pub draw_color: String,
     pub draw_width: f32,
+    /// The ink picked with the lasso on a sheet (a view state: never saved or undone).
+    pub lasso: Option<crate::cmd::draw::LassoSelection>,
     /// Review › Show Comments: the Comments pane is open.
     pub comments_pane: bool,
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
@@ -556,6 +558,13 @@ impl Session {
     }
     pub fn active(&self) -> Option<&DocState> {
         self.docs.get(self.active)
+    }
+    /// Whether ink `id` on `sheet` is picked with the lasso (a view state; see
+    /// [`Session::lasso`]). The selection only marks ink of its own workbook and the same sheet:
+    /// ids are per workbook, and a sheet's index shifts when sheets are inserted, deleted or moved.
+    pub fn lasso_selected(&self, sheet: usize, id: u32) -> bool {
+        let (Some(d), Some(l)) = (self.active(), self.lasso.as_ref()) else { return false };
+        d.uid == l.doc && d.wb.sheet(sheet).is_some_and(|sh| sh.uid.get() == l.sheet_uid) && l.ids.contains(&id)
     }
     /// Where the open workbook with this [`DocState::uid`] is in [`Session::documents`].
     pub fn document_index(&self, uid: u64) -> Option<usize> {

@@ -321,6 +321,11 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                 let pts: Vec<Pos2> =
                     gridcraft_engine::cmd::draw::ink_points(sp).iter().map(|q| pos2(r.left() + q[0] * geo.z, r.top() + q[1] * geo.z)).collect();
                 if pts.len() >= 2 {
+                    // Ink picked with the lasso is marked by a soft band under the stroke.
+                    if app.session.lasso_selected(si, sp.id) {
+                        let tint = Tokens::get(p.ctx()).accent.gamma_multiply(0.35);
+                        p.add(PathShape::line(pts.clone(), PathStroke::new(w + 4.0 * geo.z.max(0.5), tint)));
+                    }
                     let col = ink_color(line, pt);
                     p.add(PathShape::line(pts, PathStroke::new(w, col)));
                 }

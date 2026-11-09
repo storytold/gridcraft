@@ -1,19 +1,106 @@
-//! Draw tab: pen and eraser tools, ink strokes, Ink to Shape.
+//! Draw tab: pen and eraser tools, ink strokes, the lasso and Ink to Shape.
 
 use gridcraft_core::CellRef;
 use gridcraft_model::{Anchor, Color, Shape, ShapeKind};
 use serde_json::{Value as Json, json};
 
-use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, ok, str_param, u32_param};
+use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, str_param, u32_param};
+
+/// Most points read from a lasso loop's parameters (a longer loop is cut off there).
+const MAX_LASSO_INPUT: usize = 20_000;
+/// Most points of a lasso loop that are kept (a longer loop is thinned out).
+const MAX_LASSO_POINTS: usize = 512;
+/// Largest sheet coordinate (points) a lasso loop point or a selection move may name.
+const MAX_LASSO_COORD: f64 = 1e7;
+/// Points of a stroke tested against the lasso (spread along it).
+const LASSO_SAMPLES: usize = 64;
+/// Farthest the lasso moves its selection in one step, sheet points.
+const MAX_MOVE: f64 = 100_000.0;
+
+/// The ink picked with the lasso on `sheet`: shape ids (view state, never saved or undone) and
+/// the loop that picked them (sheet points).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LassoSelection {
+    /// `DocState::uid` of the workbook the ids belong to: ids are per workbook, so in another
+    /// workbook the same ids would name other ink.
+    pub doc: u64,
+    /// The sheet's runtime id ([`gridcraft_model::SheetUid::get`]); a sheet index points at
+    /// another sheet once sheets are inserted, deleted or moved.
+    pub sheet_uid: u64,
+    /// The sheet's index in `doc` when the selection was made (kept for readers).
+    pub sheet: usize,
+    pub ids: Vec<u32>,
+    pub polygon: Vec<[f32; 2]>,
+}
+
+/// Where the selection's sheet is in the active document now, when the selection still belongs
+/// to it: `None` when the person switched workbook or the sheet is gone.
+fn lasso_sheet(s: &Session, sel: &LassoSelection) -> Option<usize> {
+    let d = s.active()?;
+    if d.uid != sel.doc {
+        return None;
+    }
+    (0..d.wb.sheets.len()).find(|i| d.wb.sheet(*i).is_some_and(|sh| sh.uid.get() == sel.sheet_uid))
+}
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "draw.pen", "Pen", ["Draw", "Tools"], None, "{on?: bool, color?: hex, width?: 2}", has_doc, pen),
         cmd!(noundo "draw.eraser", "Eraser", ["Draw", "Tools"], None, "{on?: bool}", has_doc, eraser),
-        cmd!(noundo "draw.lasso", "Lasso Select", ["Draw", "Tools"], None, "{} (selects ink by dragging; same as Select Objects)", has_doc, |s, _| {
-            s.draw_tool = String::new();
-            ok()
-        }),
+        cmd!(
+            noundo "draw.lasso",
+            "Lasso Select",
+            ["Draw", "Tools"],
+            None,
+            "{on?: bool} (picks up the lasso; draw a loop to select ink, drag a selected stroke to move it)",
+            has_doc,
+            lasso
+        ),
+        cmd!(
+            noundo "draw.lassoSelect",
+            "Select Ink with the Lasso",
+            [],
+            None,
+            "{points: [[x, y], …] (sheet points; at least three) , clear?: bool}",
+            has_doc,
+            lasso_select
+        ),
+        cmd!(
+            query "draw.lassoSelection",
+            "Lasso Selection",
+            [],
+            None,
+            "{} → {sheet, count, selected: [shape ids], polygon}",
+            has_doc,
+            lasso_selection
+        ),
+        cmd!(
+            "draw.moveSelection",
+            "Move Selected Ink",
+            ["Draw", "Tools"],
+            None,
+            "{dx: pt, dy: pt} (moves the ink selected with the lasso; one undo step)",
+            has_doc,
+            move_selection
+        ),
+        cmd!(
+            "draw.recolorSelection",
+            "Recolour Selected Ink",
+            ["Draw", "Tools"],
+            None,
+            "{color: hex} (recolours the ink selected with the lasso; one undo step)",
+            has_doc,
+            recolor_selection
+        ),
+        cmd!(
+            "draw.deleteSelection",
+            "Delete Selected Ink",
+            [],
+            None,
+            "{} (deletes the ink selected with the lasso; one undo step)",
+            has_doc,
+            delete_selection
+        ),
         cmd!("draw.stroke", "Ink Stroke", [], None, "{points: [[x,y],…] in sheet points, color?: hex, width?: 2}", has_doc, stroke),
         cmd!(
             "draw.inkToShape",
@@ -47,6 +134,204 @@ fn eraser(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn parse_points(t: &str) -> Vec<[f32; 2]> {
     t.split(';').filter_map(|pt| pt.split_once(',').and_then(|(x, y)| Some([x.parse().ok()?, y.parse().ok()?]))).collect()
+}
+
+/// Whether a shape is freehand ink the lasso can pick: ink strokes only, never another object
+/// (a picture, chart, or a shape converted from ink that is now a rectangle, and so on).
+pub fn is_ink(sh: &Shape) -> bool {
+    sh.kind == ShapeKind::Ink
+}
+
+// --- Lasso -------------------------------------------------------------------------------
+
+/// Draw › Lasso Select: pick up (or, with `on: false`, put down) the lasso tool. A selection
+/// already made stays.
+fn lasso(s: &mut Session, p: &Json) -> Result<Json> {
+    let on = bool_param(p, "on").unwrap_or(s.draw_tool != "lasso");
+    s.draw_tool = if on { "lasso".into() } else { String::new() };
+    let selected = lasso_ids(s);
+    Ok(json!({"tool": s.draw_tool, "count": selected.len(), "selected": selected}))
+}
+
+/// The ids picked with the lasso (view state; empty when nothing is selected).
+fn lasso_ids(s: &Session) -> Vec<u32> {
+    s.lasso.as_ref().map(|l| l.ids.clone()).unwrap_or_default()
+}
+
+/// A lasso loop's points, from `points` in sheet points. Non-finite points are dropped (never
+/// tested, so they cannot select anything), coordinates are kept within [`MAX_LASSO_COORD`], and
+/// a loop longer than [`MAX_LASSO_POINTS`] is thinned evenly. Fewer than three points is an
+/// error: there is no loop to test against.
+fn lasso_polygon(p: &Json) -> Result<Vec<[f64; 2]>> {
+    let raw = p.get("points").and_then(Json::as_array).ok_or_else(|| bad("draw.lassoSelect", "`points` is a list of [x, y] points"))?;
+    let mut pts: Vec<[f64; 2]> = raw
+        .iter()
+        .take(MAX_LASSO_INPUT)
+        .filter_map(|q| Some([q.get(0)?.as_f64()?, q.get(1)?.as_f64()?]))
+        .filter(|q| q[0].is_finite() && q[1].is_finite())
+        .map(|q| [q[0].clamp(-MAX_LASSO_COORD, MAX_LASSO_COORD), q[1].clamp(-MAX_LASSO_COORD, MAX_LASSO_COORD)])
+        .collect();
+    if pts.len() > MAX_LASSO_POINTS {
+        let step = pts.len().div_ceil(MAX_LASSO_POINTS);
+        pts = pts.into_iter().step_by(step).collect();
+    }
+    if pts.len() < 3 {
+        return Err(bad("draw.lassoSelect", "a lasso loop needs at least three points"));
+    }
+    Ok(pts)
+}
+
+/// Whether (`x`, `y`) is inside the closed loop `poly` (even–odd rule).
+fn inside(poly: &[[f64; 2]], x: f64, y: f64) -> bool {
+    let n = poly.len();
+    let mut odd = false;
+    for i in 0..n {
+        let (Some(a), Some(b)) = (poly.get(i), poly.get((i + n - 1) % n)) else { continue };
+        if (a[1] > y) != (b[1] > y) && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0] {
+            odd = !odd;
+        }
+    }
+    odd
+}
+
+/// Whether the stroke `sh` lies inside the loop: as in WordCraft, most of its geometry must be
+/// inside it, sampled up to [`LASSO_SAMPLES`] points spread along the stroke, and a stroke is
+/// selected when at least 60% of those samples are inside. A stroke that merely crosses the loop
+/// (half in, half out) is not selected. `parse_points` gives the stroke's points relative to its
+/// anchor, which is where the stroke is drawn on the sheet.
+fn stroke_inside(sh: &Shape, sheet: &gridcraft_model::Sheet, poly: &[[f64; 2]]) -> bool {
+    let pts = parse_points(&sh.text);
+    if pts.is_empty() {
+        return false;
+    }
+    let ox = sheet.col_left(sh.anchor.cell.col) + f64::from(sh.anchor.dx);
+    let oy = sheet.row_top(sh.anchor.cell.row) + f64::from(sh.anchor.dy);
+    let step = pts.len().div_ceil(LASSO_SAMPLES).max(1);
+    let (n, hits) = pts.iter().step_by(step).fold((0usize, 0usize), |(n, hits), q| {
+        let (x, y) = (ox + f64::from(q[0]), oy + f64::from(q[1]));
+        (n + 1, hits + usize::from(inside(poly, x, y)))
+    });
+    n > 0 && hits * 10 >= n * 6
+}
+
+/// Select the ink inside a loop drawn on the active sheet; `clear` drops the selection.
+fn lasso_select(s: &mut Session, p: &Json) -> Result<Json> {
+    if bool_param(p, "clear") == Some(true) {
+        s.lasso = None;
+        return Ok(json!({"selected": [], "count": 0}));
+    }
+    let poly = lasso_polygon(p)?;
+    let (doc, sheet_uid, si) = {
+        let d = s.doc()?;
+        let si = d.wb.active_sheet();
+        (d.uid, d.wb.sheet(si).ok_or(EngineError::NoDocument)?.uid.get(), si)
+    };
+    let ids = {
+        let d = s.doc()?;
+        let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
+        sh.shapes.iter().filter(|x| is_ink(x) && stroke_inside(x, sh, &poly)).map(|x| x.id).collect::<Vec<_>>()
+    };
+    let polygon: Vec<[f32; 2]> = poly.iter().map(|q| [q[0] as f32, q[1] as f32]).collect();
+    s.lasso = (!ids.is_empty()).then(|| LassoSelection { doc, sheet_uid, sheet: si, ids: ids.clone(), polygon });
+    Ok(json!({"sheet": si, "count": ids.len(), "selected": ids}))
+}
+
+/// The lasso selection on the active sheet, for the UI to paint and for scripts to read.
+fn lasso_selection(s: &mut Session, _: &Json) -> Result<Json> {
+    let si = s.doc()?.wb.active_sheet();
+    let sel = s.lasso.as_ref().filter(|l| lasso_sheet(s, l) == Some(si));
+    let (ids, polygon) = match sel {
+        Some(l) => (l.ids.clone(), json!(l.polygon)),
+        None => (Vec::new(), json!([])),
+    };
+    Ok(json!({"sheet": si, "count": ids.len(), "selected": ids, "polygon": polygon}))
+}
+
+/// The ids picked with the lasso, or an error when nothing is selected. A selection whose
+/// workbook or sheet is gone is dropped: its ids would name other ink.
+fn selection_required(s: &mut Session, cmd: &str) -> Result<LassoSelection> {
+    let mut sel = s.lasso.clone().ok_or_else(|| bad(cmd, "nothing is selected with the lasso"))?;
+    match lasso_sheet(s, &sel) {
+        Some(si) => {
+            sel.sheet = si;
+            Ok(sel)
+        }
+        None => {
+            s.lasso = None;
+            Err(bad(cmd, "nothing is selected with the lasso"))
+        }
+    }
+}
+
+/// Move the lasso-selected ink by (`dx`, `dy`) sheet points (one undo step). The anchor's offset
+/// moves, so the stroke's points (relative to the anchor) and its position stay consistent.
+fn move_selection(s: &mut Session, p: &Json) -> Result<Json> {
+    let sel = selection_required(s, "draw.moveSelection")?;
+    let d = |k: &str| {
+        f64_param(p, k)
+            .ok_or_else(|| bad("draw.moveSelection", format!("`{k}` (points) is required")))
+            .map(|v| if v.is_finite() { v.clamp(-MAX_MOVE, MAX_MOVE) } else { 0.0 })
+    };
+    let (dx, dy) = (d("dx")?, d("dy")?);
+    let si = sel.sheet;
+    let ids = sel.ids;
+    edit(s, |cx| {
+        let sh = cx.sheet_mut(si)?;
+        let mut moved = 0;
+        for id in &ids {
+            if let Some(sp) = sh.shapes.iter_mut().find(|x| x.id == *id && is_ink(x)) {
+                sp.anchor.dx = (f64::from(sp.anchor.dx) + dx).clamp(-MAX_LASSO_COORD, MAX_LASSO_COORD) as f32;
+                sp.anchor.dy = (f64::from(sp.anchor.dy) + dy).clamp(-MAX_LASSO_COORD, MAX_LASSO_COORD) as f32;
+                moved += 1;
+            }
+        }
+        if moved == 0 {
+            return Err(bad("draw.moveSelection", "nothing selected can be moved"));
+        }
+        Ok(json!({"moved": moved, "dx": dx, "dy": dy}))
+    })
+}
+
+/// Give the lasso-selected ink this colour (one undo step).
+fn recolor_selection(s: &mut Session, p: &Json) -> Result<Json> {
+    let sel = selection_required(s, "draw.recolorSelection")?;
+    let hex = str_param(p, "color").ok_or_else(|| bad("draw.recolorSelection", "`color` is RRGGBB"))?.to_string();
+    let color = Color::from_hex(&hex).ok_or_else(|| bad("draw.recolorSelection", "`color` is RRGGBB"))?;
+    let si = sel.sheet;
+    let ids = sel.ids;
+    edit(s, |cx| {
+        let sh = cx.sheet_mut(si)?;
+        let mut changed = 0;
+        for id in &ids {
+            if let Some(sp) = sh.shapes.iter_mut().find(|x| x.id == *id && is_ink(x)) {
+                sp.line = color;
+                changed += 1;
+            }
+        }
+        if changed == 0 {
+            return Err(bad("draw.recolorSelection", "nothing selected can be recoloured"));
+        }
+        Ok(json!({"recolored": changed, "color": hex}))
+    })
+}
+
+/// Delete the lasso-selected ink (one undo step), then drop the selection.
+fn delete_selection(s: &mut Session, _: &Json) -> Result<Json> {
+    let sel = selection_required(s, "draw.deleteSelection")?;
+    let si = sel.sheet;
+    let ids = sel.ids;
+    let r = edit(s, |cx| {
+        let sh = cx.sheet_mut(si)?;
+        let before = sh.shapes.len();
+        sh.shapes.retain(|x| !(is_ink(x) && ids.contains(&x.id)));
+        let deleted = before - sh.shapes.len();
+        if deleted == 0 {
+            return Err(bad("draw.deleteSelection", "nothing selected can be deleted"));
+        }
+        Ok(json!({"deleted": deleted}))
+    })?;
+    s.lasso = None;
+    Ok(r)
 }
 
 fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
