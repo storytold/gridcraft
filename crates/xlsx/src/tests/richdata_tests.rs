@@ -197,6 +197,11 @@ fn pictures_roundtrip_across_sheets_with_and_without_dynamic_arrays() {
         let mut package = Package::open(&bytes).unwrap();
         let metadata = package.read_xml("xl/metadata.xml").unwrap().unwrap();
         assert_eq!(metadata.child("metadataTypes").unwrap().attr_u32("count"), Some(if dynamic { 2 } else { 1 }));
+        let rich_type = metadata.child("metadataTypes").unwrap().kids("metadataType").find(|kind| kind.attr("name") == Some("XLRICHVALUE")).unwrap();
+        assert_eq!(rich_type.attr("coerce"), Some("1"));
+        assert_eq!(rich_type.attr("cellMeta"), None);
+        let rich = metadata.kids("futureMetadata").find(|part| part.attr("name") == Some("XLRICHVALUE")).unwrap();
+        assert!(rich.kids("bk").all(|bk| bk.path(&["extLst", "ext"]).unwrap().attr("uri") == Some("{3e2802c4-a4d2-4d8b-9148-e3be6c30e623}")));
         assert_eq!(metadata.child("valueMetadata").unwrap().attr_u32("count"), Some(2));
         let (loaded, report) = read_xlsx(&bytes).unwrap();
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);

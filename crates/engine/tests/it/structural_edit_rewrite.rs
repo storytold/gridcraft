@@ -30,7 +30,7 @@ fn formula(s: &Session, sheet: &str, cell: &str) -> Arc<Formula> {
 fn put_raw(s: &mut Session, cell: &str, text: &str) {
     let wb = Arc::make_mut(&mut s.doc_mut().unwrap().wb);
     let i = wb.sheet_index("Sheet1").unwrap();
-    let f = Formula { text: text.to_string(), expr: None, array: None, dynamic: false };
+    let f = Formula { text: text.to_string(), expr: None, array: None, dynamic: false, preserve_scalar: false };
     wb.sheet_mut(i).unwrap().cells.set(CellRef::parse(cell).unwrap(), Cell::formula(f));
 }
 

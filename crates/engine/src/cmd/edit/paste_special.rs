@@ -179,10 +179,11 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             let (dr, dc) = (dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
                             moved.array = f.array.and_then(|a| Some(RangeRef::new(a.start.offset(dr, dc)?, a.end.offset(dr, dc)?)));
                             moved.dynamic = f.dynamic;
+                            moved.preserve_scalar = f.preserve_scalar;
                             return Some(std::sync::Arc::new(moved));
                         }
                         let moved = gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
-                        Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..Formula::from_expr(moved) }))
+                        Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, preserve_scalar: f.preserve_scalar, ..Formula::from_expr(moved) }))
                     };
                     let moved_py = |cell: &Cell| -> Result<Option<std::sync::Arc<gridcraft_model::PyCode>>> {
                         let Some(py) = cell.py.clone() else { return Ok(None) };
@@ -575,7 +576,7 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
                 a => a,
             };
             let nf = match new {
-                Some(new) => Formula { array, dynamic: f.dynamic, ..Formula::from_expr(new) },
+                Some(new) => Formula { array, dynamic: f.dynamic, preserve_scalar: f.preserve_scalar, ..Formula::from_expr(new) },
                 None if array != f.array => Formula { array, ..(*f).clone() },
                 None => continue,
             };

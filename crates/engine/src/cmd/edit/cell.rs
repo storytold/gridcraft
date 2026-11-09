@@ -347,7 +347,7 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
                     && let Some(e) = f.expr()
                 {
                     let shifted = gridcraft_formula::adjust::shift_relative(e, at.row as i64 - origin.row as i64, at.col as i64 - origin.col as i64);
-                    cell.formula = Some(std::sync::Arc::new(Formula::from_expr(shifted)));
+                    cell.formula = Some(std::sync::Arc::new(Formula { preserve_scalar: f.preserve_scalar, ..Formula::from_expr(shifted) }));
                 }
                 let sh = cx.sheet_mut(sheet)?;
                 sh.set_cell(at, cell);

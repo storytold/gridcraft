@@ -25,6 +25,9 @@ pub struct Formula {
     /// rewritten in GridCraft start without it, and the writer decides from their shape.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dynamic: bool,
+    /// Keep an imported ordinary formula's scalar semantics on XLSX export.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub preserve_scalar: bool,
 }
 
 impl Formula {
@@ -33,12 +36,12 @@ impl Formula {
     pub fn new(text: &str) -> Formula {
         let body = text.strip_prefix('=').unwrap_or(text);
         match gridcraft_formula::parse(body) {
-            Ok(e) => Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false },
-            Err(_) => Formula { text: body.to_string(), expr: None, array: None, dynamic: false },
+            Ok(e) => Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false, preserve_scalar: false },
+            Err(_) => Formula { text: body.to_string(), expr: None, array: None, dynamic: false, preserve_scalar: false },
         }
     }
     pub fn from_expr(e: Expr) -> Formula {
-        Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false }
+        Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false, preserve_scalar: false }
     }
     /// The parsed expression, re-parsing when no tree is cached.
     pub fn expr(&self) -> Option<Expr> {
@@ -70,12 +73,14 @@ struct SavedFormula {
     array: Option<RangeRef>,
     #[serde(default)]
     dynamic: bool,
+    #[serde(default)]
+    preserve_scalar: bool,
 }
 
 impl From<SavedFormula> for Formula {
     fn from(f: SavedFormula) -> Formula {
         let expr = gridcraft_formula::parse(&f.text).ok().map(Arc::new);
-        Formula { text: f.text, expr, array: f.array, dynamic: f.dynamic }
+        Formula { text: f.text, expr, array: f.array, dynamic: f.dynamic, preserve_scalar: f.preserve_scalar }
     }
 }
 
@@ -162,7 +167,9 @@ mod tests {
         let mut array = Formula::new("=A1:B2*2");
         array.array = Some(RangeRef::new(CellRef::new(0, 2), CellRef::new(1, 3)));
         array.dynamic = true;
-        for f in [Formula::new("=SUM(A1:A3)+'My Sheet'!B2"), Formula::new("=LET(x,A1*2,x+1)"), array] {
+        let mut imported = Formula::new("=IF(A1=1,2,3)");
+        imported.preserve_scalar = true;
+        for f in [Formula::new("=SUM(A1:A3)+'My Sheet'!B2"), Formula::new("=LET(x,A1*2,x+1)"), array, imported] {
             let back: Formula = serde_json::from_str(&serde_json::to_string(&f)?)?;
             assert!(back.expr.is_some(), "{}: the tree is cached after reading", f.text);
             assert_eq!(back, f);

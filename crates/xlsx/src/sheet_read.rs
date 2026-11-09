@@ -661,7 +661,7 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
         model = unwrapped;
     }
     let text = model.as_str();
-    match f.attr("t").unwrap_or("normal") {
+    let mut formula = match f.attr("t").unwrap_or("normal") {
         "shared" => {
             let si = f.attr_u32("si")?;
             if !text.is_empty() {
@@ -725,7 +725,14 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
                 Some(Formula::new(text))
             }
         }
+    };
+    if !dynamic
+        && f.attr("t") != Some("array")
+        && let Some(formula) = &mut formula
+    {
+        formula.preserve_scalar = true;
     }
+    formula
 }
 
 /// `2024-03-15`, `2024-03-15T10:30:00Z`, `10:30:00` → serial.

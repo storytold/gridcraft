@@ -15,7 +15,7 @@ use crate::xml::{self, El, esc};
 
 const NS_RICH: &str = "http://schemas.microsoft.com/office/spreadsheetml/2017/richdata";
 const NS_IMAGE_REL: &str = "http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel";
-const RICH_EXT: &str = "{3E2802C4-A4D2-4D8B-9148-E3BE6C30E623}";
+const RICH_EXT: &str = "{3e2802c4-a4d2-4d8b-9148-e3be6c30e623}";
 const MAX_IMAGE: u64 = 16 * 1024 * 1024;
 const MAX_IMAGES_TOTAL: usize = 128 * 1024 * 1024;
 const MAX_RECORDS: usize = 100_000;
@@ -309,13 +309,13 @@ pub fn write(out: &mut Out, workbook_rels: &mut Rels) -> Result<(), IoError> {
     for (name, content_type, relation, bytes) in [
         (
             "rdrichvalue.xml",
-            "application/vnd.ms-excel.rdRichValue+xml",
+            "application/vnd.ms-excel.rdrichvalue+xml",
             "http://schemas.microsoft.com/office/2017/06/relationships/rdRichValue",
             data.into_bytes(),
         ),
         (
             "rdrichvaluestructure.xml",
-            "application/vnd.ms-excel.rdRichValueStructure+xml",
+            "application/vnd.ms-excel.rdrichvaluestructure+xml",
             "http://schemas.microsoft.com/office/2017/06/relationships/rdRichValueStructure",
             structures.into_bytes(),
         ),
@@ -347,7 +347,7 @@ fn metadata(count: usize, dynamic: bool) -> String {
     if dynamic {
         xml.push_str("<metadataType name=\"XLDAPR\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\" cellMeta=\"1\"/>");
     }
-    xml.push_str("<metadataType name=\"XLRICHVALUE\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" cellMeta=\"0\"/></metadataTypes>");
+    xml.push_str("<metadataType name=\"XLRICHVALUE\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\"/></metadataTypes>");
     if dynamic {
         // Lower case, as the dynamic-array-only metadata in `write.rs` spells it: Excel refuses
         // a workbook whose XLDAPR extension URI is in upper case (#2339).

@@ -648,7 +648,8 @@ fn write_sheet_data(s: &mut String, data: SheetCellData<'_>, sid: &dyn Fn(gridcr
             let ex = extra.get(&cell_ref);
             let array = dynamic.get(&cell_ref).copied().or_else(|| {
                 let f = cell?.formula.as_ref()?;
-                (f.array.is_none() && crate::array_formula::needs_array(workbook, index, cell_ref, f)).then_some(RangeRef::cell(cell_ref))
+                (f.array.is_none() && !f.preserve_scalar && crate::array_formula::needs_array(workbook, index, cell_ref, f))
+                    .then_some(RangeRef::cell(cell_ref))
             });
             write_cell(
                 s,
