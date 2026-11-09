@@ -24,18 +24,11 @@ pub(crate) struct Runtime {
     startup: bool,
     /// Help ▸ Check for Updates… was chosen; the next `tick` starts it.
     manual: bool,
-    /// The result dialog of a requested check is showing.
-    result_open: bool,
 }
 
 impl Default for Runtime {
     fn default() -> Self {
-        Self {
-            updater: Updater::new(&crate::UPDATE_APP, VERSION).with_translator(translate_update),
-            startup: false,
-            manual: false,
-            result_open: false,
-        }
+        Self { updater: Updater::new(&crate::UPDATE_APP, VERSION).with_translator(translate_update), startup: false, manual: false }
     }
 }
 
@@ -52,83 +45,74 @@ pub(crate) fn tick(app: &mut SheetApp, ctx: &egui::Context) {
     let rt = &mut app.updates_rt;
     if std::mem::take(&mut rt.manual) {
         rt.updater.check_now(ctx);
-        rt.result_open = true;
     } else if rt.startup {
         rt.updater.check_at_start(ctx);
     }
     rt.updater.tick(ctx);
-    // A requested check that found a release leaves the status idle and the prompt opens.
-    if matches!(rt.updater.status(), Status::Idle) {
-        rt.result_open = false;
-    }
 }
 
-/// Draws update status and handles updater actions only when unsaved document state permits them.
+/// Starts the helper of a ready update; it installs once the process has exited.
+pub(crate) fn start_pending_update(app: &mut SheetApp) {
+    app.updates_rt.updater.start_pending_update();
+}
+
+/// Whether the check result window shows: for every status but idle (a requested check, and the
+/// first start after an update, which reports that it installed or why it failed), and never
+/// over the startup prompt.
+fn result_window_shows(status: &Status, prompt_open: bool) -> bool {
+    !prompt_open && !matches!(status, Status::Idle)
+}
+
 pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
-    // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
+    // The close for a ready update waits until no workbook holds unsaved work.
     let clean = !app.session.documents().iter().any(|d| d.is_dirty());
+    // The shared dialogs are drawn in the language of the window that opened them.
     let previous_language = UPDATE_LANGUAGE.replace(app.ui.language);
     let action = app.updates_rt.updater.show_if(ctx, clean);
-    UPDATE_LANGUAGE.set(previous_language);
     match action {
         Action::OpenUrl(url) => {
             if let Some(open) = &app.services.open_url {
                 open(&url);
             }
         }
-        // The guarded close path asks about unsaved work; the restart helper relaunches once the
-        // process has exited.
-        Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        // Quit closes every workbook window. The install helper starts once the app exits.
+        Action::Close => app.request_quit(ctx),
         Action::None => {}
     }
-    if app.updates_rt.result_open {
-        let rt = &mut app.updates_rt;
-        match check_result(ctx, rt.updater.status(), app.ui.language) {
-            CheckResultResponse::Close => {
-                rt.updater.dismiss_status();
-                rt.result_open = false;
-            }
+    let rt = &mut app.updates_rt;
+    if result_window_shows(rt.updater.status(), rt.updater.prompt_open()) {
+        let dialog = craft_update::CheckResultDialog::new(&crate::UPDATE_APP, VERSION).with_translator(translate_update);
+        match dialog.show(ctx, rt.updater.status()) {
+            CheckResultResponse::Close => rt.updater.dismiss_status(),
             CheckResultResponse::CheckAgain => rt.updater.check_now(ctx),
+            // The next `show_if` asks the window to close once nothing is unsaved.
+            CheckResultResponse::RestartToUpdate => rt.updater.restart_to_update(),
             CheckResultResponse::None => {}
         }
     }
+    UPDATE_LANGUAGE.set(previous_language);
 }
 
-/// Presents the shared updater's result through the application's translation catalog.
-fn check_result(ctx: &egui::Context, status: &Status, language: crate::i18n::Language) -> CheckResultResponse {
-    if matches!(status, Status::Idle) {
-        return CheckResultResponse::None;
-    }
-    let mut response = CheckResultResponse::None;
-    egui::Modal::new(egui::Id::unique("gridcraft.update_result")).show(ctx, |ui| {
-        ui.set_width(400.0);
-        ui.heading(language.tr("Check for Updates…"));
-        ui.separator();
-        match status {
-            Status::Checking => {
-                ui.spinner();
-                ui.label(language.tr("Checking for updates…"));
-            }
-            Status::UpToDate => {
-                ui.label(craft_i18n::fmt(language.tr("GridCraft {version} is the newest version available."), &[("version", VERSION)]));
-            }
-            Status::Failed(error) => {
-                ui.label(language.tr("Could not check for updates."));
-                ui.label(error);
-            }
-            Status::Idle => {}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_window_shows_every_status_but_idle() {
+        let shown = [
+            Status::Checking,
+            Status::UpToDate,
+            Status::Failed("no network".into()),
+            Status::Installing,
+            Status::Ready,
+            Status::Managed,
+            Status::Updated("0.2.0".into()),
+            Status::InstallFailed("disk full".into()),
+        ];
+        for status in &shown {
+            assert!(result_window_shows(status, false), "{status:?}");
+            assert!(!result_window_shows(status, true), "{status:?} over the prompt");
         }
-        ui.horizontal(|ui| {
-            if matches!(status, Status::Failed(_)) && ui.button(language.tr("Check Again")).clicked() {
-                response = CheckResultResponse::CheckAgain;
-            }
-            if ui.button(language.tr(if matches!(status, Status::Checking) { "Cancel" } else { "OK" })).clicked() {
-                response = CheckResultResponse::Close;
-            }
-        });
-    });
-    if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-        response = CheckResultResponse::Close;
+        assert!(!result_window_shows(&Status::Idle, false));
     }
-    response
 }
