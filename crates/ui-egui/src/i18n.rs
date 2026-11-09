@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 mod cs;
 mod de;
 mod el;
+mod error_templates;
 mod es;
 mod es_functions;
 mod fr;
@@ -189,12 +190,9 @@ impl Language {
         if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
     }
 
-    /// Translates an interface label; untranslated labels fall back to English.
-    ///
-    /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
-    /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
-    pub fn tr(self, text: &str) -> &str {
-        let translated = match self {
+    /// Raw catalog lookup for contextual labels and shared message templates.
+    pub fn translation(self, text: &str) -> Option<&'static str> {
+        match self {
             Self::En => None,
             Self::Es => es::translate(text),
             Self::El => el::translate(text),
@@ -214,17 +212,55 @@ impl Language {
             Self::Vi => vi::translate(text),
             Self::Nl => nl::translate(text),
             Self::Ro => ro::translate(text),
-        };
-        translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+        }
     }
 
+    /// Translates an interface label; untranslated labels fall back to English.
+    ///
+    /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
+    /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
+    pub fn tr(self, text: &str) -> &str {
+        self.translation(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+    }
+
+    /// Translates an import warning for display in the interface. The file-format and engine
+    /// layers keep returning canonical English text to the CLI, control channel, and MCP.
+    ///
+    /// The text is looked up raw: `tr` splits a catalog key at `|` (the `context|label` form), and
+    /// a warning can carry a `|` of its own (a SYLK file name, a chart title).
+    pub(crate) fn open_warning(self, warning: &str) -> String {
+        if let Some(target) = warning.strip_prefix("missing picture ") {
+            return self.tr("missing picture {target}").replace("{target}", target);
+        }
+        if let Some(target) = warning.strip_prefix("chart ").and_then(|s| s.strip_suffix(" has no supported plot and was skipped")) {
+            return self.tr("chart {target} has no supported plot and was skipped").replace("{target}", target);
+        }
+        self.translation(warning).unwrap_or(warning).to_owned()
+    }
+
+    /// Ribbon tabs can be nouns while their corresponding commands are verbs.
+    pub fn tr_tab(self, text: &str) -> &str {
+        self.translation(&format!("Tab|{text}")).unwrap_or_else(|| self.tr(text))
+    }
+
+    /// Translates known fixed or templated diagnostics after removing engine command wrappers.
+    /// Unmatched parameter errors retain their command context; other command wrappers are cleaned.
+    /// Captured user data stays literal.
     pub(crate) fn tr_error(self, message: &str) -> String {
-        let message = if message.starts_with("command `") { crate::clean_error(message) } else { message.to_owned() };
+        let original_parameters = message.starts_with("invalid parameters for `").then_some(message);
+        let message = if message.starts_with("command `") || message.starts_with("invalid parameters for `") {
+            crate::clean_error(message)
+        } else {
+            message.to_owned()
+        };
 
         let translated = self.tr(&message);
         let fallback = message.rsplit_once('|').map_or(message.as_str(), |(_, label)| label);
 
-        if translated == fallback { message } else { translated.to_owned() }
+        if translated != fallback {
+            return translated.to_owned();
+        }
+        error_templates::format_message(&message, self).unwrap_or_else(|| original_parameters.map_or(message, str::to_owned))
     }
 
     /// A worksheet function's description in this language, looked up by the English text of the
@@ -515,5 +551,20 @@ mod tests {
         let keys: Vec<String> = order[1..].iter().map(|l| name_sort_key(l.name())).collect();
         assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
         assert_eq!(name_sort_key("Čeština"), "cestina");
+    }
+}
+
+#[cfg(test)]
+mod open_warning_tests {
+    use super::*;
+
+    /// An import warning that carries a `|` of its own keeps its whole text: only a catalog key is
+    /// split at the bar (the `context|label` form), so the display path looks a warning up raw.
+    #[test]
+    fn an_import_warning_with_a_bar_keeps_its_text() {
+        let warning = "skipped record `A|B` in book.slk";
+        for language in [Language::En, Language::De, Language::Ru] {
+            assert_eq!(language.open_warning(warning), warning);
+        }
     }
 }
