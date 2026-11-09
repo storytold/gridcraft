@@ -2,27 +2,65 @@
 //! prefixes for newer functions).
 
 use gridcraft_formula::Expr;
-use gridcraft_model::Formula;
+use gridcraft_model::{Formula, Table, Workbook};
 
 /// Formula text for a file.
 pub fn to_file(f: &Formula) -> String {
     match f.expr_arc() {
         // Most formulas have nothing the file spells differently: print them without copying.
-        Some(e) if !needs_file_spelling(&e) => gridcraft_formula::print(&e),
+        Some(e) if !needs_file_spelling(&e, None) => gridcraft_formula::print(&e),
         Some(e) => expr_to_file(Expr::clone(&e)),
         None => f.text.clone(),
     }
 }
 
+/// Worksheet formulas also resolve bare table names against the workbook. Excel files require
+/// the explicit data-body reference (`Prices[]`), while lexical and defined names stay names.
+pub fn cell_to_file(f: &Formula, wb: &Workbook, sheet: usize) -> String {
+    let context = CellScope { wb, sheet };
+    match f.expr_arc() {
+        Some(expr) if !needs_file_spelling(&expr, Some(&context)) => gridcraft_formula::print(&expr),
+        Some(expr) => expr_to_file_with(Expr::clone(&expr), Some(&context)),
+        None => to_file(f),
+    }
+}
+
+struct CellScope<'a> {
+    wb: &'a Workbook,
+    sheet: usize,
+}
+
+impl CellScope<'_> {
+    fn table(&self, name: &str) -> Option<&Table> {
+        // Match calculation's name resolution: a qualified sheet must exist, and a visible
+        // defined name wins over a table. The table's own spelling is workbook-global.
+        let (scope, bare) = match name.rsplit_once('!') {
+            Some((sheet, bare)) => (self.wb.sheet_index(sheet)?, bare),
+            None => (self.sheet, name),
+        };
+        if self.wb.name(bare, scope).is_some() {
+            return None;
+        }
+        let (sheet, table) = self.wb.table(bare)?;
+        let table = self.wb.sheet(sheet)?.tables.get(table)?;
+        // Calculation treats a table without a data body as an unresolved bare name.
+        // Writing [] would turn that Name error into a different structured-reference error.
+        table.data_range()?;
+        Some(table)
+    }
+}
+
 /// Whether [`expr_to_file`] would change anything in `e`: a LET or LAMBDA (parameter prefixes),
-/// a function with a file prefix, a spill, `@` or trim operator, or a structured reference.
-fn needs_file_spelling(e: &Expr) -> bool {
+/// a function with a file prefix, a spill, `@` or trim operator, a structured reference,
+/// or a table-resolving name when worksheet context is available.
+fn needs_file_spelling(e: &Expr, context: Option<&CellScope<'_>>) -> bool {
     let mut found = false;
     e.walk(&mut |x| {
         found |= match x {
             Expr::Call(name, _) => name == "LET" || name == "LAMBDA" || crate::tables::file_function_name(name).is_some(),
             Expr::Unary(gridcraft_formula::UnOp::Spill | gridcraft_formula::UnOp::At | gridcraft_formula::UnOp::Trim(_), _) => true,
             Expr::Struct(_) => true,
+            Expr::Name(name) => context.is_some_and(|context| context.table(name).is_some()),
             _ => false,
         }
     });
@@ -41,10 +79,16 @@ pub fn text_to_file(text: &str) -> String {
 const PARAM_PREFIX: &str = "_xlpm.";
 
 /// Adds Excel's `_xlpm.` prefix to LET/LAMBDA parameter names, at the declaration and at every use in scope.
-fn prefix_params(e: Expr, scope: &[String]) -> Expr {
-    let sub = |x: Box<Expr>, sc: &[String]| Box::new(prefix_params(*x, sc));
+fn prefix_params(e: Expr, scope: &[String], context: Option<&CellScope<'_>>) -> Expr {
+    let sub = |x: Box<Expr>, sc: &[String]| Box::new(prefix_params(*x, sc, context));
     match e {
-        Expr::Name(n) if scope.iter().any(|s| s.eq_ignore_ascii_case(&n)) => Expr::Name(format!("{PARAM_PREFIX}{n}")),
+        Expr::Name(n) if scope.iter().any(|s| gridcraft_formula::same_name(s, &n)) => Expr::Name(format!("{PARAM_PREFIX}{n}")),
+        Expr::Name(name) => match context.and_then(|context| context.table(&name)) {
+            Some(table) => {
+                Expr::Struct(gridcraft_formula::StructRef { table: table.name.clone(), specifiers: Vec::new(), col_start: None, col_end: None })
+            }
+            None => Expr::Name(name),
+        },
         Expr::Unary(op, x) => Expr::Unary(op, sub(x, scope)),
         Expr::Paren(x) => Expr::Paren(sub(x, scope)),
         Expr::Binary(op, a, b) => {
@@ -56,13 +100,13 @@ fn prefix_params(e: Expr, scope: &[String]) -> Expr {
                 spine.push((op, b));
                 left = *a;
             }
-            let mut acc = prefix_params(left, scope);
+            let mut acc = prefix_params(left, scope, context);
             while let Some((op, b)) = spine.pop() {
                 acc = Expr::Binary(op, Box::new(acc), sub(b, scope));
             }
             acc
         }
-        Expr::Invoke(c, args) => Expr::Invoke(sub(c, scope), args.into_iter().map(|a| prefix_params(a, scope)).collect()),
+        Expr::Invoke(c, args) => Expr::Invoke(sub(c, scope), args.into_iter().map(|a| prefix_params(a, scope, context)).collect()),
         Expr::Call(name, args) if name == "LET" || name == "LAMBDA" => {
             let last = args.len().saturating_sub(1);
             let is_let = name == "LET";
@@ -81,7 +125,7 @@ fn prefix_params(e: Expr, scope: &[String]) -> Expr {
                         }
                     }
                     other => {
-                        out.push(prefix_params(other, &sc));
+                        out.push(prefix_params(other, &sc, context));
                         // A LET name is in scope only after its value expression.
                         if let Some(n) = pending.take() {
                             sc.push(n);
@@ -92,16 +136,20 @@ fn prefix_params(e: Expr, scope: &[String]) -> Expr {
             Expr::Call(name, out)
         }
         // A LET-bound LAMBDA called by name, e.g. `f(3)`.
-        Expr::Call(name, args) if scope.iter().any(|s| s.eq_ignore_ascii_case(&name)) => {
-            Expr::Call(format!("{PARAM_PREFIX}{name}"), args.into_iter().map(|a| prefix_params(a, scope)).collect())
+        Expr::Call(name, args) if scope.iter().any(|s| gridcraft_formula::same_name(s, &name)) => {
+            Expr::Call(format!("{PARAM_PREFIX}{name}"), args.into_iter().map(|a| prefix_params(a, scope, context)).collect())
         }
-        Expr::Call(name, args) => Expr::Call(name, args.into_iter().map(|a| prefix_params(a, scope)).collect()),
+        Expr::Call(name, args) => Expr::Call(name, args.into_iter().map(|a| prefix_params(a, scope, context)).collect()),
         other => other,
     }
 }
 
 fn expr_to_file(e: Expr) -> String {
-    let e = prefix_params(e, &[]);
+    expr_to_file_with(e, None)
+}
+
+fn expr_to_file_with(e: Expr, context: Option<&CellScope<'_>>) -> String {
+    let e = prefix_params(e, &[], context);
     let e = e.map(&mut |x| match x {
         Expr::Call(name, args) => match crate::tables::file_function_name(&name) {
             Some(n) => Expr::Call(n, args),

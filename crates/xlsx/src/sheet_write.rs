@@ -220,6 +220,8 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
 }
 
 struct CellWriteInput<'a> {
+    workbook: &'a Workbook,
+    sheet_index: usize,
     reference: CellRef,
     cell: Option<&'a Cell>,
     picture: Option<&'a std::sync::Arc<gridcraft_model::CellPicture>>,
@@ -653,6 +655,8 @@ fn write_sheet_data(s: &mut String, data: SheetCellData<'_>, sid: &dyn Fn(gridcr
             write_cell(
                 s,
                 CellWriteInput {
+                    workbook,
+                    sheet_index: index,
                     reference: cell_ref,
                     cell,
                     picture: sheet.cell_pictures.get(&cell_ref),
@@ -736,7 +740,8 @@ fn write_sheet_views(s: &mut String, sheet: &Sheet, selected: bool) {
 }
 
 fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_model::StyleId) -> u32, out: &mut Out) {
-    let CellWriteInput { reference: c, cell, picture, header_override: ov, spill_value: extra, dynamic_range: dynamic } = input;
+    let CellWriteInput { workbook, sheet_index, reference: c, cell, picture, header_override: ov, spill_value: extra, dynamic_range: dynamic } =
+        input;
     let style = cell.map(|x| sid(x.style)).unwrap_or(0);
     s.push_str("<c r=\"");
     push_a1(s, c);
@@ -788,7 +793,7 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         s.push_str(" cm=\"1\"");
         out.dynamic_arrays = true;
     }
-    let text = formula.map(|f| esc(&crate::fmla::to_file(f))).or_else(|| py_text.map(|t| esc(&t)));
+    let text = formula.map(|f| esc(&crate::fmla::cell_to_file(f, workbook, sheet_index))).or_else(|| py_text.map(|t| esc(&t)));
     if let Some(text) = text {
         let t = match &value {
             Value::Text(_) => " t=\"str\"",
