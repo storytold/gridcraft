@@ -426,7 +426,6 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 _ => {
                     let pts: Vec<Option<[f32; 2]>> = row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j), vpos(t, &sc)])).collect();
                     draw_runs(ctx, &pts, s.color, 2.25, s.smooth.then_some(plot));
-                    line_pts.push((sec.get(i).copied().unwrap_or(false), pts.clone()));
                     let k = kinds.get(i).copied().unwrap_or(ChartKind::Line);
                     if k == ChartKind::LineMarkers && cw >= 3.0 {
                         draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
@@ -438,6 +437,8 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                             }
                         }
                     }
+                    // Kept for up/down bars once drawn and labelled: moved, not copied.
+                    line_pts.push((sec.get(i).copied().unwrap_or(false), pts));
                 }
             }
         }

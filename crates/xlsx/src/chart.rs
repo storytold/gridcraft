@@ -260,8 +260,9 @@ pub fn read_chart(root: &El) -> Option<Chart> {
             _ => LegendPos::Right,
         },
     };
-    // Up/down bars belong to a line or stock group; the chart keeps the first group's.
-    let up_down_bars = groups.iter().find_map(|(g, _)| g.child("upDownBars")).map(|u| ChartUpDownBars {
+    // Up/down bars belong to a line or stock group; the chart keeps those of a group on the
+    // primary axes, where they are drawn and written back.
+    let up_down_bars = groups.iter().filter(|(g, _)| axis_ids(g) == first_axes).find_map(|(g, _)| g.child("upDownBars")).map(|u| ChartUpDownBars {
         gap_width: u.child_val("gapWidth").and_then(|v| v.trim().trim_end_matches('%').parse::<u16>().ok()).unwrap_or(150).min(500),
         up: u.path(&["upBars", "spPr", "solidFill"]).and_then(dml_color),
         down: u.path(&["downBars", "spPr", "solidFill"]).and_then(dml_color),

@@ -64,3 +64,24 @@ fn up_down_bars_survive_xlsx_save_reopen() {
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert_eq!(back.sheets[0].charts[0].up_down_bars, None);
 }
+
+/// Bars on a group on the secondary axes aren't kept: they're drawn and written back only on the
+/// primary axes, so a round trip would drop them anyway.
+#[test]
+fn up_down_bars_on_a_secondary_group_are_left_out() {
+    let ser = |i: u32| {
+        format!(
+            "<c:ser><c:idx val=\"{i}\"/><c:order val=\"{i}\"/><c:val><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val=\"1\"/><c:pt idx=\"0\"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser>"
+        )
+    };
+    let xml = format!(
+        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>\
+        <c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/>{}<c:axId val=\"1\"/><c:axId val=\"2\"/></c:barChart>\
+        <c:lineChart><c:grouping val=\"standard\"/>{}{}<c:upDownBars><c:gapWidth val=\"150\"/><c:upBars/><c:downBars/></c:upDownBars><c:axId val=\"3\"/><c:axId val=\"4\"/></c:lineChart>\
+        <c:catAx/><c:valAx/></c:plotArea></c:chart></c:chartSpace>",
+        ser(0),
+        ser(1),
+        ser(2)
+    );
+    assert_eq!(read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().up_down_bars, None);
+}
