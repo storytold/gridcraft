@@ -828,7 +828,9 @@ fn file_version_and_calc_features_survive_a_save() {
         assert_eq!(root.children.first().map(|e| e.name.as_str()), Some("fileVersion"), "{text}");
         assert_eq!(root.children.last().map(|e| e.name.as_str()), Some("extLst"), "{text}");
         assert!(text.contains(r#"<fileVersion appName="xl" lastEdited="7" lowestEdited="7" rupBuild="11008"/>"#), "{text}");
-        assert!(text.contains(&format!("<extLst>{calc_features}</extLst>")), "{text}");
+        // The x15 workbook properties are kept too, in source order (see tests::extlist).
+        let x15 = r#"<ext uri="{140A7094-0E35-4892-8432-C4D2E57EDEB5}" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"><x15:workbookPr chartTrackingRefBase="1"/></ext>"#;
+        assert!(text.contains(&format!("<extLst>{x15}{calc_features}</extLst>")), "{text}");
     }
 
     // A workbook that had neither gets a <fileVersion> naming GridCraft (#1699), kept on the next
