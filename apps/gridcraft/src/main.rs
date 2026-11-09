@@ -242,37 +242,86 @@ fn install_bun_from(path: &str) -> Result<String, String> {
     let target = gridcraft_script_bun::discover::expected_path();
     let dir = target.parent().ok_or_else(|| format!("{} has no folder to go in.", target.display()))?;
     std::fs::create_dir_all(dir).map_err(|e| format!("could not make {}: {e}", dir.display()))?;
-    // Copy beside the target, make it executable and check that it answers as Bun; only then
-    // replace the runtime discovery finds. A wrong or partial copy never becomes the runtime.
-    let staged = staged_path(&target);
-    if let Err(e) = copy_executable(source, &staged) {
-        let _ = std::fs::remove_file(&staged);
+    // Copy into a folder of our own, made fresh for this import: the runtime folder can be a
+    // shared install's, where another user could pre-create the staged name as a symlink and a
+    // plain copy would write through it.
+    let staging = staging_dir(dir)?;
+    let staged = staged_path(&staging, &target);
+    let placed = stage_and_replace(source, &staged, &target, path);
+    let _ = std::fs::remove_dir_all(&staging);
+    placed
+}
+
+/// Copies `source` to `staged`, makes it executable and checks that it answers as Bun; only then
+/// replaces the runtime discovery finds. A wrong or partial copy never becomes the runtime.
+fn stage_and_replace(source: &std::path::Path, staged: &std::path::Path, target: &std::path::Path, shown: &str) -> Result<String, String> {
+    if let Err(e) = copy_executable(source, staged) {
+        let _ = std::fs::remove_file(staged);
         return Err(e);
     }
-    if gridcraft_script_bun::discover::version_of(&staged, std::time::Duration::from_secs(3)).is_none() {
-        let _ = std::fs::remove_file(&staged);
-        return Err(format!("{path} did not answer as Bun (`--version`)."));
+    if gridcraft_script_bun::discover::version_of(staged, std::time::Duration::from_secs(3)).is_none() {
+        let _ = std::fs::remove_file(staged);
+        return Err(format!("{shown} did not answer as Bun (`--version`)."));
     }
-    if let Err(e) = replace_file(&staged, &target) {
-        let _ = std::fs::remove_file(&staged);
+    if let Err(e) = replace_file(staged, target) {
+        let _ = std::fs::remove_file(staged);
         return Err(e);
     }
     Ok(target.display().to_string())
 }
 
-/// The temporary name an import is staged under, beside the target: same file name with `-part`
-/// before the extension, so Windows still sees an `.exe` it can start for the version check.
-fn staged_path(target: &std::path::Path) -> std::path::PathBuf {
+/// A folder inside `dir`, created exclusively for one import and readable only by this user on
+/// unix, so nobody else can pre-create its contents.
+fn staging_dir(dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    for attempt in 0..8 {
+        let path = dir.join(format!(".bun-import-{}-{attempt}", std::process::id()));
+        match make_private_dir(&path) {
+            Ok(()) => return Ok(path),
+            // A folder an earlier import of this process left behind: try the next name.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("could not make {}: {e}", path.display())),
+        }
+    }
+    Err(format!("could not make a staging folder in {}", dir.display()))
+}
+
+/// Creates one folder nobody else can write: `0700` on unix, the user's own profile on Windows.
+fn make_private_dir(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().mode(0o700).create(path)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir(path)
+    }
+}
+
+/// The temporary name an import is staged under inside its staging folder: the target's file name
+/// with `-part` before the extension, so Windows still sees an `.exe` it can start for the
+/// version check.
+fn staged_path(staging: &std::path::Path, target: &std::path::Path) -> std::path::PathBuf {
     let stem = target.file_stem().and_then(|s| s.to_str()).unwrap_or("bun");
     match target.extension().and_then(|e| e.to_str()) {
-        Some(ext) => target.with_file_name(format!("{stem}-part.{ext}")),
-        None => target.with_file_name(format!("{stem}-part")),
+        Some(ext) => staging.join(format!("{stem}-part.{ext}")),
+        None => staging.join(format!("{stem}-part")),
     }
 }
 
 /// Copies `source` to `target`, executable, and reports a failed `chmod` instead of ignoring it.
+/// `create_new` refuses a path that already exists — a symlink included — instead of writing
+/// through it.
 fn copy_executable(source: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
-    std::fs::copy(source, target).map_err(|e| format!("could not copy Bun to {}: {e}", target.display()))?;
+    let mut from = std::fs::File::open(source).map_err(|e| format!("could not read {}: {e}", source.display()))?;
+    {
+        let mut to = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(target)
+            .map_err(|e| format!("could not copy Bun to {}: {e}", target.display()))?;
+        std::io::copy(&mut from, &mut to).map_err(|e| format!("could not copy Bun to {}: {e}", target.display()))?;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -282,8 +331,8 @@ fn copy_executable(source: &std::path::Path, target: &std::path::Path) -> Result
 }
 
 /// Replaces `target` with `staged`. `fs::rename` replaces the target on every platform
-/// (`MOVEFILE_REPLACE_EXISTING` on Windows), so a failed import leaves the working runtime in
-/// place instead of removing it first.
+/// (`MOVEFILE_REPLACE_EXISTING` on Windows) and never follows a link at either path, so a failed
+/// import leaves the working runtime in place instead of removing it first.
 fn replace_file(staged: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
     std::fs::rename(staged, target).map_err(|e| format!("could not place Bun at {}: {e}", target.display()))
 }
@@ -518,7 +567,7 @@ fn main() -> eframe::Result<()> {
 
 #[cfg(test)]
 mod packaging_tests {
-    use crate::{copy_executable, replace_file, staged_path};
+    use crate::{copy_executable, replace_file, staged_path, staging_dir};
     use gridcraft_engine::io::FileKind;
 
     /// The text between `start` and `end` that follows each `marker` in `text`, sorted (e.g. the
@@ -546,24 +595,40 @@ mod packaging_tests {
     }
 
     /// Import Bun stages the file beside the runtime and replaces it only once it is there:
-    /// a failed copy never leaves a broken executable where discovery looks.
+    /// a failed copy never leaves a broken executable where discovery looks, and the staged name
+    /// lives where nobody else can pre-create it as a symlink.
     #[test]
-    fn an_import_is_staged_beside_the_runtime_and_only_then_replaces_it() {
+    fn an_import_is_staged_alone_and_only_then_replaces_the_runtime() {
         let base = std::env::temp_dir().join(format!("gridcraft-bun-install-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let target = base.join(gridcraft_script_bun::discover::bun_exe_name());
         std::fs::write(&target, b"old").unwrap();
-        let staged = staged_path(&target);
-        assert_eq!(staged.parent(), target.parent());
+        let staging = staging_dir(&base).unwrap();
+        assert_eq!(staging.parent(), Some(base.as_path()), "the staging folder sits beside the runtime");
+        assert_ne!(staging, base);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&staging).unwrap().permissions().mode() & 0o777, 0o700, "only this user can write the staging folder");
+        }
+        let staged = staged_path(&staging, &target);
+        assert_eq!(staged.parent(), Some(staging.as_path()));
         assert_ne!(staged.file_name(), target.file_name());
         let download = base.join("download");
         std::fs::write(&download, b"new").unwrap();
+        // A name that already exists — a symlink planted there in the old layout — is refused,
+        // never written through.
+        std::fs::write(&staged, b"planted").unwrap();
+        assert!(copy_executable(&download, &staged).is_err(), "an existing staged path is refused");
+        assert_eq!(std::fs::read(&staged).unwrap(), b"planted");
+        std::fs::remove_file(&staged).unwrap();
         copy_executable(&download, &staged).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"old", "the old runtime stays until the staged copy is ready");
         replace_file(&staged, &target).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"new");
         assert!(!staged.exists());
+        let _ = std::fs::remove_dir_all(&staging);
         let _ = std::fs::remove_dir_all(&base);
     }
 }
