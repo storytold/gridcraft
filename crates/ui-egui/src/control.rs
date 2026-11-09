@@ -158,7 +158,14 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "activeDocument": app.session.active_index(),
         "windows": app.session.window_list(),
         "activeWindow": app.session.active_window(),
-        "perf": {"frameMs": app.perf.frame_ms, "gridMs": app.perf.grid_ms, "fps": app.perf.fps},
+        "perf": {
+            "frameMs": app.perf.frame_ms,
+            "gridMs": app.perf.grid_ms,
+            "fps": app.perf.fps,
+            "autosaveMs": app.perf.autosave_ms,
+            "autosaveWriteMs": app.perf.autosave_write_ms,
+            "autosaves": app.perf.autosaves,
+        },
     })
 }
 
@@ -273,6 +280,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.theme", "Display Theme", ""),
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
                 ("options.autoComplete", "Enable AutoComplete for cell values", "{on?: bool} (toggles without it) → {on}"),
+                ("options.autoSave", "AutoSave", "{on?: bool} (toggles without it) → {on}"),
                 ("options.highlightActiveRow", "Highlight the active cell's row", "{on?: bool} (toggles without it) → {on}"),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
                 ("ui.dialog", "Open Dialog", ""),
@@ -493,6 +501,15 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         "app.save" => wrap(app.run("file.save", json!({"path": s("path")}))),
         "app.quit" => {
             // Programmatic calls never open dialogs: quitting from here doesn't ask about unsaved work.
+            while let Some(window) = app.parked_window_with_draft() {
+                app.enter_window(window);
+                if let Err(e) = app.settle_drafts() {
+                    return err(crate::clean_error(&e));
+                }
+            }
+            if let Err(e) = app.settle_drafts() {
+                return err(crate::clean_error(&e));
+            }
             app.allow_close = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             ok(Json::Null)
