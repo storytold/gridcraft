@@ -14,8 +14,9 @@ const MAX_PICTURE_BYTES: f64 = 16.0 * 1024.0 * 1024.0;
 /// Picks a picture and reads it only when it fits `max`: the file's own size is checked first, so
 /// choosing a huge image cannot turn into an allocation that takes the tab down. An oversized pick
 /// answers empty bytes, which the dialog reports as too large. Closing the dialog without a
-/// choice answers no pick: the `cancel` listener ends the wait and the input is removed on every
-/// path, so repeated cancels cannot pile inputs into the page.
+/// choice answers no pick: the `cancel` listener ends the wait, the input (attached so `change`
+/// fires everywhere) is removed on every path, and each handler clears both listeners so no pick
+/// leaks a handler.
 async fn pick_picture(max: f64) -> Option<(String, Vec<u8>)> {
     let document = web_sys::window()?.document()?;
     let input = document.create_element("input").ok()?.dyn_into::<web_sys::HtmlInputElement>().ok()?;
@@ -23,35 +24,47 @@ async fn pick_picture(max: f64) -> Option<(String, Vec<u8>)> {
     input.set_accept("image/png,image/jpeg");
     // The input is only a picker handle: keep it out of the page layout.
     let _ = input.style().set_property("display", "none");
-    // Some browsers only fire `change` for an input that is in the document.
+    // Some browsers only fire `change` for an input that is in the document: the input is
+    // attached before the picker opens and removed on every path below.
     let body = document.body()?;
-    let chosen: std::rc::Rc<std::cell::RefCell<Option<web_sys::File>>> = Default::default();
+    body.append_child(&input).ok()?;
     let promise = {
         let chosen = chosen.clone();
         let input = input.clone();
         js_sys::Promise::new(&mut move |resolve, _reject| {
-            let chosen = chosen.clone();
+            // Either handler ends the wait; each clears both listeners so the other closure is
+            // released too and no pick leaks a handler.
+            let finish = std::rc::Rc::new(std::cell::RefCell::new(None::<wasm_bindgen::closure::Closure<dyn FnMut()>>));
+            let change_done = finish.clone();
+            let cancel_done = finish.clone();
             let input_for_change = input.clone();
+            let input_for_cancel = input.clone();
             let resolve_for_change = resolve.clone();
-            let closure = wasm_bindgen::closure::Closure::once(move || {
+            let change = wasm_bindgen::closure::Closure::new(move || {
                 if let Some(file) = input_for_change.files().and_then(|files| files.get(0)) {
                     *chosen.borrow_mut() = Some(file);
                 }
+                input_for_change.set_onchange(None);
+                let _ =
+                    input_for_change.remove_event_listener_with_callback("cancel", change_done.borrow().as_ref().unwrap().as_ref().unchecked_ref());
                 let _ = resolve_for_change.call0(&JsValue::UNDEFINED);
             });
-            input.set_onchange(Some(closure.as_ref().unchecked_ref()));
-            closure.forget();
+            input.set_onchange(Some(change.as_ref().unchecked_ref()));
+            let resolve_for_cancel = resolve.clone();
             // Closing the dialog without a choice fires `cancel`, not `change`: without this the
             // wait below never ends and the input stays in the page.
-            let resolve_for_cancel = resolve.clone();
-            let cancel = wasm_bindgen::closure::Closure::once_into_js(move || {
+            let cancel = wasm_bindgen::closure::Closure::new(move || {
+                input_for_cancel.set_onchange(None);
+                let _ =
+                    input_for_cancel.remove_event_listener_with_callback("cancel", cancel_done.borrow().as_ref().unwrap().as_ref().unchecked_ref());
                 let _ = resolve_for_cancel.call0(&JsValue::UNDEFINED);
             });
-            let _ = input.add_event_listener_with_callback("cancel", cancel.unchecked_ref());
+            let _ = input.add_event_listener_with_callback("cancel", cancel.as_ref().unchecked_ref());
+            *finish.borrow_mut() = Some(cancel);
+            std::mem::forget(change);
             let _ = input.click();
         })
     };
-    // Removal runs on the cancel path too: no pick simply answers `None`.
     let done = wasm_bindgen_futures::JsFuture::from(promise).await;
     let _ = body.remove_child(&input);
     done.ok()?;
