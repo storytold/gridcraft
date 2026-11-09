@@ -267,7 +267,7 @@ pub struct PenTile<'a> {
 /// the arrow opens its dropdown.
 pub fn pen_tile(ui: &mut Ui, tile: PenTile<'_>) -> (Response, Response) {
     let t = Tokens::get(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(vec2(38.0, 84.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(38.0, 72.0), Sense::hover());
     // The dropdown arrow is a full 24-point target of its own, so it can be hit (and tabbed to)
     // as reliably as the tile body.
     let split = rect.bottom() - 24.0;
@@ -286,8 +286,8 @@ pub fn pen_tile(ui: &mut Ui, tile: PenTile<'_>) -> (Response, Response) {
         ui.painter().rect_filled(arrow, 5.0, t.pressed);
     }
     let p = ui.painter();
-    paint_tip(p, Rect::from_center_size(pos2(rect.center().x, rect.top() + 26.0), vec2(28.0, 28.0)), tile.tool, tile.color, tile.effect);
-    paint_swatch(p, Rect::from_center_size(pos2(rect.center().x, rect.top() + 50.0), vec2(28.0, 12.0)), tile.tool, tile.color, tile.effect);
+    paint_tip(p, Rect::from_center_size(pos2(rect.center().x, rect.top() + 20.0), vec2(28.0, 28.0)), tile.tool, tile.color, tile.effect);
+    paint_swatch(p, Rect::from_center_size(pos2(rect.center().x, rect.top() + 40.0), vec2(28.0, 12.0)), tile.tool, tile.color, tile.effect);
     crate::icons::paint(p, Rect::from_center_size(arrow.center(), vec2(12.0, 12.0)), crate::icons::Icon::Chevron, t.text_dim);
     if tile.selected {
         p.rect_stroke(rect, 5.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
