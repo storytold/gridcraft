@@ -472,6 +472,23 @@ fn file_commands_without_a_file_fail() {
     }
 }
 
+/// MCP without an app never runs Python: `wait` changes nothing, and a workbook with no file is the
+/// same error, never a dialog.
+#[test]
+fn a_save_with_wait_saves_at_once_without_python() {
+    let mut s = server();
+    let msg = fails(&mut s, "execute_command", json!({"command": "file.save", "params": {"wait": true}}));
+    assert!(msg.contains("never open dialogs"), "{msg}");
+    let path = std::env::temp_dir().join(format!("gridcraft-mcp-save-wait-{}.xlsx", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let r = ok(&mut s, "execute_command", json!({"command": "file.save", "params": {"path": path, "wait": true}}));
+    assert_eq!(r["unfinished"], json!([]), "{r}");
+    assert!(path.exists());
+    let r = ok(&mut s, "execute_command", json!({"command": "file.save", "params": {"path": path}}));
+    assert!(r.get("unfinished").is_none(), "without `wait` the reply is what it always was: {r}");
+    let _ = std::fs::remove_file(&path);
+}
+
 // ---------- cell references ----------
 
 fn cmd_fails(s: &mut Server, command: &str, params: Value) -> String {

@@ -168,6 +168,55 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Trace Error" => "Fout traceren",
         "Circular References" => "Kringverwijzingen",
         "Python Mode" => "Python-modus",
+        "Python Object" => "Python-object",
+        "Excel Value" => "Excel-waarde",
+        "Copy as CSV" => "Kopiëren als CSV",
+        "Copy as Markdown" => "Kopiëren als Markdown",
+        "Save as .csv…" => "Opslaan als .csv…",
+        "Spill Here" => "Hier overlopen",
+        "Spill One Line per Row" => "Eén tekstregel per rij laten overlopen",
+        "The table isn't kept in the file. Run the cell to see it." => "De tabel wordt niet in het bestand bewaard. Voer de cel uit om deze te zien.",
+        "This table is empty." => "Deze tabel is leeg.",
+        "This table has no rows." => "Deze tabel heeft geen rijen.",
+        "Copied only what is shown: the rest of the table isn't in the copy." => {
+            "Alleen wat wordt weergegeven is gekopieerd: de rest van de tabel staat niet in de kopie."
+        }
+        "Saved only what is shown: the rest of the table isn't in the file." => {
+            "Alleen wat wordt weergegeven is opgeslagen: de rest van de tabel staat niet in het bestand."
+        }
+        "The table is saved." => "De tabel is opgeslagen.",
+        "Only the first {rows} of {total} rows are shown." => "Alleen de eerste {rows} van {total} rijen worden weergegeven.",
+        "Only the first {cols} of {total} columns are shown." => "Alleen de eerste {cols} van {total} kolommen worden weergegeven.",
+        "Some long text is cut." => "Sommige lange tekst is afgekapt.",
+        "Copying and saving take only what is shown. Spill Here gives the whole table." => {
+            "Kopiëren en opslaan nemen alleen wat wordt weergegeven. Hier overlopen geeft de hele tabel."
+        }
+        "Save Python Table as CSV" => "Python-tabel opslaan als CSV",
+        "Python Table" => "Python-tabel",
+        "Convert to Normal Cell" => "Converteren naar normale cel",
+        "Show Card" => "Kaart weergeven",
+        "Insert\nPython" => "Python\ninvoegen",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Python invoegen (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Python-editor",
+        "Edit in Python Editor" => "Bewerken in Python-editor",
+        "Unsaved changes" => "Niet-opgeslagen wijzigingen",
+        "The code for {cell} has unsaved changes." => "De code voor {cell} heeft niet-opgeslagen wijzigingen.",
+        "The code for {cell} in {workbook} has unsaved changes." => "De code voor {cell} in {workbook} heeft niet-opgeslagen wijzigingen.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "De code kan niet langer worden: een Python-cel bevat {max} tekens, geteld als PY-formule."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell} is gewijzigd terwijl de cel in de Python-editor geopend was. Kopieer de code, of sluit de editor en open deze opnieuw op de cel."
+        }
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell} is gewijzigd terwijl de cel in de Python-editor geopend was, dus de code is niet toegepast. Kopieer de code, of sluit de editor en open deze opnieuw op de cel."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} past de code toe. Esc sluit de editor.",
+        "The Python editor's unsaved code was copied to the clipboard." => {
+            "De niet-opgeslagen code van de Python-editor is naar het klembord gekopieerd."
+        }
+        "Apply" => "Toepassen",
+        "Discard" => "Negeren",
         "Evaluate Formula" => "Formule evalueren",
         "Watch Window" => "Bewakingsvenster",
         "Calculation\nOptions" => "Berekenings-\nopties",
@@ -556,6 +605,281 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Weergeven",
         "Collapse dialog" => "Dialoogvenster samenvouwen",
         "Expand dialog" => "Dialoogvenster uitvouwen",
+        "Python|Off" => "Uit",
+        "Python|Not Set Up" => "Niet ingesteld",
+        "Python|Ready" => "Gereed",
+        "Python|Running" => "Wordt uitgevoerd",
+        "Python|Blocked" => "Geblokkeerd",
+        "Enable Python in cells" => "Python in cellen inschakelen",
+        "Waiting for Python cells to finish before saving..." => "Wachten tot de Python-cellen klaar zijn voordat er wordt opgeslagen...",
+        "Save Now" => "Nu opslaan",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "De werkmap is opgeslagen, maar deze Python-cellen waren niet klaar, dus het bestand bevat hun laatste resultaten, voor zover ze die hadden: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} en nog {count}",
+        "{version}, too old: Python cells need 3.11 or newer" => "{version}, te oud: Python-cellen vereisen versie 3.11 of nieuwer",
+        "Looking for Python…" => "Zoeken naar Python…",
+        "Copied to the clipboard." => "Naar het klembord gekopieerd.",
+        "This workbook has Python code. Enable it to run its cells; until then they keep the values saved in the file." => {
+            "Deze werkmap bevat Python-code. Schakel deze in om de cellen uit te voeren; tot die tijd behouden ze de waarden die in het bestand zijn opgeslagen."
+        }
+        "Enable" => "Inschakelen",
+        "Python: running {cell}, {seconds} s" => "Python: {cell} wordt uitgevoerd, {seconds} s",
+        "Python: {state}" => "Python: {state}",
+        "Open the Python environment" => "De Python-omgeving openen",
+        "Nothing on this system: Python doesn't run here" => "Niets op dit systeem: Python wordt hier niet uitgevoerd",
+        "GridCraft starts Python with an empty environment" => "GridCraft start Python met een lege omgeving",
+        "macOS sandbox profile" => "macOS-sandboxprofiel",
+        "Linux Landlock" => "Linux Landlock",
+        "Linux seccomp filter" => "Linux seccomp-filter",
+        "Open Python Settings" => "Python-instellingen openen",
+        "Choose Interpreter" => "Interpreter kiezen",
+        "Copy Install Command" => "Installatieopdracht kopiëren",
+        "Run Again" => "Opnieuw uitvoeren",
+        "Reset" => "Opnieuw instellen",
+        "Python Environment" => "Python-omgeving",
+        "Python Packages" => "Python-pakketten",
+        "Python Problems" => "Python-problemen",
+        "Python Run Log" => "Python-uitvoeringslogboek",
+        "What Python Can Do" => "Wat Python kan doen",
+        "GridCraft is checking Python." => "GridCraft controleert Python.",
+        "Check Again" => "Opnieuw controleren",
+        "Interpreter" => "Interpreter",
+        "Chosen by you:" => "Door u gekozen:",
+        "Automatic found:" => "Automatisch gevonden:",
+        "What runs:" => "Wat wordt uitgevoerd:",
+        "None found yet." => "Nog niets gevonden.",
+        "Sandbox" => "Sandbox",
+        "Package folders" => "Pakketmappen",
+        "What Python can read" => "Wat Python kan lezen",
+        "uv manages Python versions and packages. To get it, run:" => "uv beheert Python-versies en -pakketten. Voer dit uit om het te krijgen:",
+        "Reading files outside Python: blocked" => "Bestanden buiten Python lezen: geblokkeerd",
+        "Writing files: blocked" => "Bestanden schrijven: geblokkeerd",
+        "Using the network: blocked" => "Het netwerk gebruiken: geblokkeerd",
+        "Starting other programs: blocked" => "Andere programma's starten: geblokkeerd",
+        "Each time Python starts, GridCraft tries each of these first, and doesn't run Python unless every one is refused." => {
+            "Telkens wanneer Python start, probeert GridCraft elk van deze maatregelen en voert Python alleen uit als ze allemaal worden geweigerd."
+        }
+        "Install a package with uv. GridCraft only copies the command; you run it in a terminal, then choose Check Again." => {
+            "Installeer een pakket met uv. GridCraft kopieert alleen de opdracht; u voert die uit in een terminal en kiest daarna Opnieuw controleren."
+        }
+        "Package name" => "Pakketnaam",
+        "Other package managers" => "Andere pakketbeheerders",
+        "For people who manage Python another way: choose any interpreter by path in File › Options › Python. With pip:" => {
+            "Voor wie Python op een andere manier beheert: kies een willekeurige interpreter op pad in Bestand › Opties › Python. Met pip:"
+        }
+        "Packages: {count}" => "Pakketten: {count}",
+        "No problems." => "Geen problemen.",
+        "This workbook" => "Deze werkmap",
+        "No runs yet." => "Nog geen uitvoeringen.",
+        "Go To Cell" => "Naar cel gaan",
+        "This run printed nothing." => "Deze uitvoering heeft niets afgedrukt.",
+        "Python cells can" => "Python-cellen kunnen",
+        "Read cells through xl()" => "Cellen lezen via xl()",
+        "GridCraft sends only the cells that xl() names" => "GridCraft verstuurt alleen de cellen die xl() noemt",
+        "Import installed packages" => "Geïnstalleerde pakketten importeren",
+        "The sandbox lets Python read its own installation" => "De sandbox laat Python zijn eigen installatie lezen",
+        "Compute" => "Berekenen",
+        "Within the time and memory limits in File › Options › Python" => "Binnen de tijd- en geheugenlimieten in Bestand › Opties › Python",
+        "Printed output is kept in the Run Log" => "Afgedrukte uitvoer wordt bewaard in het uitvoeringslogboek",
+        "Use threads" => "Threads gebruiken",
+        "Threads stay inside the one Python process" => "Threads blijven binnen het ene Python-proces",
+        "Python cells cannot" => "Python-cellen kunnen niet",
+        "Read your files" => "Uw bestanden lezen",
+        "Write files" => "Bestanden schrijven",
+        "Use the network" => "Het netwerk gebruiken",
+        "Start programs" => "Programma's starten",
+        "See environment variables" => "Omgevingsvariabelen zien",
+        "Open windows" => "Vensters openen",
+        "Draw plots. The data goes to a sheet and a chart is built from it." => {
+            "Grafieken tekenen. De gegevens gaan naar een blad en daaruit wordt een grafiek gemaakt."
+        }
+        "Run this workbook's Python cells" => "De Python-cellen van deze werkmap uitvoeren",
+        "Off by default. Only you can turn this on, here: no file, macro or agent can. A workbook opened from a file also needs its own Enable." => {
+            "Standaard uit. Alleen u kunt dit hier inschakelen: geen bestand, macro of agent kan dat. Een werkmap die uit een bestand is geopend heeft ook een eigen Inschakelen nodig."
+        }
+        "Limits" => "Limieten",
+        "While Python is off, GridCraft starts nothing, so it can't yet say which version it would use." => {
+            "Zolang Python uit staat, start GridCraft niets en kan het dus nog niet zeggen welke versie het zou gebruiken."
+        }
+        "Automatic would try first:" => "Automatisch zou eerst proberen:",
+        "Set up Python with uv" => "Python instellen met uv",
+        "Run these in a terminal, in order. GridCraft looks in this environment first, so there is nothing more to choose. It only copies the commands; it never runs them." => {
+            "Voer deze opdrachten in volgorde uit in een terminal. GridCraft zoekt eerst in deze omgeving, dus er is verder niets te kiezen. Het kopieert de opdrachten alleen; het voert ze nooit uit."
+        }
+        "Any Python 3.11 or newer can be chosen by path with Browse…. To add packages to it with pip:" => {
+            "Elke Python 3.11 of nieuwer kan op pad worden gekozen met Bladeren…. Om er pakketten aan toe te voegen met pip:"
+        }
+        "Time limit for one cell" => "Tijdslimiet voor één cel",
+        " seconds" => " seconden",
+        "Memory limit" => "Geheugenlimiet",
+        " MB" => " MB",
+        "At a limit Python is restarted and its variables are cleared; the next run starts fresh." => {
+            "Bij een limiet wordt Python opnieuw gestart en worden de variabelen gewist; de volgende uitvoering begint opnieuw."
+        }
+        "On macOS the memory limit is a check twice a second, not a hard cap." => {
+            "Op macOS wordt de geheugenlimiet twee keer per seconde gecontroleerd; het is geen harde grens."
+        }
+        "Editor" => "Editor",
+        "Initialization" => "Initialisatie",
+        "The code that runs before this workbook's Python cells" => "De code die wordt uitgevoerd vóór de Python-cellen van deze werkmap",
+        "Open Initialization" => "Initialisatie openen",
+        "The initialization code has unsaved changes." => "De initialisatiecode bevat niet-opgeslagen wijzigingen.",
+        "The initialization code of {workbook} has unsaved changes." => "De initialisatiecode van {workbook} bevat niet-opgeslagen wijzigingen.",
+        "The code can't be longer: initialization code holds {max} characters." => {
+            "De code kan niet langer worden: initialisatiecode bevat maximaal {max} tekens."
+        }
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "De initialisatiecode is gewijzigd terwijl deze in de editor geopend was. Kopieer uw code, of sluit de editor en open deze opnieuw."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "De initialisatiecode is gewijzigd terwijl deze in de editor geopend was, dus uw code is niet toegepast. Kopieer de code, of sluit de editor en open deze opnieuw."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "De initialisatiecode gebruikt een pakket dat deze Python niet heeft. GridCraft heeft de regels die het nodig hebben overgeslagen en de rest uitgevoerd."
+        }
+        "Select a Python cell first." => "Selecteer eerst een Python-cel.",
+        "Output As" => "Uitvoer als",
+        "Run\nCell" => "Cel\nuitvoeren",
+        "Run the selected Python cell" => "De geselecteerde Python-cel uitvoeren",
+        "Run\nAll" => "Alles\nuitvoeren",
+        "Run every Python cell in the workbook, in order" => "Alle Python-cellen in de werkmap op volgorde uitvoeren",
+        "Nothing is running." => "Er wordt niets uitgevoerd.",
+        "Stop the running cell" => "De lopende cel stoppen",
+        "Clear Python's variables and run every cell again" => "De variabelen van Python wissen en alle cellen opnieuw uitvoeren",
+        "Python Calculation" => "Python-berekening",
+        "When this workbook's Python cells run" => "Wanneer de Python-cellen van deze werkmap worden uitgevoerd",
+        "A Python cell is running." => "Een Python-cel wordt uitgevoerd.",
+        "Python is ready." => "Python is gereed.",
+        "Which Python runs cells" => "Welke Python de cellen uitvoert",
+        "Packages" => "Pakketten",
+        "What this Python has installed" => "Wat deze Python heeft geïnstalleerd",
+        "Check Sandbox" => "Sandbox controleren",
+        "Check Python and the sandbox again, and show the report" => "Python en de sandbox opnieuw controleren en het rapport tonen",
+        "What Python\nCan Do" => "Wat Python\nkan doen",
+        "What Python cells can and can't do here" => "Wat Python-cellen hier wel en niet kunnen doen",
+        "This Workbook: Enabled" => "Deze werkmap: ingeschakeld",
+        "This Workbook: Disabled" => "Deze werkmap: uitgeschakeld",
+        "Only a person can change this." => "Alleen een persoon kan dit wijzigen.",
+        "Run Log" => "Uitvoeringslogboek",
+        "Each run's cell, time and printed output" => "Cel, tijd en afgedrukte uitvoer van elke uitvoering",
+        "Clear the Run Log" => "Het uitvoeringslogboek wissen",
+        "Problems" => "Problemen",
+        "Every Python cell with something to say" => "Elke Python-cel met iets te melden",
+        "Diagnostics" => "Diagnostiek",
+        "uv environment" => "uv-omgeving",
+        "uv Python" => "uv-Python",
+        "virtual environment" => "virtuele omgeving",
+        "conda environment" => "conda-omgeving",
+        "system" => "systeem",
+        "Python cells need a sandbox, and GridCraft has none for this system." => {
+            "Python-cellen hebben een sandbox nodig en GridCraft heeft er geen voor dit systeem."
+        }
+        "The sandbox didn't hold when GridCraft checked it, so Python won't run." => {
+            "De sandbox hield niet stand bij de controle door GridCraft, dus Python wordt niet uitgevoerd."
+        }
+        "Python is off. Turn it on in Settings to run Python cells." => {
+            "Python staat uit. Schakel het in via de instellingen om Python-cellen uit te voeren."
+        }
+        "GridCraft can't find Python 3.11 or newer. Set one up with uv, or choose one." => {
+            "GridCraft kan Python 3.11 of nieuwer niet vinden. Stel er een in met uv of kies er een."
+        }
+        "This Python is too old: Python cells need 3.11 or newer." => "Deze Python is te oud: Python-cellen vereisen versie 3.11 of nieuwer.",
+        "This is Apple's placeholder for Python, which GridCraft doesn't use. Set up Python with uv, or choose another." => {
+            "Dit is de plaatsaanduider van Apple voor Python, die GridCraft niet gebruikt. Stel Python in met uv of kies een andere."
+        }
+        "GridCraft couldn't work out what this Python needs to run." => "GridCraft kon niet bepalen wat deze Python nodig heeft om te draaien.",
+        "Python didn't start." => "Python is niet gestart.",
+        "Python isn't on for this workbook, so its cells keep the values saved in the file." => {
+            "Python staat niet aan voor deze werkmap, dus de cellen behouden de waarden die in het bestand zijn opgeslagen."
+        }
+        "This session doesn't run Python: cells keep the values saved in the file." => {
+            "Deze sessie voert geen Python uit: cellen behouden de waarden die in het bestand zijn opgeslagen."
+        }
+        "This workbook imports packages this Python doesn't have." => "Deze werkmap importeert pakketten die deze Python niet heeft.",
+        "pandas isn't installed in this Python, so ranges come back as lists of rows." => {
+            "pandas is niet geïnstalleerd in deze Python, dus bereiken komen terug als lijsten met rijen."
+        }
+        "The initialization code failed, so Python cells can't run." => {
+            "De initialisatiecode is mislukt, dus Python-cellen kunnen niet worden uitgevoerd."
+        }
+        "This code isn't valid Python." => "Deze code is geen geldige Python.",
+        "The code raised an error." => "De code gaf een fout.",
+        "The code uses a name that isn't defined." => "De code gebruikt een naam die niet is gedefinieerd.",
+        "This name is defined in a later cell. Python cells run in row order, sheet by sheet." => {
+            "Deze naam wordt in een latere cel gedefinieerd. Python-cellen worden uitgevoerd in rijvolgorde, blad voor blad."
+        }
+        "This Python doesn't have that package." => "Deze Python heeft dat pakket niet.",
+        "This package needs a library outside what the sandbox lets Python read." => {
+            "Dit pakket heeft een bibliotheek nodig buiten wat de sandbox Python laat lezen."
+        }
+        "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl()." => {
+            "Python-cellen kunnen geen bestanden op uw computer lezen of schrijven. Zet de gegevens op een blad en lees ze met xl()."
+        }
+        "Python cells can't use the network. Put the data on a sheet and read it with xl()." => {
+            "Python-cellen kunnen het netwerk niet gebruiken. Zet de gegevens op een blad en lees ze met xl()."
+        }
+        "Python cells can't start other programs or processes." => "Python-cellen kunnen geen andere programma's of processen starten.",
+        "This picture is too large to draw. Make figsize or dpi smaller." => "Deze afbeelding is te groot om te tekenen. Verklein figsize of dpi.",
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "De afbeelding verschijnt vanzelf in de cel. Python-cellen kunnen geen bestanden schrijven, dus deze regel zou mislukken."
+        }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Dit pakket tekent in een webbrowser, die Python-cellen niet kunnen openen. Gebruik matplotlib of seaborn."
+        }
+        "Python Output" => "Python-uitvoer",
+        "Display Plot over Cells" => "Plot boven cellen weergeven",
+        "Create Reference" => "Verwijzing maken",
+        "Copy Image" => "Afbeelding kopiëren",
+        "Save Image…" => "Afbeelding opslaan…",
+        "The image is saved." => "De afbeelding is opgeslagen.",
+        "The image is on the clipboard." => "De afbeelding staat op het klembord.",
+        "Image" => "Afbeelding",
+        "size" => "grootte",
+        "Resize" => "Formaat wijzigen",
+        "This picture shows the last result that cell gave." => "Deze afbeelding toont het laatste resultaat van die cel.",
+        "Select a Python cell that gave a picture first." => "Selecteer eerst een Python-cel die een afbeelding heeft opgeleverd.",
+        "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
+            "xl() heeft zijn verwijzing als tekst in de code nodig, zoals xl(\"A1:B5\")."
+        }
+        "This range is too large to send to Python." => "Dit bereik is te groot om naar Python te sturen.",
+        "xl() names something that isn't a cell, range, table or defined name here." => {
+            "xl() noemt iets wat hier geen cel, bereik, tabel of gedefinieerde naam is."
+        }
+        "The code ran past the time limit. Python was restarted, so its variables were cleared." => {
+            "De code overschreed de tijdslimiet. Python is opnieuw gestart, dus de variabelen zijn gewist."
+        }
+        "The code went over the memory limit. Python was restarted, so its variables were cleared." => {
+            "De code overschreed de geheugenlimiet. Python is opnieuw gestart, dus de variabelen zijn gewist."
+        }
+        "The result is too large to bring back to the sheet." => "Het resultaat is te groot om terug in het blad te brengen.",
+        "The printed output was cut off at its limit." => "De afgedrukte uitvoer is bij de limiet afgekapt.",
+        "Python stopped unexpectedly and was restarted, so its variables were cleared." => {
+            "Python is onverwacht gestopt en opnieuw gestart, dus de variabelen zijn gewist."
+        }
+        "The result is empty." => "Het resultaat is leeg.",
+        "The result needs cells that aren't empty." => "Het resultaat heeft cellen nodig die niet leeg zijn.",
+        "The result isn't a number a cell can hold." => "Het resultaat is geen getal dat een cel kan bevatten.",
+        "This date or length of time is outside what a cell can hold." => "Deze datum of tijdsduur valt buiten wat een cel kan bevatten.",
+        "This cell is running." => "Deze cel wordt uitgevoerd.",
+        "What this cell reads has changed since it last ran." => "Wat deze cel leest, is gewijzigd sinds de laatste uitvoering.",
+        "This cell was stopped before it finished." => "Deze cel is gestopt voordat hij klaar was.",
+        "xl() needs its reference written as text, such as xl(\"A1:B5\"). A computed reference can't be read." => {
+            "xl() heeft zijn verwijzing als tekst nodig, zoals xl(\"A1:B5\"). Een berekende verwijzing kan niet worden gelezen."
+        }
+        "This module needs the network or other programs, which Python cells can't use." => {
+            "Deze module heeft het netwerk of andere programma's nodig, die Python-cellen niet kunnen gebruiken."
+        }
+        "This Python doesn't have this package." => "Deze Python heeft dit pakket niet.",
+        "Python cells can't open windows or ask for input." => "Python-cellen kunnen geen vensters openen of om invoer vragen.",
+        "Python cells don't see your environment variables." => "Python-cellen zien uw omgevingsvariabelen niet.",
+        "Open Settings" => "Instellingen openen",
+        "Show Printed Output" => "Afgedrukte uitvoer weergeven",
+        "Hide Printed Output" => "Afgedrukte uitvoer verbergen",
+        "Line {line}" => "Regel {line}",
+        "Line {line}: {message}" => "Regel {line}: {message}",
+        "Python {version}, ready" => "Python {version}, gereed",
+        "Python {version}, running" => "Python {version}, wordt uitgevoerd",
         _ => return None,
     })
 }

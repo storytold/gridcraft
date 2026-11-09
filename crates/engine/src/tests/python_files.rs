@@ -23,7 +23,7 @@ fn cache(s: &mut Session, cell: &str, value: Value, type_name: &str) {
     let sh = wb.sheet_mut(0).unwrap();
     let c = sh.cells.get_mut(CellRef::parse(cell).unwrap()).unwrap();
     let p = Arc::make_mut(c.py.as_mut().unwrap());
-    p.output = Some(PyOutput { value, type_name: type_name.into(), preview: String::new(), convertible: true });
+    p.output = Some(PyOutput { value, type_name: type_name.into(), preview: String::new(), convertible: true, ..Default::default() });
 }
 
 fn array(rows: usize, cols: usize, data: Vec<Value>) -> Value {
@@ -97,6 +97,13 @@ fn excel_shaped(data: &str, scripts: Option<&[&str]>) -> Vec<u8> {
     let python = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<python xmlns=\"http://schemas.microsoft.com/office/spreadsheetml/2023/python\"><environmentDefinition id=\"{{00000000-0000-0000-0000-000000000000}}\"/><pythonScripts>{codes}</pythonScripts></python>"
     );
+    with_python_part(data, &python)
+}
+
+/// An empty workbook's package with `data` as its first sheet's cells and this Python part.
+fn with_python_part(data: &str, python: &str) -> Vec<u8> {
+    let mut s = s();
+    let plain = save(&mut s, "xlsx");
     const REL: &str =
         "<Relationship Id=\"rIdPy\" Type=\"http://schemas.microsoft.com/office/2023/09/relationships/Python\" Target=\"python/python1.xml\"/>";
     const TYPE: &str = "<Override PartName=\"/xl/python/python1.xml\" ContentType=\"application/vnd.ms-excel.python+xml\"/>";
@@ -106,7 +113,7 @@ fn excel_shaped(data: &str, scripts: Option<&[&str]>) -> Vec<u8> {
         "[Content_Types].xml" => text.replace("</Types>", &format!("{TYPE}</Types>")),
         _ => text.to_string(),
     };
-    with_parts(&plain, edit, &[("xl/python/python1.xml", &python)])
+    with_parts(&plain, edit, &[("xl/python/python1.xml", python)])
 }
 
 fn code(s: &Session, cell: &str) -> Option<PyCode> {
@@ -669,7 +676,7 @@ fn a_dropped_python_result_keeps_its_spill_as_values() {
     // and C1's well-formed result keeps its spill.
     let mut wb = Workbook::new();
     let sh = wb.sheet_mut(0).unwrap();
-    let out = |value: Value| Some(PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true });
+    let out = |value: Value| Some(PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true, ..Default::default() });
     let col = array(3, 1, vec![Value::Number(7.0), Value::Number(8.0), Value::Number(9.0)]);
     let bad = Value::Array(Arc::new(Array { rows: 3, cols: 1, data: vec![Value::Number(7.0)] }));
     for (at, code, value) in [("A1", "y".repeat(9_000), col.clone()), ("B1", "b".into(), bad), ("C1", "c".into(), col)] {
@@ -741,4 +748,216 @@ fn a_new_return_type_drops_the_kept_result() {
     s.execute("python.set", json!({"cell": "A1", "code": "[5, 6]", "output": "value"})).unwrap();
     assert!(code(&s, "A1").unwrap().output.is_some());
     assert_eq!((v(&s, "A1"), v(&s, "A2"), v(&s, "B1")), (Value::Number(5.0), Value::Number(6.0), Value::Number(6.0)));
+}
+
+const PY_NS: &str = "http://schemas.microsoft.com/office/spreadsheetml/2023/python";
+const PY_GUID: &str = "{0F1E2D3C-4B5A-4978-8695-A4B3C2D1E0F9}";
+const NO_CELLS: &str = "<sheetData/>";
+
+fn env_of(s: &Session) -> Option<std::sync::Arc<gridcraft_model::PyEnvironment>> {
+    s.doc().unwrap().wb.python_env.clone()
+}
+
+#[test]
+fn initialization_code_goes_through_a_file_with_what_is_around_it() {
+    // The environment as [MS-XLSX] 2.6.250 and 2.6.251 lay it out, with content of a later version
+    // around it, and a cell.
+    let part = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<python xmlns=\"{PY_NS}\" xmlns:n=\"urn:later\" n:root=\"r\">\
+         <environmentDefinition id=\"{PY_GUID}\" n:env=\"e\"><initialization userModified=\"1\" n:init=\"i\"><code>import math_x000D_\nrate = \"&lt;2&gt;\"</code><n:more>m</n:more></initialization>\
+         <extLst><ext uri=\"{{ABC}}\"><n:deep a=\"1\"/></ext></extLst></environmentDefinition>\
+         <pythonScripts><pythonScript><code>rate</code></pythonScript></pythonScripts>\
+         <extLst><ext uri=\"{{DEF}}\"/></extLst></python>"
+    );
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\"><f>_xlfn._xlws.PY(0,0)</f><v>1</v></c></row></sheetData>";
+    let mut s = s();
+    open(&mut s, "book.xlsx", &with_python_part(data, &part));
+    let env = env_of(&s).expect("the file's environment is the workbook's");
+    assert_eq!(env.code, "import math\nrate = \"<2>\"");
+    assert!(env.user_modified);
+    assert_eq!(env.id.as_deref(), Some(PY_GUID));
+    assert_eq!(s.execute("python.initialization", json!({})).unwrap()["code"], "import math\nrate = \"<2>\"");
+    // Saved, it holds all of it, and reads the same again.
+    let bytes = save(&mut s, "xlsx");
+    let xml = part_of(&bytes);
+    for piece in [
+        "xmlns:n=\"urn:later\" n:root=\"r\">",
+        &format!(
+            "<environmentDefinition id=\"{PY_GUID}\" n:env=\"e\"><initialization userModified=\"1\" n:init=\"i\"><code>import math\nrate = \"&lt;2&gt;\"</code><n:more>m</n:more></initialization><extLst><ext uri=\"{{ABC}}\"><n:deep a=\"1\"/></ext></extLst></environmentDefinition>"
+        ),
+        "<pythonScripts><pythonScript><code>rate</code></pythonScript></pythonScripts><extLst><ext uri=\"{DEF}\"/></extLst></python>",
+    ] {
+        assert!(xml.contains(piece), "{piece} isn't in {xml}");
+    }
+    let mut again = super::s();
+    open(&mut again, "again.xlsx", &bytes);
+    assert_eq!(env_of(&again).as_deref(), Some(&*env));
+    assert_eq!(part_of(&save(&mut again, "xlsx")), xml, "it says the same each time");
+    // A person's change keeps what the file held around the code, and the GUID.
+    s.execute("python.initialization", json!({"code": "rate = 3"})).unwrap();
+    let xml = part_of(&save(&mut s, "xlsx"));
+    assert!(
+        xml.contains(&format!(
+            "id=\"{PY_GUID}\" n:env=\"e\"><initialization userModified=\"1\" n:init=\"i\"><code>rate = 3</code><n:more>m</n:more>"
+        )),
+        "{xml}"
+    );
+    // Emptied, the code stays empty, rather than coming back as a default.
+    s.execute("python.initialization", json!({"code": ""})).unwrap();
+    let bytes = save(&mut s, "xlsx");
+    assert!(part_of(&bytes).contains("<code></code>"));
+    open(&mut again, "emptied.xlsx", &bytes);
+    let env = env_of(&again).unwrap();
+    assert_eq!((env.code.as_str(), env.user_modified), ("", true));
+}
+
+/// The saved package's Python part.
+fn part_of(bytes: &[u8]) -> String {
+    part(bytes, "xl/python.xml")
+}
+
+#[test]
+fn code_excel_put_there_stays_not_the_persons() {
+    for (attr, modified) in [
+        ("", false),
+        (" userModified=\"0\"", false),
+        (" userModified=\"false\"", false),
+        (" userModified=\"true\"", true),
+        (" userModified=\"bad\"", false),
+    ] {
+        let part = format!(
+            "<python xmlns=\"{PY_NS}\"><environmentDefinition id=\"{PY_GUID}\"><initialization{attr}><code>import a</code></initialization></environmentDefinition></python>"
+        );
+        let mut s = s();
+        open(&mut s, "book.xlsx", &with_python_part(NO_CELLS, &part));
+        let env = env_of(&s).unwrap();
+        assert_eq!(env.user_modified, modified, "{attr}");
+        let xml = part_of(&save(&mut s, "xlsx"));
+        assert_eq!(xml.contains("userModified"), modified, "the default isn't written: {xml}");
+        assert_eq!(s.execute("python.initialization", json!({})).unwrap()["userModified"], modified);
+    }
+}
+
+#[test]
+fn a_workbook_with_initialization_code_and_no_cells_keeps_it() {
+    let mut s = s();
+    s.execute("python.initialization", json!({"code": "x = 1"})).unwrap();
+    let bytes = save(&mut s, "xlsx");
+    let xml = part_of(&bytes);
+    assert!(xml.contains("<initialization userModified=\"1\"><code>x = 1</code></initialization>"), "{xml}");
+    assert!(!xml.contains("pythonScripts"), "the format wants a script in one: {xml}");
+    let id = env_of(&s).unwrap().id.clone().unwrap();
+    assert!(xml.contains(&format!("<environmentDefinition id=\"{id}\">")), "the format requires a GUID: {xml}");
+    assert!(part(&bytes, "[Content_Types].xml").contains("application/vnd.ms-excel.python+xml"));
+    assert!(part(&bytes, "xl/_rels/workbook.xml.rels").contains("relationships/Python"));
+    let mut again = super::s();
+    open(&mut again, "b.xlsx", &bytes);
+    assert_eq!(env_of(&again).as_deref(), env_of(&s).as_deref());
+    // A workbook that holds only an environment with nothing in it, or none, needs no part.
+    let mut plain = super::s();
+    assert!(!save(&mut plain, "xlsx").windows(10).any(|w| w == b"python.xml"));
+    // A workbook with cells and no environment gets none, as it did.
+    py(&mut plain, "A1", "1");
+    assert!(!part_of(&save(&mut plain, "xlsx")).contains("environmentDefinition"));
+}
+
+#[test]
+fn what_a_file_says_about_the_environment_is_bounded() {
+    use gridcraft_model::python::{MAX_INIT_CHARS, MAX_INIT_CHARS_KEPT};
+    // Code past the limit is cut, with a warning, and saying so survives a save: what is kept is
+    // still past the limit, so it never runs as if it were whole.
+    let long = "x".repeat(MAX_INIT_CHARS + 50);
+    let part = format!(
+        "<python xmlns=\"{PY_NS}\"><environmentDefinition id=\"{PY_GUID}\"><initialization><code>{long}</code></initialization></environmentDefinition></python>"
+    );
+    let (wb, warnings) = crate::io::open_bytes("long.xlsx", &with_python_part(NO_CELLS, &part)).unwrap();
+    let env = wb.python_env.clone().unwrap();
+    assert_eq!(env.code.chars().count(), MAX_INIT_CHARS_KEPT);
+    assert!(!env.fits());
+    assert!(warnings.iter().any(|w| w.contains("initialization code is longer")), "{warnings:?}");
+    let mut s = super::s();
+    open(&mut s, "long.xlsx", &with_python_part(NO_CELLS, &part));
+    assert_eq!(s.execute("python.initialization", json!({})).unwrap()["fits"], false);
+    let bytes = save(&mut s, "xlsx");
+    let (wb, warnings) = crate::io::open_bytes("saved.xlsx", &bytes).unwrap();
+    assert!(!wb.python_env.unwrap().fits(), "still not whole");
+    assert!(warnings.iter().any(|w| w.contains("initialization code is longer")), "{warnings:?}");
+    // Exactly at the limit is whole, and says nothing.
+    let at = "x".repeat(MAX_INIT_CHARS);
+    let part = format!(
+        "<python xmlns=\"{PY_NS}\"><environmentDefinition id=\"{PY_GUID}\"><initialization><code>{at}</code></initialization></environmentDefinition></python>"
+    );
+    let (wb, warnings) = crate::io::open_bytes("at.xlsx", &with_python_part(NO_CELLS, &part)).unwrap();
+    assert!(wb.python_env.unwrap().fits());
+    assert!(!warnings.iter().any(|w| w.contains("initialization")), "{warnings:?}");
+    // Unread content past its budget goes, with a warning, and the code stays.
+    let big = "y".repeat(5 * 1024 * 1024);
+    let part = format!(
+        "<python xmlns=\"{PY_NS}\"><environmentDefinition id=\"{PY_GUID}\"><initialization><code>a</code></initialization><extLst><ext uri=\"{{A}}\"><z>{big}</z></ext></extLst></environmentDefinition></python>"
+    );
+    let (wb, warnings) = crate::io::open_bytes("big.xlsx", &with_python_part(NO_CELLS, &part)).unwrap();
+    let env = wb.python_env.unwrap();
+    assert_eq!(env.code, "a");
+    assert!(env.kept.is_none());
+    assert!(warnings.iter().any(|w| w.contains("a save leaves them out")), "{warnings:?}");
+    // A GUID that isn't one isn't written back: the format requires one, so another takes its place.
+    for bad in ["not-a-guid", "", "{0F1E2D3C-4B5A-4978-8695-A4B3C2D1E0F}", "{0F1E2D3C-4B5A-4978-8695-A4B3C2D1E0FZ}", "\"><evil/>"] {
+        let part = format!(
+            "<python xmlns=\"{PY_NS}\"><environmentDefinition id=\"{}\"><initialization><code>a</code></initialization></environmentDefinition></python>",
+            bad.replace('"', "&quot;").replace('>', "&gt;").replace('<', "&lt;")
+        );
+        let mut s = super::s();
+        open(&mut s, "bad.xlsx", &with_python_part(NO_CELLS, &part));
+        assert_eq!(env_of(&s).unwrap().id, None, "{bad}");
+        let xml = part_of(&save(&mut s, "xlsx"));
+        assert!(!xml.contains("evil") && !xml.contains("not-a-guid"), "{xml}");
+        let (wb, _) = crate::io::open_bytes("fixed.xlsx", &with_python_part(NO_CELLS, &xml)).unwrap();
+        assert!(gridcraft_model::python::is_guid(wb.python_env.unwrap().id.as_deref().unwrap()), "{xml}");
+    }
+    // A damaged part: its cells keep their values, and there is no environment to speak of.
+    let (wb, warnings) = crate::io::open_bytes("root.xlsx", &with_python_part(NO_CELLS, "<other/>")).unwrap();
+    assert!(wb.python_env.is_none());
+    assert!(!warnings.is_empty());
+    // A part with no environment and nothing else around it has none.
+    let part = format!("<python xmlns=\"{PY_NS}\"><pythonScripts><pythonScript><code>1</code></pythonScript></pythonScripts></python>");
+    let (wb, _) = crate::io::open_bytes("plain.xlsx", &with_python_part(NO_CELLS, &part)).unwrap();
+    assert!(wb.python_env.is_none());
+    // An extension of the part itself is kept without one, and adds none.
+    let part = format!("<python xmlns=\"{PY_NS}\"><extLst><ext uri=\"{{Q}}\"/></extLst></python>");
+    let mut s = super::s();
+    open(&mut s, "ext.xlsx", &with_python_part(NO_CELLS, &part));
+    let xml = part_of(&save(&mut s, "xlsx"));
+    assert!(xml.contains("<ext uri=\"{Q}\"/>") && !xml.contains("environmentDefinition"), "{xml}");
+}
+
+#[test]
+fn initialization_code_goes_through_gridcraft_json_and_is_bounded_there() {
+    use gridcraft_model::python::{MAX_INIT_CHARS, MAX_INIT_CHARS_KEPT};
+    let mut s = super::s();
+    s.execute("python.initialization", json!({"code": "rate = 2"})).unwrap();
+    let id = env_of(&s).unwrap().id.clone();
+    let bytes = save(&mut s, "json");
+    let mut again = super::s();
+    open(&mut again, "b.json", &bytes);
+    let env = env_of(&again).unwrap();
+    assert_eq!((env.code.as_str(), env.user_modified, &env.id), ("rate = 2", true, &id));
+    // A file past the limit, with a GUID that isn't one and line breaks of another system.
+    let long = format!("a\r\n{}", "x".repeat(MAX_INIT_CHARS + 10));
+    let mut doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    doc["python_env"] = json!({"code": long, "userModified": false, "id": "\"><evil/>"});
+    let (read, warnings) = crate::io::open_bytes("long.json", &serde_json::to_vec(&doc).unwrap()).unwrap();
+    let env = read.python_env.unwrap();
+    assert_eq!(env.code.chars().count(), MAX_INIT_CHARS_KEPT);
+    assert!(env.code.starts_with("a\nx"), "line breaks as code has them");
+    assert!(!env.fits());
+    assert_eq!(env.id, None);
+    assert!(!env.user_modified);
+    assert!(warnings.iter().any(|w| w.contains("initialization code is longer")), "{warnings:?}");
+    // Without one, as files before it are, there is none.
+    let mut doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    if let Some(o) = doc.as_object_mut() {
+        o.remove("python_env");
+    }
+    let (read, _) = crate::io::open_bytes("old.json", &serde_json::to_vec(&doc).unwrap()).unwrap();
+    assert!(read.python_env.is_none());
 }

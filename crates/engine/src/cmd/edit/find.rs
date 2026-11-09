@@ -149,7 +149,13 @@ pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
                 // stays a Python cell. Code that would no longer fit in a PY formula is left as it was.
                 let old_py = cx.wb.sheet(si).and_then(|sh| sh.cell(c)).and_then(|x| x.py.clone());
                 if let Some(old) = old_py {
-                    let py = gridcraft_model::PyCode { object: old.object, ..gridcraft_model::PyCode::new(&new) };
+                    let py = gridcraft_model::PyCode {
+                        object: old.object,
+                        output_chosen: old.output_chosen,
+                        spill_lines: old.spill_lines,
+                        dates: old.dates.clone(),
+                        ..gridcraft_model::PyCode::new(&new)
+                    };
                     if py.code == old.code {
                         continue;
                     }

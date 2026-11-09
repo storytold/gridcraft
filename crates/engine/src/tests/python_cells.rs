@@ -199,9 +199,13 @@ fn python_cells_survive_native_json() {
 #[test]
 fn new_errors_parse_and_have_error_type_numbers() {
     use gridcraft_core::CellError;
-    for (text, e) in
-        [("#PYTHON!", CellError::Python), ("#BUSY!", CellError::Busy), ("#TIMEOUT!", CellError::Timeout), ("#BLOCKED!", CellError::Blocked)]
-    {
+    for (text, e) in [
+        ("#PYTHON!", CellError::Python),
+        ("#BUSY!", CellError::Busy),
+        ("#TIMEOUT!", CellError::Timeout),
+        ("#BLOCKED!", CellError::Blocked),
+        ("#CONNECT!", CellError::Connect),
+    ] {
         assert_eq!(CellError::parse(text), Some(e));
         assert_eq!(e.as_str(), text);
     }
@@ -210,6 +214,11 @@ fn new_errors_parse_and_have_error_type_numbers() {
     assert_eq!(super::v(&s, "A1"), Value::Number(11.0));
     s.execute("cell.set", json!({"cell": "A2", "input": "=ISERROR(#PYTHON!)"})).unwrap();
     assert_eq!(super::v(&s, "A2"), Value::Bool(true));
+    // #CONNECT! (the Python worker could not start) is 10, the number Excel gives it.
+    s.execute("cell.set", json!({"cell": "A3", "input": "=ERROR.TYPE(#CONNECT!)"})).unwrap();
+    assert_eq!(super::v(&s, "A3"), Value::Number(10.0));
+    s.execute("cell.set", json!({"cell": "A4", "input": "=#connect!"})).unwrap();
+    assert_eq!(super::v(&s, "A4"), Value::Error(CellError::Connect));
 }
 
 #[test]
@@ -244,7 +253,7 @@ fn a_macro_counts_python_code_as_data_and_a_blocked_spill_as_no_write() {
         let data = vec![Value::Number(5.0), Value::Number(6.0)];
         let value = Value::Array(Arc::new(gridcraft_core::Array::new(2, 1, data).unwrap()));
         Arc::make_mut(cell.py.as_mut().unwrap()).output =
-            Some(gridcraft_model::PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true });
+            Some(gridcraft_model::PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true, ..Default::default() });
     }
     s.execute("formulas.calculateNow", json!({})).unwrap();
     assert_eq!(super::v(&s, "J3"), Value::Number(6.0));
@@ -340,7 +349,7 @@ fn unmerging_lets_a_blocked_python_result_spill_again() {
         let cell = wb.sheet_mut(0).unwrap().cells.get_mut(CellRef::parse("A1").unwrap()).unwrap();
         let value = Value::Array(Arc::new(gridcraft_core::Array::new(2, 1, vec![Value::Number(5.0), Value::Number(6.0)]).unwrap()));
         Arc::make_mut(cell.py.as_mut().unwrap()).output =
-            Some(gridcraft_model::PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true });
+            Some(gridcraft_model::PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true, ..Default::default() });
     }
     s.execute("formulas.calculateNow", json!({})).unwrap();
     assert_eq!(super::v(&s, "A2"), Value::Number(6.0));
@@ -382,7 +391,7 @@ pub(super) fn spill_with_a_reader() -> crate::Session {
         let cell = wb.sheet_mut(0).unwrap().cells.get_mut(CellRef::parse("A1").unwrap()).unwrap();
         let value = Value::Array(Arc::new(gridcraft_core::Array::new(2, 1, vec![Value::Number(5.0), Value::Number(6.0)]).unwrap()));
         Arc::make_mut(cell.py.as_mut().unwrap()).output =
-            Some(gridcraft_model::PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true });
+            Some(gridcraft_model::PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true, ..Default::default() });
     }
     s.execute("formulas.calculateNow", json!({})).unwrap();
     s.execute("cell.set", json!({"cell": "B1", "input": "=SUM(A2)"})).unwrap();

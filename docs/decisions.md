@@ -127,3 +127,17 @@ so there the caps and the fuzzed input space are the protection. `crates/math/te
 gate on every test run, so a version bump has to pass it. RaTeX positions glyphs with KaTeX
 font metrics; GridCraft never bundles the KaTeX fonts, so glyphs are drawn with system fonts
 and a glyph no font has is drawn as a `[?]` box.
+
+## Helper processes run in a sandbox built on Landlock, seccomp and sandbox-exec
+
+Code GridCraft doesn't trust (a workbook's Python cells) runs in a helper process that confines
+itself before the code starts ([sandbox.md](sandbox.md)). On Linux the launcher uses Landlock and
+seccomp through the `landlock` (MIT OR Apache-2.0) and `seccompiler` (Apache-2.0 OR BSD-3-Clause)
+crates, pinned exactly at 0.4.7 and 0.5.0, so GridCraft's own code needs no `unsafe`; they are
+Linux-only dependencies. On macOS it uses `/usr/bin/sandbox-exec` with a generated
+deny-by-default profile, which needs no crate. Other systems are refused rather than run
+unconfined. An external tool (bubblewrap, firejail) was not chosen because it isn't installed by
+default and would put the confinement outside what the launcher checks. Every launch is followed by
+an enforcement check (reading a canary file, writing, a TCP connection and starting a process must
+each be refused) before the program runs, so a kernel or profile that doesn't enforce a rule makes
+the launch fail instead of running unconfined.

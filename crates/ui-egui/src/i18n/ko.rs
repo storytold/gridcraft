@@ -167,6 +167,50 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Trace Error" => "오류 추적",
         "Circular References" => "순환 참조",
         "Python Mode" => "Python 모드",
+        "Python Object" => "Python 개체",
+        "Excel Value" => "Excel 값",
+        "Copy as CSV" => "CSV로 복사",
+        "Copy as Markdown" => "Markdown으로 복사",
+        "Save as .csv…" => ".csv로 저장…",
+        "Spill Here" => "여기에 분산",
+        "Spill One Line per Row" => "한 줄씩 행으로 분산",
+        "The table isn't kept in the file. Run the cell to see it." => "표는 파일에 보관되지 않습니다. 표를 보려면 셀을 실행하세요.",
+        "This table is empty." => "이 표는 비어 있습니다.",
+        "This table has no rows." => "이 표에는 행이 없습니다.",
+        "Copied only what is shown: the rest of the table isn't in the copy." => "표시된 부분만 복사했습니다. 표의 나머지는 복사본에 없습니다.",
+        "Saved only what is shown: the rest of the table isn't in the file." => "표시된 부분만 저장했습니다. 표의 나머지는 파일에 없습니다.",
+        "The table is saved." => "표를 저장했습니다.",
+        "Only the first {rows} of {total} rows are shown." => "처음 {rows}행만 표시됩니다(전체 {total}행).",
+        "Only the first {cols} of {total} columns are shown." => "처음 {cols}열만 표시됩니다(전체 {total}열).",
+        "Some long text is cut." => "긴 텍스트의 일부가 잘렸습니다.",
+        "Copying and saving take only what is shown. Spill Here gives the whole table." => {
+            "복사와 저장은 표시된 부분만 가져옵니다. 여기에 분산을 사용하면 표 전체가 나옵니다."
+        }
+        "Save Python Table as CSV" => "Python 표를 CSV로 저장",
+        "Python Table" => "Python 표",
+        "Convert to Normal Cell" => "일반 셀로 변환",
+        "Show Card" => "카드 표시",
+        "Insert\nPython" => "Python\n삽입",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Python 삽입 (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Python 편집기",
+        "Edit in Python Editor" => "Python 편집기에서 편집",
+        "Unsaved changes" => "저장하지 않은 변경 내용",
+        "The code for {cell} has unsaved changes." => "{cell}의 코드에 저장하지 않은 변경 내용이 있습니다.",
+        "The code for {cell} in {workbook} has unsaved changes." => "{cell}({workbook})의 코드에 저장하지 않은 변경 내용이 있습니다.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "코드를 더 길게 할 수 없습니다. Python 셀에는 PY 수식으로 계산하여 {max}자까지 들어갑니다."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell}이(가) Python 편집기에서 열려 있는 동안 변경되었습니다. 코드를 복사하거나, 편집기를 닫고 셀에서 다시 여세요."
+        }
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell}이(가) Python 편집기에서 열려 있는 동안 변경되었습니다. 따라서 코드가 적용되지 않았습니다. 코드를 복사하거나, 편집기를 닫고 셀에서 다시 여세요."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply}로 코드를 적용합니다. Esc로 편집기를 닫습니다.",
+        "The Python editor's unsaved code was copied to the clipboard." => "Python 편집기의 저장하지 않은 코드를 클립보드에 복사했습니다.",
+        "Apply" => "적용",
+        "Discard" => "버리기",
+        "Cancel" => "취소",
         "Evaluate Formula" => "수식 계산",
         "Watch Window" => "감시 창",
         "Calculation\nOptions" => "계산\n옵션",
@@ -485,6 +529,277 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "표시",
         "Collapse dialog" => "대화 상자 축소",
         "Expand dialog" => "대화 상자 확장",
+        "Python|Off" => "꺼짐",
+        "Python|Not Set Up" => "설정 안 됨",
+        "Python|Ready" => "준비",
+        "Python|Running" => "실행 중",
+        "Python|Blocked" => "차단됨",
+        "Enable Python in cells" => "셀에서 Python 사용",
+        "Waiting for Python cells to finish before saving..." => "저장하기 전에 Python 셀이 끝나기를 기다리는 중...",
+        "Save Now" => "지금 저장",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "통합 문서는 저장되었지만 다음 Python 셀이 끝나지 않아 파일에는 마지막 결과(있는 경우)가 들어 있습니다: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} 외 {count}개",
+        "{version}, too old: Python cells need 3.11 or newer" => "{version}, 버전이 너무 낮음: Python 셀에는 3.11 이상이 필요합니다",
+        "Looking for Python…" => "Python을 찾는 중…",
+        "Copied to the clipboard." => "클립보드에 복사했습니다.",
+        "This workbook has Python code. Enable it to run its cells; until then they keep the values saved in the file." => {
+            "이 통합 문서에는 Python 코드가 있습니다. 셀을 실행하려면 사용하도록 설정하세요. 그때까지 셀에는 파일에 저장된 값이 유지됩니다."
+        }
+        "Enable" => "사용",
+        "Python: running {cell}, {seconds} s" => "Python: {cell} 실행 중, {seconds}초",
+        "Python: {state}" => "Python: {state}",
+        "Open the Python environment" => "Python 환경 열기",
+        "Nothing on this system: Python doesn't run here" => "이 시스템에는 아무것도 없음: 여기서는 Python이 실행되지 않습니다",
+        "GridCraft starts Python with an empty environment" => "GridCraft는 빈 환경으로 Python을 시작합니다",
+        "macOS sandbox profile" => "macOS 샌드박스 프로필",
+        "Linux Landlock" => "Linux Landlock",
+        "Linux seccomp filter" => "Linux seccomp 필터",
+        "Open Python Settings" => "Python 설정 열기",
+        "Choose Interpreter" => "인터프리터 선택",
+        "Copy Install Command" => "설치 명령 복사",
+        "Run Again" => "다시 실행",
+        "Reset" => "다시 설정",
+        "Python Environment" => "Python 환경",
+        "Python Packages" => "Python 패키지",
+        "Python Problems" => "Python 문제",
+        "Python Run Log" => "Python 실행 로그",
+        "What Python Can Do" => "Python으로 할 수 있는 일",
+        "GridCraft is checking Python." => "GridCraft가 Python을 확인하고 있습니다.",
+        "Check Again" => "다시 확인",
+        "Interpreter" => "인터프리터",
+        "Chosen by you:" => "직접 선택한 항목:",
+        "Automatic found:" => "자동으로 찾은 항목:",
+        "What runs:" => "실행되는 항목:",
+        "None found yet." => "아직 찾지 못했습니다.",
+        "Sandbox" => "샌드박스",
+        "Package folders" => "패키지 폴더",
+        "What Python can read" => "Python이 읽을 수 있는 항목",
+        "uv manages Python versions and packages. To get it, run:" => "uv는 Python 버전과 패키지를 관리합니다. 설치하려면 다음을 실행하세요:",
+        "Reading files outside Python: blocked" => "Python 외부의 파일 읽기: 차단됨",
+        "Writing files: blocked" => "파일 쓰기: 차단됨",
+        "Using the network: blocked" => "네트워크 사용: 차단됨",
+        "Starting other programs: blocked" => "다른 프로그램 시작: 차단됨",
+        "Each time Python starts, GridCraft tries each of these first, and doesn't run Python unless every one is refused." => {
+            "Python을 시작할 때마다 GridCraft는 이 항목들을 먼저 하나씩 시도하며, 하나라도 거부되면 Python을 실행하지 않습니다."
+        }
+        "Install a package with uv. GridCraft only copies the command; you run it in a terminal, then choose Check Again." => {
+            "uv로 패키지를 설치합니다. GridCraft는 명령을 복사하기만 하므로 터미널에서 직접 실행한 다음 다시 확인을 선택하세요."
+        }
+        "Package name" => "패키지 이름",
+        "Other package managers" => "기타 패키지 관리자",
+        "For people who manage Python another way: choose any interpreter by path in File › Options › Python. With pip:" => {
+            "Python을 다른 방법으로 관리하는 경우 파일 › 옵션 › Python에서 경로로 인터프리터를 선택할 수 있습니다. pip를 사용하려면:"
+        }
+        "Packages: {count}" => "패키지: {count}",
+        "No problems." => "문제가 없습니다.",
+        "This workbook" => "이 통합 문서",
+        "No runs yet." => "아직 실행 기록이 없습니다.",
+        "Go To Cell" => "셀로 이동",
+        "This run printed nothing." => "이번 실행에서는 아무것도 출력되지 않았습니다.",
+        "Python cells can" => "Python 셀이 할 수 있는 일",
+        "Read cells through xl()" => "xl()로 셀 읽기",
+        "GridCraft sends only the cells that xl() names" => "GridCraft는 xl()이 지정한 셀만 보냅니다",
+        "Import installed packages" => "설치된 패키지 가져오기",
+        "The sandbox lets Python read its own installation" => "샌드박스는 Python이 자체 설치 내용을 읽도록 허용합니다",
+        "Compute" => "계산",
+        "Within the time and memory limits in File › Options › Python" => "파일 › 옵션 › Python의 시간 및 메모리 제한 범위 내에서",
+        "Printed output is kept in the Run Log" => "출력된 내용은 실행 로그에 보관됩니다",
+        "Use threads" => "스레드 사용",
+        "Threads stay inside the one Python process" => "스레드는 하나의 Python 프로세스 안에서만 동작합니다",
+        "Python cells cannot" => "Python 셀이 할 수 없는 일",
+        "Read your files" => "내 파일 읽기",
+        "Write files" => "파일 쓰기",
+        "Use the network" => "네트워크 사용",
+        "Start programs" => "프로그램 시작",
+        "See environment variables" => "환경 변수 보기",
+        "Open windows" => "창 열기",
+        "Draw plots. The data goes to a sheet and a chart is built from it." => {
+            "플롯 그리기. 데이터는 시트에 들어가며 이를 바탕으로 차트가 만들어집니다."
+        }
+        "Run this workbook's Python cells" => "이 통합 문서의 Python 셀 실행",
+        "Off by default. Only you can turn this on, here: no file, macro or agent can. A workbook opened from a file also needs its own Enable." => {
+            "기본적으로 꺼져 있습니다. 여기서 사용자만 켤 수 있으며, 파일, 매크로, 에이전트는 켤 수 없습니다. 파일에서 연 통합 문서는 별도로 사용 설정도 필요합니다."
+        }
+        "Limits" => "제한",
+        "While Python is off, GridCraft starts nothing, so it can't yet say which version it would use." => {
+            "Python이 꺼져 있는 동안 GridCraft는 아무것도 시작하지 않으므로 어떤 버전을 사용할지 아직 알려 줄 수 없습니다."
+        }
+        "Automatic would try first:" => "자동으로 먼저 시도할 항목:",
+        "Set up Python with uv" => "uv로 Python 설정",
+        "Run these in a terminal, in order. GridCraft looks in this environment first, so there is nothing more to choose. It only copies the commands; it never runs them." => {
+            "터미널에서 다음 명령을 순서대로 실행하세요. GridCraft는 이 환경을 먼저 찾으므로 따로 선택할 필요가 없습니다. 명령을 복사만 하고 실행하지는 않습니다."
+        }
+        "Any Python 3.11 or newer can be chosen by path with Browse…. To add packages to it with pip:" => {
+            "3.11 이상의 Python은 찾아보기…로 경로를 지정해 선택할 수 있습니다. pip로 패키지를 추가하려면:"
+        }
+        "Time limit for one cell" => "셀 하나당 시간 제한",
+        " seconds" => " 초",
+        "Memory limit" => "메모리 제한",
+        " MB" => " MB",
+        "At a limit Python is restarted and its variables are cleared; the next run starts fresh." => {
+            "제한에 도달하면 Python이 다시 시작되고 변수가 지워지며, 다음 실행은 처음부터 시작됩니다."
+        }
+        "On macOS the memory limit is a check twice a second, not a hard cap." => {
+            "macOS에서 메모리 제한은 초당 두 번 확인하는 방식이며 엄격한 상한이 아닙니다."
+        }
+        "Editor" => "편집기",
+        "Initialization" => "초기화",
+        "The code that runs before this workbook's Python cells" => "이 통합 문서의 Python 셀보다 먼저 실행되는 코드",
+        "Open Initialization" => "초기화 열기",
+        "The initialization code has unsaved changes." => "초기화 코드에 저장되지 않은 변경 내용이 있습니다.",
+        "The initialization code of {workbook} has unsaved changes." => "{workbook}의 초기화 코드에 저장되지 않은 변경 내용이 있습니다.",
+        "The code can't be longer: initialization code holds {max} characters." => {
+            "코드를 더 길게 할 수 없습니다. 초기화 코드는 {max}자까지 가능합니다."
+        }
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "편집기에서 열려 있는 동안 초기화 코드가 변경되었습니다. 코드를 복사하거나 편집기를 닫고 다시 여세요."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "편집기에서 열려 있는 동안 초기화 코드가 변경되어 코드가 적용되지 않았습니다. 코드를 복사하거나 편집기를 닫고 다시 여세요."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "초기화 코드가 이 Python에 없는 패키지를 사용합니다. GridCraft는 해당 패키지가 필요한 줄을 건너뛰고 나머지를 실행했습니다."
+        }
+        "Select a Python cell first." => "먼저 Python 셀을 선택하세요.",
+        "Output As" => "출력 형식",
+        "Run\nCell" => "셀\n실행",
+        "Run the selected Python cell" => "선택한 Python 셀 실행",
+        "Run\nAll" => "모두\n실행",
+        "Run every Python cell in the workbook, in order" => "통합 문서의 모든 Python 셀을 순서대로 실행",
+        "Nothing is running." => "실행 중인 항목이 없습니다.",
+        "Stop the running cell" => "실행 중인 셀 중지",
+        "Clear Python's variables and run every cell again" => "Python 변수를 지우고 모든 셀을 다시 실행",
+        "Python Calculation" => "Python 계산",
+        "When this workbook's Python cells run" => "이 통합 문서의 Python 셀이 실행되는 시점",
+        "A Python cell is running." => "Python 셀이 실행 중입니다.",
+        "Python is ready." => "Python이 준비되었습니다.",
+        "Which Python runs cells" => "셀을 실행할 Python",
+        "Packages" => "패키지",
+        "What this Python has installed" => "이 Python에 설치된 항목",
+        "Check Sandbox" => "샌드박스 확인",
+        "Check Python and the sandbox again, and show the report" => "Python과 샌드박스를 다시 확인하고 보고서 표시",
+        "What Python\nCan Do" => "Python으로\n할 수 있는 일",
+        "What Python cells can and can't do here" => "여기서 Python 셀이 할 수 있는 일과 할 수 없는 일",
+        "This Workbook: Enabled" => "이 통합 문서: 사용",
+        "This Workbook: Disabled" => "이 통합 문서: 사용 안 함",
+        "Only a person can change this." => "사용자만 변경할 수 있습니다.",
+        "Run Log" => "실행 로그",
+        "Each run's cell, time and printed output" => "각 실행의 셀, 시간, 출력 내용",
+        "Clear the Run Log" => "실행 로그 지우기",
+        "Problems" => "문제",
+        "Every Python cell with something to say" => "알림이 있는 모든 Python 셀",
+        "Diagnostics" => "진단",
+        "uv environment" => "uv 환경",
+        "uv Python" => "uv Python",
+        "virtual environment" => "가상 환경",
+        "conda environment" => "conda 환경",
+        "system" => "시스템",
+        "Python cells need a sandbox, and GridCraft has none for this system." => {
+            "Python 셀에는 샌드박스가 필요하지만 GridCraft에는 이 시스템용 샌드박스가 없습니다."
+        }
+        "The sandbox didn't hold when GridCraft checked it, so Python won't run." => {
+            "GridCraft가 확인했을 때 샌드박스가 작동하지 않아 Python이 실행되지 않습니다."
+        }
+        "Python is off. Turn it on in Settings to run Python cells." => "Python이 꺼져 있습니다. Python 셀을 실행하려면 설정에서 켜세요.",
+        "GridCraft can't find Python 3.11 or newer. Set one up with uv, or choose one." => {
+            "GridCraft가 Python 3.11 이상을 찾을 수 없습니다. uv로 설정하거나 직접 선택하세요."
+        }
+        "This Python is too old: Python cells need 3.11 or newer." => "이 Python은 너무 오래되었습니다. Python 셀에는 3.11 이상이 필요합니다.",
+        "This is Apple's placeholder for Python, which GridCraft doesn't use. Set up Python with uv, or choose another." => {
+            "이것은 Apple이 제공하는 Python 자리 표시자이며 GridCraft는 사용하지 않습니다. uv로 Python을 설정하거나 다른 것을 선택하세요."
+        }
+        "GridCraft couldn't work out what this Python needs to run." => "GridCraft가 이 Python의 실행에 필요한 것을 파악하지 못했습니다.",
+        "Python didn't start." => "Python이 시작되지 않았습니다.",
+        "Python isn't on for this workbook, so its cells keep the values saved in the file." => {
+            "이 통합 문서에서는 Python이 켜져 있지 않아 셀에는 파일에 저장된 값이 유지됩니다."
+        }
+        "This session doesn't run Python: cells keep the values saved in the file." => {
+            "이 세션에서는 Python을 실행하지 않습니다. 셀에는 파일에 저장된 값이 유지됩니다."
+        }
+        "This workbook imports packages this Python doesn't have." => "이 통합 문서는 이 Python에 없는 패키지를 가져옵니다.",
+        "pandas isn't installed in this Python, so ranges come back as lists of rows." => {
+            "이 Python에는 pandas가 설치되어 있지 않으므로 범위가 행 목록으로 반환됩니다."
+        }
+        "The initialization code failed, so Python cells can't run." => "초기화 코드가 실패하여 Python 셀을 실행할 수 없습니다.",
+        "This code isn't valid Python." => "이 코드는 올바른 Python이 아닙니다.",
+        "The code raised an error." => "코드에서 오류가 발생했습니다.",
+        "The code uses a name that isn't defined." => "코드에서 정의되지 않은 이름을 사용합니다.",
+        "This name is defined in a later cell. Python cells run in row order, sheet by sheet." => {
+            "이 이름은 뒤쪽 셀에서 정의되어 있습니다. Python 셀은 시트별로 행 순서대로 실행됩니다."
+        }
+        "This Python doesn't have that package." => "이 Python에는 해당 패키지가 없습니다.",
+        "This package needs a library outside what the sandbox lets Python read." => {
+            "이 패키지에는 샌드박스에서 Python이 읽도록 허용한 범위 밖의 라이브러리가 필요합니다."
+        }
+        "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl()." => {
+            "Python 셀은 컴퓨터의 파일을 읽거나 쓸 수 없습니다. 데이터를 시트에 넣고 xl()로 읽으세요."
+        }
+        "Python cells can't use the network. Put the data on a sheet and read it with xl()." => {
+            "Python 셀은 네트워크를 사용할 수 없습니다. 데이터를 시트에 넣고 xl()로 읽으세요."
+        }
+        "Python cells can't start other programs or processes." => "Python 셀은 다른 프로그램이나 프로세스를 시작할 수 없습니다.",
+        "This picture is too large to draw. Make figsize or dpi smaller." => "이 그림은 너무 커서 그릴 수 없습니다. figsize 또는 dpi를 줄이세요.",
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "그림은 셀에 자동으로 나타납니다. Python 셀은 파일을 쓸 수 없으므로 이 줄은 실패합니다."
+        }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "이 패키지는 웹 브라우저에서 그리는데, Python 셀은 브라우저를 열 수 없습니다. matplotlib 또는 seaborn을 사용하세요."
+        }
+        "Python Output" => "Python 출력",
+        "Display Plot over Cells" => "셀 위에 플롯 표시",
+        "Create Reference" => "참조 만들기",
+        "Copy Image" => "이미지 복사",
+        "Save Image…" => "이미지 저장…",
+        "The image is saved." => "이미지가 저장되었습니다.",
+        "The image is on the clipboard." => "이미지가 클립보드에 있습니다.",
+        "Image" => "이미지",
+        "size" => "크기",
+        "Resize" => "크기 조정",
+        "This picture shows the last result that cell gave." => "이 그림은 해당 셀이 마지막으로 반환한 결과를 보여 줍니다.",
+        "Select a Python cell that gave a picture first." => "먼저 그림을 반환한 Python 셀을 선택하세요.",
+        "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
+            "xl()의 참조는 xl(\"A1:B5\")처럼 코드에 텍스트로 작성해야 합니다."
+        }
+        "This range is too large to send to Python." => "이 범위는 너무 커서 Python으로 보낼 수 없습니다.",
+        "xl() names something that isn't a cell, range, table or defined name here." => {
+            "xl()이 지정한 항목이 여기서는 셀, 범위, 표 또는 정의된 이름이 아닙니다."
+        }
+        "The code ran past the time limit. Python was restarted, so its variables were cleared." => {
+            "코드가 제한 시간을 초과했습니다. Python이 다시 시작되어 변수가 지워졌습니다."
+        }
+        "The code went over the memory limit. Python was restarted, so its variables were cleared." => {
+            "코드가 메모리 제한을 초과했습니다. Python이 다시 시작되어 변수가 지워졌습니다."
+        }
+        "The result is too large to bring back to the sheet." => "결과가 너무 커서 시트로 가져올 수 없습니다.",
+        "The printed output was cut off at its limit." => "출력된 내용이 제한에서 잘렸습니다.",
+        "Python stopped unexpectedly and was restarted, so its variables were cleared." => {
+            "Python이 예기치 않게 중지되어 다시 시작되었으며 변수가 지워졌습니다."
+        }
+        "The result is empty." => "결과가 비어 있습니다.",
+        "The result needs cells that aren't empty." => "결과에는 비어 있지 않은 셀이 필요합니다.",
+        "The result isn't a number a cell can hold." => "결과가 셀에 담을 수 있는 숫자가 아닙니다.",
+        "This date or length of time is outside what a cell can hold." => "이 날짜 또는 기간은 셀에 담을 수 있는 범위를 벗어납니다.",
+        "This cell is running." => "이 셀이 실행 중입니다.",
+        "What this cell reads has changed since it last ran." => "이 셀이 읽는 내용이 마지막 실행 이후 변경되었습니다.",
+        "This cell was stopped before it finished." => "이 셀은 완료되기 전에 중지되었습니다.",
+        "xl() needs its reference written as text, such as xl(\"A1:B5\"). A computed reference can't be read." => {
+            "xl()의 참조는 xl(\"A1:B5\")처럼 텍스트로 작성해야 합니다. 계산으로 만든 참조는 읽을 수 없습니다."
+        }
+        "This module needs the network or other programs, which Python cells can't use." => {
+            "이 모듈에는 네트워크 또는 다른 프로그램이 필요하며, Python 셀에서는 사용할 수 없습니다."
+        }
+        "This Python doesn't have this package." => "이 Python에는 이 패키지가 없습니다.",
+        "Python cells can't open windows or ask for input." => "Python 셀은 창을 열거나 입력을 요청할 수 없습니다.",
+        "Python cells don't see your environment variables." => "Python 셀은 환경 변수를 볼 수 없습니다.",
+        "Open Settings" => "설정 열기",
+        "Show Printed Output" => "인쇄된 출력 표시",
+        "Hide Printed Output" => "인쇄된 출력 숨기기",
+        "Line {line}" => "{line}행",
+        "Line {line}: {message}" => "{line}행: {message}",
+        "Python {version}, ready" => "Python {version}, 준비됨",
+        "Python {version}, running" => "Python {version}, 실행 중",
         _ => return None,
     })
 }

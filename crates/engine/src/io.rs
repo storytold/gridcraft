@@ -184,8 +184,13 @@ pub fn adopt_python(wb: &mut Workbook) -> Vec<String> {
                 range.iter().map(|c| if c == anchor { sh.cell(c).map(|x| x.value.clone()).unwrap_or_default() } else { sh.value(c) }).collect();
             let Some(array) = gridcraft_core::Array::new(range.height() as usize, range.width() as usize, data) else { continue };
             if let Some(py) = sh.cells.get_mut(anchor).and_then(|x| x.py.as_mut()) {
-                std::sync::Arc::make_mut(py).output =
-                    Some(gridcraft_model::PyOutput { value: array.into(), type_name: "list".into(), preview: String::new(), convertible: true });
+                std::sync::Arc::make_mut(py).output = Some(gridcraft_model::PyOutput {
+                    value: array.into(),
+                    type_name: "list".into(),
+                    preview: String::new(),
+                    convertible: true,
+                    ..Default::default()
+                });
             }
         }
     }
@@ -203,6 +208,36 @@ pub fn adopt_python(wb: &mut Workbook) -> Vec<String> {
 /// (the cell keeps its value). Either way the values the cell spilled stay as plain values
 /// ([`gridcraft_model::Sheet::settle_spill`]). Returns the warnings.
 pub fn enforce_python_limits(wb: &mut Workbook) -> Vec<String> {
+    let mut environment = enforce_environment_limits(wb);
+    environment.extend(enforce_cell_limits(wb));
+    environment
+}
+
+/// The initialization code of a file the xlsx reader hasn't cut already (GridCraft JSON): cut, with a
+/// warning, so that it doesn't run ([`gridcraft_model::PyEnvironment::fits`]). Line breaks are as code
+/// has them, and a GUID that isn't one is forgotten, so that a save doesn't write it.
+fn enforce_environment_limits(wb: &mut Workbook) -> Vec<String> {
+    use gridcraft_model::python::{MAX_INIT_CHARS, cap_init_code, is_guid, normalize_code};
+    let Some(old) = wb.python_env.as_ref() else { return Vec::new() };
+    let mut code = old.code.clone();
+    if code.contains('\r') {
+        code = normalize_code(&code);
+    }
+    let cut = cap_init_code(&mut code);
+    let bad_id = old.id.as_deref().is_some_and(|id| !is_guid(id));
+    if code != old.code || bad_id {
+        let id = old.id.clone().filter(|_| !bad_id);
+        wb.python_env = Some(std::sync::Arc::new(gridcraft_model::PyEnvironment { code, id, ..(**old).clone() }));
+    }
+    if cut {
+        return vec![format!(
+            "The Python initialization code is longer than {MAX_INIT_CHARS} characters: its start was kept, it doesn't run until it is shortened, and a save writes only what was kept."
+        )];
+    }
+    Vec::new()
+}
+
+fn enforce_cell_limits(wb: &mut Workbook) -> Vec<String> {
     let mut long = Vec::new();
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheets.get(si) else { continue };

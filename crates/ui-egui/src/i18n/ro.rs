@@ -170,6 +170,49 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Trace Error" => "Trasare eroare",
         "Circular References" => "Referințe circulare",
         "Python Mode" => "Mod Python",
+        "Python Object" => "Obiect Python",
+        "Excel Value" => "Valoare Excel",
+        "Copy as CSV" => "Copiere ca CSV",
+        "Copy as Markdown" => "Copiere ca Markdown",
+        "Save as .csv…" => "Salvare ca .csv…",
+        "Spill Here" => "Revarsă aici",
+        "Spill One Line per Row" => "Revarsă o linie de text pe rând",
+        "The table isn't kept in the file. Run the cell to see it." => "Tabelul nu este păstrat în fișier. Rulați celula pentru a-l vedea.",
+        "This table is empty." => "Acest tabel este gol.",
+        "This table has no rows." => "Acest tabel nu are rânduri.",
+        "Copied only what is shown: the rest of the table isn't in the copy." => "S-a copiat doar ce se vede: restul tabelului nu este în copie.",
+        "Saved only what is shown: the rest of the table isn't in the file." => "S-a salvat doar ce se vede: restul tabelului nu este în fișier.",
+        "The table is saved." => "Tabelul a fost salvat.",
+        "Only the first {rows} of {total} rows are shown." => "Se văd doar primele {rows} din {total} rânduri.",
+        "Only the first {cols} of {total} columns are shown." => "Se văd doar primele {cols} din {total} coloane.",
+        "Some long text is cut." => "O parte din textul lung este tăiată.",
+        "Copying and saving take only what is shown. Spill Here gives the whole table." => {
+            "Copierea și salvarea iau doar ce se vede. Revarsă aici dă tot tabelul."
+        }
+        "Save Python Table as CSV" => "Salvare tabel Python ca CSV",
+        "Python Table" => "Tabel Python",
+        "Convert to Normal Cell" => "Conversie în celulă normală",
+        "Show Card" => "Afișare card",
+        "Insert\nPython" => "Inserare\nPython",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Inserare Python (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Editor Python",
+        "Edit in Python Editor" => "Editare în editorul Python",
+        "Unsaved changes" => "Modificări nesalvate",
+        "The code for {cell} has unsaved changes." => "Codul pentru {cell} are modificări nesalvate.",
+        "The code for {cell} in {workbook} has unsaved changes." => "Codul pentru {cell} din {workbook} are modificări nesalvate.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "Codul nu poate fi mai lung: o celulă Python conține {max} caractere, numărate ca formulă PY."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "Celula {cell} s-a modificat cât timp era deschisă în editorul Python. Copiați codul sau închideți editorul și deschideți-l din nou pe celulă."
+        }
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "Celula {cell} s-a modificat cât timp era deschisă în editorul Python, așa că codul nu a fost aplicat. Copiați codul sau închideți editorul și deschideți-l din nou pe celulă."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} aplică codul. Esc închide editorul.",
+        "The Python editor's unsaved code was copied to the clipboard." => "Codul nesalvat din editorul Python a fost copiat în clipboard.",
+        "Apply" => "Aplicare",
+        "Discard" => "Renunțare",
         "Evaluate Formula" => "Evaluare formulă",
         "Watch Window" => "Fereastră de urmărire",
         "Calculation\nOptions" => "Opțiuni de\ncalcul",
@@ -1066,6 +1109,280 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Afișare",
         "Collapse dialog" => "Restrângere casetă de dialog",
         "Expand dialog" => "Extindere casetă de dialog",
+        "Python|Off" => "Dezactivat",
+        "Python|Not Set Up" => "Neconfigurat",
+        "Python|Ready" => "Pregătit",
+        "Python|Running" => "În execuție",
+        "Python|Blocked" => "Blocat",
+        "Enable Python in cells" => "Activează Python în celule",
+        "Waiting for Python cells to finish before saving..." => "Se așteaptă finalizarea celulelor Python înainte de salvare...",
+        "Save Now" => "Salvează acum",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "Registrul a fost salvat, dar aceste celule Python nu s-au terminat, așa că fișierul conține ultimele lor rezultate, dacă au avut: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} și încă {count}",
+        "{version}, too old: Python cells need 3.11 or newer" => "{version}, prea veche: celulele Python necesită versiunea 3.11 sau mai nouă",
+        "Looking for Python…" => "Se caută Python…",
+        "Copied to the clipboard." => "Copiat în clipboard.",
+        "This workbook has Python code. Enable it to run its cells; until then they keep the values saved in the file." => {
+            "Acest registru conține cod Python. Activați-l pentru a rula celulele sale; până atunci ele păstrează valorile salvate în fișier."
+        }
+        "Enable" => "Activare",
+        "Python: running {cell}, {seconds} s" => "Python: se rulează {cell}, {seconds} s",
+        "Python: {state}" => "Python: {state}",
+        "Open the Python environment" => "Deschide mediul Python",
+        "Nothing on this system: Python doesn't run here" => "Nimic pe acest sistem: Python nu rulează aici",
+        "GridCraft starts Python with an empty environment" => "GridCraft pornește Python cu un mediu gol",
+        "macOS sandbox profile" => "Profil sandbox macOS",
+        "Linux Landlock" => "Linux Landlock",
+        "Linux seccomp filter" => "Filtru seccomp Linux",
+        "Open Python Settings" => "Deschide setările Python",
+        "Choose Interpreter" => "Alege interpretorul",
+        "Copy Install Command" => "Copiază comanda de instalare",
+        "Run Again" => "Rulează din nou",
+        "Reset" => "Resetare",
+        "Python Environment" => "Mediu Python",
+        "Python Packages" => "Pachete Python",
+        "Python Problems" => "Probleme Python",
+        "Python Run Log" => "Jurnal de execuție Python",
+        "What Python Can Do" => "Ce poate face Python",
+        "GridCraft is checking Python." => "GridCraft verifică Python.",
+        "Check Again" => "Verifică din nou",
+        "Interpreter" => "Interpretor",
+        "Chosen by you:" => "Ales de dumneavoastră:",
+        "Automatic found:" => "Găsit automat:",
+        "What runs:" => "Ce rulează:",
+        "None found yet." => "Încă nu s-a găsit niciunul.",
+        "Sandbox" => "Sandbox",
+        "Package folders" => "Foldere de pachete",
+        "What Python can read" => "Ce poate citi Python",
+        "uv manages Python versions and packages. To get it, run:" => "uv gestionează versiunile și pachetele Python. Pentru a-l obține, rulați:",
+        "Reading files outside Python: blocked" => "Citirea fișierelor din afara Python: blocată",
+        "Writing files: blocked" => "Scrierea fișierelor: blocată",
+        "Using the network: blocked" => "Utilizarea rețelei: blocată",
+        "Starting other programs: blocked" => "Pornirea altor programe: blocată",
+        "Each time Python starts, GridCraft tries each of these first, and doesn't run Python unless every one is refused." => {
+            "De fiecare dată când pornește Python, GridCraft încearcă fiecare dintre aceste măsuri și nu rulează Python decât dacă toate sunt refuzate."
+        }
+        "Install a package with uv. GridCraft only copies the command; you run it in a terminal, then choose Check Again." => {
+            "Instalați un pachet cu uv. GridCraft doar copiază comanda; o rulați într-un terminal, apoi alegeți Verifică din nou."
+        }
+        "Package name" => "Numele pachetului",
+        "Other package managers" => "Alți manageri de pachete",
+        "For people who manage Python another way: choose any interpreter by path in File › Options › Python. With pip:" => {
+            "Pentru cei care gestionează Python altfel: alegeți orice interpretor după cale în Fișier › Opțiuni › Python. Cu pip:"
+        }
+        "Packages: {count}" => "Pachete: {count}",
+        "No problems." => "Nicio problemă.",
+        "No runs yet." => "Încă nicio rulare.",
+        "Go To Cell" => "Salt la celulă",
+        "This run printed nothing." => "Această rulare nu a tipărit nimic.",
+        "Python cells can" => "Celulele Python pot",
+        "Read cells through xl()" => "Citi celule prin xl()",
+        "GridCraft sends only the cells that xl() names" => "GridCraft trimite numai celulele pe care le numește xl()",
+        "Import installed packages" => "Importa pachete instalate",
+        "The sandbox lets Python read its own installation" => "Sandbox-ul permite ca Python să citească propria instalare",
+        "Compute" => "Calcula",
+        "Within the time and memory limits in File › Options › Python" => "În limitele de timp și de memorie din Fișier › Opțiuni › Python",
+        "Printed output is kept in the Run Log" => "Ieșirea tipărită este păstrată în jurnalul de execuție",
+        "Use threads" => "Folosi fire de execuție",
+        "Threads stay inside the one Python process" => "Firele de execuție rămân în interiorul singurului proces Python",
+        "Python cells cannot" => "Celulele Python nu pot",
+        "Read your files" => "Citi fișierele dumneavoastră",
+        "Write files" => "Scrie fișiere",
+        "Use the network" => "Folosi rețeaua",
+        "Start programs" => "Porni programe",
+        "See environment variables" => "Vedea variabilele de mediu",
+        "Open windows" => "Deschide ferestre",
+        "Draw plots. The data goes to a sheet and a chart is built from it." => {
+            "Desena grafice. Datele ajung într-o foaie și din ele se creează un grafic."
+        }
+        "Run this workbook's Python cells" => "Rulează celulele Python ale acestui registru",
+        "Off by default. Only you can turn this on, here: no file, macro or agent can. A workbook opened from a file also needs its own Enable." => {
+            "Dezactivat implicit. Numai dumneavoastră îl puteți activa, aici: niciun fișier, macro sau agent nu poate. Un registru deschis dintr-un fișier are nevoie și de propria activare."
+        }
+        "Limits" => "Limite",
+        "While Python is off, GridCraft starts nothing, so it can't yet say which version it would use." => {
+            "Cât timp Python este dezactivat, GridCraft nu pornește nimic, deci nu poate spune încă ce versiune ar folosi."
+        }
+        "Automatic would try first:" => "Automat ar încerca mai întâi:",
+        "Set up Python with uv" => "Configurează Python cu uv",
+        "Run these in a terminal, in order. GridCraft looks in this environment first, so there is nothing more to choose. It only copies the commands; it never runs them." => {
+            "Rulați aceste comenzi într-un terminal, în ordine. GridCraft caută mai întâi în acest mediu, deci nu mai este nimic de ales. Doar copiază comenzile; nu le rulează niciodată."
+        }
+        "Any Python 3.11 or newer can be chosen by path with Browse…. To add packages to it with pip:" => {
+            "Orice Python 3.11 sau mai nou poate fi ales după cale cu Răsfoire…. Pentru a-i adăuga pachete cu pip:"
+        }
+        "Time limit for one cell" => "Limită de timp pentru o celulă",
+        " seconds" => " secunde",
+        "Memory limit" => "Limită de memorie",
+        " MB" => " MB",
+        "At a limit Python is restarted and its variables are cleared; the next run starts fresh." => {
+            "La o limită, Python este repornit și variabilele sale sunt șterse; următoarea rulare începe de la zero."
+        }
+        "On macOS the memory limit is a check twice a second, not a hard cap." => {
+            "Pe macOS limita de memorie este verificată de două ori pe secundă; nu este o limită strictă."
+        }
+        "Editor" => "Editor",
+        "Initialization" => "Inițializare",
+        "The code that runs before this workbook's Python cells" => "Codul care rulează înaintea celulelor Python din acest registru",
+        "Open Initialization" => "Deschide inițializarea",
+        "The initialization code has unsaved changes." => "Codul de inițializare are modificări nesalvate.",
+        "The initialization code of {workbook} has unsaved changes." => "Codul de inițializare din {workbook} are modificări nesalvate.",
+        "The code can't be longer: initialization code holds {max} characters." => {
+            "Codul nu poate fi mai lung: codul de inițializare are cel mult {max} caractere."
+        }
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "Codul de inițializare s-a schimbat cât timp era deschis în editor. Copiați codul dvs. sau închideți editorul și deschideți-l din nou."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "Codul de inițializare s-a schimbat cât timp era deschis în editor, așa că nu s-a aplicat codul dvs. Copiați-l sau închideți editorul și deschideți-l din nou."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "Codul de inițializare folosește un pachet pe care acest Python nu îl are. GridCraft a omis liniile care au nevoie de el și a rulat restul."
+        }
+        "Select a Python cell first." => "Selectați mai întâi o celulă Python.",
+        "Output As" => "Ieșire ca",
+        "Run\nCell" => "Rulare\ncelulă",
+        "Run the selected Python cell" => "Rulează celula Python selectată",
+        "Run\nAll" => "Rulare\ntot",
+        "Run every Python cell in the workbook, in order" => "Rulează în ordine toate celulele Python din registru",
+        "Nothing is running." => "Nimic nu rulează.",
+        "Stop the running cell" => "Oprește celula care rulează",
+        "Clear Python's variables and run every cell again" => "Golește variabilele Python și rulează din nou toate celulele",
+        "Python Calculation" => "Calcul Python",
+        "When this workbook's Python cells run" => "Când rulează celulele Python ale acestui registru",
+        "A Python cell is running." => "O celulă Python rulează.",
+        "Python is ready." => "Python este pregătit.",
+        "Which Python runs cells" => "Ce Python rulează celulele",
+        "Packages" => "Pachete",
+        "What this Python has installed" => "Ce are instalat acest Python",
+        "Check Sandbox" => "Verifică sandbox-ul",
+        "Check Python and the sandbox again, and show the report" => "Verifică din nou Python și sandbox-ul și afișează raportul",
+        "What Python\nCan Do" => "Ce poate face\nPython",
+        "What Python cells can and can't do here" => "Ce pot și ce nu pot face aici celulele Python",
+        "This Workbook: Enabled" => "Acest registru: activat",
+        "This Workbook: Disabled" => "Acest registru: dezactivat",
+        "Only a person can change this." => "Numai o persoană poate modifica aceasta.",
+        "Run Log" => "Jurnal de execuție",
+        "Each run's cell, time and printed output" => "Celula, ora și ieșirea tipărită ale fiecărei rulări",
+        "Clear the Run Log" => "Golește jurnalul de execuție",
+        "Problems" => "Probleme",
+        "Every Python cell with something to say" => "Fiecare celulă Python cu ceva de semnalat",
+        "Diagnostics" => "Diagnosticare",
+        "uv environment" => "mediu uv",
+        "uv Python" => "Python uv",
+        "virtual environment" => "mediu virtual",
+        "conda environment" => "mediu conda",
+        "system" => "sistem",
+        "Python cells need a sandbox, and GridCraft has none for this system." => {
+            "Celulele Python au nevoie de un sandbox, iar GridCraft nu are niciunul pentru acest sistem."
+        }
+        "The sandbox didn't hold when GridCraft checked it, so Python won't run." => {
+            "Sandbox-ul nu a rezistat la verificarea GridCraft, deci Python nu va rula."
+        }
+        "Python is off. Turn it on in Settings to run Python cells." => "Python este dezactivat. Activați-l în Setări pentru a rula celule Python.",
+        "GridCraft can't find Python 3.11 or newer. Set one up with uv, or choose one." => {
+            "GridCraft nu găsește Python 3.11 sau mai nou. Configurați unul cu uv sau alegeți unul."
+        }
+        "This Python is too old: Python cells need 3.11 or newer." => {
+            "Acest Python este prea vechi: celulele Python necesită versiunea 3.11 sau mai nouă."
+        }
+        "This is Apple's placeholder for Python, which GridCraft doesn't use. Set up Python with uv, or choose another." => {
+            "Acesta este substituentul Python al Apple, pe care GridCraft nu îl folosește. Configurați Python cu uv sau alegeți altul."
+        }
+        "GridCraft couldn't work out what this Python needs to run." => "GridCraft nu a putut stabili de ce are nevoie acest Python pentru a rula.",
+        "Python didn't start." => "Python nu a pornit.",
+        "Python isn't on for this workbook, so its cells keep the values saved in the file." => {
+            "Python nu este activat pentru acest registru, deci celulele sale păstrează valorile salvate în fișier."
+        }
+        "This session doesn't run Python: cells keep the values saved in the file." => {
+            "Această sesiune nu rulează Python: celulele păstrează valorile salvate în fișier."
+        }
+        "This workbook imports packages this Python doesn't have." => "Acest registru importă pachete pe care acest Python nu le are.",
+        "pandas isn't installed in this Python, so ranges come back as lists of rows." => {
+            "pandas nu este instalat în acest Python, deci zonele revin ca liste de rânduri."
+        }
+        "The initialization code failed, so Python cells can't run." => "Codul de inițializare a eșuat, deci celulele Python nu pot rula.",
+        "This code isn't valid Python." => "Acest cod nu este Python valid.",
+        "The code raised an error." => "Codul a generat o eroare.",
+        "The code uses a name that isn't defined." => "Codul folosește un nume care nu este definit.",
+        "This name is defined in a later cell. Python cells run in row order, sheet by sheet." => {
+            "Acest nume este definit într-o celulă ulterioară. Celulele Python rulează în ordinea rândurilor, foaie cu foaie."
+        }
+        "This Python doesn't have that package." => "Acest Python nu are acel pachet.",
+        "This package needs a library outside what the sandbox lets Python read." => {
+            "Acest pachet are nevoie de o bibliotecă din afara a ceea ce sandbox-ul permite ca Python să citească."
+        }
+        "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl()." => {
+            "Celulele Python nu pot citi sau scrie fișiere de pe computerul dumneavoastră. Puneți datele într-o foaie și citiți-le cu xl()."
+        }
+        "Python cells can't use the network. Put the data on a sheet and read it with xl()." => {
+            "Celulele Python nu pot folosi rețeaua. Puneți datele într-o foaie și citiți-le cu xl()."
+        }
+        "Python cells can't start other programs or processes." => "Celulele Python nu pot porni alte programe sau procese.",
+        "This picture is too large to draw. Make figsize or dpi smaller." => {
+            "Această imagine este prea mare pentru a fi desenată. Micșorați figsize sau dpi."
+        }
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "Imaginea apare singură în celulă. Celulele Python nu pot scrie fișiere, deci această linie ar eșua."
+        }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Acest pachet desenează într-un browser web, pe care celulele Python nu îl pot deschide. Folosiți matplotlib sau seaborn."
+        }
+        "Python Output" => "Ieșire Python",
+        "Display Plot over Cells" => "Afișează graficul peste celule",
+        "Create Reference" => "Creează referință",
+        "Copy Image" => "Copiază imaginea",
+        "Save Image…" => "Salvează imaginea…",
+        "The image is saved." => "Imaginea a fost salvată.",
+        "The image is on the clipboard." => "Imaginea este în clipboard.",
+        "Image" => "Imagine",
+        "size" => "dimensiune",
+        "Resize" => "Redimensionare",
+        "This picture shows the last result that cell gave." => "Această imagine arată ultimul rezultat returnat de acea celulă.",
+        "Select a Python cell that gave a picture first." => "Selectați mai întâi o celulă Python care a returnat o imagine.",
+        "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
+            "xl() are nevoie ca referința sa să fie scrisă ca text în cod, de exemplu xl(\"A1:B5\")."
+        }
+        "This range is too large to send to Python." => "Această zonă este prea mare pentru a fi trimisă la Python.",
+        "xl() names something that isn't a cell, range, table or defined name here." => {
+            "xl() numește ceva ce aici nu este o celulă, o zonă, un tabel sau un nume definit."
+        }
+        "The code ran past the time limit. Python was restarted, so its variables were cleared." => {
+            "Codul a depășit limita de timp. Python a fost repornit, deci variabilele sale au fost șterse."
+        }
+        "The code went over the memory limit. Python was restarted, so its variables were cleared." => {
+            "Codul a depășit limita de memorie. Python a fost repornit, deci variabilele sale au fost șterse."
+        }
+        "The result is too large to bring back to the sheet." => "Rezultatul este prea mare pentru a fi adus înapoi în foaie.",
+        "The printed output was cut off at its limit." => "Ieșirea tipărită a fost tăiată la limita sa.",
+        "Python stopped unexpectedly and was restarted, so its variables were cleared." => {
+            "Python s-a oprit neașteptat și a fost repornit, deci variabilele sale au fost șterse."
+        }
+        "The result is empty." => "Rezultatul este gol.",
+        "The result needs cells that aren't empty." => "Rezultatul are nevoie de celule care nu sunt goale.",
+        "The result isn't a number a cell can hold." => "Rezultatul nu este un număr pe care îl poate conține o celulă.",
+        "This date or length of time is outside what a cell can hold." => "Această dată sau durată este în afara a ceea ce poate conține o celulă.",
+        "This cell is running." => "Această celulă rulează.",
+        "What this cell reads has changed since it last ran." => "Ceea ce citește această celulă s-a schimbat de la ultima rulare.",
+        "This cell was stopped before it finished." => "Această celulă a fost oprită înainte de a termina.",
+        "xl() needs its reference written as text, such as xl(\"A1:B5\"). A computed reference can't be read." => {
+            "xl() are nevoie ca referința sa să fie scrisă ca text, de exemplu xl(\"A1:B5\"). O referință calculată nu poate fi citită."
+        }
+        "This module needs the network or other programs, which Python cells can't use." => {
+            "Acest modul are nevoie de rețea sau de alte programe, pe care celulele Python nu le pot folosi."
+        }
+        "This Python doesn't have this package." => "Acest Python nu are acest pachet.",
+        "Python cells can't open windows or ask for input." => "Celulele Python nu pot deschide ferestre sau cere intrări.",
+        "Python cells don't see your environment variables." => "Celulele Python nu văd variabilele dumneavoastră de mediu.",
+        "Open Settings" => "Deschide setările",
+        "Show Printed Output" => "Afișează ieșirea tipărită",
+        "Hide Printed Output" => "Ascunde ieșirea tipărită",
+        "Line {line}" => "Linia {line}",
+        "Line {line}: {message}" => "Linia {line}: {message}",
+        "Python {version}, ready" => "Python {version}, pregătit",
+        "Python {version}, running" => "Python {version}, în execuție",
         _ => return None,
     })
 }
