@@ -1205,6 +1205,20 @@ mod tests {
     }
 
     #[test]
+    fn a_worksheet_reports_its_standard_width_in_characters() {
+        // The model keeps the width in pixels (64 px for the default font); ExcelScript's
+        // `getStandardWidth` reports the characters of the Column Width dialog, as the script's
+        // `range.columnWidth` does, so a width used in a calculation is in the right unit.
+        let mut s = session("standard-width");
+        let mut bridge = crate::script::SessionBridge { session: &mut s };
+        let width = gridcraft_script::BridgeExecutor::execute(&mut bridge, &BridgeCall::new("Worksheet.getStandardWidth", json!({}))).unwrap();
+        let width = width.as_f64().unwrap_or_default();
+        assert!((width - 8.43).abs() < 0.001, "the standard width is characters, not pixels: {width}");
+        let height = gridcraft_script::BridgeExecutor::execute(&mut bridge, &BridgeCall::new("Worksheet.getStandardHeight", json!({}))).unwrap();
+        assert_eq!(height, json!(20.0), "the height path is unchanged");
+    }
+
+    #[test]
     fn a_range_clear_applies_only_what_was_asked() {
         let mut s = session("clear-apply");
         s.execute("cell.set", json!({"cell": "A1", "input": "Text"})).unwrap();

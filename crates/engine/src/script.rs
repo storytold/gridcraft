@@ -155,8 +155,15 @@ pub(crate) fn execute_call(s: &mut Session, method: &str, params: &Json) -> Resu
                 .and_then(|a| a.iter().find(|x| x["name"].as_str() == Some(sheet.as_str())))
                 .cloned()
                 .unwrap_or(Json::Null);
-            let key = if method.ends_with("Height") { "standardHeight" } else { "standardWidth" };
-            Ok(entry[key].clone())
+            if method.ends_with("Height") {
+                return Ok(entry["standardHeight"].clone());
+            }
+            // The model keeps the width in pixels; ExcelScript's `getStandardWidth` reports the
+            // characters of the Column Width dialog (64 px → 8.43), like `range.columnWidth`.
+            Ok(match entry["standardWidth"].as_f64() {
+                Some(px) => Json::from(gridcraft_model::points_to_chars(px)),
+                None => entry["standardWidth"].clone(),
+            })
         }
         "Worksheet.getTables" => {
             let sheet = sheet_name(s, params)?;
