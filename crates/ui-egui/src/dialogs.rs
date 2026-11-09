@@ -82,6 +82,10 @@ pub struct Dialog {
     pick: Option<RefPick>,
     /// The linked cell's initial display text; unchanged text must not replace a number or formula.
     original_link_text: Option<String>,
+    /// Define Name: the scope identity the dialog opened with and the text its Scope box shows. The
+    /// box is free text, so text left as it opened keeps the identity: a sheet literally named
+    /// Workbook is `{sheet: "Workbook"}`, which the text alone cannot say.
+    scope_identity: Option<(String, Json)>,
     /// The state of the dialog's reference boxes (RefEdit).
     refs: ref_edit::RefBoxes,
 }
@@ -243,6 +247,7 @@ impl Dialog {
             focus_initialized: false,
             pick: None,
             original_link_text: None,
+            scope_identity: None,
             refs: ref_edit::RefBoxes::default(),
         }
     }
@@ -268,6 +273,7 @@ impl Dialog {
             focus_initialized: false,
             pick: None,
             original_link_text: None,
+            scope_identity: None,
             refs: ref_edit::RefBoxes::default(),
         }
     }
@@ -819,13 +825,17 @@ impl Dialog {
                 let selection = app.session.active().and_then(|d| {
                     d.wb.active().map(|s| format!("={}!{}", gridcraft_engine::formula::quote_sheet(&s.name), abs(&d.selection.current())))
                 });
-                let mut defaults = json!({"scope": "Workbook", "refersTo": selection});
-                for key in ["name", "scope", "comment", "refersTo", "oldName", "oldScope"] {
+                // The Scope box is free text that opens showing the identity it was opened with, so
+                // a sheet literally named Workbook keeps that meaning while the text is left alone.
+                let identity = params.get("scope").cloned().filter(|v| !v.is_null()).unwrap_or(Json::Null);
+                let caption = names::scope_caption(&identity, app.ui.language);
+                let mut defaults = json!({"scope": caption, "refersTo": selection});
+                for key in ["name", "comment", "refersTo", "oldName"] {
                     if let Some(v) = params.get(key).filter(|v| v.is_string()) {
                         defaults[key] = v.clone();
                     }
                 }
-                Dialog::form(
+                let mut dialog = Dialog::form(
                     "defineName",
                     if editing { "Edit Name" } else { "New Name" },
                     "formulas.defineName",
@@ -836,7 +846,9 @@ impl Dialog {
                         Text { key: "refersTo", label: "Refers to:" },
                     ],
                     defaults,
-                )
+                );
+                dialog.scope_identity = Some((caption, identity));
+                dialog
             }
             "tableResize" => {
                 let (table, range) = app
@@ -1152,6 +1164,45 @@ mod tests {
         assert_eq!(build_params(&dialog)["range"], "B2:C5");
         dialog.set_value("range", json!("D2:E6"));
         assert_eq!(build_params(&dialog)["range"], "D2:E6");
+    }
+
+    /// Editing a name keeps the scope it had: the Scope box is free text, so a sheet literally
+    /// named Workbook must stay a sheet scope, and a typed sheet name must be followed.
+    #[test]
+    fn editing_a_name_keeps_its_sheet_scope_identity() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("home.insertSheet", json!({"name": "Workbook"})).unwrap();
+        app.run("formulas.defineName", json!({"name": "Rate", "refersTo": "=1", "scope": {"sheet": "Workbook"}})).unwrap();
+        app.run("formulas.defineName", json!({"name": "Rate", "refersTo": "=1"})).unwrap();
+
+        let mut d = Dialog::open(
+            &mut app,
+            "defineName",
+            json!({"name": "Rate", "scope": {"sheet": "Workbook"}, "refersTo": "=1", "oldName": "Rate", "oldScope": {"sheet": "Workbook"}}),
+        )
+        .unwrap();
+        assert_eq!(d.values["scope"], "Workbook (Sheet)", "the box says which Workbook the scope means");
+        d.set_value("refersTo", json!("=2"));
+        let params = build_params(&d);
+        assert_eq!(params["scope"], json!({"sheet": "Workbook"}));
+        assert_eq!(params["oldScope"], json!({"sheet": "Workbook"}));
+
+        // OK edits the sheet-scoped name and leaves the workbook one alone.
+        app.run(d.command.unwrap(), build_params(&d)).unwrap();
+        let names = app.run("formulas.nameManager", json!({})).unwrap();
+        let rows = names.as_array().unwrap();
+        let sheet_row = rows.iter().find(|row| row["scopeIdentity"] == json!({"sheet": "Workbook"})).unwrap();
+        let book_row = rows.iter().find(|row| row["scopeIdentity"].is_null()).unwrap();
+        assert_eq!(sheet_row["refersTo"], "=2");
+        assert_eq!(book_row["refersTo"], "=1");
+
+        // Typing another sheet name moves the name there instead of keeping the old identity.
+        d.set_value("scope", json!("Лист1"));
+        let params = build_params(&d);
+        assert_eq!(params["scope"], "Лист1");
+        assert_eq!(params["oldScope"], json!({"sheet": "Workbook"}), "the name being edited is still the sheet one");
     }
 
     #[test]
