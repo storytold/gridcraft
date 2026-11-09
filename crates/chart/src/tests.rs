@@ -1721,4 +1721,7 @@ fn empty_cells_show_as_the_chart_says() {
     assert_eq!(lines(&draw(ChartKind::Line, ChartEmptyCells::Gap)), vec![2], "the first point stands alone");
     assert_eq!(lines(&draw(ChartKind::Line, ChartEmptyCells::Span)), vec![3], "one line over the gap");
     assert_eq!(lines(&draw(ChartKind::Line, ChartEmptyCells::Zero)), vec![4], "down to zero and back");
+    // A scatter line with an empty Y: broken as a gap, joined when spanned, as in Excel.
+    assert_eq!(lines(&draw(ChartKind::ScatterLines, ChartEmptyCells::Gap)), vec![2]);
+    assert_eq!(lines(&draw(ChartKind::ScatterLines, ChartEmptyCells::Span)), vec![3]);
 }

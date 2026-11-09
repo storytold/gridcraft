@@ -532,7 +532,8 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         } else {
             let lines = chart.kind == ChartKind::ScatterLines || s.kind == ChartKind::ScatterLines;
             if lines {
-                draw_runs(ctx, &px, s.color, 2.0, s.smooth.then_some(plot));
+                // Spanned, a scatter line joins the points around an empty Y too.
+                draw_runs(ctx, &line_runs(chart, &px), s.color, 2.0, s.smooth.then_some(plot));
             }
             if !lines || px.len() <= 500 {
                 draw_markers(ctx, px.iter().flatten().copied(), 3.5, s.color);
