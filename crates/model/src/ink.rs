@@ -15,6 +15,10 @@ use serde::{Deserialize, Serialize};
 
 /// The largest encoded image a texture may hold.
 pub const MAX_INK_TEXTURE_BYTES: usize = 16 * 1024 * 1024;
+/// The most encoded image bytes a workbook's whole texture store may hold. The per-texture cap
+/// alone would let [`MAX_INK_TEXTURES`] textures of 16 MiB each fill about 16 GiB, so the store
+/// has a budget of its own: import, JSON loading and XLSX reading all refuse entries beyond it.
+pub const MAX_INK_TEXTURE_STORE_BYTES: usize = 64 * 1024 * 1024;
 /// The largest width or height, in pixels, a texture may decode to.
 pub const MAX_INK_TEXTURE_SIDE: u32 = 8192;
 /// The largest pixel count a texture may decode to.
@@ -26,6 +30,12 @@ pub const MAX_INK_TEXTURE_NAME_CHARS: usize = 120;
 pub const MAX_INK_TEXTURES: usize = 1024;
 /// Ids are 128 bits of SHA-256 in lowercase hex: fixed length, so a hostile id can't bloat a file.
 const ID_CHARS: usize = 32;
+
+/// Whether an image of `data_len` bytes fits the store beside the `held` bytes it already holds.
+/// Import, JSON loading and XLSX reading all ask this before keeping an entry.
+pub fn fits_store(held: usize, data_len: usize) -> bool {
+    held.saturating_add(data_len) <= MAX_INK_TEXTURE_STORE_BYTES
+}
 
 /// A repeating brush texture: an imported PNG or JPEG, decoded once and kept encoded here.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -95,12 +105,19 @@ where
         fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
             let mut textures = Vec::new();
             let mut seen = std::collections::HashSet::new();
+            let mut bytes = 0usize;
             while textures.len() < MAX_INK_TEXTURES {
                 match seq.next_element::<Stored>()? {
                     // Ids are content-derived: a repeat is the same image, kept once, so copies
                     // cannot crowd out other textures or survive a removal of the first entry.
                     Some(Stored::Texture(texture)) => {
+                        // The store's total budget is checked as the list is read, so a file of
+                        // many small images cannot grow the workbook past it either.
+                        if !fits_store(bytes, texture.data.len()) {
+                            continue;
+                        }
                         if seen.insert(texture.id.clone()) {
+                            bytes = bytes.saturating_add(texture.data.len());
                             textures.push(texture);
                         }
                     }
@@ -157,11 +174,18 @@ impl InkTexture {
         Self::store(id, name, mime, data, width, height)
     }
 
-    /// The entry itself, once its id is known to be the payload's own: the mime, size and name caps
-    /// applied.
+    /// The entry itself, once its id is known to be the payload's own: the mime, format, size and
+    /// name caps applied.
     fn store(id: String, name: &str, mime: &str, data: Arc<Vec<u8>>, width: u32, height: u32) -> Option<InkTexture> {
         let mime = Self::normalize_mime(mime)?;
         if data.is_empty() || data.len() > MAX_INK_TEXTURE_BYTES {
+            return None;
+        }
+        // The bytes must be the format the mime names and as large as the caller claims: a
+        // hand-edited or hostile file cannot smuggle a GIF in as a PNG, or label a picture with
+        // dimensions it does not have (the painting code sizes its tiles from them).
+        let (format, header_width, header_height) = Self::image_header(&data)?;
+        if mime != format || (width, height) != (header_width, header_height) {
             return None;
         }
         if width == 0 || height == 0 || width > MAX_INK_TEXTURE_SIDE || height > MAX_INK_TEXTURE_SIDE {
@@ -173,6 +197,28 @@ impl InkTexture {
         let name: String = name.trim().chars().take(MAX_INK_TEXTURE_NAME_CHARS).collect();
         let name = if name.is_empty() { "Texture".to_string() } else { name };
         Some(InkTexture { id, name, mime, data, width, height })
+    }
+
+    /// The format the image bytes actually are, and the width and height their own header
+    /// declares. `None` for anything that is not a PNG or JPEG whose header can be read, so the
+    /// store never holds a file its painters cannot decode.
+    fn image_header(data: &[u8]) -> Option<(&'static str, u32, u32)> {
+        const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        if data.starts_with(&PNG_MAGIC) {
+            // A PNG's first chunk is always IHDR: a 13-byte length, the type, then width and
+            // height as big-endian `u32`s. No CRC or pixel data is read here.
+            let chunk = data.get(8..24)?;
+            if chunk.get(..8)? != b"\0\0\0\rIHDR" {
+                return None;
+            }
+            let be = |at: usize| -> Option<u32> { Some(u32::from_be_bytes(chunk.get(at..at + 4)?.try_into().ok()?)) };
+            return Some(("image/png", be(8)?, be(12)?));
+        }
+        if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            let (width, height) = jpeg_size(data)?;
+            return Some(("image/jpeg", width, height));
+        }
+        None
     }
 
     /// `image/png` or `image/jpeg` from a mime spelling that may carry parameters or differ in
@@ -187,16 +233,75 @@ impl InkTexture {
     }
 }
 
+/// The width and height a JPEG's frame header declares: the first SOF marker after the start of
+/// image. Segments are walked by their declared lengths; `None` when the bytes are truncated or
+/// the scan starts before any frame header.
+fn jpeg_size(data: &[u8]) -> Option<(u32, u32)> {
+    let mut at = 2;
+    while at + 4 <= data.len() {
+        if data.get(at)? != &0xFF {
+            return None;
+        }
+        let mut marker = *data.get(at + 1)?;
+        // Any number of 0xFF fill bytes may precede a marker.
+        while marker == 0xFF {
+            at += 1;
+            marker = *data.get(at + 1)?;
+        }
+        match marker {
+            // Standalone markers: no length follows.
+            0xD8 | 0x01 | 0xD0..=0xD7 => at += 2,
+            // End of image, or the scan begins before any frame header: no dimensions to read.
+            0xD9 | 0xDA => return None,
+            _ => {
+                let length = u16::from_be_bytes([*data.get(at + 2)?, *data.get(at + 3)?]) as usize;
+                if length < 2 {
+                    return None;
+                }
+                // SOF0–SOF15, except DHT (C4), JPG (C8) and DAC (CC), which share the range.
+                if (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
+                    let height = u16::from_be_bytes([*data.get(at + 5)?, *data.get(at + 6)?]) as u32;
+                    let width = u16::from_be_bytes([*data.get(at + 7)?, *data.get(at + 8)?]) as u32;
+                    return Some((width, height));
+                }
+                at = at.checked_add(2 + length)?;
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A PNG header (the magic and the IHDR chunk) claiming `w`×`h`. The store reads only the
+    /// header, so no pixel data is needed.
+    fn png_header(w: u32, h: u32) -> Vec<u8> {
+        let mut v = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        v.extend_from_slice(&[0, 0, 0, 13]);
+        v.extend_from_slice(b"IHDR");
+        v.extend_from_slice(&w.to_be_bytes());
+        v.extend_from_slice(&h.to_be_bytes());
+        // Bit depth, colour type, compression, filter and interlace, then a CRC the store ignores.
+        v.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
+        v
+    }
+
+    /// A JPEG header (SOI, an APP0 segment, then the SOF0 frame header) claiming `w`×`h`.
+    fn jpeg_header(w: u32, h: u32) -> Vec<u8> {
+        let mut v = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        v.extend_from_slice(b"JFIF\0\x01\x01\0\0\x01\0\x01\0\0");
+        v.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x11, 0x08]);
+        v.extend_from_slice(&(h as u16).to_be_bytes());
+        v.extend_from_slice(&(w as u16).to_be_bytes());
+        v.extend_from_slice(&[0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01]);
+        v
+    }
+
     /// A few bytes that carry a PNG's magic; enough for the store, which never decodes.
     fn png_bytes() -> Vec<u8> {
-        // The magic and a tail are enough for the store: decoding is the engine's job.
-        let mut v = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-        v.extend_from_slice(b"texture");
-        v
+        png_header(4, 2)
     }
 
     /// An id is derived from the bytes and is always the fixed length the store expects.
@@ -288,11 +393,39 @@ mod tests {
     #[test]
     fn caps_are_enforced() {
         let data = Arc::new(png_bytes());
-        assert!(InkTexture::new("a.png", "image/png", data.clone(), 0, 2).is_none());
-        assert!(InkTexture::new("a.png", "image/png", data.clone(), MAX_INK_TEXTURE_SIDE + 1, 1).is_none());
-        assert!(InkTexture::new("a.png", "image/png", data.clone(), 8192, 8192).is_none(), "over the pixel cap");
+        assert!(InkTexture::new("a.png", "image/png", Arc::new(png_header(0, 2)), 0, 2).is_none());
+        assert!(InkTexture::new("a.png", "image/png", Arc::new(png_header(MAX_INK_TEXTURE_SIDE + 1, 1)), MAX_INK_TEXTURE_SIDE + 1, 1).is_none());
+        assert!(InkTexture::new("a.png", "image/png", Arc::new(png_header(8192, 8192)), 8192, 8192).is_none(), "over the pixel cap");
         assert!(InkTexture::new("a.png", "image/gif", data.clone(), 4, 2).is_none());
         assert!(InkTexture::new("a.png", "image/png", Arc::new(vec![]), 4, 2).is_none());
+    }
+
+    /// The bytes must be the format the mime names and as large as the entry claims.
+    #[test]
+    fn the_bytes_must_be_the_format_and_size_the_entry_claims() {
+        let png = Arc::new(png_bytes());
+        assert!(InkTexture::new("a.png", "image/jpeg", png.clone(), 4, 2).is_none(), "a PNG is not labelled JPEG");
+        assert!(InkTexture::new("a.png", "image/png", png.clone(), 4, 3).is_none(), "a claimed height the header does not have");
+        assert!(InkTexture::new("a.png", "image/png", png.clone(), 5, 2).is_none());
+        assert!(InkTexture::new("a.png", "image/png", Arc::new(b"GIF89a\x01\x00\x01\x00".to_vec()), 1, 1).is_none(), "not a PNG or JPEG");
+        // A JPEG's own frame header gives the dimensions.
+        let jpeg = Arc::new(jpeg_header(7, 3));
+        let t = InkTexture::new("b.jpg", "image/jpeg", jpeg.clone(), 7, 3).expect("a JPEG header is read");
+        assert_eq!((t.width, t.height, t.mime.as_str()), (7, 3, "image/jpeg"));
+        assert!(InkTexture::new("b.jpg", "image/jpeg", jpeg, 7, 4).is_none());
+        // A truncated header is refused rather than trusted.
+        assert!(InkTexture::new("c.png", "image/png", Arc::new(vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]), 4, 2).is_none());
+    }
+
+    /// The store's total byte budget refuses an entry that would push it over, whatever the
+    /// per-texture and count caps allow.
+    #[test]
+    fn the_store_byte_budget_is_a_ceiling() {
+        assert!(fits_store(0, MAX_INK_TEXTURE_BYTES));
+        assert!(fits_store(MAX_INK_TEXTURE_STORE_BYTES - 1, 1));
+        assert!(!fits_store(MAX_INK_TEXTURE_STORE_BYTES, 1), "no room left");
+        assert!(!fits_store(MAX_INK_TEXTURE_STORE_BYTES - 1, 2));
+        assert!(!fits_store(usize::MAX, 1), "the arithmetic cannot wrap");
     }
 
     /// A read-back texture with an id of the wrong shape is refused.

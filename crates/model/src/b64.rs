@@ -72,10 +72,16 @@ pub mod capped {
 
     use serde::{Deserialize as _, Deserializer, Serializer};
 
+    /// Writes `v` as one base64 string, as plain [`super::serialize`] does; the cap is a reading
+    /// rule, so an entry already in memory is written as it is.
     pub fn serialize<S: Serializer>(v: &Arc<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
         super::serialize(v, s)
     }
 
+    /// Reads a base64 string, refusing it before decoding when its length could carry more than
+    /// [`crate::ink::MAX_INK_TEXTURE_BYTES`] bytes (four characters per three bytes, rounded up),
+    /// and refusing a string that is not valid base64. The error is a serde error, so a hostile
+    /// entry fails its own row rather than the whole file.
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Arc<Vec<u8>>, D::Error> {
         let s = String::deserialize(d)?;
         // Four characters per three bytes, rounded up: the largest encoding the store accepts.

@@ -701,23 +701,46 @@ pub enum InkEffect {
     Bronze,
 }
 
+/// The bounds a brush's InkML `width`/`height` are kept in, in cm: a thousandth of a centimetre at
+/// the least, a metre at most. The InkML reader and the JSON reader apply the same range, so a
+/// hand-edited file cannot put a brush outside what the file format holds.
+pub const MIN_INK_CM: f32 = 0.001;
+pub const MAX_INK_CM: f32 = 100.0;
+/// The default brush thickness in cm: Excel's plain Pen.
+pub const DEFAULT_INK_CM: f32 = 0.05;
+/// The most pressure samples one stroke may carry, matching the InkML reader's point limit.
+pub const MAX_INK_PRESSURE: usize = 20_000;
+/// The highest pressure a device records: Excel's `F` channel is 15 bits.
+pub const MAX_INK_PRESSURE_VALUE: u16 = 32_767;
+/// The bounds of a stroke's texture repeat size (how many stroke widths one repeat spans),
+/// shared with the engine's pen and the hidden-sheet reader.
+pub const MIN_INK_TEXTURE_SCALE: f32 = 0.5;
+pub const MAX_INK_TEXTURE_SCALE: f32 = 512.0;
+
 /// A stroke's brush: the Draw-tab kind, its size, texture and the per-point data the file keeps.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InkStyle {
     pub tool: InkTool,
     /// Stroke width in cm (InkML `width`).
+    #[serde(deserialize_with = "ink_cm")]
     pub width_cm: f32,
-    /// Stroke height in cm (InkML `height`): the brush's thickness across the stroke; a Pencil is
-    /// six times and a Highlighter twice its width.
+    /// Stroke height in cm (InkML `height`): the brush's thickness across the stroke in the file,
+    /// six times the width for a Pencil and twice for a Highlighter. It is not what GridCraft
+    /// paints across a stroke: the engine's `across_cm` measures a Pencil at 0.8 of its width and
+    /// a Highlighter at this height.
+    #[serde(deserialize_with = "ink_cm")]
     pub height_cm: f32,
     /// A pen texture; `None` is a solid stroke.
     pub effect: Option<InkEffect>,
     /// Texture phase (InkML `anchorX`/`anchorY`), in the texture's own units.
+    #[serde(deserialize_with = "ink_anchor")]
     pub anchor: [f32; 2],
-    /// Texture scale (InkML `scaleFactor`).
+    /// Texture scale (InkML `scaleFactor`): a positive finite factor, else 1.
+    #[serde(deserialize_with = "ink_scale")]
     pub scale: f32,
     /// Pressure per point (`0..=32767`); empty when the device did not record any.
+    #[serde(deserialize_with = "ink_pressure")]
     pub pressure: Vec<u16>,
     /// Draw order, for Ink Replay.
     pub order: u32,
@@ -725,6 +748,7 @@ pub struct InkStyle {
     /// has no equivalent and drops it; the bytes live once on the workbook, not on every stroke.
     pub texture: Option<String>,
     /// How the texture repeats along the stroke: how many stroke widths one repeat spans.
+    #[serde(deserialize_with = "ink_texture_scale")]
     pub texture_scale: f32,
     /// The stroke's stable `a16:creationId` GUID (braces included), assigned when the stroke is
     /// created and never changed: moving or recolouring it keeps the key. Excel preserves the
@@ -732,13 +756,46 @@ pub struct InkStyle {
     pub key: Option<String>,
 }
 
+/// A brush dimension read from JSON, clamped to the InkML reader's range; a value that is not a
+/// finite number takes the plain pen's thickness instead of poisoning every measurement.
+fn ink_cm<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    let v = f32::deserialize(d)?;
+    Ok(if v.is_finite() { v.clamp(MIN_INK_CM, MAX_INK_CM) } else { DEFAULT_INK_CM })
+}
+
+/// A texture phase read from JSON: each component finite, else 0.
+fn ink_anchor<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[f32; 2], D::Error> {
+    let v = <[f32; 2]>::deserialize(d)?;
+    let finite = |v: f32| if v.is_finite() { v } else { 0.0 };
+    Ok([finite(v[0]), finite(v[1])])
+}
+
+/// A texture scale read from JSON: positive and finite, else 1 (the InkML reader's default).
+fn ink_scale<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    let v = f32::deserialize(d)?;
+    Ok(if v.is_finite() && v > 0.0 { v } else { 1.0 })
+}
+
+/// A repeat size read from JSON, kept finite and within [`MIN_INK_TEXTURE_SCALE`]–[`MAX_INK_TEXTURE_SCALE`].
+fn ink_texture_scale<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    let v = f32::deserialize(d)?;
+    Ok(if v.is_finite() && v > 0.0 { v.clamp(MIN_INK_TEXTURE_SCALE, MAX_INK_TEXTURE_SCALE) } else { 1.0 })
+}
+
+/// Pressure samples read from JSON: at most [`MAX_INK_PRESSURE`] of them, each within the 15-bit
+/// range the file format holds.
+fn ink_pressure<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u16>, D::Error> {
+    let v = Vec::<u16>::deserialize(d)?;
+    Ok(v.into_iter().take(MAX_INK_PRESSURE).map(|p| p.min(MAX_INK_PRESSURE_VALUE)).collect())
+}
+
 impl Default for InkStyle {
     /// An untooled, untextured swatch: the shape's own colour and no pressure or key.
     fn default() -> Self {
         InkStyle {
             tool: InkTool::default(),
-            width_cm: 0.05,
-            height_cm: 0.05,
+            width_cm: DEFAULT_INK_CM,
+            height_cm: DEFAULT_INK_CM,
             effect: None,
             anchor: [0.0, 0.0],
             scale: 1.0,
@@ -1367,6 +1424,24 @@ mod tests {
         assert_eq!(bare.scale, 1.0);
         assert_eq!(bare.texture_scale, 1.0);
         assert!(bare.width_cm > 0.0);
+    }
+
+    /// InkStyle fields read from JSON are kept within the ranges the InkML reader enforces, so a
+    /// hand-edited file cannot put a brush outside what the format holds or poison measurements.
+    #[test]
+    fn ink_style_fields_are_clamped_on_deserialize() {
+        let style: InkStyle =
+            serde_json::from_str(r#"{"width_cm":1e38,"height_cm":-4,"anchor":[1e38,-2],"scale":-1,"pressure":[1,32768,40000],"texture_scale":1e9}"#)
+                .expect("reads");
+        assert_eq!(style.width_cm, MAX_INK_CM);
+        assert_eq!(style.height_cm, MIN_INK_CM);
+        assert_eq!(style.anchor, [1e38, -2.0], "finite anchors are kept as they are");
+        assert_eq!(style.scale, 1.0, "a negative scale takes the default");
+        assert_eq!(style.pressure, vec![1, MAX_INK_PRESSURE_VALUE, MAX_INK_PRESSURE_VALUE]);
+        assert_eq!(style.texture_scale, MAX_INK_TEXTURE_SCALE);
+        // JSON has no NaN or infinity, so a number too large for f32 is refused by the reader
+        // rather than stored as one; the finite guard is the second line of defence.
+        assert!(serde_json::from_str::<InkStyle>(r#"{"width_cm":1e40}"#).is_err());
     }
 
     /// A valid creation id is kept as it is, and a minted one is unique.

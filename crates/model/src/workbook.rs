@@ -392,14 +392,21 @@ impl Workbook {
     pub fn ink_texture_index(&self, id: &str) -> Option<usize> {
         self.ink_textures.iter().position(|t| t.id == id)
     }
+    /// The encoded bytes all the stored textures hold together, the figure
+    /// [`crate::ink::MAX_INK_TEXTURE_STORE_BYTES`] bounds.
+    pub fn ink_texture_bytes(&self) -> usize {
+        self.ink_textures.iter().map(|t| t.data.len()).sum()
+    }
     /// Stores a texture unless one with its (content-derived) id is already there, and says
     /// whether it was added. Importing the same image twice therefore reuses the first entry.
-    pub fn add_ink_texture(&mut self, texture: crate::ink::InkTexture) -> (usize, bool) {
+    /// `None` when the store's total byte budget has no room for it.
+    pub fn add_ink_texture(&mut self, texture: crate::ink::InkTexture) -> Option<(usize, bool)> {
         match self.ink_texture_index(&texture.id) {
-            Some(i) => (i, false),
+            Some(i) => Some((i, false)),
+            None if !crate::ink::fits_store(self.ink_texture_bytes(), texture.data.len()) => None,
             None => {
                 self.ink_textures.push(texture);
-                (self.ink_textures.len() - 1, true)
+                Some((self.ink_textures.len() - 1, true))
             }
         }
     }
@@ -631,13 +638,18 @@ mod tests {
         use crate::ink::InkTexture;
         use std::sync::Arc;
         let mut wb = Workbook::new();
-        let bytes = Arc::new(vec![1u8, 2, 3, 4]);
+        // A PNG header claiming 2×2, the size the entry names.
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13];
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&[0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0, 0, 0, 0, 0]);
+        let bytes = Arc::new(png);
         let first = InkTexture::new("a.png", "image/png", bytes.clone(), 2, 2).expect("valid");
         let id = first.id.clone();
-        assert_eq!(wb.add_ink_texture(first), (0, true));
+        assert_eq!(wb.add_ink_texture(first), Some((0, true)));
         let again = InkTexture::new("b.png", "image/png", bytes, 2, 2).expect("valid");
-        assert_eq!(wb.add_ink_texture(again), (0, false), "the same bytes reuse the entry");
+        assert_eq!(wb.add_ink_texture(again), Some((0, false)), "the same bytes reuse the entry");
         assert_eq!(wb.ink_textures.len(), 1);
+        assert_eq!(wb.ink_texture_bytes(), wb.ink_textures[0].data.len());
         assert_eq!(wb.ink_texture(&id).map(|t| t.name.as_str()), Some("a.png"));
         assert!(wb.remove_ink_texture(&id).is_some());
         assert!(wb.ink_textures.is_empty());
