@@ -152,10 +152,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   polylines still read, but they stay polylines: they carry no `InkStyle`, so reopening and saving
   an older workbook does not upgrade its ink to InkML). A part with several `<trace>`s, or a
   `<traceGroup>`, reads as one stroke per trace. Excel drops GridCraft's own draw-order and
-  pen-subtype `brushProperty` names on save; the draw order, the brush subtype (Pencil, Fountain
-  Pen, Brush Pen) and imported brush textures also travel in a veryHidden `GridCraft Ink`
-  worksheet that Excel preserves, so they come back after an Excel round trip; Excel itself sees
-  the base stroke (colour plus the nearest built-in effect). A worksheet whose layout a newer
+  pen-subtype `brushProperty` names on save; the draw order, the brush subtypes InkML cannot tell
+  apart (Fountain Pen and Brush Pen — a plain Pencil is `inkEffects=pencil`, and only a textured
+  Pencil needs the sheet) and imported brush textures also travel in a veryHidden
+  `GridCraft Ink` worksheet that Excel preserves, so they come back after an Excel round trip;
+  Excel itself sees the base stroke (colour plus the nearest built-in effect). A worksheet whose layout a newer
   GridCraft wrote is kept as an ordinary hidden sheet rather than dropped, so this version's save
   never deletes it. Inserted icons
   still lose their identity/artwork on save (#551).
