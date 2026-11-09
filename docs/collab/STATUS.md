@@ -1,7 +1,7 @@
 # Real-time collaboration: status and acceptance evidence
 
 - Date: 2026-11-09
-- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), HEAD `c8e2a3de` (code; this page is the docs commit on top)
+- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), HEAD `d36899da` (code; this page is the docs commit on top)
 - Base: `origin/main` = `2c58c769` (rebased 2026-11-08)
 - PR: <https://github.com/storytold/gridcraft/pull/3613> (draft)
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
@@ -80,26 +80,30 @@ has both sides implemented here.
 | §1 session model | one session per file, owner/editor/viewer, presence (sheet, cell/range, selection, viewport), join/leave/reconnect | `4396ad93`, `56cff6ae`; `cargo test -p gridcraft-collab` (21) — `hub` presence/role tests; server socket tests `two_editors_converge_on_one_book`, `a_viewer_is_refused_before_the_engine` |
 | §2 book sync | op unit = one user action (`command`/`structural`), sheet keys stable across restarts, authoritative recalculation on one engine `Session`, delta of changed cells (spills included) instead of the workbook, `baseVersion`/`epoch` conflict rules | `5a307189`, `12628770`, `f828c9fb`; collab delta/dedup/epoch tests; server acceptance `a_dynamic_array_spills_and_the_spill_survives_a_commit`, `a_large_range_travels_and_commits` (A1:E2000, 10 000 cells); client `a_structural_command_lands_on_both_replicas` |
 | §3 presence/UX | overlay of other participants' selections, participant list, status bar, viewer refused locally and by the server | `56cff6ae`; `crates/ui-egui/src/collab.rs`, `apps/gridcraft/src/collab_ui.rs`; client `a_viewer_is_refused_locally_and_still_receives`; server `a_viewer_is_refused_before_the_engine`; server `a_viewer_is_refused_before_the_engine` |
-| §4 undo/redo | per-actor steps (≤200), undo/redo are new room operations, refuse with `conflict` when someone else changed the cell, history survives reconnect while the server runs, not a server restart; a structural step (row or sheet insert/delete) is reversed from whole-sheet images in one operation (`applied.images`, epoch grows, sheet keys kept); an image larger than one frame travels in `imagePart` parts (ADR-0013) | `f828c9fb`, `30ebbb73`, `59eb9e06`, `c8e2a3de`; collab undo/redo/conflict and structural-image tests; client `undo_reverses_only_the_actors_own_step` / `redo_puts_the_step_back_on_every_replica` / `structural_undo_restores_rows_and_sheets_on_every_replica` / `an_eight_megabyte_sheet_image_travels_in_parts_and_converges` |
+| §4 undo/redo | per-actor steps (≤200), undo/redo are new room operations, refuse with `conflict` when someone else changed the cell, history survives reconnect while the server runs, not a server restart; a structural step (row or sheet insert/delete) is reversed from whole-sheet images in one operation (`applied.images`, epoch grows, sheet keys kept); an image larger than one frame travels in `imagePart` parts (ADR-0013); an undo/redo is journaled like any other version, so a reconnect after it — or a restart that replays the tail — reaches the undone document | `f828c9fb`, `30ebbb73`, `59eb9e06`, `c8e2a3de`, `d36899da`; collab undo/redo/conflict, structural-image and replay tests; client `undo_reverses_only_the_actors_own_step` / `redo_puts_the_step_back_on_every_replica` / `structural_undo_restores_rows_and_sheets_on_every_replica` / `an_eight_megabyte_sheet_image_travels_in_parts_and_converges` / `a_peer_that_reconnects_after_an_undo_sees_the_undone_state` / `a_peer_that_reconnects_after_a_structural_undo_gets_the_sheet_image`; server persistence `an_undo_replays_from_the_journal_after_a_restart` / `a_snapshot_after_an_undo_keeps_the_step_in_the_base` |
 | §5 roles | viewer cannot write; role re-read from the signed JWT on every message; lease and takeover | `4bd61141`, `4396ad93`; server socket tests `a_bad_token_never_joins`, `the_lease_allows_one_session_and_the_owner_takes_over` |
 | §6 compat/save | feature `collab` off by default; single-user build unchanged; commit returns the authoritative `.xlsx`, opened by LibreOffice in the acceptance test | `56cff6ae`, `39ac1a28`; server acceptance `a_committed_file_opens_in_libreoffice`; `cargo check -p gridcraft` without the feature |
-| §7 server | `apps/gridcraft-collab-server`: HTTP session lifecycle, WS transport, JWT (HS256/ES256/EdDSA), healthcheck, `/metrics`, journal + snapshots + restart + compaction, no cell values or tokens in logs | `4bd61141`, `39ac1a28`, `f2346c30`; `server.md`; 19 unit + 7 socket + 5 persistence + 5 acceptance |
+| §7 server | `apps/gridcraft-collab-server`: HTTP session lifecycle, WS transport, JWT (HS256/ES256/EdDSA), healthcheck, `/metrics`, journal + snapshots + restart + compaction, no cell values or tokens in logs | `4bd61141`, `39ac1a28`, `f2346c30`, `d36899da`; `server.md`; 20 unit + 7 socket + 7 persistence + 5 acceptance |
 | §8 tests | unit, two clients, same-cell conflict, structural edits with participants, formulas/dynamic arrays, reconnect/catch-up, viewer, 10 000 cells, commit opens in LibreOffice | counts below; `7ed43c2a` |
 
-## 4. Test run after the rebase and the structural-undo slice (2026-11-09)
+## 4. Test run after the journaled-undo slice (2026-11-09)
 
-Run for the structural-undo commit (`59eb9e06`) and the image-chunking slice (`c8e2a3de`):
+Run for the journaled-undo commit (`d36899da`), on top of the structural undo and
+the image chunking:
 
 ```text
-cargo +1.95.0 test -p gridcraft-collab                     31 passed
-cargo +1.95.0 test -p gridcraft-collab-client               7 converge + 4 image-part tests passed
-cargo +1.95.0 test -p gridcraft-collab-server --all-targets 19 unit + 7 socket + 5 persistence + 5 acceptance, all passed
-cargo test -p gridcraft-collab-web -p gridcraft-web         5 + 11 passed
-cargo check -p gridcraft-collab-web -p gridcraft-web --target wasm32-unknown-unknown  ok
+cargo +1.95.0 test -p gridcraft-collab                     35 passed
+cargo +1.95.0 test -p gridcraft-collab-client               9 converge + 4 image-part tests passed
+cargo +1.95.0 test -p gridcraft-collab-server --all-targets 20 unit + 7 socket + 7 persistence + 5 acceptance, all passed
+cargo +1.95.0 test -p gridcraft-collab-web -p gridcraft-web 5 + 11 passed
 cargo fmt --all -- --check                                 clean
 cargo +1.95.0 clippy --workspace --all-targets -- -D warnings
                                                           clean
 ```
+
+Before this slice the same run counted 31 collab, 7 converge, 19 unit and 5
+persistence. The wasm32 check of `collab-web`/`gridcraft-web` is unchanged by
+these crates and was last run for the web host-bridge slice.
 
 The clippy run uses `1.95.0`, the toolchain the branch is built with, where
 `fetch_update` is not deprecated. Under the host's default `1.99.1` the same run
@@ -136,11 +140,12 @@ for WASM; the browser uses `crates/collab-web` and the host bridge.
 2. Structural undo (row/sheet insert-delete) is one operation with whole-sheet
    images (`applied.images`), refused as `conflict` when any operation came after
    the step; an image over 512 KiB travels in `imagePart` parts (ADR-0013), so the
-   old 8 MiB `too_large` bound is gone. Two limits remain: the image does not
+   old 8 MiB `too_large` bound is gone. One limit remains: the image does not
    carry workbook-level metadata (defined names, protection of structure) or a
-   sheet's `preserved` blobs; and undo/redo effects are still not journaled, so a
-   reconnect between an undo and the next snapshot can miss it (the same gap the
-   cell undo has).
+   sheet's `preserved` blobs. The undo/redo effects no longer fall outside the
+   journal (§8); the undo *history* is memory-only, so a restarted room starts
+   with empty undo stacks (ADR-0010 §6) — the document is right, the steps are
+   not undoable a second time.
 3. TLS termination is the ingress proxy's job; the process speaks HTTP/WS.
 4. Multiple windows of one user share one `actorId`.
 5. One room mutex per process; document isolation is by `fileId`. Many large
@@ -190,3 +195,71 @@ Tests:
   image) apply nothing until the last part; a disconnect mid-sequence and a
   missing part both leave the document intact and request a resync from the
   version before the first part.
+
+The parts are the wire form only: since `d36899da` a structural undo/redo is a
+journal entry of its own (§8), so the whole image is also one line of
+`journal.jsonl`, and the next snapshot (operation count, timer or shutdown)
+compacts it away with the rest of the tail.
+
+## 8. Undo and redo in the journal (2026-11-09)
+
+An undo takes a version like any other operation, but the server only journaled
+`op` messages: a client that reconnected between an undo and the next snapshot
+was told it was caught up while the undone cell was still in its replica, and a
+restart silently dropped the step the base did not cover. It also put a gap in
+the version sequence of the journal, which ADR-0003 §1/§5 require to be
+contiguous.
+
+- `JournalEntry.op` is now a `JournalOp`: `Op { op }`, `Undo` or `Redo`
+  (`apps/gridcraft-collab-server/src/store.rs`). A client operation is replayed
+  through `Room::apply`, so the engine rules and its step of the history run
+  again; a reversal is replayed from the answer it produced.
+- `Room::replay_reversal` restores that answer: `applied.images` replaces the
+  sheets (and revives their keys) or `applied.delta` restores the cells, then the
+  counters come from the entry. The undo *history* is never written to the
+  volume (ADR-0010 §6): the answer already carries every cell or sheet the
+  operation put back.
+- Replay is strict about the sequence: the first entry after `base_version` must
+  be `base_version + 1`, every next one `+1`, and a reversal needs the room's
+  next version. `meta.version` is no longer compared with the replayed head: it
+  is the head at the last snapshot, so after a crash it sits at the base while
+  the journal is ahead — the old check refused such a directory and dropped the
+  session instead of replaying it.
+- `Room::forget_history` clears the per-actor stacks after a replay: replaying the
+  operations rebuilds something close to them, but a step a later undo took away
+  is not in the volume, so a restarted room starts with empty stacks rather than
+  offering an undo the document would refuse.
+- `ws.rs` journals `undo`/`redo` frames through the same `record` and counts them
+  as operations (session `updatedAt`, the `ops` metric): they change the document
+  and take a version.
+- A structural reversal's journal entry is large: it stores the answer, which for
+  a structural step is the whole sheet image (the same bytes `applied` sends,
+  chunked on the wire). Compaction matters more with them; the snapshot on the
+  operation count, on the timer and on shutdown trims them as before.
+
+Tests:
+
+- `crates/collab/src/tests.rs`: `a_journaled_undo_and_redo_replay_from_their_answers_after_a_restart`
+  (a fresh room over the workbook the edit left replays the undo and the redo;
+  the counters land on 2 and 3), `a_journaled_structural_undo_replays_its_sheet_image`
+  (the inserted sheet is gone, the restored sheet keeps its old key, the epoch
+  follows), `a_replayed_undo_is_refused_when_the_journal_skips_a_version`,
+  `a_restored_room_starts_with_empty_undo_stacks`.
+- `crates/collab-client/tests/converge.rs`:
+  `a_peer_that_reconnects_after_an_undo_sees_the_undone_state` (two replicas: the
+  peer drops at v1, the author undoes, the peer comes back at v1 and finds the
+  cell empty, then a redo reaches both) and
+  `a_peer_that_reconnects_after_a_structural_undo_gets_the_sheet_image` (the same
+  for a sheet insert undone from an image). Both fail without the journal change:
+  the peer keeps the cell or the extra sheet and is told it is caught up.
+- `apps/gridcraft-collab-server/tests/persistence.rs`:
+  `an_undo_replays_from_the_journal_after_a_restart` (a snapshot compacts the edit
+  into the base, the undo is the only journal entry, the server is stopped
+  without a flush: the restart serves version 2, commits the undone cell and
+  catches a client at v1 up from the journal, not from the workbook) and
+  `a_snapshot_after_an_undo_keeps_the_step_in_the_base` (the other direction:
+  `flush` compacts the undo into the base, the journal is empty, a restart still
+  serves the undone-then-redone value).
+- `apps/gridcraft-collab-server/src/store.rs`: a reversal entry round-trips and
+  its line carries no step and no before-image, so the history is not in the
+  volume.
