@@ -537,6 +537,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Input Y Range:" => "Ievades Y diapazons:",
         "Input message:" => "Ievades ziņojums:",
         "Insert" => "Ievietot",
+        "Header Menu|Insert" => "Ievietot",
         "Insert Calculated Field" => "Ievietot aprēķinātu lauku",
         "Insert Cells…" => "Ievietot šūnas…",
         "Insert Chart" => "Ievietot diagrammu",

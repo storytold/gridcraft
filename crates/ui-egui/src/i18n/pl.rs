@@ -56,6 +56,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Okienko\nformatowania",
         "Format" => "Formatuj",
         "Insert" => "Wstaw",
+        "Header Menu|Insert" => "Wstaw",
         "Insert Cells…" => "Wstaw komórki…",
         "Delete" => "Usuń",
         "Delete Cells…" => "Usuń komórki…",
