@@ -43,8 +43,7 @@ long `.xls` track, so about half parallelizes (≈30–50 wall-clock hours with 
 
 Why alpha: all six core workflows in the [alpha gate](docs/roadmap.md#alpha-gate) pass end to end on macOS with save and reopen, and the core workflow works end to end (open an XLSX, enter formulas and data, format, sort
 and filter, chart, pivot, print to PDF, save XLSX), but users still hit blocking gaps on real
-files: 100 MB workbooks don't open (#175), there's no `.xls` (#121), Arabic and Devanagari text
-isn't shaped (Chinese text still reported in #142), charts lose their type and options on round trip, and
+files: 100 MB workbooks don't open (#175), there's no `.xls` (#121), Devanagari text needs shaping verification (Chinese text still reported in #142), charts lose their type and options on round trip, and
 nobody has yet confirmed that Excel opens our output without a repair prompt across a real
 corpus. Beta needs those closed (see [beta gates](docs/roadmap.md#beta-gates)).
 
@@ -105,7 +104,7 @@ Localized German formulas and numbers are in PR #163. Detail: [localization-pari
 | Simplified Chinese | zh-Hans | menus only | ~12% |
 | Spanish | es | none | 0% |
 | Hindi | hi | none | 0% |
-| Arabic | ar | none (no RTL layout, no shaping) | 0% |
+| Arabic | ar | catalog pending; shared shaping/bidi works | 0% |
 | French | fr | none | 0% |
 | Portuguese | pt-BR | menus, File view, dialogs | ~43% |
 | Indonesian | id | none | 0% |
@@ -150,6 +149,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | CSV and text open detects each column's date order: a value that reads only day first (`31/05/2026`) makes the column day first, a value that reads only month first (`12/31/2026`) makes it month first, an all-ambiguous column keeps month first with a warning, and a column with both kinds stays text with a warning (#2765) |
 | 2026-10-31 | Recently Used lists the functions most recently entered in a formula from any source (ribbon, control channel, MCP, scripts), kept with the preferences and returned by `formulas.recentlyUsed`; the Insert Function dialog takes Excel's title and a working category list (Most Recently Used, All, each category) |
 | 2026-10-31 | Formulas › Function Library as a big Insert Function button, the AutoSum split button and three columns of labelled small buttons, each category book in its own colour; category menus end with Insert Function… on that category; More Functions cascades into the remaining categories; Home › Editing shares the AutoSum menu; the MR key tip opens Recently Used |
+| 2026-10-26 | Arabic bidi display/editing preserve logical source text; per-cell reading direction is editable and survives undo, XLSX and conditional-format priority |
+| 2026-10-26 | Arabic text shows in cells and the interface through a system, fontconfig or craft-fonts Arabic face; workbook fonts keep their script fallbacks |
 | 2026-10-25 | AutoSum over a selection does what Excel does: a selected row gets one total to its right (in its last cell if that is empty), not a one-cell total under each cell; a block whose last column is empty gets each row's total there, one whose last row is empty each column's, and with both the corner gets the total of the block; otherwise totals go under each column as before |
 | 2026-10-24 | Macro interface ([macros.md](docs/macros.md#in-the-window)): an Automate › Macros group (Record Macro, which turns into Stop Recording, Use Relative References, Run Macro with recent macros); "Recording · N steps" with Stop in the status bar; a Record Macro dialog (checked name, free Ctrl+Shift shortcut, description); the Macros dialog lists macros beside Automate scripts and a VBA project, with Run, Step Into, Edit, Create, Delete and Options; Ctrl+Shift+letter macro shortcuts; questions that offer Run, Overwrite, Shift Down or Shift Right; a step editor with a breakpoint gutter, drag to reorder, a command picker, reference boxes that switch between relative tokens and absolute references, Inputs and Output tabs, a debug bar (Check, Run, Step, Continue, Run to Here, Stop with keep or undo) and grid overlays for inputs, writes, conflicts and the current step |
 | 2026-10-24 | Go To lists the named ranges of every sheet (`Sheet2!Name` for a name scoped to another sheet; hidden names, constants and formulas left out) and the references entered before, a double-click goes to an entry, and the Reference box takes several names or references separated by commas (`Price, Type`, `B14:C22,F19:G30`) |
@@ -278,6 +279,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | minor | File-page text fields keep the view open when Esc cancels an edit (#3035) |
 | 2026-10-31 | minor | Progress log: Recently Used and Insert Function categories |
 | 2026-10-31 | minor | Progress log: Function Library |
+| 2026-10-26 | minor | Progress log: Arabic bidi display and editing |
+| 2026-10-26 | minor | Progress log: Arabic font fallback |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-24 | minor | Macro interface on the Automate tab; progress log row |
 | 2026-10-24 | minor | Macro engine and `macro.*` commands; catalog 275 / 291 → 276 / 292 (View › Macros › Record Macro); progress log row |
