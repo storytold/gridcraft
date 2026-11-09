@@ -5,10 +5,13 @@
 //! customisation, add-in task panes), the workbook (custom XML, links to external workbooks with
 //! their `<externalReferences>`, data connections, XML maps) and each sheet (query tables, cells
 //! mapped to XML elements, form controls other than the buttons, scroll bars and spin buttons
-//! `controls.rs` models, ActiveX controls, OLE objects, the sheet background and printer settings, with the sheet's `<picture>`, `<oleObjects>` and `<controls>` XML, the `r:id`
-//! of `<pageSetup>`, the legacy VML shapes those controls need and the pictures of the headers and
-//! footers, `&G`, with their `<legacyDrawingHF>`). The workbook also keeps its
-//! `<fileVersion>` and the calcFeatures extension, which Excel needs to trust the saved values.
+//! `controls.rs` models, ActiveX controls, OLE objects, the sheet background and printer settings,
+//! with the sheet's `<picture>`, `<oleObjects>` and `<controls>` XML, the `r:id` of `<pageSetup>`,
+//! the legacy VML shapes those controls need and the pictures of the headers and footers (`&G`,
+//! with their `<legacyDrawingHF>`). PivotTables whose source is in another workbook are kept too:
+//! their table parts with the sheet, their cache definition and records parts with the workbook,
+//! and the cache's external-workbook link and original `cacheId`.
+//! The workbook also keeps its `<fileVersion>` and the calcFeatures extension, which Excel needs to trust the saved values.
 //!
 //! On write, kept parts get fresh part names where needed and new relationship ids; the `r:id`s in
 //! kept XML are rewritten to match. Kept content is conservative:
@@ -19,6 +22,7 @@
 //!   opened, followed or refreshed. A relative path to a linked workbook is rewritten when the
 //!   workbook is saved into another folder ([`rebase_links`]), so it still names the same file.
 //! - Sheet content lives on the sheet: deleting the sheet drops it, Copy Sheet doesn't copy it.
+//!   A kept pivot cache no kept PivotTable uses any more is dropped with it.
 //!   Cell references inside kept parts (a control's linked cell, a query table's range, a cell
 //!   mapped to an XML element) are kept as they were, not adjusted to inserted or deleted rows.
 //! - Strict Open XML files are not passed through (their namespaces differ from what we write).
@@ -38,6 +42,7 @@ use quick_xml::{Reader, Writer};
 
 use crate::IoError;
 use crate::package::{self, normalize};
+use crate::pivot::{CT_PIVOT_CACHE_DEF, CT_PIVOT_TABLE, ExternalPivot};
 use crate::read::Ctx;
 use crate::write::{NS_REL, Out, Rels, XML_DECL};
 use crate::xml::{self, esc_attr};
@@ -50,7 +55,7 @@ pub use read::KeptReader;
 pub use rebase::{SheetKept, rebase_links};
 #[cfg(test)]
 pub(crate) use write::sheet_names_in;
-pub use write::{KeptOut, SheetIds, WorkbookKept, workbook_elements, write_package_rels, write_workbook};
+pub use write::{KeptOut, SheetIds, WorkbookKept, finish_style_ids, workbook_elements, write_package_rels, write_workbook};
 
 /// Most bytes kept for one workbook.
 pub const MAX_KEPT_TOTAL: usize = 256 * 1024 * 1024;
@@ -103,7 +108,15 @@ const FILE_VERSION_ATTRS: &[&str] = &["appName", "lastEdited", "lowestEdited", "
 const CALC_FEATURES_URI: &str = "{B58B0392-4F1F-4190-BB64-5DF3571DCE5F}";
 const NS_CALC_FEATURES: &str = "http://schemas.microsoft.com/office/spreadsheetml/2018/calcfeatures";
 /// Kept sheet elements, in schema order (all after `<legacyDrawing>`, before `<tableParts>`).
+/// The sheet parts a kept sheet carries: the header and footer pictures first, as main lists them.
 const SHEET_SLOTS: &[&str] = &["legacyDrawingHF", "picture", "oleObjects", "controls"];
+/// Rewritten kinds a kept PivotTable (source in another workbook) reaches: the table, from the
+/// sheet, and its cache, which the workbook keeps (several tables can share one cache).
+const PIVOT_TABLE_GRAPH: &[&str] = &["pivotTable", "pivotCacheDefinition"];
+/// Rewritten kinds a kept pivot cache reaches.
+const PIVOT_CACHE_GRAPH: &[&str] = &["pivotCacheDefinition", "pivotCacheRecords"];
+/// Relationship type of a PivotTable's link to its cache.
+const PIVOT_CACHE_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition";
 
 /// Relationship kinds GridCraft reads and rewrites, or that depend on content it rewrites:
 /// kept content whose graph reaches one of them is dropped.
@@ -182,6 +195,21 @@ fn is_kind(r: &PreservedRel, kinds: &[&str]) -> bool {
 
 fn rewritten(r: &PreservedRel) -> bool {
     !r.external && REWRITTEN.contains(&kind(&r.rel_type).to_ascii_lowercase().as_str())
+}
+
+/// Gives the kept PivotTable part `table` a relationship to its cache `cache`, unless it has one.
+/// A table with no cache relationship gets its cache from the workbook's cache id, and the writer
+/// keeps the cache only through a relationship from the table.
+fn link_cache(p: &mut Preserved, table: &str, cache: &str) {
+    let Some(part) = p.parts.iter_mut().find(|q| normalize(&q.name) == normalize(table)) else { return };
+    if part.rels.iter().any(|r| !r.external && is_kind(r, &["pivotCacheDefinition"]) && normalize(&r.target) == normalize(cache)) {
+        return;
+    }
+    let mut n = part.rels.len() + 1;
+    while part.rels.iter().any(|r| r.id == format!("rId{n}")) {
+        n += 1;
+    }
+    part.rels.push(PreservedRel { id: format!("rId{n}"), rel_type: PIVOT_CACHE_REL.into(), target: cache.into(), external: false });
 }
 
 fn rels_part_name(part: &str) -> String {
