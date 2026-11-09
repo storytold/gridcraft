@@ -1,5 +1,10 @@
 use super::{SheetApp, theme};
 use crate::fonts;
+use std::time::Duration;
+
+fn request_font_catalog_poll(ctx: &egui::Context) {
+    ctx.request_repaint_after(Duration::from_millis(100));
+}
 
 impl SheetApp {
     /// Test-harness setup: mark a deterministic font set (see
@@ -56,6 +61,9 @@ impl SheetApp {
         // before it handles input, so a font change requested now would consume the step without
         // applying it. Delay the change one frame; the hidden-paint request keeps it coming.
         let defer_font_change = self.synthetic_pending || !self.synthetic.is_empty();
+        if !self.prepared_fonts && !fonts::scan_done() {
+            request_font_catalog_poll(ctx);
+        }
         if !defer_font_change && self.fonts_han.is_some_and(|han| han != theme::HanOrder::of(self.ui.language)) {
             self.fonts_ready = false;
             self.fonts_set = false;
@@ -66,7 +74,12 @@ impl SheetApp {
             // A font-set change made last frame is active now.
             self.fonts_rebind = false;
         } else if !defer_font_change && !self.prepared_fonts && fonts::scan_done() {
-            self.rebind_workbook_fonts(ctx);
+            let catalog_just_ready = !self.fonts_catalog_ready;
+            self.fonts_catalog_ready = true;
+            let rebound = self.rebind_workbook_fonts(ctx);
+            if catalog_just_ready && !rebound {
+                ctx.request_repaint();
+            }
         }
     }
 
@@ -94,19 +107,102 @@ impl SheetApp {
     /// Binds the workbook's installed fonts once the background scan has finished. Adding fonts
     /// re-applies the font set, which egui activates at the next pass, so skip this frame's paint
     /// (same one-frame cost as startup). Only when an open workbook changed.
-    fn rebind_workbook_fonts(&mut self, ctx: &egui::Context) {
+    fn rebind_workbook_fonts(&mut self, ctx: &egui::Context) -> bool {
         let seen = self.fonts_key();
         if seen == self.fonts_seen {
-            return;
+            return false;
         }
         let used = self.used_fonts();
         self.fonts_seen = seen;
         if used == self.fonts_bound {
-            return;
+            return false;
         }
         ctx.set_fonts(theme::font_definitions_with(self.ui.language, &used));
         self.fonts_bound = used;
         self.fonts_rebind = true;
         ctx.request_repaint();
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[test]
+    fn catalog_ready_requests_one_repaint_when_no_workbook_fonts_change() {
+        let _ = fonts::catalog();
+        let ctx = egui::Context::default();
+        let requests = Arc::new(AtomicUsize::new(0));
+        ctx.set_repaint_observer({
+            let requests = Arc::clone(&requests);
+            move |_| {
+                requests.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+        let mut app = SheetApp::new(gridcraft_engine::Session::new(), crate::Services::default());
+        app.fonts_ready = true;
+        app.fonts_set = true;
+
+        app.apply_font_state(&ctx);
+        assert_eq!(requests.load(Ordering::Relaxed), 1);
+        app.apply_font_state(&ctx);
+        assert_eq!(requests.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn pending_catalog_scan_schedules_a_delayed_paint() {
+        let ctx = egui::Context::default();
+        let requests = Arc::new(AtomicUsize::new(0));
+        ctx.set_repaint_observer({
+            let requests = Arc::clone(&requests);
+            move |_| {
+                requests.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+
+        request_font_catalog_poll(&ctx);
+
+        assert_eq!(requests.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn context_setup_starts_the_system_font_catalog_scan() {
+        let ctx = egui::Context::default();
+        SheetApp::setup_context_for_language(&ctx, false, crate::i18n::Language::En);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !fonts::scan_done() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(fonts::scan_done(), "context setup should start the background font scan");
+    }
+
+    #[test]
+    fn rebinding_workbook_fonts_still_requests_a_repaint() {
+        let _ = fonts::catalog();
+        let ctx = egui::Context::default();
+        let requests = Arc::new(AtomicUsize::new(0));
+        ctx.set_repaint_observer({
+            let requests = Arc::clone(&requests);
+            move |_| {
+                requests.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, crate::Services::default());
+        app.fonts_ready = true;
+        app.fonts_set = true;
+        app.fonts_catalog_ready = true;
+
+        app.apply_font_state(&ctx);
+        assert!(app.fonts_rebind);
+        assert!(requests.load(Ordering::Relaxed) > 0);
     }
 }

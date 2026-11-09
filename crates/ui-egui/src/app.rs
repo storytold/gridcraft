@@ -56,6 +56,7 @@ impl SheetApp {
             perf: Perf::default(),
             fonts_ready: false,
             fonts_set: false,
+            fonts_catalog_ready: false,
             prepared_fonts: false,
             fonts_bound: Vec::new(),
             fonts_seen: (0, 0),
@@ -93,12 +94,12 @@ impl SheetApp {
     ///
     /// [`logic`]: SheetApp::logic
     pub fn setup_context(ctx: &egui::Context, dark: bool) {
-        crate::fonts::start_scan();
         Self::setup_context_for_language(ctx, dark, i18n::Language::En);
     }
 
     /// Sets up fonts and visuals for a specific persisted interface language.
     pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
+        crate::fonts::start_scan();
         ctx.set_fonts(theme::font_definitions_for_language(language));
         theme::apply(ctx, dark);
     }

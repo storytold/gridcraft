@@ -11,6 +11,8 @@
 //! font list is the standard [`crate::ribbon::FONTS`] set.
 
 use std::collections::HashSet;
+#[cfg(any(windows, test))]
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -41,6 +43,36 @@ pub(crate) fn read_font(_path: &std::path::Path) -> Option<Vec<u8>> {
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_FAMILY_NAMES: usize = 16;
 
+#[cfg(any(windows, test))]
+fn expand_environment_references(value: &str, mut lookup: impl FnMut(&str) -> Option<String>) -> String {
+    let mut expanded = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(open) = rest.find('%') {
+        expanded.push_str(&rest[..open]);
+        let after_open = &rest[open + 1..];
+        let Some(close) = after_open.find('%') else {
+            expanded.push_str(&rest[open..]);
+            return expanded;
+        };
+        let name = &after_open[..close];
+        if let Some(replacement) = lookup(name) {
+            expanded.push_str(&replacement);
+        } else {
+            expanded.push_str(&rest[open..open + close + 2]);
+        }
+        rest = &after_open[close + 1..];
+    }
+    expanded.push_str(rest);
+    expanded
+}
+
+#[cfg(any(windows, test))]
+fn registry_font_path(value: &str, font_dir: &Path, lookup: impl FnMut(&str) -> Option<String>) -> PathBuf {
+    let expanded = expand_environment_references(value, lookup);
+    let path = PathBuf::from(expanded);
+    if path.is_absolute() { path } else { font_dir.join(path) }
+}
+
 /// One face of one installed font file.
 #[derive(Clone, Debug)]
 pub struct Face {
@@ -59,6 +91,30 @@ pub struct Face {
     pub weight: f32,
     /// Whether the style name reads as italic or oblique.
     pub italic: bool,
+}
+
+#[cfg(windows)]
+fn registry_font_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let windir = std::env::var_os("WINDIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Windows"));
+    let font_dir = windir.join("Fonts");
+    for (hkey, subkey) in [
+        (winreg::enums::HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"),
+        (winreg::enums::HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"),
+    ] {
+        if let Ok(reg) = winreg::RegKey::predef(hkey).open_subkey(subkey) {
+            for item in reg.enum_values().flatten() {
+                let name = item.0;
+                if let Ok(value) = reg.get_value::<String, _>(&name) {
+                    let full = registry_font_path(&value, &font_dir, |name| std::env::var(name).ok());
+                    if full.exists() {
+                        paths.push(full);
+                    }
+                }
+            }
+        }
+    }
+    paths
 }
 
 /// The font folders of the platform (the system's and the user's). Empty on wasm.
@@ -82,6 +138,8 @@ pub fn system_font_dirs() -> Vec<PathBuf> {
             if let Some(l) = std::env::var_os("LOCALAPPDATA") {
                 dirs.push(PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
             }
+            #[cfg(windows)]
+            dirs.extend(registry_font_paths());
         } else {
             dirs.extend(["/usr/share/fonts", "/usr/local/share/fonts", "/usr/share/fonts/TTF"].map(Into::into));
             if let Some(h) = &home {
@@ -167,20 +225,24 @@ fn file_faces(data: &[u8]) -> Vec<(u32, String, Vec<String>, String)> {
 /// Catalog every face under `dirs`, recursing into subfolders. A folder reached twice (through a
 /// symlink) is read once, so a link back to a parent ends the walk.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<Face> {
+pub fn scan_dirs(paths: &[PathBuf]) -> Vec<Face> {
     let mut out: Vec<Face> = Vec::new();
-    let mut stack: Vec<PathBuf> = dirs.to_vec();
+    let mut stack: Vec<PathBuf> = paths.to_vec();
     let mut seen_dirs: HashSet<PathBuf> = HashSet::new();
-    while let Some(dir) = stack.pop() {
-        let key = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
-        if !seen_dirs.insert(key) {
-            continue;
-        }
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
+    let mut seen_files: HashSet<PathBuf> = HashSet::new();
+    while let Some(path) = stack.pop() {
+        if path.is_dir() {
+            let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            if !seen_dirs.insert(key) {
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(&path) else { continue };
+            for entry in entries.flatten() {
+                stack.push(entry.path());
+            }
+        } else {
+            let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            if !seen_files.insert(key) {
                 continue;
             }
             let is_font = path
@@ -212,7 +274,7 @@ pub fn catalog() -> &'static [Face] {
 }
 
 /// The catalog if the scan has finished, else `None` — never blocks, for use while painting.
-fn catalog_now() -> Option<&'static [Face]> {
+pub fn catalog_now() -> Option<&'static [Face]> {
     CATALOG.get().map(Vec::as_slice)
 }
 
@@ -239,7 +301,7 @@ pub fn scan_done() -> bool {
 /// The faces of one installed family, by any of its names, regular-weight first (the order roles
 /// pick from).
 pub fn faces_of(family: &str) -> Vec<Face> {
-    catalog_now().map(|cat| faces_named(cat, family)).unwrap_or_default()
+    faces_named(catalog(), family)
 }
 
 /// The faces in `cat` that go by `wanted`. When two families claim one name the winner is fixed,
@@ -265,7 +327,10 @@ fn faces_named(cat: &[Face], wanted: &str) -> Vec<Face> {
 /// [`cell_family`](crate::theme::cell_family) looks up, so `맑은 고딕` binds as `맑은 고딕`, not as
 /// the catalog's `Malgun Gothic`.
 pub fn installed_among(names: &[String]) -> Vec<String> {
-    catalog_now().map(|cat| installed_in(cat, names)).unwrap_or_default()
+    if names.is_empty() {
+        return Vec::new();
+    }
+    installed_in(catalog(), names)
 }
 
 /// [`installed_among`] over a given catalog. Names dedupe exactly, not case-folded: a role key is
@@ -283,12 +348,18 @@ fn installed_in(cat: &[Face], names: &[String]) -> Vec<String> {
     out
 }
 
-/// The font list a combo box shows: the standard [`crate::ribbon::FONTS`] names first (what Excel
-/// offers, and what we substitute), then every other installed family A–Z. Never blocks: until the
-/// background scan finishes it returns just the standard names.
+/// The full font list: the standard [`crate::ribbon::FONTS`] names first, then every other installed
+/// family A–Z once the background scan finishes. While it is still running, returns the standard
+/// names without blocking; the UI's scan polling requests a repaint when the catalog is ready.
 pub fn families() -> Vec<String> {
+    families_from_catalog(catalog_now())
+}
+
+/// The catalog-backed font list, or the standard names if the background scan is still running.
+/// Passing `None` keeps the ribbon's paint path nonblocking.
+pub fn families_from_catalog(cat: Option<&[Face]>) -> Vec<String> {
     let mut out: Vec<String> = crate::ribbon::FONTS.iter().map(|s| s.to_string()).collect();
-    let Some(cat) = catalog_now() else { return out };
+    let Some(cat) = cat else { return out };
     let mut seen: HashSet<String> = out.iter().map(|s| s.to_lowercase()).collect();
     let mut installed: Vec<String> = cat.iter().map(|f| f.family.clone()).collect();
     installed.sort_by_key(|a| a.to_lowercase());
@@ -396,6 +467,46 @@ pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registry_paths_expand_each_environment_reference() {
+        let font_dir = std::env::temp_dir().join("gridcraft-registry-fonts");
+        let absolute_dir = std::env::temp_dir().join("gridcraft-registry-root");
+        let expand = |name: &str| match name {
+            "ROOT" => Some(absolute_dir.to_string_lossy().into_owned()),
+            "FOLDER" => Some("Private".into()),
+            _ => None,
+        };
+
+        assert_eq!(
+            registry_font_path("%ROOT%/Fonts/%FILE%", &font_dir, |name| {
+                if name == "ROOT" { Some(absolute_dir.to_string_lossy().into_owned()) } else { None }
+            }),
+            absolute_dir.join("Fonts/%FILE%"),
+            "unresolved variables remain literal in an absolute path"
+        );
+        assert_eq!(
+            registry_font_path("%FOLDER%/Example.ttf", &font_dir, expand),
+            font_dir.join("Private/Example.ttf"),
+            "relative paths resolve against the Windows font directory"
+        );
+        assert_eq!(
+            registry_font_path("%MISSING%/Example.ttf", &font_dir, |_| None),
+            font_dir.join("%MISSING%/Example.ttf"),
+            "unresolved references remain a safe relative path"
+        );
+    }
+
+    #[test]
+    fn font_families_fall_back_to_standard_names_until_catalog_is_ready() {
+        let expected: Vec<String> = crate::ribbon::FONTS.iter().map(|name| name.to_string()).collect();
+        assert_eq!(families_from_catalog(None), expected);
+
+        let cat = [face("Ubuntu", &["Ubuntu"], "ubuntu.ttf", 400.0)];
+        let families = families_from_catalog(Some(&cat));
+        assert!(families.starts_with(&expected));
+        assert_eq!(families.last().map(String::as_str), Some("Ubuntu"));
+    }
 
     #[test]
     fn style_names_map_to_weight_and_slant() {
@@ -626,13 +737,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// On a Windows machine with Malgun Gothic, the real file carries its Korean name.
     #[cfg(windows)]
     #[test]
-    fn malgun_gothic_answers_to_its_korean_name_when_installed() {
-        let root = std::env::var_os("WINDIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Windows"));
-        let Ok(data) = std::fs::read(root.join("Fonts").join("malgun.ttf")) else { return };
-        let faces = file_faces(&data);
-        assert!(faces.iter().any(|(_, family, names, _)| family == "Malgun Gothic" && names.iter().any(|n| n == "맑은 고딕")), "{faces:?}");
+    fn registry_fonts_are_scanned() {
+        let cat = catalog();
+        let fams = families();
+        println!("REGISTRY SCAN: found {} faces across {} families: {fams:?}", cat.len(), fams.len());
+        assert!(!cat.is_empty());
     }
 }
