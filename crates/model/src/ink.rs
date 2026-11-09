@@ -94,9 +94,16 @@ where
 
         fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
             let mut textures = Vec::new();
+            let mut seen = std::collections::HashSet::new();
             while textures.len() < MAX_INK_TEXTURES {
                 match seq.next_element::<Stored>()? {
-                    Some(Stored::Texture(texture)) => textures.push(texture),
+                    // Ids are content-derived: a repeat is the same image, kept once, so copies
+                    // cannot crowd out other textures or survive a removal of the first entry.
+                    Some(Stored::Texture(texture)) => {
+                        if seen.insert(texture.id.clone()) {
+                            textures.push(texture);
+                        }
+                    }
                     Some(Stored::Ignored(_)) => {}
                     None => break,
                 }
@@ -232,10 +239,28 @@ mod tests {
 
     #[test]
     fn json_stops_at_the_texture_count_limit() {
-        let one = serde_json::to_value(stored()).expect("serialises");
-        let list = vec![one; MAX_INK_TEXTURES + 5];
+        // Distinct payloads give distinct ids; repeats of one fill the serialised entry, not the store.
+        let list: Vec<_> = (0..MAX_INK_TEXTURES + 5)
+            .map(|i| {
+                let mut texture = stored();
+                let mut data = png_bytes();
+                data.extend_from_slice(&i.to_le_bytes());
+                texture.data = Arc::new(data);
+                texture.id = InkTexture::id_for(&texture.data);
+                serde_json::to_value(&texture).expect("serialises")
+            })
+            .collect();
         let store: Store = serde_json::from_value(serde_json::json!({"textures": list})).expect("reads");
         assert_eq!(store.textures.len(), MAX_INK_TEXTURES, "the store cannot grow past its cap");
+    }
+
+    #[test]
+    fn json_repeated_texture_ids_are_kept_once() {
+        // Ids are content-derived, so a hostile file repeating one entry must not fill the store
+        // with copies: removal drops the first match, and the survivors would keep painting.
+        let one = serde_json::to_value(stored()).expect("serialises");
+        let store: Store = serde_json::from_value(serde_json::json!({"textures": vec![one; 3]})).expect("reads");
+        assert_eq!(store.textures.len(), 1, "repeats of one id are the same image: {textures:?}", textures = store.textures);
     }
 
     #[test]

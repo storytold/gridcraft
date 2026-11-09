@@ -553,7 +553,7 @@ fn texture_import(s: &mut Session, p: &Json) -> Result<Json> {
         }
         let data = crate::io::base64_decode(b).ok_or_else(|| bad("draw.textureImport", "invalid base64"))?;
         (str_param(p, "name").unwrap_or("Texture").to_string(), data)
-    } else if let Some(path) = str_param(p, "path") {
+    } else if let Some(path) = str_param(p, "path").filter(|path| !path.trim().is_empty()) {
         // Bound the read itself: a 2 GB file must not be allocated before the 16 MiB check.
         let data = crate::io::read_file_limited(path, gridcraft_model::MAX_INK_TEXTURE_BYTES as u64)?;
         let name = str_param(p, "name")
@@ -561,7 +561,7 @@ fn texture_import(s: &mut Session, p: &Json) -> Result<Json> {
             .unwrap_or_else(|| path.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or("Texture").to_string());
         (name, data)
     } else {
-        return Err(bad("draw.textureImport", "give `path`, or `name` and `base64`"));
+        return Err(bad("draw.textureImport", "choose a PNG or JPEG image to import (give `path`, or `name` and `base64`)"));
     };
     let (mime, width, height) = validate_texture(&data)?;
     let texture = InkTexture::new(&name, mime, std::sync::Arc::new(data), width, height)

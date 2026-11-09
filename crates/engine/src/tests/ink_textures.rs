@@ -80,11 +80,15 @@ fn hostile_imports_are_refused() {
         (json!({"name": "x.gif", "base64": b64(b"GIF89a\x01\x00\x01\x00\x00\x00\x00")}), "not a PNG or JPEG"),
         (json!({"name": "x.png", "base64": b64(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3])}), "truncated"),
         (json!({"name": "x.png", "base64": b64(&vec![0u8; 16 * 1024 * 1024 + 1])}), "too large"),
-        (json!({}), "no source"),
+        (json!({"path": ""}), "an empty path is no image chosen"),
+        (json!({"path": "   "}), "a blank path is no image chosen"),
     ] {
         assert!(s.execute("draw.textureImport", params).is_err(), "{why} must be refused");
     }
-    assert_eq!(s.doc().unwrap().wb.ink_textures.len(), 0);
+    // The empty-path refusal names the action, not the OS: OK on an untouched dialog must say
+    // what to do rather than `: No such file or directory`.
+    let err = s.execute("draw.textureImport", json!({"path": ""})).unwrap_err().to_string();
+    assert!(err.contains("choose a PNG or JPEG"), "the message must name the action: {err}");
 }
 
 /// The pen's repeat size is clamped to its documented range rather than trusted.
