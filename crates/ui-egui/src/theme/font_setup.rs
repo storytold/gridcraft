@@ -110,9 +110,8 @@ pub fn has_bold_face(ctx: &egui::Context, font_name: &str, italic: bool) -> bool
     ctx.fonts(|f| defs_have_bold_face(f.definitions(), font_name, italic))
 }
 
-/// Embedded OFL Latin role face from `fonts/latin-manifest.txt` when no system font candidate was
-/// found (such as on `wasm32` or a minimal Linux host).
-fn craft_role_font(role: &str) -> Option<FontData> {
+/// Resolves a built-in role to its OFL Latin face (`Carlito` or `Caladea`) in `latin_fonts`.
+fn craft_role_font_from(role: &str, latin_fonts: &[(&str, &str, &'static [u8])]) -> Option<FontData> {
     let (family, style) = match role {
         UI | CELL => ("Carlito", "Regular"),
         UI_BOLD | CELL_BOLD => ("Carlito", "Bold"),
@@ -123,7 +122,13 @@ fn craft_role_font(role: &str) -> Option<FontData> {
         MATH_BOLD => ("Caladea", "Bold"),
         _ => return None,
     };
-    craft_fonts::CRAFT_LATIN_FONTS.iter().find(|(f, s, _)| *f == family && *s == style).map(|(_, _, bytes)| FontData::from_static(bytes))
+    latin_fonts.iter().find(|(f, s, _)| *f == family && *s == style).map(|(_, _, bytes)| FontData::from_static(bytes))
+}
+
+/// Embedded OFL Latin role face from `fonts/latin-manifest.txt` when no system font candidate was
+/// found (such as on `wasm32` or a minimal Linux host).
+fn craft_role_font(role: &str) -> Option<FontData> {
+    craft_role_font_from(role, craft_fonts::CRAFT_LATIN_FONTS)
 }
 
 /// Width in points, at 100% zoom, of one line of cell text drawn as the grid draws it: in the
@@ -699,25 +704,41 @@ mod font_binding_tests {
         }
     }
 
-    /// Verifies that embedded Latin role fonts provide all 8 faces and distinct font faces for regular, bold, italic, and bold-italic when bundled.
+    /// Verifies that Latin role font lookup maps each built-in role to its distinct regular, bold, italic, and bold-italic face.
     #[test]
     fn craft_role_fonts_supply_distinct_bold_and_italic_faces() {
-        if craft_fonts::CRAFT_LATIN_FONTS.is_empty() {
-            assert!(!super::craft_fonts_required(), "CRAFT_FONTS_REQUIRED=1 must bundle CRAFT_LATIN_FONTS");
-            assert!(super::craft_role_font("cell").is_none());
-            return;
+        static TABLE: &[(&str, &str, &[u8])] = &[
+            ("Carlito", "Regular", b"carlito-regular"),
+            ("Carlito", "Bold", b"carlito-bold"),
+            ("Carlito", "Italic", b"carlito-italic"),
+            ("Carlito", "Bold Italic", b"carlito-bold-italic"),
+            ("Caladea", "Regular", b"caladea-regular"),
+            ("Caladea", "Bold", b"caladea-bold"),
+            ("Caladea", "Italic", b"caladea-italic"),
+            ("Caladea", "Bold Italic", b"caladea-bold-italic"),
+        ];
+        for table in std::iter::once(TABLE).chain((!craft_fonts::CRAFT_LATIN_FONTS.is_empty()).then_some(craft_fonts::CRAFT_LATIN_FONTS)) {
+            assert_eq!(table.len(), 8, "all 8 Carlito and Caladea faces must be present");
+            let ui = super::craft_role_font_from(UI, table).expect("ui face");
+            let ui_bold = super::craft_role_font_from(UI_BOLD, table).expect("ui-bold face");
+            let reg = super::craft_role_font_from(CELL, table).expect("cell face");
+            let bold = super::craft_role_font_from(CELL_BOLD, table).expect("cell-bold face");
+            let italic = super::craft_role_font_from(CELL_ITALIC, table).expect("cell-italic face");
+            let bi = super::craft_role_font_from(CELL_BOLD_ITALIC, table).expect("cell-bold-italic face");
+            let serif = super::craft_role_font_from(SERIF, table).expect("serif face");
+            let math = super::craft_role_font_from(MATH, table).expect("math face");
+            let math_italic = super::craft_role_font_from(MATH_ITALIC, table).expect("math-italic face");
+            let math_bold = super::craft_role_font_from(MATH_BOLD, table).expect("math-bold face");
+            assert!(super::craft_role_font_from(MONO, table).is_none());
+            assert_eq!((*ui.font).as_ref(), (*reg.font).as_ref());
+            assert_eq!((*ui_bold.font).as_ref(), (*bold.font).as_ref());
+            assert_eq!((*serif.font).as_ref(), (*math.font).as_ref());
+            assert_ne!((*reg.font).as_ref(), (*bold.font).as_ref(), "bold must use a distinct font face from regular");
+            assert_ne!((*reg.font).as_ref(), (*italic.font).as_ref(), "italic must use a distinct font face from regular");
+            assert_ne!((*bold.font).as_ref(), (*bi.font).as_ref(), "bold-italic must use a distinct font face from bold");
+            assert_ne!((*serif.font).as_ref(), (*math_bold.font).as_ref(), "Caladea Bold must differ from Caladea Regular");
+            assert_ne!((*serif.font).as_ref(), (*math_italic.font).as_ref(), "Caladea Italic must differ from Caladea Regular");
         }
-        assert_eq!(craft_fonts::CRAFT_LATIN_FONTS.len(), 8, "all 8 Carlito and Caladea faces must be bundled");
-        let reg = super::craft_role_font("cell").expect("cell face");
-        let bold = super::craft_role_font("cell-bold").expect("cell-bold face");
-        let italic = super::craft_role_font("cell-italic").expect("cell-italic face");
-        let bi = super::craft_role_font("cell-bold-italic").expect("cell-bold-italic face");
-        let serif = super::craft_role_font("serif").expect("serif face");
-        let math_bold = super::craft_role_font("math-bold").expect("math-bold face");
-        assert_ne!((*reg.font).as_ref(), (*bold.font).as_ref(), "bold must use a distinct font face from regular");
-        assert_ne!((*reg.font).as_ref(), (*italic.font).as_ref(), "italic must use a distinct font face from regular");
-        assert_ne!((*bold.font).as_ref(), (*bi.font).as_ref(), "bold-italic must use a distinct font face from bold");
-        assert_ne!((*serif.font).as_ref(), (*math_bold.font).as_ref(), "Caladea Bold must differ from Caladea Regular");
     }
 
     /// Verifies `defs_have_bold_face` and `has_bold_face` when regular and bold families share or differ in their primary face.
