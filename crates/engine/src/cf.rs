@@ -244,7 +244,7 @@ impl CfCache {
         let v = sh.value(c);
         let no_stats = RuleStats::default();
         for (idx, cf) in rules {
-            let first = cf.ranges.first().map(|r| r.start).unwrap_or(c);
+            let first = RangeRef::top_left(&cf.ranges).unwrap_or(c);
             let st: &RuleStats = match stats_need(&cf.rule) {
                 Some(need) => &*self.stats.entry(idx).or_insert_with(|| RuleStats::build(sh, &cf.ranges, need)),
                 None => &no_stats,
