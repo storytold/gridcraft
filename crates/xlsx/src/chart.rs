@@ -265,6 +265,8 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         gap_width: u.child_val("gapWidth").and_then(|v| v.trim().trim_end_matches('%').parse::<u16>().ok()).unwrap_or(150).min(500),
         up: u.path(&["upBars", "spPr", "solidFill"]).and_then(dml_color),
         down: u.path(&["downBars", "spPr", "solidFill"]).and_then(dml_color),
+        up_opacity: u.path(&["upBars", "spPr", "solidFill"]).and_then(fill_opacity),
+        down_opacity: u.path(&["downBars", "spPr", "solidFill"]).and_then(fill_opacity),
     });
     let doughnut = plot.child("doughnutChart");
     let hole_size = doughnut.and_then(|g| g.child_val("holeSize")).and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(75).clamp(10, 90);
@@ -668,17 +670,29 @@ fn trendline_xml(t: &Trendline, wb: &Workbook) -> String {
     x
 }
 
+/// A solid fill's opacity in percent (`a:alpha` on its colour, in thousandths of a percent).
+fn fill_opacity(fill: &El) -> Option<u8> {
+    let colour = fill.children.iter().find(|c| c.name.ends_with("Clr"))?;
+    let alpha = colour.child("alpha")?.attr_f64("val")?;
+    alpha.is_finite().then(|| (alpha / 1000.0).round().clamp(0.0, 100.0) as u8)
+}
+
 /// The chart's up/down bars, written in a primary line or stock group (`axes` 1 and 2).
 fn up_down_xml(ch: &Chart, axes: (u32, u32), wb: &Workbook) -> String {
     let Some(u) = ch.up_down_bars.filter(|_| axes.0 == 1) else { return String::new() };
-    let fill = |c: Option<Color>| {
-        c.and_then(|c| srgb(&c, &wb.theme)).map(|c| format!("<c:spPr><a:solidFill>{c}</a:solidFill></c:spPr>")).unwrap_or_default()
+    let fill = |c: Option<Color>, opacity: Option<u8>| {
+        let Some(rgb) = c.and_then(|c| srgb(&c, &wb.theme)) else { return String::new() };
+        let colour = match opacity.filter(|o| *o < 100) {
+            Some(o) => rgb.replacen("/>", &format!("><a:alpha val=\"{}\"/></a:srgbClr>", u32::from(o) * 1000), 1),
+            None => rgb,
+        };
+        format!("<c:spPr><a:solidFill>{colour}</a:solidFill></c:spPr>")
     };
     format!(
         "<c:upDownBars><c:gapWidth val=\"{}\"/><c:upBars>{}</c:upBars><c:downBars>{}</c:downBars></c:upDownBars>",
         u.gap_width.min(500),
-        fill(u.up),
-        fill(u.down)
+        fill(u.up, u.up_opacity),
+        fill(u.down, u.down_opacity)
     )
 }
 

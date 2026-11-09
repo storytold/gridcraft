@@ -557,6 +557,12 @@ pub struct ChartUpDownBars {
     pub up: Option<Color>,
     /// Fill of a bar where the last series is lower; `None` is Excel's default, dark grey.
     pub down: Option<Color>,
+    /// Opacity of the up fill in percent (`a:alpha`); `None` is opaque.
+    #[serde(default)]
+    pub up_opacity: Option<u8>,
+    /// Opacity of the down fill in percent; `None` is opaque.
+    #[serde(default)]
+    pub down_opacity: Option<u8>,
 }
 
 /// A chart's data table (`c:dTable`), independent of the chart legend.

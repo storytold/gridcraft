@@ -1761,3 +1761,18 @@ fn up_down_bars_join_the_first_and_last_lines() {
         .count();
     assert_eq!(flat, 1, "equal values draw one black line");
 }
+
+/// Up/down bar fills resolve with the file's opacity: 67% is 171 of 255; Excel's default fills are
+/// opaque.
+#[test]
+fn up_down_bar_opacity_reaches_the_drawing() {
+    use gridcraft_model::{ChartUpDownBars, Color};
+    let mut wb = Workbook::new();
+    wb.sheet_mut(0).unwrap().set_value(CellRef::new(0, 0), Value::Number(1.0));
+    let mut c = chart(ChartKind::Line);
+    c.series = vec![Series { values: "Sheet1!$A$1:$A$1".into(), ..Default::default() }];
+    c.up_down_bars = Some(ChartUpDownBars { gap_width: 150, up: None, down: Some(Color::Rgb(0xFF0000)), up_opacity: None, down_opacity: Some(67) });
+    let ud = resolve(&wb, 0, &c).up_down.unwrap();
+    assert_eq!(ud.down, [0xFF, 0, 0, 171]);
+    assert_eq!(ud.up, [0xF9, 0xF9, 0xF9, 0xFF]);
+}

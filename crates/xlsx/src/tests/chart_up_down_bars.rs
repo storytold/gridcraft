@@ -24,11 +24,19 @@ fn chart(extra: &str) -> gridcraft_model::Chart {
 fn up_down_bars_are_read() {
     assert_eq!(chart("").up_down_bars, None);
     let c = chart("<c:upDownBars><c:gapWidth val=\"50\"/><c:upBars/><c:downBars/></c:upDownBars>");
-    assert_eq!(c.up_down_bars, Some(ChartUpDownBars { gap_width: 50, up: None, down: None }));
+    assert_eq!(c.up_down_bars, Some(ChartUpDownBars { gap_width: 50, up: None, down: None, up_opacity: None, down_opacity: None }));
     let c = chart(
         "<c:upDownBars><c:gapWidth val=\"150%\"/><c:upBars/><c:downBars><c:spPr><a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill></c:spPr></c:downBars></c:upDownBars>",
     );
-    assert_eq!(c.up_down_bars, Some(ChartUpDownBars { gap_width: 150, up: None, down: Some(Color::Rgb(0xFF0000)) }));
+    assert_eq!(
+        c.up_down_bars,
+        Some(ChartUpDownBars { gap_width: 150, up: None, down: Some(Color::Rgb(0xFF0000)), up_opacity: None, down_opacity: None })
+    );
+    // A fill's alpha, in thousandths of a percent, is its opacity.
+    let c = chart(
+        "<c:upDownBars><c:upBars/><c:downBars><c:spPr><a:solidFill><a:srgbClr val=\"FF0000\"><a:alpha val=\"67000\"/></a:srgbClr></a:solidFill></c:spPr></c:downBars></c:upDownBars>",
+    );
+    assert_eq!(c.up_down_bars.map(|u| (u.up_opacity, u.down_opacity)), Some((None, Some(67))));
     // No gap width is Excel's 150; an out-of-range one is held to 500.
     assert_eq!(chart("<c:upDownBars><c:upBars/><c:downBars/></c:upDownBars>").up_down_bars.map(|u| u.gap_width), Some(150));
     assert_eq!(chart("<c:upDownBars><c:gapWidth val=\"9000\"/></c:upDownBars>").up_down_bars.map(|u| u.gap_width), Some(500));
@@ -37,8 +45,8 @@ fn up_down_bars_are_read() {
 #[test]
 fn up_down_bars_survive_xlsx_save_reopen() {
     for bars in [
-        ChartUpDownBars { gap_width: 150, up: None, down: None },
-        ChartUpDownBars { gap_width: 40, up: Some(Color::Rgb(0x00B050)), down: Some(Color::Rgb(0xFF0000)) },
+        ChartUpDownBars { gap_width: 150, up: None, down: None, up_opacity: None, down_opacity: None },
+        ChartUpDownBars { gap_width: 40, up: Some(Color::Rgb(0x00B050)), down: Some(Color::Rgb(0xFF0000)), up_opacity: None, down_opacity: Some(67) },
     ] {
         let mut c = chart("");
         c.id = 1;
