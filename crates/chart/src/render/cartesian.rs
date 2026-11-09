@@ -336,7 +336,9 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
 
     // The plotted points of the lines, in series order, with whether each is on the secondary axis:
     // up/down bars join the first and last primary ones.
-    let mut line_pts: Vec<(bool, Vec<Option<[f32; 2]>>)> = Vec::new();
+    let mut line_pts: Vec<LinePoints> = Vec::new();
+    // Kept only when up/down bars will read them.
+    let keep_line_pts = data.up_down.is_some() && !horizontal;
     // Areas first, then columns, then lines on top.
     for pass in 0..3 {
         for (i, s) in data.series.iter().enumerate() {
@@ -438,7 +440,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                         }
                     }
                     // Kept for up/down bars once drawn and labelled: moved, not copied.
-                    line_pts.push((sec.get(i).copied().unwrap_or(false), pts));
+                    line_pts.push((sec.get(i).copied().unwrap_or(false), keep_line_pts.then_some(pts)));
                 }
             }
         }
@@ -565,12 +567,16 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
     draw_trend_labels(ctx, plot, &trend_labels);
 }
 
+/// A line series' plotted points for up/down bars: whether it is on the secondary axis, and the
+/// points, kept only when the chart has up/down bars.
+type LinePoints = (bool, Option<Vec<Option<[f32; 2]>>>);
+
 /// Up/down bars over the lines, as Excel draws them: in each category where both have a point, a bar
 /// from the first line series to the last, `cw / (1 + gap / 100)` wide and outlined in black, light
 /// where the last is higher and dark where it is lower; equal values give a black line.
-fn up_down_bars(ctx: &mut Ctx, ud: &crate::UpDownBars, lines: &[(bool, Vec<Option<[f32; 2]>>)], cw: f32) {
+fn up_down_bars(ctx: &mut Ctx, ud: &crate::UpDownBars, lines: &[LinePoints], cw: f32) {
     const OUTLINE: Rgba = [0, 0, 0, 0xFF];
-    let primary: Vec<&Vec<Option<[f32; 2]>>> = lines.iter().filter(|(secondary, _)| !secondary).map(|(_, p)| p).collect();
+    let primary: Vec<&Vec<Option<[f32; 2]>>> = lines.iter().filter(|(secondary, _)| !secondary).filter_map(|(_, p)| p.as_ref()).collect();
     let [first, .., last] = primary.as_slice() else { return };
     let w = cw / (1.0 + ud.gap.clamp(0.0, 500.0) / 100.0);
     for (a, b) in first.iter().zip(last.iter()) {
