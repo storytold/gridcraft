@@ -4,7 +4,7 @@ use gridcraft_core::CellRef;
 use gridcraft_model::{Anchor, Color, InkEffect, InkStyle, InkTexture, InkTool, MAX_INK_TEXTURES, Shape, ShapeKind};
 use serde_json::{Value as Json, json};
 
-use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, ok, str_param, u32_param};
+use super::{CommandSpec, EngineError, Result, Session, bad, cmd, edit, has_doc, ok};
 
 /// Excel's pen widths in millimetres (the Highlighter has its own wider steps).
 pub const PEN_WIDTHS_MM: [f32; 6] = [0.25, 0.35, 0.5, 1.0, 2.0, 3.5];
@@ -14,8 +14,56 @@ pub const HIGHLIGHTER_WIDTHS_MM: [f32; 6] = [2.0, 4.0, 6.0, 8.0, 10.0, 10.0];
 /// say, and the bounds it is kept within. The tile length is `width * scale`: a scale of 8 on
 /// a pen paints one repeat every eight stroke widths, so repeats grow with the brush.
 pub const DEFAULT_TEXTURE_SCALE: f32 = 8.0;
-pub const MIN_TEXTURE_SCALE: f32 = 0.5;
-pub const MAX_TEXTURE_SCALE: f32 = 512.0;
+pub const MIN_TEXTURE_SCALE: f32 = gridcraft_model::MIN_INK_TEXTURE_SCALE;
+pub const MAX_TEXTURE_SCALE: f32 = gridcraft_model::MAX_INK_TEXTURE_SCALE;
+
+/// The most points one `draw.stroke` may carry; a longer stroke is refused rather than cut, so a
+/// caller never loses data without hearing about it.
+pub const MAX_STROKE_POINTS: usize = 20_000;
+
+/// A numeric parameter: absent (or null) is `None`; a value present that is not a finite number is
+/// refused. Every `draw.*` parameter follows one policy: wrong types and unknown names are errors,
+/// while the documented ranges are clamped.
+fn number(p: &Json, key: &str, cmd: &str) -> Result<Option<f64>> {
+    match p.get(key) {
+        None | Some(Json::Null) => Ok(None),
+        Some(v) => v.as_f64().filter(|v| v.is_finite()).map(Some).ok_or_else(|| bad(cmd, format!("`{key}` must be a finite number"))),
+    }
+}
+
+/// A whole-number parameter (a gallery id or a shape id).
+fn whole(p: &Json, key: &str, cmd: &str) -> Result<Option<u32>> {
+    match p.get(key) {
+        None | Some(Json::Null) => Ok(None),
+        Some(v) => v
+            .as_u64()
+            .filter(|v| *v <= u64::from(u32::MAX))
+            .map(|v| Some(v as u32))
+            .ok_or_else(|| bad(cmd, format!("`{key}` must be a whole number"))),
+    }
+}
+
+/// A string parameter: absent (or null) is `None`, anything else that is not a string is refused.
+fn text<'a>(p: &'a Json, key: &str, cmd: &str) -> Result<Option<&'a str>> {
+    match p.get(key) {
+        None | Some(Json::Null) => Ok(None),
+        Some(v) => v.as_str().map(Some).ok_or_else(|| bad(cmd, format!("`{key}` must be a string"))),
+    }
+}
+
+/// A boolean parameter.
+fn flag(p: &Json, key: &str, cmd: &str) -> Result<Option<bool>> {
+    match p.get(key) {
+        None | Some(Json::Null) => Ok(None),
+        Some(v) => v.as_bool().map(Some).ok_or_else(|| bad(cmd, format!("`{key}` must be true or false"))),
+    }
+}
+
+/// Whether an effect name is the "none" spelling rather than an unknown one.
+fn is_no_effect(e: &str) -> bool {
+    let e = e.trim().to_ascii_lowercase();
+    e.is_empty() || matches!(e.as_str(), "none" | "solid")
+}
 
 /// A repeat size from a parameter or the pen's state, kept finite and within
 /// [`MIN_TEXTURE_SCALE`]–[`MAX_TEXTURE_SCALE`].
@@ -175,12 +223,12 @@ pub fn cm_to_px(cm: f32) -> f32 {
     cm * PX_PER_CM
 }
 
-/// Sheet points (96 dpi pixels) to centimetres.
-pub fn px_to_cm(px: f32) -> f32 {
-    px / PX_PER_CM
-}
-
 /// Every `draw.*` command the CLI and the host can call, with its parameter shapes.
+///
+/// One parameter policy across the Draw commands: a value of the wrong type or an unknown brush,
+/// effect or texture name is an error, while the ranges stated here are clamped. `brush` is the
+/// canonical brush name; `kind` is accepted as an alias wherever it is listed. A pen with no
+/// texture or effect reports `""` for both (`texture` and `effect`), never `null`.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -188,7 +236,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Pen",
             ["Draw", "Tools"],
             None,
-            "{on?: bool, brush?: pen|pencil|highlighter|fountainPen|brushPen, color?: #RRGGBB, width?: mm, effect?: rainbow|galaxy|lava|ocean|roseGold|gold|silver|bronze|none, texture?: imported id | \"\" (none), textureScale?: stroke widths per repeat, pen?: gallery id}",
+            "{on?: bool, brush?: pen|pencil|highlighter|fountainPen|brushPen (alias: kind), color?: #RRGGBB, width?: mm 0.05–20 (clamped), effect?: rainbow|galaxy|lava|ocean|roseGold|gold|silver|bronze|none, texture?: imported id | \"\" (none; unknown ids error), textureScale?: 0.5–512 stroke widths per repeat (clamped), pen?: gallery id} → the pen in hand. `width` is millimetres since #3606 (it was points 0.5–40 before): a point value reads about 3.8x thicker, so pass millimetres.",
             has_doc,
             pen
         ),
@@ -197,7 +245,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Pen",
             ["Draw", "Tools"],
             None,
-            "{brush|kind: pen|pencil|highlighter|fountainPen|brushPen, color?: #RRGGBB, width?: mm, effect?: name, texture?: imported id, textureScale?: stroke widths per repeat} → {pen}",
+            "{brush|kind: pen|pencil|highlighter|fountainPen|brushPen, color?: #RRGGBB, width?: mm 0.05–20 (clamped), effect?: name, texture?: imported id, textureScale?: 0.5–512 (clamped)} → {id, brush, color, width, effect, texture, textureScale}. Errors on an unknown brush, effect or texture id, and on an unknown parameter type.",
             has_doc,
             add_pen
         ),
@@ -206,11 +254,19 @@ pub fn specs() -> Vec<CommandSpec> {
             "Change Pen",
             ["Draw", "Tools"],
             None,
-            "{id, brush?: kind, color?: #RRGGBB, width?: mm, effect?: name, texture?: imported id | \"\", textureScale?: stroke widths per repeat} → {pen}",
+            "{id, brush?: kind, color?: #RRGGBB, width?: mm 0.05–20 (clamped), effect?: name, texture?: imported id | \"\" (none), textureScale?: 0.5–512 (clamped)} → {id, brush, color, width, effect, texture, textureScale}. Selecting a pen that is not in the gallery is an error.",
             has_doc,
             update_pen
         ),
-        cmd!(noundo "draw.deletePen", "Delete Tool", ["Draw", "Tools"], None, "{id} → {removed}", has_doc, delete_pen),
+        cmd!(
+            noundo "draw.deletePen",
+            "Delete Tool",
+            ["Draw", "Tools"],
+            None,
+            "{id} → {removed}; deleting a pen that is not in the gallery answers {removed: false} (idempotent), Excel's default pens (ids 0–5) cannot be deleted and error.",
+            has_doc,
+            delete_pen
+        ),
         cmd!(noundo "draw.eraser", "Eraser", ["Draw", "Tools"], None, "{on?: bool}", has_doc, eraser),
         cmd!(noundo "draw.lasso", "Lasso Select", ["Draw", "Tools"], None, "{} (selects ink by dragging; same as Select Objects)", has_doc, |s, _| {
             s.draw_tool = String::new();
@@ -221,7 +277,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Ink Stroke",
             [],
             None,
-            "{points: [[x,y],…] in sheet points, brush?: kind, color?: hex, width?: mm, effect?: name, texture?: imported id, textureScale?: stroke widths per repeat, pressure?: [0..32767] per point}",
+            "{points: [[x,y],…] in sheet points, at most 20000 (more errors), brush?: kind, color?: hex, width?: mm 0.05–20 (clamped), effect?: name, texture?: imported id, textureScale?: 0.5–512 (clamped), pressure?: 0–32767 per point, at most one per point (more errors)} → {shape}. `texture: \"\"` is an explicit plain stroke; an unknown id is an error; a texture the session's pen names but the workbook no longer holds paints plainly.",
             has_doc,
             stroke
         ),
@@ -230,12 +286,28 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Brush Texture",
             ["Draw", "Tools"],
             None,
-            "{path} | {name, base64} → {id, name, width, height, added}; a PNG or JPEG up to 16 MiB and 8192 px a side. Importing the same bytes again reuses the entry.",
+            "{path} XOR {name, base64} → {id, name, mime, width, height, index, added}. A PNG or JPEG up to 16 MiB, 8192 px a side and 16 million pixels, decoded within 64 MiB; the workbook holds at most 1024 textures and 64 MiB of encoded image in total. Importing the same bytes again reuses the entry (added: false) and reports its index; an image past the store's budget is refused.",
             has_doc,
             texture_import
         ),
-        cmd!("draw.textureRemove", "Remove Brush Texture", ["Draw", "Tools"], None, "{id} → {removed}", has_doc, texture_remove),
-        cmd!(query "draw.textureList", "Brush Textures", [], None, "{} → {textures: [{id, name, mime, width, height, bytes}], selected, scale}", has_doc, texture_list),
+        cmd!(
+            "draw.textureRemove",
+            "Remove Brush Texture",
+            ["Draw", "Tools"],
+            None,
+            "{id} → {removed}; removing a texture the workbook does not hold answers {removed: false} (idempotent).",
+            has_doc,
+            texture_remove
+        ),
+        cmd!(
+            query "draw.textureList",
+            "Brush Textures",
+            [],
+            None,
+            "{} → {textures: [{id, name, mime, width, height, bytes}], texture, textureScale}. `texture` is the pen's imported id (\"\" for none). Returns the whole store, which the import caps hold to 1024 textures.",
+            has_doc,
+            texture_list
+        ),
         cmd!("draw.inkToShape", "Ink to Shape", [], None, "{id?: shape id} → {kind} (needs the Draw tab's Ink to Shape)", has_doc, ink_to_shape),
     ]
 }
@@ -253,16 +325,58 @@ fn stroke_color(color: Option<&str>, effect: Option<InkEffect>, fallback: &str) 
 }
 
 /// `draw.pen`: turn the pen on or off, or take a gallery pen's brush, colour, width, effect and
-/// texture into the hand that paints.
+/// texture into the hand that paints. Every parameter is parsed and checked into a local first, so
+/// a rejected call leaves the pen exactly as it was.
 fn pen(s: &mut Session, p: &Json) -> Result<Json> {
     s.ensure_draw_pens();
     let selecting = ["brush", "kind", "color", "width", "effect", "texture", "textureScale", "pen"].iter().any(|k| p.get(*k).is_some());
-    let on = bool_param(p, "on").unwrap_or(selecting || s.draw_tool != "pen");
-    s.draw_tool = if on { "pen".into() } else { String::new() };
+    let on = flag(p, "on", "draw.pen")?.unwrap_or(selecting || s.draw_tool != "pen");
 
-    // Selecting a gallery pen loads its brush, colour, thickness and texture.
-    if let Some(id) = u32_param(p, "pen") {
-        let chosen = s.draw_pens.iter().find(|q| q.id == id).cloned().ok_or_else(|| bad("draw.pen", format!("no pen {id} in the gallery")))?;
+    // Validate everything before touching the session.
+    let chosen = match whole(p, "pen", "draw.pen")? {
+        Some(id) => Some(s.draw_pens.iter().find(|q| q.id == id).cloned().ok_or_else(|| bad("draw.pen", format!("no pen {id} in the gallery")))?),
+        None => None,
+    };
+    let brush = match text(p, "brush", "draw.pen")?.or(text(p, "kind", "draw.pen")?) {
+        Some(name) => Some(parse_tool(name).ok_or_else(|| bad("draw.pen", format!("unknown brush '{name}'")))?),
+        None => None,
+    };
+    let color = match text(p, "color", "draw.pen")? {
+        Some(c) => {
+            if parse_color(c).is_none() {
+                return Err(bad("draw.pen", format!("'{c}' is not a #RRGGBB colour")));
+            }
+            Some(c.to_string())
+        }
+        None => None,
+    };
+    let width = number(p, "width", "draw.pen")?.map(|w| (w as f32).clamp(0.05, 20.0));
+    let effect = match text(p, "effect", "draw.pen")? {
+        Some(e) => {
+            let parsed = parse_effect(e);
+            // Four standard names must not silently fall back to solid; only the none spellings do.
+            if parsed.is_none() && !is_no_effect(e) {
+                return Err(bad("draw.pen", format!("unknown effect '{e}'")));
+            }
+            Some(parsed)
+        }
+        None => None,
+    };
+    let texture = match text(p, "texture", "draw.pen")? {
+        Some(id) => {
+            let id = id.trim();
+            if !id.is_empty() && s.doc()?.wb.ink_texture(id).is_none() {
+                return Err(bad("draw.pen", "no imported texture has that id"));
+            }
+            Some((!id.is_empty()).then(|| id.to_string()))
+        }
+        None => None,
+    };
+    let scale = number(p, "textureScale", "draw.pen")?.map(|v| texture_scale(v as f32));
+
+    // Apply: a gallery pen first, then the parameters named, as before.
+    s.draw_tool = if on { "pen".into() } else { String::new() };
+    if let Some(chosen) = chosen {
         s.draw_brush = chosen.tool;
         s.draw_color = chosen.color;
         s.draw_width = chosen.width;
@@ -270,34 +384,21 @@ fn pen(s: &mut Session, p: &Json) -> Result<Json> {
         s.draw_texture = chosen.texture.unwrap_or_default();
         s.draw_texture_scale = texture_scale(chosen.texture_scale);
     }
-    if let Some(name) = str_param(p, "brush").or_else(|| str_param(p, "kind")) {
-        let tool = parse_tool(name).ok_or_else(|| bad("draw.pen", format!("unknown brush '{name}'")))?;
+    if let Some(tool) = brush {
         s.draw_brush = tool_name(tool).to_string();
     }
     let tool = parse_tool(&s.draw_brush).unwrap_or(InkTool::Pen);
-    if let Some(c) = str_param(p, "color") {
-        if parse_color(c).is_none() {
-            return Err(bad("draw.pen", format!("'{c}' is not a #RRGGBB colour")));
-        }
-        s.draw_color = c.to_string();
+    if let Some(c) = color {
+        s.draw_color = c;
     }
-    if let Some(w) = f64_param(p, "width") {
-        if !w.is_finite() {
-            return Err(bad("draw.pen", "the width must be a finite number of millimetres"));
-        }
-        s.draw_width = (w as f32).clamp(0.05, 20.0);
+    if let Some(w) = width {
+        s.draw_width = w;
     } else if s.draw_width <= 0.0 {
         s.draw_width = *widths_mm(tool).first().unwrap_or(&0.5);
     }
-    if let Some(e) = str_param(p, "effect") {
-        let effect = parse_effect(e);
-        // Four standard names must not silently fall back to solid; only the none spellings do.
-        let is_none = e.trim().is_empty() || matches!(e.trim().to_ascii_lowercase().as_str(), "none" | "solid");
-        if effect.is_none() && !is_none {
-            return Err(bad("draw.pen", format!("unknown effect '{e}'")));
-        }
+    if let Some(effect) = effect {
         s.draw_effect = effect.map(|q| effect_name(q).to_string()).unwrap_or_default();
-        if effect.is_some() && str_param(p, "color").is_none() {
+        if effect.is_some() && text(p, "color", "draw.pen")?.is_none() {
             s.draw_color = effect.map(effect_base).unwrap_or("#1F5FC9").to_string();
         }
         // A built-in effect and an imported texture cannot both paint: choosing an effect
@@ -306,60 +407,52 @@ fn pen(s: &mut Session, p: &Json) -> Result<Json> {
             s.draw_texture.clear();
         }
     }
-    let effect = parse_effect(&s.draw_effect);
     if s.draw_color.eq_ignore_ascii_case("none") {
         s.draw_color = "#1F5FC9".into();
     }
-    if let Some(id) = p.get("texture").and_then(Json::as_str) {
-        if !id.is_empty() && s.doc()?.wb.ink_texture(id).is_none() {
-            return Err(bad("draw.pen", "no imported texture has that id"));
-        }
-        s.draw_texture = id.to_string();
+    if let Some(texture) = texture {
+        s.draw_texture = texture.unwrap_or_default();
     }
-    if let Some(v) = f64_param(p, "textureScale") {
-        s.draw_texture_scale = texture_scale(v as f32);
+    if let Some(scale) = scale {
+        s.draw_texture_scale = scale;
     }
+    let effect = parse_effect(&s.draw_effect);
     Ok(json!({
         "tool": s.draw_tool,
         "brush": s.draw_brush,
         "color": s.draw_color,
         "width": s.draw_width,
-        "effect": effect.map(effect_name),
+        "effect": effect.map(effect_name).unwrap_or(""),
         "texture": s.draw_texture,
         "textureScale": texture_scale(s.draw_texture_scale),
     }))
 }
 
 /// `draw.addPen`: add a pen to the gallery from a brush and optional colour, width, effect and
-/// texture, and answer the pen it minted.
+/// texture, and answer the id of the pen it minted. Validates every parameter before the gallery
+/// or the pen in hand changes.
 fn add_pen(s: &mut Session, p: &Json) -> Result<Json> {
     s.ensure_draw_pens();
-    let name = str_param(p, "brush").or_else(|| str_param(p, "kind")).unwrap_or("pen");
+    let name = text(p, "brush", "draw.addPen")?.or(text(p, "kind", "draw.addPen")?).unwrap_or("pen");
     let tool = parse_tool(name).ok_or_else(|| bad("draw.addPen", format!("unknown brush '{name}'")))?;
-    let effect = match str_param(p, "effect") {
+    let effect = match text(p, "effect", "draw.addPen")? {
         Some(e) => {
             let parsed = parse_effect(e);
-            let is_none = e.trim().is_empty() || matches!(e.trim().to_ascii_lowercase().as_str(), "none" | "solid");
-            if parsed.is_none() && !is_none {
+            if parsed.is_none() && !is_no_effect(e) {
                 return Err(bad("draw.addPen", format!("unknown effect '{e}'")));
             }
             parsed
         }
         None => None,
     };
-    let color = match str_param(p, "color") {
+    let color = match text(p, "color", "draw.addPen")? {
         Some(c) if parse_color(c).is_some() => c.to_string(),
         Some(c) => return Err(bad("draw.addPen", format!("'{c}' is not a #RRGGBB colour"))),
         None => effect.map(effect_base).unwrap_or("#1F5FC9").to_string(),
     };
     let default_width = *widths_mm(tool).first().unwrap_or(&0.5);
-    let width = match f64_param(p, "width") {
-        Some(w) if w.is_finite() => (w as f32).clamp(0.05, 20.0),
-        Some(_) => return Err(bad("draw.addPen", "the width must be a finite number of millimetres")),
-        None => default_width,
-    };
-    let id = s.draw_pens.iter().map(|q| q.id).max().map_or(1, |m| m.saturating_add(1));
-    let texture = match str_param(p, "texture").map(str::trim).filter(|id| !id.is_empty()) {
+    let width = number(p, "width", "draw.addPen")?.map_or(default_width, |w| (w as f32).clamp(0.05, 20.0));
+    let texture = match text(p, "texture", "draw.addPen")?.map(str::trim).filter(|id| !id.is_empty()) {
         Some(texture) => {
             if s.doc()?.wb.ink_texture(texture).is_none() {
                 return Err(bad("draw.addPen", "no imported texture has that id"));
@@ -368,7 +461,8 @@ fn add_pen(s: &mut Session, p: &Json) -> Result<Json> {
         }
         None => None,
     };
-    let scale = f64_param(p, "textureScale").map(|v| texture_scale(v as f32)).unwrap_or(DEFAULT_TEXTURE_SCALE);
+    let scale = number(p, "textureScale", "draw.addPen")?.map_or(DEFAULT_TEXTURE_SCALE, |v| texture_scale(v as f32));
+    let id = s.draw_pens.iter().map(|q| q.id).max().map_or(1, |m| m.saturating_add(1));
     let pen = DrawPen {
         id,
         tool: tool_name(tool).to_string(),
@@ -388,59 +482,56 @@ fn add_pen(s: &mut Session, p: &Json) -> Result<Json> {
     s.draw_texture = pen.texture.clone().unwrap_or_default();
     s.draw_texture_scale = pen.texture_scale;
     Ok(json!({
-        "pen": id,
+        "id": id,
         "brush": pen.tool,
         "color": pen.color,
         "width": pen.width,
-        "effect": pen.effect,
-        "texture": pen.texture,
+        "effect": pen.effect.as_deref().unwrap_or(""),
+        "texture": pen.texture.as_deref().unwrap_or(""),
         "textureScale": pen.texture_scale,
     }))
 }
 
 /// `draw.updatePen`: change the gallery pen whose id is given, leaving the fields it did not name
-/// as they were; the pen in hand follows when it is the one changed.
+/// as they were; the pen in hand follows when it is the one changed. The pen is checked whole
+/// before the gallery changes, so a rejected call leaves it as it was.
 fn update_pen(s: &mut Session, p: &Json) -> Result<Json> {
     s.ensure_draw_pens();
-    let id = u32_param(p, "id").ok_or_else(|| bad("draw.updatePen", "the id of the pen to change is required"))?;
+    let id = whole(p, "id", "draw.updatePen")?.ok_or_else(|| bad("draw.updatePen", "the id of the pen to change is required"))?;
     let idx = s.draw_pens.iter().position(|q| q.id == id).ok_or_else(|| bad("draw.updatePen", format!("no pen {id} in the gallery")))?;
     let old = s.draw_pens.get(idx).cloned().ok_or_else(|| bad("draw.updatePen", "gone"))?;
     let mut pen = old.clone();
-    if let Some(name) = str_param(p, "brush").or_else(|| str_param(p, "kind")) {
+    if let Some(name) = text(p, "brush", "draw.updatePen")?.or(text(p, "kind", "draw.updatePen")?) {
         let tool = parse_tool(name).ok_or_else(|| bad("draw.updatePen", format!("unknown brush '{name}'")))?;
         pen.tool = tool_name(tool).to_string();
     }
-    if let Some(c) = str_param(p, "color") {
+    if let Some(c) = text(p, "color", "draw.updatePen")? {
         if parse_color(c).is_none() {
             return Err(bad("draw.updatePen", format!("'{c}' is not a #RRGGBB colour")));
         }
         pen.color = c.to_string();
     }
-    if let Some(w) = f64_param(p, "width") {
-        if !w.is_finite() {
-            return Err(bad("draw.updatePen", "the width must be a finite number of millimetres"));
-        }
+    if let Some(w) = number(p, "width", "draw.updatePen")? {
         pen.width = (w as f32).clamp(0.05, 20.0);
     }
-    if let Some(e) = str_param(p, "effect") {
+    if let Some(e) = text(p, "effect", "draw.updatePen")? {
         let parsed = parse_effect(e);
-        let is_none = e.trim().is_empty() || matches!(e.trim().to_ascii_lowercase().as_str(), "none" | "solid");
-        if parsed.is_none() && !is_none {
+        if parsed.is_none() && !is_no_effect(e) {
             return Err(bad("draw.updatePen", format!("unknown effect '{e}'")));
         }
         pen.effect = parsed.map(|q| effect_name(q).to_string());
-        if parsed.is_some() && str_param(p, "color").is_none() {
+        if parsed.is_some() && text(p, "color", "draw.updatePen")?.is_none() {
             pen.color = parsed.map(effect_base).unwrap_or("#1F5FC9").to_string();
         }
     }
-    if let Some(id) = p.get("texture").and_then(Json::as_str) {
+    if let Some(id) = text(p, "texture", "draw.updatePen")? {
         let id = id.trim();
         if !id.is_empty() && s.doc()?.wb.ink_texture(id).is_none() {
             return Err(bad("draw.updatePen", "no imported texture has that id"));
         }
         pen.texture = (!id.is_empty()).then(|| id.to_string());
     }
-    if let Some(v) = f64_param(p, "textureScale") {
+    if let Some(v) = number(p, "textureScale", "draw.updatePen")? {
         pen.texture_scale = texture_scale(v as f32);
     }
     // The pen in hand follows its gallery entry when it is the entry being changed.
@@ -461,12 +552,12 @@ fn update_pen(s: &mut Session, p: &Json) -> Result<Json> {
         s.draw_texture_scale = pen.texture_scale;
     }
     Ok(json!({
-        "pen": pen.id,
+        "id": pen.id,
         "brush": pen.tool,
         "color": pen.color,
         "width": pen.width,
-        "effect": pen.effect,
-        "texture": pen.texture,
+        "effect": pen.effect.as_deref().unwrap_or(""),
+        "texture": pen.texture.as_deref().unwrap_or(""),
         "textureScale": pen.texture_scale,
     }))
 }
@@ -475,7 +566,7 @@ fn update_pen(s: &mut Session, p: &Json) -> Result<Json> {
 /// pen back in hand when the deleted pen was the one painting.
 fn delete_pen(s: &mut Session, p: &Json) -> Result<Json> {
     s.ensure_draw_pens();
-    let id = u32_param(p, "id").ok_or_else(|| bad("draw.deletePen", "the id of the pen to delete is required"))?;
+    let id = whole(p, "id", "draw.deletePen")?.ok_or_else(|| bad("draw.deletePen", "the id of the pen to delete is required"))?;
     if id < DEFAULT_PEN_COUNT {
         return Err(bad("draw.deletePen", "Excel's default pens cannot be deleted"));
     }
@@ -505,7 +596,7 @@ fn delete_pen(s: &mut Session, p: &Json) -> Result<Json> {
 
 /// `draw.eraser`: turn the eraser on or off, which turns the pen off when it comes on.
 fn eraser(s: &mut Session, p: &Json) -> Result<Json> {
-    let on = bool_param(p, "on").unwrap_or(s.draw_tool != "eraser");
+    let on = flag(p, "on", "draw.eraser")?.unwrap_or(s.draw_tool != "eraser");
     s.draw_tool = if on { "eraser".into() } else { String::new() };
     Ok(json!({"tool": s.draw_tool}))
 }
@@ -550,21 +641,30 @@ fn validate_texture(data: &[u8]) -> Result<(&'static str, u32, u32)> {
 /// `draw.textureImport`: stores an imported PNG or JPEG in the workbook's texture store, or reuses
 /// the entry the same bytes already made. The command is one undo step, and a refused image leaves
 /// the workbook untouched.
+///
+/// Give either `path` or `name`+`base64`, not both: the request has one meaning. The answer names
+/// the entry's `id`, `name`, `mime`, `width`, `height`, its `index` in the store, and whether it
+/// was `added` (false when the same bytes were already there).
 fn texture_import(s: &mut Session, p: &Json) -> Result<Json> {
-    let (name, data) = if let Some(b) = str_param(p, "base64") {
+    let base64 = text(p, "base64", "draw.textureImport")?;
+    let path = text(p, "path", "draw.textureImport")?;
+    let name = text(p, "name", "draw.textureImport")?;
+    if base64.is_some() && path.is_some() {
+        return Err(bad("draw.textureImport", "give either `path` or `base64`, not both"));
+    }
+    let (name, data) = if let Some(b) = base64 {
         // Check the encoded length first, so a hostile parameter is refused before decoding.
         let longest = gridcraft_model::MAX_INK_TEXTURE_BYTES.div_ceil(3) * 4 + 4;
         if b.len() > longest {
             return Err(bad("draw.textureImport", "brush textures must be at most 16 MiB"));
         }
         let data = crate::io::base64_decode(b).ok_or_else(|| bad("draw.textureImport", "invalid base64"))?;
-        (str_param(p, "name").unwrap_or("Texture").to_string(), data)
-    } else if let Some(path) = str_param(p, "path").filter(|path| !path.trim().is_empty()) {
+        (name.unwrap_or("Texture").to_string(), data)
+    } else if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
         // Bound the read itself: a 2 GB file must not be allocated before the 16 MiB check.
         let data = crate::io::read_file_limited(path, gridcraft_model::MAX_INK_TEXTURE_BYTES as u64)?;
-        let name = str_param(p, "name")
-            .map(str::to_string)
-            .unwrap_or_else(|| path.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or("Texture").to_string());
+        let name =
+            name.map(str::to_string).unwrap_or_else(|| path.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or("Texture").to_string());
         (name, data)
     } else {
         return Err(bad("draw.textureImport", "choose a PNG or JPEG image to import (give `path`, or `name` and `base64`)"));
@@ -579,15 +679,20 @@ fn texture_import(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad("draw.textureImport", "the workbook already holds the most brush textures it can (1024)"));
     }
     edit(s, |cx| {
-        let (index, added) = cx.wb.add_ink_texture(texture);
-        Ok(json!({"id": id, "name": name, "width": width, "height": height, "index": index, "added": added}))
+        let Some((index, added)) = cx.wb.add_ink_texture(texture) else {
+            return Err(bad("draw.textureImport", "the workbook's brush textures already fill their 64 MiB budget"));
+        };
+        Ok(json!({"id": id, "name": name, "mime": mime, "width": width, "height": height, "index": index, "added": added}))
     })
 }
 
 /// `draw.textureRemove`: drops a texture from the workbook and takes it out of the pen in hand and
 /// of every gallery pen, so nothing keeps painting with an image the store no longer holds.
+///
+/// Idempotent: removing an id the workbook does not hold answers `{removed: false}` rather than
+/// failing, so a repeated removal (or one racing an undo) is harmless.
 fn texture_remove(s: &mut Session, p: &Json) -> Result<Json> {
-    let id = str_param(p, "id").ok_or_else(|| bad("draw.textureRemove", "missing `id`"))?.to_string();
+    let id = text(p, "id", "draw.textureRemove")?.ok_or_else(|| bad("draw.textureRemove", "missing `id`"))?.to_string();
     if s.doc()?.wb.ink_texture(&id).is_none() {
         return Ok(json!({"removed": false}));
     }
@@ -606,7 +711,8 @@ fn texture_remove(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 /// `draw.textureList`: the workbook's textures (with their encoded byte length), the texture the
-/// pen in hand paints with and the repeat size it uses.
+/// pen in hand paints with (`texture`, `""` for none) and the repeat size it uses
+/// (`textureScale`). Returns the store as it is, up to its documented cap of 1024 textures.
 fn texture_list(s: &mut Session, _p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let textures: Vec<Json> =
@@ -616,8 +722,8 @@ fn texture_list(s: &mut Session, _p: &Json) -> Result<Json> {
             .collect();
     Ok(json!({
         "textures": textures,
-        "selected": s.draw_texture,
-        "scale": texture_scale(s.draw_texture_scale),
+        "texture": s.draw_texture,
+        "textureScale": texture_scale(s.draw_texture_scale),
     }))
 }
 
@@ -627,18 +733,30 @@ fn parse_points(t: &str) -> Vec<[f32; 2]> {
 }
 
 /// `draw.stroke`: a freehand stroke of `points` in sheet points, with its brush and draw order.
+/// Parameters are checked before anything is drawn: a malformed point, too many points or a
+/// pressure that does not match the points is an error rather than silently cut data.
 fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
-    let pts: Vec<[f64; 2]> = p
-        .get("points")
-        .and_then(Json::as_array)
-        .map(|a| {
+    let pts = match p.get("points") {
+        None | Some(Json::Null) => Vec::new(),
+        Some(v) => {
+            let a = v.as_array().ok_or_else(|| bad("draw.stroke", "`points` must be an array of [x, y] pairs"))?;
+            if a.len() > MAX_STROKE_POINTS {
+                return Err(bad("draw.stroke", format!("a stroke holds at most {MAX_STROKE_POINTS} points")));
+            }
             a.iter()
-                .filter_map(|q| Some([q.get(0)?.as_f64()?, q.get(1)?.as_f64()?]))
-                .filter(|q| q[0].is_finite() && q[1].is_finite())
-                .take(20_000)
-                .collect()
-        })
-        .unwrap_or_default();
+                .map(|q| {
+                    let pair = q.as_array().filter(|pair| pair.len() >= 2).ok_or_else(|| bad("draw.stroke", "each point must be an [x, y] pair"))?;
+                    let coord = |i: usize| -> Result<f64> {
+                        pair.get(i)
+                            .and_then(Json::as_f64)
+                            .filter(|v| v.is_finite())
+                            .ok_or_else(|| bad("draw.stroke", "each point's x and y must be finite numbers"))
+                    };
+                    Ok([coord(0)?, coord(1)?])
+                })
+                .collect::<Result<Vec<_>>>()?
+        }
+    };
     if pts.len() < 2 {
         return Err(bad("draw.stroke", "a stroke needs at least two points"));
     }
@@ -647,48 +765,64 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     let maxx = pts.iter().map(|q| q[0]).fold(f64::NEG_INFINITY, f64::max);
     let maxy = pts.iter().map(|q| q[1]).fold(f64::NEG_INFINITY, f64::max);
 
-    let tool = match str_param(p, "brush").or_else(|| str_param(p, "kind")) {
+    let tool = match text(p, "brush", "draw.stroke")?.or(text(p, "kind", "draw.stroke")?) {
         Some(name) => parse_tool(name).ok_or_else(|| bad("draw.stroke", format!("unknown brush '{name}'")))?,
         None => parse_tool(&s.draw_brush).unwrap_or(InkTool::Pen),
     };
-    let effect = match str_param(p, "effect") {
+    let effect = match text(p, "effect", "draw.stroke")? {
         Some(e) => {
             let parsed = parse_effect(e);
-            let is_none = e.trim().is_empty() || matches!(e.trim().to_ascii_lowercase().as_str(), "none" | "solid");
-            if parsed.is_none() && !is_none {
+            if parsed.is_none() && !is_no_effect(e) {
                 return Err(bad("draw.stroke", format!("unknown effect '{e}'")));
             }
             parsed
         }
         None => parse_effect(&s.draw_effect),
     };
+    let color = text(p, "color", "draw.stroke")?;
     let fallback = if s.draw_color.is_empty() { "#1F5FC9" } else { s.draw_color.as_str() };
-    let line = stroke_color(str_param(p, "color"), effect, fallback);
-    let width_mm = match f64_param(p, "width") {
-        Some(w) if w.is_finite() => (w as f32).clamp(0.05, 20.0),
-        Some(_) => return Err(bad("draw.stroke", "the width must be a finite number of millimetres")),
+    let line = stroke_color(color, effect, fallback);
+    let width_mm = match number(p, "width", "draw.stroke")? {
+        Some(w) => (w as f32).clamp(0.05, 20.0),
         None => {
             let w = if s.draw_width <= 0.0 { *widths_mm(tool).first().unwrap_or(&0.5) } else { s.draw_width };
             w.clamp(0.05, 20.0)
         }
     };
     let (width_cm, height_cm) = ink_size_cm(tool, width_mm);
-    let pressure: Vec<u16> = p
-        .get("pressure")
-        .and_then(Json::as_array)
-        .map(|a| a.iter().filter_map(Json::as_f64).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 32767.0).round() as u16).take(pts.len()).collect())
-        .unwrap_or_default();
+    // Pressure is per point, from 0 to 32767. A shorter list is allowed (the device stopped
+    // recording); a longer one, a non-number or an out-of-range value is refused, not cut.
+    let pressure: Vec<u16> = match p.get("pressure") {
+        None | Some(Json::Null) => Vec::new(),
+        Some(v) => {
+            let a = v.as_array().ok_or_else(|| bad("draw.stroke", "`pressure` must be an array of numbers from 0 to 32767"))?;
+            if a.len() > pts.len() {
+                return Err(bad("draw.stroke", "a stroke holds one pressure per point at most"));
+            }
+            a.iter()
+                .map(|q| {
+                    q.as_f64()
+                        .filter(|v| v.is_finite() && (0.0..=32767.0).contains(v))
+                        .map(|v| v.round() as u16)
+                        .ok_or_else(|| bad("draw.stroke", "each pressure must be a number from 0 to 32767"))
+                })
+                .collect::<Result<Vec<_>>>()?
+        }
+    };
     // A texture the caller names and one the pen carries are different promises: an explicit id
     // must exist (a typo is an error), while the pen's is session state — undo can take the
     // imported texture away and another workbook never held it — so a stale one paints plainly.
     // A present but empty `texture` is an explicit "none" (as in draw.pen/draw.updatePen), so it
     // must not fall back to the pen's texture.
-    let no_texture = p.get("texture").and_then(Json::as_str).is_some_and(|id| id.trim().is_empty());
-    let explicit =
-        (!no_texture).then(|| p.get("texture").and_then(Json::as_str)).flatten().map(str::trim).filter(|id| !id.is_empty()).map(str::to_string);
+    let named = text(p, "texture", "draw.stroke")?;
+    let no_texture = named.is_some_and(|id| id.trim().is_empty());
+    let explicit = named.map(str::trim).filter(|id| !id.is_empty()).map(str::to_string);
     let from_session = explicit.is_none() && !no_texture;
     let mut texture = explicit.or_else(|| (!no_texture && !s.draw_texture.is_empty()).then(|| s.draw_texture.clone()));
-    let texture_scale = f64_param(p, "textureScale").map(|v| texture_scale(v as f32)).unwrap_or_else(|| texture_scale(s.draw_texture_scale));
+    let texture_scale = match number(p, "textureScale", "draw.stroke")? {
+        Some(v) => texture_scale(v as f32),
+        None => texture_scale(s.draw_texture_scale),
+    };
 
     let d = s.doc()?;
     if let Some(id) = &texture
@@ -714,9 +848,9 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     let anchor = [-minx as f32, -miny as f32];
     // A reopened workbook holds keys minted by an earlier process, whose counter started at zero,
     // so a freshly minted key can be one the workbook already uses: mint past those.
-    let held: Vec<&str> =
+    let held: std::collections::HashSet<&str> =
         d.wb.sheets.iter().flat_map(|sheet| sheet.shapes.iter()).filter_map(|x| x.ink.as_ref()).filter_map(|i| i.key.as_deref()).collect();
-    let key = gridcraft_model::ink_creation_id_free(|k| held.contains(&k));
+    let key = gridcraft_model::ink_creation_id_free(|k| held.contains(k));
     let shape = Shape {
         math: Default::default(),
         id,
@@ -803,7 +937,7 @@ pub fn ink_points(sh: &Shape) -> Vec<[f32; 2]> {
 /// geometry that best fits it.
 fn ink_to_shape(s: &mut Session, p: &Json) -> Result<Json> {
     let si = s.doc()?.wb.active_sheet();
-    let id = u32_param(p, "id");
+    let id = whole(p, "id", "draw.inkToShape")?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         let idx = match id {

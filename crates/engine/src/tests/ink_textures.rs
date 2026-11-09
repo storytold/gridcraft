@@ -52,7 +52,7 @@ fn removing_a_texture_forgets_it_and_clears_the_pen() {
     assert_eq!(removed["removed"], true);
     assert_eq!(s.execute("draw.textureRemove", json!({"id": id})).unwrap()["removed"], false);
     assert_eq!(s.execute("draw.textureList", json!({})).unwrap()["textures"].as_array().unwrap().len(), 0);
-    assert_eq!(s.execute("draw.textureList", json!({})).unwrap()["selected"], "");
+    assert_eq!(s.execute("draw.textureList", json!({})).unwrap()["texture"], "");
     // The pen no longer names a texture that is gone.
     assert!(s.execute("draw.pen", json!({"texture": id})).is_err());
 }
@@ -98,7 +98,8 @@ fn the_pen_scale_is_kept_within_its_limits() {
     let id = s.execute("draw.textureImport", json!({"name": "a.png", "base64": b64(&png(4, 4))})).unwrap()["id"].as_str().unwrap().to_string();
     assert_eq!(s.execute("draw.pen", json!({"texture": id, "textureScale": 0.001})).unwrap()["textureScale"], 0.5);
     assert_eq!(s.execute("draw.pen", json!({"textureScale": 10_000})).unwrap()["textureScale"], 512.0);
-    assert_eq!(s.execute("draw.pen", json!({"textureScale": "junk"})).unwrap()["textureScale"], 512.0, "a bad value keeps the pen's");
+    // A value of the wrong type is an error now, not silently ignored.
+    assert!(s.execute("draw.pen", json!({"textureScale": "junk"})).is_err(), "a non-numeric repeat size is refused");
     assert_eq!(s.execute("draw.pen", json!({"texture": ""})).unwrap()["texture"], "", "an empty id clears the texture");
 }
 
@@ -125,7 +126,7 @@ fn a_texture_undone_from_the_workbook_paints_plainly() {
     s.execute("draw.pen", json!({"texture": id})).unwrap();
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(s.execute("draw.textureList", json!({})).unwrap()["textures"].as_array().unwrap().len(), 0);
-    assert_eq!(s.execute("draw.textureList", json!({})).unwrap()["selected"], id, "the session still names the gone texture");
+    assert_eq!(s.execute("draw.textureList", json!({})).unwrap()["texture"], id, "the session still names the gone texture");
     s.execute("draw.stroke", json!({"points": [[0, 0], [40, 40]]})).unwrap();
     let d = s.doc().unwrap();
     let shape = d.wb.sheets[0].shapes.last().expect("the stroke was committed");
@@ -225,17 +226,17 @@ fn another_pens_scale_or_deletion_leaves_the_pen_in_hand_alone() {
     // deleting the one that is not in hand must not overwrite the scale the person is drawing at.
     let mut s = s();
     let id = s.execute("draw.textureImport", json!({"name": "a.png", "base64": b64(&png(4, 4))})).unwrap()["id"].as_str().unwrap().to_string();
-    let other = s.execute("draw.addPen", json!({"brush": "pen", "texture": id, "textureScale": 2})).unwrap()["pen"].as_u64().unwrap();
-    let in_hand = s.execute("draw.addPen", json!({"brush": "pen", "texture": id, "textureScale": 9})).unwrap()["pen"].as_u64().unwrap();
+    let other = s.execute("draw.addPen", json!({"brush": "pen", "texture": id, "textureScale": 2})).unwrap()["id"].as_u64().unwrap();
+    let in_hand = s.execute("draw.addPen", json!({"brush": "pen", "texture": id, "textureScale": 9})).unwrap()["id"].as_u64().unwrap();
     assert_ne!(other, in_hand);
     s.execute("draw.updatePen", json!({"id": other, "textureScale": 5})).unwrap();
     let list = s.execute("draw.textureList", json!({})).unwrap();
-    assert_eq!(list["selected"], id, "the pen in hand still paints with its texture");
-    assert_eq!(list["scale"], 9.0, "and keeps its own repeat size");
+    assert_eq!(list["texture"], id, "the pen in hand still paints with its texture");
+    assert_eq!(list["textureScale"], 9.0, "and keeps its own repeat size");
     s.execute("draw.deletePen", json!({"id": other})).unwrap();
     let list = s.execute("draw.textureList", json!({})).unwrap();
-    assert_eq!(list["selected"], id, "deleting the other pen leaves the pen in hand textured");
-    assert_eq!(list["scale"], 9.0);
+    assert_eq!(list["texture"], id, "deleting the other pen leaves the pen in hand textured");
+    assert_eq!(list["textureScale"], 9.0);
 }
 
 /// A path import larger than the texture cap is refused before the bytes are decoded.
@@ -258,14 +259,163 @@ fn deleting_an_untextured_pen_with_another_scale_leaves_the_pen_in_hand_alone() 
     // Two untextured pens that differ only in their repeat size are still different pens:
     // deleting the one that is not in hand must not reset the pen being drawn with.
     let mut s = s();
-    let other = s.execute("draw.addPen", json!({"brush": "pen", "textureScale": 2})).unwrap()["pen"].as_u64().unwrap();
-    let in_hand = s.execute("draw.addPen", json!({"brush": "pen", "textureScale": 7})).unwrap()["pen"].as_u64().unwrap();
+    let other = s.execute("draw.addPen", json!({"brush": "pen", "textureScale": 2})).unwrap()["id"].as_u64().unwrap();
+    let in_hand = s.execute("draw.addPen", json!({"brush": "pen", "textureScale": 7})).unwrap()["id"].as_u64().unwrap();
     assert_ne!(other, in_hand);
     s.execute("draw.deletePen", json!({"id": other})).unwrap();
     let list = s.execute("draw.textureList", json!({})).unwrap();
-    assert_eq!(list["selected"], "", "no texture");
-    assert_eq!(list["scale"], 7.0, "the pen in hand keeps its repeat size");
+    assert_eq!(list["texture"], "", "no texture");
+    assert_eq!(list["textureScale"], 7.0, "the pen in hand keeps its repeat size");
     // Deleting the pen that is in hand does put the default pen back.
     s.execute("draw.deletePen", json!({"id": in_hand})).unwrap();
-    assert_eq!(s.execute("draw.textureList", json!({})).unwrap()["scale"], 8.0, "the default pen's repeat size");
+    assert_eq!(s.execute("draw.textureList", json!({})).unwrap()["textureScale"], 8.0, "the default pen's repeat size");
+}
+
+/// A JPEG imports as readily as a PNG, and the store records its own mime.
+#[test]
+fn a_jpeg_imports_and_keeps_its_mime() {
+    let image = image::RgbImage::from_pixel(12, 7, image::Rgb([20, 90, 200]));
+    let mut bytes = Cursor::new(Vec::new());
+    image.write_to(&mut bytes, image::ImageFormat::Jpeg).unwrap();
+    let mut s = s();
+    let r = s.execute("draw.textureImport", json!({"name": "photo.jpg", "base64": b64(&bytes.into_inner())})).unwrap();
+    assert_eq!(r["mime"], "image/jpeg");
+    assert_eq!(r["width"], 12);
+    assert_eq!(r["height"], 7);
+    assert_eq!(s.execute("draw.textureList", json!({})).unwrap()["textures"][0]["mime"], "image/jpeg");
+}
+
+/// Images whose header is valid but whose size is over a cap, or whose pixels do not decode, are
+/// refused and leave the store untouched.
+#[test]
+fn oversized_and_undecodable_images_are_refused() {
+    // A CRC-32 as a PNG chunk carries it, so a header-only image fails on its size rather than
+    // on a bad checksum.
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        for &b in bytes {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        !crc
+    }
+    // Header-only PNGs: the reader refuses them on the header, before any pixels are decoded.
+    let header = |w: u32, h: u32| {
+        let mut body = b"IHDR".to_vec();
+        body.extend_from_slice(&w.to_be_bytes());
+        body.extend_from_slice(&h.to_be_bytes());
+        body.extend_from_slice(&[8, 6, 0, 0, 0]);
+        let mut v = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13];
+        v.extend_from_slice(&body);
+        v.extend_from_slice(&crc32(&body).to_be_bytes());
+        v
+    };
+    let png = png(8, 8);
+    let truncated = png[..png.len() / 2].to_vec();
+    let mut s = s();
+    let good = s.execute("draw.textureImport", json!({"name": "a.png", "base64": b64(&png)})).unwrap();
+    assert_eq!(good["added"], true);
+    let before = s.doc().unwrap().wb.ink_textures.len();
+    for (bytes, why) in
+        [(header(8193, 1), "over 8192 pixels a side"), (header(5000, 4000), "over 16 million pixels"), (truncated, "truncated pixels")]
+    {
+        assert!(s.execute("draw.textureImport", json!({"name": "x.png", "base64": b64(&bytes)})).is_err(), "{why} must be refused");
+        assert_eq!(s.doc().unwrap().wb.ink_textures.len(), before, "{why}: the store is unchanged");
+    }
+}
+
+/// A full store refuses a new texture while still reusing the entry the same bytes already made.
+#[test]
+fn a_full_store_refuses_a_new_texture_but_reuses_an_existing_one() {
+    use gridcraft_model::ink::{InkTexture, MAX_INK_TEXTURES};
+    use std::sync::Arc;
+    let mut s = s();
+    let bytes = png(4, 4);
+    let first = s.execute("draw.textureImport", json!({"name": "a.png", "base64": b64(&bytes)})).unwrap()["id"].as_str().unwrap().to_string();
+    // Fill the store to its cap with distinct tiny textures.
+    {
+        let doc = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut doc.wb);
+        while wb.ink_textures.len() < MAX_INK_TEXTURES {
+            let mut data = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13];
+            data.extend_from_slice(b"IHDR");
+            data.extend_from_slice(&[0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0, 0, 0, 0, 0]);
+            data.extend_from_slice(&(wb.ink_textures.len() as u32).to_le_bytes());
+            let texture = InkTexture::new("fill.png", "image/png", Arc::new(data), 2, 2).expect("valid");
+            assert!(wb.add_ink_texture(texture).is_some());
+        }
+    }
+    // A new image is refused: the store already holds its maximum.
+    let err = s.execute("draw.textureImport", json!({"name": "b.png", "base64": b64(&png(6, 6))})).unwrap_err().to_string();
+    assert!(err.contains("most brush textures"), "{err}");
+    assert_eq!(s.doc().unwrap().wb.ink_textures.len(), MAX_INK_TEXTURES);
+    // The same bytes as an entry already there still reuse it, even at the cap.
+    let again = s.execute("draw.textureImport", json!({"name": "a-again.png", "base64": b64(&bytes)})).unwrap();
+    assert_eq!(again["added"], false);
+    assert_eq!(again["id"].as_str(), Some(first.as_str()));
+    assert_eq!(s.doc().unwrap().wb.ink_textures.len(), MAX_INK_TEXTURES);
+}
+
+/// A rejected `draw.pen` leaves the pen in hand exactly as it was.
+#[test]
+fn a_rejected_pen_call_changes_nothing() {
+    let mut s = s();
+    let id = s.execute("draw.textureImport", json!({"name": "a.png", "base64": b64(&png(4, 4))})).unwrap()["id"].as_str().unwrap().to_string();
+    s.execute("draw.pen", json!({"pen": 1, "width": 1.5})).unwrap();
+    let before = s.execute("draw.textureList", json!({})).unwrap();
+    let (tool, brush, color, width) = (s.draw_tool.clone(), s.draw_brush.clone(), s.draw_color.clone(), s.draw_width);
+    // Each call names a valid change and one bad parameter: the valid part must not stick.
+    for params in [
+        json!({"pen": 3, "brush": "crayon"}),
+        json!({"pen": 3, "color": "not-a-colour"}),
+        json!({"pen": 3, "effect": "plaid"}),
+        json!({"pen": 3, "texture": "ffffffffffffffffffffffffffffffff"}),
+        json!({"pen": 3, "width": "wide"}),
+        json!({"pen": 3, "textureScale": "big"}),
+        json!({"pen": 99}),
+    ] {
+        assert!(s.execute("draw.pen", params.clone()).is_err(), "{params} must be refused");
+        assert_eq!(s.draw_tool, tool, "{params}");
+        assert_eq!(s.draw_brush, brush, "{params}");
+        assert_eq!(s.draw_color, color, "{params}");
+        assert_eq!(s.draw_width, width, "{params}");
+        assert_eq!(s.execute("draw.textureList", json!({})).unwrap(), before, "{params}");
+    }
+    // The texture is still selectable with a valid call.
+    assert_eq!(s.execute("draw.pen", json!({"texture": id})).unwrap()["texture"], id.as_str());
+}
+
+/// Points and pressure past the documented limits are errors, not silently cut data.
+#[test]
+fn stroke_limits_are_errors_not_truncation() {
+    let mut s = s();
+    let too_many: Vec<[f64; 2]> = (0..=crate::cmd::draw::MAX_STROKE_POINTS).map(|i| [i as f64, 0.0]).collect();
+    let err = s.execute("draw.stroke", json!({"points": too_many})).unwrap_err().to_string();
+    assert!(err.contains("at most"), "{err}");
+    // One pressure per point at most.
+    assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [1, 1]], "pressure": [1, 2, 3]})).is_err());
+    // Values outside 0..32767 and non-numbers are refused.
+    for pressure in [json!([1, 40000]), json!([1, -1]), json!([1, "high"])] {
+        assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [1, 1]], "pressure": pressure})).is_err(), "{pressure}");
+    }
+    // A shorter pressure list is fine: the device simply stopped recording.
+    s.execute("draw.stroke", json!({"points": [[0, 0], [1, 1]], "pressure": [100]})).unwrap();
+    // A malformed point or a wrong-typed width is refused rather than skipped.
+    assert!(s.execute("draw.stroke", json!({"points": [[0, 0], ["x", 1]]})).is_err());
+    assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [1, 1]], "width": "wide"})).is_err());
+}
+
+/// A texture import takes one source: giving both a path and base64 is refused.
+#[test]
+fn texture_import_rejects_two_sources() {
+    let mut s = s();
+    let err = s.execute("draw.textureImport", json!({"path": "a.png", "base64": b64(&png(4, 4))})).unwrap_err().to_string();
+    assert!(err.contains("not both"), "{err}");
+    assert!(s.doc().unwrap().wb.ink_textures.is_empty());
+    // The answer names the mime and the store index as well as the id.
+    let r = s.execute("draw.textureImport", json!({"name": "a.png", "base64": b64(&png(4, 4))})).unwrap();
+    assert_eq!(r["mime"], "image/png");
+    assert_eq!(r["index"], 0);
 }

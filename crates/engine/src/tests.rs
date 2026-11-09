@@ -3611,7 +3611,7 @@ fn ink_custom_pens_add_select_change_and_delete() {
     assert_eq!(s.draw_pens.iter().find(|p| p.id == 2).map(|p| p.color.as_str()), Some("#112233"));
     assert!(s.execute("draw.deletePen", json!({"id": 2})).is_err(), "a default pen cannot be deleted");
     let added = s.execute("draw.addPen", json!({"kind": "fountainPen", "color": "#0A7B3E", "width": 1.0, "effect": "gold"})).unwrap();
-    let id = added["pen"].as_u64().expect("an id");
+    let id = added["id"].as_u64().expect("an id");
     assert_eq!(added["brush"], "fountainPen");
     // Excel's six default pens come first; the new pen follows them.
     assert_eq!(s.draw_pens.iter().filter(|p| p.id >= crate::cmd::draw::DEFAULT_PEN_COUNT).count(), 1);
@@ -3621,7 +3621,7 @@ fn ink_custom_pens_add_select_change_and_delete() {
     assert_eq!(s.draw_effect, "gold");
     // Another pen and selection by id.
     let second = s.execute("draw.addPen", json!({"brush": "pencil"})).unwrap();
-    let second_id = second["pen"].as_u64().unwrap();
+    let second_id = second["id"].as_u64().unwrap();
     assert_ne!(id, second_id);
     s.execute("draw.pen", json!({"color": "#D13B2F"})).unwrap();
     s.execute("draw.pen", json!({"pen": id})).unwrap();
@@ -3652,14 +3652,14 @@ fn ink_commands_are_safe_with_hostile_params() {
     assert!(s.execute("draw.pen", json!({"effect": "neon"})).is_err());
     assert!(s.execute("draw.pen", json!({"brush": "laser"})).is_err());
     assert!(s.execute("draw.pen", json!({"pen": 999})).is_err());
-    assert!(s.execute("draw.pen", json!({"width": "wide"})).is_ok());
+    assert!(s.execute("draw.pen", json!({"width": "wide"})).is_err(), "a non-numeric width is refused, not ignored");
     assert!(s.execute("draw.stroke", json!({"points": "nope"})).is_err());
     assert!(s.execute("draw.stroke", json!({"points": [[1, 1]]})).is_err());
     assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [10, 10]], "width": -4})).is_ok());
     let clamped = s.doc().unwrap().wb.active().unwrap().shapes.last().cloned().unwrap();
     assert!((clamped.ink.as_ref().map(|i| i.width_cm).unwrap_or(0.0) - 0.005).abs() < 1e-5, "a negative width clamps to the thinnest brush");
     assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [10, 10]], "effect": "sparkle"})).is_err());
-    assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [10, 10]], "pressure": "lots"})).is_ok());
+    assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [10, 10]], "pressure": "lots"})).is_err(), "a non-numeric pressure is refused");
     assert!(s.execute("draw.addPen", json!({"brush": "laser"})).is_err());
     assert!(s.execute("draw.addPen", json!({"color": "#12"})).is_err());
     assert!(s.execute("draw.deletePen", json!({})).is_err());
