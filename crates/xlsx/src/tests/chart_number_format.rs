@@ -162,6 +162,8 @@ fn chart(id: u32, kind: ChartKind, series: Vec<Series>, axes: AxisNumberFormats)
         data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,

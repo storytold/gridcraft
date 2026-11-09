@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::cell::{Cell, CellPicture};
 use crate::features::{
-    Anchor, AutoFilter, Chart, Comment, CondFormat, Hyperlink, Image, LineInfo, ObjKind, ObjRef, PivotTable, PrintSettings, Shape, ShapeKind,
-    SheetProtection, Slicer, Sparkline, Table, Validation,
+    Anchor, AutoFilter, Chart, Comment, CondFormat, FormControl, Hyperlink, Image, LineInfo, ObjKind, ObjRef, PivotTable, PrintSettings, Shape,
+    ShapeKind, SheetProtection, Slicer, Sparkline, Table, Validation,
 };
 use crate::store::CellStore;
 use crate::style::{Color, StyleId};
@@ -147,6 +147,10 @@ pub struct Sheet {
     /// On-sheet slicer widgets (filter a table column by clicking value tiles).
     #[serde(default)]
     pub slicers: Vec<Slicer>,
+    /// Form controls (buttons, sliders, spin buttons). They paint above every other object and
+    /// take clicks first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub controls: Vec<FormControl>,
     /// PivotTables whose output lives on this sheet.
     #[serde(default)]
     pub pivots: Vec<PivotTable>,
@@ -219,6 +223,7 @@ impl Sheet {
             shapes: vec![],
             sparklines: vec![],
             slicers: vec![],
+            controls: vec![],
             pivots: vec![],
             protection: None,
             edit_ranges: vec![],
@@ -285,6 +290,8 @@ impl Sheet {
             if s.kind == ShapeKind::Equation { ObjKind::Equation } else { ObjKind::Shape }
         } else if self.slicers.iter().any(|o| o.id == id) {
             ObjKind::Slicer
+        } else if self.controls.iter().any(|o| o.id == id) {
+            ObjKind::Control
         } else {
             return None;
         };
@@ -305,6 +312,7 @@ impl Sheet {
             ObjKind::Shape => self.shapes.iter().find(|c| c.id == o.id).map(|c| c.anchor),
             ObjKind::Slicer => self.slicers.iter().find(|c| c.id == o.id).map(|c| c.anchor),
             ObjKind::Equation => self.shapes.iter().find(|c| c.id == o.id && c.kind == ShapeKind::Equation).map(|c| c.anchor),
+            ObjKind::Control => self.controls.iter().find(|c| c.id == o.id).map(|c| c.anchor),
         }
     }
 
@@ -315,6 +323,7 @@ impl Sheet {
             ObjKind::Shape => self.shapes.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
             ObjKind::Slicer => self.slicers.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
             ObjKind::Equation => self.shapes.iter_mut().find(|c| c.id == o.id && c.kind == ShapeKind::Equation).map(|c| &mut c.anchor),
+            ObjKind::Control => self.controls.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
         }
     }
 
@@ -331,12 +340,13 @@ impl Sheet {
             ObjKind::Shape => take(&mut self.shapes, |c| c.id == o.id),
             ObjKind::Slicer => take(&mut self.slicers, |c| c.id == o.id),
             ObjKind::Equation => take(&mut self.shapes, |c| c.id == o.id && c.kind == ShapeKind::Equation),
+            ObjKind::Control => take(&mut self.controls, |c| c.id == o.id),
         }
     }
 
-    /// Every floating object's anchor in a fixed order (charts, images, shapes, slicers) that
-    /// [`Sheet::object_anchors_mut`] repeats, so a pass can compute new anchors from the old ones
-    /// and write them back in step.
+    /// Every floating object's anchor in a fixed order (charts, images, shapes, slicers, controls)
+    /// that [`Sheet::object_anchors_mut`] repeats, so a pass can compute new anchors from the old
+    /// ones and write them back in step.
     pub fn object_anchors(&self) -> impl Iterator<Item = &Anchor> {
         self.charts
             .iter()
@@ -344,6 +354,7 @@ impl Sheet {
             .chain(self.images.iter().map(|o| &o.anchor))
             .chain(self.shapes.iter().map(|o| &o.anchor))
             .chain(self.slicers.iter().map(|o| &o.anchor))
+            .chain(self.controls.iter().map(|o| &o.anchor))
     }
 
     pub fn object_anchors_mut(&mut self) -> impl Iterator<Item = &mut Anchor> {
@@ -353,6 +364,7 @@ impl Sheet {
             .chain(self.images.iter_mut().map(|o| &mut o.anchor))
             .chain(self.shapes.iter_mut().map(|o| &mut o.anchor))
             .chain(self.slicers.iter_mut().map(|o| &mut o.anchor))
+            .chain(self.controls.iter_mut().map(|o| &mut o.anchor))
     }
     /// Displayed value of a cell: its own value, or a spilled value.
     pub fn value(&self, c: CellRef) -> Value {
@@ -479,12 +491,14 @@ impl Sheet {
     /// sheet AutoFilter while it has criteria, or a hidden data row of a filtered table.
     /// Other hidden rows were hidden by hand.
     pub fn is_row_filtered(&self, row: u32) -> bool {
-        if !self.is_row_hidden(row) {
-            return false;
-        }
-        let in_sheet_filter =
-            self.autofilter.as_ref().is_some_and(|af| !af.criteria.is_empty() && row > af.range.start.row && row <= af.range.end.row);
-        in_sheet_filter || self.tables.iter().any(|t| !t.filter.is_empty() && t.data_range().is_some_and(|r| row >= r.start.row && row <= r.end.row))
+        self.is_row_hidden(row) && self.filter_row_spans().iter().any(|&(first, last)| row >= first && row <= last)
+    }
+    /// The row spans (first, last) an applied filter can hide: the data rows of the sheet
+    /// AutoFilter while it has criteria, and of each filtered table.
+    pub fn filter_row_spans(&self) -> Vec<(u32, u32)> {
+        let sheet = self.autofilter.as_ref().filter(|af| !af.criteria.is_empty()).map(|af| (af.range.start.row.saturating_add(1), af.range.end.row));
+        let tables = self.tables.iter().filter(|t| !t.filter.is_empty()).filter_map(|t| t.data_range()).map(|r| (r.start.row, r.end.row));
+        sheet.into_iter().chain(tables).collect()
     }
     pub fn is_col_hidden(&self, col: u32) -> bool {
         self.cols.get(&col).is_some_and(|r| r.hidden)
@@ -819,6 +833,8 @@ mod tests {
                 data_table: None,
                 gridlines: false,
                 style: 0,
+                hole_size: 75,
+                first_slice_angle: 0,
                 x_title: None,
                 y_title: None,
                 source: None,
@@ -841,6 +857,7 @@ mod tests {
             ObjKind::Slicer => {
                 s.slicers.push(Slicer { id, table: String::new(), column: String::new(), caption: String::new(), anchor, selected: None, columns: 1 })
             }
+            ObjKind::Control => s.controls.push(FormControl { id, anchor, ..Default::default() }),
         }
     }
 
@@ -862,13 +879,15 @@ mod tests {
             (ObjKind::Slicer, 1),
             (ObjKind::Image, 4),
             (ObjKind::Equation, 6),
+            (ObjKind::Control, 13),
             (ObjKind::Shape, 12),
             (ObjKind::Equation, 8),
+            (ObjKind::Control, 15),
         ];
         for &(kind, id) in &inserted {
             push_object(&mut s, kind, id, Anchor { cell: CellRef::new(id, 0), ..Default::default() });
         }
-        let per_kind = s.charts.len() + s.images.len() + s.shapes.len() + s.slicers.len();
+        let per_kind = s.charts.len() + s.images.len() + s.shapes.len() + s.slicers.len() + s.controls.len();
         assert_eq!(per_kind, inserted.len());
         assert_eq!(s.object_anchors().count(), per_kind, "object_anchors visits every collection");
         assert_eq!(s.object_anchors_mut().count(), per_kind, "object_anchors_mut visits every collection");
@@ -879,10 +898,10 @@ mod tests {
         }
         let marks: Vec<f32> = s.object_anchors().map(|a| a.dx).collect();
         assert_eq!(marks, (0..per_kind).map(|i| i as f32).collect::<Vec<f32>>());
-        // The sequence is the documented one (charts, images, shapes, slicers, each in insertion
-        // order; equations are shapes) and every object appears in it once.
+        // The sequence is the documented one (charts, images, shapes, slicers, controls, each in
+        // insertion order; equations are shapes) and every object appears in it once.
         let collection = |k: ObjKind| if k == ObjKind::Equation { ObjKind::Shape } else { k };
-        let documented: Vec<u32> = [ObjKind::Chart, ObjKind::Image, ObjKind::Shape, ObjKind::Slicer]
+        let documented: Vec<u32> = [ObjKind::Chart, ObjKind::Image, ObjKind::Shape, ObjKind::Slicer, ObjKind::Control]
             .iter()
             .flat_map(|&k| inserted.iter().filter(move |(kind, _)| collection(*kind) == k).map(|&(_, id)| id))
             .collect();
