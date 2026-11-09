@@ -41,7 +41,7 @@ async fn pick_picture(max: f64) -> Option<(String, Vec<u8>)> {
             let input_for_change = input.clone();
             let input_for_cancel = input.clone();
             let resolve_for_change = resolve.clone();
-            let change = wasm_bindgen::closure::Closure::new(move || {
+            let change: wasm_bindgen::closure::Closure<dyn FnMut()> = wasm_bindgen::closure::Closure::new(move || {
                 if let Some(file) = input_for_change.files().and_then(|files| files.get(0)) {
                     *chosen.borrow_mut() = Some(file);
                 }
@@ -54,7 +54,7 @@ async fn pick_picture(max: f64) -> Option<(String, Vec<u8>)> {
             let resolve_for_cancel = resolve.clone();
             // Closing the dialog without a choice fires `cancel`, not `change`: without this the
             // wait below never ends and the input stays in the page.
-            let cancel = wasm_bindgen::closure::Closure::new(move || {
+            let cancel: wasm_bindgen::closure::Closure<dyn FnMut()> = wasm_bindgen::closure::Closure::new(move || {
                 input_for_cancel.set_onchange(None);
                 let _ =
                     input_for_cancel.remove_event_listener_with_callback("cancel", cancel_done.borrow().as_ref().unwrap().as_ref().unchecked_ref());
