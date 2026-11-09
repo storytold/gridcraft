@@ -513,6 +513,11 @@ pub struct Session {
     /// The values a `range.setValues` entry actually wrote, read back when the command ran: typed
     /// input and the destination format decide the value, and a recording must replay that value.
     pub(crate) write_values: Vec<Option<Json>>,
+    /// The value a `cell.set` entry stored, read back when the command ran: like a range write's
+    /// values, a recording replays what the cell stored (a number stays a number), because the
+    /// shim drops `parse`. Reading at stop time would let a later edit to the same cell rewrite
+    /// an earlier step.
+    pub(crate) cell_inputs: Vec<Option<Json>>,
     /// The recording buffer while a recorder runs ([`Session::start_recording`]): top-level
     /// commands with the place they ran in, kept apart from the journal.
     pub recorder: Option<record::Recorder>,
@@ -666,13 +671,20 @@ impl Session {
         if self.write_values.len() != self.journal.len() {
             self.write_values = vec![None; self.journal.len()];
         }
+        if self.cell_inputs.len() != self.journal.len() {
+            self.cell_inputs = vec![None; self.journal.len()];
+        }
         // A recorded range write replays the values the command stored, not the text it was given:
-        // the destination format and typed input decide the value.
+        // the destination format and typed input decide the value. A recorded `cell.set` replays
+        // what its own command stored, read now: reading at stop time would let a later edit to
+        // the same cell rewrite this step.
         let written = if id == "range.setValues" { self.written_values(&entry.1) } else { None };
+        let stored = if id == "cell.set" { Self::stored_cell_value(self, &entry.1) } else { None };
         self.journal.push(entry);
         self.journal_sizes.push(entry_size);
         self.sheet_names.push(sheet);
         self.write_values.push(written);
+        self.cell_inputs.push(stored);
         self.journal_bytes = self.journal_bytes.saturating_add(entry_size);
         let len = self.journal.len();
         let mut n = if len > JOURNAL_MAX_ENTRIES { len - JOURNAL_MAX_ENTRIES / 2 } else { 0 };
@@ -689,6 +701,7 @@ impl Session {
             self.journal_sizes.drain(..n);
             self.sheet_names.drain(..n.min(self.sheet_names.len()));
             self.write_values.drain(..n.min(self.write_values.len()));
+            self.cell_inputs.drain(..n.min(self.cell_inputs.len()));
             self.journal_bytes = kept;
             self.recording = self.recording.map(|r| r.saturating_sub(n));
             self.script_recording = self.script_recording.map(|r| r.saturating_sub(n));
@@ -737,6 +750,30 @@ impl Session {
         Some(Json::Array(rows))
     }
 
+    /// The value a `cell.set` entry stored, read back from the cell the command wrote: a
+    /// formula where one was written, the stored value otherwise, encoded exactly as
+    /// `written_values` encodes one cell (whole numbers as integers, formula-like or signed
+    /// text with its marker, a stored leading apostrophe doubled). `None` when the cell
+    /// cannot be read: the recorder then replays the typed text as before.
+    fn stored_cell_value(&self, params: &Json) -> Option<Json> {
+        let sheet_index = crate::cmd::target_sheet(self, params).ok()?;
+        let at = crate::cmd::cell_param_on(self, params, "cell", sheet_index).ok()??;
+        let doc = self.doc().ok()?;
+        let sheet = doc.wb.sheet(sheet_index)?;
+        let cell = sheet.cell(at)?;
+        if let Some(formula) = cell.formula.as_ref() {
+            return Some(Json::String(format!("={}", formula.text)));
+        }
+        let stored = Self::whole_number(crate::cmd::inspect::value_json(&sheet.value(at)));
+        let stored = match stored {
+            Json::String(text) if crate::cmd::edit::is_formula_input(&text) => Json::String(format!("'{text}")),
+            Json::String(text) if crate::cmd::edit::is_signed_number_text(&text) => Json::String(format!("'{text}")),
+            Json::String(text) if text.starts_with('\'') => Json::String(format!("'{text}")),
+            other => other,
+        };
+        Some(stored)
+    }
+
     /// A whole number as an integer, so a recorded literal reads `2` rather than `2.0`.
     fn whole_number(value: Json) -> Json {
         match value {
@@ -757,6 +794,7 @@ impl Session {
         self.journal.truncate(keep);
         self.sheet_names.truncate(keep);
         self.write_values.truncate(keep);
+        self.cell_inputs.truncate(keep);
         self.recording = self.recording.map(|r| r.min(self.journal.len()));
         self.script_recording = self.script_recording.map(|r| r.min(self.journal.len()));
     }

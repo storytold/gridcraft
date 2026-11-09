@@ -249,25 +249,13 @@ fn record(s: &mut Session, p: &Json) -> Result<Json> {
     let store = store(s)?;
     // A journal trimmed past the start loses the beginning of the recording, never the workbook.
     let start = start.min(s.journal.len());
-    // A recorded `cell.set` replays the stored value, not the typed text: the value is resolved
-    // when recording stops (not when the command ran), mirroring `range.setValues`' capture, so
-    // a later edit in the same session does not leak into the saved script. A formula replays as
-    // the formula it is; a number replays as a number (the shim drops `parse`, so the saved
-    // script must carry what the cell stored, not the text typed). A stale sheet index cannot
-    // replay anyway, so it stays skipped by the recorder.
-    let journal_slice: Vec<(String, Json)> = s.journal[start..].iter().map(|(id, params)| (id.clone(), params.clone())).collect();
-    let cell_values: Vec<Option<Json>> = journal_slice
-        .iter()
-        .enumerate()
-        .map(|(offset, (id, params))| {
-            if id != "cell.set" {
-                return None;
-            }
-            let name = s.sheet_names.get(start + offset).cloned().flatten();
-            let params = crate::script::resolve_recorded_sheet_named(params, name.as_deref());
-            recorded_cell_value(s, &params)
-        })
-        .collect();
+    // A recorded `cell.set` replays what its own command stored, not the typed text: each step
+    // carries the value its command read back when it ran (like `range.setValues`' capture), so
+    // a later edit to the same cell cannot rewrite an earlier step. A formula replays as the
+    // formula it is; a number replays as a number (the shim drops `parse`, so the saved script
+    // must carry what the cell stored, not the text typed). A stale sheet index cannot replay
+    // anyway, so it stays skipped by the recorder.
+    let cell_values: Vec<Option<Json>> = s.cell_inputs.get(start..).map(|slice| slice.to_vec()).unwrap_or_default();
     let steps: Vec<JournalStep> = s.journal[start..]
         .iter()
         .enumerate()
@@ -326,36 +314,6 @@ fn record(s: &mut Session, p: &Json) -> Result<Json> {
         "steps": recording.calls.len(),
         "skipped": skipped,
     }))
-}
-
-/// The value a recorded `cell.set` replays: what the cell stored, like a range write's values.
-/// A formula replays as the formula; a number replays as a number; text the cell kept as text
-/// (with its marker when it reads as a formula) replays verbatim. `None` when the cell cannot
-/// be read (a stale sheet reference): the recorder then replays the typed text as before.
-fn recorded_cell_value(s: &mut Session, params: &Json) -> Option<Json> {
-    let sheet = super::target_sheet(s, params).ok()?;
-    let at = super::cell_param_on(s, params, "cell", sheet).ok()??;
-    let doc = s.doc().ok()?;
-    let sheet = doc.wb.sheet(sheet)?;
-    let cell = sheet.cell(at)?;
-    if let Some(formula) = cell.formula.as_ref() {
-        return Some(Json::String(format!("={}", formula.text)));
-    }
-    let stored = crate::cmd::inspect::value_json(&sheet.value(at));
-    let stored = match stored {
-        Json::Number(n) => match n.as_f64() {
-            Some(f) if f.fract() == 0.0 && f.abs() < 9_007_199_254_740_992.0 => Json::Number(serde_json::Number::from(f as i64)),
-            _ => Json::Number(n),
-        },
-        // Text a verbatim replay would read as a formula goes back with the apostrophe that
-        // marks it text; a stored leading apostrophe is itself text, so it goes back doubled
-        // (the replay strips one).
-        Json::String(text) if crate::cmd::edit::is_formula_input(&text) => Json::String(format!("'{text}")),
-        Json::String(text) if crate::cmd::edit::is_signed_number_text(&text) => Json::String(format!("'{text}")),
-        Json::String(text) if text.starts_with('\'') => Json::String(format!("'{text}")),
-        other => other,
-    };
-    Some(stored)
 }
 
 /// The address `values` cover from the start of `range`, keeping the sheet prefix as written: a
@@ -957,20 +915,9 @@ mod tests {
         assert!(code.contains("// Skipped: home.italic (not supported by the Office Scripts bridge)."), "{code}");
         assert_eq!(stopped["steps"], 5);
         assert_eq!(stopped["skipped"][0]["id"], "home.italic");
-        // Mirror the substitution `record()` applies, so the replay runs the same calls.
-        let journal_copy: Vec<(String, Json)> = s.journal[start..].iter().map(|(id, params)| (id.clone(), params.clone())).collect();
-        let stored_values: Vec<Option<Json>> = journal_copy
-            .iter()
-            .enumerate()
-            .map(|(offset, (id, params))| {
-                if id != "cell.set" {
-                    return None;
-                }
-                let name = s.sheet_names.get(start + offset).cloned().flatten();
-                let params = crate::script::resolve_recorded_sheet_named(params, name.as_deref());
-                recorded_cell_value(&mut s, &params)
-            })
-            .collect();
+        // Mirror the substitution `record()` applies, so the replay runs the same calls: each
+        // `cell.set` carries what its own command stored.
+        let stored_values: Vec<Option<Json>> = s.cell_inputs.get(start..).map(|slice| slice.to_vec()).unwrap_or_default();
         let steps: Vec<JournalStep> = s.journal[start..]
             .iter()
             .enumerate()
@@ -1128,6 +1075,22 @@ mod tests {
         assert!(code.contains("getRange(\"B1\").setValue(\"Sales\");"), "{code}");
         assert_eq!(value(&s, 0, "A1"), Value::Number(42.0));
         assert_eq!(value(&s, 0, "B1"), Value::Text("Sales".into()));
+    }
+    #[test]
+    fn a_recording_keeps_each_cell_write_it_saw() {
+        // Each `cell.set` replays what its own command stored: A1 set to `42` and then `7`
+        // records `setValue(42)` followed by `setValue(7)`, not two sevens. A later edit to
+        // the same cell must not rewrite an earlier step (the value used to be read when
+        // recording stopped).
+        let mut s = session("record-cell-sequence");
+        s.execute("script.record", json!({"on": true})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+        let stopped = s.execute("script.record", json!({"on": false})).unwrap();
+        let code = stopped["code"].as_str().unwrap_or_default();
+        assert!(code.contains("getRange(\"A1\").setValue(42);"), "{code}");
+        assert!(code.contains("getRange(\"A1\").setValue(7);"), "{code}");
+        assert_eq!(value(&s, 0, "A1"), Value::Number(7.0));
     }
 
     #[test]

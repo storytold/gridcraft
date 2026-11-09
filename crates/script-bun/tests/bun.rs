@@ -19,6 +19,7 @@ impl BridgeExecutor for Calls {
         Ok(match call.method.as_str() {
             // The engine answers these with values, so the shim's readers have something to read.
             "Worksheet.getName" => Json::String("Data".into()),
+            "Workbook.getActiveWorksheet" => json!({"sheet": "Sheet1"}),
             "RangeFormat.getRangeBorder" => json!({"kind": "border", "sheet": "Data", "range": "A1", "side": "edgetop"}),
             // Far past the shim's 64 KiB read, in three-byte characters: the read boundary falls
             // inside one of them.
@@ -68,6 +69,25 @@ function main(workbook: ExcelScript.Workbook) {
     assert_eq!(calls.calls[2].params["value"], json!(42));
     assert_eq!(calls.calls[1].params["sheet"], json!("Data"));
     assert_eq!(report.output, vec!["done 42".to_string()]);
+}
+
+#[test]
+#[ignore = "needs Bun; set GRIDCRAFT_BUN"]
+fn a_recorded_cell_write_replays_its_stored_value_through_bun() {
+    use gridcraft_script::recorder::{JournalStep, record};
+    let Some(host) = host() else { return };
+    // A typed `42` records the stored number, not the text: the replay must forward a JSON
+    // number through the shim, so the engine stores a number rather than text (the shim
+    // drops `parse`).
+    let steps = vec![JournalStep::new("cell.set", json!({"cell": "A1", "input": 42}))];
+    let recording = record(&steps);
+    assert!(recording.code.contains("setValue(42);"), "{}", recording.code);
+    let mut calls = Calls { calls: Vec::new() };
+    host.run(&recording.code, &Limits::default(), &mut calls).expect("the recorded script runs");
+    let methods: Vec<&str> = calls.calls.iter().map(|c| c.method.as_str()).collect();
+    assert_eq!(methods, ["Workbook.getActiveWorksheet", "Range.setValue"]);
+    assert_eq!(calls.calls[1].params["value"], json!(42));
+    assert!(calls.calls[1].params["value"].is_number(), "the replay carries a number, not text");
 }
 
 #[test]
