@@ -1142,8 +1142,17 @@ fn summarize_columns(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
                 let varying: Vec<usize> = (0..parsed.columns.len()).filter(|index| !rolled.contains(index)).collect();
                 let mut projections: BTreeSet<Vec<ScalarKey>> = BTreeSet::new();
                 for row in table_rows {
+                    // The domains above keep the first spelling of a text value, and
+                    // `FilterContext::set` folds filter keys to the model collation, so the
+                    // projections must fold too: otherwise a candidate built from the kept
+                    // spelling misses a projection stored under another spelling.
                     projections.insert(
-                        varying.iter().map(|&index| row.get(parsed.columns[index].column).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect(),
+                        varying
+                            .iter()
+                            .map(|&index| {
+                                row.get(parsed.columns[index].column).map(|value| folded_key(&ScalarKey::from(value))).unwrap_or(ScalarKey::Blank)
+                            })
+                            .collect(),
                     );
                 }
                 Some((varying, projections))
@@ -1189,7 +1198,13 @@ fn summarize_columns(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
                     Some((varying, projections)) => {
                         let key: Vec<ScalarKey> = varying
                             .iter()
-                            .map(|&index| combination.get(index).and_then(|value| value.as_ref()).map(ScalarKey::from).unwrap_or(ScalarKey::Blank))
+                            .map(|&index| {
+                                combination
+                                    .get(index)
+                                    .and_then(|value| value.as_ref())
+                                    .map(|value| folded_key(&ScalarKey::from(value)))
+                                    .unwrap_or(ScalarKey::Blank)
+                            })
                             .collect();
                         if !projections.contains(&key) {
                             continue;

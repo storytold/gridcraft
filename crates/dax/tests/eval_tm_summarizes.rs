@@ -653,8 +653,12 @@ fn summarize_groups_text_case_insensitively() {
     let mut model = DataModel {
         tables: vec![table(
             "Sales",
-            vec![column("Region", "String"), column("Amount", "Double")],
-            vec![vec![text("East"), money(10.0)], vec![text("east"), money(5.0)], vec![text("West"), money(20.0)]],
+            vec![column("Region", "String"), column("Product", "String"), column("Amount", "Double")],
+            vec![
+                vec![text("East"), text("Widget"), money(10.0)],
+                vec![text("east"), text("Gadget"), money(5.0)],
+                vec![text("West"), text("Widget"), money(20.0)],
+            ],
         )],
         relationships: Vec::new(),
         measures: Vec::new(),
@@ -670,6 +674,14 @@ fn summarize_groups_text_case_insensitively() {
     assert_eq!(summarized.rows, vec![vec![text("East"), money(15.0)], vec![text("West"), money(20.0)]], "one group per spelling");
     let columns = run("SUMMARIZECOLUMNS(Sales[Region], \"T\", SUM(Sales[Amount]))");
     assert_eq!(columns.rows, vec![vec![text("East"), money(15.0)], vec![text("West"), money(20.0)]], "one row per spelling");
+    // Auto-exist consults the same folded projection set for multi-column layouts: with
+    // ("east", "Widget") and ("East", "Gadget") both present, ("east", "Gadget") exists.
+    let both = run("SUMMARIZECOLUMNS(Sales[Region], Sales[Product])");
+    assert_eq!(
+        both.rows,
+        vec![vec![text("East"), text("Gadget")], vec![text("East"), text("Widget")], vec![text("West"), text("Widget")]],
+        "mixed-case pairs exist case-insensitively"
+    );
 }
 
 #[test]
