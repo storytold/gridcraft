@@ -117,6 +117,7 @@ fn hex(s: &str) -> Vec<u8> {
 }
 
 const SKIPPED: &str = "Some data validation rules in .xls files could not be read and were skipped.";
+const IGNORED: &str = "Some data validation records in .xls files were ignored, as Excel ignores them: they have no DVal record before them, or come after the number of rules it gives.";
 
 /// Each kind of rule, as Excel writes it, gives what the `.xlsx` reader gives for the same rule.
 #[test]
@@ -251,17 +252,19 @@ fn relative_references_start_from_the_top_left_of_all_ranges() {
 }
 
 /// As in Excel, a DVal's count is authoritative: Dv records past it, or with no DVal before
-/// them, aren't read.
+/// them, aren't read. That's said once, and not as a rule that failed to read.
 #[test]
 fn only_the_dvals_count_of_rules_is_read() {
     let a = || rule(1, 0, 4, &hex("1e0000"), &[], &[[0, 0, 0, 0]]);
     let b = || rule(1, 0, 4, &hex("1e0000"), &[], &[[1, 1, 0, 0]]);
-    let (wb, report) = workbook(&[], &[dval(1), a(), b()]);
+    let (wb, report) = workbook(&[], &[dval(1), a(), b(), b()]);
     assert_eq!(wb.sheets[0].validations.iter().map(|v| v.ranges.clone()).collect::<Vec<_>>(), vec![vec![range("A1")]]);
-    assert!(report.warnings.iter().any(|w| w == SKIPPED), "{:?}", report.warnings);
+    assert_eq!(report.warnings.iter().filter(|w| *w == IGNORED).count(), 1, "{:?}", report.warnings);
+    assert!(!report.warnings.iter().any(|w| w == SKIPPED), "{:?}", report.warnings);
     let (wb, report) = workbook(&[], &[a(), b()]);
     assert!(wb.sheets[0].validations.is_empty());
-    assert!(report.warnings.iter().any(|w| w == SKIPPED), "{:?}", report.warnings);
+    assert!(report.warnings.iter().any(|w| w == IGNORED), "{:?}", report.warnings);
+    assert!(!report.warnings.iter().any(|w| w == SKIPPED), "{:?}", report.warnings);
 }
 
 /// Malformed rules never fail the import. Where Excel opens such a file, the result is what

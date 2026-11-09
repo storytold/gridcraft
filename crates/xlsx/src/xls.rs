@@ -799,18 +799,19 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
         // A short DVal starts no rules.
         0x01B2 => st.dv_left = dv::dval(&mut c).unwrap_or(0),
         0x01BE => {
-            // A Dv past its DVal's count, or with no DVal, isn't read (as in Excel).
-            let rule = if st.dv_left == 0 {
-                None
-            } else {
-                st.dv_left -= 1;
-                match dv::dv(&mut c) {
-                    Ok(raw) => {
-                        budget.text(raw.text_len())?;
-                        dv::validation(raw, &st.g.links)
-                    }
-                    Err(_) => None,
+            // A Dv past its DVal's count, or with no DVal, isn't read: Excel doesn't read it
+            // either, so it isn't a rule that failed. Say so rather than drop it unannounced.
+            if st.dv_left == 0 {
+                report.warn("Some data validation records in .xls files were ignored, as Excel ignores them: they have no DVal record before them, or come after the number of rules it gives.");
+                return Ok(());
+            }
+            st.dv_left -= 1;
+            let rule = match dv::dv(&mut c) {
+                Ok(raw) => {
+                    budget.text(raw.text_len())?;
+                    dv::validation(raw, &st.g.links)
                 }
+                Err(_) => None,
             };
             match rule {
                 Some(v) => st.sheet.validations.push(v),
