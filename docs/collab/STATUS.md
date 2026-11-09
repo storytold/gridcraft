@@ -176,9 +176,6 @@ keeps the new optional fields.
 6. Browser transport is in place (`crates/collab-web`, host bridge); a real
    browser run against the cabinet page and the craft-libs pin removal after
    the upstream merge remain.
-7. The server binary does not initialise a logger, so `log::*` from the library is
-   dropped; `eprintln!` at start and shutdown work, metrics and `/healthz` are not
-   affected.
 
 ## 7. Sheet images in parts (ADR-0013, 2026-11-09)
 
@@ -462,3 +459,44 @@ step image, so a step of a macro-heavy workbook is larger on the wire and in the
 32 MiB operation bound is where such a step is refused rather than truncated. The theme stays with
 the workbook. The undo history is still memory-only (ADR-0010 §6), so a restarted room starts with
 empty stacks.
+
+## 11. Logging in the binary (2026-11-09, TASK.md §6 п.7 / §7)
+
+`log::*` from the library used to be dropped: the binary never installed a logger. It does now
+(`apps/gridcraft-collab-server/src/logging.rs`).
+
+- `env_logger` with default features off except `regex`: no colour stack, timestamps from `chrono`
+  (already a dependency). One line per record — `2026-11-09T12:54:32.659Z INFO
+  gridcraft_collab_server: session opened fileId=1 session=… fresh=true`; no ANSI escape on a pipe
+  or in a file; a multiline message is collapsed onto its line.
+- Filter from `RUST_LOG`. When unset: `warn,gridcraft_collab_server=info,gridcraft_collab=info`, so
+  a start says what the process does while `axum`/`hyper`/`tungstenite` stay at `warn`.
+  `RUST_LOG=info` turns everything up, `RUST_LOG=off` silences a healthy run.
+- The lifecycle records the library already emitted (`session opened`, `session restored`,
+  `session closed`, `periodic snapshot: N sessions`, `snapshot failed`, `journal append failed`,
+  `store scan failed`, `session not persisted/restored`) now reach stderr. `main` logs `listening
+  on {addr}` with the address after `bind` (`ADDR=127.0.0.1:0` prints the real port) and
+  `N sessions snapshotted` at shutdown instead of `eprintln!`. The fatal startup error stays on
+  stderr, before and independent of the filter.
+- No secret is added to a record: the existing lines carry `fileId`, `sessionId`, `actorId`, a
+  version, a code and `storage io/json/xlsx` causes — never the token, the signing key, cell values
+  or a path outside `fileId`. `/healthz` and `/metrics` are untouched (`healthz` answered `ok` in
+  the run below).
+
+Evidence (remote host, 2026-11-09):
+
+```text
+cargo +1.95.0 test -p gridcraft-collab-server -j 8   24 unit + 7 socket + 9 persistence + 5 acceptance + 2 logging
+cargo +1.95.0 clippy -p gridcraft-collab-server --all-targets -j 8 -- -D warnings   clean
+cargo fmt --all -- --check                           clean
+
+2026-11-09T12:54:32.659Z INFO  gridcraft_collab_server: gridcraft-collab-server listening on 127.0.0.1:18787 (0 sessions restored)
+2026-11-09T12:54:34.172Z INFO  gridcraft_collab_server: session opened fileId=1 session=<sessionId> fresh=true
+2026-11-09T12:54:34.474Z INFO  gridcraft_collab_server: gridcraft-collab-server: 0 sessions snapshotted
+```
+
+`tests/logging.rs` spawns the real binary: with `RUST_LOG=info` stderr gets `listening on`,
+`session opened` (the line holds no service token) and, after one operation, `periodic snapshot: 1
+sessions`; with `RUST_LOG=off` a running process writes nothing. Unit tests in `src/logging.rs`
+hold the default filter (collab at `info`, `axum`/`hyper`/`gridcraft_engine` at `warn`), the
+`RUST_LOG` override, the one-line shape and the newline collapse.

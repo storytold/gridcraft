@@ -139,21 +139,52 @@ GET    /v1/sessions/{id}/ws    WebSocket
 Логи содержат только `fileId`, `sessionId`, `actorId`, версию и код — ни значений ячеек, ни
 токенов.
 
+## Логирование
+
+Бинарь устанавливает логгер `log` (`apps/gridcraft-collab-server/src/logging.rs`), поэтому
+записи `log::*` из библиотеки попадают в stderr. Формат — одна строка на запись: время (UTC,
+миллисекунды), уровень, target и сообщение.
+
+```text
+2026-11-09T12:54:32.659Z INFO  gridcraft_collab_server: gridcraft-collab-server listening on 127.0.0.1:18787 (0 sessions restored)
+2026-11-09T12:54:34.172Z INFO  gridcraft_collab_server: session opened fileId=1 session=<sessionId> fresh=true
+2026-11-09T12:54:34.474Z INFO  gridcraft_collab_server: gridcraft-collab-server: 0 sessions snapshotted
+```
+
+ANSI-escape не выводятся никогда (у `env_logger` выключена фича `color`), поэтому файл и труба
+остаются простым текстом; многострочное сообщение схлопывается в одну строку.
+
+Фильтр — `RUST_LOG` в синтаксисе `env_logger`:
+
+| `RUST_LOG` | Что выводится |
+|---|---|
+| не задан | `warn,gridcraft_collab_server=info,gridcraft_collab=info` — свои крейты на `info`, остальные на `warn` |
+| `info` | всё на `info` и выше |
+| `gridcraft_collab=debug` | свои крейты подробно, остальное — по уровню из этой же строки |
+| `off` | ничего: успешный старт и работа молчат |
+
+Записи несут `fileId`, `sessionId`, `actorId`, версию, код и причину ошибки — ни значений
+ячеек, ни токенов, ни путей вне `fileId`; причина ошибки хранилища печатается как
+`storage io/json/xlsx` без пути. Фатальная ошибка старта (нет ключа, занятый адрес, не
+открылся том) по-прежнему идёт в stderr напрямую, до фильтра и независимо от него.
+
+Строки жизненного цикла: `listening on {addr}` (адрес после bind — при `ADDR=127.0.0.1:0`
+виден фактический порт), `session opened`, `session restored`, `session closed`,
+`periodic snapshot: N sessions`, `N sessions snapshotted` на завершении.
+
 ## Чего ещё нет
 
 - **TLS** терминируется на входном прокси (RFC §4.1); бинарь слушает HTTP/WS.
 - **Коммит в кабинет** через server-to-server callback: HTTP `commit` есть, исходящего
   вызова кабинета пока нет.
 - **Отмена структурных правок** — v2 (undo и redo merge-шагов есть).
-- **Логгер в бинаре** не инициализирован: `log::*` из библиотеки сейчас уходит в никуда;
-  метрики и `/healthz` это не затрагивает.
 
 Клиент: `docs/collab/client.md` (feature `collab`, `GRIDCRAFT_COLLAB_URL`/`_TOKEN`).
 
 ## Проверка
 
 ```bash
-cargo test -p gridcraft-collab-server      # unit + 6 socket + 3 восстановление + 5 приёмка
+cargo test -p gridcraft-collab-server      # 24 unit + 7 socket + 9 восстановление + 5 приёмка + 2 логгер
 cargo clippy -p gridcraft-collab-server --all-targets -- -D warnings
 cargo xtask layers
 ```
