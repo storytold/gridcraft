@@ -105,8 +105,16 @@ impl Drop for Transport {
         let mut inner = self.inner.borrow_mut();
         inner.live = false;
         if let Some(socket) = inner.socket.take() {
+            // Take the callbacks off the socket before the closures that back them are freed:
+            // `close()` resolves asynchronously, and its event would otherwise reach a closure
+            // whose wasm table entry is gone (`closure invoked recursively or after being
+            // dropped`).
+            socket.set_onopen(None);
+            socket.set_onmessage(None);
+            socket.set_onclose(None);
             let _ = socket.close();
         }
+        inner.closers = Closers::default();
     }
 }
 

@@ -133,8 +133,14 @@ impl Bridge {
             Message::Open { name, data } => deliver_open(&inbox, &ctx, &name, &data),
             Message::Session { session_id, ws_url, token, role } => {
                 host_session::deliver(&events, HostEvent::Session(host_session::HostSession::new(session_id, ws_url, token, role)));
+                // The event is applied on the next frame; without a repaint request an idle app
+                // draws none, and the session would open only on the next unrelated input.
+                ctx.request_repaint();
             }
-            Message::Committed { version, etag } => host_session::deliver(&events, HostEvent::Committed { version, etag }),
+            Message::Committed { version, etag } => {
+                host_session::deliver(&events, HostEvent::Committed { version, etag });
+                ctx.request_repaint();
+            }
             Message::Host { .. } | Message::Saved { .. } | Message::HandoffDone { .. } => {}
         });
     }

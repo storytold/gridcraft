@@ -142,6 +142,13 @@ impl SheetApp {
         // frames still see worker completion. `ui` and the desktop app no longer poll it.
         self.poll_printing(ctx);
         self.poll_collab();
+        // ADR-0006: while a session is live the participant list and this window's cursor are
+        // posted at 5–10 Hz, and the transport delivers the room's answers on a frame. Without
+        // input egui draws none, so the session keeps a frame scheduled at the presence pace
+        // (the web shell's `gridcraft:presence` is posted from that same frame).
+        if self.collab.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         self.guard_window_close(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         updates_ui::tick(self, ctx);
