@@ -395,6 +395,17 @@ fn zoom_100_is_one_to_one_and_top_align_keeps_an_inset() {
         let at_50 = cell_text_y(VAlign::Top, half_rect, gh, 0.5);
         assert!((at_50 - LINE_EDGE_INSET * 0.5).abs() < 0.01, "{at_50}");
         assert!(at_50 + gh < half_rect.bottom(), "50% inset must not eat the row");
+        // A single line taller than the row is clamped to the top inset (`y_bottom.max(y_top)`).
+        let gh_over = short.height() + 8.0;
+        assert!(gh_over > short.height(), "the glyph must be taller than the row");
+        let over_top = cell_text_y(VAlign::Top, short, gh_over, geo.z);
+        let over_mid = cell_text_y(VAlign::Center, short, gh_over, geo.z);
+        let over_bot = cell_text_y(VAlign::Bottom, short, gh_over, geo.z);
+        let unclamped = short.bottom() - gh_over - inset;
+        assert!(unclamped < short.top() + inset, "without the clamp the line would start above the top inset");
+        assert!((over_top - (short.top() + inset)).abs() < 0.01, "tall glyph stays at the top inset, got {over_top}");
+        assert!((over_bot - over_top).abs() < 0.01, "bottom cannot start above the top inset, got {over_bot}");
+        assert!((over_mid - over_top).abs() < 0.01, "middle collapses onto the top inset, got {over_mid}");
         let wrapped_top = wrapped_cell_text_y(VAlign::Top, tall, gh, geo.z);
         let wrapped_mid = wrapped_cell_text_y(VAlign::Center, tall, gh, geo.z);
         let wrapped_bot = wrapped_cell_text_y(VAlign::Bottom, tall, gh, geo.z);
@@ -403,8 +414,27 @@ fn zoom_100_is_one_to_one_and_top_align_keeps_an_inset() {
         assert!((wrapped_mid + gh / 2.0 - tall.center().y).abs() < 0.01, "wrapped middle stays centred");
     }
     let page = PageGrid::build(&wb, 0, 0, 0).unwrap();
-    let print_scale = page.scale;
+    // `PageGrid::scale` is the print scale (1.0 at 100%). `Geo::paged` multiplies the sheet
+    // zoom by it, so comparing `paged.z` with `page.scale` only restates that formula.
+    assert!((page.scale - 1.0).abs() < 1e-4, "100% print scale is 1:1, got {}", page.scale);
     let sh = wb.sheet(0).unwrap();
     let paged = Geo::paged(sh, rect, egui::Vec2::ZERO, std::sync::Arc::new(page));
-    assert!((paged.z - print_scale).abs() < 1e-3, "page layout must use the same 1:1 factor, got {}", paged.z);
+    assert!((paged.z - 1.0).abs() < 1e-4, "page layout at 100% sheet zoom is 1:1, got {}", paged.z);
+    // Sheet zoom reaches `Geo::z` and the cell size. Passing 2.0 or 0.5 straight into
+    // `cell_text_y` does not exercise that.
+    for (percent, factor) in [(50u16, 0.5f32), (200, 2.0)] {
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.zoom = percent;
+            let geo = Geo::new(sh, rect, egui::Vec2::ZERO);
+            let cell = geo.cell_rect(sh, CellRef::new(1, 1));
+            let mid_row = geo.cell_rect(sh, CellRef::new(3, 1));
+            let short_row = geo.cell_rect(sh, CellRef::new(5, 1));
+            assert!((geo.z - factor).abs() < 1e-4, "{percent}% must be {factor} sheet pixels per point, got {}", geo.z);
+            assert!((cell.height() - 64.0 * factor).abs() < 0.05 && (cell.width() - 140.0 * factor).abs() < 0.05, "{percent}% {cell:?}");
+            assert!((mid_row.height() - 40.0 * factor).abs() < 0.05, "{percent}% {mid_row:?}");
+            assert!((short_row.height() - 24.0 * factor).abs() < 0.05, "{percent}% {short_row:?}");
+        } else {
+            assert!(wb.sheet(0).is_some(), "sheet 0");
+        }
+    }
 }
