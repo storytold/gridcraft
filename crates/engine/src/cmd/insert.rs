@@ -542,49 +542,57 @@ fn valid_table_name(name: &str) -> bool {
 /// An explicit stack also keeps long operator chains from growing the Rust call stack.
 fn rename_total_table_refs(expr: &mut gridcraft_formula::Expr, old: &str, new: &str, shadowed: bool) -> bool {
     use gridcraft_formula::Expr;
-    let mut pending = vec![(expr, shadowed)];
+    let mut pending = vec![(expr, shadowed, false)];
     let mut hit = false;
-    while let Some((node, bound)) = pending.pop() {
+    while let Some((node, old_bound, new_bound)) = pending.pop() {
         match node {
             Expr::Struct(st) if st.table.eq_ignore_ascii_case(old) => {
                 st.table = new.to_string();
                 hit = true;
             }
-            Expr::Name(name) if !bound && name.eq_ignore_ascii_case(old) => {
-                *name = new.to_string();
+            Expr::Name(name) if !old_bound && name.eq_ignore_ascii_case(old) => {
+                if new_bound {
+                    // A local binding named like the destination must not capture the renamed table.
+                    *node =
+                        Expr::Struct(gridcraft_formula::StructRef { table: new.to_string(), specifiers: Vec::new(), col_start: None, col_end: None });
+                } else {
+                    *name = new.to_string();
+                }
                 hit = true;
             }
             Expr::Call(name, args) => match name.as_str() {
                 "LET" if args.len() >= 3 && !args.len().is_multiple_of(2) => {
                     if let Some((body, pairs)) = args.split_last_mut() {
-                        let mut local = bound;
+                        let mut local = (old_bound, new_bound);
                         for pair in pairs.chunks_mut(2) {
                             if let [declaration, value] = pair {
                                 // A LET binding starts after its own initializer, not inside it.
-                                pending.push((value, local));
-                                local |= matches!(declaration, Expr::Name(n) if n.eq_ignore_ascii_case(old));
+                                pending.push((value, local.0, local.1));
+                                local.0 |= matches!(declaration, Expr::Name(n) if n.eq_ignore_ascii_case(old));
+                                local.1 |= matches!(declaration, Expr::Name(n) if n.eq_ignore_ascii_case(new));
                             }
                         }
-                        pending.push((body, local));
+                        pending.push((body, local.0, local.1));
                     }
                 }
                 "LAMBDA" => {
                     if let Some((body, params)) = args.split_last_mut() {
-                        let local = bound || params.iter().any(|p| matches!(p, Expr::Name(n) if n.eq_ignore_ascii_case(old)));
-                        pending.push((body, local));
+                        let old_local = old_bound || params.iter().any(|p| matches!(p, Expr::Name(n) if n.eq_ignore_ascii_case(old)));
+                        let new_local = new_bound || params.iter().any(|p| matches!(p, Expr::Name(n) if n.eq_ignore_ascii_case(new)));
+                        pending.push((body, old_local, new_local));
                     }
                 }
-                _ => pending.extend(args.iter_mut().map(|e| (e, bound))),
+                _ => pending.extend(args.iter_mut().map(|e| (e, old_bound, new_bound))),
             },
-            Expr::Array(rows) => pending.extend(rows.iter_mut().flatten().map(|e| (e, bound))),
-            Expr::Unary(_, e) | Expr::Paren(e) => pending.push((e, bound)),
+            Expr::Array(rows) => pending.extend(rows.iter_mut().flatten().map(|e| (e, old_bound, new_bound))),
+            Expr::Unary(_, e) | Expr::Paren(e) => pending.push((e, old_bound, new_bound)),
             Expr::Binary(_, a, b) => {
-                pending.push((a, bound));
-                pending.push((b, bound));
+                pending.push((a, old_bound, new_bound));
+                pending.push((b, old_bound, new_bound));
             }
             Expr::Invoke(callee, args) => {
-                pending.push((callee, bound));
-                pending.extend(args.iter_mut().map(|e| (e, bound)));
+                pending.push((callee, old_bound, new_bound));
+                pending.extend(args.iter_mut().map(|e| (e, old_bound, new_bound)));
             }
             _ => {}
         }

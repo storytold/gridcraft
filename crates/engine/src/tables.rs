@@ -334,6 +334,11 @@ mod tests {
             ("LAMBDA(Prices,Prices+SUM(Prices[Price]))(2)", "LAMBDA(Prices,Prices+SUM(PriceList[Price]))(2)"),
             ("SUM(Prices)+LAMBDA(Prices,Prices)(2)+SUM(Prices)", "SUM(PriceList)+LAMBDA(Prices,Prices)(2)+SUM(PriceList)"),
             ("LET(x,LET(Prices,2,Prices),SUM(Prices))", "LET(x,LET(Prices,2,Prices),SUM(PriceList))"),
+            ("LET(PriceList,2,SUM(Prices))", "LET(PriceList,2,SUM(PriceList[]))"),
+            ("LAMBDA(PriceList,SUM(Prices))(2)", "LAMBDA(PriceList,SUM(PriceList[]))(2)"),
+            ("LET(pricelist,2,SUM(Prices))", "LET(pricelist,2,SUM(PriceList[]))"),
+            ("LET(PriceList,SUM(Prices),PriceList)", "LET(PriceList,SUM(PriceList),PriceList)"),
+            ("LET(x,LAMBDA(PriceList,SUM(Prices))(2),SUM(Prices))", "LET(x,LAMBDA(PriceList,SUM(PriceList[]))(2),SUM(PriceList))"),
         ] {
             let mut s = Session::new();
             s.new_workbook();
