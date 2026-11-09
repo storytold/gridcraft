@@ -386,3 +386,165 @@ fn redo_puts_back_what_undo_took_away_and_a_new_edit_ends_the_branch() {
     room.apply(&mut s, op("op-2", "cell.set", json!({"input": 7}), &sheet, "A1"), "ann").unwrap();
     assert!(room.redo(&mut s, "ann", None).is_err(), "a new edit ends the redo branch");
 }
+
+/// A structural operation against the current head: the tests below are about its undo, not about
+/// the exclusivity rule, which has its own test.
+fn structural_op(room: &Room, op_id: &str, cmd: &str, params: Json, sheet: &str) -> ClientOp {
+    ClientOp {
+        op_id: op_id.to_string(),
+        doc: "book".into(),
+        base_version: room.version(),
+        epoch: room.epoch(),
+        kind: Kind::Structural,
+        target: Target { sheet: sheet.to_string(), a1: Some("A1".into()) },
+        payload: Payload { cmd: cmd.to_string(), params },
+        preview: None,
+    }
+}
+
+fn value_of(s: &Session, sheet: usize, a1: &str) -> Value {
+    s.doc().unwrap().wb.sheet(sheet).unwrap().value(CellRef::parse(a1).unwrap())
+}
+
+#[test]
+fn a_row_insert_undoes_as_one_operation_with_the_whole_sheet_image() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, op("a", "cell.set", json!({"input": 1}), &sheet, "A1"), "ann").unwrap();
+    room.apply(&mut s, op("b", "cell.set", json!({"input": 2}), &sheet, "A2"), "ann").unwrap();
+    let inserted = room.apply(&mut s, structural_op(&room, "ins", "home.insertRows", json!({"rows": "1:1"}), &sheet), "ann").unwrap();
+    assert_eq!(value_of(&s, 0, "A1"), Value::Empty);
+    assert_eq!(value_of(&s, 0, "A2"), Value::Number(1.0));
+
+    let undone = room.undo(&mut s, "ann", Some("ins")).unwrap();
+    assert_eq!(undone.version, 4);
+    assert_eq!(undone.epoch, inserted.epoch + 1, "an undo that moves addresses bumps the epoch");
+    assert!(undone.result.command.is_none());
+    let images = undone.images.expect("the undo carries the sheets it restored");
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].name, "Sheet1");
+    assert!(undone.sheets.is_some(), "the client gets the sheet map of the restored workbook");
+    assert_eq!(value_of(&s, 0, "A1"), Value::Number(1.0));
+    assert_eq!(value_of(&s, 0, "A2"), Value::Number(2.0));
+    assert_eq!(value_of(&s, 0, "A3"), Value::Empty);
+}
+
+#[test]
+fn a_row_delete_undoes_with_the_cells_it_removed() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, op("a", "cell.set", json!({"input": 1}), &sheet, "A1"), "ann").unwrap();
+    room.apply(&mut s, op("b", "cell.set", json!({"input": 2}), &sheet, "A2"), "ann").unwrap();
+    room.apply(&mut s, structural_op(&room, "del", "home.deleteRows", json!({"rows": "1:1"}), &sheet), "ann").unwrap();
+    assert_eq!(value_of(&s, 0, "A1"), Value::Number(2.0), "the row above was removed");
+
+    room.undo(&mut s, "ann", Some("del")).unwrap();
+    assert_eq!(value_of(&s, 0, "A1"), Value::Number(1.0), "the deleted content is back");
+    assert_eq!(value_of(&s, 0, "A2"), Value::Number(2.0));
+}
+
+#[test]
+fn a_sheet_insert_undoes_to_the_sheet_set_before_it() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, structural_op(&room, "add", "home.insertSheet", json!({"name": "Extra"}), &sheet), "ann").unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 2);
+    assert_eq!(s.doc().unwrap().wb.sheets[1].name, "Extra");
+
+    let undone = room.undo(&mut s, "ann", Some("add")).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+    assert_eq!(s.doc().unwrap().wb.sheets[0].name, "Sheet1");
+    let images = undone.images.expect("the sheet image restores the one-sheet workbook");
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].name, "Sheet1");
+}
+
+#[test]
+fn a_sheet_delete_undoes_with_the_sheet_image_and_keeps_its_key() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, structural_op(&room, "add", "home.insertSheet", json!({"name": "Extra"}), &sheet), "ann").unwrap();
+    let extra_key = {
+        let d = s.doc().unwrap();
+        let at = d.wb.sheet_index("Extra").unwrap();
+        room.sheet_keys().key_for_index(&d.wb, at).unwrap()
+    };
+    let mut fill = op("fill", "cell.set", json!({"input": 7}), &extra_key.to_string(), "B1");
+    fill.base_version = room.version();
+    fill.epoch = room.epoch();
+    room.apply(&mut s, fill, "ann").unwrap();
+    room.apply(&mut s, structural_op(&room, "del", "home.deleteSheet", json!({"sheet": "Extra"}), &extra_key.to_string()), "ann").unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+
+    room.undo(&mut s, "ann", Some("del")).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.sheets.len(), 2);
+    let at = d.wb.sheet_index("Extra").expect("the deleted sheet is back");
+    assert_eq!(d.wb.sheets[at].value(CellRef::parse("B1").unwrap()), Value::Number(7.0));
+    assert_eq!(room.sheet_keys().key_for_index(&d.wb, at), Some(extra_key), "the restored sheet keeps its session key");
+    assert!(!room.sheet_keys().is_dead(extra_key));
+}
+
+#[test]
+fn a_structural_undo_is_refused_when_another_edit_came_after_it() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, op("a", "cell.set", json!({"input": 1}), &sheet, "A1"), "ann").unwrap();
+    room.apply(&mut s, structural_op(&room, "ins", "home.insertRows", json!({"rows": "1:1"}), &sheet), "ann").unwrap();
+    let mut later = op("b", "cell.set", json!({"input": 9}), &sheet, "B2");
+    later.base_version = room.version();
+    later.epoch = room.epoch();
+    room.apply(&mut s, later, "bob").unwrap();
+    let refused = room.undo(&mut s, "ann", Some("ins")).unwrap_err();
+    assert_eq!(refused.rejected().code, RejectCode::Conflict);
+    assert!(refused.rejected().retryable, "the client can resync and try again");
+    assert_eq!(value_of(&s, 0, "A2"), Value::Number(1.0), "the refused undo changed nothing");
+    assert_eq!(value_of(&s, 0, "B2"), Value::Number(9.0));
+}
+
+#[test]
+fn a_structural_redo_puts_the_edit_back_from_the_after_image() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, op("a", "cell.set", json!({"input": 1}), &sheet, "A1"), "ann").unwrap();
+    let inserted = room.apply(&mut s, structural_op(&room, "ins", "home.insertRows", json!({"rows": "1:1"}), &sheet), "ann").unwrap();
+    room.undo(&mut s, "ann", Some("ins")).unwrap();
+    assert_eq!(value_of(&s, 0, "A1"), Value::Number(1.0));
+    let redone = room.redo(&mut s, "ann", Some("ins")).unwrap();
+    assert_eq!(redone.version, inserted.version + 2);
+    assert_eq!(redone.epoch, inserted.epoch + 2, "undo and redo both move addresses");
+    assert_eq!(value_of(&s, 0, "A1"), Value::Empty);
+    assert_eq!(value_of(&s, 0, "A2"), Value::Number(1.0));
+    let images = redone.images.expect("a structural redo carries the after image too");
+    assert_eq!(images.len(), 1);
+}
+
+#[test]
+fn a_sheet_image_round_trips_through_the_wire() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, op("a", "cell.set", json!({"input": "=1+1"}), &sheet, "A1"), "ann").unwrap();
+    room.apply(&mut s, structural_op(&room, "ins", "home.insertRows", json!({"rows": "1:1"}), &sheet), "ann").unwrap();
+    let undone = room.undo(&mut s, "ann", Some("ins")).unwrap();
+    let images = undone.images.clone().unwrap();
+    let text = serde_json::to_string(&images).expect("the image is JSON");
+    let back: Vec<crate::SheetImage> = serde_json::from_str(&text).expect("the image reads back");
+    assert_eq!(back.len(), images.len());
+    assert_eq!(back[0].name, images[0].name);
+    let frame = serde_json::to_string(&crate::ServerMessage::Applied { applied: undone.clone() }).expect("the frame is JSON");
+    let message: crate::ServerMessage = serde_json::from_str(&frame).expect("the frame reads back");
+    match message {
+        crate::ServerMessage::Applied { applied } => {
+            assert_eq!(applied.version, undone.version);
+            assert_eq!(applied.images.expect("the images survive the frame").len(), 1);
+        }
+        other => panic!("expected applied, got {other:?}"),
+    }
+}

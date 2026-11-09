@@ -83,6 +83,20 @@ impl SheetKeys {
         self.dead.contains(&key)
     }
 
+    /// Gives a sheet that a structural undo brings back its old key again. A deleted sheet leaves
+    /// a tombstone; the step that removed it keeps the key in its image, and restoring the sheet
+    /// with the same runtime identity before the next [`SheetKeys::sync`] keeps the key with it.
+    pub fn revive(&mut self, key: u64, uid: u64) {
+        if let Some(old) = self.uid_of_key.insert(key, uid) {
+            self.key_of_uid.remove(&old);
+        }
+        if let Some(previous) = self.key_of_uid.insert(uid, key) {
+            self.uid_of_key.remove(&previous);
+        }
+        self.dead.remove(&key);
+        self.next = self.next.max(key);
+    }
+
     /// How many keys the session has issued.
     pub fn issued(&self) -> u64 {
         self.next

@@ -17,13 +17,19 @@ use serde_json::Value as Json;
 use crate::delta::delta_for;
 use crate::keys::SheetKeys;
 use crate::ops::{Class, classify};
-use crate::protocol::{Applied, CellChange, ClientOp, CommandEcho, Hint, Kind, Outcome, RejectCode, Rejected, SheetDelta, SheetName};
+use crate::protocol::{Applied, CellChange, ClientOp, CommandEcho, Hint, Kind, Outcome, RejectCode, Rejected, SheetDelta, SheetImage, SheetName};
 
 /// How many applied operations the room remembers for idempotent resends (ADR-0003).
 pub const DEDUP_WINDOW: usize = 10_000;
 
 /// How many steps one participant may undo (ADR-0010).
 pub const UNDO_STEPS: usize = 200;
+
+/// How large the whole-sheet images of a structural undo may be, as JSON, before the room refuses
+/// it as `too_large`. A structural step is one operation by contract, so the images travel in one
+/// `applied` frame; chunking them is a follow-up. Without the bound an oversized answer would
+/// break the socket instead of being refused.
+pub const IMAGE_LIMIT: usize = 8 * 1024 * 1024;
 
 /// One cell a step touched: its state before and after. An undo puts `before` back only while the
 /// cell still holds `after` (an edit by somebody else wins).
@@ -36,12 +42,28 @@ pub struct CellSnap {
     pub after: CellState,
 }
 
-/// One participant's reversible step. Structural steps are not kept in v1.
+/// One participant's reversible step.
+///
+/// A cell step keeps the cells it touched; a structural step (a row or sheet insert or delete)
+/// keeps the whole sheets before and after it, because every address below an edited line may
+/// have moved and a deleted sheet has no cells left to diff against.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Step {
     pub op_id: String,
+    /// The document version at which this step's result was current. A structural step is only
+    /// reversed while the room still sits there: a later operation anywhere may have edited a
+    /// cell the image would put back.
+    #[serde(default)]
+    pub version: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cells: Vec<CellSnap>,
+    /// A structural step: every sheet as it stood before it (what `undo` restores).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<Vec<SheetImage>>,
+    /// A structural step: every sheet as it stood after it (what `redo` restores).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<Vec<SheetImage>>,
 }
 
 /// A refusal the caller sends to the client as it is.
@@ -166,6 +188,9 @@ impl Room {
             (index, name)
         };
         debug_assert!(session.active().is_some_and(|d| d.wb.sheet(index).is_some()));
+        // A structural step keeps whole sheets: what they were before the command runs, and what
+        // they are after it. The old keys still map the sheets the command is about to remove.
+        let before_images = if structural { session.active().map(|d| images_of(&d.wb, &self.keys)) } else { None };
         let mut params = op.payload.params.clone();
         normalise(&mut params, &op.payload.cmd, &name, op.target.a1.as_deref());
         session.apply_remote(&op.payload.cmd, params.clone()).map_err(|e| self.reject(&op, RejectCode::Invalid, false, &e.to_string()))?;
@@ -175,19 +200,13 @@ impl Room {
             let delta = delta_for(&d.wb, &self.keys, &changed);
             let sheets = if structural {
                 self.keys.sync(&d.wb);
-                Some(
-                    (0..d.wb.sheets.len())
-                        .filter_map(|index| {
-                            let key = self.keys.key_for_index(&d.wb, index)?;
-                            Some(SheetName { key: key.to_string(), name: d.wb.sheets[index].name.clone() })
-                        })
-                        .collect(),
-                )
+                Some(sheet_map(&d.wb, &self.keys))
             } else {
                 None
             };
             (delta, sheets)
         };
+        let after_images = if structural { session.active().map(|d| images_of(&d.wb, &self.keys)) } else { None };
         let step_cells = if structural {
             Vec::new()
         } else {
@@ -207,11 +226,13 @@ impl Room {
             actor: actor.to_string(),
             result: Outcome { command: Some(CommandEcho { id: op.payload.cmd.clone(), params }), delta: Some(delta) },
             sheets,
+            images: None,
         };
         self.remember(applied.clone());
-        if !step_cells.is_empty() {
+        let structural_step = before_images.is_some() && after_images.is_some();
+        if !step_cells.is_empty() || structural_step {
             let steps = self.history.entry(actor.to_string()).or_default();
-            steps.push_back(Step { op_id: op.op_id.clone(), cells: step_cells });
+            steps.push_back(Step { op_id: op.op_id.clone(), version: self.version, cells: step_cells, before: before_images, after: after_images });
             while steps.len() > UNDO_STEPS {
                 steps.pop_front();
             }
@@ -235,6 +256,9 @@ impl Room {
             && wanted != step.op_id
         {
             return Err(self.undo_reject(RejectCode::Conflict, false, "that is not the last edit of this participant"));
+        }
+        if let Some(before) = step.before.clone() {
+            return self.reverse_sheets(session, actor, &step, before, true);
         }
         let mut groups: BTreeMap<usize, Vec<(CellRef, CellState)>> = BTreeMap::new();
         {
@@ -261,7 +285,9 @@ impl Room {
             steps.pop_back();
         }
         let redo = self.redo.entry(actor.to_string()).or_default();
-        redo.push_back(step.clone());
+        let mut undone = step.clone();
+        undone.version = self.version;
+        redo.push_back(undone);
         while redo.len() > UNDO_STEPS {
             redo.pop_front();
         }
@@ -272,6 +298,7 @@ impl Room {
             actor: actor.to_string(),
             result: Outcome { command: None, delta: Some(delta) },
             sheets: None,
+            images: None,
         })
     }
 
@@ -285,6 +312,9 @@ impl Room {
             && wanted != step.op_id
         {
             return Err(self.redo_reject(RejectCode::Conflict, false, "that is not the last undone edit of this participant"));
+        }
+        if let Some(after) = step.after.clone() {
+            return self.reverse_sheets(session, actor, &step, after, false);
         }
         let mut groups: BTreeMap<usize, Vec<(CellRef, CellState)>> = BTreeMap::new();
         {
@@ -311,7 +341,9 @@ impl Room {
             steps.pop_back();
         }
         let history = self.history.entry(actor.to_string()).or_default();
-        history.push_back(step.clone());
+        let mut redone = step.clone();
+        redone.version = self.version;
+        history.push_back(redone);
         while history.len() > UNDO_STEPS {
             history.pop_front();
         }
@@ -322,6 +354,80 @@ impl Room {
             actor: actor.to_string(),
             result: Outcome { command: None, delta: Some(delta) },
             sheets: None,
+            images: None,
+        })
+    }
+
+    /// Applies a whole-sheet image as one operation: every sheet of the step replaces the current
+    /// workbook in the order of the session map, the keys of the restored sheets are kept, and the
+    /// epoch grows because addresses moved. Only the last step of `actor` can be here, and only
+    /// while the room still sits at the version the step left: a later edit anywhere may have
+    /// touched a cell the image would put back, so it refuses as `conflict` instead of overwriting.
+    fn reverse_sheets(&mut self, session: &mut Session, actor: &str, step: &Step, images: Vec<SheetImage>, undo: bool) -> Result<Applied, RoomError> {
+        if self.version != step.version {
+            return Err(self.image_reject(undo, RejectCode::Conflict, true, "another edit came after this structural step"));
+        }
+        match serde_json::to_vec(&images) {
+            Ok(bytes) if bytes.len() > IMAGE_LIMIT => {
+                return Err(self.image_reject(undo, RejectCode::TooLarge, false, "the sheet image is too large to travel as one operation"));
+            }
+            Ok(_) => {}
+            Err(_) => return Err(self.image_reject(undo, RejectCode::Internal, false, "the sheet image could not be written")),
+        }
+        let sheets = images.iter().map(|image| image.sheet.clone()).collect();
+        session.restore_sheets(sheets).map_err(|e| self.image_reject(undo, RejectCode::Internal, false, &e.to_string()))?;
+        for image in &images {
+            if let Ok(key) = image.key.parse::<u64>() {
+                self.keys.revive(key, image.sheet.uid.get());
+            }
+        }
+        let sheets = {
+            let d = session.active().ok_or_else(|| self.image_reject(undo, RejectCode::Internal, false, "no document"))?;
+            self.keys.sync(&d.wb);
+            sheet_map(&d.wb, &self.keys)
+        };
+        let _ = session.take_changed();
+        self.version += 1;
+        self.epoch += 1;
+        let mut moved = step.clone();
+        moved.version = self.version;
+        if undo {
+            if let Some(steps) = self.history.get_mut(actor) {
+                steps.pop_back();
+            }
+            let redo = self.redo.entry(actor.to_string()).or_default();
+            redo.push_back(moved);
+            while redo.len() > UNDO_STEPS {
+                redo.pop_front();
+            }
+        } else {
+            if let Some(steps) = self.redo.get_mut(actor) {
+                steps.pop_back();
+            }
+            let history = self.history.entry(actor.to_string()).or_default();
+            history.push_back(moved);
+            while history.len() > UNDO_STEPS {
+                history.pop_front();
+            }
+        }
+        Ok(Applied {
+            op_id: format!("{}-{}", if undo { "undo" } else { "redo" }, step.op_id),
+            version: self.version,
+            epoch: self.epoch,
+            actor: actor.to_string(),
+            result: Outcome { command: None, delta: None },
+            sheets: Some(sheets),
+            images: Some(images),
+        })
+    }
+
+    fn image_reject(&self, undo: bool, code: RejectCode, retryable: bool, message: &str) -> RoomError {
+        RoomError::Rejected(Rejected {
+            op_id: if undo { "undo".into() } else { "redo".into() },
+            code,
+            retryable,
+            hint: Some(Hint { version: self.version, epoch: self.epoch }),
+            message: Some(message.to_string()),
         })
     }
 
@@ -365,6 +471,35 @@ impl Room {
             message: Some(message.to_string()),
         })
     }
+}
+
+/// Every sheet of `wb` as a whole-sheet image, in workbook order, with its session key. A sheet
+/// the map has not seen yet (the one an insert just made) gets its key from the sync that follows
+/// the command.
+fn images_of(wb: &Workbook, keys: &SheetKeys) -> Vec<SheetImage> {
+    wb.sheets
+        .iter()
+        .enumerate()
+        .filter_map(|(index, sheet)| {
+            let key = keys.key_for_index(wb, index)?;
+            Some(SheetImage {
+                key: key.to_string(),
+                name: sheet.name.clone(),
+                index: u32::try_from(index).unwrap_or(u32::MAX),
+                sheet: sheet.as_ref().clone(),
+            })
+        })
+        .collect()
+}
+
+/// The session's sheet map in workbook order: what a structural `applied` carries.
+fn sheet_map(wb: &Workbook, keys: &SheetKeys) -> Vec<SheetName> {
+    (0..wb.sheets.len())
+        .filter_map(|index| {
+            let key = keys.key_for_index(wb, index)?;
+            Some(SheetName { key: key.to_string(), name: wb.sheets[index].name.clone() })
+        })
+        .collect()
 }
 
 /// The cells of one applied delta as snapshots: what they held in `before`, what they hold in

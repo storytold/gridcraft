@@ -225,14 +225,23 @@ impl Synced {
                     self.pending.retain(|pending| pending.op_id != applied.op_id);
                     if applied.actor == self.actor {
                         if applied.result.command.is_some() {
-                            if !applied.op_id.starts_with("undo-") {
+                            if !applied.op_id.starts_with("undo-") && !applied.op_id.starts_with("redo-") {
                                 self.own.push_back(applied.op_id.clone());
                                 while self.own.len() > 200 {
                                     self.own.pop_front();
                                 }
                             }
-                        } else {
-                            self.own.pop_back();
+                        } else if let Some(step) = applied.op_id.strip_prefix("undo-") {
+                            if self.own.back().is_some_and(|id| id == step) {
+                                self.own.pop_back();
+                            }
+                        } else if let Some(step) = applied.op_id.strip_prefix("redo-") {
+                            // Redo puts the step back on the undo stack: the next undo reverses it
+                            // again, and a later edit still ends the branch.
+                            self.own.push_back(step.to_string());
+                            while self.own.len() > 200 {
+                                self.own.pop_front();
+                            }
                         }
                     }
                 }
@@ -286,6 +295,12 @@ impl Synced {
             if !mine || structural {
                 let _ = session.apply_remote(&command.id, command.params.clone());
             }
+        }
+        // A structural undo/redo is not a command: the server sends the whole sheets it restored,
+        // in the session's order, and the client replaces its own before the map below moves.
+        if let Some(images) = &applied.images {
+            let sheets = images.iter().map(|image| image.sheet.clone()).collect();
+            let _ = session.restore_sheets(sheets);
         }
         if let Some(sheets) = &applied.sheets {
             self.apply_sheets(sheets);

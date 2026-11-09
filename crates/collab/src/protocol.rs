@@ -96,6 +96,46 @@ pub struct SheetName {
     pub name: String,
 }
 
+/// A whole sheet as it stood at one boundary of a structural step (ADR-0010 §Structural undo).
+///
+/// A row insert or delete moves every address below it, and a sheet insert or delete changes the
+/// set of sheets, so the cells a structural step touched are not a delta: an undo needs the sheet
+/// as it was, not a list of changed cells. The room keeps such an image before and after the step
+/// and sends it with the undo/redo so every replica replaces the same sheets in one operation.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetImage {
+    /// The session key of the sheet. It survives the undo, so presence and later operations keep
+    /// addressing the same sheet.
+    pub key: String,
+    pub name: String,
+    /// Where the sheet sat in the workbook at that boundary.
+    pub index: u32,
+    /// The sheet itself: cells, formulas, styles, merges, tables, charts and its view.
+    #[serde(with = "sheet_value")]
+    pub sheet: gridcraft_model::Sheet,
+}
+
+/// Serde for a [`gridcraft_model::Sheet`] inside an internally tagged [`crate::ServerMessage`].
+///
+/// The tag makes serde buffer a message's fields as content, and content keeps JSON object keys as
+/// strings: a sheet's row, column and band maps are keyed by numbers, so they would refuse to read
+/// back. Round-tripping the sheet through `serde_json` gives its inner maps the ordinary JSON
+/// deserializer, which turns a string key into the number the map holds.
+mod sheet_value {
+    use gridcraft_model::Sheet;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+
+    pub fn serialize<S: Serializer>(sheet: &Sheet, serializer: S) -> Result<S::Ok, S::Error> {
+        serde_json::to_value(sheet).map_err(serde::ser::Error::custom)?.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Sheet, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        serde_json::from_value(value).map_err(D::Error::custom)
+    }
+}
+
 /// A confirmed operation: the only thing a client applies.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -108,6 +148,11 @@ pub struct Applied {
     /// The sheet map after a structural operation: keys never change, names and order may.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sheets: Option<Vec<SheetName>>,
+    /// Whole-sheet images of a structural undo/redo: the sheets as they stood before the step
+    /// (undo) or after it (redo). The client replaces its sheets with them, then applies `sheets`;
+    /// such an answer has no command echo and no cell delta, because every address may have moved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<SheetImage>>,
 }
 
 /// Where the client should resynchronise after a rejection.

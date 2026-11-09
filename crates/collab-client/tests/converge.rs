@@ -160,3 +160,85 @@ async fn redo_puts_the_step_back_on_every_replica() {
     assert_eq!(ann.synced.state().version, 3);
     server.stop().await;
 }
+
+fn names(peer: &Peer) -> Vec<String> {
+    peer.session.doc().unwrap().wb.sheets.iter().map(|sheet| sheet.name.clone()).collect()
+}
+
+fn value_in(peer: &Peer, sheet: &str, a1: &str) -> Value {
+    let d = peer.session.doc().unwrap();
+    let index = d.wb.sheet_index(sheet).unwrap_or_else(|| panic!("no sheet {sheet}"));
+    d.wb.sheets[index].value(CellRef::parse(a1).unwrap())
+}
+
+/// A structural undo is one operation with the sheets as they were: rows move back and a deleted
+/// sheet comes back, on the author's replica and on the peer's alike.
+#[tokio::test]
+async fn structural_undo_restores_rows_and_sheets_on_every_replica() {
+    let server = support::start().await;
+    let session = support::create(&server, 46).await;
+    let mut ann = join(&server, 46, &session, "ann", Role::Editor).await;
+    let mut bob = join(&server, 46, &session, "bob", Role::Editor).await;
+
+    ann.synced.execute(&mut ann.session, "cell.set", json!({ "cell": "A1", "input": 1 })).unwrap();
+    ann.synced.execute(&mut ann.session, "cell.set", json!({ "cell": "A2", "input": 2 })).unwrap();
+    settle(&mut ann, &mut bob).await;
+
+    // A row insert is structural: it is not previewed and moves the cells down.
+    ann.synced.execute(&mut ann.session, "home.insertRows", json!({ "rows": "1:1" })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    for peer in [&ann, &bob] {
+        assert_eq!(value(peer, "A1"), Value::Empty);
+        assert_eq!(value(peer, "A2"), Value::Number(1.0));
+        assert_eq!(value(peer, "A3"), Value::Number(2.0));
+        assert_eq!(peer.synced.state().epoch, 1);
+    }
+
+    ann.synced.undo().unwrap();
+    settle(&mut ann, &mut bob).await;
+    for peer in [&ann, &bob] {
+        assert_eq!(value(peer, "A1"), Value::Number(1.0), "the row edit is undone from the sheet image");
+        assert_eq!(value(peer, "A2"), Value::Number(2.0));
+        assert_eq!(value(peer, "A3"), Value::Empty);
+        assert_eq!(peer.synced.state().epoch, 2, "the undo moves addresses too");
+    }
+
+    ann.synced.redo().unwrap();
+    settle(&mut ann, &mut bob).await;
+    for peer in [&ann, &bob] {
+        assert_eq!(value(peer, "A1"), Value::Empty);
+        assert_eq!(value(peer, "A2"), Value::Number(1.0));
+        assert_eq!(peer.synced.state().epoch, 3);
+    }
+    ann.synced.undo().unwrap();
+    settle(&mut ann, &mut bob).await;
+    assert_eq!(value(&bob, "A1"), Value::Number(1.0));
+
+    // Sheet insert and delete: the set of sheets is part of the same operation.
+    ann.synced.execute(&mut ann.session, "home.insertSheet", json!({ "name": "Extra" })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    assert_eq!(names(&ann), ["Sheet1", "Extra"]);
+    assert_eq!(names(&bob), ["Sheet1", "Extra"]);
+    ann.synced.undo().unwrap();
+    settle(&mut ann, &mut bob).await;
+    assert_eq!(names(&ann), ["Sheet1"]);
+    assert_eq!(names(&bob), ["Sheet1"]);
+
+    ann.synced.execute(&mut ann.session, "home.insertSheet", json!({ "name": "Extra" })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    ann.synced.execute(&mut ann.session, "cell.set", json!({ "cell": "B1", "input": 7 })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    assert_eq!(value_in(&bob, "Extra", "B1"), Value::Number(7.0));
+    ann.synced.execute(&mut ann.session, "home.deleteSheet", json!({ "sheet": "Extra" })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    assert_eq!(names(&bob), ["Sheet1"]);
+
+    ann.synced.undo().unwrap();
+    settle(&mut ann, &mut bob).await;
+    for peer in [&ann, &bob] {
+        assert_eq!(names(peer), ["Sheet1", "Extra"], "the deleted sheet comes back");
+        assert_eq!(value_in(peer, "Extra", "B1"), Value::Number(7.0), "with the cells it held");
+        assert_eq!(peer.synced.state().epoch, 9);
+    }
+    server.stop().await;
+}

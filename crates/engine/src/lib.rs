@@ -1199,6 +1199,36 @@ impl Session {
         Ok(())
     }
 
+    /// Replaces every sheet of the workbook with an image a shared session kept for a structural
+    /// undo or redo: a row insert moves every address below it and a sheet insert or delete changes
+    /// the set of sheets, so the operation restores whole sheets rather than a list of cells. The
+    /// dependency graph is rebuilt and the workbook recalculated; the caller keeps the authoritative
+    /// sheet keys, which follow the restored runtime identities.
+    ///
+    /// Images arrive from the session's room, which validates them against the engine it runs; a
+    /// serialized cell store is rebuilt from its cells rather than trusting its cached count.
+    pub fn restore_sheets(&mut self, mut sheets: Vec<gridcraft_model::Sheet>) -> Result<()> {
+        if sheets.is_empty() {
+            return Err(EngineError::Other("a workbook needs at least one sheet".into()));
+        }
+        for sheet in &mut sheets {
+            sheet.cells.rebuild();
+        }
+        let Some(d) = self.active_mut() else { return Err(EngineError::NoDocument) };
+        let DocState { wb, calc, revision, sheet_selections, .. } = d;
+        let active = wb.active_sheet().min(sheets.len() - 1);
+        {
+            let model = Arc::make_mut(wb);
+            model.sheets = sheets.into_iter().map(Arc::new).collect();
+            model.set_active_sheet(active);
+            calc.rebuild(model);
+            calc.recalc_all(model);
+        }
+        sheet_selections.resize(wb.sheets.len(), Selection::default());
+        *revision = revision.saturating_add(1);
+        Ok(())
+    }
+
     /// Replaces the cached values of cells with the authoritative ones another participant's
     /// command produced. The formulas, styles and structure are already in place (the command
     /// was applied through [`Session::apply_remote`]); only evaluation results can differ —
