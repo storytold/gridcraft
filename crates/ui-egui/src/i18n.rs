@@ -20,6 +20,8 @@ mod ja;
 mod ko;
 mod nl;
 mod pl;
+mod plural;
+mod pseudo;
 mod pt;
 mod ro;
 mod ru;
@@ -53,6 +55,10 @@ pub enum Language {
     Vi,
     Nl,
     Ro,
+    /// Not offered in the switcher: the interface with every string accented, padded
+    /// and bracketed, so words that never went through a key stand out. It translates
+    /// nothing; `app.language.set {"language": "pseudo"}` selects it.
+    Pseudo,
 }
 
 impl Language {
@@ -109,6 +115,7 @@ impl Language {
             Self::Vi => "Tiếng Việt",
             Self::Nl => "Nederlands",
             Self::Ro => "Română",
+            Self::Pseudo => "Pseudo",
         }
     }
 
@@ -134,6 +141,7 @@ impl Language {
             Self::Vi => "vi",
             Self::Nl => "nl",
             Self::Ro => "ro",
+            Self::Pseudo => "pseudo",
         }
     }
 
@@ -168,6 +176,7 @@ impl Language {
             "vi" => Some(Self::Vi),
             "nl" => Some(Self::Nl),
             "ro" => Some(Self::Ro),
+            "pseudo" => Some(Self::Pseudo),
             _ => None,
         }
     }
@@ -194,8 +203,12 @@ impl Language {
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
     /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
     pub fn tr(self, text: &str) -> &str {
+        if self == Self::Pseudo {
+            return pseudo::text(text.rsplit_once('|').map_or(text, |(_, label)| label));
+        }
         let translated = match self {
             Self::En => None,
+            Self::Pseudo => None,
             Self::Es => es::translate(text),
             Self::El => el::translate(text),
             Self::Ja => ja::translate(text),
@@ -216,6 +229,35 @@ impl Language {
             Self::Ro => ro::translate(text),
         };
         translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+    }
+
+    /// Translates a message that counts something: `key` is the English singular wording with an
+    /// `{n}` slot (`"Check passed: writes {n} cell"`), and this picks the form the count takes in
+    /// this language and fills `{n}` in.
+    ///
+    /// A language needing more than two forms keeps them in its catalog's plural table (Russian's
+    /// is `ru::plural`). A language whose forms are not written yet shows the English wording, so
+    /// a partly translated catalog stays readable; slots other than `{n}` are left for the call
+    /// site to fill.
+    ///
+    /// The category comes from [`plural::category`], which knows every offered language's rules, so
+    /// adding a language is its rule there, its forms in its own file, and one arm in
+    /// [`Language::plural_form`] \u{2014} including a language with six forms (Arabic) or a `zero`
+    /// form (Latvian), which [`plural::Category`] already names.
+    pub fn tr_plural(self, n: u64, key: &str) -> String {
+        let category = plural::category(self, n);
+        let form = self.plural_form(key, category).or_else(|| plural::english(key, category)).unwrap_or(key);
+        let text = if self == Self::Pseudo { pseudo::text(form) } else { form };
+        text.replace("{n}", &n.to_string())
+    }
+
+    /// The language's own wording of a counted message for a plural category, when it has one.
+    /// Every other language falls back to English until its forms are written.
+    fn plural_form(self, key: &str, category: plural::Category) -> Option<&'static str> {
+        match self {
+            Self::Ru => ru::plural(key, category),
+            _ => None,
+        }
     }
 
     pub(crate) fn tr_error(self, message: &str) -> String {
@@ -515,5 +557,20 @@ mod tests {
         let keys: Vec<String> = order[1..].iter().map(|l| name_sort_key(l.name())).collect();
         assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
         assert_eq!(name_sort_key("Čeština"), "cestina");
+    }
+
+    #[test]
+    fn a_counted_message_takes_the_language_form() {
+        let step = "{n} step";
+        for n in 0..=30u64 {
+            let shown = Language::Ru.tr_plural(n, step);
+            assert!(!shown.contains('{'), "the count is left unfilled in {shown}");
+            assert_ne!(shown, Language::En.tr_plural(n, step), "Russian at {n} falls back to English");
+        }
+        assert_ne!(Language::Ru.tr_plural(1, step), Language::Ru.tr_plural(2, step));
+        assert_ne!(Language::Ru.tr_plural(2, step), Language::Ru.tr_plural(5, step));
+        // The pseudo-locale accents what it is given, so an untranslated count shows up too.
+        let pseudo = Language::Pseudo.tr_plural(2, step);
+        assert!(pseudo.starts_with('\u{27e6}') && pseudo.contains('2'), "{pseudo}");
     }
 }

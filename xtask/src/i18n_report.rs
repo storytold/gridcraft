@@ -2,6 +2,11 @@
 //! the catalogs in `crates/ui-egui/src/i18n/`. A string a catalog lacks shows in English, so the
 //! report always succeeds; `cargo xtask ci` runs it first so the list shows in the gate log.
 //!
+//! It also reads the keys the interface code asks for (`tr("\u{2026}")`, `tr_tab("\u{2026}")`, the
+//! key argument of `tr_plural`, and a command's label in `cmd!("id", "Label")`) and compares them
+//! with the reference set, so a string the code shows that no catalog holds is listed instead of
+//! shipping in English.
+//!
 //! The reference set is every key any catalog translates. A catalog is a source file with a
 //! `fn translate`; its keys are the string literals that start a match arm (`"key" => …`) or open a
 //! table row (`("key", …)`). With the `engine` feature it also lists function help rows keyed by
@@ -40,7 +45,83 @@ pub fn run(root: &Path) -> Result<(), String> {
     }
     print!("{}", render(&catalogs));
     print!("{}", function_help(&help));
+    let reference: BTreeSet<String> = catalogs.values().flatten().cloned().collect();
+    print!("{}", code_report(&asked_keys(root), &reference));
     Ok(())
+}
+
+/// Every key the interface code asks a catalog for, read from the call sites rather than from the
+/// catalogs: `tr(\u{2026})`, `tr_tab(\u{2026})`, the key argument of `tr_plural(n, \u{2026})` and the
+/// label of `cmd!("id", "Label")` (the id is data, the label is the key). The catalog module itself
+/// is skipped, and so are tests: a key only a test names is not one the interface shows.
+fn asked_keys(root: &Path) -> BTreeSet<String> {
+    let mut keys = BTreeSet::new();
+    let mut dirs = vec![root.join("crates")];
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default().to_owned();
+            if path.is_dir() {
+                if name != "target" && name != "i18n" && !name.starts_with('.') {
+                    dirs.push(path);
+                }
+                continue;
+            }
+            if !name.ends_with(".rs") || name == "i18n.rs" {
+                continue;
+            }
+            let Ok(source) = std::fs::read_to_string(&path) else { continue };
+            collect_asked(&source, &mut keys);
+        }
+    }
+    keys
+}
+
+/// The keys in one file's source; see [`asked_keys`] for the call sites it recognises.
+fn collect_asked(source: &str, keys: &mut BTreeSet<String>) {
+    for (literal, start, _) in literals(source) {
+        let prefix = &source[..start];
+        let asked = translates(prefix, "tr(") || translates(prefix, "tr_tab(") || plural_key(prefix) || command_label(prefix);
+        if asked && !literal.is_empty() {
+            keys.insert(literal);
+        }
+    }
+}
+
+/// Whether the literal opens as the argument of a call to `name` (`tr(`, `tr_tab(`). The callee must
+/// start there: `attr(` also ends in `tr(` and is not a translation.
+fn translates(prefix: &str, name: &str) -> bool {
+    let Some(rest) = prefix.trim_end().strip_suffix(name) else { return false };
+    !rest.ends_with(|c: char| c.is_alphanumeric() || c == '_')
+}
+
+/// Whether the literal opens as the key argument of `tr_plural(n, \u{2026})`: the call is still open
+/// and no argument separator has closed it since.
+fn plural_key(prefix: &str) -> bool {
+    let Some(open) = prefix.rfind("tr_plural(") else { return false };
+    !prefix[open..].contains(')')
+}
+
+/// Whether the literal is the label of `cmd!("id", "Label")`: the call is open, an id literal and a
+/// comma come before it.
+fn command_label(prefix: &str) -> bool {
+    let Some(open) = prefix.rfind("cmd!(") else { return false };
+    let inside = &prefix[open + "cmd!(".len()..];
+    !inside.contains(')') && inside.trim_end().ends_with(',') && inside.contains('"')
+}
+
+/// What the code asks for that no catalog holds, then the keys catalogs hold that no call site asks
+/// for (dead keys, or keys a test or a dynamic `format!` builds).
+pub fn code_report(asked: &BTreeSet<String>, reference: &BTreeSet<String>) -> String {
+    let mut out = format!("i18n-report: the code asks for {} interface strings\n", asked.len());
+    let missing: Vec<&str> = asked.iter().map(String::as_str).filter(|key| !reference.contains(*key)).collect();
+    let _ = writeln!(out, "  asked for, no catalog holds: {}", missing.len());
+    list(&mut out, missing.iter().copied(), missing.len());
+    let unasked: Vec<&str> = reference.iter().map(String::as_str).filter(|key| !asked.contains(*key)).collect();
+    let _ = writeln!(out, "  in the catalogs, no call site asks for it: {}", unasked.len());
+    list(&mut out, unasked.iter().copied(), unasked.len());
+    out
 }
 
 /// Per language: how many reference keys it lacks, then the first [`LIST_CAP`] of them.

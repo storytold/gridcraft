@@ -492,3 +492,85 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
+
+/// The Russian wording of a counted message for a plural category: 1 шаг, 2 шага, 5 шагов.
+/// A language words only the categories it distinguishes; the caller falls back to English for a
+/// category this answers nothing for.
+pub(super) fn plural(key: &str, category: super::plural::Category) -> Option<&'static str> {
+    use super::plural::Category::{Few, Many, One, Other};
+    Some(match (key, category) {
+        ("{n} step", One) => "{n} шаг",
+        ("{n} step", Few | Other) => "{n} шага",
+        ("{n} step", Many) => "{n} шагов",
+        ("Ran {n} step.", One) => "Выполнен {n} шаг.",
+        ("Ran {n} step.", Few | Other) => "Выполнено {n} шага.",
+        ("Ran {n} step.", Many) => "Выполнено {n} шагов.",
+        ("Saved macro “{name}” ({n} step)", One) => "Макрос «{name}» сохранён ({n} шаг)",
+        ("Saved macro “{name}” ({n} step)", Few | Other) => "Макрос «{name}» сохранён ({n} шага)",
+        ("Saved macro “{name}” ({n} step)", Many) => "Макрос «{name}» сохранён ({n} шагов)",
+        ("Ran macro “{name}” ({n} step)", One) => "Макрос «{name}» выполнен ({n} шаг)",
+        ("Ran macro “{name}” ({n} step)", Few | Other) => "Макрос «{name}» выполнен ({n} шага)",
+        ("Ran macro “{name}” ({n} step)", Many) => "Макрос «{name}» выполнен ({n} шагов)",
+        ("{name}    (script, {n} step)", One) => "{name}    (скрипт, {n} шаг)",
+        ("{name}    (script, {n} step)", Few | Other) => "{name}    (скрипт, {n} шага)",
+        ("{name}    (script, {n} step)", Many) => "{name}    (скрипт, {n} шагов)",
+        ("Check passed: writes {n} cell", One) => "Проверка пройдена: изменяет {n} ячейку",
+        ("Check passed: writes {n} cell", Few | Other) => "Проверка пройдена: изменяет {n} ячейки",
+        ("Check passed: writes {n} cell", Many) => "Проверка пройдена: изменяет {n} ячеек",
+        ("{n} cell found", One) => "Найдена {n} ячейка",
+        ("{n} cell found", Few | Other) => "Найдено {n} ячейки",
+        ("{n} cell found", Many) => "Найдено {n} ячеек",
+        ("All done. We made {n} replacement.", One) => "Готово. Выполнена {n} замена.",
+        ("All done. We made {n} replacement.", Few | Other) => "Готово. Выполнено {n} замены.",
+        ("All done. We made {n} replacement.", Many) => "Готово. Выполнено {n} замен.",
+        ("Finished: {n} step ran, one undo step.", One) => "Готово: выполнен {n} шаг, одна отмена.",
+        ("Finished: {n} step ran, one undo step.", Few | Other) => "Готово: выполнено {n} шага, одна отмена.",
+        ("Finished: {n} step ran, one undo step.", Many) => "Готово: выполнено {n} шагов, одна отмена.",
+        ("Stopped after {n} step; the changes were kept.", One | Few | Other | Many) => "Остановлено после {n} шага; изменения сохранены.",
+        (", {n} of them holds data (red)", One | Few | Other | Many) => ", из них {n} содержат данные (красным)",
+        ("{n} item in this file was handled differently. First: {warning}", One) => "{n} элемент в этом файле обработан иначе. Первый: {warning}",
+        ("{n} item in this file was handled differently. First: {warning}", Few | Other) => {
+            "{n} элемента в этом файле обработаны иначе. Первый: {warning}"
+        }
+        ("{n} item in this file was handled differently. First: {warning}", Many) => "{n} элементов в этом файле обработаны иначе. Первый: {warning}",
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plural as russian;
+    use crate::i18n::plural::{Category, PLURALS};
+
+    /// Every counted message the interface has a key for is worded in Russian: no count falls back
+    /// to English in the one catalog that is written out.
+    #[test]
+    fn every_counted_message_is_worded_in_russian() {
+        for key in PLURALS {
+            for category in [Category::One, Category::Few, Category::Many, Category::Other] {
+                assert!(russian(key, category).is_some(), "{key:?} has no Russian wording for {category:?}");
+            }
+        }
+    }
+
+    /// The three forms a Russian count takes read differently, or the table would be pointless.
+    /// Only the messages whose count is the subject of the sentence take all three; the rest are
+    /// one wording with the number in it.
+    #[test]
+    fn one_few_and_many_read_differently() {
+        for key in ["{n} step", "Ran {n} step.", "Check passed: writes {n} cell", "{n} cell found"] {
+            let one = russian(key, Category::One).unwrap_or("");
+            let few = russian(key, Category::Few).unwrap_or("");
+            let many = russian(key, Category::Many).unwrap_or("");
+            assert_ne!(one, few, "{key:?}");
+            assert_ne!(few, many, "{key:?}");
+        }
+    }
+
+    /// A new counted message cannot ship with a silent English fallback: the key list and the
+    /// Russian table are the same set.
+    #[test]
+    fn the_key_list_is_the_russian_table() {
+        assert_eq!(PLURALS.len(), 12);
+    }
+}

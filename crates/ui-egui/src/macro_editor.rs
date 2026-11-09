@@ -740,7 +740,7 @@ pub fn check(app: &mut SheetApp, ed: &mut Editor) {
             {
                 ed.errors.insert(step.to_string(), e.get("message").and_then(Json::as_str).unwrap_or("").to_string());
             }
-            ed.outcome = Some(check_text(&v));
+            ed.outcome = Some(check_text(app.ui.language, &v));
             ed.check = Some(v);
         }
         Err(e) => {
@@ -750,7 +750,7 @@ pub fn check(app: &mut SheetApp, ed: &mut Editor) {
     }
 }
 
-fn check_text(v: &Json) -> String {
+fn check_text(lang: crate::i18n::Language, v: &Json) -> String {
     if let Some(errors) = v["errors"].as_array().filter(|e| !e.is_empty()) {
         return errors.iter().filter_map(Json::as_str).collect::<Vec<_>>().join(" ");
     }
@@ -759,9 +759,9 @@ fn check_text(v: &Json) -> String {
     }
     let cells: u64 = v["footprint"]["sheets"].as_array().into_iter().flatten().filter_map(|s| s["changed"].as_u64()).sum();
     let conflicts = v["conflicts"].as_u64().unwrap_or(0);
-    let mut text = format!("Check passed: writes {cells} cell{}", if cells == 1 { "" } else { "s" });
+    let mut text = lang.tr_plural(cells, "Check passed: writes {n} cell");
     if conflicts > 0 {
-        text.push_str(&format!(", {conflicts} of them hold data (red)"));
+        text.push_str(&lang.tr_plural(conflicts, ", {n} of them holds data (red)"));
     } else {
         text.push_str(", over no data");
     }
@@ -780,7 +780,7 @@ pub fn run(app: &mut SheetApp, ed: &mut Editor) {
     ed.errors.clear();
     let name = ed.draft.name.clone();
     match macro_ui::call(app, "Run Macro", "macro.run", json!({"name": name, "inputs": run_inputs(ed)})) {
-        Some(v) => ed.outcome = Some(format!("Ran {} step{}.", v["ran"].as_u64().unwrap_or(0), if v["ran"] == 1 { "" } else { "s" })),
+        Some(v) => ed.outcome = Some(app.ui.language.tr_plural(v["ran"].as_u64().unwrap_or(0), "Ran {n} step.")),
         None => {
             if let Some((_, text)) = app.message.as_ref()
                 && let Some((path, msg)) = error_step(text)
@@ -824,7 +824,7 @@ pub fn debug_action(app: &mut SheetApp, ed: &mut Editor, action: &str) {
         let name = ed.draft.name.clone();
         let p = with(json!({"name": name, "inputs": run_inputs(ed), "action": "start"}), bp_params(ed));
         let Some(v) = macro_ui::call(app, "Debug Macro", "macro.debug", p) else { return };
-        apply_debug(ed, &v);
+        apply_debug(app.ui.language, ed, &v);
         if action == "step" || v["state"] != "paused" {
             return;
         }
@@ -837,19 +837,19 @@ pub fn debug_action(app: &mut SheetApp, ed: &mut Editor, action: &str) {
         other => json!({"action": other}),
     };
     if let Some(v) = macro_ui::call(app, "Debug Macro", "macro.debug", with(p, bp_params(ed))) {
-        apply_debug(ed, &v);
+        apply_debug(app.ui.language, ed, &v);
     }
 }
 
 /// Stop: ends the debugged run, keeping its changes as one undo step or undoing them.
 pub fn stop(app: &mut SheetApp, ed: &mut Editor, keep: bool) {
     if let Some(v) = macro_ui::call(app, "Debug Macro", "macro.debug", json!({"action": "stop", "keep": keep})) {
-        apply_debug(ed, &v);
+        apply_debug(app.ui.language, ed, &v);
     }
 }
 
 /// Takes in a `macro.debug` result: paused (select the current step), or ended (say how).
-pub fn apply_debug(ed: &mut Editor, v: &Json) {
+pub fn apply_debug(lang: crate::i18n::Language, ed: &mut Editor, v: &Json) {
     match v["state"].as_str() {
         Some("paused") => {
             if let Some(step) = v["current"]["step"].as_str() {
@@ -863,7 +863,7 @@ pub fn apply_debug(ed: &mut Editor, v: &Json) {
             ed.debug = None;
             let executed = v["executed"].as_u64().unwrap_or(0);
             ed.outcome = Some(match state {
-                "finished" => format!("Finished: {executed} step{} ran, one undo step.", if executed == 1 { "" } else { "s" }),
+                "finished" => lang.tr_plural(executed, "Finished: {n} step ran, one undo step."),
                 "failed" => {
                     if let Some(step) = v["error"]["step"].as_str() {
                         let msg = v["error"]["message"].as_str().unwrap_or("").to_string();
@@ -872,7 +872,7 @@ pub fn apply_debug(ed: &mut Editor, v: &Json) {
                     }
                     v["message"].as_str().unwrap_or("The macro failed; nothing was changed.").to_string()
                 }
-                _ if v["kept"] == true => format!("Stopped after {executed} step{}; the changes were kept.", if executed == 1 { "" } else { "s" }),
+                _ if v["kept"] == true => lang.tr_plural(executed, "Stopped after {n} step; the changes were kept."),
                 _ => match v["stopped"].as_str() {
                     Some(msg) => format!("Stopped: {msg}"),
                     None => "Stopped; the changes were undone.".into(),
@@ -893,7 +893,7 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
     };
     // A prompt's button re-ran a debugger action (making room for the output, approving).
     if let Some(v) = app.macros.debug_result.take() {
-        apply_debug(&mut ed, &v);
+        apply_debug(app.ui.language, &mut ed, &v);
     }
     if ed.start_check {
         ed.start_check = false;

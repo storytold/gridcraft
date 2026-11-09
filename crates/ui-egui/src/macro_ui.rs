@@ -89,7 +89,7 @@ pub fn stop_recording(app: &mut SheetApp) {
             Some(name) => {
                 let steps = v["steps"].as_u64().unwrap_or(0);
                 app.macros.note_recent(name);
-                let mut text = format!("Saved macro “{name}” ({steps} step{})", if steps == 1 { "" } else { "s" });
+                let mut text = app.ui.language.tr_plural(steps, "Saved macro “{name}” ({n} step)").replace("{name}", name);
                 if let Some(k) = v["shortcutDropped"].as_str() {
                     text.push_str(&format!(" without {k}: another macro took it while recording"));
                 }
@@ -176,7 +176,7 @@ pub fn note_result(app: &mut SheetApp, id: &str, params: &Json, v: &Json) {
     let ran = v["ran"].as_u64().unwrap_or(0);
     let text = match v["stopped"].as_str() {
         Some(msg) => format!("Macro “{name}” stopped: {msg}"),
-        None => format!("Ran macro “{name}” ({ran} step{})", if ran == 1 { "" } else { "s" }),
+        None => app.ui.language.tr_plural(ran, "Ran macro “{name}” ({n} step)").replace("{name}", &name),
     };
     app.toast = Some((text, crate::now_ms()));
 }
@@ -266,7 +266,7 @@ pub fn status(app: &mut SheetApp, ui: &mut Ui) {
     ui.add_space(12.0);
     let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
     ui.painter().circle_filled(r.center(), 4.5, t.recording);
-    let text = format!("{} · {n} step{}", app.ui.language.tr("Recording"), if n == 1 { "" } else { "s" });
+    let text = format!("{} · {}", app.ui.language.tr("Recording"), app.ui.language.tr_plural(n as u64, "{n} step"));
     ui.label(egui::RichText::new(text).font(theme::ui_font(12.5)).color(t.text));
     let stop = ui.add(egui::Button::new(egui::RichText::new(app.ui.language.tr("Stop")).font(theme::ui_font(12.0))).min_size(vec2(40.0, 18.0)));
     if stop.on_hover_text("Stop recording and save the macro").clicked() {
@@ -425,7 +425,7 @@ pub fn macros_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
                         let label = match (e.kind, &e.shortcut) {
                             (Kind::Macro, Some(k)) => format!("{}    {k}", e.name),
                             (Kind::Macro, None) => e.name.clone(),
-                            (Kind::Script, _) => format!("{}    (script, {} step{})", e.name, e.steps, if e.steps == 1 { "" } else { "s" }),
+                            (Kind::Script, _) => app.ui.language.tr_plural(e.steps, "{name}    (script, {n} step)").replace("{name}", &e.name),
                         };
                         let selected = e.kind == kind && e.name.eq_ignore_ascii_case(name.trim());
                         let r = ui.add(egui::Button::selectable(selected, label).min_size(vec2(322.0, 20.0)));
