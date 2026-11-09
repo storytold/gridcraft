@@ -270,9 +270,10 @@ impl<'a> Binder<'a> {
             let keyword = match spec.name {
                 // DATATABLE's type words (`DATATABLE ( "Id", INTEGER, ... )`) and CONVERT's data
                 // type (`CONVERT ( "123", INTEGER )`) are documented enumerations the catalog
-                // types as `Text`/`Any`.
-                "DATATABLE" if index % 2 == 1 => keyword_name(arg),
-                "CONVERT" if index == 1 => keyword_name(arg),
+                // types as `Text`/`Any`: only the documented words bind as keywords, so a typo
+                // stays an unknown name instead of reaching the evaluator as a string.
+                "DATATABLE" if index % 2 == 1 => clause_keyword(arg, DATA_TYPE_KEYWORDS),
+                "CONVERT" if index == 1 => clause_keyword(arg, DATA_TYPE_KEYWORDS),
                 // The interval and calendar-flag slots are documented enumerations the catalog
                 // types as `Text`: `DATEADD` takes an interval plus optional extension and
                 // truncation flags, `DATESINPERIOD` an interval plus an end behaviour,
@@ -389,6 +390,11 @@ fn is_visual_keyword(function: &str, index: usize, word: &str) -> bool {
 /// The enum words accepted by the window/relation clauses. Matching is case-insensitive, and an
 /// identifier outside this set is left to normal name binding so typos still report an error.
 const WINDOW_KEYWORDS: &[&str] = &["ASC", "DESC", "ABS", "REL", "DEFAULT", "FIRST", "LAST", "KEEP", "NONE", "LOWESTPARENT", "HIGHESTPARENT"];
+
+/// The data-type words `CONVERT` and `DATATABLE` accept. Matching is case-insensitive, a
+/// documented word still wins over a table name, and anything else falls through to normal
+/// name resolution so a typo reports an unknown name.
+const DATA_TYPE_KEYWORDS: &[&str] = &["BOOLEAN", "LOGICAL", "CURRENCY", "DECIMAL", "DATETIME", "DOUBLE", "INTEGER", "INT64", "STRING", "TEXT"];
 
 fn clause_keyword(expr: &Expr, allowed: &[&str]) -> Option<String> {
     let word = keyword_name(expr)?;

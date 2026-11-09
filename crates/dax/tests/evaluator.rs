@@ -603,6 +603,18 @@ fn text_is_not_compared_with_numbers() {
     assert_eq!(eval("\"a\" IN {\"A\"}"), Scalar::Boolean(true));
     assert_eq!(eval("BLANK() IN {BLANK()}"), Scalar::Boolean(true));
     assert_eq!(eval("1 IN {2.0, 3.0}"), Scalar::Boolean(false));
+    // A Boolean never compares with a number: `TRUE() = 1` is FALSE, `<>` is TRUE, and
+    // ordering answers FALSE — the same incomparable-pair rule text-with-number follows.
+    assert_eq!(eval("TRUE() = 1"), Scalar::Boolean(false));
+    assert_eq!(eval("1 = TRUE()"), Scalar::Boolean(false));
+    assert_eq!(eval("TRUE() <> 1"), Scalar::Boolean(true));
+    assert_eq!(eval("TRUE() < 1"), Scalar::Boolean(false));
+    assert_eq!(eval("TRUE() IN { 1 }"), Scalar::Boolean(false));
+    assert_eq!(eval("BLANK() = FALSE()"), Scalar::Boolean(true));
+    // `MAX`/`MIN` report the incomparable pair instead of coercing: TRUE is not 1.
+    let bound = Binder::new(&model()).bind_expression(&parse_expression("MAX(TRUE(), 5)").expect("parse")).expect("bind");
+    let error = Evaluator::new(&model()).expect("evaluator").evaluate(&bound).expect_err("MAX cannot compare a Boolean with a number");
+    assert!(error.message.contains("cannot compare"), "{error:?}");
 }
 
 #[test]

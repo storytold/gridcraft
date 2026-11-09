@@ -264,6 +264,10 @@ impl Scalar {
             (Scalar::String(a), Scalar::String(b)) => Some(a.to_lowercase().cmp(&b.to_lowercase())),
             (Scalar::String(_), _) | (_, Scalar::String(_)) => None,
             (Scalar::Boolean(a), Scalar::Boolean(b)) => Some(a.cmp(b)),
+            // DAX does not compare a logical value with a number: `TRUE() = 1` and the `IN`,
+            // `SWITCH` and `MIN`/`MAX` paths built on this ordering treat them as incomparable.
+            // BLANK is not numeric, so the BLANK-converts-to-FALSE rule above is unaffected.
+            (Scalar::Boolean(_), other) | (other, Scalar::Boolean(_)) if other.is_numeric() => None,
             // Two keys of the same integer variant compare exactly: above 2^53 the `f64` route
             // would report distinct values as equal, and `IN`/`=` must not.
             (Scalar::Integer(a), Scalar::Integer(b)) => Some(a.cmp(b)),

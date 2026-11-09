@@ -413,6 +413,25 @@ fn a_datatable_type_word_is_never_a_table_name() {
         BoundExpr::Call { args, .. } => assert!(matches!(&args[1], BoundExpr::Keyword(word) if word == "INTEGER"), "{:?}", args[1]),
         other => panic!("expected a call, got {other:?}"),
     }
+    // Every documented type word binds in both slots: the catalog types them as Text/Any, so
+    // the keyword rule — not normal name resolution — must claim them.
+    for word in ["BOOLEAN", "LOGICAL", "CURRENCY", "DECIMAL", "DATETIME", "DOUBLE", "INTEGER", "INT64", "STRING", "TEXT"] {
+        match bind(&model, &format!("CONVERT ( 1, {word} )")) {
+            BoundExpr::Call { args, .. } => assert!(matches!(&args[1], BoundExpr::Keyword(bound) if bound == word), "{word}: {:?}", args[1]),
+            other => panic!("{word}: expected a call, got {other:?}"),
+        }
+        match bind(&model, &format!("DATATABLE ( \"Id\", {word}, {{ {{ 1 }} }} )")) {
+            BoundExpr::Call { args, .. } => assert!(matches!(&args[1], BoundExpr::Keyword(bound) if bound == word), "{word}: {:?}", args[1]),
+            other => panic!("{word}: expected a call, got {other:?}"),
+        }
+    }
+    // A typo in either slot is not a keyword: it falls through to name resolution and fails
+    // as an unknown name instead of reaching the evaluator as a string.
+    for formula in ["CONVERT ( 1, INTEGR )", "DATATABLE ( \"Id\", Strng, { { 1 } } )"] {
+        let expr = parse_expression(formula).expect("parses");
+        let error = Binder::new(&model).bind_expression(&expr).expect_err("a type-word typo is not a keyword");
+        assert!(error.message.contains("unknown name"), "{formula}: {error:?}");
+    }
 }
 
 #[test]
