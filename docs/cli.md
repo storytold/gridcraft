@@ -4,7 +4,7 @@ Headless GridCraft: inspect, convert, evaluate, script and serve MCP without a w
 non-zero exit code.
 
 `.xls` (Excel 97-2003, BIFF8) files are imported with values, formulas, number formats, merges,
-column widths, row heights and defined names; fonts, fills, borders, charts and other objects are
+column widths, row heights, defined names and data validation; fonts, fills, borders, charts and other objects are
 not imported yet. Import warnings go to stderr. Convert to `.xlsx` to save; `.xls` output is not
 supported.
 

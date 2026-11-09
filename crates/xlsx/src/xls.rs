@@ -5,12 +5,13 @@
 //! Read: worksheets, shared strings, cell values, formulas (text and cached results, including
 //! shared and array formulas), cell formatting (number formats, fonts, fills, borders,
 //! alignment, protection, the colour palette and user-defined cell styles), the 1904 date
-//! system, merged cells, column widths, row heights, defined names, print areas, print titles
-//! and the calculation settings (mode, iteration, precision as displayed). Everything else
-//! (charts, pictures, comments, conditional formats, validation, macros) is skipped with a
+//! system, merged cells, column widths, row heights, defined names, print areas, print titles,
+//! the calculation settings (mode, iteration, precision as displayed) and data validation.
+//! Everything else (charts, pictures, comments, conditional formats, macros) is skipped with a
 //! warning.
 //! Encrypted workbooks and pre-BIFF8 versions are refused.
 
+mod dv;
 mod formula;
 mod ftab;
 mod records;
@@ -205,7 +206,7 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     // The overview comes first.
     report.warnings.insert(
         0,
-        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, merged cells, column widths, row heights and defined names were read. Charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
+        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, merged cells, column widths, row heights, defined names and data validation were read. Charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
     );
     Ok((wb, report))
 }
@@ -419,6 +420,9 @@ struct SheetState<'g> {
     dropped: usize,
     unsupported: Vec<&'static str>,
     calc: CalcSettings,
+    /// Dv records still to read: the last DVal's count, less those read since. Excel reads
+    /// exactly that many after a DVal, and none without one.
+    dv_left: u32,
 }
 
 impl SheetState<'_> {
@@ -560,6 +564,7 @@ fn worksheet(
         dropped: 0,
         unsupported: vec![],
         calc: CalcSettings::default(),
+        dv_left: 0,
     };
     let mut depth = 1usize;
     while let Some(rec) = recs.next_record()? {
@@ -791,7 +796,27 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
         0x001C => report.warn("Cell comments in .xls files are not imported yet."),
         0x00EC => report.warn("Pictures, charts and shapes in .xls files are not imported yet."),
         0x01B0 | 0x0879 => report.warn("Conditional formatting in .xls files is not imported yet."),
-        0x01B2 => report.warn("Data validation in .xls files is not imported yet."),
+        // A short DVal starts no rules.
+        0x01B2 => st.dv_left = dv::dval(&mut c).unwrap_or(0),
+        0x01BE => {
+            // A Dv past its DVal's count, or with no DVal, isn't read (as in Excel).
+            let rule = if st.dv_left == 0 {
+                None
+            } else {
+                st.dv_left -= 1;
+                match dv::dv(&mut c) {
+                    Ok(raw) => {
+                        budget.text(raw.text_len())?;
+                        dv::validation(raw, &st.g.links)
+                    }
+                    Err(_) => None,
+                }
+            };
+            match rule {
+                Some(v) => st.sheet.validations.push(v),
+                None => report.warn("Some data validation rules in .xls files could not be read and were skipped."),
+            }
+        }
         0x01B8 => report.warn("Hyperlinks in .xls files are not imported yet."),
         0x00B0 => report.warn("PivotTables in .xls files are not imported yet; their values were kept."),
         _ => {}
