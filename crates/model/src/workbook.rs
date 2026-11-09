@@ -95,6 +95,10 @@ pub struct CalcSettings {
     pub max_change: f64,
     /// Use precision as displayed.
     pub precision_as_displayed: bool,
+    /// R1C1 reference style (`<calcPr refMode="R1C1"/>`): kept with the file and written back;
+    /// GridCraft itself shows and takes A1 references.
+    #[serde(default)]
+    pub r1c1: bool,
 }
 
 impl Default for CalcSettings {
@@ -105,6 +109,7 @@ impl Default for CalcSettings {
             max_iterations: Self::DEFAULT_ITERATIONS,
             max_change: Self::DEFAULT_CHANGE,
             precision_as_displayed: false,
+            r1c1: false,
         }
     }
 }
@@ -280,6 +285,12 @@ pub struct Workbook {
     pub calc: CalcSettings,
     #[serde(default, skip_serializing_if = "is_all")]
     pub show_objects: ShowObjects,
+    /// Trust Center › Privacy Options › "Remove personal information from file properties on save"
+    /// (`<workbookPr filterPrivacy="1"/>`): kept with the file, and while it is on the author and
+    /// company are left out of the XLSX files GridCraft writes, as Excel leaves them empty. Other
+    /// formats aren't filtered: the workbook's own serialization still holds them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remove_personal_info: bool,
     /// Read and set with [`Workbook::active_sheet`] and [`Workbook::set_active_sheet`].
     pub active_sheet: ActiveSheet,
     /// The workbook window's display settings (`<workbookView>`), kept across an open + save.
@@ -421,6 +432,7 @@ impl Workbook {
             date_system: DateSystem::D1900,
             calc: CalcSettings::default(),
             show_objects: ShowObjects::All,
+            remove_personal_info: false,
             active_sheet: ActiveSheet::default(),
             view: WorkbookView::default(),
             props: DocProps::default(),
@@ -578,7 +590,7 @@ impl Workbook {
         }
     }
 
-    /// A free id for a new chart, picture, shape, table or slicer: one more than the largest in
+    /// A free id for a new chart, picture, shape, table, slicer or form control: one more than the largest in
     /// use, or, when that is `u32::MAX` (a file can carry any id), the lowest free one.
     pub fn next_object_id(&self) -> u32 {
         self.free_object_ids(1).first().copied().unwrap_or(u32::MAX)
@@ -599,6 +611,7 @@ impl Workbook {
                     .chain(s.shapes.iter().map(|o| o.id))
                     .chain(s.tables.iter().map(|o| o.id))
                     .chain(s.slicers.iter().map(|o| o.id))
+                    .chain(s.controls.iter().map(|o| o.id))
             })
             .collect();
         used.sort_unstable();
@@ -686,6 +699,10 @@ mod tests {
         }
         assert_eq!(wb.next_object_id(), 8);
         if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(crate::FormControl { id: 12, ..Default::default() });
+        }
+        assert_eq!(wb.next_object_id(), 13, "form controls take ids from the same sequence");
+        if let Some(sh) = wb.sheet_mut(0) {
             sh.images.push(image(u32::MAX));
         }
         // An id read from a file at the maximum: the lowest free id, not the maximum again.
@@ -701,6 +718,19 @@ mod tests {
             sh.images.push(image(u32::MAX - 1));
         }
         assert_eq!(wb.free_object_ids(3), vec![1, 2, u32::MAX], "the top first, then from 1");
+    }
+
+    /// A form control's id is in use like any object's: the free ids skip it, also when it is the
+    /// largest id a file could carry.
+    #[test]
+    fn free_object_ids_skip_a_form_controls_id() {
+        let mut wb = Workbook::new();
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(crate::FormControl { id: 3, ..Default::default() });
+            sh.controls.push(crate::FormControl { id: u32::MAX, ..Default::default() });
+        }
+        assert_eq!(wb.free_object_ids(4), vec![1, 2, 4, 5], "3 and the largest id are taken");
+        assert_eq!(wb.next_object_id(), 1);
     }
 
     /// A file can use the largest id and the one below it: nothing is free above them, so the free

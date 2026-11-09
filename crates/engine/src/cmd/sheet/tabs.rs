@@ -59,15 +59,22 @@ pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 cx.wb.sheets.get(si).map(|s| s.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect()).unwrap_or_default();
             let Some(sh) = cx.wb.sheet_mut(si) else { continue };
             for (c, f) in keys {
-                if let Some(e) = f.expr_arc() {
-                    let ne = gridcraft_formula::adjust::delete_sheet((*e).clone(), &name, &order);
-                    if let Some(cell) = sh.cells.get_mut(c) {
-                        // A reference into the deleted sheet, or a 3-D span losing an interior
-                        // sheet, reads something else now even when its text is unchanged.
-                        if ne != *e || spans_changed(&e, &order, &new_order) {
-                            super::edit::forget_value(cell);
-                            cx.changed.push((si, c));
-                        }
+                // Only formulas whose tree or 3-D span changes are rewritten or forgotten; the
+                // others keep their text.
+                let changed = f.with_expr(|e| {
+                    let ne = gridcraft_formula::adjust::delete_sheet(e.clone(), &name, &order);
+                    let diff = ne != *e;
+                    (diff, diff || spans_changed(e, &order, &new_order), ne)
+                });
+                if let Some((tree_changed, reads_changed, ne)) = changed
+                    && (tree_changed || reads_changed)
+                    && let Some(cell) = sh.cells.get_mut(c)
+                {
+                    if reads_changed {
+                        super::edit::forget_value(cell);
+                        cx.changed.push((si, c));
+                    }
+                    if tree_changed {
                         cell.formula = Some(Arc::new(f.rewritten(ne)));
                     }
                 }
@@ -120,14 +127,12 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 cx.wb.sheets.get(si).map(|s| s.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect()).unwrap_or_default();
             let Some(sh) = cx.wb.sheet_mut(si) else { continue };
             for (c, f) in keys {
-                if let Some(e) = f.expr() {
-                    let ne = gridcraft_formula::adjust::rename_sheet(e, &old, &name);
-                    let text = gridcraft_formula::print(&ne);
-                    if text != f.text
-                        && let Some(cell) = sh.cells.get_mut(c)
-                    {
-                        cell.formula = Some(Arc::new(f.rewritten(ne)));
-                    }
+                // Compares trees, so unchanged formulas are not printed; they keep their text.
+                let changed = f.with_expr(|e| Some(gridcraft_formula::adjust::rename_sheet(e.clone(), &old, &name)).filter(|ne| ne != e));
+                if let Some(Some(ne)) = changed
+                    && let Some(cell) = sh.cells.get_mut(c)
+                {
+                    cell.formula = Some(Arc::new(f.rewritten(ne)));
                 }
             }
             for ch in sh.charts.iter_mut() {
@@ -184,7 +189,7 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             // Object ids are unique across the workbook (selection and the `{kind, id}` commands
             // rely on it), so the copied objects get fresh ones (free ones, even when a file used
             // the largest id).
-            let count = sh.charts.len() + sh.images.len() + sh.shapes.len() + sh.slicers.len();
+            let count = sh.charts.len() + sh.images.len() + sh.shapes.len() + sh.slicers.len() + sh.controls.len();
             let ids = cx.wb.free_object_ids(count);
             if ids.len() < count {
                 return Err(bad("sheet.move", "no free object ids are left for the copied objects"));
@@ -195,6 +200,7 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             sh.images.iter_mut().for_each(|o| o.id = fresh());
             sh.shapes.iter_mut().for_each(|o| o.id = fresh());
             sh.slicers.iter_mut().for_each(|o| o.id = fresh());
+            sh.controls.iter_mut().for_each(|o| o.id = fresh());
             let at = to.min(n);
             // The copy gets its own copies of the sheet's names, referring to the copy.
             let copies: Vec<gridcraft_model::DefinedName> = cx

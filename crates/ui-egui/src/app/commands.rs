@@ -163,8 +163,19 @@ impl SheetApp {
                 Ok(Json::Null)
             }
             "view.expandFormulaBar" => {
-                self.ui.formula_bar_expanded = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.formula_bar_expanded);
-                Ok(json!({"on": self.ui.formula_bar_expanded}))
+                // `lines` is where a drag of the bar's bottom edge left it: one line collapses it,
+                // more expands it to that height, which expanding returns to afterwards.
+                if let Some(lines) = p.get("lines").and_then(Json::as_u64) {
+                    let lines = usize::try_from(lines).unwrap_or(usize::MAX).clamp(1, crate::formula_bar::MAX_DRAG_LINES);
+                    self.ui.formula_bar_expanded = lines > 1;
+                    if lines > 1 {
+                        self.ui.formula_bar_lines = lines;
+                    }
+                    Ok(json!({"on": self.ui.formula_bar_expanded, "lines": self.ui.formula_bar_lines}))
+                } else {
+                    self.ui.formula_bar_expanded = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.formula_bar_expanded);
+                    Ok(json!({"on": self.ui.formula_bar_expanded}))
+                }
             }
             "view.darkMode" => {
                 let current = if self.ui.system_theme { self.effective_dark } else { self.ui.dark };
@@ -190,6 +201,10 @@ impl SheetApp {
             "options.autoComplete" => {
                 self.ui.autocomplete = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.autocomplete);
                 Ok(json!({"on": self.ui.autocomplete}))
+            }
+            "options.highlightActiveRow" => {
+                self.ui.highlight_active_row = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.highlight_active_row);
+                Ok(json!({"on": self.ui.highlight_active_row}))
             }
             "view.interfaceScale" => {
                 // `{"percent": 125}` or `{"percent": "auto"}`; out-of-range values are clamped.
@@ -287,6 +302,7 @@ impl SheetApp {
         // The requests belong to the window the command left active.
         self.follow_active_window();
         self.prune_selected_object();
+        self.prune_views();
         for req in self.session.take_ui_requests() {
             match req {
                 UiRequest::Dialog(name, params) => self.open_dialog(&name, params),
@@ -312,8 +328,12 @@ impl SheetApp {
     }
 
     /// Whether the active sheet of the active document is protected (drives the Protect/Unprotect
-    /// Sheet labels and actions).
+    /// Sheet labels and actions). While a dialog with reference boxes is open, it is the dialog's
+    /// own sheet: Protect Sheet ends the pick and acts on that sheet, so the label says so too.
     pub fn active_sheet_protected(&self) -> bool {
+        if let Some(protected) = self.dialog.as_ref().and_then(|d| d.home_sheet_protected(self)) {
+            return protected;
+        }
         self.session.active().and_then(|d| d.wb.active().map(|s| s.is_protected())).unwrap_or(false)
     }
 
@@ -321,6 +341,20 @@ impl SheetApp {
         if let Err(e) = self.commit_text_box_edit() {
             self.message = Some(("Text Box".into(), clean_error(&e)));
             return;
+        }
+        // A protection action taken while a reference box picks on another sheet is for the
+        // dialog's sheet: the pick ends, showing that sheet again, before the action is chosen.
+        if matches!(name, "protectSheet" | "unprotectSheet")
+            && let Some(mut d) = self.dialog.take()
+        {
+            let error =
+                if d.home_sheet_deleted(self) { Some(dialogs::SHEET_DELETED.into()) } else { d.end_pick(self).err().map(|e| clean_error(&e)) };
+            if let Some(error) = error {
+                self.message = Some((d.title.clone(), error));
+                self.dialog = Some(d);
+                return;
+            }
+            self.dialog = Some(d);
         }
         // Every Protect Sheet entry point (ribbon menus, keytips, tab menu) becomes Unprotect Sheet
         // on a protected sheet. A sheet without a password is unprotected straight away.
@@ -376,7 +410,16 @@ impl SheetApp {
                     "Close the macro step editor first: it keeps its window until it closes itself, so its steps and debug run are not lost.".into(),
                 ));
             }
-            other => self.dialog = dialogs::Dialog::open(self, other, params),
+            other => {
+                // A dialog replaced while one of its reference boxes picks (a ribbon command
+                // opening another dialog) first puts the sheet and selection from before picking
+                // back, as closing it does.
+                if let Some(mut old) = self.dialog.take() {
+                    // The draft was committed above, so the sheet can be shown again.
+                    let _ = old.end_pick(self);
+                }
+                self.dialog = dialogs::Dialog::open(self, other, params);
+            }
         }
     }
 
