@@ -300,6 +300,11 @@ fn pen(s: &mut Session, p: &Json) -> Result<Json> {
         if effect.is_some() && str_param(p, "color").is_none() {
             s.draw_color = effect.map(effect_base).unwrap_or("#1F5FC9").to_string();
         }
+        // A built-in effect and an imported texture cannot both paint: choosing an effect
+        // clears the texture in hand, as the pen dropdown does through draw.updatePen.
+        if effect.is_some() {
+            s.draw_texture.clear();
+        }
     }
     let effect = parse_effect(&s.draw_effect);
     if s.draw_color.eq_ignore_ascii_case("none") {
@@ -676,9 +681,13 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     // A texture the caller names and one the pen carries are different promises: an explicit id
     // must exist (a typo is an error), while the pen's is session state — undo can take the
     // imported texture away and another workbook never held it — so a stale one paints plainly.
-    let explicit = p.get("texture").and_then(Json::as_str).map(str::trim).filter(|id| !id.is_empty()).map(str::to_string);
-    let from_session = explicit.is_none();
-    let mut texture = explicit.or_else(|| (!s.draw_texture.is_empty()).then(|| s.draw_texture.clone()));
+    // A present but empty `texture` is an explicit "none" (as in draw.pen/draw.updatePen), so it
+    // must not fall back to the pen's texture.
+    let no_texture = p.get("texture").and_then(Json::as_str).is_some_and(|id| id.trim().is_empty());
+    let explicit =
+        (!no_texture).then(|| p.get("texture").and_then(Json::as_str)).flatten().map(str::trim).filter(|id| !id.is_empty()).map(str::to_string);
+    let from_session = explicit.is_none() && !no_texture;
+    let mut texture = explicit.or_else(|| (!no_texture && !s.draw_texture.is_empty()).then(|| s.draw_texture.clone()));
     let texture_scale = f64_param(p, "textureScale").map(|v| texture_scale(v as f32)).unwrap_or_else(|| texture_scale(s.draw_texture_scale));
 
     let d = s.doc()?;

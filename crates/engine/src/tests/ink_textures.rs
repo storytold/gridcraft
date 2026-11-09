@@ -134,6 +134,31 @@ fn a_texture_undone_from_the_workbook_paints_plainly() {
     assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [40, 40]], "texture": id})).is_err());
 }
 
+/// Choosing a built-in effect clears the imported texture in hand, so the effect shows.
+#[test]
+fn choosing_an_effect_clears_the_texture_in_hand() {
+    // The renderer gives an imported texture priority, so a session holding both would never
+    // show the effect. The pen dropdown avoids this through draw.updatePen; draw.pen must too.
+    let mut s = s();
+    let id = s.execute("draw.textureImport", json!({"name": "a.png", "base64": b64(&png(4, 4))})).unwrap()["id"].as_str().unwrap().to_string();
+    s.execute("draw.pen", json!({"texture": id})).unwrap();
+    let pen = s.execute("draw.pen", json!({"effect": "galaxy"})).unwrap();
+    assert_eq!(pen["texture"], "", "the effect replaces the imported texture: {pen}");
+}
+
+/// An explicit empty texture on a stroke is a plain stroke, not the pen's texture.
+#[test]
+fn an_explicit_empty_stroke_texture_paints_plainly() {
+    // draw.pen and draw.updatePen treat "" as none; draw.stroke fell back to the session texture.
+    let mut s = s();
+    let id = s.execute("draw.textureImport", json!({"name": "a.png", "base64": b64(&png(4, 4))})).unwrap()["id"].as_str().unwrap().to_string();
+    s.execute("draw.pen", json!({"texture": id})).unwrap();
+    s.execute("draw.stroke", json!({"points": [[0, 0], [40, 40]], "texture": ""})).unwrap();
+    let d = s.doc().unwrap();
+    let shape = d.wb.sheets[0].shapes.last().expect("the stroke was committed");
+    assert_eq!(shape.ink.as_ref().and_then(|i| i.texture.as_deref()), None, "an explicit empty texture paints plainly");
+}
+
 /// Imported textures and their ids survive a save to and read from the JSON format.
 #[test]
 fn textures_travel_in_the_workbook_json() {
