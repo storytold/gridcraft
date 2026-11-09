@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use crate::features::ChartKind;
 use crate::sheet::Visibility;
 
 /// A relationship from an owning part (the package root, the workbook or a sheet, or a kept part)
@@ -92,4 +93,17 @@ impl Preserved {
     pub fn byte_len(&self) -> usize {
         self.parts.iter().chain(self.vml.iter()).fold(0usize, |n, p| n.saturating_add(p.data.len()))
     }
+}
+
+/// A worksheet chart's own style, colour and user-shape parts, kept from the source file: the
+/// Chart Styles gallery choice, the Change Colors set, and text boxes or shapes drawn inside the
+/// chart (with the pictures they use).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChartKept {
+    /// The chart part's relationships to those parts (`rels`) and the parts behind them (`parts`).
+    pub parts: Preserved,
+    /// The chart's type and style number when it was read: the style and colour parts are left
+    /// out on save once either has changed, as they no longer describe the chart.
+    pub kind: ChartKind,
+    pub style: u32,
 }
