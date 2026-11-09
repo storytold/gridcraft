@@ -106,13 +106,13 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out>
                     }
                     DatePart::Month(n) => match n {
                         1 | 2 => push_padded(text, date.month as i64, n),
-                        3 => text.extend(date.month_short.chars()),
+                        3 => text.push_str(date.month_short),
                         5 => text.extend(date.month_name.chars().take(1)),
                         _ => text.push_str(date.month_name),
                     },
                     DatePart::Day(n) => match n {
                         1 | 2 => push_padded(text, date.day as i64, n),
-                        3 => text.extend(date.day_short.chars()),
+                        3 => text.push_str(date.day_short),
                         _ => text.push_str(date.day_name),
                     },
                     DatePart::Hour(n) => {
