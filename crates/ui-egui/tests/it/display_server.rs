@@ -11,6 +11,7 @@ fn app() -> SheetApp {
     crate::common::app(Session::new())
 }
 
+/// The JSON a control call answered with; `Null` for a screenshot request.
 fn reply(outcome: Outcome) -> Value {
     match outcome {
         Outcome::Done(v) => v,
@@ -18,6 +19,8 @@ fn reply(outcome: Outcome) -> Value {
     }
 }
 
+/// `options.displayServer` reads and sets the choice, refuses unknown values, and the choice
+/// survives a save and load of `ui.json`.
 #[test]
 fn the_display_server_is_a_setting_that_survives_a_restart() {
     let mut a = app();
@@ -40,6 +43,8 @@ fn the_display_server_is_a_setting_that_survives_a_restart() {
     }
 }
 
+/// The command is listed in `engine.commands`, runs through `engine.execute` and shows in
+/// `ui.inspect`.
 #[test]
 fn agents_find_run_and_read_the_setting_over_the_control_channel() {
     let mut a = app();

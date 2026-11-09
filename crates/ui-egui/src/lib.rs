@@ -140,7 +140,9 @@ pub enum DisplayServer {
     /// The app's own choice: XWayland whenever there's an X server, for file drag-and-drop.
     #[default]
     Auto,
+    /// Native Wayland, when there's a Wayland compositor.
     Wayland,
+    /// X11, through XWayland on a Wayland desktop.
     X11,
 }
 
@@ -157,6 +159,8 @@ impl DisplayServer {
         }
     }
 
+    /// The display server saved as `code` (any case, surrounding spaces ignored); `None` for an
+    /// unknown code.
     pub fn from_code(code: &str) -> Option<DisplayServer> {
         DisplayServer::ALL.into_iter().find(|d| d.code().eq_ignore_ascii_case(code.trim()))
     }
@@ -171,6 +175,8 @@ impl DisplayServer {
     }
 }
 
+/// Reads the saved `displayServer`; an unknown or malformed value reads as Automatic instead of
+/// failing the whole `ui.json`.
 fn lenient_display_server<'de, D: serde::Deserializer<'de>>(d: D) -> Result<DisplayServer, D::Error> {
     let v = Json::deserialize(d)?;
     Ok(v.as_str().and_then(DisplayServer::from_code).unwrap_or_default())

@@ -465,10 +465,12 @@ mod display_server_tests {
     use super::uses_x11;
     use gridcraft_ui_egui::DisplayServer::{Auto, Wayland, X11};
 
+    /// Whether `uses_x11` forces X11 for `setting` with only `vars` in the environment.
     fn x11(setting: gridcraft_ui_egui::DisplayServer, vars: &[(&str, &str)]) -> bool {
         uses_x11(setting, |name| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| std::ffi::OsString::from(v))).0
     }
 
+    /// The variable, then the setting, then what's available decide, and the log line says which.
     #[test]
     fn the_display_server_follows_the_variable_then_the_setting() {
         let both = [("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0")];
