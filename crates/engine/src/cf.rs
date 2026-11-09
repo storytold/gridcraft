@@ -125,13 +125,16 @@ fn threshold(wb: &Workbook, sheet: usize, at: CellRef, st: &RuleStats, k: &CfVal
     }
 }
 
+/// The colour `t` of the way from `a` to `b`, as Excel paints it.
+///
+/// Excel moves each channel from `a`'s byte toward `b`'s and drops the fraction instead of
+/// rounding it, so a channel that rises is floored while one that falls is ceiled: the halfway
+/// point of red → green is `[128, 127, 0]`, not `[128, 128, 0]`. Measured in Excel over a whole
+/// ramp (#1848).
 fn lerp(a: [u8; 3], b: [u8; 3], t: f64) -> [u8; 3] {
     let t = t.clamp(0.0, 1.0);
-    [
-        (a[0] as f64 + (b[0] as f64 - a[0] as f64) * t).round() as u8,
-        (a[1] as f64 + (b[1] as f64 - a[1] as f64) * t).round() as u8,
-        (a[2] as f64 + (b[2] as f64 - a[2] as f64) * t).round() as u8,
-    ]
+    let mix = |i: usize| (a[i] as f64 + ((b[i] as f64 - a[i] as f64) * t).trunc()) as u8;
+    [mix(0), mix(1), mix(2)]
 }
 
 pub use gridcraft_model::icon_count;
@@ -519,6 +522,34 @@ mod tests {
         assert!(look("A1").and_then(|l| l.style).is_none_or(|st| st.borders.top.is_none()));
         assert_eq!(look("A1").and_then(|l| l.scale_fill), Some([0xF8, 0x69, 0x6B]));
         assert_eq!(look("A4").and_then(|l| l.scale_fill), Some([0x63, 0xBE, 0x7B]));
+    }
+
+    /// In-between values take Excel's colour: each channel moves from the earlier stop's byte
+    /// toward the later one and the fraction is dropped, so red → green over 0..20 reads 243/12
+    /// at 1 and 128/127 at the halfway point (measured in Excel, #1848).
+    #[test]
+    fn color_scale_interpolates_each_channel_toward_its_start_colour() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let values: Vec<serde_json::Value> = (0..=20).map(|n| json!([n])).collect();
+        s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+        let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.cond_formats = vec![CondFormat {
+            ranges: vec![RangeRef::parse("A1:A21").unwrap()],
+            rule: CfRule::ColorScale { stops: vec![(CfValueKind::Number(0.0), Color::rgb(0xFF, 0, 0)), (CfValueKind::Max, Color::rgb(0, 0xFF, 0))] },
+            priority: 1,
+            stop_if_true: false,
+        }];
+        let fill = |a: &str| {
+            let d = s.doc().unwrap();
+            CfCache::new().look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.scale_fill)
+        };
+        // The rising green channel is floored, the falling red one ceiled.
+        assert_eq!(fill("A1"), Some([0xFF, 0, 0]));
+        assert_eq!(fill("A2"), Some([243, 12, 0]));
+        assert_eq!(fill("A11"), Some([0x80, 0x7F, 0]));
+        assert_eq!(fill("A14"), Some([90, 165, 0]));
+        assert_eq!(fill("A21"), Some([0, 0xFF, 0]));
     }
 
     /// Looking cells up does work in proportion to the cells asked for, not the rule's range: the
