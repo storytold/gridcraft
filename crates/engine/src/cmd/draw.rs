@@ -188,7 +188,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Pen",
             ["Draw", "Tools"],
             None,
-            "{on?: bool, brush?: pen|pencil|highlighter|fountainPen|brushPen, color?: #RRGGBB, width?: mm, effect?: rainbow|galaxy|lava|ocean|roseGold|gold|silver|bronze|none, texture?: imported id | \"\" (none), textureScale?: 8, pen?: gallery id}",
+            "{on?: bool, brush?: pen|pencil|highlighter|fountainPen|brushPen, color?: #RRGGBB, width?: mm, effect?: rainbow|galaxy|lava|ocean|roseGold|gold|silver|bronze|none, texture?: imported id | \"\" (none), textureScale?: stroke widths per repeat, pen?: gallery id}",
             has_doc,
             pen
         ),
@@ -197,7 +197,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Pen",
             ["Draw", "Tools"],
             None,
-            "{brush|kind: pen|pencil|highlighter|fountainPen|brushPen, color?: #RRGGBB, width?: mm, effect?: name, texture?: imported id, textureScale?: 8} → {pen}",
+            "{brush|kind: pen|pencil|highlighter|fountainPen|brushPen, color?: #RRGGBB, width?: mm, effect?: name, texture?: imported id, textureScale?: stroke widths per repeat} → {pen}",
             has_doc,
             add_pen
         ),
@@ -221,7 +221,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Ink Stroke",
             [],
             None,
-            "{points: [[x,y],…] in sheet points, brush?: kind, color?: hex, width?: mm, effect?: name, texture?: imported id, textureScale?: 8, pressure?: [0..32767] per point}",
+            "{points: [[x,y],…] in sheet points, brush?: kind, color?: hex, width?: mm, effect?: name, texture?: imported id, textureScale?: stroke widths per repeat, pressure?: [0..32767] per point}",
             has_doc,
             stroke
         ),

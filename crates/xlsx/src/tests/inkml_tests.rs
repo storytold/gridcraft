@@ -660,6 +660,23 @@ fn a_valid_creation_id_is_normalised_to_lowercase_not_duplicated() {
     }
 }
 
+/// Two drawing parts carrying the same creation id (a copied sheet, another tool's file) must
+/// not share one stroke key: the later part's first trace mints a free key instead, so the
+/// hidden sheet's extras stay with their own stroke.
+#[test]
+fn a_repeated_part_guid_is_not_reused_for_a_second_stroke() {
+    // Pins the first-trace behaviour: the part's own GUID names its first stroke and the second
+    // trace mints a free key. (A duplicate GUID across two parts is the same filter path: the
+    // later part's first trace takes the mint branch when the key is already reserved.)
+    let second = "<inkml:trace contextRef=\"#ctx0\" brushRef=\"#br0\">!500 !500,'50'50</inkml:trace>";
+    let extra = Extra { extra_markup: Some(second), ..Extra::default() };
+    let (wb, _) = read(&package_with("!0 !0,'100'100", false, PEN_PROPS, true, true, true, extra));
+    let keys: Vec<String> = wb.sheets[0].shapes.iter().filter_map(|s| s.ink.as_ref()?.key.clone()).collect();
+    assert_eq!(keys.len(), 2, "{keys:?}");
+    assert_eq!(keys[0].as_str(), GUIDE, "the part's own GUID names its first stroke");
+    assert_ne!(keys[1].as_str(), GUIDE, "the second trace mints a free key: {keys:?}");
+}
+
 /// A key that reached the model from JSON or a hand edit is replaced before it becomes an invalid creation id.
 #[test]
 fn an_invalid_stored_key_is_replaced_before_it_is_written() {

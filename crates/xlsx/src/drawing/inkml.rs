@@ -159,11 +159,10 @@ fn read_traces(
     let width_px = (style.width_cm * PX_PER_CM as f32).clamp(1.0, 255.0).round();
     let fill = Color::Rgb((width_px as u32) << 16);
     // The part's GUID names the first stroke. Later traces mint ids reserved across the whole
-    // workbook (`cx.ink_keys`), so two parts never hand out the same new id.
-    let part_key = creation_id_of(content_part);
-    if let Some(first) = &part_key {
-        cx.ink_keys.insert(first.clone());
-    }
+    // workbook (`cx.ink_keys`), so two parts never hand out the same new id. `insert` is false
+    // when an earlier part already holds this GUID (a copied sheet, another tool's file): the
+    // key is then not reused, and this part's first trace mints a free one instead.
+    let part_key = creation_id_of(content_part).filter(|key| cx.ink_keys.insert(key.clone()));
     let mut total = 0usize;
     let mut shapes = Vec::new();
     for (i, trace) in traces(&root)?.into_iter().enumerate() {
