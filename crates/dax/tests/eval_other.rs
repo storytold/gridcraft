@@ -273,11 +273,14 @@ fn rank_partitions_text_case_insensitively() {
     let run = |src: &str| {
         let expr = parse_expression(src).expect("parses");
         let bound = Binder::new(&model).bind_expression(&expr).expect("binds");
-        evaluator.evaluate(&bound).expect("evaluates")
+        evaluator.evaluate_table(&bound).expect("evaluates")
     };
+    // Per-row numbers pin the folded partition rule: both spellings share one partition
+    // (East rows numbered 1, 2, West numbered 1), not just the same total.
+    let numbered = run("ADDCOLUMNS(Scratch, \"N\", ROWNUMBER(Scratch, ORDERBY(Scratch[Amount]), DEFAULT, PARTITIONBY(Scratch[Region])))");
     assert_eq!(
-        run("SUMX(Scratch, ROWNUMBER(Scratch, ORDERBY(Scratch[Amount]), DEFAULT, PARTITIONBY(Scratch[Region])))"),
-        Scalar::Decimal(4.0),
+        numbered.column(numbered.column_index("N").expect("number column")),
+        vec![Scalar::Integer(1), Scalar::Integer(2), Scalar::Integer(1)],
         "East rows are numbered 1, 2 and West is 1"
     );
 }
