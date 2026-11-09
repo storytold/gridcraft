@@ -424,7 +424,9 @@ fn sorted_entries(ev: &Evaluator<'_>, relation: &TableValue, clause: &WindowClau
             let mut partition = Vec::with_capacity(clause.partitions.len());
             for (table, column) in &clause.partitions {
                 let value = ev.eval(&BoundExpr::Column { table: *table, column: *column }, ctx)?;
-                partition.push(ScalarKey::from(&value));
+                // Partition keys follow the model collation like the filter keys they are
+                // compared with below: fold text so "East" and "east" form one partition.
+                partition.push(folded_key(&ScalarKey::from(&value)));
             }
             let mut order = Vec::with_capacity(clause.order.len());
             for key in &clause.order {

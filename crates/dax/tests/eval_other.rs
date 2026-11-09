@@ -250,6 +250,39 @@ fn rank_and_rownumber_partition_and_order_blanks() {
 }
 
 #[test]
+fn rank_partitions_text_case_insensitively() {
+    // "East" and "east" form one partition under the model collation: without the folded
+    // partition comparison the mixed-case spelling starts a new partition and is numbered 1
+    // instead of 2. The extra spelling keeps every existing assertion's partition intact.
+    let scratch = ModelTable {
+        name: "Scratch".into(),
+        columns: vec![
+            ModelColumn { name: "Region".into(), data_type: Some("String".into()) },
+            ModelColumn { name: "Amount".into(), data_type: Some("Double".into()) },
+        ],
+        rows: vec![
+            vec![Scalar::String("East".into()), Scalar::Integer(10)],
+            vec![Scalar::String("east".into()), Scalar::Integer(20)],
+            vec![Scalar::String("West".into()), Scalar::Integer(30)],
+        ],
+    };
+    let mut model = model();
+    model.tables.push(scratch);
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let run = |src: &str| {
+        let expr = parse_expression(src).expect("parses");
+        let bound = Binder::new(&model).bind_expression(&expr).expect("binds");
+        evaluator.evaluate(&bound).expect("evaluates")
+    };
+    assert_eq!(
+        run("SUMX(Scratch, ROWNUMBER(Scratch, ORDERBY(Scratch[Amount]), DEFAULT, PARTITIONBY(Scratch[Region])))"),
+        Scalar::Decimal(4.0),
+        "East rows are numbered 1, 2 and West is 1"
+    );
+}
+
+#[test]
 fn rank_requires_a_current_row() {
     assert!(eval("RANK(SKIP, Sales, ORDERBY(Sales[Amount]))").is_err());
     assert!(eval("RANK(\"SKIP\", Sales, ORDERBY(Sales[Amount]))").is_err());

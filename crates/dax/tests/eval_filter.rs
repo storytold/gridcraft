@@ -158,6 +158,32 @@ fn index_partitions_the_relation() {
     let lasts = eval_table("INDEX(-1, Sales, ORDERBY(Sales[Amount]), PARTITIONBY(Sales[Region]))").expect("INDEX");
     assert_eq!(column(&lasts, "Amount"), vec![Scalar::Integer(300), Scalar::Integer(400)]);
 }
+#[test]
+fn index_partitions_text_case_insensitively() {
+    // "East" and "east" form one partition under the model collation: without the folded
+    // partition keys the mixed-case spelling opens a second partition and INDEX returns one
+    // row per spelling instead of a single East row. Same-shape rows keep the fold minimal.
+    let scratch = ModelTable {
+        name: "Scratch".into(),
+        columns: vec![ModelColumn { name: "Region".into(), data_type: Some("String".into()) }, number_column("Amount")],
+        rows: vec![
+            vec![Scalar::String("East".into()), Scalar::Integer(100)],
+            vec![Scalar::String("east".into()), Scalar::Integer(300)],
+            vec![Scalar::String("West".into()), Scalar::Integer(200)],
+        ],
+    };
+    let mut model = model();
+    model.tables.push(scratch);
+    model.parse_formulas().expect("model parses");
+    let evaluator = evaluator(&model);
+    let run = |src: &str| {
+        let expr = parse_expression(src).map_err(|error| error.to_string()).expect("parses");
+        let bound = Binder::new(&model).bind_expression(&expr).map_err(|error| error.to_string()).expect("binds");
+        evaluator.evaluate_table(&bound).map_err(|error| error.to_string()).expect("evaluates")
+    };
+    let firsts = run("INDEX(1, Scratch, ORDERBY(Scratch[Amount]), PARTITIONBY(Scratch[Region]))");
+    assert_eq!(column(&firsts, "Amount"), vec![Scalar::Integer(100), Scalar::Integer(200)], "one first row per folded region");
+}
 
 #[test]
 fn index_uses_the_current_row_partition_inside_an_iterator() {

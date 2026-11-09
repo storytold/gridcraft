@@ -714,7 +714,13 @@ fn compare_keys(keys: &[OrderKey<'_>], default_blanks: BlanksOrder, left: &[Scal
 
 fn compare_partition(left: &[Scalar], right: &[Scalar]) -> Ordering {
     for (a, b) in left.iter().zip(right.iter()) {
-        let ordering = compare_values(a, b, false, BlanksOrder::Default);
+        // Partition values follow the model collation like grouping and VALUES: fold text so
+        // "East" and "east" compare equal (`total_order` would otherwise break the folded tie
+        // with the raw spellings).
+        let ordering = match (a, b) {
+            (Scalar::String(a), Scalar::String(b)) => a.to_lowercase().cmp(&b.to_lowercase()),
+            _ => compare_values(a, b, false, BlanksOrder::Default),
+        };
         if ordering != Ordering::Equal {
             return ordering;
         }
