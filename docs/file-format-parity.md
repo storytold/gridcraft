@@ -14,6 +14,8 @@ support comes from `crates/engine/src/io.rs` (`FileKind`), `crates/xlsx/src` and
 Legacy scalar `INDEX(range, MATCH(...))` formulas remain ordinary formulas on save, including when
 shared formulas are expanded during import (`array_export.rs`, #1505).
 
+Cell text now uses shared Unicode bidi layout while retaining logical source indexes for editing, copy and XLSX. Format Cells exposes Context, Left to right and Right to left reading direction, independent of sheet geometry. OOXML Context uses the first non-whitespace character. Optional direction preserves absent versus explicit Context in differential styles. The renderer is pinned to a reviewed egui 0.36.2 backport with real-font, editing, accessibility and WASM checks. Physical screen-reader behavior remains unverified.
+
 ## Workbook window settings
 
 GridCraft keeps one modelled workbook window. On XLSX import it selects the first visible
@@ -205,6 +207,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-11-01 | trivial | XLSX selects the first visible workbook view as one unit and bounds imported/exported tab ratios; isolated attributes and sheet-edit round trips covered, with firstSheet left to #2264 (#3057) |
 | 2026-10-31 | minor | CSV and text open detects each column's date order: a value that reads only day first (`31/05/2026`) makes the column day first, a value that reads only month first (`12/31/2026`) makes it month first, an all-ambiguous column keeps month first with a warning, and a column with both kinds stays text with a warning (#2765) |
 | 2026-10-31 | minor | XLSX open reads Google Sheets' `IFERROR(__xludf.DUMMYFUNCTION("…"),cached)` export wrapper as the formula inside when GridCraft calculates every function in it (plain, shared and array formulas, whole or nested; Google-only functions and unparseable, over-long or over-deep inner text keep the wrapper and the cached value) and keeps the cached value; saving writes the real formula with Excel's `_xlfn.` prefixes (#2871) |
+| 2026-10-26 | minor | Alignment readingOrder 0/1/2 survives cell, named-style and differential-style round-trips; Format Cells exposes reading direction and CF priority preserves unspecified inheritance |
 | 2026-10-27 | minor | CSV import reads GridCraft's semicolon CSV back: decimal-comma numbers in a semicolon file are numbers, and delimiter sniffing picks the semicolon when every comma sits between digits |
 | 2026-10-24 | minor | CSV export: **CSV UTF-8 (Semicolon delimited)** next to **CSV UTF-8 (Comma delimited)** in File › Export and Save As, both with a UTF-8 BOM so Excel reads accents; the semicolon one writes decimal commas. The comma one now writes commas even for a workbook opened from a `;` file. `file.exportCsv` / `file.saveBytes` take `delimiter`, `decimal` and `bom` (unchanged output without them). Why the names differ from Excel's: [CSV names](#csv-names-what-the-file-holds) |
 | 2026-10-21 | minor | HTML (Save as Web Page) writes pictures (`data:` URI `<img>`) and charts (inline SVG from the chart crate's drawing primitives, text included) at their anchors; the table uses the sheet's column widths and row heights when the sheet has either, and output for sheets without pictures or charts is unchanged |
