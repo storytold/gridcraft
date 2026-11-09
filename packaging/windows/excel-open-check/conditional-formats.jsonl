@@ -1,0 +1,8 @@
+# Colour scale, data bar, icon set, top 10, formula and text rules
+home.conditionalFormat={"range":"C5:F8","rule":{"type":"colorScale"}}
+home.conditionalFormat={"range":"C5:C8","rule":{"type":"dataBar"}}
+home.conditionalFormat={"range":"D5:D8","rule":{"type":"iconSet"}}
+home.conditionalFormat={"range":"E5:E8","rule":{"type":"top10","rank":2}}
+home.conditionalFormat={"range":"F5:F8","rule":{"type":"cellIs","operator":"greaterThan","value":"60000","preset":"lightRedFill"}}
+home.conditionalFormat={"range":"B5:B8","rule":{"type":"containsText","text":"th","preset":"yellowFill"}}
+home.conditionalFormat={"range":"C5:F8","rule":{"type":"expression","formula":"=C5>AVERAGE($C$5:$F$8)","preset":"greenFill"}}

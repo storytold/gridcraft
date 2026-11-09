@@ -1,0 +1,8 @@
+# One rule of each kind
+data.validation={"range":"K2:K5","type":"list","formula1":"North,South,East,West"}
+data.validation={"range":"K6:K8","type":"whole","operator":"between","formula1":"1","formula2":"100","inputTitle":"Count","inputMessage":"1 to 100","errorStyle":"warning"}
+data.validation={"range":"L2:L5","type":"decimal","operator":"greaterThan","formula1":"0"}
+data.validation={"range":"L6:L8","type":"date","operator":"greaterOrEqual","formula1":"2026-01-01"}
+data.validation={"range":"M2:M5","type":"textLength","operator":"lessOrEqual","formula1":"10"}
+data.validation={"range":"M6:M8","type":"custom","formula1":"=ISNUMBER(M6)"}
+data.validation={"range":"N2:N5","type":"list","formula1":"=$B$5:$B$8"}
