@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 
 use gridcraft_core::{CellRef, Value};
 use gridcraft_model::ink::{InkTexture, MAX_INK_TEXTURE_BYTES};
-use gridcraft_model::{InkTool, Sheet, Visibility, Workbook};
+use gridcraft_model::{InkStyle, InkTool, Sheet, Visibility, Workbook};
 use serde::{Deserialize, Serialize};
 
 /// The sheet's name, and the marker its A1 holds so a sheet of the same name that is not ours
@@ -207,10 +207,15 @@ fn clamp_scale(scale: f32) -> Option<f32> {
     (scale.is_finite() && scale > 0.0).then(|| scale.clamp(0.5, 512.0))
 }
 
-/// Which brush kinds InkML cannot carry whole: Excel's Pencil is an effect, and Fountain Pen and
-/// Brush Pen are byte-identical in the file, so a stroke read back needs the subtype from here.
-fn tool_needs_extension(tool: InkTool) -> bool {
-    matches!(tool, InkTool::Pencil | InkTool::FountainPen | InkTool::BrushPen)
+/// Which strokes InkML cannot carry whole: Fountain Pen and Brush Pen are byte-identical in the
+/// file, so a stroke read back needs the subtype from here. A plain Pencil is `inkEffects=pencil`
+/// in InkML; only a Pencil carrying an effect loses that marker (the texture replaces it).
+fn tool_needs_extension(ink: &InkStyle) -> bool {
+    match ink.tool {
+        InkTool::FountainPen | InkTool::BrushPen => true,
+        InkTool::Pencil => ink.effect.is_some(),
+        InkTool::Pen | InkTool::Highlighter => false,
+    }
 }
 
 /// The JSON name of a brush kind, as the hidden sheet stores it.
@@ -254,7 +259,7 @@ pub fn from_workbook(wb: &Workbook) -> Option<InkSheetData> {
                 // Excel drops the private brushProperty names, so the subtype (Fountain Pen and
                 // Brush Pen are identical in InkML) and the draw order live here. Order 0 is the
                 // default a single stroke needs no record for.
-                tool: tool_needs_extension(ink.tool).then(|| tool_name(ink.tool).to_string()),
+                tool: tool_needs_extension(ink).then(|| tool_name(ink.tool).to_string()),
                 order: (ink.order > 0).then_some(ink.order),
             };
             if !extras.is_empty() {

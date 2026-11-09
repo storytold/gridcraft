@@ -188,6 +188,24 @@ fn a_workbook_without_extension_data_gains_no_ink_sheet() {
     assert!(back.ink_textures.is_empty());
 }
 
+/// A plain Pencil stroke is `inkEffects=pencil` in InkML, so saving must not grow the hidden
+/// sheet for it; only a Pencil carrying an effect (which replaces that marker) needs one.
+#[test]
+fn a_plain_pencil_stroke_gains_no_ink_sheet() {
+    for (effect, gains) in [(None, false), (Some(gridcraft_model::InkEffect::Rainbow), true)] {
+        let mut shape = ink_shape(1, "{11111111-2222-3333-4444-555555555555}");
+        let ink = shape.ink.as_mut().expect("ink");
+        ink.tool = InkTool::Pencil;
+        ink.effect = effect;
+        let bytes = write_xlsx(&with_shape(shape)).expect("writes");
+        assert_eq!(
+            sheet_names(&bytes).iter().any(|n| n.starts_with(INK_SHEET_NAME)),
+            gains,
+            "a plain pencil is Excel-representable, a textured one is not (effect={effect:?})"
+        );
+    }
+}
+
 /// Imported textures survive a save and reopen with their ids and scales.
 #[test]
 fn textures_survive_a_save_and_reopen() {

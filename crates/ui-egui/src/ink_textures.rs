@@ -256,7 +256,7 @@ pub(crate) fn gallery(ui: &mut egui::Ui, textures: &[InkTexture], selected: Opti
     let tr = crate::i18n::current(ui.ctx());
     let mut action = None;
     let tokens = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(tr.tr("Textures")).small());
+    ui.label(egui::RichText::new(tr.tr("Imported Textures")).small());
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(3.0, 3.0);
         for tile in textures {

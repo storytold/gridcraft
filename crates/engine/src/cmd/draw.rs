@@ -206,7 +206,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Change Pen",
             ["Draw", "Tools"],
             None,
-            "{id, brush?: kind, color?: #RRGGBB, width?: mm, effect?: name, texture?: imported id | \"\"} → {pen}",
+            "{id, brush?: kind, color?: #RRGGBB, width?: mm, effect?: name, texture?: imported id | \"\", textureScale?: stroke widths per repeat} → {pen}",
             has_doc,
             update_pen
         ),
