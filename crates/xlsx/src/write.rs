@@ -199,6 +199,7 @@ fn pivot_caches_children(xml: &str) -> String {
     const OPEN: &str = "<pivotCaches";
     const CLOSE: &str = "</pivotCaches>";
     let mut children = String::new();
+    let mut rest = xml;
     while let Some(open) = rest.find(OPEN) {
         let Some(after) = rest.get(open..) else { break };
         // `OPEN` is a prefix: only `<pivotCaches` followed by whitespace, `>` or `/` opens the
