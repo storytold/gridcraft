@@ -136,6 +136,12 @@ pub fn approx_text_width(text: &str, size: f32, bold: bool) -> f32 {
             c if c.is_ascii_uppercase() => 0.65,
             c if c.is_ascii_digit() => 0.56,
             c if c.is_ascii() => 0.52,
+            // Arabic marks (harakat) sit on the previous letter and take no width.
+            '\u{064B}'..='\u{065F}' | '\u{0670}' | '\u{06D6}'..='\u{06ED}' => 0.0,
+            // Latin-1/extended, Greek, Cyrillic, Hebrew and Arabic letters average about half an
+            // em; only CJK-class (full-width) glyphs are a whole em. Counting Arabic as 1 em made
+            // wrapped cells look twice as long as they are, so AutoFit gave huge rows.
+            c if (c as u32) < 0x0E00 || ('\u{FB1D}'..='\u{FEFF}').contains(&c) => 0.55,
             _ => 1.0,
         };
     }
