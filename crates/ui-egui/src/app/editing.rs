@@ -546,4 +546,22 @@ mod merged_cell_enter_tests {
         app.move_after_enter(1, 0);
         assert_eq!(sel(&app), "A4");
     }
+
+    #[test]
+    fn enter_from_a_merged_cell_in_a_tab_run_skips_a_hidden_row_and_keeps_the_column() {
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("selection.set", json!({"range": "D2:E3"})).unwrap();
+        app.run("home.mergeCells", json!({})).unwrap();
+        app.run("selection.set", json!({"range": "A4"})).unwrap();
+        app.run("home.hideRows", json!({})).unwrap();
+        let sel = |app: &SheetApp| app.session.active().map(|d| d.selection.a1()).unwrap_or_default();
+        app.run("selection.set", json!({"cell": "C2"})).unwrap();
+        app.move_after_enter(0, 1);
+        assert_eq!(sel(&app), "D2:E3");
+        // Row 4 is hidden: Enter lands on C5, the run's column, not B5.
+        app.move_after_enter(1, 0);
+        assert_eq!(sel(&app), "C5");
+    }
 }
