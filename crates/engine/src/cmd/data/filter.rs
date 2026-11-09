@@ -12,15 +12,20 @@ pub(super) fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
     // The active cell belongs to the active sheet: on another sheet the table is the one at `range`.
     let at = if sheet == s.doc()?.wb.active_sheet() { s.doc()?.selection.active } else { r.start };
     let has = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.autofilter.is_some());
-    let in_table = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.table_at(at).map(|t| t.name.clone()));
-    if let Some(name) = in_table {
+    let ti = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.tables.iter().position(|t| t.range.contains(at)));
+    if let Some(ti) = ti {
+        let want = !s.doc()?.wb.sheet(sheet).and_then(|sh| sh.tables.get(ti)).is_some_and(|t| t.filter_button);
         return edit(s, |cx| {
-            let sh = cx.sheet_mut(sheet)?;
-            if let Some(t) = sh.tables.iter_mut().find(|t| t.name == name) {
-                t.filter_button = !t.filter_button;
-                if !t.filter_button {
-                    t.filter.clear();
+            if want {
+                crate::cmd::insert::set_table_filter_button(cx, sheet, ti, true)?;
+            } else {
+                // Data › Filter removes the filter; the Table Design Filter Button box only hides
+                // the arrows and keeps the criteria.
+                crate::cmd::insert::clear_table_filter(cx, sheet, ti);
+                if let Some(t) = cx.wb.sheet_mut(sheet).and_then(|sh| sh.tables.get_mut(ti)) {
+                    t.filter_button = false;
                 }
+                cx.structural = true;
             }
             Ok(Json::Null)
         });
@@ -171,7 +176,13 @@ pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
     }
     let Some(af) = sh.autofilter.as_ref() else { return };
     let r = af.range;
-    if r.end.row.checked_add(1) != Some(at.row) || at.col < r.start.col || at.col > r.end.col || sh.tables.iter().any(|t| t.range == r) {
+    // A table's own filter covers its `filter_range()` (the header and the data rows), so a table
+    // with a totals row stores that shorter range; a cell in the totals row must not grow it.
+    if r.end.row.checked_add(1) != Some(at.row)
+        || at.col < r.start.col
+        || at.col > r.end.col
+        || sh.tables.iter().any(|t| t.range == r || t.filter_range() == Some(r))
+    {
         return;
     }
     let grown = RangeRef::new(r.start, CellRef::new(at.row, r.end.col));
@@ -185,10 +196,25 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
     let Some(sh) = wb.sheet(sheet) else { return };
     let Some(af) = sh.autofilter.clone() else { return };
     let r = af.range;
-    let mut hide = Vec::new();
+    let hide = criteria_hide_rows(wb, sh, r, &af.criteria);
+    let Some(shm) = wb.sheet_mut(sheet) else { return };
+    for row in r.start.row + 1..=r.end.row {
+        if hide.contains(&row) {
+            shm.rows.entry(row).or_default().hidden = true;
+        } else if let Some(e) = shm.rows.get_mut(&row) {
+            e.hidden = false;
+        }
+    }
+}
+
+/// The rows of `r` (below its header) that `criteria` hide. Shared by the sheet AutoFilter and by
+/// a table's own AutoFilter: a table read from XLSX keeps its criteria in `Table::filter`, not in
+/// `Sheet::autofilter`, so turning its filter off must use the same evaluation to reveal exactly
+/// the rows the filter hid (manually hidden rows keep their state).
+pub(crate) fn criteria_hide_rows(wb: &Workbook, sh: &Sheet, r: RangeRef, criteria: &[(u32, FilterCriterion)]) -> std::collections::HashSet<u32> {
     // Precompute per-criterion top10 threshold and average once, not per row.
     let mut col_stats: std::collections::HashMap<usize, (Option<f64>, f64)> = std::collections::HashMap::new();
-    for (i, (off, c)) in af.criteria.iter().enumerate() {
+    for (i, (off, c)) in criteria.iter().enumerate() {
         if matches!(c, FilterCriterion::Top10 { .. } | FilterCriterion::AboveAverage(_)) {
             let col = r.start.col + off;
             let mut nums: Vec<f64> = (r.start.row + 1..=r.end.row).filter_map(|row| sh.value(CellRef::new(row, col)).as_f64()).collect();
@@ -205,9 +231,10 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
             col_stats.insert(i, (thr, avg));
         }
     }
+    let mut hide = std::collections::HashSet::new();
     for row in r.start.row + 1..=r.end.row {
         let mut visible = true;
-        for (i, (off, crit)) in af.criteria.iter().enumerate() {
+        for (i, (off, crit)) in criteria.iter().enumerate() {
             let c = CellRef::new(row, r.start.col + off);
             let v = sh.value(c);
             let text = crate::display::cell_text(wb, sh, c);
@@ -256,16 +283,11 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
                 break;
             }
         }
-        hide.push((row, !visible));
-    }
-    let Some(shm) = wb.sheet_mut(sheet) else { return };
-    for (row, h) in hide {
-        if h {
-            shm.rows.entry(row).or_default().hidden = true;
-        } else if let Some(e) = shm.rows.get_mut(&row) {
-            e.hidden = false;
+        if !visible {
+            hide.insert(row);
         }
     }
+    hide
 }
 
 pub(super) fn clear_filter(s: &mut Session, _: &Json) -> Result<Json> {

@@ -113,6 +113,30 @@ fn autofilter_range_grows_when_a_value_is_entered_in_the_row_below() {
 }
 
 #[test]
+fn a_table_with_a_totals_row_keeps_its_autofilter_from_growing_over_the_totals_row() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["a"], ["b"]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A3", "header": true})).unwrap();
+    s.execute("table.totalRow", json!({"table": "Table1", "on": true})).unwrap();
+    // The table's filter menu installs its filter range (header and data rows) as the sheet
+    // AutoFilter, so the totals row sits right below it.
+    let t = &s.doc().unwrap().wb.active().unwrap().tables[0];
+    assert_eq!(t.range.a1(), "A1:A4", "the totals row extends the table");
+    let fr = t.filter_range().unwrap();
+    assert_eq!(fr.a1(), "A1:A3", "the filter range stops above the totals row");
+    // The filter menu installs the AutoFilter over that range; the active cell is outside the
+    // table so `data.filter` installs one instead of toggling the table's Filter Button.
+    s.execute("selection.set", json!({"cell": "D1"})).unwrap();
+    s.execute("data.filter", json!({"range": fr.a1()})).unwrap();
+    let range = |s: &Session| s.doc().unwrap().wb.active().unwrap().autofilter.as_ref().map(|a| a.range.a1());
+    assert_eq!(range(&s), Some("A1:A3".to_string()));
+    // Typing in the totals row does not grow the filter over it.
+    s.execute("cell.set", json!({"cell": "A4", "input": "total"})).unwrap();
+    assert_eq!(range(&s), Some("A1:A3".to_string()));
+}
+
+#[test]
 fn list_validation_without_formula1_is_an_error() {
     let mut s = Session::new();
     s.new_workbook();
