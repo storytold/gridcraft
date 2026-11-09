@@ -48,6 +48,13 @@ pub fn is_group_level(seq: &str) -> bool {
     matches!(lookup(seq), Some(Entry::Continue)) || (lookup(seq).is_none() && has_deeper(seq))
 }
 
+/// False under a legacy Excel 2003 menu letter that has no ribbon tab (Alt+I, D, V, T): Excel
+/// paints no badges for those, so the ribbon stays as it is while the sequence is typed.
+pub fn paints_badges(prefix: &str) -> bool {
+    let Some(root) = prefix.get(..1) else { return true };
+    SEQUENCES.iter().any(|(seq, entry)| matches!(entry, Entry::Tab(_)) && seq.starts_with(root))
+}
+
 fn matches_target(action: &Action, target: &str) -> bool {
     match action {
         Action::Command(id) | Action::CommandWith(id, _) | Action::Pending(id) | Action::Control(id) => *id == target,
@@ -212,6 +219,22 @@ mod tests {
         assert!(!is_group_level("H"), "a terminal tab is not a group level");
         assert!(!is_group_level("HVS"), "a finish is not a group level");
         assert!(!has_deeper("X"));
+    }
+
+    #[test]
+    fn legacy_menu_letters_finish_without_badges() {
+        assert_eq!(lookup("IR"), Some(Entry::Finish(Action::Command("home.insertRows"))));
+        assert_eq!(lookup("DS"), Some(Entry::Finish(Action::Dialog("sort"))));
+        assert_eq!(lookup("EAA"), Some(Entry::Finish(Action::Command("edit.clearAll"))));
+        for root in ["I", "D", "V", "T"] {
+            assert!(is_group_level(root), "{root} waits for the menu letter");
+            assert!(!paints_badges(root), "{root} has no tab, so no badges");
+        }
+        assert!(paints_badges(""), "tab badges");
+        assert!(paints_badges("HO"));
+        assert!(paints_badges("J"), "the Draw tab's two-letter unit");
+        assert!(paints_badges("E"), "E and O stay aliases of Home");
+        assert_eq!(sequences_for("home.insertRows"), vec!["HIR", "IR"], "the ribbon sequence stays first");
     }
 
     #[test]
