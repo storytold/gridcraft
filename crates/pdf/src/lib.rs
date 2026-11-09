@@ -776,6 +776,13 @@ impl Page {
             // Bold without a bold face: fill and stroke the outlines.
             let _ = writeln!(s, "2 Tr {} w {}", n(pt * 0.03), rgb_op(color, true));
         }
+        // The run's text for copying and search: a font may split one character into several
+        // glyphs (SARA AM in Leelawadee UI) and reorder them, which the ToUnicode map can't say.
+        let mut actual = String::from("<FEFF");
+        for unit in run.encode_utf16() {
+            let _ = write!(actual, "{unit:04X}");
+        }
+        let _ = writeln!(s, "/Span << /ActualText {actual}> >> BDC");
         let mut rise = String::from("0");
         let mut tj = String::from("[");
         for g in &glyphs {
@@ -797,7 +804,7 @@ impl Page {
                 let _ = write!(tj, "{adjust} ");
             }
         }
-        let _ = writeln!(s, "{tj}] TJ");
+        let _ = writeln!(s, "{tj}] TJ\nEMC");
         if rise != "0" {
             s.push_str("0 Ts\n");
         }

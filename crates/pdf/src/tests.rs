@@ -426,6 +426,10 @@ fn fallback_font_is_embedded_shaped_and_searchable() -> Result<(), Box<dyn Error
     assert!(find(&pdf, format!("/Length1 {}", epaint_default_fonts::UBUNTU_LIGHT.len()).as_bytes()).is_some());
     // Copying the text gives back the characters (П is U+041F).
     assert!(find(&pdf, b"<041F>").is_some(), "ToUnicode maps the glyphs back to text");
+    // Each embedded run also carries its text, which survives glyphs split or reordered by shaping.
+    let s = String::from_utf8_lossy(&pdf);
+    assert!(s.contains("/Span << /ActualText <FEFF041F04400438043204350442> >> BDC"), "the run's text for copying");
+    assert_eq!(s.matches(" BDC\n").count(), s.matches("\nEMC\n").count(), "marked content is balanced");
     assert!(find(&pdf, b"] TJ").is_some());
     // Latin stays in the standard font; CJK, which the font lacks, still uses the CID font.
     assert!(find(&pdf, b"(No. ) Tj").is_some());

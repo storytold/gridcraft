@@ -58,7 +58,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32); #142
   (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora); no shaping for Arabic or
   Devanagari on screen; PDF export embeds one shaped fallback font (`GRIDCRAFT_PDF_THAI_FONT` or the
-  craft-fonts Thai face), so Thai exports; Chinese shows only where the reader has the font (non-embedded CID fallback), and
+  craft-fonts Thai face, else a Thai font the system ships (Leelawadee UI or Tahoma on Windows, Noto Sans Thai or Garuda on Linux; not yet on macOS, whose Thai fonts are .ttc collections)), so Thai exports; Chinese shows only where the reader has the font (non-embedded CID fallback), and
   other non-Latin scripts in PDF still need a font that covers them.
 - **Impact:** blocks most of the world's users even with an English UI.
 - **Estimate:** 12–20 h. [localization-parity.md](localization-parity.md)

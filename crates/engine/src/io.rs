@@ -1024,6 +1024,70 @@ pub fn load_pdf_fonts_from_env() -> Vec<String> {
     warnings
 }
 
+/// The Thai fonts systems ship, as (regular, bold of the same family), in the order PDF export
+/// tries them: Windows' Leelawadee UI and Tahoma, then Noto Sans Thai and Garuda (fonts-thai-tlwg)
+/// in the Linux font folders, as the UI's `thai()` in ui-egui `theme/font_fallback.rs` finds them
+/// (keep the two in step). macOS has Thonburi and Sukhumvit only as collections (.ttc), which the
+/// PDF writer can't embed yet.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn system_thai_fonts() -> Vec<(std::path::PathBuf, Option<std::path::PathBuf>)> {
+    use std::path::PathBuf;
+    const LINUX_DIRS: [&str; 6] = [
+        "/usr/share/fonts/truetype/noto",
+        "/usr/share/fonts/opentype/noto",
+        "/usr/share/fonts/truetype",
+        "/usr/share/fonts",
+        "/usr/share/fonts/chromeos/noto",
+        // Flatpak mounts the host's fonts here.
+        "/run/host/fonts/truetype",
+    ];
+    const LINUX_FILES: [(&str, &str); 3] = [
+        ("NotoSansThai-Regular.ttf", "NotoSansThai-Bold.ttf"),
+        ("tlwg/Garuda.ttf", "tlwg/Garuda-Bold.ttf"),
+        ("garuda/Garuda.ttf", "garuda/Garuda-Bold.ttf"),
+    ];
+    let windows = std::env::var_os("WINDIR").map_or_else(|| PathBuf::from("C:\\Windows"), PathBuf::from).join("Fonts");
+    let mut fonts: Vec<(PathBuf, Option<PathBuf>)> =
+        [("LeelawUI.ttf", "LeelaUIb.ttf"), ("tahoma.ttf", "tahomabd.ttf")].iter().map(|(r, b)| (windows.join(r), Some(windows.join(b)))).collect();
+    for (regular, bold) in LINUX_FILES {
+        fonts.extend(LINUX_DIRS.iter().map(|d| (PathBuf::from(d).join(regular), Some(PathBuf::from(d).join(bold)))));
+    }
+    // Fedora ships Noto Sans Thai as one variable font; bold is then drawn from it.
+    fonts.push((PathBuf::from("/usr/share/fonts/google-noto-vf/NotoSansThai[wght].ttf"), None));
+    fonts
+}
+
+/// Registers the first of [`system_thai_fonts`] PDF export can embed, with its bold face, when no
+/// font is registered for regular or bold text yet (so a face set through [`PDF_FONT_ENV`] or a
+/// bundled one is never replaced, and regular and bold come from one family). Returns its name.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_system_pdf_fonts() -> Option<String> {
+    if has_pdf_font_face(false) || has_pdf_font_face(true) {
+        return None;
+    }
+    first_usable_font(&system_thai_fonts(), register_pdf_font)
+}
+
+/// Tries `candidates` in order and registers the first regular face `register` accepts, then its
+/// bold face when that one is usable too. Missing, unreadable and refused files are skipped.
+#[cfg(not(target_arch = "wasm32"))]
+fn first_usable_font(
+    candidates: &[(std::path::PathBuf, Option<std::path::PathBuf>)],
+    mut register: impl FnMut(Vec<u8>, bool) -> Result<String>,
+) -> Option<String> {
+    for (regular, bold) in candidates {
+        let Ok(name) = read_font_file(regular).map_err(EngineError::Other).and_then(|bytes| register(bytes, false)) else { continue };
+        // A bold face that can't be used leaves bold text to the regular face, drawn bolder.
+        if let Some(bold) = bold
+            && let Ok(bytes) = read_font_file(bold)
+        {
+            let _ = register(bytes, true);
+        }
+        return Some(name);
+    }
+    None
+}
+
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 pub fn base64_encode(data: &[u8]) -> String {

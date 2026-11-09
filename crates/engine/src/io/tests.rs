@@ -784,3 +784,51 @@ fn sylk_survives_huge_relative_offsets_and_width_floods() {
     let (wb, _) = open_bytes("widths.slk", &flood).unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::Number(1.0));
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn system_thai_fonts_pair_each_regular_face_with_its_own_bold() {
+    let fonts = system_thai_fonts();
+    let name = |p: &std::path::Path| p.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+    let pairs: Vec<(String, Option<String>)> = fonts.iter().map(|(r, b)| (name(r), b.as_deref().map(name))).collect();
+    // Windows first, in the UI's order, then Noto Sans Thai and Garuda (issue #3529's fonts-thai-tlwg).
+    assert_eq!(pairs.first(), Some(&("LeelawUI.ttf".to_string(), Some("LeelaUIb.ttf".to_string()))));
+    assert!(pairs.contains(&("NotoSansThai-Regular.ttf".to_string(), Some("NotoSansThai-Bold.ttf".to_string()))));
+    assert!(
+        fonts
+            .iter()
+            .any(|(r, b)| r.ends_with("truetype/tlwg/Garuda.ttf") && b.as_deref().is_some_and(|b| b.ends_with("truetype/tlwg/Garuda-Bold.ttf")))
+    );
+    // Every bold face is in the same folder as its regular face.
+    assert!(fonts.iter().all(|(r, b)| b.as_deref().is_none_or(|b| b.parent() == r.parent())));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_first_usable_system_font_is_registered_with_its_bold_face() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-system-fonts-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = |name: &str, bytes: &[u8]| {
+        let p = dir.join(name);
+        std::fs::write(&p, bytes).unwrap();
+        p
+    };
+    let refused = file("cff.otf", b"cff");
+    let good = file("good.ttf", b"good regular");
+    let good_bold = file("good-bold.ttf", b"good bold");
+    let later = file("later.ttf", b"good later");
+    let candidates =
+        vec![(dir.join("missing.ttf"), None), (dir.clone(), None), (refused, Some(good_bold.clone())), (good, Some(good_bold)), (later, None)];
+    let mut calls: Vec<(String, bool)> = Vec::new();
+    let name = first_usable_font(&candidates, |bytes, bold| {
+        let text = String::from_utf8(bytes).unwrap();
+        calls.push((text.clone(), bold));
+        if text.starts_with("good") { Ok(text) } else { Err(EngineError::Other("refused".into())) }
+    });
+    // Missing files and a folder are skipped unread; a refused face does not bring its bold face in.
+    assert_eq!(name.as_deref(), Some("good regular"));
+    assert_eq!(calls, [("cff".to_string(), false), ("good regular".to_string(), false), ("good bold".to_string(), true)]);
+    assert_eq!(first_usable_font(&[(dir.join("missing.ttf"), None)], |_, _| Ok(String::new())), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}

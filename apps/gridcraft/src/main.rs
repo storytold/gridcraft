@@ -239,7 +239,8 @@ fn icon() -> Option<egui::IconData> {
 
 /// The font PDF export embeds for Thai and other text the standard PDF fonts lack: the file
 /// `GRIDCRAFT_PDF_THAI_FONT` names (TH Sarabun New, for example), else the craft-fonts Thai face
-/// when this build embeds one. Without either, export works as before.
+/// when this build embeds one, else a Thai font the system ships (Leelawadee UI, Tahoma, Noto Sans
+/// Thai, Garuda). Without any, export works as before.
 fn load_pdf_fonts() {
     for warning in gridcraft_engine::io::load_pdf_fonts_from_env() {
         log::warn!("{warning}");
@@ -255,6 +256,9 @@ fn load_pdf_fonts() {
         {
             log::warn!("craft-fonts Thai face for PDF export: {e}");
         }
+    }
+    if let Some(name) = gridcraft_engine::io::load_system_pdf_fonts() {
+        log::info!("PDF export embeds {name}, a Thai font this system ships");
     }
 }
 
