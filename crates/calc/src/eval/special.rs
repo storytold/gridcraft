@@ -248,10 +248,10 @@ fn collect_dynamic_reads(wb: &Workbook, sheet: usize, e: &Expr, out: &mut Dynami
         {
             known = false
         }
-        Expr::Call(n, args) if resizes_sum_range(n, args.len()) => {
-            if !matches!(args.first(), Some(Expr::Ref(_))) && matches!(args.get(2), Some(Expr::Ref(_))) {
-                known = false;
-            }
+        Expr::Call(n, args)
+            if resizes_sum_range(n, args.len()) && !matches!(args.first(), Some(Expr::Ref(_))) && matches!(args.get(2), Some(Expr::Ref(_))) =>
+        {
+            known = false;
         }
         // A function defined by a name (a LAMBDA).
         Expr::Call(n, _) if gridcraft_functions::lookup(n).is_none() && !is_special(n) => known &= name(out, n),
