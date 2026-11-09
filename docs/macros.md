@@ -1,6 +1,6 @@
 # Macros
 
-> **Last updated:** 2026-10-25 · **Change:** minor (recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
+> **Last updated:** 2026-11-02 · **Change:** minor (form buttons run macros, `macro.run` takes `output`, and a button action kept in a hidden name comes back on reopen only while the file still agrees with it; earlier: a close that waits on the step editor's question runs in the editor's window, and a further close asked meanwhile waits for the answer or is refused; earlier: closing a workbook or quitting asks about the step editor's unsaved draft first; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
 
 GridCraft macros are typed, declarative lists of commands, not VBA. Every step runs a GridCraft
 command (the same ids the ribbon, CLI and MCP use) or one of three bounded control steps. A macro
@@ -98,12 +98,18 @@ refused rather than read as the header.
 
 ## Running
 
-`macro.run {name, inputs?, onConflict?, overwrite?, approve?, timeLimit?}`:
+`macro.run {name, inputs?, output?, onConflict?, overwrite?, approve?, timeLimit?}` (`output`
+replaces the macro's output anchor for this run, as a form button that sends the output elsewhere
+does; `macro.check` and the debugger take it too). The policy and the approval go by the macro as
+it is stored; the footprint, the conflict rule and the check of each step work on the cells
+`output` names, so data there is protected as at the macro's own anchor. An `output` that isn't
+reference text of at most 1,024 characters, or that names no cell (a bad reference, a sheet that
+doesn't exist, a cell outside the grid), is refused before anything runs:
 
 1. **Policy.** File commands other than Properties, exports and printing (such as Open, Save
    and Close), app, window (including New Window, Hide and Unhide), automate and macro commands,
-   and Undo and Redo, never run in a macro. File › Properties runs, and so do exports and
-   printing (`file.exportPdf`, `exportCsv`, `exportHtml`, `print`, `printPreview`, `saveBytes`)
+   Undo and Redo, and pressing a form control (`control.press`), never run in a macro. File ›
+   Properties runs, and so do exports and printing (`file.exportPdf`, `exportCsv`, `exportHtml`, `print`, `printPreview`, `saveBytes`)
    that only produce bytes. Reading or writing a file (`data.getData`, `data.fromTextCsv`,
    `insert.picture` or `pageLayout.background` with a `path`, or an export or print with a
    `path`) needs the command in the macro's `permissions`. Any `path` other than `null` counts,
@@ -138,9 +144,9 @@ refused rather than read as the header.
    do; a step that deletes one of them, or changes the size of a range a Repeat is going over,
    stops the run.
 
-`macro.check {name, inputs?, onConflict?, overwrite?, timeLimit?}` reports the bound inputs, the
-output anchor, any approval needed and the footprint, and puts back everything the dry run
-changed. `ok` says whether `macro.run` with the same parameters would go ahead without a question;
+`macro.check {name, inputs?, output?, onConflict?, overwrite?, timeLimit?}` reports the bound
+inputs, the output anchor (`output` when given), any approval needed and the footprint, and puts
+back everything the dry run changed. `ok` says whether `macro.run` with the same parameters would go ahead without a question;
 when it wouldn't, `errors` says why: the run would fail at a step, a Stop step rolls it back, it
 would write over data under `ask` or `fail`, shifting can't make room (the check shifts and
 checks again, then puts everything back), or the run would go past
@@ -246,6 +252,35 @@ kept but does not run the macro.
 {name, to}`. Saving under a name a macro has is refused unless `replace: true` is passed, and
 renaming to one is refused; names compare ignoring the case of the letters A to Z. A renamed macro is checked
 against every limit again, its size included. Saving, renaming and deleting are undoable.
+Renaming a macro also renames it in the form buttons that run it.
+
+## Form buttons
+
+A form button (Insert › Controls › Button, `insert.button`) runs a macro or one command when it is
+pressed (`control.press {id, approve?, onConflict?}`). `control.assign {id, macro, input?,
+output?}` makes it run a macro, on the selection when it is pressed (`input: "selection"`, the
+default) or always on one range (`input: "B2:D9"`), with an optional output cell; `control.assign
+{id, command, params}` makes it run a command with fixed parameters. A macro runs through
+`macro.run` with its checks; a command goes through the same policy as a macro step and runs, as
+a step does, inside the scripts' file sandbox unless it is an approved file command, so a button
+in a workbook opened from a file asks before it runs anything. Like a step, a button's command
+never opens a web page or a dialog: `link.open` is refused when it is assigned or comes in from
+a file, and a command that would open a dialog or a page once it runs (a command given no
+parameters opens its dialog) is refused then, with the request dropped and nothing done.
+In the window, a press that asks (approve the action, or overwrite data in the macro's way) opens
+a prompt whose answer applies only to what it asked about: if the workbook, the sheet, the
+button, its action, its macro or the selection changes while the prompt is open (an agent
+reassigns the button), the answer runs nothing and the next press asks again.
+
+In xlsx a button carries its macro as Excel writes it (`macro="[0]!Name"`, a macro run on the
+selection). A command, a fixed input range or an output cell has no place there and is kept in a
+hidden defined name (`_gc_control_actions_<k>`), keyed by the sheet, the button's place, name and
+anchor cell. When the file is opened the hidden name is removed and each kept action goes back
+onto its button only when the file still agrees with it: a kept macro action needs the file to
+assign that macro still, so an assignment removed in another application stays removed and a
+button given another macro keeps that one; a kept command needs the file to assign no macro. A
+button whose name, anchor cell or place changed, or which another application removed, gets no
+kept action.
 
 Macros are saved in the workbook: as a field in GridCraft's JSON format, and in xlsx as hidden
 defined names (`_gc_macro_<n>_<k>`, the macro's JSON split into string literals within Excel's
@@ -294,9 +329,21 @@ other macros open; a macro that was left out is not in the saved file.
   the Output tab sets the anchor and what to do when results would land on data. The editor
   belongs to the workbook it opened in: while another workbook is active it says so and Save,
   Check, Run and Debug wait until that workbook is active again, and closing the workbook closes
-  the editor. It keeps its window until it closes itself: another dialog asked for meanwhile is
-  refused with a message, and closing the app first asks about the editor's debug run and unsaved
-  steps, then about unsaved workbooks.
+  the editor. A draft with unsaved changes counts as unsaved work when its workbook closes (File >
+  Close, Cmd+W, a window's close button), or the window that shows the editor closes while the
+  workbook stays open in another: the editor first asks Save changes to the macro, even if the
+  workbook itself is saved; Save or Don't Save goes on with the close, in the window it was asked
+  in (whichever window was activated meanwhile), and a workbook that closes then asks about its
+  own unsaved changes, and Cancel keeps both open. While the question stands, a further request
+  for the same close (Cmd+W again, the window's close button) waits for the answer without a
+  second question, and the close then runs once; a request for a different close (the whole
+  workbook while only the editor's window was closing, or the reverse) is refused with the reason
+  until the question is answered. A new macro that has not been edited does not ask. It keeps its
+  window until it closes itself: another dialog asked for meanwhile is refused with a message, and
+  closing the app (its window's close button, Quit, Cmd+Q) first asks about the editor's debug
+  run and unsaved steps, in the editor's window, then about each unsaved workbook in its window;
+  Cancel at any of these questions stops the quit with every window open (a draft already
+  discarded with Don't Save stays discarded).
 - **Debug bar.** Check dry-runs the macro and colours the grid: inputs blue, the cells it writes
   green, the cells among them that hold data red. Run runs it as one undo step. Step, Continue and
   Run to Here start the debugger when needed (`macro.debug` with the editor's breakpoints and

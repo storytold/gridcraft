@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/gridcraft", "apps/gridcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.14.2"
+version = "0.16.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -24,10 +24,11 @@ gridcraft-engine = { path = "crates/engine" }
 gridcraft-ui-egui = { path = "crates/ui-egui" }
 gridcraft-mcp = { path = "crates/mcp" }
 gridcraft-pdf = { path = "crates/pdf" }
+gridcraft-math = { path = "crates/math" }
 # Every craft-libs crate (craft-update and craft-window here, craft-ui in ui-egui, craft-print in
-# the app) comes from one storytold/craft-libs revision.
+# the app) comes from one craft-libs revision.
 # craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", version = "=0.1.0", features = ["egui"] }
+craft-update = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d", version = "=0.1.0", features = ["egui"] }
 
 # foundation
 thiserror = "2"
@@ -47,6 +48,13 @@ aes = { version = "0.9", default-features = false }
 sha1 = { version = "0.11", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
+# equations: RaTeX (MIT) lays LaTeX out as positioned glyphs, rules and paths. Exact pins: it is
+# young (0.1.x), and the gate recorded in docs/decisions.md vetted this release.
+ratex-parser = "=0.1.14"
+ratex-layout = "=0.1.14"
+ratex-types = "=0.1.14"
+ratex-font = "=0.1.14"
+
 # ui
 egui = "0.37"
 egui_extras = { version = "0.37", default-features = false }
@@ -63,7 +71,7 @@ skrifa = { version = "0.44", default-features = false, features = ["std"] }
 epaint_default_fonts = "0.37"
 # One native window per workbook: the window list, Window menu titles and the immediate-viewport
 # driver. Same craft-libs revision as craft-update above.
-craft-window = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", default-features = false, features = ["egui"] }
+craft-window = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d", default-features = false, features = ["egui"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
