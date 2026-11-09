@@ -1035,3 +1035,17 @@ fn pivot_caches_children_keeps_wrapper_namespace_bindings() {
     assert!(!children.contains("/ xmlns:"), "no binding lands after the self-closing slash: {children}");
     assert!(crate::xml::parse(format!("<pivotCaches>{children}</pivotCaches>").as_bytes()).is_ok(), "the merged children parse: {children}");
 }
+
+#[test]
+fn pivot_caches_children_does_not_match_a_prefix_of_another_binding() {
+    // A child declaring `xmlns:related` does not satisfy the wrapper's `xmlns:rel`: substring
+    // matching would omit `xmlns:rel` and leave the child's `rel:id` unbound.
+    use crate::write::pivot_caches_children_for_test;
+    let xml = "<pivotCaches xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><pivotCache cacheId=\"1\" xmlns:related=\"urn:x\" rel:id=\"rId1\"/></pivotCaches>";
+    let children = pivot_caches_children_for_test(xml);
+    assert!(
+        children.contains("xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""),
+        "the exact binding is kept: {children}"
+    );
+    assert!(crate::xml::parse(format!("<pivotCaches>{children}</pivotCaches>").as_bytes()).is_ok(), "the merged children parse: {children}");
+}

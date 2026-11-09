@@ -309,8 +309,11 @@ fn scope_with_bindings(bindings: &[&&str], body: &str) -> String {
             continue;
         }
         if depth == 0 {
+            // Compare exact attribute names: a child declaring `xmlns:related` must not count
+            // as satisfying the wrapper's `xmlns:rel` — substring matching would omit `xmlns:rel`
+            // and leave the child's `rel:id` unbound in the saved workbook.
             let missing: Vec<&str> =
-                bindings.iter().copied().copied().filter(|binding| !opener.contains(binding.split('=').next().unwrap_or(""))).collect();
+                bindings.iter().copied().copied().filter(|binding| !has_attr_name(opener, binding.split('=').next().unwrap_or(""))).collect();
             if missing.is_empty() {
                 scoped.push_str(rest.get(..=tag_end).unwrap_or(""));
             } else {
@@ -335,6 +338,26 @@ fn scope_with_bindings(bindings: &[&&str], body: &str) -> String {
     scoped
 }
 
+/// Whether `opener` (a `<…>` tag; comments and declarations already excluded by the caller)
+/// declares the attribute `name`: exact name match, so `xmlns:rel` does not match
+/// `xmlns:related`. A boundary (`=`, whitespace, `/`, `>`) must follow the name, and
+/// whitespace, `<` or the string start must precede it.
+fn has_attr_name(opener: &str, name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let mut rest = opener;
+    while let Some(found) = rest.find(name) {
+        let before_ok = found == 0 || rest.get(..found).is_some_and(|head| head.ends_with([' ', '\t', '\n', '\r', '<']));
+        let after = rest.get(found + name.len()..).unwrap_or("");
+        let after_ok = after.starts_with(['=', ' ', '\t', '\n', '\r', '/', '>']);
+        if before_ok && after_ok {
+            return true;
+        }
+        rest = after;
+    }
+    false
+}
 /// The `<pivotCache>`-child scan, exposed so an integration test can pin the element-name
 /// boundary without going through a whole workbook write.
 #[cfg(test)]
