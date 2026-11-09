@@ -1,7 +1,7 @@
 # Real-time collaboration: status and acceptance evidence
 
 - Date: 2026-11-09
-- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), HEAD `0b18f456` (code and tests; this page's update sits on top)
+- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), HEAD `54f15d41` (code and tests; this page's update sits on top)
 - Base: `origin/main` = `2c58c769` (rebased 2026-11-08)
 - PR: <https://github.com/storytold/gridcraft/pull/3613> (draft)
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
@@ -148,7 +148,7 @@ keeps the new optional fields.
 | 3 | structural queue | FIFO per document: operations pass one room mutex in arrival order; `structural` must have `baseVersion == head` and bumps `epoch` |
 | 4 | snapshot cost | snapshot is the authoritative `.xlsx` written by the real writer, not a JSON model; chunked resync of 768 KiB per frame (RFC §3.3/§4.6/§9) |
 | 5 | host contract | `INTEGRATION.md` §6 implemented in the app: `gridcraft:session`, `session-state`, `presence`, `commit`, `committed`; the cabinet-side page and the server-to-server commit callback are outside this repository |
-| 6 | several windows | one `actorId` per user, presence shows one window (RFC §13.6); `windowId` is a possible follow-up |
+| 6 | several windows | decided and implemented (RFC §13.6, §12 below): one `actorId` per user, one `windowId` per window; participants and presence are per window, undo/redo stay on the actor |
 | 7 | CSV/TSV | collaboration is `.xlsx` only, as in `INTEGRATION.md` |
 
 ## 6. Known gaps
@@ -170,7 +170,9 @@ keeps the new optional fields.
    starts with empty undo stacks (ADR-0010 §6) — the document is right, the steps
    are not undoable a second time.
 3. TLS termination is the ingress proxy's job; the process speaks HTTP/WS.
-4. Multiple windows of one user share one `actorId`.
+4. ~~Multiple windows of one user share one `actorId`~~: they share the actor (as decided) and
+   differ in `windowId`, so the participant list has one row per window (RFC §13.6, §12); a new
+   window of a user does not reset or take away the actor's undo stack.
 5. One room mutex per process; document isolation is by `fileId`. Many large
    workbooks need separate workers (ADR-0007).
 6. Browser transport is in place (`crates/collab-web`, host bridge); a real
@@ -500,3 +502,62 @@ cargo fmt --all -- --check                           clean
 sessions`; with `RUST_LOG=off` a running process writes nothing. Unit tests in `src/logging.rs`
 hold the default filter (collab at `info`, `axum`/`hyper`/`gridcraft_engine` at `warn`), the
 `RUST_LOG` override, the one-line shape and the newline collapse.
+
+## 12. Several windows of one user (RFC §13.6, 2026-11-09)
+
+A person is an actor; a window is a connection of that person. The decision is one `actorId` per
+user and a random `windowId` per window, and the implementation keeps operations and undo exactly
+where they were: the wire of `op`/`applied`/`undo`/`redo` and the room's per-actor stack are
+untouched. Presence and the participant list become per window.
+
+- `crates/collab/src/hub.rs`: `Participant.window_id` (wire `windowId`, omitted when empty);
+  the hub keys participants by `(actor, window_id)`, so joining the same window twice is one row
+  and another window of the same actor is a second one. `presence(doc, actor, window, …)` writes
+  that window's cursor only. `apply`/`undo`/`redo` still take the actor and check the role of any
+  of its windows.
+- `crates/collab/src/gateway.rs`: `ClientMessage::Hello` carries `windowId` (default empty — an
+  older client has one implicit window); `Connection.window_id` fixes the window at the
+  handshake; `Leave` and `Presence` address that window.
+- `apps/gridcraft-collab-server/src/ws.rs`: the connection table counts `(actor, window)` pairs,
+  so the row of a window is removed only when its last connection is gone; a reconnect that
+  overlaps the old socket keeps the row. `maxParticipants` counts distinct actors, not windows,
+  so a second or third window of somebody already in the session is allowed (RFC §13.6). A
+  presence answer is queued for the sender through the same per-connection queue as the peers'
+  frames, so every frame is applied in the order the room produced it and an older frame cannot
+  blank a window's row on the sender.
+- `crates/collab-client`: `Config.window_id` (empty asks the client to make one:
+  process id + a per-process counter + Rust's per-process random hash seed); the client sends it
+  in `hello` and reuses it after every reconnect, `State.window_id` is how the UI tells its own
+  window from the other one of the same actor. `Synced::new` uses it as the operation-id prefix
+  (two windows of one actor never reuse an `opId`) and the `own` undo view still keys on
+  `applied.actor`, so all windows of one person see the same undo stack.
+- `crates/collab-web`: the page's `clientId` is the window id (`hello.windowId`, `State.window_id`);
+  `host_participants` emits one row per window with `clientId = windowId` (falling back to the
+  actor when a client sent none), so the cabinet's list shows two rows for two windows.
+- `crates/ui-egui`: `PresenceView.window_id` and `PresenceView::is_window_of`; the desktop and web
+  adapters filter by `(actor, window)` instead of actor, so the other window of the same user is
+  painted and listed. The colour stays per actor (RFC §5); the rows are told apart by `windowId`.
+
+Tests:
+
+```text
+cargo +1.95.0 test -p gridcraft-collab -j 8          45 passed
+  two_windows_of_one_actor_are_two_participants        two rows, presence per window, version stays 0
+  a_reconnecting_window_keeps_its_row_and_a_client_without_one_keeps_a_single_row
+  a_new_window_does_not_take_the_actors_undo_stack_away
+  two_connections_of_one_actor_are_two_windows_in_the_gateway
+  a_participant_row_carries_its_window_id_on_the_wire   windowId on the wire, old frame defaults
+cargo +1.95.0 test -p gridcraft-collab-client -j 8   13 converge + 5 parts
+  two_windows_of_one_actor_are_two_rows_and_share_the_undo_stack
+  a_reconnecting_window_keeps_its_row                 same window id: still two rows, never a third
+cargo +1.95.0 test -p gridcraft-collab-server -j 8   24 unit + 7 socket + 9 persistence + 5 acceptance + 2 logging
+cargo +1.95.0 test -p gridcraft-collab-web -j 8      6 passed
+  two_windows_of_one_actor_are_two_host_participants  host list row per window, own other window painted
+cargo +1.95.0 clippy -p gridcraft-collab -p gridcraft-collab-client -p gridcraft-collab-server
+  -p gridcraft-collab-web -p gridcraft-ui-egui --all-targets -j 8 -- -D warnings   clean
+cargo +1.95.0 clippy -p gridcraft --features collab --all-targets -j 8 -- -D warnings   clean
+cargo fmt --all -- --check                           clean
+cargo check -p gridcraft-web --target wasm32-unknown-unknown   ok
+```
+
+No CI file is touched and nothing is pushed to `storytold/*`.

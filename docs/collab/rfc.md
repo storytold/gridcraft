@@ -144,12 +144,12 @@ WebSocket, WSS. Один фрейм — один JSON-объект. Лимиты
 
 | Тип | Направление | Поля | Семантика |
 |---|---|---|---|
-| `hello` | C→S | `token, name, lastVersion` | auth + join; подписанный токен только здесь, не в URL |
+| `hello` | C→S | `token, name, lastVersion, windowId?` | auth + join; подписанный токен только здесь, не в URL; `windowId` — окно клиента (RFC §13.6), пусто у старого клиента — одно неявное окно |
 | `welcome` | S→C | `sessionId, actorId, role, version, epoch, sheets[], participants, lease` | старт; `sheets` — карта `sheetKey ↔ имя` |
 | `op` | C→S | `opId, doc, baseVersion, epoch, kind, target, payload, preview?` | операция |
 | `applied` | S→C | `opId, version, epoch, result{command?,delta?}, actorId, sheets?, images?, book?, more?, imagePart{seq,total,data}?` | авторитетный результат; `book` — состояние уровня книги у границы структурного шага (defined names, защита структуры, package/книжные `preserved` и chart sheets, VBA-проект, стили, `calc`), `imagePart` — часть образа, `more:true` до последней |
 | `rejected` | S→C | `opId, code, retryable, hint{version,epoch}, details?` | отказ |
-| `presence` | C↔S | `sheetKey, active, ranges[], viewport, editing?` | эфемерно |
+| `presence` | C↔S | клиент: `sheetKey, active, ranges[], viewport, editing?`; сервер: `participants[]` с `actor, windowId, name, role, presence?` | эфемерно; одна запись на **окно** (`windowId` рядом с `actor`), две строки для двух окон одного пользователя |
 | `resync` | C→S | `from` | запрос базы/хвоста |
 | `snapshot` | S→C | `mode:"base", version, epoch, total, seq, bytes(base64)` | авторитетная книга чанками по 768 КиБ |
 | `resynced` | S→C | `version, epoch` | догон закончен; дальше идут живые `applied` |
@@ -229,7 +229,8 @@ OT не используется: сервер применяет к head (ADR-0
 - Отдельный тип, не журналируется, `version` не меняет; ≤10 Гц, коалесцируется.
 - Лимит 2 KiB, до 8 диапазонов (дальше `truncated:true`); `drop-stale` при backpressure.
 - Выделение — состояние **окна**: клиент шлёт значения, сервер раздаёт участникам;
-  несколько окон одной книги могут иметь разное выделение.
+  несколько окон одной книги могут иметь разное выделение. Список участников — тоже по
+  окнам: `actorId` у двух окон один, `windowId` разный (RFC §13.6).
 - TTL 30 с: без presence участник показывается «неактивен» и убирается.
 - Цвет участника выдаёт сервер из `actorId` (стабильный в сессии).
 
@@ -403,8 +404,19 @@ Headless-стенд: in-process сервер (комната + `Session`) и 2�
    инкрементальный снапшот по листам (`Arc<Sheet>` уже общий) в v1?
 5. **Хост-контракт**: `<app>:session`/`presence`/`commit` в `INTEGRATION.md` §6 —
    поднимать ли contract version или добавить поля обратносовместимо?
-6. **Несколько окон**: presence и undo при двух окнах одной книги — один `actorId`
-   или разные? Предлагаю один актор на пользователя, окна различаются presence.
+6. **Несколько окон — решено (2026-11-09): один `actorId`, окна различаются `windowId`.**
+   `actorId` остаётся пользователем: роль, автор операции и стек undo/redo — его.
+   `windowId` — случайный id окна (сессия клиента), уходит в `hello` и виден в каждой
+   записи `presence` рядом с `actor`. Сервер держит участников по паре
+   `(actorId, windowId)`, поэтому список участников показывает две строки для двух окон
+   одного пользователя, а третье окно того же пользователя допускается и не отбирает
+   undo у первых двух. Reconnect сохраняет `windowId` (клиент генерирует его один раз на
+   окно), поэтому повторное подключение не плодит третью запись. Пересчёт версии,
+   операции и `applied` не меняются: presence остаётся состоянием окна, `undo`/`redo`
+   идут по `actorId`. Лимит `maxParticipants` считает людей, а не окна. Реализация:
+   `crates/collab` (`Participant.windowId`, ключ `(actor, window)` в хабе),
+   `crates/collab-client` (`Config.windowId`, `State.windowId`), `crates/collab-web`
+   (host-список — строка на окно), `ui-egui::PresenceView.windowId`.
 7. **CSV/TSV**: подтвердить, что collab только для `.xlsx` (в `INTEGRATION.md` так).
 
 ## 14. План поставки
