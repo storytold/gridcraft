@@ -309,6 +309,10 @@ pub struct GridState {
     pub control: Option<crate::form_controls::Gesture>,
     /// The form control that takes the arrow keys (the one last worked).
     pub focused_control: Option<u32>,
+    /// IME context generation while the grid itself owns the IME (a cell selected, not editing).
+    /// It changes when the grid gains focus, so the integration can tell a new IME context from an
+    /// ordinary selection move.
+    pub ime_generation: u64,
     /// Insert › Controls: the kind a click or drag on the grid places, and where the drag began
     /// (logical position).
     pub placing: Option<gridcraft_engine::model::ControlKind>,

@@ -1,6 +1,6 @@
 use super::geo::Geo;
 use super::menus::is_checkbox;
-use super::{CellRef, Drag, Sheet, SheetApp, json};
+use super::{CellRef, Drag, Rect, Sheet, SheetApp, json, pos2, vec2};
 
 /// Grid keyboard handling when no text field has focus.
 pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
@@ -14,15 +14,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
     // So do the fill menu (its Esc closes it, not the copy) and the right-drag that opens it (an
     // arrow key would move the selection the menu fills from), and a macro's question.
-    if editing
-        || app.dialog.is_some()
-        || other_focus
-        || app.message.is_some()
-        || app.grid.filter_menu.is_some()
-        || app.grid.fill_menu.is_some()
-        || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
-        || app.macros.question.is_some()
-    {
+    if editing || app.dialog.is_some() || other_focus || app.message.is_some() || menu_owns_keyboard(app) {
         return;
     }
     if ctx.memory(|m| m.focused()).is_none() {
@@ -32,7 +24,12 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     ctx.memory_mut(|m| {
         m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
     });
+    // With a cell selected (not editing) the grid itself owns the IME, as Excel's sheet does: the
+    // first kana opens the cell editor, so Japanese can be typed without pressing F2 first.
     let events = grid_events(app, ctx, sh);
+    if start_ime_edit(app, ctx, resp, geo, sh, &events) {
+        return;
+    }
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
     let shortcut_pressed = events.iter().any(|e| {
         matches!(e, egui::Event::Key { pressed: true, modifiers: m, key, .. }
@@ -154,6 +151,47 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             _ => {}
         }
     }
+}
+
+/// An open filter or fill menu, the right-drag that opens one, or a macro's question owns the
+/// keyboard even when a click inside it left focus on nothing (#1516).
+fn menu_owns_keyboard(app: &SheetApp) -> bool {
+    app.grid.filter_menu.is_some()
+        || app.grid.fill_menu.is_some()
+        || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
+        || app.macros.question.is_some()
+}
+
+/// While the grid has focus it owns the IME, as Excel's sheet does, so a composition can start with
+/// a cell merely selected. The first preedit opens the cell editor (whose text field then owns the
+/// composition and shows it); a commit already in the batch fills the editor directly. Returns
+/// whether the batch started an edit, in which case the rest of it belongs to the new editor.
+fn start_ime_edit(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet, events: &[egui::Event]) -> bool {
+    if ctx.memory(|m| m.has_focus(resp.id)) {
+        if resp.gained_focus() {
+            app.grid.ime_generation = app.grid.ime_generation.wrapping_add(1);
+        }
+        let cell = app.session.active().map(|d| d.selection.active).map(|c| geo.mirror_rect(geo.cell_rect(sh, c))).unwrap_or(resp.rect);
+        let x = if geo.rtl { cell.right() } else { cell.left() };
+        let cursor = Rect::from_min_size(pos2(x, cell.top()), vec2(1.0, cell.height()));
+        let ime = egui::output::IMEOutput::new(resp.id, app.grid.ime_generation.max(1), egui::IMEPurpose::Normal, cell, cursor);
+        ctx.output_mut(|o| o.ime = Some(ime));
+    }
+    if let Some(text) = events.iter().find_map(|ev| match ev {
+        egui::Event::Ime(egui::ImeEvent::Commit(text)) if !text.is_empty() => Some(text.clone()),
+        _ => None,
+    }) {
+        app.begin_edit(Some(text), false);
+        if let Some(ed) = app.editor.as_mut() {
+            ed.caret = ed.text.chars().count();
+        }
+        return true;
+    }
+    if events.iter().any(|ev| matches!(ev, egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) if !text.is_empty())) {
+        app.begin_edit(Some(String::new()), false);
+        return true;
+    }
+    false
 }
 
 /// This frame's input events, without those the focused form control took.
