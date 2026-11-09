@@ -509,20 +509,27 @@ fn import_texture(app: &mut SheetApp, d: &mut Dialog, ui: &mut egui::Ui, confirm
         d.picture_inbox = None;
         // Empty bytes are a pick the browser refused to read for its size.
         if bytes.is_empty() || bytes.len() > 16 * 1024 * 1024 {
-            // The rejected pick replaces the earlier one, so OK cannot import it.
+            // The rejected pick replaces the earlier one, so OK cannot import it — including a
+            // path typed before the pick, which would otherwise be imported while the dialog
+            // said no image was chosen.
             d.values.remove("base64");
             d.values.remove("name");
-            app.message = Some((d.title.clone(), "Choose a PNG or JPEG no larger than 16 MB.".into()));
+            d.values.remove("path");
+            app.message = Some((d.title.clone(), "Choose a PNG or JPEG no larger than 16 MiB and 8192 pixels a side.".into()));
         } else {
             d.values.remove("path");
             d.values.insert("name".into(), json!(name));
             d.values.insert("base64".into(), json!(gridcraft_engine::io::base64_encode(&bytes)));
         }
     }
+    // The limits are part of the dialog, not only of the error after a rejected pick.
+    let limits = "PNG or JPEG, up to 16 MiB, 8192 pixels a side and 16 million pixels.";
     if app.services.pick_picture_async.is_some() {
         ui.label(d.values.get("name").and_then(Json::as_str).unwrap_or("No image selected"));
+        ui.label(egui::RichText::new(limits).small());
     } else {
         ui.label("Image file path (PNG or JPEG):");
+        ui.label(egui::RichText::new(limits).small());
         let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
         if ui.text_edit_singleline(&mut path).changed() {
             // A typed path replaces a picked file: both its bytes and its name, which would

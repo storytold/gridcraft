@@ -12,6 +12,11 @@ type Harness = egui_kittest::Harness<'static, SheetApp>;
 fn draw_tab() -> Harness {
     let mut session = Session::new();
     session.new_workbook();
+    draw_tab_with(session)
+}
+
+/// The Draw-tab harness for a session that already holds something, such as an imported texture.
+fn draw_tab_with(session: Session) -> Harness {
     let mut app = crate::common::app(session);
     app.ui.ribbon_tab = "Draw".into();
     let mut h = crate::common::builder().with_size(vec2(1440.0, 700.0)).build_ui_state(
@@ -50,4 +55,24 @@ fn the_lasso_button_describes_what_it_really_does() {
     h.get_by_label("Lasso Select").hover();
     h.run_steps(6);
     assert!(h.query_by_value("Select and move ink and shapes, as Select Objects does").is_some(), "the Lasso Select tooltip tells the truth");
+}
+
+/// A gallery tile answers with the texture's name, and the import tile says what it does, so the
+/// imported-texture part of the pen dropdown can be worked by a screen reader.
+#[test]
+fn an_imported_texture_tile_names_its_texture() {
+    let image = image::RgbaImage::from_pixel(8, 8, image::Rgba([30, 120, 200, 255]));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+    let mut session = Session::new();
+    session.new_workbook();
+    session
+        .execute("draw.textureImport", serde_json::json!({"name": "stripes.png", "base64": gridcraft_engine::io::base64_encode(&bytes.into_inner())}))
+        .unwrap();
+    let mut h = draw_tab_with(session);
+    // Open a pen's dropdown, where the imported textures sit beside Excel's eight.
+    h.get_by_label("Galaxy pen options").click();
+    h.run_steps(6);
+    assert!(h.query_by_label("stripes.png").is_some(), "the tile carries the texture's name");
+    assert!(h.query_by_label("Import a texture…").is_some(), "the + tile says what it opens");
 }

@@ -47,7 +47,10 @@ struct Tier {
     side: u32,
     max_bytes: usize,
     max_items: usize,
-    entries: HashMap<(String, usize), Entry>,
+    /// Keyed by the texture's content-addressed id, which is enough on its own: the same bytes
+    /// always give the same id, so a changed payload can never hide under an old key. Keying by
+    /// `String` lets a frame look up by a borrowed id instead of cloning one per stroke.
+    entries: HashMap<String, Entry>,
     bytes: usize,
 }
 
@@ -58,41 +61,40 @@ impl Tier {
         Self { side, max_bytes, max_items, entries: HashMap::new(), bytes: 0 }
     }
 
-    /// The upload for `key`, decoded at this tier's [`Self::side`] on first use and kept until the
-    /// budget drops it. The newest frame that drew it is stamped so eviction takes the least
-    /// recently painted textures.
-    fn texture(&mut self, ctx: &egui::Context, key: (String, usize), data: &[u8]) -> Option<TextureHandle> {
-        let frame = ctx.cumulative_frame_nr();
-        if let Some(entry) = self.entries.get_mut(&key) {
-            entry.used = frame;
-            return entry.texture.clone();
-        }
-        let texture = decode(data, self.side).map(|image| {
-            let options = egui::TextureOptions {
-                magnification: egui::TextureFilter::Linear,
-                minification: egui::TextureFilter::Linear,
-                wrap_mode: egui::TextureWrapMode::Repeat,
-                mipmap_mode: None,
-            };
-            ctx.load_texture("ink texture", image, options)
-        });
+    /// The upload for `key` when this tier holds it, stamped as drawn this frame.
+    fn get(&mut self, key: &str, frame: u64) -> Option<Option<TextureHandle>> {
+        let entry = self.entries.get_mut(key)?;
+        entry.used = frame;
+        Some(entry.texture.clone())
+    }
+
+    /// Uploads `image` for `key` and trims the tier to its budgets. A hard ceiling applies to every
+    /// entry, the ones drawn this frame included: only the upload being inserted is spared, so one
+    /// frame painting many textures cannot grow the tier past `max_items`/`max_bytes`.
+    fn insert(&mut self, ctx: &egui::Context, key: &str, image: Option<image::RgbaImage>, frame: u64) -> Option<TextureHandle> {
+        let texture = image.as_ref().map(|image| upload(ctx, image));
         let bytes = texture.as_ref().map_or(0, |t| t.size()[0] * t.size()[1] * 4);
         while self.entries.len() >= self.max_items || self.bytes.saturating_add(bytes) > self.max_bytes {
-            let oldest =
-                self.entries.iter().filter(|(_, e)| e.used.saturating_add(1) < frame).min_by_key(|(_, e)| e.used).map(|(key, _)| key.clone());
+            let oldest = self.entries.iter().min_by_key(|(_, e)| e.used).map(|(key, _)| key.clone());
             let Some(oldest) = oldest else { break };
             if let Some(entry) = self.entries.remove(&oldest) {
                 self.bytes = self.bytes.saturating_sub(entry.bytes);
             }
         }
-        // Entries drawn this frame or the last cannot be evicted, so a frame that fills the budget
-        // leaves no room to trim. Keep the new upload anyway: dropping it would decode and upload
-        // the same texture again on every frame it stays on screen, which is the thrash the cache
-        // exists to prevent. The next insert once those textures leave the screen trims back to the
-        // budget.
         self.bytes = self.bytes.saturating_add(bytes);
-        self.entries.insert(key, Entry { texture: texture.clone(), bytes, used: frame });
+        self.entries.insert(key.to_string(), Entry { texture: texture.clone(), bytes, used: frame });
         texture
+    }
+
+    /// The upload for `key`, decoded at this tier's [`Self::side`] on first use and kept until the
+    /// budget drops it. The newest frame that drew it is stamped so eviction takes the least
+    /// recently painted textures.
+    fn texture(&mut self, ctx: &egui::Context, key: &str, data: &[u8]) -> Option<TextureHandle> {
+        let frame = ctx.cumulative_frame_nr();
+        if let Some(texture) = self.get(key, frame) {
+            return texture;
+        }
+        self.insert(ctx, key, decode(data, self.side), frame)
     }
 }
 
@@ -111,14 +113,24 @@ impl Default for Cache {
 }
 
 impl Cache {
-    /// The repeat-quality upload a stroke paints with.
+    /// The repeat-quality upload a stroke paints with. The gallery preview is derived from the same
+    /// decode, so a texture the canvas paints is not decoded a second time when its gallery opens.
     fn stroke(&mut self, ctx: &egui::Context, ink: &InkTexture) -> Option<TextureHandle> {
-        self.strokes.texture(ctx, (ink.id.clone(), ink.data.len()), &ink.data)
+        let frame = ctx.cumulative_frame_nr();
+        if let Some(texture) = self.strokes.get(&ink.id, frame) {
+            return texture;
+        }
+        let image = decode(&ink.data, MAX_SIDE);
+        if !self.thumbs.entries.contains_key(&ink.id) {
+            let thumb = image.as_ref().map(|image| shrink_to(image, THUMB_SIDE));
+            self.thumbs.insert(ctx, &ink.id, thumb, frame);
+        }
+        self.strokes.insert(ctx, &ink.id, image, frame)
     }
 
     /// The small preview a gallery tile shows.
     fn thumb(&mut self, ctx: &egui::Context, ink: &InkTexture) -> Option<TextureHandle> {
-        self.thumbs.texture(ctx, (ink.id.clone(), ink.data.len()), &ink.data)
+        self.thumbs.texture(ctx, &ink.id, &ink.data)
     }
 }
 
@@ -165,10 +177,15 @@ fn resolve_count() -> usize {
 }
 
 /// Decodes an imported image into RGBA at no more than `side` pixels a side; `None` for bytes the
-/// store never should have accepted, or an image over the engine's own caps. The engine caps bound
-/// the decode itself, so a huge source can't allocate more than a capped image before it is shrunk.
-fn decode(data: &[u8], side: u32) -> Option<egui::ColorImage> {
+/// store never should have accepted, a format the store does not hold, or an image over the
+/// engine's own caps. The engine caps bound the decode itself, so a huge source can't allocate more
+/// than a capped image before it is shrunk.
+fn decode(data: &[u8], side: u32) -> Option<image::RgbaImage> {
     let format = image::guess_format(data).ok()?;
+    // The store holds PNG and JPEG only; anything else is a damaged file, not a texture.
+    if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Jpeg) {
+        return None;
+    }
     let (w, h) = image::ImageReader::with_format(Cursor::new(data), format).into_dimensions().ok()?;
     if w == 0 || h == 0 || w > gridcraft_engine::model::MAX_INK_TEXTURE_SIDE || h > gridcraft_engine::model::MAX_INK_TEXTURE_SIDE {
         return None;
@@ -179,12 +196,32 @@ fn decode(data: &[u8], side: u32) -> Option<egui::ColorImage> {
     limits.max_image_height = Some(gridcraft_engine::model::MAX_INK_TEXTURE_SIDE);
     limits.max_alloc = Some(64 * 1024 * 1024);
     reader.limits(limits);
-    let mut picture = reader.decode().ok()?;
-    if w.max(h) > side {
-        picture = picture.thumbnail(side, side);
+    let picture = reader.decode().ok()?;
+    Some(shrink_to(&picture.into_rgba8(), side))
+}
+
+/// `image` shrunk to fit a `side`-pixel box, keeping its aspect ratio.
+fn shrink_to(image: &image::RgbaImage, side: u32) -> image::RgbaImage {
+    let (w, h) = image.dimensions();
+    if w.max(h) <= side {
+        return image.clone();
     }
-    let rgba = picture.into_rgba8();
-    Some(egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw()))
+    let scale = f64::from(side) / f64::from(w.max(h));
+    let tw = ((f64::from(w) * scale).round() as u32).max(1);
+    let th = ((f64::from(h) * scale).round() as u32).max(1);
+    image::imageops::thumbnail(image, tw, th)
+}
+
+/// Uploads a decoded image with the repeat wrap the tiled mesh needs.
+fn upload(ctx: &egui::Context, image: &image::RgbaImage) -> TextureHandle {
+    let color = egui::ColorImage::from_rgba_unmultiplied([image.width() as usize, image.height() as usize], image.as_raw());
+    let options = egui::TextureOptions {
+        magnification: egui::TextureFilter::Linear,
+        minification: egui::TextureFilter::Linear,
+        wrap_mode: egui::TextureWrapMode::Repeat,
+        mipmap_mode: None,
+    };
+    ctx.load_texture("ink texture", color, options)
 }
 
 /// A mesh that paints a textured stroke through `pts` (screen points): the pattern is one repeat
@@ -251,6 +288,10 @@ pub(crate) enum GalleryAction {
 /// each tile shows the image itself, the one the pen paints with is outlined, a right-click offers
 /// removing it, and the last tile imports another. A tile scrolled out of the dropdown is neither
 /// painted nor resolved, so a long gallery costs only the tiles the person can see.
+///
+/// Every tile is a focusable button: a screen reader hears the texture's name and whether the pen
+/// paints with it, and a focused or hovered tile gets an accent ring, so the gallery can be worked
+/// from the keyboard.
 pub(crate) fn gallery(ui: &mut egui::Ui, textures: &[InkTexture], selected: Option<&str>) -> Option<GalleryAction> {
     use crate::theme::Tokens;
     let tr = crate::i18n::current(ui.ctx());
@@ -270,11 +311,20 @@ pub(crate) fn gallery(ui: &mut egui::Ui, textures: &[InkTexture], selected: Opti
             {
                 painter.image(handle.id(), rect.shrink(2.0), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
             }
-            if selected == Some(tile.id.as_str()) {
+            let is_selected = selected == Some(tile.id.as_str());
+            if is_selected {
                 painter.rect_stroke(rect, 3.0, egui::Stroke::new(2.0, tokens.accent), egui::StrokeKind::Inside);
+            } else if resp.hovered() {
+                painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.0, tokens.accent), egui::StrokeKind::Inside);
             }
+            if resp.has_focus() {
+                painter.rect_stroke(rect.expand(1.0), 3.0, egui::Stroke::new(2.0, tokens.accent), egui::StrokeKind::Outside);
+            }
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), is_selected, tile.name.clone()));
             let resp = resp.on_hover_text(&tile.name);
-            if resp.clicked() {
+            // Enter or Space on a focused tile selects it, so the gallery is keyboard-operable.
+            let keyboard = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space));
+            if resp.clicked() || keyboard {
                 action = Some(GalleryAction::Select(tile.id.clone()));
             }
             let id = tile.id.clone();
@@ -285,7 +335,9 @@ pub(crate) fn gallery(ui: &mut egui::Ui, textures: &[InkTexture], selected: Opti
                 }
             });
         }
-        if ui.add(egui::Button::new("+").min_size(egui::vec2(26.0, 26.0))).on_hover_text(tr.tr("Import a texture…")).clicked() {
+        let import = ui.add(egui::Button::new("+").min_size(egui::vec2(26.0, 26.0)));
+        import.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Import a texture…"));
+        if import.on_hover_text(tr.tr("Import a texture…")).clicked() {
             action = Some(GalleryAction::Import);
         }
     });
@@ -411,27 +463,37 @@ mod tests {
         }
     }
 
-    /// A texture the frame is painting is kept even when the budget is full of textures the frame
-    /// is also painting: dropping it would decode and upload it again on every repaint.
+    /// The item ceiling is hard: a frame that paints more textures than the tier holds trims the
+    /// least recently drawn ones, this frame's included, so one frame cannot grow it without bound.
     #[test]
-    fn a_full_budget_keeps_a_texture_the_frame_is_painting() {
+    fn the_item_ceiling_holds_even_for_textures_the_frame_paints() {
         let ctx = egui::Context::default();
-        let mut tier = Tier::new(THUMB_SIDE, usize::MAX, 1);
-        let a = distinct(32, 32, 1);
-        let b = distinct(32, 32, 2);
-        let key = |t: &InkTexture| (t.id.clone(), t.data.len());
+        let mut tier = Tier::new(THUMB_SIDE, usize::MAX, 2);
         advance(&ctx);
-        assert!(tier.texture(&ctx, key(&a), &a.data).is_some());
-        assert!(tier.texture(&ctx, key(&b), &b.data).is_some()); // no entry can be trimmed yet
-        assert_eq!(tier.entries.len(), 2, "both uploads stay while the frame paints them");
-        // The next frame paints only `b`, so a tile nothing draws any more can go.
+        let textures: Vec<InkTexture> = (0..5).map(|i| distinct(32, 32, i)).collect();
+        // One frame paints all five.
+        for t in &textures {
+            assert!(tier.texture(&ctx, &t.id, &t.data).is_some());
+        }
+        assert_eq!(tier.entries.len(), 2, "the ceiling holds even for uploads this frame drew");
+        assert!(tier.entries.contains_key(&textures[4].id), "the upload just inserted is kept");
+    }
+
+    /// The byte ceiling is hard too: a frame painting textures past it drops older uploads rather
+    /// than growing the tier.
+    #[test]
+    fn the_byte_ceiling_holds_even_for_textures_the_frame_paints() {
+        let ctx = egui::Context::default();
+        let one = 32 * 32 * 4;
+        let mut tier = Tier::new(THUMB_SIDE, one * 2, 64);
         advance(&ctx);
-        tier.texture(&ctx, key(&b), &b.data);
-        advance(&ctx);
-        let c = distinct(32, 32, 3);
-        assert!(tier.texture(&ctx, key(&c), &c.data).is_some());
-        assert!(!tier.entries.contains_key(&key(&a)), "a texture no frame draws any more is dropped");
-        assert!(tier.entries.contains_key(&key(&c)), "and the one just painted takes its room");
+        let textures: Vec<InkTexture> = (0..4).map(|i| distinct(32, 32, i)).collect();
+        for t in &textures {
+            tier.texture(&ctx, &t.id, &t.data);
+        }
+        assert_eq!(tier.entries.len(), 2, "at most two uploads fit the byte budget");
+        assert!(tier.bytes <= one * 2, "the budget is not exceeded: {}", tier.bytes);
+        assert!(tier.entries.contains_key(&textures[3].id), "the upload just inserted is kept");
     }
 
     /// Eviction takes the preview no frame has drawn for longest, keeping the ones still on screen.
@@ -442,16 +504,15 @@ mod tests {
         let a = distinct(32, 32, 1);
         let b = distinct(32, 32, 2);
         let c = distinct(32, 32, 3);
-        let key = |t: &InkTexture| (t.id.clone(), t.data.len());
         advance(&ctx);
-        tier.texture(&ctx, key(&a), &a.data);
+        tier.texture(&ctx, &a.id, &a.data);
         advance(&ctx);
-        tier.texture(&ctx, key(&b), &b.data);
+        tier.texture(&ctx, &b.id, &b.data);
         advance(&ctx);
-        tier.texture(&ctx, key(&a), &a.data); // still on screen, so it is not the oldest
+        tier.texture(&ctx, &a.id, &a.data); // still on screen, so it is not the oldest
         advance(&ctx);
-        tier.texture(&ctx, key(&c), &c.data); // needs room: the preview nothing drew goes
-        let keys: Vec<&String> = tier.entries.keys().map(|(id, _)| id).collect();
+        tier.texture(&ctx, &c.id, &c.data); // needs room: the preview nothing drew goes
+        let keys: Vec<&String> = tier.entries.keys().collect();
         assert!(keys.contains(&&a.id) && keys.contains(&&c.id), "previews painted this frame stay");
         assert!(!keys.contains(&&b.id), "the preview no frame drew for longest is dropped");
         assert_eq!(tier.entries.len(), 2);
@@ -462,7 +523,13 @@ mod tests {
     #[test]
     fn undecodable_bytes_give_no_texture() {
         let ctx = egui::Context::default();
-        let t = ink(vec![0x89, b'P', b'N', b'G'], 4, 2);
+        // A PNG header with no pixels behind it: the store accepts the header, the decoder does not.
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13];
+        bytes.extend_from_slice(b"IHDR");
+        bytes.extend_from_slice(&4u32.to_be_bytes());
+        bytes.extend_from_slice(&2u32.to_be_bytes());
+        bytes.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
+        let t = ink(bytes, 4, 2);
         assert!(texture(&ctx, &t).is_none());
     }
 
@@ -500,6 +567,38 @@ mod tests {
         // A 2:1 (tall) image repeats half as often across the same width.
         let m = stroke_mesh(&pts, 4.0, Color32::WHITE, TextureId::Managed(1), 2.0, 5.0);
         assert!((m.vertices[1].uv.y - 0.4).abs() < 1e-5);
+    }
+
+    /// A mesh needs two points and a positive finite width and tile; anything else gives an empty
+    /// mesh rather than geometry with NaNs in it.
+    #[test]
+    fn a_mesh_needs_two_points_and_positive_sizes() {
+        let tex = TextureId::Managed(1);
+        let one = [egui::pos2(1.0, 1.0)];
+        let two = [egui::pos2(0.0, 0.0), egui::pos2(10.0, 0.0)];
+        for (pts, width, tile) in [
+            (&one[..], 4.0, 5.0),
+            (&two[..], 0.0, 5.0),
+            (&two[..], -4.0, 5.0),
+            (&two[..], f32::NAN, 5.0),
+            (&two[..], f32::INFINITY, 5.0),
+            (&two[..], 4.0, 0.0),
+            (&two[..], 4.0, -5.0),
+            (&two[..], 4.0, f32::NAN),
+        ] {
+            let m = stroke_mesh(pts, width, Color32::WHITE, tex, 1.0, tile);
+            assert!(m.vertices.is_empty() && m.indices.is_empty(), "no mesh for {} points, width {width}, tile {tile}", pts.len());
+        }
+    }
+
+    /// A non-finite aspect falls back to square instead of poisoning the texture coordinates.
+    #[test]
+    fn a_non_finite_aspect_falls_back_to_square() {
+        let pts = [egui::pos2(0.0, 0.0), egui::pos2(10.0, 0.0)];
+        let square = stroke_mesh(&pts, 4.0, Color32::WHITE, TextureId::Managed(1), 1.0, 5.0);
+        let nan = stroke_mesh(&pts, 4.0, Color32::WHITE, TextureId::Managed(1), f32::NAN, 5.0);
+        assert_eq!(nan.vertices.len(), square.vertices.len());
+        assert!(nan.vertices.iter().zip(&square.vertices).all(|(a, b)| a.uv == b.uv));
     }
 
     /// A diagonal stroke is a band the stroke's width wide, not a collapsed line.

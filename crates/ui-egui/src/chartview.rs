@@ -323,7 +323,9 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                         // An imported texture wins over Excel's built-in effect: the image
                         // repeats along the stroke, tinted by the brush colour, with the
                         // brush's alpha rules.
-                        let imported = wb.ink_texture(ink.texture.as_deref().unwrap_or("")).and_then(|texture| {
+                        // Only look in the store when the stroke names a texture: an untextured
+                        // stroke must not search for an empty id every frame.
+                        let imported = ink.texture.as_deref().and_then(|id| wb.ink_texture(id)).and_then(|texture| {
                             let handle = crate::ink_textures::texture(p.ctx(), texture)?;
                             let aspect = texture.height.max(1) as f32 / texture.width.max(1) as f32;
                             Some((handle, aspect, gridcraft_engine::cmd::draw::texture_scale(ink.texture_scale)))
@@ -610,6 +612,27 @@ pub(crate) fn ink_color(line: Color32, width_pt: f32) -> Color32 {
     if width_pt > 8.0 { line.gamma_multiply(0.45) } else { line }
 }
 
+/// The most points one stroke is painted with: recorded points are decimated to this before a
+/// frame paints it, so a 20,000-point stroke costs a bounded number of shapes rather than one per
+/// point pair.
+const MAX_PAINT_POINTS: usize = 256;
+
+/// At most `max` points, evenly spaced and keeping both ends. Painting needs the shape, not every
+/// recorded sample; the committed data is untouched.
+fn decimate(pts: &[Pos2], max: usize) -> Vec<Pos2> {
+    sample_indices(pts.len(), max).into_iter().map(|i| pts[i]).collect()
+}
+
+/// The indices [`decimate`] keeps: at most `max`, evenly spaced, both ends included. Pressure is
+/// sampled through the same indices so a decimated stroke keeps each point's own pressure.
+fn sample_indices(len: usize, max: usize) -> Vec<usize> {
+    if len <= max || max < 2 {
+        return (0..len).collect();
+    }
+    let step = (len - 1) as f32 / (max - 1) as f32;
+    (0..max).map(|i| ((i as f32 * step).round() as usize).min(len - 1)).collect()
+}
+
 /// Paints an [`InkStyle`] stroke: a wide translucent band for a Highlighter, a slightly
 /// translucent flat line for a Pencil and a pressure-tapered stroke for the Fountain and Brush
 /// pens (recorded pressure when there is any, a smooth taper otherwise). A textured pen carries
@@ -627,10 +650,9 @@ fn paint_ink(p: &Painter, pts: &[Pos2], sp: &gridcraft_engine::model::Shape, ink
             p.add(PathShape::line(pts.to_vec(), PathStroke::new(across.max(2.0), translucent(line, 115))));
         }
         InkTool::Pencil => {
-            // Flat and a touch translucent, like graphite.
-            for pair in pts.windows(2) {
-                p.line_segment([pair[0], pair[1]], Stroke::new(across.max(1.0), translucent(line, 215)));
-            }
+            // Flat and a touch translucent, like graphite. One path, not one shape per segment:
+            // a long stroke would otherwise cost thousands of draw calls a frame.
+            p.add(PathShape::line(pts.to_vec(), PathStroke::new(across.max(1.0), translucent(line, 215))));
         }
         InkTool::FountainPen | InkTool::BrushPen => paint_tapered(p, pts, width, &ink.pressure, line),
         InkTool::Pen => {
@@ -651,15 +673,17 @@ fn paint_ink(p: &Painter, pts: &[Pos2], sp: &gridcraft_engine::model::Shape, ink
 /// A pressure-tapered line: each point's pressure sets the segment's width, and a stroke without
 /// recorded pressure gets a smooth swell instead.
 fn paint_tapered(p: &Painter, pts: &[Pos2], width: f32, pressure: &[u16], color: Color32) {
-    let n = pts.len();
-    if n < 2 {
+    if pts.len() < 2 {
         return;
     }
-    let press = |i: usize| -> f32 {
-        match pressure.get(i) {
+    let idx = sample_indices(pts.len(), MAX_PAINT_POINTS);
+    let pts: Vec<Pos2> = idx.iter().map(|i| pts[*i]).collect();
+    let n = pts.len();
+    let press = |k: usize| -> f32 {
+        match pressure.get(idx[k]) {
             Some(v) => (*v as f32 / 32767.0).clamp(0.05, 1.0),
             None => {
-                let t = i as f32 / (n - 1) as f32;
+                let t = k as f32 / (n - 1) as f32;
                 0.35 + 0.65 * (std::f32::consts::PI * t).sin()
             }
         }
@@ -684,12 +708,14 @@ fn paint_tapered_texture(
     if bands.is_empty() || pts.len() < 2 {
         return;
     }
+    let idx = sample_indices(pts.len(), MAX_PAINT_POINTS);
+    let pts: Vec<Pos2> = idx.iter().map(|i| pts[*i]).collect();
     let n = pts.len();
-    let press = |i: usize| -> f32 {
-        match pressure.get(i) {
+    let press = |k: usize| -> f32 {
+        match pressure.get(idx[k]) {
             Some(v) => (*v as f32 / 32767.0).clamp(0.05, 1.0),
             None => {
-                let t = i as f32 / (n - 1) as f32;
+                let t = k as f32 / (n - 1) as f32;
                 0.35 + 0.65 * (std::f32::consts::PI * t).sin()
             }
         }
@@ -715,16 +741,28 @@ fn paint_ink_texture(p: &Painter, pts: &[Pos2], width: f32, effect: gridcraft_en
     if bands.is_empty() || pts.len() < 2 {
         return;
     }
+    let pts = decimate(pts, MAX_PAINT_POINTS);
     let period = (width.max(2.0) * 1.7).max(3.0);
     let phase = (anchor[0] + anchor[1]) * 0.05 * z;
+    let band_at = |travelled: f32| ((travelled / period).rem_euclid(bands.len() as f32)) as usize;
     let mut travelled = phase;
+    // Consecutive segments of one band are drawn as one path, so a stroke costs one shape per
+    // colour run instead of one per segment.
+    let mut run: Vec<Pos2> = vec![pts[0]];
+    let mut run_band = band_at(travelled);
     for pair in pts.windows(2) {
-        let seg = (pair[1] - pair[0]).length();
-        let idx = ((travelled / period).rem_euclid(bands.len() as f32)) as usize;
-        let band = bands.get(idx).copied().unwrap_or(Color32::GRAY);
-        p.line_segment([pair[0], pair[1]], Stroke::new(width.max(1.0), band));
-        travelled += seg;
+        travelled += (pair[1] - pair[0]).length();
+        let next = band_at(travelled);
+        if next == run_band {
+            run.push(pair[1]);
+        } else {
+            p.add(PathShape::line(std::mem::take(&mut run), PathStroke::new(width.max(1.0), bands.get(run_band).copied().unwrap_or(Color32::GRAY))));
+            run.push(pair[0]);
+            run.push(pair[1]);
+            run_band = next;
+        }
     }
+    p.add(PathShape::line(run, PathStroke::new(width.max(1.0), bands.get(run_band).copied().unwrap_or(Color32::GRAY))));
 }
 
 #[cfg(test)]

@@ -279,26 +279,27 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
     sep(ui);
 
     // Excel's default pens and the person's own, each tile painted in its own colour and shape.
+    // The gallery is walked by index and its strings are borrowed: cloning the whole pen list every
+    // frame would copy every pen's text on each repaint.
     app.session.ensure_draw_pens();
     let tr = crate::i18n::current(ui.ctx());
-    for pen in app.session.draw_pens.clone() {
-        let selected = pen_in_hand(&app.session, &pen);
-        let label = gridcraft_engine::cmd::draw::pen_label(&pen).unwrap_or_else(|| pen_icon::tool_label(&pen.tool));
-        let (main, arrow) = pen_icon::pen_tile(
-            ui,
-            pen_icon::PenTile {
-                id: pen.id,
-                tool: &pen.tool,
-                color: hex_color(&pen.color),
-                effect: pen.effect.as_deref(),
-                tip: tr.tr(label),
-                selected,
-            },
-        );
+    for i in 0..app.session.draw_pens.len() {
+        let (id, tool, color, effect, tip, selected) = {
+            let pen = &app.session.draw_pens[i];
+            let label = gridcraft_engine::cmd::draw::pen_label(pen).unwrap_or_else(|| pen_icon::tool_label(&pen.tool));
+            (pen.id, pen.tool.clone(), hex_color(&pen.color), pen.effect.clone(), tr.tr(label), pen_in_hand(&app.session, pen))
+        };
+        let (main, arrow) = pen_icon::pen_tile(ui, pen_icon::PenTile { id, tool: &tool, color, effect: effect.as_deref(), tip, selected });
         if main.clicked() {
-            act(app, "draw.pen", json!({"on": true, "pen": pen.id}));
+            act(app, "draw.pen", json!({"on": true, "pen": id}));
         }
-        egui::Popup::menu(&arrow).show(|ui| pen_dropdown(app, ui, &pen));
+        egui::Popup::menu(&arrow).show(|ui| {
+            // The dropdown needs the pen's current state; it is looked up only while the menu is
+            // open, so the gallery is never cloned per frame.
+            if let Some(pen) = app.session.draw_pens.iter().find(|q| q.id == id).cloned() {
+                pen_dropdown(app, ui, &pen);
+            }
+        });
     }
     let add = big_button(ui, Icon::Plus, "Add", "Add a pen to the gallery", true);
     egui::Popup::menu(&add).show(|ui| {
@@ -374,16 +375,26 @@ fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::dr
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
             for hex in row {
-                let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                // A 24-point target with a name: a screen reader hears the colour, and hovering
+                // or focusing it shows the accent ring.
+                let (r, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
                 let c = hex_color(hex);
                 ui.painter().rect_filled(r, 2.0, c);
                 let on = hex.eq_ignore_ascii_case(color);
+                let accent = Tokens::get(ui.ctx()).accent;
                 ui.painter().rect_stroke(
                     r,
                     2.0,
-                    Stroke::new(if on { 2.0 } else { 1.0 }, if on { Tokens::get(ui.ctx()).accent } else { egui::Color32::from_gray(160) }),
+                    Stroke::new(if on { 2.0 } else { 1.0 }, if on { accent } else { egui::Color32::from_gray(160) }),
                     StrokeKind::Inside,
                 );
+                if (resp.hovered() || resp.has_focus()) && !on {
+                    ui.painter().rect_stroke(r, 2.0, Stroke::new(1.0, accent), StrokeKind::Inside);
+                }
+                if resp.has_focus() {
+                    ui.painter().rect_stroke(r.expand(1.0), 2.0, Stroke::new(2.0, accent), StrokeKind::Outside);
+                }
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, *hex));
                 if resp.on_hover_text(*hex).clicked() {
                     apply_pen_change(app, id, tool, hex, width, effect);
                     ui.close();
@@ -397,12 +408,14 @@ fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::dr
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
             for name in row {
-                let (r, resp) = ui.allocate_exact_size(vec2(34.0, 18.0), Sense::click());
+                let (r, resp) = ui.allocate_exact_size(vec2(34.0, 24.0), Sense::click());
                 pen_icon::paint_effect_swatch(ui.painter(), r, name);
                 let on = effect == Some(*name);
-                if on {
-                    ui.painter().rect_stroke(r.expand(1.0), 2.0, Stroke::new(2.0, Tokens::get(ui.ctx()).accent), StrokeKind::Outside);
+                let accent = Tokens::get(ui.ctx()).accent;
+                if on || resp.hovered() || resp.has_focus() {
+                    ui.painter().rect_stroke(r.expand(if resp.has_focus() { 2.0 } else { 1.0 }), 2.0, Stroke::new(2.0, accent), StrokeKind::Outside);
                 }
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, tr.tr(pen_icon::effect_label(name))));
                 if resp.on_hover_text(tr.tr(pen_icon::effect_label(name))).clicked() {
                     // A built-in effect replaces an imported texture, which wins over it in
                     // painting; the tile would otherwise look chosen while strokes stay textured.
@@ -419,8 +432,12 @@ fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::dr
     }
     // The person's imported patterns, in the same list as Excel's eight built-in textures; each
     // tile shows the image and the pen paints with it until another is chosen.
-    let textures = app.session.active().map(|d| d.wb.ink_textures.clone()).unwrap_or_default();
-    if let Some(action) = crate::ink_textures::gallery(ui, &textures, pen.texture.as_deref()) {
+    let action = {
+        // Borrowed, not cloned: the gallery only reads the list.
+        let textures = app.session.active().map(|d| d.wb.ink_textures.as_slice()).unwrap_or(&[]);
+        crate::ink_textures::gallery(ui, textures, pen.texture.as_deref())
+    };
+    if let Some(action) = action {
         match action {
             crate::ink_textures::GalleryAction::Select(texture_id) => {
                 apply_pen_texture(app, id, tool, color, width, &texture_id, pen.texture_scale);
@@ -434,6 +451,16 @@ fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::dr
                 act(app, "draw.textureRemove", json!({"id": texture_id}));
             }
         }
+    }
+    // The pen's imported texture can also be removed from a plain button, so the action does not
+    // need a right-click (and is reachable from the keyboard).
+    let selected_texture = pen.texture.as_deref().map(str::to_string);
+    let selected_name = pen.texture.as_deref().and_then(|id| app.session.active().and_then(|d| d.wb.ink_texture(id)).map(|t| t.name.clone()));
+    if let (Some(id), Some(name)) = (selected_texture, selected_name)
+        && ui.button(format!("{}: {name}", tr.tr("Remove Texture"))).clicked()
+    {
+        act(app, "draw.textureRemove", json!({"id": id}));
+        ui.close();
     }
     // More Colors…: a hex/HSVA picker in the dropdown, applied as it moves.
     let more_id = ui.scope_id().with("draw_pen_more_colors");

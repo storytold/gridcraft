@@ -98,12 +98,6 @@ pub fn effect_colors(effect: &str) -> &'static [Color32] {
     }
 }
 
-/// The colour a textured swatch shows at its centre (its base when unnamed).
-pub fn effect_mid(effect: &str) -> Color32 {
-    let bands = effect_colors(effect);
-    bands.get(bands.len() / 2).copied().unwrap_or_else(|| effect_base(effect))
-}
-
 /// The point `t` of the way from `a` to `b`.
 fn lerp(a: Pos2, b: Pos2, t: f32) -> Pos2 {
     pos2(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
@@ -273,8 +267,10 @@ pub struct PenTile<'a> {
 /// the arrow opens its dropdown.
 pub fn pen_tile(ui: &mut Ui, tile: PenTile<'_>) -> (Response, Response) {
     let t = Tokens::get(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(vec2(38.0, 72.0), Sense::hover());
-    let split = rect.bottom() - 13.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(38.0, 84.0), Sense::hover());
+    // The dropdown arrow is a full 24-point target of its own, so it can be hit (and tabbed to)
+    // as reliably as the tile body.
+    let split = rect.bottom() - 24.0;
     let body = Rect::from_min_max(rect.min, pos2(rect.right(), split));
     let arrow = Rect::from_min_max(pos2(rect.left(), split), rect.max);
     let id = ui.scope_id().with(("pen_tile", tile.id));
@@ -290,16 +286,21 @@ pub fn pen_tile(ui: &mut Ui, tile: PenTile<'_>) -> (Response, Response) {
         ui.painter().rect_filled(arrow, 5.0, t.pressed);
     }
     let p = ui.painter();
-    paint_tip(p, Rect::from_center_size(pos2(rect.center().x, rect.top() + 22.0), vec2(28.0, 28.0)), tile.tool, tile.color, tile.effect);
-    paint_swatch(p, Rect::from_center_size(pos2(rect.center().x, rect.top() + 44.0), vec2(28.0, 12.0)), tile.tool, tile.color, tile.effect);
-    crate::icons::paint(p, Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), crate::icons::Icon::Chevron, t.text_dim);
+    paint_tip(p, Rect::from_center_size(pos2(rect.center().x, rect.top() + 26.0), vec2(28.0, 28.0)), tile.tool, tile.color, tile.effect);
+    paint_swatch(p, Rect::from_center_size(pos2(rect.center().x, rect.top() + 50.0), vec2(28.0, 12.0)), tile.tool, tile.color, tile.effect);
+    crate::icons::paint(p, Rect::from_center_size(arrow.center(), vec2(12.0, 12.0)), crate::icons::Icon::Chevron, t.text_dim);
     if tile.selected {
         p.rect_stroke(rect, 5.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
     }
+    // A focused body or arrow shows the accent ring too, so keyboard focus is visible.
+    if (main.has_focus() || chevron.has_focus()) && !tile.selected {
+        p.rect_stroke(rect.expand(1.0), 5.0, Stroke::new(2.0, t.accent), StrokeKind::Outside);
+    }
     // Each tile is its own pen ("Galaxy pen", "Red pen", …), so the tool's generic name would
-    // leave the six default pens and every custom one indistinguishable to a screen reader.
-    let label = tile.tip;
-    main.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
+    // leave the six default pens and every custom one indistinguishable to a screen reader. The
+    // selected pen says so too, since a screen reader cannot see the accent frame.
+    let label = if tile.selected { format!("{} (selected)", tile.tip) } else { tile.tip.to_string() };
+    main.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label.as_str()));
     chevron.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), format!("{label} options")));
     let tip = tile.tip.to_string();
     (main.on_hover_text(tip.clone()), chevron.on_hover_text(tip))

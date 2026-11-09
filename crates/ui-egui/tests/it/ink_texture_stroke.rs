@@ -38,7 +38,43 @@ fn textured_meshes(h: &egui_kittest::Harness<'static, SheetApp>) -> Vec<(Texture
         .collect()
 }
 
-/// An imported texture paints a textured mesh along the stroke, and the stroke is snapshotted with it.
+/// Counts the pixels of the two pattern colours inside `rect` (in pixels): the texture is a
+/// red-and-blue checker, so a stroke painted with it shows both, while a plain stroke shows
+/// neither. Sampling only the stroke's own rectangle keeps the ribbon's pen tiles out of the count.
+fn pattern_pixels(image: &image::RgbaImage, rect: egui::Rect) -> (usize, usize) {
+    let (mut red, mut blue) = (0, 0);
+    let x0 = rect.left().floor().max(0.0) as u32;
+    let y0 = rect.top().floor().max(0.0) as u32;
+    let x1 = (rect.right().ceil() as u32).min(image.width());
+    let y1 = (rect.bottom().ceil() as u32).min(image.height());
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let [r, g, b, a] = image.get_pixel(x, y).0;
+            if a < 200 {
+                continue;
+            }
+            if r > 180 && g < 100 && b < 100 {
+                red += 1;
+            } else if b > 180 && r < 100 && g < 140 {
+                blue += 1;
+            }
+        }
+    }
+    (red, blue)
+}
+
+/// The screen rectangle a textured mesh covers, in points.
+fn textured_mesh_bounds(h: &egui_kittest::Harness<'static, SheetApp>) -> Option<egui::Rect> {
+    h.output().shapes.iter().find_map(|s| match &s.shape {
+        Shape::Mesh(mesh) if mesh.texture_id != TextureId::default() && mesh.vertices.len() >= 4 => {
+            Some(mesh.vertices.iter().fold(egui::Rect::NOTHING, |rect, v| rect.union(egui::Rect::from_min_size(v.pos, egui::Vec2::ZERO))))
+        }
+        _ => None,
+    })
+}
+
+/// An imported texture paints a textured mesh along the stroke, and the rendered frame really
+/// shows both of the pattern's colours; the snapshot goes to a file of this test's own.
 #[test]
 fn an_imported_texture_paints_a_stroke_and_is_snapshotted() {
     let mut h = harness();
@@ -47,23 +83,35 @@ fn an_imported_texture_paints_a_stroke_and_is_snapshotted() {
         h.state_mut().run("draw.textureImport", json!({"name": "checker.png", "base64": gridcraft_engine::io::base64_encode(&bytes)})).unwrap();
     let id = imported["id"].as_str().unwrap().to_string();
     h.state_mut().run("draw.pen", json!({"texture": id, "textureScale": 2})).unwrap();
-    h.state_mut().run("draw.stroke", json!({"points": [[80, 80], [240, 110], [320, 200], [180, 260]], "color": "#1F5FC9", "width": 12})).unwrap();
+    // A white pen leaves the pattern's own colours in the render, so the assertion below is about
+    // the texture, not the tint.
+    h.state_mut().run("draw.stroke", json!({"points": [[80, 80], [240, 110], [320, 200], [180, 260]], "color": "#FFFFFF", "width": 12})).unwrap();
     h.run_steps(4);
 
     let meshes = textured_meshes(&h);
     assert_eq!(meshes.len(), 1, "the stroke is painted as one textured mesh");
     assert!(meshes[0].1 >= 12, "a four-point stroke tiles at least three segments");
 
-    // The off-screen snapshot: not a committed file, written where the build keeps its output.
     let image = h.render().expect("the wgpu test renderer draws the frame");
-    let dir = std::env::var_os("CARGO_TARGET_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"));
-    std::fs::create_dir_all(&dir).expect("the target directory exists");
-    let path = dir.join("ink-texture-stroke.png");
+    let bounds = textured_mesh_bounds(&h).expect("the textured mesh has a screen rectangle");
+    // The render is in physical pixels; the mesh is in points.
+    let ppp = h.ctx.pixels_per_point();
+    let stroke_rect =
+        egui::Rect::from_min_max(egui::pos2(bounds.left() * ppp, bounds.top() * ppp), egui::pos2(bounds.right() * ppp, bounds.bottom() * ppp));
+    let (red, blue) = pattern_pixels(&image, stroke_rect);
+    assert!(red > 20 && blue > 20, "the rendered stroke shows the pattern's two colours: {red} red, {blue} blue");
+    // Without the texture the same rectangle paints plainly: no pattern colours at all.
+    h.state_mut().run("draw.textureRemove", json!({"id": id})).unwrap();
+    h.run_steps(3);
+    let plain = h.render().expect("the second frame renders");
+    let (red, blue) = pattern_pixels(&plain, stroke_rect);
+    assert_eq!((red, blue), (0, 0), "a removed texture leaves a plain stroke");
+
+    // The snapshot: a file of this test's own, not a name shared with every run of the suite.
+    let path = std::env::temp_dir().join(format!("gridcraft-ink-texture-stroke-{}.png", std::process::id()));
     image.save(&path).expect("the snapshot is written");
     assert!(path.is_file());
-    eprintln!("ink texture snapshot: {}", path.display());
+    let _ = std::fs::remove_file(&path);
 }
 
 /// A stroke whose texture was removed paints as a plain line rather than disappearing.
