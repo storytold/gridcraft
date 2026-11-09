@@ -1014,7 +1014,6 @@ fn ensure_rel(p: &mut Preserved, kind: &str, target: &str) -> String {
 /// so reaching the error means the part namespace is genuinely exhausted.
 fn fresh_part_name(p: &Preserved, dir: &str, stem: &str, ext: &str, start: u32) -> Result<String, IoError> {
     let mut n = start.max(1);
-    let mut wrapped = false;
     loop {
         let name = format!("{dir}/{stem}{n}{ext}");
         if !p.parts.iter().any(|q| q.name.eq_ignore_ascii_case(&name)) {
