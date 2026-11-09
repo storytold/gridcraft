@@ -90,8 +90,8 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     let mut doc = DocState::new(wb, path, title, crate::Trust::FromFile);
     if !imported
         && !encrypted
-        && (crate::io::FileKind::from_path(&name) == Some(crate::io::FileKind::Xlsx)
-            || (crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx))
+        && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx
+        && matches!(crate::io::FileKind::from_path(&name), Some(crate::io::FileKind::Xlsx) | None)
     {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
@@ -115,7 +115,8 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     let path = match str_param(p, "path").map(str::to_string).or_else(|| s.active().and_then(|d| d.path.clone())) {
         Some(p) => p,
         None => {
-            s.ui_requests.push(crate::UiRequest::Dialog("saveAs".into(), json!({})));
+            let has_host_xlsx = s.active().is_some_and(|d| d.wb.source_path.is_some() && d.content_kind == Some(crate::io::FileKind::Xlsx));
+            s.ui_requests.push(crate::UiRequest::Dialog("saveAs".into(), json!({"saveAs": !has_host_xlsx})));
             return ok();
         }
     };

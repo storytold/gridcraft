@@ -6453,3 +6453,52 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
 }
+
+#[test]
+fn open_content_kind_and_save_dialog_payloads_distinguish_xlsx_from_imports_and_encrypted() {
+    let mut src = s();
+    src.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+    let xlsx = crate::io::save_bytes(&src.doc().unwrap().wb, "book.xlsx").unwrap();
+
+    // Untitled workbook: save and saveAs both queue Save As (`saveAs: true`).
+    src.take_ui_requests();
+    src.execute("file.save", json!({})).unwrap();
+    assert_eq!(src.take_ui_requests(), vec![crate::UiRequest::Dialog("saveAs".into(), json!({"saveAs": true}))]);
+    src.execute("file.saveAs", json!({})).unwrap();
+    assert_eq!(src.take_ui_requests(), vec![crate::UiRequest::Dialog("saveAs".into(), json!({"saveAs": true}))]);
+
+    // Unencrypted .xlsx opened with an .xlsx name or with no extension (sniff fallback) gets
+    // content_kind = Some(FileKind::Xlsx), and file.save queues saveAs: false.
+    for name in ["Quarterly.xlsx", "Quarterly"] {
+        let mut s = s();
+        s.execute("file.open", json!({"name": name, "base64": crate::io::base64_encode(&xlsx)})).unwrap();
+        assert_eq!(s.doc().unwrap().content_kind, Some(crate::io::FileKind::Xlsx), "{name}");
+        s.take_ui_requests();
+        s.execute("file.save", json!({})).unwrap();
+        assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::Dialog("saveAs".into(), json!({"saveAs": false}))], "{name}");
+        s.execute("file.saveAs", json!({})).unwrap();
+        assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::Dialog("saveAs".into(), json!({"saveAs": true}))], "{name}");
+    }
+
+    // Imported (.xls, .xlsb, .ods), encrypted .xlsx, and non-XLSX text files get content_kind = None
+    // and queue saveAs: true on file.save.
+    for (name, bytes, pw) in [
+        ("legacy.xls", xls_fixture(), None),
+        ("source.xlsb", xlsb_fixture(), None),
+        ("source.ods", ods_fixture(), None),
+        ("disguised.xlsx", ods_fixture(), None),
+        ("Secret.xlsx", encrypted_book("pw-99"), Some("pw-99")),
+        ("notes.csv", b"a,b\n1,2\n".to_vec(), None),
+    ] {
+        let mut s = s();
+        let mut params = json!({"name": name, "base64": crate::io::base64_encode(&bytes)});
+        if let Some(pw) = pw {
+            params["password"] = json!(pw);
+        }
+        s.execute("file.open", params).unwrap();
+        assert_eq!(s.doc().unwrap().content_kind, None, "{name}");
+        s.take_ui_requests();
+        s.execute("file.save", json!({})).unwrap();
+        assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::Dialog("saveAs".into(), json!({"saveAs": true}))], "{name}");
+    }
+}

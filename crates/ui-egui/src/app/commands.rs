@@ -382,39 +382,8 @@ impl SheetApp {
                 }
             }
             "saveAs" => {
-                let save_as = params.get("saveAs").and_then(Json::as_bool).unwrap_or(false);
-                let suggested = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-                if let Some(pick) = &self.services.pick_save {
-                    if let Some(path) = pick(&suggested) {
-                        let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };
-                        self.run_or_alert("file.save", json!({"path": path}));
-                    }
-                } else if (self.services.host_save.is_some() || self.services.download.is_some())
-                    && let Ok(r) = self.run("file.saveBytes", json!({"format": "xlsx"}))
-                    && let Some(b) = r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode)
-                {
-                    let name = r.get("name").and_then(Json::as_str).unwrap_or("Book.xlsx").to_string();
-                    if let Some(host) = &self.services.host_save {
-                        match host(&name, &b, save_as) {
-                            Ok(()) => {
-                                if let Some(doc) = self.session.active_mut() {
-                                    let file = Some(std::path::PathBuf::from(&name));
-                                    if doc.wb.source_path != file {
-                                        std::sync::Arc::make_mut(&mut doc.wb).source_path = file;
-                                    }
-                                    doc.content_kind = Some(gridcraft_engine::io::FileKind::Xlsx);
-                                    doc.saved = doc.wb.clone();
-                                    if doc.path.is_none() {
-                                        doc.title = name;
-                                    }
-                                }
-                            }
-                            Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e))),
-                        }
-                    } else if let Some(dl) = &self.services.download {
-                        dl(&name, &b);
-                    }
-                }
+                let save_as = params.get("saveAs").and_then(Json::as_bool).unwrap_or(true);
+                let _ = self.save_as_xlsx(save_as);
             }
             // File › Options (`file.options`) and the File tab itself open the Backstage view.
             "options" => self.open_backstage(backstage::Page::Options),
@@ -440,6 +409,71 @@ impl SheetApp {
                 }
                 self.dialog = dialogs::Dialog::open(self, other, params);
             }
+        }
+    }
+
+    /// Marks the active workbook saved as an `.xlsx` under `name`, updating `source_path`,
+    /// `content_kind`, the `saved` snapshot, and (when pathless) `title`.
+    pub fn mark_active_saved_xlsx(&mut self, name: &str) {
+        if let Some(doc) = self.session.active_mut() {
+            let file = Some(std::path::PathBuf::from(name));
+            if doc.wb.source_path != file {
+                std::sync::Arc::make_mut(&mut doc.wb).source_path = file;
+            }
+            doc.content_kind = Some(gridcraft_engine::io::FileKind::Xlsx);
+            doc.saved = doc.wb.clone();
+            if doc.path.is_none() {
+                doc.title = name.to_string();
+            }
+        }
+    }
+
+    /// Saves the active workbook as `.xlsx` through `pick_save`, `host_save`, or `download`.
+    /// Returns `true` when the workbook was written or handed over, or `false` when cancelled
+    /// or when saving failed.
+    pub fn save_as_xlsx(&mut self, save_as: bool) -> bool {
+        let suggested = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
+        if let Some(pick) = &self.services.pick_save {
+            let Some(path) = pick(&suggested) else { return false };
+            let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };
+            return match self.run("file.save", json!({"path": path})) {
+                Ok(_) => true,
+                Err(e) => {
+                    self.message = Some(("GridCraft".into(), clean_error(&e)));
+                    false
+                }
+            };
+        }
+        if self.services.host_save.is_none() && self.services.download.is_none() {
+            return false;
+        }
+        let r = match self.run("file.saveBytes", json!({"format": "xlsx"})) {
+            Ok(r) => r,
+            Err(e) => {
+                self.message = Some(("GridCraft".into(), clean_error(&e)));
+                return false;
+            }
+        };
+        let Some(b) = r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode) else {
+            return false;
+        };
+        let name = r.get("name").and_then(Json::as_str).unwrap_or("Book.xlsx").to_string();
+        if let Some(host) = &self.services.host_save {
+            match host(&name, &b, save_as) {
+                Ok(()) => {
+                    self.mark_active_saved_xlsx(&name);
+                    true
+                }
+                Err(e) => {
+                    self.message = Some(("GridCraft".into(), clean_error(&e)));
+                    false
+                }
+            }
+        } else if let Some(dl) = &self.services.download {
+            dl(&name, &b);
+            true
+        } else {
+            false
         }
     }
 
