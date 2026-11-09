@@ -107,7 +107,9 @@ fn check_connection(id: &'static str, driver: &str, connection: &str) -> Result<
         "sqlite" => {
             let path = connection.strip_prefix("sqlite://").or_else(|| connection.strip_prefix("sqlite:")).unwrap_or(connection);
             let uri = path.contains("://") || path.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("file:"));
-            if path.starts_with("\\\\") || path.starts_with("//") || uri {
+            // Windows reads `/` and `\` alike, so `/\host\share` and `\/host/share` are UNC too.
+            let unc = path.as_bytes().get(..2).is_some_and(|b| b.iter().all(|c| matches!(c, b'/' | b'\\')));
+            if unc || uri {
                 return Err(bad(id, "a SQLite database must be a local file, not a network path or a URI"));
             }
         }
@@ -994,6 +996,9 @@ mod tests {
             ("odbc", "DSN=sales;UID=u;PWD=secret"),
             ("sqlite", "\\\\attacker\\share\\x.db"),
             ("sqlite", "//attacker/share/x.db"),
+            ("sqlite", "/\\attacker\\share\\x.db"),
+            ("sqlite", "\\/attacker/share/x.db"),
+            ("sqlite", "sqlite:/\\attacker\\share\\x.db"),
             ("sqlite", "sqlite:////attacker/share/x.db"),
             ("sqlite", "file:x.db?vfs=unix-none"),
             ("odbc", "Driver=/tmp/evil.so;Server=h"),
