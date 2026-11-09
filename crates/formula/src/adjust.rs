@@ -4,6 +4,7 @@
 use gridcraft_core::{CellError, MAX_COLS, MAX_ROWS, RangeRef};
 
 use crate::ast::{Anchor, Expr, RefKind, Reference, SheetSel, clamp_anchor};
+use crate::same_name;
 
 /// Copy/fill: relative parts move by `(dr, dc)`. References pushed off the sheet become `#REF!`.
 pub fn shift_relative(e: Expr, dr: i64, dc: i64) -> Expr {
@@ -96,10 +97,13 @@ pub enum Edit {
 }
 
 /// Whether `r`, in a formula living on sheet `host`, points into sheet `target`.
+///
+/// Sheet names compare with `same_name`, as `Workbook::sheet_index` does: a reference stored as
+/// `лист1!A1` reaches the sheet named `Лист1`, and an edit to that sheet must move it.
 fn on_target(r: &Reference, host: &str, target: &str) -> bool {
     match &r.sheet {
-        SheetSel::Current => host.eq_ignore_ascii_case(target),
-        SheetSel::Named(n) => n.eq_ignore_ascii_case(target),
+        SheetSel::Current => same_name(host, target),
+        SheetSel::Named(n) => same_name(n, target),
         SheetSel::Span(..) => false,
     }
 }
@@ -273,17 +277,18 @@ fn adjust_ref(r: Reference, edit: &Edit) -> Option<Reference> {
     }
 }
 
-/// Renames sheet references `old` → `new`.
+/// Renames sheet references `old` → `new`. Names compare with `same_name`, like
+/// `Workbook::sheet_index`, so a case variant in another script is renamed too.
 pub fn rename_sheet(e: Expr, old: &str, new: &str) -> Expr {
     e.map(&mut |x| match x {
         Expr::Ref(mut r) => {
             match &mut r.sheet {
-                SheetSel::Named(n) if n.eq_ignore_ascii_case(old) => *n = new.to_string(),
+                SheetSel::Named(n) if same_name(n, old) => *n = new.to_string(),
                 SheetSel::Span(a, b) => {
-                    if a.eq_ignore_ascii_case(old) {
+                    if same_name(a, old) {
                         *a = new.to_string();
                     }
-                    if b.eq_ignore_ascii_case(old) {
+                    if same_name(b, old) {
                         *b = new.to_string();
                     }
                 }
@@ -292,9 +297,10 @@ pub fn rename_sheet(e: Expr, old: &str, new: &str) -> Expr {
             Expr::Ref(r)
         }
         // Sheet-qualified defined name `Old!MyName` is stored as one string, with the bare sheet name as the parser
-        // stores it (the printer adds the quotes).
-        Expr::Name(n) => match n.split_at_checked(old.len()) {
-            Some((head, rest)) if head.eq_ignore_ascii_case(old) && rest.starts_with('!') => Expr::Name(format!("{new}{rest}")),
+        // stores it (the printer adds the quotes). Split at the last `!`: `same_name` folds names of different
+        // byte lengths (`K` U+212A and `K`, `ß` and `SS`), so `old.len()` is not where this name ends.
+        Expr::Name(n) => match n.rsplit_once('!') {
+            Some((head, rest)) if same_name(head, old) => Expr::Name(format!("{new}!{rest}")),
             _ => Expr::Name(n),
         },
         other => other,
@@ -304,12 +310,12 @@ pub fn rename_sheet(e: Expr, old: &str, new: &str) -> Expr {
 /// References to a deleted sheet become `#REF!`. `order` lists the sheet names (before the deletion) in tab order:
 /// a 3-D span that loses an end sheet shrinks to the neighbouring surviving sheet, as in Excel.
 pub fn delete_sheet(e: Expr, name: &str, order: &[String]) -> Expr {
-    let pos = |n: &str| order.iter().position(|o| o.eq_ignore_ascii_case(n));
+    let pos = |n: &str| order.iter().position(|o| same_name(o, n));
     e.map(&mut |x| match x {
-        Expr::Ref(r) if r.sheet_name().is_some_and(|n| n.eq_ignore_ascii_case(name)) => Expr::Error(CellError::Ref),
+        Expr::Ref(r) if r.sheet_name().is_some_and(|n| same_name(n, name)) => Expr::Error(CellError::Ref),
         Expr::Ref(mut r) => {
             if let SheetSel::Span(a, b) = &r.sheet
-                && (a.eq_ignore_ascii_case(name) || b.eq_ignore_ascii_case(name))
+                && (same_name(a, name) || same_name(b, name))
             {
                 let (Some(ia), Some(ib)) = (pos(a), pos(b)) else { return Expr::Ref(r) };
                 if ia == ib {
@@ -317,9 +323,9 @@ pub fn delete_sheet(e: Expr, name: &str, order: &[String]) -> Expr {
                 }
                 // The deleted end moves one sheet towards the other end; the span keeps its direction.
                 let inward = |from: usize, to: usize| order.get(if from < to { from + 1 } else { from.saturating_sub(1) });
-                let (na, nb) = if a.eq_ignore_ascii_case(name) { (inward(ia, ib), order.get(ib)) } else { (order.get(ia), inward(ib, ia)) };
+                let (na, nb) = if same_name(a, name) { (inward(ia, ib), order.get(ib)) } else { (order.get(ia), inward(ib, ia)) };
                 let (Some(na), Some(nb)) = (na, nb) else { return Expr::Error(CellError::Ref) };
-                r.sheet = if na.eq_ignore_ascii_case(nb) { SheetSel::Named(na.clone()) } else { SheetSel::Span(na.clone(), nb.clone()) };
+                r.sheet = if same_name(na, nb) { SheetSel::Named(na.clone()) } else { SheetSel::Span(na.clone(), nb.clone()) };
             }
             Expr::Ref(r)
         }

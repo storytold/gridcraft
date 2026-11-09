@@ -31,7 +31,7 @@ use sort::{quick_sort, sort};
 #[cfg(test)]
 use tools::split_delimited;
 use tools::{remove_duplicates, text_to_columns};
-pub use validation::{check_validation, list_items};
+pub use validation::{check_literal_fill_validation, check_literal_validation, check_validation, list_items};
 use validation::{circle_invalid, validate_cmd, validation};
 pub(super) use validation::{move_rule_formula, remove_validation_cells};
 
