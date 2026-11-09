@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    CellRef, EngineError, Json, RangeRef, Result, Session, bool_param, cell_param, current_region, json, jump, split_sheet, str_param, target_ranges,
+    target_sheet,
+};
 
 // ---------------------------------------------------------------- selection
 
@@ -63,7 +66,14 @@ pub(super) fn selection_move(s: &mut Session, p: &Json) -> Result<Json> {
     // Extension moves the far corner, not the active cell.
     let from = if extend { sel.moving_end() } else { sel.active };
     // Skip hidden rows/columns and step over merged areas.
-    let mut to = if jmp {
+    let mut to = if jmp && extend && (dr == 0) != (dc == 0) {
+        // Excel: Ctrl+Shift+arrow searches the active cell's column (or row) from the moving
+        // edge, so a header row selected with Ctrl+Shift+Right extends down to the end of the
+        // active column's data.
+        let probe = if dr != 0 { CellRef::new(from.row, sel.active.col) } else { CellRef::new(sel.active.row, from.col) };
+        let edge = jump(sheet, probe, dr.signum(), dc.signum());
+        if dr != 0 { CellRef::new(edge.row, from.col) } else { CellRef::new(from.row, edge.col) }
+    } else if jmp {
         jump(sheet, from, dr.signum(), dc.signum())
     } else {
         let mut t = from.offset_clamped(dr, dc);
@@ -132,6 +142,23 @@ pub(super) fn selection_next(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc_mut()?;
     d.selection.cycle(fwd, by_row);
     Ok(json!({"active": d.selection.active.a1()}))
+}
+
+pub(super) fn selection_next_corner(s: &mut Session, _: &Json) -> Result<Json> {
+    let d = s.doc_mut()?;
+    let Some(sheet) = d.wb.active() else { return Err(EngineError::NoDocument) };
+    // A corner in a merged cell lands on its top-left cell. One in a hidden row or column, one
+    // the sheet's protection doesn't let you select, and a merged cell that starts outside the
+    // selected area are skipped.
+    let area = d.selection.current();
+    let stop = |c: CellRef| {
+        Some(sheet.merge_at(c).map_or(c, |m| m.start))
+            .filter(|c| area.contains(*c) && !sheet.is_row_hidden(c.row) && !sheet.is_col_hidden(c.col) && cell_selectable(&d.wb, sheet, *c))
+    };
+    let mut next = d.selection.clone();
+    next.next_corner_by(stop);
+    d.selection = next;
+    Ok(json!({"active": d.selection.active.a1(), "selection": d.selection.a1()}))
 }
 
 pub(super) fn select_all(s: &mut Session, _: &Json) -> Result<Json> {

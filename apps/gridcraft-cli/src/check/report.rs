@@ -131,7 +131,7 @@ fn fit(s: &str, w: usize) -> String {
     if n <= w { s.to_string() } else { format!("…{}", s.chars().skip(n + 1 - w).collect::<String>()) }
 }
 
-pub(super) fn print_human(reports: &[FileReport], opts: &Options) {
+fn print_file_reports(reports: &[FileReport]) {
     for r in reports {
         outln!("== {}", r.path);
         if let Some(e) = &r.error {
@@ -186,7 +186,9 @@ pub(super) fn print_human(reports: &[FileReport], opts: &Options) {
             }
         }
     }
-    outln!("");
+}
+
+fn print_file_table(reports: &[FileReport]) {
     let w = reports.iter().map(|r| r.path.chars().count()).max().unwrap_or(4).clamp(4, 50);
     outln!(
         "{:<w$}  {:>8}  {:>8}  {:>8}  {:>8}  {:>9}  {:>8}  round trip",
@@ -220,7 +222,9 @@ pub(super) fn print_human(reports: &[FileReport], opts: &Options) {
             c.volatile
         );
     }
-    let t = totals(reports);
+}
+
+fn print_rankings(t: &Totals, opts: &Options) {
     let top = ranked(&t.functions);
     if !top.is_empty() {
         outln!("");
@@ -239,6 +243,9 @@ pub(super) fn print_human(reports: &[FileReport], opts: &Options) {
             outln!("  {n:>8}  {sig}");
         }
     }
+}
+
+fn print_totals(t: &Totals) {
     outln!("");
     outln!("files: {} ({} opened, {} failed to open)", t.files, t.opened, t.failed);
     outln!(
@@ -261,4 +268,13 @@ pub(super) fn print_human(reports: &[FileReport], opts: &Options) {
         if t.round_trip_failed > 0 { format!(" ({} failed)", t.round_trip_failed) } else { String::new() },
         if cats.is_empty() { String::new() } else { format!("; categories (files): {}", cats.join(", ")) }
     );
+}
+
+pub(super) fn print_human(reports: &[FileReport], opts: &Options) {
+    print_file_reports(reports);
+    outln!("");
+    print_file_table(reports);
+    let t = totals(reports);
+    print_rankings(&t, opts);
+    print_totals(&t);
 }

@@ -21,10 +21,18 @@ pub enum CellError {
     Calc,
     /// Circular reference that could not be resolved (shown as 0 by Excel; we keep it explicit).
     Circ,
+    /// A Python cell's code raised an error, or Python stopped.
+    Python,
+    /// A Python cell is waiting to run.
+    Busy,
+    /// A Python cell ran longer than the time limit.
+    Timeout,
+    /// Python can't run here: the workbook's content isn't enabled, or this build has no Python.
+    Blocked,
 }
 
 impl CellError {
-    pub const ALL: [CellError; 10] = [
+    pub const ALL: [CellError; 14] = [
         CellError::Null,
         CellError::Div0,
         CellError::Value,
@@ -35,6 +43,10 @@ impl CellError {
         CellError::GettingData,
         CellError::Spill,
         CellError::Calc,
+        CellError::Python,
+        CellError::Busy,
+        CellError::Timeout,
+        CellError::Blocked,
     ];
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -49,9 +61,16 @@ impl CellError {
             CellError::Spill => "#SPILL!",
             CellError::Calc => "#CALC!",
             CellError::Circ => "#CIRC!",
+            CellError::Python => "#PYTHON!",
+            CellError::Busy => "#BUSY!",
+            CellError::Timeout => "#TIMEOUT!",
+            CellError::Blocked => "#BLOCKED!",
         }
     }
-    /// `ERROR.TYPE` number.
+    /// `ERROR.TYPE` number. Microsoft documents 1 to 8; 9 (#SPILL!), 11 (#BLOCKED!) and 14 (#CALC!)
+    /// are the numbers Excel returns. Microsoft documents no number for #PYTHON!, #BUSY! or
+    /// #TIMEOUT!: 19, 20 and 21 are GridCraft's own choice, after the numbers Excel is known to use,
+    /// and may change if Excel's numbers become known.
     pub fn code(&self) -> u32 {
         match self {
             CellError::Null => 1,
@@ -65,6 +84,10 @@ impl CellError {
             CellError::Spill => 9,
             CellError::Calc => 14,
             CellError::Circ => 15,
+            CellError::Blocked => 11,
+            CellError::Python => 19,
+            CellError::Busy => 20,
+            CellError::Timeout => 21,
         }
     }
     pub fn parse(s: &str) -> Option<CellError> {
@@ -702,11 +725,12 @@ mod tests {
     }
 
     #[test]
-    fn arrays() {
-        let a = Array::new(2, 2, vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()]).unwrap();
+    fn arrays() -> Result<(), std::io::Error> {
+        let a = Array::new(2, 2, vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()]).ok_or_else(|| std::io::Error::other("valid array"))?;
         assert_eq!(a.transpose().get(0, 1), Some(&Value::Number(3.0)));
         assert!(Array::new(2, 2, vec![]).is_none());
         let row = Array::row(vec![1.0.into(), 2.0.into()]);
         assert_eq!(row.get_broadcast(5, 1), Value::Number(2.0));
+        Ok(())
     }
 }

@@ -276,3 +276,26 @@ fn page_and_point_units_scroll_the_grid_by_their_converted_distance() {
     let point = h.state().view().scroll.y;
     assert!(point > 0.0 && point < page, "40 points scroll less than a page: point {point}, page {page}");
 }
+
+#[test]
+/// Zooming moves no cell: trace arrows shown before a Ctrl+wheel zoom are still shown after its
+/// glide (#3097), while an edit still removes them.
+fn trace_arrows_stay_through_a_wheel_zoom() {
+    let mut h = animated();
+    h.state_mut().run("cell.set", json!({"cell": "B2", "input": "1"})).unwrap();
+    h.state_mut().run("cell.set", json!({"cell": "F7", "input": "=B2"})).unwrap();
+    h.state_mut().run("selection.set", json!({"range": "F7"})).unwrap();
+    let r = h.state_mut().run("formulas.tracePrecedents", json!({})).unwrap();
+    let app = h.state_mut();
+    app.grid.trace = gridcraft_ui_egui::grid::Trace::new(app, r);
+    let current = |h: &Harness| {
+        let d = h.state().session.active().unwrap();
+        h.state().grid.trace.as_ref().is_some_and(|t| (t.uid, t.revision) == (d.uid, d.revision))
+    };
+    assert!(current(&h));
+    let seen = turn_and_watch(&mut h, 1.0, 40);
+    assert!(seen.windows(2).filter(|w| w[0] != w[1]).count() > 1, "the zoom glides over several frames: {seen:?}");
+    assert!(current(&h), "the arrows stay at {}%", zoom(&h));
+    h.state_mut().run("cell.set", json!({"cell": "B2", "input": "2"})).unwrap();
+    assert!(!current(&h), "an edit removes them");
+}

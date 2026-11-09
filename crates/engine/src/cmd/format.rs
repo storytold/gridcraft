@@ -1,10 +1,13 @@
 //! Formatting: Home › Font, Alignment, Number, Styles, Cells › Format.
 
 use gridcraft_core::{CellRef, RangeRef};
-use gridcraft_model::*;
+use gridcraft_model::{BorderLine, BorderStyle, Borders, Color, Fill, HAlign, NumFmt, Style, StyleId, Theme, Underline, VAlign, VertAlign};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, ok, parse_lines, split_sheet, str_param,
+    target_ranges, target_sheet,
+};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -87,8 +90,14 @@ pub fn specs() -> Vec<CommandSpec> {
             format_cells
         ),
         // Alignment
-        cmd!("home.alignLeft", "Align Left", ["Home", "Alignment"], Some("Cmd+L"), "{range?}", has_doc, |s, p| halign(s, p, HAlign::Left)),
-        cmd!("home.alignCenter", "Center", ["Home", "Alignment"], Some("Cmd+E"), "{range?}", has_doc, |s, p| halign(s, p, HAlign::Center)),
+        CommandSpec {
+            shortcut_mac: Some("Cmd+L"),
+            ..cmd!("home.alignLeft", "Align Left", ["Home", "Alignment"], Some("Cmd+L"), "{range?}", has_doc, |s, p| halign(s, p, HAlign::Left))
+        },
+        CommandSpec {
+            shortcut_mac: Some("Cmd+E"),
+            ..cmd!("home.alignCenter", "Center", ["Home", "Alignment"], Some("Cmd+E"), "{range?}", has_doc, |s, p| halign(s, p, HAlign::Center))
+        },
         cmd!("home.alignRight", "Align Right", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| halign(s, p, HAlign::Right)),
         cmd!("home.justify", "Justify", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| halign(s, p, HAlign::Justify)),
         cmd!("home.alignTop", "Top Align", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| valign(s, p, VAlign::Top)),
@@ -647,8 +656,7 @@ fn merge(s: &mut Session, p: &Json, how: &str) -> Result<Json> {
                             let others: Vec<CellRef> = sh.cells.iter_range(m).map(|(c, _)| c).filter(|c| *c != m.start).collect();
                             for c in others {
                                 if let Some(mut cell) = sh.cells.get(c).cloned() {
-                                    cell.value = gridcraft_core::Value::Empty;
-                                    cell.formula = None;
+                                    cell.clear_content();
                                     sh.set_cell(c, cell);
                                 }
                                 touched.push((sheet, c));
@@ -665,8 +673,7 @@ fn merge(s: &mut Session, p: &Json, how: &str) -> Result<Json> {
                         let others: Vec<CellRef> = sh.cells.iter_range(*r).map(|(c, _)| c).filter(|c| *c != r.start).collect();
                         for c in others {
                             if let Some(mut cell) = sh.cells.get(c).cloned() {
-                                cell.value = gridcraft_core::Value::Empty;
-                                cell.formula = None;
+                                cell.clear_content();
                                 sh.set_cell(c, cell);
                             }
                             touched.push((sheet, c));
@@ -683,7 +690,10 @@ fn merge(s: &mut Session, p: &Json, how: &str) -> Result<Json> {
             let blocked = sh
                 .cells
                 .iter_range(reach)
-                .filter(|(_, x)| x.formula.is_some() && x.value == gridcraft_core::Value::Error(gridcraft_core::CellError::Spill));
+                // A Python cell's result is blocked and unblocked like a formula's.
+                .filter(|(_, x)| {
+                    (x.formula.is_some() || x.py.is_some()) && x.value == gridcraft_core::Value::Error(gridcraft_core::CellError::Spill)
+                });
             touched.extend(blocked.map(|(c, _)| (sheet, c)));
         }
         cx.changed.extend(touched);

@@ -127,6 +127,12 @@ fn styles_theme_and_sizes() {
     let bytes = minimal(body, &[("xl/styles.xml", styles), ("xl/theme/theme1.xml", theme)], rels, "");
     let (wb, _) = read_xlsx(&bytes).unwrap();
     let s = wb.sheet(0).unwrap();
+    assert_style_definitions(&wb, s);
+    assert_theme(&wb);
+    assert_sheet_settings(s);
+}
+
+fn assert_style_definitions(wb: &gridcraft_model::Workbook, s: &gridcraft_model::Sheet) {
     let st1 = wb.styles.get(s.cell(at("A1")).unwrap().style);
     assert_eq!(st1.num_fmt.as_str(), "0.000\"kg\"");
     assert!(st1.font.bold && st1.font.italic && st1.font.strike);
@@ -152,6 +158,9 @@ fn styles_theme_and_sizes() {
     assert_eq!(st3.fill.pattern, PatternType::DarkGrid);
     assert_eq!(st3.fill.fg, Color::Theme(5, 0));
     assert_eq!(wb.styles.get(s.cell(at("D1")).unwrap().style).num_fmt.as_str(), "General");
+}
+
+fn assert_theme(wb: &gridcraft_model::Workbook) {
     // Theme: file order dk1, lt1… maps to lt1, dk1… in the model.
     assert_eq!(wb.theme.colors[0], 0xFFFFFF);
     assert_eq!(wb.theme.colors[1], 0x000000);
@@ -159,6 +168,9 @@ fn styles_theme_and_sizes() {
     assert_eq!(wb.theme.colors[3], 0x44546A);
     assert_eq!(wb.theme.colors[4], 0x4472C4);
     assert_eq!(wb.theme.major_font, "Calibri Light");
+}
+
+fn assert_sheet_settings(s: &gridcraft_model::Sheet) {
     // Sheet settings.
     assert_eq!(s.tab_color, Some(Color::Rgb(0x00B050)));
     assert_eq!(s.freeze, Some((2, 1)));
@@ -536,8 +548,11 @@ fn chartex_parts_as_excel_expects_them() {
         }],
         legend: LegendPos::Bottom,
         data_labels: false,
+        data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,
@@ -571,6 +586,50 @@ fn chartex_parts_as_excel_expects_them() {
     assert!(back.names.is_empty());
     let s = &back.sheet(0).unwrap().charts[0].series[0];
     assert_eq!((s.name.as_deref(), s.categories.as_deref(), s.values.as_str()), (Some("Data!$B$1"), Some("Data!$A$2:$A$5"), "Data!$B$2:$B$5"));
+}
+
+#[test]
+fn doughnut_writes_every_series_as_a_ring_with_hole_and_angle() {
+    use gridcraft_model::{Chart, ChartKind, LegendPos, Series};
+    let ser = |name: &str, values: &str| Series {
+        name: Some(name.into()),
+        categories: Some("Data!$A$2:$A$4".into()),
+        values: values.into(),
+        ..Default::default()
+    };
+    let mut wb = gridcraft_model::Workbook::new();
+    let mut sheet = gridcraft_model::Sheet::new("Data");
+    sheet.charts.push(Chart {
+        id: 1,
+        kind: ChartKind::Doughnut,
+        anchor: Default::default(),
+        title: None,
+        series: vec![ser("Outer", "Data!$B$2:$B$4"), ser("Inner", "Data!$C$2:$C$4")],
+        legend: LegendPos::Right,
+        data_labels: false,
+        data_table: None,
+        gridlines: false,
+        style: 2,
+        hole_size: 25,
+        first_slice_angle: 180,
+        x_title: None,
+        y_title: None,
+        source: None,
+        by_rows: false,
+        pivot: None,
+    });
+    wb.sheets = vec![std::sync::Arc::new(sheet)];
+    let bytes = crate::write_xlsx(&wb).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+    let mut cx = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("xl/charts/chart1.xml").unwrap(), &mut cx).unwrap();
+    assert!(cx.contains("<c:doughnutChart>"), "{cx}");
+    assert_eq!(cx.matches("<c:ser>").count(), 2, "one series per ring: {cx}");
+    assert!(cx.contains("<c:holeSize val=\"25\"/>"), "{cx}");
+    assert!(cx.contains("<c:firstSliceAng val=\"180\"/>"), "{cx}");
+    let (back, _) = crate::read_xlsx(&bytes).unwrap();
+    let ch = &back.sheet(0).unwrap().charts[0];
+    assert_eq!((ch.kind, ch.series.len(), ch.hole_size, ch.first_slice_angle), (ChartKind::Doughnut, 2, 25, 180));
 }
 
 /// #377: a WordArt-style text box keeps its run size, bold, typeface, text fill and outline, its

@@ -389,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn criteria() {
+    fn text_criteria() {
         assert!(m(">5", Value::Number(6.0)));
         assert!(!m(">5", Value::Number(5.0)));
         assert!(m(">=5", Value::Number(5.0)));
@@ -402,6 +402,10 @@ mod tests {
         assert!(m("?pple", Value::from("apple")));
         assert!(m("~*", Value::from("*")));
         assert!(!m("~*", Value::from("x")));
+    }
+
+    #[test]
+    fn blank_criteria() {
         assert!(m("", Value::Empty));
         assert!(m("", Value::from("")));
         assert!(!m("", Value::Number(0.0)));
@@ -409,10 +413,14 @@ mod tests {
         assert!(!m("=", Value::from("a")));
         assert!(m("<>", Value::from("a")));
         assert!(!m("<>", Value::Empty));
-        assert!(m("TRUE", Value::Bool(true)));
-        // A bare "<=" or ">=" never matches an empty string (Excel 365: COUNTIF(="", "<=") is 0).
         assert!(!m("<=", Value::from("")));
         assert!(!m(">=", Value::from("")));
+        // A bare "<=" or ">=" never matches an empty string (Excel 365: COUNTIF(="", "<=") is 0).
+    }
+
+    #[test]
+    fn typed_criteria() {
+        assert!(m("TRUE", Value::Bool(true)));
         assert!(m("<b", Value::from("apple")));
         assert!(!m("<b", Value::Number(1.0)));
         assert!(m("#N/A", Value::Error(CellError::NA)));

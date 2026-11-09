@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Cell, CellRef, EngineError, Json, RangeRef, Result, Session, bad, bool_param, cell_param_on, col_param, data_target, edit, guess_header, json,
+    ok, str_param, target_range, target_sheet,
+};
 
 // ---------------------------------------------------------------- tools
 
@@ -143,7 +146,16 @@ pub(super) fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         for (c, t) in out {
-            let cell = crate::cmd::edit::input_to_cell(&t, sheet, c, &mut cx.wb).unwrap_or(None);
+            let cell = match crate::cmd::edit::input_to_cell(&t, sheet, c, &mut cx.wb) {
+                Ok(cell) => cell,
+                // `=PY(…)` doesn't make a Python cell (that takes python.set): the piece is kept
+                // as text rather than lost.
+                Err(_) if gridcraft_model::python::is_py_formula(&t) => {
+                    let style = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
+                    Some(Cell { value: gridcraft_core::Value::text(t.as_str()), formula: None, style, py: None })
+                }
+                Err(_) => None,
+            };
             let shm = cx.sheet_mut(sheet)?;
             match cell {
                 Some(x) => shm.set_cell(c, x),

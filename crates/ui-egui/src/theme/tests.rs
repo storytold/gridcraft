@@ -13,7 +13,7 @@ fn fallback_faces_are_appended_to_every_family() {
         if fb_keys.is_empty() {
             return; // no fallback face on this machine (minimal Linux)
         }
-        for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
+        for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO, MATH, MATH_ITALIC, MATH_BOLD] {
             let chain = fonts.families.get(&FontFamily::Name(role.into())).map(Vec::as_slice).unwrap_or_default();
             // The optional craft-fonts faces follow the system fallbacks at the very end.
             let end = chain.iter().rposition(|k| !k.starts_with("craft-")).map_or(0, |i| i + 1);
@@ -183,7 +183,8 @@ fn fallback_covers_its_script() {
     // have a glyph for every non-space character in the sample. A script runs when a system
     // face or the optional craft-fonts input provides one; the printed skip is a recorded
     // gate, and a present face that is not wired in fails.
-    let cases: [(&str, Vec<(String, u32)>, &str); 10] = [
+    type Case = (&'static str, Vec<(String, u32)>, &'static str);
+    let cases: [Case; 10] = [
         ("sys-cjk-han-ja", cjk_han_japanese(), "カテゴリ"),
         // Chinese uses a system Han face or the native-only permitted LXGW craft face; the
         // barred Noto CJK collection never supplies it.

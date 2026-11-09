@@ -1,5 +1,8 @@
 use super::create::{insert_pivot, source_param};
-use super::*;
+use super::{
+    Anchor, CellRef, Chart, ChartKind, EngineError, Json, LegendPos, PivotDateGroup, Result, Session, Workbook, anchor_mode_param, bad, cell_param,
+    edit, f64_param, find_pivot, json, other, pv, str_param,
+};
 
 // ---------------------------------------------------------------- PivotChart
 
@@ -62,7 +65,10 @@ pub(super) fn insert_pivot_chart(s: &mut Session, p: &Json) -> Result<Json> {
         series,
         legend: if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) { LegendPos::Right } else { LegendPos::Bottom },
         data_labels: false,
+        data_table: None,
         gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
+        hole_size: 75,
+        first_slice_angle: 0,
         style: 1,
         x_title: None,
         y_title: None,

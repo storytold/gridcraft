@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    CellRef, Chart, Color, EngineError, Json, LegendPos, RangeRef, Result, Session, Trendline, TrendlineKind, bad, bool_param, cell_param_on, edit,
+    f64_param, json, split_sheet, str_param, u32_param,
+};
 
 fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
     let d = s.doc()?;
@@ -40,6 +43,7 @@ pub(super) fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
             "dataLabels" => c.data_labels = on,
+            "dataTable" => crate::cmd::insert::update_data_table(c, p, Some(on))?,
             "gridlines" => c.gridlines = on,
             "axisTitles" => {
                 c.x_title = on.then(|| c.x_title.clone().unwrap_or_else(|| "Axis Title".into()));

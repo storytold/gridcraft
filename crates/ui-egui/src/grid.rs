@@ -15,6 +15,15 @@ use crate::SheetApp;
 use crate::editor::EditState;
 use crate::theme::{self, Tokens};
 
+/// A painted pane: its row span, column span and screen rectangle.
+pub(crate) type PaneQuad = ((u32, u32), (u32, u32), Rect);
+/// Cached Page Break Preview ranges, keyed by (doc uid, revision, sheet).
+type PagesCache = ((u64, u64, usize), Vec<(RangeRef, u32)>);
+/// Cached Show Details cells, keyed by (doc uid, revision, sheet, pivot).
+type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>);
+
+mod active_row;
+pub use active_row::active_row_band;
 mod cell_paint;
 mod cursor;
 mod editor;
@@ -37,9 +46,9 @@ pub use editor::validation_arrow;
 use editor::{editor_slack, editor_width, list_picker_height};
 pub use geo::Geo;
 pub use interact::{follow_link, freeze_handles, point_move};
-pub(crate) use quadrant::paint_quadrant;
-pub(crate) use selection::paint_selection;
+pub(crate) use quadrant::{QuadrantPaint, paint_quadrant};
 pub use selection::selection_fill;
+pub(crate) use selection::{SelectionPaintInput, paint_selection};
 pub(crate) use show::horizontal_scrollbar;
 pub use show::show;
 #[cfg(test)]
@@ -94,6 +103,10 @@ pub enum Drag {
     Select,
     Rows(u32),
     Cols(u32),
+    /// Point mode over the row headers: the formula's reference runs from this row to the pointer.
+    PointRows(u32),
+    /// Point mode over the column headers: the formula's reference runs from this column to the pointer.
+    PointCols(u32),
     /// Reordering one contiguous whole-column selection by its header.
     MoveCols {
         source: RangeRef,
@@ -124,12 +137,15 @@ pub enum Drag {
         grab: CellRef,
         to: Option<CellRef>,
     },
+    /// Moving a floating object, or resizing it from one of its eight handles.
     Object {
-        kind: &'static str,
-        id: u32,
+        obj: gridcraft_engine::model::ObjRef,
         start: Pos2,
         orig: (CellRef, f32, f32, f32, f32),
-        resize: bool,
+        handle: Option<crate::objects::Handle>,
+        /// This drag has made its undo step; later frames merge into it, and never into the
+        /// step of an earlier drag.
+        stepped: bool,
     },
 }
 
@@ -146,28 +162,87 @@ pub struct FillTag {
     pub undo_len: usize,
 }
 
-/// Trace Precedents / Trace Dependents arrows: they stay on the cell they were traced from, on its
-/// sheet, while the selection moves. They go away when anything changes the workbook
-/// (`revision`): Excel removes them on edits to the traced formula and on inserted, deleted or
-/// moved cells, this also on a new value in a precedent.
+/// Trace Precedents, Trace Dependents and Trace Error arrows: they stay on the cells they were
+/// traced from while the selection moves. They go away when anything but a zoom changes the
+/// workbook (`revision`): Excel removes them on edits to the traced formula and on inserted,
+/// deleted or moved cells, this also on a new value in a precedent.
 pub struct Trace {
     pub uid: u64,
     pub revision: u64,
-    pub sheet: usize,
-    pub cell: CellRef,
-    /// The command's result: `{"sheet", "range"}` precedents or `{"sheet", "cell"}` dependents.
-    pub items: serde_json::Value,
+    pub arrows: Vec<TraceArrow>,
+}
+
+/// One trace arrow, from a cell or range (boxed) to a cell, each on its sheet. An arrow is drawn
+/// on a sheet that holds both its ends.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TraceArrow {
+    pub from: (usize, RangeRef),
+    pub to: (usize, RangeRef),
+    /// A link between two cells showing the error Trace Error follows, drawn in the error colour.
+    pub error: bool,
 }
 
 impl Trace {
-    /// A trace of the active cell, just run.
-    pub fn new(app: &SheetApp, items: serde_json::Value) -> Option<Trace> {
-        app.session.active().map(|d| Trace { uid: d.uid, revision: d.revision, sheet: d.wb.active_sheet(), cell: d.selection.active, items })
+    /// The arrows of a trace of the active cell, from the command's result: `{"sheet", "range"}`
+    /// precedents (Trace Precedents), `{"sheet", "cell"}` dependents (Trace Dependents), or
+    /// `{"arrows": [{"from", "to", "kind"}]}` (Trace Error). Ends on a sheet the workbook no
+    /// longer has are left out.
+    pub fn new(app: &SheetApp, result: serde_json::Value) -> Option<Trace> {
+        let d = app.session.active()?;
+        let traced = (d.wb.active_sheet(), RangeRef::new(d.selection.active, d.selection.active));
+        let end = |v: &serde_json::Value| {
+            let sheet = match v["sheet"].as_str() {
+                Some(name) => d.wb.sheet_index(name)?,
+                None => traced.0,
+            };
+            Some((sheet, RangeRef::parse(v["range"].as_str().or(v["cell"].as_str())?)?))
+        };
+        let arrows = match result.get("arrows").and_then(|a| a.as_array()) {
+            Some(list) => {
+                list.iter().filter_map(|a| Some(TraceArrow { from: end(&a["from"])?, to: end(&a["to"])?, error: a["kind"] == "error" })).collect()
+            }
+            None => result
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|it| {
+                    let (from, to) = if it.get("range").is_some() { (end(it)?, traced) } else { (traced, end(it)?) };
+                    Some(TraceArrow { from, to, error: false })
+                })
+                .collect(),
+        };
+        Some(Trace { uid: d.uid, revision: d.revision, arrows })
+    }
+
+    /// The active document's uid and revision, to hand [`Trace::keep_through_zoom`] after a zoom.
+    pub fn key(app: &SheetApp) -> Option<(u64, u64)> {
+        app.session.active().map(|d| (d.uid, d.revision))
+    }
+
+    /// Zooming changes the workbook (its revision) but moves no cell: arrows that were shown
+    /// before a zoom stay after it, as in Excel (#3097). `before` is [`Trace::key`] from then.
+    pub fn keep_through_zoom(app: &mut SheetApp, before: Option<(u64, u64)>) {
+        let now = Trace::key(app);
+        if let Some(t) = app.grid.trace.as_mut()
+            && before == Some((t.uid, t.revision))
+            && let Some((uid, revision)) = now
+            && uid == t.uid
+        {
+            t.revision = revision;
+        }
     }
 }
 
 #[derive(Default)]
 pub struct GridState {
+    /// The active sheet's line positions and outlines, kept with a weak reference to the sheet
+    /// they were built from: while it still upgrades to the very sheet shown, the sheet hasn't
+    /// changed (every change goes through `Arc::make_mut`, which moves or copies a sheet that
+    /// has a weak reference to it), so they still hold.
+    pub(crate) lines: Option<(std::sync::Weak<Sheet>, geo::SheetLines)>,
+    /// The conditional formatting statistics (minimum, maximum, percentiles, duplicates) of the
+    /// active sheet's rules, kept the same way: they are read from that sheet's cells alone.
+    pub(crate) cf: Option<(std::sync::Weak<Sheet>, CfCache)>,
     pub drag: Drag,
     pub ensure_visible: bool,
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
@@ -210,7 +285,7 @@ pub struct GridState {
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
-    pub pages: Option<((u64, u64, usize), Vec<(RangeRef, u32)>)>,
+    pub pages: Option<PagesCache>,
     /// The PivotTable Fields pane's `pivot.fields` answer, cached per (doc uid, revision, pivot):
     /// it scans the whole source list, far too slow to repeat every frame (#2113).
     pub pivot_fields: Option<((u64, u64, String), serde_json::Value)>,
@@ -218,7 +293,7 @@ pub struct GridState {
     /// report's top-left and cached per (doc uid, revision, sheet, pivot): finding them computes
     /// the whole report. `None` when the report can't be computed or is out of date: every cell
     /// of it offers Show Details, and running it says why.
-    pub show_details_cells: Option<((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>)>,
+    pub show_details_cells: Option<DetailsCache>,
     pub header_menu: Option<(Pos2, bool)>,
     /// Page Layout view pagination, cached per (doc uid, revision, sheet, rows, columns).
     pub paper: Option<crate::paper_view::PaperCache>,
@@ -230,6 +305,14 @@ pub struct GridState {
     pub hf_start: bool,
     /// The grid geometry of the last frame (hit-testing for agents and tests).
     pub geo: Option<Geo>,
+    /// A form control being worked with the pointer.
+    pub control: Option<crate::form_controls::Gesture>,
+    /// The form control that takes the arrow keys (the one last worked).
+    pub focused_control: Option<u32>,
+    /// Insert › Controls: the kind a click or drag on the grid places, and where the drag began
+    /// (logical position).
+    pub placing: Option<gridcraft_engine::model::ControlKind>,
+    pub place_start: Option<Pos2>,
     /// The horizontal scrollbar's track in the sheet tab bar (hit-testing for tests).
     pub hscroll: Option<Rect>,
     /// The handle between the sheet tabs and the horizontal scrollbar (hit-testing for tests).
@@ -241,6 +324,8 @@ pub struct GridState {
     pub wheel_zoom: Option<WheelZoom>,
     /// A one-finger touch drag in progress: it pans the sheet instead of selecting.
     pub touch_pan: bool,
+    /// What the macro step editor shows on the grid (Check, debugging).
+    pub macro_overlay: Option<crate::macro_editor::MacroOverlay>,
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and

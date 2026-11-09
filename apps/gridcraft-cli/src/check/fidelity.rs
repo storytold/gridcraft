@@ -1,6 +1,6 @@
 use super::calc::formula_text;
 use super::package::{REBUILT_KINDS, relationship_kinds, validate_package};
-use super::*;
+use super::{BTreeSet, Category, Cell, CellError, CellRef, Diffs, Options, RoundTrip, Sheet, Value, Workbook, number_text, quote_sheet};
 
 // ---------------------------------------------------------------- round trip
 
