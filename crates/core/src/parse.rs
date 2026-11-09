@@ -56,7 +56,7 @@ pub fn number_stored_as_text(s: &str) -> Option<f64> {
     let t = s.trim();
     // The same parentheses typed entry reads, accounting forms included: `$(5)`, `(5)%`.
     match parenthesized(t) {
-        Some(inner) if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) => None,
+        Some(inner) if inner.strip_prefix(['$', '€']).map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) => None,
         Some(inner) => parse_plain(&inner).map(|(n, _)| -n),
         None => parse_plain(t).map(|(n, _)| n),
     }
@@ -66,7 +66,7 @@ fn parse_numeric(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)
     // Parenthesised negatives: (100) = -100, and the accounting forms `$(100)` and `(5)%`.
     if let Some(inner) = parenthesized(t) {
         // Excel reads no sign and no nested parentheses inside: `(-5)`, `($-5)`, `((5))`.
-        if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) {
+        if inner.strip_prefix(['$', '€']).map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) {
             return None;
         }
         let r = parse_plain(&inner).or_else(|| parse_fraction(&inner).map(|n| (n, Some("# ?/?"))));
@@ -112,6 +112,7 @@ fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
     let mut s = t;
     let mut neg = false;
     let mut currency = false;
+    let mut euro = false;
     let mut percent = false;
     if let Some(r) = s.strip_prefix('-') {
         neg = true;
@@ -127,12 +128,30 @@ fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
             s = r2;
         }
     }
+    // The euro sign stands before or after the digits, with an optional space, and leaves the
+    // cell in General (observed in Excel with US settings: `65.00€` and `€ 65` are 65; `£5` is
+    // text).
+    if !currency && let Some(r) = s.strip_prefix('€') {
+        euro = true;
+        s = r.trim_start();
+        if !neg && let Some(r2) = s.strip_prefix('-') {
+            neg = true;
+            s = r2;
+        }
+    }
     if let Some(r) = s.strip_suffix('%') {
         percent = true;
         s = r.trim_end();
     }
-    // Excel reads `$5` and `5%` but not `$5%`.
-    if s.is_empty() || currency && percent {
+    if !currency
+        && !euro
+        && let Some(r) = s.strip_suffix('€')
+    {
+        euro = true;
+        s = r.trim_end();
+    }
+    // Excel reads `$5` and `5%` but not `$5%`, and no euro sign with a percent sign.
+    if s.is_empty() || (currency || euro) && percent {
         return None;
     }
     let has_sep = s.contains(',');
@@ -177,6 +196,8 @@ fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
         Some(if digits.contains('.') { "0.00%" } else { "0%" })
     } else if sci {
         Some("0.00E+00")
+    } else if euro {
+        None
     } else if has_sep {
         Some(if digits.contains('.') { "#,##0.00" } else { "#,##0" })
     } else {
@@ -613,6 +634,24 @@ mod tests {
         assert_eq!(parse_input("2/29/1904", DateSystem::D1904).value, Value::Number(59.0));
     }
 
+    /// Typed into a General cell, Excel (US settings) reads a euro sign before or after the digits
+    /// and keeps the cell General; other currency signs and a decimal comma make text.
+    #[test]
+    fn euro_sign_is_read_as_a_number() {
+        for (text, n) in [("65.00€", 65.0), ("€65", 65.0), ("65 €", 65.0), ("€ 65", 65.0), ("-€5", -5.0), ("(€5)", -5.0), ("1,000€", 1000.0)]
+        {
+            let r = p(text);
+            assert_eq!(r.value, Value::Number(n), "{text}");
+            assert_eq!(r.format, None, "{text}");
+        }
+        // Excel keeps the scientific format a typed exponent gets, euro sign or not.
+        assert_eq!(p("1e3€").value, Value::Number(1000.0));
+        assert_eq!(p("1e3€").format, Some("0.00E+00"));
+        for text in ["65,00€", "£5", "¥5", "65.00€%", "5 $", "12€3"] {
+            assert_eq!(p(text).value, Value::text(text), "{text}");
+        }
+    }
+
     #[test]
     fn numbers_stored_as_text() {
         for (text, n) in [
@@ -625,11 +664,46 @@ mod tests {
             ("(100)", -100.0),
             ("$(5)", -5.0),
             ("(5)%", -0.05),
+            ("65.00€", 65.0),
+            ("€65", 65.0),
+            ("65 €", 65.0),
+            ("€ 65", 65.0),
+            ("-€5", -5.0),
+            ("€-5", -5.0),
+            ("(€5)", -5.0),
+            ("1,000€", 1000.0),
+            ("1e3€", 1000.0),
         ] {
             assert_eq!(number_stored_as_text(text), Some(n), "{text}");
         }
         // Dates, times, fractions, words and blanks are not flagged.
-        for text in ["3/4/2026", "10:30", "1 1/2", "abc", "12abc", "", "  ", "TRUE", "#N/A", "((1))", "(-5)", "$(5)%", "(1/2)"] {
+        for text in [
+            "3/4/2026",
+            "10:30",
+            "1 1/2",
+            "abc",
+            "12abc",
+            "",
+            "  ",
+            "TRUE",
+            "#N/A",
+            "((1))",
+            "(-5)",
+            "$(5)%",
+            "(1/2)",
+            "65,00€",
+            "£5",
+            "5£",
+            "¥5",
+            "65.00€%",
+            "€5%",
+            "5 $",
+            "12€3",
+            "$5€",
+            "€$5",
+            "(€-5)",
+            "€",
+        ] {
             assert_eq!(number_stored_as_text(text), None, "{text}");
         }
     }
