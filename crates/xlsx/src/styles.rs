@@ -46,6 +46,13 @@ pub fn read_color(e: &El, palette: &[u32]) -> Color {
         return Color::Theme(t as u8, tint);
     }
     if let Some(i) = e.attr_u32("indexed") {
+        // ECMA-376 Part 4 §3.8.27: 64 is system foreground (auto/black), 65 is system background (white).
+        if i == 64 {
+            return Color::Auto;
+        }
+        if i == 65 {
+            return Color::Rgb(0xFFFFFF);
+        }
         return palette.get(i as usize).map(|&c| Color::Rgb(c)).unwrap_or(Color::Auto);
     }
     Color::Auto
@@ -812,4 +819,23 @@ pub fn dxf_id(dxfs: &mut Vec<Style>, s: &Style) -> u32 {
     }
     dxfs.push(s.clone());
     (dxfs.len() - 1) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_indexed_system_colors() {
+        let palette = crate::tables::INDEXED;
+
+        let el_64 = crate::xml::parse(b"<color indexed=\"64\"/>").unwrap();
+        assert_eq!(read_color(&el_64, &palette), Color::Auto);
+
+        let el_65 = crate::xml::parse(b"<color indexed=\"65\"/>").unwrap();
+        assert_eq!(read_color(&el_65, &palette), Color::Rgb(0xFFFFFF));
+
+        let el_1 = crate::xml::parse(b"<color indexed=\"1\"/>").unwrap();
+        assert_eq!(read_color(&el_1, &palette), Color::Rgb(0xFFFFFF));
+    }
 }
