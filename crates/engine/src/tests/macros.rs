@@ -1548,7 +1548,10 @@ fn macros_and_automate_scripts_live_side_by_side() {
     assert_eq!(r["skipped"], json!(["automate.recordActions", "automate.recordActions"]));
     let m = crate::macros::parse_macro(&s.execute("macro.get", json!({"name": "Recorded"})).unwrap()).unwrap();
     let ids: Vec<String> = crate::macros::command_steps(&m.steps).iter().map(|(_, id, p)| format!("{id} {p}")).collect();
-    assert_eq!(ids, ["cell.set {\"cell\":\"A1\",\"input\":\"typed\",\"parse\":false}", "cell.set {\"cell\":\"B1\",\"input\":\"from script\",\"parse\":false}"]);
+    assert_eq!(
+        ids,
+        ["cell.set {\"cell\":\"A1\",\"input\":\"typed\",\"parse\":false}", "cell.set {\"cell\":\"B1\",\"input\":\"from script\",\"parse\":false}"]
+    );
     // Both lists keep their own entries, under the same name if need be.
     let scripts = s.execute("automate.allScripts", json!({})).unwrap();
     assert_eq!(scripts, json!([{"name": "Empty", "steps": 0, "trusted": true}, {"name": "Inner", "steps": 1, "trusted": true}]));
@@ -1734,7 +1737,10 @@ fn a_recording_is_kept_when_saving_it_fails() {
     let r = s.execute("macro.record", json!({"stop": true, "name": "Good"})).unwrap();
     assert_eq!(r["saved"], "Good");
     assert!(!s.is_recording());
-    assert_eq!(recorded(&mut s, "Good"), ["cell.set {\"cell\":\"A1\",\"input\":\"typed\",\"parse\":false}", "cell.set {\"cell\":\"A2\",\"input\":\"more\",\"parse\":false}"]);
+    assert_eq!(
+        recorded(&mut s, "Good"),
+        ["cell.set {\"cell\":\"A1\",\"input\":\"typed\",\"parse\":false}", "cell.set {\"cell\":\"A2\",\"input\":\"more\",\"parse\":false}"]
+    );
 
     // A workbook at its macro limit: freeing a slot and stopping again saves it.
     s.execute("macro.record", json!({"relative": false})).unwrap();
@@ -1808,7 +1814,10 @@ fn a_step_that_names_another_sheet_keeps_its_references() {
     s.execute("macro.record", json!({"stop": true, "name": "Named"})).unwrap();
     let steps = recorded(&mut s, "Named");
     assert!(steps.contains(&"cell.set {\"cell\":\"C4\",\"input\":\"x\",\"parse\":false,\"sheet\":\"Two\"}".to_string()), "{steps:?}");
-    assert!(steps.contains(&"cell.set {\"cell\":\"Input.cell(3,2)\",\"input\":\"90\",\"parse\":false,\"sheet\":\"Sheet1\"}".to_string()), "{steps:?}");
+    assert!(
+        steps.contains(&"cell.set {\"cell\":\"Input.cell(3,2)\",\"input\":\"90\",\"parse\":false,\"sheet\":\"Sheet1\"}".to_string()),
+        "{steps:?}"
+    );
 }
 
 #[test]
@@ -1959,7 +1968,12 @@ fn a_recorded_script_run_keeps_the_steps_that_ran() {
     let steps = recorded(&mut s, "Rec");
     assert_eq!(
         steps.get(..2),
-        Some(&["cell.set {\"cell\":\"B1\",\"input\":\"first\",\"parse\":false}".to_string(), "cell.set {\"cell\":\"B1\",\"input\":\"kept\",\"parse\":false}".to_string()][..]),
+        Some(
+            &[
+                "cell.set {\"cell\":\"B1\",\"input\":\"first\",\"parse\":false}".to_string(),
+                "cell.set {\"cell\":\"B1\",\"input\":\"kept\",\"parse\":false}".to_string()
+            ][..]
+        ),
         "{steps:?}"
     );
     assert!(!r["skipped"].as_array().unwrap().contains(&json!("automate.runScript")), "{r}");

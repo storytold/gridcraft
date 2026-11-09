@@ -258,10 +258,7 @@ fn record(s: &mut Session, p: &Json) -> Result<Json> {
     let cell_parses: Vec<Option<bool>> = journal_slice
         .iter()
         .map(|(id, params)| {
-            if id == "cell.set"
-                && params.get("parse").is_none()
-                && !params.get("sheet").is_some_and(Json::is_number)
-            {
+            if id == "cell.set" && params.get("parse").is_none() && !params.get("sheet").is_some_and(Json::is_number) {
                 Some(recorded_cell_parse(s, params))
             } else {
                 None
