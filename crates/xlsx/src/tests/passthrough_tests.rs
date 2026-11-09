@@ -1016,3 +1016,16 @@ fn pivot_caches_children_ignores_a_longer_element_name() {
     assert_eq!(children.matches("<pivotCache ").count(), 1, "only the real wrapper contributes: {children}");
     assert!(children.contains("cacheId=\"1\""), "{children}");
 }
+
+#[test]
+fn pivot_caches_children_keeps_wrapper_namespace_bindings() {
+    // A kept `<pivotCaches>` wrapper may bind a prefix other than the workbook's `r` (kept XML
+    // is preserved verbatim). The merge drops the wrappers but keeps the children, so each
+    // child's kept prefix must stay bound — otherwise the saved workbook has an unbound prefix.
+    use crate::write::pivot_caches_children_for_test;
+    let xml = "<pivotCaches xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><pivotCache cacheId=\"1\" rel:id=\"rId1\"/></pivotCaches>\
+        <pivotCaches xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><pivotCache cacheId=\"5\" rel:id=\"rId2\"/></pivotCaches>";
+    let children = pivot_caches_children_for_test(xml);
+    assert_eq!(children.matches("<pivotCache ").count(), 2, "both wrappers contribute: {children}");
+    assert!(children.contains("xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""), "each child must carry its wrapper's binding: {children}");
+}

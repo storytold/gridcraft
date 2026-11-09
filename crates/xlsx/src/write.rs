@@ -188,13 +188,11 @@ pub fn abs_range(r: &RangeRef) -> String {
 
 /// The `<pivotCache>` children of every kept `<pivotCaches>` element, concatenated.
 ///
-/// Attributes on the element itself (a kept element's `xmlns:r`, say) are dropped: the workbook
-/// root declares every prefix. A kept slot holds one element per kept part (the model reader adds
-/// to the first, and a pass-through part brings its own), so cutting from the first opener to the
-/// last closer would carry the sibling wrappers — and the tags between them — into the workbook's
-/// single element. Each pair is cut out in turn instead: the element never nests, so the scan finds
-/// the same boundaries a parser does, and the children keep the `r:id` attributes verbatim that the
-/// XML tree (which drops namespace prefixes) could not write back.
+/// Kept XML is preserved verbatim, so a wrapper may bind a prefix the fresh workbook root does
+/// not declare (`xmlns:rel`, say, where the root only has `xmlns:r`). The wrappers are dropped
+/// but the children are kept, so each wrapper's own bindings are re-declared on its children and
+/// the merged children stay well-formed — even when two wrappers bind the same prefix to
+/// different namespaces, because every binding is scoped to its own child.
 fn pivot_caches_children(xml: &str) -> String {
     const OPEN: &str = "<pivotCaches";
     const CLOSE: &str = "</pivotCaches>";
@@ -212,6 +210,7 @@ fn pivot_caches_children(xml: &str) -> String {
             continue;
         }
         let Some(tag_end) = after.find('>').map(|i| open + i) else { break };
+        let Some(tag) = rest.get(open..=tag_end) else { break };
         let after_tag = rest.get(tag_end + 1..).unwrap_or("");
         // `<pivotCaches/>` holds no children: skip it rather than stop at it.
         if rest.get(tag_end.saturating_sub(1)..tag_end) == Some("/") {
@@ -219,10 +218,118 @@ fn pivot_caches_children(xml: &str) -> String {
             continue;
         }
         let Some(end) = after_tag.find(CLOSE) else { break };
-        children.push_str(after_tag.get(..end).unwrap_or(""));
+        let body = after_tag.get(..end).unwrap_or("");
+        children.push_str(&scope_wrapper_bindings(tag, body));
         rest = after_tag.get(end + CLOSE.len()..).unwrap_or("");
     }
     children
+}
+
+/// The wrapper's own `xmlns`/`xmlns:prefix` bindings (`xmlns:rel="…"`, say), in opener order.
+///
+/// Read off the opener text: the kept fragment is not well-formed XML on its own (one slot can
+/// hold several sibling elements), so a real parser cannot see it. Every binding starts after
+/// whitespace (never at the `<pivotCaches` name itself) and is `name="value"` with a double
+/// quote — the writer only emits double quotes, and kept fragments come from the same reader.
+fn wrapper_bindings(tag: &str) -> Vec<&str> {
+    let mut bindings = Vec::new();
+    for piece in tag.split(|c: char| c.is_whitespace()) {
+        // The opener's closing `>` rides on the last piece (`…"…">`); drop it before matching.
+        // A self-closing `/>` opener holds no children and never reaches this scan.
+        let piece = piece.strip_suffix('>').unwrap_or(piece);
+        let Some(name) = piece.strip_prefix("xmlns") else { continue };
+        let name = name.split('=').next().unwrap_or("");
+        if !name.is_empty() && !name.starts_with(':') {
+            continue;
+        }
+        if name.contains(['>', '/', '<', '"', '\'']) {
+            continue;
+        }
+        if !piece.contains('=') || !piece.ends_with('"') || piece.matches('"').count() != 2 {
+            continue;
+        }
+        if !bindings.iter().any(|kept: &&str| kept.split('=').next() == piece.split('=').next()) {
+            bindings.push(piece);
+        }
+    }
+    bindings
+}
+
+/// The wrapper's own `xmlns`/`xmlns:prefix` bindings, re-declared on every top-level child so
+/// the surviving children keep the prefixes their attributes use.
+///
+/// `<pivotCache>` children are empty elements in practice but the writer does not assume it:
+/// the bindings go on each top-level child's own opener, and nested tags inherit them from
+/// their parent. A child that already declares a prefix keeps its own binding; the wrapper's
+/// copy of that prefix is dropped on that child, so conflicting bindings stay scoped.
+fn scope_wrapper_bindings(tag: &str, body: &str) -> String {
+    let bindings = wrapper_bindings(tag);
+    if bindings.is_empty() {
+        return body.to_string();
+    }
+    let scoped = if bindings.iter().any(|binding| binding.starts_with("xmlns:r=")) {
+        // The fresh workbook root already binds `r` to the relationships namespace — the shape
+        // `keep_external_pivots` and `add_pivot_cache` write — so re-declaring it on every child
+        // would only bloat the saved workbook. Other prefixes still need their own bindings.
+        let extra: Vec<&&str> = bindings.iter().filter(|binding| !binding.starts_with("xmlns:r=")).collect();
+        if extra.is_empty() {
+            return body.to_string();
+        }
+        scope_with_bindings(&extra, body)
+    } else {
+        scope_with_bindings(&bindings.iter().collect::<Vec<_>>(), body)
+    };
+    return scoped;
+}
+
+/// The `bindings` re-declared on every top-level child of `body`, so the surviving children
+/// keep the prefixes their attributes use. `<pivotCache>` children are empty elements in
+/// practice but the writer does not assume it: the bindings go on each top-level child's own
+/// opener, and nested tags inherit them from their parent. A child that already declares a
+/// prefix keeps its own binding; the wrapper's copy of that prefix is dropped on that child,
+/// so conflicting bindings stay scoped.
+fn scope_with_bindings(bindings: &[&&str], body: &str) -> String {
+    let mut scoped = String::with_capacity(body.len() + bindings.iter().map(|binding| binding.len()).sum::<usize>());
+    let mut rest = body;
+    let mut depth = 0usize;
+    while let Some(start) = rest.find('<') {
+        let Some(tag_end) = rest.get(start..).and_then(|tag| tag.find('>')).map(|offset| start + offset) else { break };
+        let opener = rest.get(start..=tag_end).unwrap_or("");
+        let self_closed = opener.ends_with("/>") || opener.starts_with("<?") || opener.starts_with("<!");
+        let verbatim = opener.starts_with("</") || opener.starts_with("<!--") || opener.starts_with("<?") || opener.starts_with("<!");
+        // Comments, declarations and close tags carry no prefix bindings of their own: copy them
+        // verbatim and leave the depth alone. A comment's text may mention `cacheId="` or look
+        // like markup; treating it as a child would corrupt the kept comment on the way through.
+        if verbatim {
+            scoped.push_str(rest.get(..=tag_end).unwrap_or(""));
+            rest = rest.get(tag_end + 1..).unwrap_or("");
+            // A comment's own `-->` already closed it above; only a `</…>` closes an element.
+            if opener.starts_with("</") {
+                depth = depth.saturating_sub(1);
+            }
+            continue;
+        }
+        if depth == 0 {
+            let missing: Vec<&str> = bindings.iter().copied().copied().filter(|binding| !opener.contains(binding.split('=').next().unwrap_or(""))).collect();
+            if missing.is_empty() {
+                scoped.push_str(rest.get(..=tag_end).unwrap_or(""));
+            } else {
+                let joined = missing.iter().map(|binding| binding.to_string()).collect::<Vec<_>>().join(" ");
+                scoped.push_str(rest.get(..tag_end).unwrap_or(""));
+                scoped.push(' ');
+                scoped.push_str(&joined);
+                scoped.push_str(rest.get(tag_end..=tag_end).unwrap_or(""));
+            }
+        } else {
+            scoped.push_str(rest.get(..=tag_end).unwrap_or(""));
+        }
+        rest = rest.get(tag_end + 1..).unwrap_or("");
+        if !self_closed {
+            depth += 1;
+        }
+    }
+    scoped.push_str(rest);
+    scoped
 }
 
 /// The `<pivotCache>`-child scan, exposed so an integration test can pin the element-name

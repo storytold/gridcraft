@@ -197,6 +197,53 @@ fn encode_utf16(text: &str) -> Vec<u8> {
     bytes
 }
 
+/// The `StoragePath` text of one `<BackupFile>` entry, XML-decoded and trimmed the way
+/// [`parse_xml`] leaves node text for [`Self::script_from_log`]: named entities
+/// (`&amp;`), decimal (`&#83;`) and hexadecimal (`&#x53;`) references resolve, and anything
+/// else (an unknown entity, a literal `&`) stays verbatim.
+fn decode_storage_path(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(hash) = rest.find('&') {
+        out.push_str(rest.get(..hash).unwrap_or(""));
+        let after = rest.get(hash + 1..).unwrap_or("");
+        let Some(semi) = after.find(';') else {
+            out.push_str(rest.get(hash..).unwrap_or(""));
+            break;
+        };
+        let entity = after.get(..semi).unwrap_or("");
+        if let Some(decoded) = decode_storage_entity(entity) {
+            out.push_str(&decoded);
+        } else {
+            out.push_str(rest.get(hash..hash + 1 + semi + 1).unwrap_or(""));
+        }
+        rest = after.get(semi + 1..).unwrap_or("");
+    }
+    out.push_str(rest);
+    out.trim().to_string()
+}
+
+/// One XML entity body (the text between `&` and `;`): `amp`, `&#83;`, `&#x53;` and the other
+/// predefined entities. Surrogates and out-of-range code points do not decode — the raw text is
+/// kept so the comparison simply misses, exactly as a damaged log entry should.
+fn decode_storage_entity(entity: &str) -> Option<String> {
+    if let Some(named) = quick_xml::escape::resolve_predefined_entity(entity) {
+        return Some(named.to_string());
+    }
+    let (digits, radix) = match entity.strip_prefix('#') {
+        Some(rest) => match rest.strip_prefix('x').or_else(|| rest.strip_prefix('X')) {
+            Some(hex) => (hex, 16),
+            None => (rest, 10),
+        },
+        None => return None,
+    };
+    if digits.is_empty() || digits.len() > 7 {
+        return None;
+    }
+    let code = u32::from_str_radix(digits, radix).ok()?;
+    char::from_u32(code).map(|c| c.to_string())
+}
+
 /// Returns the text of the first `<tag>` element in `xml` (no attributes are expected).
 fn tag_text<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
     let open = format!("<{tag}>");
@@ -1279,11 +1326,14 @@ fn update_log_content(content: &[u8], storage_path: &str, new_size: usize) -> Op
         };
         let end = start + end_relative + "</BackupFile>".len();
         let block = text.get(start..end)?;
+        // `script_from_log` selects through the parsed-XML `StoragePath` text, which the reader
+        // XML-decodes (`&#83;CRIPT` reads as `SCRIPT`). Decode the same way here or a
+        // size-changing rewrite returns a container with a stale log Size.
         let is_target = block
             .find("<StoragePath>")
             .and_then(|index| block.get(index + "<StoragePath>".len()..))
             .and_then(|rest| rest.find("</StoragePath>").map(|close| (rest, close)))
-            .is_some_and(|(rest, close)| rest.get(..close) == Some(storage_path));
+            .is_some_and(|(rest, close)| rest.get(..close).is_some_and(|raw| decode_storage_path(raw) == storage_path.trim()));
         if is_target && let Ok(updated) = replace_tag_text(block, "Size", &new_size.to_string()) {
             output.push_str(text.get(cursor..start)?);
             output.push_str(&updated);
@@ -1610,6 +1660,20 @@ mod tests {
         let measure = measures.first().ok_or_else(|| ModelFileError::Corrupt("measure".into()))?;
         assert_eq!(measure.name, "Semi");
         assert_eq!(measure.formula, "\"a;b\" & SUM(Sales[Amount])");
+        Ok(())
+    }
+
+    #[test]
+    fn encoded_storage_path_still_updates_the_log_size() -> Result<()> {
+        // `script_from_log` matches via the XML-decoded `StoragePath` text, but
+        // `update_log_content` used to compare the raw text — an entity-encoded path such as
+        // `&#83;CRIPT` selects SCRIPT there and misses here, leaving a stale log Size.
+        let content = [0xFF, 0xFE].into_iter().chain(encode_utf16("<BackupLog><BackupFile><Path>x</Path><StoragePath>&#83;CRIPT</StoragePath><Size>7</Size></BackupFile></BackupLog>").into_iter()).collect::<Vec<u8>>();
+        let updated = update_log_content(&content, "SCRIPT", 42).ok_or_else(|| ModelFileError::Corrupt("the encoded path must match".into()))?;
+        let text = decode_utf16(&updated[2..], true)?;
+        assert!(text.contains("<StoragePath>&#83;CRIPT</StoragePath>"), "the stored bytes keep their encoding: {text}");
+        assert!(text.contains("<Size>42</Size>"), "the size is updated for the decoded match: {text}");
+        assert!(!text.contains("<Size>7</Size>"), "no stale size remains: {text}");
         Ok(())
     }
 }
