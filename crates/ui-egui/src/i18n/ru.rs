@@ -228,6 +228,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Name Box" => "Поле имени",
         "Cell Editor" => "Редактор ячейки",
         "Font Size" => "Размер шрифта",
+        "Furigana" => "Фуригана",
         "Gridlines" => "Сетка",
         "Headings" => "Заголовки",
         "Zoom" => "Масштаб",
