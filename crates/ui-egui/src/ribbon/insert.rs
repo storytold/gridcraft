@@ -333,20 +333,6 @@ fn hex_color(hex: &str) -> egui::Color32 {
         .unwrap_or(egui::Color32::GRAY)
 }
 
-/// The base colour of a texture, for a preset built in code.
-fn pen_icon_base(effect: Option<&str>) -> &'static str {
-    match effect {
-        Some("galaxy") => "#5B3EA8",
-        Some("rainbow") => "#E83A6B",
-        Some("lava") => "#D94F1E",
-        Some("ocean") => "#1B7FB5",
-        Some("roseGold") => "#C98A7A",
-        Some("gold") => "#C99A2E",
-        Some("silver") => "#9AA3AD",
-        Some("bronze") => "#9A673A",
-        _ => "#1F5FC9",
-    }
-}
 
 /// The sixteen solid colours Excel offers for a pen.
 const PEN_SOLIDS: [&str; 16] = [
@@ -393,7 +379,9 @@ fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::dr
                     StrokeKind::Inside,
                 );
                 if resp.on_hover_text(*hex).clicked() {
-                    apply_pen_change(app, id, tool, hex, width, effect);
+                    // A solid colour choice replaces the texture: keeping the effect would make
+                    // `stroke_color` paint the texture's base colour instead of the chosen one.
+                    apply_pen_change(app, id, tool, hex, width, None);
                     ui.close();
                 }
             }
@@ -412,7 +400,12 @@ fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::dr
                     ui.painter().rect_stroke(r.expand(1.0), 2.0, Stroke::new(2.0, Tokens::get(ui.ctx()).accent), StrokeKind::Outside);
                 }
                 if resp.on_hover_text(tr.tr(pen_icon::effect_label(name))).clicked() {
-                    apply_pen_change(app, id, tool, pen_icon_base(Some(name)), width, Some(name));
+                    // The engine resets the colour when only the effect changes, so carry the
+                    // texture's base colour from the single remaining engine table.
+                    let base = gridcraft_engine::cmd::draw::parse_effect(name)
+                        .map(gridcraft_engine::cmd::draw::effect_base)
+                        .unwrap_or("#1F5FC9");
+                    apply_pen_change(app, id, tool, base, width, Some(name));
                     ui.close();
                 }
             }
@@ -442,7 +435,8 @@ fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::dr
             ui.data_mut(|d| d.insert_temp(hv_id, hsva));
             let [r, g, b] = hsva.to_srgb();
             let hex = format!("#{r:02X}{g:02X}{b:02X}");
-            apply_pen_change(app, id, tool, &hex, width, effect);
+            // Same as the swatches: a picked colour is solid, not textured.
+            apply_pen_change(app, id, tool, &hex, width, None);
         }
     }
     if deletable && ui.button(tr.tr("Delete Tool")).clicked() {

@@ -596,6 +596,29 @@ fn paint_ink(p: &Painter, pts: &[Pos2], sp: &gridcraft_engine::model::Shape, ink
     let width = gridcraft_engine::cmd::draw::ink_width(sp) * z;
     let tall = gridcraft_engine::cmd::draw::ink_height(sp) * z;
     let translucent = |c: Color32, a: u8| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a);
+    if let Some(effect) = ink.effect {
+        match ink.tool {
+            InkTool::Highlighter => {
+                // One translucent pass: the bands carry the highlighter's opacity themselves, so no
+                // second translucent band underneath (that would darken the ink and double-cover cells).
+                paint_ink_texture(p, pts, tall, effect, ink.anchor, z, Some(115));
+            }
+            InkTool::FountainPen | InkTool::BrushPen => {
+                // Same per-segment widths as an untapered tapered stroke; only the colour is textured.
+                paint_tapered_texture(p, pts, width, &ink.pressure, effect, ink.anchor, z);
+            }
+            InkTool::Pencil => {
+                for pair in pts.windows(2) {
+                    p.line_segment([pair[0], pair[1]], Stroke::new((width * 0.8).max(1.0), translucent(line, 215)));
+                }
+                paint_ink_texture(p, pts, width * 0.8, effect, ink.anchor, z, None);
+            }
+            InkTool::Pen => {
+                paint_ink_texture(p, pts, width, effect, ink.anchor, z, None);
+            }
+        }
+        return;
+    }
     match ink.tool {
         InkTool::Highlighter => {
             p.add(PathShape::line(pts.to_vec(), PathStroke::new(tall.max(2.0), translucent(line, 115))));
@@ -610,9 +633,6 @@ fn paint_ink(p: &Painter, pts: &[Pos2], sp: &gridcraft_engine::model::Shape, ink
         InkTool::Pen => {
             p.add(PathShape::line(pts.to_vec(), PathStroke::new(width.max(1.0), line)));
         }
-    }
-    if let Some(effect) = ink.effect {
-        paint_ink_texture(p, pts, if ink.tool == InkTool::Highlighter { tall } else { width }, effect, ink.anchor, z);
     }
 }
 
@@ -643,7 +663,8 @@ fn paint_tapered(p: &Painter, pts: &[Pos2], width: f32, pressure: &[u16], color:
 
 /// Lays an effect's palette along the stroke in bands: a deterministic texture whose phase comes
 /// from the stroke's InkML anchor (so it is a property of the ink, not of the frame).
-fn paint_ink_texture(p: &Painter, pts: &[Pos2], width: f32, effect: gridcraft_engine::model::InkEffect, anchor: [f32; 2], z: f32) {
+/// `alpha` tints each band translucent (a textured highlighter); `None` paints opaque bands.
+fn paint_ink_texture(p: &Painter, pts: &[Pos2], width: f32, effect: gridcraft_engine::model::InkEffect, anchor: [f32; 2], z: f32, alpha: Option<u8>) {
     let name = gridcraft_engine::cmd::draw::effect_name(effect);
     let bands = crate::pen_icon::effect_colors(name);
     if bands.is_empty() || pts.len() < 2 {
@@ -656,7 +677,43 @@ fn paint_ink_texture(p: &Painter, pts: &[Pos2], width: f32, effect: gridcraft_en
         let seg = (pair[1] - pair[0]).length();
         let idx = ((travelled / period).rem_euclid(bands.len() as f32)) as usize;
         let band = bands.get(idx).copied().unwrap_or(Color32::GRAY);
+        let band = match alpha {
+            Some(a) => Color32::from_rgba_unmultiplied(band.r(), band.g(), band.b(), a),
+            None => band,
+        };
         p.line_segment([pair[0], pair[1]], Stroke::new(width.max(1.0), band));
+        travelled += seg;
+    }
+}
+
+/// A textured Fountain or Brush Pen: the same per-segment widths `paint_tapered` uses, with the
+/// effect's bands as the colour instead of the pen colour.
+fn paint_tapered_texture(p: &Painter, pts: &[Pos2], width: f32, pressure: &[u16], effect: gridcraft_engine::model::InkEffect, anchor: [f32; 2], z: f32) {
+    let name = gridcraft_engine::cmd::draw::effect_name(effect);
+    let bands = crate::pen_icon::effect_colors(name);
+    if bands.is_empty() || pts.len() < 2 {
+        return;
+    }
+    let period = (width.max(2.0) * 1.7).max(3.0);
+    let phase = (anchor[0] + anchor[1]) * 0.05 * z;
+    let n = pts.len();
+    let full = pressure.len() == n;
+    let press = |i: usize| -> f32 {
+        match pressure.get(i).filter(|_| full) {
+            Some(v) => (*v as f32 / 32767.0).clamp(0.05, 1.0),
+            None => {
+                let t = i as f32 / (n - 1) as f32;
+                0.35 + 0.65 * (std::f32::consts::PI * t).sin()
+            }
+        }
+    };
+    let mut travelled = phase;
+    for (i, pair) in pts.windows(2).enumerate() {
+        let seg = (pair[1] - pair[0]).length();
+        let idx = ((travelled / period).rem_euclid(bands.len() as f32)) as usize;
+        let band = bands.get(idx).copied().unwrap_or(Color32::GRAY);
+        let w = width * (press(i) + press(i + 1)) / 2.0;
+        p.line_segment([pair[0], pair[1]], Stroke::new(w.max(1.0), band));
         travelled += seg;
     }
 }

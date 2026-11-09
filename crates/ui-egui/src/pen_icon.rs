@@ -41,17 +41,14 @@ pub fn effect_label(effect: &str) -> &'static str {
 /// The base colour of a texture (the colour Excel stores as the stroke's `color`). The fallback is
 /// the pen blue used for an unknown name.
 pub fn effect_base(effect: &str) -> Color32 {
-    match effect {
-        "rainbow" => Color32::from_rgb(0xE8, 0x3A, 0x6B),
-        "galaxy" => Color32::from_rgb(0x5B, 0x3E, 0xA8),
-        "lava" => Color32::from_rgb(0xD9, 0x4F, 0x1E),
-        "ocean" => Color32::from_rgb(0x1B, 0x7F, 0xB5),
-        "roseGold" => Color32::from_rgb(0xC9, 0x8A, 0x7A),
-        "gold" => Color32::from_rgb(0xC9, 0x9A, 0x2E),
-        "silver" => Color32::from_rgb(0x9A, 0xA3, 0xAD),
-        "bronze" => Color32::from_rgb(0x9A, 0x67, 0x3A),
-        _ => Color32::from_rgb(0x1F, 0x5F, 0xC9),
-    }
+    // Single source: the engine's texture table. An unknown name falls back to pen blue.
+    let hex = gridcraft_engine::cmd::draw::parse_effect(effect)
+        .map(gridcraft_engine::cmd::draw::effect_base)
+        .unwrap_or("#1F5FC9");
+    gridcraft_engine::model::Color::from_hex(hex)
+        .and_then(|c| c.resolve(&gridcraft_engine::model::Theme::default()))
+        .map(crate::theme::color32)
+        .unwrap_or(Color32::from_rgb(0x1F, 0x5F, 0xC9))
 }
 
 /// The colours a texture's bands run through, brightest first. A solid pen has only its own.
