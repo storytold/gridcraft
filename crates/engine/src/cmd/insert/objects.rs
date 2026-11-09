@@ -76,6 +76,7 @@ pub(super) fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
             height: f64_param(p, "height").map(|v| v as f32).unwrap_or(h as f32 * scale),
             // Excel inserts pictures as "Move but don't size with cells" (`editAs="oneCell"`).
             mode: anchor_mode_param(p).unwrap_or(gridcraft_model::AnchorMode::MoveOnly),
+            hidden_end: None,
         },
         data: data.into(),
         mime,
@@ -148,6 +149,7 @@ pub(super) fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
             width: f64_param(p, "width").unwrap_or(144.0) as f32,
             height: f64_param(p, "height").unwrap_or(if kind == ShapeKind::Line { 0.0 } else { 96.0 }) as f32,
             mode: anchor_mode_param(p).unwrap_or_default(),
+            hidden_end: None,
         },
         fill,
         line,
@@ -224,6 +226,12 @@ pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
             _ => None,
         };
         let Some(a) = anchor else { return Err(bad("object.move", "no such object")) };
+        let moved_cell = at.is_some_and(|cell| cell != a.cell);
+        let horizontal = !moved_cell && (p.get("dx").is_some() || p.get("width").is_some());
+        let vertical = !moved_cell && (p.get("dy").is_some() || p.get("height").is_some());
+        if moved_cell {
+            a.hidden_end = None;
+        }
         if let Some(at) = at {
             a.cell = at;
         }
@@ -238,6 +246,18 @@ pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(v) = f64_param(p, "height") {
             a.height = v.clamp(0.0, 10000.0) as f32;
+        }
+        let (snapshot, end) = (*a, a.hidden_end);
+        if let Some(end) = end {
+            let end = crate::cmd::sheet::update_hidden_end(sh, &snapshot, end, horizontal, vertical);
+            let anchor = match kind.as_str() {
+                "chart" => sh.charts.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
+                "image" => sh.images.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
+                "slicer" => sh.slicers.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
+                "shape" => sh.shapes.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
+                _ => None,
+            };
+            if let Some(a) = anchor { a.hidden_end = end; }
         }
         Ok(Json::Null)
     })
@@ -262,7 +282,10 @@ pub(super) fn set_anchor_mode(s: &mut Session, p: &Json) -> Result<Json> {
             _ => sh.shapes.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
         };
         let Some(a) = anchor else { return Err(bad("object.setAnchorMode", "no such object")) };
-        a.mode = mode;
+        if a.mode != mode {
+            a.mode = mode;
+            a.hidden_end = None;
+        }
         Ok(json!({"mode": anchor_mode_name(mode)}))
     })
 }

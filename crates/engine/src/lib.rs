@@ -820,6 +820,17 @@ impl Session {
         // it leaves the group its step and makes one of its own for what it changed after the end.
         // A command that opened and closed its own groups makes one step of its own, which
         // replaces the steps those groups made.
+        // Floating objects keep the place their "Move and size with cells" setting gives them
+        // when the command resized, hid or moved the rows and columns around them.
+        if result.is_ok()
+            && spec.undoable
+            && self.depth == 0
+            && let Some((uid, wb, _)) = &before
+            && let Some(d) = self.docs.iter_mut().find(|d| d.uid == *uid)
+            && !Arc::ptr_eq(&d.wb, wb)
+        {
+            cmd::sheet::refit_objects(wb, &mut d.wb);
+        }
         let epoch_changed = self.group_epoch != group_epoch;
         let in_group_now = before.as_ref().is_some_and(|(uid, ..)| self.in_group(*uid));
         let was_open = start.is_some_and(|(was_open, _)| was_open);

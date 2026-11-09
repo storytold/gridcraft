@@ -179,6 +179,7 @@ pub(super) fn align(s: &mut Session, p: &Json) -> Result<Json> {
             a.cell = c;
             a.dx = (x - shc.col_left(c.col)) as f32;
             a.dy = (y - shc.row_top(c.row)) as f32;
+            a.hidden_end = None;
         }
         Ok(Json::Null)
     })
@@ -188,5 +189,8 @@ pub(super) fn rotate(s: &mut Session, p: &Json) -> Result<Json> {
     if p.get("flip").is_some_and(|f| !f.is_null()) {
         return Err(bad("arrange.rotate", "`flip` is not supported: shapes have no flip state"));
     }
-    with_shape(s, p, |sh| std::mem::swap(&mut sh.anchor.width, &mut sh.anchor.height))
+    with_shape(s, p, |sh| {
+        std::mem::swap(&mut sh.anchor.width, &mut sh.anchor.height);
+        sh.anchor.hidden_end = None;
+    })
 }

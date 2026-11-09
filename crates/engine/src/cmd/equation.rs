@@ -89,7 +89,7 @@ fn insert_equation(s: &mut Session, p: &Json) -> Result<Json> {
     let mut shape = Shape {
         id,
         kind: ShapeKind::Equation,
-        anchor: Anchor { cell: at, dx: 0.0, dy: 0.0, width, height, mode: AnchorMode::MoveOnly },
+        anchor: Anchor { cell: at, dx: 0.0, dy: 0.0, width, height, mode: AnchorMode::MoveOnly, hidden_end: None },
         fill: Color::Auto,
         line: color,
         text: latex.to_string(),
@@ -138,6 +138,7 @@ fn edit_equation(s: &mut Session, p: &Json) -> Result<Json> {
         shape.math.refresh(latex);
         shape.anchor.width = width;
         shape.anchor.height = height;
+        shape.anchor.hidden_end = None;
         Ok(json!({"equation": id}))
     })
 }
