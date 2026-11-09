@@ -284,7 +284,13 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
     let mut done = |start: egui::layers::ShapeIdx, rect: Rect| painted.push(PaintedObject { shapes: start.0..p.add(egui::Shape::Noop).0, rect });
     // The grid paints the active workbook: its pictures are cached under it.
     let doc = app.session.active().map_or(0, |d| d.uid);
+    // While Ink Replay runs, the sheet's own strokes are left out and the replayed ink below
+    // paints them again, progressively.
+    let replay = crate::ink::replay_for(app, doc, si);
     for sp in &sh.shapes {
+        if replay.is_some() && sp.kind == ShapeKind::Ink {
+            continue;
+        }
         let r = anchor_rect(geo, sh, &sp.anchor);
         if !r.intersects(p.clip_rect()) {
             continue;
@@ -351,6 +357,9 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             paint_shape_text(p, wb, sp, r, geo.z);
         }
         done(start, r);
+    }
+    if let Some(replay) = replay {
+        crate::ink::paint_replay(p, geo, sh, replay, &mut done);
     }
     for im in &sh.images {
         let r = anchor_rect(geo, sh, &im.anchor);

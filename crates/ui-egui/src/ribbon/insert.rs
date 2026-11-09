@@ -285,4 +285,25 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "draw.inkToShape", json!({}));
     }
+    sep(ui);
+    let playing = app.grid.replay.is_some();
+    let replay = big_button(ui, Icon::Play, "Ink\nReplay", "Replay the sheet's ink strokes in the order they were drawn", false);
+    control_keytip(app, ui, &replay, "draw.inkReplay");
+    if playing {
+        ui.painter().rect_stroke(replay.rect, 5.0, Stroke::new(2.0, Tokens::get(ui.ctx()).accent), StrokeKind::Inside);
+    }
+    let forced = invoke(app, "draw.inkReplay");
+    if replay.clicked() || forced {
+        // The clicked state is the truth, not the engine's: command search can have run the
+        // command and left the session switch on with no animation behind it.
+        match app.run("draw.inkReplay", json!({"on": !playing})) {
+            Ok(report) if report["replaying"].as_bool() == Some(true) => {
+                if !crate::ink::start(app, &report) {
+                    crate::ink::stop(app);
+                }
+            }
+            Ok(_) => crate::ink::stop(app),
+            Err(e) => app.message = Some(("GridCraft".into(), crate::clean_error(&e))),
+        }
+    }
 }

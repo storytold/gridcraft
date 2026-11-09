@@ -1063,7 +1063,7 @@ struct Saved {
     last_find: Option<Json>,
     hide_ruler: bool,
     windows: (Vec<crate::WindowState>, Option<u64>, u64, u64),
-    draw: (String, String, f32),
+    draw: (String, String, f32, bool),
     comments_pane: bool,
     show_all_notes: bool,
 }
@@ -1091,7 +1091,7 @@ impl Saved {
             last_find: s.last_find.clone(),
             hide_ruler: s.hide_ruler,
             windows: (s.windows.clone(), s.active_window, s.next_window, s.activation),
-            draw: (s.draw_tool.clone(), s.draw_color.clone(), s.draw_width),
+            draw: (s.draw_tool.clone(), s.draw_color.clone(), s.draw_width, s.ink_replay),
             comments_pane: s.comments_pane,
             show_all_notes: s.show_all_notes,
         };
@@ -1125,7 +1125,7 @@ impl Saved {
         s.last_find = self.last_find;
         s.hide_ruler = self.hide_ruler;
         (s.windows, s.active_window, s.next_window, s.activation) = self.windows;
-        (s.draw_tool, s.draw_color, s.draw_width) = self.draw;
+        (s.draw_tool, s.draw_color, s.draw_width, s.ink_replay) = self.draw;
         s.comments_pane = self.comments_pane;
         s.show_all_notes = self.show_all_notes;
     }

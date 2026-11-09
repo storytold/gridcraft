@@ -334,6 +334,7 @@ pub(super) fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
         text: name,
         format: Default::default(),
         math: Default::default(),
+        ink: None,
     };
     let sheet = d.wb.active_sheet();
     edit(s, |cx| {

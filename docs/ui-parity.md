@@ -4,7 +4,7 @@
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
-separately in [parity-checklist.md](parity-checklist.md) (281 / 296).
+separately in [parity-checklist.md](parity-checklist.md) (282 / 297).
 
 Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes),
 `crates/engine/src/cmd` (shortcuts in command specs), the owner's black-box notes
@@ -249,6 +249,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Draw tab: Ink Replay plays the sheet's ink strokes back in the order they were drawn, each stroke appearing progressively, previous strokes staying and a second click stopping; no document change and no undo (`draw.inkReplay`); catalog 282 / 297 |
 | 2026-11-02 | minor | Form controls: buttons, sliders (scroll bars) and spin buttons placed, worked, selected and edited on the sheet (Insert › Controls, Assign Action, Format Control); catalog 281 / 296 |
 | 2026-11-03 | minor | Highlight the active cell's row: a global preference that tints the whole row, off by default |
 | 2026-11-03 | minor | The formula bar's bottom edge is a resize handle: dragging it sets the bar's height in whole lines, up to half the window, and dragging it to one line collapses it; expanding (the chevron, Ctrl+Shift+U) returns to the dragged height, which is kept with the UI preferences. `view.expandFormulaBar {lines}` sets it (#1246) |

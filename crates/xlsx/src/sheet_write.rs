@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{
     Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, NoteBox, NoteCorner, Orientation, PageOrder,
-    Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
+    ShapeKind, Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
 };
 
 use crate::drawing::{Obj, image_content_type, image_ext};
@@ -328,6 +328,7 @@ fn write_sheet_notes(s: &mut String, sheet: &Sheet, si: usize, kept: &crate::pas
     s.push_str(&kept.elements(&controls));
 }
 
+/// Writes a sheet's drawing part and every part its objects need: media, charts, ink and formulas.
 fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, rels: &mut Rels, out: &mut Out) {
     // Drawing: pictures, charts, shapes.
     if !sheet.images.is_empty() || !sheet.charts.is_empty() || !sheet.shapes.is_empty() {
@@ -367,6 +368,20 @@ fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, 
             objs.push(Obj::Chart(ch, rid));
         }
         for sh in &sheet.shapes {
+            if sh.kind == ShapeKind::Ink
+                && sh.ink.is_some()
+                && let Some(parts) = crate::drawing::ink_parts(sh, &wb.theme)
+            {
+                out.inks += 1;
+                let ink_name = format!("xl/ink/ink{}.xml", out.inks);
+                out.part(&ink_name, Some(crate::drawing::CT_INKML), parts.xml.into_bytes());
+                let content = drels.add("customXml", &format!("../ink/ink{}.xml", out.inks));
+                out.default_type("png", "image/png");
+                let file = out.image_part("png", &parts.png);
+                let image = drels.add("image", &format!("../media/{file}"));
+                objs.push(Obj::Ink(sh, crate::drawing::InkRefs { content, image, creation_id: parts.creation_id }));
+                continue;
+            }
             objs.push(Obj::Shape(sh));
         }
         out.part(&format!("xl/drawings/drawing{dn}.xml"), Some(CT_DRAWING), crate::drawing::write_drawing(sheet, &wb.theme, &objs).into_bytes());

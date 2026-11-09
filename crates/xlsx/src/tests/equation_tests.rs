@@ -20,6 +20,7 @@ fn equation(id: u32, cell: &str, latex: &str, ink: Color) -> Shape {
         text: latex.into(),
         format: Default::default(),
         math: Default::default(),
+        ink: None,
     }
 }
 
@@ -161,6 +162,7 @@ fn a_text_box_stays_a_text_box_and_hostile_sources_survive() {
         text: "plain".into(),
         format: Default::default(),
         math: Default::default(),
+        ink: None,
     });
     wb.sheets[0] = Arc::new(sh);
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();

@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (form controls; catalog 281 / 296; earlier: insert objects: equations; earlier: what-if and analysis: Solver Sensitivity report; no score change; earlier: chart resizing no longer listed as missing; no score change; earlier: what-if and analysis: Analysis ToolPak has all 19 tools; earlier: page layout and print: Page Setup's page order; no score change; earlier: charts: data tables with XLSX round-trip and print/PDF; no score change; earlier: what-if and analysis: Solver Options; the Insert Function dialog is named as in Excel; no score change; earlier: Solver Load/Save Model and Reset All; automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-08 · **Change:** minor (Ink Replay; catalog 282 / 297; earlier: form controls; catalog 281 / 296; earlier: insert objects: equations; earlier: what-if and analysis: Solver Sensitivity report; no score change; earlier: chart resizing no longer listed as missing; no score change; earlier: what-if and analysis: Analysis ToolPak has all 19 tools; earlier: page layout and print: Page Setup's page order; no score change; earlier: charts: data tables with XLSX round-trip and print/PDF; no score change; earlier: what-if and analysis: Solver Options; the Insert Function dialog is named as in Excel; no score change; earlier: Solver Load/Save Model and Reset All; automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -13,7 +13,7 @@ generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 | Number | Value | Kind |
 |---|---|---|
 | Feature breadth (weighted by use) | **~75%** | estimated from the area table below; anchored on two measurements |
-| Ribbon and menu catalog | **281 / 296 (94.9%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
+| Ribbon and menu catalog | **282 / 297 (94.9%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
 | Worksheet functions, by name | **513 / 523 (98.1%)** | measured: registered functions vs Microsoft's published function list (method below) |
 | Worksheet functions that do real work | **504 / 523 (96.4%)** | measured: excludes 9 stubs (7 CUBE functions, WEBSERVICE, FILTERXML) |
 | **Ready for real work** | **~50%** | estimated; written weights below (51.6 computed) |
@@ -54,8 +54,8 @@ long `.xls` track, so about half parallelizes (≈30–50 wall-clock hours with 
   COPILOT and PY: **523 functions**. Ours: every `f!(…)` spec in `crates/functions/src/*.rs` plus
   `SPECIAL_FUNCTIONS` in `crates/calc/src/eval.rs` (evaluator special forms), minus the test-only
   `ADD2`: **505**, all of them Excel names.
-- **Ribbon catalog:** `crates/engine/src/catalog.rs` (296 unique ids across 16 tabs) against the
-  321 command ids registered in `crates/engine/src/cmd/*.rs`, recomputed from source by script and
+- **Ribbon catalog:** `crates/engine/src/catalog.rs` (297 unique ids across 16 tabs) against the
+  322 command ids registered in `crates/engine/src/cmd/*.rs`, recomputed from source by script and
   identical to the committed `parity-checklist.md`. The catalog is our own transcription of
   Excel's main ribbon tabs; it leaves out most contextual tabs (Picture Format, Shape Format,
   Header & Footer, Sparkline, Slicer, Timeline), most of the Developer tab (its form controls are
@@ -305,7 +305,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
   values on rows or columns, date grouping, sort, filters, show-values-as, refresh, and XLSX round-trip.
 - Page layout & print: Page Break Preview, print settings, PDF export and printing.
 - What-if: Goal Seek, scenarios, data tables. Spelling (system word list) and thesaurus.
-- Draw: pen, highlighter, eraser, ink strokes and Ink to Shape. Task panes: Comments (threaded
+- Draw: pen, highlighter, eraser, ink strokes, Ink to Shape and Ink Replay. Task panes: Comments (threaded
   replies, resolve), Watch Window, Selection, Format Chart.
 - Charts: column, bar, line, area, pie, doughnut (one concentric ring per series), scatter,
   bubble, radar, histogram, waterfall, funnel, treemap, sunburst, box & whisker, stock and combo
@@ -334,6 +334,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Draw: Ink Replay (`draw.inkReplay`) plays the sheet's ink strokes back in drawing order; catalog 281 / 296 → 282 / 297 |
 | 2026-11-02 | minor | Form controls (buttons, scroll bars, spin buttons) in Insert objects and Automation; catalog 277 / 292 → 281 / 296 (Developer › Controls) |
 | 2026-11-02 | minor | Insert objects: equations; catalog count 277 / 292 (no score change) |
 | 2026-11-02 | minor | What-if and analysis: Solver Sensitivity report (no score change) |

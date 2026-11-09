@@ -284,6 +284,8 @@ pub struct GridState {
     pub pane: Option<String>,
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
+    /// Ink Replay animating the sheet's strokes (Draw › Replay).
+    pub replay: Option<crate::ink::Replay>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
     pub pages: Option<PagesCache>,
     /// The PivotTable Fields pane's `pivot.fields` answer, cached per (doc uid, revision, pivot):
