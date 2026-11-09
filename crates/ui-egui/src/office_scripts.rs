@@ -54,6 +54,9 @@ impl Status {
 
 /// Opens the pane (Automate ▸ Office Scripts).
 pub fn open(app: &mut SheetApp) -> Dialog {
+    // A Bun installed while GridCraft runs (after the first pane open) is found on the next
+    // open: one `bun --version` probe per explicit open, never per save or delete.
+    ensure_host(app);
     refresh(app);
     Dialog::custom("officeScripts", "Office Scripts", json!({}))
 }

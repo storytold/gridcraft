@@ -10,8 +10,7 @@
 
 use serde_json::{Map, Value as Json, json};
 
-use crate::syntax;
-use crate::{MAX_CODE_CHARS, MAX_NAME_CHARS};
+use crate::{MAX_NAME_CHARS, syntax};
 
 /// The format version GridCraft writes.
 pub const FORMAT_VERSION: &str = "0.3.0";
@@ -93,9 +92,8 @@ impl OstsFile {
             return Err(OstsError::Version(version));
         }
         let body = string_field(&mut object, "body")?.ok_or(OstsError::Missing("body"))?;
-        if body.chars().count() > MAX_CODE_CHARS {
-            return Err(OstsError::TooLarge(body.len()));
-        }
+        // A body over the character limit is reported by `syntax::check` below with the limit,
+        // not as a byte size: a 150,000-character body is far below the 2 MiB file bound.
         // Excel's editor always writes a main function; a file without one is not a script.
         if !has_main(&body) {
             return Err(OstsError::NoMain);
@@ -386,6 +384,17 @@ mod tests {
     fn oversized_files_are_refused_before_parsing() {
         let huge = "x".repeat(MAX_OSTS_BYTES + 1);
         assert!(matches!(OstsFile::parse(&huge), Err(OstsError::TooLarge(_))));
+    }
+
+    #[test]
+    fn a_body_over_the_character_limit_names_the_limit() {
+        // A body of 100,001 characters is far below the 2 MiB file bound: the error names the
+        // character limit instead of reporting a contradictory byte size.
+        let body = format!("function main() {{ /* {} */ }}", "x".repeat(crate::MAX_CODE_CHARS));
+        let text = file(json!({"body": body}));
+        let error = OstsFile::parse(&text).unwrap_err().to_string();
+        assert!(error.contains(&crate::MAX_CODE_CHARS.to_string()), "{error}");
+        assert!(!error.contains("at most 2097152"), "{error}");
     }
 
     #[test]

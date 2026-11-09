@@ -977,7 +977,9 @@ fn range_set(s: &mut Session, method: &str, params: &Json) -> Result<Json, Bridg
             command(s, "range.setValues", json!({"sheet": sheet, "range": range, "values": values, "parse": false}))?;
         }
         _ => {
-            // setText / setTexts: the text exactly as given.
+            // setText / setTexts: the text exactly as given. A leading apostrophe is text here,
+            // never the marker that keeps formula-like text a text, so the write carries the
+            // flag that keeps it verbatim.
             let key = if method == "Range.setText" { "text" } else { "texts" };
             let value = params.get(key).cloned().ok_or_else(|| BridgeError::invalid_argument(format!("missing `{key}`")))?;
             let values =
@@ -985,7 +987,7 @@ fn range_set(s: &mut Session, method: &str, params: &Json) -> Result<Json, Bridg
             if !values.is_array() {
                 return Err(BridgeError::invalid_argument("setTexts takes rows of text"));
             }
-            command(s, "range.setValues", json!({"sheet": sheet, "range": range, "values": values, "parse": false}))?;
+            command(s, "range.setValues", json!({"sheet": sheet, "range": range, "values": values, "parse": false, "verbatim": true}))?;
         }
     }
     Ok(Json::Null)

@@ -1003,9 +1003,27 @@ mod tests {
     }
 
     #[test]
+    fn a_verbatim_write_keeps_a_literal_leading_apostrophe() {
+        // `setText` and `setTexts` store the text given: a leading apostrophe is text, not the
+        // marker that keeps formula-like text a text.
+        let mut s = session("verbatim-apostrophe");
+        {
+            let mut bridge = crate::script::SessionBridge { session: &mut s };
+            let text = BridgeCall::new("Range.setText", json!({"range": "A1", "text": "'=1+1"}));
+            gridcraft_script::BridgeExecutor::execute(&mut bridge, &text).unwrap();
+            assert_eq!(value(bridge.session, 0, "A1"), Value::Text("'=1+1".into()));
+            let texts = BridgeCall::new("Range.setTexts", json!({"range": "A2", "texts": [["'abc"]]}));
+            gridcraft_script::BridgeExecutor::execute(&mut bridge, &texts).unwrap();
+            assert_eq!(value(bridge.session, 0, "A2"), Value::Text("'abc".into()));
+        }
+        // The recording's marker still decodes: `'=1+1` with `parse: false` is the text `=1+1`.
+        s.execute("range.setValues", json!({"range": "A3", "values": [["'=1+1"]], "parse": false})).unwrap();
+        assert_eq!(value(&s, 0, "A3"), Value::Text("=1+1".into()));
+    }
+
+    #[test]
     fn a_range_write_above_the_capture_bound_is_skipped() {
         let mut s = session("record-uncaptured");
-        s.execute("script.record", json!({"on": true})).unwrap();
         let row = Json::Array((0..10_001).map(|i| json!(i)).collect());
         s.execute("range.setValues", json!({"range": "A1", "values": [row]})).unwrap();
         let stopped = s.execute("script.record", json!({"on": false})).unwrap();
