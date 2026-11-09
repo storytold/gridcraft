@@ -1006,6 +1006,7 @@ impl Dialog {
                 dialog
             }
             "manageRules" => Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({})),
+            "newFormattingRule" => cond_format_rules::new_rule_dialog(app, &params),
             "commandSearch" => Dialog::custom("commandSearch", "Search Commands", json!({})),
             "agents" => Dialog::custom("agents", "Agent Control", json!({})),
             "about" => {
