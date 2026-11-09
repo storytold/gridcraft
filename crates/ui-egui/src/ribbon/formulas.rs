@@ -150,18 +150,14 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui);
     ui.vertical(|ui| {
-        if small_button(ui, Icon::Trace, "Trace Precedents", "Trace Precedents", false).clicked()
-            && let Ok(r) = app.run("formulas.tracePrecedents", json!({}))
-        {
-            app.grid.trace = crate::grid::Trace::new(app, r);
+        if small_button(ui, Icon::Trace, "Trace Precedents", "Trace Precedents", false).clicked() {
+            act(app, "formulas.tracePrecedents", json!({}));
         }
-        if small_button(ui, Icon::Trace, "Trace Dependents", "Trace Dependents", false).clicked()
-            && let Ok(r) = app.run("formulas.traceDependents", json!({}))
-        {
-            app.grid.trace = crate::grid::Trace::new(app, r);
+        if small_button(ui, Icon::Trace, "Trace Dependents", "Trace Dependents", false).clicked() {
+            act(app, "formulas.traceDependents", json!({}));
         }
         if small_button(ui, Icon::Close, "Remove Arrows", "Remove Arrows", false).clicked() {
-            app.grid.trace = None;
+            act(app, "formulas.removeArrows", json!({}));
         }
     });
     ui.vertical(|ui| {
@@ -180,13 +176,8 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             if ui.button(format!("{}…", lang.tr("Error Checking"))).clicked() {
                 app.open_dialog("errorChecking", json!({}));
             }
-            // A cell without an error, or one its error starts in without references, has no
-            // arrows: the ones shown stay.
-            if ui.button(lang.tr("Trace Error")).clicked()
-                && let Ok(r) = app.run("formulas.traceError", json!({}))
-                && r["arrows"].as_array().is_some_and(|a| !a.is_empty())
-            {
-                app.grid.trace = crate::grid::Trace::new(app, r);
+            if ui.button(lang.tr("Trace Error")).clicked() {
+                act(app, "formulas.traceError", json!({}));
             }
             let circular = circular_references(app);
             ui.add_enabled_ui(!circular.is_empty(), |ui| {
@@ -209,7 +200,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     if big_button(ui, Icon::Search, "Watch\nWindow", "Watch Window", false).clicked() {
-        app.grid.pane = Some("watch".into());
+        act(app, "formulas.watchWindow", json!({}));
     }
     sep(ui);
     let co = big_button(ui, Icon::Calc, "Calculation\nOptions", "Calculation Options", true);

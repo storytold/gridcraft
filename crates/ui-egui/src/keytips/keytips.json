@@ -1820,8 +1820,8 @@
   },
   {
    "seq": "AD",
-   "kind": "command",
-   "target": "data.consolidate",
+   "kind": "dialog",
+   "target": "consolidate",
    "excel": "Consolidate",
    "note": ""
   },
@@ -2200,8 +2200,8 @@
   },
   {
    "seq": "AWT",
-   "kind": "command",
-   "target": "data.dataTable",
+   "kind": "dialog",
+   "target": "dataTable",
    "excel": "Data Table",
    "note": ""
   },
@@ -2780,17 +2780,15 @@
   },
   {
    "seq": "OE",
-   "kind": "command",
-   "target": "home.formatCells",
-   "excel": "Format > Cells",
-   "note": "Legacy Excel 2003 menu path (#941)."
+   "kind": "dialog",
+   "target": "formatCells",
+   "excel": "Format Cells"
   },
   {
    "seq": "OD",
-   "kind": "command",
-   "target": "home.conditionalFormat",
-   "excel": "Format > Conditional Formatting",
-   "note": "Legacy Excel 2003 menu path (#941)."
+   "kind": "dialog",
+   "target": "manageRules",
+   "excel": "Conditional Formatting"
   },
   {
    "seq": "DFF",
@@ -2836,17 +2834,17 @@
   },
   {
    "seq": "DL",
-   "kind": "command",
-   "target": "data.validation",
-   "excel": "Data > Validation",
-   "note": "Legacy Excel 2003 menu path (#941)."
+   "kind": "dialog",
+   "target": "dataValidation",
+   "excel": "Validation",
+   "note": "Legacy Excel Data menu"
   },
   {
    "seq": "DT",
-   "kind": "command",
-   "target": "data.dataTable",
-   "excel": "Data > Table (what-if data table)",
-   "note": "Legacy Excel 2003 menu path (#941)."
+   "kind": "dialog",
+   "target": "dataTable",
+   "excel": "Data Table",
+   "note": "Legacy Excel Data menu"
   },
   {
    "seq": "VN",
@@ -2911,6 +2909,350 @@
    "pending": true,
    "excel": "Search / Tell Me",
    "note": "Alt+Q search box does not exist yet (issue #49)"
+  },
+  {
+   "seq": "D",
+   "kind": "tab",
+   "target": "Data",
+   "note": "Legacy Excel menu prefix"
+  },
+  {
+   "seq": "DB",
+   "kind": "dialog",
+   "target": "subtotal",
+   "excel": "Subtotal",
+   "note": "Legacy Excel Data menu"
+  },
+  {
+   "seq": "DE",
+   "kind": "dialog",
+   "target": "textToColumns",
+   "excel": "Text to Columns",
+   "note": "Legacy Excel Data menu"
+  },
+  {
+   "seq": "DFA",
+   "kind": "dialog",
+   "target": "advancedFilter",
+   "excel": "Advanced Filter",
+   "note": "Legacy Excel Data menu"
+  },
+  {
+   "seq": "DFS",
+   "kind": "command",
+   "target": "data.clearFilter",
+   "excel": "Show All",
+   "note": "Legacy Excel Data menu"
+  },
+  {
+   "seq": "DGE",
+   "kind": "dialog",
+   "target": "outlineSettings",
+   "excel": "Outline Settings",
+   "note": "Legacy Excel Data menu"
+  },
+  {
+   "seq": "DIC",
+   "kind": "command",
+   "target": "insert.table",
+   "excel": "Create List",
+   "note": "Legacy Excel Data menu"
+  },
+  {
+   "seq": "DIR",
+   "kind": "dialog",
+   "target": "tableResize",
+   "excel": "Resize List",
+   "note": "Legacy Excel Data menu"
+  },
+  {
+   "seq": "DIT",
+   "kind": "command",
+   "target": "table.totalRow",
+   "excel": "Total Row",
+   "note": "Legacy Excel Data menu"
+  },
+  {
+   "seq": "DIV",
+   "kind": "command",
+   "target": "table.convertToRange",
+   "excel": "Convert to Range",
+   "note": "Legacy Excel Data menu"
+  },
+  {
+   "seq": "DN",
+   "kind": "dialog",
+   "target": "consolidate",
+   "excel": "Consolidate",
+   "note": "Legacy Excel Data menu"
+  },
+  {
+   "seq": "DP",
+   "kind": "command",
+   "target": "insert.pivotTable",
+   "excel": "PivotTable and PivotChart Report",
+   "note": "Legacy Excel Data menu"
+  },
+  {
+   "seq": "DR",
+   "kind": "command",
+   "target": "pivot.refresh",
+   "excel": "Refresh Data",
+   "note": "Legacy Excel Data menu"
+  },
+  {
+   "seq": "EAF",
+   "kind": "command",
+   "target": "edit.clearFormats",
+   "excel": "Clear Formats"
+  },
+  {
+   "seq": "EC",
+   "kind": "command",
+   "target": "edit.copy",
+   "excel": "Copy"
+  },
+  {
+   "seq": "EE",
+   "kind": "dialog",
+   "target": "find",
+   "excel": "Replace",
+   "params": {
+    "replace": true
+   }
+  },
+  {
+   "seq": "EID",
+   "kind": "command",
+   "target": "edit.fillDown",
+   "excel": "Fill Down"
+  },
+  {
+   "seq": "EIJ",
+   "kind": "command",
+   "target": "home.justify",
+   "excel": "Fill Justify"
+  },
+  {
+   "seq": "EIL",
+   "kind": "command",
+   "target": "edit.fillLeft",
+   "excel": "Fill Left"
+  },
+  {
+   "seq": "EIR",
+   "kind": "command",
+   "target": "edit.fillRight",
+   "excel": "Fill Right"
+  },
+  {
+   "seq": "EIS",
+   "kind": "dialog",
+   "target": "series",
+   "excel": "Fill Series"
+  },
+  {
+   "seq": "EIU",
+   "kind": "command",
+   "target": "edit.fillUp",
+   "excel": "Fill Up"
+  },
+  {
+   "seq": "EP",
+   "kind": "command",
+   "target": "edit.paste",
+   "excel": "Paste"
+  },
+  {
+   "seq": "ET",
+   "kind": "command",
+   "target": "edit.cut",
+   "excel": "Cut"
+  },
+  {
+   "seq": "EU",
+   "kind": "command",
+   "target": "edit.undo",
+   "excel": "Undo"
+  },
+  {
+   "seq": "FS",
+   "kind": "command",
+   "target": "file.save",
+   "excel": "Save",
+   "note": "Legacy File menu"
+  },
+  {
+   "seq": "FV",
+   "kind": "command",
+   "target": "file.print",
+   "excel": "Print Preview",
+   "note": "Legacy File menu; opens the Windows Print page with preview"
+  },
+  {
+   "seq": "I",
+   "kind": "tab",
+   "target": "Insert",
+   "note": "Legacy Excel menu prefix"
+  },
+  {
+   "seq": "IB",
+   "kind": "command",
+   "target": "pageLayout.breaks",
+   "excel": "Insert Page Break",
+   "params": {
+    "insert": true
+   }
+  },
+  {
+   "seq": "IH",
+   "kind": "command",
+   "target": "insert.recommendedCharts",
+   "excel": "Insert Chart"
+  },
+  {
+   "seq": "II",
+   "kind": "dialog",
+   "target": "insertLink",
+   "excel": "Insert Hyperlink"
+  },
+  {
+   "seq": "IM",
+   "kind": "dialog",
+   "target": "comment",
+   "excel": "Insert Note",
+   "params": {
+    "threaded": false
+   }
+  },
+  {
+   "seq": "INP",
+   "kind": "dialog",
+   "target": "pasteName",
+   "excel": "Paste Name"
+  },
+  {
+   "seq": "IPF",
+   "kind": "dialog",
+   "target": "insertPicture",
+   "excel": "Insert Picture from File",
+   "params": {
+    "placement": "overCells"
+   }
+  },
+  {
+   "seq": "OCS",
+   "kind": "dialog",
+   "target": "defaultWidth",
+   "excel": "Standard Column Width"
+  },
+  {
+   "seq": "TG",
+   "kind": "dialog",
+   "target": "goalSeek",
+   "excel": "Goal Seek",
+   "note": "Legacy Tools menu"
+  },
+  {
+   "seq": "TK",
+   "kind": "dialog",
+   "target": "errorChecking",
+   "excel": "Error Checking",
+   "note": "Legacy Tools menu"
+  },
+  {
+   "seq": "TMM",
+   "kind": "dialog",
+   "target": "macros",
+   "excel": "Macros",
+   "note": "Legacy Tools menu"
+  },
+  {
+   "seq": "TMR",
+   "kind": "dialog",
+   "target": "recordMacro",
+   "excel": "Record Macro",
+   "note": "Legacy Tools menu; stops while recording"
+  },
+  {
+   "seq": "TPA",
+   "kind": "dialog",
+   "target": "allowEditRanges",
+   "excel": "Allow Users to Edit Ranges",
+   "note": "Legacy Tools menu"
+  },
+  {
+   "seq": "TPP",
+   "kind": "dialog",
+   "target": "protectSheet",
+   "excel": "Protect Sheet",
+   "note": "Legacy Tools menu"
+  },
+  {
+   "seq": "TPW",
+   "kind": "dialog",
+   "target": "protectWorkbook",
+   "excel": "Protect Workbook",
+   "note": "Legacy Tools menu"
+  },
+  {
+   "seq": "TS",
+   "kind": "dialog",
+   "target": "spelling",
+   "excel": "Spelling",
+   "note": "Legacy Tools menu"
+  },
+  {
+   "seq": "TUE",
+   "kind": "command",
+   "target": "formulas.traceError",
+   "excel": "Trace Error",
+   "note": "Legacy Tools menu"
+  },
+  {
+   "seq": "TUF",
+   "kind": "dialog",
+   "target": "evaluateFormula",
+   "excel": "Evaluate Formula",
+   "note": "Legacy Tools menu"
+  },
+  {
+   "seq": "TUW",
+   "kind": "command",
+   "target": "formulas.watchWindow",
+   "excel": "Watch Window",
+   "note": "Legacy Tools menu"
+  },
+  {
+   "seq": "TV",
+   "kind": "dialog",
+   "target": "solver",
+   "excel": "Solver",
+   "note": "Legacy Tools menu"
+  },
+  {
+   "seq": "V",
+   "kind": "tab",
+   "target": "View",
+   "note": "Legacy Excel menu prefix"
+  },
+  {
+   "seq": "VC",
+   "kind": "command",
+   "target": "review.showAllNotes",
+   "excel": "Show All Notes"
+  },
+  {
+   "seq": "VF",
+   "kind": "command",
+   "target": "view.formulaBar",
+   "excel": "Toggle Formula Bar"
+  },
+  {
+   "seq": "VH",
+   "kind": "dialog",
+   "target": "headerFooter",
+   "excel": "Header and Footer"
   }
  ]
 }

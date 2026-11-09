@@ -118,6 +118,10 @@ impl SheetApp {
         if id == "insert.recommendedCharts" && params.get("type").is_none() {
             return self.open_dialog("recommendedCharts", json!({}));
         }
+        if id == "formulas.watchWindow" && params.as_object().is_some_and(serde_json::Map::is_empty) {
+            self.grid.pane = Some("watch".into());
+            return;
+        }
         // Switch Windows with no window named (key tip, command search) opens the View tab's
         // list to choose from; programmatic callers of `run` get the list back.
         if id == "view.switchWindows" && ["window", "doc"].iter().all(|k| params.get(*k).is_none_or(Json::is_null)) {
@@ -130,7 +134,14 @@ impl SheetApp {
             // A refused cell draft already shows its own message (with the rule's title).
             Err(e) if self.message.as_ref().is_some_and(|(_, m)| *m == e) => {}
             Err(e) => self.alert(e),
-            Ok(_) => {}
+            Ok(result) => match id {
+                "formulas.tracePrecedents" | "formulas.traceDependents" => self.grid.trace = crate::grid::Trace::new(self, result),
+                "formulas.traceError" if result["arrows"].as_array().is_some_and(|arrows| !arrows.is_empty()) => {
+                    self.grid.trace = crate::grid::Trace::new(self, result);
+                }
+                "formulas.removeArrows" => self.grid.trace = None,
+                _ => {}
+            },
         }
     }
 
@@ -369,6 +380,9 @@ impl SheetApp {
         {
             self.run_or_alert("review.unprotectSheet", json!({}));
             return;
+        }
+        if name == "protectWorkbook" && self.session.active().is_some_and(|doc| doc.wb.protected_structure) {
+            return backstage::protect_workbook(self);
         }
         match name {
             "open" => {
