@@ -585,7 +585,6 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
                 d.wb.names
                     .iter()
                     .filter(|n| n.scope.is_none() || n.scope == Some(ed.sheet))
-                    .filter(|n| !n.hidden)
                     .filter(|n| custom_lambda(&d.wb, ed.sheet, &n.name, ed.locale).is_some())
                     .map(|n| n.name.clone()),
             );
@@ -921,6 +920,9 @@ fn custom_lambda(
     locale: gridcraft_engine::formula::FormulaLocale,
 ) -> Option<(String, String)> {
     let n = wb.name(name, sheet)?;
+    if n.hidden {
+        return None;
+    }
     let gridcraft_engine::formula::Expr::Call(head, args) = gridcraft_engine::formula::parse_name(&n.formula).ok()? else { return None };
     if !head.eq_ignore_ascii_case("LAMBDA") {
         return None;
@@ -967,6 +969,20 @@ mod spill_tests {
             custom_lambda(&wb, 0, "BI_Rate", gridcraft_engine::formula::FormulaLocale::Es),
             Some(("BI_Rate(amount; rate)".into(), "Applies a rate".into()))
         );
+    }
+
+    #[test]
+    fn custom_lambda_hides_the_effective_name() {
+        let mut wb = gridcraft_engine::model::Workbook::new();
+        wb.names.push(gridcraft_engine::model::DefinedName {
+            name: "BI_HiddenRate".into(),
+            scope: None,
+            formula: "LAMBDA(rate,rate)".into(),
+            comment: "Private".into(),
+            hidden: true,
+        });
+
+        assert_eq!(custom_lambda(&wb, 0, "BI_HiddenRate", gridcraft_engine::formula::FormulaLocale::En), None);
     }
 
     fn set(app: &mut SheetApp, cell: &str, input: &str) {
