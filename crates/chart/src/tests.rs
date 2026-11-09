@@ -1682,6 +1682,26 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
 }
 
+/// Axis labels in a huge size (the file allows up to 400 pt) still leave the plot its room, with
+/// outer category levels too: every series is drawn, on column and bar charts.
+#[test]
+fn huge_axis_sizes_leave_room_for_the_plot() {
+    use gridcraft_model::ChartTextStyle;
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered] {
+        let mut d = sample(kind);
+        d.category_levels = vec![vec!["Group one".into(); 3].into_iter().chain(vec!["Group two".into(); 3]).collect()];
+        let colors: Vec<_> = d.series.iter().map(|s| s.color).collect();
+        let mut c = chart(kind);
+        c.legend = LegendPos::None;
+        let huge = ChartTextStyle { size: Some(400.0), ..Default::default() };
+        c.text.category_axis = huge;
+        c.text.value_axis = huge;
+        let p = render(&c, &d, 600.0, 400.0, &ApproxMeasure);
+        let bars = p.iter().filter(|p| matches!(p, Prim::Rect { fill: Some(f), w, h, .. } if colors.contains(f) && *w > 0.5 && *h > 0.5)).count();
+        assert!(bars >= d.series.len() * 2, "{kind:?}: {bars} bars drawn");
+    }
+}
+
 /// A chart's own text styles: legend, data labels and axis labels in the size, weight and capitals
 /// its file gives; what it leaves out keeps the usual look.
 /// A legend in a huge size (the file allows up to 400 pt) still leaves the plot its room: the

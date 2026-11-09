@@ -102,7 +102,10 @@ impl ValAxis<'_> {
 
 /// Draws gridlines, axis labels and the category axis line; returns the plot rectangle.
 pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis>, horizontal: bool, grid: bool) -> Bx {
-    let (vl, cl) = (Look::of(ctx.text.value_axis, LABEL_SIZE), Look::of(ctx.text.category_axis, LABEL_SIZE));
+    // A row of axis labels takes at most 15% of the height, so a huge size from the file still
+    // leaves the plot room, outer category levels included.
+    let fit = |l: Look| Look { size: l.size.min((area.h * 0.15 / 1.4).max(1.0)), ..l };
+    let (vl, cl) = (fit(Look::of(ctx.text.value_axis, LABEL_SIZE)), fit(Look::of(ctx.text.category_axis, LABEL_SIZE)));
     let ls = vl.size.max(cl.size);
     let lh = ls * 1.4;
     let ylabels = y.labels();
