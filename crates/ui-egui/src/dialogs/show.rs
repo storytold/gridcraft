@@ -4,6 +4,7 @@ use super::charts::{recommended_charts, select_data};
 use super::command_search::command_search;
 use super::cond_format_rules::manage_rules;
 use super::data::{advanced_filter_form, data_validation_form, sort};
+use super::database::{db_import_params, from_database, run_confirmed, stop_waiting, wait_row};
 use super::find::{find, go_to};
 use super::format_cells::format_cells;
 use super::insert_function::insert_function;
@@ -65,6 +66,17 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
                 }
             }
             v["delimiters"] = Json::Array(delims);
+        }
+        "fromDatabase" => v = db_import_params(d),
+        "dbPassword" => {
+            if let Some(m) = v.as_object_mut() {
+                m.retain(|k, _| matches!(k.as_str(), "table" | "password"));
+            }
+        }
+        "dbTrust" => {
+            if let Some(m) = v.as_object_mut() {
+                m.retain(|k, _| matches!(k.as_str(), "table" | "trust"));
+            }
         }
         "removeDuplicates" | "subtotal" => {
             if let Some(t) = d.values.get("columnsText").and_then(Json::as_str).filter(|t| !t.trim().is_empty()) {
@@ -155,6 +167,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
         "assignAction" => 440.0,
+        "fromDatabase" => 520.0,
         "zoom" => 220.0,
         "pasteSpecial" => 480.0,
         _ => 380.0,
@@ -223,6 +236,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     });
                 }
                 "macros" => crate::macro_ui::macros_dialog(app, ui, &mut d, &mut open),
+                "fromDatabase" => from_database(app, ui, &mut d, &mut confirm, &mut open),
                 "recordMacro" => crate::macro_ui::record_dialog(app, ui, &mut d, &mut open),
                 "statistics" | "accessibility" | "errorChecking" | "evaluateFormula" | "comments" => {
                     let r = if d.name == "comments" {
@@ -379,6 +393,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 }
                 _ => form(app, ui, &mut d, &mut confirm, &mut open),
             }
+            wait_row(app, ui, &mut d);
         });
     window_shown(ctx, &mut d, collapsed.is_some(), shown.map(|r| r.response.rect));
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
@@ -429,9 +444,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.message = Some((d.title.clone(), crate::clean_error(&e)));
         confirm = false;
     }
-    if confirm && let Some(cmd) = d.command {
-        let params = build_params(&d);
-        match app.run(cmd, params) {
+    let ran = run_confirmed(app, &mut d, &mut confirm);
+    if let Some(result) = ran {
+        match result {
             Ok(r) => {
                 open = false;
                 if d.name == "solver" {
@@ -452,9 +467,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             }
             Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
         }
-    } else if confirm {
+    } else if confirm && d.command.is_none() {
         open = false;
     }
+    stop_waiting(app, &d, open);
     if !open
         && !confirm
         && let Err(e) = end_pick(app, &mut d)
@@ -542,7 +558,13 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
 }
 
 fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
-    form_fields(app, ui, d);
+    if d.name == "dbTrust" {
+        // A file can hold many connections and long statements: they scroll, OK and Cancel stay
+        // in view.
+        egui::ScrollArea::vertical().id_salt("dbTrustFields").max_height(360.0).show(ui, |ui| form_fields(app, ui, d));
+    } else {
+        form_fields(app, ui, d);
+    }
     ok_cancel(ui, confirm, open);
 }
 
@@ -592,7 +614,7 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     // Field labels, choices and notes are English source strings, translated as they are drawn.
     let lang = crate::i18n::current(ui.ctx());
     egui::Grid::new("form").num_columns(1).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        for f in d.fields.clone() {
+        for (row, f) in d.fields.clone().into_iter().enumerate() {
             match f {
                 Field::Text { key, label } => {
                     ui.vertical(|ui| {
@@ -602,7 +624,7 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                             .get(key)
                             .map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| if v.is_null() { String::new() } else { v.to_string() }))
                             .unwrap_or_default();
-                        let multiline = key == "text";
+                        let multiline = key == "text" || key == "query";
                         let r = if multiline {
                             ui.add(egui::TextEdit::multiline(&mut s).desired_rows(4).desired_width(320.0)).labelled_by(label.id)
                         } else {
@@ -610,7 +632,7 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                         };
                         take_first_focus(d, &r);
                         if r.changed() {
-                            d.values.insert(key.into(), json!(s));
+                            d.set_value(key, json!(s));
                         }
                         if let Some(pick) = d.pick.as_mut().filter(|pick| pick.key == key) {
                             track_pick(pick, &r, r.changed());
@@ -698,6 +720,11 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                     // context separator, so such a note is shown as it is.
                     let text = if t.contains('|') { t.as_str() } else { lang.tr(&t) };
                     ui.label(egui::RichText::new(text).small());
+                }
+                Field::Code(t) => {
+                    egui::ScrollArea::vertical().id_salt(("code", row)).max_height(120.0).show(ui, |ui| {
+                        ui.add(egui::TextEdit::multiline(&mut t.as_str()).font(egui::TextStyle::Monospace).desired_rows(1).desired_width(320.0));
+                    });
                 }
             }
             ui.end_row();

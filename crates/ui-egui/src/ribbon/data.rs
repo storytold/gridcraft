@@ -7,6 +7,22 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
     if gd.clicked() {
         app.open_dialog("open", json!({}));
     }
+    let db = big_button(ui, Icon::Table, "From\nDatabase", "Import the result of an SQL query (PostgreSQL, MySQL, SQLite, ODBC)", false);
+    control_keytip(app, ui, &db, "data.fromDatabase");
+    if db.clicked() {
+        app.open_dialog("fromDatabase", json!({}));
+    }
+    sep(ui);
+    let ra = big_button(ui, Icon::Redo, "Refresh\nAll", "Refresh all database tables and PivotTables in the workbook", false);
+    control_keytip(app, ui, &ra, "data.refreshAll");
+    if ra.clicked() {
+        crate::refresh_all(app);
+    }
+    let rf = big_button(ui, Icon::Redo, "Refresh", "Run the query of the selected database table (or PivotTable) again", false);
+    control_keytip(app, ui, &rf, "data.refresh");
+    if rf.clicked() {
+        act(app, "data.refresh", json!({}));
+    }
     sep(ui);
     ui.vertical(|ui| {
         let __k = small_button(ui, Icon::SortAsc, "", "Sort A to Z", false);

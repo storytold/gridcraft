@@ -25,6 +25,8 @@ gridcraft-ui-egui = { path = "crates/ui-egui" }
 gridcraft-mcp = { path = "crates/mcp" }
 gridcraft-pdf = { path = "crates/pdf" }
 gridcraft-math = { path = "crates/math" }
+# The apps choose its drivers through their own features.
+gridcraft-datasource = { path = "crates/datasource", default-features = false }
 # Every craft-libs crate (craft-update and craft-window here, craft-ui in ui-egui, craft-print in
 # the app) comes from one craft-libs revision.
 # craft-update: app-specific pretend versions apply to startup and manual checks.

@@ -247,6 +247,9 @@ pub struct Workbook {
     /// separator back (a `;` file stays a `;` file). `None` = not read from CSV: CSV saves use `,`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv_delimiter: Option<u8>,
+    /// Queries behind tables imported from a database (Data › From Database), for Refresh.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub db_queries: Vec<crate::DbQuery>,
     /// GridCraft macros (typed command lists, not VBA), in the order the macro list shows them.
     /// The JSON format keeps them as this field; xlsx keeps them in hidden defined names.
     #[serde(default, skip_serializing_if = "crate::macros::Macros::is_empty", skip_deserializing)]
@@ -360,6 +363,7 @@ impl Workbook {
             phonetics: vec![],
             vba_project: None,
             csv_delimiter: None,
+            db_queries: vec![],
             macros: crate::macros::Macros::default(),
             macros_read: vec![],
             macros_unread: Arc::default(),
@@ -512,6 +516,16 @@ impl Workbook {
         self.free_object_ids(1).first().copied().unwrap_or(u32::MAX)
     }
 
+    /// Drops the database queries whose table is gone (deleted sheet, table converted to a range,
+    /// its rows or columns deleted…), so Refresh never fills another table with them.
+    pub fn drop_orphan_db_queries(&mut self) {
+        if self.db_queries.is_empty() {
+            return;
+        }
+        let live: std::collections::HashSet<u32> = self.sheets.iter().flat_map(|s| s.tables.iter().map(|t| t.id)).collect();
+        self.db_queries.retain(|q| live.contains(&q.table_id));
+    }
+
     /// `count` distinct ids no object in the workbook uses, sorted: the ones above the largest id
     /// in use while they last, then the lowest free ones. Fewer come back only when the id space
     /// is exhausted.
@@ -529,6 +543,9 @@ impl Workbook {
                     .chain(s.slicers.iter().map(|o| o.id))
                     .chain(s.controls.iter().map(|o| o.id))
             })
+            // A database query keeps its table's id until the edit that removed the table ends
+            // (see `drop_orphan_db_queries`): a table made in that same edit can't take it.
+            .chain(self.db_queries.iter().map(|q| q.table_id))
             .collect();
         used.sort_unstable();
         used.dedup();
@@ -603,6 +620,17 @@ mod tests {
         assert!(wb.check_sheet_name("a/b", None).is_err());
         assert!(wb.check_sheet_name(&"x".repeat(32), None).is_err());
         assert!(wb.check_sheet_name("Budget 2026", None).is_ok());
+    }
+
+    #[test]
+    fn a_database_query_keeps_its_table_id_until_the_edit_ends() {
+        let mut wb = Workbook::new();
+        wb.db_queries.push(crate::DbQuery { table_id: 5, ..Default::default() });
+        // The table is gone, its query not yet dropped: the id is not handed out again.
+        assert_eq!(wb.next_object_id(), 6);
+        wb.drop_orphan_db_queries();
+        assert!(wb.db_queries.is_empty());
+        assert_eq!(wb.next_object_id(), 1);
     }
 
     #[test]

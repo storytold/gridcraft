@@ -127,6 +127,8 @@ pub struct Out {
     /// Authors of threaded comments, in first-use order; written to `xl/persons/person.xml`.
     pub persons: Vec<String>,
     pub table_id: u32,
+    /// The name each table (by model id) was written with, unique within its sheet.
+    pub table_names: std::collections::HashMap<u32, String>,
     pub dynamic_arrays: bool,
     pub needs_calc: bool,
     pub cell_pictures: crate::richdata::PicturesOut,
@@ -264,6 +266,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         ctrl_props: 0,
         persons: vec![],
         table_id: 0,
+        table_names: Default::default(),
         dynamic_arrays: false,
         needs_calc: false,
         cell_pictures: Default::default(),
@@ -408,6 +411,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         wb_rels.add("vbaProject", "vbaProject.bin");
         out.part("xl/vbaProject.bin", Some(CT_VBA), data.to_vec());
     }
+    crate::db_queries::write(wb, &mut wb_rels, &mut out)?;
     out.part("xl/_rels/workbook.xml.rels", None, wb_rels.xml().into_bytes());
 
     // Document properties.

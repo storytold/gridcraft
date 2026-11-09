@@ -4,6 +4,7 @@
 pub mod analysis;
 pub mod controls;
 pub mod data;
+pub mod database;
 pub mod draw;
 pub mod edit;
 pub mod equation;
@@ -169,6 +170,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(controls::specs());
         v.extend(equation::specs());
         v.extend(data::specs());
+        v.extend(database::specs());
         v.extend(formulas::specs());
         v.extend(review::specs());
         v.extend(view::specs());
@@ -410,6 +412,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     // Equations whose source changed (or that arrived without a layout, as from a paste) are
     // laid out here, so painting only ever reads the cache.
     wb.refresh_equations();
+    wb.drop_orphan_db_queries();
     if !protection_checked {
         check_protection(&d.wb, &wb, &d.unlocked_ranges)?;
     }

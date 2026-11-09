@@ -6,6 +6,15 @@ license.workspace = true
 description = "GridCraft command line: inspect, convert, evaluate, script and serve MCP without a window"
 publish = false
 
+[features]
+# Data › From Database drivers; a build can leave any of them out (`--no-default-features`).
+default = ["postgres", "mysql", "sqlite"]
+postgres = ["gridcraft-datasource/postgres"]
+mysql = ["gridcraft-datasource/mysql"]
+sqlite = ["gridcraft-datasource/sqlite"]
+# ODBC data sources (needs the system ODBC driver manager to link: unixODBC on Linux).
+odbc = ["gridcraft-datasource/odbc"]
+
 [lints]
 workspace = true
 
@@ -16,6 +25,7 @@ path = "src/main.rs"
 [dependencies]
 gridcraft-engine = { workspace = true }
 gridcraft-mcp = { workspace = true }
+gridcraft-datasource = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 # `check`: validating the packages GridCraft writes (content types, relationships).
