@@ -1,7 +1,7 @@
 # Real-time collaboration: status and acceptance evidence
 
-- Date: 2026-11-09
-- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), HEAD `bcba9ce0` (code and tests); this page and `server.md` ride on top of it
+- Date: 2026-11-10
+- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), HEAD `6a9b143c` (code and tests); this page rides on top of it
 - Base: `origin/main` = `2c58c769` (rebased 2026-11-08)
 - PR: <https://github.com/storytold/gridcraft/pull/3613> (draft)
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
@@ -52,7 +52,10 @@ it, with the same protocol as the desktop:
 collaboration messages), the single deviation ADR-0016 §3 allows. Manifest and
 `Cargo.lock` both record it; other craft-libs crates stay on their upstream
 revision. After the craft-libs change merges, both pins move back to
-`storytold/craft-libs`.
+`storytold/craft-libs`. On 2026-11-10 the merge had not happened: `main`
+(`1b34eba4`) lacks the collaboration messages — `compare/7666e2b1...main` is
+`diverged` with `behind_by: 1`, and `crates/web-host/src/lib.rs` there has no
+`session` message (§6.6, §16).
 
 Evidence:
 
@@ -182,9 +185,18 @@ keeps the new optional fields.
    up another's operations, commits or metrics. Isolation stays by `fileId`. Many large workbooks
    *on separate hosts* still need separate workers behind sticky routing (ADR-0007 §3): that is a
    deployment concern, not a lock inside this process.
-6. Browser transport is in place (`crates/collab-web`, host bridge); a real
-   browser run against the cabinet page and the craft-libs pin removal after
-   the upstream merge remain.
+6. ~~Browser transport and a real browser run~~ — the two-client headless run through a
+   cabinet-like host page is done (§16): two iframes of the trunk build join one room, 24
+   operations are accepted with no rejection, both replicas converge, presence keeps the
+   ADR-0006 pace and the owner's Save publishes the built `.xlsx` to `COLLAB_CABINET_URL`.
+   That run found and fixed two host-bridge bugs (§16): `session`/`committed` did not request a
+   repaint, so an idle pane joined only when unrelated input drew a frame, and presence was
+   bound to frames that arrived only on input. The **craft-libs pin stays**: `storytold/craft-libs`
+   `main` does not carry the six collaboration messages — the fork commit `7666e2b1` is one
+   commit that `main` lacks (`GET /repos/storytold/craft-libs/compare/7666e2b1...main` →
+   `diverged`, `behind_by: 1`; `crates/web-host/src/lib.rs` on `main` has no `session` message).
+   Both pins move back to `storytold/craft-libs` after that merge. What a person still has to do
+   is listed in §16.
 
 ## 7. Sheet images in parts (ADR-0013, 2026-11-09)
 
@@ -730,3 +742,81 @@ host-environment tests that also failed before it:
 
 No CI file is touched, nothing is pushed to `storytold/*`; the commit stays on
 `feature/realtime-collaboration`.
+
+## 16. Two-client host run against a cabinet-like page (2026-11-10)
+
+**Head `6a9b143c`** on `feature/realtime-collaboration` carries the two host-bridge fixes this
+run found; this entry is the docs commit on top of it.
+
+The browser half of §2 and §6.6, run the way `INTEGRATION.md` §6 describes it: a page frames two
+GridCraft clients, gives each its room token, opens the file the cabinet holds, and takes the
+commit. The page is a local stand-in for the cabinet (it serves the trunk build, asks the room to
+build the file and answers the room's callback); the two clients are real browser tabs of the
+real web build, driven through `window.gridcraft` (`craft-web-api`), not through the protocol.
+
+**Environment.** Chrome `154.0.8037.92` headless (SwiftShader, `--use-angle=swiftshader`,
+`--enable-unsafe-swiftshader`), 560×360 at device pixel ratio 1, `trunk build --release`
+(trunk 0.22.1, 28.5 MB wasm) in `apps/gridcraft-web`. `gridcraft-collab-server` on
+`127.0.0.1:8087` with a fresh store, HS256 development tokens (`aud:"office-sync"`,
+`fileId:7`, `app:"gridcraft"`, one `sessionId` for both clients, roles `owner` and `editor`),
+and `COLLAB_CABINET_URL=http://127.0.0.1:8090/api/v1/internal/office/sessions/{sessionId}/commit`
+with `COLLAB_CABINET_TOKEN`. The page opened the session through `POST /v1/sessions` and asked
+for the file once before the edits (`POST /v1/sessions/{id}/commit`); the room built the blank
+workbook (4004 bytes, `PK\x03\x04`) and posted it to the callback, which answered
+`{version:41, etag:"gridcraft-cabinet-etag-41"}`. Each pane is
+`/index.html?host=parent&webgl&author=Alice|Bob` and received that workbook as `gridcraft:open`
+— the cabinet's bytes, not an app-made blank.
+
+**Result.**
+
+| Step | What was observed |
+|---|---|
+| `gridcraft:ready` | both panes posted it; the page answered `host` and `open` with the cabinet's 4004-byte `.xlsx`; both apps report the workbook through `document.inspect` |
+| join | `session-state` `pending` then `synced` in both panes, both listing two windows (`web-…687636177` owner, `web-…231118710` editor) |
+| operations | 24 accepted, 0 refused: 12 `cell.set` per pane through `window.gridcraft.execute`, each confirmed by the room's version before the next; room `version=24`; `ops_total 24`, `applied_total 24` |
+| convergence | after the last operation both replicas read the same `A1:L2`: every `Alice 1…12` and `Bob 1…12` cell, byte-identical sheets |
+| presence | posted on the 100 ms gate of ADR-0006: 8.36 Hz per pane (median interval 110.5 ms) over a 3 s quiet window after the edits; 6.7–6.9 Hz while the operations were being applied (SwiftShader's frame cost bounds the pace on this host) |
+| commit | the owner's Save posts `gridcraft:commit {sessionId}` with no bytes; the page calls the room's `POST /v1/sessions/{id}/commit`; the room builds the 4261-byte `.xlsx` (`sha256 614bf3b6…`) and posts it to `COLLAB_CABINET_URL` with `expectedVersion:"gridcraft-cabinet-etag-41"`; the cabinet stores it as version 42 |
+| `committed` | both panes show `Committed as version 42 · etag "gridcraft-cabinet-etag-42"`; `commits_total 2`, `cabinet_published_total 2`, `cabinet_conflicts_total 0`, `cabinet_errors_total 0` |
+
+The second callback is the contract's chain: the room sent the etag of the first accepted commit
+as `expectedVersion`, so the cabinet could refuse a file changed outside the session.
+
+**Two host-bridge bugs this run found (fixed).**
+
+1. **A host message did not schedule a frame.** `gridcraft:session` and `gridcraft:committed`
+   were queued for the next frame but nothing asked for one; an idle app draws no frame, so a pane
+   joined only if unrelated input happened to paint. With two panes, one often stayed single-user
+   for the whole run (`session-state` never posted), and re-sending the message replaced a live
+   transport. `apps/gridcraft-web/src/host.rs` now calls `ctx.request_repaint()` for both
+   messages. The join test went from 1 of 2 panes on a bad run to 6 of 6.
+2. **Presence was bound to input-driven frames.** The UI posted `presence` from `ui`, and egui
+   drew only on input, so the browser pace was ~2 Hz. `SheetApp::logic` now schedules
+   `ctx.request_repaint_after(100 ms)` while a session is live (`crates/ui-egui/src/app.rs`), the
+   same way the word processor's session does; the measured pace is the ADR-0006 one (table
+   above).
+
+The failing pre-fix runs also logged one `Error: closure invoked recursively or after being
+dropped` from the wasm glue: dropping a `Transport` closed its socket but left the `on*` closures
+registered, and the asynchronous `close` event reached freed wasm code.
+`crates/collab-web/src/socket.rs` now takes the callbacks off the socket and drops the closures
+in `Drop`; the run above has no page error (only a 404 for the page's missing favicon).
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo fmt --all -- --check` exit 0;
+`cargo test -p gridcraft-collab-web -p gridcraft-web` green (11 web tests, the collab-web suite);
+`cargo clippy -p gridcraft-collab-web -p gridcraft-web -p gridcraft-ui-egui --all-targets --
+-D warnings` clean. The wasm32 `clippy -D warnings` still stops on the pre-existing `dead_code`
+warning in `crates/ui-egui/src/backstage.rs` (`Modified`), untouched by this slice and present
+before it. No push was made and CI is unchanged.
+
+**What remains for a person.**
+
+1. Two real machines or profiles over a network, with the real cabinet page (its own tokens,
+   iframe policy and `wss://`). This run used one headless browser and two same-origin iframes on
+   loopback.
+2. The cabinet's own storage: real version/etag numbering, antivirus and the ticket that carries
+   the numeric `fileId` in `doc`; the same service token in `COLLAB_CABINET_TOKEN` and in the
+   cabinet's callback configuration. A lost `200` is still a `409` until the cabinet makes the
+   callback idempotent.
+3. The craft-libs pin removal, which waits for `storytold/craft-libs` to merge the six
+   collaboration messages (§6.6): on 2026-11-10 `main` did not contain `7666e2b1`.
