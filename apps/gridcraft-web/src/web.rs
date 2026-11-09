@@ -75,6 +75,10 @@ async fn pick_picture(max: f64) -> Option<(String, Vec<u8>)> {
                 finish_for_cancel();
             });
             if input.add_event_listener_with_callback("cancel", cancel.as_ref().unchecked_ref()).is_err() {
+                // Without the cancel listener a dismissed picker would never end the wait and the
+                // input would stay in the page: resolve now and take the input out.
+                finish();
+                input.remove();
                 return;
             }
             *handlers.borrow_mut() = Some((change, cancel));
