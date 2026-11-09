@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-03 · **Change:** trivial (§17: the shape count is the 15 `insert.shape` kinds, and single-headed arrows join Ink to Shape's preset list; earlier: minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All)) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -148,8 +148,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 17. Insert objects (F)
 - Ink strokes now survive XLSX save/reopen as editable polylines. Inserted icons still lose their
   identity/artwork on save (#551); native Office InkML import is not implemented.
-- SmartArt, WordArt, signature line, objects, 3-D models, screenshot; 8 shape kinds vs ~170;
-  pictures in cells (#61, PR #105). Equations exist (LaTeX source with a live preview, Office Math in xlsx); there is
+- SmartArt, WordArt, signature line, objects, 3-D models, screenshot; 15 insertable shape kinds —
+  14 geometric presets plus `textBox`, as `insert.shape` lists them — against Excel's ~170 (Ink to
+  Shape now converts recognised strokes to Excel's preset set: rectangles/squares, ellipse/circle, diamond,
+  parallelogram, trapezoid, pentagon, hexagon, triangle/right triangle, single, block and double
+  arrows, lines); pictures in cells (#61, PR #105). Equations exist (LaTeX source with a live preview, Office Math in xlsx); there is
   no structured (WYSIWYG) equation editing and no ink equations. **Estimate:** 25–40 h.
 
 ### 18. Accessibility (U)

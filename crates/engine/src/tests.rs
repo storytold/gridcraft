@@ -3469,6 +3469,271 @@ fn ink_strokes_and_ink_to_shape() {
 }
 
 #[test]
+fn ink_to_shape_rejects_an_invalid_id_instead_of_converting_the_last_stroke() {
+    let mut s = s();
+    s.execute("draw.stroke", json!({"points": [[100.0, 100.0], [200.0, 102.0], [201.0, 180.0], [99.0, 181.0], [101.0, 104.0]]})).unwrap();
+    // An explicit id that is not a number is a bad parameter, not a request for the last stroke.
+    for id in [json!("1"), json!(-1), json!(1.5), json!(null), json!(4_294_967_296_u64)] {
+        assert!(matches!(s.execute("draw.inkToShape", json!({"id": id})), Err(crate::EngineError::BadParams { .. })), "id {id} must be rejected");
+    }
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].kind, gridcraft_model::ShapeKind::Ink, "the stroke stays ink");
+    // No id still converts the last stroke.
+    assert_eq!(s.execute("draw.inkToShape", json!({})).unwrap()["kind"], "Rectangle");
+}
+
+#[test]
+fn ink_to_shape_rejects_a_non_boolean_mode_instead_of_converting_the_last_stroke() {
+    let mut s = s();
+    s.execute("draw.stroke", json!({"points": [[100.0, 100.0], [200.0, 102.0], [201.0, 180.0], [99.0, 181.0], [101.0, 104.0]]})).unwrap();
+    // A present `on` that is not true or false is a bad parameter, as an invalid `id` is: a caller
+    // that mistypes the mode gets an error, not an unrequested conversion of the last stroke.
+    for on in [json!("true"), json!(1), json!(null), json!("off")] {
+        assert!(matches!(s.execute("draw.inkToShape", json!({"on": on})), Err(crate::EngineError::BadParams { .. })), "on {on} must be rejected");
+    }
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].kind, gridcraft_model::ShapeKind::Ink, "the stroke stays ink");
+    assert!(!s.ink_to_shape, "the mode did not change");
+    // No `on` key still converts the last stroke.
+    assert_eq!(s.execute("draw.inkToShape", json!({})).unwrap()["kind"], "Rectangle");
+}
+
+#[test]
+fn ink_to_shape_mode_converts_every_stroke_and_snaps_squares() {
+    let mut s = s();
+    assert_eq!(s.execute("draw.inkToShape", json!({"on": true})).unwrap()["on"], true);
+    // A near-square: the converted rectangle gets equal sides, like Excel's square.
+    let r = s.execute("draw.stroke", json!({"points": [[100.0, 100.0], [180.0, 100.0], [180.0, 172.0], [100.0, 172.0], [100.0, 100.0]]})).unwrap();
+    assert_eq!(r["kind"], "Rectangle");
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert_eq!(sh.shapes[0].kind, gridcraft_model::ShapeKind::Rectangle);
+    assert_eq!(sh.shapes[0].anchor.width, sh.shapes[0].anchor.height);
+    // Mode off: strokes stay ink.
+    assert_eq!(s.execute("draw.inkToShape", json!({"on": false})).unwrap()["on"], false);
+    s.execute("draw.stroke", json!({"points": [[10.0, 10.0], [60.0, 10.0]]})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert_eq!(sh.shapes[1].kind, gridcraft_model::ShapeKind::Ink);
+}
+
+#[test]
+fn ink_to_shape_keeps_an_arrow_pointing_the_way_it_was_drawn() {
+    let mut s = s();
+    s.execute("draw.inkToShape", json!({"on": true})).unwrap();
+    // A shaft from right to left and two barbs at the left-hand tip.
+    let r = s.execute("draw.stroke", json!({"points": [[200, 100], [160, 100], [120, 100], [100, 100], [120, 108], [101, 100], [120, 92]]})).unwrap();
+    assert_eq!(r["kind"], "Arrow");
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    assert_eq!(sh.kind, gridcraft_model::ShapeKind::Arrow);
+    assert!(sh.format.flip_h, "a right-to-left arrow must point left");
+    assert!(!sh.format.flip_v);
+    // The box is the shaft's, not the barbs': a horizontal stroke stays horizontal.
+    assert!((sh.anchor.width - 100.0).abs() < 0.5, "{:?}", sh.anchor);
+    assert_eq!(sh.anchor.height, 0.0, "a horizontal shaft has a flat box, so the arrow cannot slope: {:?}", sh.anchor);
+    // Drawn left to right, the same stroke points right.
+    let r = s.execute("draw.stroke", json!({"points": [[100, 100], [140, 100], [180, 100], [200, 100], [180, 108], [199, 100], [180, 92]]})).unwrap();
+    assert_eq!(r["kind"], "Arrow");
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[1].clone();
+    assert_eq!(sh.kind, gridcraft_model::ShapeKind::Arrow);
+    assert!(!sh.format.flip_h);
+    assert!(!sh.format.flip_v);
+}
+
+#[test]
+fn ink_to_shape_keeps_a_flat_line_flat() {
+    let mut s = s();
+    s.execute("draw.inkToShape", json!({"on": true})).unwrap();
+    // The line preset runs from one corner of its box to the other, so a minimum height would
+    // tilt a horizontal line by that much over its length (and a vertical one across its width).
+    s.execute("draw.stroke", json!({"points": [[100, 100], [140, 100], [180, 100], [200, 100]]})).unwrap();
+    s.execute("draw.stroke", json!({"points": [[300, 100], [300, 140], [300, 200]]})).unwrap();
+    let doc = s.doc().unwrap().wb.active().unwrap().clone();
+    assert_eq!(doc.shapes[0].kind, gridcraft_model::ShapeKind::Line);
+    assert_eq!(doc.shapes[0].anchor.height, 0.0, "a horizontal line has a flat box: {:?}", doc.shapes[0].anchor);
+    assert_eq!(doc.shapes[1].kind, gridcraft_model::ShapeKind::Line);
+    assert_eq!(doc.shapes[1].anchor.width, 0.0, "a vertical line has a flat box: {:?}", doc.shapes[1].anchor);
+}
+
+#[test]
+fn ink_to_shape_maps_a_square_standing_on_its_corner_to_a_diamond() {
+    let mut s = s();
+    s.execute("draw.inkToShape", json!({"on": true})).unwrap();
+    let pts: Vec<[f64; 2]> = vec![
+        [150.0, 100.0],
+        [175.0, 125.0],
+        [200.0, 150.0],
+        [175.0, 175.0],
+        [150.0, 200.0],
+        [125.0, 175.0],
+        [100.0, 150.0],
+        [125.0, 125.0],
+        [150.0, 100.0],
+    ];
+    let r = s.execute("draw.stroke", json!({"points": pts})).unwrap();
+    assert_eq!(r["kind"], "Diamond");
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    assert_eq!(sh.kind, gridcraft_model::ShapeKind::Diamond);
+}
+
+#[test]
+fn ink_to_shape_anchors_polygon_presets_to_the_recognised_corners() {
+    let mut s = s();
+    s.execute("draw.inkToShape", json!({"on": true})).unwrap();
+    // A hexagon whose top edge bows out by 4 points. The simplifier drops the bow (its tolerance
+    // is a twentieth of the diagonal, about 6 points), so the recognised corners are the plain
+    // 100 × 60 hexagon while the raw stroke is 100 × 64: the preset is inscribed in the corners'
+    // box, so the anchor must be that box and not the stroke's.
+    let pts: Vec<[f64; 2]> = vec![[20.0, 10.0], [50.0, 6.0], [80.0, 10.0], [100.0, 40.0], [80.0, 70.0], [20.0, 70.0], [0.0, 40.0], [20.0, 10.0]];
+    let r = s.execute("draw.stroke", json!({"points": pts})).unwrap();
+    assert_eq!(r["kind"], "Hexagon");
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    assert_eq!(sh.kind, gridcraft_model::ShapeKind::Hexagon);
+    assert!((sh.anchor.width - 100.0).abs() < 0.5, "{:?}", sh.anchor);
+    assert!((sh.anchor.height - 60.0).abs() < 0.5, "the anchor is the corners' box, not the stroke's: {:?}", sh.anchor);
+}
+
+#[test]
+fn ink_to_shape_flips_trapezoids_and_parallelograms_to_the_way_they_were_drawn() {
+    let mut s = s();
+    s.execute("draw.inkToShape", json!({"on": true})).unwrap();
+    // A trapezoid with its wide side on top: the preset draws the wide side at the bottom, so it
+    // is mirrored down instead of turning into an upright trapezoid with the wrong way up.
+    s.execute("draw.stroke", json!({"points": [[0, 0], [100, 0], [80, 60], [20, 60], [0, 0]]})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    assert_eq!(sh.kind, gridcraft_model::ShapeKind::Trapezoid);
+    assert!(sh.format.flip_v, "the wide side belongs on top: {:?}", sh.format);
+    assert!(!sh.format.flip_h);
+    // A parallelogram leaning the other way is the same preset mirrored across.
+    s.execute("draw.stroke", json!({"points": [[0, 0], [75, 0], [100, 60], [25, 60], [0, 0]]})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[1].clone();
+    assert_eq!(sh.kind, gridcraft_model::ShapeKind::Parallelogram);
+    assert!(sh.format.flip_h, "the top edge leans the other way: {:?}", sh.format);
+    assert!(!sh.format.flip_v);
+}
+
+#[test]
+fn ink_to_shape_leaves_a_polygon_its_preset_cannot_place_as_ink() {
+    let mut s = s();
+    s.execute("draw.inkToShape", json!({"on": true})).unwrap();
+    // A stroke sampled along its edges, as a pen draws it (corner points alone would read as a
+    // circle: every point would sit at one radius).
+    fn sampled(corners: &[[f64; 2]]) -> Vec<[f64; 2]> {
+        let mut out = Vec::new();
+        for i in 0..corners.len() {
+            let (a, b) = (corners[i], corners[(i + 1) % corners.len()]);
+            for k in 0..5 {
+                let t = k as f64 / 5.0;
+                out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+            }
+        }
+        out.push(corners[0]);
+        out
+    }
+    // A regular pentagon, point up, is the preset: it converts.
+    let pentagon: Vec<[f64; 2]> = (0..5)
+        .map(|i| {
+            let a = -std::f64::consts::FRAC_PI_2 + i as f64 * std::f64::consts::TAU / 5.0;
+            [100.0 + 50.0 * a.cos(), 100.0 + 50.0 * a.sin()]
+        })
+        .collect();
+    assert_eq!(s.execute("draw.stroke", json!({"points": sampled(&pentagon)})).unwrap()["kind"], "Pentagon");
+    // A six-corner polygon whose top-right corner is a quarter of the box to the left of where
+    // the preset puts it stays ink instead of being drawn with a corner it never had.
+    let lopsided: Vec<[f64; 2]> = vec![[0.0, 0.0], [40.0, 0.0], [100.0, 50.0], [60.0, 100.0], [0.0, 100.0], [-40.0, 50.0]];
+    assert_eq!(s.execute("draw.stroke", json!({"points": sampled(&lopsided)})).unwrap()["kind"], "Ink");
+    // The same five corners visited in star order are a pentagram, not the pentagon: the corners
+    // are the preset's, but in an order that draws edges the preset never had, so it stays ink.
+    let star: Vec<[f64; 2]> = (0..5).map(|i| pentagon[(i * 2) % 5]).collect();
+    assert_eq!(s.execute("draw.stroke", json!({"points": sampled(&star)})).unwrap()["kind"], "Ink");
+}
+
+#[test]
+fn ink_to_shape_keeps_only_triangles_the_preset_can_draw() {
+    let mut s = s();
+    s.execute("draw.inkToShape", json!({"on": true})).unwrap();
+    // An isosceles triangle with its apex up: the preset as drawn.
+    s.execute("draw.stroke", json!({"points": [[0, 60], [100, 60], [50, 0], [0, 60]]})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    assert_eq!(sh.kind, gridcraft_model::ShapeKind::Triangle);
+    assert!(!sh.format.flip_v, "{:?}", sh.format);
+    // Apex down: the same preset mirrored inside its box, so it keeps pointing down.
+    s.execute("draw.stroke", json!({"points": [[0, 0], [100, 0], [50, 60], [0, 0]]})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[1].clone();
+    assert_eq!(sh.kind, gridcraft_model::ShapeKind::Triangle);
+    assert!(sh.format.flip_v, "the apex belongs at the bottom: {:?}", sh.format);
+    // A scalene triangle: the preset's apex sits in the middle of the box, so converting this
+    // would move the drawn apex halfway across. The stroke stays ink.
+    let r = s.execute("draw.stroke", json!({"points": [[0, 0], [100, 0], [30, 60], [0, 0]]})).unwrap();
+    assert_eq!(r["kind"], "Ink");
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[2].kind, gridcraft_model::ShapeKind::Ink);
+    // A right isosceles triangle whose 90° apex sits on the bottom edge's midpoint is the
+    // `Triangle` preset mirrored down, not the `RightTriangle` preset: it converts rather than
+    // staying ink because its right angle is not at a box corner.
+    s.execute("draw.stroke", json!({"points": [[0, 0], [50, 50], [100, 0], [0, 0]]})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[3].clone();
+    assert_eq!(sh.kind, gridcraft_model::ShapeKind::Triangle);
+    assert!(sh.format.flip_v, "the apex belongs at the bottom: {:?}", sh.format);
+}
+
+#[test]
+fn ink_to_shape_keeps_a_right_triangles_right_angle_corner() {
+    let mut s = s();
+    s.execute("draw.inkToShape", json!({"on": true})).unwrap();
+    // Right angle at the bottom-right: flip across, not down.
+    let r = s.execute("draw.stroke", json!({"points": [[100, 0], [100, 100], [0, 100], [100, 0]]})).unwrap();
+    assert_eq!(r["kind"], "RightTriangle");
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    assert_eq!(sh.kind, gridcraft_model::ShapeKind::RightTriangle);
+    assert!(sh.format.flip_h, "the right angle belongs on the right: {:?}", sh.format);
+    assert!(!sh.format.flip_v);
+    // Right angle at the top-left: flip down, not across.
+    s.execute("draw.stroke", json!({"points": [[0, 0], [100, 0], [0, 100], [0, 0]]})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[1].clone();
+    assert_eq!(sh.kind, gridcraft_model::ShapeKind::RightTriangle);
+    assert!(!sh.format.flip_h, "the right angle belongs on the left: {:?}", sh.format);
+    assert!(sh.format.flip_v);
+}
+
+#[test]
+fn ink_to_shape_leaves_a_rotated_right_triangle_as_ink() {
+    let mut s = s();
+    s.execute("draw.inkToShape", json!({"on": true})).unwrap();
+    // A right angle at (30, 46), inside the box's bottom edge and off its centre: no axis-aligned
+    // preset takes that orientation and it is not the centred-apex `Triangle` either, so the
+    // stroke stays ink instead of moving the corner.
+    let r = s.execute("draw.stroke", json!({"points": [[0, 0], [100, 0], [30, 46], [0, 0]]})).unwrap();
+    assert_eq!(r["kind"], "Ink");
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    assert_eq!(sh.kind, gridcraft_model::ShapeKind::Ink);
+    // A long, thin triangle whose right angle sits 6 points in on the 12-point short side. The
+    // vertex survives simplification (the assertion below), so conversion really reaches
+    // right_triangle_flips: the tolerance must scale with the shorter side (0.15 × 12 = 1.8, not
+    // 0.15 × 100 = 15).
+    let pts: Vec<[f32; 2]> = vec![[0.0, 6.0], [100.0, 0.0], [0.0, 12.0], [0.0, 6.0]];
+    let found = crate::cmd::ink_shape::recognise(&pts);
+    assert!(
+        matches!(&found, Some(crate::cmd::ink_shape::InkShape::Polygon(c)) if c.len() == 3),
+        "the stroke must reach the conversion as a three-corner polygon: {found:?}"
+    );
+    let r = s.execute("draw.stroke", json!({"points": [[0, 6], [100, 0], [0, 12], [0, 6]]})).unwrap();
+    assert_eq!(r["kind"], "Ink");
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[1].clone();
+    assert_eq!(sh.kind, gridcraft_model::ShapeKind::Ink);
+}
+
+#[test]
+fn ink_to_shape_leaves_an_unrecognised_stroke_as_ink_and_draw_stroke_succeeds() {
+    let mut s = s();
+    s.execute("draw.inkToShape", json!({"on": true})).unwrap();
+    let r = s.execute("draw.stroke", json!({"points": [[10, 10], [60, 40], [110, 10], [160, 40], [210, 10]]})).unwrap();
+    assert_eq!(r["kind"], "Ink", "the stroke stays ink");
+    assert_eq!(r["shape"], 1);
+    let sheet = s.doc().unwrap().wb.active().unwrap().clone();
+    assert_eq!(sheet.shapes.len(), 1);
+    assert_eq!(sheet.shapes[0].kind, gridcraft_model::ShapeKind::Ink);
+    // The ink and the command share one undo step, so undo removes what the result reported.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().shapes.is_empty());
+}
+
+#[test]
 fn xlsb_import_keeps_cached_values_and_reports_limits() {
     let bytes = xlsb_fixture();
     assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Xlsb);
@@ -5765,6 +6030,22 @@ fn journal_is_capped_by_serialized_size() {
 }
 
 #[test]
+fn a_script_recorded_with_ink_to_shape_off_replays_its_strokes_as_ink() {
+    let mut s = s();
+    // Recorded with the mode off, so its strokes were drawn as ink: a replay in a session where
+    // the mode is on must not convert them.
+    s.execute("automate.recordActions", json!({})).unwrap();
+    let pts = [[100.0, 100.0], [180.0, 100.0], [180.0, 172.0], [100.0, 172.0], [100.0, 100.0]];
+    assert_eq!(s.execute("draw.stroke", json!({"points": pts})).unwrap()["kind"], "Ink");
+    s.execute("automate.recordActions", json!({"stop": true, "name": "Ink off"})).unwrap();
+    s.execute("draw.inkToShape", json!({"on": true})).unwrap();
+    assert_eq!(s.execute("automate.runScript", json!({"name": "Ink off"})).unwrap()["ran"], 2);
+    let sheet = s.doc().unwrap().wb.active().unwrap().clone();
+    assert_eq!(sheet.shapes.len(), 2);
+    assert_eq!(sheet.shapes[1].kind, gridcraft_model::ShapeKind::Ink, "the replay converted a stroke that was drawn as ink");
+}
+
+#[test]
 fn recording_keeps_its_steps_when_the_journal_is_trimmed() {
     let mut s = s();
     for _ in 0..9_990 {
@@ -5776,9 +6057,31 @@ fn recording_keeps_its_steps_when_the_journal_is_trimmed() {
         s.execute("cell.set", json!({"cell": "B1", "input": format!("step{i}")})).unwrap();
     }
     let r = s.execute("automate.recordActions", json!({"stop": true, "name": "Steps"})).unwrap();
+    // The twenty typed steps; no stroke was drawn, so no Ink to Shape step is added.
     assert_eq!(r["steps"], 20, "{r}");
     let script = s.doc().unwrap().wb.names.iter().find(|n| n.name == "_sc_scripts").map(|n| n.formula.clone()).unwrap();
     assert!(script.contains("step0") && script.contains("step19") && !script.contains("selection.set"), "{script}");
+}
+
+#[test]
+fn recorded_strokes_replay_the_ink_to_shape_mode_they_were_drawn_with() {
+    let mut s = s();
+    // The mode is on before recording starts, so its toggle is not in the recorded window.
+    s.execute("draw.inkToShape", json!({"on": true})).unwrap();
+    s.execute("automate.recordActions", json!({})).unwrap();
+    let pts = [[100.0, 100.0], [180.0, 100.0], [180.0, 172.0], [100.0, 172.0], [100.0, 100.0]];
+    assert_eq!(s.execute("draw.stroke", json!({"points": pts})).unwrap()["kind"], "Rectangle");
+    s.execute("automate.recordActions", json!({"stop": true, "name": "Ink"})).unwrap();
+    let script = s.doc().unwrap().wb.names.iter().find(|n| n.name == "_sc_scripts").map(|n| n.formula.clone()).unwrap();
+    assert!(script.contains("draw.inkToShape") && script.contains("draw.stroke"), "{script}");
+
+    // Playing the script back with the mode off still converts the stroke: the saved mode is
+    // restored first, so the replayed stroke is the preset shape it was recorded as.
+    s.execute("draw.inkToShape", json!({"on": false})).unwrap();
+    assert_eq!(s.execute("automate.runScript", json!({"name": "Ink"})).unwrap()["ran"], 2);
+    let sheet = s.doc().unwrap().wb.active().unwrap().clone();
+    assert_eq!(sheet.shapes.len(), 2);
+    assert_eq!(sheet.shapes[1].kind, gridcraft_model::ShapeKind::Rectangle);
 }
 
 #[test]
