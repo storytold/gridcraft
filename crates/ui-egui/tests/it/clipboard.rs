@@ -88,6 +88,18 @@ fn programmatic_copy_does_not_write_to_the_system_clipboard() {
 }
 
 #[test]
+fn ribbon_clipboard_actions_end_end_mode() {
+    let mut h = harness(Services::default());
+    h.state_mut().grid.end_mode = true;
+    h.state_mut().copy_to_clipboard(&egui::Context::default(), "edit.copy");
+    assert!(!h.state().grid.end_mode);
+
+    h.state_mut().grid.end_mode = true;
+    h.state_mut().paste_from_clipboard();
+    assert!(!h.state().grid.end_mode);
+}
+
+#[test]
 fn pasting_reads_the_clipboard_html_for_the_numbers_behind_the_text() {
     // #257: currency text from another spreadsheet stays a number when the host offers the HTML.
     let mut h = harness(Services {
