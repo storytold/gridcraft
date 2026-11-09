@@ -1,7 +1,7 @@
 # Real-time collaboration: status and acceptance evidence
 
 - Date: 2026-11-09
-- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), HEAD `8883269d` (code; this page is the docs commit on top)
+- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), HEAD `bb992c06` (code and tests; the docs commit `8b375590` and this page's update sit on top)
 - Base: `origin/main` = `2c58c769` (rebased 2026-11-08)
 - PR: <https://github.com/storytold/gridcraft/pull/3613> (draft)
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
@@ -125,7 +125,7 @@ for WASM; the browser uses `crates/collab-web` and the host bridge.
 
 ```text
 cargo +1.95.0 test -p gridcraft-collab                     38 passed
-cargo +1.95.0 test -p gridcraft-collab-client               10 converge + 4 image-part tests passed
+cargo +1.95.0 test -p gridcraft-collab-client               10 converge + 5 image-part tests passed
 cargo +1.95.0 test -p gridcraft-collab-server --all-targets 20 unit + 7 socket + 8 persistence + 5 acceptance, all passed
 cargo +1.95.0 check --workspace --all-targets              clean
 cargo fmt --all -- --check                                 clean
@@ -354,6 +354,10 @@ Tests:
   `structural_undo_restores_the_workbook_metadata_on_every_replica` (author and
   peer see the same defined names before the delete, after it, after undo and
   after redo; structure protection survives a row undo on both).
+- `crates/collab-client/tests/parts.rs`:
+  `a_chunked_image_carries_the_book_metadata_and_the_kept_parts_to_both_replicas`
+  (a 2 MiB image with a kept part, a name and structure protection: two replicas
+  apply nothing until the last part and then all three together).
 - `apps/gridcraft-collab-server/tests/persistence.rs`:
   `a_structural_undo_replays_the_workbook_metadata_after_a_restart` (a snapshot
   compacts the insert and the name into the base; the delete and its undo are the
