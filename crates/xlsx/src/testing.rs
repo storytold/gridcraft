@@ -46,6 +46,57 @@ pub fn encrypt_workbook_standard(package: &[u8], password: &str) -> Vec<u8> {
 /// Excel lays it out: streams under 4096 bytes in the mini stream, larger ones in regular
 /// sectors. Up to 109 FAT sectors (about 7 MB of streams).
 pub fn compound_file(streams: &[(&str, &[u8])]) -> Vec<u8> {
+    let nodes: Vec<Node> = streams.iter().map(|(name, data)| Node::Stream(name, data.to_vec())).collect();
+    build_tree(&nodes)
+}
+/// One entry of a compound file built by [`build_tree`]: a stream with its bytes, or a storage
+/// with its children.
+pub(crate) enum Node<'a> {
+    Stream(&'a str, Vec<u8>),
+    #[cfg_attr(not(test), expect(dead_code, reason = "nested storages are built only by this crate's tests"))]
+    Storage(&'a str, Vec<Node<'a>>),
+}
+/// A directory entry of [`build_tree`] before it is written: its sibling and child links
+/// (directory indexes, NOSTREAM for none) and, for a stream, its bytes.
+struct Flat<'n> {
+    name: &'n str,
+    data: Option<&'n [u8]>,
+    right: u32,
+    child: u32,
+}
+/// Appends `nodes` (and, depth first, their children) to `out`, chaining each level as right
+/// siblings. Returns the directory index of the first node, or NOSTREAM when there is none.
+fn flatten<'n>(nodes: &'n [Node<'n>], out: &mut Vec<Flat<'n>>) -> u32 {
+    const NO_STREAM: u32 = 0xFFFF_FFFF;
+    let mut first = NO_STREAM;
+    let mut prev: Option<usize> = None;
+    for node in nodes {
+        let k = out.len();
+        let (name, data) = match node {
+            Node::Stream(name, data) => (*name, Some(data.as_slice())),
+            Node::Storage(name, _) => (*name, None),
+        };
+        out.push(Flat { name, data, right: NO_STREAM, child: NO_STREAM });
+        if let Node::Storage(_, children) = node {
+            out[k].child = flatten(children, out);
+        }
+        match prev {
+            Some(p) => out[p].right = k as u32,
+            None => first = k as u32,
+        }
+        prev = Some(k);
+    }
+    first
+}
+/// A version 3 compound file (512-byte sectors) holding the tree `root` under the root storage,
+/// written from the public [MS-CFB] specification. Streams under 4096 bytes go in the mini
+/// stream (64-byte mini sectors chained by the mini FAT, the container owned by the root
+/// entry), larger ones in regular sectors. Directory entries are laid out depth first; each
+/// storage's `child` names its first child and siblings are chained through `right` (a
+/// degenerate all-black tree, which readers follow). CLSIDs and timestamps are zero. Names are
+/// at most 31 UTF-16 units. Up to 109 FAT sectors (about 7 MB of streams): there are no DIFAT
+/// sectors, so larger fixtures panic.
+pub(crate) fn build_tree(root: &[Node]) -> Vec<u8> {
     const SECTOR: usize = 512;
     const MINI: usize = 64;
     const CUTOFF: usize = 4096;
@@ -53,12 +104,19 @@ pub fn compound_file(streams: &[(&str, &[u8])]) -> Vec<u8> {
     const END: u32 = 0xFFFF_FFFE;
     const FAT_SECTOR: u32 = 0xFFFF_FFFD;
     let is_mini = |d: &[u8]| d.len() < CUTOFF;
+    // Directory entries depth first, the root at index 0; a storage has no bytes.
+    let mut tree = vec![Flat { name: "Root Entry", data: None, right: FREE, child: FREE }];
+    let root_child = flatten(root, &mut tree);
+    let entries = &tree[1..];
+    fn bytes<'n>(e: &Flat<'n>) -> &'n [u8] {
+        e.data.unwrap_or(&[])
+    }
 
     // The mini stream: small streams in 64-byte mini sectors, chained by the mini FAT.
     let mut container = vec![];
     let mut mini_fat: Vec<u32> = vec![];
     let mut mini_starts = vec![];
-    for (_, d) in streams {
+    for d in entries.iter().map(bytes) {
         if !is_mini(d) || d.is_empty() {
             mini_starts.push(END);
             continue;
@@ -74,9 +132,9 @@ pub fn compound_file(streams: &[(&str, &[u8])]) -> Vec<u8> {
     }
 
     // Regular-sector blobs, in order: directory, mini FAT, mini stream, then each large stream.
-    let dir_len = (streams.len() + 1).div_ceil(4) * SECTOR;
+    let dir_len = (entries.len() + 1).div_ceil(4) * SECTOR;
     let mut blobs: Vec<Vec<u8>> = vec![vec![0; dir_len], mini_fat.iter().flat_map(|v| v.to_le_bytes()).collect(), container.clone()];
-    blobs.extend(streams.iter().map(|(_, d)| if is_mini(d) { vec![] } else { d.to_vec() }));
+    blobs.extend(entries.iter().map(bytes).map(|d| if is_mini(d) { vec![] } else { d.to_vec() }));
     let counts: Vec<usize> = blobs.iter().map(|b| b.len().div_ceil(SECTOR)).collect();
     let body: usize = counts.iter().sum();
     let mut fat_sectors = 1;
@@ -102,33 +160,37 @@ pub fn compound_file(streams: &[(&str, &[u8])]) -> Vec<u8> {
 
     let put16 = |b: &mut [u8], at: usize, v: u16| b[at..at + 2].copy_from_slice(&v.to_le_bytes());
     let put32 = |b: &mut [u8], at: usize, v: u32| b[at..at + 4].copy_from_slice(&v.to_le_bytes());
-    // Directory: the root (owning the mini stream), then the streams chained as right siblings.
+    // Directory: the root (owning the mini stream), then the tree depth first. Unused slots
+    // keep NOSTREAM links.
     let dir = &mut blobs[0];
     for k in 0..dir_len / 128 {
         for at in [68, 72, 76] {
             put32(dir, k * 128 + at, FREE);
         }
     }
-    let mut entry = |k: usize, name: &str, kind: u8, start: u32, size: usize| {
+    let mut entry = |k: usize, name: &str, kind: u8, links: (u32, u32), start: u32, size: usize| {
         let e = k * 128;
         let units: Vec<u8> = name.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert!(units.len() <= 62, "a compound file name holds at most 31 UTF-16 units");
         dir[e..e + units.len()].copy_from_slice(&units);
-        put16(dir, e + 64, units.len() as u16 + 2);
+        put16(dir, e + 64, units.len() as u16 + 2); // the length counts the terminator
         dir[e + 66] = kind;
         dir[e + 67] = 1; // black
-        if kind == 5 && !streams.is_empty() {
-            put32(dir, e + 76, 1);
-        }
-        if kind == 2 && k < streams.len() {
-            put32(dir, e + 72, k as u32 + 1);
-        }
+        put32(dir, e + 72, links.0);
+        put32(dir, e + 76, links.1);
         put32(dir, e + 116, start);
         put32(dir, e + 120, size as u32);
     };
-    entry(0, "Root Entry", 5, starts[2], container.len());
-    for (k, (name, data)) in streams.iter().enumerate() {
-        let start = if is_mini(data) { mini_starts[k] } else { starts[3 + k] };
-        entry(k + 1, name, 2, start, data.len());
+    entry(0, "Root Entry", 5, (FREE, root_child), starts[2], container.len());
+    for (k, e) in entries.iter().enumerate() {
+        match e.data {
+            // A storage's start sector and size are zero ([MS-CFB] 2.6.3).
+            None => entry(k + 1, e.name, 1, (e.right, e.child), 0, 0),
+            Some(data) => {
+                let start = if is_mini(data) { mini_starts[k] } else { starts[3 + k] };
+                entry(k + 1, e.name, 2, (e.right, FREE), start, data.len());
+            }
+        }
     }
 
     let mut out = vec![0u8; SECTOR * (1 + fat_sectors + body)];
