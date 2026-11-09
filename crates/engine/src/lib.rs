@@ -35,7 +35,7 @@ use gridcraft_model::Workbook;
 use serde::Serialize;
 use serde_json::Value as Json;
 
-pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command, register_test_command};
+pub use cmd::{CommandInfo, CommandSpec, Status, command_specs, find_command, register_test_command};
 pub use gridcraft_calc as calc;
 pub use gridcraft_core as core;
 pub use gridcraft_formula as formula;
@@ -51,6 +51,11 @@ pub enum EngineError {
     UnknownCommand(String),
     #[error("command `{0}` is not available right now: {1}")]
     Disabled(String, String),
+    /// A published placeholder id (`catalog::RESERVED`): the feature behind it is not built yet.
+    /// The message starts with the code `NOT_IMPLEMENTED`, so a caller can tell it apart from an
+    /// unknown command without parsing prose.
+    #[error("NOT_IMPLEMENTED: {0}")]
+    NotImplemented(String),
     #[error("invalid parameters for `{cmd}`: {msg}")]
     BadParams { cmd: String, msg: String },
     #[error("no workbook open")]
@@ -669,6 +674,10 @@ impl Session {
     /// Panics inside commands are caught and reported; the workbook is restored.
     pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        // A reserved id is published so callers get a defined error rather than "unknown command".
+        if spec.status == Status::NotImplemented {
+            return Err(cmd::not_implemented(id));
+        }
         if let Err(why) = (spec.enabled)(self) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }

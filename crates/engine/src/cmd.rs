@@ -4,6 +4,7 @@
 pub mod analysis;
 pub mod controls;
 pub mod data;
+pub mod developer;
 pub mod draw;
 pub mod edit;
 pub mod equation;
@@ -38,6 +39,19 @@ use crate::{DocState, EngineError, Result, Selection, Session};
 pub type Run = fn(&mut Session, &Json) -> Result<Json>;
 pub type Enabled = fn(&Session) -> std::result::Result<(), String>;
 
+/// Whether a registered command can do its work yet.
+///
+/// A catalog row with no feature behind it is not registered at all (it is "missing"). A
+/// [`Status::NotImplemented`] command is one whose id is published before the feature lands, so
+/// callers get a defined [`EngineError::NotImplemented`] instead of "unknown command"; it reports
+/// `enabled: false` and counts as missing in [`crate::catalog::parity`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Status {
+    Implemented,
+    NotImplemented,
+}
+
 pub struct CommandSpec {
     pub id: &'static str,
     pub label: &'static str,
@@ -53,6 +67,7 @@ pub struct CommandSpec {
     pub run: Run,
     pub journal: bool,
     pub undoable: bool,
+    pub status: Status,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -63,6 +78,9 @@ pub struct CommandInfo {
     pub shortcut: Option<&'static str>,
     pub shortcut_mac: Option<&'static str>,
     pub params: &'static str,
+    /// `implemented` for a command that runs, `not_implemented` for a published placeholder
+    /// (see [`Status`]).
+    pub status: Status,
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
@@ -89,7 +107,11 @@ impl CommandInfo {
 
 impl CommandSpec {
     pub fn info(&self, s: &Session) -> CommandInfo {
-        let e = (self.enabled)(s);
+        // A reserved id is never enabled, whatever its `enabled` fn says: there is nothing to run.
+        let e = match self.status {
+            Status::Implemented => (self.enabled)(s),
+            Status::NotImplemented => Err(NOT_IMPLEMENTED_REASON.to_string()),
+        };
         CommandInfo {
             id: self.id,
             label: self.label,
@@ -97,10 +119,20 @@ impl CommandSpec {
             shortcut: self.shortcut,
             shortcut_mac: self.shortcut_mac,
             params: self.params,
+            status: self.status,
             enabled: e.is_ok(),
             disabled_reason: e.err(),
         }
     }
+}
+
+/// Why a [`Status::NotImplemented`] command cannot run: one wording for `disabled_reason`, the
+/// `NOT_IMPLEMENTED` error and the catalog's doc.
+pub const NOT_IMPLEMENTED_REASON: &str = "is reserved for a feature that is not built yet (#2960)";
+
+/// The `NOT_IMPLEMENTED` error a reserved id answers with.
+pub fn not_implemented(id: &str) -> EngineError {
+    EngineError::NotImplemented(format!("`{id}` {NOT_IMPLEMENTED_REASON}"))
 }
 
 /// Params that hold a secret: `password`, or a name ending in `Password`.
@@ -146,13 +178,13 @@ pub fn has_clipboard(s: &Session) -> std::result::Result<(), String> {
 
 macro_rules! cmd {
     ($id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: true, undoable: true }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: true, undoable: true, status: $crate::cmd::Status::Implemented }
     };
     (query $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: false, undoable: false }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: false, undoable: false, status: $crate::cmd::Status::Implemented }
     };
     (noundo $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: true, undoable: false }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: true, undoable: false, status: $crate::cmd::Status::Implemented }
     };
 }
 pub(crate) use cmd;
@@ -175,6 +207,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(inspect::specs());
         v.extend(extra::specs());
         v.extend(macros::specs());
+        v.extend(developer::specs());
         v.extend(draw::specs());
         v.extend(spelling::specs());
         v.extend(solver::specs());
@@ -217,6 +250,7 @@ pub fn register_test_command(id: &'static str, run: Run) {
         run,
         journal: true,
         undoable: false,
+        status: Status::Implemented,
     }));
     test_commands().push(spec);
 }
@@ -235,6 +269,7 @@ pub(crate) fn register_undoable_test_command(id: &'static str, run: Run) {
         run,
         journal: false,
         undoable: true,
+        status: Status::Implemented,
     }));
     test_commands().push(spec);
 }

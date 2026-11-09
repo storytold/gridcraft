@@ -1,6 +1,16 @@
 //! Excel's ribbon and menu tree (feature names only), used as the parity metric: a catalog
-//! entry counts as done when a command with its id is registered. `cargo xtask parity` writes
-//! `docs/parity-checklist.md` from this list.
+//! entry counts as done when an implemented command with its id is registered
+//! ([`implemented`]). `cargo xtask parity` writes `docs/parity-checklist.md` from this list.
+//!
+//! The schema is `(id, tab, group, label)`; availability is not a catalog field but the command's
+//! [`crate::Status`], which has two values a catalog row can have a command for:
+//!
+//! - [`crate::Status::Implemented`]: the command runs. [`implemented`] counts the row as done.
+//! - [`crate::Status::NotImplemented`]: the id is published ahead of its feature and answers
+//!   `NOT_IMPLEMENTED` (see [`RESERVED`]). [`implemented`] counts the row as missing, as if it had
+//!   no command at all, so registering a placeholder never inflates parity.
+//!
+//! A row with no registered command is simply missing (most of the checklist).
 
 /// (id, tab, group, label)
 pub const CATALOG: &[(&str, &str, &str, &str)] = &[
@@ -275,11 +285,31 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("automate.allScripts", "Automate", "Scripting Tools", "All Scripts"),
     ("automate.recordActions", "Automate", "Scripting Tools", "Record Actions"),
     ("automate.trustScripts", "Automate", "Scripting Tools", "Trust Scripts"),
-    // Developer (Insert › Controls in GridCraft)
+    // Developer (Excel's Developer tab). One id convention per control: a Developer entry that
+    // already has a command elsewhere keeps that id (`DEVELOPER_SHARED`, and Macros is
+    // `view.macros` under View), and only an entry with no implementation yet reserves a
+    // `developer.*` id (`RESERVED`). No `developer.*` id duplicates an existing command.
     ("insert.button", "Developer", "Controls", "Button (Form Control)"),
     ("insert.spinButton", "Developer", "Controls", "Spin Button (Form Control)"),
     ("insert.slider", "Developer", "Controls", "Scroll Bar (Form Control)"),
     ("control.format", "Developer", "Controls", "Properties"),
+    ("developer.visualBasic", "Developer", "Code", "Visual Basic"),
+    ("developer.recordMacro", "Developer", "Code", "Record Macro"),
+    ("developer.useRelativeReferences", "Developer", "Code", "Use Relative References"),
+    ("developer.macroSecurity", "Developer", "Code", "Macro Security"),
+    ("developer.addIns", "Developer", "Add-ins", "Add-ins"),
+    ("developer.excelAddIns", "Developer", "Add-ins", "Excel Add-ins"),
+    ("developer.comAddIns", "Developer", "Add-ins", "COM Add-ins"),
+    ("developer.insert", "Developer", "Controls", "Insert"),
+    ("developer.designMode", "Developer", "Controls", "Design Mode"),
+    ("developer.viewCode", "Developer", "Controls", "View Code"),
+    ("developer.runDialog", "Developer", "Controls", "Run Dialog"),
+    ("developer.xmlSource", "Developer", "XML", "Source"),
+    ("developer.xmlMapProperties", "Developer", "XML", "Map Properties"),
+    ("developer.expansionPacks", "Developer", "XML", "Expansion Packs"),
+    ("developer.refreshData", "Developer", "XML", "Refresh Data"),
+    ("developer.importXml", "Developer", "XML", "Import"),
+    ("developer.exportXml", "Developer", "XML", "Export"),
     // Table Design
     ("table.rename", "Table Design", "Properties", "Table Name"),
     ("table.resize", "Table Design", "Properties", "Resize Table"),
@@ -326,6 +356,51 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("pivot.delete", "PivotTable Analyze", "Actions", "Clear All"),
 ];
 
+/// Developer-tab ids published before their feature lands (#2960). They are registered as
+/// [`crate::Status::NotImplemented`] commands (crates/engine/src/cmd/developer.rs), so a caller
+/// gets `NOT_IMPLEMENTED` instead of "unknown command", and they count as missing in [`parity`].
+pub const RESERVED: &[&str] = &[
+    "developer.visualBasic",
+    "developer.recordMacro",
+    "developer.useRelativeReferences",
+    "developer.macroSecurity",
+    "developer.addIns",
+    "developer.excelAddIns",
+    "developer.comAddIns",
+    "developer.insert",
+    "developer.designMode",
+    "developer.viewCode",
+    "developer.runDialog",
+    "developer.xmlSource",
+    "developer.xmlMapProperties",
+    "developer.expansionPacks",
+    "developer.refreshData",
+    "developer.importXml",
+    "developer.exportXml",
+];
+
+/// Developer-tab rows whose command already has a home elsewhere in the ribbon, and where from.
+/// They keep that id on this tab too: one convention per control, so `developer.insert` would not
+/// be a second name for the Insert menu, and the pane's Properties button stays `control.format`.
+pub const DEVELOPER_SHARED: &[(&str, &str)] = &[
+    ("view.macros", "View › Macros (the same Macros dialog, also Alt+F8)"),
+    ("insert.button", "Insert › Controls, a form button"),
+    ("insert.spinButton", "Insert › Controls, a form spin button"),
+    ("insert.slider", "Insert › Controls, a form scroll bar"),
+    ("control.format", "Format Control › Properties, on the selected form control"),
+];
+
+/// A catalog row's label, by id (the first row with it).
+pub fn label(id: &str) -> Option<&'static str> {
+    CATALOG.iter().find(|e| e.0 == id).map(|e| e.3)
+}
+
+/// Whether the catalog id has a working command behind it. A reserved placeholder
+/// ([`RESERVED`], `NOT_IMPLEMENTED`) does not count.
+pub fn implemented(id: &str) -> bool {
+    crate::find_command(id).is_some_and(|c| c.status == crate::Status::Implemented)
+}
+
 /// Distinct catalog ids.
 pub fn ids() -> Vec<&'static str> {
     let mut v: Vec<&str> = CATALOG.iter().map(|e| e.0).collect();
@@ -337,6 +412,63 @@ pub fn ids() -> Vec<&'static str> {
 /// (implemented, total) over distinct ids.
 pub fn parity() -> (usize, usize) {
     let ids = ids();
-    let done = ids.iter().filter(|id| crate::find_command(id).is_some()).count();
+    let done = ids.iter().filter(|id| implemented(id)).count();
     (done, ids.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Finding from the #3563 review: the Developer tab uses one id convention per control. An
+    /// entry that already has a command keeps that id (`DEVELOPER_SHARED`); every other entry
+    /// reserves a `developer.*` id in `RESERVED`; no `developer.*` id duplicates a live command.
+    #[test]
+    fn developer_rows_use_one_namespace_convention() {
+        let rows: Vec<&str> = CATALOG.iter().filter(|e| e.1 == "Developer").map(|e| e.0).collect();
+        for id in &rows {
+            if id.starts_with("developer.") {
+                assert!(RESERVED.contains(id), "{id} is a Developer row but not in RESERVED");
+                let spec = crate::find_command(id).unwrap_or_else(|| panic!("{id} is not registered"));
+                assert_eq!(spec.status, crate::Status::NotImplemented, "{id}");
+                assert!(spec.menu.is_empty(), "{id} must not appear in a menu");
+            } else {
+                assert!(DEVELOPER_SHARED.iter().any(|(shared, _)| shared == id), "{id} is a Developer row but not in DEVELOPER_SHARED");
+                assert!(implemented(id), "{id} is shared, so it must run");
+            }
+        }
+        // The reverse: a reserved or shared id that names a Developer row is drawn on the tab.
+        for id in RESERVED {
+            assert!(rows.contains(id), "{id} is reserved but has no Developer row");
+        }
+        for (id, _) in DEVELOPER_SHARED {
+            if CATALOG.iter().any(|e| e.0 == *id && e.1 == "Developer") {
+                assert!(rows.contains(id), "{id} is shared with the Developer tab but missing from it");
+            }
+        }
+        // Macros is the tab's one live control and keeps its View id, so its catalog row is
+        // under View rather than Developer.
+        assert!(DEVELOPER_SHARED.iter().any(|(id, _)| *id == "view.macros"));
+        assert!(implemented("view.macros"));
+        // A reserved id answers its own error code, not "unknown command".
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        for id in RESERVED {
+            let e = s.execute(id, serde_json::json!({})).unwrap_err();
+            assert!(matches!(e, crate::EngineError::NotImplemented(_)), "{id}: {e}");
+            assert!(e.to_string().starts_with("NOT_IMPLEMENTED: "), "{id}: {e}");
+            let info = s.commands().into_iter().find(|c| c.id == *id).expect("listed");
+            assert!(!info.enabled && info.status == crate::Status::NotImplemented, "{id}");
+        }
+    }
+
+    /// A reserved id is published but not implemented: it must not move the parity metric.
+    #[test]
+    fn reserved_ids_count_as_missing() {
+        for id in RESERVED {
+            assert!(CATALOG.iter().any(|e| e.0 == *id), "{id} has no catalog row");
+            assert!(!implemented(id), "{id} is reserved and must not count as implemented");
+            assert!(ids().contains(id), "{id} is not a distinct catalog id");
+        }
+    }
 }

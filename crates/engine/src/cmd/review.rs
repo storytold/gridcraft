@@ -41,6 +41,7 @@ pub fn specs() -> Vec<CommandSpec> {
             run: allow_edit_ranges,
             journal: false,
             undoable: true,
+            status: crate::cmd::Status::Implemented,
         },
         cmd!(query "review.checkAccessibility", "Check Accessibility", ["Review", "Accessibility"], None, "{} → issues", has_doc, accessibility),
         cmd!(noundo "review.previousComment", "Previous Comment", ["Review", "Comments"], None, "{} → {sheet, cell}", has_comments, |s, _| {

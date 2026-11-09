@@ -54,6 +54,13 @@ impl SheetApp {
         {
             return r;
         }
+        // view.macros is the query that answers with the workbook's scripts. UI callers that want
+        // the Macros dialog ask for it explicitly (`{"dialog": true}`, as the Developer tab's
+        // Macros button does); the command still answers the query, so every caller gets the list.
+        // `{}` and `null` are the query alone and never open anything.
+        if id == "view.macros" && params.get("dialog").and_then(Json::as_bool) == Some(true) {
+            self.open_dialog("macros", json!({}));
+        }
         let before = self.session.active_window();
         let zoom_from = matches!(id, "view.zoom" | "view.zoom100" | "view.zoomToSelection").then(|| crate::grid::Trace::key(self));
         let r = self.session.run(id, params);

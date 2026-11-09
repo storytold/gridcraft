@@ -186,7 +186,15 @@ pub fn specs() -> Vec<CommandSpec> {
             switch_windows
         ),
         cmd!(noundo "view.ruler", "Ruler", ["View", "Show"], None, "{on?} → {on}: rulers in Page Layout view (an application option)", has_doc, ruler),
-        cmd!(query "view.macros", "Macros", ["View", "Macros"], None, "{} → scripts", has_doc, all_scripts),
+        cmd!(
+            query "view.macros",
+            "Macros",
+            ["View", "Macros"],
+            None,
+            "{dialog?: true} → scripts [{name, steps, trusted}|{name: \"(VBA)\", kind: vba, size, executed: false}]; the query returns the list, and `dialog: true` also opens the Macros dialog (UI only; a programmatic caller always gets the list)",
+            has_doc,
+            all_scripts
+        ),
         // Table tools
         cmd!("table.resize", "Resize Table", ["Table Design", "Properties"], None, "{table?, range: \"A1:F20\"}", has_doc, table_resize),
         cmd!("table.removeDuplicates", "Remove Duplicates", ["Table Design", "Tools"], None, "{table?, columns?}", has_doc, |s, p| s

@@ -16,6 +16,7 @@ mod automate;
 mod contextual;
 mod controls;
 mod data;
+mod developer;
 mod formulas;
 mod galleries;
 mod home;
@@ -31,6 +32,7 @@ use contextual::{chart_design, table_design};
 pub(crate) use controls::{ComboResult, editable_combo};
 use controls::{act, keytip};
 use data::data;
+use developer::developer;
 use formulas::formulas;
 pub use home::FONTS;
 use home::home;
@@ -42,7 +44,7 @@ pub use title_bar::{MAC_CONTENT_LEFT, MAC_TITLE_BAR, TITLE_LEFT_PAD, title_bar};
 use title_bar::{TITLE_BAR_H, TITLE_CONTROL_H};
 use view::view;
 
-pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
+pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate", "Developer"];
 const _: () = assert!(TITLE_CONTROL_H < TITLE_BAR_H, "title-bar controls keep a margin above and below");
 
 /// Draws the ribbon tabs and the active tab's horizontally scrollable card, resetting an unavailable contextual tab to Home.
@@ -59,58 +61,69 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         .exact_size(h)
         .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 10, right: 10, top: 0, bottom: 6 }))
         .show(ui, |ui| {
-            // Tabs row.
+            // Tabs row. Ten tabs and the File tab are wider than a narrow window, so the row
+            // scrolls with the same arrows the card's groups use; no tab is left clipped.
             let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    ui.add_space(8.0);
-                    if app.chrome.file_tab {
-                        file_menu(app, ui);
-                    }
-                    let mut tabs: Vec<&str> = TABS.to_vec();
-                    let ctx_tabs = contextual_tabs(app);
-                    tabs.extend(ctx_tabs.iter());
-                    for tab in tabs {
-                        let active = app.ui.ribbon_tab == tab;
-                        let contextual = ctx_tabs.contains(&tab);
-                        let font = theme::ui_font(13.5);
-                        let label = app.ui.language.tr(tab);
-                        let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
-                        let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
-                        if resp.hovered() && !active {
-                            ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
+                let mut area =
+                    egui::ScrollArea::horizontal().id_salt("ribbon_tabs").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+                if let Some((frame, x)) = ui.ctx().data_mut(|d| d.remove_temp::<(u64, f32)>(TabsOverflow::scroll_target_id()))
+                    && ui.ctx().cumulative_frame_nr().saturating_sub(frame) <= 1
+                {
+                    area = area.horizontal_scroll_offset(x);
+                }
+                let scroll = area.show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        ui.add_space(8.0);
+                        if app.chrome.file_tab {
+                            file_menu(app, ui);
                         }
-                        let color = if contextual {
-                            t.accent
-                        } else if active {
-                            t.text
-                        } else {
-                            t.text_dim
-                        };
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
-                        if active {
-                            let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
-                            ui.painter().rect_filled(ul, 1.5, t.accent);
-                        }
-                        if resp.clicked() {
-                            if active && !collapsed {
-                                app.ui.ribbon_collapsed = true;
+                        let mut tabs: Vec<&str> = TABS.to_vec();
+                        let ctx_tabs = contextual_tabs(app);
+                        tabs.extend(ctx_tabs.iter());
+                        for tab in tabs {
+                            let active = app.ui.ribbon_tab == tab;
+                            let contextual = ctx_tabs.contains(&tab);
+                            let font = theme::ui_font(13.5);
+                            let label = app.ui.language.tr(tab);
+                            let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
+                            let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
+                            if resp.hovered() && !active {
+                                ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
+                            }
+                            let color = if contextual {
+                                t.accent
+                            } else if active {
+                                t.text
                             } else {
-                                app.ui.ribbon_tab = tab.to_string();
-                                app.ui.ribbon_collapsed = false;
+                                t.text_dim
+                            };
+                            ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
+                            if active {
+                                let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
+                                ui.painter().rect_filled(ul, 1.5, t.accent);
+                            }
+                            if resp.clicked() {
+                                if active && !collapsed {
+                                    app.ui.ribbon_collapsed = true;
+                                } else {
+                                    app.ui.ribbon_tab = tab.to_string();
+                                    app.ui.ribbon_collapsed = false;
+                                }
+                            }
+                            if resp.double_clicked() {
+                                app.ui.ribbon_collapsed = !collapsed;
+                            }
+                            if app.keytips.prefix() == Some("")
+                                && let Some(sequence) = keytip_table::tab_sequence(tab)
+                            {
+                                keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
                             }
                         }
-                        if resp.double_clicked() {
-                            app.ui.ribbon_collapsed = !collapsed;
-                        }
-                        if app.keytips.prefix() == Some("")
-                            && let Some(sequence) = keytip_table::tab_sequence(tab)
-                        {
-                            keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
-                        }
-                    }
+                    });
                 });
+                scroll_arrows(ui, &t, ScrollRow::Tabs, scroll);
             });
             if collapsed {
                 return;
@@ -152,6 +165,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             "Data" => data(app, ui),
                             "Review" => review(app, ui),
                             "View" => view(app, ui),
+                            "Developer" => developer(app, ui),
                             "Automate" => automate(app, ui),
                             "Table Design" => table_design(app, ui),
                             "Chart Design" => chart_design(app, ui),
@@ -160,7 +174,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         }
                     });
                 });
-                scroll_arrows(ui, &t, tab.as_str(), scroll);
+                scroll_arrows(ui, &t, ScrollRow::Groups(tab.as_str()), scroll);
             });
         });
 }
@@ -202,25 +216,99 @@ impl RibbonOverflow {
     }
 }
 
-/// When the tab's groups are wider than the card, arrows at its edges scroll them (horizontal wheel or
-/// trackpad input over the card still does too).
-fn scroll_arrows(ui: &mut Ui, t: &Tokens, tab: &str, scroll: egui::scroll_area::ScrollAreaOutput<()>) {
+/// How much of the tab row the window shows, recorded each frame for the tab row's scroll arrows
+/// and for tests.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TabsOverflow {
+    /// Width of File and every tab.
+    pub content: f32,
+    /// Width of the row's visible area.
+    pub visible: f32,
+    /// How far the row is scrolled.
+    pub offset: f32,
+}
+
+impl TabsOverflow {
+    fn id() -> egui::Id {
+        egui::Id::unique("ribbon_tabs_overflow")
+    }
+
+    /// Where an arrow click asks the next frame's `ScrollArea` to scroll to.
+    fn scroll_target_id() -> egui::Id {
+        egui::Id::unique("ribbon_tabs_scroll_target")
+    }
+
+    /// Last frame's overflow.
+    pub fn get(ctx: &egui::Context) -> TabsOverflow {
+        ctx.data(|d| d.get_temp(Self::id())).unwrap_or_default()
+    }
+
+    /// Whether the row is wider than the window.
+    pub fn overflows(&self) -> bool {
+        self.content > self.visible + 0.5
+    }
+}
+
+/// Which row's scroll arrows are drawn: the active tab's groups, or the ribbon's tab row.
+#[derive(Clone, Copy)]
+enum ScrollRow<'a> {
+    Groups(&'a str),
+    Tabs,
+}
+
+impl ScrollRow<'_> {
+    /// The names the row's arrows answer to, left then right.
+    fn labels(self) -> (&'static str, &'static str) {
+        match self {
+            ScrollRow::Groups(_) => ("Scroll ribbon left", "Scroll ribbon right"),
+            ScrollRow::Tabs => ("Scroll tabs left", "Scroll tabs right"),
+        }
+    }
+
+    /// Distinguishes the two rows' arrow widgets: both are drawn in child scopes of the ribbon
+    /// panel, which share a scope id, so the row's own tag keeps the ids apart.
+    fn tag(self) -> &'static str {
+        match self {
+            ScrollRow::Groups(_) => "groups",
+            ScrollRow::Tabs => "tabs",
+        }
+    }
+
+    /// Where the arrow click asks the next frame's `ScrollArea` to scroll to.
+    fn scroll_target_id(self) -> egui::Id {
+        match self {
+            ScrollRow::Groups(tab) => RibbonOverflow::scroll_target_id(tab),
+            ScrollRow::Tabs => TabsOverflow::scroll_target_id(),
+        }
+    }
+}
+
+/// When a row is wider than its window, arrows at its edges scroll it (horizontal wheel or
+/// trackpad input over it still does too).
+fn scroll_arrows(ui: &mut Ui, t: &Tokens, row: ScrollRow<'_>, scroll: egui::scroll_area::ScrollAreaOutput<()>) {
     let inner = scroll.inner_rect;
     let max = (scroll.content_size.x - inner.width()).max(0.0);
-    let overflow = RibbonOverflow {
-        content: scroll.content_size.x,
-        visible: inner.width(),
-        offset: scroll.state.clamped_offset().x,
-        content_height: scroll.content_size.y,
-        visible_height: inner.height(),
-    };
-    ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::id(), overflow));
-    if !overflow.overflows() {
+    let offset = scroll.state.clamped_offset().x;
+    let content = scroll.content_size.x;
+    let overflows = content > inner.width() + 0.5;
+    match row {
+        ScrollRow::Groups(_) => {
+            let overflow =
+                RibbonOverflow { content, visible: inner.width(), offset, content_height: scroll.content_size.y, visible_height: inner.height() };
+            ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::id(), overflow));
+        }
+        ScrollRow::Tabs => {
+            let overflow = TabsOverflow { content, visible: inner.width(), offset };
+            ui.ctx().data_mut(|d| d.insert_temp(TabsOverflow::id(), overflow));
+        }
+    }
+    if !overflows {
         return;
     }
+    let (left_name, right_name) = row.labels();
     let step = (inner.width() * 0.6).max(60.0);
     let mut target = None;
-    for (left, show) in [(true, overflow.offset > 0.5), (false, overflow.offset < max - 0.5)] {
+    for (left, show) in [(true, offset > 0.5), (false, offset < max - 0.5)] {
         if !show {
             continue;
         }
@@ -229,19 +317,19 @@ fn scroll_arrows(ui: &mut Ui, t: &Tokens, tab: &str, scroll: egui::scroll_area::
         } else {
             Rect::from_min_size(pos2(inner.right() - 18.0, inner.top()), vec2(18.0, inner.height()))
         };
-        let resp = ui.interact(r, ui.scope_id().with(("ribbon_scroll_arrow", left)), Sense::click());
+        let resp = ui.interact(r, ui.scope_id().with(("ribbon_scroll_arrow", row.tag(), left)), Sense::click());
         ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.hover } else { t.ribbon });
         ui.painter().rect_stroke(r, 4.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
         icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), if left { Icon::Left } else { Icon::Right }, t.text);
-        let name = if left { "Scroll ribbon left" } else { "Scroll ribbon right" };
+        let name = if left { left_name } else { right_name };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
         if resp.on_hover_text(crate::i18n::current(ui.ctx()).tr(name)).clicked() {
-            target = Some(if left { overflow.offset - step } else { overflow.offset + step });
+            target = Some(if left { offset - step } else { offset + step });
         }
     }
     if let Some(x) = target {
         let frame = ui.ctx().cumulative_frame_nr();
-        ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::scroll_target_id(tab), (frame, x.clamp(0.0, max))));
+        ui.ctx().data_mut(|d| d.insert_temp(row.scroll_target_id(), (frame, x.clamp(0.0, max))));
         ui.ctx().request_repaint();
     }
 }

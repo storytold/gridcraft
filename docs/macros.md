@@ -365,7 +365,9 @@ under the next free name, and the dialogs are opened only from the ribbon, the m
 
 Automate scripts (`automate.recordActions`, `newScript`, `allScripts`, `runScript`,
 `deleteScript`) are an older, separate feature. They keep their commands, parameters, storage
-(`_sc_scripts`) and results, and View › Macros (`view.macros`) still lists them. Macro commands
+(`_sc_scripts`) and results, and View › Macros (`view.macros`) still lists them; the Developer
+tab's Macros button runs the same query with `{"dialog": true}` to open the dialog, while `{}` is
+the query on its own. Macro commands
 neither read nor change their storage; a recording keeps the steps a script run ran while it
 recorded. A workbook can hold a script and a macro with the same name.
 

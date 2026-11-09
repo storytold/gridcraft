@@ -11,7 +11,7 @@ use std::fs;
 use std::path::Path;
 
 /// "File" is not a ribbon tab: its sequence opens the Backstage view.
-const TABS: &[&str] = &["File", "Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
+const TABS: &[&str] = &["File", "Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate", "Developer"];
 
 /// Commands whose empty-params behaviour depends on the host machine (e.g. the
 /// system dictionary). These are never probed; their tests assert "invoked

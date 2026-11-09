@@ -1,11 +1,12 @@
 //! Ribbon layout: the big split button, the scroll arrows of an overflowing tab, and every tab
 //! fitting the card's height.
 
-use egui::vec2;
+use egui::accesskit::Role;
+use egui::{Event, Modifiers, PointerButton, vec2};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::icons::Icon;
-use gridcraft_ui_egui::ribbon::{RibbonOverflow, TABS};
+use gridcraft_ui_egui::ribbon::{RibbonOverflow, TABS, TabsOverflow};
 use gridcraft_ui_egui::{SheetApp, widgets};
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
@@ -79,6 +80,42 @@ fn each_tab_keeps_a_scroll_offset_of_its_own() {
     h.state_mut().ui.ribbon_tab = "Home".into();
     h.run_steps(3);
     assert_eq!(RibbonOverflow::get(&h.ctx).offset, home_offset, "Home kept its offset");
+}
+
+#[test]
+fn a_narrow_window_scrolls_the_tab_row_to_its_last_tab() {
+    // File and the ten tabs outgrow a narrow window; the row's arrows bring the trailing tabs
+    // (Automate, Developer) into view instead of leaving them clipped.
+    let mut h = app_at(600.0, "Home");
+    let o = TabsOverflow::get(&h.ctx);
+    assert!(o.overflows(), "the tab row is wider than a 600 px window: {} in {}", o.content, o.visible);
+    assert_eq!(o.offset, 0.0);
+    assert!(h.query_by_label("Scroll tabs left").is_none(), "nothing to the left yet");
+    for _ in 0..8 {
+        let Some(arrow) = h.query_by_label("Scroll tabs right") else { break };
+        arrow.click();
+        h.run_steps(2);
+    }
+    let o = TabsOverflow::get(&h.ctx);
+    assert!(o.offset >= o.content - o.visible - 0.5, "scrolled to the end: {} of {}", o.offset, o.content - o.visible);
+    assert!(h.query_by_label("Scroll tabs right").is_none(), "no right arrow at the end");
+    // The #3563 review: the last tab is Developer, and at the row's end it is on screen and
+    // clickable — not clipped and not merely scrolled past. The left arrow marks the viewport the
+    // scroll area exposes (`TabsOverflow::visible` wide), so its right edge is where Developer ends.
+    let row = h.get_by_label("Scroll tabs left").rect();
+    let at = egui::pos2(row.left() + o.visible - 12.0, row.center().y);
+    assert!(at.x < 600.0, "the click point is inside the window: {at:?}");
+    h.input_mut().events.push(Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.input_mut().events.push(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+    }
+    assert_eq!(h.state().ui.ribbon_tab, "Developer", "the last tab answers a click at the row's end");
+    assert!(h.query_by_role_and_label(Role::Button, "Macros").is_some(), "the Developer card drew its controls");
+    // A wide window shows the whole row and no arrows.
+    let h = app_at(1440.0, "Home");
+    assert!(!TabsOverflow::get(&h.ctx).overflows());
+    assert!(h.query_by_label("Scroll tabs right").is_none());
 }
 
 #[test]
