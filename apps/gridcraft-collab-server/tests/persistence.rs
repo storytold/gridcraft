@@ -184,3 +184,102 @@ async fn the_periodic_tick_snapshots_a_quiet_room() {
     assert!(snapshotted, "the periodic tick never wrote a snapshot");
     server.stop().await;
 }
+
+/// Reads a cell from the bytes a commit returned.
+async fn committed_a1(server: &support::Server, session: &str) -> Value {
+    let (status, body) = http(server, "POST", &format!("/v1/sessions/{session}/commit"), Some(SERVICE), None).await;
+    assert_eq!(status, 200, "{body}");
+    let reply: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, reply["bytes"].as_str().unwrap()).unwrap();
+    let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsx", &bytes).unwrap();
+    a1(&workbook)
+}
+
+/// The undo of an operation the base already covers is a version of its own: the journal must
+/// carry it, or a restart (or a client catching up) brings the undone cell back.
+#[tokio::test]
+async fn an_undo_replays_from_the_journal_after_a_restart() {
+    let root = temp_root("undo-restart");
+    let session;
+    {
+        let server = start_stored(&root).await;
+        session = create(&server, 26, false).await;
+        let mut ann = open(&server, &session, "ann", Role::Editor, 26).await;
+        let sheet = sheet_key(&next(&mut ann).await);
+        ann.send(Message::text(op("op-1", "cell.set", json!({ "input": 42 }), &sheet, "A1"))).await.unwrap();
+        assert_eq!(next(&mut ann).await["applied"]["version"], 1);
+        // The edit is compacted into base.xlsx; the undo then lands in the journal, above it.
+        server.app.snapshot(&session).await.unwrap();
+        let (_, page) = http(&server, "GET", "/metrics", None, None).await;
+        assert_eq!(metric(&page, "gridcraft_collab_journal_ops"), 0, "{page}");
+
+        send_json(&mut ann, &json!({ "type": "undo", "opId": "op-1" })).await;
+        let undone = next(&mut ann).await;
+        assert_eq!(undone["applied"]["version"], 2, "{undone}");
+        assert_eq!(undone["applied"]["opId"], "undo-op-1", "{undone}");
+        let (_, page) = http(&server, "GET", "/metrics", None, None).await;
+        assert_eq!(metric(&page, "gridcraft_collab_journal_ops"), 1, "the undo is a journaled operation: {page}");
+        ann.close(None).await.unwrap();
+        // No flush and no snapshot on the way out: this is the crash the journal is there for.
+        server.stop().await;
+    }
+
+    let server = start_stored(&root).await;
+    assert_eq!(server.restored, 1, "the volume restores to the journal's head, not to the base");
+    let (status, body) = http(&server, "GET", &format!("/v1/sessions/{session}"), Some(SERVICE), None).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap()["version"], 2);
+    let committed = committed_a1(&server, &session).await;
+    assert_eq!(committed, Value::Empty, "the undone cell does not come back");
+
+    // A client that still holds version 1 is caught up by the undo, not sent the workbook.
+    let mut bob = open_at(&server, &session, "bob", Role::Editor, 26, 1).await;
+    assert_eq!(next(&mut bob).await["version"], 2);
+    let tail = next(&mut bob).await;
+    assert_eq!(tail["type"], "applied", "{tail}");
+    assert_eq!(tail["applied"]["version"], 2);
+    assert_eq!(tail["applied"]["opId"], "undo-op-1");
+    assert_eq!(next(&mut bob).await["type"], "resynced");
+    let (_, page) = http(&server, "GET", "/metrics", None, None).await;
+    assert_eq!(metric(&page, "gridcraft_collab_catchups_total"), 1, "{page}");
+    server.stop().await;
+}
+
+/// A snapshot after the undo compacts the undo into the base: the journal is trimmed to nothing
+/// and a restart still sees the undone document.
+#[tokio::test]
+async fn a_snapshot_after_an_undo_keeps_the_step_in_the_base() {
+    let root = temp_root("undo-compact");
+    let session;
+    {
+        let server = start_stored(&root).await;
+        session = create(&server, 27, false).await;
+        let mut ann = open(&server, &session, "ann", Role::Editor, 27).await;
+        let sheet = sheet_key(&next(&mut ann).await);
+        ann.send(Message::text(op("op-1", "cell.set", json!({ "input": 7 }), &sheet, "A1"))).await.unwrap();
+        assert_eq!(next(&mut ann).await["applied"]["version"], 1);
+        send_json(&mut ann, &json!({ "type": "undo", "opId": "op-1" })).await;
+        assert_eq!(next(&mut ann).await["applied"]["version"], 2);
+        send_json(&mut ann, &json!({ "type": "redo", "opId": "op-1" })).await;
+        assert_eq!(next(&mut ann).await["applied"]["version"], 3);
+        ann.close(None).await.unwrap();
+        // Compaction: the base moves to version 3 and the journal it covers is dropped.
+        assert_eq!(server.app.flush().await, 1);
+        let (_, page) = http(&server, "GET", "/metrics", None, None).await;
+        assert_eq!(metric(&page, "gridcraft_collab_journal_ops"), 0, "{page}");
+        assert_eq!(metric(&page, "gridcraft_collab_journal_bytes"), 0, "{page}");
+        server.stop().await;
+    }
+
+    let server = start_stored(&root).await;
+    assert_eq!(server.restored, 1);
+    let committed = committed_a1(&server, &session).await;
+    assert_eq!(committed, Value::Number(7.0), "the redo is part of the base");
+    let mut bob = open_at(&server, &session, "bob", Role::Editor, 27, 0).await;
+    assert_eq!(next(&mut bob).await["version"], 3);
+    let (version, _epoch, bytes) = read_snapshot(&mut bob).await;
+    assert_eq!(version, 3);
+    let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsx", &bytes).unwrap();
+    assert_eq!(a1(&workbook), Value::Number(7.0));
+    server.stop().await;
+}

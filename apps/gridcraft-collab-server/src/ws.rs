@@ -294,11 +294,15 @@ async fn pump(
         return resync(app, session_id, conn_id, tx, socket, from).await;
     }
     let now = now_secs();
-    let op = match &message {
-        ClientMessage::Op { op } => Some(op.clone()),
+    let journal_op = match &message {
+        ClientMessage::Op { op } => Some(crate::JournalOp::Op { op: op.clone() }),
+        ClientMessage::Undo { .. } => Some(crate::JournalOp::Undo),
+        ClientMessage::Redo { .. } => Some(crate::JournalOp::Redo),
         _ => None,
     };
-    let operations = matches!(&message, ClientMessage::Op { .. });
+    // An undo/redo is an operation of the document like any other: it takes a version and the
+    // session counts as changed, even though it carries no command of its own.
+    let writes = journal_op.is_some();
     let (handled, out, lease_lost) = {
         let mut inner = app.inner.lock().await;
         let Some(file_id) = inner.sessions.get(session_id).map(|meta| meta.file_id) else {
@@ -307,7 +311,7 @@ async fn pump(
         if inner.leases.touch(file_id, session_id, now, app.cfg.lease_ttl.as_secs()).is_none() {
             (Vec::new(), Vec::new(), true)
         } else {
-            if operations {
+            if writes {
                 if let Some(meta) = inner.sessions.get_mut(session_id) {
                     meta.updated_at = now;
                 }
@@ -348,7 +352,7 @@ async fn pump(
     if lease_lost {
         return false;
     }
-    if let Some(op) = &op
+    if let Some(op) = journal_op
         && let Some(applied) = handled.iter().find_map(|message| match message {
             ServerMessage::Applied { applied } => Some(applied.clone()),
             _ => None,

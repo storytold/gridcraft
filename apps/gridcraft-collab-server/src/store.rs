@@ -29,6 +29,20 @@ const SEEN: &str = "seen.json";
 const JOURNAL: &str = "journal.jsonl";
 const META: &str = "meta.json";
 
+/// What produced one journaled version (`docs/collab/server.md`).
+///
+/// An operation is replayed through the room, so its engine rules and its step of the history run
+/// once more. An undo/redo is replayed from the answer it produced: the step it reversed lives in
+/// the room's memory only (ADR-0010 §6) and is not part of the volume, while `applied` already
+/// carries every cell or sheet the operation put back.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum JournalOp {
+    Op { op: ClientOp },
+    Undo,
+    Redo,
+}
+
 /// One applied operation of the journal: enough to replay it after a restart and to answer a
 /// client that missed it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -37,7 +51,7 @@ pub struct JournalEntry {
     /// Seconds since the epoch.
     pub at: u64,
     pub actor: String,
-    pub op: ClientOp,
+    pub op: JournalOp,
     pub applied: Applied,
 }
 
@@ -302,11 +316,36 @@ mod tests {
         JournalEntry {
             at: 1_000 + version,
             actor: "ann".into(),
-            op: serde_json::from_str(r#"{"opId":"op-1","doc":"s","kind":"command","target":{"sheet":"1"},"payload":{"cmd":"cell.set","params":{}}}"#)
+            op: JournalOp::Op {
+                op: serde_json::from_str(
+                    r#"{"opId":"op-1","doc":"s","kind":"command","target":{"sheet":"1"},"payload":{"cmd":"cell.set","params":{}}}"#,
+                )
                 .unwrap(),
+            },
             applied: serde_json::from_str(&format!(r#"{{"opId":"op-{version}","version":{version},"epoch":0,"actor":"ann","result":{{}}}}"#))
                 .unwrap(),
         }
+    }
+
+    #[test]
+    fn a_reversal_entry_carries_its_effect_and_not_the_step_it_reversed() {
+        let store = store();
+        let reversal = JournalEntry {
+            at: 2_000,
+            actor: "ann".into(),
+            op: JournalOp::Undo,
+            applied: serde_json::from_str(
+                r#"{"opId":"undo-op-1","version":2,"epoch":0,"actor":"ann","result":{"delta":[{"sheet":"1","cells":[{"a1":"A1","value":null}]}]}}"#,
+            )
+            .unwrap(),
+        };
+        store.write_journal(7, &[entry(1), reversal.clone()]).unwrap();
+        let read = store.read_journal(7).unwrap();
+        assert_eq!(read, vec![entry(1), reversal]);
+        let line = fs::read_to_string(store.dir(7).join(JOURNAL)).unwrap();
+        assert!(line.contains(r#""kind":"undo""#), "{line}");
+        assert!(!line.contains(r#""step""#), "the undo history is not part of the volume: {line}");
+        assert!(!line.contains(r#""before""#), "the undo history is not part of the volume: {line}");
     }
 
     #[test]

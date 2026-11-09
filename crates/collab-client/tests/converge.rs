@@ -17,16 +17,22 @@ struct Peer {
 }
 
 async fn join(server: &support::Server, file_id: i64, session: &str, who: &str, role: Role) -> Peer {
+    let mut local = Session::new();
+    local.new_workbook();
+    reconnect(server, file_id, session, who, role, 0, local).await
+}
+
+/// Comes back as `who` at `last_version`, keeping the local document the peer already had: what a
+/// client does after a dropped connection (`Config::last_version` is the catch-up point).
+async fn reconnect(server: &support::Server, file_id: i64, session: &str, who: &str, role: Role, last_version: u64, local: Session) -> Peer {
     let cfg = Config {
         url: server.url(session),
         token: support::token(who, role, file_id, session),
         name: who.to_string(),
-        last_version: 0,
+        last_version,
         reconnect: Some(Duration::from_millis(200)),
     };
     let (client, welcome) = Client::connect(cfg).await.unwrap();
-    let mut local = Session::new();
-    local.new_workbook();
     let synced = Synced::new(client, &welcome);
     Peer { session: local, synced }
 }
@@ -38,6 +44,21 @@ fn value(peer: &Peer, a1: &str) -> Value {
 
 fn sheet_name(peer: &Peer) -> String {
     peer.session.doc().unwrap().wb.active().unwrap().name.clone()
+}
+
+/// Lets one connection deliver what the server sent, while nobody else is listening.
+async fn settle_one(peer: &mut Peer) {
+    for _ in 0..200 {
+        if !peer.synced.poll(&mut peer.session).is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            continue;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        if peer.synced.poll(&mut peer.session).is_empty() {
+            return;
+        }
+    }
+    panic!("the replica did not settle");
 }
 
 /// Lets both connections deliver what the server sent. The two quiet rounds absorb the server's
@@ -357,5 +378,75 @@ async fn an_eight_megabyte_sheet_image_travels_in_parts_and_converges() {
         assert_eq!(names(peer), ["Sheet1", "Extra"]);
         assert_eq!(peer.synced.state().epoch, 3);
     }
+    server.stop().await;
+}
+
+/// An undo is a version of its own, so a peer that reconnects between it and the next snapshot has
+/// to be caught up by it: the journal carries the undo like any other operation. Before that, the
+/// catch-up said "caught up" while the undone cell was still in the reconnecting replica.
+#[tokio::test]
+async fn a_peer_that_reconnects_after_an_undo_sees_the_undone_state() {
+    let server = support::start().await;
+    let session = support::create(&server, 48).await;
+    let mut ann = join(&server, 48, &session, "ann", Role::Editor).await;
+    let mut bob = join(&server, 48, &session, "bob", Role::Editor).await;
+
+    ann.synced.execute(&mut ann.session, "cell.set", json!({ "cell": "A1", "input": 5 })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    assert_eq!(bob.synced.state().version, 1);
+    assert_eq!(value(&bob, "A1"), Value::Number(5.0));
+
+    // Bob's connection goes away at version 1; the author undoes while he is away.
+    let local = std::mem::replace(&mut bob.session, Session::new());
+    let away_at = bob.synced.state().version;
+    drop(bob);
+    ann.synced.undo().unwrap();
+    settle_one(&mut ann).await;
+    assert_eq!(ann.synced.state().version, 2);
+    assert_eq!(value(&ann, "A1"), Value::Empty);
+
+    let mut back = reconnect(&server, 48, &session, "bob", Role::Editor, away_at, local).await;
+    settle(&mut ann, &mut back).await;
+    assert_eq!(value(&back, "A1"), Value::Empty, "the catch-up carries the undo");
+    assert_eq!(value(&ann, "A1"), Value::Empty, "both replicas see the undone step");
+    assert_eq!(back.synced.state().version, 2);
+
+    // The redo after the reconnect puts the step back on both.
+    ann.synced.redo().unwrap();
+    settle(&mut ann, &mut back).await;
+    assert_eq!(value(&ann, "A1"), Value::Number(5.0));
+    assert_eq!(value(&back, "A1"), Value::Number(5.0));
+    assert_eq!(back.synced.state().version, 3);
+    server.stop().await;
+}
+
+/// A structural undo is journaled with the sheets it put back, so the same catch-up works when the
+/// reconnecting replica has to replace whole sheets rather than patch cells.
+#[tokio::test]
+async fn a_peer_that_reconnects_after_a_structural_undo_gets_the_sheet_image() {
+    let server = support::start().await;
+    let session = support::create(&server, 49).await;
+    let mut ann = join(&server, 49, &session, "ann", Role::Editor).await;
+    let mut bob = join(&server, 49, &session, "bob", Role::Editor).await;
+
+    ann.synced.execute(&mut ann.session, "cell.set", json!({ "cell": "A1", "input": 1 })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    // A structural edit waits for the head, so it goes out after the first answer.
+    ann.synced.execute(&mut ann.session, "home.insertSheet", json!({ "name": "Extra" })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    assert_eq!(names(&bob), ["Sheet1", "Extra"]);
+    let away_at = bob.synced.state().version;
+
+    let local = std::mem::replace(&mut bob.session, Session::new());
+    drop(bob);
+    ann.synced.undo().unwrap();
+    settle_one(&mut ann).await;
+    assert_eq!(names(&ann), ["Sheet1"]);
+
+    let mut back = reconnect(&server, 49, &session, "bob", Role::Editor, away_at, local).await;
+    settle(&mut ann, &mut back).await;
+    assert_eq!(names(&back), ["Sheet1"], "the inserted sheet is undone on the reconnecting replica");
+    assert_eq!(value(&back, "A1"), Value::Number(1.0));
+    assert_eq!(back.synced.state().version, 3);
     server.stop().await;
 }

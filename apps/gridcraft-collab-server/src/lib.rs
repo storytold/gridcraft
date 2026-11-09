@@ -28,7 +28,7 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
-use gridcraft_collab::{Applied, ClientOp, Gateway, Room, RoomState, ServerMessage, SheetKeys};
+use gridcraft_collab::{Applied, Gateway, Room, RoomState, ServerMessage, SheetKeys};
 use gridcraft_engine::{DocState, Session, Trust};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -37,7 +37,7 @@ use tokio::sync::{Mutex, mpsc};
 pub use config::{Config, ConfigError};
 pub use jwt::{JwtConfig, VerifyError};
 pub use lease::Lease;
-pub use store::{JournalEntry, Store, StoreError, StoredMeta};
+pub use store::{JournalEntry, JournalOp, Store, StoreError, StoredMeta};
 
 use crate::lease::Leases;
 use crate::metrics::{Gauges, Metrics};
@@ -351,16 +351,44 @@ impl App {
         session.add_document(DocState::from_saved(workbook, None, meta.name.clone(), Trust::FromFile));
         let mut room = Room::restore(keys, state);
         let journal = store.read_journal(file_id)?;
+        // The base is at `base_version` and the journal holds every version after it, undo and
+        // redo included: a gap would replay a document that never existed.
+        let mut expected = meta.base_version;
         for entry in &journal {
             if entry.applied.version <= meta.base_version {
                 continue;
             }
-            room.apply(&mut session, entry.op.clone(), &entry.actor)
-                .map_err(|e| StoreError::Load(format!("replay of version {} refused: {}", entry.applied.version, e.rejected().code.code())))?;
+            if entry.applied.version != expected.saturating_add(1) {
+                return Err(StoreError::Load(format!("fileId {file_id}: the journal jumps from {expected} to {}", entry.applied.version)));
+            }
+            let replayed = match &entry.op {
+                JournalOp::Op { op } => room.apply(&mut session, op.clone(), &entry.actor).map(|_| ()),
+                // An undo/redo's step lives in the room's memory only; its answer carries the
+                // cells or sheets it put back, which is all a replay needs.
+                JournalOp::Undo | JournalOp::Redo => room.replay_reversal(&mut session, &entry.applied),
+            };
+            replayed.map_err(|e| {
+                let rejected = e.rejected();
+                StoreError::Load(format!(
+                    "replay of version {} refused: {} {}",
+                    entry.applied.version,
+                    rejected.code.code(),
+                    rejected.message.as_deref().unwrap_or("")
+                ))
+            })?;
+            expected = entry.applied.version;
         }
-        if room.version() != meta.version {
-            return Err(StoreError::Load(format!("fileId {file_id}: journal ends at {}, meta says {}", room.version(), meta.version)));
+        if room.version() != expected {
+            return Err(StoreError::Load(format!("fileId {file_id}: the journal ends at {}, replay reached {}", expected, room.version())));
         }
+        // `meta.version` is the head at the last snapshot; a crash after a snapshot leaves it at
+        // `base_version` while the journal is ahead. It may not claim more than the volume holds.
+        if meta.version > expected {
+            return Err(StoreError::Load(format!("fileId {file_id}: meta claims version {}, the volume ends at {expected}", meta.version)));
+        }
+        // The stacks a replay rebuilt are not the ones the operations left: a journaled undo
+        // dropped a step the volume never had. A restarted room starts with empty stacks.
+        room.forget_history();
         Ok(Some(Loaded { session, keys: room.sheet_keys().clone(), state: room.state(), journal, meta }))
     }
 
@@ -414,14 +442,17 @@ impl App {
 
     /// Appends one applied operation to the journal. Returns whether a periodic snapshot is due.
     /// The journal is kept even without a volume: catch-up inside the process needs it.
-    pub(crate) async fn record(&self, session_id: &str, actor: &str, op: &ClientOp, applied: &Applied, now: u64) -> bool {
+    ///
+    /// An undo/redo is journaled like any other operation: it took a version, and a client that
+    /// reconnects after it — or a restart that replays the tail — must reach the same document.
+    pub(crate) async fn record(&self, session_id: &str, actor: &str, op: JournalOp, applied: &Applied, now: u64) -> bool {
         let mut inner = self.inner.lock().await;
         let Some(file_id) = inner.sessions.get(session_id).map(|meta| meta.file_id) else { return false };
         let Some(journal) = inner.journal.get_mut(session_id) else { return false };
         if journal.last().is_some_and(|entry| applied.version <= entry.applied.version) {
             return false;
         }
-        let entry = JournalEntry { at: now, actor: actor.to_string(), op: op.clone(), applied: applied.clone() };
+        let entry = JournalEntry { at: now, actor: actor.to_string(), op, applied: applied.clone() };
         if let Some(store) = &self.store
             && let Err(e) = store.append_journal(file_id, &entry)
         {

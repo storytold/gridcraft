@@ -567,3 +567,88 @@ fn a_sheet_image_round_trips_through_the_wire() {
         other => panic!("expected applied, got {other:?}"),
     }
 }
+
+/// The journal records an undo as an operation, so a restart that replays the tail must reach the
+/// same document. The step it reversed lived in the room's memory only; its answer carries the
+/// cells it put back, which is what a replay needs.
+#[test]
+fn a_journaled_undo_and_redo_replay_from_their_answers_after_a_restart() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, op("op-1", "cell.set", json!({"input": 5}), &sheet, "A1"), "ann").unwrap();
+    let keys = room.sheet_keys().clone();
+    let base_wb = s.doc().unwrap().wb.as_ref().clone();
+    let undone = room.undo(&mut s, "ann", Some("op-1")).unwrap();
+    let redone = room.redo(&mut s, "ann", Some("op-1")).unwrap();
+
+    // The restart: the base is the workbook as the edit left it, and the room starts with no
+    // history at all. The journal holds the undo and the redo.
+    let mut base = Session::new();
+    base.add_document(gridcraft_engine::DocState::new(base_wb, None, "book".into(), gridcraft_engine::Trust::FromFile));
+    let mut restored = Room::restore(keys, crate::RoomState { version: 1, epoch: 0, seen: Vec::new() });
+    restored.replay_reversal(&mut base, &undone).unwrap();
+    assert_eq!(restored.version(), 2);
+    assert_eq!(value_of(&base, 0, "A1"), Value::Empty, "the undone cell is gone after the replay");
+    restored.replay_reversal(&mut base, &redone).unwrap();
+    assert_eq!(restored.version(), 3);
+    assert_eq!(value_of(&base, 0, "A1"), Value::Number(5.0), "the redo puts the step back");
+}
+
+/// A structural undo replays its sheet images the same way: the sheets of the step replace the
+/// workbook, and the room's epoch moves with them.
+#[test]
+fn a_journaled_structural_undo_replays_its_sheet_image() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, op("a", "cell.set", json!({"input": 1}), &sheet, "A1"), "ann").unwrap();
+    room.apply(&mut s, structural_op(&room, "add", "home.insertSheet", json!({"name": "Extra"}), &sheet), "ann").unwrap();
+    let keys = room.sheet_keys().clone();
+    let base_wb = s.doc().unwrap().wb.as_ref().clone();
+    let undone = room.undo(&mut s, "ann", Some("add")).unwrap();
+    assert_eq!(undone.epoch, 2);
+
+    let mut base = Session::new();
+    base.add_document(gridcraft_engine::DocState::new(base_wb, None, "book".into(), gridcraft_engine::Trust::FromFile));
+    let mut restored = Room::restore(keys, crate::RoomState { version: 2, epoch: 1, seen: Vec::new() });
+    restored.replay_reversal(&mut base, &undone).unwrap();
+    assert_eq!(base.doc().unwrap().wb.sheets.len(), 1, "the inserted sheet is undone");
+    assert_eq!(value_of(&base, 0, "A1"), Value::Number(1.0));
+    assert_eq!(restored.version(), 3);
+    assert_eq!(restored.epoch(), 2, "the undo moved addresses");
+    assert_eq!(restored.sheet_keys().key_for_index(&base.doc().unwrap().wb, 0).map(|key| key.to_string()), Some(sheet));
+}
+
+#[test]
+fn a_replayed_undo_is_refused_when_the_journal_skips_a_version() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, op("op-1", "cell.set", json!({"input": 5}), &sheet, "A1"), "ann").unwrap();
+    let undone = room.undo(&mut s, "ann", Some("op-1")).unwrap();
+
+    // A room at version 0 that is handed version 2 has lost the operation between them.
+    let mut fresh = session();
+    let mut empty = Room::new(&fresh);
+    let refused = empty.replay_reversal(&mut fresh, &undone).expect_err("a gap is refused");
+    assert_eq!(refused.rejected().code, RejectCode::Internal);
+    assert_eq!(empty.version(), 0, "nothing was applied");
+}
+
+/// A room restored from the volume starts with empty undo stacks: the volume never holds a step a
+/// later undo took away (ADR-0010 §6), so a stack rebuilt by replay would not be the one the
+/// operations left.
+#[test]
+fn a_restored_room_starts_with_empty_undo_stacks() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, op("op-1", "cell.set", json!({"input": 5}), &sheet, "A1"), "ann").unwrap();
+    room.undo(&mut s, "ann", Some("op-1")).unwrap();
+    room.apply(&mut s, op("op-2", "cell.set", json!({"input": 6}), &sheet, "A2"), "ann").unwrap();
+    room.forget_history();
+    let refused = room.undo(&mut s, "ann", None).expect_err("the stacks are gone");
+    assert_eq!(refused.rejected().code, RejectCode::Invalid);
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("A2").unwrap()).as_f64(), Some(6.0));
+}

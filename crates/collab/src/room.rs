@@ -240,6 +240,15 @@ impl Room {
         Ok(applied)
     }
 
+    /// Drops every per-actor undo and redo stack. A room restored from the volume has replayed the
+    /// operations that built them, but the volume never holds a step a later undo took away
+    /// (ADR-0010 §6), so a replay cannot rebuild the stacks; they start empty, as the design says,
+    /// instead of offering an undo the document would refuse.
+    pub fn forget_history(&mut self) {
+        self.history.clear();
+        self.redo.clear();
+    }
+
     /// Reverses the last step of `actor` (ADR-0010): a new operation at the next version, never a
     /// rewind of somebody else's work. Every touched cell must still hold what this step left
     /// there; one that somebody else edited refuses the whole undo as `conflict` with the
@@ -358,6 +367,55 @@ impl Room {
         })
     }
 
+    /// Replays the effect of a journaled undo or redo after a restart.
+    ///
+    /// The undo stacks live in memory only (ADR-0010 §6), so the step one of them reversed cannot
+    /// be rebuilt from the volume. Its answer can: an `applied` carries the whole sheets the
+    /// operation put back (`images`) or the cells it restored (`result.delta`). Replay proves the
+    /// journal has no gap (`version` is the room's next one) and takes the counters from the entry,
+    /// so a restart ends exactly at the version the store recorded.
+    pub fn replay_reversal(&mut self, session: &mut Session, applied: &Applied) -> Result<(), RoomError> {
+        if applied.version != self.version.saturating_add(1) {
+            return Err(self.replay_reject(applied, "the journal skips a version before this undo/redo"));
+        }
+        if let Some(images) = &applied.images {
+            let sheets = images.iter().map(|image| image.sheet.clone()).collect();
+            session.restore_sheets(sheets).map_err(|e| self.replay_reject(applied, &e.to_string()))?;
+            for image in images {
+                if let Ok(key) = image.key.parse::<u64>() {
+                    self.keys.revive(key, image.sheet.uid.get());
+                }
+            }
+        } else if let Some(delta) = &applied.result.delta {
+            let mut groups: BTreeMap<usize, Vec<(CellRef, CellState)>> = BTreeMap::new();
+            {
+                let d = session.active().ok_or_else(|| self.replay_reject(applied, "no document"))?;
+                for sheet in delta {
+                    let Ok(key) = sheet.sheet.parse::<u64>() else { continue };
+                    let index =
+                        self.keys.index_for_key(&d.wb, key).ok_or_else(|| self.replay_reject(applied, "a sheet of this undo/redo is gone"))?;
+                    for change in &sheet.cells {
+                        let at = CellRef::parse(&change.a1).ok_or_else(|| self.replay_reject(applied, "a bad address in the journal"))?;
+                        let value = serde_json::from_value::<Value>(change.value.clone())
+                            .map_err(|_| self.replay_reject(applied, "a bad value in the journal"))?;
+                        let state = CellState { value, formula: change.formula.clone(), style: change.style.unwrap_or(0) };
+                        groups.entry(index).or_default().push((at, state));
+                    }
+                }
+            }
+            for (index, cells) in &groups {
+                session.restore_cells(*index, cells).map_err(|e| self.replay_reject(applied, &e.to_string()))?;
+            }
+        } else {
+            return Err(self.replay_reject(applied, "this undo/redo carries neither sheets nor cells"));
+        }
+        let _ = session.take_changed();
+        self.version = applied.version;
+        self.epoch = applied.epoch;
+        self.sync_keys(session);
+        Ok(())
+    }
+
     /// Applies a whole-sheet image as one operation: every sheet of the step replaces the current
     /// workbook in the order of the session map, the keys of the restored sheets are kept, and the
     /// epoch grows because addresses moved. Only the last step of `actor` can be here, and only
@@ -455,6 +513,16 @@ impl Room {
                 self.seen.remove(&old);
             }
         }
+    }
+
+    fn replay_reject(&self, applied: &Applied, message: &str) -> RoomError {
+        RoomError::Rejected(Rejected {
+            op_id: applied.op_id.clone(),
+            code: RejectCode::Internal,
+            retryable: false,
+            hint: Some(Hint { version: self.version, epoch: self.epoch }),
+            message: Some(message.to_string()),
+        })
     }
 
     fn reject(&self, op: &ClientOp, code: RejectCode, retryable: bool, message: &str) -> RoomError {
