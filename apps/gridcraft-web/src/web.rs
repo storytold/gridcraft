@@ -41,9 +41,10 @@ async fn pick_picture(max: f64) -> Option<(String, Vec<u8>)> {
             let input_for_change = input.clone();
             let input_for_cancel = input.clone();
             let resolve_for_change = resolve.clone();
+            let chosen_for_change = chosen.clone();
             let change: wasm_bindgen::closure::Closure<dyn FnMut()> = wasm_bindgen::closure::Closure::new(move || {
                 if let Some(file) = input_for_change.files().and_then(|files| files.get(0)) {
-                    *chosen.borrow_mut() = Some(file);
+                    *chosen_for_change.borrow_mut() = Some(file);
                 }
                 input_for_change.set_onchange(None);
                 let _ =
