@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-06 · **Change:** minor (correct review findings in catalogs, native menus and regional formats; Arabic bidi display, editing and cell reading direction; Arabic font fallback; number formats honour the `B1`/`B2` calendar prefixes) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-09 · **Change:** minor (reconcile the language counts and the Languages table with the shipped catalogs; earlier: correct review findings in catalogs, native menus and regional formats; Arabic bidi display, editing and cell reading direction; Arabic font fallback; number formats honour the `B1`/`B2` calendar prefixes) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -159,6 +159,9 @@ checks. Physical screen-reader behavior remains unverified.
 UI strings translated are measured counts against the ~2,200 estimate. Estimates to `full`
 include the rest of the catalog work below (10–20 h, counted once), localized function names,
 separators, number/date formats, machine translation with agent review, and script work.
+The counts were measured on 2026-10-10 and are kept as history; every interface language now has a
+catalog (`crates/ui-egui/src/i18n/`), and a string a catalog lacks shows in English
+(`cargo xtask i18n-report`).
 
 | Language | Code | UI strings translated | Dialogs / tooltips / help | Script support | Native review | Status | Estimate to full |
 |---|---|---|---|---|---|---|---|
@@ -166,17 +169,14 @@ separators, number/date formats, machine translation with agent review, and scri
 | Simplified Chinese (Mandarin) | zh-Hans | 266 (~12%) | no | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus only | 8–13 h |
 | Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
 | Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
-| Arabic | ar | 0 (0%) | no | **no shaping, no RTL UI**; Sheet Right-to-Left mirrors the grid (#146) | no | none | 25–35 h |
+| Arabic | ar | 0 (0%) | no | shared shaping and bidi layout; no Arabic UI catalog; Sheet Right-to-Left mirrors the grid (#146) | no | none | 25–35 h |
 | French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
 | Portuguese | pt-BR | 943 (~43%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
-| Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display, but phonetic runs (ふりがな) survive an XLSX open + save | no | menus only | 8–12 h |
-| Japanese | ja | 943 (~43%) | dialogs and messages | CJK system-font fallback; IME unverified; no furigana display | no | menus, File view, dialogs, messages | 3–5 h |
-| Japanese | ja | 268 (~12%) | no | CJK system-font fallback; the theme's East Asian typeface (`<a:ea>`) survives open + save (rendering does not use it yet); IME unverified; no furigana display | no | menus only | 8–12 h |
+| Japanese | ja | 943 (~43%) | dialogs and messages | CJK system-font fallback; the theme's East Asian typeface (`<a:ea>`) survives open + save (rendering does not use it yet); IME unverified; no furigana display, but phonetic runs (ふりがな) survive an XLSX open + save | no | menus, File view, dialogs, messages | 3–5 h |
 | German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
 | Italian | it | 971 (~44%) | dialogs, tooltips, pivot pane | Latin: yes | no | menus, File view, dialogs, pivot pane | 3–5 h |
 | Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
-| Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
 | Turkish | tr | 382 (~17%) | no | Latin: yes | yes | menus only | 4–8 h |
 | Vietnamese | vi | 398 (~18%) | no | Latin with stacked diacritics: unverified | no | menus, File view | 5–9 h |
 
@@ -215,10 +215,11 @@ language (none so far) and of localized function names.
 | 2026-11-05 | minor | Fix Polish/Traditional Chinese template lookups, Greek coupon-rate and Chinese analysis/preview terms, native Insert menu context and macOS language declarations; correct Thai built-in time format IDs and localized fractional seconds |
 | 2026-11-03 | minor | Keep unchanged text typed on Ctrl+Shift+Enter, distinguish sheet and workbook name scopes, preserve parser tokens, localize typed filter labels and chart data choices, retain 12-hour suggestions, make style previews scrollable and correct help terminology |
 | 2026-11-02 | minor | Review translated help by language; correct mathematical/statistical/financial terminology, localize empty resolved chart names and blank-filter search, validate generated sheet prefixes and assert complete hint signatures |
-| 2026-11-02 | minor | Complete help for the current 515 functions in all 18 translated interface languages; retain existing wording, separate help from formula syntax and test optional/repeated-argument structure |
+| 2026-11-02 | minor | Complete help for the current 515 functions in all 19 translated interface languages; retain existing wording, separate help from formula syntax and test optional/repeated-argument structure |
 | 2026-11-02 | minor | Extend Russian help to 479 distinct descriptions and 283 argument keys; preserve original translations and canonical formula syntax; cover reported XLOOKUP, COLUMN and RADIANS tooltips |
 | 2026-11-02 | minor | Ctrl+Enter fills unchanged stored text as a typed literal without adding an apostrophe; fresh localized numeric entry retains normal parsing |
 | 2026-10-29 | minor | Russian: refresh #676 catalog, adapt #1850 formula aliases to current help/name handling, localize error literals and selected parameter/parser diagnostics at the UI boundary |
+| 2026-11-09 | minor | One row per language and current script status in the Languages table, the 19 translated help tables named consistently, and generated-name prefixes tested against every catalog |
 | 2026-10-27 | minor | Number formats honour the `B1`/`B2` calendar prefixes: never shown; `B2` renders year, month, day and Arabic month and weekday names in the tabular Hijri calendar (1 Jan 2001 = 6 Shawwal 1421; leap years 2, 5, 7, 10, 13, 15, 18, 21, 24, 26 and 29 of the 30-year cycle, which is what Excel shows). Checked against Excel 16.0 (build 20527, en-US) on every serial and about 1,700 format/value pairs: a locale or currency tag before `B2` keeps the date Gregorian, a misplaced `B` and digit or a prefix before a number format is rejected, serial 60 has no Hijri date, serial 0 shows as serial 1, two-word month names use a no-break space. Not matched: Excel's weekday/month-name mix-ups in one `B2` section and its weekday-only quirks |
 | 2026-10-27 | minor | AutoFit column width, wrapped-row height and PivotTable column fit estimate Arabic letters at ~0.48 em (measured 0.36–0.53 em shaped, Noto Sans/Naskh Arabic and DejaVu Sans) instead of 1 em, Arabic-Indic digits as wide as ASCII digits, and give vowel marks and direction marks no width; vowelled Arabic no longer fits ~3.5× too wide |
 | 2026-10-26 | minor | Shared bidi layout supports Arabic clusters, marks, visual cursor navigation and directional accessibility; cell Context/LTR/RTL is stored separately from sheet RTL and round-trips through XLSX |

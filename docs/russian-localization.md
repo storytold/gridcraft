@@ -15,8 +15,9 @@ restoring their older parser/editor/help implementations.
   than its own rendering implementation.
 - Function help uses the existing English-keyed description/argument tables. Signatures come
   from canonical function metadata, keeping optional arguments and argument order consistent.
-  Nineteen non-English languages, including Traditional Chinese, use these tables for the current 515 functions;
-  see [coverage and translation provenance](localization-parity.md#function-help-coverage).
+  Nineteen of the 24 interface languages, including Traditional Chinese, use these tables for the
+  current 515 functions; English is the source, and Danish, Swedish, Georgian and Lithuanian use
+  English help. See [coverage and translation provenance](localization-parity.md#function-help-coverage).
 - Localization occurs at UI entry/display boundaries. Engine values, commands, clipboard and
   XLSX retain canonical English syntax. Workbook content and LET/LAMBDA name identity are not
   translated or folded as function aliases.

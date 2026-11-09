@@ -5,8 +5,8 @@ for Spanish formula entry and display. On first run the preference follows the s
 Choose **Русский**, **Polski**, **Français**, **Deutsch**, **Italiano**, **Português (Brasil)**, or **Türkçe** for formula
 entry and display in those languages. Other interface languages use the English formula table and
 separators. For example, Polish `=SUMA(1,5;2,25)` is stored in XLSX as `SUM(1.5,2.25)`.
-French and German use dots between array columns, as in `{1.2;3.4}`. Italian and Brazilian Portuguese use
-backslashes between array columns, as does Turkish.
+French and German use dots between array columns, as in `{1.2;3.4}`. Spanish, Polish, Russian, Italian,
+Brazilian Portuguese and Turkish use backslashes between array columns.
 
 | Spanish | Canonical English |
 | --- | --- |
@@ -30,8 +30,9 @@ shows `Ventas[[#Datos];[Importe]]` for the stored reference `Ventas[[#Data],[Imp
 Table and column names stay as entered.
 
 The cell editor, formula bar, Show Formulas, autocomplete, the Formula ribbon, Insert Function, and argument hints
-use the selected formula language. Spanish help covers the current 515-function catalog.
-Functions without a Spanish alias keep their English name, and missing help falls back to English.
+use the selected formula language. Spanish help covers the current 515-function catalog; only the 15
+functions the Spanish table renames have a Spanish name, the rest keep their English one, and missing
+help falls back to English.
 General interface labels and errors
 fall back to English where Spanish translations are not provided. An edit captures its language
 when it starts so switching the preference cannot reinterpret unfinished input.
