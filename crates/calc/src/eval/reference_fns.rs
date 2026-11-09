@@ -1,4 +1,4 @@
-use super::format::{cell_format_code, r1c1_to_a1};
+use super::format::r1c1_to_a1;
 use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, MAX_CELLS, Value, err};
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use std::sync::Arc;
@@ -289,11 +289,15 @@ impl<'h> Evaluator<'h> {
             })),
             "sheetname" => Ev::V(Value::text(sheet.map(|s| s.name.clone()).unwrap_or_default())),
             "protect" => Ev::V(Value::number(if sheet.is_some_and(|s| wb.styles.get(s.style_id(c)).protection.locked) { 1.0 } else { 0.0 })),
-            "format" => {
+            "format" | "color" | "parentheses" => {
                 let code = sheet.map(|s| wb.styles.get(s.style_id(c)).num_fmt.as_str().to_string()).unwrap_or_default();
-                Ev::V(Value::text(cell_format_code(&code)))
+                let info = gridcraft_numfmt::NumberFormat::parse_cached(&code).cell_info();
+                Ev::V(match kind.as_str() {
+                    "format" => Value::text(info.code),
+                    "color" => Value::Number(if info.color { 1.0 } else { 0.0 }),
+                    _ => Value::Number(if info.parentheses { 1.0 } else { 0.0 }),
+                })
             }
-            "color" | "parentheses" => Ev::V(Value::Number(0.0)),
             "prefix" => Ev::V(Value::text("")),
             _ => err(CellError::Value),
         }
