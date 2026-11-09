@@ -20,6 +20,7 @@ jsonwebtoken = "9.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+env_logger = { version = "0.11", default-features = false, features = ["regex"] }
 base64 = "0.22"
 sha2 = { workspace = true }
 chrono = { workspace = true }

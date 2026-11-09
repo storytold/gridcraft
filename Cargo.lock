@@ -1549,6 +1549,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "env_filter"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "900d271a03799a1ee8d1ca9b19893b48ca674a9284fefcfb85f05e74ed314217"
+dependencies = [
+ "log",
+ "regex",
+]
+
+[[package]]
+name = "env_logger"
+version = "0.11.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de671bd27a75a797dc9ae289ba1e77276e75e2026408aab65185384e2d5cd3f6"
+dependencies = [
+ "env_filter",
+ "log",
+]
+
+[[package]]
 name = "epaint"
 version = "0.37.0"
 source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
@@ -2150,6 +2170,7 @@ dependencies = [
 name = "gridcraft-collab"
 version = "0.16.0"
 dependencies = [
+ "base64 0.22.1",
  "gridcraft-calc",
  "gridcraft-core",
  "gridcraft-engine",
@@ -2186,6 +2207,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
+ "env_logger",
  "futures-util",
  "gridcraft-collab",
  "gridcraft-engine",

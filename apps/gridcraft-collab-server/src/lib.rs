@@ -16,6 +16,7 @@ pub mod config;
 pub mod http;
 mod jwt;
 pub mod lease;
+pub mod logging;
 pub mod metrics;
 pub mod store;
 mod ws;

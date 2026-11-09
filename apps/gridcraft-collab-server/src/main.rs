@@ -8,7 +8,9 @@
 //! gridcraft-collab-server
 //! ```
 //!
-//! The token and the secret are never printed; the listen address is.
+//! The token and the secret are never printed; the listen address is. Records go to stderr through
+//! [`gridcraft_collab_server::logging`]: one line each, filter from `RUST_LOG`
+//! (`warn,gridcraft_collab_server=info,gridcraft_collab=info` when unset, `off` for silence).
 
 use std::sync::Arc;
 
@@ -18,6 +20,7 @@ use gridcraft_collab_server::{App, Config, JwtConfig};
 
 #[tokio::main]
 async fn main() {
+    gridcraft_collab_server::logging::init();
     if let Err(message) = run().await {
         eprintln!("gridcraft-collab-server: {message}");
         std::process::exit(2);
@@ -40,12 +43,13 @@ async fn run() -> Result<(), String> {
     let restored = app.restore().await;
     let _snapshots = app.spawn_snapshots();
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| format!("cannot bind {addr}: {e}"))?;
-    eprintln!("gridcraft-collab-server listening on {addr} ({restored} sessions restored)");
+    let addr = listener.local_addr().map_err(|e| format!("cannot read the bound address: {e}"))?;
+    log::info!("gridcraft-collab-server listening on {addr} ({restored} sessions restored)");
     axum::serve(listener, router(app.clone())).with_graceful_shutdown(shutdown(app)).await.map_err(|e| format!("the server stopped: {e}"))
 }
 
 async fn shutdown(app: Arc<App>) {
     let _ = tokio::signal::ctrl_c().await;
     let saved = app.flush().await;
-    eprintln!("gridcraft-collab-server: {saved} sessions snapshotted");
+    log::info!("gridcraft-collab-server: {saved} sessions snapshotted");
 }
