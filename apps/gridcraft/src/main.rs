@@ -392,7 +392,7 @@ fn main() -> eframe::Result<()> {
                 let Some(mut app) = pending.take() else {
                     return Err("the app was already created".into());
                 };
-                SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
+                SheetApp::setup_desktop_context(&cc.egui_ctx, app.ui.dark, app.ui.language);
                 if let Some(port) = control_port {
                     match control_server::start(port, control_token.clone(), cc.egui_ctx.clone()) {
                         Ok(rx) => app.control_rx = Some(rx),
