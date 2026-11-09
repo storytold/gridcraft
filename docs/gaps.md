@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-03 · **Change:** minor (§1: pinned public corpus CI job; upstream: §17 equations) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -17,7 +17,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 
 ### 1. XLSX output not proven in Excel or on real files (FF)
-- **Missing:** a run over a real-world XLSX corpus, and confirmation that Excel opens what we save
+- **Missing:** a run over a larger real-world XLSX corpus (a pinned 24-file public set runs weekly in the non-required `Corpus` CI job, `corpus/`), and confirmation that Excel opens what we save
   with no repair prompt (PivotTables, charts, CF, validation, dynamic arrays, tables).
 - **Evidence:** round-trip tests cover our own files only (`crates/xlsx/src/tests/`); PivotTable
   round-trip noted as "unverified in real Excel" since 10-07; #64 (dynamic-array flag) shows the
@@ -193,6 +193,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-11-01 | minor | §4: chart data tables implemented for column, bar, line, area and compatible combo charts, with legend keys and border settings, live source values, XLSX round-trip and print/PDF; other chart gaps remain. |
 | 2026-10-31 | minor | §13: Solver Options (Max Evaluations, Integer Optimality and the Evolutionary options), saved with the model |
 | 2026-10-31 | minor | §13: Solver Load/Save Model (`data.solverSaveModel`, `data.solverLoadModel`) and Reset All (`data.solverReset`), with buttons in the Solver Parameters dialog |
+| 2026-10-25 | minor | §1: pinned 24-file public workbook corpus and a non-required `Corpus` CI job running `gridcraft-cli check` over it |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |
