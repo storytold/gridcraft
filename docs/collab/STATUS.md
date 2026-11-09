@@ -1,7 +1,7 @@
 # Real-time collaboration: status and acceptance evidence
 
 - Date: 2026-11-09
-- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), HEAD `d36899da` (code; this page is the docs commit on top)
+- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), HEAD `8883269d` (code; this page is the docs commit on top)
 - Base: `origin/main` = `2c58c769` (rebased 2026-11-08)
 - PR: <https://github.com/storytold/gridcraft/pull/3613> (draft)
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
@@ -80,7 +80,7 @@ has both sides implemented here.
 | §1 session model | one session per file, owner/editor/viewer, presence (sheet, cell/range, selection, viewport), join/leave/reconnect | `4396ad93`, `56cff6ae`; `cargo test -p gridcraft-collab` (21) — `hub` presence/role tests; server socket tests `two_editors_converge_on_one_book`, `a_viewer_is_refused_before_the_engine` |
 | §2 book sync | op unit = one user action (`command`/`structural`), sheet keys stable across restarts, authoritative recalculation on one engine `Session`, delta of changed cells (spills included) instead of the workbook, `baseVersion`/`epoch` conflict rules | `5a307189`, `12628770`, `f828c9fb`; collab delta/dedup/epoch tests; server acceptance `a_dynamic_array_spills_and_the_spill_survives_a_commit`, `a_large_range_travels_and_commits` (A1:E2000, 10 000 cells); client `a_structural_command_lands_on_both_replicas` |
 | §3 presence/UX | overlay of other participants' selections, participant list, status bar, viewer refused locally and by the server | `56cff6ae`; `crates/ui-egui/src/collab.rs`, `apps/gridcraft/src/collab_ui.rs`; client `a_viewer_is_refused_locally_and_still_receives`; server `a_viewer_is_refused_before_the_engine`; server `a_viewer_is_refused_before_the_engine` |
-| §4 undo/redo | per-actor steps (≤200), undo/redo are new room operations, refuse with `conflict` when someone else changed the cell, history survives reconnect while the server runs, not a server restart; a structural step (row or sheet insert/delete) is reversed from whole-sheet images in one operation (`applied.images`, epoch grows, sheet keys kept); an image larger than one frame travels in `imagePart` parts (ADR-0013); an undo/redo is journaled like any other version, so a reconnect after it — or a restart that replays the tail — reaches the undone document | `f828c9fb`, `30ebbb73`, `59eb9e06`, `c8e2a3de`, `d36899da`; collab undo/redo/conflict, structural-image and replay tests; client `undo_reverses_only_the_actors_own_step` / `redo_puts_the_step_back_on_every_replica` / `structural_undo_restores_rows_and_sheets_on_every_replica` / `an_eight_megabyte_sheet_image_travels_in_parts_and_converges` / `a_peer_that_reconnects_after_an_undo_sees_the_undone_state` / `a_peer_that_reconnects_after_a_structural_undo_gets_the_sheet_image`; server persistence `an_undo_replays_from_the_journal_after_a_restart` / `a_snapshot_after_an_undo_keeps_the_step_in_the_base` |
+| §4 undo/redo | per-actor steps (≤200), undo/redo are new room operations, refuse with `conflict` when someone else changed the cell, history survives reconnect while the server runs, not a server restart; a structural step (row or sheet insert/delete) is reversed from whole-sheet images in one operation (`applied.images`, epoch grows, sheet keys kept) and the workbook-level state of the same boundary (`applied.book`: defined names, structure protection) plus each sheet's `preserved` blobs; an image larger than one frame travels in `imagePart` parts (ADR-0013); an undo/redo is journaled like any other version, so a reconnect after it — or a restart that replays the tail — reaches the undone document | `f828c9fb`, `30ebbb73`, `59eb9e06`, `c8e2a3de`, `d36899da`, `8883269d`; collab undo/redo/conflict, structural-image and replay tests; client `undo_reverses_only_the_actors_own_step` / `redo_puts_the_step_back_on_every_replica` / `structural_undo_restores_rows_and_sheets_on_every_replica` / `structural_undo_restores_the_workbook_metadata_on_every_replica` / `an_eight_megabyte_sheet_image_travels_in_parts_and_converges` / `a_peer_that_reconnects_after_an_undo_sees_the_undone_state` / `a_peer_that_reconnects_after_a_structural_undo_gets_the_sheet_image`; server persistence `an_undo_replays_from_the_journal_after_a_restart` / `a_structural_undo_replays_the_workbook_metadata_after_a_restart` / `a_snapshot_after_an_undo_keeps_the_step_in_the_base` |
 | §5 roles | viewer cannot write; role re-read from the signed JWT on every message; lease and takeover | `4bd61141`, `4396ad93`; server socket tests `a_bad_token_never_joins`, `the_lease_allows_one_session_and_the_owner_takes_over` |
 | §6 compat/save | feature `collab` off by default; single-user build unchanged; commit returns the authoritative `.xlsx`, opened by LibreOffice in the acceptance test | `56cff6ae`, `39ac1a28`; server acceptance `a_committed_file_opens_in_libreoffice`; `cargo check -p gridcraft` without the feature |
 | §7 server | `apps/gridcraft-collab-server`: HTTP session lifecycle, WS transport, JWT (HS256/ES256/EdDSA), healthcheck, `/metrics`, journal + snapshots + restart + compaction, no cell values or tokens in logs | `4bd61141`, `39ac1a28`, `f2346c30`, `d36899da`; `server.md`; 20 unit + 7 socket + 7 persistence + 5 acceptance |
@@ -121,12 +121,30 @@ The earlier "no wasm32 std" note no longer applies: the remote build host has
 the wasm32 target and trunk 0.22.1. The native transport is still not compiled
 for WASM; the browser uses `crates/collab-web` and the host bridge.
 
+### 4.1. Run after the structural-image slice (`8883269d`)
+
+```text
+cargo +1.95.0 test -p gridcraft-collab                     38 passed
+cargo +1.95.0 test -p gridcraft-collab-client               10 converge + 4 image-part tests passed
+cargo +1.95.0 test -p gridcraft-collab-server --all-targets 20 unit + 7 socket + 8 persistence + 5 acceptance, all passed
+cargo +1.95.0 check --workspace --all-targets              clean
+cargo fmt --all -- --check                                 clean
+cargo +1.95.0 clippy -p gridcraft-model -p gridcraft-engine -p gridcraft-collab
+  -p gridcraft-collab-client -p gridcraft-collab-server --all-targets -- -D warnings
+                                                          clean
+```
+
+The three new collab tests and the new converge/persistence test are in §9.
+`gridcraft-collab-web`/`gridcraft-web` are unchanged by this slice and were not
+run again; their source depends on `Applied` only through the transport, which
+keeps the new optional fields.
+
 ## 5. RFC §13 open questions — where they stand in the implementation
 
 | # | Question | State |
 |---|---|---|
 | 1 | delta granularity | cells, not blocks: `applied.delta` lists changed cells with values; a 10 000-cell range is one operation and one delta, split into `applied{more:true}` frames when large (ADR-0013) |
-| 2 | command size limit | server accepts messages up to 9 MiB, frames up to 1 MiB (`GRIDCRAFT_COLLAB_*` config, `server.md`); a structural undo/redo image over one frame travels in `applied{more:true}` / `imagePart` parts of 512 KiB before base64 (ADR-0013), assembled by the client before it is applied; a single *command* above the message limit is still refused — client-side splitting of a large command is not implemented |
+| 2 | command size limit | server accepts messages up to 9 MiB, frames up to 1 MiB (`GRIDCRAFT_COLLAB_*` config, `server.md`); a structural undo/redo image over one frame travels in `applied{more:true}` / `imagePart` parts of 512 KiB before base64 (ADR-0013), assembled by the client before it is applied; the parts carry the whole `{book, images}` payload, so the workbook-level state is not repeated per frame; a single *command* above the message limit is still refused — client-side splitting of a large command is not implemented |
 | 3 | structural queue | FIFO per document: operations pass one room mutex in arrival order; `structural` must have `baseVersion == head` and bumps `epoch` |
 | 4 | snapshot cost | snapshot is the authoritative `.xlsx` written by the real writer, not a JSON model; chunked resync of 768 KiB per frame (RFC §3.3/§4.6/§9) |
 | 5 | host contract | `INTEGRATION.md` §6 implemented in the app: `gridcraft:session`, `session-state`, `presence`, `commit`, `committed`; the cabinet-side page and the server-to-server commit callback are outside this repository |
@@ -138,14 +156,19 @@ for WASM; the browser uses `crates/collab-web` and the host bridge.
 1. The cabinet's server-to-server commit callback: the HTTP `commit` endpoint exists,
    the outgoing call is integration work.
 2. Structural undo (row/sheet insert-delete) is one operation with whole-sheet
-   images (`applied.images`), refused as `conflict` when any operation came after
-   the step; an image over 512 KiB travels in `imagePart` parts (ADR-0013), so the
-   old 8 MiB `too_large` bound is gone. One limit remains: the image does not
-   carry workbook-level metadata (defined names, protection of structure) or a
-   sheet's `preserved` blobs. The undo/redo effects no longer fall outside the
-   journal (§8); the undo *history* is memory-only, so a restarted room starts
-   with empty undo stacks (ADR-0010 §6) — the document is right, the steps are
-   not undoable a second time.
+   images (`applied.images`) and the workbook-level state of the same boundary
+   (`applied.book`: defined names, structure protection), each sheet carrying its
+   `preserved` blobs; it is refused as `conflict` when any operation came after
+   the step, and an image that cannot be applied (empty sheet set, a name scope
+   outside the image) is refused before the document changes. An image over
+   512 KiB travels in `imagePart` parts (ADR-0013), so the old 8 MiB `too_large`
+   bound is gone. What stays outside the image is package-level unmodelled
+   content (the workbook's `preserved`: package/workbook relationships, VBA
+   project, chart sheets), styles, theme and calc settings: a structural step
+   does not change them, and they stay with the workbook. The undo *history* is
+   still memory-only, so a restarted room starts with empty undo stacks
+   (ADR-0010 §6) — the document is right, the steps are not undoable a second
+   time.
 3. TLS termination is the ingress proxy's job; the process speaks HTTP/WS.
 4. Multiple windows of one user share one `actorId`.
 5. One room mutex per process; document isolation is by `fileId`. Many large
@@ -159,14 +182,17 @@ for WASM; the browser uses `crates/collab-web` and the host bridge.
 
 ## 7. Sheet images in parts (ADR-0013, 2026-11-09)
 
-A structural undo/redo carries every sheet of its step. The old room refused an
-image over 8 MiB as `too_large`; it now travels in parts, and the limit is gone:
+A structural undo/redo carries every sheet of its step and the workbook-level
+state of the same boundary. The old room refused an image over 8 MiB as
+`too_large`; it now travels in parts, and the limit is gone:
 
-- `crates/collab/src/parts.rs`: `split_applied(applied, budget)` serialises
-  `images` once and cuts the bytes into `imagePart{seq,total,data}` frames of 512
-  KiB before base64 (about 683 KiB on the wire, under the 1 MiB frame limit).
-  `version`, `epoch`, `opId`, `sheets` and `result` repeat on every part;
-  `more` is true until the last one.
+- `crates/collab/src/parts.rs`: `split_applied(applied, budget)` serialises the
+  whole `{book, images}` payload once and cuts the bytes into
+  `imagePart{seq,total,data}` frames of 512 KiB before base64 (about 683 KiB on
+  the wire, under the 1 MiB frame limit). `version`, `epoch`, `opId`, `sheets`
+  and `result` repeat on every part; `book` and `images` only travel inside the
+  payload, so the workbook-level state is not repeated per frame; `more` is true
+  until the last one.
 - `apps/gridcraft-collab-server/src/ws.rs` writes the parts back to back: the
   whole sequence is queued for the peers while the room lock is still held, and
   only then does the task await a socket write, so neither another operation nor
@@ -263,3 +289,79 @@ Tests:
 - `apps/gridcraft-collab-server/src/store.rs`: a reversal entry round-trips and
   its line carries no step and no before-image, so the history is not in the
   volume.
+
+## 9. Workbook metadata and kept parts in a structural image (2026-11-09)
+
+A structural step already restored whole sheets, but the boundary it belongs to is
+bigger than the sheets. Deleting a sheet drops or rescopes its defined names, and
+`Sheet::preserved` (form controls, OLE objects, query tables, VML) is skipped in
+the sheet's JSON because it is not part of the workbook format: the author's room
+kept it in memory, but a peer and a journal replay lost it. The image now carries
+it, so an undo/redo after a sheet or row delete restores what the document had at
+that boundary on every replica and after a restart.
+
+What the image holds now:
+
+| Piece | Where | Notes |
+|---|---|---|
+| sheets (cells, formulas, styles, merges, tables, charts, view) | `applied.images[].sheet` | as before |
+| a sheet's kept file content | `applied.images[].preserved` | new; base64 blobs of `Preserved` |
+| defined names (name, scope, formula) | `applied.book.names` | new; scopes index the restored sheets |
+| structure protection + its password hash | `applied.book.protected_structure`, `.structure_password` | new; the hash never the password |
+| step boundary state for redo | `Step::before_book` / `after_book` | in the room's memory, bounded as the step history |
+
+- `crates/model`: `WorkbookMeta` (names, structure protection, password hash) and
+  `Workbook::workbook_meta()`; `Preserved` and its parts are now serialisable
+  (the sheet field itself stays `#[serde(skip)]`, so the workbook format is
+  unchanged) and a kept part's bytes go through a shared base64 module.
+- `crates/engine`: `Session::restore_structural(sheets, meta)` replaces the
+  sheets and, in the same call, the workbook-level state, then rebuilds and
+  recalculates once. It validates the image before touching the document: an
+  empty sheet set or a name scope outside the image is refused and the caller
+  still holds the old document. `restore_sheets` delegates with `meta: None`, so
+  old callers and old journal entries keep working.
+- `crates/collab`: `Applied.book`, `Step::before_book`/`after_book`,
+  `SheetImage::preserved` and `SheetImage::restored()`. `reverse_sheets` restores
+  sheets and metadata together; it still refuses as `conflict{retryable:true}` (and
+  before any mutation) when the room is not at the step's version.
+  `Room::replay_reversal` restores `applied.book` too, so a journaled undo after
+  a restart reaches the same names and kept parts.
+- `crates/collab-client`: the parts reassemble into an `ImageBundle` and the
+  replica applies sheets and metadata through `restore_structural`; if the
+  image does not fit the replica the document is left alone and a resync from the
+  version before the operation is requested.
+- Chunking is unchanged in shape but the payload is the bundle: when the image
+  does not fit one frame, the `imagePart` parts carry `{book, images}`, and a
+  client that misses a part still applies nothing (ADR-0013).
+
+What deliberately stays outside the image: the workbook's own `preserved`
+(package and workbook relationships, VBA project, chart sheets), styles, theme
+and calc settings. A structural step does not change them; they stay with the
+workbook, and restoring them from a step image would let an undo overwrite
+settings the step never touched.
+
+Tests:
+
+- `crates/collab/src/tests.rs`:
+  `a_sheet_delete_image_carries_the_workbook_meta_and_the_kept_parts` (a name
+  scoped to the deleted sheet and a workbook-scope name come back on undo; the
+  sheet's kept part survives an `Applied` round-trip through JSON and a
+  `replay_reversal` on a room restored at the step's version),
+  `a_row_delete_undo_keeps_the_structure_protection_of_the_boundary`, and
+  `a_sheet_delete_undo_after_a_foreign_edit_changes_nothing` (the refusal is
+  `conflict`; sheets, names and cells are untouched).
+- `crates/collab-client/tests/converge.rs`:
+  `structural_undo_restores_the_workbook_metadata_on_every_replica` (author and
+  peer see the same defined names before the delete, after it, after undo and
+  after redo; structure protection survives a row undo on both).
+- `apps/gridcraft-collab-server/tests/persistence.rs`:
+  `a_structural_undo_replays_the_workbook_metadata_after_a_restart` (a snapshot
+  compacts the insert and the name into the base; the delete and its undo are the
+  journal; a crash and a restart replay the undo, and the committed `.xlsx` opens
+  with `ExtraRef` scoped to `Extra` at the same formula).
+
+Limits: an image in the journal is one JSON line and can be large with kept
+parts (the same compaction rules as before apply); the wire chunks it, the
+volume does not. The `defined names` of a step are bounded only by the workbook
+itself; a workbook with tens of thousands of names makes the journal line and
+the `book` part of the image proportionally large.
