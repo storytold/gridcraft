@@ -1239,12 +1239,29 @@ mod tests {
 
     #[test]
     fn a_successful_install_refreshes_the_session_backend_through_the_opener() {
-        // The failing case this guards: a model-less session imports a model and still gets
+        // The failing case this guards: a model-less session installs a model and still gets
         // the no-model error because nothing refreshed `translate_backend` on the session
-        // that ran the install. The opener stands in for the host's `installed_backend`.
+        // that ran the install. The opener stands in for the host's `installed_backend`;
+        // the id gate is covered by `install_refresh_ignores_a_backend_for_another_model`.
+        struct Installed;
+        impl gridcraft_translate::Backend for Installed {
+            fn model_id(&self) -> &str {
+                "qwen3-1.7b"
+            }
+            fn supports(&self, _: &LangTag, _: &LangTag) -> bool {
+                true
+            }
+            fn translate(
+                &self,
+                req: &gridcraft_translate::BatchRequest<'_>,
+                _: &gridcraft_translate::Cancel,
+            ) -> std::result::Result<Vec<String>, gridcraft_translate::BackendError> {
+                Ok(req.texts.iter().map(|_| String::new()).collect())
+            }
+        }
         let mut s = session();
         s.translate_backend = None;
-        let opened: Arc<dyn gridcraft_translate::Backend> = Arc::new(FixedBackend::new());
+        let opened: Arc<dyn gridcraft_translate::Backend> = Arc::new(Installed);
         let probe = Arc::clone(&opened);
         s.translate_backend_opener = Some(Arc::new(move |_: &Session| Some(Some(Arc::clone(&probe)))));
         let m = manifest::find("qwen3-1.7b").expect("manifest");
