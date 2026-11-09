@@ -243,6 +243,10 @@ fn rename_sheet_updates_qualified_names() -> Result<(), Box<dyn std::error::Erro
     let e = rename_sheet(parse("Data!MyName")?, "Data", "It's");
     assert_eq!(e, Expr::Name("It's!MyName".into()));
     assert_eq!(print(&rename_sheet(e, "It's", "Totals")), "Totals!MyName");
+    // `same_name` folds names whose byte lengths differ: U+212A KELVIN SIGN is `k`, so the sheet name
+    // in `K!MyName` is not `old.len()` bytes and the split is at the `!`, not at the old name's length.
+    const KELVIN: &str = "\u{212A}";
+    assert_eq!(print(&rename_sheet(parse("K!MyName")?, KELVIN, "Данные")), "Данные!MyName");
     Ok(())
 }
 
