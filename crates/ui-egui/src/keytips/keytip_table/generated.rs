@@ -278,7 +278,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("AFT", Entry::Finish(Action::Pending("data.fromText"))), // pending; Excel: Get External Data: From Text; gap #12; reserved until the command lands
     ("AFW", Entry::Finish(Action::Pending("data.fromWeb"))),  // pending; Excel: Get External Data: From Web; reserved until the command lands
     ("AG", Entry::Continue),                                  // Excel: Group Menu; group level: containment(Group)
-    ("AGA", Entry::Finish(Action::Pending("data.autoOutline"))), // pending; Excel: Auto Outline; Auto Outline; reserved until the command lands
+    ("AGA", Entry::Finish(Action::Command("data.autoOutline"))), // Excel: Auto Outline
     ("AGG", Entry::Finish(Action::Command("data.group"))),    // Excel: Group
     ("AH", Entry::Finish(Action::Command("data.hideDetail"))), // Excel: Hide Detail
     ("AJ", Entry::Finish(Action::Command("data.showDetail"))), // Excel: Show Detail
