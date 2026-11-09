@@ -58,6 +58,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Область\nформатування",
         "Format" => "Формат",
         "Insert" => "Вставити",
+        "Header Menu|Insert" => "Вставити",
         "Insert Cells…" => "Вставити комірки…",
         "Delete" => "Видалити",
         "Delete Cells…" => "Видалити комірки…",

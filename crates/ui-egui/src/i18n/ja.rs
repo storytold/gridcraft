@@ -64,6 +64,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Format\nPane", "書式ウィンドウ"),
     ("Format", "書式"),
     ("Insert", "挿入"),
+    ("Header Menu|Insert", "挿入"),
     ("Insert Cells…", "セルの挿入…"),
     ("Delete", "削除"),
     ("Delete Cells…", "セルの削除…"),
