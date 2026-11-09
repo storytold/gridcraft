@@ -93,12 +93,14 @@ impl SheetApp {
     ///
     /// [`logic`]: SheetApp::logic
     pub fn setup_context(ctx: &egui::Context, dark: bool) {
-        crate::fonts::start_scan();
         Self::setup_context_for_language(ctx, dark, i18n::Language::En);
     }
 
-    /// Sets up fonts and visuals for a specific persisted interface language.
+    /// Sets up fonts and visuals for a specific persisted interface language, and starts the
+    /// machine's font scan. Both apps call this directly, so the scan starts here rather than only
+    /// in [`Self::setup_context`].
     pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
+        crate::fonts::start_scan(ctx);
         ctx.set_fonts(theme::font_definitions_for_language(language));
         theme::apply(ctx, dark);
     }
@@ -318,6 +320,29 @@ mod lifecycle_tests {
         let mut session = Session::new();
         session.new_workbook();
         SheetApp::new(session, Services::default())
+    }
+
+    #[test]
+    /// A font chosen from the list is applied to the selection and the workbook asks for it, so the
+    /// next font-set rebuild binds the installed face.
+    fn a_chosen_font_is_applied_and_the_workbook_asks_for_it() {
+        let mut app = app();
+        app.run("home.fontName", json!({"range": "A1", "name": "Noto Sans JP"})).expect("home.fontName");
+        let doc = app.session.active().expect("a workbook");
+        let styled = doc.wb.styles.get(doc.wb.active().expect("a sheet").style_id(CellRef::parse("A1").expect("A1")));
+        assert_eq!(styled.font.name, "Noto Sans JP");
+        assert!(app.used_fonts().iter().any(|f| f == "Noto Sans JP"), "the font-set rebuild sees it");
+    }
+
+    #[test]
+    /// The font-list command offers the standard names and reports the scan state without blocking.
+    fn the_font_list_command_offers_the_standard_names() {
+        let mut app = app();
+        let r = app.run("ui.fonts", json!({})).expect("ui.fonts");
+        let families: Vec<&str> = r["families"].as_array().expect("families").iter().filter_map(Json::as_str).collect();
+        assert!(families.contains(&"Calibri"), "the standard names lead the list");
+        assert!(r["installed"].is_array(), "installed families are a list");
+        assert!(r["scanning"].is_boolean(), "the scan state is reported");
     }
 
     /// One headless pass; a test has no renderer for the texture atlas delta (0.37 panics when it

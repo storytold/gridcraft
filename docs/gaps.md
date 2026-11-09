@@ -186,13 +186,14 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - No iOS, iPadOS or Android layout. **Estimate:** 30–60 h.
 
 ### 24. Fonts and look (U)
-- Font weights beyond regular/bold (#168), system font list (#4), Calibri metrics (#29), macOS
+- Font weights beyond regular/bold (#168), Calibri metrics (#29), macOS
   chrome (#169, #170), Linux title bar (#54), icon consistency across apps (#173). **Estimate:** 7–12 h.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | minor | §24: the Home ▸ Font list offers the families installed on the OS (standard names first, filterable) and applies the chosen one; `ui.fonts` reports the offered and installed families to agents. The rest of the fonts item remains |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |

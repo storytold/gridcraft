@@ -288,6 +288,11 @@ impl SheetApp {
                 }),
                 None => Json::Null,
             }),
+            "ui.fonts" => Ok(json!({
+                "families": crate::fonts::families(),
+                "installed": crate::fonts::installed_families(),
+                "scanning": crate::fonts::scanning(),
+            })),
             "ui.notice.dismiss" => {
                 self.notice = None;
                 Ok(Json::Null)
