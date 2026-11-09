@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{BinaryOp, Literal, NameRef, UnaryOp};
 use crate::model::DataModel;
-use crate::{Call, Expr, ExprKind, FunctionSpec, ParamKind, lookup, parse_expression, validate_call};
+use crate::{Call, Expr, ExprKind, FunctionSpec, lookup, parse_expression, validate_call};
 
 /// A name-resolution error with the source span.
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
@@ -264,12 +264,24 @@ impl<'a> Binder<'a> {
         let mut args = Vec::with_capacity(call.args.len());
         for (index, arg) in call.args.iter().enumerate() {
             // Documented enum parameters (intervals, ties, blanks, text type names) are written
-            // as bare names. The parser cannot tell them from table/measure names, but the
-            // catalog's parameter kind can: a Text position only accepts a literal or a keyword.
-            let expected = spec.overload_for(call.args.len()).and_then(|overload| overload.params.get(index)).copied();
+            // as bare names. The parser cannot tell them from table/measure names, so each
+            // documented slot is matched by function and position below; anything else goes
+            // through normal name resolution.
             let keyword = match spec.name {
+                // DATATABLE's type words (`DATATABLE ( "Id", INTEGER, ... )`) and CONVERT's data
+                // type (`CONVERT ( "123", INTEGER )`) are documented enumerations the catalog
+                // types as `Text`/`Any`.
                 "DATATABLE" if index % 2 == 1 => keyword_name(arg),
                 "CONVERT" if index == 1 => keyword_name(arg),
+                // The interval and calendar-flag slots are documented enumerations the catalog
+                // types as `Text`: `DATEADD` takes an interval plus optional extension and
+                // truncation flags, `DATESINPERIOD` an interval plus an end behaviour,
+                // `PARALLELPERIOD` an interval.
+                "DATEADD" if index == 2 => clause_keyword(arg, &["DAY", "MONTH", "QUARTER", "YEAR"]),
+                "DATEADD" if index == 3 || index == 4 => clause_keyword(arg, &["EXTENDING", "ANCHORED", "PRECISE"]),
+                "DATESINPERIOD" if index == 3 => clause_keyword(arg, &["DAY", "WEEK", "MONTH", "QUARTER", "YEAR"]),
+                "DATESINPERIOD" if index == 4 => clause_keyword(arg, &["PRECISE", "ENDALIGNED"]),
+                "PARALLELPERIOD" if index == 2 => clause_keyword(arg, &["MONTH", "QUARTER", "YEAR"]),
                 // RANKX's Ties argument is documented as `Dense` but catalogued as a Scalar.
                 "RANKX" if index == 4 => keyword_name(arg),
                 // RANKX's Order argument is catalogued as a Scalar too, but it is `ASC`/`DESC`.
@@ -280,6 +292,14 @@ impl<'a> Binder<'a> {
                 "CROSSFILTER" if index == 2 => {
                     clause_keyword(arg, &["NONE", "ONE", "ONEWAY", "BOTH", "TWOWAY", "ONEWAY_LEFTFILTERSRIGHT", "ONEWAY_RIGHTFILTERSLEFT"])
                 }
+                // RANK/ROWNUMBER's Reset argument is `NONE`, `LOWESTPARENT` or `HIGHESTPARENT`,
+                // catalogued as `Any` so that a relation expression still binds there.
+                // RANK's Ties and Blanks arguments are documented enumerations the catalog types
+                // as `Text`: `RANK ( DENSE, ... )`, `RANK ( ..., DEFAULT, ... )`.
+                "RANK" if index == 0 => clause_keyword(arg, &["DENSE", "SKIP"]),
+                "RANK" if index == 3 => clause_keyword(arg, &["DEFAULT", "FIRST", "LAST"]),
+                // ROWNUMBER's Blanks argument takes the same three ordering words.
+                "ROWNUMBER" if index == 2 => clause_keyword(arg, &["DEFAULT", "FIRST", "LAST"]),
                 // RANK/ROWNUMBER's Reset argument is `NONE`, `LOWESTPARENT` or `HIGHESTPARENT`,
                 // catalogued as `Any` so that a relation expression still binds there.
                 "RANK" if index == 6 => clause_keyword(arg, &["NONE", "LOWESTPARENT", "HIGHESTPARENT"]),
@@ -309,35 +329,12 @@ impl<'a> Binder<'a> {
                 // PATHITEM's optional Type is documented as `TEXT`/`INTEGER` but catalogued as
                 // `Any` so that the numeric `0`/`1` spellings still bind.
                 "PATHITEM" | "PATHITEMREVERSE" if index == 2 => clause_keyword(arg, &["TEXT", "INTEGER"]),
-                _ if matches!(expected, Some(ParamKind::Text)) => keyword_name(arg),
+                // Every other Text position (LEFT's text, FORMAT's pattern, INFO restriction
+                // names) takes a value, not an enumeration: a bare word there resolves as a
+                // name, so an undefined word reports "unknown name" instead of silently
+                // becoming text. Table, measure and variable names still bind normally.
                 _ => visual_keyword_name(spec.name, index, arg),
-            }
-            // A name only wins where the position genuinely accepts one — a documented `Text`
-            // argument such as `RANKX(..., Dense)` or a visual calculation's axis. A fixed enum
-            // slot (`DATEDIFF`'s interval, `CONVERT`'s type, the order words) is not a name
-            // position: a table called `Month` must not turn `DATEDIFF(a, b, MONTH)` into a table
-            // reference, and a variable called `YEAR` must not either.
-            .filter(|keyword| {
-                // `DATATABLE`'s type words are types even though the catalog marks them `Text`,
-                // so a table named `INTEGER` must not capture them either.
-                let fixed_slot =
-                    spec.name == "DATATABLE" || (!matches!(expected, Some(ParamKind::Text)) && !is_visual_keyword(spec.name, index, keyword));
-                if fixed_slot {
-                    return true;
-                }
-                // The interval and calendar-flag slots are documented enumerations that the catalog
-                // types as `Text`, so they reach this filter instead of the fixed-slot branch. A
-                // name must not capture them — `DATEADD ( dates, 1, YEAR )` stays a year even when
-                // a table, measure or variable is called `YEAR` — while any other word there is
-                // still a name.
-                if interval_keyword(spec.name, index, keyword) {
-                    return true;
-                }
-                if self.model.table_index(keyword).is_some() || self.model.measure_index(keyword).is_some() {
-                    return false;
-                }
-                !vars.iter().any(|var| var.eq_ignore_ascii_case(keyword))
-            });
+            };
             if let Some(keyword) = keyword {
                 args.push(BoundExpr::Keyword(keyword));
             } else {
@@ -393,27 +390,6 @@ const WINDOW_KEYWORDS: &[&str] = &["ASC", "DESC", "ABS", "REL", "DEFAULT", "FIRS
 fn clause_keyword(expr: &Expr, allowed: &[&str]) -> Option<String> {
     let word = keyword_name(expr)?;
     allowed.iter().any(|candidate| word.eq_ignore_ascii_case(candidate)).then_some(word)
-}
-
-/// Whether `word` is a documented time-intelligence interval or calendar flag at the 0-based
-/// `index` of its call.
-///
-/// Those slots are enumerations the catalog types as `Text`, so they reach the name filter instead
-/// of the fixed-slot branch; a variable of the same spelling must still not shadow them. A word
-/// outside the set is left to normal name binding, so a typo or a genuine variable reports as one.
-fn interval_keyword(function: &str, index: usize, word: &str) -> bool {
-    let allowed: &[&str] = match (function, index) {
-        // `DATEADD ( <Dates>, <NumberOfIntervals>, <Interval>[, <Extension>[, <Truncation>]] )`
-        ("DATEADD", 2) => &["DAY", "MONTH", "QUARTER", "YEAR"],
-        ("DATEADD", 3) | ("DATEADD", 4) => &["EXTENDING", "ANCHORED", "PRECISE"],
-        // `DATESINPERIOD ( <Dates>, <StartDate>, <NumberOfIntervals>, <Interval>[, <EndBehavior>] )`
-        ("DATESINPERIOD", 3) => &["DAY", "WEEK", "MONTH", "QUARTER", "YEAR"],
-        ("DATESINPERIOD", 4) => &["PRECISE", "ENDALIGNED"],
-        // `PARALLELPERIOD ( <Dates>, <NumberOfIntervals>, <Interval> )`
-        ("PARALLELPERIOD", 2) => &["MONTH", "QUARTER", "YEAR"],
-        _ => return false,
-    };
-    allowed.iter().any(|candidate| word.eq_ignore_ascii_case(candidate))
 }
 
 fn collect_measure_names(model: &DataModel, expr: &BoundExpr, out: &mut BTreeSet<String>) {

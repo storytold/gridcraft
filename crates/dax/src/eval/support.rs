@@ -170,8 +170,10 @@ const EXCEL_EPOCH_CE_DAYS: i64 = 693_594;
 pub(crate) fn date_serial(year: i64, month: i64, day: i64, hour: i64, minute: i64, second: i64) -> f64 {
     // Normalize out-of-range months the way Excel does (DATE(2024, 13, 1) is 2025-01-01). The day
     // counts on from the first of that month, so day 0 is the last day of the month before.
-    let months = month - 1;
-    let year = year.saturating_add(months.div_euclid(12));
+    // The month total is computed in `i128`: `month` arrives from `number(..) as i64`, which
+    // saturates at `i64::MIN`, and `month - 1` would wrap (or panic in debug builds) for it.
+    let months = i128::from(month) - 1;
+    let year = year.saturating_add(i64::try_from(months.div_euclid(12)).unwrap_or(if months < 0 { i64::MIN } else { i64::MAX }));
     let month = u32::try_from(months.rem_euclid(12) + 1).unwrap_or(1);
     let days = month_start_ce_days(year, month) - i128::from(EXCEL_EPOCH_CE_DAYS) + i128::from(day) - 1;
     days as f64 + (hour as f64 * 3600.0 + minute as f64 * 60.0 + second as f64) / 86400.0
@@ -682,6 +684,18 @@ mod tests {
         assert_eq!(days_in_month(2023, 2), 28);
         assert_eq!(days_in_month(1900, 2), 28);
         assert_eq!(days_in_month(2000, 2), 29);
+    }
+
+    #[test]
+    fn extreme_months_saturate_instead_of_wrapping() {
+        // `DATE`'s month arrives from `number(..) as i64`, which saturates at the extremes; the
+        // normalization must not wrap (or panic in debug) for `i64::MIN` and `i64::MAX`.
+        let min = date_serial(2024, i64::MIN, 1, 0, 0, 0);
+        let max = date_serial(2024, i64::MAX, 1, 0, 0, 0);
+        assert!(min.is_finite(), "i64::MIN month stays finite: {min}");
+        assert!(max.is_finite(), "i64::MAX month stays finite: {max}");
+        assert!(min < date_serial(2024, 1, 1, 0, 0, 0));
+        assert!(max > date_serial(2024, 12, 31, 0, 0, 0));
     }
 
     #[test]

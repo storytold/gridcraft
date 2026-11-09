@@ -399,3 +399,74 @@ fn a_datatable_type_word_is_never_a_table_name() {
         other => panic!("expected a call, got {other:?}"),
     }
 }
+
+#[test]
+fn value_text_positions_do_not_bind_bare_words_as_keywords() {
+    let model = sample_model();
+    // `Text` parameters that take a value — not a documented enumeration — resolve a bare word
+    // as a name. An undefined word is an unknown name, not silent text.
+    for formula in [
+        "LEFT ( Nme, 1 )",
+        "RIGHT ( Nme, 1 )",
+        "LEN ( Nme )",
+        "CONTAINSSTRING ( Sales[Region], Nme )",
+        "FORMAT ( Sales[Amount], Nme )",
+        "NAMEOF ( Sales[Amount], Nme )",
+        "EVALUATEANDLOG ( Sales[Amount], Nme )",
+        "INFO.STORAGETABLES ( Nme, 1 )",
+        "DATEADD ( Date[Date], 1, Fortnight )",
+        "DATESINPERIOD ( Date[Date], Date[Date], -12, Fortnight )",
+        "PARALLELPERIOD ( Date[Date], 1, Fortnight )",
+    ] {
+        let expr = parse_expression(formula).expect("parses");
+        let error = Binder::new(&model).bind_expression(&expr).expect_err("an undefined word is not a keyword");
+        assert!(error.message.contains("unknown name `Nme`") || error.message.contains("unknown name `Fortnight`"), "{formula}: {error:?}");
+    }
+    // A genuine name still binds in those positions: tables, measures and variables.
+    let mut named = sample_model();
+    named.tables.push(ModelTable {
+        name: "Nme".into(),
+        columns: vec![ModelColumn { name: "Id".into(), data_type: Some("Int64".into()) }],
+        rows: vec![],
+    });
+    assert!(matches!(bind(&named, "LEFT ( Nme, 1 )"), BoundExpr::Call { .. }));
+    let bound = bind(&model, "VAR Nme = \"ab\" RETURN LEFT ( Nme, 1 )");
+    assert!(matches!(bound, BoundExpr::VarReturn { .. }), "{bound:?}");
+}
+
+#[test]
+fn rank_ties_and_blanks_bind_their_documented_words() {
+    let model = sample_model();
+    // RANK's Ties and Blanks and ROWNUMBER's Blanks are documented bare words.
+    for (formula, position, word) in [
+        ("RANK ( DENSE, Sales, ORDERBY ( Sales[Amount] ) )", 0, "DENSE"),
+        ("RANK ( SKIP, Sales, ORDERBY ( Sales[Amount] ) )", 0, "SKIP"),
+        ("RANK ( DENSE, Sales, ORDERBY ( Sales[Amount] ), DEFAULT )", 3, "DEFAULT"),
+        ("RANK ( DENSE, Sales, ORDERBY ( Sales[Amount] ), FIRST )", 3, "FIRST"),
+        ("RANK ( DENSE, Sales, ORDERBY ( Sales[Amount] ), LAST )", 3, "LAST"),
+        ("ROWNUMBER ( Sales, ORDERBY ( Sales[Amount] ), DEFAULT )", 2, "DEFAULT"),
+        ("ROWNUMBER ( Sales, ORDERBY ( Sales[Amount] ), FIRST )", 2, "FIRST"),
+        ("ROWNUMBER ( Sales, ORDERBY ( Sales[Amount] ), LAST )", 2, "LAST"),
+    ] {
+        match bind(&model, formula) {
+            BoundExpr::Call { args, .. } => {
+                assert!(matches!(&args[position], BoundExpr::Keyword(found) if found == word), "{formula}: {:?}", args[position]);
+            }
+            other => panic!("{formula}: expected a call, got {other:?}"),
+        }
+    }
+    // A table named like one of those words must not capture the slot.
+    let mut shadowed = sample_model();
+    shadowed.tables.push(ModelTable {
+        name: "DENSE".into(),
+        columns: vec![ModelColumn { name: "Id".into(), data_type: Some("Int64".into()) }],
+        rows: vec![],
+    });
+    match bind(&shadowed, "RANK ( DENSE, Sales, ORDERBY ( Sales[Amount] ) )") {
+        BoundExpr::Call { args, .. } => assert!(matches!(&args[0], BoundExpr::Keyword(word) if word == "DENSE"), "{:?}", args[0]),
+        other => panic!("expected a call, got {other:?}"),
+    }
+    // An undocumented word there is still a name, and therefore unknown here.
+    let expr = parse_expression("RANK ( DENSEX, Sales, ORDERBY ( Sales[Amount] ) )").expect("parses");
+    assert!(Binder::new(&model).bind_expression(&expr).is_err());
+}
