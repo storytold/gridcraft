@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-08 · **Change:** minor (§17: Excel's compact ink traces decode and its brush decides the tool, not the pressure channel; earlier: native Office InkML ink in xlsx; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-09 · **Change:** minor (§5: remaining work reflects landed CJK fallback and Arabic shaping/bidi; earlier: §17: Excel's compact ink traces decode and its brush decides the tool, not the pressure channel; earlier: native Office InkML ink in xlsx; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -54,10 +54,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
 ### 5. Text in non-Latin scripts doesn't render or export (L)
-- **Missing:** CJK font fallback, complex shaping (Arabic, Devanagari, Thai), bidi, non-Latin PDF.
+- **Missing:** cross-platform script coverage, Devanagari/Thai shaping verification, non-Latin PDF and Arabic UI layout.
 - **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32); #142
-  (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora); no shaping for Arabic or
-  Devanagari; PDF writer uses 14 standard fonts only.
+  (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora). Arabic shared shaping/bidi,
+  editing and cell Context/LTR/RTL now have focused regressions and full gates. Arabic font
+  delivery and PDF output are separate PRs; other script shaping still needs verification.
 - **Impact:** blocks most of the world's users even with an English UI.
 - **Estimate:** 12–20 h. [localization-parity.md](localization-parity.md)
 
@@ -197,6 +198,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | minor | §5: remaining work reflects the landed localization (system-font fallback for CJK, Thai, Hebrew and Arabic; Arabic shared shaping/bidi, editing and cell Context/LTR/RTL with regressions and full gates); still missing: cross-platform script coverage, Devanagari/Thai shaping verification, non-Latin PDF and Arabic UI layout |
 | 2026-11-08 | minor | §17: brushes paint with a repeating image the person imports (PNG/JPEG, content-addressed workbook store, `draw.textureImport`/`draw.textureRemove`/`draw.textureList`), tiled along and across the stroke and tinted by the brush colour; the textures, each stroke's texture id and repeat size, the brush subtype and the draw order travel in a veryHidden `GridCraft Ink` worksheet Excel preserves, written only while such data exists and kept (not dropped) when a newer layout is opened here |
 | 2026-11-08 | minor | §17: Excel's compact ink traces decode, its brush decides the tool (the pressure channel says nothing), `*` keeps the difference order, a damaged InkML part no longer stops the workbook opening, a multi-trace part reads as one stroke per trace, and a copied sheet's ink is rekeyed; legacy DrawingML ink is not upgraded on save and Excel drops the private draw-order brush property (the `GridCraft Ink` sheet returns it) |
 | 2026-11-07 | minor | §17: native Office InkML ink in xlsx (`xdr:contentPart` + InkML part + PNG fallback); brush kind, effect, pressure and draw order round-trip |
