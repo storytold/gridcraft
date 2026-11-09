@@ -1,5 +1,52 @@
 # Decisions
 
+## Translate runs Qwen3 GGUF on candle, with user-downloaded weights (#2211)
+
+Content translation had to be local, offline and buildable on Windows, macOS, Linux and BSD with
+no required accelerator. Three pure-Rust paths were measured end to end on the reference Windows
+machine on 2026-11-07:
+
+- **OPUS-MT** (per-pair Marian models, first as ONNX under rten, then as GGUF/safetensors under
+  candle): small (~116 MB) and correct, but narrow, one download per pair, and brittle across
+  runtimes. Dropped when a single multilingual model proved practical.
+- **Qwen3.5** (0.8B–9B): a hybrid linear-attention architecture (`qwen3_5`,
+  `Qwen3_5ForConditionalGeneration`, linear-attention layers with convolution state). Candle has
+  no implementation; only dense `qwen3`/`quantized_qwen3` exists. Not usable.
+- **Qwen3 dense** (1.7B Q8_0, 0.6B Q8_0): Apache-2.0, 119 languages, implemented by candle's
+  `quantized_qwen3`. Chosen: one 1.8 GB model covers many pairs; 0.6B is the small option.
+
+Manifest rows pin immutable commits and record the model card licence: **Apache-2.0** for both
+Qwen3 models and each tokenizer. The 1.7B GGUF is 1,834,426,016 B (SHA-256
+`061b54da…`); the tokenizer is 11,422,654 B (`aeb13307…`) and is shared by both sizes. The 0.6B
+GGUF is 639,446,688 B (`9465e63a…`), pinned to its own revision; its `tokenizer.json` is
+byte-identical to the 1.7B's.
+
+Prompting is part of the choice: Qwen3's thinking mode must be forced off with the empty
+`<think></think>` block; `/no_think` alone still emitted a reasoning trace. The prompt is the chat
+format, greedy decoding stops at `<|im_end|>`/EOS, and one segment is one model call (no multi-cell
+prompt batching in v1). `from: auto` omits the source tag and lets the model translate into the
+target; the heuristic detector still labels uncertain short strings for the pane.
+
+Weights are never committed and never bundled. The repository contains only the manifest (id,
+revision, files, byte sizes, SHA-256, licence, URLs). The person downloads the model in the app
+after a consent screen that names the source, size, licence and SHA-256, or places the files in the
+documented model directory; both paths are verified the same way before use. `translate.modelDownload`
+refuses without `consent: true` and without a host-installed transport; the desktop host's transport is HTTPS. The 1.8 GB default is
+shown honestly (above the 2 GB refusal threshold is not reached, but it is not a casual download);
+the 0.6B row is the smaller choice.
+
+The CPU runtime is the default on every platform and the only one in this change. `Accelerator`
+(`cpu`, `openvino`) is the seam for a future optional OpenVINO backend on Intel x86; requesting an
+unavailable accelerator returns a clear message and still runs identically on the CPU. No C/C++
+runtime dependency, no DirectML, and no accelerator is required.
+
+Primary crates are `gridcraft-translate` (L1, pure and wasm-clean) and
+`gridcraft-translate-candle` (L6, native). Inference never runs in `Session::execute`: a worker
+thread owns the backend, the selection snapshot and a cancellation token, and `translate.insert`
+is the only writer. The web build reports model commands as unavailable rather than shipping a
+backend. Job timeout defaults to 30 minutes for this backend; each segment is bounded to a
+2,048-token prompt and 256 new tokens, and cancellation is checked between segments and tokens.
+
 ## Bound repeated XLSX column expansion (#1022)
 
 Limit each worksheet to 1,000,000 nondefault column assignments across all `<cols>` blocks.

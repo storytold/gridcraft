@@ -42,6 +42,7 @@ pub use gridcraft_formula as formula;
 pub use gridcraft_math as math;
 pub use gridcraft_model as model;
 pub use gridcraft_numfmt as numfmt;
+pub use gridcraft_translate as translate;
 pub use selection::Selection;
 pub use windows::{Target, TargetGuard, WindowState, WindowView};
 
@@ -457,6 +458,11 @@ pub enum UiRequest {
 /// the measure takes (egui's: see `theme::cell_text_width` in the UI crate).
 pub type TextWidth = Arc<dyn Fn(&str, &model::Font, bool) -> f32 + Send + Sync>;
 
+/// Reopens the installed translation model `id` for a session's model root (the native opener
+/// the host installs at startup). `None` means the opener has no model to offer, without an
+/// error.
+pub type TranslateBackendOpener = dyn Fn(&Session, &str) -> Option<Option<Arc<dyn gridcraft_translate::Backend>>> + Send + Sync;
+
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
@@ -511,6 +517,39 @@ pub struct Session {
     pub draw_width: f32,
     /// Review › Show Comments: the Comments pane is open.
     pub comments_pane: bool,
+    /// Review › Language › Translate: the task pane is open (`review.translate`).
+    pub translate_pane: bool,
+    /// The last source language chosen in the pane (`auto` or a BCP-47 tag).
+    pub translate_from: String,
+    /// The last target language chosen. Empty until the host or a command sets one.
+    pub translate_to: String,
+    /// Model root the host resolved (`$GRIDCRAFT_MODELS`, the app data directory, beside the
+    /// executable, or `models/` in a source tree). Empty when no host set one.
+    pub translate_models_dir: String,
+    /// The native backend the host injected. `None` means no model is loaded; commands then
+    /// report an actionable state and write nothing.
+    pub translate_backend: Option<Arc<dyn gridcraft_translate::Backend>>,
+    /// Reopens the installed model for the session's model root (the native opener the host
+    /// installed at startup). `Session::execute` never loads weights itself — inference crates
+    /// are native-only and the engine stays wasm-clean — so after `translate.modelImport` or
+    /// `translate.modelDownload` succeeds, the command calls this to refresh `translate_backend`
+    /// on the session that ran it; without it a model-less session keeps reporting no-model.
+    pub translate_backend_opener: Option<Arc<TranslateBackendOpener>>,
+    /// `translate.run` blocks the calling thread for up to `timeoutMs` (30 minutes by default),
+    /// which would freeze the desktop's UI frame when a command runs there (pane, control
+    /// channel, MCP connected to the app). The desktop host sets this; those callers use
+    /// `translate.start` plus `translate.status` instead. Host-set, like `link_policy`: no
+    /// command can change it.
+    pub block_translate_run_on_ui: bool,
+    /// User-initiated model download transport (native host only; never used during inference).
+    pub translate_fetcher: Option<Arc<dyn gridcraft_translate::ModelFetcher>>,
+    /// Translation jobs, shared with their worker threads.
+    pub translate_jobs: Arc<std::sync::Mutex<std::collections::HashMap<u64, cmd::translate::JobHandle>>>,
+    /// Last job id handed out.
+    pub(crate) next_translate_job: u64,
+    /// The text `translate.copy` last put on the engine clipboard (the UI hands it to the system
+    /// clipboard; headless callers can read it from the result instead).
+    pub translate_clipboard: Option<String>,
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,

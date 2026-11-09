@@ -168,13 +168,30 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
 fn open(path: &str) -> Result<Session, String> {
     let mut s = Session::new();
     exec(&mut s, "file.open", json!({"path": path}))?;
+    install_translate(&mut s);
     Ok(s)
 }
 
 fn blank() -> Session {
     let mut s = Session::new();
     s.new_workbook();
+    install_translate(&mut s);
     s
+}
+
+/// Translation commands follow the desktop app: the model root is resolved the same way, and an
+/// installed model is injected lazily. There is no download transport here; the app's consent
+/// screen is the download path.
+fn install_translate(session: &mut Session) {
+    let root = gridcraft_translate_candle::models_root();
+    session.translate_models_dir = root.display().to_string();
+    session.translate_backend = gridcraft_translate_candle::installed_backend(&root);
+    // Same opener the desktop installs: the engine's install commands refresh the running
+    // session's backend through it after their own verified install.
+    session.translate_backend_opener = Some(std::sync::Arc::new(|s: &Session, id: &str| {
+        (!s.translate_models_dir.trim().is_empty() && gridcraft_translate::manifest::valid_id(id))
+            .then(|| gridcraft_translate_candle::installed_backend_for(std::path::Path::new(&s.translate_models_dir), id))
+    }));
 }
 
 fn activate_sheet(s: &mut Session, sheet: Option<&str>) -> Result<(), String> {
@@ -420,6 +437,7 @@ fn run(args: &[String]) -> Result<(), String> {
         (None, Some(name)) => {
             let mut s = Session::new();
             exec(&mut s, "file.new", json!({"sample": name}))?;
+            install_translate(&mut s);
             s
         }
         (None, None) => blank(),
@@ -542,6 +560,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
                 (None, Some(name)) => {
                     let mut s = Session::new();
                     exec(&mut s, "file.new", json!({"sample": name}))?;
+                    install_translate(&mut s);
                     s
                 }
                 (None, None) => blank(),

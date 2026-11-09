@@ -24,8 +24,14 @@ gridcraft-xlsx = { workspace = true }
 gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
 gridcraft-math = { workspace = true }
+gridcraft-translate = { workspace = true }
+# Model-file verification (size + SHA-256) for import/download; pure Rust, wasm-safe.
+sha2 = { workspace = true }
 image = { workspace = true }
 
 [dev-dependencies]
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }
+# The deterministic fixed-word-map backend: engine tests exercise the whole pipeline without a
+# model binary. Never enabled by a shipped build.
+gridcraft-translate = { workspace = true, features = ["test-backend"] }
 zip = { workspace = true }

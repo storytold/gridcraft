@@ -2261,9 +2261,8 @@
    "seq": "RL",
    "kind": "command",
    "target": "review.translate",
-   "pending": true,
-   "excel": "Translate",
-   "note": "feature gap; reserved until the command lands"
+   "pending": false,
+   "excel": "Translate"
   },
   {
    "seq": "RN",

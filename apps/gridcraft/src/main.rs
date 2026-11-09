@@ -15,6 +15,7 @@ mod control_server;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
 mod logging;
+mod model_host;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod print;
@@ -206,6 +207,11 @@ fn services() -> Services {
         open_url: Some(Box::new(|url: &str| open_with_system(url))),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
+        models: Some(std::sync::Arc::new(model_host::Models::new())),
+        translate_refresh: Some(Box::new(model_host::refresh)),
+        pick_model_dir: Some(Box::new(|| {
+            rfd::FileDialog::new().set_title("Choose a translation model folder").pick_folder().and_then(|p| p.to_str().map(str::to_string))
+        })),
         ..Default::default()
     }
 }
@@ -319,6 +325,7 @@ fn main() -> eframe::Result<()> {
         log::warn!("sample {s}: {e}");
     }
     let mut app = SheetApp::new(session, services());
+    model_host::refresh(&mut app.session);
     app.watch_desktop_theme();
     app.start_update_check();
     let control_port = control_port;

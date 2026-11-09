@@ -1,6 +1,6 @@
 # Roadmap detail
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (test command) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-07 · **Change:** minor (Review › Language › Translate landed) · **Target:** Microsoft Excel (Microsoft 365)
 
 Forward-looking plan. The one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work
 list is [`gaps.md`](gaps.md); numbers and method are in
@@ -14,6 +14,8 @@ list is [`gaps.md`](gaps.md); numbers and method are in
    15-digit comparison (#187). 8–15 h. Language work should extend the new `i18n` catalog past the
    ribbon rather than add scattered literals.
 2. **XLSX on real files** (gaps #1, #3): corpus run plus Excel opening our output.
+   The Translate pane (#2211) now exercises the local-model path end to end; worksheet
+   `TRANSLATE()`/`DETECTLANGUAGE()` remain separate follow-ups over the same engine.
 3. **Large workbooks and multi-threaded recalc** (gap #2).
 
 ## Alpha gate
@@ -93,7 +95,7 @@ to check our files, and Windows machines with the reported GPU drivers.
 | Accessibility | #18 | 12–18 |
 | Page Layout view, print polish | #14 | 12–20 |
 | Mobile layout | #23 | 30–60 |
-| AI features with local models | #22 | 30–50 |
+| AI features with local models | #22 | 20–35 |
 | Plugin / custom-function API | #21 | 25–40 |
 
 ## Measuring
@@ -113,6 +115,7 @@ to check our files, and Windows machines with the reported GPU drivers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Review › Language › Translate landed (§22 in `gaps.md`): current focus, the alpha gate and the remaining AI estimate (20–35 h) follow it |
 | 2026-10-23 | minor | Measuring: tests run through `cargo xtask test` |
 | 2026-10-11 | minor | PivotTable calculated fields landed |
 | 2026-10-10 | minor | Current focus and M15 updated for the 10-10 merges |

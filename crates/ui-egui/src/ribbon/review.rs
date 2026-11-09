@@ -46,6 +46,7 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
     if r.clicked() {
         act(app, "review.showComments", json!({"on": !shown}));
         if app.session.comments_pane {
+            // `review.showComments` also closes the Translate pane (one task pane at a time).
             app.grid.pane = None;
         }
     }
@@ -64,6 +65,22 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
+    sep(ui);
+    let translating = app.session.translate_pane;
+    let r = big_button(ui, Icon::Name, "Translate", "Translate the selected text locally", false);
+    control_keytip(app, ui, &r, "review.translate");
+    if translating {
+        ui.painter().rect_stroke(r.rect, 5.0, Stroke::new(2.0, Tokens::get(ui.ctx()).accent), StrokeKind::Inside);
+    }
+    if r.clicked() {
+        act(app, "review.translate", json!({}));
+        if app.session.translate_pane {
+            app.grid.pane = None;
+            if app.session.comments_pane {
+                app.run_or_alert("review.showComments", json!({"on": false}));
+            }
+        }
+    }
     sep(ui);
     let protected = app.active_sheet_protected();
     let __k = big_button(ui, Icon::Lock, if protected { "Unprotect\nSheet" } else { "Protect\nSheet" }, "Protect Sheet", false);

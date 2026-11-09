@@ -1,0 +1,20 @@
+[package]
+name = "gridcraft-translate-candle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft translation backend: Qwen3 GGUF models on candle (native, CPU, pure Rust)"
+
+[lints]
+workspace = true
+
+[dependencies]
+gridcraft-translate = { workspace = true }
+candle-core = "0.11.1"
+candle-transformers = "0.11.1"
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+gridcraft-translate = { workspace = true, features = ["test-backend"] }
