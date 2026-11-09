@@ -131,7 +131,11 @@ Denylist — свойство **сервера**, не клиента: кома�
 
 WebSocket, WSS. Один фрейм — один JSON-объект. Лимиты: `op` ≤ 1 MiB, `applied` ≤ 8 MiB
 (дельта больше дробится на кадры `applied{more:true}` одного `opId`; вся дельта операции
-≤ 32 MiB, иначе сервер отвечает `too-large` и просит разбить команду), `presence` ≤ 2 KiB,
+≤ 32 MiB, иначе сервер отвечает `too-large` и просит разбить команду). Образ листов
+структурного undo/redo, который не влезает в кадр, едет частями `applied{more:true}` с
+`imagePart{seq,total,data}`: `data` — base64-срез сериализованного `images`, части идут
+подряд, `version`/`epoch`/`opId` повторяются, клиент применяет операцию только после
+`more:false` (ADR-0013). `presence` ≤ 2 KiB,
 `snapshot` — чанки по 1 MiB с `seq`. Сжатие permessage-deflate, если договорится
 транспорт; бинарный формат в v1 не вводим.
 
@@ -142,7 +146,7 @@ WebSocket, WSS. Один фрейм — один JSON-объект. Лимиты
 | `hello` | C→S | `token, name, lastVersion` | auth + join; подписанный токен только здесь, не в URL |
 | `welcome` | S→C | `sessionId, actorId, role, version, epoch, sheets[], participants, lease` | старт; `sheets` — карта `sheetKey ↔ имя` |
 | `op` | C→S | `opId, doc, baseVersion, epoch, kind, target, payload, preview?` | операция |
-| `applied` | S→C | `opId, version, epoch, result{command?,delta?}, actorId` | авторитетный результат |
+| `applied` | S→C | `opId, version, epoch, result{command?,delta?}, actorId, sheets?, images?, more?, imagePart{seq,total,data}?` | авторитетный результат; `imagePart` — часть образа листов, `more:true` до последней |
 | `rejected` | S→C | `opId, code, retryable, hint{version,epoch}, details?` | отказ |
 | `presence` | C↔S | `sheetKey, active, ranges[], viewport, editing?` | эфемерно |
 | `resync` | C→S | `from` | запрос базы/хвоста |
@@ -244,11 +248,13 @@ OT не используется: сервер применяет к head (ADR-0
 - **Структурный шаг** (вставка/удаление строк или листов) хранится как образ листов **до и
   после** правки: адреса ниже вставки сдвигаются, а удалённый лист нечем диффить. Undo/redo
   такого шага — одна операция: `applied.images` несёт листы целиком, клиент заменяет их
-  (`Session::restore_sheets`), `applied.sheets` даёт карту ключей, `epoch` растёт. Обратный
-  шаг применяется, только пока комната стоит на версии шага; иначе `conflict{retryable:true}` —
-  чужая правка не перезаписывается. Образ листа не покрывает изменения уровня книги
-  (defined names) и `preserved`-блоки; одна операция ограничена 8 МиБ (`too_large`), чанкинг
-  образа — следующий шаг.
+  (`Session::restore_sheets`), `applied.sheets` даёт карту ключей, `epoch` растёт. Образ
+  больше кадра едет частями `imagePart` (ADR-0013): клиент собирает его до применения и при
+  обрыве последовательности не меняет документ, а просит догон с версии до первой части.
+  Обратный шаг применяется, только пока комната стоит на версии шага; иначе
+  `conflict{retryable:true}` — чужая правка не перезаписывается. Образ листа не покрывает
+  изменения уровня книги (defined names) и `preserved`-блоки; прежний предел 8 МиБ
+  (`too_large`) снят чанкингом.
 - История не пишется в файл и не уходит в кабинет.
 - Offline: только повтор непринятых `command`-операций с `baseVersion`; `structural`
   offline запрещён (адреса разъедутся). Автономной сходимости нет.
@@ -298,6 +304,7 @@ OT не используется: сервер применяет к head (ADR-0
   `DELETE /v1/sessions/{id}` удаляет каталог: кабинет забрал файл или отказался от
   несохранённых правок (§5.2).
 - **Лимиты**: документ ≤ 512 MB (как ридер), операция ≤ 1 MiB, дельта ≤ 8 MiB,
+  образ листов структурного undo/redo — частями по 512 КиБ до base64 (кадр < 1 MiB),
   участников ≤ 5 (v1), presence ≤ 10 Гц, сессий на процесс — по памяти.
 - **Метрики**: активные сессии, участники, латентность `op→applied`, размер базы и
   хвоста, reconnect rate, отказы по кодам. **Логи без содержимого ячеек и токенов**
