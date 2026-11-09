@@ -1290,3 +1290,143 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::translate;
+    use crate::i18n::Language;
+
+    /// Every catalog source in `i18n/`: the reference set of interface strings is every key any of
+    /// them translates, as `cargo xtask i18n-report` counts it.
+    const CATALOGS: [(&str, &str); 19] = [
+        ("cs", include_str!("cs.rs")),
+        ("de", include_str!("de.rs")),
+        ("el", include_str!("el.rs")),
+        ("es", include_str!("es.rs")),
+        ("fr", include_str!("fr.rs")),
+        ("it", include_str!("it.rs")),
+        ("ja", include_str!("ja.rs")),
+        ("ko", include_str!("ko.rs")),
+        ("lv", include_str!("lv.rs")),
+        ("nl", include_str!("nl.rs")),
+        ("pl", include_str!("pl.rs")),
+        ("pt", include_str!("pt.rs")),
+        ("ro", include_str!("ro.rs")),
+        ("ru", include_str!("ru.rs")),
+        ("sr", include_str!("sr.rs")),
+        ("tr", include_str!("tr.rs")),
+        ("uk", include_str!("uk.rs")),
+        ("vi", include_str!("vi.rs")),
+        ("zh", include_str!("zh.rs")),
+    ];
+
+    /// The keys of one catalog source, read as `i18n-report` reads them: string literals outside
+    /// `//` comments that start a match arm (`"key" => …`) or open a table row (`("key", …)`).
+    /// The test module is skipped.
+    fn catalog_keys(source: &str) -> BTreeSet<String> {
+        let source = source.split("#[cfg(test)]").next().unwrap_or(source);
+        let mut keys = BTreeSet::new();
+        let mut chars = source.char_indices().peekable();
+        while let Some((start, c)) = chars.next() {
+            if c == '/' && source[start..].starts_with("//") {
+                chars.by_ref().find(|(_, c)| *c == '\n');
+                continue;
+            }
+            if c != '"' {
+                continue;
+            }
+            let mut value = String::new();
+            let mut end = None;
+            while let Some((i, c)) = chars.next() {
+                match c {
+                    '"' => {
+                        end = Some(i + 1);
+                        break;
+                    }
+                    '\\' => match chars.next().map(|(_, c)| c) {
+                        Some('n') => value.push('\n'),
+                        Some('t') => value.push('\t'),
+                        Some(c @ ('\\' | '"' | '\'')) => value.push(c),
+                        Some('\r' | '\n') => {
+                            while chars.peek().is_some_and(|(_, c)| c.is_whitespace()) {
+                                chars.next();
+                            }
+                        }
+                        other => panic!("unexpected escape \\{other:?} in a catalog literal: {value:?}"),
+                    },
+                    c => value.push(c),
+                }
+            }
+            let end = end.expect("every catalog literal is closed");
+            let before = source[..start].trim_end();
+            let after = source[end..].trim_start();
+            if after.starts_with("=>") || (before.ends_with('(') && after.starts_with(',')) {
+                keys.insert(value);
+            }
+        }
+        keys
+    }
+
+    /// The `{name}` placeholders of a string, sorted: a translation may reorder them.
+    fn placeholders(text: &str) -> Vec<&str> {
+        let mut names: Vec<&str> = text.split('{').skip(1).filter_map(|rest| rest.split_once('}').map(|(name, _)| name)).collect();
+        names.sort_unstable();
+        names
+    }
+
+    /// A key the Latvian catalog lacks shows in English with no error, so the catalog must cover
+    /// every key of every catalog, the strings only Latvian translates among them.
+    #[test]
+    fn latvian_translates_every_key_of_every_catalog() {
+        assert_eq!(CATALOGS.len(), Language::ALL.len() - 1, "every language but English has a catalog listed here");
+        let mut reference = BTreeSet::new();
+        for (code, source) in CATALOGS {
+            assert!(Language::parse(code).is_some(), "{code} names a supported language");
+            let keys = catalog_keys(source);
+            assert!(keys.len() > 100, "{code}: only {} keys read; the catalog reader is out of step with the source", keys.len());
+            reference.extend(keys);
+        }
+        // The reader decodes escapes and reads both match arms and table rows.
+        for key in ["Paste", "Arrange\nAll", "$ English (United States)"] {
+            assert!(reference.contains(key), "{key:?} is read from the catalogs");
+        }
+        let missing: Vec<&String> = reference.iter().filter(|key| translate(key).is_none()).collect();
+        assert!(missing.is_empty(), "{} of {} keys fall back to English in Latvian: {missing:?}", missing.len(), reference.len());
+    }
+
+    /// Placeholders, percent signs and line breaks are filled in or laid out by the code, so a
+    /// translation keeps every one of them.
+    #[test]
+    fn latvian_translations_keep_placeholders_percent_signs_and_line_breaks() {
+        let keys = catalog_keys(include_str!("lv.rs"));
+        assert!(keys.iter().any(|key| key.contains('{')) && keys.iter().any(|key| key.contains('%')) && keys.iter().any(|key| key.contains('\n')));
+        for english in &keys {
+            let latvian = translate(english).unwrap_or_else(|| panic!("{english:?} is a key of lv.rs"));
+            let label = english.rsplit_once('|').map_or(english.as_str(), |(_, label)| label);
+            assert!(!latvian.trim().is_empty(), "{english:?} has a blank translation");
+            assert_eq!(placeholders(latvian), placeholders(label), "placeholders of {english:?} => {latvian:?}");
+            assert_eq!(latvian.matches('%').count(), label.matches('%').count(), "percent signs of {english:?} => {latvian:?}");
+            assert_eq!(latvian.matches('\n').count(), label.matches('\n').count(), "line breaks of {english:?} => {latvian:?}");
+        }
+    }
+
+    /// Latvian is registered: listed, named, coded, parsed and dispatched to this catalog.
+    #[test]
+    fn latvian_is_registered_and_dispatches_to_its_catalog() {
+        assert!(Language::ALL.contains(&Language::Lv));
+        assert!(Language::for_picker().contains(&Language::Lv));
+        assert_eq!(Language::Lv.code(), "lv");
+        assert_eq!(Language::Lv.name(), "Latviešu");
+        assert_eq!(Language::parse("lv"), Some(Language::Lv));
+        assert_eq!(Language::parse("lv-LV"), Some(Language::Lv));
+        assert!(Language::code_list("|").split('|').any(|code| code == "\"lv\""));
+        for english in ["Paste", "Save", "Arrange\nAll", "'{file}' is protected."] {
+            let latvian = translate(english).unwrap_or_else(|| panic!("{english:?} is translated"));
+            assert_eq!(Language::Lv.tr(english), latvian, "Language::Lv dispatches {english:?} to lv.rs");
+            assert_ne!(latvian, english, "{english:?} is not left in English");
+        }
+        assert_eq!(Language::Lv.tr("Not in any catalog|Untranslated"), "Untranslated");
+    }
+}
