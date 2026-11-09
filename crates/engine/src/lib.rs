@@ -458,6 +458,10 @@ pub enum UiRequest {
 /// the measure takes (egui's: see `theme::cell_text_width` in the UI crate).
 pub type TextWidth = Arc<dyn Fn(&str, &model::Font, bool) -> f32 + Send + Sync>;
 
+/// Reopens the installed translation model for a session's model root (the native opener the
+/// host installs at startup). `None` means the opener has no model to offer, without an error.
+pub type TranslateBackendOpener = dyn Fn(&Session) -> Option<Option<Arc<dyn gridcraft_translate::Backend>>> + Send + Sync;
+
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
@@ -529,7 +533,7 @@ pub struct Session {
     /// are native-only and the engine stays wasm-clean — so after `translate.modelImport` or
     /// `translate.modelDownload` succeeds, the command calls this to refresh `translate_backend`
     /// on the session that ran it; without it a model-less session keeps reporting no-model.
-    pub translate_backend_opener: Option<Arc<dyn Fn(&Session) -> Option<Option<Arc<dyn gridcraft_translate::Backend>>> + Send + Sync>>,
+    pub translate_backend_opener: Option<Arc<TranslateBackendOpener>>,
     /// User-initiated model download transport (native host only; never used during inference).
     pub translate_fetcher: Option<Arc<dyn gridcraft_translate::ModelFetcher>>,
     /// Translation jobs, shared with their worker threads.

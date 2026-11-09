@@ -969,10 +969,10 @@ fn model_download(s: &mut Session, p: &Json) -> Result<Json> {
 /// it a model-less session keeps reporting no-model after its own import or download.
 #[cfg(not(target_arch = "wasm32"))]
 fn refresh_installed_backend(s: &mut Session, m: &ModelManifest) {
-    if let Some(reopened) = s.translate_backend_opener.as_ref().and_then(|open| open(s)) {
-        if reopened.as_ref().is_some_and(|b| b.model_id() == m.id) {
-            s.translate_backend = reopened;
-        }
+    if let Some(reopened) = s.translate_backend_opener.as_ref().and_then(|open| open(s))
+        && reopened.as_ref().is_some_and(|b| b.model_id() == m.id)
+    {
+        s.translate_backend = reopened;
     }
 }
 
