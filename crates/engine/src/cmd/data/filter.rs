@@ -127,9 +127,12 @@ fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
         (Some(a), Some(b)) => a.partial_cmp(&b),
         // A numeric ordering comparison only matches numbers; blanks and text never do.
         (None, Some(_)) if matches!(op, "<" | "<=" | ">" | ">=") => None,
-        _ => Some(gridcraft_core::compare_text(text, crit)),
+        _ => {
+            let (lhs, rhs) = if matches!(op, "=" | "<>") { (text.trim(), crit.trim()) } else { (text, crit) };
+            Some(gridcraft_core::compare_text(lhs, rhs))
+        }
     };
-    let wild = || crate::cmd::edit::wildcard(&text.to_lowercase(), &crit.to_lowercase());
+    let wild = || crate::cmd::edit::wildcard(&text.trim().to_lowercase(), &crit.trim().to_lowercase());
     match op {
         "=" => {
             if crit.contains(['*', '?']) {
@@ -157,9 +160,20 @@ fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
     }
 }
 
+/// Compare AutoFilter text values, ignoring surrounding spaces.
+fn filter_value_eq(a: &str, b: &str) -> bool {
+    a.trim().eq_ignore_ascii_case(b.trim())
+}
+
 /// The filter's "(Blanks)" group: truly empty cells and zero-length text such as a `=""` result.
 fn filter_blank(v: &Value) -> bool {
     v.is_empty() || matches!(v, Value::Text(t) if t.is_empty())
+}
+
+/// Excel AutoFilter's (Blanks) selection also matches whitespace-only text.
+/// Do not use this for detecting genuinely empty cells elsewhere.
+fn filter_dropdown_blank(v: &Value) -> bool {
+    filter_blank(v) || matches!(v, Value::Text(t) if t.trim().is_empty())
 }
 
 /// Excel grows an AutoFilter range when a value is entered in the row right below it, in one of its columns (#2342).
@@ -213,10 +227,10 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
             let text = crate::display::cell_text(wb, sh, c);
             let ok = match crit {
                 FilterCriterion::Values { values, blanks } => {
-                    if filter_blank(&v) {
+                    if filter_dropdown_blank(&v) {
                         *blanks
                     } else {
-                        values.iter().any(|x| x.eq_ignore_ascii_case(&text) || x.eq_ignore_ascii_case(&v.display()))
+                        values.iter().any(|x| filter_value_eq(x, &text) || filter_value_eq(x, &v.display()))
                     }
                 }
                 FilterCriterion::Custom { a, b, and } => {
@@ -302,20 +316,35 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
     for row in af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000) {
         let c = CellRef::new(row, col);
         let v = sh.value(c);
-        let blank = filter_blank(&v);
+        let blank = filter_dropdown_blank(&v);
         let t = if blank { "(Blanks)".to_string() } else { crate::display::cell_text(wb, sh, c) };
         let on = match selected {
             Some(FilterCriterion::Values { values, blanks }) => {
                 if blank {
                     *blanks
                 } else {
-                    values.iter().any(|x| x.eq_ignore_ascii_case(&t))
+                    values.iter().any(|x| filter_value_eq(x, &t))
                 }
             }
             _ => true,
         };
-        let key = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
-        seen.entry((key, t)).or_insert(on);
+        // Group equivalent text values without modifying cell contents.
+        let is_text = !blank && matches!(v, Value::Text(_));
+        let (sort, canonical, label) = if is_text {
+            let normalized = t.trim().to_ascii_lowercase();
+            let label = if t.trim().eq_ignore_ascii_case("(Blanks)") {
+                format!("'{}'", t.trim())
+            } else if t.trim().is_empty() {
+                t.clone()
+            } else {
+                t.trim().to_string()
+            };
+            ((1, 0, normalized.clone()), normalized, label)
+        } else {
+            let sort = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
+            (sort, t.clone(), t)
+        };
+        seen.entry((sort, canonical)).and_modify(|entry: &mut (String, bool)| entry.1 |= on).or_insert((label, on));
     }
-    seen.into_iter().map(|((_, t), on)| (t, on)).collect()
+    seen.into_values().collect()
 }
