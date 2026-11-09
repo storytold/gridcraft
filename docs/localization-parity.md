@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-06 · **Change:** minor (correct review findings in catalogs, native menus and regional formats) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-06 · **Change:** minor (correct review findings in catalogs, native menus and regional formats; Arabic bidi display, editing and cell reading direction; Arabic font fallback; number formats honour the `B1`/`B2` calendar prefixes) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -72,6 +72,15 @@ search uses the displayed translation while commands retain their canonical blan
 Generated sheet prefixes follow the existing sheet-name rules, and command metadata documents
 the localized book, sheet and table-column prefix parameters.
 
+## Arabic bidi and cell reading direction (2026-10-27)
+
+Cell text uses shared Unicode bidi layout while retaining logical source indexes for editing,
+copy and XLSX. Format Cells exposes Context, Left to right and Right to left reading direction,
+independent of sheet geometry. OOXML Context uses the first non-whitespace character. Optional
+direction preserves absent versus explicit Context in differential styles. The renderer is
+pinned to a reviewed egui 0.36.2 backport with real-font, editing, accessibility and WASM
+checks. Physical screen-reader behavior remains unverified.
+
 ## Where we are (measured from source on `main`, after the 2026-10-10 merges)
 
 - **A first catalog exists, for the ribbon only.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in
@@ -107,17 +116,36 @@ the localized book, sheet and table-column prefix parameters.
   separators for Spanish, Russian, Polish, French, German, Italian, Brazilian Portuguese and Turkish.
   Spanish also localizes structured-reference specifiers. Russian date/time format editing and
   German format previews retain canonical storage codes.
+- **Calendars in number formats.** The `B1` (Gregorian) and `B2` (Hijri) calendar prefixes that
+  Arabic Excel writes at the start of a format section are hidden; under `B2` the year, month
+  number, day and the Arabic month and weekday names (`mmm` and `ddd` show the full name) count
+  in the tabular Hijri calendar (leap years 2, 5, 7, 10, 13, 15, 18, 21, 24, 26 and 29 of each
+  30-year cycle), while month and weekday names of a Gregorian date follow the display
+  locale's language. Checked against Excel 16.0 (build 20527, en-US) on every serial from 1 to
+  2,958,465 and about 1,700 format/value pairs: a `[$...]` locale or currency tag before `B2`
+  keeps the date Gregorian; a repeated prefix (`B2B2`) is accepted; any other `B` and digit
+  (`B3`, `B12`, `B1B2`, `dd B2`, `\B2`), or a prefix before a number format (`B10.00`), is
+  rejected (`TEXT` gives `#VALUE!`, a cell shows General); serial 60 shows `#VALUE!` under `B2`
+  for any date or clock part; two-word month names use a no-break space. Differs from Excel:
+  in a `B2` section with a weekday and a month name, Excel prints the weekday for
+  `mmmm`/`mmmmm` after `ddd`/`dddd`, and the weekday numbered by the month (Saturday from
+  month 7) for `ddd`/`dddd` after `mmm`/`mmmm`; a `B2` section showing only the weekday uses
+  the real weekday for serials 0–59 and gives `#VALUE!` for the last days of 9999. Excel's
+  Buddhist-year `b`/`bb`/`bbbb` tokens are not supported.
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
   `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed
   Noto CJK and WenQuanYi faces can render Chinese without a broad filesystem grant. This does
   not change the installed-font catalogue or add bundled fonts. Lao falls back to Lao Sangam MN / Lao MN (macOS),
-  Leelawadee UI / DokChampa (Windows) or Noto Sans Lao / Phetsarath OT (Linux). There is no complex-text shaping: Arabic and
-  Devanagari don't join or reorder, and there is no bidirectional layout. **Sheet Right-to-Left**
+  Leelawadee UI / DokChampa (Windows) or Noto Sans Lao / Phetsarath OT (Linux). Arabic falls back to a system Arabic face,
+  fontconfig's Arabic choice or craft-fonts' Noto Sans Arabic; fontconfig's choice leads these fallbacks, but a UI font
+  with Arabic of its own (DejaVu Sans in the Flatpak) still draws interface Arabic (#229). egui uses harfrust shaping and
+  Unicode bidi layout, so Arabic joins and runs both ways; coverage of scripts other than Arabic still needs verification.
+  **Sheet Right-to-Left**
   (`view.rightToLeft`, Page Layout › Sheet Options, XLSX `rightToLeft`, `.xls` WINDOW2 fRightToLeft) mirrors the grid (#146):
   column A and the row headers on the right, the vertical scrollbar on the left; hit-testing,
-  arrow keys, editor, popups and floating objects follow; text stays left-to-right inside its box
-  (no bidi), and the sheet tabs, horizontal scrollbar and printing/PDF are not mirrored yet.
+  arrow keys, editor, popups and floating objects follow; text follows its cell reading direction
+  inside its box, and the sheet tabs, horizontal scrollbar and printing/PDF are not mirrored yet.
   Text boxes and shapes keep their paragraphs' right-to-left direction (`a:pPr rtl`) through XLSX
   save, though GridCraft still draws that text left to right. IME input goes
   through egui/winit and is unverified for Chinese, Japanese and Korean.
@@ -191,6 +219,10 @@ language (none so far) and of localized function names.
 | 2026-11-02 | minor | Extend Russian help to 479 distinct descriptions and 283 argument keys; preserve original translations and canonical formula syntax; cover reported XLOOKUP, COLUMN and RADIANS tooltips |
 | 2026-11-02 | minor | Ctrl+Enter fills unchanged stored text as a typed literal without adding an apostrophe; fresh localized numeric entry retains normal parsing |
 | 2026-10-29 | minor | Russian: refresh #676 catalog, adapt #1850 formula aliases to current help/name handling, localize error literals and selected parameter/parser diagnostics at the UI boundary |
+| 2026-10-27 | minor | Number formats honour the `B1`/`B2` calendar prefixes: never shown; `B2` renders year, month, day and Arabic month and weekday names in the tabular Hijri calendar (1 Jan 2001 = 6 Shawwal 1421; leap years 2, 5, 7, 10, 13, 15, 18, 21, 24, 26 and 29 of the 30-year cycle, which is what Excel shows). Checked against Excel 16.0 (build 20527, en-US) on every serial and about 1,700 format/value pairs: a locale or currency tag before `B2` keeps the date Gregorian, a misplaced `B` and digit or a prefix before a number format is rejected, serial 60 has no Hijri date, serial 0 shows as serial 1, two-word month names use a no-break space. Not matched: Excel's weekday/month-name mix-ups in one `B2` section and its weekday-only quirks |
+| 2026-10-27 | minor | AutoFit column width, wrapped-row height and PivotTable column fit estimate Arabic letters at ~0.48 em (measured 0.36–0.53 em shaped, Noto Sans/Naskh Arabic and DejaVu Sans) instead of 1 em, Arabic-Indic digits as wide as ASCII digits, and give vowel marks and direction marks no width; vowelled Arabic no longer fits ~3.5× too wide |
+| 2026-10-26 | minor | Shared bidi layout supports Arabic clusters, marks, visual cursor navigation and directional accessibility; cell Context/LTR/RTL is stored separately from sheet RTL and round-trips through XLSX |
+| 2026-10-26 | minor | Arabic text renders in cells and the interface: a system Arabic face (Tahoma, Arial or Segoe UI on Windows, Geeza Pro on macOS, Noto Sans or Naskh Arabic on Linux) joins the script fallbacks, fontconfig's Arabic choice, when it has Arabic letters, leads the Arabic fallbacks and draws Arabic wherever the UI or cell font has none, such as the default cell fonts (part of #229; a UI font with Arabic of its own, such as DejaVu Sans in the Flatpak, still draws interface Arabic, left for a follow-up), and craft-fonts' Noto Sans Arabic is a required face allowed on the web. Workbook fonts without Arabic keep every script fallback. Shaping and bidirectional layout remain separate work |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |

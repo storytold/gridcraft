@@ -336,7 +336,12 @@ pub fn filter_entries(wb: &Workbook, sheet: usize, col: u32) -> Vec<FilterValue>
             !blank && sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) && !crate::display::formula_hidden(wb, sh, c);
         seen.entry((key, t, formula_shown)).or_insert((on, if blank { Value::Empty } else { v }, c));
     }
-    seen.into_iter()
+    let mut values: Vec<_> = seen.into_iter().collect();
+    values.sort_by(|((a, ta, _), _), ((b, tb, _), _)| {
+        a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then_with(|| gridcraft_core::compare_text(&a.2, &b.2)).then_with(|| ta.cmp(tb))
+    });
+    values
+        .into_iter()
         .map(|((_, label, formula_shown), (selected, value, source))| FilterValue { label, selected, value, formula_shown, source })
         .collect()
 }

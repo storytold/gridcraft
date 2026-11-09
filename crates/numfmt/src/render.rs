@@ -1,8 +1,11 @@
 //! Rendering a value with a parsed section.
 
+use std::borrow::Cow;
+
 use gridcraft_core::date::{datetime_from_serial, max_serial};
 use gridcraft_core::{DateSystem, Locale};
 
+use crate::calendar::Calendar;
 use crate::decimal::{decimal_digits, fixed, fixed_from_digits, format_general_fit};
 use crate::parse::{DatePart, Section, Tok};
 
@@ -73,6 +76,15 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem, loc: Locale) -
         day += 1;
     }
     let total_ms = day.saturating_mul(86_400_000).saturating_add(ms);
+    // Under `B2`, Excel shows the 1900 system's fictitious 29 February (serial 60) as `#VALUE!`
+    // whenever a clock or calendar part is shown, even for `hh:mm` (`[h]` alone still works).
+    if sec.calendar == Calendar::Hijri
+        && sys == DateSystem::D1900
+        && day == 60
+        && sec.toks.iter().any(|t| matches!(t, Tok::Date(d) if !d.is_elapsed()))
+    {
+        return None;
+    }
     let needs_date = sec.toks.iter().any(|t| matches!(t, Tok::Date(d) if d.is_calendar()));
     let dt = if needs_date { datetime_from_serial(sys, day as f64)? } else { datetime_from_serial(sys, 0.0).unwrap_or_default() };
     let ampm = sec.toks.iter().any(|t| matches!(t, Tok::Date(DatePart::AmPm | DatePart::AP(..))));
@@ -81,14 +93,25 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem, loc: Locale) -
     let second = (ms / 1000) % 60;
     let milli = ms % 1000;
     let pad = |n: i64, w: u8| if w >= 2 { format!("{:0w$}", n, w = w.min(20) as usize) } else { n.to_string() };
-    // A date outside the calendar range never reaches here (`datetime_from_serial` said no), so the
-    // casts only guard the impossible; `month_name`/`weekday_name` answer `""` when out of range.
-    let month_no = u8::try_from(dt.month).unwrap_or(0);
-    let weekday_no = u8::try_from(dt.weekday).unwrap_or(0);
-    let month_name = loc.month_name(month_no, false);
-    let month_name_short = loc.month_name(month_no, true);
-    let day_name = loc.weekday_name(weekday_no, false);
-    let day_name_short = loc.weekday_name(weekday_no, true);
+    // No date in the section's calendar (serial 60 under `B2`): shown like an out-of-range date.
+    let date = sec.calendar.date(&dt)?;
+    // Year, month and day count in the section's calendar; the names of a Gregorian date are the
+    // display locale's, a Hijri date keeps the Arabic names Excel shows under `B2`. A date outside
+    // the calendar range never reaches here, so the casts only guard the impossible;
+    // `month_name`/`weekday_name` answer `""` when out of range.
+    let (month_name, month_name_short, day_name, day_name_short): (Cow<'_, str>, Cow<'_, str>, Cow<'_, str>, Cow<'_, str>) = match sec.calendar {
+        Calendar::Gregorian => {
+            let month_no = u8::try_from(date.month).unwrap_or(0);
+            let weekday_no = u8::try_from(dt.weekday).unwrap_or(0);
+            (
+                loc.month_name(month_no, false).into(),
+                loc.month_name(month_no, true).into(),
+                loc.weekday_name(weekday_no, false).into(),
+                loc.weekday_name(weekday_no, true).into(),
+            )
+        }
+        Calendar::Hijri => (date.month_name.into(), date.month_short.into(), date.day_name.into(), date.day_short.into()),
+    };
     let mut out = Out::default();
     for t in &sec.toks {
         match t {
@@ -96,19 +119,19 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem, loc: Locale) -
                 let s = match *d {
                     DatePart::Year(n) => {
                         if n <= 2 {
-                            format!("{:02}", dt.year.rem_euclid(100))
+                            format!("{:02}", date.year.rem_euclid(100))
                         } else {
-                            format!("{:04}", dt.year)
+                            format!("{:04}", date.year)
                         }
                     }
                     DatePart::Month(n) => match n {
-                        1 | 2 => pad(dt.month as i64, n),
+                        1 | 2 => pad(date.month as i64, n),
                         3 => month_name_short.to_string(),
                         5 => month_name.chars().take(1).collect(),
                         _ => month_name.to_string(),
                     },
                     DatePart::Day(n) => match n {
-                        1 | 2 => pad(dt.day as i64, n),
+                        1 | 2 => pad(date.day as i64, n),
                         3 => day_name_short.to_string(),
                         _ => day_name.to_string(),
                     },
