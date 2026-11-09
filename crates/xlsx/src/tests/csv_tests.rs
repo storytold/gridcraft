@@ -2,7 +2,7 @@ use gridcraft_core::{CellRef, DateSystem, MAX_COLS, Value};
 use gridcraft_model::{Sheet, Workbook};
 
 use crate::csv::{decode_text, parse_records, sniff_delimiter};
-use crate::{CsvOptions, Format, IoError, read_csv, sniff, write_csv, write_csv_limited};
+use crate::{CsvOptions, Format, IoError, read_csv, read_csv_with_report, sniff, write_csv, write_csv_limited};
 
 fn v(wb: &Workbook, r: u32, c: u32) -> Value {
     wb.sheet(0).unwrap().value(CellRef::new(r, c))
@@ -21,6 +21,86 @@ fn quoting_and_newlines() {
     assert_eq!(v(&wb, 1, 2), Value::Number(3.0));
     assert_eq!(v(&wb, 2, 0), Value::Empty);
     assert_eq!(v(&wb, 3, 0), Value::text("last"));
+}
+
+fn date(y: i64, m: i64, d: i64) -> Value {
+    Value::Number(gridcraft_core::date::serial_from_ymd(DateSystem::D1900, y, m, d).unwrap())
+}
+
+#[test]
+fn day_first_columns_read_ambiguous_dates_day_first() {
+    let src = "CustomerID,Name,City,SignupDate,RenewalDate,CardNumber,Balance\n\
+        00123,Zoë Ångström,Malmö,03/04/2026,25/12/2026,4111111111111111,1234.50\n\
+        00456,José Núñez,São Paulo,12/01/2026,01/02/2027,5500005555555559,99.90\n\
+        00789,Françoise Lefèvre,Besançon,31/05/2026,30/11/2026,4012888888881881,0.00\n\
+        01000,Jürgen Weiß,Köln,07/08/2026,13/09/2026,3530111333300000,-15.25\n";
+    let (wb, report) = read_csv_with_report(src.as_bytes(), &CsvOptions::default()).unwrap();
+    // A value that reads only day first (31/05, 25/12) makes the whole column day first.
+    assert_eq!(v(&wb, 1, 3), date(2026, 4, 3));
+    assert_eq!(v(&wb, 2, 3), date(2026, 1, 12));
+    assert_eq!(v(&wb, 3, 3), date(2026, 5, 31));
+    assert_eq!(v(&wb, 4, 3), date(2026, 8, 7));
+    assert_eq!(v(&wb, 1, 4), date(2026, 12, 25));
+    assert_eq!(v(&wb, 2, 4), date(2027, 2, 1));
+    assert_eq!(v(&wb, 3, 4), date(2026, 11, 30));
+    assert_eq!(v(&wb, 4, 4), date(2026, 9, 13));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
+#[test]
+fn month_first_columns_keep_month_first_without_a_warning() {
+    let (wb, report) = read_csv_with_report(b"When\n12/31/2026\n01/02/2027\n", &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 1, 0), date(2026, 12, 31));
+    assert_eq!(v(&wb, 2, 0), date(2027, 1, 2));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
+#[test]
+fn an_all_ambiguous_date_column_keeps_month_first_and_warns() {
+    let (wb, report) = read_csv_with_report(b"When\n03/04/2026\n12/01/2026\n", &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 1, 0), date(2026, 3, 4));
+    assert_eq!(v(&wb, 2, 0), date(2026, 12, 1));
+    assert!(report.warnings.iter().any(|w| w.contains("column A") && w.contains("ambiguous")), "{:?}", report.warnings);
+    // Keeping every field as text reads no dates, so there is no order to guess.
+    let (_, report) = read_csv_with_report(b"When\n03/04/2026\n12/01/2026\n", &CsvOptions { parse_values: false, ..Default::default() }).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
+#[test]
+fn a_column_with_both_orders_keeps_its_dates_as_text_and_warns() {
+    let (wb, report) = read_csv_with_report(b"When\n31/05/2026\n12/31/2026\n", &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 1, 0), Value::text("31/05/2026"));
+    assert_eq!(v(&wb, 2, 0), Value::text("12/31/2026"));
+    assert!(report.warnings.iter().any(|w| w.contains("column A") && w.contains("both day-first and month-first")), "{:?}", report.warnings);
+}
+
+#[test]
+fn dashes_and_two_digit_years_follow_the_column_order() {
+    let (wb, report) = read_csv_with_report(b"When\n31-05-26\n03-04-26\n", &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 1, 0), date(2026, 5, 31));
+    assert_eq!(v(&wb, 2, 0), date(2026, 4, 3));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+
+    let (wb, report) = read_csv_with_report(b"When\n12-31-26\n01-02-27\n", &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 1, 0), date(2026, 12, 31));
+    assert_eq!(v(&wb, 2, 0), date(2027, 1, 2));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
+#[test]
+fn a_day_first_date_and_time_is_read_day_first() {
+    let (wb, report) = read_csv_with_report(b"When\n31/05/2026 10:30\n03/04/2026 10:30\n", &CsvOptions::default()).unwrap();
+    let at = |y, m, d| Value::Number(gridcraft_core::date::serial_from_ymd(DateSystem::D1900, y, m, d).unwrap() + 10.5 / 24.0);
+    assert_eq!(v(&wb, 1, 0), at(2026, 5, 31));
+    assert_eq!(v(&wb, 2, 0), at(2026, 4, 3));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
+#[test]
+fn iso_dates_are_not_reordered_by_their_column() {
+    let wb = read_csv(b"When\n31/05/2026\n2026-03-04\n", &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 1, 0), date(2026, 5, 31));
+    assert_eq!(v(&wb, 2, 0), date(2026, 3, 4));
 }
 
 #[test]

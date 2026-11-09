@@ -5,16 +5,20 @@ use egui::{Event, Key, Modifiers, PointerButton};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
-use gridcraft_engine::model::StepKind;
-use gridcraft_ui_egui::SheetApp;
+use gridcraft_engine::model::{Step, StepKind};
+use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn harness() -> Harness {
+    harness_with(Default::default())
+}
+
+fn harness_with(services: Services) -> Harness {
     let mut session = Session::new();
     session.new_workbook();
-    let mut app = SheetApp::new(session, Default::default());
+    let mut app = SheetApp::new(session, services);
     app.ui.ribbon_tab = "Automate".into();
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
@@ -280,7 +284,7 @@ fn a_new_macro_never_replaces_one_with_its_name() {
         {
             let ed = h.state_mut().macros.editor.as_mut().unwrap();
             ed.draft.name = "three".into();
-            ed.draft.steps = vec![gridcraft_engine::model::Step::command("cell.set", json!({"cell": "B1", "input": "x"}))];
+            ed.draft.steps = vec![Step::command("cell.set", json!({"cell": "B1", "input": "x"}))];
             ed.dirty = true;
         }
         h.run_steps(2);
@@ -306,7 +310,7 @@ fn a_rename_that_lands_before_a_failed_save_is_remembered() {
         let ed = h.state_mut().macros.editor.as_mut().unwrap();
         ed.draft.name = "Renamed".into();
         // Too large to keep in the workbook: the rename lands, the save after it fails.
-        ed.draft.steps.push(gridcraft_engine::model::Step::command("cell.set", json!({"cell": "A4", "input": big})));
+        ed.draft.steps.push(Step::command("cell.set", json!({"cell": "A4", "input": big})));
         ed.dirty = true;
     }
     h.run_steps(2);
@@ -366,7 +370,7 @@ fn the_editor_works_only_on_the_workbook_it_opened_in() {
     // A new macro whose one step writes A1, not saved yet.
     h.state_mut().open_dialog("macroEditor", json!({"new": "Fresh"}));
     h.run_steps(3);
-    let step = gridcraft_engine::model::Step::command("cell.set", json!({"cell": "A1", "input": "ran"}));
+    let step = Step::command("cell.set", json!({"cell": "A1", "input": "ran"}));
     h.state_mut().macros.editor.as_mut().unwrap().draft.steps = vec![step];
     let book1 = h.state().session.active().unwrap().uid;
     // Another workbook becomes active while the editor is open (File › New, Switch Window, an agent).
@@ -404,6 +408,55 @@ fn the_editor_works_only_on_the_workbook_it_opened_in() {
     h.run_steps(3);
     assert!(h.state().macros.editor.is_none());
     assert!(h.state().dialog.as_ref().is_none_or(|d| d.name() != "macroEditor"));
+}
+
+#[test]
+fn a_deferred_close_acts_on_the_editors_window_whichever_window_is_active_meanwhile() {
+    let mut h = harness();
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    let book1 = h.state().session.active().unwrap().uid;
+    let home = h.state().session.active_window().unwrap();
+    // Another workbook in a window of its own.
+    h.state_mut().run("file.new", json!({})).unwrap();
+    h.run_steps(2);
+    let book2 = h.state().session.active().unwrap().uid;
+    let other = h.state().session.active_window().unwrap();
+    assert_ne!(other, home);
+    // Back in the editor's window, File › Close asks about the draft and waits.
+    h.state_mut().enter_window(home);
+    h.run_steps(2);
+    let r = h.state_mut().run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert!(asks_about(&h, &name));
+    assert_eq!(h.state().macros.editor.as_ref().and_then(|e| e.then_close.as_ref()).map(|c| c.window), Some(home));
+    // The other window is the session's active one when the question is answered (a native
+    // window the person clicked on while the question stood), while the editor's window draws
+    // the question: the answer is given through the editor's own frame, as its button gives it.
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    let mut d = app.dialog.take().expect("the editor is its window's dialog");
+    assert_eq!(d.name(), "macroEditor");
+    app.session.activate_window(other);
+    assert_eq!(app.session.active().map(|d| d.uid), Some(book2));
+    // Don't Save: the question's answer closes the editor without saving.
+    let ed = app.macros.editor.as_mut().unwrap();
+    ed.ask_close = false;
+    ed.dirty = false;
+    ed.close_requested = true;
+    let mut open = true;
+    let mut out = ctx.run_pass(egui::RawInput::default(), |ctx| gridcraft_ui_egui::macro_editor::window(app, ctx, &mut d, &mut open));
+    out.textures_delta.clear(); // not painted
+    assert!(!open, "the editor closed");
+    // The close that was asked in the editor's window closes that workbook, not the other.
+    assert!(!is_open(&h, book1), "the editor's workbook closed");
+    assert!(is_open(&h, book2), "the workbook of the window activated meanwhile stays open");
+    assert!(h.state().session.window(other).is_some());
+    assert!(h.state().macros.editor.is_none());
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none());
 }
 
 /// Asks the window to close (the close button, Alt+F4, quitting) and returns the commands the
@@ -551,4 +604,437 @@ fn a_macro_at_the_step_limit_opens_without_freezing_the_editor() {
     let ms = gridcraft_ui_egui::now_ms() - t;
     assert!(ms < 10_000.0, "five frames took {ms} ms");
     assert!(h.query_by_label_contains("Step 1: ").is_some());
+}
+
+/// Opens the editor on a new macro and gives its draft a step, as editing it does.
+fn edited_new_macro(h: &mut Harness) {
+    h.state_mut().open_dialog("macroEditor", json!({}));
+    h.run_steps(3);
+    let ed = h.state_mut().macros.editor.as_mut().unwrap();
+    ed.draft.steps.push(Step::command("cell.set", json!({"cell": "A1", "input": "7"})));
+    ed.dirty = true;
+    h.run_steps(2);
+}
+
+/// Clicks a button of the editor's Save changes question: the question's buttons are drawn last
+/// (the formula bar has a Cancel and the editor a Save of their own).
+fn answer(h: &mut Harness, label: &str) {
+    h.get_all_by_role_and_label(egui::Role::Button, label).last().unwrap().click();
+    h.run_steps(4);
+}
+
+/// Whether the workbook `uid` is still open (the app starts a blank one when the last closes).
+fn is_open(h: &Harness, uid: u64) -> bool {
+    h.state().session.documents().iter().any(|d| d.uid == uid)
+}
+
+fn asks_about(h: &Harness, name: &str) -> bool {
+    h.query_by_label_contains(&format!("Save changes to macro “{name}”")).is_some()
+}
+
+#[test]
+fn closing_the_workbook_asks_about_an_unsaved_draft_first() {
+    let mut h = harness();
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    let book = h.state().session.active().unwrap().uid;
+    assert!(!h.state().session.active().unwrap().is_dirty());
+    // The workbook is saved, but the draft is not: File › Close asks about the draft and waits.
+    let r = h.state_mut().run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert!(asks_about(&h, &name));
+    assert!(is_open(&h, book));
+    // Cancel keeps the workbook and the draft.
+    answer(&mut h, "Cancel");
+    assert!(is_open(&h, book));
+    assert_eq!(h.state().macros.editor.as_ref().map(|e| e.draft.steps.len()), Some(1));
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("macroEditor"));
+    // A window's close button (`window.close`) asks the same way.
+    let window = h.state().session.active_window().unwrap();
+    let r = h.state_mut().run("window.close", json!({"window": window})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert!(asks_about(&h, &name));
+    answer(&mut h, "Cancel");
+    assert!(is_open(&h, book));
+    // Don't Save closes the editor, then the workbook (which has nothing of its own to ask about).
+    h.state_mut().run("file.close", json!({})).unwrap();
+    h.run_steps(3);
+    answer(&mut h, "Don't Save");
+    assert!(h.state().macros.editor.is_none());
+    assert!(!is_open(&h, book));
+    assert!(h.state().dialog.is_none());
+}
+
+#[test]
+fn save_in_the_question_saves_the_macro_then_the_workbook_asks_about_itself() {
+    let path = std::env::temp_dir().join(format!("gridcraft-macro-draft-{}.xlsx", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let target = path.to_string_lossy().to_string();
+    let mut h = harness_with(Services { pick_save: Some(Box::new(move |_| Some(target.clone()))), ..Default::default() });
+    edited_new_macro(&mut h);
+    let book = h.state().session.active().unwrap().uid;
+    h.state_mut().run("file.close", json!({})).unwrap();
+    h.run_steps(3);
+    answer(&mut h, "Save");
+    // The macro is in the workbook now, which makes it unsaved: closing it goes on and asks.
+    assert!(h.state().macros.editor.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb.macros.len(), 1);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    h.get_all_by_role_and_label(egui::Role::Button, "Save").last().unwrap().click();
+    h.run_steps(4);
+    assert!(!is_open(&h, book));
+    let mut s = Session::new();
+    s.execute("file.open", json!({"path": path.to_str().unwrap()})).unwrap();
+    let wb = &s.active().unwrap().wb;
+    assert_eq!(wb.macros.len(), 1);
+    assert_eq!(wb.macros[0].steps.len(), 1);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_draft_that_cannot_be_saved_keeps_its_workbook_open() {
+    let mut h = harness();
+    h.state_mut().run("macro.save", json!({"macro": {"name": "Taken", "steps": []}})).unwrap();
+    let d = h.state_mut().session.active_mut().unwrap();
+    d.saved = d.wb.clone();
+    edited_new_macro(&mut h);
+    let book = h.state().session.active().unwrap().uid;
+    // A new macro never replaces one with its name, so Save is refused.
+    h.state_mut().macros.editor.as_mut().unwrap().draft.name = "Taken".into();
+    h.state_mut().run("file.close", json!({})).unwrap();
+    h.run_steps(3);
+    answer(&mut h, "Save");
+    assert!(h.state().message.is_some());
+    h.state_mut().message = None;
+    h.run_steps(2);
+    assert!(h.state().macros.editor.is_some());
+    // Closing the editor itself later never closes the workbook the earlier question was about.
+    h.state_mut().macros.editor.as_mut().unwrap().close_requested = true;
+    h.run_steps(3);
+    answer(&mut h, "Don't Save");
+    assert!(h.state().macros.editor.is_none());
+    assert!(is_open(&h, book));
+}
+
+#[test]
+fn an_untouched_new_macro_does_not_make_closing_ask() {
+    let mut h = harness();
+    h.state_mut().open_dialog("macroEditor", json!({}));
+    h.run_steps(3);
+    assert!(h.state().macros.editor.as_ref().unwrap().dirty);
+    let book = h.state().session.active().unwrap().uid;
+    let r = h.state_mut().run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], true);
+    assert!(!is_open(&h, book));
+    h.run_steps(3);
+    assert!(h.state().macros.editor.is_none());
+    assert!(h.state().dialog.is_none());
+}
+
+#[test]
+fn a_new_macros_name_change_alone_makes_closing_ask() {
+    let mut h = harness();
+    h.state_mut().open_dialog("macroEditor", json!({}));
+    h.run_steps(3);
+    let book = h.state().session.active().unwrap().uid;
+    // Only the name changes, as typing in the Name box does.
+    let ed = h.state_mut().macros.editor.as_mut().unwrap();
+    ed.draft.name = "Renamed".into();
+    ed.dirty = true;
+    h.run_steps(2);
+    let r = h.state_mut().run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert!(asks_about(&h, "Renamed"));
+    assert!(is_open(&h, book));
+}
+
+/// Quit (Cmd+Q, the macOS Quit menu, a Dock quit) and the commands the app answered with over the
+/// next frames.
+fn request_quit(h: &mut Harness) -> Vec<egui::ViewportCommand> {
+    let ctx = h.ctx.clone();
+    h.state_mut().request_quit(&ctx);
+    step_commands(h)
+}
+
+#[test]
+fn quit_asks_about_the_editors_unsaved_steps_first() {
+    let mut h = harness();
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    assert!(!h.state().session.active().unwrap().is_dirty());
+    // Every workbook is saved, but the draft is not: the app stays and the editor asks.
+    let sent = request_quit(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    assert!(!h.state().allow_close);
+    assert!(asks_about(&h, &name));
+    // Cancel keeps the app and the draft.
+    answer(&mut h, "Cancel");
+    let sent = step_commands(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    assert_eq!(h.state().macros.editor.as_ref().map(|e| e.draft.steps.len()), Some(1));
+    // Asked again, Don't Save closes the editor and the quit goes on.
+    request_quit(&mut h);
+    assert!(asks_about(&h, &name));
+    h.get_by_label("Don't Save").click();
+    let sent = step_commands(&mut h);
+    assert!(h.state().macros.editor.is_none());
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+}
+
+#[test]
+fn a_refused_save_while_quitting_stops_the_quit() {
+    let mut h = harness();
+    h.state_mut().run("macro.save", json!({"macro": {"name": "Taken", "steps": []}})).unwrap();
+    let d = h.state_mut().session.active_mut().unwrap();
+    d.saved = d.wb.clone();
+    edited_new_macro(&mut h);
+    // A new macro never replaces one with its name, so the question's Save is refused.
+    h.state_mut().macros.editor.as_mut().unwrap().draft.name = "Taken".into();
+    for quit in [request_quit, request_window_close] {
+        h.run_steps(2);
+        let sent = quit(&mut h);
+        assert!(sent.contains(&egui::ViewportCommand::CancelClose) || !h.state().allow_close, "{sent:?}");
+        assert!(asks_about(&h, "Taken"));
+        answer(&mut h, "Save");
+        assert!(h.state().message.is_some());
+        h.state_mut().message = None;
+        assert!(h.state().macros.editor.is_some());
+        // Closing the editor later, on its own, no longer quits the app.
+        h.state_mut().macros.editor.as_mut().unwrap().close_requested = true;
+        h.run_steps(3);
+        h.get_by_label("Don't Save").click();
+        let sent = step_commands(&mut h);
+        assert!(h.state().macros.editor.is_none());
+        assert!(!sent.contains(&egui::ViewportCommand::Close), "the app keeps running: {sent:?}");
+        assert!(!h.state().allow_close);
+        // The next round starts with the same draft in the editor again.
+        edited_new_macro(&mut h);
+        h.state_mut().macros.editor.as_mut().unwrap().draft.name = "Taken".into();
+    }
+}
+
+#[test]
+fn an_untouched_new_macro_closes_without_asking_however_the_editor_closes() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    let open_new = |h: &mut Harness| {
+        h.state_mut().open_dialog("macroEditor", json!({}));
+        h.run_steps(3);
+        assert!(h.state().macros.editor.as_ref().is_some_and(|e| e.dirty && e.saved_as.is_none()));
+    };
+    // Its own close button.
+    open_new(&mut h);
+    h.state_mut().macros.editor.as_mut().unwrap().close_requested = true;
+    h.run_steps(3);
+    assert!(h.state().macros.editor.is_none(), "no Save changes question for a macro nobody edited");
+    // The control channel's cancel.
+    open_new(&mut h);
+    let r = gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, "ui.dialog.cancel", &json!({}));
+    assert!(matches!(&r, gridcraft_ui_egui::control::Outcome::Done(v) if v.get("error").is_none()));
+    h.run_steps(2);
+    assert!(h.state().macros.editor.is_none());
+    // Quit, with every workbook saved: the editor closes and the quit goes on.
+    open_new(&mut h);
+    let sent = request_quit(&mut h);
+    assert!(h.state().macros.editor.is_none());
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+}
+
+#[test]
+fn closing_the_window_that_shows_the_editor_asks_about_its_draft() {
+    let mut h = harness();
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    let home = h.state().session.active_window().unwrap();
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    h.run_steps(3);
+    let other = h.state().session.active_window().unwrap();
+    assert_ne!(other, home);
+    // The workbook stays open in its other window, but the editor's window would take the draft.
+    let r = h.state_mut().run("window.close", json!({"window": home})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert_eq!(h.state().session.active_window(), Some(home), "the editor's window comes forward to ask");
+    assert!(asks_about(&h, &name));
+    answer(&mut h, "Cancel");
+    assert!(h.state().session.window(home).is_some());
+    assert_eq!(h.state().macros.editor.as_ref().map(|e| e.draft.steps.len()), Some(1));
+    // File › Close in the editor's window asks too; Don't Save closes that window and the editor.
+    let r = h.state_mut().run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert!(asks_about(&h, &name));
+    answer(&mut h, "Don't Save");
+    assert!(h.state().macros.editor.is_none());
+    assert!(h.state().session.window(home).is_none());
+    assert!(h.state().session.window(other).is_some(), "the workbook stays open in its other window");
+}
+
+#[test]
+fn closing_the_window_that_shows_a_saved_editor_closes_the_editor_with_it() {
+    let mut h = harness();
+    three(&mut h);
+    let home = h.state().session.active_window().unwrap();
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    h.run_steps(3);
+    let r = h.state_mut().run("window.close", json!({"window": home})).unwrap();
+    assert_eq!(r["closed"], true);
+    h.run_steps(3);
+    // Nothing is left of an editor no window shows: a new one opens, and nothing was lost.
+    assert!(h.state().macros.editor.is_none());
+    h.state_mut().open_dialog("macroEditor", json!({"macro": "Three"}));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("macroEditor"));
+}
+
+#[test]
+fn a_close_request_during_the_editors_save_dialog_waits_for_it() {
+    let mut h = harness();
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    let book1 = h.state().session.active().unwrap().uid;
+    let home = h.state().session.active_window().unwrap();
+    h.state_mut().run("file.new", json!({})).unwrap();
+    h.run_steps(2);
+    let book2 = h.state().session.active().unwrap().uid;
+    h.state_mut().enter_window(home);
+    h.run_steps(2);
+    // Cmd+W: the editor asks about the draft and the close waits.
+    let r = h.state_mut().run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert!(asks_about(&h, &name));
+    // Cmd+W again, then the window's close button, while the question stands: the same close,
+    // so both wait on the same question; it is not asked twice and nothing closes under it.
+    let r = h.state_mut().run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], false);
+    let r = h.state_mut().run("window.close", json!({"window": home})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert_eq!(h.get_all_by_label_contains("Save changes to macro").count(), 1, "one question");
+    assert!(is_open(&h, book1) && is_open(&h, book2));
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let pending = h.state().macros.editor.as_ref().and_then(|e| e.then_close.as_ref()).expect("the close waits");
+    assert_eq!((pending.id.as_str(), pending.whole), ("file.close", true), "the close that opened the question is the pending one");
+    // Don't Save: the editor closes and the workbook closes once; the other workbook stays.
+    answer(&mut h, "Don't Save");
+    assert!(h.state().macros.editor.is_none());
+    assert!(!is_open(&h, book1));
+    assert!(is_open(&h, book2), "the close ran once");
+    assert!(h.state().dialog.is_none());
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+}
+
+#[test]
+fn a_different_close_during_the_editors_question_is_refused_until_it_is_answered() {
+    let mut h = harness();
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    let book = h.state().session.active().unwrap().uid;
+    let home = h.state().session.active_window().unwrap();
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    h.run_steps(3);
+    let other = h.state().session.active_window().unwrap();
+    // The editor's window closes while the workbook stays open in the other: the editor asks.
+    let r = h.state_mut().run("window.close", json!({"window": home})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert!(asks_about(&h, &name));
+    // The Backstage Close (the whole workbook) while that question stands asks for more than
+    // the question was asked for: refused with the reason; the question and the workbook stay.
+    let e = h.state_mut().run("file.close", json!({"document": true})).unwrap_err();
+    assert!(e.contains("asking whether to save") && e.contains("its window closes"), "{e}");
+    h.run_steps(2);
+    assert_eq!(h.get_all_by_label_contains("Save changes to macro").count(), 1, "one question");
+    assert!(is_open(&h, book));
+    assert_eq!(h.state().session.windows().len(), 2);
+    // Don't Save closes the editor's window alone, as the question was asked for.
+    answer(&mut h, "Don't Save");
+    assert!(h.state().macros.editor.is_none());
+    assert!(h.state().session.window(home).is_none());
+    assert!(h.state().session.window(other).is_some());
+    assert!(is_open(&h, book), "the workbook stays open in its other window");
+    // The reverse: the workbook is closing when a close of the editor's window alone arrives.
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    h.run_steps(3);
+    h.state_mut().enter_window(other);
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    let r = h.state_mut().run("file.close", json!({"document": true})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert!(asks_about(&h, &name));
+    let e = h.state_mut().run("window.close", json!({"window": other})).unwrap_err();
+    assert!(e.contains("the workbook closes"), "{e}");
+    // Cancel keeps the workbook, both windows and the draft.
+    answer(&mut h, "Cancel");
+    assert!(is_open(&h, book));
+    assert_eq!(h.state().session.windows().len(), 2);
+    assert_eq!(h.state().macros.editor.as_ref().map(|e| e.draft.steps.len()), Some(1));
+    assert!(h.state().macros.editor.as_ref().is_some_and(|e| e.then_close.is_none()));
+}
+
+#[test]
+fn quitting_with_a_draft_in_one_window_and_unsaved_cells_in_another_asks_in_order_and_cancel_stops_it() {
+    let mut h = harness();
+    // Book1, saved, with an unsaved draft in its window; Book2 with unsaved cells in its own.
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    let book1 = h.state().session.active().unwrap().uid;
+    let a = h.state().session.active_window().unwrap();
+    assert!(!h.state().session.active().unwrap().is_dirty());
+    h.state_mut().run("file.new", json!({})).unwrap();
+    h.state_mut().run("cell.set", json!({"cell": "Z9", "input": "unsaved"})).unwrap();
+    h.run_steps(2);
+    let book2 = h.state().session.active().unwrap().uid;
+    let title2 = h.state().session.active().unwrap().display_title();
+    let b = h.state().session.active_window().unwrap();
+    assert_ne!(a, b);
+    let both_open =
+        |h: &Harness| is_open(h, book1) && is_open(h, book2) && h.state().session.window(a).is_some() && h.state().session.window(b).is_some();
+    // Quit from Book2's window: the editor's question comes first, in its own window.
+    let sent = request_quit(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close) && !h.state().allow_close, "{sent:?}");
+    assert_eq!(h.state().session.active_window(), Some(a), "the editor's window comes forward");
+    assert!(asks_about(&h, &name));
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("macroEditor"), "no workbook is asked about yet");
+    // Don't Save: the draft goes, the editor closes and the quit goes on (the window asks to
+    // close again, which a test harness has to do by hand).
+    h.get_all_by_role_and_label(egui::Role::Button, "Don't Save").last().unwrap().click();
+    let sent = step_commands(&mut h);
+    assert!(h.state().macros.editor.is_none());
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    request_window_close(&mut h);
+    // Book2 is asked about next, in its window, as the quit's question.
+    assert_eq!(h.state().session.active_window(), Some(b), "the unsaved workbook's window comes forward");
+    let d = h.state().dialog.as_ref().expect("Book2 is asked about");
+    assert_eq!(d.name(), "saveChanges");
+    assert_eq!(d.values.get("title").and_then(serde_json::Value::as_str), Some(title2.as_str()));
+    assert_eq!(d.values.get("quit"), Some(&json!(true)), "{:?}", d.values);
+    assert!(both_open(&h));
+    // Cancel: the quit stops with both windows and workbooks open and Book2's changes kept; the
+    // draft the person discarded stays discarded.
+    h.get_all_by_role_and_label(egui::Role::Button, "Cancel").last().unwrap().click();
+    let sent = step_commands(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close) && !h.state().allow_close, "{sent:?}");
+    assert!(h.state().dialog.is_none());
+    assert!(both_open(&h));
+    assert!(h.state().session.documents().iter().find(|d| d.uid == book2).unwrap().is_dirty());
+    assert!(h.state().macros.editor.is_none());
+    // A quit cancelled at the editor's question stops before any workbook is asked about.
+    h.state_mut().enter_window(a);
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    let sent = request_quit(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    assert!(asks_about(&h, &name));
+    answer(&mut h, "Cancel");
+    let sent = step_commands(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close) && !h.state().allow_close, "{sent:?}");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("macroEditor"), "no Save Changes question followed");
+    assert_eq!(h.state().macros.editor.as_ref().map(|e| e.draft.steps.len()), Some(1), "the draft is kept");
+    assert!(both_open(&h));
 }

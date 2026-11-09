@@ -25,10 +25,13 @@ pub const XF_EXT_URI: &str = "{C7286773-470A-42A8-94C5-96B5CB345126}";
 
 /// The bags for one checkbox cell control, referenced as `xfComplement i="0"`: Checkbox (0),
 /// XFControls → 0 (1), XFComplement → 1 (2), XFComplements mapping index 0 → 2 (3). Every
-/// reference points to an earlier bag, as [MS-XLSX] 2.6.230 requires.
+/// reference points to an earlier bag, as [MS-XLSX] 2.6.230 requires. The XFComplements bag is
+/// the one `xfComplement` indexes into, and Excel finds it by its `extRef`: without
+/// `extRef="XFComplementsMapperExtRef"` it repairs the workbook ("Format from /xl/styles.xml")
+/// and drops every checkbox (#2630).
 pub fn checkbox_part() -> String {
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<FeaturePropertyBags xmlns=\"{NS}\" count=\"4\"><bag type=\"Checkbox\"/><bag type=\"XFControls\"><bagId k=\"CellControl\">0</bagId></bag><bag type=\"XFComplement\"><bagId k=\"XFControls\">1</bagId></bag><bag type=\"XFComplements\"><a k=\"MappedFeaturePropertyBags\"><bagId>2</bagId></a></bag></FeaturePropertyBags>"
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<FeaturePropertyBags xmlns=\"{NS}\" count=\"4\"><bag type=\"Checkbox\"/><bag type=\"XFControls\"><bagId k=\"CellControl\">0</bagId></bag><bag type=\"XFComplement\"><bagId k=\"XFControls\">1</bagId></bag><bag type=\"XFComplements\" extRef=\"XFComplementsMapperExtRef\"><a k=\"MappedFeaturePropertyBags\"><bagId>2</bagId></a></bag></FeaturePropertyBags>"
     )
 }
 
@@ -73,6 +76,9 @@ mod tests {
     fn written_chain_resolves_and_hostile_chains_do_not() {
         let root = crate::xml::parse(checkbox_part().as_bytes()).unwrap_or_default();
         assert_eq!(checkbox_complements(&root), vec![true]);
+        // #2630: Excel repairs the file unless the mapping bag carries this extRef.
+        let mapper = root.kids("bag").find(|b| b.attr("type") == Some("XFComplements"));
+        assert_eq!(mapper.and_then(|b| b.attr("extRef")), Some("XFComplementsMapperExtRef"));
         // Out-of-range, wrong-type and self references resolve to false without panicking.
         let bad = format!(
             "<FeaturePropertyBags xmlns=\"{NS}\"><bag type=\"XFControls\"><bagId k=\"CellControl\">99</bagId></bag><bag type=\"XFComplement\"><bagId k=\"XFControls\">1</bagId></bag><bag type=\"XFComplements\"><a k=\"MappedFeaturePropertyBags\"><bagId>1</bagId><bagId>4294967295</bagId><bagId>x</bagId></a></bag></FeaturePropertyBags>"
