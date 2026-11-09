@@ -22,8 +22,8 @@ const OUTBOX: usize = 256;
 
 /// Runs one connection to the end. The session must already exist; the HTTP upgrade checked.
 pub(crate) async fn run(app: Arc<App>, session_id: String, mut socket: WebSocket) {
-    let Some((token, name, last_version)) = read_hello(&app, &mut socket).await else { return };
-    let (connection, welcome) = match handshake(&app, &session_id, token, name).await {
+    let Some((token, name, last_version, window_id)) = read_hello(&app, &mut socket).await else { return };
+    let (connection, welcome) = match handshake(&app, &session_id, token, name, window_id).await {
         Ok(value) => value,
         Err(failure) => {
             fail(&mut socket, failure).await;
@@ -34,14 +34,14 @@ pub(crate) async fn run(app: Arc<App>, session_id: String, mut socket: WebSocket
         app.metrics.resumes.fetch_add(1, Ordering::Relaxed);
     }
     let (tx, mut rx) = mpsc::channel::<ServerMessage>(OUTBOX);
-    let (conn_id, others, participants) = register(&app, &session_id, &connection.actor, tx.clone()).await;
+    let (conn_id, others, participants) = register(&app, &session_id, &connection.actor, &connection.window_id, tx.clone()).await;
     if send(&mut socket, &welcome).await.is_err() {
-        leave(&app, &session_id, &connection.actor, Some(&conn_id)).await;
+        leave(&app, &session_id, &connection.actor, &connection.window_id, Some(&conn_id)).await;
         return;
     }
     broadcast(&app.metrics, &others, &ServerMessage::Presence { participants });
     if last_version < version_of(&welcome) && !resync(&app, &session_id, &conn_id, &tx, &mut socket, last_version).await {
-        leave(&app, &session_id, &connection.actor, Some(&conn_id)).await;
+        leave(&app, &session_id, &connection.actor, &connection.window_id, Some(&conn_id)).await;
         return;
     }
 
@@ -63,7 +63,7 @@ pub(crate) async fn run(app: Arc<App>, session_id: String, mut socket: WebSocket
         }
     }
     close(&mut socket, "connection-closed").await;
-    leave(&app, &session_id, &connection.actor, Some(&conn_id)).await;
+    leave(&app, &session_id, &connection.actor, &connection.window_id, Some(&conn_id)).await;
 }
 
 /// What stops the handshake, and how the socket says it.
@@ -83,7 +83,7 @@ impl Refused {
     }
 }
 
-async fn read_hello(app: &App, socket: &mut WebSocket) -> Option<(String, String, u64)> {
+async fn read_hello(app: &App, socket: &mut WebSocket) -> Option<(String, String, u64, String)> {
     let frame = match timeout(app.cfg.hello_timeout, socket.recv()).await {
         Ok(Some(Ok(frame))) => frame,
         Ok(_) => {
@@ -100,7 +100,7 @@ async fn read_hello(app: &App, socket: &mut WebSocket) -> Option<(String, String
         return None;
     };
     match serde_json::from_str::<ClientMessage>(text.as_str()) {
-        Ok(ClientMessage::Hello { token, name, last_version }) => Some((token, name, last_version)),
+        Ok(ClientMessage::Hello { token, name, last_version, window_id }) => Some((token, name, last_version, window_id)),
         _ => {
             fail(socket, Refused::policy(1008, "hello-required", "the first message must be hello")).await;
             None
@@ -108,7 +108,7 @@ async fn read_hello(app: &App, socket: &mut WebSocket) -> Option<(String, String
     }
 }
 
-async fn handshake(app: &App, session_id: &str, token: String, name: String) -> Result<(Connection, ServerMessage), Refused> {
+async fn handshake(app: &App, session_id: &str, token: String, name: String, window_id: String) -> Result<(Connection, ServerMessage), Refused> {
     let claims = app.jwt.verify(&token, &app.cfg.audience).map_err(|e| {
         app.metrics.auth_failures.fetch_add(1, Ordering::Relaxed);
         Refused::auth(e.code())
@@ -129,11 +129,14 @@ async fn handshake(app: &App, session_id: &str, token: String, name: String) -> 
     };
     let present = inner.gateway.hub().participants(session_id).map_err(|_| Refused::policy(4404, "session-unknown", "no such session"))?;
     let known = present.iter().any(|p| p.actor == claims.sub);
-    if !known && present.len() >= app.cfg.max_participants {
+    // The limit counts people, not windows: a second or third window of somebody already in the
+    // session is allowed (RFC §13.6), a new person is not while the session is full.
+    let people = present.iter().map(|p| p.actor.as_str()).collect::<std::collections::BTreeSet<_>>().len();
+    if !known && people >= app.cfg.max_participants {
         return Err(Refused::policy(4429, "too-many", "the session is full"));
     }
     let info = LeaseInfo { owner: lease.owner.clone(), expires_at: lease.expires_at };
-    let (connection, welcome) = inner.gateway.connect(&claims, now, expected, &name, Some(info)).map_err(|e: AuthError| {
+    let (connection, welcome) = inner.gateway.connect(&claims, now, expected, &name, &window_id, Some(info)).map_err(|e: AuthError| {
         app.metrics.auth_failures.fetch_add(1, Ordering::Relaxed);
         Refused::auth(e.code())
     })?;
@@ -253,6 +256,7 @@ async fn register(
     app: &App,
     session_id: &str,
     actor: &str,
+    window_id: &str,
     tx: mpsc::Sender<ServerMessage>,
 ) -> (u64, Vec<(u64, mpsc::Sender<ServerMessage>)>, Vec<gridcraft_collab::Participant>) {
     let mut inner = app.inner.lock().await;
@@ -260,8 +264,8 @@ async fn register(
     inner.next_conn = inner.next_conn.saturating_add(1);
     let others = inner.conns.get(session_id).map(|senders| senders.iter().map(|(id, tx)| (*id, tx.clone())).collect::<Vec<_>>()).unwrap_or_default();
     inner.conns.entry(session_id.to_string()).or_default().insert(id, tx);
-    let actors = inner.actors.entry(session_id.to_string()).or_default();
-    *actors.entry(actor.to_string()).or_insert(0) += 1;
+    let windows = inner.actors.entry(session_id.to_string()).or_default();
+    *windows.entry((actor.to_string(), window_id.to_string())).or_insert(0) += 1;
     let participants = inner.gateway.hub().participants(session_id).unwrap_or_default();
     app.metrics.connections.fetch_add(1, Ordering::Relaxed);
     (id, others, participants)
@@ -340,8 +344,16 @@ async fn pump(
             let out: Vec<ServerMessage> = messages.iter().flat_map(frames).collect();
             for frame in &out {
                 match frame {
-                    ServerMessage::Applied { .. } | ServerMessage::Presence { .. } => {
+                    ServerMessage::Applied { .. } => broadcast(&app.metrics, &others, frame),
+                    ServerMessage::Presence { .. } => {
                         broadcast(&app.metrics, &others, frame);
+                        // A presence answer carries every window of every person, this
+                        // connection's own row included (RFC §13.6). It goes to the sender through
+                        // the same queue as the peers' frames, so every frame of the document is
+                        // applied in the order the room produced it: a frame computed before this
+                        // window's cursor cannot land after it and blank the row. Presence is still
+                        // state of a window, never of the document, and dropping one is harmless.
+                        let _ = tx.try_send(frame.clone());
                     }
                     _ => {}
                 }
@@ -379,8 +391,8 @@ async fn pump(
                 replied = true;
             }
             ServerMessage::Presence { .. } => {
-                // Presence is state of a connection, not of the document: the sender already
-                // knows its own cursor.
+                // Queued for this connection under the room lock, in order with the peers' frames
+                // (see above): nothing to write here.
             }
             _ => {
                 if send(socket, frame).await.is_err() {
@@ -395,7 +407,7 @@ async fn pump(
     true
 }
 
-async fn leave(app: &App, session_id: &str, actor: &str, conn_id: Option<&u64>) {
+async fn leave(app: &App, session_id: &str, actor: &str, window_id: &str, conn_id: Option<&u64>) {
     let (participants, others) = {
         let mut inner = app.inner.lock().await;
         if let Some(id) = conn_id {
@@ -412,19 +424,20 @@ async fn leave(app: &App, session_id: &str, actor: &str, conn_id: Option<&u64>) 
         }
         let mut participants = None;
         let mut removed = false;
-        if let Some(actors) = inner.actors.get_mut(session_id) {
-            if let Some(count) = actors.get_mut(actor) {
+        let key = (actor.to_string(), window_id.to_string());
+        if let Some(windows) = inner.actors.get_mut(session_id) {
+            if let Some(count) = windows.get_mut(&key) {
                 *count = count.saturating_sub(1);
                 if *count == 0 {
-                    actors.remove(actor);
+                    windows.remove(&key);
                     removed = true;
                 }
             }
-            if actors.is_empty() {
+            if windows.is_empty() {
                 inner.actors.remove(session_id);
             }
         }
-        if removed && let Ok(left) = inner.gateway.hub_mut().leave(session_id, actor) {
+        if removed && let Ok(left) = inner.gateway.hub_mut().leave(session_id, actor, window_id) {
             participants = Some(left);
         }
         let others = inner.conns.get(session_id).map(|senders| senders.values().cloned().collect::<Vec<_>>()).unwrap_or_default();

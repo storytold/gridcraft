@@ -56,7 +56,11 @@ pub enum Event {
 #[derive(Clone, Debug, Default)]
 pub struct State {
     pub session_id: String,
+    /// The person (the JWT subject): operations, role and undo belong to it.
     pub actor: String,
+    /// The window of that person this replica is: presence belongs to it (RFC §13.6). Empty when
+    /// the client sent no id.
+    pub window_id: String,
     pub role: Option<Role>,
     pub version: u64,
     pub epoch: u64,

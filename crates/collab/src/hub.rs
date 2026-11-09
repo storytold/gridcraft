@@ -49,10 +49,21 @@ pub struct Viewport {
     pub cols: u32,
 }
 
-/// One person in one document.
+/// One window of one person in one document (RFC §13.6).
+///
+/// A person is an `actor`: their role, their undo stack and the author of their operations. A
+/// window is a connection of that person — two browser tabs, two desktop processes, a reconnect.
+/// Presence belongs to a window, so the list carries one [`Participant`] per window, and two
+/// windows of one actor share the actor id and differ in `window_id`. Undo stays on the actor:
+/// the room's stack never sees a window.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Participant {
     pub actor: String,
+    /// The window of that actor. Empty when a client sent no id (the older wire, or a reconnect
+    /// of an old client): such a client has one implicit window per document.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub window_id: String,
     pub name: String,
     pub role: Role,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -80,7 +91,16 @@ impl From<RoomError> for HubError {
 struct Document {
     session: Session,
     room: Room,
-    participants: BTreeMap<String, Participant>,
+    /// One entry per window, keyed by `(actor, window_id)`. A person with two open windows is two
+    /// rows; joining again through the same window is the same row.
+    participants: BTreeMap<(String, String), Participant>,
+}
+
+impl Document {
+    /// The role of a person: the same in every window they have open.
+    fn role_of(&self, actor: &str) -> Option<Role> {
+        self.participants.values().find(|participant| participant.actor == actor).map(|participant| participant.role)
+    }
 }
 
 /// All documents of one server process.
@@ -142,16 +162,22 @@ impl Hub {
         self.documents.remove(doc).is_some()
     }
 
-    /// Adds a participant. The role comes from the JWT, never from the client's message.
-    pub fn join(&mut self, doc: &str, actor: &str, name: &str, role: Role) -> Result<Vec<Participant>, HubError> {
+    /// Adds one window of a participant. The role comes from the JWT, never from the client's
+    /// message; the window id from the client's `hello`. Re-joining the same `(actor, window)` is
+    /// idempotent: a reconnect keeps its row instead of adding a second one.
+    pub fn join(&mut self, doc: &str, actor: &str, window_id: &str, name: &str, role: Role) -> Result<Vec<Participant>, HubError> {
         let document = self.documents.get_mut(doc).ok_or(HubError::UnknownDocument)?;
-        document.participants.insert(actor.to_string(), Participant { actor: actor.to_string(), name: name.to_string(), role, presence: None });
+        let key = (actor.to_string(), window_id.to_string());
+        document
+            .participants
+            .insert(key, Participant { actor: actor.to_string(), window_id: window_id.to_string(), name: name.to_string(), role, presence: None });
         Ok(document.participants.values().cloned().collect())
     }
 
-    pub fn leave(&mut self, doc: &str, actor: &str) -> Result<Vec<Participant>, HubError> {
+    /// Removes one window. Another window of the same actor keeps its row and its presence.
+    pub fn leave(&mut self, doc: &str, actor: &str, window_id: &str) -> Result<Vec<Participant>, HubError> {
         let document = self.documents.get_mut(doc).ok_or(HubError::UnknownDocument)?;
-        document.participants.remove(actor);
+        document.participants.remove(&(actor.to_string(), window_id.to_string()));
         Ok(document.participants.values().cloned().collect())
     }
 
@@ -189,11 +215,12 @@ impl Hub {
         document.room.sheet_keys().key_for_index(workbook, index).map(|k| k.to_string())
     }
 
-    /// Applies one operation on behalf of `actor`, after the role check of ADR-0008.
+    /// Applies one operation on behalf of `actor`, after the role check of ADR-0008. The operation
+    /// is the person's, whichever of their windows sends it.
     pub fn apply(&mut self, doc: &str, actor: &str, op: ClientOp) -> Result<Applied, HubError> {
         let document = self.documents.get_mut(doc).ok_or(HubError::UnknownDocument)?;
-        let participant = document.participants.get(actor).ok_or(HubError::UnknownParticipant)?;
-        if !participant.role.can_write() {
+        let role = document.role_of(actor).ok_or(HubError::UnknownParticipant)?;
+        if !role.can_write() {
             return Err(HubError::Forbidden);
         }
         Ok(document.room.apply(&mut document.session, op, actor)?)
@@ -203,8 +230,8 @@ impl Hub {
     /// room's, and the answer is a confirmed operation like any other.
     pub fn undo(&mut self, doc: &str, actor: &str, op_id: Option<&str>) -> Result<Applied, HubError> {
         let document = self.documents.get_mut(doc).ok_or(HubError::UnknownDocument)?;
-        let participant = document.participants.get(actor).ok_or(HubError::UnknownParticipant)?;
-        if !participant.role.can_write() {
+        let role = document.role_of(actor).ok_or(HubError::UnknownParticipant)?;
+        if !role.can_write() {
             return Err(HubError::Forbidden);
         }
         Ok(document.room.undo(&mut document.session, actor, op_id)?)
@@ -213,18 +240,19 @@ impl Hub {
     /// Puts back the last step `actor` undid (ADR-0010).
     pub fn redo(&mut self, doc: &str, actor: &str, op_id: Option<&str>) -> Result<Applied, HubError> {
         let document = self.documents.get_mut(doc).ok_or(HubError::UnknownDocument)?;
-        let participant = document.participants.get(actor).ok_or(HubError::UnknownParticipant)?;
-        if !participant.role.can_write() {
+        let role = document.role_of(actor).ok_or(HubError::UnknownParticipant)?;
+        if !role.can_write() {
             return Err(HubError::Forbidden);
         }
         Ok(document.room.redo(&mut document.session, actor, op_id)?)
     }
 
-    /// Stores the participant's presence and returns everyone else's, so the caller can broadcast
-    /// it. Presence is state of a connection, never of the document.
-    pub fn presence(&mut self, doc: &str, actor: &str, presence: Option<Presence>) -> Result<Vec<Participant>, HubError> {
+    /// Stores one window's presence and returns every window's row, so the caller can broadcast
+    /// it. Presence is state of a window, never of the document: two windows of one actor carry
+    /// their own cursors, and the version does not move.
+    pub fn presence(&mut self, doc: &str, actor: &str, window_id: &str, presence: Option<Presence>) -> Result<Vec<Participant>, HubError> {
         let document = self.documents.get_mut(doc).ok_or(HubError::UnknownDocument)?;
-        let participant = document.participants.get_mut(actor).ok_or(HubError::UnknownParticipant)?;
+        let participant = document.participants.get_mut(&(actor.to_string(), window_id.to_string())).ok_or(HubError::UnknownParticipant)?;
         participant.presence = presence;
         Ok(document.participants.values().cloned().collect())
     }

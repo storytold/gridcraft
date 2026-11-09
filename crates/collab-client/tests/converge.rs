@@ -5,7 +5,7 @@ mod support;
 
 use std::time::Duration;
 
-use gridcraft_collab::Role;
+use gridcraft_collab::{Presence, Role};
 use gridcraft_collab_client::{Client, Config, EditError, Event, Synced};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
@@ -35,12 +35,35 @@ async fn join_with(server: &support::Server, file_id: i64, session: &str, who: &
 /// Comes back as `who` at `last_version`, keeping the local document the peer already had: what a
 /// client does after a dropped connection (`Config::last_version` is the catch-up point).
 async fn reconnect(server: &support::Server, file_id: i64, session: &str, who: &str, role: Role, last_version: u64, local: Session) -> Peer {
+    reconnect_window(server, file_id, session, who, role, last_version, String::new(), local).await
+}
+
+/// Joins as one named window of `who` (RFC §13.6): two windows of one person share the actor and
+/// differ in the window id.
+async fn join_window(server: &support::Server, file_id: i64, session: &str, who: &str, role: Role, window_id: &str) -> Peer {
+    let mut local = Session::new();
+    local.new_workbook();
+    reconnect_window(server, file_id, session, who, role, 0, window_id.to_string(), local).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn reconnect_window(
+    server: &support::Server,
+    file_id: i64,
+    session: &str,
+    who: &str,
+    role: Role,
+    last_version: u64,
+    window_id: String,
+    local: Session,
+) -> Peer {
     let cfg = Config {
         url: server.url(session),
         token: support::token(who, role, file_id, session),
         name: who.to_string(),
         last_version,
         reconnect: Some(Duration::from_millis(200)),
+        window_id,
     };
     let (client, welcome) = Client::connect(cfg).await.unwrap();
     let synced = Synced::new(client, &welcome);
@@ -69,6 +92,50 @@ async fn settle_one(peer: &mut Peer) {
         }
     }
     panic!("the replica did not settle");
+}
+
+/// Polls both connections until `ready` holds, so a test waits for the state it asserts on
+/// instead of for a number of quiet rounds.
+async fn wait_until(a: &mut Peer, b: &mut Peer, label: &str, mut ready: impl FnMut(&Peer, &Peer) -> bool) {
+    for _ in 0..300 {
+        a.synced.poll(&mut a.session);
+        b.synced.poll(&mut b.session);
+        if ready(a, b) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!(
+        "the replicas did not reach the expected state ({label}): a={:?} b={:?}",
+        a.synced
+            .state()
+            .participants
+            .iter()
+            .map(|p| format!("{}/{:?}", p.window_id, p.presence.as_ref().map(|x| x.active.clone())))
+            .collect::<Vec<_>>(),
+        b.synced
+            .state()
+            .participants
+            .iter()
+            .map(|p| format!("{}/{:?}", p.window_id, p.presence.as_ref().map(|x| x.active.clone())))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// Lets three connections deliver what the server sent (a third window joins two others).
+async fn settle_three(a: &mut Peer, b: &mut Peer, c: &mut Peer) {
+    for _ in 0..200 {
+        let busy = !a.synced.poll(&mut a.session).is_empty() | !b.synced.poll(&mut b.session).is_empty() | !c.synced.poll(&mut c.session).is_empty();
+        if busy {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            continue;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        if a.synced.poll(&mut a.session).is_empty() && b.synced.poll(&mut b.session).is_empty() && c.synced.poll(&mut c.session).is_empty() {
+            return;
+        }
+    }
+    panic!("the replicas did not settle");
 }
 
 /// Lets both connections deliver what the server sent. The two quiet rounds absorb the server's
@@ -192,10 +259,92 @@ async fn redo_puts_the_step_back_on_every_replica() {
     server.stop().await;
 }
 
+/// Two windows of one person (RFC §13.6): the same actor id, different window ids, two rows in the
+/// participant list that each window sees, presence per window, undo still on the actor.
+#[tokio::test]
+async fn two_windows_of_one_actor_are_two_rows_and_share_the_undo_stack() {
+    let server = support::start().await;
+    let session = support::create(&server, 55).await;
+    let mut one = join_window(&server, 55, &session, "ann", Role::Editor, "w1").await;
+    let mut two = join_window(&server, 55, &session, "ann", Role::Editor, "w2").await;
+
+    let rows = |peer: &Peer| {
+        let mut windows: Vec<String> = peer.synced.state().participants.iter().filter(|p| p.actor == "ann").map(|p| p.window_id.clone()).collect();
+        windows.sort();
+        windows
+    };
+    wait_until(&mut one, &mut two, "two rows", |one, two| rows(one).len() == 2 && rows(two).len() == 2).await;
+    assert_eq!(rows(&one), ["w1", "w2"], "the first window sees both rows");
+    assert_eq!(rows(&two), ["w1", "w2"], "the second window sees both rows too");
+
+    // Presence is per window: the two cursors coexist, and neither moves the version.
+    let sheet = one.synced.key_for_name(&sheet_name(&one)).expect("the sheet key");
+    one.synced.send_presence(Presence { sheet_key: sheet.clone(), active: "A1".into(), ranges: vec![], viewport: None });
+    two.synced.send_presence(Presence { sheet_key: sheet.clone(), active: "B2".into(), ranges: vec![], viewport: None });
+    let cursor = |peer: &Peer, window: &str| {
+        peer.synced.state().participants.iter().find(|p| p.window_id == window).and_then(|p| p.presence.clone()).map(|presence| presence.active)
+    };
+    wait_until(&mut one, &mut two, "two cursors", |one, two| {
+        cursor(one, "w1").as_deref() == Some("A1")
+            && cursor(one, "w2").as_deref() == Some("B2")
+            && cursor(two, "w1").as_deref() == Some("A1")
+            && cursor(two, "w2").as_deref() == Some("B2")
+    })
+    .await;
+    assert_eq!(one.synced.state().version, 0, "presence is not an operation");
+
+    // The step of one window is the person's step: the other window can undo it, because the
+    // room's stack belongs to the actor and a new window does not take it away.
+    one.synced.execute(&mut one.session, "cell.set", json!({ "cell": "D1", "input": 9 })).unwrap();
+    settle(&mut one, &mut two).await;
+    assert_eq!(value(&two, "D1"), Value::Number(9.0));
+    two.synced.undo().unwrap();
+    settle(&mut one, &mut two).await;
+    assert_eq!(value(&one, "D1"), Value::Empty, "the actor's step is undone from the other window");
+
+    // A third window joins: it is a third row and nothing of the first two is lost.
+    let mut three = join_window(&server, 55, &session, "ann", Role::Editor, "w3").await;
+    settle_three(&mut one, &mut two, &mut three).await;
+    let mut windows: Vec<String> = three.synced.state().participants.iter().filter(|p| p.actor == "ann").map(|p| p.window_id.clone()).collect();
+    windows.sort();
+    assert_eq!(windows, ["w1", "w2", "w3"]);
+    one.synced.redo().unwrap();
+    settle(&mut one, &mut two).await;
+    assert_eq!(value(&one, "D1"), Value::Number(9.0), "the first window still has the step to redo");
+    server.stop().await;
+}
+
+/// A window that reconnects keeps its id, so its row is the same one: the participant list does
+/// not grow a third entry, and the other window sees it as before (RFC §13.6).
+#[tokio::test]
+async fn a_reconnecting_window_keeps_its_row() {
+    let server = support::start().await;
+    let session = support::create(&server, 56).await;
+    let mut one = join_window(&server, 56, &session, "ann", Role::Editor, "w1").await;
+    let mut two = join_window(&server, 56, &session, "ann", Role::Editor, "w2").await;
+    let rows = |peer: &Peer| peer.synced.state().participants.iter().filter(|p| p.actor == "ann").map(|p| p.window_id.clone()).collect::<Vec<_>>();
+    wait_until(&mut one, &mut two, "two rows", |one, two| rows(one).len() == 2 && rows(two).len() == 2).await;
+
+    // The second window drops and comes back with the same window id, as the client does after a
+    // socket failure.
+    let local = std::mem::replace(&mut two.session, Session::new());
+    let away_at = two.synced.state().version;
+    drop(two);
+    let mut back = reconnect_window(&server, 56, &session, "ann", Role::Editor, away_at, "w2".into(), local).await;
+    wait_until(&mut one, &mut back, "reconnect rows", |one, back| rows(one).len() == 2 && rows(back).len() == 2).await;
+    // Let any late frames from the closed socket land, then count again: the row is still one row
+    // per window, never a third one.
+    settle(&mut one, &mut back).await;
+    assert_eq!(one.synced.state().participants.len(), 2, "a reconnect does not leave a stale row");
+    assert_eq!(back.synced.state().participants.len(), 2);
+    let on_wire = back.synced.state().participants.iter().filter(|p| p.actor == "ann").map(|p| p.window_id.clone()).collect::<Vec<_>>();
+    assert_eq!(on_wire, ["w1", "w2"], "the reconnected window is still w2");
+    server.stop().await;
+}
+
 fn names(peer: &Peer) -> Vec<String> {
     peer.session.doc().unwrap().wb.sheets.iter().map(|sheet| sheet.name.clone()).collect()
 }
-
 fn value_in(peer: &Peer, sheet: &str, a1: &str) -> Value {
     let d = peer.session.doc().unwrap();
     let index = d.wb.sheet_index(sheet).unwrap_or_else(|| panic!("no sheet {sheet}"));

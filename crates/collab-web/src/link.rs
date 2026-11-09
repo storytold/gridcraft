@@ -64,7 +64,14 @@ impl SessionLink {
             client_id: client_id.to_string(),
             name: name.to_string(),
             token: token.to_string(),
-            state: State { session_id: session_id.to_string(), actor: actor.to_string(), role: Some(role), connected: false, ..State::default() },
+            state: State {
+                session_id: session_id.to_string(),
+                actor: actor.to_string(),
+                window_id: client_id.to_string(),
+                role: Some(role),
+                connected: false,
+                ..State::default()
+            },
             pending: RefCell::new(Vec::new()),
             events: VecDeque::new(),
             snapshot: None,
@@ -79,7 +86,14 @@ impl SessionLink {
             client_id: client_id.to_string(),
             name: name.to_string(),
             token: String::new(),
-            state: State { session_id: session_id.to_string(), actor: actor.to_string(), role: Some(role), connected: false, ..State::default() },
+            state: State {
+                session_id: session_id.to_string(),
+                actor: actor.to_string(),
+                window_id: client_id.to_string(),
+                role: Some(role),
+                connected: false,
+                ..State::default()
+            },
             pending: RefCell::new(Vec::new()),
             events: VecDeque::new(),
             snapshot: None,
@@ -228,7 +242,12 @@ impl SessionLink {
             }
         }
         if opened {
-            let hello = ClientMessage::Hello { token: self.token.clone(), name: self.name.clone(), last_version: self.state.version };
+            let hello = ClientMessage::Hello {
+                token: self.token.clone(),
+                name: self.name.clone(),
+                last_version: self.state.version,
+                window_id: self.client_id.clone(),
+            };
             let _ = self.send_raw(&hello);
         }
     }

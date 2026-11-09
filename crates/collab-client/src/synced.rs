@@ -99,14 +99,17 @@ pub struct Synced {
 }
 
 impl Synced {
-    /// A desktop session over the native client.
+    /// A desktop session over the native client. The window id the client sent in `hello` is the
+    /// id of this replica (RFC §13.6): operation ids are prefixed with it, so two windows of one
+    /// actor never collide, and presence stays per window.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(client: crate::Client, welcome: &Welcome) -> Synced {
-        Synced::with_link(Box::new(client), welcome, format!("{}-{}", welcome.actor_id, now_millis()))
+        let window_id = client.window_id().to_string();
+        Synced::with_link(Box::new(client), welcome, window_id)
     }
 
     /// A session over any transport. The browser build passes its own `WebSocket`
-    /// link and an id from the page's clock; the desktop `new` wraps the native
+    /// link and its window id from the page; the desktop `new` wraps the native
     /// client the same way.
     pub fn with_link(link: Box<dyn Link>, welcome: &Welcome, client_id: String) -> Synced {
         let mut synced = Synced {
@@ -537,9 +540,4 @@ fn normalise(params: &mut Json, cmd: &str, sheet: &str, a1: &str) {
     } else {
         object.insert("range".to_string(), Json::String(a1.to_string()));
     }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn now_millis() -> i64 {
-    chrono::Utc::now().timestamp_millis()
 }

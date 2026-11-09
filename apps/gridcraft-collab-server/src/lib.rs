@@ -163,7 +163,9 @@ pub(crate) struct Inner {
     pub sessions: BTreeMap<String, DocMeta>,
     pub leases: Leases,
     pub conns: BTreeMap<String, BTreeMap<u64, mpsc::Sender<ServerMessage>>>,
-    pub actors: BTreeMap<String, BTreeMap<String, usize>>,
+    /// The open connections per document, keyed by `(actor, windowId)`: two windows of one person
+    /// are two entries, and a reconnect of the same window is the same entry (RFC §13.6).
+    pub actors: BTreeMap<String, BTreeMap<(String, String), usize>>,
     pub next_conn: u64,
     /// The applied operations after the base on disk, kept in memory for catch-up and trimmed by
     /// every snapshot.

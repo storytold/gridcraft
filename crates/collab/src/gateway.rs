@@ -15,13 +15,18 @@ use crate::protocol::{Applied, ClientOp, Rejected, SheetName};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ClientMessage {
-    /// The first message: the signed token, the display name and the version the client holds.
+    /// The first message: the signed token, the display name, the version the client holds and
+    /// the window this connection speaks for (RFC §13.6). The window id is chosen by the client
+    /// and kept across a reconnect, so a reconnected window keeps its row in the participant list.
+    /// A client that sends none has one implicit window.
     /// The token is a string here — its signature is checked by the transport before a [`Claims`]
     /// value exists, and it is never logged.
     Hello {
         token: String,
         name: String,
         last_version: u64,
+        #[serde(default)]
+        window_id: String,
     },
     Op {
         op: ClientOp,
@@ -119,11 +124,13 @@ pub enum ServerMessage {
     },
 }
 
-/// Who a connection speaks for, fixed at the handshake.
+/// Who a connection speaks for: the person (`actor`, from the token) and the window of that person
+/// (from `hello`, RFC §13.6), fixed at the handshake.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Connection {
     pub doc: String,
     pub actor: String,
+    pub window_id: String,
     pub role: Role,
 }
 
@@ -146,22 +153,23 @@ impl Gateway {
         &mut self.hub
     }
 
-    /// Accepts a verified token: validates its claims against this server, joins the participant
-    /// and builds the welcome message the client needs before it sends anything else. `lease` is
-    /// the lease of the file, when the transport keeps one.
+    /// Accepts a verified token: validates its claims against this server, joins this window of
+    /// the participant and builds the welcome message the client needs before it sends anything
+    /// else. `lease` is the lease of the file, when the transport keeps one.
     pub fn connect(
         &mut self,
         claims: &Claims,
         now: u64,
         expected: Expected<'_>,
         name: &str,
+        window_id: &str,
         lease: Option<LeaseInfo>,
     ) -> Result<(Connection, ServerMessage), AuthError> {
         let role = claims.validate(now, expected)?;
         let doc = expected.session_id;
-        let participants = self.hub.join(doc, &claims.sub, name, role).map_err(|_| AuthError::WrongFile)?;
+        let participants = self.hub.join(doc, &claims.sub, window_id, name, role).map_err(|_| AuthError::WrongFile)?;
         let sheets: Vec<SheetName> = self.hub.sheet_map(doc).unwrap_or_default().into_iter().map(|(key, name)| SheetName { key, name }).collect();
-        let connection = Connection { doc: doc.to_string(), actor: claims.sub.clone(), role };
+        let connection = Connection { doc: doc.to_string(), actor: claims.sub.clone(), window_id: window_id.to_string(), role };
         let welcome = ServerMessage::Welcome {
             session_id: doc.to_string(),
             actor_id: claims.sub.clone(),
@@ -200,7 +208,7 @@ impl Gateway {
                 Err(HubError::Rejected(rejected)) => vec![ServerMessage::Rejected { rejected }],
                 Err(e) => vec![ServerMessage::Error { code: "internal".into(), message: format!("{e:?}"), retryable: false }],
             },
-            ClientMessage::Presence { presence } => match self.hub.presence(&connection.doc, &connection.actor, presence) {
+            ClientMessage::Presence { presence } => match self.hub.presence(&connection.doc, &connection.actor, &connection.window_id, presence) {
                 Ok(participants) => vec![ServerMessage::Presence { participants }],
                 Err(e) => vec![ServerMessage::Error { code: "internal".into(), message: format!("{e:?}"), retryable: false }],
             },
@@ -210,7 +218,7 @@ impl Gateway {
                 retryable: true,
             }],
             ClientMessage::Ping { nonce } => vec![ServerMessage::Pong { nonce }],
-            ClientMessage::Leave => match self.hub.leave(&connection.doc, &connection.actor) {
+            ClientMessage::Leave => match self.hub.leave(&connection.doc, &connection.actor, &connection.window_id) {
                 Ok(participants) => vec![ServerMessage::Presence { participants }],
                 Err(e) => vec![ServerMessage::Error { code: "internal".into(), message: format!("{e:?}"), retryable: false }],
             },

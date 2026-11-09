@@ -152,7 +152,7 @@ fn a_viewer_cannot_write_even_with_a_valid_operation() {
     let s = session();
     let mut hub = crate::Hub::new();
     assert!(hub.open("book", s));
-    hub.join("book", "ann", "Ann", crate::Role::Viewer).unwrap();
+    hub.join("book", "ann", "w1", "Ann", crate::Role::Viewer).unwrap();
     let sheet = hub.sheet_key("book", 0).unwrap();
     let refused = hub.apply("book", "ann", op("v1", "cell.set", json!({"input": 1}), &sheet, "A1")).expect_err("viewer is refused");
     match refused {
@@ -167,17 +167,92 @@ fn an_editor_changes_the_document_and_presence_is_returned_to_others() {
     let s = session();
     let mut hub = crate::Hub::new();
     assert!(hub.open("book", s));
-    hub.join("book", "ann", "Ann", crate::Role::Editor).unwrap();
-    hub.join("book", "bob", "Bob", crate::Role::Viewer).unwrap();
+    hub.join("book", "ann", "w1", "Ann", crate::Role::Editor).unwrap();
+    hub.join("book", "bob", "w1", "Bob", crate::Role::Viewer).unwrap();
     let sheet = hub.sheet_key("book", 0).unwrap();
     let applied = hub.apply("book", "ann", op("e1", "cell.set", json!({"input": 4}), &sheet, "A1")).unwrap();
     assert_eq!(applied.version, 1);
     assert_eq!(applied.actor, "ann");
     let presence = crate::Presence { sheet_key: sheet.clone(), active: "A1".into(), ranges: vec![], viewport: None };
-    let all = hub.presence("book", "bob", Some(presence)).unwrap();
+    let all = hub.presence("book", "bob", "w1", Some(presence)).unwrap();
     let bob = all.iter().find(|p| p.actor == "bob").unwrap();
     assert_eq!(bob.presence.as_ref().unwrap().active, "A1");
     assert_eq!(all.len(), 2, "both participants are listed");
+}
+
+#[test]
+fn two_windows_of_one_actor_are_two_participants() {
+    let s = session();
+    let mut hub = crate::Hub::new();
+    assert!(hub.open("book", s));
+    hub.join("book", "ann", "w1", "Ann", crate::Role::Editor).unwrap();
+    hub.join("book", "ann", "w2", "Ann", crate::Role::Editor).unwrap();
+    hub.join("book", "bob", "w1", "Bob", crate::Role::Viewer).unwrap();
+
+    let all = hub.participants("book").unwrap();
+    assert_eq!(all.len(), 3, "two windows of one person are two rows, plus bob");
+    let ann: Vec<&crate::Participant> = all.iter().filter(|p| p.actor == "ann").collect();
+    assert_eq!(ann.len(), 2);
+    assert_eq!(ann[0].role, crate::Role::Editor);
+    let mut windows: Vec<&str> = ann.iter().map(|p| p.window_id.as_str()).collect();
+    windows.sort();
+    assert_eq!(windows, ["w1", "w2"], "the rows differ by window, not by actor");
+
+    // Presence of one window is that window's: the other window of the same person has none and
+    // the document's version does not move.
+    let presence = crate::Presence { sheet_key: "1".into(), active: "B2".into(), ranges: vec![], viewport: None };
+    let after = hub.presence("book", "ann", "w1", Some(presence.clone())).unwrap();
+    assert_eq!(after.len(), 3, "presence does not add a row");
+    let first = after.iter().find(|p| p.actor == "ann" && p.window_id == "w1").unwrap();
+    let second = after.iter().find(|p| p.actor == "ann" && p.window_id == "w2").unwrap();
+    assert_eq!(first.presence, Some(presence));
+    assert_eq!(second.presence, None, "the other window keeps its own cursor");
+    assert_eq!(hub.version("book"), Some(0), "presence never moves the version");
+
+    let left = hub.leave("book", "ann", "w1").unwrap();
+    assert_eq!(left.len(), 2, "closing one window leaves the other open");
+    assert!(left.iter().any(|p| p.actor == "ann" && p.window_id == "w2"));
+}
+
+#[test]
+fn a_reconnecting_window_keeps_its_row_and_a_client_without_one_keeps_a_single_row() {
+    let s = session();
+    let mut hub = crate::Hub::new();
+    assert!(hub.open("book", s));
+    hub.join("book", "ann", "w1", "Ann", crate::Role::Editor).unwrap();
+    hub.join("book", "bob", "w1", "Bob", crate::Role::Editor).unwrap();
+    // The socket dropped and came back with the same window id: the row is the same one.
+    hub.join("book", "ann", "w1", "Ann", crate::Role::Editor).unwrap();
+    assert_eq!(hub.participants("book").unwrap().len(), 2, "a reconnect does not add a third row");
+
+    // An older client sends no window id: it is one implicit window, and re-joining it replaces
+    // the row instead of adding another (the behaviour before RFC §13.6).
+    hub.join("book", "ann", "", "Ann", crate::Role::Editor).unwrap();
+    hub.join("book", "ann", "", "Ann", crate::Role::Editor).unwrap();
+    let ids: Vec<String> = hub.participants("book").unwrap().into_iter().map(|p| format!("{}/{}", p.actor, p.window_id)).collect();
+    assert_eq!(ids, ["ann/", "ann/w1", "bob/w1"]);
+}
+
+#[test]
+fn a_new_window_does_not_take_the_actors_undo_stack_away() {
+    let s = session();
+    let mut hub = crate::Hub::new();
+    assert!(hub.open("book", s));
+    hub.join("book", "ann", "w1", "Ann", crate::Role::Editor).unwrap();
+    let sheet = hub.sheet_key("book", 0).unwrap();
+    hub.apply("book", "ann", op("e1", "cell.set", json!({"input": 7}), &sheet, "A1")).unwrap();
+    assert_eq!(hub.version("book"), Some(1));
+
+    // The second and third windows of the same person join: the undo stack is the actor's, so it
+    // is still there for any of them, and undo stays one operation of the document.
+    hub.join("book", "ann", "w2", "Ann", crate::Role::Editor).unwrap();
+    hub.join("book", "ann", "w3", "Ann", crate::Role::Editor).unwrap();
+    assert_eq!(hub.participants("book").unwrap().len(), 3);
+    let undone = hub.undo("book", "ann", None).unwrap();
+    assert_eq!(undone.actor, "ann");
+    assert_eq!(undone.version, 2, "undo is an operation of the document like any other");
+    let delta = undone.result.delta.expect("the undone cell is reported");
+    assert!(delta.iter().any(|d| d.cells.iter().any(|c| c.a1 == "A1")), "the step of the actor was reversed");
 }
 
 #[test]
@@ -185,7 +260,7 @@ fn commit_writes_the_authoritative_workbook_as_a_zip_package() {
     let s = session();
     let mut hub = crate::Hub::new();
     assert!(hub.open("book", s));
-    hub.join("book", "ann", "Ann", crate::Role::Owner).unwrap();
+    hub.join("book", "ann", "w1", "Ann", crate::Role::Owner).unwrap();
     let bytes = hub.commit("book").unwrap();
     assert!(bytes.starts_with(b"PK"), "an .xlsx is a zip package");
 }
@@ -212,7 +287,7 @@ fn expected<'a>() -> crate::Expected<'a> {
 fn a_valid_token_joins_and_gets_the_sheets_and_version() {
     let mut gw = crate::Gateway::new();
     assert!(gw.hub_mut().open("book", session()));
-    let (connection, welcome) = gw.connect(&claims("ann", crate::Role::Editor), 1_000, expected(), "Ann", None).unwrap();
+    let (connection, welcome) = gw.connect(&claims("ann", crate::Role::Editor), 1_000, expected(), "Ann", "w1", None).unwrap();
     assert_eq!(connection.actor, "ann");
     match welcome {
         crate::ServerMessage::Welcome { role, version, sheets, participants, .. } => {
@@ -231,20 +306,20 @@ fn a_token_for_another_file_or_an_expired_one_is_refused() {
     assert!(gw.hub_mut().open("book", session()));
     let mut wrong_file = claims("ann", crate::Role::Editor);
     wrong_file.file_id = 8;
-    assert_eq!(gw.connect(&wrong_file, 1_000, expected(), "Ann", None).unwrap_err(), crate::AuthError::WrongFile);
+    assert_eq!(gw.connect(&wrong_file, 1_000, expected(), "Ann", "w1", None).unwrap_err(), crate::AuthError::WrongFile);
     let mut expired = claims("ann", crate::Role::Editor);
     expired.exp = 999;
-    assert_eq!(gw.connect(&expired, 1_000, expected(), "Ann", None).unwrap_err(), crate::AuthError::Expired);
+    assert_eq!(gw.connect(&expired, 1_000, expected(), "Ann", "w1", None).unwrap_err(), crate::AuthError::Expired);
     let mut wrong_app = claims("ann", crate::Role::Editor);
     wrong_app.app = "pdfcraft".into();
-    assert_eq!(gw.connect(&wrong_app, 1_000, expected(), "Ann", None).unwrap_err(), crate::AuthError::WrongApp);
+    assert_eq!(gw.connect(&wrong_app, 1_000, expected(), "Ann", "w1", None).unwrap_err(), crate::AuthError::WrongApp);
 }
 
 #[test]
 fn a_viewer_gets_a_rejection_from_the_message_loop() {
     let mut gw = crate::Gateway::new();
     assert!(gw.hub_mut().open("book", session()));
-    let (connection, welcome) = gw.connect(&claims("vic", crate::Role::Viewer), 1_000, expected(), "Vic", None).unwrap();
+    let (connection, welcome) = gw.connect(&claims("vic", crate::Role::Viewer), 1_000, expected(), "Vic", "w1", None).unwrap();
     let sheet = match welcome {
         crate::ServerMessage::Welcome { sheets, .. } => sheets[0].key.clone(),
         other => panic!("expected welcome, got {other:?}"),
@@ -260,8 +335,8 @@ fn a_viewer_gets_a_rejection_from_the_message_loop() {
 fn presence_and_ping_round_trip_through_the_gateway() {
     let mut gw = crate::Gateway::new();
     assert!(gw.hub_mut().open("book", session()));
-    let (ann, _) = gw.connect(&claims("ann", crate::Role::Editor), 1_000, expected(), "Ann", None).unwrap();
-    let (bob, _) = gw.connect(&claims("bob", crate::Role::Viewer), 1_000, expected(), "Bob", None).unwrap();
+    let (ann, _) = gw.connect(&claims("ann", crate::Role::Editor), 1_000, expected(), "Ann", "w1", None).unwrap();
+    let (bob, _) = gw.connect(&claims("bob", crate::Role::Viewer), 1_000, expected(), "Bob", "w1", None).unwrap();
     let presence = crate::Presence { sheet_key: "1".into(), active: "B2".into(), ranges: vec![], viewport: None };
     let messages = gw.handle(&ann, crate::ClientMessage::Presence { presence: Some(presence.clone()) });
     match &messages[0] {
@@ -278,14 +353,69 @@ fn presence_and_ping_round_trip_through_the_gateway() {
 }
 
 #[test]
+fn two_connections_of_one_actor_are_two_windows_in_the_gateway() {
+    let mut gw = crate::Gateway::new();
+    assert!(gw.hub_mut().open("book", session()));
+    let (ann_one, _) = gw.connect(&claims("ann", crate::Role::Editor), 1_000, expected(), "Ann", "w1", None).unwrap();
+    let (ann_two, welcome) = gw.connect(&claims("ann", crate::Role::Editor), 1_000, expected(), "Ann", "w2", None).unwrap();
+    assert_eq!(ann_one.actor, ann_two.actor, "the person is the token's subject in both windows");
+    assert_ne!(ann_one.window_id, ann_two.window_id);
+    match welcome {
+        crate::ServerMessage::Welcome { participants, .. } => {
+            assert_eq!(participants.len(), 2, "the second window sees both rows");
+            assert!(participants.iter().all(|p| p.actor == "ann"));
+        }
+        other => panic!("expected welcome, got {other:?}"),
+    }
+
+    let presence = crate::Presence { sheet_key: "1".into(), active: "C3".into(), ranges: vec![], viewport: None };
+    let messages = gw.handle(&ann_two, crate::ClientMessage::Presence { presence: Some(presence) });
+    match &messages[0] {
+        crate::ServerMessage::Presence { participants } => {
+            assert_eq!(participants.len(), 2);
+            let one = participants.iter().find(|p| p.window_id == "w1").unwrap();
+            let two = participants.iter().find(|p| p.window_id == "w2").unwrap();
+            assert_eq!(one.presence, None, "the first window keeps its own cursor");
+            assert_eq!(two.presence.as_ref().map(|p| p.active.as_str()), Some("C3"));
+        }
+        other => panic!("expected presence, got {other:?}"),
+    }
+
+    // Closing the second window leaves the first one in the session.
+    let left = gw.handle(&ann_two, crate::ClientMessage::Leave);
+    match &left[0] {
+        crate::ServerMessage::Presence { participants } => {
+            assert_eq!(participants.len(), 1);
+            assert_eq!(participants[0].window_id, "w1");
+        }
+        other => panic!("expected presence, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_participant_row_carries_its_window_id_on_the_wire() {
+    let participant =
+        crate::Participant { actor: "ann".into(), window_id: "w2".into(), name: "Ann".into(), role: crate::Role::Editor, presence: None };
+    let text = serde_json::to_string(&participant).unwrap();
+    assert!(text.contains("\"windowId\":\"w2\""), "{text}");
+    let back: crate::Participant = serde_json::from_str(&text).unwrap();
+    assert_eq!(back, participant);
+    // A frame from a server that does not know windows still parses.
+    let old = r#"{"actor":"ann","name":"Ann","role":"editor"}"#;
+    let back: crate::Participant = serde_json::from_str(old).unwrap();
+    assert_eq!(back.window_id, "", "no window id is the one implicit window");
+}
+
+#[test]
 fn a_hello_on_the_wire_carries_the_signed_token_not_claims() {
     let text = r#"{"type":"hello","token":"a.b.c","name":"Ann","lastVersion":3}"#;
     let message: crate::ClientMessage = serde_json::from_str(text).unwrap();
     assert!(matches!(message, crate::ClientMessage::Hello { .. }));
-    if let crate::ClientMessage::Hello { token, name, last_version } = message {
+    if let crate::ClientMessage::Hello { token, name, last_version, window_id } = message {
         assert_eq!(token, "a.b.c");
         assert_eq!(name, "Ann");
         assert_eq!(last_version, 3);
+        assert_eq!(window_id, "", "an older client sends no window id and has one implicit window");
     }
 }
 

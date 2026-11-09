@@ -16,9 +16,13 @@ use crate::grid::selection::range_in_pane;
 use gridcraft_engine::model::Sheet;
 
 /// Where one other participant is: the sheet (by name), the active cell and the selected areas.
+///
+/// A participant is a window (RFC §13.6): one person with two windows is two views, both with the
+/// same `actor` and a different `window_id`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PresenceView {
     pub actor: String,
+    pub window_id: String,
     pub name: String,
     pub color: Color32,
     pub sheet: String,

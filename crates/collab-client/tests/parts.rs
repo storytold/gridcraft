@@ -73,6 +73,7 @@ fn replica() -> (Synced, Sink, Session) {
         state: Rc::new(RefCell::new(State {
             session_id: "session".into(),
             actor: "ann".into(),
+            window_id: "ann-1".into(),
             role: Some(Role::Editor),
             version: 3,
             epoch: 1,

@@ -166,10 +166,17 @@ pub struct HostParticipant {
     pub color: Option<String>,
 }
 
+/// One row per window (RFC §13.6): the cabinet lists two windows of one person as two
+/// participants, and `clientId` is the window id so the rows do not collapse into one. A client
+/// that sent no window id is one row per actor, as before.
 pub fn host_participants(participants: &[Participant]) -> Vec<HostParticipant> {
     participants
         .iter()
-        .map(|participant| HostParticipant { client_id: participant.actor.clone(), role: role_word(participant.role).into(), color: None })
+        .map(|participant| HostParticipant {
+            client_id: if participant.window_id.is_empty() { participant.actor.clone() } else { participant.window_id.clone() },
+            role: role_word(participant.role).into(),
+            color: None,
+        })
         .collect()
 }
 
@@ -324,13 +331,14 @@ impl Collab {
         self.link.send_presence(Presence { sheet_key: key, active: selection.active.to_string(), ranges, viewport: None });
     }
 
-    /// Rebuild the drawing list from the server's participants.
+    /// Rebuild the drawing list from the server's participants: one view per window, so a second
+    /// window of this person is painted and listed too (RFC §13.6).
     fn views(&mut self, state: &State) {
-        let own = &state.actor;
+        let own = (&state.actor, &state.window_id);
         self.participants = state
             .participants
             .iter()
-            .filter(|participant| &participant.actor != own)
+            .filter(|participant| (&participant.actor, &participant.window_id) != own)
             .filter_map(|participant| {
                 let presence = participant.presence.as_ref()?;
                 let sheet = state.sheets.iter().find(|sheet| sheet.key == presence.sheet_key)?.name.clone();
@@ -338,6 +346,7 @@ impl Collab {
                 let ranges = presence.ranges.iter().filter_map(|range| RangeRef::parse(range)).collect();
                 Some(PresenceView {
                     actor: participant.actor.clone(),
+                    window_id: participant.window_id.clone(),
                     name: participant.name.clone(),
                     color: PresenceView::colour_for(&participant.actor),
                     sheet,
@@ -554,5 +563,44 @@ mod tests {
         let mut session = replica();
         assert!(collab.read_only());
         assert!(collab.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": 1 })).is_some_and(|result| result.is_err()));
+    }
+
+    /// Two windows of one person (RFC §13.6): the host bridge gets a row per window, so the
+    /// cabinet's list shows both, and this window paints the *other* window of its own actor.
+    #[test]
+    fn two_windows_of_one_actor_are_two_host_participants() {
+        let mut collab = Collab::offline("s1", "ann", Role::Editor, "w1");
+        let mut session = replica();
+        let welcome = wire(&ServerMessage::Welcome {
+            session_id: "s1".into(),
+            actor_id: "ann".into(),
+            role: Role::Editor,
+            version: 0,
+            epoch: 0,
+            sheets: vec![gridcraft_collab::SheetName { key: "1".into(), name: "Sheet1".into() }],
+            participants: Vec::new(),
+            lease: None,
+        });
+        assert!(collab.on_text(&welcome, &mut session));
+
+        let cursor = |window: &str, active: &str| Participant {
+            actor: "ann".into(),
+            window_id: window.into(),
+            name: "Ann".into(),
+            role: Role::Editor,
+            presence: Some(Presence { sheet_key: "1".into(), active: active.into(), ranges: vec![], viewport: None }),
+        };
+        let frame = wire(&ServerMessage::Presence { participants: vec![cursor("w1", "A1"), cursor("w2", "C3")] });
+        assert!(collab.on_text(&frame, &mut session));
+
+        let views = collab.poll(&mut session);
+        assert_eq!(views.len(), 1, "the other window of the same actor is painted, this one is not");
+        assert_eq!(views[0].actor, "ann");
+        assert_eq!(views[0].window_id, "w2");
+        assert_eq!(views[0].active, CellRef::parse("C3").unwrap());
+
+        let people = collab.session_participants();
+        assert_eq!(people.len(), 2, "the cabinet list has one row per window");
+        assert_eq!(people.iter().map(|p| p.client_id.as_str()).collect::<Vec<_>>(), ["w1", "w2"]);
     }
 }

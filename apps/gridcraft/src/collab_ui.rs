@@ -32,7 +32,8 @@ pub fn start_from_env() {
     let token = std::env::var("GRIDCRAFT_COLLAB_TOKEN").ok().filter(|s| !s.is_empty());
     let (Some(url), Some(token)) = (url, token) else { return };
     let name = std::env::var("GRIDCRAFT_COLLAB_NAME").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "User".into());
-    let cfg = Config { url, token, name, last_version: 0, reconnect: Some(Duration::from_secs(1)) };
+    // One window id per process, made by the client and kept across reconnects (RFC §13.6).
+    let cfg = Config { url, token, name, last_version: 0, reconnect: Some(Duration::from_secs(1)), window_id: String::new() };
     let (send, receive) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
@@ -138,7 +139,8 @@ impl Collab for Adapter {
         state
             .participants
             .iter()
-            .filter(|participant| participant.actor != state.actor)
+            // Window, not person: a second window of this user is listed like anybody else's.
+            .filter(|participant| participant.actor != state.actor || participant.window_id != state.window_id)
             .filter_map(|participant| {
                 let presence = participant.presence.as_ref()?;
                 let sheet = state.sheets.iter().find(|sheet| sheet.key == presence.sheet_key)?.name.clone();
@@ -146,6 +148,7 @@ impl Collab for Adapter {
                 let ranges = presence.ranges.iter().filter_map(|range| RangeRef::parse(range)).collect();
                 Some(PresenceView {
                     actor: participant.actor.clone(),
+                    window_id: participant.window_id.clone(),
                     name: participant.name.clone(),
                     color: PresenceView::colour_for(&participant.actor),
                     sheet,

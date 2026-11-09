@@ -228,7 +228,9 @@ impl WebShell {
         for event in events {
             match self.host_state.on_event(event) {
                 HostAction::Connect(session) => {
-                    let client_id = format!("web-{}", js_sys::Date::now() as u64);
+                    // The window id (RFC §13.6): random, one per browser window's session, reused
+                    // by the link's reconnect. The cabinet's participant list keys a row by it.
+                    let client_id = format!("web-{}-{}", js_sys::Date::now() as u64, (js_sys::Math::random() * 1e9) as u64);
                     let actor = self.app.session.prefs.user_name.clone();
                     let actor = if actor.is_empty() { "User".to_string() } else { actor };
                     let session_id = session.session_id().to_string();

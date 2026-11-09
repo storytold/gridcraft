@@ -38,6 +38,23 @@ pub struct Config {
     pub last_version: u64,
     /// `None` closes on the first transport failure; `Some` retries with backoff.
     pub reconnect: Option<Duration>,
+    /// This window's id (RFC §13.6): one random value per client window, sent in `hello`, kept for
+    /// the whole life of the session (a reconnect reuses it, so the server keeps one row). Empty
+    /// asks [`Client::connect`] to make one.
+    pub window_id: String,
+}
+
+/// A window id no other window of this or any other process shares: the process id, a counter of
+/// the windows this process made and the per-process random seed Rust's hash maps start from.
+fn new_window_id() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u32(std::process::id());
+    hasher.write_u64(NEXT.fetch_add(1, Ordering::Relaxed));
+    format!("win-{:016x}", hasher.finish())
 }
 
 use crate::link::{Event, Link, State, Welcome};
@@ -68,14 +85,23 @@ pub struct Client {
     events: mpsc::UnboundedReceiver<Event>,
     state: Arc<Mutex<State>>,
     task: JoinHandle<()>,
+    window_id: String,
 }
 
 impl Client {
     /// Connects, authenticates and waits for `welcome`. Frames that arrive before the caller polls
     /// (the catch-up) are queued as events.
-    pub async fn connect(cfg: Config) -> Result<(Client, Welcome), ConnectError> {
+    pub async fn connect(mut cfg: Config) -> Result<(Client, Welcome), ConnectError> {
+        if cfg.window_id.is_empty() {
+            cfg.window_id = new_window_id();
+        }
         let mut socket = open(&cfg).await.map_err(ConnectError::Transport)?;
-        let hello = ClientMessage::Hello { token: cfg.token.clone(), name: cfg.name.clone(), last_version: cfg.last_version };
+        let hello = ClientMessage::Hello {
+            token: cfg.token.clone(),
+            name: cfg.name.clone(),
+            last_version: cfg.last_version,
+            window_id: cfg.window_id.clone(),
+        };
         send(&mut socket, &hello).await?;
         let welcome = loop {
             let frame = tokio::time::timeout(HANDSHAKE_TIMEOUT, socket.next())
@@ -95,6 +121,7 @@ impl Client {
         let state = State {
             session_id: welcome.session_id.clone(),
             actor: welcome.actor_id.clone(),
+            window_id: cfg.window_id.clone(),
             role: Some(welcome.role),
             version: welcome.version,
             epoch: welcome.epoch,
@@ -105,12 +132,19 @@ impl Client {
         let shared = Arc::new(Mutex::new(state));
         let (ops, ops_rx) = mpsc::unbounded_channel();
         let (events_tx, events) = mpsc::unbounded_channel();
+        let window_id = cfg.window_id.clone();
         let task = tokio::spawn(run(socket, cfg, shared.clone(), ops_rx, events_tx));
-        Ok((Client { ops, events, state: shared, task }, welcome))
+        Ok((Client { ops, events, state: shared, task, window_id }, welcome))
     }
 
     pub fn state(&self) -> State {
         self.state.lock().map(|state| state.clone()).unwrap_or_default()
+    }
+
+    /// The id of this window, as the server knows it (RFC §13.6). It is the same after a
+    /// reconnect of this client.
+    pub fn window_id(&self) -> &str {
+        &self.window_id
     }
 
     /// Queues an operation. The connection sends it and resends it after a reconnect until the
@@ -192,7 +226,12 @@ async fn run(
                 let Ok(mut fresh) = open(&cfg).await else { continue };
                 let hello = {
                     let state = shared.lock().map(|state| state.clone()).unwrap_or_default();
-                    ClientMessage::Hello { token: cfg.token.clone(), name: cfg.name.clone(), last_version: state.version }
+                    ClientMessage::Hello {
+                        token: cfg.token.clone(),
+                        name: cfg.name.clone(),
+                        last_version: state.version,
+                        window_id: cfg.window_id.clone(),
+                    }
                 };
                 if send(&mut fresh, &hello).await.is_err() {
                     continue;
