@@ -31,6 +31,8 @@ pub struct Rel {
     /// Resolved part name (no leading `/`), or the raw target for external relationships.
     pub target: String,
     pub external: bool,
+    /// Original target before part resolution removes fragments.
+    pub raw_target: String,
 }
 
 pub fn normalize(name: &str) -> String {
@@ -145,7 +147,7 @@ impl<'a> Package<'a> {
                 let target_raw = r.attr("Target")?;
                 let external = r.attr("TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
                 let target = if external { target_raw.to_string() } else { resolve(dir, target_raw) };
-                Some(Rel { id, kind, target, external })
+                Some(Rel { id, kind, target, external, raw_target: target_raw.to_string() })
             })
             .collect())
     }

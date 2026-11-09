@@ -14,6 +14,48 @@ fn s() -> Session {
     s
 }
 
+#[test]
+fn drawing_part_links_follow_sheet_rename_reorder_and_json_roundtrip() {
+    use gridcraft_model::{DrawingHyperlink, Image};
+    let mut session = s();
+    let original = session.doc().unwrap().wb.sheet(0).unwrap().name.clone();
+    session.execute("insert.shape", json!({"kind": "rectangle"})).unwrap();
+    let link = DrawingHyperlink { target: "../worksheets/custom.xml#B2".into(), internal_sheet: Some(original.clone()), ..Default::default() };
+    {
+        let sheet = std::sync::Arc::make_mut(&mut session.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sheet.shapes[0].hyperlink = Some(link.clone());
+        sheet.images.push(Image {
+            hyperlink: Some(link),
+            id: 100,
+            anchor: Default::default(),
+            data: b"original".to_vec().into(),
+            mime: "image/png".into(),
+            alt: String::new(),
+        });
+    }
+    session.execute("sheet.rename", json!({"sheet": 0, "name": "Renamed"})).unwrap();
+    let names = |s: &Session| {
+        let sheet = s.doc().unwrap().wb.sheets.iter().find(|s| !s.images.is_empty()).unwrap();
+        (sheet.images[0].hyperlink.as_ref().unwrap().internal_sheet.clone(), sheet.shapes[0].hyperlink.as_ref().unwrap().internal_sheet.clone())
+    };
+    assert_eq!(names(&session), (Some("Renamed".into()), Some("Renamed".into())));
+    session.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(names(&session), (Some(original.clone()), Some(original)));
+    session.execute("edit.redo", json!({})).unwrap();
+    session.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    session.execute("sheet.move", json!({"sheet": "Renamed", "to": 1})).unwrap();
+    let mut wb: gridcraft_model::Workbook = serde_json::from_value(serde_json::to_value(&session.doc().unwrap().wb).unwrap()).unwrap();
+    for _ in 0..2 {
+        wb = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap().0;
+        let sheet = wb.sheet(1).unwrap();
+        assert_eq!(sheet.name, "Renamed");
+        for link in [sheet.images[0].hyperlink.as_ref().unwrap(), sheet.shapes[0].hyperlink.as_ref().unwrap()] {
+            assert_eq!(link.internal_sheet.as_deref(), Some("Renamed"));
+            assert_eq!(link.target, "../worksheets/sheet2.xml#B2");
+        }
+    }
+}
+
 fn v(s: &Session, a: &str) -> Value {
     s.doc().unwrap().wb.active().unwrap().value(CellRef::parse(a).unwrap())
 }
@@ -3687,6 +3729,7 @@ fn add_image(s: &mut Session, cell: &str, mode: gridcraft_model::AnchorMode) -> 
     let wb = std::sync::Arc::make_mut(&mut d.wb);
     let id = wb.next_object_id();
     wb.sheet_mut(0).unwrap().images.push(gridcraft_model::Image {
+        hyperlink: None,
         id,
         anchor: gridcraft_model::Anchor { cell: CellRef::parse(cell).unwrap(), dx: 0.0, dy: 0.0, width: 40.0, height: 40.0, mode },
         data: tiny_png().into(),

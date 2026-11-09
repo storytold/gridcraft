@@ -118,6 +118,11 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                     cell.formula = Some(Arc::new(gridcraft_model::Formula::from_expr(ne)));
                 }
             }
+            for link in sh.images.iter_mut().filter_map(|i| i.hyperlink.as_mut()).chain(sh.shapes.iter_mut().filter_map(|s| s.hyperlink.as_mut())) {
+                if link.internal_sheet.as_deref().is_some_and(|sheet| sheet.eq_ignore_ascii_case(&old)) {
+                    link.internal_sheet = Some(name.clone());
+                }
+            }
             for ch in sh.charts.iter_mut() {
                 // A PivotChart follows its PivotTable's sheet.
                 if let Some((sheet, pivot)) = ch.pivot.as_deref().and_then(crate::pivot::parse_chart_link)

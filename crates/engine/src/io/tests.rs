@@ -91,6 +91,7 @@ fn html_export_refuses_an_outsized_grid_instead_of_growing_forever() {
 fn html_export_embeds_images_as_data_uris() {
     let mut wb = Workbook::new();
     wb.sheet_mut(0).unwrap().images.push(gridcraft_model::Image {
+        hyperlink: None,
         id: 1,
         anchor: gridcraft_model::Anchor { cell: CellRef::new(0, 0), dx: 0.0, dy: 0.0, width: 72.0, height: 36.0, mode: Default::default() },
         data: vec![1, 2, 3].into(),
@@ -113,6 +114,7 @@ fn html_export_places_images_at_their_anchor_using_sheet_geometry() {
     sh.cols.insert(1, gridcraft_model::LineInfo { size: Some(100.0), ..Default::default() });
     sh.rows.insert(1, gridcraft_model::LineInfo { size: Some(30.0), ..Default::default() });
     sh.images.push(gridcraft_model::Image {
+        hyperlink: None,
         id: 1,
         anchor: gridcraft_model::Anchor { cell: CellRef::new(3, 2), dx: 5.0, dy: 7.0, width: 10.0, height: 20.0, mode: Default::default() },
         data: vec![1].into(),
@@ -132,6 +134,7 @@ fn book_with_picture(anchor: &str, cell_at: (u32, u32)) -> Workbook {
     let sh = wb.sheet_mut(0).unwrap();
     sh.set_value(CellRef::new(cell_at.0, cell_at.1), gridcraft_core::Value::Number(1.0));
     sh.images.push(gridcraft_model::Image {
+        hyperlink: None,
         id: 1,
         anchor: gridcraft_model::Anchor {
             cell: CellRef::parse(anchor).unwrap(),

@@ -18,7 +18,7 @@ fn sheet_with(name: &str, pictures: &[(u32, &[u8])]) -> Arc<Sheet> {
     let mut s = Sheet::new(name);
     for (id, data) in pictures {
         let anchor = Anchor { cell: CellRef::parse("B2").unwrap(), width: 40.0, height: 30.0, ..Default::default() };
-        s.images.push(Image { id: *id, anchor, data: data.to_vec().into(), mime: "image/png".into(), alt: String::new() });
+        s.images.push(Image { hyperlink: None, id: *id, anchor, data: data.to_vec().into(), mime: "image/png".into(), alt: String::new() });
     }
     Arc::new(s)
 }
