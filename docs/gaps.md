@@ -136,9 +136,6 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 15. Remaining functions and an oracle suite (F)
 - 18 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 16–26 h.
-- 20 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 17–29 h.
-- 21 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 18–30 h.
-- 18 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 18–30 h.
   [function-parity.md](function-parity.md)
 
 ### 16. Collaboration and review (F)
