@@ -325,15 +325,16 @@ impl<'a> Binder<'a> {
                 if fixed_slot {
                     return true;
                 }
-                if self.model.table_index(keyword).is_some() || self.model.measure_index(keyword).is_some() {
-                    return false;
-                }
                 // The interval and calendar-flag slots are documented enumerations that the catalog
                 // types as `Text`, so they reach this filter instead of the fixed-slot branch. A
-                // variable must not capture them — `DATEADD ( dates, 1, YEAR )` stays a year even
-                // inside `VAR YEAR = 1` — while any other word there is still a name.
+                // name must not capture them — `DATEADD ( dates, 1, YEAR )` stays a year even when
+                // a table, measure or variable is called `YEAR` — while any other word there is
+                // still a name.
                 if interval_keyword(spec.name, index, keyword) {
                     return true;
+                }
+                if self.model.table_index(keyword).is_some() || self.model.measure_index(keyword).is_some() {
+                    return false;
                 }
                 !vars.iter().any(|var| var.eq_ignore_ascii_case(keyword))
             });

@@ -293,6 +293,51 @@ fn an_interval_keyword_is_not_shadowed_by_a_variable() {
     let bound = bind(&model, "VAR DENSE = 1 RETURN RANKX ( Sales, Sales[Amount], 42, DENSE )");
     assert!(format!("{bound:?}").contains("Variable"), "{bound:?}");
 }
+#[test]
+fn an_interval_keyword_is_not_shadowed_by_a_table_or_measure_name() {
+    // A table or measure named like a documented interval must not capture the interval word.
+    // `DATEADD`, `DATESINPERIOD` and `PARALLELPERIOD` catalogue their intervals as `Text`, so
+    // the word reaches the name filter instead of the fixed-slot branch.
+    let mut table_model = sample_model();
+    table_model.tables.push(ModelTable {
+        name: "Year".into(),
+        columns: vec![ModelColumn { name: "Id".into(), data_type: Some("Int64".into()) }],
+        rows: Vec::new(),
+    });
+    for formula in [
+        "DATEADD ( Date[Date], 1, YEAR )",
+        "DATESINPERIOD ( Date[Date], Date[Date], -12, YEAR )",
+        "PARALLELPERIOD ( Date[Date], 1, YEAR )",
+    ] {
+        match bind(&table_model, formula) {
+            BoundExpr::Call { args, .. } => {
+                let position = args.len() - 1;
+                assert!(
+                    matches!(&args[position], BoundExpr::Keyword(word) if word.eq_ignore_ascii_case("YEAR")),
+                    "{formula}: the interval must stay `YEAR`, got {:?}",
+                    args[position]
+                );
+            }
+            other => panic!("{formula}: expected a call, got {other:?}"),
+        }
+    }
+    let mut measure_model = sample_model();
+    measure_model.measures.push(Measure {
+        name: "Year".into(),
+        formula: "SUM ( Sales[Amount] )".into(),
+        table: None,
+        format: None,
+        expr: None,
+    });
+    measure_model.parse_formulas().expect("model parses");
+    match bind(&measure_model, "DATEADD ( Date[Date], 1, YEAR )") {
+        BoundExpr::Call { args, .. } => {
+            assert!(matches!(&args[2], BoundExpr::Keyword(word) if word.eq_ignore_ascii_case("YEAR")), "{:?}", args[2]);
+        }
+        other => panic!("expected a call, got {other:?}"),
+    }
+}
+
 
 #[test]
 fn documented_order_keywords_bind_at_their_argument_positions() {
