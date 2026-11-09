@@ -334,15 +334,15 @@ fn cjk_text_is_not_replaced_by_question_marks() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn arabic_is_shaped_and_preserved_or_export_reports_missing_font() -> Result<(), Box<dyn Error>> {
+fn arabic_is_shaped_and_preserved_or_falls_back_without_a_font() -> Result<(), Box<dyn Error>> {
     let text = "مَرْحَبًا 123 (ABC)";
     let mut doc = PdfDoc::new();
     let page = doc.add_page(600.0, 300.0);
     page.text(30.0, 70.0, 20.0, Font::Helvetica, [0, 0, 0], text);
     let layout = arabic::layout(Font::Helvetica, text);
     let Ok(layout) = layout else {
-        let error = doc.finish().unwrap_err().to_string();
-        assert!(error.contains("Arabic PDF"), "{error}");
+        assert!(doc.missing_arabic_font());
+        check_xref(&doc.finish()?)?;
         return Ok(());
     };
     assert!(layout.width > 0.0);
@@ -386,9 +386,15 @@ fn cjk_inside_arabic_text_uses_the_cid_font() -> Result<(), Box<dyn Error>> {
     assert!(find(&pdf, b"/Encoding /UniGB-UTF16-H").is_some(), "the page declares the CID font");
     assert_eq!(utf16_entry(&pdf, "/ActualText")?, text);
     assert!(text_width(Font::Helvetica, 20.0, text) >= text_width(Font::Helvetica, 20.0, "مرحبا") + 40.0, "two full-width ideographs");
-    let mut emoji = PdfDoc::new();
-    emoji.add_page(600.0, 300.0).text(30.0, 70.0, 20.0, Font::Helvetica, [0, 0, 0], "مرحبا 😀");
-    assert!(emoji.finish().is_err(), "characters no font covers still fail the export");
+    for (text, cid_run) in [("مرحبا 😀", &b"<D83DDE00> Tj"[..]), ("مرحبا Привет", &b"<041F04400438043204350442> Tj"[..])] {
+        let mut uncovered = PdfDoc::new();
+        uncovered.add_page(600.0, 300.0).text(30.0, 70.0, 20.0, Font::Helvetica, [0, 0, 0], text);
+        assert!(!uncovered.missing_arabic_font());
+        let pdf = uncovered.finish()?;
+        check_xref(&pdf)?;
+        assert!(find(&pdf, cid_run).is_some(), "{text}: characters the Arabic face lacks fall back like non-Arabic text");
+        assert_eq!(utf16_entry(&pdf, "/ActualText")?, text);
+    }
     Ok(())
 }
 

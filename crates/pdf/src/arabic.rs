@@ -10,7 +10,7 @@ use skrifa::{
 };
 use unicode_bidi::BidiInfo;
 
-use crate::{CID_FONT, Error, Font, n, pdf_string, pdf_utf16_string, win_ansi};
+use crate::{CID_FONT, Error, Font, n, needs_cid, pdf_string, pdf_utf16_string};
 
 include!(concat!(env!("OUT_DIR"), "/arabic_fonts.rs"));
 
@@ -20,9 +20,27 @@ const MAX_SUBSET_BYTES: usize = 64 * 1024 * 1024;
 const MAX_SUBSET_GLYPHS: usize = 16_384;
 const SYNTHETIC_BOLD_STROKE: f32 = 30.0;
 
-/// Whether `text` set in `font` is shaped; Symbol keeps its own one-run encoding.
+/// How `text` set in `font` is drawn. Symbol keeps its own one-run encoding, and Arabic without
+/// an installed or bundled face falls back to the standard fonts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Shaping {
+    Plain,
+    Shaped,
+    NoFont,
+}
+
+pub(crate) fn shaping(font: Font, text: &str) -> Shaping {
+    if font == Font::Symbol || !needed(text) {
+        return Shaping::Plain;
+    }
+    match face(bold(font)) {
+        Ok(None) => Shaping::NoFont,
+        Ok(Some(_)) | Err(_) => Shaping::Shaped,
+    }
+}
+
 pub(crate) fn shaped(font: Font, text: &str) -> bool {
-    font != Font::Symbol && needed(text)
+    shaping(font, text) == Shaping::Shaped
 }
 
 pub(crate) fn needed(text: &str) -> bool {
@@ -73,18 +91,20 @@ impl Face {
 
 #[cfg(test)]
 pub(crate) fn bold_face_is_synthetic() -> bool {
-    face(true).is_ok_and(|face| face.synthetic_bold)
+    face(true).is_ok_and(|face| face.is_some_and(|face| face.synthetic_bold))
 }
 
-fn face(is_bold: bool) -> Result<&'static Face, Error> {
-    static REGULAR: OnceLock<Face> = OnceLock::new();
-    static BOLD: OnceLock<Face> = OnceLock::new();
+/// The Arabic face for a weight, or `None` when none is bundled or installed. The search runs
+/// once per weight, so measuring text never rescans the font directories.
+fn face(is_bold: bool) -> Result<Option<&'static Face>, Error> {
+    static REGULAR: OnceLock<Result<Option<Face>, Error>> = OnceLock::new();
+    static BOLD: OnceLock<Result<Option<Face>, Error>> = OnceLock::new();
     let cache = if is_bold { &BOLD } else { &REGULAR };
-    if let Some(face) = cache.get() {
-        return Ok(face);
-    }
-    let loaded = load_face(is_bold)?;
-    Ok(cache.get_or_init(|| loaded))
+    cache.get_or_init(|| find_face(ARABIC_FONTS, &system_font_dirs(), is_bold)).as_ref().map(Option::as_ref).map_err(Error::clone)
+}
+
+fn loaded_face(font: Font) -> Result<&'static Face, Error> {
+    face(bold(font))?.ok_or_else(|| Error("Arabic PDF export needs Noto Sans Arabic".into()))
 }
 
 fn bundled_match(fonts: &[(&str, &'static [u8])], is_bold: bool) -> Option<&'static [u8]> {
@@ -94,64 +114,72 @@ fn bundled_match(fonts: &[(&str, &'static [u8])], is_bold: bool) -> Option<&'sta
         .map(|&(_, bytes)| bytes)
 }
 
-fn load_face(is_bold: bool) -> Result<Face, Error> {
-    if let Some(bytes) = bundled_match(ARABIC_FONTS, is_bold) {
-        return Face::new(Cow::Borrowed(bytes), is_bold);
+#[cfg(not(target_arch = "wasm32"))]
+fn system_font_dirs() -> Vec<std::path::PathBuf> {
+    use std::path::PathBuf;
+    // Only the redistributable Noto family is used. Never embed proprietary system fonts.
+    let mut dirs: Vec<PathBuf> = [
+        "/usr/share/fonts/noto",
+        "/usr/share/fonts/google-noto-vf",
+        "/usr/share/fonts/truetype/noto",
+        "/usr/share/fonts/TTF",
+        "/usr/local/share/fonts",
+        "/usr/local/share/fonts/noto",
+        "/usr/local/share/fonts/TTF",
+        "/Library/Fonts",
+    ]
+    .into_iter()
+    .map(Into::into)
+    .collect();
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        let home = PathBuf::from(home);
+        dirs.extend([home.join(".local/share/fonts"), home.join(".fonts"), home.join("Library/Fonts")]);
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use std::{io::Read as _, path::PathBuf};
-        // Only the redistributable Noto family is used. Never embed proprietary system fonts.
-        let mut dirs: Vec<PathBuf> = [
-            "/usr/share/fonts/noto",
-            "/usr/share/fonts/google-noto-vf",
-            "/usr/share/fonts/truetype/noto",
-            "/usr/share/fonts/TTF",
-            "/usr/local/share/fonts",
-            "/usr/local/share/fonts/noto",
-            "/usr/local/share/fonts/TTF",
-            "/Library/Fonts",
-        ]
-        .into_iter()
-        .map(Into::into)
-        .collect();
-        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-            let home = PathBuf::from(home);
-            dirs.extend([home.join(".local/share/fonts"), home.join(".fonts"), home.join("Library/Fonts")]);
-        }
-        if let Some(root) = std::env::var_os("WINDIR") {
-            dirs.push(PathBuf::from(root).join("Fonts"));
-        }
-        if let Some(root) = std::env::var_os("LOCALAPPDATA") {
-            dirs.push(PathBuf::from(root).join("Microsoft/Windows/Fonts"));
-        }
-        let filename = if is_bold { "NotoSansArabic-Bold.ttf" } else { "NotoSansArabic-Regular.ttf" };
-        for dir in dirs {
-            for name in ["NotoSansArabic.ttf", "NotoSansArabic[wght].ttf", filename] {
-                let path = dir.join(name);
-                let file = match std::fs::File::open(&path) {
-                    Ok(file) => file,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(e) => return Err(Error(format!("Cannot read Arabic PDF font {}: {e}", path.display()))),
-                };
-                let mut bytes = Vec::new();
-                file.take((64 << 20) + 1).read_to_end(&mut bytes).map_err(|e| Error(format!("Cannot read Arabic PDF font: {e}")))?;
-                if bytes.len() > 64 << 20 {
-                    return Err(Error("Arabic PDF font exceeds 64 MiB".into()));
-                }
-                if is_bold && name != filename && !has_weight_axis(&bytes) {
-                    continue;
-                }
-                return Face::new(Cow::Owned(bytes), is_bold);
+    if let Some(root) = std::env::var_os("WINDIR") {
+        dirs.push(PathBuf::from(root).join("Fonts"));
+    }
+    if let Some(root) = std::env::var_os("LOCALAPPDATA") {
+        dirs.push(PathBuf::from(root).join("Microsoft/Windows/Fonts"));
+    }
+    dirs
+}
+
+#[cfg(target_arch = "wasm32")]
+fn system_font_dirs() -> Vec<std::path::PathBuf> {
+    Vec::new()
+}
+
+fn find_face(bundled: &[(&str, &'static [u8])], dirs: &[std::path::PathBuf], is_bold: bool) -> Result<Option<Face>, Error> {
+    use std::io::Read as _;
+    if let Some(bytes) = bundled_match(bundled, is_bold) {
+        return Face::new(Cow::Borrowed(bytes), is_bold).map(Some);
+    }
+    let filename = if is_bold { "NotoSansArabic-Bold.ttf" } else { "NotoSansArabic-Regular.ttf" };
+    for dir in dirs {
+        for name in ["NotoSansArabic.ttf", "NotoSansArabic[wght].ttf", filename] {
+            let path = dir.join(name);
+            let file = match std::fs::File::open(&path) {
+                Ok(file) => file,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(Error(format!("Cannot read Arabic PDF font {}: {e}", path.display()))),
+            };
+            let mut bytes = Vec::new();
+            file.take((64 << 20) + 1).read_to_end(&mut bytes).map_err(|e| Error(format!("Cannot read Arabic PDF font: {e}")))?;
+            if bytes.len() > 64 << 20 {
+                return Err(Error("Arabic PDF font exceeds 64 MiB".into()));
             }
+            if is_bold && name != filename && !has_weight_axis(&bytes) {
+                continue;
+            }
+            return Face::new(Cow::Owned(bytes), is_bold).map(Some);
         }
     }
-    if let Some((name, bytes)) = bundled_fallback(ARABIC_FONTS, is_bold) {
+    if let Some((name, bytes)) = bundled_fallback(bundled, is_bold) {
         let mut face = Face::new(Cow::Borrowed(bytes), is_bold)?;
         face.synthetic_bold = needs_synthetic_bold(name, bytes, is_bold);
-        return Ok(face);
+        return Ok(Some(face));
     }
-    Err(Error("Arabic PDF export needs Noto Sans Arabic. Install its regular and bold fonts, or build with CRAFT_FONTS_DIR.".into()))
+    Ok(None)
 }
 
 /// The bundled face to use when no face matches the requested weight: regular text never borrows a bold face.
@@ -185,7 +213,7 @@ pub(crate) fn layout(font: Font, text: &str) -> Result<Layout, Error> {
     if text.len() > MAX_TEXT_BYTES {
         return Err(Error("Arabic PDF text exceeds the 128 KiB per-line limit".into()));
     }
-    let face = face(bold(font))?;
+    let face = loaded_face(font)?;
     let raw = face.font()?;
     let shaper = face.data.shaper(&raw).instance(Some(&face.instance)).build();
     let units = shaper.units_per_em();
@@ -222,19 +250,12 @@ pub(crate) fn layout(font: Font, text: &str) -> Result<Layout, Error> {
             for (span, embedded) in spans {
                 let part = run_text.get(span.clone()).ok_or_else(|| Error("Invalid PDF text boundary".into()))?;
                 if !embedded {
-                    if part.chars().any(|ch| win_ansi(ch) == b'?' && ch != '?' && !is_line_break(ch) && !cid_covers(ch)) {
-                        return Err(Error("The Arabic PDF font does not cover all characters in this text".into()));
-                    }
                     let part = part.chars().map(|ch| if is_line_break(ch) { ' ' } else { ch });
                     let part: Vec<char> = if rtl { part.rev().map(mirror_ansi).collect() } else { part.collect() };
-                    for run in part.chunk_by(|a, b| cid_covers(*a) == cid_covers(*b)) {
+                    for run in part.chunk_by(|a, b| needs_cid(*a) == needs_cid(*b)) {
                         let (text, x) = (run.iter().collect(), layout.width);
                         layout.width += run.iter().map(|&ch| f32::from(font.char_width(ch))).sum::<f32>();
-                        layout.items.push(if run.first().is_some_and(|&ch| cid_covers(ch)) {
-                            Item::Cid { text, x }
-                        } else {
-                            Item::Latin { text, x }
-                        });
+                        layout.items.push(if run.first().is_some_and(|&ch| needs_cid(ch)) { Item::Cid { text, x } } else { Item::Latin { text, x } });
                     }
                     continue;
                 }
@@ -283,7 +304,7 @@ pub(crate) fn layout(font: Font, text: &str) -> Result<Layout, Error> {
 
 pub(crate) fn vertical_extents(font: Font, text: &str) -> Result<(f32, f32), Error> {
     let layout = layout(font, text)?;
-    let face = face(bold(font))?;
+    let face = loaded_face(font)?;
     let raw = face.font()?;
     let metrics = raw.glyph_metrics(Size::new(1000.0), skrifa::instance::LocationRef::new(face.instance.coords()));
     let (mut ascent, mut descent) = (0.0_f32, 0.0_f32);
@@ -314,12 +335,6 @@ pub(crate) fn vertical_extents(font: Font, text: &str) -> Result<(f32, f32), Err
         }
     }
     Ok((ascent, descent))
-}
-
-/// Characters the Adobe-GB1 CID font sets when the Arabic face lacks them: CJK punctuation,
-/// kana, bopomofo, ideographs and full-width forms. Anything else uncovered fails the export.
-fn cid_covers(ch: char) -> bool {
-    matches!(ch, '\u{3000}'..='\u{312F}' | '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}' | '\u{F900}'..='\u{FAFF}' | '\u{FF00}'..='\u{FFEF}')
 }
 
 // The mirrored characters representable by WinAnsi. HarfRust handles embedded glyphs.
@@ -396,7 +411,7 @@ impl Subset {
         if self.glyphs.len() >= MAX_SUBSET_GLYPHS {
             return Err(Error("PDF page has too many distinct Arabic glyphs".into()));
         }
-        let face = face(bold(font))?;
+        let face = loaded_face(font)?;
         let raw = face.font()?;
         let location = skrifa::instance::LocationRef::new(face.instance.coords());
         let glyph = raw.outline_glyphs().get(id.into()).ok_or_else(|| Error("Missing Arabic PDF glyph outline".into()))?;
@@ -593,6 +608,14 @@ mod tests {
         assert!(super::embeddable(true, 'م'));
         assert!(super::embeddable(false, '\u{200f}'));
         assert!(!super::embeddable(false, 'A'));
+    }
+
+    #[test]
+    fn no_bundled_or_installed_face_is_not_an_error() {
+        for bold in [false, true] {
+            assert!(matches!(super::find_face(&[], &[], bold), Ok(None)));
+            assert!(matches!(super::find_face(&[], &[std::env::temp_dir().join("gridcraft-no-fonts-here")], bold), Ok(None)));
+        }
     }
 
     #[test]

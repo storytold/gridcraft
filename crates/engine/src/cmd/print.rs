@@ -92,8 +92,17 @@ pub(crate) const PX_TO_PT: f32 = 0.75;
 /// Most pages one export produces.
 pub const MAX_PAGES: usize = 2000;
 
+/// A rendered PDF and whether its Arabic text fell back to `?` for lack of an Arabic font.
+pub struct RenderedPdf {
+    pub bytes: Vec<u8>,
+    pub pages: usize,
+    pub missing_arabic_font: bool,
+}
+
+const MISSING_ARABIC_FONT: &str = "Arabic text was exported as ? because Noto Sans Arabic is not installed.";
+
 /// Renders laid-out sheets to a PDF.
-pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> Result<(Vec<u8>, usize)> {
+pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> Result<RenderedPdf> {
     let mut doc = PdfDoc::new();
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
@@ -168,18 +177,24 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
             page.link_page(Rect::new(lx, ly, w, h), target_page, Point::new(x, y));
         }
     }
-    let n = doc.page_count();
-    Ok((doc.finish().map_err(|error| EngineError::Other(error.to_string()))?, n))
+    let pages = doc.page_count();
+    let missing_arabic_font = doc.missing_arabic_font();
+    let bytes = doc.finish().map_err(|error| EngineError::Other(error.to_string()))?;
+    Ok(RenderedPdf { bytes, pages, missing_arabic_font })
 }
 
 // ---------------------------------------------------------------- commands
 
-fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
+fn build_pdf(s: &mut Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let opts = PrintOptions::from_params(p, cmd)?;
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
     let path = d.path.clone().unwrap_or_default();
-    render_pdf(&d.wb, &lays, &d.display_title(), &path)
+    let pdf = render_pdf(&d.wb, &lays, &d.display_title(), &path)?;
+    if pdf.missing_arabic_font {
+        s.ui_requests.push(crate::UiRequest::Message(MISSING_ARABIC_FONT.into()));
+    }
+    Ok((pdf.bytes, pdf.pages))
 }
 
 pub(crate) fn export_pdf(s: &mut Session, p: &Json) -> Result<Json> {
