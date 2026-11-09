@@ -710,7 +710,8 @@ impl Session {
 
     /// The values a `range.setValues` entry wrote, read back from the cells it covered: the same
     /// sheet and starting cell the command used, the rows and columns it was given, a formula where
-    /// one was written and the stored value otherwise. `None` when the write is too large to keep.
+    /// one was written, the stored value otherwise and an empty string for a blank cell. `None`
+    /// when the write is too large to keep.
     fn written_values(&mut self, params: &Json) -> Option<Json> {
         let values = params.get("values")?.as_array()?;
         let cells: usize = values.iter().map(|row| row.as_array().map_or(1, Vec::len)).sum();
@@ -730,10 +731,10 @@ impl Session {
             let mut out = Vec::new();
             for ci in 0..row_cells.len() {
                 let at = start.offset(ri as i64, ci as i64)?;
-                // A blank cell has no stored entry (the write removed it); the recording holds
-                // `null` for it, which the replay clears with. Taking the whole write as
-                // uncaptured over one blank would drop the step.
-                out.push(Self::encoded_cell_value(sheet, at).unwrap_or(Json::Null));
+                // A blank cell has no stored entry (the write removed it) and records as an empty
+                // string, which the replay clears with. One blank must not make the whole write
+                // uncaptured.
+                out.push(Self::encoded_cell_value(sheet, at).unwrap_or_else(|| Json::String(String::new())));
             }
             rows.push(Json::Array(out));
         }
@@ -742,14 +743,21 @@ impl Session {
 
     /// One cell's stored value as a recording replays it: the formula where one was written,
     /// the stored value otherwise — whole numbers as integers, formula-like or signed text with
-    /// the apostrophe that marks it text, a stored leading apostrophe doubled. The replay
-    /// (`range_set_values`) decodes this one encoding. `None` when the cell holds nothing.
+    /// the apostrophe that marks it text, a stored leading apostrophe doubled, an empty string
+    /// for a blank cell. The replay (`range_set_values`) decodes this one encoding. `None` when
+    /// the sheet has no entry for the cell at all.
     fn encoded_cell_value(sheet: &gridcraft_model::Sheet, at: gridcraft_core::CellRef) -> Option<Json> {
         let cell = sheet.cell(at)?;
         if let Some(formula) = cell.formula.as_ref() {
             return Some(Json::String(format!("={}", formula.text)));
         }
         let stored = Self::whole_number(crate::cmd::inspect::value_json(&sheet.value(at)));
+        // A blank cell goes back as an empty string, not `null`: `setValues` takes strings,
+        // numbers and booleans, and Excel reads a `null` entry as "leave this cell alone", so
+        // the exported script would keep the old value.
+        if stored.is_null() {
+            return Some(Json::String(String::new()));
+        }
         let stored = match stored {
             // Text the replay would read as a formula goes back with the apostrophe
             // that marks it text; a stored leading apostrophe is itself text, so it

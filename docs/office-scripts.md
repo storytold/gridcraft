@@ -155,10 +155,11 @@ different lengths record their bounding block and the rows as given, which Excel
 such data as a rectangle. Above 10,000 cells the stored values are not captured, so the step is
 left out with a comment saying why: split a large write into blocks of at most 10,000 cells. The
 values are the ones the write stored — typed input and the destination format applied, a formula
-kept as a formula, and text that would read as a formula written back with the apostrophe that
-keeps it text (`'=1+1`). A `cell.set` records the value the cell stored, like a
-`range.setValues`, and the replay keeps it verbatim. `setText` and
-`setTexts` store the text they are given: a leading apostrophe stays text there, never the marker.
+kept as a formula, text that would read as a formula written back with the apostrophe that keeps
+it text (`'=1+1`), and an empty string for a cell the write cleared, which the replay clears with.
+A `cell.set` records the value the cell stored, like a `range.setValues`, and the replay keeps it
+verbatim. `setText` and `setTexts` store the text they are given: a leading apostrophe stays text
+there, never the marker.
 
 With an unsaved draft in the editor, stopping the recorder saves the recording and lists it but
 leaves the draft alone. Save the draft under a name of its own — check the recording's

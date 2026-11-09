@@ -1047,7 +1047,8 @@ mod tests {
     #[test]
     fn a_recorded_range_write_keeps_the_blank_it_cleared() {
         // A `null` in the values clears its cell: the cell then has no stored entry, and the
-        // capture holds `null` for it. One blank must not turn the whole step into "uncaptured".
+        // capture holds an empty string for it — not `null`, which Excel reads as "leave the
+        // cell alone". One blank must not turn the whole step into "uncaptured".
         let mut s = session("record-range-blank");
         s.execute("cell.set", json!({"cell": "A1", "input": "old"})).unwrap();
         s.execute("cell.set", json!({"cell": "B1", "input": "old"})).unwrap();
@@ -1055,9 +1056,15 @@ mod tests {
         s.execute("range.setValues", json!({"range": "A1:B1", "values": [["new", null]]})).unwrap();
         let stopped = s.execute("script.record", json!({"on": false})).unwrap();
         let code = stopped["code"].as_str().unwrap_or_default();
-        assert!(code.contains("getRange(\"A1:B1\").setValues([[\"new\", null]]);"), "{code}");
+        assert!(code.contains("getRange(\"A1:B1\").setValues([[\"new\", \"\"]]);"), "{code}");
         assert_eq!(stopped["skipped"], json!([]), "{code}");
         assert_eq!(stopped["steps"], 1, "{code}");
+        // The recorded call clears the cell it names.
+        let mut replay = session("record-range-blank-replay");
+        replay.execute("cell.set", json!({"cell": "B1", "input": "old"})).unwrap();
+        replay.execute("range.setValues", json!({"range": "A1:B1", "values": [["new", ""]], "parse": false})).unwrap();
+        assert_eq!(value(&replay, 0, "B1"), Value::Empty);
+        assert_eq!(value(&replay, 0, "A1"), Value::Text("new".into()));
     }
 
     #[test]
