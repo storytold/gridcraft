@@ -2,12 +2,8 @@
 //! a desktop spreadsheet has on the Mac. Items run the same commands as the ribbon.
 //!
 //! Titles and labels go through [`Language::tr`] like the rest of the interface, so the menu bar
-//! follows the interface language. macOS builds its menu once, so a language change rebuilds it
-//! ([`NativeMenu::needs_reinstall`]).
-
-// This file is also compiled as a module of the `mac_menu_appkit` integration test, where only
-// `install` is used; keep the test target free of dead-code warnings.
-#![allow(dead_code, unused_imports)]
+//! follows the interface language. A language change rebuilds the bar while keeping the original
+//! event channel.
 
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, channel};
@@ -201,10 +197,13 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
 }
 
 pub struct NativeMenu {
-    _menu: Menu,
     events: Receiver<MenuEvent>,
+    bar: MenuBar,
+}
+
+struct MenuBar {
+    _menu: Menu,
     theme_items: Vec<(&'static str, CheckMenuItem)>,
-    /// The language this bar was built in; a different one needs a rebuild.
     language: Language,
     window_menu: Option<Submenu>,
     /// The Window menu's window items and what they last showed.
@@ -230,8 +229,8 @@ fn select_theme(app: &mut SheetApp, id: &str) -> bool {
     true
 }
 
-impl NativeMenu {
-    pub fn install(ctx: &egui::Context, language: Language) -> NativeMenu {
+impl MenuBar {
+    fn install(language: Language) -> Self {
         let menu = Menu::new();
         let app_menu = Submenu::new("GridCraft", true);
         let about = MenuItem::with_id("dialog:about", language.tr("About GridCraft"), true, None);
@@ -284,19 +283,7 @@ impl NativeMenu {
         if let Some(window) = &window_menu {
             window.set_as_windows_menu_for_nsapp();
         }
-        let (tx, rx) = channel();
-        let ctx = ctx.clone();
-        MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
-            let _ = tx.send(e);
-            ctx.request_repaint();
-        }));
-        NativeMenu { _menu: menu, events: rx, theme_items, language, window_menu, window_items: Vec::new(), windows: Vec::new() }
-    }
-
-    /// Whether the bar was built for a different language than the app now uses; macOS keeps the
-    /// menu until it is replaced, so the caller rebuilds rather than waiting for a restart.
-    pub fn needs_reinstall(&self, app: &SheetApp) -> bool {
-        self.language != app.ui.language
+        Self { _menu: menu, theme_items, language, window_menu, window_items: Vec::new(), windows: Vec::new() }
     }
 
     /// Keeps the Window menu's list of open windows (title, unsaved bullet, active check) in
@@ -329,6 +316,19 @@ impl NativeMenu {
                 item.set_checked(w.active);
             }
         }
+    }
+}
+
+impl NativeMenu {
+    pub fn install(ctx: &egui::Context, language: Language) -> Self {
+        let (tx, events) = channel();
+        let ctx = ctx.clone();
+        // Muda accepts only the first event handler. The receiver outlives every menu bar rebuild.
+        MenuEvent::set_event_handler(Some(move |event| {
+            let _ = tx.send(event);
+            ctx.request_repaint();
+        }));
+        Self { events, bar: MenuBar::install(language) }
     }
 
     /// Runs the chosen menu items. Commands go to the active window, the most recently focused;
@@ -397,13 +397,16 @@ impl NativeMenu {
                 app.run_or_alert(&id, json!({}));
             }
         }
-        for (mode, item) in &self.theme_items {
+        if self.bar.language != app.ui.language {
+            self.bar = MenuBar::install(app.ui.language);
+        }
+        for (mode, item) in &self.bar.theme_items {
             let checked = app.ui.theme_mode() == *mode;
             if item.is_checked() != checked {
                 item.set_checked(checked);
             }
         }
-        self.sync_windows(app);
+        self.bar.sync_windows(app);
     }
 }
 

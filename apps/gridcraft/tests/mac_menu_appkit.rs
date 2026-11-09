@@ -10,6 +10,21 @@
 mod native_menu;
 
 #[cfg(target_os = "macos")]
+fn menu_item_index(menu: &objc2_app_kit::NSMenu, title: &str) -> isize {
+    (0..menu.numberOfItems())
+        .find(|&index| menu.itemAtIndex(index).is_some_and(|item| item.title().to_string() == title))
+        .unwrap_or_else(|| panic!("menu item {title:?} not found"))
+}
+
+#[cfg(target_os = "macos")]
+fn choose_theme(bar: &objc2_app_kit::NSMenu, view: &str, display_theme: &str, theme: &str) {
+    let view_menu = bar.itemAtIndex(menu_item_index(bar, view)).and_then(|item| item.submenu()).expect("View submenu");
+    let theme_menu =
+        view_menu.itemAtIndex(menu_item_index(&view_menu, display_theme)).and_then(|item| item.submenu()).expect("Display Theme submenu");
+    theme_menu.performActionForItemAtIndex(menu_item_index(&theme_menu, theme));
+}
+
+#[cfg(target_os = "macos")]
 fn main() {
     use objc2::MainThreadMarker;
     use objc2_app_kit::NSApplication;
@@ -37,13 +52,22 @@ fn main() {
     let last = windows_menu.itemAtIndex(windows_menu.numberOfItems() - 1).expect("a Window menu item");
     assert_eq!(last.title().to_string(), open[0].label(), "the Window menu lists the open workbook");
 
+    choose_theme(&bar, "View", "Display Theme", "Dark");
+    menu.poll(&mut app, &ctx, egui::ViewportId::ROOT);
+    assert_eq!(app.ui.theme_mode(), "dark", "the original menu dispatches commands");
+
     // The bar follows the interface language: installing a Chinese bar replaces the English one, and
     // the Window menu stays AppKit's `windowsMenu` under its translated title.
-    let _menu = native_menu::NativeMenu::install(&ctx, gridcraft_ui_egui::i18n::Language::Zh);
+    app.ui.language = gridcraft_ui_egui::i18n::Language::Zh;
+    menu.poll(&mut app, &ctx, egui::ViewportId::ROOT);
     let bar = nsapp.mainMenu().expect("the rebuilt main menu");
     let tops: Vec<String> = (0..bar.numberOfItems()).filter_map(|i| bar.itemAtIndex(i)?.submenu()).map(|m| m.title().to_string()).collect();
     assert_eq!(tops, ["GridCraft", "文件", "编辑", "视图", "插入", "格式", "工具", "数据", "窗口", "帮助"]);
     assert_eq!(nsapp.windowsMenu().map(|m| m.title().to_string()).as_deref(), Some("窗口"), "AppKit knows the translated Window menu");
+
+    choose_theme(&bar, "视图", "显示主题", "浅色");
+    menu.poll(&mut app, &ctx, egui::ViewportId::ROOT);
+    assert_eq!(app.ui.theme_mode(), "light", "the rebuilt menu still dispatches commands");
 
     println!("mac_menu_appkit: ok");
 }
