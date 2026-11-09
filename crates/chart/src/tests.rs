@@ -1684,6 +1684,32 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
 
 /// A chart's own text styles: legend, data labels and axis labels in the size, weight and capitals
 /// its file gives; what it leaves out keeps the usual look.
+/// A legend in a huge size (the file allows up to 400 pt) still leaves the plot its room: the
+/// series are drawn, top or bottom, and the legend's text fits the chart.
+#[test]
+fn a_huge_legend_size_leaves_room_for_the_plot() {
+    use gridcraft_model::ChartTextStyle;
+    let d = sample(ChartKind::ColumnClustered);
+    let colors: Vec<_> = d.series.iter().map(|s| s.color).collect();
+    for pos in [LegendPos::Bottom, LegendPos::Top, LegendPos::Right] {
+        let mut c = chart(ChartKind::ColumnClustered);
+        c.legend = pos;
+        c.text.legend = ChartTextStyle { size: Some(400.0), ..Default::default() };
+        let p = render(&c, &d, 600.0, 400.0, &ApproxMeasure);
+        let bars = p.iter().filter(|p| matches!(p, Prim::Rect { fill: Some(f), w, h, .. } if colors.contains(f) && *w > 2.0 && *h > 2.0)).count();
+        assert!(bars >= d.series.len() * 2, "{pos:?}: {bars} bars drawn");
+        let legend = p.iter().find_map(|p| match p {
+            Prim::Text { text, size, .. }
+                if text == &d.series[0].name || (text.ends_with('…') && d.series[0].name.starts_with(text.trim_end_matches('…'))) =>
+            {
+                Some(*size)
+            }
+            _ => None,
+        });
+        assert!(legend.is_some_and(|s| s * 1.6 <= 400.0 * 0.3 + 0.01), "{pos:?}: legend size {legend:?}");
+    }
+}
+
 #[test]
 fn text_takes_the_charts_own_styles() {
     use gridcraft_model::{ChartTextStyle, ChartTextStyles};

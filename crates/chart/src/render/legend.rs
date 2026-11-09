@@ -102,7 +102,10 @@ pub(super) fn draw_swatch(ctx: &mut Ctx, sw: Swatch, x: f32, yc: f32, s: f32, co
 }
 
 pub(super) fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos: LegendPos, area: Bx) -> Bx {
+    // A row of the legend takes at most the share of the height its rows may use, so a huge size
+    // from the file can't leave the plot no room at all.
     let look = Look::of(ctx.text.legend, LABEL_SIZE);
+    let look = Look { size: look.size.min((area.h * 0.3 / 1.6).max(1.0)), ..look };
     let size = look.size;
     let row_h = size * 1.6;
     let s = size * 0.8;
