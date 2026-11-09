@@ -41,7 +41,17 @@ target/debug/gridcraft-cli run \
   --out plan/excel/picture-and-dynamic.xlsx
 ```
 
-Omit the picture command and/or both formula commands for the other controls.
+For each run, replace the A1 input and `--out` path as listed below. Omit the
+picture command and/or both formula commands according to the control matrix.
+These distinct paths retain all four outputs for comparison.
+
+| Control | A1 input | `--out` path |
+| --- | --- | --- |
+| Ordinary | `ordinary` | `plan/excel/ordinary.xlsx` |
+| Dynamic only | `dynamic-only` | `plan/excel/dynamic-only.xlsx` |
+| Picture only | `picture-only` | `plan/excel/picture-only.xlsx` |
+| Picture + dynamic | `picture-and-dynamic` | `plan/excel/picture-and-dynamic.xlsx` |
+
 Record the source commit and fixture hashes. Generate an independent set from
 each candidate PR head when comparing implementations. An edited package that
 contains only a PR's metadata changes is an **isolated packaging experiment**,
