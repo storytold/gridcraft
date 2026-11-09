@@ -204,7 +204,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ),
     (
         "Creates a link; the cell shows the friendly name, or the link itself.",
-        "Δημιουργεί έναν σύνδεσμο. το κελί δείχνει το φιλικό όνομα ή τον ίδιο τον σύνδεσμο.",
+        "Δημιουργεί έναν σύνδεσμο· το κελί δείχνει το φιλικό όνομα ή τον ίδιο τον σύνδεσμο.",
     ),
     ("Creates a reusable custom function.", "Δημιουργεί μια επαναχρησιμοποιήσιμη προσαρμοσμένη συνάρτηση."),
     ("Cumulative beta probability.", "Αθροιστική πιθανότητα beta."),
@@ -591,7 +591,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
         "Επιστρέφει τον αριθμό που προσδιορίζει μια τιμή σφάλματος ή το #N/A εάν δεν είναι σφάλμα.",
     ),
     ("Returns the number of days between two dates.", "Επιστρέφει τον αριθμό των ημερών μεταξύ δύο ημερομηνιών."),
-    ("Returns the phonetic (furigana) text; here the text itself.", "Επιστρέφει το φωνητικό (furigana) κείμενο. εδώ το ίδιο το κείμενο."),
+    ("Returns the phonetic (furigana) text; here the text itself.", "Επιστρέφει το φωνητικό (furigana) κείμενο· εδώ το ίδιο το κείμενο."),
     (
         "Returns the position of a value in a row or column with flexible match and search modes.",
         "Επιστρέφει τη θέση μιας τιμής σε μια γραμμή ή στήλη με ευέλικτες λειτουργίες αντιστοίχισης και αναζήτησης.",
@@ -744,7 +744,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Yield of a security with an odd last period.", "Απόδοση ομολόγου με ακανόνιστη τελευταία περίοδο τόκων."),
     ("Z-score of a value.", "Z-score μιας τιμής."),
     ("e raised to the given power.", "Το e υψωμένο στη δεδομένη δύναμη."),
-    ("k-th percentile, k from 0 to 1 inclusive.", "κ-ο εκατοστημόριο, k από 0 έως 1 συμπεριλαμβανομένου."),
+    ("k-th percentile, k from 0 to 1 inclusive.", "k-ο εκατοστημόριο, k από 0 έως 1 συμπεριλαμβανομένου."),
     ("k-th percentile, k strictly between 0 and 1.", "k-ο εκατοστημόριο, k αυστηρά μεταξύ 0 και 1."),
 ];
 
