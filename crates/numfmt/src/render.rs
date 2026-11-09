@@ -3,8 +3,9 @@
 use std::fmt::Write as _;
 
 use gridcraft_core::DateSystem;
-use gridcraft_core::date::{MONTHS, WEEKDAYS, datetime_from_serial, max_serial};
+use gridcraft_core::date::{datetime_from_serial, max_serial};
 
+use crate::calendar::Calendar;
 use crate::decimal::{decimal_digits, fixed, fixed_from_digits, format_general_fit};
 use crate::parse::{DatePart, Section, Tok};
 
@@ -77,14 +78,23 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out>
         day += 1;
     }
     let total_ms = day.saturating_mul(86_400_000).saturating_add(ms);
-    let dt = if sec.calendar { datetime_from_serial(sys, day as f64)? } else { datetime_from_serial(sys, 0.0).unwrap_or_default() };
+    // Under `B2`, Excel shows the 1900 system's fictitious 29 February (serial 60) as `#VALUE!`
+    // whenever a clock or calendar part is shown, even for `hh:mm` (`[h]` alone still works).
+    if sec.calendar == Calendar::Hijri
+        && sys == DateSystem::D1900
+        && day == 60
+        && sec.toks.iter().any(|t| matches!(t, Tok::Date(d) if !d.is_elapsed()))
+    {
+        return None;
+    }
+    let dt = if sec.needs_date { datetime_from_serial(sys, day as f64)? } else { datetime_from_serial(sys, 0.0).unwrap_or_default() };
     let ampm = sec.ampm;
     let hour = ms / 3_600_000;
     let minute = (ms / 60_000) % 60;
     let second = (ms / 1000) % 60;
     let milli = ms % 1000;
-    let month_name = MONTHS.get((dt.month as usize).wrapping_sub(1)).copied().unwrap_or("");
-    let day_name = WEEKDAYS.get(dt.weekday as usize).copied().unwrap_or("");
+    // No date in the section's calendar (serial 60 under `B2`): shown like an out-of-range date.
+    let date = sec.calendar.date(&dt)?;
     let mut out = Out::default();
     for t in &sec.toks {
         match t {
@@ -92,18 +102,18 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out>
                 let text = &mut out.text;
                 match *d {
                     DatePart::Year(n) => {
-                        let _ = if n <= 2 { write!(text, "{:02}", dt.year.rem_euclid(100)) } else { write!(text, "{:04}", dt.year) };
+                        let _ = if n <= 2 { write!(text, "{:02}", date.year.rem_euclid(100)) } else { write!(text, "{:04}", date.year) };
                     }
                     DatePart::Month(n) => match n {
-                        1 | 2 => push_padded(text, dt.month as i64, n),
-                        3 => text.extend(month_name.chars().take(3)),
-                        5 => text.extend(month_name.chars().take(1)),
-                        _ => text.push_str(month_name),
+                        1 | 2 => push_padded(text, date.month as i64, n),
+                        3 => text.extend(date.month_short.chars()),
+                        5 => text.extend(date.month_name.chars().take(1)),
+                        _ => text.push_str(date.month_name),
                     },
                     DatePart::Day(n) => match n {
-                        1 | 2 => push_padded(text, dt.day as i64, n),
-                        3 => text.extend(day_name.chars().take(3)),
-                        _ => text.push_str(day_name),
+                        1 | 2 => push_padded(text, date.day as i64, n),
+                        3 => text.extend(date.day_short.chars()),
+                        _ => text.push_str(date.day_name),
                     },
                     DatePart::Hour(n) => {
                         let h = if ampm {

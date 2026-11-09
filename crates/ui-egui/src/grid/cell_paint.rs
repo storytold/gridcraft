@@ -59,6 +59,9 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
         if st.num_fmt.as_str() != "General" {
             style.num_fmt = st.num_fmt.clone();
         }
+        if st.align.reading_order.is_some() {
+            style.align.reading_order = st.align.reading_order;
+        }
         for (dst, src) in [
             (&mut style.borders.left, st.borders.left),
             (&mut style.borders.right, st.borders.right),
