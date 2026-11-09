@@ -482,3 +482,80 @@ fn the_cut_text_pastes_again_once_the_clipboard_has_held_other_text() {
     h.run_steps(2);
     assert_eq!(value_at(&h, "H1"), Some(Value::from("Name")), "the same text copied afresh pastes");
 }
+
+/// The floating pictures on the active sheet: (anchor cell, width, height, mime).
+fn pictures(h: &Harness) -> Vec<(String, f32, f32, String)> {
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    sh.images.iter().map(|i| (i.anchor.cell.a1(), i.anchor.width, i.anchor.height, i.mime.clone())).collect()
+}
+
+#[test]
+fn cmd_v_with_a_picture_on_the_clipboard_inserts_it_at_the_active_cell() {
+    // A screenshot or a browser image: the clipboard has pixels and no text (#699, #3018, #3182).
+    let mut h = harness(Services::default());
+    h.state_mut().run("selection.set", json!({"cell": "C5"})).unwrap();
+    let image = egui::ColorImage::new([4, 3], vec![egui::Color32::from_rgb(200, 30, 30); 12]);
+    h.input_mut().events.push(Event::PasteImage(std::sync::Arc::new(image)));
+    h.run_steps(2);
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    assert_eq!(pictures(&h), vec![("C5".to_string(), 4.0, 3.0, "image/png".to_string())]);
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    let png = image::load_from_memory(&sh.images[0].data).unwrap().to_rgba8();
+    assert_eq!(png.get_pixel(3, 2).0, [200, 30, 30, 255], "the pixels survive the PNG round trip");
+
+    // One undo step removes it.
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert!(pictures(&h).is_empty());
+}
+
+#[test]
+fn a_malformed_clipboard_picture_is_refused_without_inserting() {
+    let mut h = harness(Services::default());
+    let mut image = egui::ColorImage::new([4, 3], vec![egui::Color32::WHITE; 12]);
+    image.pixels.truncate(5);
+    h.input_mut().events.push(Event::PasteImage(std::sync::Arc::new(image)));
+    h.run_steps(2);
+    assert!(pictures(&h).is_empty());
+    assert!(h.state().message.is_some(), "the user is told the paste failed");
+
+    dismiss(&mut h);
+    h.input_mut().events.push(Event::PasteImage(std::sync::Arc::new(egui::ColorImage::new([0, 0], Vec::new()))));
+    h.run_steps(2);
+    assert!(pictures(&h).is_empty());
+
+    // Wider than the 16384-pixel limit: refused before its pixels are copied.
+    dismiss(&mut h);
+    let wide = egui::ColorImage::new([20_000, 1], vec![egui::Color32::WHITE; 20_000]);
+    h.input_mut().events.push(Event::PasteImage(std::sync::Arc::new(wide)));
+    h.run_steps(2);
+    assert!(pictures(&h).is_empty());
+    let message = format!("{:?}", h.state().message);
+    assert!(message.contains("too large"), "{message}");
+}
+
+#[test]
+fn ribbon_paste_pastes_a_clipboard_picture_when_there_is_no_text() {
+    let reads = Rc::new(RefCell::new(0));
+    let count = reads.clone();
+    let (_, mut services) = system_clipboard("");
+    services.paste_image = Some(Box::new(move || {
+        *count.borrow_mut() += 1;
+        Some(image::RgbaImage::from_pixel(5, 2, image::Rgba([0, 0, 255, 255])))
+    }));
+    let mut h = harness(services);
+    h.state_mut().run("selection.set", json!({"cell": "B7"})).unwrap();
+    click_paste(&mut h);
+    assert_eq!(*reads.borrow(), 1);
+    assert_eq!(pictures(&h), vec![("B7".to_string(), 5.0, 2.0, "image/png".to_string())]);
+}
+
+#[test]
+fn ribbon_paste_prefers_clipboard_text_over_a_picture() {
+    let (_, mut services) = system_clipboard("words");
+    services.paste_image = Some(Box::new(|| Some(image::RgbaImage::new(1, 1))));
+    let mut h = harness(services);
+    h.state_mut().run("selection.set", json!({"cell": "D2"})).unwrap();
+    click_paste(&mut h);
+    assert_eq!(value_at(&h, "D2"), Some(Value::from("words")));
+    assert!(pictures(&h).is_empty());
+}

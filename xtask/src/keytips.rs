@@ -323,6 +323,11 @@ fn render_tests(entries: &[Entry], probe: &Probe) -> String {
                     id = e.target,
                 ),
             },
+            // Options is a Backstage page rather than a dialog box.
+            "dialog" if e.target == "options" => format!(
+                "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().backstage.is_some(), \"{seq} must open the Options page\");",
+                seq = e.seq,
+            ),
             "dialog" => format!(
                 "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().dialog.is_some(), \"{seq} must open the {dialog} dialog\");",
                 seq = e.seq,
