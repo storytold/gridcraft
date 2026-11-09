@@ -122,6 +122,15 @@ mod contract_tests {
         }
     }
 
+    /// A template without a translation shows the English text, so the reference language covers
+    /// the whole shared set; `translated_templates_preserve_slots_for_every_catalog` skips the rest.
+    #[test]
+    fn russian_covers_every_shared_template() {
+        for source in TEMPLATES {
+            assert!(crate::i18n::Language::Ru.translation(source).is_some(), "missing Russian template: {source}");
+        }
+    }
+
     /// Checks real canonical parser errors are translated only at the UI boundary.
     #[test]
     fn actual_parser_diagnostics_are_translated_without_changing_the_parser() {

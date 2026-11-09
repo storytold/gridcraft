@@ -502,6 +502,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "number too large `{number}`" => "Слишком большое число `{number}`",
         "unexpected character `{character}`" => "Недопустимый символ `{character}`",
         "invalid cell reference `{cell}` for `{key}`" => "Неверная ссылка на ячейку `{cell}` в параметре `{key}`",
+        "`{cell}` for `{key}` names a sheet other than the one this command works on" => {
+            "`{cell}` в параметре `{key}` указывает на другой лист, не тот, с которым работает команда"
+        }
         "expected `,` or `)`, found {token}" => "Ожидался разделитель аргументов или `)`, получено: {token}",
         "expected a reference after the sheet name, found {token}" => "После имени листа ожидалась ссылка, получено: {token}",
         "expected a number in array, found {token}" => "В массиве ожидалось число, получено: {token}",
