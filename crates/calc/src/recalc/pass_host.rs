@@ -564,13 +564,14 @@ impl Host for PassHost<'_> {
         if let Some(v) = self.results.get(&k) {
             return !v.is_empty();
         }
-        for (anchor, arr) in &self.spills {
-            if anchor.0 == sheet && c.row >= anchor.1.row && c.col >= anchor.1.col {
-                let (dr, dc) = ((c.row - anchor.1.row) as usize, (c.col - anchor.1.col) as usize);
-                if dr < arr.rows && dc < arr.cols {
-                    return !arr.get(dr, dc).is_none_or(Value::is_empty);
-                }
-            }
+        let covering = match self.spill_index.covering(sheet, c) {
+            Cover::None => None,
+            Cover::One(a) => self.spills.get_key_value(&(sheet, a)),
+            Cover::Many => self.spills.iter().find(|(a, arr)| a.0 == sheet && spill_covers(a.1, arr, c)),
+        };
+        if let Some((anchor, arr)) = covering {
+            let (dr, dc) = ((c.row - anchor.1.row) as usize, (c.col - anchor.1.col) as usize);
+            return !arr.get(dr, dc).is_none_or(Value::is_empty);
         }
         self.wb.sheet(sheet).is_some_and(|s| s.cell(c).is_some_and(|cell| cell.formula.is_some() || cell.py.is_some()) || !s.value(c).is_empty())
     }
