@@ -233,11 +233,11 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
             if let Some(w) = web_sys::window()
                 && let gridcraft_engine::links::LinkKind::External(url) = gridcraft_engine::links::classify(url)
             {
-                // With `noopener` the new browsing context can't hold a reference back to the
-                // editor window and navigate it while the user reads the linked page. It must be a
-                // window *feature*: inside the target string it would only name the new window.
-                let _ = w.open_with_url_and_target_and_features(&url, "_blank", "noopener,noreferrer");
+                // `noopener` is a window feature, so the new context cannot navigate the editor.
+                // With that feature, `open` returns no WindowProxy even when it succeeds.
+                return w.open_with_url_and_target_and_features(&url, "_blank", "noopener").is_ok();
             }
+            false
         })),
         inbox: Some(inbox),
         ..Default::default()
