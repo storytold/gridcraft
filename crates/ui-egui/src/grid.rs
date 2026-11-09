@@ -324,8 +324,69 @@ pub struct GridState {
     pub wheel_zoom: Option<WheelZoom>,
     /// A one-finger touch drag in progress: it pans the sheet instead of selecting.
     pub touch_pan: bool,
+    /// F8 Extend Selection or Shift+F8 Add or Remove Selection mode (see [`SelectionMode`]).
+    pub selection_mode: SelectionMode,
+    /// Add mode: the last area is the cell an arrow key moved to, not yet extended, so the next
+    /// arrow moves it again instead of keeping it.
+    pub add_pending: Option<RangeRef>,
+    /// Add mode header drag: the areas kept from before the drag, which the dragged range joins.
+    pub header_drag_base: Vec<String>,
     /// What the macro step editor shows on the grid (Check, debugging).
     pub macro_overlay: Option<crate::macro_editor::MacroOverlay>,
+}
+
+/// Excel's keyboard selection modes, shown in the status bar. In Extend mode (F8) arrow keys and
+/// clicks extend from the anchor as if Shift were held. In Add mode (Shift+F8) arrow keys move the
+/// active cell without dropping the selected areas, Shift+arrows grow a new area from there, and a
+/// click adds an area (or removes one already selected) as Ctrl+click does. Esc, the same key
+/// again, or editing a cell turns the mode off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SelectionMode {
+    #[default]
+    Off,
+    Extend,
+    Add,
+}
+
+impl SelectionMode {
+    /// The id the `ui.selectionMode` command takes and returns.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Extend => "extend",
+            Self::Add => "add",
+        }
+    }
+
+    pub fn parse(id: &str) -> Option<Self> {
+        match id.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" => Some(Self::Off),
+            "extend" => Some(Self::Extend),
+            "add" => Some(Self::Add),
+            _ => None,
+        }
+    }
+
+    /// The status bar text (an i18n catalog key), when the mode shows one.
+    pub fn status_text(self) -> Option<&'static str> {
+        match self {
+            Self::Off => None,
+            Self::Extend => Some("Extend Selection"),
+            Self::Add => Some("Add or Remove Selection"),
+        }
+    }
+}
+
+impl GridState {
+    /// Turns `mode` on, or off when it is already on (F8 / Shift+F8); the other mode ends.
+    pub fn toggle_selection_mode(&mut self, mode: SelectionMode) {
+        self.set_selection_mode(if self.selection_mode == mode { SelectionMode::Off } else { mode });
+    }
+
+    pub fn set_selection_mode(&mut self, mode: SelectionMode) {
+        self.selection_mode = mode;
+        self.add_pending = None;
+    }
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and

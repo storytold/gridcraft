@@ -261,6 +261,18 @@ impl SheetApp {
                 self.open_dialog(name, p.clone());
                 Ok(json!({"dialog": self.dialog.as_ref().map(|d| d.name())}))
             }
+            "ui.selectionMode" => {
+                // `{"mode": "extend"}` (F8), `"add"` (Shift+F8) or `"off"`; `{}` reports the mode.
+                match p.get("mode").and_then(Json::as_str) {
+                    Some(id) => match crate::grid::SelectionMode::parse(id) {
+                        Some(mode) => self.grid.set_selection_mode(mode),
+                        None => return Some(Err(format!("unknown selection mode {id:?} (use \"extend\", \"add\" or \"off\")"))),
+                    },
+                    None if p.get("mode").is_some_and(|v| !v.is_null()) => return Some(Err("`mode` must be \"extend\", \"add\" or \"off\"".into())),
+                    None => {}
+                }
+                Ok(json!({"mode": self.grid.selection_mode.id()}))
+            }
             "ui.pythonMode" => {
                 // `{"on": true}` starts Python mode on the active cell (or switches the edit in
                 // progress to it), `{"on": false}` leaves it; without `on` it switches. A start

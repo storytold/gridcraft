@@ -18,6 +18,8 @@ impl SheetApp {
             self.message = Some(("Text Box".into(), clean_error(&e)));
             return;
         }
+        // Editing a cell ends Extend and Add mode, as in Excel.
+        self.grid.set_selection_mode(crate::grid::SelectionMode::Off);
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
         let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
