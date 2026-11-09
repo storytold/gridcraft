@@ -301,6 +301,17 @@ fn start(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn run(s: &mut Session, p: &Json) -> Result<Json> {
+    // The desktop control channel and the pane run commands on the UI frame: a blocking
+    // `translate.run` there would freeze the window for up to `timeoutMs` (30 minutes by
+    // default), and the channel's own reply timeout cannot stop the started job. Those
+    // callers already have the non-blocking path: `translate.start` plus `translate.status`.
+    // Headless callers (CLI `run --cmd`, MCP, scripts) go through `execute_headless`, which
+    // sets no such guard. The flag is host-set, like `link_policy`: no command can widen it.
+    if s.block_translate_run_on_ui {
+        return Err(EngineError::Other(
+            "translate.run blocks the UI thread; from the desktop (pane, control channel, MCP connected to the app) use translate.start and poll translate.status instead. translate.run is for headless callers only (gridcraft-cli, headless MCP)".into(),
+        ));
+    }
     let snap = snapshot(s, p)?;
     let backend = backend(s)?;
     let timeout = timeout_param(p)?;
@@ -965,11 +976,11 @@ fn model_download(s: &mut Session, p: &Json) -> Result<Json> {
 /// session, and headless callers (CLI, MCP, the control channel) inject the backend at startup.
 /// After either install command succeeds on the session that ran it, that session can use the
 /// model right away: the host's opener (installed at startup next to the model root) reopens
-/// the verified install, and the refreshed `translate_backend` replaces the old one. Without
-/// it a model-less session keeps reporting no-model after its own import or download.
+/// the just-installed `m.id`, and the refreshed `translate_backend` replaces the old one.
+/// Without it a model-less session keeps reporting no-model after its own import or download.
 #[cfg(not(target_arch = "wasm32"))]
 fn refresh_installed_backend(s: &mut Session, m: &ModelManifest) {
-    if let Some(reopened) = s.translate_backend_opener.as_ref().and_then(|open| open(s))
+    if let Some(reopened) = s.translate_backend_opener.as_ref().and_then(|open| open(s, m.id))
         && reopened.as_ref().is_some_and(|b| b.model_id() == m.id)
     {
         s.translate_backend = reopened;
@@ -1263,7 +1274,7 @@ mod tests {
         s.translate_backend = None;
         let opened: Arc<dyn gridcraft_translate::Backend> = Arc::new(Installed);
         let probe = Arc::clone(&opened);
-        s.translate_backend_opener = Some(Arc::new(move |_: &Session| Some(Some(Arc::clone(&probe)))));
+        s.translate_backend_opener = Some(Arc::new(move |_: &Session, _: &str| Some(Some(Arc::clone(&probe)))));
         let m = manifest::find("qwen3-1.7b").expect("manifest");
         refresh_installed_backend(&mut s, m);
         assert!(s.translate_backend.as_ref().is_some_and(|b| b.model_id() == opened.model_id()));
@@ -1292,7 +1303,7 @@ mod tests {
         let mut s = session();
         s.translate_backend = None;
         let other: Arc<dyn gridcraft_translate::Backend> = Arc::new(Other);
-        s.translate_backend_opener = Some(Arc::new(move |_: &Session| Some(Some(Arc::clone(&other)))));
+        s.translate_backend_opener = Some(Arc::new(move |_: &Session, _: &str| Some(Some(Arc::clone(&other)))));
         let m = manifest::find("qwen3-1.7b").expect("manifest");
         refresh_installed_backend(&mut s, m);
         assert!(s.translate_backend.is_none());
@@ -1308,5 +1319,28 @@ mod tests {
         let m = manifest::find("qwen3-1.7b").expect("manifest");
         refresh_installed_backend(&mut s, m);
         assert!(s.translate_backend.is_none());
+    }
+
+    #[test]
+    fn translate_run_is_refused_on_ui_sessions_but_start_is_not() {
+        // The failing case this guards: a desktop control-channel request runs `translate.run`
+        // on the UI frame and freezes the window for up to `timeoutMs`. The host sets
+        // `block_translate_run_on_ui`; the non-blocking path keeps working there, and
+        // headless sessions (flag unset) keep the blocking convenience.
+        let mut ui = session();
+        ui.block_translate_run_on_ui = true;
+        let err = ui.execute("translate.run", json!({"range": "A1", "from": "en", "to": "es"})).unwrap_err().to_string();
+        assert!(err.contains("blocks the UI thread"), "{err}");
+        assert!(err.contains("translate.start"), "{err}");
+        // `translate.start` snapshots and returns a job without blocking.
+        ui.execute("cell.set", json!({"cell": "A1", "input": "Hello"})).expect("cell");
+        let started = ui.execute("translate.start", json!({"range": "A1", "from": "en", "to": "es"})).expect("start");
+        assert!(started["job"].as_u64().is_some(), "{started}");
+        // A headless caller with no guard keeps `translate.run`.
+        let mut headless = session();
+        assert!(!headless.block_translate_run_on_ui);
+        headless.execute("cell.set", json!({"cell": "A1", "input": "Hello"})).expect("cell");
+        let report = headless.execute("translate.run", json!({"range": "A1", "from": "en", "to": "es"})).expect("run");
+        assert_eq!(report["stats"]["translated"], 1, "{report}");
     }
 }

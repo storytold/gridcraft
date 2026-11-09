@@ -179,10 +179,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   function API. **Estimate:** 25–40 h plus an owner decision.
 
 ### 22. AI features (F)
-- Local cell translation landed: Review › Language › Translate runs a user-downloaded Qwen3
-  GGUF model on the CPU through candle, offline, with consent, SHA-256 verification, cancel and
-  one-undo-step insert. It translates text cells only; formulas, numbers, dates, booleans, errors
-  and empty cells are skipped and reported.
+- Local cell translation landed on the desktop: Review › Language › Translate runs a
+  user-downloaded Qwen3 GGUF model on the CPU through candle, offline, with consent, SHA-256
+  verification, cancel and one-undo-step insert. It translates text cells only; formulas,
+  numbers, dates, booleans, errors and empty cells are skipped and reported. The web build
+  ships no model backend, so translation there remains future work.
 - Still missing: an in-app assistant, natural-language formulas, Analyze Data, model-based
   language detection, and `TRANSLATE()`/`DETECTLANGUAGE()` as worksheet functions (separate
   follow-ups over the same engine). Agent control via MCP is already strong.

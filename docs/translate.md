@@ -19,8 +19,10 @@ channel, `gridcraft-cli run --cmd` and MCP see, because every action is a normal
   placeholder tokens (`{name}`, `{{name}}`, `${name}`, `%s`, `%1$s`), and verifies every marker
   comes back before a translated string is accepted.
 - Auto-detects the source language with a pure heuristic (Unicode script plus stopword and
-  diacritic scoring). A short or ambiguous string comes back with low confidence and is **not**
-  translated: the pane asks for a source language instead of guessing.
+  diacritic scoring). With the shipped Qwen3 backend, `from: auto` reaches the model, which
+  translates into the target directly; the detector's answer is reported but never blocks.
+  Backends without `auto_source` support instead fail low-confidence strings (`lowConfidence`)
+  rather than guessing, and the pane asks for a source language.
 - There is no whole-workbook mode, real-time translation, comment/chart/shape translation, or
   translation memory in the file. `TRANSLATE()` / `DETECTLANGUAGE()` remain separate follow-ups
   (see `docs/function-parity.md`).
@@ -51,12 +53,12 @@ WASM backend ships in v1.
 | `translate.start` | `{range?, sheet?, from?: "auto"\|tag, to?, maxCells?}` | `{job, cells, skipped}` | Snapshots and starts a worker; never writes. `to` defaults to the remembered target. |
 | `translate.status` | `{job}` | `{state, progress, segments?, skipped?, stats?, error?}` | `state`: `queued`, `running`, `done`, `cancelled`, `failed`. |
 | `translate.cancel` | `{job}` | `{cancelled}` | Idempotent; a cancelled job writes nothing. |
-| `translate.run` | start's params plus `timeoutMs?` | `{job, segments, stats, model, from, to, elapsedMs}` | Blocking convenience for CLI/MCP; writes nothing. Returns the `job` id as well as the report, so the same result can be passed to `translate.insert` or `translate.copy`; it stays readable while the session keeps it. A timeout is an error. |
+| `translate.run` | start's params plus `timeoutMs?` | `{job, segments, stats, model, from, to, elapsedMs}` | Blocking convenience for headless callers (CLI, headless MCP); writes nothing. Refused on UI-thread sessions (desktop pane, control channel, MCP connected to the app), which use `translate.start` plus `translate.status` instead. Returns the `job` id as well as the report, so the same result can be passed to `translate.insert` or `translate.copy`; it stays readable while the session keeps it. A timeout is an error. |
 | `translate.insert` | `{range?, job? \| values?, mode?: "replace"\|"emptyOnly"}` | `{cells, skipped}` | Journaled, one undo step, all-or-nothing on errors. `values` is `[{cell, text}]` or rows of text from `range`. |
 | `translate.copy` | `{job, cells?}` | `{chars, cells}` | Puts the translated lines on the engine clipboard (`Session::translate_clipboard`); the pane copies them to the system clipboard on the explicit Copy action. |
 | `translate.models` | `{}` | `{models, active, modelsDir, accelerators}` | Installed/available models, state, licence, hashes and the model directory. |
-| `translate.modelImport` | `{path, id?, consent: true}` | model record | Copies and verifies a folder; refuses without consent. On the session that ran it, refreshes the backend through the host's opener, so the model is usable right away. |
-| `translate.modelDownload` | `{id, consent: true}` | model record | URL comes from the shipped manifest, never from the caller; refuses without consent and without a host transport. On the session that ran it, refreshes the backend through the host's opener, so the model is usable right away. |
+| `translate.modelImport` | `{path, id?, consent: true}` | model record | Copies and verifies a folder; refuses without consent. On a host session (desktop, CLI) refreshes the backend through the host's opener, so the model is usable right away; a session with no opener (web build) still needs one injected. |
+| `translate.modelDownload` | `{id, consent: true}` | model record | URL comes from the shipped manifest, never from the caller; refuses without consent and without a host transport. Same refresh rule as `translate.modelImport`. |
 | `translate.modelRemove` | `{id}` | `{removed}` | Removes the model directory; unknown or traversing ids are refused. |
 
 Only `review.translate` is a ribbon-catalog entry, so it is the one that moves from missing to

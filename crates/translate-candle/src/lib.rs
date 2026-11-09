@@ -297,12 +297,25 @@ pub fn models_root() -> PathBuf {
     PathBuf::from("models")
 }
 
-/// Opens the installed `qwen3-1.7b` model when its directory exists.
+/// Opens the installed model `id` when its directory exists. Falls back to any verified
+/// installed manifest when `id` is unknown or not installed, so an install always becomes
+/// usable; `None` only when no verified model directory exists at all.
 pub fn installed_backend(root: &Path) -> Option<std::sync::Arc<dyn gridcraft_translate::Backend>> {
-    if !root.join("qwen3-1.7b").is_dir() {
+    installed_backend_for(root, "qwen3-1.7b").or_else(|| {
+        manifest::MANIFESTS.iter().find_map(|m| {
+            (m.id != "qwen3-1.7b")
+                .then(|| installed_backend_for(root, m.id))
+                .flatten()
+        })
+    })
+}
+
+/// Opens the installed model `id` when its directory verifies; `None` otherwise.
+pub fn installed_backend_for(root: &Path, id: &str) -> Option<std::sync::Arc<dyn gridcraft_translate::Backend>> {
+    if !manifest::valid_id(id) || !root.join(id).is_dir() {
         return None;
     }
-    CandleBackend::open(root, "qwen3-1.7b").ok().map(|b| std::sync::Arc::new(b) as std::sync::Arc<dyn gridcraft_translate::Backend>)
+    CandleBackend::open(root, id).ok().map(|b| std::sync::Arc::new(b) as std::sync::Arc<dyn gridcraft_translate::Backend>)
 }
 
 /// The model files a manifest lists.
