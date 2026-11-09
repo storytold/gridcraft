@@ -1,3 +1,5 @@
+#[cfg(test)]
+use super::CellRef;
 use super::Trace;
 use super::cursor::update_cursor;
 use super::editor::{in_cell_editor, list_picker, validation_arrow};
@@ -8,12 +10,126 @@ use super::quadrant::{QuadrantPaint, mirror_painted, paint_quadrant};
 use super::selection::{SelectionPaintInput, paint_selection};
 use super::tables::{TableHeading, paint_filter_button, table_headings};
 use super::{
-    Align2, Arc, CfCache, Color32, DISPLAY_SCALE, Drag, MAX_COLS, MAX_ROWS, Painter, PaneQuad, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke,
+    Align2, Arc, CfCache, Color32, DISPLAY_SCALE, Drag, MAX_COLS, MAX_ROWS, Painter, PaneQuad, Pos2, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke,
     StrokeKind, Tokens, WHEEL_ZOOM_IDLE, WheelZoom, Workbook, col_to_letters, heading_font_size, json, pos2, theme, vec2, wheel_zoom_step,
     zoom_glide_step,
 };
-#[cfg(test)]
-use super::{CellRef, Pos2};
+use crate::SheetView;
+
+/// One pointer step of a frame, in the order the window sent it.
+enum PanStep {
+    /// The middle button went down here.
+    Down(Pos2),
+    /// The pointer moved here.
+    Move(Pos2),
+    /// The middle button came up here.
+    Up(Pos2),
+}
+
+/// What the middle-button pan needs from one frame.
+struct MiddlePan<'a> {
+    /// The press landed on the grid and no editor wants it.
+    start: bool,
+    /// The button is still down, or went up in this frame.
+    down: bool,
+    focused: bool,
+    /// The frame's middle-button and pointer-move events, in order.
+    steps: &'a [PanStep],
+    /// Where the pointer ended the frame, when nothing recorded it as a step.
+    pos: Option<Pos2>,
+    /// Screen points per sheet point, when the pan is running.
+    z: Option<f32>,
+    rtl: bool,
+}
+
+/// AutoCAD's pan. The sheet follows the steps between the press and the release, in the order the
+/// window sent them: a move that follows the press counts, a move that follows the release does not.
+/// A release while the window is unfocused never reaches egui (it clears the keys but not the
+/// pointer buttons), so losing focus ends the pan too.
+fn middle_pan(app: &mut SheetApp, view: &mut SheetView, g: MiddlePan<'_>) {
+    let mut panning = app.grid.middle_pan;
+    let mut last = app.grid.middle_pan_pos;
+    let mut saw_press = false;
+    for step in g.steps {
+        match *step {
+            PanStep::Down(pos) if g.start && !panning => {
+                begin_pan(app, Some(pos));
+                panning = true;
+                last = Some(pos);
+                saw_press = true;
+            }
+            PanStep::Down(_) => saw_press = true,
+            PanStep::Move(pos) if panning && g.focused => pan_by(view, &mut last, pos, g.z, g.rtl),
+            PanStep::Move(_) => {}
+            PanStep::Up(pos) => {
+                if panning && g.focused {
+                    pan_by(view, &mut last, pos, g.z, g.rtl);
+                }
+                panning = false;
+                last = None;
+            }
+        }
+    }
+    if g.start && !saw_press {
+        // The button came down without a press event of its own: start where the pointer is now.
+        begin_pan(app, g.pos);
+        panning = true;
+        last = g.pos;
+    }
+    if !g.down || !g.focused {
+        panning = false;
+        last = None;
+    }
+    app.grid.middle_pan = panning;
+    app.grid.middle_pan_pos = last;
+}
+
+/// Start the pan at `pos`, dropping whatever drag the press interrupted.
+fn begin_pan(app: &mut SheetApp, pos: Option<Pos2>) {
+    // A primary drag that commits on release (fill, freeze, column reorder, move) would otherwise
+    // stay pending: the pan skips the grid's interactions, so the release is never handled and the
+    // no-pointer fallback later commits a stale destination.
+    if matches!(app.grid.drag, Drag::Move { .. } | Drag::Fill { .. } | Drag::Freeze { .. } | Drag::MoveCols { .. }) {
+        app.grid.drag = Drag::None;
+    }
+    // A Page Layout ruler drag commits `pageLayout.pageSetup` when the primary button comes up; the
+    // pan skips the paper view's interactions, so that release would only be seen once the pan ends,
+    // at a later pointer position. Drop the drag (and its preview) with it.
+    app.grid.ruler_drag = None;
+    app.grid.middle_pan = true;
+    app.grid.middle_pan_pos = pos;
+}
+
+/// Move the sheet by the step from where the pan left off to `pos`, and remember `pos`.
+fn pan_by(view: &mut SheetView, last: &mut Option<Pos2>, pos: Pos2, z: Option<f32>, rtl: bool) {
+    let (Some(from), Some(z)) = (*last, z) else { return };
+    let mut d = pos - from;
+    if rtl {
+        d.x = -d.x;
+    }
+    view.scroll -= d / z;
+    *last = Some(pos);
+}
+
+/// The frame's middle-button and pointer-move events, in window order. Empty unless the button is
+/// involved or a pan is running, so an ordinary frame allocates nothing.
+fn frame_pan_steps(ui: &egui::Ui, panning: bool) -> Vec<PanStep> {
+    ui.input(|i| {
+        let middle = egui::PointerButton::Middle;
+        if !panning && !i.pointer.button_pressed(middle) && !i.pointer.button_down(middle) {
+            return Vec::new();
+        }
+        i.events
+            .iter()
+            .filter_map(|e| match e {
+                egui::Event::PointerButton { pos, button, pressed: true, .. } if *button == middle => Some(PanStep::Down(*pos)),
+                egui::Event::PointerButton { pos, button, pressed: false, .. } if *button == middle => Some(PanStep::Up(*pos)),
+                egui::Event::PointerMoved(pos) => Some(PanStep::Move(*pos)),
+                _ => None,
+            })
+            .collect()
+    })
+}
 
 /// The line positions and outlines of sheet `si`: the ones built for it before while it is the
 /// same sheet, else built now and kept (see `GridState::lines`).
@@ -83,7 +199,17 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         Geo::with_lines(sh, rect, scroll, &lines)
     };
     // Scrolling.
-    let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.time));
+    let (scroll_delta, zoom_delta, modifiers, now, middle_pressed, middle_down, pointer_pos) = ui.input(|i| {
+        (
+            i.smooth_scroll_delta,
+            i.zoom_delta(),
+            i.modifiers,
+            i.time,
+            i.pointer.button_pressed(egui::PointerButton::Middle),
+            i.pointer.button_down(egui::PointerButton::Middle),
+            i.pointer.latest_pos(),
+        )
+    });
     if (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx()) {
         if zoom_delta != 1.0 {
             // egui's zoom factor is e^(speed × points); one notch is `line_scroll_speed` points.
@@ -128,6 +254,29 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             view.scroll -= d / z;
         }
     }
+    // AutoCAD's pan: holding the middle button drags the sheet with the pointer. It starts on the
+    // press, not after egui's drag threshold, so the content follows from the first point, and it
+    // stops dead on release (no inertia). Nothing selects while it is held. A cell, text box or
+    // header/footer editor keeps the middle click: X11 pastes PRIMARY with it.
+    let editing = app.editor.is_some() || app.text_box_editor.is_some() || app.grid.hf_edit.is_some();
+    let pan_start = middle_pressed && !editing && (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx());
+    let z = (pan_start || app.grid.middle_pan).then(|| if paper { make_geo(app, view.scroll).z } else { sh.zoom as f32 / 100.0 * DISPLAY_SCALE });
+    // The pan follows the frame's events in order: a move that follows the press counts, a move
+    // that follows the release does not.
+    let pan_steps = frame_pan_steps(ui, app.grid.middle_pan);
+    middle_pan(
+        app,
+        &mut view,
+        MiddlePan {
+            start: pan_start,
+            down: middle_down,
+            focused: ui.input(|i| i.focused),
+            steps: &pan_steps,
+            pos: pointer_pos,
+            z,
+            rtl: sh.right_to_left,
+        },
+    );
     // A one-finger touch drag pans the sheet, the content following the finger; it doesn't select.
     // (Two fingers pinch-zoom through `zoom_delta` above.)
     if resp.drag_started() && ui.input(|i| i.any_touches()) {
@@ -370,7 +519,9 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
         if !resp.dragged() {
             app.grid.touch_pan = false;
         }
-    } else {
+    } else if !app.grid.middle_pan {
+        // A held middle button pans the sheet and clicks nothing (its release frame reaches
+        // `interact` with no button down and does nothing).
         crate::paper_view::interact(app, ui, resp, geo, sh, wb);
         interact(app, ui, resp, geo, sh, wb);
     }
