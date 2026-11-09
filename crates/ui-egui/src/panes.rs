@@ -426,7 +426,7 @@ fn translate(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     }
-    let record = if shown_id.as_str().is_empty() {
+    let record = if shown_id.is_empty() {
         Json::Null
     } else if let Some(found) = list.iter().find(|r| r["id"].as_str() == Some(shown_id.as_str())).cloned() {
         found
