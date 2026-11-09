@@ -94,10 +94,14 @@ pub(super) fn selection_move(s: &mut Session, p: &Json) -> Result<Json> {
         while (sheet.is_row_hidden(t.row) || sheet.is_col_hidden(t.col)) && guard < 100_000 {
             // Step each hidden axis along its own direction, so a diagonal exit from a merge
             // (Tab-run return column) keeps its column while skipping hidden rows.
-            let n = CellRef::new(
+            let mut n = CellRef::new(
                 if sheet.is_row_hidden(t.row) { t.offset_clamped(dr.signum(), 0).row } else { t.row },
                 if sheet.is_col_hidden(t.col) { t.offset_clamped(0, dc.signum()).col } else { t.col },
             );
+            if n == t {
+                // The hidden axis has no direction (a move along the other axis): walk as before.
+                n = t.offset_clamped(dr.signum(), dc.signum());
+            }
             if n == t {
                 break;
             }
