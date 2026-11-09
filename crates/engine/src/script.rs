@@ -368,10 +368,13 @@ pub(crate) fn execute_call(s: &mut Session, method: &str, params: &Json) -> Resu
         "Range.clear" => {
             let range = parse_range(params)?;
             let apply = params.get("applyTo").and_then(Json::as_str).unwrap_or("all").to_ascii_lowercase();
+            // `ExcelScript.ClearApplyTo` has exactly these three members; a clear is destructive,
+            // so an unknown name is refused instead of clearing the formats too.
             let id = match apply.as_str() {
-                "contents" | "resercontents" | "resetcontents" => "edit.clearContents",
+                "contents" => "edit.clearContents",
                 "formats" => "edit.clearFormats",
-                _ => "edit.clearAll",
+                "all" => "edit.clearAll",
+                other => return Err(BridgeError::invalid_argument(format!("unknown clear applyTo `{other}` (all, contents, formats)"))),
             };
             let sheet = sheet_name(s, params)?;
             command(s, id, json!({"sheet": sheet, "range": range.a1()}))?;
@@ -711,10 +714,14 @@ pub(crate) fn execute_call(s: &mut Session, method: &str, params: &Json) -> Resu
             let alert = params.get("alert").and_then(Json::as_object).cloned().unwrap_or_default();
             let (sheet, cell) = checked_cell(s, params, "cell")?;
             let mut p = validation_rule(s, sheet, cell)?;
-            for (from, to) in [("message", "errorMessage"), ("title", "errorTitle"), ("style", "errorStyle")] {
+            for (from, to) in [("message", "errorMessage"), ("title", "errorTitle")] {
                 if let Some(v) = alert.get(from) {
                     p.insert(to.into(), v.clone());
                 }
+            }
+            // `getErrorAlert` reports `Stop`; `data.validation` takes `stop`.
+            if let Some(style) = alert.get("style").and_then(Json::as_str) {
+                p.insert("errorStyle".into(), Json::String(style.to_ascii_lowercase()));
             }
             command(s, "data.validation", Json::Object(p))?;
             Ok(Json::Null)
@@ -734,7 +741,8 @@ pub(crate) fn execute_call(s: &mut Session, method: &str, params: &Json) -> Resu
         "DataValidation.setIgnoreBlanks" => {
             let (sheet, cell) = checked_cell(s, params, "cell")?;
             let mut p = validation_rule(s, sheet, cell)?;
-            p.insert("allowBlank".into(), params.get("ignoreBlanks").cloned().unwrap_or(Json::Bool(true)));
+            // `data.validation` takes `ignoreBlank`; `allowBlank` here changed nothing.
+            p.insert("ignoreBlank".into(), params.get("ignoreBlanks").cloned().unwrap_or(Json::Bool(true)));
             command(s, "data.validation", Json::Object(p))?;
             Ok(Json::Null)
         }
@@ -1147,6 +1155,20 @@ fn comment_get(s: &mut Session, method: &str, params: &Json) -> Result<Json, Bri
     })
 }
 
+/// The `data.validation` name for a name `script.validation` reported. The engine stores the
+/// ExcelScript member name (`TextLength`, `NotBetween`, `Stop`), while `data.validation` parses
+/// the camelCase form (`textLength`, `notBetween`, `stop`) case-sensitively, so passing the
+/// reported name straight back would be refused (or, for the type, read as another rule).
+fn validation_command_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut chars = name.chars();
+    if let Some(first) = chars.next() {
+        out.extend(first.to_lowercase());
+        out.push_str(chars.as_str());
+    }
+    out
+}
+
 /// The current rule of a cell as `data.validation` parameters, for a setter that changes one part.
 fn validation_rule(s: &mut Session, sheet: String, cell: CellRef) -> Result<Map<String, Json>, BridgeError> {
     let rule = command(s, "script.validation", json!({"sheet": sheet, "cell": cell.a1()}))?;
@@ -1170,7 +1192,15 @@ fn validation_rule(s: &mut Session, sheet: String, cell: CellRef) -> Result<Map<
             "inCellDropdown",
         ] {
             if let Some(v) = fields.get(key) {
-                p.insert(key.into(), v.clone());
+                // `script.validation` names the rule as ExcelScript does (`allowBlank`,
+                // `inCellDropdown`); `data.validation` takes `ignoreBlank` and `dropdown`.
+                let (name, value) = match key {
+                    "allowBlank" => ("ignoreBlank", v.clone()),
+                    "inCellDropdown" => ("dropdown", v.clone()),
+                    "type" | "operator" | "errorStyle" => (key, v.as_str().map_or_else(|| v.clone(), |s| Json::String(validation_command_name(s)))),
+                    _ => (key, v.clone()),
+                };
+                p.insert(name.into(), value);
             }
         }
     }

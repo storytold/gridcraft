@@ -1045,6 +1045,22 @@ mod tests {
     }
 
     #[test]
+    fn a_recorded_range_write_keeps_the_blank_it_cleared() {
+        // A `null` in the values clears its cell: the cell then has no stored entry, and the
+        // capture holds `null` for it. One blank must not turn the whole step into "uncaptured".
+        let mut s = session("record-range-blank");
+        s.execute("cell.set", json!({"cell": "A1", "input": "old"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1", "input": "old"})).unwrap();
+        s.execute("script.record", json!({"on": true})).unwrap();
+        s.execute("range.setValues", json!({"range": "A1:B1", "values": [["new", null]]})).unwrap();
+        let stopped = s.execute("script.record", json!({"on": false})).unwrap();
+        let code = stopped["code"].as_str().unwrap_or_default();
+        assert!(code.contains("getRange(\"A1:B1\").setValues([[\"new\", null]]);"), "{code}");
+        assert_eq!(stopped["skipped"], json!([]), "{code}");
+        assert_eq!(stopped["steps"], 1, "{code}");
+    }
+
+    #[test]
     fn a_range_write_above_the_capture_bound_is_skipped() {
         let mut s = session("record-uncaptured");
         s.execute("script.record", json!({"on": true})).unwrap();
@@ -1127,6 +1143,88 @@ mod tests {
         }
         assert_eq!(value(&s, 0, "A1"), Value::Number(42.0), "typed input stays a number");
         assert_eq!(value(&s, 0, "B1"), Value::Text("42".into()), "a verbatim write stays text");
+    }
+
+    /// The cell's number format, as the stored style holds it.
+    fn number_format(s: &Session, a1: &str) -> String {
+        let doc = s.doc().unwrap();
+        let sh = doc.wb.sheet(0).unwrap();
+        doc.wb.styles.get(sh.style_id(CellRef::parse(a1).unwrap())).num_fmt.as_str().to_string()
+    }
+
+    #[test]
+    fn a_validation_setter_keeps_the_rule_it_rewrites() {
+        // `script.validation` names the rule as ExcelScript does (`TextLength`, `NotBetween`,
+        // `Warning`); `data.validation` parses the camelCase names case-sensitively and fails on
+        // anything else. A setter that writes one part back must keep the rest of the rule.
+        let mut s = session("validation-setter");
+        s.execute(
+            "data.validation",
+            json!({
+                "range": "A1",
+                "type": "textLength",
+                "operator": "notBetween",
+                "formula1": "1",
+                "formula2": "3",
+                "errorStyle": "warning",
+                "ignoreBlank": false,
+            }),
+        )
+        .unwrap();
+        let rule = |s: &Session| s.doc().unwrap().wb.sheet(0).and_then(|sh| sh.validations.first().cloned());
+        {
+            let mut bridge = crate::script::SessionBridge { session: &mut s };
+            let alert = BridgeCall::new(
+                "DataValidation.setErrorAlert",
+                json!({"cell": "A1", "alert": {"message": "Use 1 to 3", "title": "Length", "style": "Stop"}}),
+            );
+            gridcraft_script::BridgeExecutor::execute(&mut bridge, &alert).unwrap();
+        }
+        let dv = rule(&s).expect("the rule survives its setter");
+        assert_eq!(dv.kind, gridcraft_model::ValidationKind::TextLength);
+        assert_eq!(dv.op, gridcraft_model::CfOperator::NotBetween);
+        assert_eq!(dv.f1, "1");
+        assert_eq!(dv.f2.as_deref(), Some("3"));
+        assert_eq!(dv.error_style, gridcraft_model::ErrorStyle::Stop, "`Stop` from getErrorAlert is the `stop` the command takes");
+        assert_eq!(dv.error_message, "Use 1 to 3");
+        assert_eq!(dv.error_title, "Length");
+        assert!(!dv.allow_blank, "the rule kept the blank flag it had");
+        {
+            let mut bridge = crate::script::SessionBridge { session: &mut s };
+            let blanks = BridgeCall::new("DataValidation.setIgnoreBlanks", json!({"cell": "A1", "ignoreBlanks": true}));
+            gridcraft_script::BridgeExecutor::execute(&mut bridge, &blanks).unwrap();
+        }
+        assert!(rule(&s).expect("the rule survives its setter").allow_blank, "setIgnoreBlanks writes the blank flag");
+    }
+
+    #[test]
+    fn a_range_clear_applies_only_what_was_asked() {
+        let mut s = session("clear-apply");
+        s.execute("cell.set", json!({"cell": "A1", "input": "Text"})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "A1", "code": "@"})).unwrap();
+        assert_eq!(number_format(&s, "A1"), "@");
+        {
+            let mut bridge = crate::script::SessionBridge { session: &mut s };
+            let contents = BridgeCall::new("Range.clear", json!({"range": "A1", "applyTo": "Contents"}));
+            gridcraft_script::BridgeExecutor::execute(&mut bridge, &contents).unwrap();
+        }
+        assert_eq!(value(&s, 0, "A1"), Value::Empty, "contents cleared");
+        assert_eq!(number_format(&s, "A1"), "@", "the format stays with the cell");
+        s.execute("cell.set", json!({"cell": "A1", "input": "Text"})).unwrap();
+        {
+            let mut bridge = crate::script::SessionBridge { session: &mut s };
+            let formats = BridgeCall::new("Range.clear", json!({"range": "A1", "applyTo": "Formats"}));
+            gridcraft_script::BridgeExecutor::execute(&mut bridge, &formats).unwrap();
+        }
+        assert_eq!(value(&s, 0, "A1"), Value::Text("Text".into()), "the contents stay");
+        assert_eq!(number_format(&s, "A1"), "General", "the format went back to General");
+        // A clear deletes: an applyTo the enum does not have is refused, not read as `all`.
+        let mut bridge = crate::script::SessionBridge { session: &mut s };
+        let bogus = BridgeCall::new("Range.clear", json!({"range": "A1", "applyTo": "resercontents"}));
+        let error = gridcraft_script::BridgeExecutor::execute(&mut bridge, &bogus).unwrap_err();
+        assert_eq!(error.code, gridcraft_script::ErrorCode::InvalidArgument);
+        assert!(error.message.contains("resercontents"), "{}", error.message);
+        assert_eq!(value(&s, 0, "A1"), Value::Text("Text".into()), "nothing was cleared");
     }
 
     #[test]

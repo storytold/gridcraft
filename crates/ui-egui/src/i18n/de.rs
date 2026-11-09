@@ -528,6 +528,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bun is not installed" => "Bun ist nicht installiert",
         "Download Bun…" => "Bun herunterladen…",
         "Import Bun…" => "Bun importieren…",
+        "Check Again" => "Erneut prüfen",
         "Change Folder…" => "Ordner ändern…",
         "Reset Folder" => "Ordner zurücksetzen",
         "Import Script…" => "Skript importieren…",

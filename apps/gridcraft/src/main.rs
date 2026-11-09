@@ -393,7 +393,9 @@ fn main() -> eframe::Result<()> {
     let mut session = Session::new();
     // Office Scripts keep their own folder next to the settings (never in the workbook), and use
     // Bun when this machine has one. The pane can pick one up installed while GridCraft runs.
-    if let Some(dir) = config_dir() {
+    // Runs without preferences (agents' test runs) keep no folder of their own either: recording
+    // a script would otherwise write into the user's settings folder.
+    if let Some(dir) = config_dir().filter(|_| prefs_enabled()) {
         let scripts = dir.join("scripts").display().to_string();
         session.scripts_dir_default = Some(scripts.clone());
         session.scripts_dir = Some(scripts);

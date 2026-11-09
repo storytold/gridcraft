@@ -156,8 +156,8 @@ such data as a rectangle. Above 10,000 cells the stored values are not captured,
 left out with a comment saying why: split a large write into blocks of at most 10,000 cells. The
 values are the ones the write stored — typed input and the destination format applied, a formula
 kept as a formula, and text that would read as a formula written back with the apostrophe that
-keeps it text (`'=1+1`). A `cell.set` records whether its typed input was parsed, so the replay
-keeps what the cell read; a `range.setValues` records its stored values verbatim. `setText` and
+keeps it text (`'=1+1`). A `cell.set` records the value the cell stored, like a
+`range.setValues`, and the replay keeps it verbatim. `setText` and
 `setTexts` store the text they are given: a leading apostrophe stays text there, never the marker.
 
 With an unsaved draft in the editor, stopping the recorder saves the recording and lists it but

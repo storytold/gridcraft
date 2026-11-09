@@ -730,7 +730,10 @@ impl Session {
             let mut out = Vec::new();
             for ci in 0..row_cells.len() {
                 let at = start.offset(ri as i64, ci as i64)?;
-                out.push(Self::encoded_cell_value(sheet, at)?);
+                // A blank cell has no stored entry (the write removed it); the recording holds
+                // `null` for it, which the replay clears with. Taking the whole write as
+                // uncaptured over one blank would drop the step.
+                out.push(Self::encoded_cell_value(sheet, at).unwrap_or(Json::Null));
             }
             rows.push(Json::Array(out));
         }
