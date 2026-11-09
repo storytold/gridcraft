@@ -453,6 +453,7 @@ pub struct Page {
     depth: u32,
     arabic: arabic::Subset,
     error: Option<Error>,
+    missing_arabic_font: bool,
 }
 
 /// Most bytes of content per page before further drawing is dropped (keeps hostile inputs from
@@ -719,7 +720,9 @@ impl Page {
         // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
         let matrix = format!("{} {} {} {} {} {}", n(cs), n(-sn), n(sn), n(cs), n(origin.x), n(self.y(origin.y)));
         let size = size.min(10_000.0);
-        if arabic::shaped(font, text) {
+        let shaping = arabic::shaping(font, text);
+        self.missing_arabic_font |= shaping == arabic::Shaping::NoFont;
+        if shaping == arabic::Shaping::Shaped {
             self.shaped_text(&matrix, size, font, color, text, direction);
         } else {
             self.standard_text(&matrix, size, font, color, text, direction);
@@ -897,6 +900,7 @@ impl PdfDoc {
             depth: 0,
             arabic: arabic::Subset::default(),
             error: None,
+            missing_arabic_font: false,
         });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
@@ -911,8 +915,14 @@ impl PdfDoc {
         self.pages.get_mut(i)
     }
 
+    /// Whether some Arabic text was drawn with the standard fonts, as `?`, because no Arabic face
+    /// is bundled or installed.
+    pub fn missing_arabic_font(&self) -> bool {
+        self.pages.iter().any(|page| page.missing_arabic_font)
+    }
+
     /// Serializes the document. A document without pages gets one blank Letter page.
-    /// Returns an error if Arabic text could not be rendered without losing characters.
+    /// Returns an error if the Arabic font is unusable or Arabic text exceeds a size limit.
     pub fn finish(mut self) -> Result<Vec<u8>, Error> {
         for page in &self.pages {
             if let Some(error) = &page.error {

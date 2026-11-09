@@ -84,16 +84,12 @@ fn pdf_export_keeps_safe_links_on_their_printed_pages() {
 }
 
 #[test]
-fn unrenderable_arabic_does_not_overwrite_the_export_destination() {
+fn arabic_with_characters_its_font_lacks_still_exports() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 😀"})).unwrap();
-    let path = std::env::temp_dir().join(format!("gridcraft-arabic-failed-export-{}.pdf", std::process::id()));
-    std::fs::write(&path, b"previous document").unwrap();
-    let result = s.execute("file.exportPdf", json!({"path": path.to_str().unwrap()}));
-    assert!(result.is_err());
-    assert_eq!(std::fs::read(&path).unwrap(), b"previous document");
-    assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Text("مرحبا 😀".into()));
-    std::fs::remove_file(path).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "مرحبا Привет"})).unwrap();
+    let out = s.execute("file.exportPdf", json!({})).unwrap();
+    assert_eq!(out["pages"], 1);
 }
 
 #[test]
