@@ -29,6 +29,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("core", Class::Layer(0)),
     ("numfmt", Class::Layer(0)),
     ("pdf", Class::Layer(0)),
+    // The confined launcher for helper processes; the Python worker and the apps use it.
+    ("sandbox", Class::Layer(0)),
     ("formula", Class::Layer(1)),
     ("functions", Class::Layer(1)),
     // Equation layout (LaTeX to glyphs, rules and paths) and OMML, on top of RaTeX.
@@ -36,6 +38,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("model", Class::Layer(2)),
     ("calc", Class::Layer(2)),
     ("xlsx", Class::Layer(2)),
+    ("python", Class::Layer(2)),
     ("chart", Class::Layer(3)),
     ("engine", Class::Layer(5)),
     ("ui-egui", Class::Layer(6)),

@@ -184,8 +184,13 @@ pub fn adopt_python(wb: &mut Workbook) -> Vec<String> {
                 range.iter().map(|c| if c == anchor { sh.cell(c).map(|x| x.value.clone()).unwrap_or_default() } else { sh.value(c) }).collect();
             let Some(array) = gridcraft_core::Array::new(range.height() as usize, range.width() as usize, data) else { continue };
             if let Some(py) = sh.cells.get_mut(anchor).and_then(|x| x.py.as_mut()) {
-                std::sync::Arc::make_mut(py).output =
-                    Some(gridcraft_model::PyOutput { value: array.into(), type_name: "list".into(), preview: String::new(), convertible: true });
+                std::sync::Arc::make_mut(py).output = Some(gridcraft_model::PyOutput {
+                    value: array.into(),
+                    type_name: "list".into(),
+                    preview: String::new(),
+                    convertible: true,
+                    ..Default::default()
+                });
             }
         }
     }

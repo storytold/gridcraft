@@ -2,8 +2,16 @@
 //! `PY("…",0|1)` formula of the function's syntax, and the `xl("…")` references inside it). An
 //! xlsx file keeps the code in its Python part instead (see the xlsx crate).
 
-use gridcraft_core::{CellError, Value};
+use std::sync::Arc;
+
+use gridcraft_core::{Array, CellError, Value};
 use serde::{Deserialize, Serialize};
+
+use crate::cell::CellPicture;
+
+mod table;
+
+pub use table::PyTable;
 
 /// Excel's limit on the characters of one formula. A Python cell's code must fit in it once it is
 /// written as the PY formula of the function's syntax ([`PyCode::to_file_formula`]): quotes are
@@ -20,6 +28,109 @@ pub const FILE_PREFIX: &str = "_xlfn._xlws.";
 /// Characters in one string literal of a `PY(…)` formula (Excel's limit for a literal).
 const CHUNK_CHARS: usize = 255;
 
+/// The most characters of initialization code that run, and that a command or the editor takes. The
+/// format sets no limit; this keeps what a file can make the app hold, lay out and send small.
+pub const MAX_INIT_CHARS: usize = 65_536;
+
+/// Most characters of initialization code kept from a file: one more than [`MAX_INIT_CHARS`], so
+/// code that was cut still fails [`PyEnvironment::fits`], also once it is saved and read again, and
+/// never runs as if it were whole.
+pub const MAX_INIT_CHARS_KEPT: usize = MAX_INIT_CHARS + 1;
+
+/// A workbook's Python environment ([MS-XLSX] 2.6.250): the initialization code that runs before its
+/// Python cells, in their shared variables, and what a file says about it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PyEnvironment {
+    pub code: String,
+    /// A person wrote or changed the code (the format's `userModified`). Without it the code is what
+    /// the application that wrote the file put there, and a package it needs isn't a reason to stop
+    /// the cells: see the `python` crate's `Init`.
+    pub user_modified: bool,
+    /// The environment's GUID as the file has it. A workbook that never had one gets one when saved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// What the file held around it that GridCraft doesn't read. Not in JSON, as with
+    /// [`crate::Preserved`].
+    #[serde(skip)]
+    pub kept: Option<std::sync::Arc<PyEnvironmentXml>>,
+}
+
+/// The raw XML of the Python part that GridCraft doesn't read, written back as it came. Opaque to
+/// everything except the file-format crate.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PyEnvironmentXml {
+    /// Attributes of `python`, such as namespace declarations, besides the default namespace.
+    pub root_attrs: String,
+    /// Elements of `python` besides `environmentDefinition` and `pythonScripts`.
+    pub root_elements: String,
+    /// Attributes of `environmentDefinition` besides `id`.
+    pub environment_attrs: String,
+    /// Elements of `environmentDefinition` besides `initialization`.
+    pub environment_elements: String,
+    /// `environmentDefinition` had no `initialization`, which a save doesn't add while there is no
+    /// code.
+    pub no_initialization: bool,
+    /// The file had an `environmentDefinition` with no readable GUID, which a save has too.
+    pub definition: bool,
+    /// Attributes of `initialization` besides `userModified`.
+    pub initialization_attrs: String,
+    /// Elements of `initialization` besides `code`.
+    pub initialization_elements: String,
+}
+
+impl PyEnvironment {
+    /// Code a person gave GridCraft.
+    pub fn from_person(code: &str) -> PyEnvironment {
+        PyEnvironment { code: normalize_code(code), user_modified: true, ..PyEnvironment::default() }
+    }
+
+    /// Whether there is anything to run.
+    pub fn has_code(&self) -> bool {
+        !self.code.trim().is_empty()
+    }
+
+    /// Whether the code is short enough to run ([`MAX_INIT_CHARS`]). The work is bounded by the
+    /// limit, not by the code.
+    pub fn fits(&self) -> bool {
+        init_fits(&self.code)
+    }
+}
+
+/// Whether `code` is short enough to be initialization code ([`MAX_INIT_CHARS`]).
+pub fn init_fits(code: &str) -> bool {
+    code.chars().nth(MAX_INIT_CHARS).is_none()
+}
+
+/// `code` cut to what a file may make the app keep ([`MAX_INIT_CHARS_KEPT`]). Returns whether it was
+/// cut.
+pub fn cap_init_code(code: &mut String) -> bool {
+    match code.char_indices().nth(MAX_INIT_CHARS_KEPT) {
+        Some((at, _)) => {
+            code.truncate(at);
+            true
+        }
+        None => false,
+    }
+}
+
+/// A GUID for an environment that has none yet (the format requires one), worked out from the code,
+/// so the same workbook saves the same bytes: a file only needs its environment told apart.
+pub fn environment_id(code: &str) -> String {
+    let hash = |seed: u64| code.bytes().fold(seed, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3));
+    let (a, b) = (hash(0xCBF2_9CE4_8422_2325), hash(0x8422_2325_CBF2_9CE4));
+    format!("{{{:08X}-{:04X}-4{:03X}-8{:03X}-{:012X}}}", a >> 32, (a >> 16) & 0xFFFF, a & 0xFFF, b >> 52, b & 0xFFFF_FFFF_FFFF)
+}
+
+/// Whether `id` is a GUID as the format writes one (ST_Guid): `{8-4-4-4-12}` in hexadecimal.
+pub fn is_guid(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    bytes.len() == 38
+        && bytes.first() == Some(&b'{')
+        && bytes.last() == Some(&b'}')
+        && bytes.iter().enumerate().skip(1).take(36).all(|(i, b)| if matches!(i, 9 | 14 | 19 | 24) { *b == b'-' } else { b.is_ascii_hexdigit() })
+}
+
 /// A Python cell.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -32,13 +143,72 @@ pub struct PyCode {
     /// The cell's inputs changed while calculation was manual: its value is out of date until
     /// the workbook is calculated.
     pub stale: bool,
+    /// A text result with line breaks spills one line per row, instead of staying in the cell. Only
+    /// GridCraft JSON holds this: the file format has no place for it, so in an xlsx file it lasts
+    /// for the session.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub spill_lines: bool,
+    /// The cell is waiting to run or running: it shows `#BUSY!` while its kept result, and what that
+    /// result spilled, stay until the new one arrives. A state of this session, never saved.
+    #[serde(skip)]
+    pub busy: bool,
+    /// The error its last run ended with, when that run left no result: what it reads as, and shows
+    /// again, while it waits for another run. A state of this session, never saved.
+    #[serde(skip)]
+    pub failed: Option<CellError>,
+    /// The dates in its result, and the formats it wrote for them. A state of this session, never
+    /// saved: in a file the formats are just the cells' formats.
+    #[serde(skip)]
+    pub dates: PyDates,
+    /// A person or a file chose the return type. With no such choice, a picture behaves as a Python
+    /// Object, since a plot is no use drawn inside a small cell, and anything else as an Excel Value.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub output_chosen: bool,
+}
+
+/// What a number in a Python result stands for, which decides the format it shows with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PyDateKind {
+    Date,
+    DateTime,
+    Time,
+    Duration,
+}
+
+impl PyDateKind {
+    /// The format a cell with no format of its own takes: Excel's built-in formats 14, 22, 21 and 46.
+    pub fn format_code(self) -> &'static str {
+        match self {
+            PyDateKind::Date => "m/d/yyyy",
+            PyDateKind::DateTime => "m/d/yyyy h:mm",
+            PyDateKind::Time => "h:mm:ss",
+            PyDateKind::Duration => "[h]:mm:ss",
+        }
+    }
+}
+
+/// The date formats of a Python cell's result. These are shared, as a cell is copied each time a
+/// flag on it changes, and a result can hold a million dates.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PyDates {
+    /// The numbers of the result that are dates, by their place in row order, in ascending order.
+    pub result: Arc<[(u32, PyDateKind)]>,
+    /// The cells whose format came from a result, by (rows, columns) from this cell, in ascending
+    /// order: a format the person gave a cell is its own, and one written here is not.
+    pub written: Arc<[(u32, u32, PyDateKind)]>,
+}
+
+impl PyDates {
+    pub fn is_empty(&self) -> bool {
+        self.result.is_empty() && self.written.is_empty()
+    }
 }
 
 /// A Python result kept on the cell.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PyOutput {
-    /// The result as cells (an array spills), or its preview as text when it has no cell form.
+    /// The result as cells (an array spills); a result with no cell form shows its type's name.
     pub value: Value,
     /// Python's name for the result's type.
     pub type_name: String,
@@ -46,6 +216,48 @@ pub struct PyOutput {
     pub preview: String,
     /// Whether `value` is the result converted to cells.
     pub convertible: bool,
+    /// A Python object that is like a table: a bounded look at it, for the card. A state of this
+    /// session, never saved.
+    #[serde(skip)]
+    pub table: Option<Arc<PyTable>>,
+    /// A run in this session gave this result, so `table` is all there is to know. A result read from
+    /// a file has lost its table, if it had one. A state of this session, never saved.
+    #[serde(skip)]
+    pub from_run: bool,
+    /// The picture the result is, when it is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<PyImage>,
+}
+
+/// A picture a Python cell gave.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PyImage {
+    /// The encoded bytes, shared, so an undo step doesn't copy them.
+    #[serde(serialize_with = "picture_out", deserialize_with = "picture_in")]
+    pub picture: Arc<CellPicture>,
+    /// Its size as reported to people and agents: pixels at the figure's own resolution.
+    pub width: u32,
+    pub height: u32,
+    /// How many pixels of `picture` stand for one of that size.
+    pub density: u32,
+    /// For a figure whose size the code didn't choose: the smallest size at which the worker can draw
+    /// it again. A state of this session, never saved: only the worker that ran the cell has the
+    /// figure.
+    #[serde(skip)]
+    pub floor: Option<[u32; 2]>,
+    /// The figure drawn again to fill its cell, and the size it was drawn at. A state of this session,
+    /// never saved.
+    #[serde(skip)]
+    pub fitted: Option<(Arc<CellPicture>, [u32; 2])>,
+}
+
+fn picture_out<S: serde::Serializer>(picture: &Arc<CellPicture>, s: S) -> Result<S::Ok, S::Error> {
+    picture.as_ref().serialize(s)
+}
+
+fn picture_in<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Arc<CellPicture>, D::Error> {
+    CellPicture::deserialize(d).map(Arc::new)
 }
 
 impl PyCode {
@@ -53,12 +265,36 @@ impl PyCode {
         PyCode { code: normalize_code(code), ..PyCode::default() }
     }
 
+    /// The picture its last result is, when it is one.
+    pub fn image(&self) -> Option<&PyImage> {
+        self.output.as_ref()?.image.as_ref()
+    }
+
+    /// The return type in effect: the one chosen, or for a cell with no choice, a Python Object when
+    /// its result is a picture.
+    pub fn shows_object(&self) -> bool {
+        self.object || (!self.output_chosen && self.image().is_some())
+    }
+
+    /// The picture to draw inside the cell: its result's, with Excel Value in effect.
+    pub fn image_in_cell(&self) -> Option<&Arc<CellPicture>> {
+        self.image().filter(|_| !self.shows_object()).map(|i| i.fitted.as_ref().map_or(&i.picture, |(picture, _)| picture))
+    }
+
     /// What the cell shows for its result: cell values (an array spills from the cell), or, for a
-    /// Python object, its type name. `None` before the code has run.
+    /// Python object, what names it (`value` holds that, with its size when it has one). A text with
+    /// line breaks stays in the cell unless [`PyCode::spill_lines`] says one line per row. `None`
+    /// before the code has run.
     pub fn result_value(&self) -> Option<Value> {
         let out = self.output.as_ref()?;
-        let scalar = !matches!(out.value, Value::Array(_)) && out.convertible;
-        Some(if self.object && !scalar { Value::text(out.type_name.as_str()) } else { out.value.clone() })
+        if self.spill_lines
+            && out.convertible
+            && let Value::Text(text) = &out.value
+            && let Some(lines) = spilled_lines(text)
+        {
+            return Some(lines);
+        }
+        Some(if self.object && matches!(out.value, Value::Array(_)) { Value::text(out.type_name.as_str()) } else { out.value.clone() })
     }
 
     /// The cell as a formula (without `=`): `PY("…"&"…",0)`, with the code in string literals of
@@ -68,7 +304,7 @@ impl PyCode {
         let chunks = chunk(&self.code, CHUNK_CHARS);
         let lits: Vec<String> = chunks.iter().map(|c| format!("\"{}\"", c.replace('"', "\"\""))).collect();
         let lits = if lits.is_empty() { "\"\"".to_string() } else { lits.join("&") };
-        format!("PY({lits},{})", u8::from(self.object))
+        format!("PY({lits},{})", u8::from(self.shows_object()))
     }
 
     /// [`PyCode::to_formula`] with Excel's `_xlfn._xlws.` prefix: the string-literal form
@@ -118,7 +354,11 @@ impl PyCode {
                         _ => return None,
                     };
                     skip_space(&mut chars);
-                    return (chars.next()? == ')' && chars.all(char::is_whitespace)).then(|| PyCode { object, ..PyCode::new(&code) });
+                    return (chars.next()? == ')' && chars.all(char::is_whitespace)).then(|| PyCode {
+                        object,
+                        output_chosen: true,
+                        ..PyCode::new(&code)
+                    });
                 }
                 ')' => return chars.all(char::is_whitespace).then(|| PyCode::new(&code)),
                 _ => return None,
@@ -143,6 +383,25 @@ fn skip_space(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
     while chars.peek().is_some_and(|c| c.is_whitespace()) {
         chars.next();
     }
+}
+
+/// A text with line breaks as one line per row: `\n`, `\r\n` and `\r` each end a line, and a line
+/// break at the very end doesn't start another. `None` for a text with no line breaks, and for one
+/// with more lines than a result may have, which stays in its cell.
+fn spilled_lines(text: &str) -> Option<Value> {
+    if !text.contains(['\n', '\r']) {
+        return None;
+    }
+    let text = normalize_code(text);
+    let text = text.strip_suffix('\n').unwrap_or(&text);
+    let rows = text.bytes().filter(|b| *b == b'\n').count().saturating_add(1);
+    if rows > MAX_RESULT_CELLS {
+        return None;
+    }
+    if rows == 1 {
+        return Some(Value::text(text));
+    }
+    Array::new(rows, 1, text.split('\n').map(Value::text).collect()).map(Value::from)
 }
 
 /// Line breaks as `\n`.
@@ -393,15 +652,85 @@ mod tests {
     #[test]
     fn result_values() {
         let arr = gridcraft_core::Array::new(2, 1, vec![1.0.into(), 2.0.into()]).map(Value::from).unwrap();
-        let out = PyOutput { value: arr.clone(), type_name: "list".into(), preview: "[1, 2]".into(), convertible: true };
+        let out = PyOutput { value: arr.clone(), type_name: "list".into(), preview: "[1, 2]".into(), convertible: true, ..PyOutput::default() };
         let mut py = PyCode { output: Some(out), ..PyCode::new("[1, 2]") };
         assert_eq!(py.result_value(), Some(arr));
         py.object = true;
         assert_eq!(py.result_value(), Some(Value::text("list")));
-        py.output = Some(PyOutput { value: Value::Number(3.0), type_name: "int".into(), preview: "3".into(), convertible: true });
+        py.output =
+            Some(PyOutput { value: Value::Number(3.0), type_name: "int".into(), preview: "3".into(), convertible: true, ..PyOutput::default() });
         assert_eq!(py.result_value(), Some(Value::Number(3.0)), "scalars show as values in object mode too");
         py.output = None;
         assert_eq!(py.result_value(), None);
+    }
+
+    #[test]
+    fn a_python_object_shows_what_names_it() {
+        let object = |value: Value, type_name: &str| PyOutput { value, type_name: type_name.into(), ..PyOutput::default() };
+        let mut py = PyCode { object: true, output: Some(object(Value::text("DataFrame 6x4"), "DataFrame")), ..PyCode::new("df") };
+        assert_eq!(py.result_value(), Some(Value::text("DataFrame 6x4")));
+        // A result cells can hold, read from a file, still shows the object's name, and doesn't spill.
+        let arr = Array::new(2, 1, vec![1.0.into(), 2.0.into()]).map(Value::from).unwrap();
+        py.output = Some(object(arr.clone(), "list"));
+        assert_eq!(py.result_value(), Some(Value::text("list")));
+        py.object = false;
+        assert_eq!(py.result_value(), Some(arr));
+    }
+
+    fn lines_of(text: &str) -> Option<Value> {
+        let output = PyOutput { value: Value::text(text), type_name: "str".into(), convertible: true, ..PyOutput::default() };
+        PyCode { spill_lines: true, output: Some(output), ..PyCode::new("s") }.result_value()
+    }
+
+    fn rows(lines: &[&str]) -> Option<Value> {
+        Array::new(lines.len(), 1, lines.iter().map(|l| Value::text(*l)).collect()).map(Value::from)
+    }
+
+    #[test]
+    fn a_text_stays_in_its_cell_unless_it_spills_one_line_per_row() {
+        let text = "a\nb";
+        let output = PyOutput { value: Value::text(text), type_name: "str".into(), convertible: true, ..PyOutput::default() };
+        let py = PyCode { output: Some(output), ..PyCode::new("s") };
+        assert_eq!(py.result_value(), Some(Value::text(text)), "by default");
+        assert_eq!(lines_of(text), rows(&["a", "b"]));
+        // Every kind of line break, and an empty line in the middle.
+        assert_eq!(lines_of("a\r\nb\rc\n\nd"), rows(&["a", "b", "c", "", "d"]));
+        // A line break at the end starts no line, one more does.
+        assert_eq!(lines_of("a\nb\n"), rows(&["a", "b"]));
+        assert_eq!(lines_of("a\nb\r\n"), rows(&["a", "b"]));
+        assert_eq!(lines_of("a\nb\n\n"), rows(&["a", "b", ""]));
+        // One line, or none, is a text.
+        assert_eq!(lines_of("a\n"), Some(Value::text("a")));
+        assert_eq!(lines_of("\n"), Some(Value::text("")));
+        assert_eq!(lines_of("a"), Some(Value::text("a")));
+        assert_eq!(lines_of(""), Some(Value::text("")));
+        // At the limit it spills, past it the text stays in its cell.
+        let at = "\n".repeat(MAX_RESULT_CELLS);
+        assert!(matches!(lines_of(&at), Some(Value::Array(a)) if a.rows == MAX_RESULT_CELLS));
+        let over = "\n".repeat(MAX_RESULT_CELLS + 1);
+        assert!(matches!(lines_of(&over), Some(Value::Text(_))));
+        // A label is no text, whatever a type's name holds.
+        let object = PyOutput { value: Value::text("a\nb 2"), type_name: "a\nb".into(), ..PyOutput::default() };
+        assert_eq!(PyCode { spill_lines: true, object: true, output: Some(object), ..PyCode::new("s") }.result_value(), Some(Value::text("a\nb 2")));
+    }
+
+    #[test]
+    fn what_a_session_keeps_stays_out_of_json() {
+        let table = Arc::new(PyTable { rows: 0, cols: 1, ..PyTable::default() });
+        let output = PyOutput { value: Value::text("list 1"), type_name: "list".into(), table: Some(table), from_run: true, ..PyOutput::default() };
+        let py = PyCode { object: true, output: Some(output), ..PyCode::new("x") };
+        let json = serde_json::to_value(&py).unwrap();
+        assert!(json["output"].get("table").is_none() && json["output"].get("fromRun").is_none(), "{json}");
+        assert!(json.get("spillLines").is_none(), "off is the default: {json}");
+        let back: PyCode = serde_json::from_value(json).unwrap();
+        let output = back.output.unwrap();
+        assert_eq!((output.table, output.from_run), (None, false));
+        assert_eq!(output.value, Value::text("list 1"));
+        // The option is in the file.
+        let on = PyCode { spill_lines: true, ..PyCode::new("x") };
+        let json = serde_json::to_value(&on).unwrap();
+        assert_eq!(json["spillLines"], true);
+        assert!(serde_json::from_value::<PyCode>(json).unwrap().spill_lines);
     }
 
     #[test]
@@ -439,5 +768,20 @@ mod tests {
         }
         assert_eq!(xl_calls("xl  (  \"A1\"  )")[0].reference.as_deref(), Some("A1"));
         assert_eq!(xl_calls("xl('''A1''')")[0].reference, None);
+    }
+
+    #[test]
+    fn a_literal_formula_with_a_return_type_has_chosen_it() {
+        let value = PyCode::from_formula("=PY(\"plot()\",0)").unwrap();
+        assert!(value.output_chosen && !value.object);
+        assert!(PyCode::from_formula("=PY(\"plot()\",1)").unwrap().output_chosen);
+        assert!(!PyCode::from_formula("=PY(\"plot()\")").unwrap().output_chosen);
+    }
+
+    #[test]
+    fn a_tables_cells_stop_at_its_shape() {
+        let table = PyTable { rows: 1, cols: 1, data: vec![Value::Number(1.0), Value::Number(2.0)], ..Default::default() };
+        assert_eq!(table.cell(0, 0), Some(&Value::Number(1.0)));
+        assert_eq!(table.cell(1, 0), None, "data past its rows is no cell");
     }
 }
