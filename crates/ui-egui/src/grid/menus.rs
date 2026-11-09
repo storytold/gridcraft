@@ -560,7 +560,7 @@ pub(super) fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool)
 /// The context-menu entry for Insert Copied Cells / Insert Cut Cells, when the clipboard holds a
 /// copy or cut of this app: whole rows or columns insert at once, a block asks which way to shift
 /// (Insert Paste). A cut block can only be pasted, so it gets no entry.
-fn insert_copied_item(app: &SheetApp) -> Option<(&'static str, &'static str)> {
+pub(crate) fn insert_copied_item(app: &SheetApp) -> Option<(&'static str, &'static str)> {
     let clip = app.session.clipboard.as_ref()?;
     let lines = clip.selected.is_full_rows() != clip.selected.is_full_cols();
     let cut = clip.cut && app.session.active().is_some_and(|d| d.uid == clip.doc_uid);
