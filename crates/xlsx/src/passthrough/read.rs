@@ -241,7 +241,11 @@ impl KeptReader {
         for r in wb_rels.iter().filter(|r| is_kind(r, WORKBOOK_ROOTS)) {
             if let Err(why) = self.keep(cx, &mut p, std::slice::from_ref(r), &mut seen) {
                 cx.warn(format!("{} part {} was dropped: {why}", kind(&r.rel_type), r.target));
-                if kind(&r.rel_type) == "powerPivotData" {
+                // A dangling workbook relationship names a target the package never held: nothing
+                // was lost (`closure` fails those with "is missing"), so it is warned about above
+                // and not recorded as a drop — recording it would refuse every later save and skip
+                // model-backed PivotTables for a model that was never there.
+                if kind(&r.rel_type) == "powerPivotData" && cx.pkg.has(&r.target) {
                     self.model_dropped = true;
                     // The model exists but could not be kept: remember it with the reason, so the
                     // writer refuses instead of writing the package without its data model.

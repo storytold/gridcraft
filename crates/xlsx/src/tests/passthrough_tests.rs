@@ -1003,3 +1003,16 @@ fn a_sheet_of_modelled_controls_keeps_nothing_for_them() {
     assert_eq!(sh.controls.len(), 2);
     assert!(sh.preserved.is_none(), "{:?}", sh.preserved);
 }
+
+#[test]
+fn pivot_caches_children_ignores_a_longer_element_name() {
+    // `pivot_caches_children` scans for the `<pivotCaches` prefix; a longer element name that
+    // starts with those bytes must not count as the wrapper. Regression test for the boundary
+    // check: without it the scan would cut children out of `<pivotCachesExtra>`.
+    use crate::write::pivot_caches_children_for_test;
+    let xml = "<pivotCachesExtra><pivotCache cacheId=\"9\"/></pivotCachesExtra>\
+        <pivotCaches><pivotCache cacheId=\"1\"/></pivotCaches>";
+    let children = pivot_caches_children_for_test(xml);
+    assert_eq!(children.matches("<pivotCache ").count(), 1, "only the real wrapper contributes: {children}");
+    assert!(children.contains("cacheId=\"1\""), "{children}");
+}

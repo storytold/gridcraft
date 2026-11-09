@@ -1025,6 +1025,35 @@ fn a_workbook_without_a_model_saves_as_before() {
     assert_eq!(back.sheet(0).map(|sheet| sheet.value(CellRef::new(0, 0))), Some(Value::number(1.0)));
 }
 
+// A `powerPivotData` relationship whose target the package never held: nothing was lost, so the
+// read warns but records no drop — later saves still succeed and no model-backed pivot is
+// skipped for a model that was never there.
+#[test]
+fn a_dangling_model_relationship_is_not_recorded_as_dropped() {
+    let rel = r#"<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/powerPivotData" Target="model/item.data"/>"#;
+    let ct = r#"<?xml version="1"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#;
+    let wb = r#"<?xml version="1"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
+    let rels = format!(
+        r#"<?xml version="1"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>{rel}</Relationships>"#
+    );
+    let sheet = r#"<?xml version="1"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#;
+    let bytes = super::make_zip(&[
+        ("[Content_Types].xml", ct.as_bytes()),
+        ("_rels/.rels", super::ROOT_RELS.as_bytes()),
+        ("xl/workbook.xml", wb.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+    ]);
+    let (wb, report) = read_xlsx(&bytes).expect("a dangling model relationship still opens");
+    assert!(wb.dropped_model.is_none(), "nothing was lost, so nothing is recorded as dropped");
+    assert!(
+        report.warnings.iter().any(|w| w.contains("powerPivotData") && w.contains("model/item.data") && w.contains("missing")),
+        "the dangling target is still warned about: {:?}",
+        report.warnings
+    );
+    write_xlsx(&wb).expect("no recorded drop means the save is not refused");
+}
+
 #[test]
 fn attach_without_model_data_keeps_the_existing_one() {
     let bytes = with_model_part();

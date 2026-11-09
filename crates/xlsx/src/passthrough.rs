@@ -174,8 +174,10 @@ const REWRITTEN: &[&str] = &[
 /// their style, colour and shape parts are kept byte for byte (the chart sheet is not modelled).
 const CHART_SHEET_GRAPH: &[&str] = &["chartsheet", "drawing", "chart", "chartex", "chartstyle", "chartcolorstyle", "chartusershapes"];
 
-/// Part-name prefixes (lower case) GridCraft's writer never produces: kept parts there keep their
-/// original names. Anything else is renamed so it can't collide with written parts.
+/// Part-name prefixes (lower case) where a kept part keeps its original name when no other part
+/// has claimed it. The pivot writer also claims names in `xl/pivotCache/` and `xl/pivotTables/`
+/// through the same name table, so a collision there is renamed. Anything else is always
+/// renamed so it can't collide with written parts.
 const OWN_DIRS: &[&str] = &[
     "customxml/",
     "docprops/custom.xml",

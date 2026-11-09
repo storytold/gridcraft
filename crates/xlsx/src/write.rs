@@ -199,9 +199,17 @@ fn pivot_caches_children(xml: &str) -> String {
     const OPEN: &str = "<pivotCaches";
     const CLOSE: &str = "</pivotCaches>";
     let mut children = String::new();
-    let mut rest = xml;
     while let Some(open) = rest.find(OPEN) {
         let Some(after) = rest.get(open..) else { break };
+        // `OPEN` is a prefix: only `<pivotCaches` followed by whitespace, `>` or `/` opens the
+        // element. Anything else (a longer element name starting with those bytes) is skipped.
+        let is_open = after
+            .get(OPEN.len()..OPEN.len() + 1)
+            .is_some_and(|next| next == " " || next == ">" || next == "/" || next.starts_with(['\t', '\n', '\r']));
+        if !is_open {
+            rest = after.get(OPEN.len()..).unwrap_or("");
+            continue;
+        }
         let Some(tag_end) = after.find('>').map(|i| open + i) else { break };
         let after_tag = rest.get(tag_end + 1..).unwrap_or("");
         // `<pivotCaches/>` holds no children: skip it rather than stop at it.
@@ -214,6 +222,13 @@ fn pivot_caches_children(xml: &str) -> String {
         rest = after_tag.get(end + CLOSE.len()..).unwrap_or("");
     }
     children
+}
+
+/// The `<pivotCache>`-child scan, exposed so an integration test can pin the element-name
+/// boundary without going through a whole workbook write.
+#[cfg(test)]
+pub(crate) fn pivot_caches_children_for_test(xml: &str) -> String {
+    pivot_caches_children(xml)
 }
 
 /// Refuses sheet names XLSX cannot hold. The reader repairs such names (cuts, strips, renames
