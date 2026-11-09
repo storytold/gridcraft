@@ -168,6 +168,19 @@ fn filters_and_report_filter_rows() {
     assert!(s.execute("pivot.filter", json!({"field": "Product", "selected": []})).is_err());
 }
 
+/// A selection of the most labels allowed (100,000) is looked up once per record, not scanned: the
+/// report still filters case-insensitively.
+#[test]
+fn a_huge_filter_selection_is_matched_through_a_set() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Product"], "values": ["Sales"], "filters": ["Region"]})).unwrap();
+    let mut selected: Vec<String> = (0..99_999).map(|i| format!("Region {i}")).collect();
+    selected.push("EAST".into());
+    s.execute("pivot.filter", json!({"field": "Region", "selected": selected})).unwrap();
+    let gt = find_row(&s, "Grand Total").unwrap();
+    assert_eq!(val(&s, &CellRef::new(gt, 1).a1()), Value::Number(415.0));
+}
+
 #[test]
 fn show_values_as() {
     let mut s = sales();
@@ -243,6 +256,70 @@ fn compact_vs_tabular_shapes() {
     assert_eq!(text(&s, "A5"), "Apples");
 }
 
+fn assert_values_on_rows_default(s: &Session) {
+    let p = pt(s);
+    assert!(p.values_on_rows);
+    assert_eq!(p.values_position, None);
+    let r = p.last_range.unwrap();
+    assert_eq!(r.width(), 2);
+    // header + 3 × (region + 2 values) + 2 grand totals
+    assert_eq!(r.height(), 1 + 9 + 2);
+    assert_eq!(text(s, "A4"), "East");
+    assert_eq!(val(s, "B4"), Value::Empty);
+    assert_eq!(text(s, "A5"), "Sum of Sales");
+    assert_eq!(val(s, "B5"), Value::Number(415.0));
+    assert_eq!(text(s, "A6"), "Sum of Units");
+    assert_eq!(val(s, "B6"), Value::Number(33.0));
+    assert_eq!(text(s, "A13"), "Total Sum of Sales");
+    assert_eq!(val(s, "B13"), Value::Number(TOTAL));
+    assert_eq!(text(s, "A14"), "Total Sum of Units");
+    assert_eq!(val(s, "B14"), Value::Number(72.0));
+}
+
+fn assert_values_on_rows_tabular(s: &mut Session) {
+    // Tabular, no column field: "Total" heads the data column, as Excel saves it.
+    s.execute("pivot.layout", json!({"layout": "tabular"})).unwrap();
+    assert_eq!(text(s, "A3"), "Region");
+    assert_eq!(text(s, "B3"), "Values");
+    assert_eq!(text(s, "C3"), "Total");
+}
+
+fn assert_values_on_rows_position(s: &mut Session) {
+    s.execute("pivot.layout", json!({"layout": "compact"})).unwrap();
+    // Σ Values before Region: the value fields are the outer items.
+    s.execute("pivot.moveField", json!({"field": "Values", "from": "rows", "to": "rows", "position": 0})).unwrap();
+    assert_eq!(pt(s).values_position, Some(0));
+    assert_eq!(text(s, "A4"), "Sum of Sales");
+    assert_eq!(val(s, "B4"), Value::Empty);
+    assert_eq!(text(s, "A5"), "East");
+    assert_eq!(val(s, "B5"), Value::Number(415.0));
+    assert_eq!(text(s, "A8"), "Sum of Units");
+    assert_eq!(text(s, "A9"), "East");
+    assert_eq!(val(s, "B9"), Value::Number(33.0));
+    assert_eq!(text(s, "A12"), "Total Sum of Sales");
+    assert_eq!(val(s, "B13"), Value::Number(72.0));
+    // Adding a row field in front keeps Σ Values ahead of Region.
+    s.execute("pivot.addField", json!({"field": "Product", "area": "rows", "position": 0})).unwrap();
+    assert_eq!(pt(s).values_position, Some(1));
+    s.execute("pivot.removeField", json!({"field": "Product", "area": "rows"})).unwrap();
+    assert_eq!(pt(s).values_position, Some(0));
+    // No row field: one line per value field and no grand total.
+    s.execute("pivot.removeField", json!({"field": "Region", "area": "rows"})).unwrap();
+    let r = pt(s).last_range.unwrap();
+    assert_eq!(r.height(), 1 + 2);
+    assert_eq!(text(s, "A4"), "Sum of Sales");
+    assert_eq!(val(s, "B4"), Value::Number(TOTAL));
+    assert_eq!(text(s, "A5"), "Sum of Units");
+    assert_eq!(val(s, "B5"), Value::Number(72.0));
+    // Back to Columns.
+    s.execute("pivot.moveField", json!({"field": "Σ Values", "from": "rows", "to": "columns"})).unwrap();
+    assert!(!pt(s).values_on_rows);
+    assert_eq!(text(s, "A3"), "Sum of Sales");
+    assert_eq!(text(s, "B3"), "Sum of Units");
+    assert!(s.execute("pivot.moveField", json!({"field": "Σ Values", "from": "columns", "to": "filters"})).is_err());
+    assert!(s.execute("pivot.moveField", json!({"field": "Σ Values", "from": "rows", "to": "columns"})).is_err());
+}
+
 #[test]
 fn values_on_rows_layouts() {
     let mut s = sales();
@@ -250,61 +327,9 @@ fn values_on_rows_layouts() {
     assert_eq!(text(&s, "C3"), "Sum of Units");
     // Σ Values after Region: each region holds one line per value field.
     s.execute("pivot.moveField", json!({"field": "Σ Values", "from": "columns", "to": "rows"})).unwrap();
-    let p = pt(&s);
-    assert!(p.values_on_rows);
-    assert_eq!(p.values_position, None);
-    let r = p.last_range.unwrap();
-    assert_eq!(r.width(), 2);
-    // header + 3 × (region + 2 values) + 2 grand totals
-    assert_eq!(r.height(), 1 + 9 + 2);
-    assert_eq!(text(&s, "A4"), "East");
-    assert_eq!(val(&s, "B4"), Value::Empty);
-    assert_eq!(text(&s, "A5"), "Sum of Sales");
-    assert_eq!(val(&s, "B5"), Value::Number(415.0));
-    assert_eq!(text(&s, "A6"), "Sum of Units");
-    assert_eq!(val(&s, "B6"), Value::Number(33.0));
-    assert_eq!(text(&s, "A13"), "Total Sum of Sales");
-    assert_eq!(val(&s, "B13"), Value::Number(TOTAL));
-    assert_eq!(text(&s, "A14"), "Total Sum of Units");
-    assert_eq!(val(&s, "B14"), Value::Number(72.0));
-    // Tabular, no column field: "Total" heads the data column, as Excel saves it.
-    s.execute("pivot.layout", json!({"layout": "tabular"})).unwrap();
-    assert_eq!(text(&s, "A3"), "Region");
-    assert_eq!(text(&s, "B3"), "Values");
-    assert_eq!(text(&s, "C3"), "Total");
-    s.execute("pivot.layout", json!({"layout": "compact"})).unwrap();
-    // Σ Values before Region: the value fields are the outer items.
-    s.execute("pivot.moveField", json!({"field": "Values", "from": "rows", "to": "rows", "position": 0})).unwrap();
-    assert_eq!(pt(&s).values_position, Some(0));
-    assert_eq!(text(&s, "A4"), "Sum of Sales");
-    assert_eq!(val(&s, "B4"), Value::Empty);
-    assert_eq!(text(&s, "A5"), "East");
-    assert_eq!(val(&s, "B5"), Value::Number(415.0));
-    assert_eq!(text(&s, "A8"), "Sum of Units");
-    assert_eq!(text(&s, "A9"), "East");
-    assert_eq!(val(&s, "B9"), Value::Number(33.0));
-    assert_eq!(text(&s, "A12"), "Total Sum of Sales");
-    assert_eq!(val(&s, "B13"), Value::Number(72.0));
-    // Adding a row field in front keeps Σ Values ahead of Region.
-    s.execute("pivot.addField", json!({"field": "Product", "area": "rows", "position": 0})).unwrap();
-    assert_eq!(pt(&s).values_position, Some(1));
-    s.execute("pivot.removeField", json!({"field": "Product", "area": "rows"})).unwrap();
-    assert_eq!(pt(&s).values_position, Some(0));
-    // No row field: one line per value field and no grand total.
-    s.execute("pivot.removeField", json!({"field": "Region", "area": "rows"})).unwrap();
-    let r = pt(&s).last_range.unwrap();
-    assert_eq!(r.height(), 1 + 2);
-    assert_eq!(text(&s, "A4"), "Sum of Sales");
-    assert_eq!(val(&s, "B4"), Value::Number(TOTAL));
-    assert_eq!(text(&s, "A5"), "Sum of Units");
-    assert_eq!(val(&s, "B5"), Value::Number(72.0));
-    // Back to Columns.
-    s.execute("pivot.moveField", json!({"field": "Σ Values", "from": "rows", "to": "columns"})).unwrap();
-    assert!(!pt(&s).values_on_rows);
-    assert_eq!(text(&s, "A3"), "Sum of Sales");
-    assert_eq!(text(&s, "B3"), "Sum of Units");
-    assert!(s.execute("pivot.moveField", json!({"field": "Σ Values", "from": "columns", "to": "filters"})).is_err());
-    assert!(s.execute("pivot.moveField", json!({"field": "Σ Values", "from": "rows", "to": "columns"})).is_err());
+    assert_values_on_rows_default(&s);
+    assert_values_on_rows_tabular(&mut s);
+    assert_values_on_rows_position(&mut s);
 }
 
 #[test]
@@ -355,53 +380,65 @@ fn change_source_keeps_values_ahead_of_its_field() {
     assert_eq!(text(&s, "A5"), "Apples");
 }
 
+fn assert_values_between_compact_rows(s: &Session) {
+    // Compact: East, then per value field its products, then per-value subtotals of East.
+    assert_eq!(text(s, "A4"), "East");
+    assert_eq!(text(s, "A5"), "Sum of Sales");
+    assert_eq!(text(s, "A6"), "Apples");
+    assert_eq!(val(s, "B6"), Value::Number(160.0));
+    assert_eq!(text(s, "A9"), "Sum of Units");
+    assert_eq!(text(s, "A10"), "Apples");
+    assert_eq!(val(s, "B10"), Value::Number(16.0));
+    assert_eq!(text(s, "A13"), "East Sum of Sales");
+    assert_eq!(val(s, "B13"), Value::Number(415.0));
+    assert_eq!(text(s, "A14"), "East Sum of Units");
+    assert_eq!(val(s, "B14"), Value::Number(33.0));
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert_eq!(d.wb.styles.get(sh.style_id(CellRef::parse("A5").unwrap())).align.indent, 1);
+    assert_eq!(d.wb.styles.get(sh.style_id(CellRef::parse("A6").unwrap())).align.indent, 2);
+}
+
+fn assert_values_between_outline(s: &mut Session) {
+    // Outline: one column per level, "Values" heads the Σ Values column.
+    s.execute("pivot.layout", json!({"layout": "outline"})).unwrap();
+    assert_eq!(pt(s).last_range.unwrap().width(), 4);
+    assert_eq!(text(s, "A3"), "Region");
+    assert_eq!(text(s, "B3"), "Values");
+    assert_eq!(text(s, "C3"), "Product");
+    assert_eq!(text(s, "B5"), "Sum of Sales");
+    assert_eq!(text(s, "C6"), "Apples");
+    assert_eq!(val(s, "D6"), Value::Number(160.0));
+}
+
+fn assert_values_between_tabular(s: &mut Session) {
+    // Tabular: labels start on their parent's row; totals per value field below each group.
+    s.execute("pivot.layout", json!({"layout": "tabular"})).unwrap();
+    assert_eq!(text(s, "A4"), "East");
+    assert_eq!(text(s, "B4"), "Sum of Sales");
+    assert_eq!(text(s, "C4"), "Apples");
+    assert_eq!(val(s, "D4"), Value::Number(160.0));
+    assert_eq!(text(s, "B7"), "Sum of Units");
+    assert_eq!(text(s, "C7"), "Apples");
+    assert_eq!(val(s, "D7"), Value::Number(16.0));
+    assert_eq!(text(s, "A10"), "East Sum of Sales");
+    assert_eq!(val(s, "D10"), Value::Number(415.0));
+    assert_eq!(text(s, "A11"), "East Sum of Units");
+    let r = pt(s).last_range.unwrap();
+    let last = r.end.row + 1;
+    assert_eq!(text(s, &format!("A{}", last - 1)), "Total Sum of Sales");
+    assert_eq!(text(s, &format!("A{last}")), "Total Sum of Units");
+    assert_eq!(val(s, &format!("D{last}")), Value::Number(72.0));
+}
+
 #[test]
 fn values_on_rows_between_row_fields() {
     let mut s = sales();
     s.execute("insert.pivotTable", json!({"rows": ["Region", "Product"], "values": ["Sales", "Units"]})).unwrap();
     s.execute("pivot.moveField", json!({"field": "Σ Values", "from": "columns", "to": "rows", "position": 1})).unwrap();
-    // Compact: East, then per value field its products, then per-value subtotals of East.
-    assert_eq!(text(&s, "A4"), "East");
-    assert_eq!(text(&s, "A5"), "Sum of Sales");
-    assert_eq!(text(&s, "A6"), "Apples");
-    assert_eq!(val(&s, "B6"), Value::Number(160.0));
-    assert_eq!(text(&s, "A9"), "Sum of Units");
-    assert_eq!(text(&s, "A10"), "Apples");
-    assert_eq!(val(&s, "B10"), Value::Number(16.0));
-    assert_eq!(text(&s, "A13"), "East Sum of Sales");
-    assert_eq!(val(&s, "B13"), Value::Number(415.0));
-    assert_eq!(text(&s, "A14"), "East Sum of Units");
-    assert_eq!(val(&s, "B14"), Value::Number(33.0));
-    let d = s.doc().unwrap();
-    let sh = d.wb.active().unwrap();
-    assert_eq!(d.wb.styles.get(sh.style_id(CellRef::parse("A5").unwrap())).align.indent, 1);
-    assert_eq!(d.wb.styles.get(sh.style_id(CellRef::parse("A6").unwrap())).align.indent, 2);
-    // Outline: one column per level, "Values" heads the Σ Values column.
-    s.execute("pivot.layout", json!({"layout": "outline"})).unwrap();
-    assert_eq!(pt(&s).last_range.unwrap().width(), 4);
-    assert_eq!(text(&s, "A3"), "Region");
-    assert_eq!(text(&s, "B3"), "Values");
-    assert_eq!(text(&s, "C3"), "Product");
-    assert_eq!(text(&s, "B5"), "Sum of Sales");
-    assert_eq!(text(&s, "C6"), "Apples");
-    assert_eq!(val(&s, "D6"), Value::Number(160.0));
-    // Tabular: labels start on their parent's row; totals per value field below each group.
-    s.execute("pivot.layout", json!({"layout": "tabular"})).unwrap();
-    assert_eq!(text(&s, "A4"), "East");
-    assert_eq!(text(&s, "B4"), "Sum of Sales");
-    assert_eq!(text(&s, "C4"), "Apples");
-    assert_eq!(val(&s, "D4"), Value::Number(160.0));
-    assert_eq!(text(&s, "B7"), "Sum of Units");
-    assert_eq!(text(&s, "C7"), "Apples");
-    assert_eq!(val(&s, "D7"), Value::Number(16.0));
-    assert_eq!(text(&s, "A10"), "East Sum of Sales");
-    assert_eq!(val(&s, "D10"), Value::Number(415.0));
-    assert_eq!(text(&s, "A11"), "East Sum of Units");
-    let r = pt(&s).last_range.unwrap();
-    let last = r.end.row + 1;
-    assert_eq!(text(&s, &format!("A{}", last - 1)), "Total Sum of Sales");
-    assert_eq!(text(&s, &format!("A{last}")), "Total Sum of Units");
-    assert_eq!(val(&s, &format!("D{last}")), Value::Number(72.0));
+    assert_values_between_compact_rows(&s);
+    assert_values_between_outline(&mut s);
+    assert_values_between_tabular(&mut s);
 }
 
 #[test]
@@ -988,4 +1025,37 @@ fn detail_cells_are_the_cells_show_details_takes() {
     let d = s.doc().unwrap();
     let pt = &d.wb.active().unwrap().pivots[0];
     assert!(crate::pivot::detail_cells(&d.wb, pt, d.wb.active_sheet()).unwrap_err().contains("out of date"));
+}
+
+#[test]
+fn rank_ties_are_dense_and_count_numbers_is_captioned_count_of() {
+    // #1448 items 10 and 12: Excel ranks 5, 4, 3, 3, 4 as 1, 2, 3, 3, 2 (GridCraft gave 1, 2, 4,
+    // 4, 2), and captions a Count Numbers field "Count of Val".
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([["Key", "Val"], ["A", 5], ["B", 4], ["C", 3], ["D", 3], ["E", 4]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("insert.pivotTable", json!({"source": "Sheet1!$A$1:$B$6", "destination": "Sheet1!D3", "rows": ["Key"], "values": ["Val"]})).unwrap();
+    s.execute("pivot.valueSettings", json!({"index": 0, "showAs": "rank"})).unwrap();
+    let ranks: Vec<Value> = ["E4", "E5", "E6", "E7", "E8"].iter().map(|a| val(&s, a)).collect();
+    assert_eq!(ranks, [1.0, 2.0, 3.0, 3.0, 2.0].map(Value::Number));
+    s.execute("pivot.valueSettings", json!({"index": 0, "showAs": "normal", "func": "countNumbers"})).unwrap();
+    assert_eq!(text(&s, "E3"), "Count of Val");
+}
+
+#[test]
+fn legacy_count_numbers_caption_follows_the_function() {
+    // Workbooks saved before Count Numbers was captioned "Count of" carry "Count Numbers of Val";
+    // that is still an automatic caption, so it follows a new function. A custom name stays.
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([["Key", "Val"], ["A", 5], ["B", 4]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("insert.pivotTable", json!({"source": "Sheet1!$A$1:$B$3", "destination": "Sheet1!D3", "rows": ["Key"], "values": ["Val"]})).unwrap();
+    for (legacy, after) in [("Count Numbers of Val", "Sum of Val"), ("Count Numbers of Val2", "Sum of Val"), ("Numbers counted", "Numbers counted")] {
+        s.execute("pivot.valueSettings", json!({"index": 0, "func": "countNumbers", "name": legacy})).unwrap();
+        assert_eq!(text(&s, "E3"), legacy);
+        s.execute("pivot.valueSettings", json!({"index": 0, "func": "sum"})).unwrap();
+        assert_eq!(text(&s, "E3"), after, "{legacy}");
+    }
 }

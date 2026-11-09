@@ -438,7 +438,7 @@ fn date_part(t: &Tok) -> Option<DatePart> {
 }
 
 fn analyze(raw: Raw) -> Section {
-    let Raw { mut toks, color, cond, currency } = raw;
+    let Raw { toks, color, cond, currency } = raw;
     let is_date = toks.iter().any(|t| matches!(t, Tok::Date(_)));
     let has_general = toks.iter().any(|t| matches!(t, Tok::General));
     let mut sec = Section {
@@ -458,69 +458,85 @@ fn analyze(raw: Raw) -> Section {
     };
     if is_date {
         sec.kind = SecKind::Date;
-        // m/mm after hours or before seconds means minutes.
-        for i in 0..toks.len() {
-            let Some(Tok::Date(DatePart::Month(n))) = toks.get(i) else { continue };
-            let n = *n;
-            if n > 2 {
-                continue;
-            }
-            let prev = toks.get(..i).and_then(|s| s.iter().rev().find_map(date_part));
-            let next = toks.get(i + 1..).and_then(|s| s.iter().find_map(date_part));
-            let after_h = matches!(prev, Some(DatePart::Hour(_) | DatePart::ElapsedH(_)));
-            let before_s = matches!(next, Some(DatePart::Second(_) | DatePart::ElapsedS(_)));
-            if (after_h || before_s)
-                && let Some(t) = toks.get_mut(i)
-            {
-                *t = Tok::Date(DatePart::Minute(n));
-            }
-        }
-        let mut out = Vec::with_capacity(toks.len());
-        let mut i = 0;
-        while let Some(t) = toks.get(i) {
-            if matches!(t, Tok::Point) && toks.get(i + 1) == Some(&Tok::Digit('0')) {
-                let mut n = 0usize;
-                while toks.get(i + 1 + n) == Some(&Tok::Digit('0')) {
-                    n += 1;
-                }
-                out.push(Tok::Date(DatePart::SubSec(n.min(255) as u8)));
-                i += 1 + n;
-                continue;
-            }
-            match t {
-                Tok::Date(_) | Tok::Fill(_) => out.push(t.clone()),
-                other => push_lit(&mut out, &other.literal_text()),
-            }
-            i += 1;
-        }
-        sec.toks = out;
-        return sec;
+        return analyze_date(toks, sec);
     }
     if has_general {
         sec.kind = SecKind::General;
-        let mut out = Vec::with_capacity(toks.len());
-        for t in &toks {
-            match t {
-                Tok::General | Tok::Fill(_) => out.push(t.clone()),
-                other => push_lit(&mut out, &other.literal_text()),
-            }
-        }
-        sec.toks = out;
-        return sec;
+        return analyze_general(toks, sec);
     }
     sec.has_digits = toks.iter().any(|t| matches!(t, Tok::Digit(_)));
     if sec.has_at && !sec.has_digits {
         sec.kind = SecKind::Text;
-        let mut out = Vec::with_capacity(toks.len());
-        for t in &toks {
-            match t {
-                Tok::At | Tok::Fill(_) => out.push(t.clone()),
-                other => push_lit(&mut out, &other.literal_text()),
-            }
-        }
-        sec.toks = out;
-        return sec;
+        return analyze_text(toks, sec);
     }
+    analyze_number(toks, sec)
+}
+
+fn analyze_date(mut toks: Vec<Tok>, mut sec: Section) -> Section {
+    // m/mm after hours or before seconds means minutes.
+    for i in 0..toks.len() {
+        let Some(Tok::Date(DatePart::Month(n))) = toks.get(i) else { continue };
+        let n = *n;
+        if n > 2 {
+            continue;
+        }
+        let prev = toks.get(..i).and_then(|s| s.iter().rev().find_map(date_part));
+        let next = toks.get(i + 1..).and_then(|s| s.iter().find_map(date_part));
+        let after_h = matches!(prev, Some(DatePart::Hour(_) | DatePart::ElapsedH(_)));
+        let before_s = matches!(next, Some(DatePart::Second(_) | DatePart::ElapsedS(_)));
+        if (after_h || before_s)
+            && let Some(t) = toks.get_mut(i)
+        {
+            *t = Tok::Date(DatePart::Minute(n));
+        }
+    }
+    let mut out = Vec::with_capacity(toks.len());
+    let mut i = 0;
+    while let Some(t) = toks.get(i) {
+        if matches!(t, Tok::Point) && toks.get(i + 1) == Some(&Tok::Digit('0')) {
+            let mut n = 0usize;
+            while toks.get(i + 1 + n) == Some(&Tok::Digit('0')) {
+                n += 1;
+            }
+            out.push(Tok::Date(DatePart::SubSec(n.min(255) as u8)));
+            i += 1 + n;
+            continue;
+        }
+        match t {
+            Tok::Date(_) | Tok::Fill(_) => out.push(t.clone()),
+            other => push_lit(&mut out, &other.literal_text()),
+        }
+        i += 1;
+    }
+    sec.toks = out;
+    sec
+}
+
+fn analyze_general(toks: Vec<Tok>, mut sec: Section) -> Section {
+    let mut out = Vec::with_capacity(toks.len());
+    for t in &toks {
+        match t {
+            Tok::General | Tok::Fill(_) => out.push(t.clone()),
+            other => push_lit(&mut out, &other.literal_text()),
+        }
+    }
+    sec.toks = out;
+    sec
+}
+
+fn analyze_text(toks: Vec<Tok>, mut sec: Section) -> Section {
+    let mut out = Vec::with_capacity(toks.len());
+    for t in &toks {
+        match t {
+            Tok::At | Tok::Fill(_) => out.push(t.clone()),
+            other => push_lit(&mut out, &other.literal_text()),
+        }
+    }
+    sec.toks = out;
+    sec
+}
+
+fn analyze_number(mut toks: Vec<Tok>, mut sec: Section) -> Section {
     // Number section.
     let mut seen_point = false;
     let mut seen_exp = false;

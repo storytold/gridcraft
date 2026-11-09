@@ -86,11 +86,11 @@ fn hidden_objects_do_not_take_clicks() {
     let (mut h, id) = fixture();
     let at = inside(&h);
     click(&mut h, at);
-    assert_eq!(h.state().selected_chart, Some(id), "the click lands on the rectangle while it shows");
+    assert_eq!(h.state().selected_object.map(|o| o.id), Some(id), "the click lands on the rectangle while it shows");
     assert_eq!(active_cell(&h), CellRef::parse("A1").unwrap());
     ctrl_6(&mut h);
-    assert_eq!(h.state().selected_chart, None, "hiding objects drops the selection on one");
+    assert_eq!(h.state().selected_object, None, "hiding objects drops the selection on one");
     click(&mut h, at);
-    assert_eq!(h.state().selected_chart, None);
+    assert_eq!(h.state().selected_object, None);
     assert_eq!(active_cell(&h), CellRef::parse("E4").unwrap(), "the click selects the cell under the hidden rectangle");
 }

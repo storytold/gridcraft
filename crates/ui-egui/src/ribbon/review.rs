@@ -1,5 +1,5 @@
 use super::controls::{act, anchor_keytip, control_keytip, menu_items, sep};
-use super::*;
+use super::{Icon, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, json, small_button};
 
 pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
     let __k = big_button(ui, Icon::Spell, "Spelling", "Spelling (F7)", false);
@@ -65,7 +65,7 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
         );
     });
     sep(ui);
-    let protected = app.session.active().and_then(|d| d.wb.active().map(|s| s.is_protected())).unwrap_or(false);
+    let protected = app.active_sheet_protected();
     let __k = big_button(ui, Icon::Lock, if protected { "Unprotect\nSheet" } else { "Protect\nSheet" }, "Protect Sheet", false);
     control_keytip(app, ui, &__k, "dialog:protectSheet");
     if __k.clicked() {

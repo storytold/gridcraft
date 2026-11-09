@@ -37,9 +37,12 @@ pub fn start() {
         {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
         }
-        // `?host=parent`: a same-origin page framing GridCraft (such as a Nextcloud app) opens
-        // workbooks in it and stores what it saves (`host`).
-        let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
+        // Host modes (`craft-web-host`): `?host=parent`, a same-origin page framing GridCraft (such
+        // as a Nextcloud app), opens workbooks in it and stores what it saves (`host`). Unframed
+        // there is no parent, so that URL on its own stays the normal app with downloads.
+        // `data-host="page"` on the canvas opts a page in instead: it runs GridCraft in its own
+        // document and talks over DOM `CustomEvent`s on the canvas.
+        let bridge = crate::host::Bridge::detect(&canvas);
         let app_bridge = bridge.clone();
         let result = eframe::WebRunner::new()
             .start(
@@ -48,7 +51,7 @@ pub fn start() {
                 Box::new(move |cc| {
                     let inbox: Inbox = Inbox::default();
                     let mut session = Session::new();
-                    // In host mode the parent sends the workbook to edit; no sample meanwhile.
+                    // In host mode the host sends the workbook to edit; no sample meanwhile.
                     let q = if app_bridge.is_some() { String::new() } else { query() };
                     if let Some(name) = q.split(['?', '&']).find_map(|kv| kv.strip_prefix("sample=")) {
                         let _ = session.execute("file.new", serde_json::json!({"sample": name}));
@@ -96,6 +99,7 @@ pub fn start() {
                         }
                         bridge.post_ready();
                     }
+                    crate::api::install(&mut app, cc.egui_ctx.clone());
                     Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, prefs }))
                 }),
             )
@@ -193,7 +197,7 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
             let ctx = ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let Some(file) = rfd::AsyncFileDialog::new()
-                    .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "json"])
+                    .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "slk", "json"])
                     .pick_file()
                     .await
                 else {
@@ -230,8 +234,9 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
                 && let gridcraft_engine::links::LinkKind::External(url) = gridcraft_engine::links::classify(url)
             {
                 // With `noopener` the new browsing context can't hold a reference back to the
-                // editor window and navigate it while the user reads the linked page.
-                let _ = w.open_with_url_and_target(&url, "_blank,noopener");
+                // editor window and navigate it while the user reads the linked page. It must be a
+                // window *feature*: inside the target string it would only name the new window.
+                let _ = w.open_with_url_and_target_and_features(&url, "_blank", "noopener,noreferrer");
             }
         })),
         inbox: Some(inbox),

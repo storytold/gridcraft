@@ -1,4 +1,4 @@
-use super::*;
+use super::{CellRef, EngineError, Json, RangeRef, Result, Session, bad, edit, f64_param, json, str_param, target_range, target_sheet};
 
 // ---------------------------------------------------------------- fill
 
@@ -31,8 +31,9 @@ pub(super) fn fill_dir(s: &mut Session, p: &Json, dr: i64, dc: i64) -> Result<Js
     } else {
         RangeRef::new(CellRef::new(r.start.row, r.end.col), r.end)
     };
+    let skip = s.doc()?.wb.sheet(sheet).map(|sh| super::filtered_rows(sh, r)).unwrap_or_default();
     edit(s, |cx| {
-        crate::fill::fill(cx, sheet, src, r, crate::fill::FillMode::Copy)?;
+        crate::fill::fill_except(cx, sheet, src, r, crate::fill::FillMode::Copy, &skip)?;
         Ok(Json::Null)
     })
 }
@@ -78,7 +79,7 @@ pub(super) fn fill_series(s: &mut Session, p: &Json) -> Result<Json> {
     let stop = f64_param(p, "stop");
     let unit = str_param(p, "dateUnit").unwrap_or("day").to_string();
     edit(s, |cx| {
-        crate::fill::series(cx, sheet, r, rows, &kind, step, stop, &unit)?;
+        crate::fill::series(cx, sheet, crate::fill::SeriesOptions { range: r, rows, kind: &kind, step, stop, unit: &unit })?;
         Ok(Json::Null)
     })
 }

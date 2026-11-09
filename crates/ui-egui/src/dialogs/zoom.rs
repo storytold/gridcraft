@@ -1,5 +1,5 @@
 use super::show::ok_cancel;
-use super::*;
+use super::{Dialog, Json, json};
 
 /// Zoom's Magnification presets, as `preset` values and labels, in Excel's order.
 const ZOOM_PRESETS: [(&str, &str); 5] = [("200", "200%"), ("100", "100%"), ("75", "75%"), ("50", "50%"), ("25", "25%")];

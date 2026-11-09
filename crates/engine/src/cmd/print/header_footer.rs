@@ -1,5 +1,5 @@
 use super::layout::SheetLayout;
-use super::*;
+use super::{Font, Page, Value, Workbook};
 
 /// Side margin of headers and footers, in points, when Align with Page Margins is off.
 pub(super) const HF_FIXED_SIDE_MARGIN: f32 = 0.7 * 72.0;
@@ -153,6 +153,17 @@ pub struct HfSection {
     pub size: Option<f32>,
 }
 
+/// Most bytes one section's expanded text may hold. A code like `&A` adds the whole sheet name
+/// (or file path) each time it appears, and a JSON workbook's names have no length limit.
+const MAX_SECTION_BYTES: usize = 64 * 1024;
+
+/// Appends `s` unless the section would pass [`MAX_SECTION_BYTES`]; what doesn't fit is left out.
+fn push_field(text: &mut String, s: &str) {
+    if text.len().saturating_add(s.len()) <= MAX_SECTION_BYTES {
+        text.push_str(s);
+    }
+}
+
 /// Expands a header/footer string into its left, centre and right sections.
 pub fn expand_header_footer(spec: &str, cx: &HfContext) -> [HfSection; 3] {
     let mut out: [HfSection; 3] = Default::default();
@@ -187,14 +198,14 @@ pub fn expand_header_footer(spec: &str, cx: &HfContext) -> [HfSection; 3] {
                         i += 1 + digits.len();
                     }
                 }
-                sec.text.push_str(&n.to_string());
+                push_field(&mut sec.text, &n.to_string());
             }
-            'N' | 'n' => sec.text.push_str(&cx.pages.to_string()),
-            'D' | 'd' => sec.text.push_str(&cx.date),
-            'T' | 't' => sec.text.push_str(&cx.time),
-            'A' | 'a' => sec.text.push_str(&cx.sheet),
-            'F' | 'f' => sec.text.push_str(&cx.file),
-            'Z' | 'z' => sec.text.push_str(&cx.path),
+            'N' | 'n' => push_field(&mut sec.text, &cx.pages.to_string()),
+            'D' | 'd' => push_field(&mut sec.text, &cx.date),
+            'T' | 't' => push_field(&mut sec.text, &cx.time),
+            'A' | 'a' => push_field(&mut sec.text, &cx.sheet),
+            'F' | 'f' => push_field(&mut sec.text, &cx.file),
+            'Z' | 'z' => push_field(&mut sec.text, &cx.path),
             '&' => sec.text.push('&'),
             'B' | 'b' => sec.bold = !sec.bold,
             'I' | 'i' => sec.italic = !sec.italic,

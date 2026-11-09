@@ -1,5 +1,5 @@
 use super::descriptive::{arg_pairs, intercept, moments, slope};
-use super::*;
+use super::{Arg, C, CellError, R, Value, arg, array_val, as_array, boolean, has, num, num_val};
 
 pub(super) fn forecast(a: &[Arg], _: C) -> R<Value> {
     let x = num(a, 0)?;

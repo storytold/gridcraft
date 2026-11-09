@@ -17,6 +17,25 @@ fn contains(hay: &[u8], needle: &str) -> bool {
 }
 
 #[test]
+fn chart_data_table_prints_formatted_values_and_follows_recalculation() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Quarter", "Sales"], ["Q1", 1234], ["Q2", 5678]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "B2:B3", "format": "#,##0.00"})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:B3", "at": "D2", "type": "column"})).unwrap();
+    let (off, pages) = pdf_of(&mut s, json!({"fitToPage": true}));
+    assert_eq!(pages, 1);
+    let count = |bytes: &[u8], text: &str| String::from_utf8_lossy(bytes).matches(text).count();
+    s.execute("chart.set", json!({"dataTable": true})).unwrap();
+    let (on, _) = pdf_of(&mut s, json!({"fitToPage": true}));
+    assert_eq!(count(&on, "(1,234.00) Tj"), count(&off, "(1,234.00) Tj") + 1);
+    assert_eq!(count(&on, "(5,678.00) Tj"), count(&off, "(5,678.00) Tj") + 1);
+    s.execute("cell.set", json!({"cell": "B2", "input": "=1000+111"})).unwrap();
+    let (updated, _) = pdf_of(&mut s, json!({"fitToPage": true}));
+    assert!(!contains(&updated, "(1,234.00) Tj"));
+    assert!(count(&updated, "(1,111.00) Tj") >= 2, "cell and chart data table both print the new value");
+}
+
+#[test]
 fn pdf_export_keeps_safe_links_on_their_printed_pages() {
     let mut s = s();
     s.execute("insert.link", json!({"cell": "A1", "target": "https://example.org/report"})).unwrap();
@@ -148,6 +167,142 @@ fn wide_sheet_goes_down_then_over() {
     assert_eq!(pv["pageList"][2]["range"], "K1:O45");
 }
 
+/// The ranges of the printed pages, in print order.
+fn page_ranges(s: &mut Session) -> Vec<String> {
+    let pv = s.execute("file.printPreview", json!({})).unwrap();
+    let list = pv["pageList"].as_array().unwrap();
+    assert_eq!(pv["pages"], list.len());
+    for (i, page) in list.iter().enumerate() {
+        assert_eq!(page["page"], i + 1);
+        assert_eq!(page["pageOrder"], s.doc().unwrap().wb.active().unwrap().print.page_order.id());
+    }
+    list.iter().map(|p| p["range"].as_str().unwrap().to_string()).collect()
+}
+
+/// The content streams of an exported PDF's pages, in page order (pages without pictures are the
+/// file's only streams).
+fn pdf_pages(s: &mut Session) -> Vec<String> {
+    let (pdf, pages) = pdf_of(s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    let streams: Vec<String> = text.split("endstream").filter(|part| part.contains("stream\n")).map(str::to_string).collect();
+    assert_eq!(streams.len() as u64, pages);
+    streams
+}
+
+/// The page order measured in Excel: print area A1:D4 with a row break before row 3 and a column
+/// break before column C, so four pages two tall and two wide, each filled and labelled in its
+/// own colour, with `Page &P of &N` in the footer.
+fn two_by_two_pages() -> Session {
+    let mut s = s();
+    for (range, color, label) in
+        [("A1:B2", "#FF0000", "red"), ("A3:B4", "#00FF00", "green"), ("C1:D2", "#0000FF", "blue"), ("C3:D4", "#FFFF00", "yellow")]
+    {
+        s.execute("home.fillColor", json!({"range": range, "color": color})).unwrap();
+        s.execute("cell.set", json!({"cell": &range[..2], "input": label})).unwrap();
+    }
+    s.execute("pageLayout.pageSetup", json!({"printArea": "A1:D4", "rowBreaks": [3], "colBreaks": ["C"], "footer": "Page &P of &N"})).unwrap();
+    s
+}
+
+/// The colour of each printed page, read from its fill and label; each page's footer must
+/// number it in print order.
+fn printed_colours(s: &mut Session) -> Vec<&'static str> {
+    let pages = pdf_pages(s);
+    let n = pages.len();
+    pages
+        .iter()
+        .enumerate()
+        .map(|(i, page)| {
+            assert!(page.contains(&format!("(Page {} of {n}) Tj", i + 1)), "page {}: {page}", i + 1);
+            let found: Vec<&str> = [("red", "1 0 0 rg"), ("green", "0 1 0 rg"), ("blue", "0 0 1 rg"), ("yellow", "1 1 0 rg")]
+                .into_iter()
+                .filter(|(label, fill)| page.contains(&format!("({label}) Tj")) && page.contains(&format!("\n{fill}\n")))
+                .map(|(label, _)| label)
+                .collect();
+            assert_eq!(found.len(), 1, "page {}: {found:?}", i + 1);
+            found[0]
+        })
+        .collect()
+}
+
+#[test]
+fn page_order_sets_the_sequence_of_the_pages_as_measured_in_excel() {
+    let mut s = two_by_two_pages();
+    // Down, then over is the default: down the first column of pages, then the next.
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().print.page_order, PageOrder::DownThenOver);
+    assert_eq!(s.execute("pageLayout.pageSetup", json!({})).unwrap()["page_order"], "downThenOver");
+    let down = ["A1:B2", "A3:B4", "C1:D2", "C3:D4"];
+    assert_eq!(page_ranges(&mut s), down);
+    assert_eq!(printed_colours(&mut s), ["red", "green", "blue", "yellow"]);
+    // Over, then down: across the first row of pages, then the next.
+    let r = s.execute("pageLayout.pageSetup", json!({"pageOrder": "overThenDown"})).unwrap();
+    assert_eq!(r["page_order"], "overThenDown");
+    let over = ["A1:B2", "C1:D2", "A3:B4", "C3:D4"];
+    assert_eq!(page_ranges(&mut s), over);
+    assert_eq!(printed_colours(&mut s), ["red", "blue", "green", "yellow"]);
+    assert_eq!(s.execute("file.printPreview", json!({"page": 2})).unwrap()["page"]["range"], "C1:D2");
+    // One undo step.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(page_ranges(&mut s), down);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(page_ranges(&mut s), over);
+    // Anything but the two orders is refused and changes nothing, even next to a good value.
+    for bad in [json!("sideways"), json!("OverThenDown"), json!(""), json!(2), json!(null), json!(true), json!(["downThenOver"])] {
+        let e = s.execute("pageLayout.pageSetup", json!({"pageOrder": bad, "orientation": "landscape"})).unwrap_err();
+        assert!(e.to_string().contains("pageOrder"), "{bad}: {e}");
+    }
+    let pr = &s.doc().unwrap().wb.active().unwrap().print;
+    assert_eq!((pr.page_order, pr.orientation), (PageOrder::OverThenDown, Orientation::Portrait));
+    assert!(s.take_ui_requests().is_empty(), "a programmatic call never opens a dialog");
+    // First-page and odd/even headers go by the printed sequence too.
+    s.execute(
+        "pageLayout.headerFooter",
+        json!({"header": "&COdd &P", "evenHeader": "&CEven &P", "firstHeader": "&CCover", "differentFirst": true, "differentOddEven": true}),
+    )
+    .unwrap();
+    let pages = pdf_pages(&mut s);
+    for (page, (header, label)) in pages.iter().zip([("Cover", "red"), ("Even 2", "blue"), ("Odd 3", "green"), ("Even 4", "yellow")]) {
+        assert!(page.contains(&format!("({header}) Tj")) && page.contains(&format!("({label}) Tj")), "{header}: {page}");
+    }
+    s.execute("pageLayout.pageSetup", json!({"pageOrder": "downThenOver"})).unwrap();
+    assert_eq!(page_ranges(&mut s), down);
+    let pages = pdf_pages(&mut s);
+    for (page, (header, label)) in pages.iter().zip([("Cover", "red"), ("Even 2", "green"), ("Odd 3", "blue"), ("Even 4", "yellow")]) {
+        assert!(page.contains(&format!("({header}) Tj")) && page.contains(&format!("({label}) Tj")), "{header}: {page}");
+    }
+}
+
+#[test]
+fn page_order_without_breaks_and_with_print_titles() {
+    let mut s = s();
+    // Every cell shows its own address: 60 rows and 15 columns are two pages tall and two wide.
+    let rows: Vec<Vec<Json>> = (1..=60).map(|r| (0..15).map(|c| json!(format!("{}{r}", gridcraft_core::col_to_letters(c)))).collect()).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    for titles in [false, true] {
+        if titles {
+            s.execute("pageLayout.pageSetup", json!({"titleRows": "1:1", "titleCols": "A:A"})).unwrap();
+        }
+        s.execute("pageLayout.pageSetup", json!({"pageOrder": "downThenOver"})).unwrap();
+        let down = page_ranges(&mut s);
+        if !titles {
+            assert_eq!(down, ["A1:J45", "A46:J60", "K1:O45", "K46:O60"]);
+        }
+        s.execute("pageLayout.pageSetup", json!({"pageOrder": "overThenDown"})).unwrap();
+        let over = page_ranges(&mut s);
+        assert_eq!(over, [down[0].clone(), down[2].clone(), down[1].clone(), down[3].clone()], "titles: {titles}");
+        // Each printed page starts with its own top-left cell; the title row and column (A1 is in
+        // both) repeat on every page in either order.
+        for (order, ranges) in [("overThenDown", &over), ("downThenOver", &down)] {
+            s.execute("pageLayout.pageSetup", json!({"pageOrder": order})).unwrap();
+            for (i, (page, range)) in pdf_pages(&mut s).iter().zip(ranges.iter()).enumerate() {
+                let top_left = range.split(':').next().unwrap();
+                assert!(page.contains(&format!("({top_left}) Tj")), "{order} page {}: no {top_left}", i + 1);
+                assert_eq!(page.contains("(A1) Tj"), titles || i == 0, "{order} page {}, titles: {titles}", i + 1);
+            }
+        }
+    }
+}
+
 #[test]
 fn first_and_even_pages_print_their_own_headers() {
     let mut s = s();
@@ -172,6 +327,14 @@ fn first_and_even_pages_print_their_own_headers() {
     s.execute("pageLayout.headerFooter", json!({"differentFirst": false, "differentOddEven": false})).unwrap();
     let (pdf, _) = pdf_of(&mut s, json!({}));
     assert!(contains(&pdf, "(Odd 1) Tj") && contains(&pdf, "(Odd 2) Tj") && !contains(&pdf, "(Cover) Tj"));
+}
+
+/// The y position of the first `(text) Tj` in a PDF (PDF space: larger is higher on the page).
+fn text_y(pdf: &[u8], text: &str) -> Option<f32> {
+    let s = String::from_utf8_lossy(pdf);
+    let before = &s[..s.find(&format!("({text}) Tj"))?];
+    let tm = before.rfind(" Tm")?;
+    before[..tm].rsplit([' ', '\n']).next()?.parse().ok()
 }
 
 /// The x position and font size of the first `(text) Tj` in a PDF.
@@ -251,6 +414,12 @@ fn pdf_contains_text_and_header_codes_expand() {
     assert_eq!(r.text, "P4/9 9:00 AM");
     assert_eq!(expand_header_footer("plain", &cx)[1].text, "plain");
     assert_eq!(expand_header_footer("&", &cx)[1].text, "");
+    // A megabyte sheet name repeated by 5,000 `&A` codes stops at the section's 64 KiB.
+    let long = HfContext { sheet: "S".repeat(1024 * 1024), ..cx };
+    let [_, c, _] = expand_header_footer(&"&A".repeat(5_000), &long);
+    assert!(c.text.is_empty(), "the name alone is over the limit");
+    let short = HfContext { sheet: "S".repeat(1000), ..Default::default() };
+    assert_eq!(expand_header_footer(&"&A".repeat(5_000), &short)[1].text.len(), 65_000);
 }
 
 #[test]
@@ -473,6 +642,11 @@ fn hostile_settings_never_panic_and_cap_pages() {
     assert_eq!(pv["pages"].as_u64().unwrap(), MAX_PAGES as u64);
     let r = s.execute("file.exportPdf", json!({})).unwrap();
     assert_eq!(r["pages"], MAX_PAGES);
+    // Over, then down stops at the cap as well, along the first row of pages.
+    s.execute("pageLayout.pageSetup", json!({"pageOrder": "overThenDown"})).unwrap();
+    let pv = s.execute("file.printPreview", json!({})).unwrap();
+    assert_eq!(pv["pages"].as_u64().unwrap(), MAX_PAGES as u64);
+    assert_eq!(pv["pageList"][1]["rows"], pv["pageList"][0]["rows"], "the second page is beside the first");
     s.execute("pageLayout.pageSetup", json!({"fitWidth": 1, "fitHeight": 1, "titleRows": "1:1048576", "titleCols": "A:XFD", "headings": true}))
         .unwrap();
     let pv = s.execute("file.printPreview", json!({})).unwrap();
@@ -527,6 +701,79 @@ fn bands_unit() {
     assert!(w.len() > 2);
 }
 
+/// The wrapper `wrap_lines` replaced, re-measuring strings, as the reference for its lines.
+fn wrap_lines_remeasuring(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
+    let mut out = Vec::new();
+    for para in text.split('\n') {
+        let mut line = String::new();
+        for word in para.split(' ') {
+            let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            if line.is_empty() || gridcraft_pdf::text_width(font, size, &cand) <= width {
+                line = cand;
+            } else {
+                out.push(std::mem::take(&mut line));
+                line = word.to_string();
+            }
+            while gridcraft_pdf::text_width(font, size, &line) > width && line.chars().count() > 1 {
+                let chars: Vec<char> = line.chars().collect();
+                let (mut lo, mut hi) = (1usize, chars.len());
+                while lo < hi {
+                    let mid = lo + (hi - lo).div_ceil(2);
+                    let cut: String = chars[..mid].iter().collect();
+                    if gridcraft_pdf::text_width(font, size, &cut) <= width {
+                        lo = mid;
+                    } else {
+                        hi = mid - 1;
+                    }
+                }
+                if lo == chars.len() {
+                    break;
+                }
+                out.push(chars[..lo].iter().collect());
+                line = chars[lo..].iter().collect();
+            }
+            if out.len() > 2000 {
+                return out;
+            }
+        }
+        out.push(line);
+    }
+    out
+}
+
+#[test]
+fn wrap_lines_matches_the_remeasuring_wrapper() {
+    let texts = [
+        "the quick brown fox jumps",
+        "Supercalifragilistic",
+        "a  b   c\n\nverylongwordthatneedsbreaking short\nend ",
+        "Wide WWWWWWWWWW words, iiiiiiii narrow ones; mixed MMMMiiiiMMMM",
+        "€ ü ß — unicode Ünïcödé text",
+        "",
+        " ",
+    ];
+    for text in texts {
+        for font in [Font::Helvetica, Font::HelveticaBold, Font::Courier] {
+            for (size, width) in [(10.0, 50.0), (10.0, 20.0), (11.0, 1.0), (8.0, 300.0), (12.0, 0.0)] {
+                assert_eq!(wrap_lines(text, font, size, width), wrap_lines_remeasuring(text, font, size, width), "{text:?} {font:?} {size} {width}");
+            }
+        }
+    }
+}
+
+#[test]
+fn wrapping_a_long_word_in_a_narrow_box_stops_at_the_line_limit() {
+    // One character per line: the old wrapper re-measured and copied the rest of the word for
+    // each of the 100,000 lines before checking the limit.
+    let word = "w".repeat(100_000);
+    let lines = wrap_lines(&word, Font::Helvetica, 10.0, 1.0);
+    assert!(lines.len() <= 2002, "{}", lines.len());
+    assert!(lines.iter().all(|l| l == "w"));
+    // A long paragraph in a very wide box is one line.
+    let para = vec!["word"; 50_000].join(" ");
+    assert_eq!(wrap_lines(&para, Font::Helvetica, 10.0, 1.0e9), vec![para.clone()]);
+}
+
 #[test]
 fn center_across_spans_following_empty_center_across_cells() {
     let mut styles = StyleTable::default();
@@ -564,4 +811,130 @@ fn rotated_wrapped_text_prints_rotated() {
     // Every piece of both headers is rotated, each wrapped along the row height into a few long lines.
     assert_eq!(up + down, blocks.len(), "a header line printed flat: {blocks:?}");
     assert!((1..=3).contains(&up) && (1..=3).contains(&down), "up {up}, down {down}: {blocks:?}");
+}
+
+#[test]
+fn checkbox_cells_print_as_boxes_not_true_false() {
+    // #2972: a checkbox cell printed its value as TRUE or FALSE.
+    let mut s = s();
+    s.execute("insert.checkbox", json!({"range": "A1:A2"})).unwrap();
+    s.execute("cell.toggleCheckbox", json!({"cell": "A2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "TRUE"})).unwrap();
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    assert!(!contains(&pdf, "(FALSE) Tj"), "the unchecked box printed as FALSE");
+    // Only the plain TRUE in C1 prints as text; the checked box is a filled box.
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(text.matches("(TRUE) Tj").count(), 1, "the checked box printed as TRUE");
+    assert!(contains(&pdf, "0.063 0.486 0.255 rg"), "the checked box is not filled");
+    assert!(contains(&pdf, "0.431 0.431 0.431 RG"), "the unchecked box is not outlined");
+}
+
+#[test]
+fn an_equation_without_a_layout_prints_its_source_one_line_per_line() {
+    use super::objects::{MAX_FALLBACK_LINES, fallback_lines};
+    let mut s = s();
+    s.execute("insert.equation", json!({"latex": "x", "cell": "B2"})).unwrap();
+    // A file can carry a source the layout engine refuses: two lines here, in a frame 100 px
+    // (75 pt) tall, which holds six 12 pt lines.
+    let with_source = |text: &str| {
+        let mut wb = (*s.doc().unwrap().wb).clone();
+        if let Some(sh) = wb.sheet_mut(0) {
+            for x in sh.shapes.iter_mut() {
+                x.text = text.into();
+                x.anchor.height = 100.0;
+            }
+        }
+        let mut t = Session::new();
+        t.add_document(crate::DocState::new(wb, None, "Book".into(), crate::Trust::FromFile));
+        pdf_of(&mut t, json!({})).0
+    };
+    let pdf = with_source("frac{\nsecond line");
+    assert!(contains(&pdf, "(frac{) Tj"), "the first line is its own text run");
+    assert!(contains(&pdf, "(second line) Tj"), "and so is the second");
+    assert!(!contains(&pdf, "(frac{?second line) Tj"), "the newline is not printed as ?");
+    let (y1, y2) = (text_y(&pdf, "frac{").unwrap(), text_y(&pdf, "second line").unwrap());
+    assert!(y1 > y2 && y1 - y2 < 13.0, "the second line sits one line below the first: {y1} {y2}");
+    // Lines the frame cannot hold are not printed.
+    let pdf = with_source(&"l\n".repeat(10_000));
+    assert_eq!(String::from_utf8_lossy(&pdf).matches("(l) Tj").count(), 6);
+    // Whatever the frame, the count is capped; a frame too low for one line still shows the first.
+    let tall = "l\n".repeat(10_000);
+    assert_eq!(fallback_lines(&tall, f32::INFINITY, 12.0).count(), MAX_FALLBACK_LINES);
+    assert_eq!(fallback_lines(&tall, 1.0e9, 12.0).count(), MAX_FALLBACK_LINES);
+    assert_eq!(fallback_lines("a\nb\nc", 30.0, 12.0).count(), 2);
+    assert_eq!(fallback_lines("a\nb", 0.0, 12.0).count(), 1);
+    assert_eq!(fallback_lines("a\nb", f32::NAN, 12.0).count(), 1);
+}
+
+#[test]
+fn the_fallback_text_is_clipped_to_the_equation_frame() {
+    // A long line of a source that does not lay out, in a narrow frame (40 by 100 px, 30 by
+    // 75 pt): the lines are drawn inside a clip of the frame, nested in the block's, so they
+    // cannot run over neighbours, and the clip is lifted again before the next object (a text
+    // box below the equation in the same block) is drawn.
+    let mut s = s();
+    s.execute("insert.equation", json!({"latex": "x", "cell": "B2"})).unwrap();
+    s.execute("insert.textBox", json!({"at": "B12", "text": "later box"})).unwrap();
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    if let Some(sh) = wb.sheet_mut(0) {
+        for x in sh.shapes.iter_mut().filter(|x| x.kind == gridcraft_model::ShapeKind::Equation) {
+            x.text = format!("frac{{{}", "l".repeat(200));
+            x.anchor.width = 40.0;
+            x.anchor.height = 100.0;
+        }
+    }
+    let mut t = Session::new();
+    t.add_document(crate::DocState::new(wb, None, "Book".into(), crate::Trust::FromFile));
+    let (pdf, _) = pdf_of(&mut t, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    let clip = text.find("30 75 re W n").expect("a clip the size of the frame");
+    let run = text.find("(frac{llll").expect("the source line");
+    let later = text.find("(later box) Tj").expect("the text box after the equation");
+    assert!(clip < run && run < later, "clip, then the text, then the later object");
+    // The net number of saved graphics states (`q` less `Q`) before an operator.
+    let depth = |at: usize| text[..at].lines().filter(|l| *l == "q").count() as i64 - text[..at].lines().filter(|l| *l == "Q").count() as i64;
+    assert_eq!(depth(run), depth(clip), "the text is drawn under the frame's clip");
+    assert_eq!(depth(later), depth(clip) - 1, "the later object is drawn with the frame's state restored");
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // tests run only off wasm, where the clock exists
+fn an_equation_source_of_a_megabyte_prints_a_bounded_excerpt() {
+    // A file can carry a source far past `MAX_SOURCE_BYTES` (the drawing part may be 512 MiB). It
+    // never lays out, so the fallback prints the first 4,096 bytes and does no work on the rest:
+    // the PDF holds one run of that length, not the megabyte, and export takes bounded time.
+    let mut s = s();
+    s.execute("insert.equation", json!({"latex": "x", "cell": "B2"})).unwrap();
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    if let Some(sh) = wb.sheet_mut(0) {
+        for x in sh.shapes.iter_mut() {
+            x.text = "l".repeat(1 << 20);
+        }
+    }
+    let mut t = Session::new();
+    t.add_document(crate::DocState::new(wb, None, "Book".into(), crate::Trust::FromFile));
+    let start = std::time::Instant::now();
+    let (pdf, _) = pdf_of(&mut t, json!({}));
+    let took = start.elapsed();
+    let text = String::from_utf8_lossy(&pdf);
+    let longest = text.split(|c| c != 'l').map(str::len).max().unwrap_or(0);
+    assert_eq!(longest, gridcraft_math::MAX_SOURCE_BYTES, "the run is the excerpt and no more");
+    assert!(pdf.len() < 64 * 1024, "the PDF holds the excerpt, not the megabyte: {} bytes", pdf.len());
+    assert!(took < std::time::Duration::from_secs(5), "{took:?}");
+}
+
+#[test]
+fn equations_print_with_the_symbol_font() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("insert.equation", json!({"latex": "\\sum_{i=1}^{n} \\alpha_i \\le \\infty \\pm \\sqrt{x} \\times \\partial y", "cell": "B2"}))
+        .unwrap();
+    s.execute("insert.equation", json!({"latex": "\\mathbb{R} \\oplus \\text{\u{4E2D}}", "cell": "B8"})).unwrap();
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    assert!(contains(&pdf, "/BaseFont /Symbol >>"), "maths symbols use the Symbol font");
+    assert!(contains(&pdf, "/BaseFont /Times-Italic"), "variables are italic");
+    // The summation (0xE5) and alpha (0x61) codes in Symbol.
+    assert!(contains(&pdf, "(\\345) Tj") && contains(&pdf, "(a) Tj"));
+    // A glyph no standard font has is a [?] box.
+    assert!(contains(&pdf, "(?) Tj"));
 }

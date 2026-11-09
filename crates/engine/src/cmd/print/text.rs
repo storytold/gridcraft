@@ -1,44 +1,59 @@
 use super::draw::{Block, Look, rgb_of};
-use super::*;
+use super::{CellRef, Color, Font, HAlign, MAX_COLS, Page, Point, RangeRef, Sheet, Style, StyleTable, Underline, VAlign, Value};
 
 const PAD_PX: f32 = 2.0;
 
+/// Most lines [`wrap_lines`] returns (it may return one more, the rest of a paragraph).
+const MAX_WRAP_LINES: usize = 2000;
+
 /// Word-wraps `text` to `width` points.
+///
+/// Widths are kept as running sums of glyph widths (the sum `text_width` makes), so each
+/// character is measured once: re-measuring the line for every word, or the rest of an
+/// over-long word for every piece cut from it, made a long paragraph or word quadratic.
 pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
+    let units_of = |s: &str| -> u64 { s.chars().map(|c| u64::from(font.char_width(c))).sum() };
+    let fits = |units: u64| units as f32 * size / 1000.0 <= width;
+    let space = units_of(" ");
     let mut out = Vec::new();
     for para in text.split('\n') {
         let mut line = String::new();
+        let mut line_units: u64 = 0;
         for word in para.split(' ') {
-            let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            if line.is_empty() || gridcraft_pdf::text_width(font, size, &cand) <= width {
-                line = cand;
+            let word_units = units_of(word);
+            if line.is_empty() {
+                line.push_str(word);
+                line_units = word_units;
+            } else if fits(line_units + space + word_units) {
+                line.push(' ');
+                line.push_str(word);
+                line_units += space + word_units;
             } else {
                 out.push(std::mem::take(&mut line));
-                line = word.to_string();
+                line.push_str(word);
+                line_units = word_units;
             }
-            // Break a single over-long word by characters. The cut that fits is found by binary
-            // search (each try measures one candidate prefix), so an over-long word costs
-            // O(n log n) measurements instead of re-measuring the whole cut per character for
-            // every emitted line (`a` × 100k pasted text would be cubic worst case).
-            while gridcraft_pdf::text_width(font, size, &line) > width && line.chars().count() > 1 {
-                let chars: Vec<char> = line.chars().collect();
-                let (mut lo, mut hi) = (1usize, chars.len());
-                while lo < hi {
-                    let mid = lo + (hi - lo).div_ceil(2);
-                    let cut: String = chars[..mid].iter().collect();
-                    if gridcraft_pdf::text_width(font, size, &cut) <= width {
-                        lo = mid;
-                    } else {
-                        hi = mid - 1;
+            // Break a single over-long word by characters: each piece is the longest that fits
+            // (at least one character).
+            if !fits(line_units) && line.chars().nth(1).is_some() {
+                let mut piece = String::new();
+                let mut units: u64 = 0;
+                for c in line.chars() {
+                    let w = u64::from(font.char_width(c));
+                    if !piece.is_empty() && !fits(units + w) {
+                        out.push(std::mem::take(&mut piece));
+                        units = 0;
+                        if out.len() > MAX_WRAP_LINES {
+                            return out;
+                        }
                     }
+                    piece.push(c);
+                    units += w;
                 }
-                if lo == chars.len() {
-                    break;
-                }
-                out.push(chars[..lo].iter().collect());
-                line = chars[lo..].iter().collect();
+                line = piece;
+                line_units = units;
             }
-            if out.len() > 2000 {
+            if out.len() > MAX_WRAP_LINES {
                 return out;
             }
         }
@@ -51,9 +66,53 @@ fn font_for(style: &Style) -> Font {
     Font::styled(Font::family_for(&style.font.name), style.font.bold, style.font.italic)
 }
 
+fn text_align(align: HAlign, value: &Value) -> HAlign {
+    match align {
+        HAlign::General => match value {
+            Value::Number(_) => HAlign::Right,
+            Value::Bool(_) | Value::Error(_) => HAlign::Center,
+            _ => HAlign::Left,
+        },
+        HAlign::CenterAcross | HAlign::Distributed => HAlign::Center,
+        HAlign::Justify | HAlign::Fill => HAlign::Left,
+        other => other,
+    }
+}
+
 /// Is a cell free for text to overflow into?
 fn empty_for_overflow(sh: &Sheet, c: CellRef, merges: &[RangeRef]) -> bool {
     sh.value_ref(c).is_none_or(|v| v.is_empty()) && !merges.iter().any(|m| m.contains(c))
+}
+
+fn extend_text_bounds(sh: &Sheet, c: CellRef, merges: &[RangeRef], k: f32, need: f32, align: HAlign, bounds: (f32, f32)) -> (f32, f32) {
+    let (mut clip_l, mut clip_r) = bounds;
+    let grow = |dir: i64, mut remaining: f32| -> f32 {
+        let mut ext = 0.0;
+        let mut col = c.col as i64 + dir;
+        while remaining > 0.0 && col >= 0 && col < MAX_COLS as i64 {
+            let nc = CellRef::new(c.row, col as u32);
+            if !empty_for_overflow(sh, nc, merges) {
+                break;
+            }
+            let width = sh.col_width(nc.col) * k;
+            ext += width;
+            remaining -= width;
+            col += dir;
+            if ext > 20_000.0 {
+                break;
+            }
+        }
+        ext
+    };
+    match align {
+        HAlign::Right => clip_l -= grow(-1, need),
+        HAlign::Center => {
+            clip_l -= grow(-1, need / 2.0);
+            clip_r += grow(1, need / 2.0);
+        }
+        _ => clip_r += grow(1, need),
+    }
+    (clip_l, clip_r)
 }
 
 /// Unscaled width of the empty Center Across Selection cells right of `c`, which its text is centred over too.
@@ -71,16 +130,17 @@ pub(super) fn center_across_width(styles: &StyleTable, sh: &Sheet, c: CellRef, m
     ext
 }
 
-pub(super) fn draw_text(
-    pg: &mut Page,
-    b: &Block,
-    c: CellRef,
-    l: &Look,
-    rect: (f32, f32, f32, f32),
-    merged: bool,
-    merges: &[RangeRef],
-    limits: (f32, f32),
-) {
+pub(super) struct TextPlacement<'a> {
+    pub cell: CellRef,
+    pub look: &'a Look,
+    pub rect: (f32, f32, f32, f32),
+    pub merged: bool,
+    pub merges: &'a [RangeRef],
+    pub limits: (f32, f32),
+}
+
+pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) {
+    let TextPlacement { cell: c, look: l, rect, merged, merges, limits } = placement;
     let (x, y, w, h) = rect;
     let sh = b.sh;
     let wb = b.wb;
@@ -133,20 +193,7 @@ pub(super) fn draw_text(
         text = "#".repeat(((avail / hash).floor().max(1.0) as usize).min(255));
         tw = gridcraft_pdf::text_width(font, size, &text);
     }
-    let h_align = match st.align.h {
-        HAlign::General => {
-            if is_num {
-                HAlign::Right
-            } else if matches!(v, Value::Bool(_) | Value::Error(_)) {
-                HAlign::Center
-            } else {
-                HAlign::Left
-            }
-        }
-        HAlign::CenterAcross | HAlign::Distributed => HAlign::Center,
-        HAlign::Justify | HAlign::Fill => HAlign::Left,
-        other => other,
-    };
+    let h_align = text_align(st.align.h, &v);
     let rot = st.align.rotation;
     let rotated = rot != 0 && rot != 255;
     // Rotated text wraps along its own direction: upright (±90°) text to the row height.
@@ -170,32 +217,7 @@ pub(super) fn draw_text(
     let (mut clip_l, mut clip_r) = (x, x + w + across);
     if !wrap && !merged && !is_num && rot.abs() != 90 && across <= 0.0 && tw + 2.0 * pad + indent > w {
         let need = tw + 2.0 * pad + indent - w;
-        let grow = |dir: i64, mut need: f32| -> f32 {
-            let mut ext = 0.0;
-            let mut col = c.col as i64 + dir;
-            while need > 0.0 && col >= 0 && col < MAX_COLS as i64 {
-                let nc = CellRef::new(c.row, col as u32);
-                if !empty_for_overflow(sh, nc, merges) {
-                    break;
-                }
-                let cw = sh.col_width(nc.col) * b.k;
-                ext += cw;
-                need -= cw;
-                col += dir;
-                if ext > 20_000.0 {
-                    break;
-                }
-            }
-            ext
-        };
-        match h_align {
-            HAlign::Right => clip_l -= grow(-1, need),
-            HAlign::Center => {
-                clip_l -= grow(-1, need / 2.0);
-                clip_r += grow(1, need / 2.0);
-            }
-            _ => clip_r += grow(1, need),
-        }
+        (clip_l, clip_r) = extend_text_bounds(sh, c, merges, b.k, need, h_align, (clip_l, clip_r));
     }
     let clip_l = clip_l.max(limits.0);
     let clip_r = clip_r.min(limits.1);
@@ -215,7 +237,7 @@ pub(super) fn draw_text(
             } else {
                 (x + pad + (last - i) * line_h, y + pad + size * 0.8)
             };
-            pg.text_rotated(ox, oy, size, font, color, t, angle);
+            pg.text_rotated(Point::new(ox, oy), size, font, color, t, angle);
         }
         pg.restore();
         return;

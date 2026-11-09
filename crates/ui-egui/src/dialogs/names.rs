@@ -1,5 +1,5 @@
 use super::show::ok_cancel;
-use super::*;
+use super::{Dialog, Json, Key, SheetApp, json};
 
 pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut bool) {
     let list = app.session.run("formulas.nameManager", json!({})).unwrap_or(Json::Null);

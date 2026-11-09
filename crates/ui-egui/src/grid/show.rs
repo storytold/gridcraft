@@ -1,19 +1,53 @@
+use super::Trace;
 use super::cursor::update_cursor;
 use super::editor::{in_cell_editor, list_picker, validation_arrow};
 use super::geo::Geo;
 use super::interact::{interact, paint_freeze_handles};
 use super::menus::{context_menu, error_check_tag, fill_menu, fill_options_tag, filter_menu, header_menu, object_menu};
-use super::quadrant::{mirror_painted, paint_quadrant};
-use super::selection::paint_selection;
+use super::quadrant::{QuadrantPaint, mirror_painted, paint_quadrant};
+use super::selection::{SelectionPaintInput, paint_selection};
 use super::tables::{TableHeading, paint_filter_button, table_headings};
-use super::*;
+use super::{
+    Align2, Arc, CfCache, Color32, DISPLAY_SCALE, Drag, MAX_COLS, MAX_ROWS, Painter, PaneQuad, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke,
+    StrokeKind, Tokens, WHEEL_ZOOM_IDLE, WheelZoom, Workbook, col_to_letters, heading_font_size, json, pos2, theme, vec2, wheel_zoom_step,
+    zoom_glide_step,
+};
+#[cfg(test)]
+use super::{CellRef, Pos2};
+
+/// The line positions and outlines of sheet `si`: the ones built for it before while it is the
+/// same sheet, else built now and kept (see `GridState::lines`).
+fn sheet_lines(app: &mut SheetApp, wb: &Workbook, si: usize) -> Option<super::geo::SheetLines> {
+    let sheet = wb.sheets.get(si)?;
+    if let Some((built_from, lines)) = &app.grid.lines
+        && is_sheet(built_from, wb, si)
+    {
+        return Some(lines.clone());
+    }
+    let lines = super::geo::SheetLines::of(sheet);
+    app.grid.lines = Some((Arc::downgrade(sheet), lines.clone()));
+    Some(lines)
+}
+
+/// Whether `built_from` still is sheet `si` of `wb`, unchanged (see `GridState::lines`).
+fn is_sheet(built_from: &std::sync::Weak<Sheet>, wb: &Workbook, si: usize) -> bool {
+    wb.sheets.get(si).is_some_and(|s| built_from.upgrade().is_some_and(|b| Arc::ptr_eq(&b, s)))
+}
+
+/// The conditional formatting cache kept for sheet `si` while it is unchanged, else a new one.
+fn kept_cf(app: &mut SheetApp, wb: &Workbook, si: usize) -> CfCache {
+    match app.grid.cf.take() {
+        Some((built_from, cf)) if is_sheet(&built_from, wb, si) => cf,
+        _ => CfCache::new(),
+    }
+}
 
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let available = ui.available_rect_before_wrap();
     // A right-to-left sheet has its vertical scrollbar on the left.
     let rtl = app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.right_to_left);
-    let bar = 14.0_f32.min(available.width());
+    let bar = vertical_bar_width(app, available);
     let rect = if rtl {
         Rect::from_min_max(pos2(available.left() + bar, available.top()), available.max)
     } else {
@@ -37,15 +71,16 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     } else {
         Rect::from_min_max(pos2((rect.left() + ruler).min(rect.right()), (rect.top() + ruler).min(rect.bottom())), rect.max)
     };
+    let Some(lines) = sheet_lines(app, &wb, si) else { return };
     let make_geo = |app: &mut SheetApp, scroll: egui::Vec2| -> Geo {
         if paper {
-            let probe = Geo::new(sh, grid_rect, scroll);
+            let probe = Geo::with_lines(sh, grid_rect, scroll, &lines);
             if let Some(g) = crate::paper_view::grid_for(app, &wb, si, sh, probe.cells.size(), scroll) {
                 let g = crate::paper_view::with_dragged_margin(app, &wb, si, g);
-                return Geo::paged(sh, grid_rect, scroll, g);
+                return Geo::paged_with_lines(sh, grid_rect, scroll, g, &lines);
             }
         }
-        Geo::new(sh, rect, scroll)
+        Geo::with_lines(sh, rect, scroll, &lines)
     };
     // Scrolling.
     let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.time));
@@ -106,24 +141,9 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         }
         view.scroll -= d / z;
     }
-    // The zoom glides to its step like egui eases a wheel notch (90% of the way in 0.1 s), or goes
-    // there at once without animations (as for the selection outline below: View › Animations
-    // off, egui's off in the headless harness, or a screenshot on its way).
-    let mut zooming = WheelZoom::at(app, place, sh.zoom, now);
-    if let Some((to, shown)) = zooming.glide {
-        let glides = app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight();
-        let share = egui::emath::exponential_smooth_factor(0.9, 0.1, ui.input(|i| i.stable_dt).min(0.1));
-        let z = if glides { zoom_glide_step(shown, to, share) } else { to };
-        let _ = app.session.run("view.zoom", json!({"percent": z}));
-        zooming.glide = (z != to).then_some((to, z));
-        ui.ctx().request_repaint();
-    }
-    // Store a glide's progress, or that it stopped.
-    if app.grid.wheel_zoom.is_some_and(|w| w.glide.is_some()) {
-        app.grid.wheel_zoom = Some(zooming);
-    }
+    update_zoom_glide(app, ui, place, sh.zoom, now);
     view.scroll = view.scroll.max(egui::Vec2::ZERO);
-    let (mut max_x, mut max_y) = (sh.col_left(MAX_COLS - 20) as f32, sh.row_top(MAX_ROWS - 40) as f32);
+    let (mut max_x, mut max_y) = (lines.ci.start(MAX_COLS - 20) as f32, lines.ri.start(MAX_ROWS - 40) as f32);
     if paper {
         // Page layout units run past sheet units (margins and gaps); the end is known once the
         // pages reach the last row / column.
@@ -138,7 +158,158 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     view.scroll.y = view.scroll.y.min(max_y);
     let mut geo = make_geo(app, view.scroll);
     // Keep the active cell (or the moving end of an extension) visible after keyboard moves.
-    if app.grid.ensure_visible {
+    ActiveCellVisibility { app, wb: &wb, si, sh, selection: &sel, paper, make_geo: &make_geo }.update(&mut view, &mut geo);
+    // Snap scrolling to whole rows/columns at rest like Excel? Keep smooth (better on trackpads).
+    if let Some(v) = app.view_mut() {
+        *v = view;
+    }
+    app.grid.cells_rect = Some(geo.mirror_rect(geo.cells));
+    // The selection outline glides to a new selection. It stays on its cells when Animations is
+    // off, when egui's animations are (the headless harness), and while a screenshot is on its way.
+    // A mouse button held down (a click or a drag selecting cells) moves it at once, as in Excel:
+    // a gliding outline trails the pointer and reads as lag.
+    let outline = selection_outline(app, ui, &geo, sh, &sel, place, now);
+    app.grid.geo = Some(geo.clone());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, t.grid_bg);
+    // Everything up to the headers is painted in logical (left-to-right) coordinates.
+    let mirror_from = painter.add(egui::Shape::Noop);
+    // A rule over a whole column scans it for its statistics: done once per change of the sheet,
+    // not every frame.
+    let cf_sheet = wb.sheets.get(si).map(Arc::downgrade);
+    let mut cf = kept_cf(app, &wb, si);
+    let quads = if geo.paper.is_some() {
+        crate::paper_view::paint_pages(
+            crate::paper_view::PagePaintInput {
+                app,
+                painter: &painter,
+                geo: &geo,
+                workbook: &wb,
+                sheet_index: si,
+                sheet: sh,
+                selection: &sel,
+                outline,
+                tokens: &t,
+            },
+            &mut cf,
+        )
+    } else {
+        paint_panes(
+            PanesInput { app, painter: &painter, geo: &geo, workbook: &wb, sheet_index: si, sheet: sh, selection: &sel, outline, tokens: &t },
+            &mut cf,
+        )
+    };
+    app.grid.cf = cf_sheet.map(|s| (s, cf));
+    // Objects above cells. A hidden object can't stay selected: Delete or the Format pane would act
+    // on something the user can't see.
+    if crate::chartview::objects_hidden(&wb) {
+        app.selected_object = None;
+    }
+    let objects = crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
+    paint_overlays(OverlayInput {
+        app,
+        ui,
+        painter: &painter.with_clip_rect(geo.cells),
+        geo: &geo,
+        workbook: &wb,
+        sheet_index: si,
+        sheet: sh,
+        selection: &sel,
+    });
+    if sh.view == gridcraft_engine::model::SheetViewMode::PageBreakPreview {
+        paint_pages(app, &painter.with_clip_rect(geo.cells), &geo, sh);
+    }
+    if geo.paper.is_some() {
+        crate::paper_view::paint_headers_footers(app, ui, &painter, &geo, &wb, sh);
+    }
+    // Headers.
+    if sh.show_headings {
+        let headings = table_headings(&geo, sh, sel.active);
+        paint_headers(&painter, &geo, sh, &sel, &t, &quads, &headings);
+        paint_freeze_handles(&painter, &geo, sh, &app.grid.drag, &t);
+    }
+    crate::outline::paint(&painter, &geo, sh, &t);
+    if geo.rtl {
+        let mirror_to = painter.add(egui::Shape::Noop);
+        mirror_painted(ui.ctx(), painter.layer_id(), mirror_from.0..mirror_to.0, &geo, &objects);
+    }
+    if geo.paper.is_some() {
+        crate::paper_view::paint_rulers(app, &painter, rect, &geo, &t);
+    }
+    show_grid_interactions(app, ui, &resp, &geo, sh, &wb);
+    let track_x = vertical_scroll_track(available, rect, rtl);
+    // The track starts below the column headings and frozen rows; the bar's column beside them
+    // takes its colour too instead of showing a light square in dark mode.
+    ui.painter().rect_filled(Rect::from_min_max(pos2(track_x.0, rect.top()), pos2(track_x.1, rect.bottom())), 0.0, t.tab_bar);
+    vertical_scrollbar(app, ui, sh, &geo, track_x, max_y, &t);
+    update_clipboard_repaint(app, ui, now);
+}
+
+/// The vertical scroll bar's width: none when the workbook hides it (File › Options ›
+/// Display options for this workbook), and the grid takes its room.
+fn vertical_bar_width(app: &SheetApp, available: Rect) -> f32 {
+    if app.session.active().is_none_or(|d| d.wb.view.show_vertical_scroll) { 14.0_f32.min(available.width()) } else { 0.0 }
+}
+
+fn vertical_scroll_track(available: Rect, grid: Rect, rtl: bool) -> (f32, f32) {
+    if rtl { (available.left(), grid.left()) } else { (grid.right(), available.right()) }
+}
+
+fn update_clipboard_repaint(app: &mut SheetApp, ui: &egui::Ui, now: f64) {
+    if app.session.clipboard.is_some() {
+        // By the clock, not per frame: a gliding outline repaints more often than the ants step.
+        app.grid.marching_phase = crate::selection_glide::ants_phase(now);
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+    }
+}
+
+struct ActiveCellVisibility<'a, F> {
+    app: &'a mut SheetApp,
+    wb: &'a Workbook,
+    si: usize,
+    sh: &'a Sheet,
+    selection: &'a gridcraft_engine::Selection,
+    paper: bool,
+    make_geo: &'a F,
+}
+
+fn selection_outline(
+    app: &mut SheetApp,
+    ui: &egui::Ui,
+    geo: &Geo,
+    sh: &Sheet,
+    sel: &gridcraft_engine::Selection,
+    place: (u64, usize),
+    now: f64,
+) -> Rect {
+    let pointer_selecting = ui.input(|i| i.pointer.any_down());
+    let outline = app.grid.glide.frame(crate::selection_glide::Frame {
+        place,
+        range: sel.current(),
+        target: geo.range_rect(sh, sel.current()),
+        view: geo.cells,
+        now,
+        frame_nr: ui.ctx().cumulative_frame_nr(),
+        animate: app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight() && !pointer_selecting,
+    });
+    if app.grid.glide.is_gliding() {
+        ui.ctx().request_repaint();
+    }
+    outline
+}
+
+impl<F: Fn(&mut SheetApp, egui::Vec2) -> Geo> ActiveCellVisibility<'_, F> {
+    fn update(&mut self, view: &mut crate::SheetView, geo: &mut Geo) {
+        if !self.app.grid.ensure_visible {
+            return;
+        }
+        let app = &mut *self.app;
+        let wb = self.wb;
+        let si = self.si;
+        let sh = self.sh;
+        let sel = self.selection;
+        let paper = self.paper;
+
         app.grid.ensure_visible = false;
         let moving = std::mem::take(&mut app.grid.reveal_moving_end);
         let cell = if moving { sel.moving_end() } else { sel.active };
@@ -151,8 +322,8 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         let extended = (moving && target == cell).then(|| sel.current());
         let before = view.scroll;
         if paper {
-            crate::paper_view::ensure_covers(app, &wb, si, target);
-            geo = make_geo(app, view.scroll);
+            crate::paper_view::ensure_covers(app, wb, si, target);
+            *geo = (self.make_geo)(app, view.scroll);
         }
         let cr = geo.cell_rect(sh, target);
         let area = Rect::from_min_max(pos2(geo.cells.left() + geo.frozen_w, geo.cells.top() + geo.frozen_h), geo.cells.max);
@@ -184,69 +355,11 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             view.scroll.x = before.x;
         }
         view.scroll = view.scroll.max(egui::Vec2::ZERO);
-        geo = make_geo(app, view.scroll);
+        *geo = (self.make_geo)(app, view.scroll);
     }
-    // Snap scrolling to whole rows/columns at rest like Excel? Keep smooth (better on trackpads).
-    if let Some(v) = app.view_mut() {
-        *v = view;
-    }
-    app.grid.cells_rect = Some(geo.mirror_rect(geo.cells));
-    // The selection outline glides to a new selection. It stays on its cells when Animations is
-    // off, when egui's animations are (the headless harness), and while a screenshot is on its way.
-    // A mouse button held down (a click or a drag selecting cells) moves it at once, as in Excel:
-    // a gliding outline trails the pointer and reads as lag.
-    let pointer_selecting = ui.input(|i| i.pointer.any_down());
-    let outline = app.grid.glide.frame(crate::selection_glide::Frame {
-        place,
-        range: sel.current(),
-        target: geo.range_rect(sh, sel.current()),
-        view: geo.cells,
-        now,
-        frame_nr: ui.ctx().cumulative_frame_nr(),
-        animate: app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight() && !pointer_selecting,
-    });
-    if app.grid.glide.is_gliding() {
-        ui.ctx().request_repaint();
-    }
-    app.grid.geo = Some(geo.clone());
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, t.grid_bg);
-    // Everything up to the headers is painted in logical (left-to-right) coordinates.
-    let mirror_from = painter.add(egui::Shape::Noop);
-    let mut cf = CfCache::new();
-    let quads = if geo.paper.is_some() {
-        crate::paper_view::paint_pages(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t)
-    } else {
-        paint_panes(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t)
-    };
-    // Objects above cells. A hidden object can't stay selected: Delete or the Format pane would act
-    // on something the user can't see.
-    if crate::chartview::objects_hidden(&wb) {
-        app.selected_chart = None;
-    }
-    let objects = crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
-    paint_overlays(app, ui, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh, &sel);
-    if sh.view == gridcraft_engine::model::SheetViewMode::PageBreakPreview {
-        paint_pages(app, &painter.with_clip_rect(geo.cells), &geo, sh);
-    }
-    if geo.paper.is_some() {
-        crate::paper_view::paint_headers_footers(app, ui, &painter, &geo, &wb, sh);
-    }
-    // Headers.
-    if sh.show_headings {
-        let headings = table_headings(&geo, sh, sel.active);
-        paint_headers(&painter, &geo, sh, &sel, &t, &quads, &headings);
-        paint_freeze_handles(&painter, &geo, sh, &app.grid.drag, &t);
-    }
-    crate::outline::paint(&painter, &geo, sh, &t);
-    if geo.rtl {
-        let mirror_to = painter.add(egui::Shape::Noop);
-        mirror_painted(ui.ctx(), painter.layer_id(), mirror_from.0..mirror_to.0, &geo, &objects);
-    }
-    if geo.paper.is_some() {
-        crate::paper_view::paint_rulers(app, &painter, rect, &geo, &t);
-    }
-    // Interaction.
+}
+
+fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu);
     // A pan the grid never saw end (it was hidden mid-drag) must not swallow the next press.
     if app.grid.touch_pan && !resp.dragged() && !resp.drag_stopped() {
@@ -258,48 +371,56 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             app.grid.touch_pan = false;
         }
     } else {
-        crate::paper_view::interact(app, ui, &resp, &geo, sh, &wb);
-        interact(app, ui, &resp, &geo, sh, &wb);
+        crate::paper_view::interact(app, ui, resp, geo, sh, wb);
+        interact(app, ui, resp, geo, sh, wb);
     }
-    update_cursor(app, ui, &resp, &geo, sh);
-    crate::text_box::show(app, ui, &geo, sh);
+    update_cursor(app, ui, resp, geo, sh);
+    crate::text_box::show(app, ui, geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
-        in_cell_editor(app, ui, &geo, sh, &wb);
+        in_cell_editor(app, ui, geo, sh, wb);
     }
-    filter_menu(app, ui, &geo, previous_popups.0 == app.grid.filter_menu);
-    list_picker(app, ui, &geo, previous_popups.1 == app.grid.list_picker);
+    filter_menu(app, ui, geo, previous_popups.0 == app.grid.filter_menu);
+    list_picker(app, ui, geo, previous_popups.1 == app.grid.list_picker);
     header_menu(app, ui, previous_popups.2 == app.grid.header_menu);
     context_menu(app, ui);
     fill_menu(app, ui, previous_popups.3 == app.grid.fill_menu);
-    fill_options_tag(app, ui, &geo, sh);
+    fill_options_tag(app, ui, geo, sh);
     object_menu(app, ui);
-    error_check_tag(app, ui, &geo, sh);
-    let track_x = if rtl { (available.left(), rect.left()) } else { (rect.right(), available.right()) };
-    // The track starts below the column headings and frozen rows; the bar's column beside them
-    // takes its colour too instead of showing a light square in dark mode.
-    ui.painter().rect_filled(Rect::from_min_max(pos2(track_x.0, rect.top()), pos2(track_x.1, rect.bottom())), 0.0, t.tab_bar);
-    vertical_scrollbar(app, ui, sh, &geo, track_x, max_y, &t);
-    if app.session.clipboard.is_some() {
-        // By the clock, not per frame: a gliding outline repaints more often than the ants step.
-        app.grid.marching_phase = crate::selection_glide::ants_phase(now);
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+    error_check_tag(app, ui, geo, sh);
+}
+
+fn update_zoom_glide(app: &mut SheetApp, ui: &egui::Ui, place: (u64, usize), zoom: u16, now: f64) {
+    let mut zooming = WheelZoom::at(app, place, zoom, now);
+    if let Some((to, shown)) = zooming.glide {
+        let glides = app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight();
+        let share = egui::emath::exponential_smooth_factor(0.9, 0.1, ui.input(|i| i.stable_dt).min(0.1));
+        let z = if glides { zoom_glide_step(shown, to, share) } else { to };
+        let from = Trace::key(app);
+        let _ = app.session.run("view.zoom", json!({"percent": z}));
+        Trace::keep_through_zoom(app, from);
+        zooming.glide = (z != to).then_some((to, z));
+        ui.ctx().request_repaint();
+    }
+    if app.grid.wheel_zoom.is_some_and(|w| w.glide.is_some()) {
+        app.grid.wheel_zoom = Some(zooming);
     }
 }
 
 /// Normal view: up to four panes (frozen rows/columns), each painted with its own clip.
-#[allow(clippy::too_many_arguments)]
-fn paint_panes(
-    app: &SheetApp,
-    painter: &Painter,
-    geo: &Geo,
-    wb: &Workbook,
-    si: usize,
-    sh: &Sheet,
-    sel: &gridcraft_engine::Selection,
+struct PanesInput<'a> {
+    app: &'a SheetApp,
+    painter: &'a Painter,
+    geo: &'a Geo,
+    workbook: &'a Workbook,
+    sheet_index: usize,
+    sheet: &'a Sheet,
+    selection: &'a gridcraft_engine::Selection,
     outline: Rect,
-    cf: &mut CfCache,
-    t: &Tokens,
-) -> Vec<((u32, u32), (u32, u32), Rect)> {
+    tokens: &'a Tokens,
+}
+
+fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
+    let PanesInput { app, painter, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel, outline, tokens: t } = input;
     // Quadrants: (rows, cols, clip).
     let (sr0, sr1) = geo.scroll_rows(sh);
     let (sc0, sc1) = geo.scroll_cols(sh);
@@ -321,8 +442,20 @@ fn paint_panes(
             continue;
         }
         let p = painter.with_clip_rect(*clip);
-        paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t);
-        paint_selection(&p, geo, sh, sel, outline, t, app, *rows, *cols);
+        let active_row = app.ui.highlight_active_row.then_some(sel.active.row);
+        paint_quadrant(QuadrantPaint {
+            painter: &p,
+            geo,
+            workbook: wb,
+            sheet_index: si,
+            sheet: sh,
+            rows: *rows,
+            cols: *cols,
+            cf,
+            tokens: t,
+            active_row,
+        });
+        paint_selection(SelectionPaintInput { painter: &p, geo, sheet: sh, selection: sel, outline, tokens: t, app, rows: *rows, cols: *cols });
     }
     // Freeze lines.
     if geo.fr > 0 {
@@ -337,13 +470,17 @@ fn paint_panes(
 /// The worksheet is painted virtually, so it needs its own scrollbar rather than a
 /// ScrollArea containing all million rows. Keep the scroll extent stable during a drag.
 fn vertical_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, sh: &Sheet, geo: &Geo, track_x: (f32, f32), limit: f32, t: &Tokens) {
+    // A workbook that hides its vertical scroll bar leaves it no width.
+    if track_x.1 <= track_x.0 {
+        return;
+    }
     let track = Rect::from_min_max(pos2(track_x.0, geo.cells.top() + geo.frozen_h), pos2(track_x.1, geo.cells.bottom()));
     if track.height() <= 0.0 || track.width() <= 0.0 {
         return;
     }
     let visible = track.height() / geo.z;
     let scroll = app.view().scroll.y;
-    let last = sh.used_range().map(|r| r.end.row.saturating_add(10)).unwrap_or(100).clamp(100, MAX_ROWS - 1);
+    let last = geo.used.map(|r| r.end.row.saturating_add(10)).unwrap_or(100).clamp(100, MAX_ROWS - 1);
     let content = geo.scroll_top_of(sh, last);
     let extent = (content - visible).max(scroll).max(0.0).min(limit);
     let id = ui.scope_id().with("vscroll");
@@ -396,7 +533,7 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
     let Some(sh) = wb.active() else { return };
     let visible = ((geo.cells.width() - geo.frozen_w) / geo.z).max(0.0);
     let scroll = app.view().scroll.x;
-    let last = sh.used_range().map(|r| r.end.col.saturating_add(10)).unwrap_or(26).clamp(26, MAX_COLS - 1);
+    let last = geo.used.map(|r| r.end.col.saturating_add(10)).unwrap_or(26).clamp(26, MAX_COLS - 1);
     let content = geo.scroll_left_of(sh, last);
     let extent = (content - visible).max(scroll).max(0.0);
     let id = ui.scope_id().with("hscroll");
@@ -446,7 +583,7 @@ pub(crate) fn paint_headers(
     sh: &Sheet,
     sel: &gridcraft_engine::Selection,
     t: &Tokens,
-    quads: &[((u32, u32), (u32, u32), Rect)],
+    quads: &[PaneQuad],
     headings: &[TableHeading],
 ) {
     let font = theme::ui_font(heading_font_size(geo.z));
@@ -469,7 +606,7 @@ pub(crate) fn paint_headers(
     for (rows, cols, clip) in quads {
         let pc = p.with_clip_rect(Rect::from_min_max(pos2(clip.left(), top.top()), pos2(clip.right(), top.bottom())));
         if cols.0 <= cols.1 {
-            for c in cols.0..=cols.1 {
+            for c in geo.shown_cols(cols.0, cols.1) {
                 if !done_cols.insert((c, clip.left() as i32)) {
                     continue;
                 }
@@ -510,7 +647,7 @@ pub(crate) fn paint_headers(
         }
         let pr = p.with_clip_rect(Rect::from_min_max(pos2(left.left(), clip.top()), pos2(left.right(), clip.bottom())));
         if rows.0 <= rows.1 {
-            for rr in rows.0..=rows.1 {
+            for rr in geo.shown_rows(rows.0, rows.1) {
                 if !done_rows.insert((rr, clip.top() as i32)) {
                     continue;
                 }
@@ -555,18 +692,20 @@ pub(super) fn hidden_around(i: u32, size: impl Fn(u32) -> f32) -> (bool, bool) {
     (i > 0 && size(i - 1) <= 0.0, i < u32::MAX && size(i + 1) <= 0.0)
 }
 
-#[allow(clippy::too_many_arguments)]
 /// Paints the validation arrow and input message, notes, the hyperlink tooltip and trace precedent/dependent arrows.
-pub(crate) fn paint_overlays(
-    app: &mut SheetApp,
-    ui: &egui::Ui,
-    p: &Painter,
-    geo: &Geo,
-    wb: &Workbook,
-    si: usize,
-    sh: &Sheet,
-    sel: &gridcraft_engine::Selection,
-) {
+pub(crate) struct OverlayInput<'a> {
+    app: &'a mut SheetApp,
+    ui: &'a egui::Ui,
+    painter: &'a Painter,
+    geo: &'a Geo,
+    workbook: &'a Workbook,
+    sheet_index: usize,
+    sheet: &'a Sheet,
+    selection: &'a gridcraft_engine::Selection,
+}
+
+pub(crate) fn paint_overlays(input: OverlayInput<'_>) {
+    let OverlayInput { app, ui, painter: p, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel } = input;
     // Validation dropdown arrow for the active cell.
     if app.editor.is_none()
         && let Some(r) = validation_arrow(sh, geo, sel.active)
@@ -638,32 +777,36 @@ pub(crate) fn paint_overlays(
             ui.label(tip);
         });
     }
-    // Trace precedents / dependents arrows.
+    if let Some(o) = &app.grid.macro_overlay {
+        crate::macro_editor::paint_overlay(p, geo, sh, o);
+    }
+    // Trace Precedents, Trace Dependents and Trace Error arrows.
     if let Some(trace) = &app.grid.trace
         && app.session.active().is_some_and(|d| d.uid == trace.uid && d.revision == trace.revision)
-        && trace.sheet == si
-        && let Some(items) = trace.items.as_array()
     {
-        let blue = Color32::from_rgb(0x1F, 0x5F, 0xC9);
-        let active = geo.cell_rect(sh, trace.cell).center();
-        for it in items {
-            if it["sheet"].as_str().is_some_and(|s| !s.eq_ignore_ascii_case(&sh.name)) {
-                continue;
-            }
-            let target = it["range"].as_str().or(it["cell"].as_str()).and_then(RangeRef::parse);
-            let Some(t) = target else { continue };
-            let tr = geo.range_rect(sh, t);
-            if !t.is_single() {
-                for pane in geo.range_panes(t) {
-                    p.with_clip_rect(pane.intersect(p.clip_rect())).rect_stroke(tr, 0.0, Stroke::new(1.5, blue), StrokeKind::Inside);
+        let t = Tokens::get(p.ctx());
+        let clip = p.clip_rect();
+        for a in trace.arrows.iter().filter(|a| a.from.0 == si && a.to.0 == si) {
+            let colour = if a.error { t.sheet_trace_error } else { t.sheet_trace_arrow };
+            let (fr, tr) = (geo.range_rect(sh, a.from.1), geo.range_rect(sh, a.to.1));
+            for (range, rect) in [(a.from.1, fr), (a.to.1, tr)] {
+                if !range.is_single() {
+                    for pane in geo.range_panes(range) {
+                        p.with_clip_rect(pane.intersect(clip)).rect_stroke(rect, 0.0, Stroke::new(1.5, colour), StrokeKind::Inside);
+                    }
                 }
             }
-            let (from, to) = if it.get("range").is_some() { (tr.center(), active) } else { (active, tr.center()) };
-            p.line_segment([from, to], Stroke::new(1.5, blue));
-            p.circle_filled(from, 3.0, blue);
+            let (from, to) = (fr.center(), tr.center());
+            // An arrow wholly out of view costs nothing (a long Trace Error chain has thousands),
+            // and one from a cell to itself has no direction.
+            if !Rect::from_two_pos(from, to).expand(9.0).intersects(clip) || from.distance(to) < 1.0 {
+                continue;
+            }
+            p.line_segment([from, to], Stroke::new(1.5, colour));
+            p.circle_filled(from, 3.0, colour);
             let d = (to - from).normalized();
             let n = vec2(-d.y, d.x);
-            p.add(egui::Shape::convex_polygon(vec![to, to - d * 9.0 + n * 4.0, to - d * 9.0 - n * 4.0], blue, Stroke::NONE));
+            p.add(egui::Shape::convex_polygon(vec![to, to - d * 9.0 + n * 4.0, to - d * 9.0 - n * 4.0], colour, Stroke::NONE));
         }
     }
     let _ = (wb, si);
@@ -753,29 +896,56 @@ mod trace_arrow_tests {
         app.grid.trace = Trace::new(app, r);
     }
 
-    /// The arrows `paint_overlays` draws on the active sheet, as (tail, head) points.
-    fn arrows(app: &mut SheetApp) -> (Geo, Vec<(Pos2, Pos2)>) {
+    /// The lines `paint_overlays` draws on the active sheet scrolled by `scroll`, as (tail, head)
+    /// points in the colour given.
+    fn lines_in(app: &mut SheetApp, colour: Color32, scroll: egui::Vec2) -> (Geo, Vec<(Pos2, Pos2)>) {
         let d = app.session.active().unwrap();
         let (wb, si, sel) = (d.wb.clone(), d.wb.active_sheet(), d.selection.clone());
         let sh = wb.sheet(si).unwrap();
-        let geo = Geo::new(sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(1200.0, 800.0)), vec2(0.0, 0.0));
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1200.0, 800.0));
+        let geo = Geo::new(sh, screen, scroll);
         let ctx = egui::Context::default();
-        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
             let p = ui.painter().clone();
-            paint_overlays(app, ui, &p, &geo, &wb, si, sh, &sel);
+            paint_overlays(OverlayInput { app, ui, painter: &p, geo: &geo, workbook: &wb, sheet_index: si, sheet: sh, selection: &sel });
         });
         // No renderer consumes the font atlas upload here.
         out.textures_delta.clear();
-        let blue = Color32::from_rgb(0x1F, 0x5F, 0xC9);
         let mut lines = Vec::new();
         for s in out.shapes {
             if let egui::Shape::LineSegment { points, stroke } = s.shape
-                && stroke.color == blue
+                && stroke.color == colour
             {
                 lines.push((points[0], points[1]));
             }
         }
         (geo, lines)
+    }
+
+    /// The precedent and dependent arrows `paint_overlays` draws on the active sheet.
+    fn arrows(app: &mut SheetApp) -> (Geo, Vec<(Pos2, Pos2)>) {
+        lines_in(app, Tokens::light().sheet_trace_arrow, vec2(0.0, 0.0))
+    }
+
+    /// The arrows Trace Error draws between cells showing the error.
+    fn error_arrows(app: &mut SheetApp) -> (Geo, Vec<(Pos2, Pos2)>) {
+        lines_in(app, Tokens::light().sheet_trace_error, vec2(0.0, 0.0))
+    }
+
+    /// Cell centres for an arrow from `from` to `to`.
+    fn link(app: &SheetApp, geo: &Geo, from: &str, to: &str) -> (Pos2, Pos2) {
+        (center(app, geo, from), center(app, geo, to))
+    }
+
+    /// The H column of the sheet measured in Excel, H4 selected: Trace Error on H4 leads to H2,
+    /// whose own reference H1 has no error.
+    fn h_column() -> SheetApp {
+        let mut app = app();
+        for (c, v) in [("E1", "10"), ("H1", "0"), ("H2", "=10/H1"), ("H3", "=H2+E1"), ("H4", "=H3*1")] {
+            app.run("cell.set", json!({"cell": c, "input": v})).unwrap();
+        }
+        select(&mut app, "H4");
+        app
     }
 
     fn center(app: &SheetApp, geo: &Geo, cell: &str) -> Pos2 {
@@ -857,5 +1027,122 @@ mod trace_arrow_tests {
         let revisions: Vec<u64> = app.session.documents().iter().map(|d| d.revision).collect();
         assert_eq!(revisions[0], revisions[1]);
         assert!(arrows(&mut app).1.is_empty(), "Book1's arrows are not drawn on Book2");
+    }
+
+    #[test]
+    fn precedent_arrows_stay_through_a_zoom() {
+        let mut app = app();
+        app.run("home.insertSheet", json!({"name": "Two"})).unwrap();
+        app.run("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        app.run("cell.set", json!({"cell": "B2", "input": "1"})).unwrap();
+        app.run("cell.set", json!({"cell": "F7", "input": "=B2"})).unwrap();
+        select(&mut app, "F7");
+        trace(&mut app, "formulas.tracePrecedents");
+        app.run("view.zoom", json!({"percent": 75})).unwrap();
+        let (geo, lines) = arrows(&mut app);
+        assert_eq!(lines, [(center(&app, &geo, "B2"), center(&app, &geo, "F7"))], "#3097");
+        // Zooming another sheet leaves them too, and they are back on returning to their sheet.
+        app.run("sheet.activate", json!({"sheet": "Two"})).unwrap();
+        app.run("view.zoom", json!({"percent": 200})).unwrap();
+        assert!(arrows(&mut app).1.is_empty());
+        app.run("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        let (geo, lines) = arrows(&mut app);
+        assert_eq!(lines, [(center(&app, &geo, "B2"), center(&app, &geo, "F7"))]);
+    }
+
+    #[test]
+    fn trace_error_draws_the_links_to_the_source_in_the_error_colour() {
+        let mut app = h_column();
+        trace(&mut app, "formulas.traceError");
+        select(&mut app, "A1");
+        let (geo, red) = error_arrows(&mut app);
+        assert_eq!(red, [link(&app, &geo, "H2", "H3"), link(&app, &geo, "H3", "H4")], "H2 → H3 → H4, from the source outwards");
+        let (geo, blue) = arrows(&mut app);
+        assert_eq!(blue, [link(&app, &geo, "H1", "H2")], "the source's own reference, like a precedent arrow; none from E1");
+        assert_ne!(Tokens::light().sheet_trace_error, Tokens::light().sheet_trace_arrow);
+    }
+
+    #[test]
+    fn trace_error_boxes_a_range_feeding_the_source() {
+        let mut app = app();
+        for (c, v) in [("A2", "5"), ("J1", "=XLOOKUP(99,A2:A3,A2:A3)"), ("J2", "=J1")] {
+            app.run("cell.set", json!({"cell": c, "input": v})).unwrap();
+        }
+        select(&mut app, "J2");
+        trace(&mut app, "formulas.traceError");
+        let (geo, red) = error_arrows(&mut app);
+        assert_eq!(red, [link(&app, &geo, "J1", "J2")]);
+        let d = app.session.active().unwrap();
+        let range = geo.range_rect(d.wb.sheet(0).unwrap(), RangeRef::parse("A2:A3").unwrap());
+        let (_, blue) = arrows(&mut app);
+        assert_eq!(blue, [(range.center(), center(&app, &geo, "J1"))], "one arrow from the middle of A2:A3, not two");
+    }
+
+    #[test]
+    fn remove_arrows_and_edits_clear_trace_error_arrows() {
+        let mut app = h_column();
+        trace(&mut app, "formulas.traceError");
+        assert_eq!(error_arrows(&mut app).1.len(), 2);
+        // What the ribbon's Remove Arrows button does.
+        app.grid.trace = None;
+        assert!(error_arrows(&mut app).1.is_empty() && arrows(&mut app).1.is_empty());
+        trace(&mut app, "formulas.traceError");
+        app.run("cell.set", json!({"cell": "H1", "input": "2"})).unwrap();
+        assert!(error_arrows(&mut app).1.is_empty(), "a change to the workbook removes them");
+    }
+
+    #[test]
+    fn trace_error_arrows_follow_the_zoom() {
+        let mut app = h_column();
+        trace(&mut app, "formulas.traceError");
+        let (_, before) = error_arrows(&mut app);
+        for id in ["view.zoom", "view.zoom100", "view.zoomToSelection"] {
+            app.run(id, json!({"percent": 150, "viewWidth": 1200.0, "viewHeight": 800.0})).unwrap();
+        }
+        app.run("view.zoom", json!({"percent": 150})).unwrap();
+        let (geo, red) = error_arrows(&mut app);
+        assert_eq!(red, [link(&app, &geo, "H2", "H3"), link(&app, &geo, "H3", "H4")], "still there after zooming: {red:?}");
+        let length = |(a, b): (Pos2, Pos2)| a.distance(b);
+        assert!((length(red[0]) / length(before[0]) - 1.5).abs() < 0.05, "1.5 times as long at 150%: {red:?} {before:?}");
+        assert_eq!(arrows(&mut app).1.len(), 1);
+        // Undoing the zoom is an edit like any other.
+        app.run("edit.undo", json!({})).unwrap();
+        assert!(error_arrows(&mut app).1.is_empty());
+    }
+
+    #[test]
+    fn trace_error_arrows_stay_on_the_sheets_they_link() {
+        let mut app = app();
+        app.run("home.insertSheet", json!({"name": "Two"})).unwrap();
+        for (c, v) in [("A1", "=1/0"), ("A2", "=A1")] {
+            app.run("cell.set", json!({"cell": c, "input": v})).unwrap();
+        }
+        app.run("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        for (c, v) in [("B1", "=Two!A2"), ("C1", "=B1")] {
+            app.run("cell.set", json!({"cell": c, "input": v})).unwrap();
+        }
+        select(&mut app, "C1");
+        trace(&mut app, "formulas.traceError");
+        let (geo, red) = error_arrows(&mut app);
+        assert_eq!(red, [link(&app, &geo, "B1", "C1")], "Two!A2 → B1 crosses sheets and isn't drawn");
+        app.run("sheet.activate", json!({"sheet": "Two"})).unwrap();
+        let (geo, red) = error_arrows(&mut app);
+        assert_eq!(red, [link(&app, &geo, "A1", "A2")], "the part of the chain on Two shows there");
+    }
+
+    #[test]
+    fn a_long_chain_paints_only_the_arrows_in_view() {
+        let mut app = app();
+        let formulas: Vec<[String; 1]> = (1..=3000).map(|r| [if r == 1 { "=1/0".to_string() } else { format!("=A{}", r - 1) }]).collect();
+        app.run("range.setValues", json!({"range": "A1", "values": formulas})).unwrap();
+        select(&mut app, "A3000");
+        trace(&mut app, "formulas.traceError");
+        assert_eq!(app.grid.trace.as_ref().map(|t| t.arrows.len()), Some(2999));
+        let colour = Tokens::light().sheet_trace_error;
+        let (geo, top) = lines_in(&mut app, colour, vec2(0.0, 0.0));
+        assert!((30..=60).contains(&top.len()), "the rows on screen: {}", top.len());
+        assert_eq!(top.first().copied(), Some(link(&app, &geo, "A1", "A2")));
+        let (_, further) = lines_in(&mut app, colour, vec2(0.0, 20.0 * 1500.0));
+        assert!((30..=60).contains(&further.len()), "{}", further.len());
     }
 }
