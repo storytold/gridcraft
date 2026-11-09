@@ -282,11 +282,17 @@ impl<'a> Binder<'a> {
                 "DATESINPERIOD" if index == 3 => clause_keyword(arg, &["DAY", "WEEK", "MONTH", "QUARTER", "YEAR"]),
                 "DATESINPERIOD" if index == 4 => clause_keyword(arg, &["PRECISE", "ENDALIGNED"]),
                 "PARALLELPERIOD" if index == 2 => clause_keyword(arg, &["MONTH", "QUARTER", "YEAR"]),
-                // RANKX's Ties argument is documented as `Dense` but catalogued as a Scalar.
-                "RANKX" if index == 4 => keyword_name(arg),
+                // RANKX's Ties argument is documented as `Dense`/`Skip` but catalogued as a
+                // Scalar; only the documented words bind as keywords so a typo stays an
+                // unknown name instead of reaching the evaluator as a keyword.
+                "RANKX" if index == 4 => clause_keyword(arg, &["SKIP", "DENSE"]),
                 // RANKX's Order argument is catalogued as a Scalar too, but it is `ASC`/`DESC`.
                 "RANKX" if index == 3 => clause_keyword(arg, &["ASC", "DESC"]),
-                "DATEDIFF" if index == 2 => keyword_name(arg),
+                // DATEDIFF's interval is a documented enumeration the catalog types as `Any`.
+                "DATEDIFF" if index == 2 => clause_keyword(
+                    arg,
+                    &["SECOND", "MINUTE", "HOUR", "DAY", "WEEK", "MONTH", "QUARTER", "YEAR"],
+                ),
                 // TOPN's `(expression, Order)` pairs: ASC/DESC sit at every odd index from 3.
                 "TOPN" if index >= 3 && index % 2 == 1 => clause_keyword(arg, &["ASC", "DESC"]),
                 "CROSSFILTER" if index == 2 => {

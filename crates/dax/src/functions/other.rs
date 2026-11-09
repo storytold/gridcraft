@@ -131,7 +131,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         0,
         usize::MAX,
         &[optional("RestrictionName", ParamKind::Text), optional("RestrictionValue", ParamKind::Any)],
-        &[overload(&[]), overload(&[ParamKind::Text]), variadic(&[ParamKind::Text, ParamKind::Any])],
+        &[overload(&[]), variadic(&[ParamKind::Text, ParamKind::Any])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, false, false),
         "Returns statistics about the in-memory storage tables of the model, with one row per \

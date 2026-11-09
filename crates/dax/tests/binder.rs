@@ -284,14 +284,29 @@ fn an_interval_keyword_is_not_shadowed_by_a_variable() {
         }
     }
     // The other direction: a word that is not a documented enumeration stays a name, so the
-    // variable binds — `PARALLELPERIOD` has no `DAY` interval, and neither does a genuine text
-    // parameter (RANKX's Ties).
+    // variable binds — `PARALLELPERIOD` has no `DAY` interval, and neither do the
+    // undocumented words in RANKX's Ties slot.
     let bound = bind(&model, "VAR DAY = 1 RETURN PARALLELPERIOD ( Date[Date], 1, DAY )");
     assert!(format!("{bound:?}").contains("Variable"), "{bound:?}");
     let bound = bind(&model, "VAR Tertial = 1 RETURN DATEADD ( Date[Date], 1, Tertial )");
     assert!(format!("{bound:?}").contains("Variable"), "{bound:?}");
     let bound = bind(&model, "VAR DENSE = 1 RETURN RANKX ( Sales, Sales[Amount], 42, DENSE )");
     assert!(format!("{bound:?}").contains("Variable"), "{bound:?}");
+    // RANKX's Ties slot takes `SKIP`/`DENSE` only: the documented words bind as keywords at
+    // index 4, and an undocumented word there is an unknown name, not a silent keyword.
+    for ties in ["SKIP", "DENSE", "skip", "dense"] {
+        let bound = bind(&model, &format!("RANKX ( Sales, Sales[Amount], 42, DESC, {ties} )"));
+        match bound {
+            BoundExpr::Call { args, .. } => {
+                assert!(matches!(&args[4], BoundExpr::Keyword(word) if word.eq_ignore_ascii_case(ties)), "{ties}: {:?}", args[4]);
+            }
+            other => panic!("{ties}: expected a call, got {other:?}"),
+        }
+    }
+    let expr = parse_expression("RANKX ( Sales, Sales[Amount], 42, DESC, Dens )").expect("parse");
+    assert!(Binder::new(&model).bind_expression(&expr).is_err(), "a Ties typo is not a keyword");
+    let expr = parse_expression("DATEDIFF ( Sales[Amount], Sales[Amount], Fortnight )").expect("parse");
+    assert!(Binder::new(&model).bind_expression(&expr).is_err(), "an undocumented interval is not a keyword");
 }
 #[test]
 fn an_interval_keyword_is_not_shadowed_by_a_table_or_measure_name() {
