@@ -145,7 +145,7 @@ keeps the new optional fields.
 |---|---|---|
 | 1 | delta granularity | cells, not blocks: `applied.delta` lists changed cells with values; a 10 000-cell range is one operation and one delta, split into `applied{more:true}` frames when large (ADR-0013) |
 | 2 | command size limit | server accepts messages up to 9 MiB, frames up to 1 MiB (`GRIDCRAFT_COLLAB_*` config, `server.md`); a structural undo/redo image over one frame travels in `applied{more:true}` / `imagePart` parts of 512 KiB before base64 (ADR-0013), assembled by the client before it is applied; the parts carry the whole `{book, images}` payload, so the workbook-level state is not repeated per frame; one operation is bounded to 32 MiB (RFC §4.1) and a step image over it is refused `too_large` before mutation; a single *command* above the message limit is still refused — client-side splitting of a large command is not implemented |
-| 3 | structural queue | FIFO per document: operations pass one room mutex in arrival order; `structural` must have `baseVersion == head` and bumps `epoch` |
+| 3 | structural queue | FIFO per document: operations pass that document's own mutex in arrival order (one lock per book since §14; the process registry and the file leases are separate); `structural` must have `baseVersion == head` and bumps `epoch` |
 | 4 | snapshot cost | snapshot is the authoritative `.xlsx` written by the real writer, not a JSON model; chunked resync of 768 KiB per frame (RFC §3.3/§4.6/§9) |
 | 5 | host contract | `INTEGRATION.md` §6 implemented in the app: `gridcraft:session`, `session-state`, `presence`, `commit`, `committed`; the server-to-server commit callback is implemented too (`COLLAB_CABINET_URL`, §13); the cabinet-side page is outside this repository |
 | 6 | several windows | decided and implemented (RFC §13.6, §12 below): one `actorId` per user, one `windowId` per window; participants and presence are per window, undo/redo stay on the actor |
@@ -175,8 +175,12 @@ keeps the new optional fields.
 4. ~~Multiple windows of one user share one `actorId`~~: they share the actor (as decided) and
    differ in `windowId`, so the participant list has one row per window (RFC §13.6, §12); a new
    window of a user does not reset or take away the actor's undo stack.
-5. One room mutex per process; document isolation is by `fileId`. Many large
-   workbooks need separate workers (ADR-0007).
+5. ~~One room mutex per process~~: every open document has its own lock since §14 — the registry
+   and the file leases are process-wide, while the room, the sockets, the journal and the snapshot
+   version of a book are behind that book's lock, so a recalculation of one workbook does not hold
+   up another's operations, commits or metrics. Isolation stays by `fileId`. Many large workbooks
+   *on separate hosts* still need separate workers behind sticky routing (ADR-0007 §3): that is a
+   deployment concern, not a lock inside this process.
 6. Browser transport is in place (`crates/collab-web`, host bridge); a real
    browser run against the cabinet page and the craft-libs pin removal after
    the upstream merge remain.
@@ -623,3 +627,49 @@ cargo +1.95.0 check -p gridcraft-collab-web -p gridcraft-web --target wasm32-unk
 ```
 
 No CI file is touched and nothing is pushed to `storytold/*`.
+
+## 14. One lock per document instead of one per process (ADR-0007 §3, 2026-11-09)
+
+The server no longer serialises every book through one async mutex. The registry — which sessions
+are open and which file each leased — sits behind a short lock; the protocol state of a document
+(`Gateway`, sockets, participant windows, journal, snapshot version) sits behind that document's
+own lock.
+
+- `apps/gridcraft-collab-server/src/lib.rs`: `Doc {meta, gateway, conns, actors, journal,
+  snapshot_version}` and `Entry {file_id, doc}` inside the registry `Inner {docs, leases}`.
+  `App::doc` clones the `Arc` out of the registry; the caller locks only that book.
+- The message loop (`ws.rs`) reads the document handle and touches the lease in the registry, then
+  works under the document lock only: role check and apply, metrics, queuing the `applied` parts
+  and the journal entry. `record_locked` replaced `record`: the journal is appended under the same
+  lock as the operation that produced it, so two operations of one document cannot reach it out of
+  order (the previous two-lock sequence could, and a restart then refused the version gap). The
+  periodic snapshot is still spawned after the lock is released.
+- `create_session`, `restore`, `close_session` and `drop_session` touch the registry and then the
+  replaced document's lock — never both held across an `await`, so a takeover of a busy book does
+  not stall the others. `flush` still waits for each document's lock (shutdown must not skip a
+  book); `/metrics` and `GET /v1/sessions/{id}` take the document lock and report that book at
+  that point, without blocking the rest.
+- The lease stays process-wide and is checked before the document lock. A takeover between the
+  two leaves a detached copy applying one operation to nobody; the new owner's document is
+  untouched and the old sockets already received `session-closed`.
+
+Tests:
+
+- `src/lib.rs`: `a_busy_document_does_not_hold_up_another` — the first book's lock is held (a
+  long recalculation): a third session opens, the second book reports and commits, and the busy
+  one answers only after its lock is released.
+- `tests/ws.rs`: `two_books_are_isolated_and_each_converges` — two client pairs on two sessions;
+  both first edits are version 1, each replica sees its own value and never the other book's,
+  each commit carries one book, and a second edit on one book leaves the other at version 1 with
+  its own value.
+
+Run (remote host, `+1.95.0` where noted):
+
+```text
+cargo test -p gridcraft-collab-server --all-targets -j 8
+                                      34 unit + 8 socket + 9 persistence + 5 acceptance + 6 callback + 2 logging
+cargo +1.95.0 clippy -p gridcraft-collab-server --all-targets -j 8 -- -D warnings   clean
+cargo fmt --all -- --check                                 clean
+```
+
+The crates below the server are unchanged, so their gates from §13 still stand.
