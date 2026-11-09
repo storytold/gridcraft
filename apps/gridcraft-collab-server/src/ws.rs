@@ -2,9 +2,10 @@
 //!
 //! The first frame must be `hello` with the cabinet's signed token; until it is verified the
 //! connection speaks for nobody. After it, every frame goes through
-//! [`gridcraft_collab::Gateway`] under the state lock, so operations of one document keep the
-//! order the room assigned them. A connection that falls behind loses frames — the client sees a
-//! version gap and asks for a resync, which is the same path a reconnect takes.
+//! [`gridcraft_collab::Gateway`] under the lock of its document (ADR-0007 §3), so operations of one
+//! document keep the order the room assigned them and a busy book does not hold up the others. A
+//! connection that falls behind loses frames — the client sees a version gap and asks for a
+//! resync, which is the same path a reconnect takes.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -34,7 +35,10 @@ pub(crate) async fn run(app: Arc<App>, session_id: String, mut socket: WebSocket
         app.metrics.resumes.fetch_add(1, Ordering::Relaxed);
     }
     let (tx, mut rx) = mpsc::channel::<ServerMessage>(OUTBOX);
-    let (conn_id, others, participants) = register(&app, &session_id, &connection.actor, &connection.window_id, tx.clone()).await;
+    let Some((conn_id, others, participants)) = register(&app, &session_id, &connection.actor, &connection.window_id, tx.clone()).await else {
+        close(&mut socket, "session-unknown").await;
+        return;
+    };
     if send(&mut socket, &welcome).await.is_err() {
         leave(&app, &session_id, &connection.actor, &connection.window_id, Some(&conn_id)).await;
         return;
@@ -114,20 +118,27 @@ async fn handshake(app: &App, session_id: &str, token: String, name: String, win
         Refused::auth(e.code())
     })?;
     let now = now_secs();
-    let mut inner = app.inner.lock().await;
-    let meta = inner.sessions.get(session_id).cloned().ok_or_else(|| Refused::policy(4404, "session-unknown", "no such session"))?;
-    let expected = Expected { aud: &app.cfg.audience, app: &app.cfg.app, file_id: meta.file_id, session_id };
-    let ttl = app.cfg.lease_ttl.as_secs();
-    let lease = match inner.leases.touch(meta.file_id, session_id, now, ttl) {
-        Some(lease) => lease,
-        // A session restored from the volume, or one whose lease idled out, takes the lease back
-        // on its first connection. A live lease of another session still refuses.
-        None => inner
-            .leases
-            .acquire(meta.file_id, session_id, &meta.owner, now, ttl, false)
-            .map_err(|_| Refused::policy(4409, "lease", "the file is held by another session"))?,
+    let Some(doc) = app.doc(session_id).await else { return Err(Refused::policy(4404, "session-unknown", "no such session")) };
+    let (file_id, owner) = {
+        let doc = doc.lock().await;
+        (doc.meta.file_id, doc.meta.owner.clone())
     };
-    let present = inner.gateway.hub().participants(session_id).map_err(|_| Refused::policy(4404, "session-unknown", "no such session"))?;
+    let expected = Expected { aud: &app.cfg.audience, app: &app.cfg.app, file_id, session_id };
+    let ttl = app.cfg.lease_ttl.as_secs();
+    let lease = {
+        let mut inner = app.inner.lock().await;
+        match inner.leases.touch(file_id, session_id, now, ttl) {
+            Some(lease) => lease,
+            // A session restored from the volume, or one whose lease idled out, takes the lease
+            // back on its first connection. A live lease of another session still refuses.
+            None => inner
+                .leases
+                .acquire(file_id, session_id, &owner, now, ttl, false)
+                .map_err(|_| Refused::policy(4409, "lease", "the file is held by another session"))?,
+        }
+    };
+    let mut doc = doc.lock().await;
+    let present = doc.gateway.hub().participants(session_id).map_err(|_| Refused::policy(4404, "session-unknown", "no such session"))?;
     let known = present.iter().any(|p| p.actor == claims.sub);
     // The limit counts people, not windows: a second or third window of somebody already in the
     // session is allowed (RFC §13.6), a new person is not while the session is full.
@@ -136,7 +147,7 @@ async fn handshake(app: &App, session_id: &str, token: String, name: String, win
         return Err(Refused::policy(4429, "too-many", "the session is full"));
     }
     let info = LeaseInfo { owner: lease.owner.clone(), expires_at: lease.expires_at };
-    let (connection, welcome) = inner.gateway.connect(&claims, now, expected, &name, &window_id, Some(info)).map_err(|e: AuthError| {
+    let (connection, welcome) = doc.gateway.connect(&claims, now, expected, &name, &window_id, Some(info)).map_err(|e: AuthError| {
         app.metrics.auth_failures.fetch_add(1, Ordering::Relaxed);
         Refused::auth(e.code())
     })?;
@@ -179,8 +190,9 @@ async fn resync(app: &Arc<App>, session_id: &str, conn_id: &u64, tx: &mpsc::Send
     }
     loop {
         let entries = {
-            let inner = app.inner.lock().await;
-            inner.journal_after(session_id, sent)
+            let Some(doc) = app.doc(session_id).await else { return false };
+            let doc = doc.lock().await;
+            doc.journal_after(sent)
         };
         if entries.is_empty() {
             let (version, epoch) = re_register(app, session_id, conn_id, tx).await;
@@ -201,26 +213,26 @@ async fn resync(app: &Arc<App>, session_id: &str, conn_id: &u64, tx: &mpsc::Send
 }
 
 async fn unregister(app: &App, session_id: &str, conn_id: &u64) -> (u64, u64) {
-    let mut inner = app.inner.lock().await;
-    if let Some(senders) = inner.conns.get_mut(session_id) {
-        senders.remove(conn_id);
-    }
-    let head = inner.gateway.hub().version(session_id).unwrap_or(0);
-    let base = inner.snapshot_version.get(session_id).copied().unwrap_or(0);
-    (head, base)
+    let Some(doc) = app.doc(session_id).await else { return (0, 0) };
+    let mut doc = doc.lock().await;
+    doc.conns.remove(conn_id);
+    let head = doc.gateway.hub().version(session_id).unwrap_or(0);
+    (head, doc.snapshot_version)
 }
 
 async fn re_register(app: &App, session_id: &str, conn_id: &u64, tx: &mpsc::Sender<ServerMessage>) -> (u64, u64) {
-    let mut inner = app.inner.lock().await;
-    inner.conns.entry(session_id.to_string()).or_default().insert(*conn_id, tx.clone());
-    (inner.gateway.hub().version(session_id).unwrap_or(0), inner.gateway.hub().epoch(session_id).unwrap_or(0))
+    let Some(doc) = app.doc(session_id).await else { return (0, 0) };
+    let mut doc = doc.lock().await;
+    doc.conns.insert(*conn_id, tx.clone());
+    (doc.gateway.hub().version(session_id).unwrap_or(0), doc.gateway.hub().epoch(session_id).unwrap_or(0))
 }
 
 async fn snapshot_source(app: &App, session_id: &str) -> Option<(u64, u64, std::sync::Arc<gridcraft_model::Workbook>)> {
-    let inner = app.inner.lock().await;
-    let version = inner.gateway.hub().version(session_id)?;
-    let epoch = inner.gateway.hub().epoch(session_id).unwrap_or(0);
-    let workbook = inner.gateway.hub().workbook(session_id)?;
+    let doc = app.doc(session_id).await?;
+    let doc = doc.lock().await;
+    let version = doc.gateway.hub().version(session_id)?;
+    let epoch = doc.gateway.hub().epoch(session_id).unwrap_or(0);
+    let workbook = doc.gateway.hub().workbook(session_id)?;
     Some((version, epoch, workbook))
 }
 
@@ -258,17 +270,16 @@ async fn register(
     actor: &str,
     window_id: &str,
     tx: mpsc::Sender<ServerMessage>,
-) -> (u64, Vec<(u64, mpsc::Sender<ServerMessage>)>, Vec<gridcraft_collab::Participant>) {
-    let mut inner = app.inner.lock().await;
-    let id = inner.next_conn;
-    inner.next_conn = inner.next_conn.saturating_add(1);
-    let others = inner.conns.get(session_id).map(|senders| senders.iter().map(|(id, tx)| (*id, tx.clone())).collect::<Vec<_>>()).unwrap_or_default();
-    inner.conns.entry(session_id.to_string()).or_default().insert(id, tx);
-    let windows = inner.actors.entry(session_id.to_string()).or_default();
-    *windows.entry((actor.to_string(), window_id.to_string())).or_insert(0) += 1;
-    let participants = inner.gateway.hub().participants(session_id).unwrap_or_default();
+) -> Option<(u64, Vec<(u64, mpsc::Sender<ServerMessage>)>, Vec<gridcraft_collab::Participant>)> {
+    let doc = app.doc(session_id).await?;
+    let id = app.next_conn.fetch_add(1, Ordering::Relaxed);
+    let mut doc = doc.lock().await;
+    let others = doc.conns.iter().map(|(id, tx)| (*id, tx.clone())).collect::<Vec<_>>();
+    doc.conns.insert(id, tx);
+    *doc.actors.entry((actor.to_string(), window_id.to_string())).or_insert(0) += 1;
+    let participants = doc.gateway.hub().participants(session_id).unwrap_or_default();
     app.metrics.connections.fetch_add(1, Ordering::Relaxed);
-    (id, others, participants)
+    Some((id, others, participants))
 }
 
 /// Handles one frame. `false` closes the connection.
@@ -307,79 +318,82 @@ async fn pump(
     // An undo/redo is an operation of the document like any other: it takes a version and the
     // session counts as changed, even though it carries no command of its own.
     let writes = journal_op.is_some();
-    let (handled, out, lease_lost) = {
-        let mut inner = app.inner.lock().await;
-        let Some(file_id) = inner.sessions.get(session_id).map(|meta| meta.file_id) else {
-            return false;
-        };
-        if inner.leases.touch(file_id, session_id, now, app.cfg.lease_ttl.as_secs()).is_none() {
-            (Vec::new(), Vec::new(), true)
-        } else {
-            if writes {
-                if let Some(meta) = inner.sessions.get_mut(session_id) {
-                    meta.updated_at = now;
-                }
-                app.metrics.ops.fetch_add(1, Ordering::Relaxed);
-            }
-            let messages = inner.gateway.handle(connection, message);
-            for message in &messages {
-                match message {
-                    ServerMessage::Applied { .. } => {
-                        app.metrics.applied.fetch_add(1, Ordering::Relaxed);
-                    }
-                    ServerMessage::Rejected { rejected } => {
-                        app.metrics.rejection(rejected.code.code());
-                    }
-                    _ => {}
-                }
-            }
-            let others = inner
-                .conns
-                .get(session_id)
-                .map(|senders| senders.iter().filter(|(id, _)| *id != conn_id).map(|(id, tx)| (*id, tx.clone())).collect::<Vec<_>>())
-                .unwrap_or_default();
-            // Split and queue for the peers while the room lock is still held: the parts of one
-            // applied must not be separated by another operation (ADR-0013 §2), and two pumps run
-            // on different worker threads. `broadcast` is synchronous, so no await happens here.
-            let out: Vec<ServerMessage> = messages.iter().flat_map(frames).collect();
-            for frame in &out {
-                match frame {
-                    ServerMessage::Applied { .. } => broadcast(&app.metrics, &others, frame),
-                    ServerMessage::Presence { .. } => {
-                        broadcast(&app.metrics, &others, frame);
-                        // A presence answer carries every window of every person, this
-                        // connection's own row included (RFC §13.6). It goes to the sender through
-                        // the same queue as the peers' frames, so every frame of the document is
-                        // applied in the order the room produced it: a frame computed before this
-                        // window's cursor cannot land after it and blank the row. Presence is still
-                        // state of a window, never of the document, and dropping one is harmless.
-                        let _ = tx.try_send(frame.clone());
-                    }
-                    _ => {}
-                }
-            }
-            (messages, out, false)
+    let (doc, file_id) = {
+        let inner = app.inner.lock().await;
+        match inner.docs.get(session_id) {
+            Some(entry) => (entry.doc.clone(), entry.file_id),
+            None => return false,
         }
     };
-    if lease_lost {
+    let lease_held = {
+        let mut inner = app.inner.lock().await;
+        inner.leases.touch(file_id, session_id, now, app.cfg.lease_ttl.as_secs()).is_some()
+    };
+    if !lease_held {
         return false;
     }
-    if let Some(op) = journal_op
-        && let Some(applied) = handled.iter().find_map(|message| match message {
-            ServerMessage::Applied { applied } => Some(applied.clone()),
-            _ => None,
-        })
-    {
-        let due = app.record(session_id, &connection.actor, op, &applied, now).await;
-        if due {
-            let app = app.clone();
-            let session_id = session_id.to_string();
-            tokio::spawn(async move {
-                if let Err(e) = app.snapshot(&session_id).await {
-                    log::error!("periodic snapshot failed session={session_id}: {e}");
-                }
-            });
+    let (out, due) = {
+        let mut doc = doc.lock().await;
+        if writes {
+            doc.meta.updated_at = now;
+            app.metrics.ops.fetch_add(1, Ordering::Relaxed);
         }
+        let messages = doc.gateway.handle(connection, message);
+        for message in &messages {
+            match message {
+                ServerMessage::Applied { .. } => {
+                    app.metrics.applied.fetch_add(1, Ordering::Relaxed);
+                }
+                ServerMessage::Rejected { rejected } => {
+                    app.metrics.rejection(rejected.code.code());
+                }
+                _ => {}
+            }
+        }
+        let others = doc.conns.iter().filter(|(id, _)| *id != conn_id).map(|(id, tx)| (*id, tx.clone())).collect::<Vec<_>>();
+        // Split and queue for the peers while the document lock is still held: the parts of one
+        // applied must not be separated by another operation (ADR-0013 §2), and two pumps of the
+        // same document run on different worker threads. `broadcast` is synchronous, so no await
+        // happens here. Another document's pump waits on its own lock, not this one.
+        let out: Vec<ServerMessage> = messages.iter().flat_map(frames).collect();
+        for frame in &out {
+            match frame {
+                ServerMessage::Applied { .. } => broadcast(&app.metrics, &others, frame),
+                ServerMessage::Presence { .. } => {
+                    broadcast(&app.metrics, &others, frame);
+                    // A presence answer carries every window of every person, this
+                    // connection's own row included (RFC §13.6). It goes to the sender through
+                    // the same queue as the peers' frames, so every frame of the document is
+                    // applied in the order the room produced it: a frame computed before this
+                    // window's cursor cannot land after it and blank the row. Presence is still
+                    // state of a window, never of the document, and dropping one is harmless.
+                    let _ = tx.try_send(frame.clone());
+                }
+                _ => {}
+            }
+        }
+        // The journal entry is written under the same lock as the operation it records, so two
+        // operations of one document cannot reach the journal out of order.
+        let due = match (
+            &journal_op,
+            messages.iter().find_map(|message| match message {
+                ServerMessage::Applied { applied } => Some(applied),
+                _ => None,
+            }),
+        ) {
+            (Some(op), Some(applied)) => app.record_locked(&mut doc, &connection.actor, op.clone(), applied, now),
+            _ => false,
+        };
+        (out, due)
+    };
+    if due {
+        let app = app.clone();
+        let session_id = session_id.to_string();
+        tokio::spawn(async move {
+            if let Err(e) = app.snapshot(&session_id).await {
+                log::error!("periodic snapshot failed session={session_id}: {e}");
+            }
+        });
     }
     let mut replied = false;
     for frame in &out {
@@ -409,38 +423,25 @@ async fn pump(
 
 async fn leave(app: &App, session_id: &str, actor: &str, window_id: &str, conn_id: Option<&u64>) {
     let (participants, others) = {
-        let mut inner = app.inner.lock().await;
+        let Some(doc) = app.doc(session_id).await else { return };
+        let mut doc = doc.lock().await;
         if let Some(id) = conn_id {
-            let empty = match inner.conns.get_mut(session_id) {
-                Some(senders) => {
-                    senders.remove(id);
-                    senders.is_empty()
-                }
-                None => false,
-            };
-            if empty {
-                inner.conns.remove(session_id);
-            }
+            doc.conns.remove(id);
         }
         let mut participants = None;
         let mut removed = false;
         let key = (actor.to_string(), window_id.to_string());
-        if let Some(windows) = inner.actors.get_mut(session_id) {
-            if let Some(count) = windows.get_mut(&key) {
-                *count = count.saturating_sub(1);
-                if *count == 0 {
-                    windows.remove(&key);
-                    removed = true;
-                }
-            }
-            if windows.is_empty() {
-                inner.actors.remove(session_id);
+        if let Some(count) = doc.actors.get_mut(&key) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                doc.actors.remove(&key);
+                removed = true;
             }
         }
-        if removed && let Ok(left) = inner.gateway.hub_mut().leave(session_id, actor, window_id) {
+        if removed && let Ok(left) = doc.gateway.hub_mut().leave(session_id, actor, window_id) {
             participants = Some(left);
         }
-        let others = inner.conns.get(session_id).map(|senders| senders.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
+        let others = doc.conns.values().cloned().collect::<Vec<_>>();
         (participants, others)
     };
     app.metrics.connections.fetch_sub(1, Ordering::Relaxed);

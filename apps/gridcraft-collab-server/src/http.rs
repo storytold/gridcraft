@@ -99,11 +99,7 @@ async fn close_session(State(app): State<Arc<App>>, headers: HeaderMap, Path(id)
 }
 
 async fn upgrade(State(app): State<Arc<App>>, Path(id): Path<String>, upgrade: WebSocketUpgrade) -> Response {
-    let exists = {
-        let inner = app.inner.lock().await;
-        inner.sessions.contains_key(&id)
-    };
-    if !exists {
+    if app.doc(&id).await.is_none() {
         return ApiError::not_found("no such session").into_response();
     }
     let limits = (app.cfg.max_message, app.cfg.max_frame);

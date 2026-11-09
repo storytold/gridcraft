@@ -51,6 +51,75 @@ async fn two_editors_converge_on_one_book() {
 }
 
 #[tokio::test]
+async fn two_books_are_isolated_and_each_converges() {
+    let server = start().await;
+    let one = create(&server, 71, false).await;
+    let two = create(&server, 72, false).await;
+
+    let mut ann = open(&server, &one, "ann", Role::Editor, 71).await;
+    let one_sheet = sheet_key(&next(&mut ann).await);
+    let mut bob = open(&server, &one, "bob", Role::Editor, 71).await;
+    assert_eq!(next(&mut bob).await["participants"].as_array().unwrap().len(), 2);
+    assert_eq!(next(&mut ann).await["type"], "presence");
+
+    let mut cy = open(&server, &two, "cy", Role::Editor, 72).await;
+    let two_sheet = sheet_key(&next(&mut cy).await);
+    let mut dee = open(&server, &two, "dee", Role::Editor, 72).await;
+    assert_eq!(next(&mut dee).await["participants"].as_array().unwrap().len(), 2);
+    assert_eq!(next(&mut cy).await["type"], "presence");
+
+    // Each document has its own version sequence: both first edits are version 1.
+    ann.send(Message::text(op("op-1", "cell.set", json!({ "input": 1 }), &one_sheet, "A1"))).await.unwrap();
+    cy.send(Message::text(op("op-2", "cell.set", json!({ "input": 2 }), &two_sheet, "A1"))).await.unwrap();
+
+    let applied_ann = next(&mut ann).await;
+    let applied_bob = next(&mut bob).await;
+    let applied_cy = next(&mut cy).await;
+    let applied_dee = next(&mut dee).await;
+    assert_eq!(applied_ann["applied"]["version"], 1);
+    assert_eq!(applied_bob["applied"]["version"], 1);
+    assert_eq!(applied_cy["applied"]["version"], 1);
+    assert_eq!(applied_dee["applied"]["version"], 1);
+    // Every replica of a document sees its own value and never the other book's.
+    assert_eq!(applied_bob["applied"]["result"]["delta"][0]["cells"][0]["value"]["v"], 1.0);
+    assert_eq!(applied_dee["applied"]["result"]["delta"][0]["cells"][0]["value"]["v"], 2.0);
+
+    // The cabinet sees two independent sessions with one participant pair each.
+    for (session, file_id) in [(&one, 71), (&two, 72)] {
+        let (status, body) = http(&server, "GET", &format!("/v1/sessions/{session}"), Some(SERVICE), None).await;
+        assert_eq!(status, 200, "{body}");
+        let info: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(info["fileId"], file_id);
+        assert_eq!(info["version"], 1);
+        assert_eq!(info["participants"].as_array().unwrap().len(), 2);
+    }
+
+    // Each commit carries that book and only that book.
+    let value_of = |bytes: &str| {
+        let reply: Value = serde_json::from_str(bytes).unwrap();
+        let raw = base64::engine::general_purpose::STANDARD.decode(reply["bytes"].as_str().unwrap()).unwrap();
+        let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsx", &raw).unwrap();
+        let doc = gridcraft_engine::DocState::new(workbook, None, "plan.xlsx".into(), gridcraft_engine::Trust::FromFile);
+        doc.wb.sheet(0).map(|sheet| sheet.value(gridcraft_engine::core::CellRef::parse("A1").unwrap())).unwrap()
+    };
+    let (status, one_commit) = http(&server, "POST", &format!("/v1/sessions/{one}/commit"), Some(SERVICE), None).await;
+    assert_eq!(status, 200, "{one_commit}");
+    let (status, two_commit) = http(&server, "POST", &format!("/v1/sessions/{two}/commit"), Some(SERVICE), None).await;
+    assert_eq!(status, 200, "{two_commit}");
+    assert_eq!(value_of(&one_commit), gridcraft_engine::core::Value::Number(1.0));
+    assert_eq!(value_of(&two_commit), gridcraft_engine::core::Value::Number(2.0));
+
+    // A second edit on one book still leaves the other at its version and value.
+    bob.send(Message::text(op("op-3", "cell.set", json!({ "input": 3 }), &one_sheet, "A2"))).await.unwrap();
+    assert_eq!(next(&mut bob).await["applied"]["version"], 2);
+    assert_eq!(next(&mut ann).await["applied"]["version"], 2);
+    let (status, body) = http(&server, "GET", &format!("/v1/sessions/{two}"), Some(SERVICE), None).await;
+    assert_eq!(status, 200);
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["version"], 1);
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn a_viewer_is_refused_before_the_engine() {
     let server = start().await;
     let session = create(&server, 8, false).await;

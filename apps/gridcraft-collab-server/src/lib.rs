@@ -165,72 +165,65 @@ struct Loaded {
     meta: StoredMeta,
 }
 
-/// State behind one mutex: the protocol, the documents and the sockets. A command runs under this
-/// lock, because a room applies to one engine session in process order (ADR-0003).
-pub(crate) struct Inner {
+/// One open document: the protocol state of its room, the sockets that follow it, the operations
+/// after its base and the version the volume is at. A document has its own lock (ADR-0007 §3), so
+/// an operation on one book never waits for a recalculation in another.
+pub(crate) struct Doc {
+    pub meta: DocMeta,
+    /// The protocol rules and the room of this document. The hub inside holds one document —
+    /// this one — so the message loop of a connection only needs this document's lock.
     pub gateway: Gateway,
-    pub sessions: BTreeMap<String, DocMeta>,
-    pub leases: Leases,
-    pub conns: BTreeMap<String, BTreeMap<u64, mpsc::Sender<ServerMessage>>>,
-    /// The open connections per document, keyed by `(actor, windowId)`: two windows of one person
-    /// are two entries, and a reconnect of the same window is the same entry (RFC §13.6).
-    pub actors: BTreeMap<String, BTreeMap<(String, String), usize>>,
-    pub next_conn: u64,
+    pub conns: BTreeMap<u64, mpsc::Sender<ServerMessage>>,
+    /// The open connections per `(actor, windowId)`: two windows of one person are two entries,
+    /// and a reconnect of the same window is the same entry (RFC §13.6).
+    pub actors: BTreeMap<(String, String), usize>,
     /// The applied operations after the base on disk, kept in memory for catch-up and trimmed by
     /// every snapshot.
-    pub journal: BTreeMap<String, Vec<JournalEntry>>,
+    pub journal: Vec<JournalEntry>,
     /// The version `base.xlsx` is at.
-    pub snapshot_version: BTreeMap<String, u64>,
+    pub snapshot_version: u64,
+}
+
+impl Doc {
+    /// The operations after `from`, oldest first. Empty when the journal was compacted past it;
+    /// the caller then sends a snapshot.
+    pub fn journal_after(&self, from: u64) -> Vec<Applied> {
+        self.journal.iter().filter(|entry| entry.applied.version > from).map(|entry| entry.applied.clone()).collect()
+    }
+}
+
+/// One registry entry: the file a session serves and its document. The file id sits here too, so
+/// a lease can be checked without taking the document's lock.
+pub(crate) struct Entry {
+    pub file_id: i64,
+    pub doc: Arc<Mutex<Doc>>,
+}
+
+/// The registry behind the process lock: which documents are open and which file each session
+/// leased. Everything that changes per operation lives in the document's own [`Doc`] lock; this
+/// one is taken only to look a session up, to open or close one, and for the lease.
+pub(crate) struct Inner {
+    pub docs: BTreeMap<String, Entry>,
+    pub leases: Leases,
 }
 
 impl Inner {
     fn new() -> Inner {
-        Inner {
-            gateway: Gateway::new(),
-            sessions: BTreeMap::new(),
-            leases: Leases::new(),
-            conns: BTreeMap::new(),
-            actors: BTreeMap::new(),
-            next_conn: 0,
-            journal: BTreeMap::new(),
-            snapshot_version: BTreeMap::new(),
-        }
-    }
-
-    /// Drops a document and returns the senders of its connections, so the caller can tell them
-    /// the session is gone once the lock is released.
-    pub fn drop_session(&mut self, session_id: &str) -> Vec<mpsc::Sender<ServerMessage>> {
-        self.gateway.hub_mut().close(session_id);
-        self.sessions.remove(session_id);
-        self.actors.remove(session_id);
-        self.leases.release(session_id);
-        self.journal.remove(session_id);
-        self.snapshot_version.remove(session_id);
-        self.conns.remove(session_id).map(|senders| senders.into_values().collect()).unwrap_or_default()
-    }
-
-    pub fn participants_total(&self) -> u64 {
-        self.actors.values().map(|actors| actors.len() as u64).sum()
-    }
-
-    /// The operations after `from`, oldest first. Empty when the journal was compacted past it;
-    /// the caller then sends a snapshot.
-    pub fn journal_after(&self, session_id: &str, from: u64) -> Vec<Applied> {
-        self.journal
-            .get(session_id)
-            .map(|entries| entries.iter().filter(|entry| entry.applied.version > from).map(|entry| entry.applied.clone()).collect())
-            .unwrap_or_default()
+        Inner { docs: BTreeMap::new(), leases: Leases::new() }
     }
 }
 
-/// The server: configuration, the JWT key, one lock over the protocol state and metrics.
+/// The server: configuration, the JWT key, the registry of open documents and metrics.
 pub struct App {
     pub cfg: Config,
     pub jwt: JwtConfig,
     pub store: Option<Store>,
     /// The cabinet commit callback, when configured (`INTEGRATION.md` §5.2).
     cabinet: Option<Cabinet>,
+    /// The open-document registry and the leases: short critical sections only.
     pub(crate) inner: Mutex<Inner>,
+    /// The next connection id of the process.
+    pub(crate) next_conn: AtomicU64,
     pub metrics: Metrics,
 }
 
@@ -238,13 +231,33 @@ impl App {
     /// A server without a volume: everything lives in the process (tests, local runs).
     pub fn new(cfg: Config, jwt: JwtConfig) -> App {
         let cabinet = cfg.cabinet.as_ref().map(Cabinet::new);
-        App { cfg, jwt, store: None, cabinet, inner: Mutex::new(Inner::new()), metrics: Metrics::default() }
+        App { cfg, jwt, store: None, cabinet, inner: Mutex::new(Inner::new()), next_conn: AtomicU64::new(0), metrics: Metrics::default() }
     }
 
     /// A server that keeps its sessions on `store` and restores them at startup.
     pub fn with_store(cfg: Config, jwt: JwtConfig, store: Store) -> App {
         let cabinet = cfg.cabinet.as_ref().map(Cabinet::new);
-        App { cfg, jwt, store: Some(store), cabinet, inner: Mutex::new(Inner::new()), metrics: Metrics::default() }
+        App { cfg, jwt, store: Some(store), cabinet, inner: Mutex::new(Inner::new()), next_conn: AtomicU64::new(0), metrics: Metrics::default() }
+    }
+
+    /// The document behind `session_id`, when it is open. The caller locks it for as long as it
+    /// works on that book; another document's lock is untouched by that.
+    pub(crate) async fn doc(&self, session_id: &str) -> Option<Arc<Mutex<Doc>>> {
+        self.inner.lock().await.docs.get(session_id).map(|entry| entry.doc.clone())
+    }
+
+    /// Removes a document from the registry and returns the senders of its connections, so the
+    /// caller can tell them the session is gone once the locks are released. The document's lock
+    /// is taken without the registry held: a long operation there must not hold up other books.
+    pub(crate) async fn drop_session(&self, session_id: &str) -> Vec<mpsc::Sender<ServerMessage>> {
+        let removed = {
+            let mut inner = self.inner.lock().await;
+            inner.leases.release(session_id);
+            inner.docs.remove(session_id)
+        };
+        let Some(entry) = removed else { return Vec::new() };
+        let doc = entry.doc.lock().await;
+        doc.conns.values().cloned().collect()
     }
 
     /// Opens a session for a file (ADR-0007 §1): loads the workbook, takes the lease and adds a
@@ -278,45 +291,52 @@ impl App {
         let session_id = new_session_id(request.file_id, &request.owner, now);
         let ttl = self.cfg.lease_ttl.as_secs();
 
-        let mut closed = Vec::new();
+        let mut replaced = None;
         let expires_at = {
             let mut inner = self.inner.lock().await;
-            let existing = inner.leases.live(request.file_id, now);
-            if let Some(lease) = &existing
+            if let Some(lease) = inner.leases.live(request.file_id, now)
                 && lease.session_id != session_id
             {
                 if !request.takeover {
                     return Err(ApiError::new(StatusCode::CONFLICT, "lease", format!("the file is open in session {}", lease.session_id)));
                 }
-                closed = inner.drop_session(&lease.session_id);
+                inner.leases.release(&lease.session_id);
+                // The room leaves the registry here; its sockets are told below, once its own lock
+                // is free — a long operation inside it must not hold up other documents.
+                replaced = inner.docs.remove(&lease.session_id);
             }
+            let mut gateway = Gateway::new();
             match (keys, state) {
                 (Some(keys), Some(state)) => {
-                    inner.gateway.hub_mut().open_restored(&session_id, session, keys, state);
+                    gateway.hub_mut().open_restored(&session_id, session, keys, state);
                 }
                 _ => {
-                    inner.gateway.hub_mut().open(&session_id, session);
+                    gateway.hub_mut().open(&session_id, session);
                 }
             }
             let lease = inner
                 .leases
                 .acquire(request.file_id, &session_id, &request.owner, now, ttl, request.takeover)
                 .map_err(|_| ApiError::new(StatusCode::CONFLICT, "lease", "the file is open in another session"))?;
-            inner.sessions.insert(
-                session_id.clone(),
-                DocMeta {
-                    file_id: request.file_id,
-                    app: request.app.clone(),
-                    owner: request.owner.clone(),
-                    name: name.clone(),
-                    created_at,
-                    updated_at: now,
-                    cabinet,
-                },
-            );
-            inner.journal.insert(session_id.clone(), journal);
-            inner.snapshot_version.insert(session_id.clone(), base_version);
+            let meta = DocMeta {
+                file_id: request.file_id,
+                app: request.app.clone(),
+                owner: request.owner.clone(),
+                name: name.clone(),
+                created_at,
+                updated_at: now,
+                cabinet,
+            };
+            let doc = Doc { meta, gateway, conns: BTreeMap::new(), actors: BTreeMap::new(), journal, snapshot_version: base_version };
+            inner.docs.insert(session_id.clone(), Entry { file_id: request.file_id, doc: Arc::new(Mutex::new(doc)) });
             lease.expires_at
+        };
+        let closed = match replaced {
+            Some(entry) => {
+                let doc = entry.doc.lock().await;
+                doc.conns.values().cloned().collect::<Vec<_>>()
+            }
+            None => Vec::new(),
         };
         for sender in closed {
             let _ = sender.try_send(ServerMessage::Error {
@@ -414,12 +434,12 @@ impl App {
     /// the session id).
     async fn write_meta(&self, session_id: &str) -> Result<(), StoreError> {
         let Some(store) = &self.store else { return Ok(()) };
+        let Some(doc) = self.doc(session_id).await else { return Ok(()) };
         let meta = {
-            let inner = self.inner.lock().await;
-            let Some(meta) = inner.sessions.get(session_id) else { return Ok(()) };
-            let version = inner.gateway.hub().version(session_id).unwrap_or(0);
-            let epoch = inner.gateway.hub().epoch(session_id).unwrap_or(0);
-            stored_meta(session_id, meta, version, epoch, inner.snapshot_version.get(session_id).copied().unwrap_or(0))
+            let doc = doc.lock().await;
+            let version = doc.gateway.hub().version(session_id).unwrap_or(0);
+            let epoch = doc.gateway.hub().epoch(session_id).unwrap_or(0);
+            stored_meta(session_id, &doc.meta, version, epoch, doc.snapshot_version)
         };
         store.write_meta(meta.file_id, &meta)
     }
@@ -429,14 +449,16 @@ impl App {
     /// when a session opens.
     pub async fn snapshot(&self, session_id: &str) -> Result<(), StoreError> {
         let Some(store) = self.store.clone() else { return Ok(()) };
+        let Some(doc) = self.doc(session_id).await else { return Ok(()) };
         let snapshot = {
-            let inner = self.inner.lock().await;
-            let Some(meta) = inner.sessions.get(session_id) else { return Ok(()) };
-            let Some(workbook) = inner.gateway.hub().workbook(session_id) else { return Ok(()) };
-            let Some(keys) = inner.gateway.hub().sheet_keys(session_id) else { return Ok(()) };
-            let Some(state) = inner.gateway.hub().room_state(session_id) else { return Ok(()) };
+            let doc = doc.lock().await;
+            let (Some(workbook), Some(keys), Some(state)) =
+                (doc.gateway.hub().workbook(session_id), doc.gateway.hub().sheet_keys(session_id), doc.gateway.hub().room_state(session_id))
+            else {
+                return Ok(());
+            };
             let base_version = state.version;
-            store::Snapshot { meta: stored_meta(session_id, meta, state.version, state.epoch, base_version), workbook, keys, state }
+            store::Snapshot { meta: stored_meta(session_id, &doc.meta, state.version, state.epoch, base_version), workbook, keys, state }
         };
         let file_id = snapshot.meta.file_id;
         let version = snapshot.meta.version;
@@ -444,32 +466,30 @@ impl App {
         tokio::task::spawn_blocking(move || writer.write_snapshot(&snapshot))
             .await
             .map_err(|e| StoreError::Load(format!("snapshot task: {e}")))??;
-        let mut inner = self.inner.lock().await;
-        if let Some(journal) = inner.journal.get_mut(session_id) {
-            // Operations applied while the snapshot was being written stay: the file is
-            // rewritten atomically, so either the old journal or the trimmed one is on disk.
-            journal.retain(|entry| entry.applied.version > version);
-            store.write_journal(file_id, journal)?;
-        }
-        inner.snapshot_version.insert(session_id.to_string(), version);
-        drop(inner);
+        let mut doc = doc.lock().await;
+        // Operations applied while the snapshot was being written stay: the file is rewritten
+        // atomically, so either the old journal or the trimmed one is on disk.
+        doc.journal.retain(|entry| entry.applied.version > version);
+        store.write_journal(file_id, &doc.journal)?;
+        doc.snapshot_version = version;
+        drop(doc);
         self.metrics.snapshots.fetch_add(1, Ordering::Relaxed);
         self.metrics.last_snapshot_at.store(now_secs(), Ordering::Relaxed);
         Ok(())
     }
 
-    /// Appends one applied operation to the journal. Returns whether a periodic snapshot is due.
-    /// The journal is kept even without a volume: catch-up inside the process needs it.
+    /// Appends one applied operation to the journal of `doc`, **while its lock is held**. The
+    /// caller is the message loop that just applied it, so two operations of one document cannot
+    /// reach the journal out of order and leave a version gap a restart would refuse.
     ///
     /// An undo/redo is journaled like any other operation: it took a version, and a client that
     /// reconnects after it — or a restart that replays the tail — must reach the same document.
-    pub(crate) async fn record(&self, session_id: &str, actor: &str, op: JournalOp, applied: &Applied, now: u64) -> bool {
-        let mut inner = self.inner.lock().await;
-        let Some(file_id) = inner.sessions.get(session_id).map(|meta| meta.file_id) else { return false };
-        let Some(journal) = inner.journal.get_mut(session_id) else { return false };
-        if journal.last().is_some_and(|entry| applied.version <= entry.applied.version) {
+    /// Returns whether a periodic snapshot is due.
+    pub(crate) fn record_locked(&self, doc: &mut Doc, actor: &str, op: JournalOp, applied: &Applied, now: u64) -> bool {
+        if doc.journal.last().is_some_and(|entry| applied.version <= entry.applied.version) {
             return false;
         }
+        let file_id = doc.meta.file_id;
         let entry = JournalEntry { at: now, actor: actor.to_string(), op, applied: applied.clone() };
         if let Some(store) = &self.store
             && let Err(e) = store.append_journal(file_id, &entry)
@@ -477,12 +497,11 @@ impl App {
             log::error!("journal append failed fileId={file_id}: {e}");
             return false;
         }
-        journal.push(entry);
+        doc.journal.push(entry);
         if self.store.is_none() {
             return false;
         }
-        let base = inner.snapshot_version.get(session_id).copied().unwrap_or(0);
-        applied.version.saturating_sub(base) >= self.cfg.snapshot_ops
+        applied.version.saturating_sub(doc.snapshot_version) >= self.cfg.snapshot_ops
     }
 
     /// Reopens the sessions the volume kept. A damaged directory is logged and skipped: one bad
@@ -501,22 +520,27 @@ impl App {
             match self.load_stored(scanned.file_id) {
                 Ok(Some(loaded)) => {
                     let now = now_secs();
+                    let mut gateway = Gateway::new();
                     let mut inner = self.inner.lock().await;
-                    if inner.gateway.hub_mut().open_restored(&scanned.session_id, loaded.session, loaded.keys, loaded.state) {
-                        inner.sessions.insert(
-                            scanned.session_id.clone(),
-                            DocMeta {
-                                file_id: scanned.file_id,
-                                app: scanned.app.clone(),
-                                owner: scanned.owner.clone(),
-                                name: scanned.name.clone(),
-                                created_at: scanned.created_at,
-                                updated_at: now,
-                                cabinet: scanned.cabinet.clone(),
-                            },
-                        );
-                        inner.journal.insert(scanned.session_id.clone(), loaded.journal);
-                        inner.snapshot_version.insert(scanned.session_id.clone(), scanned.base_version);
+                    if gateway.hub_mut().open_restored(&scanned.session_id, loaded.session, loaded.keys, loaded.state) {
+                        let meta = DocMeta {
+                            file_id: scanned.file_id,
+                            app: scanned.app.clone(),
+                            owner: scanned.owner.clone(),
+                            name: scanned.name.clone(),
+                            created_at: scanned.created_at,
+                            updated_at: now,
+                            cabinet: scanned.cabinet.clone(),
+                        };
+                        let doc = Doc {
+                            meta,
+                            gateway,
+                            conns: BTreeMap::new(),
+                            actors: BTreeMap::new(),
+                            journal: loaded.journal,
+                            snapshot_version: scanned.base_version,
+                        };
+                        inner.docs.insert(scanned.session_id.clone(), Entry { file_id: scanned.file_id, doc: Arc::new(Mutex::new(doc)) });
                         restored += 1;
                         log::info!("session restored fileId={} session={}", scanned.file_id, scanned.session_id);
                     }
@@ -536,19 +560,19 @@ impl App {
         }
         let ids: Vec<String> = {
             let inner = self.inner.lock().await;
-            inner
-                .sessions
-                .keys()
-                .filter(|id| {
-                    let base = inner.snapshot_version.get(*id).copied().unwrap_or(0);
-                    let head = inner.gateway.hub().version(id).unwrap_or(0);
-                    head > base
-                })
-                .cloned()
-                .collect()
+            inner.docs.keys().cloned().collect()
         };
         let mut saved = 0;
         for id in ids {
+            let due = {
+                let Some(doc) = self.doc(&id).await else { continue };
+                let doc = doc.lock().await;
+                let head = doc.gateway.hub().version(&id).unwrap_or(0);
+                head > doc.snapshot_version
+            };
+            if !due {
+                continue;
+            }
             match self.snapshot(&id).await {
                 Ok(()) => saved += 1,
                 Err(e) => log::error!("snapshot failed session={id}: {e}"),
@@ -581,11 +605,12 @@ impl App {
 
     /// `GET /v1/sessions/{id}`.
     pub async fn session_info(&self, session_id: &str) -> Result<SessionInfo, ApiError> {
-        let inner = self.inner.lock().await;
-        let meta = inner.sessions.get(session_id).ok_or_else(|| ApiError::not_found("no such session"))?;
-        let participants = inner.gateway.hub().participants(session_id).unwrap_or_default();
-        let version = inner.gateway.hub().version(session_id).unwrap_or(0);
-        let epoch = inner.gateway.hub().epoch(session_id).unwrap_or(0);
+        let Some(doc) = self.doc(session_id).await else { return Err(ApiError::not_found("no such session")) };
+        let doc = doc.lock().await;
+        let participants = doc.gateway.hub().participants(session_id).unwrap_or_default();
+        let version = doc.gateway.hub().version(session_id).unwrap_or(0);
+        let epoch = doc.gateway.hub().epoch(session_id).unwrap_or(0);
+        let meta = &doc.meta;
         Ok(SessionInfo {
             session_id: session_id.to_string(),
             file_id: meta.file_id,
@@ -610,17 +635,17 @@ impl App {
     /// the commit and only the built file's digest travels back.
     pub async fn commit(&self, session_id: &str, expected_version: Option<u64>) -> Result<CommitReply, ApiError> {
         let (name, version, bytes, file_id, expected) = {
-            let inner = self.inner.lock().await;
-            let meta = inner.sessions.get(session_id).ok_or_else(|| ApiError::not_found("no such session"))?;
-            let version = inner.gateway.hub().version(session_id).unwrap_or(0);
+            let Some(doc) = self.doc(session_id).await else { return Err(ApiError::not_found("no such session")) };
+            let doc = doc.lock().await;
+            let version = doc.gateway.hub().version(session_id).unwrap_or(0);
             if let Some(expected) = expected_version
                 && expected != version
             {
                 return Err(ApiError::new(StatusCode::CONFLICT, "conflict", format!("the session is at version {version}")));
             }
             let bytes =
-                inner.gateway.hub().commit(session_id).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", format!("{e:?}")))?;
-            (meta.name.clone(), version, bytes, meta.file_id, meta.cabinet.as_ref().map(|published| published.etag.clone()))
+                doc.gateway.hub().commit(session_id).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", format!("{e:?}")))?;
+            (doc.meta.name.clone(), version, bytes, doc.meta.file_id, doc.meta.cabinet.as_ref().map(|published| published.etag.clone()))
         };
         self.metrics.commits.fetch_add(1, Ordering::Relaxed);
         let sha256 = hex(&Sha256::digest(&bytes));
@@ -670,13 +695,14 @@ impl App {
     /// only the answer that still matches the etag this one started from replaces it.
     async fn remember_commit(&self, session_id: &str, published: &Published, expected: Option<&str>) {
         let stored = {
-            let mut inner = self.inner.lock().await;
-            match inner.sessions.get_mut(session_id) {
-                Some(meta) if meta.cabinet.as_ref().map(|current| current.etag.as_str()) == expected => {
-                    meta.cabinet = Some(published.clone());
-                    true
-                }
-                _ => false,
+            let Some(doc) = self.doc(session_id).await else { return };
+            let mut doc = doc.lock().await;
+            let current = doc.meta.cabinet.as_ref().map(|published| published.etag.as_str());
+            if current == expected {
+                doc.meta.cabinet = Some(published.clone());
+                true
+            } else {
+                false
             }
         };
         if stored && let Err(e) = self.write_meta(session_id).await {
@@ -684,12 +710,13 @@ impl App {
         }
     }
 
-    /// Queues one message for every socket of the session. The room lock is not held: a slow
+    /// Queues one message for every socket of the session. The document lock is not held: a slow
     /// subscriber loses the frame, the document is unaffected.
     async fn notify(&self, session_id: &str, message: &ServerMessage) {
         let senders: Vec<mpsc::Sender<ServerMessage>> = {
-            let inner = self.inner.lock().await;
-            inner.conns.get(session_id).map(|senders| senders.values().cloned().collect()).unwrap_or_default()
+            let Some(doc) = self.doc(session_id).await else { return };
+            let doc = doc.lock().await;
+            doc.conns.values().cloned().collect()
         };
         for sender in senders {
             if sender.try_send(message.clone()).is_err() {
@@ -700,14 +727,14 @@ impl App {
 
     /// `DELETE /v1/sessions/{id}`: the cabinet closes the session and its lease.
     pub async fn close_session(&self, session_id: &str) -> Result<(), ApiError> {
-        let (senders, file_id) = {
-            let mut inner = self.inner.lock().await;
-            let Some(meta) = inner.sessions.get(session_id) else {
+        let file_id = {
+            let Some(doc) = self.doc(session_id).await else {
                 return Err(ApiError::not_found("no such session"));
             };
-            let file_id = meta.file_id;
-            (inner.drop_session(session_id), file_id)
+            let doc = doc.lock().await;
+            doc.meta.file_id
         };
+        let senders = self.drop_session(session_id).await;
         for sender in senders {
             let _ =
                 sender.try_send(ServerMessage::Error { code: "session-closed".into(), message: "the session was closed".into(), retryable: false });
@@ -724,19 +751,21 @@ impl App {
     /// The `/metrics` body, with the gauges read under the state lock. File sizes come from the
     /// volume; reading a few directory entries per scrape is cheap next to the page itself.
     pub async fn metrics_page(&self) -> String {
-        let (files, mut gauges) = {
+        let now = now_secs();
+        let (docs, leases) = {
             let inner = self.inner.lock().await;
-            let now = now_secs();
-            let gauges = Gauges {
-                sessions: inner.sessions.len() as u64,
-                participants: inner.participants_total(),
-                leases: inner.leases.live_leases(now).len() as u64,
-                journal_ops: inner.journal.values().map(|entries| entries.len() as u64).sum(),
-                ..Gauges::default()
-            };
-            let files: Vec<i64> = inner.sessions.values().map(|meta| meta.file_id).collect();
-            (files, gauges)
+            (inner.docs.iter().map(|(id, entry)| (id.clone(), entry.doc.clone())).collect::<Vec<_>>(), inner.leases.live_leases(now).len() as u64)
         };
+        let mut participants = 0;
+        let mut journal_ops = 0;
+        let mut files = Vec::with_capacity(docs.len());
+        for (_, doc) in &docs {
+            let doc = doc.lock().await;
+            participants += doc.actors.len() as u64;
+            journal_ops += doc.journal.len() as u64;
+            files.push(doc.meta.file_id);
+        }
+        let mut gauges = Gauges { sessions: docs.len() as u64, participants, leases, journal_ops, ..Gauges::default() };
         if let Some(store) = &self.store {
             gauges.journal_bytes = files.iter().filter_map(|file_id| store.journal_size(*file_id).ok().flatten()).sum();
             gauges.base_bytes = files.iter().filter_map(|file_id| store.base_size(*file_id).ok().flatten()).sum();
@@ -835,5 +864,45 @@ mod tests {
         assert!(token_matches("secret", "secret"));
         assert!(!token_matches("secret", "secreT"));
         assert!(!token_matches("secret", "secret "));
+    }
+
+    /// Two documents do not share a lock (ADR-0007 §3). While one book sits inside a long
+    /// operation, the other opens sessions, reports and commits, and the busy one answers as soon
+    /// as its own lock is back.
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn a_busy_document_does_not_hold_up_another() {
+        use std::time::Duration;
+
+        let cfg = Config::default();
+        let app = App::new(cfg.clone(), JwtConfig::hs256(b"test-secret").unwrap());
+        let request = |file_id: i64| CreateSession {
+            file_id,
+            app: cfg.app.clone(),
+            owner: "ann".into(),
+            initial_name: None,
+            initial_bytes: None,
+            takeover: false,
+        };
+        let first = app.create_session(request(101), 1).await.unwrap();
+        let second = app.create_session(request(102), 1).await.unwrap();
+
+        let busy = app.doc(&first.session_id).await.unwrap();
+        let guard = busy.lock().await; // one long recalculation of the first document
+
+        // The registry is not behind that lock: another session opens while the first is busy.
+        let third = tokio::time::timeout(Duration::from_secs(5), app.create_session(request(103), 1)).await.expect("the registry answers");
+        assert!(third.is_ok(), "a third document opens while the first is busy: {third:?}");
+
+        // So does every per-document path of the second document.
+        let info = tokio::time::timeout(Duration::from_secs(5), app.session_info(&second.session_id)).await.expect("the second document answers");
+        assert_eq!(info.unwrap().file_id, 102);
+        let commit = tokio::time::timeout(Duration::from_secs(5), app.commit(&second.session_id, None)).await.expect("the second document commits");
+        assert!(!commit.unwrap().bytes.is_empty());
+
+        // The busy document itself still waits for its own lock, and answers once it is back.
+        assert!(tokio::time::timeout(Duration::from_millis(100), app.session_info(&first.session_id)).await.is_err());
+        drop(guard);
+        assert!(app.session_info(&first.session_id).await.is_ok());
     }
 }
