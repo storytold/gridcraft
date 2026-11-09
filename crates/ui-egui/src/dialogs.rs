@@ -86,6 +86,9 @@ pub struct Dialog {
     /// box is free text, so text left as it opened keeps the identity: a sheet literally named
     /// Workbook is `{sheet: "Workbook"}`, which the text alone cannot say.
     scope_identity: Option<(String, Json)>,
+    /// Define Name: the Scope box's word for workbook scope in the interface language
+    /// (`Cartella di lavoro`), which free text means workbook scope, not a sheet with that name.
+    workbook_caption: Option<String>,
     /// The state of the dialog's reference boxes (RefEdit).
     refs: ref_edit::RefBoxes,
 }
@@ -248,6 +251,7 @@ impl Dialog {
             pick: None,
             original_link_text: None,
             scope_identity: None,
+            workbook_caption: None,
             refs: ref_edit::RefBoxes::default(),
         }
     }
@@ -274,6 +278,7 @@ impl Dialog {
             pick: None,
             original_link_text: None,
             scope_identity: None,
+            workbook_caption: None,
             refs: ref_edit::RefBoxes::default(),
         }
     }
@@ -848,6 +853,7 @@ impl Dialog {
                     defaults,
                 );
                 dialog.scope_identity = Some((caption, identity));
+                dialog.workbook_caption = Some(app.ui.language.tr("Workbook").to_string());
                 dialog
             }
             "tableResize" => {
@@ -1203,6 +1209,39 @@ mod tests {
         let params = build_params(&d);
         assert_eq!(params["scope"], "Лист1");
         assert_eq!(params["oldScope"], json!({"sheet": "Workbook"}), "the name being edited is still the sheet one");
+    }
+
+    /// The Scope box shows the interface's own word for workbook scope ("Cartella di lavoro" in
+    /// Italian). Typing that word means workbook scope, not a sheet that carries the word as its
+    /// name, so a translated interface still reaches both scopes.
+    #[test]
+    fn typing_the_translated_workbook_word_means_workbook_scope() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("app.language.set", json!({"language": "it"})).unwrap();
+        app.run("home.insertSheet", json!({"name": "Cartella di lavoro"})).unwrap();
+        app.run("home.insertSheet", json!({"name": "Data"})).unwrap();
+        app.run("formulas.defineName", json!({"name": "Rate", "refersTo": "=1", "scope": {"sheet": "Data"}})).unwrap();
+
+        let mut d = Dialog::open(
+            &mut app,
+            "defineName",
+            json!({"name": "Rate", "scope": {"sheet": "Data"}, "refersTo": "=1", "oldName": "Rate", "oldScope": {"sheet": "Data"}}),
+        )
+        .unwrap();
+        assert_eq!(d.values["scope"], "Data", "a sheet scope reads as its sheet's name");
+        d.set_value("scope", json!("Cartella di lavoro"));
+        let params = build_params(&d);
+        assert!(!params.as_object().unwrap().contains_key("scope"), "the box's own workbook word is workbook scope: {params}");
+        assert_eq!(params["oldScope"], json!({"sheet": "Data"}), "the name being edited is still the sheet one");
+        app.run(d.command.unwrap(), build_params(&d)).unwrap();
+
+        let rows = app.run("formulas.nameManager", json!({})).unwrap();
+        let rows = rows.as_array().unwrap().clone();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0]["scopeIdentity"].is_null(), "the name moved to workbook scope: {rows:?}");
+        assert_eq!(rows[0]["refersTo"], "=1");
     }
 
     #[test]

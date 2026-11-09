@@ -32,8 +32,13 @@ fn define_name_scope(d: &Dialog, v: &mut Json) {
             m.insert("oldScope".into(), identity.clone());
         }
     }
+    // `Workbook`, and the word the box itself uses for workbook scope in the interface language,
+    // mean workbook scope: the command sees an absent parameter. Free text that happens to read
+    // like the translated word is not a sheet name.
+    let workbook_caption = d.workbook_caption.as_deref();
     for key in ["scope", "oldScope"] {
-        if m.get(key).and_then(Json::as_str) == Some("Workbook") {
+        let reads_workbook = m.get(key).and_then(Json::as_str).is_some_and(|text| text == "Workbook" || Some(text) == workbook_caption);
+        if reads_workbook {
             m.remove(key);
         }
     }
