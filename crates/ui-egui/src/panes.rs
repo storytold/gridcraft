@@ -434,7 +434,11 @@ fn translate(app: &mut SheetApp, ui: &mut Ui) {
         .or_else(|| list.first().cloned())
         .unwrap_or(Json::Null);
     let id = record["id"].as_str().unwrap_or("qwen3-1.7b").to_string();
-
+    let pairs = record["pairs"].as_array().cloned().unwrap_or_default();
+    let sources: Vec<String> = pairs.iter().filter_map(|p| p["from"].as_str()).map(str::to_string).collect();
+    let targets: Vec<String> = pairs.iter().filter_map(|p| p["to"].as_str()).map(str::to_string).collect();
+    let from = if app.session.translate_from.trim().is_empty() { "auto".to_string() } else { app.session.translate_from.clone() };
+    let to = if app.session.translate_to.trim().is_empty() { targets.first().cloned().unwrap_or_default() } else { app.session.translate_to.clone() };
     // Model state first: without one every action below is disabled and says what to do.
     egui::Frame::NONE.fill(t.menu_bg).corner_radius(6.0).inner_margin(8.0).stroke(egui::Stroke::new(1.0, t.separator)).show(ui, |ui| {
         ui.set_width(ui.available_width());
