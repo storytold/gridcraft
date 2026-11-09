@@ -370,7 +370,7 @@ fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, 
         for sh in &sheet.shapes {
             if sh.kind == ShapeKind::Ink
                 && sh.ink.is_some()
-                && let Some(parts) = crate::drawing::ink_parts(sh, &wb.theme)
+                && let Some(parts) = crate::drawing::ink_parts(sh, &wb.theme, &mut out.ink_pixels)
             {
                 out.inks += 1;
                 let ink_name = format!("xl/ink/ink{}.xml", out.inks);

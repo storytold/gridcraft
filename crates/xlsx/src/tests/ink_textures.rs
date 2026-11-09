@@ -9,15 +9,29 @@ use gridcraft_model::{Anchor, AnchorMode, Color, InkStyle, InkTool, Shape, Shape
 use crate::ink_sheet::{INK_SHEET_NAME, InkExtras, InkSheetData, build, is_ink_sheet, parse, unique_name};
 use crate::{read_xlsx, write_xlsx};
 
-/// A texture holding `bytes`, whose id those bytes give it.
-fn texture(name: &str, bytes: Vec<u8>, w: u32, h: u32) -> InkTexture {
+/// A PNG header (magic and IHDR) claiming `w`×`h`, then `filler` trailing bytes of a repeating
+/// pattern. The store reads the header, so this is enough to be a stored texture; the filler gives
+/// distinct payloads distinct ids.
+fn png_payload(filler: usize, w: u32, h: u32) -> Vec<u8> {
+    let mut v = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13];
+    v.extend_from_slice(b"IHDR");
+    v.extend_from_slice(&w.to_be_bytes());
+    v.extend_from_slice(&h.to_be_bytes());
+    v.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
+    v.extend((0..filler).map(|i| (i % 251) as u8));
+    v
+}
+
+/// A texture named `name` holding a `filler`-byte PNG payload of `w`×`h`.
+fn texture(name: &str, filler: usize, w: u32, h: u32) -> InkTexture {
+    let bytes = png_payload(filler, w, h);
     InkTexture::new(name, "image/png", Arc::new(bytes), w, h).expect("a texture within the caps")
 }
 
 /// Sheet data with two textures and one stroke's extras.
 fn sample() -> InkSheetData {
     InkSheetData {
-        textures: vec![texture("a.png", vec![1, 2, 3, 4, 5], 2, 1), texture("b.png", vec![9; 1000], 40, 25)],
+        textures: vec![texture("a.png", 5, 2, 1), texture("b.png", 1000, 40, 25)],
         ink: [
             (
                 "{11111111-2222-3333-4444-555555555555}".to_string(),
@@ -47,8 +61,8 @@ fn round_trips_textures_and_extras() {
 #[test]
 fn a_large_texture_spans_cells() {
     // 100 KiB of base64 is four chunks under the 30,000-character cell limit.
-    let bytes: Vec<u8> = (0..100 * 1024).map(|i| (i % 251) as u8).collect();
-    let data = InkSheetData { textures: vec![texture("big.png", bytes.clone(), 512, 512)], ink: Default::default() };
+    let bytes = png_payload(100 * 1024, 512, 512);
+    let data = InkSheetData { textures: vec![texture("big.png", 100 * 1024, 512, 512)], ink: Default::default() };
     let sheet = build(INK_SHEET_NAME, &data);
     let used: Vec<u32> = (6..40).filter(|c| sheet.cells.get(CellRef::new(2, *c)).is_some()).collect();
     assert!(used.len() > 1, "the payload must be split");
@@ -83,7 +97,8 @@ fn an_unknown_version_is_not_read() {
     assert!(parse(&sheet).is_none(), "a newer layout must not be half-read");
 }
 
-/// Rows with malformed or missing fields are skipped without failing the read.
+/// Rows with malformed or missing fields are skipped without failing the read. Each row's base64
+/// is valid for its payload, so only the field the row targets can be the reason it is skipped.
 #[test]
 fn hostile_rows_are_skipped_not_fatal() {
     let mut sheet = build(INK_SHEET_NAME, &sample());
@@ -92,21 +107,23 @@ fn hostile_rows_are_skipped_not_fatal() {
     while row(r).is_some() {
         r += 1;
     }
-    // A forged id, a texture over the pixel cap, junk base64, and a non-JSON extra.
-    let rows: [(&str, String, &str, &str); 4] = [
-        ("texture", "not-a-real-id".into(), "4", "2"),
-        ("texture", "cd".repeat(16), "9000", "1"),
-        ("texture", "ef".repeat(16), "4", "2"),
-        ("ink", "{BAD}".into(), "", ""),
+    let valid = |w: u32, h: u32| gridcraft_model::b64::encode(&png_payload(0, w, h));
+    // A forged id, a texture over the pixel cap, junk base64, and a non-JSON extra. The first two
+    // carry base64 that decodes and a header that parses: their id and size are the only faults.
+    let rows: [(&str, String, &str, &str, String); 4] = [
+        ("texture", "not-a-real-id".into(), "4", "2", valid(4, 2)),
+        ("texture", "cd".repeat(16), "9000", "1", valid(9000, 1)),
+        ("texture", "ef".repeat(16), "4", "2", "!!!!".into()),
+        ("ink", "{BAD}".into(), "", "", String::new()),
     ];
-    for (i, (kind, key, a, b)) in rows.iter().enumerate() {
+    for (i, (kind, key, a, b, data)) in rows.iter().enumerate() {
         sheet.set_value(CellRef::new(r + i as u32, 0), Value::text(*kind));
         sheet.set_value(CellRef::new(r + i as u32, 1), Value::text(key.as_str()));
         sheet.set_value(CellRef::new(r + i as u32, 2), Value::text("x.png"));
         sheet.set_value(CellRef::new(r + i as u32, 3), Value::text("image/png"));
         sheet.set_value(CellRef::new(r + i as u32, 4), Value::text(*a));
         sheet.set_value(CellRef::new(r + i as u32, 5), Value::text(*b));
-        sheet.set_value(CellRef::new(r + i as u32, 6), Value::text("!!!!"));
+        sheet.set_value(CellRef::new(r + i as u32, 6), Value::text(data.as_str()));
     }
     let back = parse(&sheet).expect("the sheet still reads");
     assert_eq!(back.textures.len(), 2, "only the well-formed textures survive");
@@ -210,7 +227,8 @@ fn a_plain_pencil_stroke_gains_no_ink_sheet() {
 #[test]
 fn textures_survive_a_save_and_reopen() {
     let mut wb = with_shape(ink_shape(1, "{11111111-2222-3333-4444-555555555555}"));
-    let texture = texture("stripes.png", vec![7u8; 400], 10, 20);
+    let texture = texture("stripes.png", 400, 10, 20);
+    let payload = texture.data.clone();
     let id = texture.id.clone();
     wb.ink_textures.push(texture);
     let bytes = write_xlsx(&wb).expect("writes");
@@ -221,14 +239,14 @@ fn textures_survive_a_save_and_reopen() {
     assert_eq!(back.ink_textures.len(), 1);
     assert_eq!(back.ink_textures[0].id, id);
     assert_eq!(back.ink_textures[0].name, "stripes.png");
-    assert_eq!(back.ink_textures[0].data.as_ref(), &vec![7u8; 400]);
+    assert_eq!(back.ink_textures[0].data, payload);
 }
 
 /// A stroke keeps its texture id and brush subtype through a save and reopen.
 #[test]
 fn a_stroke_texture_and_subtype_survive_a_save_and_reopen() {
     let key = "{11111111-2222-3333-4444-555555555555}";
-    let texture = texture("a.png", vec![1, 2, 3, 4], 4, 4);
+    let texture = texture("a.png", 4, 4, 4);
     let id = texture.id.clone();
     let mut wb = with_shape(ink_shape(1, key));
     wb.ink_textures.push(texture);
@@ -254,7 +272,7 @@ fn a_stroke_texture_and_subtype_survive_a_save_and_reopen() {
 /// Saving a workbook that was just read keeps the extension rather than dropping it.
 #[test]
 fn a_second_save_after_reading_keeps_the_extension() {
-    let texture = texture("a.png", vec![9, 8, 7], 3, 3);
+    let texture = texture("a.png", 3, 3, 3);
     let mut wb = with_shape(ink_shape(1, "{22222222-2222-3333-4444-555555555555}"));
     let id = texture.id.clone();
     wb.ink_textures.push(texture);
@@ -300,7 +318,7 @@ fn an_unreadable_ink_sheet_is_kept_so_a_save_does_not_delete_it() {
 fn a_stroke_without_a_key_keeps_its_texture_by_its_emitted_id() {
     // The drawing writer mints a deterministic creation id when the stroke's key is missing or
     // malformed; the hidden sheet must key its extras by that same id, or the texture is lost.
-    let texture = texture("a.png", vec![1, 2, 3], 2, 2);
+    let texture = texture("a.png", 3, 2, 2);
     let id = texture.id.clone();
     let mut wb = with_shape(ink_shape(1, "{11111111-2222-3333-4444-555555555555}"));
     wb.ink_textures.push(texture);

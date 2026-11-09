@@ -162,21 +162,27 @@ pub fn parse(sheet: &Sheet) -> Option<InkSheetData> {
         }
     }
     let mut data = InkSheetData::default();
+    // The store's total byte budget is spent as the sheet is read, so a sheet of many small
+    // textures cannot grow the workbook past it any more than one huge texture can.
+    let mut store_bytes = 0usize;
     for row in rows.values() {
         let text = |col: u32| row.get(&col).map(String::as_str).unwrap_or("");
         match text(0) {
             "texture" if data.textures.len() < gridcraft_model::MAX_INK_TEXTURES => {
                 let Some(width) = text(4).parse::<u32>().ok() else { continue };
                 let Some(height) = text(5).parse::<u32>().ok() else { continue };
-                let encoded: String = row.range(6..).map(|(_, chunk)| chunk.as_str()).collect();
-                if encoded.len() / 4 * 3 > MAX_INK_TEXTURE_BYTES + 3 {
+                // Collect the base64 chunks while counting, so an over-long payload is refused
+                // before its string is ever built rather than after.
+                let Some(encoded) = join_base64(row.range(6..).map(|(_, chunk)| chunk.as_str()), MAX_INK_TEXTURE_BYTES) else { continue };
+                let Some(bytes) = gridcraft_model::b64::decode(&encoded) else { continue };
+                if !gridcraft_model::ink::fits_store(store_bytes, bytes.len()) {
                     continue;
                 }
-                let Some(bytes) = gridcraft_model::b64::decode(&encoded) else { continue };
                 let Some(texture) = InkTexture::from_parts(text(1).to_string(), text(2), text(3), std::sync::Arc::new(bytes), width, height) else {
                     continue;
                 };
                 if !data.textures.iter().any(|t| t.id == texture.id) {
+                    store_bytes = store_bytes.saturating_add(texture.data.len());
                     data.textures.push(texture);
                 }
             }
@@ -188,7 +194,10 @@ pub fn parse(sheet: &Sheet) -> Option<InkSheetData> {
                 let Ok(extras) = serde_json::from_str::<InkExtras>(text(2)) else { continue };
                 let extras = InkExtras {
                     texture: extras.texture.filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())),
-                    scale: extras.scale.filter(|s| s.is_finite() && *s > 0.0).map(|s| s.clamp(0.5, 512.0)),
+                    scale: extras
+                        .scale
+                        .filter(|s| s.is_finite() && *s > 0.0)
+                        .map(|s| s.clamp(gridcraft_model::MIN_INK_TEXTURE_SCALE, gridcraft_model::MAX_INK_TEXTURE_SCALE)),
                     tool: extras.tool.filter(|t| !t.trim().is_empty() && t.chars().count() <= 32),
                     order: extras.order,
                 };
@@ -202,9 +211,23 @@ pub fn parse(sheet: &Sheet) -> Option<InkSheetData> {
     Some(data)
 }
 
+/// Joins the base64 chunks of one texture row, stopping as soon as they could carry more than
+/// `max_bytes` decoded bytes: a hostile row is refused without building its string first.
+fn join_base64<'a>(chunks: impl Iterator<Item = &'a str>, max_bytes: usize) -> Option<String> {
+    let longest = max_bytes.div_ceil(3) * 4;
+    let mut encoded = String::new();
+    for chunk in chunks {
+        if encoded.len().saturating_add(chunk.len()) > longest {
+            return None;
+        }
+        encoded.push_str(chunk);
+    }
+    Some(encoded)
+}
+
 /// The scale a texture repeat may have: the same bounds the engine's pen accepts.
 fn clamp_scale(scale: f32) -> Option<f32> {
-    (scale.is_finite() && scale > 0.0).then(|| scale.clamp(0.5, 512.0))
+    (scale.is_finite() && scale > 0.0).then(|| scale.clamp(gridcraft_model::MIN_INK_TEXTURE_SCALE, gridcraft_model::MAX_INK_TEXTURE_SCALE))
 }
 
 /// Which strokes InkML cannot carry whole: Fountain Pen and Brush Pen are byte-identical in the
@@ -292,5 +315,21 @@ pub fn apply_to_workbook(wb: &mut Workbook, data: &InkSheetData) {
                 ink.order = order;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::join_base64;
+
+    /// Base64 chunks are joined only while they fit the byte cap, so an over-long payload is
+    /// refused while it is collected rather than after its string is built.
+    #[test]
+    fn base64_chunks_are_refused_past_the_byte_cap() {
+        // Six bytes encode to eight characters: two four-character chunks fit, a ninth does not.
+        assert_eq!(join_base64(["AAAA", "AAAA"].into_iter(), 6).as_deref(), Some("AAAAAAAA"));
+        assert_eq!(join_base64(["AAAA", "AAAA", "A"].into_iter(), 6), None);
+        assert_eq!(join_base64(["AAAAA", "AAAA"].into_iter(), 6), None, "refused as soon as the cap is passed");
+        assert_eq!(join_base64(std::iter::empty(), 6).as_deref(), Some(""));
     }
 }

@@ -43,12 +43,15 @@ const MAX_TRACES: usize = 1_024;
 const MAX_TRACE_DEPTH: u8 = 8;
 /// Largest coordinate magnitude in the trace's units (Excel's traceFormat min/max).
 const MAX_COORD: i64 = 2_147_483_647;
-/// Largest brush dimension accepted, in cm.
-const MAX_BRUSH_CM: f32 = 100.0;
 /// Largest coordinate accepted in sheet points (the same bound as the legacy reader).
 const MAX_SHEET: f64 = 1e7;
 /// Longest edge of the fallback picture, in px.
 const MAX_PNG: f64 = 1024.0;
+/// The most pixels all fallback pictures in one save may rasterise. The picture is a fallback
+/// Excel shows when it cannot render the InkML, not art: past this budget a stroke gets a 1×1
+/// transparent placeholder, so a workbook of thousands of long strokes cannot make saving
+/// quadratic in the stroke count.
+pub(crate) const MAX_FALLBACK_PIXELS_PER_SAVE: u64 = 64 * 1024 * 1024;
 /// Pressure channel's maximum.
 const MAX_PRESSURE: i64 = 32_767;
 
@@ -415,12 +418,16 @@ fn brush(definitions: &El) -> (InkStyle, Color) {
     let mut gridcraft_tool = None;
     let mut ink_effects = None;
     let mut mask_pen = false;
+    // Whether the file gave each dimension: `InkStyle::default` has a height, so an absent
+    // `height` must not look like a stated one.
+    let mut width = None;
+    let mut height = None;
     let Some(brush) = definitions.child("brush") else { return (style, color) };
     for p in brush.kids("brushProperty") {
         let (Some(name), Some(value)) = (p.attr("name"), p.attr("value")) else { continue };
         match name {
-            "width" => style.width_cm = brush_cm(value).unwrap_or(style.width_cm),
-            "height" => style.height_cm = brush_cm(value).unwrap_or(style.height_cm),
+            "width" => width = brush_cm(value).or(width),
+            "height" => height = brush_cm(value).or(height),
             "color" => color = Color::from_hex(value).unwrap_or(color),
             "tip" => mask_pen |= value.trim() == "rectangle",
             "rasterOp" => mask_pen |= value.trim() == "maskPen",
@@ -433,9 +440,11 @@ fn brush(definitions: &El) -> (InkStyle, Color) {
             _ => {}
         }
     }
-    if style.height_cm <= 0.0 {
-        style.height_cm = style.width_cm;
-    }
+    // A brush with no height is as tall as it is wide (InkML's default), and one with no width
+    // takes the plain pen's. Without this a width-0.35 brush read back as the model's 0.05 height.
+    let width = width.unwrap_or(style.width_cm);
+    style.width_cm = width;
+    style.height_cm = height.unwrap_or(width);
     style.effect = ink_effects.as_deref().and_then(effect);
     // Excel writes an F (pressure) channel for every plain pen, so it says nothing about the
     // tool: Fountain Pen and Brush Pen are indistinguishable in an Excel file. Without a
@@ -457,7 +466,7 @@ fn brush(definitions: &El) -> (InkStyle, Color) {
 /// A brush dimension in cm, clamped to the range Excel accepts; a value that is not a finite
 /// number leaves the default in place.
 fn brush_cm(v: &str) -> Option<f32> {
-    finite(v).map(|v| v.clamp(0.001, MAX_BRUSH_CM))
+    finite(v).map(|v| v.clamp(gridcraft_model::MIN_INK_CM, gridcraft_model::MAX_INK_CM))
 }
 
 /// The first finite `f32` in `v`, ignoring surrounding whitespace.
@@ -490,8 +499,9 @@ pub(crate) struct Parts {
 }
 
 /// The InkML part, the fallback picture and the creation id for `shape`, or `None` when its
-/// geometry cannot be represented (the caller then writes the legacy polyline).
-pub(crate) fn parts(shape: &Shape, theme: &Theme) -> Option<Parts> {
+/// geometry cannot be represented (the caller then writes the legacy polyline). `budget` is the
+/// save's remaining fallback-picture pixels, spent as pictures are rasterised.
+pub(crate) fn parts(shape: &Shape, theme: &Theme, budget: &mut u64) -> Option<Parts> {
     if shape.kind != ShapeKind::Ink {
         return None;
     }
@@ -509,7 +519,7 @@ pub(crate) fn parts(shape: &Shape, theme: &Theme) -> Option<Parts> {
     let color = shape.line.resolve(theme).unwrap_or([0, 0, 0]);
     let trace = encode_trace(&points, use_f.then_some(pressure.as_slice()));
     let xml = inkml_xml(ink, &color, use_f, &trace);
-    let png = fallback_png(shape, ink, &points, color)?;
+    let png = fallback_png(shape, ink, &points, color, budget)?;
     Some(Parts { xml, png, creation_id: creation_id(shape) })
 }
 
@@ -584,8 +594,8 @@ fn second(points: &[[i64; 2]], pressure: Option<&[i64]>, channel: usize, i: usiz
 
 /// The whole InkML part: one context with the trace format, one brush, one trace.
 fn inkml_xml(ink: &InkStyle, color: &[u8; 3], f: bool, trace: &str) -> String {
-    let width = ink.width_cm.clamp(0.001, MAX_BRUSH_CM);
-    let height = ink.height_cm.clamp(0.001, MAX_BRUSH_CM);
+    let width = ink.width_cm.clamp(gridcraft_model::MIN_INK_CM, gridcraft_model::MAX_INK_CM);
+    let height = ink.height_cm.clamp(gridcraft_model::MIN_INK_CM, gridcraft_model::MAX_INK_CM);
     let short = |v: f32| v.to_string();
     let mut props = format!(
         "<inkml:brushProperty name=\"width\" value=\"{}\" units=\"cm\"/><inkml:brushProperty name=\"height\" value=\"{}\" units=\"cm\"/><inkml:brushProperty name=\"color\" value=\"#{:02X}{:02X}{:02X}\"/>",
@@ -683,33 +693,42 @@ pub fn creation_id(shape: &Shape) -> String {
 }
 
 /// A transparent PNG of the stroke in its colour, at the anchor's aspect ratio. Excel needs it as
-/// the contentPart's `mc:Fallback`.
-fn fallback_png(shape: &Shape, ink: &InkStyle, points: &[[i64; 2]], color: [u8; 3]) -> Option<Vec<u8>> {
+/// the contentPart's `mc:Fallback`. `budget` is the save's remaining pixels: a picture that does
+/// not fit becomes a 1×1 transparent placeholder, so the InkML stroke still opens natively while
+/// the raster work stays bounded per save.
+fn fallback_png(shape: &Shape, ink: &InkStyle, points: &[[i64; 2]], color: [u8; 3], budget: &mut u64) -> Option<Vec<u8>> {
     let w = f64::from(shape.anchor.width).clamp(1.0, MAX_SHEET);
     let h = f64::from(shape.anchor.height).clamp(1.0, MAX_SHEET);
     let scale = (MAX_PNG / w.max(h)).min(1.0);
     let pw = ((w * scale).round() as u32).clamp(1, MAX_PNG as u32);
     let ph = ((h * scale).round() as u32).clamp(1, MAX_PNG as u32);
+    let pixels = u64::from(pw) * u64::from(ph);
+    if pixels > *budget {
+        return Some(placeholder_png());
+    }
+    *budget -= pixels;
     let mut rgba = vec![0u8; (pw as usize) * (ph as usize) * 4];
     let radius = (f64::from(ink.width_cm) * PX_PER_CM * scale / 2.0).clamp(0.5, 24.0);
-    // Bound the raster work a hostile stroke can ask for: the picture is a fallback, not art.
-    let mut budget = 100_000usize;
+    // Every stamp is charged the square it may touch to the same budget, so the raster work one
+    // save can ask for is bounded whether it comes from many strokes or from one long one.
+    let stamp_pixels = ((2.0 * radius + 3.0).powi(2)).ceil() as u64;
     let pts: Vec<[f64; 2]> = points.iter().map(|p| [p[0] as f64 / THOUSANDTHS_PER_PX * scale, p[1] as f64 / THOUSANDTHS_PER_PX * scale]).collect();
-    if pts.len() == 1 {
+    if pts.len() == 1 && stamp_pixels <= *budget {
+        *budget -= stamp_pixels;
         stamp(&mut rgba, pw, ph, pts[0][0], pts[0][1], radius, color);
     }
     for pair in pts.windows(2) {
-        if budget == 0 {
+        if *budget < stamp_pixels {
             break;
         }
         let (a, b) = (pair[0], pair[1]);
         let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
         let steps = (len / 0.5).ceil().clamp(1.0, 512.0) as usize;
         for i in 0..=steps {
-            if budget == 0 {
+            if *budget < stamp_pixels {
                 break;
             }
-            budget -= 1;
+            *budget -= stamp_pixels;
             let t = i as f64 / steps as f64;
             stamp(&mut rgba, pw, ph, a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, radius, color);
         }
@@ -723,6 +742,19 @@ fn fallback_png(shape: &Shape, ink: &InkStyle, points: &[[i64; 2]], color: [u8; 
         writer.write_image_data(&rgba).ok()?;
     }
     Some(out)
+}
+
+/// A 1×1 transparent PNG, the fallback a stroke past the save's pixel budget gets: deterministic
+/// bytes, so every such stroke shares one `xl/media` part.
+fn placeholder_png() -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut enc = png::Encoder::new(&mut out, 1, 1);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    if let Ok(mut writer) = enc.write_header() {
+        let _ = writer.write_image_data(&[0, 0, 0, 0]);
+    }
+    out
 }
 
 /// A soft round dab, source-over into the transparent picture.

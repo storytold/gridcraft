@@ -753,3 +753,38 @@ fn minted_ink_keys_never_repeat_a_workbook_id() {
     assert_ne!(c, "{11111111-2222-4333-8444-555555555555}", "a key already in the workbook is not minted again");
     assert!(!reserved.contains(&c) || reserved.iter().filter(|k| **k == c).count() == 1, "the mint is reserved");
 }
+
+/// A brush that states a width but no height is as tall as it is wide, not the model's 0.05 cm.
+#[test]
+fn a_brush_without_a_height_is_as_tall_as_it_is_wide() {
+    // The old reader compared against `InkStyle::default`'s height (0.05), so the missing-height
+    // check never ran and a 0.35 cm brush read back 0.05 cm tall.
+    const WIDTH_ONLY: &str = r##"<inkml:brushProperty name="width" value="0.35" units="cm"/>"##;
+    let (wb, _) = read(&package("!0 !0,'1000 '1000", false, WIDTH_ONLY, true, true, true));
+    let ink = ink_shape(&wb).ink.as_ref().expect("editable ink");
+    close(ink.width_cm, 0.35);
+    close(ink.height_cm, 0.35);
+}
+
+/// A stroke whose fallback picture does not fit the save's raster budget still gets its InkML
+/// part, with a 1×1 transparent picture instead of an expensive one.
+#[test]
+fn a_fallback_picture_past_the_save_budget_is_a_placeholder() {
+    let shape = Shape {
+        id: 9,
+        kind: ShapeKind::Ink,
+        anchor: Anchor { cell: CellRef::parse("B2").unwrap(), dx: 0.0, dy: 0.0, width: 300.0, height: 200.0, mode: AnchorMode::Absolute },
+        fill: Color::Auto,
+        line: Color::rgb(0x1F, 0x5F, 0xC9),
+        text: "10,10;80,35".into(),
+        format: Default::default(),
+        math: Default::default(),
+        ink: Some(InkStyle { tool: InkTool::Pen, width_cm: 0.1, height_cm: 0.1, key: Some(GUIDE.into()), ..InkStyle::default() }),
+    };
+    let mut budget = 0u64;
+    let parts = crate::drawing::ink_parts(&shape, &gridcraft_model::Theme::default(), &mut budget).expect("the stroke is still native ink");
+    assert!(parts.xml.contains("<inkml:trace"), "the InkML part is written");
+    let reader = png::Decoder::new(std::io::Cursor::new(parts.png)).read_info().expect("a valid PNG");
+    assert_eq!((reader.info().width, reader.info().height), (1, 1), "the placeholder is one transparent pixel");
+    assert_eq!(budget, 0, "a placeholder spends nothing");
+}

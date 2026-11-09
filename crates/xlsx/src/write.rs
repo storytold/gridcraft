@@ -120,6 +120,8 @@ pub struct Out {
     pub drawings: u32,
     /// InkML parts written (`xl/ink/inkN.xml`).
     pub inks: u32,
+    /// Fallback-picture raster budget left in this save, in pixels.
+    pub ink_pixels: u64,
     pub tables: u32,
     pub comments: u32,
     /// VML drawings written, the last VML shape-id block used, and control properties parts.
@@ -276,6 +278,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         chart_names: vec![],
         drawings: 0,
         inks: 0,
+        ink_pixels: crate::drawing::MAX_FALLBACK_PIXELS_PER_SAVE,
         tables: 0,
         comments: 0,
         vmls: 0,

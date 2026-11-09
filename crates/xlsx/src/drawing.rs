@@ -22,11 +22,12 @@ mod inkml;
 pub use inkml::creation_id;
 #[cfg(test)]
 pub(crate) use inkml::mint_ink_key;
-pub(crate) use inkml::{CT as CT_INKML, Parts as InkParts};
+pub(crate) use inkml::{CT as CT_INKML, MAX_FALLBACK_PIXELS_PER_SAVE, Parts as InkParts};
 
-/// The InkML part and fallback picture for a native ink stroke (see [`inkml`]).
-pub(crate) fn ink_parts(shape: &Shape, theme: &Theme) -> Option<InkParts> {
-    inkml::parts(shape, theme)
+/// The InkML part and fallback picture for a native ink stroke (see [`inkml`]). `budget` is the
+/// save's remaining fallback-picture raster budget, spent as pictures are drawn.
+pub(crate) fn ink_parts(shape: &Shape, theme: &Theme, budget: &mut u64) -> Option<InkParts> {
+    inkml::parts(shape, theme, budget)
 }
 
 // ---------------------------------------------------------------- reading
