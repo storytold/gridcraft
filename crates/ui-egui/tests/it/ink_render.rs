@@ -52,3 +52,64 @@ fn ink_translucency_follows_the_brush_not_the_zoom() {
         assert_eq!(c.a() < 255, translucent, "{brush} at {zoom}%: {c:?}");
     }
 }
+
+/// An effect's bands follow the base stroke's shape: pencil-width on a Pencil, tapered on a
+/// Fountain Pen — never a full-width overlay that hides the brush.
+#[test]
+fn effect_bands_follow_the_brush_shape() {
+    // A tapered base narrows to 0.05×width at low pressure; the overlay must narrow with it.
+    for (brush, narrow) in [("pencil", false), ("fountainPen", true)] {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute(
+            "draw.stroke",
+            json!({"points": [[40, 80], [120, 80], [200, 80]], "color": "#1F5FC9", "width": 2.0, "brush": brush, "effect": "rainbow", "pressure": [2000, 32767, 2000]}),
+        )
+        .unwrap();
+        let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+            |ui, app: &mut SheetApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            crate::common::app(s),
+        );
+        h.run_steps(4);
+        // Tessellation turns segments into small paths: the 2-point ones along the stroke are
+        // the effect bands; the base is a longer path and the grid paints at ~1px.
+        let kinds: Vec<String> = h
+            .output()
+            .shapes
+            .iter()
+            .map(|s| match &s.shape {
+                Shape::Path(p) => format!("path#{} w={:.1}", p.points.len(), p.stroke.width),
+                _ => "other".into(),
+            })
+            .collect();
+        let widths: Vec<f32> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Path(p) if p.points.len() == 2 && (p.points[0].y - p.points[1].y).abs() < 3.0 && p.stroke.width > 1.5 => Some(p.stroke.width),
+                _ => None,
+            })
+            .collect();
+        assert!(!widths.is_empty(), "the {brush} effect paints band segments: {kinds:?} (brush={brush})");
+        if narrow {
+            // The bands must take more than one width along the stroke: the swell's ends are
+            // much narrower than its middle, while an overlay paints one width everywhere.
+            let mut sorted = widths.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            sorted.dedup_by(|a, b| (*a - *b).abs() < 0.05);
+            assert!(sorted.len() > 1, "a tapered effect varies with the base instead of overlaying one width (brush={brush}): {widths:?}");
+        } else {
+            // The effect must match the pencil body, not the pen width the old overlay used: a
+            // 2 mm pencil body is 0.8 × its pen width, so bands sit well under full width.
+            let full = gridcraft_engine::cmd::draw::cm_to_px(2.0 / 10.0);
+            assert!(
+                widths.iter().all(|w| *w < full * 0.9),
+                "a pencil effect paints at the pencil body width, not the pen width ({full:.1}): {widths:?}"
+            );
+        }
+    }
+}

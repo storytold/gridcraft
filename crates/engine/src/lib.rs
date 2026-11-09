@@ -518,7 +518,7 @@ pub struct Session {
     /// Pens the person added with Draw ▸ Add Pen. A view setting, not saved in the file.
     pub draw_pens: Vec<crate::cmd::draw::DrawPen>,
     /// Draw tab pen: the imported texture it paints with (an id in `Workbook::ink_textures`,
-    /// empty for none) and the size in sheet points one repeat covers.
+    /// empty for none) and how many stroke widths one repeat spans.
     pub draw_texture: String,
     pub draw_texture_scale: f32,
     /// Review › Show Comments: the Comments pane is open.

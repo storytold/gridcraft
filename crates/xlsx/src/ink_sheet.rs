@@ -50,7 +50,7 @@ pub struct InkExtras {
     /// Id of the imported texture the stroke paints with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture: Option<String>,
-    /// How many sheet points one repeat of the texture covers.
+    /// How many stroke widths one repeat of the texture spans.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<f32>,
     /// The GridCraft brush subtype (`fountainPen`, `brushPen`, …): Excel cannot tell the last two

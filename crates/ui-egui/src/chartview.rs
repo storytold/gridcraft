@@ -638,7 +638,13 @@ fn paint_ink(p: &Painter, pts: &[Pos2], sp: &gridcraft_engine::model::Shape, ink
         }
     }
     if let Some(effect) = ink.effect {
-        paint_ink_texture(p, pts, if ink.tool == InkTool::Highlighter { across } else { width }, effect, ink.anchor, z);
+        // The bands follow the base's shape: a full-width overlay would hide a taper and spill
+        // past a Pencil body.
+        match ink.tool {
+            InkTool::FountainPen | InkTool::BrushPen => paint_tapered_texture(p, pts, width, &ink.pressure, effect, ink.anchor, z),
+            InkTool::Highlighter | InkTool::Pencil => paint_ink_texture(p, pts, across, effect, ink.anchor, z),
+            InkTool::Pen => paint_ink_texture(p, pts, width, effect, ink.anchor, z),
+        }
     }
 }
 
@@ -661,6 +667,43 @@ fn paint_tapered(p: &Painter, pts: &[Pos2], width: f32, pressure: &[u16], color:
     for (i, pair) in pts.windows(2).enumerate() {
         let w = width * (press(i) + press(i + 1)) / 2.0;
         p.line_segment([pair[0], pair[1]], Stroke::new(w.max(1.0), color));
+    }
+}
+/// A pressure-tapered line in an effect's bands: the taper sets each segment's width and the
+/// palette sets its colour, so a textured Fountain or Brush Pen keeps its shape.
+fn paint_tapered_texture(
+    p: &Painter,
+    pts: &[Pos2],
+    width: f32,
+    pressure: &[u16],
+    effect: gridcraft_engine::model::InkEffect,
+    anchor: [f32; 2],
+    z: f32,
+) {
+    let bands = crate::pen_icon::effect_colors(gridcraft_engine::cmd::draw::effect_name(effect));
+    if bands.is_empty() || pts.len() < 2 {
+        return;
+    }
+    let n = pts.len();
+    let press = |i: usize| -> f32 {
+        match pressure.get(i) {
+            Some(v) => (*v as f32 / 32767.0).clamp(0.05, 1.0),
+            None => {
+                let t = i as f32 / (n - 1) as f32;
+                0.35 + 0.65 * (std::f32::consts::PI * t).sin()
+            }
+        }
+    };
+    let period = (width.max(2.0) * 1.7).max(3.0);
+    let phase = (anchor[0] + anchor[1]) * 0.05 * z;
+    let mut travelled = phase;
+    for (i, pair) in pts.windows(2).enumerate() {
+        let w = width * (press(i) + press(i + 1)) / 2.0;
+        let seg = (pair[1] - pair[0]).length();
+        let idx = ((travelled / period).rem_euclid(bands.len() as f32)) as usize;
+        let band = bands.get(idx).copied().unwrap_or(Color32::GRAY);
+        p.line_segment([pair[0], pair[1]], Stroke::new(w.max(1.0), band));
+        travelled += seg;
     }
 }
 

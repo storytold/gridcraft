@@ -700,7 +700,7 @@ pub struct InkStyle {
     /// GridCraft's own texture: a content-addressed id into the workbook's texture store. Excel
     /// has no equivalent and drops it; the bytes live once on the workbook, not on every stroke.
     pub texture: Option<String>,
-    /// How the texture repeats along the stroke.
+    /// How the texture repeats along the stroke: how many stroke widths one repeat spans.
     pub texture_scale: f32,
     /// The stroke's stable `a16:creationId` GUID (braces included), assigned when the stroke is
     /// created and never changed: moving or recolouring it keeps the key. Excel preserves the

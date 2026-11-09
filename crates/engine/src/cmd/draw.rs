@@ -10,8 +10,9 @@ use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edi
 pub const PEN_WIDTHS_MM: [f32; 6] = [0.25, 0.35, 0.5, 1.0, 2.0, 3.5];
 pub const HIGHLIGHTER_WIDTHS_MM: [f32; 6] = [2.0, 4.0, 6.0, 8.0, 10.0, 10.0];
 
-/// The size in sheet points one repeat of an imported pen texture covers when the pen doesn't
-/// say, and the bounds it is kept within.
+/// How many stroke widths one repeat of an imported pen texture spans when the pen doesn't
+/// say, and the bounds it is kept within. The tile length is `width * scale`: a scale of 8 on
+/// a pen paints one repeat every eight stroke widths, so repeats grow with the brush.
 pub const DEFAULT_TEXTURE_SCALE: f32 = 8.0;
 pub const MIN_TEXTURE_SCALE: f32 = 0.5;
 pub const MAX_TEXTURE_SCALE: f32 = 512.0;
@@ -38,7 +39,7 @@ pub struct DrawPen {
     /// The id of an imported texture ([`gridcraft_model::InkTexture`]) the pen paints with; it
     /// wins over `effect`.
     pub texture: Option<String>,
-    /// How many sheet points one repeat of `texture` covers.
+    /// How many stroke widths one repeat of `texture` spans.
     pub texture_scale: f32,
 }
 
