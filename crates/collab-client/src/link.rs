@@ -81,3 +81,20 @@ pub trait Link {
     /// The next event, without waiting.
     fn poll(&mut self) -> Option<Event>;
 }
+
+/// Advances the state a transport shares with its callers from one `applied`.
+///
+/// A part of a chunked sheet image (ADR-0013) changes nothing yet: the operation is not applied
+/// and its version is not true until the last part, so the replica keeps reporting the version
+/// before the first part and a broken sequence is caught up from there. The last part carries the
+/// same `version`, `epoch` and sheet map as the first, so one rule covers both.
+pub fn note_applied(state: &mut State, applied: &Applied) {
+    if applied.more {
+        return;
+    }
+    state.version = state.version.max(applied.version);
+    state.epoch = applied.epoch;
+    if let Some(sheets) = &applied.sheets {
+        state.sheets = sheets.clone();
+    }
+}

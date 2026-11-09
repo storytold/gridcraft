@@ -132,11 +132,7 @@ impl SessionLink {
                 }
             }
             ServerMessage::Applied { applied } => {
-                self.state.version = self.state.version.max(applied.version);
-                self.state.epoch = applied.epoch;
-                if let Some(sheets) = &applied.sheets {
-                    self.state.sheets = sheets.clone();
-                }
+                gridcraft_collab_client::note_applied(&mut self.state, &applied);
                 self.pending.borrow_mut().retain(|op| op.op_id != applied.op_id);
                 self.events.push_back(Event::Applied(applied));
             }

@@ -15,5 +15,6 @@ gridcraft-model = { workspace = true }
 gridcraft-calc = { workspace = true }
 gridcraft-engine = { workspace = true }
 gridcraft-xlsx = { workspace = true }
+base64 = "0.22"
 serde = { workspace = true }
 serde_json = { workspace = true }

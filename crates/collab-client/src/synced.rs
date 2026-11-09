@@ -16,7 +16,10 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use gridcraft_collab::{Applied, ClientMessage, ClientOp, Kind, Payload, Presence, RejectCode, Role, SheetDelta, SheetName, Target, classify};
+use base64::Engine;
+use gridcraft_collab::{
+    Applied, ClientMessage, ClientOp, Kind, Payload, Presence, RejectCode, Role, SheetDelta, SheetImage, SheetName, Target, classify,
+};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
 use serde_json::{Value as Json, json};
@@ -27,6 +30,21 @@ use crate::link::{Event, Link, State, Welcome};
 struct Pending {
     op_id: String,
     previewed: bool,
+}
+
+/// A structural undo/redo whose sheet image is arriving in parts (ADR-0013).
+///
+/// Nothing is applied while the parts are coming in: a half of an image is not a document state.
+/// `from` is the version of this replica before the first part, so a sequence that breaks can ask
+/// for a catch-up from there instead of guessing.
+struct ImageParts {
+    op_id: String,
+    version: u64,
+    epoch: u64,
+    total: u32,
+    next: u32,
+    data: Vec<u8>,
+    from: u64,
 }
 
 /// Why a command could not be sent.
@@ -70,6 +88,8 @@ pub struct Synced {
     own: VecDeque<String>,
     /// The last refusal of an undo/redo, for the UI to show once.
     notice: Option<String>,
+    /// The sheet image of a structural undo/redo that is still arriving in parts.
+    image_parts: Option<ImageParts>,
 }
 
 impl Synced {
@@ -94,6 +114,7 @@ impl Synced {
             pending: Vec::new(),
             own: VecDeque::new(),
             notice: None,
+            image_parts: None,
         };
         synced.apply_sheets(&welcome.sheets);
         synced
@@ -216,9 +237,39 @@ impl Synced {
     }
 
     /// Applies every event the connection delivered and hands them to the caller.
+    ///
+    /// A structural undo/redo may arrive in parts (ADR-0013). The parts are collected here and the
+    /// caller sees one completed `applied`; until the last part nothing touches the document.
     pub fn poll(&mut self, session: &mut Session) -> Vec<Event> {
         let mut out = Vec::new();
         while let Some(event) = self.link.poll() {
+            let event = match event {
+                Event::Applied(applied) => match self.accept_image_parts(&applied) {
+                    Some(applied) => Event::Applied(applied),
+                    None => continue,
+                },
+                Event::Disconnected { reason } => {
+                    if self.image_parts.take().is_some() {
+                        self.notice = Some("the sheet image was interrupted; the document is unchanged".into());
+                    }
+                    Event::Disconnected { reason }
+                }
+                Event::Reconnected { version } => {
+                    // The catch-up restarts from the version before the first part, so the old
+                    // half of the image is never continued.
+                    self.image_parts = None;
+                    Event::Reconnected { version }
+                }
+                Event::Snapshot { version, epoch, bytes } => {
+                    self.image_parts = None;
+                    Event::Snapshot { version, epoch, bytes }
+                }
+                Event::Resynced { version, epoch } => {
+                    self.image_parts = None;
+                    Event::Resynced { version, epoch }
+                }
+                other => other,
+            };
             match &event {
                 Event::Applied(applied) => {
                     self.apply(session, applied);
@@ -283,6 +334,99 @@ impl Synced {
             out.push(event);
         }
         out
+    }
+
+    /// One `applied` narrowed to the operation to apply: a part of a chunked sheet image is
+    /// buffered (`None`), the last part becomes the whole operation (ADR-0013).
+    ///
+    /// A sequence that breaks — a missing part, another operation in the middle, undecodable
+    /// data — drops the buffer and asks for a catch-up from the version before the first part.
+    /// The document is not touched on a partial image.
+    fn accept_image_parts(&mut self, applied: &Applied) -> Option<Applied> {
+        let Some(part) = &applied.image_part else {
+            if applied.more {
+                // A part of a chunked delta this client does not assemble: never apply a prefix
+                // (ADR-0013 §3).
+                self.notice = Some("a partial operation arrived; the document is unchanged".into());
+                self.link.send_message(ClientMessage::Resync { from: self.link.state().version });
+                return None;
+            }
+            if self.image_parts.is_some() {
+                return self.refuse_image();
+            }
+            return Some(applied.clone());
+        };
+        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&part.data) else { return self.refuse_image() };
+
+        if self.image_parts.is_none() {
+            if part.seq != 0 {
+                return self.refuse_image();
+            }
+            let total = part.total;
+            self.image_parts = Some(ImageParts {
+                op_id: applied.op_id.clone(),
+                version: applied.version,
+                epoch: applied.epoch,
+                total,
+                next: 1,
+                data: bytes,
+                from: self.link.state().version,
+            });
+        } else {
+            let mut broken = false;
+            if let Some(buffer) = self.image_parts.as_mut() {
+                broken = buffer.op_id != applied.op_id
+                    || buffer.version != applied.version
+                    || buffer.epoch != applied.epoch
+                    || buffer.total != part.total
+                    || part.seq != buffer.next;
+                if !broken {
+                    buffer.next += 1;
+                    buffer.data.extend_from_slice(&bytes);
+                }
+            }
+            if broken {
+                return self.refuse_image();
+            }
+        }
+        if applied.more {
+            return None;
+        }
+        let buffer = self.image_parts.take()?;
+        if buffer.total != buffer.next {
+            // The last part says the image is complete, but a part before it never arrived.
+            self.image_parts = Some(buffer);
+            return self.refuse_image();
+        }
+        self.finish_image(buffer, applied)
+    }
+
+    /// Turns a complete sequence of parts back into the operation it carried.
+    fn finish_image(&mut self, buffer: ImageParts, applied: &Applied) -> Option<Applied> {
+        match serde_json::from_slice::<Vec<SheetImage>>(&buffer.data) {
+            Ok(images) => {
+                let mut done = applied.clone();
+                done.images = Some(images);
+                done.image_part = None;
+                done.more = false;
+                Some(done)
+            }
+            Err(_) => {
+                self.notice = Some("the sheet image arrived broken; the document is unchanged".into());
+                self.link.send_message(ClientMessage::Resync { from: buffer.from });
+                None
+            }
+        }
+    }
+
+    /// Drops a half-received image and asks for a catch-up from the version before its first
+    /// part (ADR-0013 §6). Returns `None`: nothing is applied.
+    fn refuse_image(&mut self) -> Option<Applied> {
+        if let Some(buffer) = self.image_parts.take() {
+            self.notice = Some("the sheet image arrived broken; the document is unchanged".into());
+            self.link.send_message(ClientMessage::Resync { from: buffer.from });
+        }
+        None
     }
 
     /// Applies one confirmed operation: the command first (structure, formulas, styles), then the

@@ -11,7 +11,7 @@ use std::sync::atomic::Ordering;
 
 use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket};
 use base64::Engine;
-use gridcraft_collab::{AuthError, ClientMessage, Connection, Expected, LeaseInfo, ServerMessage, SnapshotMode};
+use gridcraft_collab::{AuthError, ClientMessage, Connection, Expected, IMAGE_PART, LeaseInfo, ServerMessage, SnapshotMode, split_applied};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
@@ -187,8 +187,10 @@ async fn resync(app: &Arc<App>, session_id: &str, conn_id: &u64, tx: &mpsc::Send
             return send(socket, &ServerMessage::Resynced { version, epoch }).await.is_ok();
         }
         for applied in &entries {
-            if send(socket, &ServerMessage::Applied { applied: applied.clone() }).await.is_err() {
-                return false;
+            for frame in frames(&ServerMessage::Applied { applied: applied.clone() }) {
+                if send(socket, &frame).await.is_err() {
+                    return false;
+                }
             }
             sent = applied.version;
         }
@@ -297,7 +299,7 @@ async fn pump(
         _ => None,
     };
     let operations = matches!(&message, ClientMessage::Op { .. });
-    let (handled, others, lease_lost) = {
+    let (handled, out, lease_lost) = {
         let mut inner = app.inner.lock().await;
         let Some(file_id) = inner.sessions.get(session_id).map(|meta| meta.file_id) else {
             return false;
@@ -328,7 +330,19 @@ async fn pump(
                 .get(session_id)
                 .map(|senders| senders.iter().filter(|(id, _)| *id != conn_id).map(|(id, tx)| (*id, tx.clone())).collect::<Vec<_>>())
                 .unwrap_or_default();
-            (messages, others, false)
+            // Split and queue for the peers while the room lock is still held: the parts of one
+            // applied must not be separated by another operation (ADR-0013 §2), and two pumps run
+            // on different worker threads. `broadcast` is synchronous, so no await happens here.
+            let out: Vec<ServerMessage> = messages.iter().flat_map(frames).collect();
+            for frame in &out {
+                match frame {
+                    ServerMessage::Applied { .. } | ServerMessage::Presence { .. } => {
+                        broadcast(&app.metrics, &others, frame);
+                    }
+                    _ => {}
+                }
+            }
+            (messages, out, false)
         }
     };
     if lease_lost {
@@ -352,11 +366,10 @@ async fn pump(
         }
     }
     let mut replied = false;
-    for message in handled {
-        match &message {
+    for frame in &out {
+        match frame {
             ServerMessage::Applied { .. } => {
-                broadcast(&app.metrics, &others, &message);
-                if send(socket, &message).await.is_err() {
+                if send(socket, frame).await.is_err() {
                     return false;
                 }
                 replied = true;
@@ -364,10 +377,9 @@ async fn pump(
             ServerMessage::Presence { .. } => {
                 // Presence is state of a connection, not of the document: the sender already
                 // knows its own cursor.
-                broadcast(&app.metrics, &others, &message);
             }
             _ => {
-                if send(socket, &message).await.is_err() {
+                if send(socket, frame).await.is_err() {
                     return false;
                 }
             }
@@ -420,6 +432,17 @@ async fn leave(app: &App, session_id: &str, actor: &str, conn_id: Option<&u64>) 
         for tx in others {
             let _ = tx.try_send(message.clone());
         }
+    }
+}
+
+/// The frames one handled message becomes: an `applied` whose sheet image does not fit one frame
+/// is written as its parts, back to back (ADR-0013); every other message is one frame.
+fn frames(message: &ServerMessage) -> Vec<ServerMessage> {
+    match message {
+        ServerMessage::Applied { applied } if applied.images.is_some() => {
+            split_applied(applied.clone(), IMAGE_PART).into_iter().map(|applied| ServerMessage::Applied { applied }).collect()
+        }
+        _ => vec![message.clone()],
     }
 }
 

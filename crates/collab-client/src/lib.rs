@@ -20,5 +20,5 @@ mod synced;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use client::{Client, Config, ConnectError};
-pub use link::{Event, Link, State, Welcome};
+pub use link::{Event, Link, State, Welcome, note_applied};
 pub use synced::{EditError, Synced};

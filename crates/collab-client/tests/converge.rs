@@ -6,7 +6,7 @@ mod support;
 use std::time::Duration;
 
 use gridcraft_collab::Role;
-use gridcraft_collab_client::{Client, Config, EditError, Synced};
+use gridcraft_collab_client::{Client, Config, EditError, Event, Synced};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
 use serde_json::json;
@@ -172,6 +172,47 @@ fn value_in(peer: &Peer, sheet: &str, a1: &str) -> Value {
 }
 
 /// A structural undo is one operation with the sheets as they were: rows move back and a deleted
+/// Lets both connections deliver what the server sent, like `settle`, and keeps the events.
+///
+/// The quiet window is wider than in `settle`: a chunked image is many large frames, and a
+/// momentary gap between two parts is not the end of the operation.
+async fn settle_events(a: &mut Peer, b: &mut Peer) -> (Vec<Event>, Vec<Event>) {
+    let mut from_a = Vec::new();
+    let mut from_b = Vec::new();
+    for _ in 0..600 {
+        let mut events_a = a.synced.poll(&mut a.session);
+        let mut events_b = b.synced.poll(&mut b.session);
+        let busy = !events_a.is_empty() || !events_b.is_empty();
+        from_a.append(&mut events_a);
+        from_b.append(&mut events_b);
+        if busy {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            continue;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let mut events_a = a.synced.poll(&mut a.session);
+        let mut events_b = b.synced.poll(&mut b.session);
+        let quiet = events_a.is_empty() && events_b.is_empty();
+        from_a.append(&mut events_a);
+        from_b.append(&mut events_b);
+        if quiet {
+            return (from_a, from_b);
+        }
+    }
+    panic!("the replicas did not settle");
+}
+
+/// The applied frames of the collected events, in order.
+fn applied(events: &[Event]) -> Vec<&gridcraft_collab::Applied> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Applied(applied) => Some(applied),
+            _ => None,
+        })
+        .collect()
+}
+
 /// sheet comes back, on the author's replica and on the peer's alike.
 #[tokio::test]
 async fn structural_undo_restores_rows_and_sheets_on_every_replica() {
@@ -239,6 +280,82 @@ async fn structural_undo_restores_rows_and_sheets_on_every_replica() {
         assert_eq!(names(peer), ["Sheet1", "Extra"], "the deleted sheet comes back");
         assert_eq!(value_in(peer, "Extra", "B1"), Value::Number(7.0), "with the cells it held");
         assert_eq!(peer.synced.state().epoch, 9);
+    }
+    server.stop().await;
+}
+
+/// The image of a structural step can be over the 8 MiB that used to be refused as `too_large`.
+/// It travels in parts (ADR-0013) and every replica applies the operation once, when the last
+/// part is in, whatever its size.
+#[tokio::test]
+async fn an_eight_megabyte_sheet_image_travels_in_parts_and_converges() {
+    let server = support::start().await;
+    let session = support::create(&server, 47).await;
+    let mut ann = join(&server, 47, &session, "ann", Role::Editor).await;
+    let mut bob = join(&server, 47, &session, "bob", Role::Editor).await;
+
+    // Twelve cells of 700 KiB: the whole-sheet image of the step below is over 8 MiB.
+    let big = "x".repeat(700 * 1024);
+    for row in 1..=12 {
+        ann.synced.execute(&mut ann.session, "cell.set", json!({ "cell": format!("A{row}"), "input": big.clone() })).unwrap();
+    }
+    settle(&mut ann, &mut bob).await;
+    let (ann_setup, bob_setup) = settle_events(&mut ann, &mut bob).await;
+    let rejected: Vec<String> = ann_setup
+        .iter()
+        .chain(bob_setup.iter())
+        .filter_map(|event| match event {
+            Event::Rejected(rejected) => Some(format!("{}:{:?}:{:?}", rejected.op_id, rejected.code, rejected.message)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(applied(&ann_setup).len(), 12, "one applied per edit on the author; rejected {rejected:?}");
+    assert_eq!(applied(&bob_setup).len(), 12, "one applied per edit on the peer; rejected {rejected:?}");
+    match value(&bob, "A1") {
+        Value::Text(text) => assert_eq!(text.len(), big.len()),
+        other => panic!("the peer did not get the big value: {other:?}; rejected {rejected:?}"),
+    }
+
+    // A sheet insert is structural: its undo carries Sheet1 whole, in parts.
+    ann.synced.execute(&mut ann.session, "home.insertSheet", json!({ "name": "Extra" })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    assert_eq!(names(&bob), ["Sheet1", "Extra"]);
+
+    ann.synced.undo().unwrap();
+    let (ann_events, bob_events) = settle_events(&mut ann, &mut bob).await;
+    for events in [&ann_events, &bob_events] {
+        let applied = applied(events);
+        assert_eq!(applied.len(), 1, "the parts arrive as one operation, not as document changes");
+        let undo = applied[0];
+        assert!(undo.op_id.starts_with("undo-"), "the answer is the undo, got {}", undo.op_id);
+        assert!(!undo.more, "the caller only sees the completed operation");
+        assert!(undo.image_part.is_none());
+        let images = undo.images.as_ref().expect("the undo carries the sheet image");
+        let size = serde_json::to_vec(images).expect("JSON").len();
+        assert!(size > 8 * 1024 * 1024, "the image is {size} bytes, not over the old limit");
+    }
+    for peer in [&ann, &bob] {
+        assert_eq!(names(peer), ["Sheet1"], "the inserted sheet is undone on every replica");
+        match value(peer, "A1") {
+            Value::Text(text) => assert_eq!(text.len(), big.len(), "the big cell comes back whole"),
+            other => panic!("the restored sheet lost its cell: {other:?}"),
+        }
+        assert_eq!(peer.synced.state().version, 14, "twelve edits, the insert and the undo");
+        assert_eq!(peer.synced.state().epoch, 2, "the undo moves addresses");
+    }
+
+    ann.synced.redo().unwrap();
+    let (ann_events, bob_events) = settle_events(&mut ann, &mut bob).await;
+    for events in [&ann_events, &bob_events] {
+        let applied = applied(events);
+        assert_eq!(applied.len(), 1);
+        assert!(applied[0].op_id.starts_with("redo-"));
+        let images = applied[0].images.as_ref().expect("the redo carries the after image");
+        assert!(serde_json::to_vec(images).expect("JSON").len() > 8 * 1024 * 1024);
+    }
+    for peer in [&ann, &bob] {
+        assert_eq!(names(peer), ["Sheet1", "Extra"]);
+        assert_eq!(peer.synced.state().epoch, 3);
     }
     server.stop().await;
 }

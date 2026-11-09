@@ -526,6 +526,25 @@ fn a_structural_redo_puts_the_edit_back_from_the_after_image() {
 }
 
 #[test]
+fn a_structural_undo_with_an_image_over_eight_megabytes_is_not_refused() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    // One cell of 9 MiB makes the stage image of every sheet larger than the old `too_large`
+    // limit; the image now travels in parts instead (ADR-0013).
+    room.apply(&mut s, op("big", "cell.set", json!({"input": "x".repeat(9 * 1024 * 1024)}), &sheet, "A1"), "ann").unwrap();
+    room.apply(&mut s, structural_op(&room, "add", "home.insertSheet", json!({"name": "Extra"}), &sheet), "ann").unwrap();
+
+    let undone = room.undo(&mut s, "ann", Some("add")).expect("the image is no longer refused as too_large");
+    let images = undone.images.clone().expect("the undo carries the sheets it restored");
+    assert!(serde_json::to_vec(&images).expect("JSON").len() > 8 * 1024 * 1024);
+
+    let frames = crate::split_applied(undone, crate::IMAGE_PART);
+    assert!(frames.len() > 1, "an image over the frame limit travels in parts");
+    assert!(frames.iter().all(|frame| !frame.more || frame.image_part.is_some()));
+}
+
+#[test]
 fn a_sheet_image_round_trips_through_the_wire() {
     let mut s = session();
     let mut room = Room::new(&s);

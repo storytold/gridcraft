@@ -116,6 +116,19 @@ pub struct SheetImage {
     pub sheet: gridcraft_model::Sheet,
 }
 
+/// One part of a serialised sheet image that does not fit a single frame (ADR-0013).
+///
+/// The image of a structural undo is the UTF-8 JSON of the operation's `images`; `data` is a
+/// base64 slice of it. `seq` counts from 0 and `total` is fixed for the whole operation, so a
+/// client that misses a part in the middle refuses the image instead of applying a prefix.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImagePart {
+    pub seq: u32,
+    pub total: u32,
+    /// Base64 of a byte slice of the operation's serialised `images`.
+    pub data: String,
+}
+
 /// Serde for a [`gridcraft_model::Sheet`] inside an internally tagged [`crate::ServerMessage`].
 ///
 /// The tag makes serde buffer a message's fields as content, and content keeps JSON object keys as
@@ -151,8 +164,21 @@ pub struct Applied {
     /// Whole-sheet images of a structural undo/redo: the sheets as they stood before the step
     /// (undo) or after it (redo). The client replaces its sheets with them, then applies `sheets`;
     /// such an answer has no command echo and no cell delta, because every address may have moved.
+    /// An image over one frame travels as `imagePart` parts instead (ADR-0013).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<SheetImage>>,
+    /// True while more `applied` frames of the same operation follow (ADR-0013). `version`,
+    /// `epoch` and `opId` repeat on every part, the parts of one operation go out back to back,
+    /// and a client applies the operation only after the part with `more:false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub more: bool,
+    /// One part of the serialised `images` when the image did not fit a single frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_part: Option<ImagePart>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Where the client should resynchronise after a rejection.

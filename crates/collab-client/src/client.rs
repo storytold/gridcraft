@@ -282,11 +282,7 @@ fn handle(message: ServerMessage, shared: &Arc<Mutex<State>>, events: &mpsc::Unb
         }
         ServerMessage::Applied { applied } => {
             if let Ok(mut state) = shared.lock() {
-                state.version = state.version.max(applied.version);
-                state.epoch = applied.epoch;
-                if let Some(sheets) = &applied.sheets {
-                    state.sheets = sheets.clone();
-                }
+                crate::link::note_applied(&mut state, &applied);
             }
             let _ = events.send(Event::Applied(applied));
         }

@@ -25,12 +25,6 @@ pub const DEDUP_WINDOW: usize = 10_000;
 /// How many steps one participant may undo (ADR-0010).
 pub const UNDO_STEPS: usize = 200;
 
-/// How large the whole-sheet images of a structural undo may be, as JSON, before the room refuses
-/// it as `too_large`. A structural step is one operation by contract, so the images travel in one
-/// `applied` frame; chunking them is a follow-up. Without the bound an oversized answer would
-/// break the socket instead of being refused.
-pub const IMAGE_LIMIT: usize = 8 * 1024 * 1024;
-
 /// One cell a step touched: its state before and after. An undo puts `before` back only while the
 /// cell still holds `after` (an edit by somebody else wins).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -227,6 +221,8 @@ impl Room {
             result: Outcome { command: Some(CommandEcho { id: op.payload.cmd.clone(), params }), delta: Some(delta) },
             sheets,
             images: None,
+            more: false,
+            image_part: None,
         };
         self.remember(applied.clone());
         let structural_step = before_images.is_some() && after_images.is_some();
@@ -299,6 +295,8 @@ impl Room {
             result: Outcome { command: None, delta: Some(delta) },
             sheets: None,
             images: None,
+            more: false,
+            image_part: None,
         })
     }
 
@@ -355,6 +353,8 @@ impl Room {
             result: Outcome { command: None, delta: Some(delta) },
             sheets: None,
             images: None,
+            more: false,
+            image_part: None,
         })
     }
 
@@ -366,13 +366,6 @@ impl Room {
     fn reverse_sheets(&mut self, session: &mut Session, actor: &str, step: &Step, images: Vec<SheetImage>, undo: bool) -> Result<Applied, RoomError> {
         if self.version != step.version {
             return Err(self.image_reject(undo, RejectCode::Conflict, true, "another edit came after this structural step"));
-        }
-        match serde_json::to_vec(&images) {
-            Ok(bytes) if bytes.len() > IMAGE_LIMIT => {
-                return Err(self.image_reject(undo, RejectCode::TooLarge, false, "the sheet image is too large to travel as one operation"));
-            }
-            Ok(_) => {}
-            Err(_) => return Err(self.image_reject(undo, RejectCode::Internal, false, "the sheet image could not be written")),
         }
         let sheets = images.iter().map(|image| image.sheet.clone()).collect();
         session.restore_sheets(sheets).map_err(|e| self.image_reject(undo, RejectCode::Internal, false, &e.to_string()))?;
@@ -418,6 +411,8 @@ impl Room {
             result: Outcome { command: None, delta: None },
             sheets: Some(sheets),
             images: Some(images),
+            more: false,
+            image_part: None,
         })
     }
 
