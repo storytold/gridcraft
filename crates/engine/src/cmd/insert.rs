@@ -568,7 +568,7 @@ fn rename_total_table_refs(expr: &mut gridcraft_formula::Expr, old: &str, new: &
                             if let [declaration, value] = pair {
                                 // A LET binding starts after its own initializer, not inside it.
                                 pending.push((value, local.0, local.1));
-                                local.0 |= matches!(declaration, Expr::Name(n) if n.eq_ignore_ascii_case(old));
+                                local.0 |= matches!(declaration, Expr::Name(n) if gridcraft_formula::same_name(n, old));
                                 local.1 |= matches!(declaration, Expr::Name(n) if gridcraft_formula::same_name(n, new));
                             }
                         }
@@ -577,7 +577,7 @@ fn rename_total_table_refs(expr: &mut gridcraft_formula::Expr, old: &str, new: &
                 }
                 "LAMBDA" => {
                     if let Some((body, params)) = args.split_last_mut() {
-                        let old_local = old_bound || params.iter().any(|p| matches!(p, Expr::Name(n) if n.eq_ignore_ascii_case(old)));
+                        let old_local = old_bound || params.iter().any(|p| matches!(p, Expr::Name(n) if gridcraft_formula::same_name(n, old)));
                         let new_local = new_bound || params.iter().any(|p| matches!(p, Expr::Name(n) if gridcraft_formula::same_name(n, new)));
                         pending.push((body, old_local, new_local));
                     }
@@ -2057,6 +2057,22 @@ mod tests {
                 let Some(Expr::Call(_, sum_args)) = args.last() else { panic!("expected SUM: {printed}") };
                 assert!(matches!(sum_args.as_slice(), [Expr::Struct(st)] if st.table == destination), "{printed}");
             }
+        }
+    }
+
+    /// Unicode-equivalent source bindings shadow the table only after their declaration.
+    #[test]
+    fn custom_total_rename_preserves_unicode_source_bindings() {
+        for (formula, expected) in [
+            ("LET(CAFÉ,2,SUM(Café))", "LET(CAFÉ,2,SUM(Café))"),
+            ("LAMBDA(CAFÉ,SUM(Café))(2)", "LAMBDA(CAFÉ,SUM(Café))(2)"),
+            ("LET(CAFÉ,SUM(Café),SUM(Café))", "LET(CAFÉ,SUM(PriceList),SUM(Café))"),
+            ("SUM(Café)+LAMBDA(CAFÉ,SUM(Café))(2)+SUM(Café)", "SUM(PriceList)+LAMBDA(CAFÉ,SUM(Café))(2)+SUM(PriceList)"),
+        ] {
+            let mut expr = gridcraft_formula::parse(formula).unwrap();
+            let changed = rename_total_table_refs(&mut expr, "Café", "PriceList", false);
+            assert_eq!(gridcraft_formula::print(&expr), expected, "{formula}");
+            assert_eq!(changed, formula != expected, "{formula}");
         }
     }
 
