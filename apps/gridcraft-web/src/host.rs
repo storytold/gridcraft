@@ -63,10 +63,10 @@ impl Bridge {
     pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
         self.listen(inbox, ctx);
         let bridge = self.clone();
-        services.host_save = Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool| bridge.post_save(name, bytes, save_as)));
+        services.host_save = Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool| bridge.post_save(name, bytes, save_as, false)));
         let bridge = self.clone();
         services.download = Some(Box::new(move |name: &str, bytes: &[u8]| {
-            if let Err(e) = bridge.post_save(name, bytes, false) {
+            if let Err(e) = bridge.post_save(name, bytes, false, true) {
                 log::error!("couldn't hand {name} to the page: {e}");
             }
         }));
@@ -109,10 +109,14 @@ impl Bridge {
         self.host.post_dirty(app.session.documents().iter().any(|d| d.is_dirty()));
     }
 
-    fn post_save(&self, path: &str, bytes: &[u8], save_as: bool) -> Result<(), String> {
+    /// Posts `bytes` to the host page under `path`'s file name; records the name in `self.saved`
+    /// when `track` is true (`services.download` callers that don't mark the workbook saved inline).
+    fn post_save(&self, path: &str, bytes: &[u8], save_as: bool, track: bool) -> Result<(), String> {
         let name = file_name(path);
         self.host.post_save(&name, bytes, None, save_as)?;
-        self.saved.borrow_mut().push(name);
+        if track {
+            self.saved.borrow_mut().push(name);
+        }
         Ok(())
     }
 

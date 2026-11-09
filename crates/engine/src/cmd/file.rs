@@ -43,6 +43,7 @@ fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"index": i, "title": s.doc()?.display_title()}))
 }
 
+/// Opens a workbook from `base64` bytes or a `path`, or requests the Open dialog when neither is given.
 fn open(s: &mut Session, p: &Json) -> Result<Json> {
     let (name, bytes) = if let Some(b) = str_param(p, "base64") {
         (str_param(p, "name").unwrap_or("Book.xlsx").to_string(), crate::io::base64_decode(b).ok_or_else(|| bad("file.open", "invalid base64"))?)
@@ -149,6 +150,7 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"path": path, "bytes": bytes.len()}))
 }
 
+/// Saves the active workbook to `path`, or requests the Save As dialog with `saveAs = true` when no path is given.
 fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
     if str_param(p, "path").is_none() {
         s.ui_requests.push(crate::UiRequest::Dialog("saveAs".into(), json!({"saveAs": true})));

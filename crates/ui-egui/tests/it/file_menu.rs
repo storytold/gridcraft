@@ -167,6 +167,7 @@ fn save_actions_include_the_cell_draft_and_close_keeps_the_unsaved_prompt() {
 }
 
 #[test]
+/// Verifies that `Services::host_save` receives `save_as = false` for Save and `save_as = true` for Save As, and that Backstage Save saves an opened `.xlsx` in place.
 fn host_save_distinguishes_save_from_save_as_and_saves_opened_xlsx_from_backstage() {
     let saves = Arc::new(Mutex::new(Vec::<(String, bool, Vec<u8>)>::new()));
     let capture = saves.clone();

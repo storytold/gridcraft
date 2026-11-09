@@ -337,6 +337,7 @@ impl SheetApp {
         self.session.active().and_then(|d| d.wb.active().map(|s| s.is_protected())).unwrap_or(false)
     }
 
+    /// Opens the dialog or file picker named `name` (`open`, `saveAs`, `options`, `backstage`, or a modal dialog).
     pub fn open_dialog(&mut self, name: &str, params: Json) {
         if let Err(e) = self.commit_text_box_edit() {
             self.message = Some(("Text Box".into(), clean_error(&e)));
@@ -408,7 +409,7 @@ impl SheetApp {
                                     }
                                 }
                             }
-                            Err(e) => log::error!("couldn't hand {name} to the page: {e}"),
+                            Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e))),
                         }
                     } else if let Some(dl) = &self.services.download {
                         dl(&name, &b);
