@@ -7,7 +7,9 @@ use futures_util::SinkExt;
 use gridcraft_collab::Role;
 use gridcraft_engine::core::{CellRef, Value};
 use serde_json::json;
-use support::{SERVICE, create, http, next, op, open, open_at, read_snapshot, send_json, sheet_key, start, start_stored, temp_root};
+use support::{
+    SERVICE, create, create_with_bytes, http, next, op, open, open_at, read_snapshot, send_json, sheet_key, start, start_stored, temp_root,
+};
 use tokio_tungstenite::tungstenite::Message;
 
 fn a1(workbook: &gridcraft_engine::model::Workbook) -> Value {
@@ -50,14 +52,14 @@ async fn a_restart_restores_the_room_and_sends_the_workbook() {
     let (version, _epoch, bytes) = read_snapshot(&mut bob).await;
     assert_eq!(version, 1);
     assert_eq!(next(&mut bob).await["type"], "resynced");
-    let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsx", &bytes).unwrap();
+    let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsm", &bytes).unwrap();
     assert_eq!(a1(&workbook), Value::Number(42.0));
 
     let (status, body) = http(&server, "POST", &format!("/v1/sessions/{session}/commit"), Some(SERVICE), None).await;
     assert_eq!(status, 200, "{body}");
     let reply: serde_json::Value = serde_json::from_str(&body).unwrap();
     let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, reply["bytes"].as_str().unwrap()).unwrap();
-    let (committed, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsx", &bytes).unwrap();
+    let (committed, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsm", &bytes).unwrap();
     assert_eq!(a1(&committed), Value::Number(42.0));
 
     // The catch-up above needed the whole workbook, because the journal starts after the base.
@@ -191,7 +193,7 @@ async fn committed_a1(server: &support::Server, session: &str) -> Value {
     assert_eq!(status, 200, "{body}");
     let reply: serde_json::Value = serde_json::from_str(&body).unwrap();
     let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, reply["bytes"].as_str().unwrap()).unwrap();
-    let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsx", &bytes).unwrap();
+    let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsm", &bytes).unwrap();
     a1(&workbook)
 }
 
@@ -279,7 +281,7 @@ async fn a_snapshot_after_an_undo_keeps_the_step_in_the_base() {
     assert_eq!(next(&mut bob).await["version"], 3);
     let (version, _epoch, bytes) = read_snapshot(&mut bob).await;
     assert_eq!(version, 3);
-    let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsx", &bytes).unwrap();
+    let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsm", &bytes).unwrap();
     assert_eq!(a1(&workbook), Value::Number(7.0));
     server.stop().await;
 }
@@ -350,10 +352,141 @@ async fn a_structural_undo_replays_the_workbook_metadata_after_a_restart() {
     assert_eq!(status, 200, "{body}");
     let reply: serde_json::Value = serde_json::from_str(&body).unwrap();
     let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, reply["bytes"].as_str().unwrap()).unwrap();
-    let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsx", &bytes).unwrap();
+    let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsm", &bytes).unwrap();
     assert!(workbook.sheet_index("Extra").is_some(), "the undone delete leaves the sheet in the file");
     let name = workbook.names.iter().find(|name| name.name == "ExtraRef").expect("the replayed undo restores the name");
     assert_eq!(name.formula, "Extra!$B$1");
     assert_eq!(name.scope, Some(1), "the name keeps the sheet it is scoped to");
+    server.stop().await;
+}
+
+const VBA: &[u8] = b"\xd0\xcf\x11\xe0 synthetic vbaProject";
+const CHARTSHEET: &[u8] = br#"<?xml version="1.0"?><chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetViews><sheetView workbookViewId="0"/></sheetViews><drawing r:id="rId1"/></chartsheet>"#;
+const DRAWING: &[u8] = br#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"/>"#;
+const CHART: &[u8] = br#"<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:barChart><c:ser><c:val><c:numRef><c:f>Sheet1!$A$1:$A$3</c:f></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#;
+
+/// A workbook with a VBA project, a chart sheet with its drawing and chart, a style that is not
+/// the default and calculation settings that are not the defaults. It is written as a
+/// macro-enabled workbook, the only kind that carries a VBA project.
+fn packaged_workbook() -> Vec<u8> {
+    use std::sync::Arc;
+
+    use gridcraft_engine::model::{DefinedName, Preserved, PreservedPart, PreservedRel, PreservedSheet, Style, StyleTable, Visibility, Workbook};
+    let chart_rel =
+        |id: &str, rel_type: &str, target: &str| PreservedRel { id: id.into(), rel_type: rel_type.into(), target: target.into(), external: false };
+    let mut wb = Workbook::new();
+    wb.sheet_mut(0).expect("a sheet").set_value(CellRef::new(0, 0), Value::text("plan"));
+    wb.names.push(DefinedName { name: "Total".into(), scope: None, formula: "1+1".into(), comment: String::new(), hidden: false });
+    wb.vba_project = Some(Arc::new(VBA.to_vec()));
+    wb.preserved = Some(Arc::new(Preserved {
+        rels: vec![chart_rel("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet", "xl/chartsheets/sheet1.xml")],
+        parts: vec![
+            PreservedPart {
+                name: "xl/chartsheets/sheet1.xml".into(),
+                content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml".into(),
+                data: Arc::from(CHARTSHEET),
+                rels: vec![chart_rel(
+                    "rId1",
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing",
+                    "xl/drawings/drawing1.xml",
+                )],
+            },
+            PreservedPart {
+                name: "xl/drawings/drawing1.xml".into(),
+                content_type: "application/vnd.openxmlformats-officedocument.drawing+xml".into(),
+                data: Arc::from(DRAWING),
+                rels: vec![chart_rel("rId1", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart", "xl/charts/chart1.xml")],
+            },
+            PreservedPart {
+                name: "xl/charts/chart1.xml".into(),
+                content_type: "application/vnd.openxmlformats-officedocument.drawingml.chart+xml".into(),
+                data: Arc::from(CHART),
+                rels: Vec::new(),
+            },
+        ],
+        sheets: vec![PreservedSheet { name: "Chart1".into(), visibility: Visibility::Visible, rel_id: "rId9".into(), before: 1, sheet_id: 2 }],
+        ..Default::default()
+    }));
+    let mut styles = StyleTable::default();
+    let mut bold = Style::default();
+    bold.font.bold = true;
+    styles.intern(bold);
+    wb.styles = styles;
+    wb.calc.iterative = true;
+    wb.calc.max_iterations = 7;
+    wb.calc.max_change = 0.25;
+    gridcraft_engine::io::save_bytes(&wb, "plan.xlsm").expect("the test workbook writes")
+}
+
+/// The step image is the whole boundary: the VBA project, the chart sheet and the calculation
+/// settings travel with it, so a restart that replays a journaled undo commits a file that still
+/// has them, and the sheet the undo put back.
+#[tokio::test]
+async fn a_structural_undo_restores_the_package_state_after_a_restart() {
+    let root = temp_root("structural-package-restart");
+    let session;
+    {
+        let server = start_stored(&root).await;
+        let bytes = packaged_workbook();
+        session = create_with_bytes(&server, 61, &bytes).await;
+        let mut ann = open(&server, &session, "ann", Role::Editor, 61).await;
+        let welcome = next(&mut ann).await;
+        let sheet = sheet_key(&welcome);
+
+        let op_at = |op_id: &str, base_version: u64, epoch: u64, kind: &str, cmd: &str, params: serde_json::Value, target: &str| {
+            json!({
+                "type": "op",
+                "op": {
+                    "opId": op_id,
+                    "doc": "book",
+                    "baseVersion": base_version,
+                    "epoch": epoch,
+                    "kind": kind,
+                    "target": { "sheet": target, "a1": "A1" },
+                    "payload": { "cmd": cmd, "params": params }
+                }
+            })
+        };
+
+        send_json(&mut ann, &op_at("add", 0, 0, "structural", "home.insertSheet", json!({ "name": "Extra" }), &sheet)).await;
+        let added = next(&mut ann).await;
+        assert_eq!(added["applied"]["version"], 1, "{added}");
+        let extra = added["applied"]["sheets"][1]["key"].as_str().expect("the sheet map names the new sheet").to_string();
+
+        let named =
+            op_at("name", 1, 1, "command", "formulas.defineName", json!({ "name": "ExtraRef", "refersTo": "=Extra!$B$1", "scope": "Extra" }), &sheet);
+        send_json(&mut ann, &named).await;
+        assert_eq!(next(&mut ann).await["applied"]["version"], 2);
+        // The base holds the package state; the delete and its undo go to the journal.
+        server.app.snapshot(&session).await.unwrap();
+
+        send_json(&mut ann, &op_at("del", 2, 1, "structural", "home.deleteSheet", json!({ "sheet": "Extra" }), &extra)).await;
+        assert_eq!(next(&mut ann).await["applied"]["version"], 3);
+
+        send_json(&mut ann, &json!({ "type": "undo", "opId": "del" })).await;
+        let undone = next(&mut ann).await;
+        assert_eq!(undone["applied"]["version"], 4, "{undone}");
+        let book = &undone["applied"]["book"];
+        assert!(book["vbaProject"].is_string(), "the undo carries the VBA project: {undone}");
+        assert_eq!(book["preserved"]["sheets"][0]["name"], "Chart1", "and the chart sheet: {undone}");
+        assert_eq!(book["calc"]["iterative"], true, "and the calculation settings: {undone}");
+        ann.close(None).await.unwrap();
+        // No flush and no snapshot: this is the crash the journal is there for.
+        server.stop().await;
+    }
+
+    let server = start_stored(&root).await;
+    assert_eq!(server.restored, 1, "the volume restores to the journal's head");
+
+    let (status, body) = http(&server, "POST", &format!("/v1/sessions/{session}/commit"), Some(SERVICE), None).await;
+    assert_eq!(status, 200, "{body}");
+    let reply: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, reply["bytes"].as_str().unwrap()).unwrap();
+    let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsm", &bytes).unwrap();
+    assert!(workbook.sheet_index("Extra").is_some(), "the undone delete leaves the sheet in the file");
+    assert_eq!(workbook.vba_project.as_deref().map(Vec::as_slice), Some(VBA), "the committed file keeps the VBA project");
+    let chart = workbook.preserved.as_ref().and_then(|p| p.sheets.first()).expect("the chart sheet survives the replay and the commit");
+    assert_eq!(chart.name, "Chart1");
+    assert!(workbook.calc.iterative, "the calculation settings of the boundary are in the committed file");
     server.stop().await;
 }

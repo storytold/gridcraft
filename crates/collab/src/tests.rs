@@ -656,6 +656,48 @@ fn a_restored_room_starts_with_empty_undo_stacks() {
 /// The unmodelled parts a deleted sheet carried: what a save would lose without them.
 const KEPT_PART: &[u8] = b"<controls><control id=\"1\"/></controls>";
 
+/// The package-level content of a workbook: a chart sheet with its part and relationship, package
+/// relationships and the VBA project. A structural step does not change them, but the image of a
+/// step is the whole boundary: an undo that reaches a replica or a replayed journal restores them
+/// with the sheets rather than leaving whatever the receiving workbook happened to hold.
+const VBA: &[u8] = b"\xd0\xcf\x11\xe0 synthetic vbaProject";
+const CHART_PART: &[u8] = b"<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"/>";
+
+fn keep_workbook_parts(s: &mut Session) {
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    wb.vba_project = Some(std::sync::Arc::new(VBA.to_vec()));
+    wb.preserved = Some(std::sync::Arc::new(gridcraft_model::Preserved {
+        package_rels: vec![gridcraft_model::PreservedRel {
+            id: "rId4".into(),
+            rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties".into(),
+            target: "docProps/app.xml".into(),
+            external: false,
+        }],
+        rels: vec![gridcraft_model::PreservedRel {
+            id: "rId9".into(),
+            rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet".into(),
+            target: "xl/chartsheets/sheet1.xml".into(),
+            external: false,
+        }],
+        parts: vec![gridcraft_model::PreservedPart {
+            name: "xl/chartsheets/sheet1.xml".into(),
+            content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml".into(),
+            data: std::sync::Arc::from(CHART_PART),
+            rels: Vec::new(),
+        }],
+        elements: Vec::new(),
+        vml: None,
+        sheets: vec![gridcraft_model::PreservedSheet {
+            name: "Chart1".into(),
+            visibility: gridcraft_model::Visibility::Visible,
+            rel_id: "rId9".into(),
+            before: 1,
+            sheet_id: 2,
+        }],
+    }));
+}
+
 fn keep_part(s: &mut Session, index: usize) {
     let d = s.doc_mut().unwrap();
     let wb = std::sync::Arc::make_mut(&mut d.wb);
@@ -740,6 +782,87 @@ fn a_row_delete_undo_keeps_the_structure_protection_of_the_boundary() {
     assert!(s.doc().unwrap().wb.protected_structure);
 }
 
+/// A step image is the whole boundary, not just the sheets: the package-level kept content (a
+/// chart sheet, its part and the package relationships), the VBA project, the style table and the
+/// calculation settings travel with it. A replica or a replayed journal that applies the image ends
+/// with exactly the boundary's values, and a base that lacks them gets them back.
+#[test]
+fn a_sheet_delete_image_carries_the_package_parts_vba_styles_and_calc() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, structural_op(&room, "add", "home.insertSheet", json!({"name": "Extra"}), &sheet), "ann").unwrap();
+    let extra = extra_key(&room, &s, "Extra");
+    s.execute("formulas.defineName", json!({"name": "ExtraRef", "refersTo": "=Extra!$B$1", "scope": "Extra"})).unwrap();
+    keep_workbook_parts(&mut s);
+    // A style the boundary uses and calculation settings that are not the defaults.
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("home.bold", json!({"range": "A1", "on": true})).unwrap();
+    s.execute("formulas.calculationOptions", json!({"iterative": true, "maxIterations": 7, "maxChange": 0.25})).unwrap();
+    let boundary = s.doc().unwrap().wb.workbook_meta();
+    assert!(boundary.preserved.is_some(), "the boundary has package content");
+    assert!(boundary.vba_project.is_some(), "the boundary has a VBA project");
+    assert!(boundary.styles.as_ref().is_some_and(|styles| styles.len() > 1), "the boundary has a non-default style");
+    assert!(boundary.calc.as_ref().is_some_and(|calc| calc.iterative));
+
+    let deleted = room.apply(&mut s, structural_op(&room, "del", "home.deleteSheet", json!({"sheet": "Extra"}), &extra), "ann").unwrap();
+    let after_delete = s.doc().unwrap().wb.as_ref().clone();
+    let undone = room.undo(&mut s, "ann", Some("del")).unwrap();
+    assert_eq!(undone.book.as_deref(), Some(&boundary), "the undo carries the whole boundary");
+    assert_eq!(s.doc().unwrap().wb.workbook_meta(), boundary, "the author restores the whole boundary");
+
+    // The wire and the journal put the operation through JSON: the fields survive the round trip.
+    let wire = serde_json::to_vec(&undone).expect("the applied is JSON");
+    let journaled: crate::Applied = serde_json::from_slice(&wire).expect("the applied reads back");
+    assert_eq!(journaled.book, undone.book, "the journal entry carries the package state, VBA, styles and calc");
+
+    // A base that lacks the package state (the workbook before the boundary, or a peer that never
+    // had it) gets it from the answer alone.
+    let mut stripped = after_delete;
+    stripped.preserved = None;
+    stripped.vba_project = None;
+    stripped.styles = gridcraft_model::StyleTable::default();
+    stripped.calc = gridcraft_model::CalcSettings::default();
+    let mut base = Session::new();
+    base.add_document(gridcraft_engine::DocState::new(stripped, None, "book".into(), gridcraft_engine::Trust::FromFile));
+    let mut restored =
+        Room::restore(room.sheet_keys().clone(), crate::RoomState { version: deleted.version, epoch: deleted.epoch, seen: Vec::new() });
+    restored.replay_reversal(&mut base, &journaled).expect("the journaled undo replays the whole boundary");
+
+    let d = base.doc().unwrap();
+    assert_eq!(d.wb.workbook_meta(), boundary, "the replayed undo restores the package state, VBA, styles and calc");
+    let kept = d.wb.preserved.as_ref().expect("the package content is back");
+    assert_eq!(kept.sheets.len(), 1, "the chart sheet is back");
+    assert_eq!(kept.sheets[0].name, "Chart1");
+    assert_eq!(kept.sheets[0].before, 1);
+    assert_eq!(kept.parts[0].data.as_ref(), CHART_PART);
+    assert_eq!(d.wb.vba_project.as_deref().map(Vec::as_slice), Some(VBA));
+    assert!(d.wb.calc.iterative, "the calculation settings of the boundary are back");
+    assert_eq!(d.wb.calc.max_iterations, 7);
+}
+
+/// An image over the operation limit is refused as `too_large` before the document changes and
+/// before the version moves: the reversal is atomic or it does not happen.
+#[test]
+fn an_image_over_the_operation_limit_is_refused_before_the_document_changes() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, structural_op(&room, "add", "home.insertSheet", json!({"name": "Extra"}), &sheet), "ann").unwrap();
+    let version = room.version();
+    let epoch = room.epoch();
+
+    // A test bound well under any real image: the room refuses instead of sending it.
+    room.set_max_image(1);
+    let refused = room.undo(&mut s, "ann", Some("add")).expect_err("the image is over the limit");
+    assert_eq!(refused.rejected().code, RejectCode::TooLarge);
+    assert!(!refused.rejected().retryable, "sending the same step again cannot make it smaller");
+    assert_eq!(room.version(), version, "a refused reversal takes no version");
+    assert_eq!(room.epoch(), epoch, "and moves no addresses");
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 2, "the inserted sheet is still there");
+    assert!(s.doc().unwrap().wb.sheet_index("Extra").is_some());
+}
+
 /// A foreign edit after a structural step still refuses the undo as `conflict`, and nothing of the
 /// image — sheets, names, kept parts — lands on the document.
 #[test]
@@ -751,8 +874,11 @@ fn a_sheet_delete_undo_after_a_foreign_edit_changes_nothing() {
     let extra = extra_key(&room, &s, "Extra");
     s.execute("formulas.defineName", json!({"name": "ExtraRef", "refersTo": "=Extra!$B$1", "scope": "Extra"})).unwrap();
     keep_part(&mut s, 1);
+    keep_workbook_parts(&mut s);
     room.apply(&mut s, structural_op(&room, "del", "home.deleteSheet", json!({"sheet": "Extra"}), &extra), "ann").unwrap();
     let names_after_delete = s.doc().unwrap().wb.names.clone();
+    let preserved_after_delete = s.doc().unwrap().wb.preserved.clone();
+    let vba_after_delete = s.doc().unwrap().wb.vba_project.clone();
 
     // Somebody edits the remaining sheet after the step: the room is no longer at its version.
     let mut later = op("later", "cell.set", json!({"input": 9}), &sheet, "B2");
@@ -766,5 +892,7 @@ fn a_sheet_delete_undo_after_a_foreign_edit_changes_nothing() {
     let d = s.doc().unwrap();
     assert_eq!(d.wb.sheets.len(), 1, "the deleted sheet is not back");
     assert_eq!(d.wb.names, names_after_delete, "the names are untouched");
+    assert_eq!(d.wb.preserved, preserved_after_delete, "the package content is untouched");
+    assert_eq!(d.wb.vba_project, vba_after_delete, "the VBA project is untouched");
     assert_eq!(value_of(&s, 0, "B2"), Value::Number(9.0));
 }

@@ -424,11 +424,20 @@ impl NumFmt {
 }
 
 /// Interned styles. Index 0 is the default (Normal) style.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StyleTable {
     styles: Vec<Style>,
+    /// Interned-id lookup, rebuilt on demand. Not semantic and not in JSON, so equality and the
+    /// serialised form compare only the styles themselves: a table read back from an image is the
+    /// same table even though its cache starts empty.
     #[serde(skip)]
     index: HashMap<Style, StyleId>,
+}
+
+impl PartialEq for StyleTable {
+    fn eq(&self, other: &StyleTable) -> bool {
+        self.styles == other.styles
+    }
 }
 
 impl Default for StyleTable {

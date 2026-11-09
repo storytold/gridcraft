@@ -6461,3 +6461,39 @@ fn authoritative_values_patch_without_touching_formulas_or_history() {
     assert_eq!(d.undo.len(), undo_len, "a remote value is not a local undo step");
     assert!(d.wb.active().unwrap().cell(CellRef::parse("A2").unwrap()).unwrap().formula.is_some());
 }
+
+/// A structural image is applied whole or not at all: a name scoped past the sheets it holds, a
+/// style table without a default style and calculation settings that cannot be used are refused
+/// before the document is touched.
+#[test]
+fn restore_structural_refuses_an_image_it_cannot_apply() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": 1})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let restored = vec![gridcraft_model::Sheet::new("Restored")];
+
+    let mut bad_name = gridcraft_model::WorkbookMeta::default();
+    bad_name.names.push(gridcraft_model::DefinedName {
+        name: "X".into(),
+        scope: Some(1),
+        formula: "1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    assert!(s.restore_structural(restored.clone(), Some(bad_name)).is_err(), "a name scope outside the image is refused");
+
+    let empty_styles = gridcraft_model::WorkbookMeta {
+        styles: Some(serde_json::from_str::<gridcraft_model::StyleTable>("{\"styles\":[]}").expect("an empty table reads back")),
+        ..Default::default()
+    };
+    assert!(s.restore_structural(restored.clone(), Some(empty_styles)).is_err(), "a style table with no default style is refused");
+
+    let bad_calc =
+        gridcraft_model::WorkbookMeta { calc: Some(gridcraft_model::CalcSettings { max_iterations: 0, ..Default::default() }), ..Default::default() };
+    assert!(s.restore_structural(restored.clone(), Some(bad_calc)).is_err(), "unusable calculation settings are refused");
+
+    // Nothing above changed the document or its revision.
+    assert_eq!(s.doc().unwrap().wb.as_ref(), before.as_ref(), "the document is untouched");
+    assert_eq!(v(&s, "A1"), Value::Number(1.0));
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+}

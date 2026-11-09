@@ -22,6 +22,16 @@ async fn join(server: &support::Server, file_id: i64, session: &str, who: &str, 
     reconnect(server, file_id, session, who, role, 0, local).await
 }
 
+/// Joins with the same package state the session was opened from: a real client opens the file it
+/// has locally and then talks to the room, so both replicas start from the same VBA project, chart
+/// sheet, style table and calculation settings.
+async fn join_with(server: &support::Server, file_id: i64, session: &str, who: &str, role: Role, bytes: &[u8]) -> Peer {
+    let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsm", bytes).expect("the test workbook opens");
+    let mut local = Session::new();
+    local.add_document(gridcraft_engine::DocState::from_saved(workbook, None, "plan.xlsm".into(), gridcraft_engine::Trust::FromFile));
+    reconnect(server, file_id, session, who, role, 0, local).await
+}
+
 /// Comes back as `who` at `last_version`, keeping the local document the peer already had: what a
 /// client does after a dropped connection (`Config::last_version` is the catch-up point).
 async fn reconnect(server: &support::Server, file_id: i64, session: &str, who: &str, role: Role, last_version: u64, local: Session) -> Peer {
@@ -511,5 +521,146 @@ async fn structural_undo_restores_the_workbook_metadata_on_every_replica() {
     for peer in [&ann, &bob] {
         assert!(protected(peer), "the structural undo keeps the structure protection of the boundary");
     }
+    server.stop().await;
+}
+
+mod package {
+    use std::sync::Arc;
+
+    pub const VBA: &[u8] = b"\xd0\xcf\x11\xe0 synthetic vbaProject";
+    const CHARTSHEET: &[u8] = br#"<?xml version="1.0"?><chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetViews><sheetView workbookViewId="0"/></sheetViews><drawing r:id="rId1"/></chartsheet>"#;
+    const DRAWING: &[u8] = br#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"/>"#;
+    const CHART: &[u8] = br#"<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:barChart><c:ser><c:val><c:numRef><c:f>Sheet1!$A$1:$A$3</c:f></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#;
+
+    /// A workbook with the content a structural image used to leave behind: a VBA project, a chart
+    /// sheet with its drawing and chart, a style that is not the default and calculation settings
+    /// that are not the defaults. It is written with the real writer (as a macro-enabled
+    /// workbook, the only kind that carries a VBA project), so the file the room opens is the
+    /// package the two replicas start from.
+    pub fn workbook() -> Vec<u8> {
+        use gridcraft_engine::model::{DefinedName, Preserved, PreservedPart, PreservedRel, PreservedSheet, Style, StyleTable, Visibility, Workbook};
+        let mut wb = Workbook::new();
+        wb.sheet_mut(0).expect("a sheet").set_value(gridcraft_engine::core::CellRef::new(0, 0), gridcraft_engine::core::Value::text("plan"));
+        wb.names.push(DefinedName { name: "Total".into(), scope: None, formula: "1+1".into(), comment: String::new(), hidden: false });
+        wb.vba_project = Some(Arc::new(VBA.to_vec()));
+        wb.preserved = Some(Arc::new(Preserved {
+            rels: vec![PreservedRel {
+                id: "rId9".into(),
+                rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet".into(),
+                target: "xl/chartsheets/sheet1.xml".into(),
+                external: false,
+            }],
+            parts: vec![
+                PreservedPart {
+                    name: "xl/chartsheets/sheet1.xml".into(),
+                    content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml".into(),
+                    data: Arc::from(CHARTSHEET),
+                    rels: vec![drawing_rel()],
+                },
+                PreservedPart {
+                    name: "xl/drawings/drawing1.xml".into(),
+                    content_type: "application/vnd.openxmlformats-officedocument.drawing+xml".into(),
+                    data: Arc::from(DRAWING),
+                    rels: vec![chart_rel()],
+                },
+                PreservedPart {
+                    name: "xl/charts/chart1.xml".into(),
+                    content_type: "application/vnd.openxmlformats-officedocument.drawingml.chart+xml".into(),
+                    data: Arc::from(CHART),
+                    rels: Vec::new(),
+                },
+            ],
+            sheets: vec![PreservedSheet { name: "Chart1".into(), visibility: Visibility::Visible, rel_id: "rId9".into(), before: 1, sheet_id: 2 }],
+            ..Default::default()
+        }));
+        let mut styles = StyleTable::default();
+        let mut bold = Style::default();
+        bold.font.bold = true;
+        styles.intern(bold);
+        wb.styles = styles;
+        wb.calc.iterative = true;
+        wb.calc.max_iterations = 7;
+        wb.calc.max_change = 0.25;
+        gridcraft_engine::io::save_bytes(&wb, "plan.xlsm").expect("the test workbook writes")
+    }
+
+    fn drawing_rel() -> gridcraft_engine::model::PreservedRel {
+        gridcraft_engine::model::PreservedRel {
+            id: "rId1".into(),
+            rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing".into(),
+            target: "xl/drawings/drawing1.xml".into(),
+            external: false,
+        }
+    }
+
+    fn chart_rel() -> gridcraft_engine::model::PreservedRel {
+        gridcraft_engine::model::PreservedRel {
+            id: "rId1".into(),
+            rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart".into(),
+            target: "xl/charts/chart1.xml".into(),
+            external: false,
+        }
+    }
+}
+
+/// What a step image now carries besides the sheets, in one comparable value: the VBA project, the
+/// chart sheets, their kept parts, the calculation settings and the size of the style table.
+fn package_state(peer: &Peer) -> String {
+    let wb = &peer.session.doc().unwrap().wb;
+    format!(
+        "vba={:?}; charts={:?}; parts={:?}; calc={}/{:?}/{:?}; styles={}",
+        wb.vba_project.as_deref().map(Vec::as_slice),
+        wb.preserved.as_ref().map(|p| p.sheets.iter().map(|s| (s.name.clone(), s.before)).collect::<Vec<_>>()),
+        wb.preserved.as_ref().map(|p| p.parts.iter().map(|part| part.data.to_vec()).collect::<Vec<_>>()),
+        wb.calc.iterative,
+        wb.calc.max_iterations,
+        wb.calc.max_change,
+        wb.styles.len(),
+    )
+}
+
+/// The structural image is the whole boundary, not just the sheets: the package-level content
+/// (chart sheet, kept part, its relationship), the VBA project, the style table and the calculation
+/// settings travel with it, so the author and the peer see the same workbook before the step, after
+/// the undo and after the redo.
+#[tokio::test]
+async fn structural_undo_restores_the_package_state_and_vba_on_every_replica() {
+    let server = support::start().await;
+    let bytes = package::workbook();
+    let session = support::create_with_bytes(&server, 51, &bytes).await;
+    let mut ann = join_with(&server, 51, &session, "ann", Role::Editor, &bytes).await;
+    let mut bob = join_with(&server, 51, &session, "bob", Role::Editor, &bytes).await;
+
+    let before = package_state(&ann);
+    assert!(before.contains("vba=Some"), "the replicas start from a workbook with a VBA project: {before}");
+    assert!(before.contains("Chart1"), "and a chart sheet: {before}");
+    assert_eq!(package_state(&bob), before, "both replicas start from the same package");
+
+    ann.synced.execute(&mut ann.session, "home.insertSheet", json!({ "name": "Extra" })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    ann.synced.execute(&mut ann.session, "formulas.defineName", json!({ "name": "ExtraRef", "refersTo": "=Extra!$B$1", "scope": "Extra" })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    assert_eq!(package_state(&bob), before, "the merge commands leave the package alone");
+
+    ann.synced.execute(&mut ann.session, "home.deleteSheet", json!({ "sheet": "Extra" })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    let after = package_state(&ann);
+    assert_eq!(package_state(&bob), after, "the peer sees the delete");
+
+    ann.synced.undo().unwrap();
+    settle(&mut ann, &mut bob).await;
+    for peer in [&ann, &bob] {
+        assert_eq!(names(peer), ["Sheet1", "Extra"], "the deleted sheet is back on every replica");
+        assert_eq!(package_state(peer), before, "and so is the whole package state of the boundary");
+    }
+    assert_eq!(ann.synced.state().version, bob.synced.state().version);
+
+    ann.synced.redo().unwrap();
+    settle(&mut ann, &mut bob).await;
+    for peer in [&ann, &bob] {
+        assert_eq!(names(peer), ["Sheet1"], "the redo drops the sheet again on every replica");
+        assert_eq!(package_state(peer), after, "the package state is the after-image's again");
+    }
+    assert_eq!(ann.synced.state().version, bob.synced.state().version);
     server.stop().await;
 }

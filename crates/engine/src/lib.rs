@@ -1212,18 +1212,31 @@ impl Session {
     }
 
     /// Restores a whole structural boundary: the sheets and, when the image carries it, the
-    /// workbook-level state that belongs to the same boundary — defined names and structure
-    /// protection ([`gridcraft_model::WorkbookMeta`]). Everything is validated before the document
-    /// is touched: an image whose name scopes do not fit its sheets is refused whole, and a caller
-    /// that gets `Err` still holds the document it had.
+    /// workbook-level state that belongs to the same boundary — defined names, structure
+    /// protection ([`gridcraft_model::WorkbookMeta`]), the unmodelled package-level content and
+    /// chart sheets, the VBA project, the style table and the calculation settings. Everything is
+    /// validated before the document is touched: an image whose name scopes do not fit its sheets,
+    /// whose style table has no default style, or whose calculation settings are not usable is
+    /// refused whole, and a caller that gets `Err` still holds the document it had.
     pub fn restore_structural(&mut self, mut sheets: Vec<gridcraft_model::Sheet>, meta: Option<gridcraft_model::WorkbookMeta>) -> Result<()> {
         if sheets.is_empty() {
             return Err(EngineError::Other("a workbook needs at least one sheet".into()));
         }
-        if let Some(meta) = &meta
-            && meta.names.iter().any(|name| name.scope.is_some_and(|scope| scope >= sheets.len()))
-        {
-            return Err(EngineError::Other("a defined name of this image names a sheet it does not hold".into()));
+        if let Some(meta) = &meta {
+            if meta.names.iter().any(|name| name.scope.is_some_and(|scope| scope >= sheets.len())) {
+                return Err(EngineError::Other("a defined name of this image names a sheet it does not hold".into()));
+            }
+            if meta.styles.as_ref().is_some_and(|styles| styles.is_empty()) {
+                return Err(EngineError::Other("a style table of this image has no default style".into()));
+            }
+            if let Some(calc) = &meta.calc
+                && (calc.max_iterations == 0
+                    || calc.max_iterations > gridcraft_model::CalcSettings::MAX_ITERATIONS
+                    || !calc.max_change.is_finite()
+                    || calc.max_change < 0.0)
+            {
+                return Err(EngineError::Other("the calculation settings of this image cannot be applied".into()));
+            }
         }
         if self.active().is_none() {
             return Err(EngineError::NoDocument);
@@ -1242,6 +1255,21 @@ impl Session {
                 model.names = meta.names;
                 model.protected_structure = meta.protected_structure;
                 model.structure_password = meta.structure_password;
+                // A field the image does not carry stays as the document has it: an old journal
+                // entry predates the field, and a boundary without kept content is `None` while the
+                // document's own content must not be dropped by a step that never touched it.
+                if let Some(preserved) = meta.preserved {
+                    model.preserved = Some(preserved);
+                }
+                if let Some(vba) = meta.vba_project {
+                    model.vba_project = Some(vba);
+                }
+                if let Some(styles) = meta.styles {
+                    model.styles = styles;
+                }
+                if let Some(calc) = meta.calc {
+                    model.calc = calc;
+                }
             }
             calc.rebuild(model);
             calc.recalc_all(model);

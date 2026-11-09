@@ -244,6 +244,7 @@ fn a_chunked_image_carries_the_book_metadata_and_the_kept_parts_to_both_replicas
         names: vec![DefinedName { name: "Total".into(), scope: None, formula: "Sheet1!$A$1".into(), comment: String::new(), hidden: false }],
         protected_structure: true,
         structure_password: None,
+        ..Default::default()
     }));
     let parts = split_applied(applied, IMAGE_PART);
     assert!(parts.len() > 1, "the image must travel in parts for this test");

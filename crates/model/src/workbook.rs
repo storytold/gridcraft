@@ -285,10 +285,15 @@ fn is_all(s: &ShowObjects) -> bool {
 ///
 /// A row or sheet insert/delete moves addresses, and a sheet delete drops its defined names or
 /// rescopes them: the sheets alone do not describe the boundary a structural undo must restore.
-/// Structure protection travels with it for the same reason — the image is the whole boundary, not
-/// the parts of it that happen to live on a sheet. The workbook's unmodelled `preserved` content is
-/// deliberately not here: it is package-level, does not belong to one step, and stays with the
-/// workbook across a sheet edit.
+/// The rest of the workbook travels with it for the same reason — the image is the whole boundary,
+/// not the parts of it that happen to live on a sheet: structure protection, the unmodelled
+/// package-level content (package and workbook relationships, kept parts, chart sheets), the VBA
+/// project, the style table and the calculation settings. A structural step does not change most of
+/// them, but a replica that restores the boundary must restore all of it or none.
+///
+/// Every optional field means "not carried by this image": an image written before the field
+/// existed, or a boundary without it. A restore leaves the document's value alone in that case, so
+/// old journal entries keep replaying.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct WorkbookMeta {
@@ -299,12 +304,34 @@ pub struct WorkbookMeta {
     /// Password of the structure protection, never the password itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structure_password: Option<crate::PasswordHash>,
+    /// The workbook's unmodelled kept content: package and workbook relationships, kept parts,
+    /// VML and chart sheets ([`Workbook::preserved`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preserved: Option<Arc<crate::preserved::Preserved>>,
+    /// The VBA project blob ([`Workbook::vba_project`]), carried through unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::b64::opt")]
+    pub vba_project: Option<Arc<Vec<u8>>>,
+    /// The workbook's style table, so every replica resolves the restored cells' style ids the way
+    /// the boundary did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub styles: Option<StyleTable>,
+    /// Calculation settings of the boundary ([`Workbook::calc`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calc: Option<CalcSettings>,
 }
 
 impl Workbook {
     /// The workbook-level pieces a structural image carries (see [`WorkbookMeta`]).
     pub fn workbook_meta(&self) -> WorkbookMeta {
-        WorkbookMeta { names: self.names.clone(), protected_structure: self.protected_structure, structure_password: self.structure_password.clone() }
+        WorkbookMeta {
+            names: self.names.clone(),
+            protected_structure: self.protected_structure,
+            structure_password: self.structure_password.clone(),
+            preserved: self.preserved.clone(),
+            vba_project: self.vba_project.clone(),
+            styles: Some(self.styles.clone()),
+            calc: Some(self.calc.clone()),
+        }
     }
 }
 

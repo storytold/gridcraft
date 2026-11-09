@@ -29,7 +29,7 @@ pub use gateway::{ClientMessage, Connection, Gateway, LeaseInfo, ServerMessage, 
 pub use hub::{Hub, HubError, Participant, Presence, Role, Viewport, viewer_rejection};
 pub use keys::{KeyFile, SheetKeys};
 pub use ops::{Class, classify};
-pub use parts::{IMAGE_PART, split as split_applied};
+pub use parts::{IMAGE_LIMIT, IMAGE_PART, bundle_len, split as split_applied};
 pub use protocol::{
     Applied, CellChange, ClientOp, CommandEcho, Hint, ImageBundle, ImagePart, Kind, Outcome, Payload, RejectCode, Rejected, SheetDelta, SheetImage,
     SheetName, Target,

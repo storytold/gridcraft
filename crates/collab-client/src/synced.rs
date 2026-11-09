@@ -18,7 +18,8 @@ use std::collections::{BTreeMap, VecDeque};
 
 use base64::Engine;
 use gridcraft_collab::{
-    Applied, ClientMessage, ClientOp, ImageBundle, Kind, Payload, Presence, RejectCode, Role, SheetDelta, SheetImage, SheetName, Target, classify,
+    Applied, ClientMessage, ClientOp, IMAGE_LIMIT, IMAGE_PART, ImageBundle, Kind, Payload, Presence, RejectCode, Role, SheetDelta, SheetImage,
+    SheetName, Target, classify,
 };
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
@@ -46,6 +47,11 @@ struct ImageParts {
     data: Vec<u8>,
     from: u64,
 }
+
+/// The most parts an image may arrive in: the room's operation bound ([`IMAGE_LIMIT`]) counted in
+/// [`IMAGE_PART`] bytes, plus the two parts an exact bound can straddle. A sequence that announces
+/// more is refused before a byte of it is buffered.
+const MAX_IMAGE_PARTS: u32 = (IMAGE_LIMIT / IMAGE_PART + 2) as u32;
 
 /// Why a command could not be sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -362,6 +368,15 @@ impl Synced {
             if part.seq != 0 {
                 return self.refuse_image();
             }
+            if part.total > MAX_IMAGE_PARTS {
+                // The server is bound by the same limit; a sequence that says otherwise is not one
+                // this replica will buffer. Nothing was applied; ask for a catch-up from the
+                // version before the operation (part 0 carries `more:true`, so the version has not
+                // moved).
+                self.notice = Some("the sheet image is over the operation limit; the document is unchanged".into());
+                self.link.send_message(ClientMessage::Resync { from: self.link.state().version });
+                return None;
+            }
             let total = part.total;
             self.image_parts = Some(ImageParts {
                 op_id: applied.op_id.clone(),
@@ -388,6 +403,11 @@ impl Synced {
             if broken {
                 return self.refuse_image();
             }
+        }
+        if self.image_parts.as_ref().is_some_and(|buffer| buffer.data.len() > IMAGE_LIMIT) {
+            // The announced bound was not the real one: drop what arrived rather than grow without
+            // a limit (ADR-0013 §6, the document is unchanged).
+            return self.refuse_image();
         }
         if applied.more {
             return None;

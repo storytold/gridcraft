@@ -103,6 +103,9 @@ pub struct Room {
     history: HashMap<String, VecDeque<Step>>,
     /// Per participant, the steps `undo` took away, newest last: what `redo` may put back.
     redo: HashMap<String, VecDeque<Step>>,
+    /// The largest image a structural reversal may carry, in bytes of its serialised form
+    /// (ADR-0013 §5; see [`crate::IMAGE_LIMIT`]). A test lowers it to exercise the refusal.
+    max_image: usize,
 }
 
 impl Room {
@@ -114,7 +117,16 @@ impl Room {
         if let Some(d) = session.active() {
             keys.sync(&d.wb);
         }
-        Room { keys, version: 0, epoch: 0, seen: HashMap::new(), order: VecDeque::new(), history: HashMap::new(), redo: HashMap::new() }
+        Room {
+            keys,
+            version: 0,
+            epoch: 0,
+            seen: HashMap::new(),
+            order: VecDeque::new(),
+            history: HashMap::new(),
+            redo: HashMap::new(),
+            max_image: crate::IMAGE_LIMIT,
+        }
     }
 
     /// Rebuilds a room from a stored state: counters, dedup window and the sheet keys issued
@@ -128,6 +140,7 @@ impl Room {
             order: VecDeque::new(),
             history: HashMap::new(),
             redo: HashMap::new(),
+            max_image: crate::IMAGE_LIMIT,
         };
         for applied in state.seen {
             room.remember(applied);
@@ -147,6 +160,13 @@ impl Room {
 
     pub fn epoch(&self) -> u64 {
         self.epoch
+    }
+
+    /// Lowers or raises the per-operation image bound (tests use a small one so the refusal is
+    /// exercised without a 32 MiB image).
+    #[cfg(test)]
+    pub(crate) fn set_max_image(&mut self, bytes: usize) {
+        self.max_image = bytes;
     }
 
     pub fn sheet_keys(&self) -> &SheetKeys {
@@ -455,6 +475,22 @@ impl Room {
     ) -> Result<Applied, RoomError> {
         if self.version != step.version {
             return Err(self.image_reject(undo, RejectCode::Conflict, true, "another edit came after this structural step"));
+        }
+        // The image is the whole boundary: the sheets, the workbook-level state, the kept package
+        // content, the VBA project, the styles and the calculation settings. It is serialised once
+        // here and refused whole if it cannot travel — before the document changes and before the
+        // version moves (ADR-0013 §5, as the old large-sheet refusal did).
+        let size = crate::parts::bundle_len(book.as_ref(), &images);
+        if size.is_some_and(|bytes| bytes > self.max_image) {
+            return Err(self.image_reject(
+                undo,
+                RejectCode::TooLarge,
+                false,
+                "the image of this structural step is over the operation limit; the document is unchanged",
+            ));
+        }
+        if size.is_none() {
+            return Err(self.image_reject(undo, RejectCode::Internal, false, "the image of this structural step cannot be serialised"));
         }
         let sheets = images.iter().map(SheetImage::restored).collect();
         session.restore_structural(sheets, book.clone()).map_err(|e| self.image_reject(undo, RejectCode::Internal, false, &e.to_string()))?;

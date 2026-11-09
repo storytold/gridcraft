@@ -15,6 +15,16 @@ use crate::protocol::{Applied, ImagePart, SheetImage};
 /// 683 KiB encoded, so the JSON frame stays under the 1 MiB frame limit of the wire (RFC §4.1).
 pub const IMAGE_PART: usize = 512 * 1024;
 
+/// The largest image a structural reversal may carry, in bytes of its serialised form.
+///
+/// ADR-0013 §5 leaves the per-operation limit to the application. GridCraft sends the image in
+/// parts (each frame stays under [`IMAGE_PART`] before base64), but a step still needs a bound: the
+/// whole image is one journal line and every replica assembles it in memory. Above the bound the
+/// undo/redo is refused as `too_large` before the document is touched — the same refusal a large
+/// sheet image got before the parts existed, and the point at which optional content (styles and
+/// calculation settings) cannot ride along either. Images over 8 MiB stay well inside it.
+pub const IMAGE_LIMIT: usize = 32 * 1024 * 1024;
+
 /// The payload of one chunked image, borrowed from the operation so a large image is not cloned
 /// just to be cut. Its field names are those of [`ImageBundle`], which the client reads back.
 #[derive(Serialize)]
@@ -22,6 +32,13 @@ struct BundleRef<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     book: Option<&'a gridcraft_model::WorkbookMeta>,
     images: &'a [SheetImage],
+}
+
+/// Bytes of the serialised `{book, images}` bundle, or `None` when it cannot be serialised (a value
+/// in it has no JSON form). The room checks the length against [`IMAGE_LIMIT`] before it touches
+/// the document, so an image that cannot travel is refused rather than half applied.
+pub fn bundle_len(book: Option<&gridcraft_model::WorkbookMeta>, images: &[SheetImage]) -> Option<usize> {
+    serde_json::to_vec(&BundleRef { book, images }).ok().map(|bytes| bytes.len())
 }
 
 /// The frames one operation goes out in: itself while its images fit a part, otherwise a

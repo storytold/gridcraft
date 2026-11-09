@@ -8,6 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine as _;
 use futures_util::SinkExt;
 use gridcraft_collab::{Claims, Role};
 use gridcraft_collab_server::http::router;
@@ -124,6 +125,21 @@ pub async fn http(server: &Server, method: &str, path: &str, auth: Option<&str>,
 
 pub async fn create(server: &Server, file_id: i64, takeover: bool) -> String {
     let body = json!({ "fileId": file_id, "app": "gridcraft", "owner": "ann", "initialName": "plan.xlsx", "takeover": takeover });
+    let (status, response) = http(server, "POST", "/v1/sessions", Some(SERVICE), Some(&body.to_string())).await;
+    assert_eq!(status, 201, "{response}");
+    serde_json::from_str::<Value>(&response).unwrap()["sessionId"].as_str().unwrap().to_string()
+}
+
+/// Opens a session from bytes the cabinet holds: a workbook with a VBA project, a chart sheet, a
+/// style and calculation settings that are not the defaults.
+pub async fn create_with_bytes(server: &Server, file_id: i64, bytes: &[u8]) -> String {
+    let body = json!({
+        "fileId": file_id,
+        "app": "gridcraft",
+        "owner": "ann",
+        "initialName": "plan.xlsm",
+        "initialBytes": base64::engine::general_purpose::STANDARD.encode(bytes),
+    });
     let (status, response) = http(server, "POST", "/v1/sessions", Some(SERVICE), Some(&body.to_string())).await;
     assert_eq!(status, 201, "{response}");
     serde_json::from_str::<Value>(&response).unwrap()["sessionId"].as_str().unwrap().to_string()
