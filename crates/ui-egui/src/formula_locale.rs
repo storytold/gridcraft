@@ -34,10 +34,8 @@ pub(crate) fn canonical(
     if let Some(error) = locale.parse_error(text) {
         return Ok(error.as_str().to_string());
     }
-    for value in ["TRUE", "FALSE"] {
-        if locale.fold_alias(text) == locale.fold_alias(locale.function_name(value)) {
-            return Ok(value.to_string());
-        }
+    if let Some(value) = localized_boolean(text, locale) {
+        return Ok(value.to_string());
     }
     // Decimal-comma number entry follows the same preference, without rewriting text or dates.
     let normalized = body.trim().replace(locale.decimal_separator(), ".");
@@ -51,6 +49,11 @@ pub(crate) fn canonical(
 /// Recognizes explicit formulas and signed expression starts without treating ordinary signed numbers as formulas.
 fn is_formula_entry(text: &str) -> bool {
     text.starts_with('=') || ((text.starts_with('+') || text.starts_with('-')) && text.chars().nth(1).is_some_and(|c| c.is_alphabetic() || c == '('))
+}
+
+/// The canonical `TRUE`/`FALSE` this locale spells `text` as, in any case; `None` for other text.
+fn localized_boolean(text: &str, locale: FormulaLocale) -> Option<&'static str> {
+    ["TRUE", "FALSE"].into_iter().find(|value| locale.fold_alias(text) == locale.fold_alias(locale.function_name(value)))
 }
 
 /// Localizes a stored canonical formula for display, preserving the original text on parse failure.
@@ -94,9 +97,7 @@ pub(crate) fn edit_text(
     match sheet.value(cell) {
         Value::Text(text)
             if !raw.starts_with('\'')
-                && (is_formula_entry(&text)
-                    || ["TRUE", "FALSE"].iter().any(|v| locale.fold_alias(&text) == locale.fold_alias(locale.function_name(v)))
-                    || locale.parse_error(&text).is_some()) =>
+                && (is_formula_entry(&text) || localized_boolean(&text, locale).is_some() || locale.parse_error(&text).is_some()) =>
         {
             format!("'{raw}")
         }

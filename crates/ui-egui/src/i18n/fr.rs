@@ -1305,6 +1305,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Generated|Column" => "Colonne",
         "Generated|Row" => "Ligne",
         "Book" => "Classeur",
+        // A generated sheet name is `Feuil1` in Excel, so this row is the prefix of a new
+        // sheet's name (see `app/commands.rs`), not only a label.
         "Sheet" => "Feuil",
         "Count Numbers" => "Nombre de nombres",
         "Type to filter…" => "Saisissez pour filtrer…",

@@ -52,6 +52,7 @@ mod formula_point_headers;
 mod formula_popup;
 mod freeze_handles;
 mod function_library;
+mod generated_names;
 mod go_to_dialog;
 mod header_autofit;
 mod header_column_drag;

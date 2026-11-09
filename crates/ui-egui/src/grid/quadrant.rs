@@ -310,6 +310,16 @@ fn should_expand_text(filter_space: f32, overflows: bool, across_end: u32, col: 
     filter_space == 0.0 && (overflows || across_end > col) && !in_merge
 }
 
+/// A cell's text as the interface language spells it: the stored formula under Show Formulas, a
+/// localized `TRUE`/`FALSE` or error constant, or the text it was given.
+fn localized_cell_text(text: String, wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, v: &Value, language: crate::i18n::Language) -> String {
+    let locale = language.formula_locale();
+    if sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) {
+        return crate::formula_locale::display(&text, locale, wb, si);
+    }
+    crate::formula_locale::localized_constant(v, locale).map_or(text, str::to_string)
+}
+
 /// Paint one worksheet cell using its computed appearance and visible geometry.
 ///
 /// Handles text layout, wrapping, alignment, overflow into neighbouring cells,
@@ -357,13 +367,8 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let avail_w = rect.right() - text_left;
     let language = crate::i18n::current(p.ctx());
     let options = super::cell_paint::TextOptions { locale: language.number_locale(), width_px: avail_w / z.max(0.1) * z, char_w };
-    let (mut text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, options);
-    let locale = language.formula_locale();
-    if sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) {
-        text = crate::formula_locale::display(&text, locale, wb, si);
-    } else if let Some(localized) = crate::formula_locale::localized_constant(&v, locale) {
-        text = localized.to_string();
-    }
+    let (text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, options);
+    let text = localized_cell_text(text, wb, si, sh, c, &v, language);
     if text.is_empty() {
         return;
     }
