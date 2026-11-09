@@ -7,7 +7,8 @@
 //! mapped to XML elements, form controls other than the buttons, scroll bars and spin buttons
 //! `controls.rs` models, ActiveX controls, OLE objects, the sheet background and printer settings, with the sheet's `<picture>`, `<oleObjects>` and `<controls>` XML, the `r:id`
 //! of `<pageSetup>`, the legacy VML shapes those controls need and the pictures of the headers and
-//! footers, `&G`, with their `<legacyDrawingHF>`). The workbook also keeps its
+//! footers, `&G`, with their `<legacyDrawingHF>`). A table's query table is not kept here: the table
+//! model holds its part (`Table::query_table`), since the table part is rewritten. The workbook also keeps its
 //! `<fileVersion>` and the calcFeatures extension, which Excel needs to trust the saved values.
 //!
 //! On write, kept parts get fresh part names where needed and new relationship ids; the `r:id`s in
