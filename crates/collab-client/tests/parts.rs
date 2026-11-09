@@ -221,3 +221,54 @@ fn a_part_of_an_operation_the_client_cannot_assemble_is_never_applied() {
     assert_eq!(ann.state().version, 3);
     assert_eq!(text_at(&session, "Z9"), Value::Number(42.0));
 }
+
+/// The chunked payload is the whole image, not only the sheets: the workbook-level state and a
+/// sheet's kept file content travel inside the parts and land on both replicas together with the
+/// operation. A part that is missing still applies nothing of them.
+#[test]
+fn a_chunked_image_carries_the_book_metadata_and_the_kept_parts_to_both_replicas() {
+    use gridcraft_engine::model::{DefinedName, Preserved, PreservedPart, WorkbookMeta};
+
+    let mut image = big_image(2 * 1024 * 1024);
+    image.preserved = Some(std::sync::Arc::new(Preserved {
+        parts: vec![PreservedPart {
+            name: "xl/ctrlProps/ctrlProps1.xml".into(),
+            content_type: "application/vnd.ms-excel.controlproperties+xml".into(),
+            data: std::sync::Arc::from(&b"<controls/>"[..]),
+            rels: Vec::new(),
+        }],
+        ..Default::default()
+    }));
+    let mut applied = applied_image(vec![image]);
+    applied.book = Some(Box::new(WorkbookMeta {
+        names: vec![DefinedName { name: "Total".into(), scope: None, formula: "Sheet1!$A$1".into(), comment: String::new(), hidden: false }],
+        protected_structure: true,
+        structure_password: None,
+    }));
+    let parts = split_applied(applied, IMAGE_PART);
+    assert!(parts.len() > 1, "the image must travel in parts for this test");
+
+    let (mut ann, ann_sink, mut ann_session) = replica();
+    let (mut bob, bob_sink, mut bob_session) = replica();
+    for part in &parts[..parts.len() - 1] {
+        ann_sink.deliver(part);
+        bob_sink.deliver(part);
+        assert!(ann.poll(&mut ann_session).is_empty(), "a prefix is not applied");
+        assert!(bob.poll(&mut bob_session).is_empty());
+    }
+    let last = &parts[parts.len() - 1];
+    ann_sink.deliver(last);
+    bob_sink.deliver(last);
+    assert_eq!(ann.poll(&mut ann_session).len(), 1);
+    assert_eq!(bob.poll(&mut bob_session).len(), 1);
+
+    for (peer, session) in [(&ann, &ann_session), (&bob, &bob_session)] {
+        assert_eq!(peer.state().version, 4);
+        let d = session.doc().unwrap();
+        assert_eq!(d.wb.names.len(), 1, "the name of the boundary is restored");
+        assert_eq!(d.wb.names[0].name, "Total");
+        assert!(d.wb.protected_structure, "structure protection is restored");
+        let kept = d.wb.sheet(0).and_then(|sheet| sheet.preserved.as_ref()).expect("the kept part of the sheet is back");
+        assert_eq!(kept.parts[0].name, "xl/ctrlProps/ctrlProps1.xml");
+    }
+}
