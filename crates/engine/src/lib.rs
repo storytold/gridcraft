@@ -541,6 +541,8 @@ pub struct Session {
     /// `translate.start` plus `translate.status` instead. Host-set, like `link_policy`: no
     /// command can change it.
     pub block_translate_run_on_ui: bool,
+    /// User-initiated model download transport (native host only; never used during inference).
+    pub translate_fetcher: Option<Arc<dyn gridcraft_translate::ModelFetcher>>,
     /// Translation jobs, shared with their worker threads.
     pub translate_jobs: Arc<std::sync::Mutex<std::collections::HashMap<u64, cmd::translate::JobHandle>>>,
     /// Last job id handed out.
