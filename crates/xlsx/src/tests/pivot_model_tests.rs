@@ -1108,6 +1108,25 @@ fn a_second_pivot_cannot_claim_a_cache_id_in_use() {
     assert!(format!("{error}").contains("cache id"), "{error}");
 }
 
+#[test]
+fn an_exhausted_part_namespace_is_an_error_not_a_hang() {
+    // `fresh_part_name` walks `start..=u32::MAX` once and then fails: starting at the top with
+    // that one candidate claimed, it returns the duplicate-id error instead of saturating (the
+    // old `saturating_add(1)` looped on `u32::MAX` forever).
+    let p = Preserved {
+        parts: vec![PreservedPart {
+            name: format!("xl/pivotCache/pivotCacheDefinition{}.xml", u32::MAX),
+            content_type: crate::pivot_model::CT_PIVOT_CACHE_DEF.into(),
+            data: Arc::from(b"<x/>" as &[u8]),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let error = crate::pivot_model::fresh_part_name_for_test(&p, "xl/pivotCache", "pivotCacheDefinition", ".xml", u32::MAX)
+        .expect_err("the only candidate suffix is taken, so the search must fail");
+    assert!(format!("{error}").contains("already used by another pivot cache"), "{error}");
+}
+
 // ---------------------------------------------------------------- re-applying a pivot
 
 /// A spec whose fields differ from [`spec`]'s, so an update in place is visible in what is read.

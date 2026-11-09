@@ -1008,16 +1008,30 @@ fn ensure_rel(p: &mut Preserved, kind: &str, target: &str) -> String {
     id
 }
 
-/// A part name in `dir` that no kept part uses.
-fn fresh_part_name(p: &Preserved, dir: &str, stem: &str, ext: &str, start: u32) -> String {
+/// A part name in `dir` that no kept part uses: the suffix search tries `start..=u32::MAX` once
+/// and then fails with the duplicate-id error instead of looping forever. Callers always pass
+/// the pivot's small `cache_id`, and `add_pivot_cache` later refuses an id another cache claims,
+/// so reaching the error means the part namespace is genuinely exhausted.
+fn fresh_part_name(p: &Preserved, dir: &str, stem: &str, ext: &str, start: u32) -> Result<String, IoError> {
     let mut n = start.max(1);
     loop {
         let name = format!("{dir}/{stem}{n}{ext}");
         if !p.parts.iter().any(|q| q.name.eq_ignore_ascii_case(&name)) {
-            return name;
+            return Ok(name);
         }
-        n = n.saturating_add(1);
+        if n == u32::MAX {
+            break;
+        }
+        n += 1;
     }
+    Err(IoError::Format(format!("pivot cache id {start} is already used by another pivot cache")))
+}
+
+/// The `fresh_part_name` search, exposed so a test can pin the `u32::MAX` boundary without
+/// going through a whole workbook attach.
+#[cfg(test)]
+pub(crate) fn fresh_part_name_for_test(p: &Preserved, dir: &str, stem: &str, ext: &str, start: u32) -> Result<String, IoError> {
+    fresh_part_name(p, dir, stem, ext, start)
 }
 
 fn append_xml_before(xml: &mut String, close: &str, insert: &str) -> bool {
@@ -1399,8 +1413,8 @@ pub fn attach_model_pivot(
     let (cache_part, table_part) = match reused {
         Some((table_part, cache_part, _)) => (cache_part, table_part),
         None => (
-            fresh_part_name(p, "xl/pivotCache", "pivotCacheDefinition", ".xml", built.cache_id),
-            fresh_part_name(p, "xl/pivotTables", "pivotTable", ".xml", built.cache_id),
+            fresh_part_name(p, "xl/pivotCache", "pivotCacheDefinition", ".xml", built.cache_id)?,
+            fresh_part_name(p, "xl/pivotTables", "pivotTable", ".xml", built.cache_id)?,
         ),
     };
     match p.parts.iter_mut().find(|q| q.name.eq_ignore_ascii_case(&cache_part)) {
