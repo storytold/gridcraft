@@ -402,15 +402,38 @@ fn translate(app: &mut SheetApp, ui: &mut Ui) {
     let list = models["models"].as_array().cloned().unwrap_or_default();
     let active = models["active"].as_str().map(str::to_string);
     // Show the model in use: the first manifest record is the default download, but a 0.6B-only
-    // install makes *it* active, and the pane must describe that state, not the missing 1.7B one.
-    let record =
-        active.as_deref().and_then(|id| list.iter().find(|r| r["id"].as_str() == Some(id))).or_else(|| list.first()).cloned().unwrap_or(Json::Null);
+    // install makes *it* active, and the status line must describe that state, not the missing
+    // 1.7B one. A selector below lets the person inspect either record and install the other
+    // one without removing the working model first.
+    let shown_id = ui
+        .ctx()
+        .data(|d| d.get_temp::<String>(egui::Id::unique("translate_selected_model")))
+        .filter(|id| list.iter().any(|r| r["id"].as_str() == Some(id)))
+        .or_else(|| active.clone())
+        .or_else(|| list.first().and_then(|r| r["id"].as_str()).map(str::to_string))
+        .unwrap_or_default();
+    if list.len() > 1 {
+        ui.horizontal(|ui| {
+            ui.label(lang.tr("Model"));
+            for option in &list {
+                let option_id = option["id"].as_str().unwrap_or("");
+                let option_name = option["name"].as_str().unwrap_or(option_id);
+                let marked = active.as_deref() == Some(option_id);
+                let label = if marked { format!("{option_name} ✓") } else { option_name.to_string() };
+                if ui.selectable_label(shown_id == option_id, label).clicked() {
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("translate_selected_model"), option_id.to_string()));
+                }
+            }
+        });
+    }
+    let record = shown_id
+        .as_str()
+        .is_empty()
+        .then(Json::Null)
+        .or_else(|| list.iter().find(|r| r["id"].as_str() == Some(shown_id.as_str())).cloned())
+        .or_else(|| list.first().cloned())
+        .unwrap_or(Json::Null);
     let id = record["id"].as_str().unwrap_or("qwen3-1.7b").to_string();
-    let pairs = record["pairs"].as_array().cloned().unwrap_or_default();
-    let sources: Vec<String> = pairs.iter().filter_map(|p| p["from"].as_str()).map(str::to_string).collect();
-    let targets: Vec<String> = pairs.iter().filter_map(|p| p["to"].as_str()).map(str::to_string).collect();
-    let from = if app.session.translate_from.trim().is_empty() { "auto".to_string() } else { app.session.translate_from.clone() };
-    let to = if app.session.translate_to.trim().is_empty() { targets.first().cloned().unwrap_or_default() } else { app.session.translate_to.clone() };
 
     // Model state first: without one every action below is disabled and says what to do.
     egui::Frame::NONE.fill(t.menu_bg).corner_radius(6.0).inner_margin(8.0).stroke(egui::Stroke::new(1.0, t.separator)).show(ui, |ui| {
