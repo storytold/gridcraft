@@ -4,13 +4,13 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 276 / 292 commands implemented (94.5%).**
+**Overall: 281 / 296 commands implemented (94.9%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
 | File | 11 | 11 | 100% |
 | Home | 94 | 94 | 100% |
-| Insert | 17 | 25 | 68% |
+| Insert | 18 | 25 | 72% |
 | Draw | 4 | 4 | 100% |
 | Page Layout | 23 | 23 | 100% |
 | Formulas | 23 | 23 | 100% |
@@ -18,6 +18,7 @@ Each entry is an Excel ribbon or menu command (feature names only). It counts as
 | Review | 15 | 18 | 83% |
 | View | 21 | 21 | 100% |
 | Automate | 4 | 4 | 100% |
+| Developer | 4 | 4 | 100% |
 | Table Design | 13 | 13 | 100% |
 | Chart Design | 8 | 8 | 100% |
 | Format | 3 | 3 | 100% |
@@ -139,7 +140,7 @@ Implemented:
 - `edit.goToSpecial` Go To Special (Editing)
 - `home.addIns` Add-ins (Add-ins)
 
-## Insert (17 / 25, 68%)
+## Insert (18 / 25, 72%)
 
 Implemented:
 
@@ -158,6 +159,7 @@ Implemented:
 - `review.newComment` Comment (Comments)
 - `insert.textBox` Text Box (Text)
 - `pageLayout.headerFooter` Header & Footer (Text)
+- `insert.equation` Equation (Symbols)
 - `insert.symbol` Symbol (Symbols)
 - `insert.checkbox` Checkbox (Cell Controls)
 
@@ -170,7 +172,6 @@ Missing:
 - `insert.wordArt` WordArt (Text)
 - `insert.signatureLine` Signature Line (Text)
 - `insert.object` Object (Text)
-- `insert.equation` Equation (Symbols)
 
 ## Draw (4 / 4, 100%)
 
@@ -333,6 +334,15 @@ Implemented:
 - `automate.allScripts` All Scripts (Scripting Tools)
 - `automate.recordActions` Record Actions (Scripting Tools)
 - `automate.trustScripts` Trust Scripts (Scripting Tools)
+
+## Developer (4 / 4, 100%)
+
+Implemented:
+
+- `insert.button` Button (Form Control) (Controls)
+- `insert.spinButton` Spin Button (Form Control) (Controls)
+- `insert.slider` Scroll Bar (Form Control) (Controls)
+- `control.format` Properties (Controls)
 
 ## Table Design (13 / 13, 100%)
 

@@ -44,7 +44,7 @@ fn typing_a_chart_title_in_format_chart_area_sets_it() {
     let chart = session.execute("insert.chart", json!({"type": "column", "at": "D3"})).unwrap();
     let id = chart["chart"].as_u64().unwrap() as u32;
     let mut h = harness(session);
-    h.state_mut().selected_chart = Some(id);
+    h.state_mut().select_object_id(Some(id));
     h.state_mut().grid.pane = Some("formatChart".into());
     h.run_steps(2);
     h.get_by_role_and_label(Role::DisclosureTriangle, "Chart Title").click();

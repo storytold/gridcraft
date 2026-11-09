@@ -507,9 +507,13 @@ pub(super) fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
         let mut v = cur.clone();
         if let Some(f) = func {
             v.func = f;
-            // An automatic caption follows the function.
-            let auto = auto_name(cur.func, &cur.source_col);
-            if cur.name.eq_ignore_ascii_case(&auto) || cur.name.strip_prefix(auto.as_str()).is_some_and(|r| r.chars().all(|c| c.is_ascii_digit())) {
+            // An automatic caption follows the function. Count Numbers was captioned "Count
+            // Numbers of …" before it took Excel's "Count of …", and saved workbooks still carry it.
+            let is_auto = |base: &str| {
+                cur.name.eq_ignore_ascii_case(base) || cur.name.strip_prefix(base).is_some_and(|r| r.chars().all(|c| c.is_ascii_digit()))
+            };
+            let legacy = cur.func == PivotFunc::CountNumbers && is_auto(&format!("Count Numbers of {}", cur.source_col));
+            if is_auto(&auto_name(cur.func, &cur.source_col)) || legacy {
                 v.name = unique_value_name(pt, &auto_name(f, &cur.source_col), Some(i));
             }
         }

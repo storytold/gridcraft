@@ -20,6 +20,7 @@ pub mod outline;
 pub mod paper;
 pub mod pivot;
 pub mod pivot_calc;
+pub mod recent;
 pub mod record;
 pub mod sample;
 pub mod selection;
@@ -38,6 +39,7 @@ pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command, register_te
 pub use gridcraft_calc as calc;
 pub use gridcraft_core as core;
 pub use gridcraft_formula as formula;
+pub use gridcraft_math as math;
 pub use gridcraft_model as model;
 pub use gridcraft_numfmt as numfmt;
 pub use selection::Selection;
@@ -303,7 +305,9 @@ impl DocState {
         calc.rebuild(&wb);
         Self::with_calc(wb, calc, path, title, trust)
     }
-    fn with_calc(wb: Workbook, calc: Calc, path: Option<String>, title: String, trust: Trust) -> DocState {
+    fn with_calc(mut wb: Workbook, calc: Calc, path: Option<String>, title: String, trust: Trust) -> DocState {
+        // Equations arrive without a layout (files never store one); painting reads only the cache.
+        wb.refresh_equations();
         let scripts_trusted = !cmd::extra::has_scripts(&wb);
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
@@ -390,6 +394,10 @@ pub struct Prefs {
     pub formula_bar: bool,
     /// The statistics the status bar shows for a selection (right-click the status bar).
     pub status_bar: StatusBarStats,
+    /// Formulas › Recently Used: the functions most recently entered in a formula, newest first
+    /// (at most [`recent::MAX`]; see [`recent`]). An application list, as in Excel.
+    #[serde(deserialize_with = "recent::lenient")]
+    pub recent_functions: Vec<String>,
 }
 
 /// The selection statistics shown on the status bar, set with `view.statusBar`. Excel turns on
@@ -424,6 +432,7 @@ impl Default for Prefs {
             user_dictionary: vec![],
             formula_bar: true,
             status_bar: StatusBarStats::default(),
+            recent_functions: recent::defaults(),
         }
     }
 }
@@ -505,6 +514,9 @@ pub struct Session {
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,
+    /// Whether `link.open` may open web and e-mail addresses without the user's confirmation
+    /// (#2181). Host code sets it; no command does.
+    pub link_policy: links::LinkPolicy,
     /// Open undo groups, innermost last.
     groups: Vec<OpenGroup>,
     next_group: u64,
@@ -557,6 +569,17 @@ impl Session {
     }
     pub fn doc_mut(&mut self) -> Result<&mut DocState> {
         self.active_mut().ok_or(EngineError::NoDocument)
+    }
+    /// The warning an edit of `at` on `sheet` gets from sheet protection, or `None` when the edit
+    /// is allowed. Front ends ask before opening an editor, so typing into a locked cell never
+    /// leaves a draft that can't be entered (and so blocks saving).
+    pub fn locked_cell_message(&self, sheet: usize, at: CellRef) -> Option<String> {
+        let d = self.active()?;
+        let sh = d.wb.sheet(sheet)?;
+        if !sh.is_protected() || !d.wb.styles.get(sh.style_id(at)).protection.locked {
+            return None;
+        }
+        cmd::locked_cell_error(sh, at, &d.unlocked_ranges)
     }
     /// Opens a workbook in a new window, which becomes the active one.
     pub fn add_document(&mut self, d: DocState) -> usize {
@@ -775,7 +798,7 @@ impl Session {
                 // A toggle (Bold) is recorded with the state it set, as Excel records
                 // `Bold = True`: playing it back sets that state rather than flipping it again.
                 let params = match &result {
-                    Ok(r) if params.is_object() => record::with_toggle_state(cmd::journal_params(&params), r),
+                    Ok(r) if params.is_object() => record::with_toggle_state(id, cmd::journal_params(&params), r),
                     _ => cmd::journal_params(&params),
                 };
                 let kept = rec.push(record::RecordedStep { doc, sheet, sheet_name, selection, id: id.to_string(), params });
@@ -790,6 +813,7 @@ impl Session {
             }
             if self.journal_paused == 0 {
                 self.push_journal(id, cmd::journal_params(&params));
+                recent::note(&mut self.prefs.recent_functions, id, &params);
             }
         }
         // Inside an undo group the group owns the step. A command that ended a group open before

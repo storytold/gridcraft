@@ -62,6 +62,74 @@ fn new_and_open_from_the_file_tab_keep_the_ribbon_as_it_was() {
     assert!(h.state().ui.ribbon_collapsed);
 }
 
+/// Esc first cancels the focused File-page field, then closes File on the next press.
+#[test]
+fn escape_leaves_file_fields_before_closing_the_view() {
+    use egui::accesskit::Role;
+
+    for (page_id, label) in [
+        ("info", "Title"),
+        ("info", "Subject"),
+        ("info", "Author"),
+        ("info", "Company"),
+        ("info", "Keywords"),
+        ("info", "Description"),
+        ("options", "Maximum Iterations:"),
+        ("options", "Maximum Change:"),
+        ("print", "Copies"),
+    ] {
+        let services = Services {
+            printers: Some(Box::new(|| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                tx.send(Vec::new()).unwrap();
+                rx
+            })),
+            ..Default::default()
+        };
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut h = crate::common::harness_with(
+            crate::common::builder().with_size(egui::vec2(1200.0, 1400.0)),
+            crate::common::prepare(SheetApp::new(session, services)),
+            4,
+        );
+        h.state_mut().run("formulas.calculationOptions", serde_json::json!({"iterative": true})).unwrap();
+        h.state_mut().run("ui.backstage", serde_json::json!({"page": page_id})).unwrap();
+        h.run_steps(3);
+        let role = if page_id == "print" { Role::SpinButton } else { Role::TextInput };
+        h.get_by_role_and_label(role, label).click();
+        h.run_steps(2);
+        assert!(h.ctx.text_edit_focused(), "{label} has the caret");
+        let original = h.get_by_role_and_label(role, label).value();
+        let revision = h.state().session.active().unwrap().revision;
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(1);
+        h.input_mut().events.push(egui::Event::Text("7".into()));
+        h.run_steps(2);
+        if page_id == "print" {
+            assert_eq!(h.state().printing.settings.copies, 7, "Copies applies the entered value while editing");
+        } else {
+            assert_eq!(h.get_by_role_and_label(Role::TextInput, label).value().as_deref(), Some("7"));
+        }
+        let copies = h.state().printing.settings.copies;
+
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert_eq!(page(&h), Some(page_id), "Esc in {label} keeps File open");
+        assert!(!h.ctx.text_edit_focused(), "Esc leaves {label}");
+        assert_eq!(h.state().session.active().unwrap().revision, revision, "Esc does not commit {label}");
+        if page_id == "print" {
+            assert_eq!(h.state().printing.settings.copies, copies, "leaving Copies preserves its existing live value");
+        } else {
+            assert_eq!(h.get_by_role_and_label(Role::TextInput, label).value(), original, "Esc discards the {label} draft");
+        }
+
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert_eq!(page(&h), None, "the next Esc returns to the sheet");
+    }
+}
+
 #[test]
 fn save_actions_include_the_cell_draft_and_close_keeps_the_unsaved_prompt() {
     let downloads = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
