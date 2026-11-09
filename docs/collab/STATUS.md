@@ -1,7 +1,7 @@
 # Real-time collaboration: status and acceptance evidence
 
 - Date: 2026-11-09
-- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), HEAD `54f15d41` (code and tests; this page's update sits on top)
+- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), HEAD `bcf9c16d` (code, tests and this page)
 - Base: `origin/main` = `2c58c769` (rebased 2026-11-08)
 - PR: <https://github.com/storytold/gridcraft/pull/3613> (draft)
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
