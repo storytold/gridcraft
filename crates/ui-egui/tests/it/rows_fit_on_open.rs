@@ -8,9 +8,18 @@ use serde_json::json;
 const TEXTS: [&str; 3] =
     ["Check the quote before signing it today please.", "Check the quote before signing it today please, then file it away.", "Short."];
 
+/// The test workbook's file, removed when the test ends, also when an assertion fails.
+struct TempBook(std::path::PathBuf);
+
+impl Drop for TempBook {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// A workbook with wrapped text in a column 45 characters wide and no row heights, as a file that
 /// leaves its rows to fit on open.
-fn book() -> std::path::PathBuf {
+fn book() -> TempBook {
     let mut s = Session::new();
     s.new_workbook();
     s.execute("home.columnWidth", json!({"range": "A1", "chars": 45})).unwrap();
@@ -22,12 +31,13 @@ fn book() -> std::path::PathBuf {
     std::sync::Arc::make_mut(&mut wb.sheets[0]).rows.clear();
     let path = std::env::temp_dir().join(format!("gridcraft-rows-fit-{}.xlsx", std::process::id()));
     std::fs::write(&path, gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
-    path
+    TempBook(path)
 }
 
 #[test]
 fn a_startup_file_opens_on_the_first_frame_with_rows_fit_by_the_grids_fonts() {
-    let path = book();
+    let book = book();
+    let path = &book.0;
     let mut s = Session::new();
     s.new_workbook();
     let mut app = crate::common::app(s);
@@ -51,5 +61,4 @@ fn a_startup_file_opens_on_the_first_frame_with_rows_fit_by_the_grids_fonts() {
     for row in 0..3 {
         assert_eq!(d.wb.sheets[0].row_height(row), expected.sheets[0].row_height(row), "row {}", row + 1);
     }
-    let _ = std::fs::remove_file(&path);
 }
