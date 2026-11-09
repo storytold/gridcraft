@@ -605,6 +605,29 @@ fn opening_google_sheets_export_unwraps_only_formulas_gridcraft_calculates() {
     assert_eq!(opened.sheets[0].cells.get(CellRef::parse("A2").unwrap()).map(|c| c.value.clone()), Some(Value::text("salut")));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_font_file_must_be_a_regular_file_within_the_limit() {
+    let limit = gridcraft_pdf::MAX_FONT_BYTES;
+    let dir = std::env::temp_dir().join(format!("gridcraft-font-read-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // A directory (like a FIFO or a device) is no font file, and a missing file is an error.
+    assert_eq!(read_font_file(&dir), Err("not a regular file".to_string()));
+    assert!(read_font_file(&dir.join("missing.ttf")).is_err());
+    let small = dir.join("small.ttf");
+    std::fs::write(&small, b"abc").unwrap();
+    assert_eq!(read_font_file(&small), Ok(b"abc".to_vec()));
+    // Exactly the limit is accepted; one byte more is refused after reading at most limit + 1.
+    let at_limit = dir.join("limit.ttf");
+    std::fs::write(&at_limit, vec![0u8; limit]).unwrap();
+    assert_eq!(read_font_file(&at_limit).map(|b| b.len()), Ok(limit));
+    let over = dir.join("over.ttf");
+    std::fs::write(&over, vec![0u8; limit + 1]).unwrap();
+    assert_eq!(read_font_file(&over), Err("the file is too large".to_string()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_web_page_saved_as_xls_opens_its_table() {
     // #3166: a web app's "Export to Excel" is an HTML table saved as .xls; it opened as lines of
@@ -760,4 +783,52 @@ fn sylk_survives_huge_relative_offsets_and_width_floods() {
     flood.extend_from_slice(b"C;Y1;X1;K1\nE\n");
     let (wb, _) = open_bytes("widths.slk", &flood).unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::Number(1.0));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn system_thai_fonts_pair_each_regular_face_with_its_own_bold() {
+    let fonts = system_thai_fonts();
+    let name = |p: &std::path::Path| p.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+    let pairs: Vec<(String, Option<String>)> = fonts.iter().map(|(r, b)| (name(r), b.as_deref().map(name))).collect();
+    // Windows first, in the UI's order, then Noto Sans Thai and Garuda (issue #3529's fonts-thai-tlwg).
+    assert_eq!(pairs.first(), Some(&("LeelawUI.ttf".to_string(), Some("LeelaUIb.ttf".to_string()))));
+    assert!(pairs.contains(&("NotoSansThai-Regular.ttf".to_string(), Some("NotoSansThai-Bold.ttf".to_string()))));
+    assert!(
+        fonts
+            .iter()
+            .any(|(r, b)| r.ends_with("truetype/tlwg/Garuda.ttf") && b.as_deref().is_some_and(|b| b.ends_with("truetype/tlwg/Garuda-Bold.ttf")))
+    );
+    // Every bold face is in the same folder as its regular face.
+    assert!(fonts.iter().all(|(r, b)| b.as_deref().is_none_or(|b| b.parent() == r.parent())));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_first_usable_system_font_is_registered_with_its_bold_face() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-system-fonts-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = |name: &str, bytes: &[u8]| {
+        let p = dir.join(name);
+        std::fs::write(&p, bytes).unwrap();
+        p
+    };
+    let refused = file("cff.otf", b"cff");
+    let good = file("good.ttf", b"good regular");
+    let good_bold = file("good-bold.ttf", b"good bold");
+    let later = file("later.ttf", b"good later");
+    let candidates =
+        vec![(dir.join("missing.ttf"), None), (dir.clone(), None), (refused, Some(good_bold.clone())), (good, Some(good_bold)), (later, None)];
+    let mut calls: Vec<(String, bool)> = Vec::new();
+    let name = first_usable_font(&candidates, |bytes, bold| {
+        let text = String::from_utf8(bytes).unwrap();
+        calls.push((text.clone(), bold));
+        if text.starts_with("good") { Ok(text) } else { Err(EngineError::Other("refused".into())) }
+    });
+    // Missing files and a folder are skipped unread; a refused face does not bring its bold face in.
+    assert_eq!(name.as_deref(), Some("good regular"));
+    assert_eq!(calls, [("cff".to_string(), false), ("good regular".to_string(), false), ("good bold".to_string(), true)]);
+    assert_eq!(first_usable_font(&[(dir.join("missing.ttf"), None)], |_, _| Ok(String::new())), None);
+    let _ = std::fs::remove_dir_all(&dir);
 }

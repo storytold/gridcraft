@@ -62,6 +62,12 @@ fn stdout_failed(e: std::io::Error) -> ! {
 }
 
 fn main() -> ExitCode {
+    // PDF export embeds the Thai font GRIDCRAFT_PDF_THAI_FONT names (TH Sarabun New, for example).
+    for warning in gridcraft_engine::io::load_pdf_fonts_from_env() {
+        let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("gridcraft-cli: {warning}\n"));
+    }
+    // Otherwise a Thai font the system ships (Leelawadee UI, Tahoma, Noto Sans Thai, Garuda).
+    let _ = gridcraft_engine::io::load_system_pdf_fonts();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest = args.get(1..).unwrap_or_default();
     let r = match args.first().map(String::as_str) {

@@ -1,6 +1,8 @@
 # gridcraft-pdf
 
-A small, dependency-free PDF 1.7 writer for vector drawing and RGBA images.
+A small PDF 1.7 writer for text, vector drawing and RGBA images. Its only dependencies are
+`read-fonts` and `harfrust`, to parse and shape the optional embedded fallback font (Thai and other
+scripts the 14 standard PDF fonts lack); without a registered font it uses neither.
 
 ## API migration
 
@@ -31,3 +33,31 @@ page.image_rgba(Rect::new(10.0, 10.0, 24.0, 24.0), &rgba, [1, 1]);
 `Point::new(x, y)` uses the page's top-left origin, where y increases downward. `Rect::new(x, y,
 width, height)` describes the destination or link rectangle in the same coordinate system. The
 `image_rgba` pixel-size array is `[width, height]`.
+
+## Thai and other scripts: the fallback font
+
+The 14 standard PDF fonts only cover WinAnsiEncoding. Register one TrueType/OpenType font and
+text it covers (Thai, for example) is shaped with harfrust and embedded:
+
+```rust
+let bytes = std::fs::read(r"C:\Windows\Fonts\THSarabunNew.ttf")?;
+gridcraft_pdf::register_fallback_font(bytes, false)?; // `true` registers the bold face
+```
+
+The GridCraft app and `gridcraft-cli` do this at start-up from `GRIDCRAFT_PDF_THAI_FONT` (and
+`GRIDCRAFT_PDF_THAI_FONT_BOLD`); the app otherwise uses a craft-fonts face declared for the
+`Thai` script, when the build embeds one; both then fall back to a Thai font the system ships
+(`gridcraft_engine::io::system_thai_fonts`: Leelawadee UI or Tahoma on Windows, Noto Sans Thai or
+Garuda on Linux; macOS's Thai fonts are `.ttc` collections, not embedded yet). Font files are
+never committed to this repository.
+
+- The whole font file is embedded (no subsetting) as `CIDFontType2` with `Identity-H`, a `/W`
+  array of the glyphs used and a `ToUnicode` CMap, and each run is marked with its `/ActualText`,
+  so the text can be searched and copied in order even where the font splits or reorders glyphs
+  (SARA AM in Leelawadee UI).
+- Fonts whose `OS/2.fsType` forbids embedding (restricted, or bitmap-only) are refused.
+- A cell whose font is the registered font itself ("TH SarabunPSK", matched by the font's
+  family, full or PostScript name) is set in it entirely, Latin and digits included, through
+  `Font::family_for` → `Family::Fallback`. Other cells keep Helvetica/Times/Courier for Latin.
+- Without a bold face, bold text is the regular face filled and stroked.
+- `text_width` measures shaped runs, so wrapping and alignment match what is drawn.

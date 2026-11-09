@@ -240,6 +240,31 @@ fn icon() -> Option<egui::IconData> {
     Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
 }
 
+/// The font PDF export embeds for Thai and other text the standard PDF fonts lack: the file
+/// `GRIDCRAFT_PDF_THAI_FONT` names (TH Sarabun New, for example), else the craft-fonts Thai face
+/// when this build embeds one, else a Thai font the system ships (Leelawadee UI, Tahoma, Noto Sans
+/// Thai, Garuda). Without any, export works as before.
+fn load_pdf_fonts() {
+    for warning in gridcraft_engine::io::load_pdf_fonts_from_env() {
+        log::warn!("{warning}");
+    }
+    // A face named in the environment (regular or bold) keeps its slot, and craft-fonts fills in
+    // only when none was named: regular and bold never come from two different families.
+    if gridcraft_engine::io::has_pdf_font_face(false) || gridcraft_engine::io::has_pdf_font_face(true) {
+        return;
+    }
+    for bold in [false, true] {
+        if let Some(bytes) = gridcraft_ui_egui::theme::craft_thai_font(bold)
+            && let Err(e) = gridcraft_engine::io::register_pdf_font(bytes.to_vec(), bold)
+        {
+            log::warn!("craft-fonts Thai face for PDF export: {e}");
+        }
+    }
+    if let Some(name) = gridcraft_engine::io::load_system_pdf_fonts() {
+        log::info!("PDF export embeds {name}, a Thai font this system ships");
+    }
+}
+
 fn main() -> eframe::Result<()> {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -261,6 +286,7 @@ fn main() -> eframe::Result<()> {
             let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("gridcraft: {report}\n"));
         }
     }));
+    load_pdf_fonts();
     let args: Vec<String> = std::env::args().skip(1).collect();
     // The restart helper a self-update spawns: it finishes the swap and relaunches, then exits.
     if let Some(done) = craft_update::self_update::finish(&gridcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {

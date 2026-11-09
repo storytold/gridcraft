@@ -102,6 +102,11 @@ real_name = "Helen Kwok"
 real_name = "Robert Lee"
 sync_github_name = true
 
+[people.phumvivatsangpech-hub]
+real_name = "Phumvivat Sangpech"
+display_name = "Phumvivat Sangpech"
+sync_github_name = false
+
 [people.dylanmtaylor]
 sync_github_name = true
 

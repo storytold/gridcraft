@@ -3,10 +3,16 @@ name = "gridcraft-pdf"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "GridCraft's tiny self-contained PDF 1.7 writer (standard 14 fonts, vector drawing, RGBA images)"
+description = "GridCraft's tiny PDF 1.7 writer (standard 14 fonts, an embedded shaped fallback font, vector drawing, RGBA images)"
 readme = "README.md"
 
 [lints]
 workspace = true
 
 [dependencies]
+harfrust = { workspace = true }
+read-fonts = { workspace = true }
+
+[dev-dependencies]
+# Real font bytes for the embedding tests (Ubuntu Light, compiled into epaint).
+epaint_default_fonts = { workspace = true }

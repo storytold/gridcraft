@@ -977,6 +977,117 @@ pub fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
+/// Environment variables naming the font PDF export embeds for text the standard PDF fonts lack
+/// (Thai, for example TH Sarabun New), and its bold face.
+pub const PDF_FONT_ENV: &str = "GRIDCRAFT_PDF_THAI_FONT";
+pub const PDF_BOLD_FONT_ENV: &str = "GRIDCRAFT_PDF_THAI_FONT_BOLD";
+
+/// Registers the font PDF export embeds for text the standard PDF fonts lack (see
+/// [`gridcraft_pdf::register_fallback_font`]). Returns the font's name.
+pub fn register_pdf_font(bytes: Vec<u8>, bold: bool) -> Result<String> {
+    gridcraft_pdf::register_fallback_font(bytes, bold).map_err(|e| EngineError::Other(e.to_string()))
+}
+
+/// Whether PDF export has a fallback face of its own for regular or bold text.
+pub fn has_pdf_font_face(bold: bool) -> bool {
+    gridcraft_pdf::has_fallback_face(bold)
+}
+
+/// The bytes of a font file: a regular file only (a FIFO or device reports a size of 0, and
+/// reading it could block start-up or never end), and never more than the PDF crate accepts.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_font_file(path: &std::path::Path) -> std::result::Result<Vec<u8>, String> {
+    use std::io::Read;
+    let limit = gridcraft_pdf::MAX_FONT_BYTES as u64;
+    if !std::fs::metadata(path).map_err(|e| e.to_string())?.is_file() {
+        return Err("not a regular file".into());
+    }
+    let mut bytes = Vec::new();
+    // One byte past the limit tells a file that is too large from one of exactly the limit.
+    std::fs::File::open(path).and_then(|f| f.take(limit + 1).read_to_end(&mut bytes)).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > limit { Err("the file is too large".into()) } else { Ok(bytes) }
+}
+
+/// Registers the PDF fallback fonts named by [`PDF_FONT_ENV`] and [`PDF_BOLD_FONT_ENV`], once at
+/// start-up. Returns a warning for each font that can't be used; export then works as without it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_pdf_fonts_from_env() -> Vec<String> {
+    let mut warnings = Vec::new();
+    for (var, bold) in [(PDF_FONT_ENV, false), (PDF_BOLD_FONT_ENV, true)] {
+        let Some(path) = std::env::var_os(var) else { continue };
+        let loaded = read_font_file(std::path::Path::new(&path)).and_then(|bytes| register_pdf_font(bytes, bold).map_err(|e| e.to_string()));
+        match loaded {
+            Ok(name) => log::info!("PDF export embeds {name} for text the standard PDF fonts lack ({var})"),
+            Err(e) => warnings.push(format!("{var}={}: {e}", std::path::Path::new(&path).display())),
+        }
+    }
+    warnings
+}
+
+/// The Thai fonts systems ship, as (regular, bold of the same family), in the order PDF export
+/// tries them: Windows' Leelawadee UI and Tahoma, then Noto Sans Thai and Garuda (fonts-thai-tlwg)
+/// in the Linux font folders, as the UI's `thai()` in ui-egui `theme/font_fallback.rs` finds them
+/// (keep the two in step). macOS has Thonburi and Sukhumvit only as collections (.ttc), which the
+/// PDF writer can't embed yet.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn system_thai_fonts() -> Vec<(std::path::PathBuf, Option<std::path::PathBuf>)> {
+    use std::path::PathBuf;
+    const LINUX_DIRS: [&str; 6] = [
+        "/usr/share/fonts/truetype/noto",
+        "/usr/share/fonts/opentype/noto",
+        "/usr/share/fonts/truetype",
+        "/usr/share/fonts",
+        "/usr/share/fonts/chromeos/noto",
+        // Flatpak mounts the host's fonts here.
+        "/run/host/fonts/truetype",
+    ];
+    const LINUX_FILES: [(&str, &str); 3] = [
+        ("NotoSansThai-Regular.ttf", "NotoSansThai-Bold.ttf"),
+        ("tlwg/Garuda.ttf", "tlwg/Garuda-Bold.ttf"),
+        ("garuda/Garuda.ttf", "garuda/Garuda-Bold.ttf"),
+    ];
+    let windows = std::env::var_os("WINDIR").map_or_else(|| PathBuf::from("C:\\Windows"), PathBuf::from).join("Fonts");
+    let mut fonts: Vec<(PathBuf, Option<PathBuf>)> =
+        [("LeelawUI.ttf", "LeelaUIb.ttf"), ("tahoma.ttf", "tahomabd.ttf")].iter().map(|(r, b)| (windows.join(r), Some(windows.join(b)))).collect();
+    for (regular, bold) in LINUX_FILES {
+        fonts.extend(LINUX_DIRS.iter().map(|d| (PathBuf::from(d).join(regular), Some(PathBuf::from(d).join(bold)))));
+    }
+    // Fedora ships Noto Sans Thai as one variable font; bold is then drawn from it.
+    fonts.push((PathBuf::from("/usr/share/fonts/google-noto-vf/NotoSansThai[wght].ttf"), None));
+    fonts
+}
+
+/// Registers the first of [`system_thai_fonts`] PDF export can embed, with its bold face, when no
+/// font is registered for regular or bold text yet (so a face set through [`PDF_FONT_ENV`] or a
+/// bundled one is never replaced, and regular and bold come from one family). Returns its name.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_system_pdf_fonts() -> Option<String> {
+    if has_pdf_font_face(false) || has_pdf_font_face(true) {
+        return None;
+    }
+    first_usable_font(&system_thai_fonts(), register_pdf_font)
+}
+
+/// Tries `candidates` in order and registers the first regular face `register` accepts, then its
+/// bold face when that one is usable too. Missing, unreadable and refused files are skipped.
+#[cfg(not(target_arch = "wasm32"))]
+fn first_usable_font(
+    candidates: &[(std::path::PathBuf, Option<std::path::PathBuf>)],
+    mut register: impl FnMut(Vec<u8>, bool) -> Result<String>,
+) -> Option<String> {
+    for (regular, bold) in candidates {
+        let Ok(name) = read_font_file(regular).map_err(EngineError::Other).and_then(|bytes| register(bytes, false)) else { continue };
+        // A bold face that can't be used leaves bold text to the regular face, drawn bolder.
+        if let Some(bold) = bold
+            && let Ok(bytes) = read_font_file(bold)
+        {
+            let _ = register(bytes, true);
+        }
+        return Some(name);
+    }
+    None
+}
+
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 pub fn base64_encode(data: &[u8]) -> String {
