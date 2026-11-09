@@ -399,12 +399,16 @@ fn translate(app: &mut SheetApp, ui: &mut Ui) {
     let lang = crate::i18n::current(ui.ctx());
     let t = Tokens::get(ui.ctx());
     let models = translate_models(app, ui);
-    let record = models["models"].as_array().and_then(|a| a.first()).cloned().unwrap_or(Json::Null);
+    let list = models["models"].as_array().cloned().unwrap_or_default();
+    let active = models["active"].as_str().map(str::to_string);
+    // Show the model in use: the first manifest record is the default download, but a 0.6B-only
+    // install makes *it* active, and the pane must describe that state, not the missing 1.7B one.
+    let record =
+        active.as_deref().and_then(|id| list.iter().find(|r| r["id"].as_str() == Some(id))).or_else(|| list.first()).cloned().unwrap_or(Json::Null);
     let id = record["id"].as_str().unwrap_or("qwen3-1.7b").to_string();
     let pairs = record["pairs"].as_array().cloned().unwrap_or_default();
     let sources: Vec<String> = pairs.iter().filter_map(|p| p["from"].as_str()).map(str::to_string).collect();
     let targets: Vec<String> = pairs.iter().filter_map(|p| p["to"].as_str()).map(str::to_string).collect();
-    let active = models["active"].as_str().map(str::to_string);
     let from = if app.session.translate_from.trim().is_empty() { "auto".to_string() } else { app.session.translate_from.clone() };
     let to = if app.session.translate_to.trim().is_empty() { targets.first().cloned().unwrap_or_default() } else { app.session.translate_to.clone() };
 

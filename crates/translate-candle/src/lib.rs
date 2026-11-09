@@ -297,17 +297,29 @@ pub fn models_root() -> PathBuf {
     PathBuf::from("models")
 }
 
-/// Opens the installed model `id` when its directory exists. Falls back to any verified
-/// installed manifest when `id` is unknown or not installed, so an install always becomes
-/// usable; `None` only when no verified model directory exists at all.
+/// Opens the installed model `id` when its directory holds every manifest file at its exact
+/// byte size, falling back to any other complete manifest when `id` is unknown or incomplete,
+/// so an install always becomes usable; `None` only when no complete model directory exists.
+/// Size, not hash, is checked here: an interrupted 1.7B download never shadows a usable 0.6B
+/// install, and the full SHA-256 stays on the inference worker so startup never hashes GBs.
 pub fn installed_backend(root: &Path) -> Option<std::sync::Arc<dyn gridcraft_translate::Backend>> {
     installed_backend_for(root, "qwen3-1.7b")
         .or_else(|| manifest::MANIFESTS.iter().find_map(|m| (m.id != "qwen3-1.7b").then(|| installed_backend_for(root, m.id)).flatten()))
 }
 
-/// Opens the installed model `id` when its directory verifies; `None` otherwise.
+/// Opens the installed model `id` when its directory holds every manifest file at its exact
+/// byte size; `None` otherwise (missing directory, unknown id, or an incomplete download).
+/// Size, not hash: the worker verifies SHA-256 when it loads the model.
 pub fn installed_backend_for(root: &Path, id: &str) -> Option<std::sync::Arc<dyn gridcraft_translate::Backend>> {
-    if !manifest::valid_id(id) || !root.join(id).is_dir() {
+    if !manifest::valid_id(id) {
+        return None;
+    }
+    let dir = root.join(id);
+    let manifest = manifest::find(id)?;
+    let complete = manifest.files.iter().all(|f| {
+        manifest::valid_relative_path(f.path) && std::fs::metadata(dir.join(f.path)).is_ok_and(|meta| meta.is_file() && meta.len() == f.bytes)
+    });
+    if !complete {
         return None;
     }
     CandleBackend::open(root, id).ok().map(|b| std::sync::Arc::new(b) as std::sync::Arc<dyn gridcraft_translate::Backend>)

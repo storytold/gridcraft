@@ -57,7 +57,7 @@ WASM backend ships in v1.
 | `translate.insert` | `{range?, job? \| values?, mode?: "replace"\|"emptyOnly"}` | `{cells, skipped}` | Journaled, one undo step, all-or-nothing on errors. `values` is `[{cell, text}]` or rows of text from `range`. |
 | `translate.copy` | `{job, cells?}` | `{chars, cells}` | Puts the translated lines on the engine clipboard (`Session::translate_clipboard`); the pane copies them to the system clipboard on the explicit Copy action. |
 | `translate.models` | `{}` | `{models, active, modelsDir, accelerators}` | Installed/available models, state, licence, hashes and the model directory. |
-| `translate.modelImport` | `{path, id?, consent: true}` | model record | Copies and verifies a folder; refuses without consent. On a host session (desktop, CLI) refreshes the backend through the host's opener, so the model is usable right away; a session with no opener (web build) still needs one injected. |
+| `translate.modelImport` | `{path, id?, consent: true}` | model record | Copies and verifies a folder; refuses without consent. On a native host session (desktop, CLI) refreshes the backend through the host's opener, so the model is usable right away; the web build has no opener and no model backend, so translation stays unavailable there. |
 | `translate.modelDownload` | `{id, consent: true}` | model record | URL comes from the shipped manifest, never from the caller; refuses without consent and without a host transport. Same refresh rule as `translate.modelImport`. |
 | `translate.modelRemove` | `{id}` | `{removed}` | Removes the model directory; unknown or traversing ids are refused. |
 
