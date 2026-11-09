@@ -8,7 +8,7 @@
 //! the descriptive signature keeps both positions optional. The `INFO.VIEW.*` functions take no
 //! arguments at all.
 
-use super::{FunctionCategory, FunctionFlags, FunctionSpec, ParamKind, ReturnType, optional, overload, required, spec, variadic};
+use super::{FunctionCategory, FunctionFlags, FunctionSpec, ParamKind, ReturnType, optional, overload, pairs, required, spec, variadic};
 
 /// An `INFO.*` table function with the shared optional restriction-pair syntax.
 ///
@@ -23,7 +23,7 @@ macro_rules! info {
             0,
             usize::MAX,
             &[optional("RestrictionName", ParamKind::Text), optional("RestrictionValue", ParamKind::Any)],
-            &[overload(&[]), variadic(&[ParamKind::Text, ParamKind::Any])],
+            &[overload(&[]), pairs(&[ParamKind::Text, ParamKind::Any])],
             ReturnType::Table,
             FunctionFlags::new(false, false, false, false, false),
             $description,

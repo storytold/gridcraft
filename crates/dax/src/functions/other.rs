@@ -8,7 +8,7 @@
 //! lists under "Other". `INFO.STORAGETABLES` keeps the exact dotted spelling and shares the
 //! optional restriction-pair syntax of the other `INFO.*` functions.
 
-use super::{FunctionCategory, FunctionFlags, FunctionSpec, ParamKind, ReturnType, optional, overload, required, spec, variadic};
+use super::{FunctionCategory, FunctionFlags, FunctionSpec, ParamKind, ReturnType, optional, overload, pairs, required, spec, variadic};
 
 pub static FUNCTIONS: &[FunctionSpec] = &[
     spec(
@@ -131,7 +131,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         0,
         usize::MAX,
         &[optional("RestrictionName", ParamKind::Text), optional("RestrictionValue", ParamKind::Any)],
-        &[overload(&[]), variadic(&[ParamKind::Text, ParamKind::Any])],
+        &[overload(&[]), pairs(&[ParamKind::Text, ParamKind::Any])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, false, false),
         "Returns statistics about the in-memory storage tables of the model, with one row per \

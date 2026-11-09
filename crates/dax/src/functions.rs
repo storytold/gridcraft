@@ -231,6 +231,10 @@ pub struct Overload {
     pub params: &'static [ParamKind],
     /// When true, the last parameter kind repeats for every additional argument.
     pub variadic: bool,
+    /// When true with [`Overload::variadic`], the parameter prefix repeats in whole cycles
+    /// instead of repeating only the last kind: `INFO.*` restriction pairs accept
+    /// `Text, Any, Text, Any, ...` but never a dangling name.
+    pub pairs: bool,
 }
 
 impl Overload {
@@ -240,21 +244,35 @@ impl Overload {
 
     /// Whether this overload accepts exactly `arity` arguments.
     pub const fn matches(self, arity: usize) -> bool {
+        if self.variadic && self.pairs {
+            return arity >= self.params.len() && (arity - self.params.len()).is_multiple_of(self.params.len());
+        }
         if self.variadic { arity >= self.params.len() } else { arity == self.params.len() }
     }
 
-    /// The parameter kind at `index`; a variadic overload repeats its last kind.
+    /// The parameter kind at `index`; a variadic overload repeats its last kind, while a
+    /// pair-variadic one repeats the whole prefix so kinds alternate.
     pub fn kind_at(self, index: usize) -> Option<ParamKind> {
+        if self.variadic && self.pairs {
+            return self.params.get(index % self.params.len()).copied();
+        }
         self.params.get(index).copied().or_else(|| if self.variadic { self.params.last().copied() } else { None })
     }
 }
 
 pub const fn overload(params: &'static [ParamKind]) -> Overload {
-    Overload { params, variadic: false }
+    Overload { params, variadic: false, pairs: false }
 }
 
 pub const fn variadic(params: &'static [ParamKind]) -> Overload {
-    Overload { params, variadic: true }
+    Overload { params, variadic: true, pairs: false }
+}
+
+/// A variadic overload whose parameters repeat as whole name/value pairs: `INFO.*`
+/// restrictions accept `Text, Any` cycles, so odd arities are rejected while every even
+/// arity validates.
+pub const fn pairs(params: &'static [ParamKind]) -> Overload {
+    Overload { params, variadic: true, pairs: true }
 }
 
 /// A complete catalog record.

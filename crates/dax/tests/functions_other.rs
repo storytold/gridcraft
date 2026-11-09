@@ -124,13 +124,13 @@ fn every_record_has_consistent_signature_and_metadata() {
         }
 
         assert!(!spec.overloads.is_empty(), "{} overloads", spec.name);
-        // INFO.* records take restriction name/value pairs only: a dangling single-Text
-        // overload would accept a restriction name with no value, so arity 1 is
-        // intentionally absent (every restriction needs its pair).
-        let skip: &[usize] = if spec.name == "INFO.STORAGETABLES" { &[1] } else { &[] };
+        // INFO.* records take restriction name/value pairs only: odd arities are a
+        // dangling name, so only zero and even arities validate.
+        let skip: &[usize] = if spec.name == "INFO.STORAGETABLES" { &[1, 3, 5, 7] } else { &[] };
         let upper = if spec.max_args == usize::MAX { spec.min_args.saturating_add(8) } else { spec.max_args };
         for arity in spec.min_args..=upper {
             if skip.contains(&arity) {
+                assert!(spec.overload_for(arity).is_none(), "{} must reject odd arity {arity}", spec.name);
                 continue;
             }
             assert!(spec.overload_for(arity).is_some(), "{} has no overload for arity {arity}", spec.name);
@@ -200,6 +200,19 @@ fn compatibility_flags_are_honest() {
 }
 
 #[test]
+fn info_storagetables_repeats_restriction_pairs() {
+    let info = spec("INFO.STORAGETABLES");
+    assert_eq!(info.min_args, 0);
+    assert_eq!(info.overload_for(0).map(|overload| overload.arity()), Some(0));
+    assert!(info.overload_for(1).is_none(), "a dangling restriction name is not a call");
+    assert!(info.overload_for(3).is_none(), "an odd arity is a dangling name");
+    let pair = info.overload_for(2);
+    assert!(pair.is_some_and(|overload| overload.variadic && overload.pairs));
+    assert_eq!(pair.map(|overload| overload.kind_at(3)), Some(Some(ParamKind::Any)));
+    assert_eq!(pair.map(|overload| overload.kind_at(4)), Some(Some(ParamKind::Text)));
+}
+
+#[test]
 fn overloads_model_the_documented_signatures() {
     assert_eq!(overload_kinds(spec("BITLSHIFT"), 2), Some(vec![ParamKind::Number, ParamKind::Number]));
     assert_eq!(overload_kinds(spec("BLANK"), 0), Some(Vec::new()));
@@ -213,14 +226,6 @@ fn overloads_model_the_documented_signatures() {
     assert!(hash_overload.variadic);
     assert_eq!(hash_overload.kind_at(0), Some(ParamKind::Any));
     assert_eq!(hash_overload.kind_at(12), Some(ParamKind::Any));
-
-    let info = spec("INFO.STORAGETABLES");
-    assert_eq!(info.min_args, 0);
-    assert_eq!(info.overload_for(0).map(|overload| overload.arity()), Some(0));
-    assert!(info.overload_for(1).is_none(), "a dangling restriction name is not a call");
-    let pair = info.overload_for(2);
-    assert!(pair.is_some_and(|overload| overload.variadic));
-    assert_eq!(pair.map(|overload| overload.kind_at(3)), Some(Some(ParamKind::Any)));
 
     let rank = spec("RANK");
     assert_eq!(rank.params.len(), 7);
@@ -307,6 +312,7 @@ fn arity_boundaries_accept_and_reject_the_right_calls() {
         "ERROR ( \"a\", \"b\" )",
         "EXTERNALMEASURE ( )",
         "INFO.STORAGETABLES ( \"DATABASE_NAME\" )",
+        "INFO.STORAGETABLES ( \"A\", \"B\", \"C\" )",
         "ISATLEVEL ( )",
         "ISATLEVEL ( 'Date'[Year], 'Date'[Month] )",
         "ISCURRENCY ( )",
@@ -331,9 +337,9 @@ fn every_documented_arity_boundary_is_enforced() {
             let src = format!("{} ( {arguments} )", spec.name);
             let errors = expression_errors(&src);
             let arity_errors: Vec<&ValidationError> = errors.iter().filter(|error| error.kind == ValidationErrorKind::Arity).collect();
-            // INFO.STORAGETABLES takes restriction pairs, so a lone restriction name must
-            // fail arity even though arity 1 sits inside its open range.
-            let expect_arity = arity < spec.min_args || arity > spec.max_args || (spec.name == "INFO.STORAGETABLES" && arity == 1);
+            // INFO.STORAGETABLES takes restriction pairs, so every odd arity is a
+            // dangling name and must fail even inside the open range.
+            let expect_arity = arity < spec.min_args || arity > spec.max_args || (spec.name == "INFO.STORAGETABLES" && arity % 2 == 1);
             if expect_arity {
                 assert_eq!(arity_errors.len(), 1, "{src:?} should report one arity error: {errors:?}");
             } else {
@@ -403,11 +409,12 @@ fn variadic_functions_accept_repeatable_arguments() {
         "HASH ( Sales[Amount], Sales[Quantity], Sales[Region], Sales[OrderDate], 1 )",
         "INFO.STORAGETABLES ()",
         "INFO.STORAGETABLES ( \"A\", \"B\" )",
-        "INFO.STORAGETABLES ( \"A\", \"B\", \"C\", \"D\", \"E\" )",
+        "INFO.STORAGETABLES ( \"A\", \"B\", \"C\", \"D\", \"E\", \"F\" )",
     ] {
         assert_valid(src);
     }
     assert_invalid_kind("INFO.STORAGETABLES ( \"A\" )", ValidationErrorKind::Arity);
+    assert_invalid_kind("INFO.STORAGETABLES ( \"A\", \"B\", \"C\", \"D\", \"E\" )", ValidationErrorKind::Arity);
 }
 
 #[test]

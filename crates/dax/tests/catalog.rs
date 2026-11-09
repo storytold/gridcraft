@@ -31,7 +31,19 @@ fn records_have_consistent_signatures_and_parseable_examples() {
         assert!(spec.min_args <= spec.max_args, "{} has min > max", spec.name);
 
         let variadic = spec.overloads.iter().any(|overload| overload.variadic);
-        if variadic {
+        let paired = spec.overloads.iter().any(|overload| overload.pairs);
+        if paired {
+            // Pair-variadic records (INFO.* restrictions) accept only arities that complete
+            // whole name/value pairs; `usize::MAX` is the open range, not a concrete arity.
+            assert!(
+                spec.overloads.iter().any(|overload| overload.matches(spec.min_args)),
+                "{} has no overload for min arity {}",
+                spec.name,
+                spec.min_args
+            );
+            assert!(spec.overload_for(2).is_some(), "{} accepts one restriction pair", spec.name);
+            assert!(spec.overload_for(1).is_none(), "{} rejects a dangling restriction name", spec.name);
+        } else if variadic {
             assert!(
                 spec.overloads.iter().any(|overload| overload.matches(spec.min_args)),
                 "{} has no variadic overload for min arity {}",

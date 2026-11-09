@@ -44,7 +44,10 @@ pub use ast::{
 };
 pub use binder::{BindError, Binder, BoundExpr, BoundMeasure, BoundVariable, bind_formula};
 pub use eval::{Evaluator, FilterContext, StorageStats};
-pub use functions::{BlankPolicy, FunctionCategory, FunctionFlags, FunctionSpec, Overload, ParamKind, Parameter, ReturnType, catalog, lookup};
+pub use functions::{
+    BlankPolicy, FunctionCategory, FunctionFlags, FunctionSpec, Overload, ParamKind, Parameter, ReturnType, catalog, lookup, overload, pairs,
+    variadic,
+};
 pub use integrity::{
     Cardinality, IntegrityCheck, IntegrityFinding, IntegrityReport, MAX_REPORTED_CYCLES, MAX_REPORTED_KEYS, MAX_REPORTED_ROWS, RelationshipCheck,
     Severity, validate_model,
