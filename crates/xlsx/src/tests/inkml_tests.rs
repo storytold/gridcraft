@@ -263,8 +263,6 @@ fn every_tool_and_effect_round_trips_through_gridcraft() {
                     scale: 0.5,
                     pressure: vec![100, 2000, 32767],
                     order: id,
-                    texture: None,
-                    texture_scale: 1.0,
                     key: Some(key),
                 }),
             });
@@ -669,4 +667,58 @@ fn an_invalid_stored_key_is_replaced_before_it_is_written() {
     // Reopening keeps that replacement, so the next save writes the same id.
     let (back, _) = read(&saved);
     assert_eq!(back.sheets[0].shapes[0].ink.as_ref().unwrap().key.as_deref(), Some(id));
+}
+
+#[test]
+fn two_ink_parts_cannot_share_a_creation_id() {
+    // Excel can write two content parts carrying the same `a16:creationId` (a duplicated shape, a
+    // merged workbook). The key identifies a stroke across the whole workbook, so the reader must
+    // mint past the one already held instead of importing two strokes with the same identity.
+    let wb = r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="One" sheetId="1" r:id="rId1"/><sheet name="Two" sheetId="2" r:id="rId2"/></sheets></workbook>"#;
+    let wb_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="{NS_REL}/worksheet" Target="worksheets/sheet2.xml"/></Relationships>"#
+    );
+    let sheet = format!(r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="{NS_REL}"><sheetData/><drawing r:id="rId1"/></worksheet>"#);
+    let sheet_rels = |drawing: &str| {
+        format!(
+            r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/drawing" Target="../drawings/{drawing}.xml"/></Relationships>"#
+        )
+    };
+    let drels = |ink: &str| {
+        format!(
+            r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/customXml" Target="../ink/{ink}.xml"/><Relationship Id="rId2" Type="{NS_REL}/image" Target="../media/image1.png"/></Relationships>"#
+        )
+    };
+    let ct = format!(
+        r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/ink/ink1.xml" ContentType="application/inkml+xml"/><Override PartName="/xl/ink/ink2.xml" ContentType="application/inkml+xml"/></Types>"#
+    );
+    let root = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
+    let drawing = drawing(GUIDE);
+    let ink = inkml("!0 !0,'1000 '1000", false, PEN_PROPS);
+    // Two sheets, two drawings, two ink parts, one shared creation id.
+    let (srels1, srels2) = (sheet_rels("drawing1"), sheet_rels("drawing2"));
+    let (drels1, drels2) = (drels("ink1"), drels("ink2"));
+    let parts: Vec<(&str, &[u8])> = vec![
+        ("[Content_Types].xml", ct.as_bytes()),
+        ("_rels/.rels", root.as_bytes()),
+        ("xl/workbook.xml", wb.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", wb_rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+        ("xl/worksheets/sheet2.xml", sheet.as_bytes()),
+        ("xl/worksheets/_rels/sheet1.xml.rels", srels1.as_bytes()),
+        ("xl/worksheets/_rels/sheet2.xml.rels", srels2.as_bytes()),
+        ("xl/drawings/drawing1.xml", drawing.as_bytes()),
+        ("xl/drawings/drawing2.xml", drawing.as_bytes()),
+        ("xl/drawings/_rels/drawing1.xml.rels", drels1.as_bytes()),
+        ("xl/drawings/_rels/drawing2.xml.rels", drels2.as_bytes()),
+        ("xl/ink/ink1.xml", ink.as_bytes()),
+        ("xl/ink/ink2.xml", ink.as_bytes()),
+    ];
+    let (wb, _) = read(&make_zip(&parts));
+    let shapes: Vec<&Shape> = wb.sheets.iter().flat_map(|s| s.shapes.iter()).collect();
+    assert_eq!(shapes.len(), 2, "both strokes are read");
+    let keys: Vec<&str> = shapes.iter().filter_map(|s| s.ink.as_ref()).filter_map(|i| i.key.as_deref()).collect();
+    assert_eq!(keys.len(), 2);
+    assert_eq!(keys[0], GUIDE, "the first part keeps the file's identity");
+    assert_ne!(keys[0], keys[1], "the second part does not reuse the first's key");
 }

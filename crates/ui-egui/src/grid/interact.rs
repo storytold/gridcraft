@@ -242,10 +242,19 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                         ))
                     })
                     .collect();
-                // The line under the pointer is the ink the stroke will commit (#1786).
+                // The line under the pointer is the ink the stroke will commit (#1786): painted by
+                // the same code as committed ink, so brush, texture and taper match.
                 let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
-                let (color, width) = pen_ink(&app.session.draw_color, app.session.draw_width, &app.session.draw_brush, &theme);
-                input.ui.painter().add(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(width * geo.z, color)));
+                crate::chartview::paint_ink_preview(
+                    input.ui.painter(),
+                    &pts,
+                    &app.session.draw_brush,
+                    &app.session.draw_color,
+                    app.session.draw_width,
+                    &app.session.draw_effect,
+                    &theme,
+                    geo.z,
+                );
             }
             if resp.drag_stopped() && app.grid.ink.len() >= 2 {
                 let pts: Vec<[f32; 2]> = std::mem::take(&mut app.grid.ink);
@@ -264,33 +273,6 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
         }
     }
     false
-}
-
-/// The colour and width (sheet points) of the ink a pen stroke commits, as `draw.stroke` stores
-/// it: the pen's colour and the width it paints across the stroke, in millimetres converted to
-/// points, translucent for a highlighter and muted for a pencil.
-pub(crate) fn pen_ink(color: &str, width_mm: f32, brush: &str, theme: &gridcraft_engine::model::Theme) -> (Color32, f32) {
-    use gridcraft_engine::model::InkTool;
-    let tool = gridcraft_engine::cmd::draw::parse_tool(brush).unwrap_or(InkTool::Pen);
-    let pen_blue = gridcraft_engine::model::Color::rgb(0x1F, 0x5F, 0xC9);
-    let line = gridcraft_engine::model::Color::from_hex(color).unwrap_or(pen_blue);
-    let mm = if width_mm <= 0.0 { 0.5 } else { width_mm }.clamp(0.05, 20.0);
-    let (w_cm, h_cm) = gridcraft_engine::cmd::draw::ink_size_cm(tool, mm);
-    // `paint_ink` paints a highlighter `height_cm` across the stroke and a pencil at 0.8x its
-    // width, so the preview has to measure the same way to be as wide as the committed ink.
-    let across = match tool {
-        InkTool::Highlighter => h_cm,
-        InkTool::Pencil => w_cm * 0.8,
-        _ => w_cm,
-    };
-    let width = gridcraft_engine::cmd::draw::cm_to_px(across).max(1.0);
-    let base = line.resolve(theme).map(crate::theme::color32).unwrap_or(Color32::from_rgb(0x1F, 0x5F, 0xC9));
-    let color = match tool {
-        InkTool::Highlighter => Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 115),
-        InkTool::Pencil => base.gamma_multiply(0.85),
-        _ => base,
-    };
-    (color, width)
 }
 
 fn handle_header_autofit(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
@@ -1175,34 +1157,4 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
     ed.point_cell = Some(to);
     ed.point_anchor = Some((sheet, anchor));
     app.grid.ensure_visible = true;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_pen_preview_is_the_ink_the_stroke_commits() {
-        // #1786: the preview was always blue at 2 pt, whatever the pen. It now follows the brush,
-        // its colour and its thickness in millimetres (converted to sheet points).
-        let theme = gridcraft_engine::model::Theme::default();
-        let px = gridcraft_engine::cmd::draw::cm_to_px;
-        let (c, w) = pen_ink("#C00000", 3.0, "pen", &theme);
-        assert_eq!(c, Color32::from_rgb(0xC0, 0, 0));
-        assert!((w - px(0.3)).abs() < 0.01, "{w}");
-        let (c, w) = pen_ink("", 0.0, "", &theme);
-        assert_eq!(c, Color32::from_rgb(0x1F, 0x5F, 0xC9), "no pen chosen yet: pen blue");
-        assert!((w - px(0.05)).abs() < 0.01, "{w}");
-        let (c, w) = pen_ink("not a colour", 0.2, "pen", &theme);
-        assert_eq!(c, Color32::from_rgb(0x1F, 0x5F, 0xC9));
-        assert!((w - 1.0).abs() < 0.01, "a hairline is at least a pixel: {w}");
-        // A highlighter is a wide translucent band, as the committed ink is painted: the stroke is
-        // `height_cm` across (twice its width) and the preview measures the same way.
-        let (c, w) = pen_ink("#FFFF00", 12.0, "highlighter", &theme);
-        assert_eq!(c, Color32::from_rgba_unmultiplied(0xFF, 0xFF, 0, 115), "translucent yellow");
-        assert!((w - px(2.4)).abs() < 0.01, "across the stroke, not along it: {w}");
-        // A pencil commits at 0.8x its width, so the preview is narrower than the pen's.
-        let (_, w) = pen_ink("#333333", 2.0, "pencil", &theme);
-        assert!((w - px(0.16)).abs() < 0.01, "{w}");
-    }
 }

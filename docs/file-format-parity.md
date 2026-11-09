@@ -52,7 +52,9 @@ The InkML part carries Excel's shape (definitions, context, traceFormat, channel
 trace) with the W3C difference encoding, and the trace points are read back with all prefixes (`!`,
 `'`, `"`, `*`, inheritance) and 1/1000 cm resolution. A part that holds several `<trace>`s, or a
 `<traceGroup>`, reads as one stroke per trace, each with its own creation id and the part's brush. Brush kind, width and height, colour, effect
-and its phase and scale, pressure and draw order survive save→open. A stroke's tool is read from
+and its phase and scale, and pressure survive save→open. Draw order survives a GridCraft save and
+open, but it is written in a GridCraft-only `brushProperty` that Excel drops, so a round trip
+through Excel does not keep it (see `docs/gaps.md` §17). A stroke's tool is read from
 the brush, since Excel writes the pressure channel for every plain pen: `inkEffects=pencil` is a
 Pencil, a texture is a Pen with that effect, `tip=rectangle` with `rasterOp=maskPen` is a
 Highlighter, and everything else a Pen. The two tools Excel cannot write (Fountain Pen and Brush

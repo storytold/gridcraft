@@ -48,6 +48,11 @@ const MAX_BRUSH_CM: f32 = 100.0;
 const MAX_SHEET: f64 = 1e7;
 /// Longest edge of the fallback picture, in px.
 const MAX_PNG: f64 = 1024.0;
+/// Most dabs one stroke's fallback picture may stamp, whatever the stroke's length.
+const MAX_STAMPS: u64 = 20_000;
+/// Pixel work one save may spend rasterising ink fallbacks (dab sprites × dabs), shared by every
+/// sheet: a hostile workbook cannot multiply strokes into unbounded work.
+pub const MAX_SAVE_INK_PIXELS: u64 = 32 * 1024 * 1024;
 /// Pressure channel's maximum.
 const MAX_PRESSURE: i64 = 32_767;
 
@@ -139,7 +144,9 @@ fn read_traces(
     let anchor = anchor_for(content_part, anchor, sheet)?;
     let width_px = (style.width_cm * PX_PER_CM as f32).clamp(1.0, 255.0).round();
     let fill = Color::Rgb((width_px as u32) << 16);
-    let mut keys: Vec<String> = creation_id_of(content_part).into_iter().collect();
+    // The part's GUID names its first stroke; other traces and other parts mint past every key the
+    // workbook already holds, so the identity is stable and unique across the whole workbook.
+    let part_key = creation_id_of(content_part);
     let mut total = 0usize;
     let mut shapes = Vec::new();
     for (i, trace) in traces(&root)?.into_iter().enumerate() {
@@ -149,16 +156,12 @@ fn read_traces(
             return None;
         }
         let mut image = style.clone();
-        // The part's GUID names the first stroke; the others in one part get free keys of their own,
-        // so a gridcraft save writes one part per stroke and never repeats a creation id.
-        image.key = match (i, keys.first()) {
-            (0, Some(first)) => Some(first.clone()),
-            _ => {
-                let key = gridcraft_model::ink_creation_id_free(|k| keys.iter().any(|held| held == k));
-                keys.push(key.clone());
-                Some(key)
-            }
+        let key = match (i, part_key.as_deref()) {
+            (0, Some(first)) if !cx.ink_keys.contains(first) => first.to_string(),
+            _ => gridcraft_model::ink_creation_id_free(|k| cx.ink_keys.contains(k)),
         };
+        cx.ink_keys.insert(key.clone());
+        image.key = Some(key);
         image.pressure = pressure;
         // The part carries one brush; successive strokes keep their drawing order.
         image.order = style.order.saturating_add(i as u32);
@@ -445,19 +448,10 @@ fn finite(v: &str) -> Option<f32> {
     v.trim().parse::<f32>().ok().filter(|v| v.is_finite())
 }
 
-/// The pen texture an `inkEffects` name stands for; an unknown name is a solid stroke.
+/// The pen texture an `inkEffects` name stands for; an unknown name is a solid stroke. The model
+/// owns the table, so the reader accepts the same spellings every other layer writes.
 fn effect(name: &str) -> Option<InkEffect> {
-    match name {
-        "rainbow" => Some(InkEffect::Rainbow),
-        "galaxy" => Some(InkEffect::Galaxy),
-        "lava" => Some(InkEffect::Lava),
-        "ocean" => Some(InkEffect::Ocean),
-        "rosegold" => Some(InkEffect::RoseGold),
-        "gold" => Some(InkEffect::Gold),
-        "silver" => Some(InkEffect::Silver),
-        "bronze" => Some(InkEffect::Bronze),
-        _ => None,
-    }
+    InkEffect::from_name(name)
 }
 
 // ---------------------------------------------------------------- writing
@@ -471,7 +465,7 @@ pub(crate) struct Parts {
 
 /// The InkML part, the fallback picture and the creation id for `shape`, or `None` when its
 /// geometry cannot be represented (the caller then writes the legacy polyline).
-pub(crate) fn parts(shape: &Shape, theme: &Theme) -> Option<Parts> {
+pub(crate) fn parts(shape: &Shape, theme: &Theme, budget: &mut u64) -> Option<Parts> {
     if shape.kind != ShapeKind::Ink {
         return None;
     }
@@ -489,7 +483,7 @@ pub(crate) fn parts(shape: &Shape, theme: &Theme) -> Option<Parts> {
     let color = shape.line.resolve(theme).unwrap_or([0, 0, 0]);
     let trace = encode_trace(&points, use_f.then_some(pressure.as_slice()));
     let xml = inkml_xml(ink, &color, use_f, &trace);
-    let png = fallback_png(shape, ink, &points, color)?;
+    let png = fallback_png(shape, ink, &points, color, budget)?;
     Some(Parts { xml, png, creation_id: creation_id(shape) })
 }
 
@@ -631,16 +625,7 @@ fn inkml_xml(ink: &InkStyle, color: &[u8; 3], f: bool, trace: &str) -> String {
 
 /// The `inkEffects` name Excel writes for a texture.
 fn effect_name(e: InkEffect) -> &'static str {
-    match e {
-        InkEffect::Rainbow => "rainbow",
-        InkEffect::Galaxy => "galaxy",
-        InkEffect::Lava => "lava",
-        InkEffect::Ocean => "ocean",
-        InkEffect::RoseGold => "rosegold",
-        InkEffect::Gold => "gold",
-        InkEffect::Silver => "silver",
-        InkEffect::Bronze => "bronze",
-    }
+    e.inkml_name()
 }
 
 /// The stroke's `a16:creationId`: its stored key in canonical lowercase when it is an ST_Guid,
@@ -657,36 +642,73 @@ pub fn creation_id(shape: &Shape) -> String {
 
 /// A transparent PNG of the stroke in its colour, at the anchor's aspect ratio. Excel needs it as
 /// the contentPart's `mc:Fallback`.
-fn fallback_png(shape: &Shape, ink: &InkStyle, points: &[[i64; 2]], color: [u8; 3]) -> Option<Vec<u8>> {
+///
+/// `budget` is the pixel work left to this save ([`MAX_SAVE_INK_PIXELS`]); the picture shrinks so
+/// its dabs fit, and the work is charged back. A save with a thousand hostile strokes degrades to
+/// small fallbacks instead of rasterising gigabytes.
+fn fallback_png(shape: &Shape, ink: &InkStyle, points: &[[i64; 2]], color: [u8; 3], budget: &mut u64) -> Option<Vec<u8>> {
     let w = f64::from(shape.anchor.width).clamp(1.0, MAX_SHEET);
     let h = f64::from(shape.anchor.height).clamp(1.0, MAX_SHEET);
-    let scale = (MAX_PNG / w.max(h)).min(1.0);
-    let pw = ((w * scale).round() as u32).clamp(1, MAX_PNG as u32);
-    let ph = ((h * scale).round() as u32).clamp(1, MAX_PNG as u32);
-    let mut rgba = vec![0u8; (pw as usize) * (ph as usize) * 4];
-    let radius = (f64::from(ink.width_cm) * PX_PER_CM * scale / 2.0).clamp(0.5, 24.0);
-    // Bound the raster work a hostile stroke can ask for: the picture is a fallback, not art.
-    let mut budget = 100_000usize;
-    let pts: Vec<[f64; 2]> = points.iter().map(|p| [p[0] as f64 / THOUSANDTHS_PER_PX * scale, p[1] as f64 / THOUSANDTHS_PER_PX * scale]).collect();
-    if pts.len() == 1 {
-        stamp(&mut rgba, pw, ph, pts[0][0], pts[0][1], radius, color);
+    let max_scale = (MAX_PNG / w.max(h)).min(1.0);
+    // One dab per half pixel of stroke, capped; a dab's sprite is (2r + 3)² pixels.
+    let plan = |scale: f64| -> (f64, u32, u32, u64) {
+        let radius = (f64::from(ink.width_cm) * PX_PER_CM * scale / 2.0).clamp(0.5, 24.0);
+        let side = (2.0 * radius + 3.0).ceil();
+        let sprite = (side * side) as u64;
+        let mut dabs = 1u64;
+        for pair in points.windows(2) {
+            if dabs >= MAX_STAMPS {
+                break;
+            }
+            let (a, b) = (pair[0], pair[1]);
+            let dx = (b[0] - a[0]) as f64 / THOUSANDTHS_PER_PX * scale;
+            let dy = (b[1] - a[1]) as f64 / THOUSANDTHS_PER_PX * scale;
+            let len = (dx * dx + dy * dy).sqrt();
+            dabs = dabs.saturating_add((len / 0.5).ceil().clamp(1.0, 512.0) as u64).min(MAX_STAMPS);
+        }
+        let pw = ((w * scale).round() as u32).max(1);
+        let ph = ((h * scale).round() as u32).max(1);
+        (radius, pw, ph, sprite.saturating_mul(dabs))
+    };
+    let (mut radius, mut pw, mut ph, mut work) = plan(max_scale);
+    if work > *budget && *budget > 0 {
+        // Shrink until the estimate fits: work grows with the square of the scale (both the sprite
+        // and the dab count scale with it).
+        let factor = (*budget as f64 / work as f64).sqrt().clamp(0.02, 1.0);
+        let (r, w2, h2, work2) = plan(max_scale * factor);
+        radius = r;
+        pw = w2;
+        ph = h2;
+        work = work2;
     }
+    let pw = pw.clamp(1, MAX_PNG as u32);
+    let ph = ph.clamp(1, MAX_PNG as u32);
+    let mut rgba = vec![0u8; (pw as usize) * (ph as usize) * 4];
+    let pts: Vec<[f64; 2]> = points.iter().map(|p| [p[0] as f64 / THOUSANDTHS_PER_PX * (pw as f64 / w), p[1] as f64 / THOUSANDTHS_PER_PX * (ph as f64 / h)]).collect();
+    let dab = Dab::new(radius);
+    if pts.len() == 1 {
+        dab.blit(&mut rgba, pw, ph, pts[0][0], pts[0][1], color);
+    }
+    let mut dabs = 0u64;
     for pair in pts.windows(2) {
-        if budget == 0 {
+        if dabs >= MAX_STAMPS {
             break;
         }
         let (a, b) = (pair[0], pair[1]);
         let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
         let steps = (len / 0.5).ceil().clamp(1.0, 512.0) as usize;
         for i in 0..=steps {
-            if budget == 0 {
+            if dabs >= MAX_STAMPS {
                 break;
             }
-            budget -= 1;
+            dabs += 1;
             let t = i as f64 / steps as f64;
-            stamp(&mut rgba, pw, ph, a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, radius, color);
+            dab.blit(&mut rgba, pw, ph, a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, color);
         }
     }
+    // Charge the work actually spent, and keep the estimate as the ceiling for the next stroke.
+    let spent = work.min(u64::from(pw) * u64::from(ph) + (dab.side as u64).pow(2).saturating_mul(dabs.max(1)));
+    *budget = budget.saturating_sub(spent);
     let mut out = Vec::new();
     {
         let mut enc = png::Encoder::new(&mut out, pw, ph);
@@ -698,30 +720,59 @@ fn fallback_png(shape: &Shape, ink: &InkStyle, points: &[[i64; 2]], color: [u8; 
     Some(out)
 }
 
-/// A soft round dab, source-over into the transparent picture.
-fn stamp(img: &mut [u8], w: u32, h: u32, cx: f64, cy: f64, r: f64, color: [u8; 3]) {
-    let x0 = (cx - r - 1.0).floor().max(0.0) as u32;
-    let y0 = (cy - r - 1.0).floor().max(0.0) as u32;
-    let x1 = ((cx + r + 1.0).ceil() as i64).clamp(0, i64::from(w) - 1) as u32;
-    let y1 = ((cy + r + 1.0).ceil() as i64).clamp(0, i64::from(h) - 1) as u32;
-    if cx + r + 1.0 < 0.0 || cy + r + 1.0 < 0.0 {
-        return;
+/// A soft round dab's coverage, rendered once per stroke (one radius, one colour) and blitted at
+/// every point: no square root and no per-dab colour work inside the pixel loop.
+struct Dab {
+    side: usize,
+    alpha: Vec<u8>,
+}
+
+impl Dab {
+    fn new(r: f64) -> Dab {
+        let side = ((2.0 * r + 3.0).ceil() as usize).max(2);
+        let mut alpha = vec![0u8; side * side];
+        let c = side as f64 / 2.0;
+        for y in 0..side {
+            for x in 0..side {
+                let (dx, dy) = (x as f64 + 0.5 - c, y as f64 + 0.5 - c);
+                let d2 = dx * dx + dy * dy;
+                let reach = r + 0.5;
+                if d2 >= reach * reach {
+                    continue;
+                }
+                alpha[y * side + x] = ((reach - d2.sqrt()).clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+        }
+        Dab { side, alpha }
     }
-    for py in y0..=y1 {
-        for px in x0..=x1 {
-            let dx = px as f64 + 0.5 - cx;
-            let dy = py as f64 + 0.5 - cy;
-            let coverage = (r + 0.5 - (dx * dx + dy * dy).sqrt()).clamp(0.0, 1.0);
-            if coverage <= 0.0 {
+
+    /// Source-over into the transparent picture: the dab's coverage wins where it is stronger than
+    /// what is already there.
+    fn blit(&self, img: &mut [u8], w: u32, h: u32, cx: f64, cy: f64, color: [u8; 3]) {
+        let half = self.side as f64 / 2.0;
+        let (x0, y0) = ((cx - half).floor(), (cy - half).floor());
+        for sy in 0..self.side {
+            let py = y0 + sy as f64;
+            if py < 0.0 || py >= h as f64 {
                 continue;
             }
-            let i = ((py * w + px) * 4) as usize;
-            let Some(pixel) = img.get_mut(i..i + 4) else { continue };
-            let alpha = (f64::from(pixel[3]) / 255.0).max(coverage);
-            pixel[0] = color[0];
-            pixel[1] = color[1];
-            pixel[2] = color[2];
-            pixel[3] = (alpha * 255.0).round() as u8;
+            for sx in 0..self.side {
+                let a = self.alpha[sy * self.side + sx];
+                if a == 0 {
+                    continue;
+                }
+                let px = x0 + sx as f64;
+                if px < 0.0 || px >= w as f64 {
+                    continue;
+                }
+                let i = ((py as u32 * w + px as u32) * 4) as usize;
+                let Some(pixel) = img.get_mut(i..i + 4) else { continue };
+                let alpha = pixel[3].max(a);
+                pixel[0] = color[0];
+                pixel[1] = color[1];
+                pixel[2] = color[2];
+                pixel[3] = alpha;
+            }
         }
     }
 }

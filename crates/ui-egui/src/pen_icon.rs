@@ -41,15 +41,14 @@ pub fn effect_label(effect: &str) -> &'static str {
 /// The base colour of a texture (the colour Excel stores as the stroke's `color`). The fallback is
 /// the pen blue used for an unknown name.
 pub fn effect_base(effect: &str) -> Color32 {
-    // Single source: the engine's texture table. An unknown name falls back to pen blue.
-    let hex = gridcraft_engine::cmd::draw::parse_effect(effect).map(gridcraft_engine::cmd::draw::effect_base).unwrap_or("#1F5FC9");
-    gridcraft_engine::model::Color::from_hex(hex)
-        .and_then(|c| c.resolve(&gridcraft_engine::model::Theme::default()))
-        .map(crate::theme::color32)
-        .unwrap_or(Color32::from_rgb(0x1F, 0x5F, 0xC9))
+    // Single source: the model's texture table (which the engine and xlsx use too). An unknown
+    // name falls back to pen blue.
+    let color = gridcraft_engine::model::InkEffect::from_name(effect).map(|e| e.base_color()).unwrap_or_else(|| gridcraft_engine::model::Color::rgb(0x1F, 0x5F, 0xC9));
+    color.resolve(&gridcraft_engine::model::Theme::default()).map(crate::theme::color32).unwrap_or(Color32::from_rgb(0x1F, 0x5F, 0xC9))
 }
 
-/// The colours a texture's bands run through, brightest first. A solid pen has only its own.
+/// The colours a texture's bands run through, darkest first (the first band is the shadow
+/// tone, e.g. GALAXY starts at `#2A1B5E`). A solid pen has only its own.
 pub fn effect_colors(effect: &str) -> &'static [Color32] {
     const RAINBOW: [Color32; 5] = [
         Color32::from_rgb(0xE8, 0x3A, 0x3A),
@@ -93,10 +92,14 @@ pub fn effect_colors(effect: &str) -> &'static [Color32] {
     }
 }
 
-/// The colour a textured swatch shows at its centre (its base when unnamed).
-pub fn effect_mid(effect: &str) -> Color32 {
-    let bands = effect_colors(effect);
-    bands.get(bands.len() / 2).copied().unwrap_or_else(|| effect_base(effect))
+/// A backing behind a tip or swatch: a white or very light pen is otherwise invisible on the
+/// light ribbon, and a dark one on the dark ribbon. The plate is the ribbon's own tone with a
+/// mid-grey border, which reads against both.
+fn paint_plate(p: &Painter, rect: Rect) {
+    let t = Tokens::get(p.ctx());
+    let radius = (rect.width().min(rect.height()) * 0.18).clamp(2.0, 5.0);
+    p.rect_filled(rect, radius, t.ribbon);
+    p.rect_stroke(rect, radius, Stroke::new(1.0, Color32::from_gray(150)), StrokeKind::Inside);
 }
 
 fn lerp(a: Pos2, b: Pos2, t: f32) -> Pos2 {
@@ -109,6 +112,7 @@ fn lerp(a: Pos2, b: Pos2, t: f32) -> Pos2 {
 pub fn paint_tip(p: &Painter, rect: Rect, tool: &str, color: Color32, effect: Option<&str>) {
     let s = rect.width().min(rect.height());
     let r = Rect::from_center_size(rect.center(), vec2(s, s));
+    paint_plate(p, r);
     match tool {
         "pencil" => {
             // A narrow hexagonal barrel with a flat, slightly angled lead.
@@ -214,6 +218,7 @@ fn paint_texture(p: &Painter, r: Rect, tool: &str, effect: &str) {
 /// pencil, a wide translucent band for a highlighter, a pressure-tapered stroke for the pens.
 /// A textured swatch carries the effect's bands along the stroke.
 pub fn paint_swatch(p: &Painter, rect: Rect, tool: &str, color: Color32, effect: Option<&str>) {
+    paint_plate(p, rect);
     let (w, h) = (rect.width(), rect.height());
     let y = rect.center().y;
     let (x0, x1) = (rect.left() + w * 0.06, rect.right() - w * 0.06);
@@ -268,7 +273,8 @@ pub struct PenTile<'a> {
 pub fn pen_tile(ui: &mut Ui, tile: PenTile<'_>) -> (Response, Response) {
     let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(38.0, 72.0), Sense::hover());
-    let split = rect.bottom() - 13.0;
+    // The dropdown arrow keeps a 24 px target, the smallest a pointer or touch can hit reliably.
+    let split = rect.bottom() - 24.0;
     let body = Rect::from_min_max(rect.min, pos2(rect.right(), split));
     let arrow = Rect::from_min_max(pos2(rect.left(), split), rect.max);
     let id = ui.scope_id().with(("pen_tile", tile.id));
@@ -290,10 +296,15 @@ pub fn pen_tile(ui: &mut Ui, tile: PenTile<'_>) -> (Response, Response) {
     if tile.selected {
         p.rect_stroke(rect, 5.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
     }
+    // Keyboard focus is not selection: without a ring, tabbing through the gallery moved an
+    // invisible caret.
+    if main.has_focus() || chevron.has_focus() {
+        p.rect_stroke(rect, 5.0, Stroke::new(1.5, t.accent), StrokeKind::Outside);
+    }
     // Each tile is its own pen ("Galaxy pen", "Red pen", …), so the tool's generic name would
     // leave the six default pens and every custom one indistinguishable to a screen reader.
-    let label = tile.tip;
-    main.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
+    let label = if tile.selected { format!("{}, selected", tile.tip) } else { tile.tip.to_string() };
+    main.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &label));
     chevron.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), format!("{label} options")));
     let tip = tile.tip.to_string();
     (main.on_hover_text(tip.clone()), chevron.on_hover_text(tip))

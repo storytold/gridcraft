@@ -699,6 +699,70 @@ pub enum InkEffect {
     Bronze,
 }
 
+impl InkEffect {
+    /// The eight textures, in Excel's palette order.
+    pub const ALL: [InkEffect; 8] =
+        [InkEffect::Rainbow, InkEffect::Galaxy, InkEffect::Lava, InkEffect::Ocean, InkEffect::RoseGold, InkEffect::Gold, InkEffect::Silver, InkEffect::Bronze];
+
+    /// The canonical JSON name (`InkStyle`'s `camelCase` spelling), for the Draw tab and commands.
+    pub fn name(self) -> &'static str {
+        match self {
+            InkEffect::Rainbow => "rainbow",
+            InkEffect::Galaxy => "galaxy",
+            InkEffect::Lava => "lava",
+            InkEffect::Ocean => "ocean",
+            InkEffect::RoseGold => "roseGold",
+            InkEffect::Gold => "gold",
+            InkEffect::Silver => "silver",
+            InkEffect::Bronze => "bronze",
+        }
+    }
+
+    /// The `inkEffects` name Excel writes in InkML: its own lowercase spelling, without the camel
+    /// hump (`rosegold`).
+    pub fn inkml_name(self) -> &'static str {
+        match self {
+            InkEffect::RoseGold => "rosegold",
+            other => other.name(),
+        }
+    }
+
+    /// Parses a texture name, case and `_`/`-`/space-insensitively (both `roseGold` and Excel's
+    /// `rosegold` are accepted); `None` for `"none"`, `"solid"` or anything unknown.
+    pub fn from_name(s: &str) -> Option<InkEffect> {
+        match s.trim().to_ascii_lowercase().replace(['_', '-', ' '], "").as_str() {
+            "rainbow" => Some(InkEffect::Rainbow),
+            "galaxy" => Some(InkEffect::Galaxy),
+            "lava" => Some(InkEffect::Lava),
+            "ocean" => Some(InkEffect::Ocean),
+            "rosegold" => Some(InkEffect::RoseGold),
+            "gold" => Some(InkEffect::Gold),
+            "silver" => Some(InkEffect::Silver),
+            "bronze" => Some(InkEffect::Bronze),
+            _ => None,
+        }
+    }
+
+    /// The base colour Excel stores for the texture's stroke.
+    pub fn base_hex(self) -> &'static str {
+        match self {
+            InkEffect::Rainbow => "#E83A6B",
+            InkEffect::Galaxy => "#5B3EA8",
+            InkEffect::Lava => "#D94F1E",
+            InkEffect::Ocean => "#1B7FB5",
+            InkEffect::RoseGold => "#C98A7A",
+            InkEffect::Gold => "#C99A2E",
+            InkEffect::Silver => "#9AA3AD",
+            InkEffect::Bronze => "#9A673A",
+        }
+    }
+
+    /// [`InkEffect::base_hex`] as a model colour.
+    pub fn base_color(self) -> Color {
+        Color::from_hex(self.base_hex()).unwrap_or_default()
+    }
+}
+
 /// A stroke's brush: the Draw-tab kind, its size, texture and the per-point data the file keeps.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -719,11 +783,6 @@ pub struct InkStyle {
     pub pressure: Vec<u16>,
     /// Draw order, for Ink Replay.
     pub order: u32,
-    /// GridCraft's own texture: a content-addressed id into the workbook's texture store. Excel
-    /// has no equivalent and drops it; the bytes live once on the workbook, not on every stroke.
-    pub texture: Option<String>,
-    /// How the texture repeats along the stroke.
-    pub texture_scale: f32,
     /// The stroke's stable `a16:creationId` GUID (braces included), assigned when the stroke is
     /// created and never changed: moving or recolouring it keeps the key. Excel preserves the
     /// GUID across saves, so a map keyed by it survives an Excel round trip.
@@ -741,8 +800,6 @@ impl Default for InkStyle {
             scale: 1.0,
             pressure: Vec::new(),
             order: 0,
-            texture: None,
-            texture_scale: 1.0,
             key: None,
         }
     }
@@ -1341,8 +1398,6 @@ mod tests {
                 scale: 0.5,
                 pressure: vec![0, 32_767],
                 order: 7,
-                texture: Some("tex-1".into()),
-                texture_scale: 2.0,
                 key: Some(key.into()),
             }),
         };
@@ -1358,9 +1413,8 @@ mod tests {
 
         // With no serialized fields at all, InkStyle takes its usable defaults.
         let bare: InkStyle = serde_json::from_str("{}").expect("bare ink style");
-        assert_eq!((bare.tool, bare.effect, bare.texture, bare.key), (InkTool::Pen, None, None, None));
+        assert_eq!((bare.tool, bare.effect, bare.key), (InkTool::Pen, None, None));
         assert_eq!(bare.scale, 1.0);
-        assert_eq!(bare.texture_scale, 1.0);
         assert!(bare.width_cm > 0.0);
     }
 

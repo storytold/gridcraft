@@ -4,11 +4,17 @@ use gridcraft_core::CellRef;
 use gridcraft_model::{Anchor, Color, InkEffect, InkStyle, InkTool, Shape, ShapeKind};
 use serde_json::{Value as Json, json};
 
-use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, ok, str_param, u32_param};
+use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, has_doc, ok, str_param, u32_param};
 
 /// Excel's pen widths in millimetres (the Highlighter has its own wider steps).
 pub const PEN_WIDTHS_MM: [f32; 6] = [0.25, 0.35, 0.5, 1.0, 2.0, 3.5];
-pub const HIGHLIGHTER_WIDTHS_MM: [f32; 6] = [2.0, 4.0, 6.0, 8.0, 10.0, 10.0];
+pub const HIGHLIGHTER_WIDTHS_MM: [f32; 5] = [2.0, 4.0, 6.0, 8.0, 10.0];
+
+/// The most points one stroke may carry (the same limit the InkML reader enforces).
+pub const MAX_INK_POINTS: usize = 20_000;
+
+/// The sheet-coordinate bound a stroke point may not pass (the InkML reader's `MAX_SHEET`).
+pub const MAX_STROKE_COORD: f64 = 1e7;
 
 /// One pen of the Draw tab's gallery: its brush kind, colour, thickness in millimetres and
 /// texture. Excel's default pens have ids 0–5; the person's own pens follow.
@@ -85,48 +91,20 @@ pub fn parse_tool(s: &str) -> Option<InkTool> {
     }
 }
 
-/// The canonical JSON name of a texture.
+/// The canonical JSON name of a texture (the model owns the table, so the engine, xlsx and UI
+/// cannot drift).
 pub fn effect_name(effect: InkEffect) -> &'static str {
-    match effect {
-        InkEffect::Rainbow => "rainbow",
-        InkEffect::Galaxy => "galaxy",
-        InkEffect::Lava => "lava",
-        InkEffect::Ocean => "ocean",
-        InkEffect::RoseGold => "roseGold",
-        InkEffect::Gold => "gold",
-        InkEffect::Silver => "silver",
-        InkEffect::Bronze => "bronze",
-    }
+    effect.name()
 }
 
 /// Parses a texture by its JSON name; `None` for `"none"` or an empty string.
 pub fn parse_effect(s: &str) -> Option<InkEffect> {
-    match s.trim().to_ascii_lowercase().replace(['_', '-', ' '], "").as_str() {
-        "" | "none" | "solid" => None,
-        "rainbow" => Some(InkEffect::Rainbow),
-        "galaxy" => Some(InkEffect::Galaxy),
-        "lava" => Some(InkEffect::Lava),
-        "ocean" => Some(InkEffect::Ocean),
-        "rosegold" => Some(InkEffect::RoseGold),
-        "gold" => Some(InkEffect::Gold),
-        "silver" => Some(InkEffect::Silver),
-        "bronze" => Some(InkEffect::Bronze),
-        _ => None,
-    }
+    InkEffect::from_name(s)
 }
 
 /// The base colour Excel stores for a texture's stroke.
 pub fn effect_base(effect: InkEffect) -> &'static str {
-    match effect {
-        InkEffect::Rainbow => "#E83A6B",
-        InkEffect::Galaxy => "#5B3EA8",
-        InkEffect::Lava => "#D94F1E",
-        InkEffect::Ocean => "#1B7FB5",
-        InkEffect::RoseGold => "#C98A7A",
-        InkEffect::Gold => "#C99A2E",
-        InkEffect::Silver => "#9AA3AD",
-        InkEffect::Bronze => "#9A673A",
-    }
+    effect.base_hex()
 }
 
 /// A brush kind's thickness steps in millimetres.
@@ -161,19 +139,57 @@ pub fn px_to_cm(px: f32) -> f32 {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
+    // Every pen command returns the same object: `{pen: gallery id, brush, color, width, effect}`.
+    // `width` is millimetres (`widthMm` is the same value under its canonical name). `effect` is
+    // the texture's JSON name, or null when the pen is solid. `brush` and `kind` are the same
+    // parameter: `brush` is canonical and `kind` is kept as an alias for older macros, and every
+    // spec lists both so the docs match the code.
     vec![
         cmd!(
             noundo "draw.pen",
             "Pen",
             ["Draw", "Tools"],
             None,
-            "{on?: bool, brush?: pen|pencil|highlighter|fountainPen|brushPen, color?: #RRGGBB, width?: mm, effect?: rainbow|galaxy|lava|ocean|roseGold|gold|silver|bronze|none, pen?: gallery id}",
+            "{on?: bool, pen?: gallery id, brush|kind?: pen|pencil|highlighter|fountainPen|brushPen, color?: #RRGGBB, width?: mm, widthMm?: mm, effect?: rainbow|galaxy|lava|ocean|roseGold|gold|silver|bronze|none} → {pen: gallery id, brush, color, width (mm), effect or null}",
             has_doc,
             pen
         ),
-        cmd!(noundo "draw.addPen", "Add Pen", ["Draw", "Tools"], None, "{brush|kind: pen|pencil|highlighter|fountainPen|brushPen, color?: #RRGGBB, width?: mm, effect?: name} → {pen}", has_doc, add_pen),
-        cmd!(noundo "draw.updatePen", "Change Pen", ["Draw", "Tools"], None, "{id, brush?: kind, color?: #RRGGBB, width?: mm, effect?: name} → {pen}", has_doc, update_pen),
-        cmd!(noundo "draw.deletePen", "Delete Tool", ["Draw", "Tools"], None, "{id} → {removed}", has_doc, delete_pen),
+        cmd!(
+            noundo "draw.addPen",
+            "Add Pen",
+            ["Draw", "Tools"],
+            None,
+            "{brush|kind: pen|pencil|highlighter|fountainPen|brushPen, color?: #RRGGBB, width?: mm, widthMm?: mm, effect?: rainbow|galaxy|lava|ocean|roseGold|gold|silver|bronze|none} → {pen: gallery id, brush, color, width (mm), effect or null}",
+            has_doc,
+            add_pen
+        ),
+        cmd!(
+            noundo "draw.updatePen",
+            "Change Pen",
+            ["Draw", "Tools"],
+            None,
+            "{id, brush|kind?: pen|pencil|highlighter|fountainPen|brushPen, color?: #RRGGBB, width?: mm, widthMm?: mm, effect?: rainbow|galaxy|lava|ocean|roseGold|gold|silver|bronze|none} → {pen: gallery id, brush, color, width (mm), effect or null}",
+            has_doc,
+            update_pen
+        ),
+        cmd!(
+            noundo "draw.deletePen",
+            "Delete Tool",
+            ["Draw", "Tools"],
+            None,
+            "{id} → {removed: true}; an unknown id is an error, as in draw.updatePen",
+            has_doc,
+            delete_pen
+        ),
+        cmd!(
+            query "draw.pens",
+            "Pens",
+            ["Draw", "Tools"],
+            None,
+            "{} → {pens: [{pen: gallery id, brush, color, width (mm), effect or null},…]}, Excel's six default pens first, at most 1024 entries",
+            has_doc,
+            list_pens
+        ),
         cmd!(noundo "draw.eraser", "Eraser", ["Draw", "Tools"], None, "{on?: bool}", has_doc, eraser),
         cmd!(noundo "draw.lasso", "Lasso Select", ["Draw", "Tools"], None, "{} (selects ink by dragging; same as Select Objects)", has_doc, |s, _| {
             s.draw_tool = String::new();
@@ -184,7 +200,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Ink Stroke",
             [],
             None,
-            "{points: [[x,y],…] in sheet points, brush?: kind, color?: hex, width?: mm, effect?: name, pressure?: [0..32767] per point}",
+            "{points: [[x,y],…] in sheet points (at most 20000; |x| and |y| at most 1e7), brush|kind?: pen|pencil|highlighter|fountainPen|brushPen, color?: #RRGGBB (an invalid colour is an error), width?: mm (millimetres: 1 mm = 3.7795 pt; callers that pass points must convert), widthMm?: mm, effect?: rainbow|galaxy|lava|ocean|roseGold|gold|silver|bronze|none, pressure?: [0..32767] once per point (a wrong length or a non-number is an error)} → {shape}",
             has_doc,
             stroke
         ),
@@ -199,67 +215,111 @@ fn parse_color(s: &str) -> Option<Color> {
 
 /// The colour a stroke commits: a textured pen's base colour (Excel stores the texture's own
 /// colour), otherwise the requested one or the pen blue.
-fn stroke_color(color: Option<&str>, effect: Option<InkEffect>, fallback: &str) -> Color {
-    let pick = effect.map(effect_base).or(color).unwrap_or(fallback);
-    parse_color(pick).unwrap_or(Color::rgb(0x1F, 0x5F, 0xC9))
+fn stroke_color(color: Option<Color>, effect: Option<InkEffect>, fallback: &str) -> Color {
+    if let Some(e) = effect
+        && let Some(c) = parse_color(effect_base(e))
+    {
+        return c;
+    }
+    color.or_else(|| parse_color(fallback)).unwrap_or(Color::rgb(0x1F, 0x5F, 0xC9))
+}
+
+/// The one shape every pen command returns: the gallery id it stands for (null for the pen in
+/// hand when no gallery entry matches), its brush, colour, thickness in millimetres and texture.
+fn pen_json(id: Option<u32>, tool: &str, color: &str, width: f32, effect: Option<&str>) -> Json {
+    json!({"pen": id, "brush": tool, "color": color, "width": width, "effect": effect})
+}
+
+/// [`pen_json`] for a gallery pen.
+fn gallery_pen_json(pen: &DrawPen) -> Json {
+    pen_json(Some(pen.id), &pen.tool, &pen.color, pen.width, pen.effect.as_deref())
+}
+
+/// A millimetre width from `widthMm` (the canonical name) or `width`; a wrong type is an error
+/// rather than a silently ignored field.
+fn width_mm(s: &str, p: &Json) -> Result<Option<f32>> {
+    let Some((key, v)) = ["widthMm", "width"].iter().find_map(|k| p.get(*k).filter(|v| !v.is_null()).map(|v| (*k, v))) else {
+        return Ok(None);
+    };
+    let w = v.as_f64().filter(|w| w.is_finite()).ok_or_else(|| bad(s, format!("{key} must be a finite number of millimetres")))?;
+    Ok(Some((w as f32).clamp(0.05, 20.0)))
+}
+
+/// A texture parameter: `None` for the none spellings, an error for an unknown name.
+fn effect_param(s: &str, e: &str) -> Result<Option<InkEffect>> {
+    let parsed = parse_effect(e);
+    let is_none = e.trim().is_empty() || matches!(e.trim().to_ascii_lowercase().as_str(), "none" | "solid");
+    if parsed.is_none() && !is_none {
+        return Err(bad(s, format!("unknown effect '{e}'")));
+    }
+    Ok(parsed)
 }
 
 fn pen(s: &mut Session, p: &Json) -> Result<Json> {
     s.ensure_draw_pens();
-    let selecting = ["brush", "kind", "color", "width", "effect", "pen"].iter().any(|k| p.get(*k).is_some());
+    let selecting = ["brush", "kind", "color", "width", "widthMm", "effect", "pen"].iter().any(|k| p.get(*k).is_some());
     let on = bool_param(p, "on").unwrap_or(selecting || s.draw_tool != "pen");
-    s.draw_tool = if on { "pen".into() } else { String::new() };
+
+    // Every parameter is validated into locals first: a rejected call must leave the session as it
+    // was, not half-switched to the new tool.
+    let mut brush = s.draw_brush.clone();
+    let mut color = s.draw_color.clone();
+    let mut width = s.draw_width;
+    let mut effect = s.draw_effect.clone();
 
     // Selecting a gallery pen loads its brush, colour, thickness and texture.
     if let Some(id) = u32_param(p, "pen") {
         let chosen = s.draw_pens.iter().find(|q| q.id == id).cloned().ok_or_else(|| bad("draw.pen", format!("no pen {id} in the gallery")))?;
-        s.draw_brush = chosen.tool;
-        s.draw_color = chosen.color;
-        s.draw_width = chosen.width;
-        s.draw_effect = chosen.effect.unwrap_or_default();
+        brush = chosen.tool;
+        color = chosen.color;
+        width = chosen.width;
+        effect = chosen.effect.unwrap_or_default();
     }
     if let Some(name) = str_param(p, "brush").or_else(|| str_param(p, "kind")) {
         let tool = parse_tool(name).ok_or_else(|| bad("draw.pen", format!("unknown brush '{name}'")))?;
-        s.draw_brush = tool_name(tool).to_string();
+        brush = tool_name(tool).to_string();
     }
-    let tool = parse_tool(&s.draw_brush).unwrap_or(InkTool::Pen);
-    if let Some(c) = str_param(p, "color") {
-        if parse_color(c).is_none() {
-            return Err(bad("draw.pen", format!("'{c}' is not a #RRGGBB colour")));
-        }
-        s.draw_color = c.to_string();
+    let tool = parse_tool(&brush).unwrap_or(InkTool::Pen);
+    let color_param = match str_param(p, "color") {
+        Some(c) if parse_color(c).is_some() => Some(c.to_string()),
+        Some(c) => return Err(bad("draw.pen", format!("'{c}' is not a #RRGGBB colour"))),
+        None => None,
+    };
+    if let Some(c) = &color_param {
+        color = c.clone();
     }
-    if let Some(w) = f64_param(p, "width") {
-        if !w.is_finite() {
-            return Err(bad("draw.pen", "the width must be a finite number of millimetres"));
-        }
-        s.draw_width = (w as f32).clamp(0.05, 20.0);
-    } else if s.draw_width <= 0.0 {
-        s.draw_width = *widths_mm(tool).first().unwrap_or(&0.5);
+    match width_mm("draw.pen", p)? {
+        Some(w) => width = w,
+        None if width <= 0.0 => width = *widths_mm(tool).first().unwrap_or(&0.5),
+        None => {}
     }
     if let Some(e) = str_param(p, "effect") {
-        let effect = parse_effect(e);
-        // Four standard names must not silently fall back to solid; only the none spellings do.
-        let is_none = e.trim().is_empty() || matches!(e.trim().to_ascii_lowercase().as_str(), "none" | "solid");
-        if effect.is_none() && !is_none {
-            return Err(bad("draw.pen", format!("unknown effect '{e}'")));
-        }
-        s.draw_effect = effect.map(|q| effect_name(q).to_string()).unwrap_or_default();
-        if effect.is_some() && str_param(p, "color").is_none() {
-            s.draw_color = effect.map(effect_base).unwrap_or("#1F5FC9").to_string();
+        let parsed = effect_param("draw.pen", e)?;
+        effect = parsed.map(|q| effect_name(q).to_string()).unwrap_or_default();
+        if let Some(q) = parsed
+            && color_param.is_none()
+        {
+            color = effect_base(q).to_string();
         }
     }
-    let effect = parse_effect(&s.draw_effect);
-    if s.draw_color.eq_ignore_ascii_case("none") {
-        s.draw_color = "#1F5FC9".into();
-    }
-    Ok(json!({
-        "tool": s.draw_tool,
-        "brush": s.draw_brush,
-        "color": s.draw_color,
-        "width": s.draw_width,
-        "effect": effect.map(effect_name),
-    }))
+
+    s.draw_tool = if on { "pen".into() } else { String::new() };
+    s.draw_brush = brush;
+    s.draw_color = color;
+    s.draw_width = width;
+    s.draw_effect = effect;
+    // The gallery entry the pen in hand stands for, when it matches one exactly.
+    let in_hand = s
+        .draw_pens
+        .iter()
+        .find(|q| {
+            q.tool == s.draw_brush
+                && q.color.eq_ignore_ascii_case(&s.draw_color)
+                && (q.width - s.draw_width).abs() < 0.01
+                && q.effect.as_deref().unwrap_or_default() == s.draw_effect
+        })
+        .map(|q| q.id);
+    Ok(pen_json(in_hand, &s.draw_brush, &s.draw_color, s.draw_width, parse_effect(&s.draw_effect).map(effect_name)))
 }
 
 fn add_pen(s: &mut Session, p: &Json) -> Result<Json> {
@@ -267,14 +327,7 @@ fn add_pen(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "brush").or_else(|| str_param(p, "kind")).unwrap_or("pen");
     let tool = parse_tool(name).ok_or_else(|| bad("draw.addPen", format!("unknown brush '{name}'")))?;
     let effect = match str_param(p, "effect") {
-        Some(e) => {
-            let parsed = parse_effect(e);
-            let is_none = e.trim().is_empty() || matches!(e.trim().to_ascii_lowercase().as_str(), "none" | "solid");
-            if parsed.is_none() && !is_none {
-                return Err(bad("draw.addPen", format!("unknown effect '{e}'")));
-            }
-            parsed
-        }
+        Some(e) => effect_param("draw.addPen", e)?,
         None => None,
     };
     let color = match str_param(p, "color") {
@@ -282,13 +335,8 @@ fn add_pen(s: &mut Session, p: &Json) -> Result<Json> {
         Some(c) => return Err(bad("draw.addPen", format!("'{c}' is not a #RRGGBB colour"))),
         None => effect.map(effect_base).unwrap_or("#1F5FC9").to_string(),
     };
-    let default_width = *widths_mm(tool).first().unwrap_or(&0.5);
-    let width = match f64_param(p, "width") {
-        Some(w) if w.is_finite() => (w as f32).clamp(0.05, 20.0),
-        Some(_) => return Err(bad("draw.addPen", "the width must be a finite number of millimetres")),
-        None => default_width,
-    };
-    let id = s.draw_pens.iter().map(|q| q.id).max().map_or(1, |m| m.saturating_add(1));
+    let width = width_mm("draw.addPen", p)?.unwrap_or(*widths_mm(tool).first().unwrap_or(&0.5));
+    let id = s.next_draw_pen_id();
     let pen = DrawPen { id, tool: tool_name(tool).to_string(), color, width, effect: effect.map(|e| effect_name(e).to_string()) };
     s.draw_pens.push(pen.clone());
     // A new pen becomes the one being drawn with, as in Excel's Add menu.
@@ -297,7 +345,7 @@ fn add_pen(s: &mut Session, p: &Json) -> Result<Json> {
     s.draw_color = pen.color.clone();
     s.draw_width = pen.width;
     s.draw_effect = pen.effect.clone().unwrap_or_default();
-    Ok(json!({"pen": id, "brush": pen.tool, "color": pen.color, "width": pen.width, "effect": pen.effect}))
+    Ok(gallery_pen_json(&pen))
 }
 
 fn update_pen(s: &mut Session, p: &Json) -> Result<Json> {
@@ -310,30 +358,29 @@ fn update_pen(s: &mut Session, p: &Json) -> Result<Json> {
         let tool = parse_tool(name).ok_or_else(|| bad("draw.updatePen", format!("unknown brush '{name}'")))?;
         pen.tool = tool_name(tool).to_string();
     }
-    if let Some(c) = str_param(p, "color") {
-        if parse_color(c).is_none() {
-            return Err(bad("draw.updatePen", format!("'{c}' is not a #RRGGBB colour")));
-        }
-        pen.color = c.to_string();
+    let color_param = match str_param(p, "color") {
+        Some(c) if parse_color(c).is_some() => Some(c.to_string()),
+        Some(c) => return Err(bad("draw.updatePen", format!("'{c}' is not a #RRGGBB colour"))),
+        None => None,
+    };
+    if let Some(c) = &color_param {
+        pen.color = c.clone();
     }
-    if let Some(w) = f64_param(p, "width") {
-        if !w.is_finite() {
-            return Err(bad("draw.updatePen", "the width must be a finite number of millimetres"));
-        }
-        pen.width = (w as f32).clamp(0.05, 20.0);
+    if let Some(w) = width_mm("draw.updatePen", p)? {
+        pen.width = w;
     }
     if let Some(e) = str_param(p, "effect") {
-        let parsed = parse_effect(e);
-        let is_none = e.trim().is_empty() || matches!(e.trim().to_ascii_lowercase().as_str(), "none" | "solid");
-        if parsed.is_none() && !is_none {
-            return Err(bad("draw.updatePen", format!("unknown effect '{e}'")));
-        }
+        let parsed = effect_param("draw.updatePen", e)?;
         pen.effect = parsed.map(|q| effect_name(q).to_string());
-        if parsed.is_some() && str_param(p, "color").is_none() {
-            pen.color = parsed.map(effect_base).unwrap_or("#1F5FC9").to_string();
+        if let Some(q) = parsed
+            && color_param.is_none()
+        {
+            pen.color = effect_base(q).to_string();
         }
     }
-    // The pen in hand follows its gallery entry when it is the entry being changed.
+    // The pen in hand follows its gallery entry when it is the entry being changed. A front end
+    // that edits another entry selects it afterwards (`draw.pen`), so the tile it just changed is
+    // the one it draws with.
     let in_hand = s.draw_tool == "pen"
         && s.draw_brush == old.tool
         && s.draw_color.eq_ignore_ascii_case(&old.color)
@@ -346,7 +393,12 @@ fn update_pen(s: &mut Session, p: &Json) -> Result<Json> {
         s.draw_width = pen.width;
         s.draw_effect = pen.effect.clone().unwrap_or_default();
     }
-    Ok(json!({"pen": pen.id, "brush": pen.tool, "color": pen.color, "width": pen.width, "effect": pen.effect}))
+    Ok(gallery_pen_json(&pen))
+}
+
+fn list_pens(s: &mut Session, _p: &Json) -> Result<Json> {
+    s.ensure_draw_pens();
+    Ok(json!({"pens": s.draw_pens.iter().map(gallery_pen_json).collect::<Vec<_>>()}))
 }
 
 fn delete_pen(s: &mut Session, p: &Json) -> Result<Json> {
@@ -355,12 +407,9 @@ fn delete_pen(s: &mut Session, p: &Json) -> Result<Json> {
     if id < DEFAULT_PEN_COUNT {
         return Err(bad("draw.deletePen", "Excel's default pens cannot be deleted"));
     }
-    let doomed = s.draw_pens.iter().find(|q| q.id == id).cloned();
-    let before = s.draw_pens.len();
-    s.draw_pens.retain(|q| q.id != id);
-    let removed = s.draw_pens.len() != before;
-    if let Some(pen) = doomed
-        && s.draw_tool == "pen"
+    let idx = s.draw_pens.iter().position(|q| q.id == id).ok_or_else(|| bad("draw.deletePen", format!("no pen {id} in the gallery")))?;
+    let pen = s.draw_pens.remove(idx);
+    if s.draw_tool == "pen"
         && s.draw_brush == pen.tool
         && s.draw_color.eq_ignore_ascii_case(&pen.color)
         && (s.draw_width - pen.width).abs() < 0.01
@@ -372,7 +421,7 @@ fn delete_pen(s: &mut Session, p: &Json) -> Result<Json> {
         s.draw_color = "#1F5FC9".into();
         s.draw_width = *widths_mm(InkTool::Pen).first().unwrap_or(&0.5);
     }
-    Ok(json!({"removed": removed}))
+    Ok(json!({"removed": true}))
 }
 
 fn eraser(s: &mut Session, p: &Json) -> Result<Json> {
@@ -386,17 +435,22 @@ fn parse_points(t: &str) -> Vec<[f32; 2]> {
 }
 
 fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
-    let pts: Vec<[f64; 2]> = p
-        .get("points")
-        .and_then(Json::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(|q| Some([q.get(0)?.as_f64()?, q.get(1)?.as_f64()?]))
-                .filter(|q| q[0].is_finite() && q[1].is_finite())
-                .take(20_000)
-                .collect()
-        })
-        .unwrap_or_default();
+    let raw = p.get("points").and_then(Json::as_array).ok_or_else(|| bad("draw.stroke", "points must be an array of [x, y] pairs"))?;
+    // Reject a bad point instead of dropping it: a filtered point would shift every pressure
+    // value past it onto the wrong place.
+    let mut pts: Vec<[f64; 2]> = Vec::with_capacity(raw.len().min(MAX_INK_POINTS));
+    for q in raw {
+        let (Some(x), Some(y)) = (q.get(0).and_then(Json::as_f64), q.get(1).and_then(Json::as_f64)) else {
+            return Err(bad("draw.stroke", "every point must be a pair of numbers"));
+        };
+        if !x.is_finite() || !y.is_finite() || x.abs() > MAX_STROKE_COORD || y.abs() > MAX_STROKE_COORD {
+            return Err(bad("draw.stroke", format!("a stroke point is outside the sheet (|x| and |y| at most {MAX_STROKE_COORD})")));
+        }
+        if pts.len() == MAX_INK_POINTS {
+            return Err(bad("draw.stroke", format!("a stroke holds at most {MAX_INK_POINTS} points")));
+        }
+        pts.push([x, y]);
+    }
     if pts.len() < 2 {
         return Err(bad("draw.stroke", "a stroke needs at least two points"));
     }
@@ -410,32 +464,44 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
         None => parse_tool(&s.draw_brush).unwrap_or(InkTool::Pen),
     };
     let effect = match str_param(p, "effect") {
-        Some(e) => {
-            let parsed = parse_effect(e);
-            let is_none = e.trim().is_empty() || matches!(e.trim().to_ascii_lowercase().as_str(), "none" | "solid");
-            if parsed.is_none() && !is_none {
-                return Err(bad("draw.stroke", format!("unknown effect '{e}'")));
-            }
-            parsed
-        }
+        Some(e) => effect_param("draw.stroke", e)?,
         None => parse_effect(&s.draw_effect),
     };
+    // An invalid colour is refused, as `draw.pen`, `draw.addPen` and `draw.updatePen` do; only a
+    // missing one falls back.
+    let color = match str_param(p, "color") {
+        Some(c) => Some(parse_color(c).ok_or_else(|| bad("draw.stroke", format!("'{c}' is not a #RRGGBB colour")))?),
+        None => None,
+    };
     let fallback = if s.draw_color.is_empty() { "#1F5FC9" } else { s.draw_color.as_str() };
-    let line = stroke_color(str_param(p, "color"), effect, fallback);
-    let width_mm = match f64_param(p, "width") {
-        Some(w) if w.is_finite() => (w as f32).clamp(0.05, 20.0),
-        Some(_) => return Err(bad("draw.stroke", "the width must be a finite number of millimetres")),
+    let line = stroke_color(color, effect, fallback);
+    let width_mm = match width_mm("draw.stroke", p)? {
+        Some(w) => w,
         None => {
             let w = if s.draw_width <= 0.0 { *widths_mm(tool).first().unwrap_or(&0.5) } else { s.draw_width };
             w.clamp(0.05, 20.0)
         }
     };
     let (width_cm, height_cm) = ink_size_cm(tool, width_mm);
-    let pressure: Vec<u16> = p
-        .get("pressure")
-        .and_then(Json::as_array)
-        .map(|a| a.iter().filter_map(Json::as_f64).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 32767.0).round() as u16).take(pts.len()).collect())
-        .unwrap_or_default();
+    // Pressure is per point: a non-number is an error, not a dropped entry (which would shift
+    // every later value onto an earlier point), and extra entries are an error too.
+    let pressure: Vec<u16> = match p.get("pressure") {
+        None => Vec::new(),
+        Some(v) => {
+            let arr = v.as_array().ok_or_else(|| bad("draw.stroke", "pressure must be an array of numbers"))?;
+            if arr.len() > pts.len() {
+                return Err(bad("draw.stroke", "pressure has more entries than the stroke has points"));
+            }
+            arr.iter()
+                .map(|x| {
+                    x.as_f64()
+                        .filter(|v| v.is_finite())
+                        .map(|v| v.clamp(0.0, 32767.0).round() as u16)
+                        .ok_or_else(|| bad("draw.stroke", "every pressure entry must be a number"))
+                })
+                .collect::<Result<Vec<_>>>()?
+        }
+    };
 
     let d = s.doc()?;
     let si = d.wb.active_sheet();
@@ -446,10 +512,11 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     let text = pts.iter().map(|q| format!("{:.1},{:.1}", q[0] - minx, q[1] - miny)).collect::<Vec<_>>().join(";");
     let order = sh.shapes.iter().filter_map(|x| x.ink.as_ref()).map(|i| i.order).max().map_or(0, |o| o.saturating_add(1));
     // A reopened workbook holds keys minted by an earlier process, whose counter started at zero,
-    // so a freshly minted key can be one the workbook already uses: mint past those.
-    let held: Vec<&str> =
+    // so a freshly minted key can be one the workbook already uses: mint past those. A set, not a
+    // vector, so a shape-heavy sheet does not make every stroke quadratic.
+    let held: std::collections::HashSet<&str> =
         d.wb.sheets.iter().flat_map(|sheet| sheet.shapes.iter()).filter_map(|x| x.ink.as_ref()).filter_map(|i| i.key.as_deref()).collect();
-    let key = gridcraft_model::ink_creation_id_free(|k| held.contains(&k));
+    let key = gridcraft_model::ink_creation_id_free(|k| held.contains(k));
     let id = d.wb.next_object_id();
     let px_width = cm_to_px(width_cm).round().clamp(1.0, 255.0) as u8;
     // The texture's phase follows the stroke's place on the sheet (Excel's anchorX/anchorY are
@@ -482,7 +549,6 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
             pressure,
             order,
             key: Some(key),
-            ..InkStyle::default()
         }),
     };
     edit(s, |cx| {

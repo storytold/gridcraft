@@ -1044,6 +1044,8 @@ struct DrawState {
     brush: String,
     effect: String,
     pens: Vec<crate::cmd::draw::DrawPen>,
+    /// The gallery's next id, restored too: a dry run that added a pen must not consume ids.
+    next_pen: u32,
 }
 
 /// Session state a dry run may touch, put back afterwards. The workbook, its selection and its
@@ -1108,6 +1110,7 @@ impl Saved {
                 brush: s.draw_brush.clone(),
                 effect: s.draw_effect.clone(),
                 pens: s.draw_pens.clone(),
+                next_pen: s.draw_pen_next,
             },
             comments_pane: s.comments_pane,
             show_all_notes: s.show_all_notes,
@@ -1149,6 +1152,7 @@ impl Saved {
         s.draw_brush = draw.brush;
         s.draw_effect = draw.effect;
         s.draw_pens = draw.pens;
+        s.draw_pen_next = draw.next_pen;
         s.comments_pane = self.comments_pane;
         s.show_all_notes = self.show_all_notes;
     }
