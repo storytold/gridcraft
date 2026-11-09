@@ -448,6 +448,33 @@ fn read_views(e: &El, sheet: &mut Sheet) {
     if let Some(c) = sel.and_then(|s| s.attr("activeCell")).and_then(CellRef::parse) {
         sheet.view_active = c;
     }
+    if let Some(sel) = sel {
+        read_selected_ranges(sel, sheet);
+    }
+}
+
+/// Most selected areas kept from a file: a selection is view state, and a crafted `sqref` must not
+/// cost memory or time on every redraw.
+const MAX_SELECTED_RANGES: usize = 1024;
+
+/// The selected areas (`sqref`), as Excel opens them: in the file's order, with the active cell
+/// in area `activeCellId` (the first by default), moved to that area's first cell when it lies
+/// outside. GridCraft keeps the active cell's area last.
+fn read_selected_ranges(sel: &El, sheet: &mut Sheet) {
+    let Some(sqref) = sel.attr("sqref") else { return };
+    let mut ranges: Vec<RangeRef> = sqref.split_ascii_whitespace().filter_map(RangeRef::parse).take(MAX_SELECTED_RANGES).collect();
+    let id = sel.attr_u32("activeCellId").unwrap_or(0) as usize;
+    if id >= ranges.len() {
+        return;
+    }
+    let current = ranges.remove(id);
+    if !current.contains(sheet.view_active) {
+        sheet.view_active = current.start;
+    }
+    ranges.push(current);
+    if ranges.len() > 1 || !current.is_single() {
+        sheet.view_ranges = ranges;
+    }
 }
 
 fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet, remaining: &mut u64) -> Result<(), IoError> {

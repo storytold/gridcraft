@@ -40,6 +40,7 @@ pub fn build(name: &str) -> Option<Workbook> {
     wb.set_active_sheet(0);
     if let Some(sh) = wb.sheet_mut(0) {
         sh.view_active = gridcraft_core::CellRef::default();
+        sh.view_ranges.clear();
     }
     Some(wb)
 }

@@ -6453,3 +6453,28 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
 }
+
+#[test]
+fn a_workbook_opens_with_the_selected_areas_it_saved_and_saves_them_back() {
+    let rr = |a: &str| gridcraft_core::RangeRef::parse(a).unwrap();
+    let mut wb = (*s().doc().unwrap().wb).clone();
+    let sheet = std::sync::Arc::make_mut(&mut wb.sheets[0]);
+    sheet.view_active = CellRef::parse("D3").unwrap();
+    sheet.view_ranges = vec![rr("A6:B6"), rr("D2:D4")];
+    let mut saved = Session::new();
+    saved.add_document(crate::DocState::from_saved(wb, None, "saved".into(), crate::Trust::FromFile));
+    let d = saved.doc().unwrap();
+    assert_eq!(d.selection.active, CellRef::parse("D3").unwrap());
+    assert_eq!(d.selection.ranges, vec![rr("A6:B6"), rr("D2:D4")]);
+
+    // The selection made since is what the sheet saves; the active cell alone keeps no areas.
+    saved.execute("selection.set", json!({"range": "C2:E9"})).unwrap();
+    let d = saved.doc_mut().unwrap();
+    d.store_view(&[]);
+    assert!(!d.is_dirty(), "view state does not make the workbook dirty");
+    assert_eq!((d.wb.sheets[0].view_active, d.wb.sheets[0].view_ranges.clone()), (CellRef::parse("C2").unwrap(), vec![rr("C2:E9")]));
+    saved.execute("selection.set", json!({"cell": "F4"})).unwrap();
+    let d = saved.doc_mut().unwrap();
+    d.store_view(&[]);
+    assert!(d.wb.sheets[0].view_ranges.is_empty());
+}

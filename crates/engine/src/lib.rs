@@ -310,7 +310,7 @@ impl DocState {
         wb.refresh_equations();
         let scripts_trusted = !cmd::extra::has_scripts(&wb);
         let wb = Arc::new(wb);
-        let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
+        let sel = Selection::saved(wb.active());
         DocState {
             saved: wb.clone(),
             wb,
@@ -338,14 +338,15 @@ impl DocState {
     pub fn sheet_index(&self) -> usize {
         self.wb.active_sheet()
     }
-    /// Records the view state that is saved with the file (`sheetView topLeftCell`, the active
-    /// cell): the first visible cell of the scrolling area per sheet index in `tops`, and the
-    /// active sheet's active cell. View state never makes the workbook dirty.
+    /// Records the view state that is saved with the file (`sheetView topLeftCell`, the
+    /// selection): the first visible cell of the scrolling area per sheet index in `tops`, and the
+    /// active sheet's active cell and selected areas. View state never makes the workbook dirty.
     pub fn store_view(&mut self, tops: &[(usize, CellRef)]) {
         let active = self.selection.active;
+        let ranges = self.selection.saved_ranges();
         let si = self.wb.active_sheet();
         let changed = tops.iter().any(|(i, c)| self.wb.sheets.get(*i).is_some_and(|sh| sh.view_top_left != *c))
-            || self.wb.sheets.get(si).is_some_and(|sh| sh.view_active != active);
+            || self.wb.sheets.get(si).is_some_and(|sh| sh.view_active != active || sh.view_ranges != ranges);
         if !changed {
             return;
         }
@@ -359,9 +360,11 @@ impl DocState {
             }
         }
         if let Some(sh) = wb.sheets.get_mut(si)
-            && sh.view_active != active
+            && (sh.view_active != active || sh.view_ranges != ranges)
         {
-            Arc::make_mut(sh).view_active = active;
+            let sh = Arc::make_mut(sh);
+            sh.view_active = active;
+            sh.view_ranges = ranges;
         }
         if !dirty {
             self.saved = self.wb.clone();
