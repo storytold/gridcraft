@@ -106,7 +106,7 @@ fn big_image(bytes: usize) -> SheetImage {
     session.execute("cell.set", json!({"cell": "A1", "input": "x".repeat(bytes)})).expect("the cell takes the string");
     let doc = session.doc().expect("a document");
     let sheet = doc.wb.active().expect("a sheet").clone();
-    SheetImage { key: "0".into(), name: sheet.name.clone(), index: 0, sheet }
+    SheetImage { key: "0".into(), name: sheet.name.clone(), index: 0, sheet, preserved: None }
 }
 
 fn applied_image(images: Vec<SheetImage>) -> Applied {
@@ -118,6 +118,7 @@ fn applied_image(images: Vec<SheetImage>) -> Applied {
         result: Outcome { command: None, delta: None },
         sheets: Some(vec![SheetName { key: "0".into(), name: "Sheet1".into() }]),
         images: Some(images),
+        book: None,
         more: false,
         image_part: None,
     }

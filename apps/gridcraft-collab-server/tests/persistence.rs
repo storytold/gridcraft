@@ -283,3 +283,77 @@ async fn a_snapshot_after_an_undo_keeps_the_step_in_the_base() {
     assert_eq!(a1(&workbook), Value::Number(7.0));
     server.stop().await;
 }
+
+/// A structural undo's journal line carries the workbook-level state of the boundary it restored
+/// (defined names, structure protection), not only the sheets. A restart that replays it must end
+/// with the same names the undo put back, and the committed file must open with them.
+#[tokio::test]
+async fn a_structural_undo_replays_the_workbook_metadata_after_a_restart() {
+    let root = temp_root("structural-undo-restart");
+    let session;
+    {
+        let server = start_stored(&root).await;
+        session = create(&server, 60, false).await;
+        let mut ann = open(&server, &session, "ann", Role::Editor, 60).await;
+        let sheet = sheet_key(&next(&mut ann).await);
+
+        let op_at = |op_id: &str, base_version: u64, epoch: u64, kind: &str, cmd: &str, params: serde_json::Value, target: &str| {
+            json!({
+                "type": "op",
+                "op": {
+                    "opId": op_id,
+                    "doc": "book",
+                    "baseVersion": base_version,
+                    "epoch": epoch,
+                    "kind": kind,
+                    "target": { "sheet": target, "a1": "A1" },
+                    "payload": { "cmd": cmd, "params": params }
+                }
+            })
+        };
+
+        send_json(&mut ann, &op_at("add", 0, 0, "structural", "home.insertSheet", json!({ "name": "Extra" }), &sheet)).await;
+        let added = next(&mut ann).await;
+        assert_eq!(added["applied"]["version"], 1, "{added}");
+        let extra = added["applied"]["sheets"][1]["key"].as_str().expect("the sheet map names the new sheet").to_string();
+
+        let named =
+            op_at("name", 1, 1, "command", "formulas.defineName", json!({ "name": "ExtraRef", "refersTo": "=Extra!$B$1", "scope": "Extra" }), &sheet);
+        send_json(&mut ann, &named).await;
+        assert_eq!(next(&mut ann).await["applied"]["version"], 2);
+        // The base now holds the insert and the name; the delete and its undo go to the journal.
+        server.app.snapshot(&session).await.unwrap();
+
+        send_json(&mut ann, &op_at("del", 2, 1, "structural", "home.deleteSheet", json!({ "sheet": "Extra" }), &extra)).await;
+        assert_eq!(next(&mut ann).await["applied"]["version"], 3);
+        let (_, page) = http(&server, "GET", "/metrics", None, None).await;
+        assert_eq!(metric(&page, "gridcraft_collab_journal_ops"), 1, "{page}");
+
+        send_json(&mut ann, &json!({ "type": "undo", "opId": "del" })).await;
+        let undone = next(&mut ann).await;
+        assert_eq!(undone["applied"]["version"], 4, "{undone}");
+        let names = undone["applied"]["book"]["names"].as_array().expect("the undo carries the names of the boundary");
+        assert_eq!(names.len(), 1, "{undone}");
+        assert_eq!(names[0]["name"], "ExtraRef", "{undone}");
+        ann.close(None).await.unwrap();
+        // No flush and no snapshot: this is the crash the journal is there for.
+        server.stop().await;
+    }
+
+    let server = start_stored(&root).await;
+    assert_eq!(server.restored, 1, "the volume restores to the journal's head");
+    let (status, body) = http(&server, "GET", &format!("/v1/sessions/{session}"), Some(SERVICE), None).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap()["version"], 4);
+
+    let (status, body) = http(&server, "POST", &format!("/v1/sessions/{session}/commit"), Some(SERVICE), None).await;
+    assert_eq!(status, 200, "{body}");
+    let reply: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, reply["bytes"].as_str().unwrap()).unwrap();
+    let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsx", &bytes).unwrap();
+    assert!(workbook.sheet_index("Extra").is_some(), "the undone delete leaves the sheet in the file");
+    let name = workbook.names.iter().find(|name| name.name == "ExtraRef").expect("the replayed undo restores the name");
+    assert_eq!(name.formula, "Extra!$B$1");
+    assert_eq!(name.scope, Some(1), "the name keeps the sheet it is scoped to");
+    server.stop().await;
+}

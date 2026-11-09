@@ -114,6 +114,38 @@ pub struct SheetImage {
     /// The sheet itself: cells, formulas, styles, merges, tables, charts and its view.
     #[serde(with = "sheet_value")]
     pub sheet: gridcraft_model::Sheet,
+    /// Kept file content of the sheet (form controls, OLE objects, query tables…). It is not part
+    /// of the sheet's JSON ([`gridcraft_model::Sheet::preserved`] is skipped there because it is
+    /// not part of the workbook format), so the image carries it beside the sheet: without it a
+    /// deleted sheet would come back on a peer or after a restart without the parts that make it a
+    /// whole sheet on save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preserved: Option<std::sync::Arc<gridcraft_model::Preserved>>,
+}
+
+impl SheetImage {
+    /// The sheet as this image restores it: the model sheet plus the kept file content, which the
+    /// sheet's own serialization leaves out.
+    pub fn restored(&self) -> gridcraft_model::Sheet {
+        let mut sheet = self.sheet.clone();
+        sheet.preserved = self.preserved.clone();
+        sheet
+    }
+}
+
+/// The payload of a structural image that travels in `imagePart` parts (ADR-0013).
+///
+/// It is the serialised form of everything the parts carry — the sheets and the workbook-level
+/// state of the boundary — so a client that misses a part refuses the whole image instead of
+/// applying a prefix of it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageBundle {
+    /// Workbook-level state of the boundary (defined names, structure protection), when the step
+    /// has one. Missing in a journal entry written before the image carried it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book: Option<Box<gridcraft_model::WorkbookMeta>>,
+    pub images: Vec<SheetImage>,
 }
 
 /// One part of a serialised sheet image that does not fit a single frame (ADR-0013).
@@ -167,6 +199,11 @@ pub struct Applied {
     /// An image over one frame travels as `imagePart` parts instead (ADR-0013).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<SheetImage>>,
+    /// Workbook-level state of the same boundary (defined names, structure protection). It travels
+    /// with the images — inside the parts when they are chunked — and a client applies the two
+    /// together, so the replica restores the whole boundary, not just its sheets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book: Option<Box<gridcraft_model::WorkbookMeta>>,
     /// True while more `applied` frames of the same operation follow (ADR-0013). `version`,
     /// `epoch` and `opId` repeat on every part, the parts of one operation go out back to back,
     /// and a client applies the operation only after the part with `more:false`.

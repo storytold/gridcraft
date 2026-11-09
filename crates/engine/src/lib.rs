@@ -1207,9 +1207,26 @@ impl Session {
     ///
     /// Images arrive from the session's room, which validates them against the engine it runs; a
     /// serialized cell store is rebuilt from its cells rather than trusting its cached count.
-    pub fn restore_sheets(&mut self, mut sheets: Vec<gridcraft_model::Sheet>) -> Result<()> {
+    pub fn restore_sheets(&mut self, sheets: Vec<gridcraft_model::Sheet>) -> Result<()> {
+        self.restore_structural(sheets, None)
+    }
+
+    /// Restores a whole structural boundary: the sheets and, when the image carries it, the
+    /// workbook-level state that belongs to the same boundary — defined names and structure
+    /// protection ([`gridcraft_model::WorkbookMeta`]). Everything is validated before the document
+    /// is touched: an image whose name scopes do not fit its sheets is refused whole, and a caller
+    /// that gets `Err` still holds the document it had.
+    pub fn restore_structural(&mut self, mut sheets: Vec<gridcraft_model::Sheet>, meta: Option<gridcraft_model::WorkbookMeta>) -> Result<()> {
         if sheets.is_empty() {
             return Err(EngineError::Other("a workbook needs at least one sheet".into()));
+        }
+        if let Some(meta) = &meta
+            && meta.names.iter().any(|name| name.scope.is_some_and(|scope| scope >= sheets.len()))
+        {
+            return Err(EngineError::Other("a defined name of this image names a sheet it does not hold".into()));
+        }
+        if self.active().is_none() {
+            return Err(EngineError::NoDocument);
         }
         for sheet in &mut sheets {
             sheet.cells.rebuild();
@@ -1221,6 +1238,11 @@ impl Session {
             let model = Arc::make_mut(wb);
             model.sheets = sheets.into_iter().map(Arc::new).collect();
             model.set_active_sheet(active);
+            if let Some(meta) = meta {
+                model.names = meta.names;
+                model.protected_structure = meta.protected_structure;
+                model.structure_password = meta.structure_password;
+            }
             calc.rebuild(model);
             calc.recalc_all(model);
         }

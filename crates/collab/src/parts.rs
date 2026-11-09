@@ -1,17 +1,28 @@
 //! Splitting one `applied` into frames (ADR-0013).
 //!
-//! A structural undo or redo carries the whole sheets of its step. One image can be far larger
-//! than the frame the transport writes, so the image travels as parts of its serialised form and
-//! a replica applies the operation only once the last part is in.
+//! A structural undo or redo carries the whole sheets of its step, and the workbook-level state of
+//! the same boundary (defined names, structure protection). One image can be far larger than the
+//! frame the transport writes, so the image travels as parts of its serialised form and a replica
+//! applies the operation only once the last part is in.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use serde::Serialize;
 
-use crate::protocol::{Applied, ImagePart};
+use crate::protocol::{Applied, ImagePart, SheetImage};
 
 /// Bytes of the serialised image in one part, before base64. A part of 512 KiB becomes about
 /// 683 KiB encoded, so the JSON frame stays under the 1 MiB frame limit of the wire (RFC §4.1).
 pub const IMAGE_PART: usize = 512 * 1024;
+
+/// The payload of one chunked image, borrowed from the operation so a large image is not cloned
+/// just to be cut. Its field names are those of [`ImageBundle`], which the client reads back.
+#[derive(Serialize)]
+struct BundleRef<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    book: Option<&'a gridcraft_model::WorkbookMeta>,
+    images: &'a [SheetImage],
+}
 
 /// The frames one operation goes out in: itself while its images fit a part, otherwise a
 /// sequence of [`ImagePart`]s.
@@ -22,7 +33,8 @@ pub const IMAGE_PART: usize = 512 * 1024;
 /// before the first part. This function only cuts; the ordering is the caller's queue.
 pub fn split(applied: Applied, budget: usize) -> Vec<Applied> {
     let Some(images) = &applied.images else { return vec![applied] };
-    let Ok(bytes) = serde_json::to_vec(images) else { return vec![applied] };
+    let bundle = BundleRef { book: applied.book.as_deref(), images };
+    let Ok(bytes) = serde_json::to_vec(&bundle) else { return vec![applied] };
     let budget = budget.max(1);
     if bytes.len() <= budget {
         return vec![applied];
@@ -35,6 +47,7 @@ pub fn split(applied: Applied, budget: usize) -> Vec<Applied> {
         let end = ((seq as usize + 1) * budget).min(bytes.len());
         let mut part = applied.clone();
         part.images = None;
+        part.book = None;
         part.image_part = Some(ImagePart { seq, total, data: STANDARD.encode(&bytes[start..end]) });
         part.more = seq + 1 < total;
         frames.push(part);
@@ -45,7 +58,7 @@ pub fn split(applied: Applied, budget: usize) -> Vec<Applied> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{Outcome, SheetImage, SheetName};
+    use crate::protocol::{ImageBundle, Outcome, SheetName};
     use gridcraft_engine::Session;
     use serde_json::json;
 
@@ -56,7 +69,7 @@ mod tests {
         session.execute("cell.set", json!({"cell": "A1", "input": "x".repeat(bytes)})).expect("the cell takes the string");
         let doc = session.doc().expect("a document");
         let sheet = doc.wb.active().expect("a sheet").clone();
-        SheetImage { key: "0".into(), name: sheet.name.clone(), index: 0, sheet }
+        SheetImage { key: "0".into(), name: sheet.name.clone(), index: 0, sheet, preserved: None }
     }
 
     fn applied_with(images: Vec<SheetImage>) -> Applied {
@@ -68,6 +81,7 @@ mod tests {
             result: Outcome { command: None, delta: None },
             sheets: Some(vec![SheetName { key: "0".into(), name: "Sheet1".into() }]),
             images: Some(images),
+            book: None,
             more: false,
             image_part: None,
         }
@@ -92,6 +106,7 @@ mod tests {
         let mut reassembled = Vec::new();
         for (index, frame) in frames.iter().enumerate() {
             assert!(frame.images.is_none(), "a part carries no typed image");
+            assert!(frame.book.is_none(), "the book travels in the parts, not beside them");
             assert_eq!(frame.op_id, applied.op_id, "the opId repeats on every part");
             assert_eq!(frame.version, applied.version, "the version repeats on every part");
             assert_eq!(frame.epoch, applied.epoch, "the epoch repeats on every part");
@@ -105,10 +120,10 @@ mod tests {
             reassembled.extend(STANDARD.decode(&part.data).expect("a part is base64"));
         }
 
-        let images: Vec<SheetImage> = serde_json::from_slice(&reassembled).expect("the parts rebuild the image");
-        assert_eq!(images.len(), 1);
-        assert_eq!(images[0].name, "Sheet1");
+        let bundle: ImageBundle = serde_json::from_slice(&reassembled).expect("the parts rebuild the image");
+        assert_eq!(bundle.images.len(), 1);
+        assert_eq!(bundle.images[0].name, "Sheet1");
         // The rebuilt image is byte-for-byte what the room put in.
-        assert_eq!(serde_json::to_vec(&images).expect("JSON"), serde_json::to_vec(&applied.images.expect("the image")).expect("JSON"));
+        assert_eq!(serde_json::to_vec(&bundle.images).expect("JSON"), serde_json::to_vec(&applied.images.expect("the image")).expect("JSON"));
     }
 }

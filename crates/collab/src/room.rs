@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use gridcraft_core::{CellRef, Value};
 use gridcraft_engine::{CellState, Session};
-use gridcraft_model::{Sheet, Workbook};
+use gridcraft_model::{Sheet, Workbook, WorkbookMeta};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
@@ -55,9 +55,16 @@ pub struct Step {
     /// A structural step: every sheet as it stood before it (what `undo` restores).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<Vec<SheetImage>>,
+    /// A structural step: the workbook-level state before it (defined names, structure protection),
+    /// restored together with `before`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_book: Option<WorkbookMeta>,
     /// A structural step: every sheet as it stood after it (what `redo` restores).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<Vec<SheetImage>>,
+    /// A structural step: the workbook-level state after it, restored together with `after`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_book: Option<WorkbookMeta>,
 }
 
 /// A refusal the caller sends to the client as it is.
@@ -185,6 +192,7 @@ impl Room {
         // A structural step keeps whole sheets: what they were before the command runs, and what
         // they are after it. The old keys still map the sheets the command is about to remove.
         let before_images = if structural { session.active().map(|d| images_of(&d.wb, &self.keys)) } else { None };
+        let before_book = if structural { session.active().map(|d| d.wb.workbook_meta()) } else { None };
         let mut params = op.payload.params.clone();
         normalise(&mut params, &op.payload.cmd, &name, op.target.a1.as_deref());
         session.apply_remote(&op.payload.cmd, params.clone()).map_err(|e| self.reject(&op, RejectCode::Invalid, false, &e.to_string()))?;
@@ -201,6 +209,7 @@ impl Room {
             (delta, sheets)
         };
         let after_images = if structural { session.active().map(|d| images_of(&d.wb, &self.keys)) } else { None };
+        let after_book = if structural { session.active().map(|d| d.wb.workbook_meta()) } else { None };
         let step_cells = if structural {
             Vec::new()
         } else {
@@ -221,6 +230,7 @@ impl Room {
             result: Outcome { command: Some(CommandEcho { id: op.payload.cmd.clone(), params }), delta: Some(delta) },
             sheets,
             images: None,
+            book: None,
             more: false,
             image_part: None,
         };
@@ -228,7 +238,15 @@ impl Room {
         let structural_step = before_images.is_some() && after_images.is_some();
         if !step_cells.is_empty() || structural_step {
             let steps = self.history.entry(actor.to_string()).or_default();
-            steps.push_back(Step { op_id: op.op_id.clone(), version: self.version, cells: step_cells, before: before_images, after: after_images });
+            steps.push_back(Step {
+                op_id: op.op_id.clone(),
+                version: self.version,
+                cells: step_cells,
+                before: before_images,
+                before_book,
+                after: after_images,
+                after_book,
+            });
             while steps.len() > UNDO_STEPS {
                 steps.pop_front();
             }
@@ -263,7 +281,7 @@ impl Room {
             return Err(self.undo_reject(RejectCode::Conflict, false, "that is not the last edit of this participant"));
         }
         if let Some(before) = step.before.clone() {
-            return self.reverse_sheets(session, actor, &step, before, true);
+            return self.reverse_sheets(session, actor, &step, before, step.before_book.clone(), true);
         }
         let mut groups: BTreeMap<usize, Vec<(CellRef, CellState)>> = BTreeMap::new();
         {
@@ -304,6 +322,7 @@ impl Room {
             result: Outcome { command: None, delta: Some(delta) },
             sheets: None,
             images: None,
+            book: None,
             more: false,
             image_part: None,
         })
@@ -321,7 +340,7 @@ impl Room {
             return Err(self.redo_reject(RejectCode::Conflict, false, "that is not the last undone edit of this participant"));
         }
         if let Some(after) = step.after.clone() {
-            return self.reverse_sheets(session, actor, &step, after, false);
+            return self.reverse_sheets(session, actor, &step, after, step.after_book.clone(), false);
         }
         let mut groups: BTreeMap<usize, Vec<(CellRef, CellState)>> = BTreeMap::new();
         {
@@ -362,6 +381,7 @@ impl Room {
             result: Outcome { command: None, delta: Some(delta) },
             sheets: None,
             images: None,
+            book: None,
             more: false,
             image_part: None,
         })
@@ -379,8 +399,8 @@ impl Room {
             return Err(self.replay_reject(applied, "the journal skips a version before this undo/redo"));
         }
         if let Some(images) = &applied.images {
-            let sheets = images.iter().map(|image| image.sheet.clone()).collect();
-            session.restore_sheets(sheets).map_err(|e| self.replay_reject(applied, &e.to_string()))?;
+            let sheets = images.iter().map(SheetImage::restored).collect();
+            session.restore_structural(sheets, applied.book.as_deref().cloned()).map_err(|e| self.replay_reject(applied, &e.to_string()))?;
             for image in images {
                 if let Ok(key) = image.key.parse::<u64>() {
                     self.keys.revive(key, image.sheet.uid.get());
@@ -418,15 +438,26 @@ impl Room {
 
     /// Applies a whole-sheet image as one operation: every sheet of the step replaces the current
     /// workbook in the order of the session map, the keys of the restored sheets are kept, and the
-    /// epoch grows because addresses moved. Only the last step of `actor` can be here, and only
-    /// while the room still sits at the version the step left: a later edit anywhere may have
-    /// touched a cell the image would put back, so it refuses as `conflict` instead of overwriting.
-    fn reverse_sheets(&mut self, session: &mut Session, actor: &str, step: &Step, images: Vec<SheetImage>, undo: bool) -> Result<Applied, RoomError> {
+    /// epoch grows because addresses moved. The workbook-level state of the same boundary travels
+    /// with the image and is restored in the same call. Only the last step of `actor` can be here,
+    /// and only while the room still sits at the version the step left: a later edit anywhere may
+    /// have touched a cell the image would put back, so it refuses as `conflict` instead of
+    /// overwriting. The image is validated by the engine before anything changes, so a refusal
+    /// leaves the document exactly as it was.
+    fn reverse_sheets(
+        &mut self,
+        session: &mut Session,
+        actor: &str,
+        step: &Step,
+        images: Vec<SheetImage>,
+        book: Option<WorkbookMeta>,
+        undo: bool,
+    ) -> Result<Applied, RoomError> {
         if self.version != step.version {
             return Err(self.image_reject(undo, RejectCode::Conflict, true, "another edit came after this structural step"));
         }
-        let sheets = images.iter().map(|image| image.sheet.clone()).collect();
-        session.restore_sheets(sheets).map_err(|e| self.image_reject(undo, RejectCode::Internal, false, &e.to_string()))?;
+        let sheets = images.iter().map(SheetImage::restored).collect();
+        session.restore_structural(sheets, book.clone()).map_err(|e| self.image_reject(undo, RejectCode::Internal, false, &e.to_string()))?;
         for image in &images {
             if let Ok(key) = image.key.parse::<u64>() {
                 self.keys.revive(key, image.sheet.uid.get());
@@ -469,6 +500,7 @@ impl Room {
             result: Outcome { command: None, delta: None },
             sheets: Some(sheets),
             images: Some(images),
+            book: book.map(Box::new),
             more: false,
             image_part: None,
         })
@@ -550,6 +582,7 @@ fn images_of(wb: &Workbook, keys: &SheetKeys) -> Vec<SheetImage> {
                 name: sheet.name.clone(),
                 index: u32::try_from(index).unwrap_or(u32::MAX),
                 sheet: sheet.as_ref().clone(),
+                preserved: sheet.preserved.clone(),
             })
         })
         .collect()

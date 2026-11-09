@@ -281,6 +281,33 @@ fn is_all(s: &ShowObjects) -> bool {
     *s == ShowObjects::All
 }
 
+/// The workbook-level state a structural step carries besides its whole-sheet images.
+///
+/// A row or sheet insert/delete moves addresses, and a sheet delete drops its defined names or
+/// rescopes them: the sheets alone do not describe the boundary a structural undo must restore.
+/// Structure protection travels with it for the same reason — the image is the whole boundary, not
+/// the parts of it that happen to live on a sheet. The workbook's unmodelled `preserved` content is
+/// deliberately not here: it is package-level, does not belong to one step, and stays with the
+/// workbook across a sheet edit.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WorkbookMeta {
+    /// Defined names as they stood at the boundary, scopes included (they index [`Workbook::sheets`]).
+    pub names: Vec<DefinedName>,
+    /// Workbook structure protection (`<workbookProtection>`).
+    pub protected_structure: bool,
+    /// Password of the structure protection, never the password itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structure_password: Option<crate::PasswordHash>,
+}
+
+impl Workbook {
+    /// The workbook-level pieces a structural image carries (see [`WorkbookMeta`]).
+    pub fn workbook_meta(&self) -> WorkbookMeta {
+        WorkbookMeta { names: self.names.clone(), protected_structure: self.protected_structure, structure_password: self.structure_password.clone() }
+    }
+}
+
 impl Default for Workbook {
     fn default() -> Self {
         Workbook::new()

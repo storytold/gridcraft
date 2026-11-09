@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use base64::Engine;
 use gridcraft_collab::{
-    Applied, ClientMessage, ClientOp, Kind, Payload, Presence, RejectCode, Role, SheetDelta, SheetImage, SheetName, Target, classify,
+    Applied, ClientMessage, ClientOp, ImageBundle, Kind, Payload, Presence, RejectCode, Role, SheetDelta, SheetImage, SheetName, Target, classify,
 };
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
@@ -403,10 +403,11 @@ impl Synced {
 
     /// Turns a complete sequence of parts back into the operation it carried.
     fn finish_image(&mut self, buffer: ImageParts, applied: &Applied) -> Option<Applied> {
-        match serde_json::from_slice::<Vec<SheetImage>>(&buffer.data) {
-            Ok(images) => {
+        match serde_json::from_slice::<ImageBundle>(&buffer.data) {
+            Ok(bundle) => {
                 let mut done = applied.clone();
-                done.images = Some(images);
+                done.images = Some(bundle.images);
+                done.book = bundle.book;
                 done.image_part = None;
                 done.more = false;
                 Some(done)
@@ -441,10 +442,17 @@ impl Synced {
             }
         }
         // A structural undo/redo is not a command: the server sends the whole sheets it restored,
-        // in the session's order, and the client replaces its own before the map below moves.
+        // in the session's order, and the client replaces its own before the map below moves. The
+        // workbook-level state of the same boundary (defined names, structure protection) comes
+        // with them and is applied in the same call, so the replica never sits between two shapes
+        // of the document.
         if let Some(images) = &applied.images {
-            let sheets = images.iter().map(|image| image.sheet.clone()).collect();
-            let _ = session.restore_sheets(sheets);
+            let sheets = images.iter().map(SheetImage::restored).collect();
+            if session.restore_structural(sheets, applied.book.as_deref().cloned()).is_err() {
+                self.notice = Some("the sheet image does not fit this replica; requesting a catch-up".into());
+                self.link.send_message(ClientMessage::Resync { from: applied.version.saturating_sub(1) });
+                return;
+            }
         }
         if let Some(sheets) = &applied.sheets {
             self.apply_sheets(sheets);

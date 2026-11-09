@@ -450,3 +450,66 @@ async fn a_peer_that_reconnects_after_a_structural_undo_gets_the_sheet_image() {
     assert_eq!(back.synced.state().version, 3);
     server.stop().await;
 }
+
+fn defined_names(peer: &Peer) -> Vec<(String, Option<usize>, String)> {
+    peer.session.doc().unwrap().wb.names.iter().map(|name| (name.name.clone(), name.scope, name.formula.clone())).collect()
+}
+
+fn protected(peer: &Peer) -> bool {
+    peer.session.doc().unwrap().wb.protected_structure
+}
+
+/// Deleting a sheet also changes the workbook-level state of the file: a name scoped to it is
+/// dropped and a name referring to it turns into `#REF!`. The structural image carries that state,
+/// so the author and the peer restore the same names on undo and drop them again on redo.
+#[tokio::test]
+async fn structural_undo_restores_the_workbook_metadata_on_every_replica() {
+    let server = support::start().await;
+    let session = support::create(&server, 50).await;
+    let mut ann = join(&server, 50, &session, "ann", Role::Editor).await;
+    let mut bob = join(&server, 50, &session, "bob", Role::Editor).await;
+
+    ann.synced.execute(&mut ann.session, "formulas.defineName", json!({ "name": "Total", "refersTo": "=1+1" })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    assert_eq!(defined_names(&bob), [("Total".to_string(), None, "1+1".to_string())], "the peer gets the name before any structural step");
+
+    ann.synced.execute(&mut ann.session, "home.insertSheet", json!({ "name": "Extra" })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    ann.synced.execute(&mut ann.session, "formulas.defineName", json!({ "name": "ExtraRef", "refersTo": "=Extra!$B$1", "scope": "Extra" })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    let before = defined_names(&ann);
+    assert_eq!(defined_names(&bob), before, "both replicas start the step with the same names");
+    assert_eq!(before.len(), 2);
+
+    ann.synced.execute(&mut ann.session, "home.deleteSheet", json!({ "sheet": "Extra" })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    let after = defined_names(&ann);
+    assert_ne!(after, before, "the delete changes the names of the workbook");
+    assert_eq!(defined_names(&bob), after, "the peer sees the delete's names, not the old ones");
+
+    ann.synced.undo().unwrap();
+    settle(&mut ann, &mut bob).await;
+    for peer in [&ann, &bob] {
+        assert_eq!(defined_names(peer), before, "the undo restores the names of the boundary on every replica");
+        assert_eq!(names(peer), ["Sheet1", "Extra"], "and the sheet they belong to");
+    }
+
+    ann.synced.redo().unwrap();
+    settle(&mut ann, &mut bob).await;
+    for peer in [&ann, &bob] {
+        assert_eq!(defined_names(peer), after, "the redo drops them again on every replica");
+        assert_eq!(names(peer), ["Sheet1"]);
+    }
+
+    // Structure protection is part of the same boundary and travels with the image as well.
+    ann.synced.execute(&mut ann.session, "review.protectWorkbook", json!({ "on": true })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    ann.synced.execute(&mut ann.session, "home.insertRows", json!({ "rows": "1:1" })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    ann.synced.undo().unwrap();
+    settle(&mut ann, &mut bob).await;
+    for peer in [&ann, &bob] {
+        assert!(protected(peer), "the structural undo keeps the structure protection of the boundary");
+    }
+    server.stop().await;
+}

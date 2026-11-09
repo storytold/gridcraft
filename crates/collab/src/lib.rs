@@ -31,8 +31,8 @@ pub use keys::{KeyFile, SheetKeys};
 pub use ops::{Class, classify};
 pub use parts::{IMAGE_PART, split as split_applied};
 pub use protocol::{
-    Applied, CellChange, ClientOp, CommandEcho, Hint, ImagePart, Kind, Outcome, Payload, RejectCode, Rejected, SheetDelta, SheetImage, SheetName,
-    Target,
+    Applied, CellChange, ClientOp, CommandEcho, Hint, ImageBundle, ImagePart, Kind, Outcome, Payload, RejectCode, Rejected, SheetDelta, SheetImage,
+    SheetName, Target,
 };
 pub use room::{CellSnap, Room, RoomError, RoomState, Step};
 

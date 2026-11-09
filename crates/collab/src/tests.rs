@@ -652,3 +652,119 @@ fn a_restored_room_starts_with_empty_undo_stacks() {
     assert_eq!(refused.rejected().code, RejectCode::Invalid);
     assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("A2").unwrap()).as_f64(), Some(6.0));
 }
+
+/// The unmodelled parts a deleted sheet carried: what a save would lose without them.
+const KEPT_PART: &[u8] = b"<controls><control id=\"1\"/></controls>";
+
+fn keep_part(s: &mut Session, index: usize) {
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let Some(sheet) = wb.sheets.get_mut(index) else { return };
+    std::sync::Arc::make_mut(sheet).preserved = Some(std::sync::Arc::new(gridcraft_model::Preserved {
+        parts: vec![gridcraft_model::PreservedPart {
+            name: "xl/ctrlProps/ctrlProps1.xml".into(),
+            content_type: "application/vnd.ms-excel.controlproperties+xml".into(),
+            data: std::sync::Arc::from(KEPT_PART),
+            rels: Vec::new(),
+        }],
+        ..Default::default()
+    }));
+}
+
+fn extra_key(room: &Room, s: &Session, name: &str) -> String {
+    let d = s.doc().unwrap();
+    let index = d.wb.sheet_index(name).expect("the sheet is there");
+    room.sheet_keys().key_for_index(&d.wb, index).expect("the sheet has a key").to_string()
+}
+
+/// Deleting a sheet changes workbook-level state too: a name scoped to it is dropped or turns into
+/// `#REF!`. The step image carries that state beside the sheets, so an undo on a peer or after a
+/// restart restores the boundary whole — names, structure protection, and the sheet's kept parts.
+#[test]
+fn a_sheet_delete_image_carries_the_workbook_meta_and_the_kept_parts() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, structural_op(&room, "add", "home.insertSheet", json!({"name": "Extra"}), &sheet), "ann").unwrap();
+    let extra = extra_key(&room, &s, "Extra");
+    s.execute("formulas.defineName", json!({"name": "ExtraRef", "refersTo": "=Extra!$B$1", "scope": "Extra"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Total", "refersTo": "=1+1"})).unwrap();
+    keep_part(&mut s, 1);
+    let names_before = s.doc().unwrap().wb.names.clone();
+
+    let deleted = room.apply(&mut s, structural_op(&room, "del", "home.deleteSheet", json!({"sheet": "Extra"}), &extra), "ann").unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+    assert_eq!(s.doc().unwrap().wb.names.len(), 1, "the name scoped to the deleted sheet went with it");
+    let after_delete = s.doc().unwrap().wb.as_ref().clone();
+
+    let undone = room.undo(&mut s, "ann", Some("del")).unwrap();
+    let images = undone.images.clone().expect("the undo carries the sheets");
+    assert!(images.iter().any(|image| image.preserved.is_some()), "the image carries the kept part of the sheet");
+    let book = undone.book.clone().expect("the image carries the workbook-level state");
+    assert_eq!(book.names, names_before, "the names of the boundary travel with the image");
+    assert_eq!(s.doc().unwrap().wb.names, names_before, "the author's replica restores the names");
+
+    // The frame and the journal put the operation through JSON: what a peer receives and what a
+    // restart reads back must still restore the sheet, its kept part and the workbook state.
+    let wire = serde_json::to_vec(&undone).expect("the applied is JSON");
+    let journaled: crate::Applied = serde_json::from_slice(&wire).expect("the applied reads back");
+
+    let mut base = Session::new();
+    base.add_document(gridcraft_engine::DocState::new(after_delete, None, "book".into(), gridcraft_engine::Trust::FromFile));
+    let mut restored =
+        Room::restore(room.sheet_keys().clone(), crate::RoomState { version: deleted.version, epoch: deleted.epoch, seen: Vec::new() });
+    restored.replay_reversal(&mut base, &journaled).expect("the journaled undo replays");
+
+    let d = base.doc().unwrap();
+    assert_eq!(d.wb.names, names_before, "the replayed undo restores the names");
+    let index = d.wb.sheet_index("Extra").expect("the deleted sheet is back");
+    let kept = d.wb.sheets[index].preserved.as_ref().expect("the kept part of the sheet is back");
+    assert_eq!(kept.parts[0].name, "xl/ctrlProps/ctrlProps1.xml");
+    assert_eq!(kept.parts[0].data.as_ref(), KEPT_PART);
+}
+
+/// A row delete leaves the names alone, but the same image still carries the workbook state: a
+/// boundary is restored whole or not at all.
+#[test]
+fn a_row_delete_undo_keeps_the_structure_protection_of_the_boundary() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    s.execute("formulas.defineName", json!({"name": "Total", "refersTo": "=4"})).unwrap();
+    s.execute("review.protectWorkbook", json!({"on": true, "password": "pa55"})).unwrap();
+    room.apply(&mut s, structural_op(&room, "ins", "home.insertRows", json!({"rows": "1:1"}), &sheet), "ann").unwrap();
+    let undone = room.undo(&mut s, "ann", Some("ins")).unwrap();
+    let book = undone.book.expect("a row step carries the boundary's workbook state");
+    assert!(book.protected_structure);
+    assert_eq!(book.names.len(), 1);
+    assert!(s.doc().unwrap().wb.protected_structure);
+}
+
+/// A foreign edit after a structural step still refuses the undo as `conflict`, and nothing of the
+/// image — sheets, names, kept parts — lands on the document.
+#[test]
+fn a_sheet_delete_undo_after_a_foreign_edit_changes_nothing() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, structural_op(&room, "add", "home.insertSheet", json!({"name": "Extra"}), &sheet), "ann").unwrap();
+    let extra = extra_key(&room, &s, "Extra");
+    s.execute("formulas.defineName", json!({"name": "ExtraRef", "refersTo": "=Extra!$B$1", "scope": "Extra"})).unwrap();
+    keep_part(&mut s, 1);
+    room.apply(&mut s, structural_op(&room, "del", "home.deleteSheet", json!({"sheet": "Extra"}), &extra), "ann").unwrap();
+    let names_after_delete = s.doc().unwrap().wb.names.clone();
+
+    // Somebody edits the remaining sheet after the step: the room is no longer at its version.
+    let mut later = op("later", "cell.set", json!({"input": 9}), &sheet, "B2");
+    later.base_version = room.version();
+    later.epoch = room.epoch();
+    room.apply(&mut s, later, "bob").unwrap();
+
+    let refused = room.undo(&mut s, "ann", Some("del")).expect_err("a later edit keeps the step from being reversed");
+    assert_eq!(refused.rejected().code, RejectCode::Conflict);
+    assert!(refused.rejected().retryable);
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.sheets.len(), 1, "the deleted sheet is not back");
+    assert_eq!(d.wb.names, names_after_delete, "the names are untouched");
+    assert_eq!(value_of(&s, 0, "B2"), Value::Number(9.0));
+}
