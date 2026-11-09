@@ -271,12 +271,25 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    /// Verifies that a slicer placed on another sheet filters and clears the target table's sheet.
-    fn cross_sheet_slicer_filters_and_clears_target_table_sheet() {
+    /// Verifies same-sheet and cross-sheet slicer filtering/clearing/deletion as well as missing-table fallbacks.
+    fn cross_sheet_and_same_sheet_slicer_filters_clears_and_handles_missing_tables() {
         let mut s = Session::new();
         s.new_workbook();
         s.execute("range.setValues", json!({"range": "A1:A3", "values": [["Quarter"], ["Q1"], ["Q2"]]})).unwrap();
         s.execute("insert.table", json!({"range": "A1:A3", "name": "SalesTable"})).unwrap();
+
+        // 1. Same-sheet slicer filters, clears, and deletes cleanly.
+        let same_id = s.execute("insert.slicer", json!({"table": "SalesTable", "column": "Quarter"})).unwrap()["slicer"].as_u64().unwrap() as u32;
+        s.execute("slicer.toggle", json!({"slicer": same_id, "value": "Q1", "multi": false})).unwrap();
+        assert!(s.doc().unwrap().wb.sheets[0].is_row_filtered(2));
+        s.execute("slicer.clear", json!({"slicer": same_id})).unwrap();
+        assert!(!s.doc().unwrap().wb.sheets[0].is_row_filtered(2));
+        s.execute("slicer.toggle", json!({"slicer": same_id, "value": "Q1", "multi": false})).unwrap();
+        assert!(s.doc().unwrap().wb.sheets[0].is_row_filtered(2));
+        s.execute("slicer.delete", json!({"slicer": same_id})).unwrap();
+        assert!(!s.doc().unwrap().wb.sheets[0].is_row_filtered(2));
+
+        // 2. Cross-sheet slicer filters and clears the target table's sheet.
         s.execute("home.insertSheet", json!({"name": "Dashboard"})).unwrap();
         let id = 42;
         edit(&mut s, |cx| {
@@ -294,9 +307,29 @@ mod tests {
         .unwrap();
         let wb = &s.doc().unwrap().wb;
         assert_eq!(column_values(wb, 1, "SalesTable", "Quarter"), vec!["Q1".to_string(), "Q2".to_string()]);
+        assert!(column_values(wb, 1, "NoSuchTable", "Quarter").is_empty());
         s.execute("slicer.toggle", json!({"slicer": id, "value": "Q1", "multi": false})).unwrap();
         assert!(s.doc().unwrap().wb.sheets[0].is_row_filtered(2), "row 3 (Q2) on Sheet1 should be filtered out");
         s.execute("slicer.delete", json!({"slicer": id})).unwrap();
         assert!(!s.doc().unwrap().wb.sheets[0].is_row_filtered(2), "deleting cross-sheet slicer clears filter on Sheet1");
+
+        // 3. Unknown table on a slicer: reapply_slicer, selectAll, and delete are safe no-ops/removals.
+        let orphan_id = 99;
+        edit(&mut s, |cx| {
+            cx.sheet_mut(1)?.slicers.push(Slicer {
+                id: orphan_id,
+                table: "MissingTable".into(),
+                column: "Quarter".into(),
+                caption: "Quarter".into(),
+                anchor: Anchor { cell: CellRef::new(1, 1), dx: 0.0, dy: 0.0, width: 160.0, height: 200.0, mode: AnchorMode::MoveOnly },
+                selected: Some(vec!["Q1".into()]),
+                columns: 1,
+            });
+            Ok(Json::Null)
+        })
+        .unwrap();
+        s.execute("slicer.selectAll", json!({"slicer": orphan_id})).unwrap();
+        s.execute("slicer.delete", json!({"slicer": orphan_id})).unwrap();
+        assert!(s.doc().unwrap().wb.sheets[1].slicers.is_empty());
     }
 }

@@ -112,4 +112,50 @@ fn cross_sheet_table_slicer_imports_without_skipped_object_warning() {
     assert_eq!(sl.column, "Date for Slicer");
     assert_eq!(sl.caption, "Date for Slicer");
     assert_eq!(sl.columns, 2);
+    assert_eq!(sl.anchor.cell, gridcraft_core::CellRef::new(2, 1));
+    assert!(sl.anchor.width > 0.0 && sl.anchor.height > 0.0);
+
+    // 2. `sourceName` fallback when `<x15:tableSlicerCache>` is absent resolves the table and column by header name.
+    let cache_by_source = r#"<?xml version="1.0"?><slicerCacheDefinition xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" name="SlicerCache_Table_3_Col_36" sourceName="Date for Slicer"/>"#;
+    let zip_fallback = make_zip(&[
+        ("[Content_Types].xml", CT.as_bytes()),
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("xl/workbook.xml", wb_xml.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", wb_rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet1.as_bytes()),
+        ("xl/worksheets/_rels/sheet1.xml.rels", sheet1_rels.as_bytes()),
+        ("xl/drawings/drawing1.xml", drawing1.as_bytes()),
+        ("xl/slicers/slicer1.xml", slicer1.as_bytes()),
+        ("xl/slicerCaches/slicerCache1.xml", cache_by_source.as_bytes()),
+        ("xl/worksheets/sheet2.xml", sheet2.as_bytes()),
+        ("xl/worksheets/_rels/sheet2.xml.rels", sheet2_rels.as_bytes()),
+        ("xl/tables/table3.xml", table3.as_bytes()),
+    ]);
+    let (wb_fb, _) = crate::read_xlsx(&zip_fallback).unwrap();
+    assert_eq!(wb_fb.sheets[0].slicers.len(), 1);
+    assert_eq!((wb_fb.sheets[0].slicers[0].table.as_str(), wb_fb.sheets[0].slicers[0].column.as_str()), ("Table_3", "Date for Slicer"));
+
+    // 3. Negative cases: a missing cache, an unknown table/column, or a mismatched frame name when multiple slicer definitions exist attaches nothing.
+    let slicer_two_defs = r#"<?xml version="1.0"?><slicers xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><slicer name="Other_1" cache="SlicerCache_Table_3_Col_36" caption="Other"/><slicer name="Other_2" cache="SlicerCache_Table_3_Col_36" caption="Other 2"/></slicers>"#;
+    for (slicers_xml, cache_xml) in [
+        (slicer_two_defs, slicer_cache1),
+        (slicer1, r#"<?xml version="1.0"?><slicerCacheDefinition xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" name="UnrelatedCache" sourceName="MissingCol"/>"#),
+    ] {
+        let zip_neg = make_zip(&[
+            ("[Content_Types].xml", CT.as_bytes()),
+            ("_rels/.rels", ROOT_RELS.as_bytes()),
+            ("xl/workbook.xml", wb_xml.as_bytes()),
+            ("xl/_rels/workbook.xml.rels", wb_rels.as_bytes()),
+            ("xl/worksheets/sheet1.xml", sheet1.as_bytes()),
+            ("xl/worksheets/_rels/sheet1.xml.rels", sheet1_rels.as_bytes()),
+            ("xl/drawings/drawing1.xml", drawing1.as_bytes()),
+            ("xl/slicers/slicer1.xml", slicers_xml.as_bytes()),
+            ("xl/slicerCaches/slicerCache1.xml", cache_xml.as_bytes()),
+            ("xl/worksheets/sheet2.xml", sheet2.as_bytes()),
+            ("xl/worksheets/_rels/sheet2.xml.rels", sheet2_rels.as_bytes()),
+            ("xl/tables/table3.xml", table3.as_bytes()),
+        ]);
+        let (wb_neg, _) = crate::read_xlsx(&zip_neg).unwrap();
+        assert!(wb_neg.sheets[0].slicers.is_empty(), "mismatched or unresolvable slicer must not attach");
+    }
 }

@@ -160,9 +160,10 @@ fn latin_role_fonts(dir: &std::path::Path) -> Result<String, String> {
         ("Caladea", "Italic"),
         ("Caladea", "Bold Italic"),
     ] {
-        let Some(row) = rows.iter().find(|r| r.family == family && r.style == style && !craft_fonts_policy::barred(&r.family)) else {
-            continue;
-        };
+        let row = rows
+            .iter()
+            .find(|r| r.family == family && r.style == style && !craft_fonts_policy::barred(&r.family))
+            .ok_or_else(|| format!("{}: missing required Latin role face {family} {style}", manifest.display()))?;
         let path = dir.join(&row.file).canonicalize().map_err(|e| format!("{}: {e}", row.file))?;
         println!("cargo::rerun-if-changed={}", path.display());
         let _ = writeln!(out, "    ({family:?}, {style:?}, include_bytes!({path:?})),");

@@ -150,12 +150,12 @@ fn paint_gridlines(q: &QuadrantPaint<'_>) {
         let bottom = geo.y_end(sh, r1);
         let left = geo.x(sh, c0);
         let right = geo.x_end(sh, c1);
-        let xs = (c0..=c1).filter(|&c| sh.col_width(c) > 0.0).map(|c| geo.x(sh, c)).chain([right]);
+        let xs = geo.shown_cols(c0, c1).map(|c| geo.x(sh, c)).chain([right]);
         for x in xs {
             let x = x.round() - 0.5;
             p.line_segment([pos2(x, top), pos2(x, bottom)], stroke);
         }
-        let ys = (r0..=r1).filter(|&r| sh.row_height(r) > 0.0).map(|r| geo.y(sh, r)).chain([bottom]);
+        let ys = geo.shown_rows(r0, r1).map(|r| geo.y(sh, r)).chain([bottom]);
         for y in ys {
             let y = y.round() - 0.5;
             p.line_segment([pos2(left, y), pos2(right, y)], stroke);
@@ -164,21 +164,14 @@ fn paint_gridlines(q: &QuadrantPaint<'_>) {
 }
 
 fn visible_cells(q: &QuadrantPaint<'_>) -> Vec<CellRef> {
-    let sh = q.sheet;
+    let geo = q.geo;
     let (r0, r1) = q.rows;
     let (c0, c1) = q.cols;
     // Merged areas: blank them (no inner gridlines) and paint as one cell.
+    let cols: Vec<u32> = geo.shown_cols(c0, c1).collect();
     let mut cells: Vec<CellRef> = Vec::new();
-    for r in r0..=r1 {
-        if sh.row_height(r) == 0.0 {
-            continue;
-        }
-        for c in c0..=c1 {
-            if sh.col_width(c) == 0.0 {
-                continue;
-            }
-            cells.push(CellRef::new(r, c));
-        }
+    for r in geo.shown_rows(r0, r1) {
+        cells.extend(cols.iter().map(|&c| CellRef::new(r, c)));
     }
     cells
 }
@@ -225,10 +218,7 @@ fn outside_text_cells(q: &mut QuadrantPaint<'_>, merges: &[RangeRef]) -> Vec<(Ce
     // Text cells just outside the quadrant whose text may overflow into it: the nearest non-empty
     // cell left of `c0` and right of `c1` in each row (within the same frozen / scrolled pane).
     let mut outside: Vec<(CellRef, Rect, Look, Option<CfLook>)> = Vec::new();
-    for r in r0..=r1 {
-        if sh.row_height(r) == 0.0 {
-            continue;
-        }
+    for r in geo.shown_rows(r0, r1) {
         let left = (c0.saturating_sub(20)..c0).rev().map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
         let right = (c1.saturating_add(1)..=c1.saturating_add(20).min(MAX_COLS - 1)).map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
         for n in [left, right].into_iter().flatten() {
@@ -247,8 +237,14 @@ fn paint_cells(
     outside: &[(CellRef, Rect, Look, Option<CfLook>)],
     merges: &[RangeRef],
 ) {
+    let mut bold_faces: std::collections::HashMap<(String, bool), bool> = std::collections::HashMap::new();
     for cell in looks.iter().chain(outside) {
-        paint_cell(q, cell, merges);
+        let font = &cell.2.style.font;
+        let faux_bold = font.bold
+            && !*bold_faces
+                .entry((font.name.clone(), font.italic))
+                .or_insert_with(|| theme::has_bold_face(q.painter.ctx(), &font.name, font.italic));
+        paint_cell(q, cell, merges, faux_bold);
     }
 }
 
@@ -324,7 +320,7 @@ fn should_expand_text(filter_space: f32, overflows: bool, across_end: u32, col: 
 ///
 /// Handles text layout, wrapping, alignment, overflow into neighbouring cells,
 /// and clipping, while preserving cell decoration and merged-cell constraints.
-fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLook>), merges: &[RangeRef]) {
+fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLook>), merges: &[RangeRef], faux_bold: bool) {
     let (cell, rect, lk, cfl) = painted;
     let c = *cell;
     let p = q.painter;
@@ -373,11 +369,13 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         return;
     }
     let color = ncolor.unwrap_or(lk.text_color);
+    let direction = crate::text_direction::cell_direction(st.align.reading_order, &text);
     let halign = match st.align.h {
         HAlign::General => match v {
             Value::Number(_) => HAlign::Right,
             Value::Bool(_) | Value::Error(_) => HAlign::Center,
             _ if numeric => HAlign::Right,
+            _ if direction == egui::epaint::text::TextDirection::RightToLeft && !sh.right_to_left => HAlign::Right,
             _ => HAlign::Left,
         },
         h => painted_halign(h, geo.rtl),
@@ -389,24 +387,23 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
         let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
         let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w);
-        job.halign = match halign {
+        job.direction = direction;
+        job.halign_min_is_start = false;
+        job.halign = match painted_halign(halign, geo.rtl) {
             HAlign::Center | HAlign::CenterAcross => egui::Align::Center,
             HAlign::Right => egui::Align::RIGHT,
             _ => egui::Align::LEFT,
         };
         let galley = p.layout_job(job);
         let x = match halign {
-            HAlign::Center | HAlign::CenterAcross => rect.center().x,
-            HAlign::Right => rect.right() - pad,
-            _ => text_left + pad + indent,
+            HAlign::Center | HAlign::CenterAcross => rect.center().x - galley.rect.center().x,
+            HAlign::Right => rect.right() - pad - galley.rect.right(),
+            _ => text_left + pad + indent - galley.rect.left(),
         };
         let y = wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z);
         let text_clip = wrapped_text_clip(p, *rect, &galley, y, st.align.v);
         let cp = p.with_clip_rect(text_clip);
-        cp.galley(pos2(x, y), galley.clone(), color);
-        if st.font.bold && !theme::has_bold_face(p.ctx(), &st.font.name, st.font.italic) {
-            cp.galley(pos2(x + (0.55 * z).max(0.5), y), galley, color);
-        }
+        paint_upright_galley(&cp, pos2(x, y), &galley, color, faux_bold, z);
         return;
     }
     // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.
@@ -420,7 +417,13 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         .flatten();
     let shrunk = small.is_some();
     let font = small.unwrap_or(font);
-    let mut galley = p.layout_no_wrap(first_line.clone(), font.clone(), color);
+    let layout = |text: String| {
+        let mut job = egui::text::LayoutJob::simple(text, font.clone(), color, f32::INFINITY);
+        job.direction = direction;
+        job.halign_min_is_start = false;
+        p.layout_job(job)
+    };
+    let mut galley = layout(first_line.clone());
     let mut w = galley.size().x;
     // Numbers and dates never overflow: they show #### when too narrow.
     let hashed = !shrunk && (numeric || matches!(v, Value::Number(_))) && w > avail_w - 2.0 * pad && st.align.h != HAlign::Fill;
@@ -428,7 +431,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         // Measured on `#` itself: it is wider than `0` in some fonts, and #### must fit its cell.
         let hash_w = p.layout_no_wrap("#".to_string(), font.clone(), color).size().x.max(1.0);
         let n = ((avail_w - 2.0 * pad) / hash_w).floor().max(1.0) as usize;
-        galley = p.layout_no_wrap("#".repeat(n), font.clone(), color);
+        galley = layout("#".repeat(n));
         w = galley.size().x;
     }
     // Repeat fill (`*` in number formats) / Fill alignment. A number already shown as #### keeps
@@ -445,7 +448,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         if first_line.is_char_boundary(pos) {
             s.insert_str(pos, &ch.to_string().repeat(n));
         }
-        galley = p.layout_no_wrap(s, font.clone(), color);
+        galley = layout(s);
         w = galley.size().x;
     }
     // Center Across Selection: the text is centred over this cell and the empty cells to its right that also use it.
@@ -509,32 +512,26 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         let angle = -(st.align.rotation as f32).to_radians();
         // Upright (±90°) wrapped text wraps to the row height: lines then stack across the column.
         let galley = if st.align.wrap && st.align.rotation.abs() == 90 {
-            let job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, (rect.height() - 2.0 * pad).max(4.0));
+            let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, (rect.height() - 2.0 * pad).max(4.0));
+            job.direction = direction;
             p.layout_job(job)
         } else {
             galley.clone()
         };
-        let pos = rotated_text_pos(*rect, galley.size(), angle, painted_halign(st.align.h, geo.rtl), st.align.v, pad, indent);
+        let pos = rotated_text_pos(*rect, galley.size(), angle, halign, st.align.v, pad, indent);
         let mut shape = egui::epaint::TextShape::new(pos, galley, color);
         shape.angle = angle;
         cp.add(shape);
     } else {
-        paint_upright_galley(&cp, pos2(x, y), &galley, color, &st.font, z);
+        paint_upright_galley(&cp, pos2(x, y), &galley, color, faux_bold, z);
     }
     paint_text_decorations(&cp, TextDecoration { x, y, width: w, height: gh, color, underline: st.font.underline, strike: st.font.strike });
 }
 
-/// Paints an upright cell galley, adding a slight horizontal overstrike pass only when `font.bold` has no dedicated bold font face.
-fn paint_upright_galley(
-    cp: &Painter,
-    pos: Pos2,
-    galley: &std::sync::Arc<egui::Galley>,
-    color: Color32,
-    font: &gridcraft_engine::model::Font,
-    z: f32,
-) {
+/// Paints an upright cell galley, adding a slight horizontal overstrike pass only when `faux_bold` is true.
+fn paint_upright_galley(cp: &Painter, pos: Pos2, galley: &std::sync::Arc<egui::Galley>, color: Color32, faux_bold: bool, z: f32) {
     cp.galley(pos, galley.clone(), color);
-    if font.bold && !theme::has_bold_face(cp.ctx(), &font.name, font.italic) {
+    if faux_bold {
         cp.galley(pos2(pos.x + (0.55 * z).max(0.5), pos.y), galley.clone(), color);
     }
 }
