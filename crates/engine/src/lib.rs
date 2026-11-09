@@ -730,48 +730,44 @@ impl Session {
             let mut out = Vec::new();
             for ci in 0..row_cells.len() {
                 let at = start.offset(ri as i64, ci as i64)?;
-                let value = match sheet.cell(at).and_then(|cell| cell.formula.as_ref()) {
-                    Some(formula) => Json::String(format!("={}", formula.text)),
-                    None => match Self::whole_number(crate::cmd::inspect::value_json(&sheet.value(at))) {
-                        // Text the replay would read as a formula goes back with the apostrophe
-                        // that marks it text; a stored leading apostrophe is itself text, so it
-                        // goes back doubled (the replay strips one). One encoding, decoded in
-                        // `range_set_values`.
-                        Json::String(text) if crate::cmd::edit::is_formula_input(&text) => Json::String(format!("'{text}")),
-                        Json::String(text) if crate::cmd::edit::is_signed_number_text(&text) => Json::String(format!("'{text}")),
-                        Json::String(text) if text.starts_with('\'') => Json::String(format!("'{text}")),
-                        other => other,
-                    },
-                };
-                out.push(value);
+                out.push(Self::encoded_cell_value(sheet, at)?);
             }
             rows.push(Json::Array(out));
         }
         Some(Json::Array(rows))
     }
 
-    /// The value a `cell.set` entry stored, read back from the cell the command wrote: a
-    /// formula where one was written, the stored value otherwise, encoded exactly as
-    /// `written_values` encodes one cell (whole numbers as integers, formula-like or signed
-    /// text with its marker, a stored leading apostrophe doubled). `None` when the cell
-    /// cannot be read: the recorder then replays the typed text as before.
-    fn stored_cell_value(&self, params: &Json) -> Option<Json> {
-        let sheet_index = crate::cmd::target_sheet(self, params).ok()?;
-        let at = crate::cmd::cell_param_on(self, params, "cell", sheet_index).ok()??;
-        let doc = self.doc().ok()?;
-        let sheet = doc.wb.sheet(sheet_index)?;
+    /// One cell's stored value as a recording replays it: the formula where one was written,
+    /// the stored value otherwise — whole numbers as integers, formula-like or signed text with
+    /// the apostrophe that marks it text, a stored leading apostrophe doubled. The replay
+    /// (`range_set_values`) decodes this one encoding. `None` when the cell holds nothing.
+    fn encoded_cell_value(sheet: &gridcraft_model::Sheet, at: gridcraft_core::CellRef) -> Option<Json> {
         let cell = sheet.cell(at)?;
         if let Some(formula) = cell.formula.as_ref() {
             return Some(Json::String(format!("={}", formula.text)));
         }
         let stored = Self::whole_number(crate::cmd::inspect::value_json(&sheet.value(at)));
         let stored = match stored {
+            // Text the replay would read as a formula goes back with the apostrophe
+            // that marks it text; a stored leading apostrophe is itself text, so it
+            // goes back doubled (the replay strips one).
             Json::String(text) if crate::cmd::edit::is_formula_input(&text) => Json::String(format!("'{text}")),
             Json::String(text) if crate::cmd::edit::is_signed_number_text(&text) => Json::String(format!("'{text}")),
             Json::String(text) if text.starts_with('\'') => Json::String(format!("'{text}")),
             other => other,
         };
         Some(stored)
+    }
+
+    /// The value a `cell.set` entry stored, read back from the cell the command wrote, in the
+    /// recording's one encoding. `None` when the cell cannot be read: the recorder then replays
+    /// the typed text as before.
+    fn stored_cell_value(&self, params: &Json) -> Option<Json> {
+        let sheet_index = crate::cmd::target_sheet(self, params).ok()?;
+        let at = crate::cmd::cell_param_on(self, params, "cell", sheet_index).ok()??;
+        let doc = self.doc().ok()?;
+        let sheet = doc.wb.sheet(sheet_index)?;
+        Self::encoded_cell_value(sheet, at)
     }
 
     /// A whole number as an integer, so a recorded literal reads `2` rather than `2.0`.

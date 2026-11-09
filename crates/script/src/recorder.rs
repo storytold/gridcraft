@@ -78,8 +78,10 @@ fn skip_reason(step: &JournalStep) -> String {
         return "not supported by the Office Scripts bridge".into();
     }
     match step.id.as_str() {
+        "cell.set" if step.params.get("array").and_then(Json::as_bool) == Some(true) => {
+            "it is an array entry, which a recording cannot replay".into()
+        }
         "cell.set" if step.params.get("cell").and_then(Json::as_str).is_none() => "it used the active cell, which the recording does not know".into(),
-        "cell.set" if js_literal(step.params.get("input").unwrap_or(&Json::Null)).is_none() => "its value is not a number, text or true/false".into(),
         "range.setValues" if step.params.get("uncaptured").and_then(Json::as_bool) == Some(true) => {
             "its stored values are above the 10,000-cell capture bound".into()
         }
@@ -108,6 +110,11 @@ fn step_call(step: &JournalStep) -> Option<(BridgeCall, String)> {
     // A range write whose stored values were not captured has no faithful replay: the inputs may
     // have read as other values, so the step is skipped with its reason instead.
     if step.id == "range.setValues" && p.get("uncaptured").and_then(Json::as_bool) == Some(true) {
+        return None;
+    }
+    // An array entry writes a whole range and clears its neighbours: a single `setValue`
+    // cannot replay it, so the step is skipped with its reason instead.
+    if step.id == "cell.set" && p.get("array").and_then(Json::as_bool) == Some(true) {
         return None;
     }
     match step.id.as_str() {
@@ -437,6 +444,18 @@ mod tests {
         let r = record(&[step("cell.set", json!({"sheet": 1, "cell": "A1", "input": 1}))]);
         assert!(r.calls.is_empty(), "{:?}", r.calls);
         assert!(r.code.contains("its sheet index could not be resolved"), "{}", r.code);
+    }
+
+    #[test]
+    fn an_array_entry_is_skipped() {
+        // An array entry writes a whole range and clears its neighbours: a single `setValue`
+        // with the anchor's value cannot replay it.
+        let r = record(&[step("cell.set", json!({"cell": "A1", "input": 1, "array": true}))]);
+        assert!(r.calls.is_empty(), "{:?}", r.calls);
+        assert!(r.code.contains("it is an array entry, which a recording cannot replay"), "{}", r.code);
+        // Without the flag the same write records as before.
+        let plain = record(&[step("cell.set", json!({"cell": "A1", "input": 1}))]);
+        assert!(plain.code.contains("setValue(1);"), "{}", plain.code);
     }
 
     #[test]
