@@ -267,9 +267,9 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                     // before formula-like text is the marker that keeps it a text (`'=1+1`),
                     // as typed input writes it; before anything else it is text itself, so it
                     // stays (`'abc` → `'abc`). The `setText`/`setTexts` path (`verbatim`) stores
-                    // the text it is given, so the marker is never stripped there. A formula is
-                    // still a formula, which is what `=` means in a cell.
-                    Json::String(text) if !parse && !text.starts_with('=') => {
+                    // the text it is given, so the marker is never stripped there and a leading
+                    // `=` is text rather than a formula, as `setText` means.
+                    Json::String(text) if !parse && (verbatim || !text.starts_with('=')) => {
                         // One coherent encoding with the capture: a leading `'` before
                         // formula-like or signed text is the marker that keeps it a text
                         // (`'=1+1` → `=1+1`); a doubled `''` is a literal apostrophe, so one

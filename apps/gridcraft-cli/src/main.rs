@@ -166,9 +166,24 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
 }
 
 /// Office Scripts: the same local folder and Bun discovery as the app, so the CLI can run and
-/// export scripts. `GRIDCRAFT_SCRIPTS` overrides the folder (tests use a temp one).
+/// export scripts. A run with preferences disabled keeps no folder of its own, as the app does.
 fn scripts_dir() -> Option<String> {
-    config_dir().map(|b| b.join("scripts").display().to_string())
+    scripts_dir_with(config_dir(), prefs_enabled())
+}
+
+/// The default `<config>/scripts` folder, or none when preferences are disabled
+/// (`GRIDCRAFT_NO_PREFS`): script storage then stays off unless `GRIDCRAFT_SCRIPTS` names a folder.
+fn scripts_dir_with(config: Option<std::path::PathBuf>, prefs: bool) -> Option<String> {
+    if !prefs {
+        return None;
+    }
+    config.map(|b| b.join("scripts").display().to_string())
+}
+
+/// Runs without preferences (`GRIDCRAFT_NO_PREFS`, agents' test runs) neither read nor write
+/// them and keep no scripts folder, like the app.
+fn prefs_enabled() -> bool {
+    std::env::var_os("GRIDCRAFT_NO_PREFS").is_none()
 }
 
 /// Which folder a CLI session uses: an explicit `$GRIDCRAFT_SCRIPTS` wins over the folder saved
@@ -194,7 +209,7 @@ fn config_dir() -> Option<std::path::PathBuf> {
 /// The scripts folder the person chose in the app (`script.folder` saves it in `prefs.json`), so
 /// a CLI session lists and runs the same scripts the app shows.
 fn saved_scripts_dir(config: &std::path::Path) -> Option<String> {
-    if std::env::var_os("GRIDCRAFT_NO_PREFS").is_some() {
+    if !prefs_enabled() {
         return None;
     }
     let bytes = std::fs::read(config.join("prefs.json")).ok()?;
@@ -203,6 +218,7 @@ fn saved_scripts_dir(config: &std::path::Path) -> Option<String> {
 }
 
 /// Installs the Office Scripts runtime and folder on a session made by the CLI.
+/// `GRIDCRAFT_SCRIPTS` overrides the folder (tests use a temp one).
 fn with_scripts(mut s: Session) -> Session {
     s.script_host = Some(gridcraft_script_bun::script_host());
     let explicit = std::env::var_os("GRIDCRAFT_SCRIPTS").map(|p| std::path::PathBuf::from(p).display().to_string());
@@ -638,6 +654,19 @@ mod tests {
         assert_eq!(choose_scripts_dir(None, Some("/saved".into()), Some("/default".into())), Some("/saved".into()));
         assert_eq!(choose_scripts_dir(None, None, Some("/default".into())), Some("/default".into()));
         assert_eq!(choose_scripts_dir(None, None, None), None);
+    }
+
+    #[test]
+    fn a_run_without_preferences_keeps_no_scripts_folder() {
+        // `GRIDCRAFT_NO_PREFS` (agents' test runs) writes nothing into the user's settings
+        // folder: the default folder is unset, as in the app, unless `GRIDCRAFT_SCRIPTS` names one.
+        let config = Some(std::path::PathBuf::from("/config"));
+        let default = std::path::PathBuf::from("/config").join("scripts").display().to_string();
+        assert_eq!(scripts_dir_with(config.clone(), true), Some(default));
+        assert_eq!(scripts_dir_with(config, false), None, "no preferences: no folder of its own");
+        assert_eq!(scripts_dir_with(None, true), None);
+        // An explicit folder is still honoured with preferences off.
+        assert_eq!(choose_scripts_dir(Some("/env".into()), None, scripts_dir_with(None, false)), Some("/env".into()));
     }
 
     #[test]

@@ -1045,6 +1045,24 @@ mod tests {
     }
 
     #[test]
+    fn a_verbatim_text_write_keeps_text_that_starts_with_equals() {
+        // `setText` never parses: `=1+1` is the text given, not a formula, as in Excel.
+        let mut s = session("verbatim-equals");
+        {
+            let mut bridge = crate::script::SessionBridge { session: &mut s };
+            let text = BridgeCall::new("Range.setText", json!({"range": "A1", "text": "=1+1"}));
+            gridcraft_script::BridgeExecutor::execute(&mut bridge, &text).unwrap();
+            assert_eq!(value(bridge.session, 0, "A1"), Value::Text("=1+1".into()), "setText stores the text, not a formula");
+            let texts = BridgeCall::new("Range.setTexts", json!({"range": "A2", "texts": [["=B1*2"]]}));
+            gridcraft_script::BridgeExecutor::execute(&mut bridge, &texts).unwrap();
+            assert_eq!(value(bridge.session, 0, "A2"), Value::Text("=B1*2".into()));
+        }
+        // A formula write still parses: `setFormula` is the call that means a formula.
+        s.execute("range.setValues", json!({"range": "A3", "values": [["=1+1"]], "parse": true})).unwrap();
+        assert_eq!(value(&s, 0, "A3"), Value::Number(2.0));
+    }
+
+    #[test]
     fn a_recorded_range_write_keeps_the_blank_it_cleared() {
         // A `null` in the values clears its cell: the cell then has no stored entry, and the
         // capture holds an empty string for it — not `null`, which Excel reads as "leave the
