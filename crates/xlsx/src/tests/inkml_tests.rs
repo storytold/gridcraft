@@ -691,9 +691,7 @@ fn two_ink_parts_cannot_share_a_creation_id() {
             r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/customXml" Target="../ink/{ink}.xml"/><Relationship Id="rId2" Type="{NS_REL}/image" Target="../media/image1.png"/></Relationships>"#
         )
     };
-    let ct = format!(
-        r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/ink/ink1.xml" ContentType="application/inkml+xml"/><Override PartName="/xl/ink/ink2.xml" ContentType="application/inkml+xml"/></Types>"#
-    );
+    let ct = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/ink/ink1.xml" ContentType="application/inkml+xml"/><Override PartName="/xl/ink/ink2.xml" ContentType="application/inkml+xml"/></Types>"#;
     let root = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
     let drawing = drawing(GUIDE);
     let ink = inkml("!0 !0,'1000 '1000", false, PEN_PROPS);

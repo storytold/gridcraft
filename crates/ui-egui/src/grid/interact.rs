@@ -248,10 +248,12 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                 crate::chartview::paint_ink_preview(
                     input.ui.painter(),
                     &pts,
-                    &app.session.draw_brush,
-                    &app.session.draw_color,
-                    app.session.draw_width,
-                    &app.session.draw_effect,
+                    &crate::chartview::PreviewPen {
+                        brush: &app.session.draw_brush,
+                        color: &app.session.draw_color,
+                        width_mm: app.session.draw_width,
+                        effect: &app.session.draw_effect,
+                    },
                     &theme,
                     geo.z,
                 );

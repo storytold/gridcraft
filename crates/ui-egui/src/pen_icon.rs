@@ -292,8 +292,8 @@ pub fn pen_tile(ui: &mut Ui, tile: PenTile<'_>) -> (Response, Response) {
         ui.painter().rect_filled(arrow, 5.0, t.pressed);
     }
     let p = ui.painter();
-    paint_tip(p, Rect::from_center_size(pos2(rect.center().x, rect.top() + 22.0), vec2(28.0, 28.0)), tile.tool, tile.color, tile.effect);
-    paint_swatch(p, Rect::from_center_size(pos2(rect.center().x, rect.top() + 44.0), vec2(28.0, 12.0)), tile.tool, tile.color, tile.effect);
+    paint_tip(p, Rect::from_center_size(pos2(rect.center().x, rect.top() + 20.0), vec2(28.0, 28.0)), tile.tool, tile.color, tile.effect);
+    paint_swatch(p, Rect::from_center_size(pos2(rect.center().x, rect.top() + 40.0), vec2(28.0, 12.0)), tile.tool, tile.color, tile.effect);
     crate::icons::paint(p, Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), crate::icons::Icon::Chevron, t.text_dim);
     if tile.selected {
         p.rect_stroke(rect, 5.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);

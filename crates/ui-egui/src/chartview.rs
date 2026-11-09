@@ -10,11 +10,14 @@ use crate::SheetApp;
 use crate::grid::Geo;
 use crate::theme::{self, Tokens};
 
+/// A stroke's parsed screen points, and the hash of the text they were parsed from.
+type CachedPoints = (u64, std::rc::Rc<Vec<[f32; 2]>>);
+
 thread_local! {
     /// Parsed ink points per shape id, with the hash of the text they came from. `paint_objects`
     /// runs every frame; splitting `Shape::text` and allocating a `Vec` per stroke per frame was
     /// pure waste, and the cache is small and cleared past a cap.
-    static INK_POINTS: std::cell::RefCell<std::collections::HashMap<u32, (u64, std::rc::Rc<Vec<[f32; 2]>>)>> =
+    static INK_POINTS: std::cell::RefCell<std::collections::HashMap<u32, CachedPoints>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
@@ -693,20 +696,20 @@ fn paint_ink(p: &Painter, pts: &[Pos2], sp: &gridcraft_engine::model::Shape, ink
     }
 }
 
+/// The pen the live preview draws with: the Draw tab's brush, colour, thickness and texture.
+pub(crate) struct PreviewPen<'a> {
+    pub brush: &'a str,
+    pub color: &'a str,
+    pub width_mm: f32,
+    pub effect: &'a str,
+}
+
 /// Paints the stroke being drawn exactly as [`paint_ink`] will paint it once committed: the same
 /// brush, width, texture, taper and translucency, so the live preview cannot drift from the ink
 /// (#1786: it used to be a solid full-width line whatever the pen or effect).
-pub(crate) fn paint_ink_preview(
-    p: &Painter,
-    pts: &[Pos2],
-    brush: &str,
-    color: &str,
-    width_mm: f32,
-    effect: &str,
-    theme: &gridcraft_engine::model::Theme,
-    z: f32,
-) {
+pub(crate) fn paint_ink_preview(p: &Painter, pts: &[Pos2], pen: &PreviewPen<'_>, theme: &gridcraft_engine::model::Theme, z: f32) {
     use gridcraft_engine::model::{InkEffect, InkStyle, InkTool};
+    let (brush, color, width_mm, effect) = (pen.brush, pen.color, pen.width_mm, pen.effect);
     if pts.len() < 2 {
         return;
     }
