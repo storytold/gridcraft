@@ -93,3 +93,21 @@ impl Preserved {
         self.parts.iter().chain(self.vml.iter()).fold(0usize, |n, p| n.saturating_add(p.data.len()))
     }
 }
+
+/// A kept part the reader could not keep: its package name, its unpacked size and why it was
+/// dropped.
+///
+/// GridCraft keeps unmodelled content so that a save never loses it. A part above the per-part
+/// limit, or one that no longer fits the keep budget (the kept bytes or the part slots another
+/// kept part already used), can't be kept, and unlike a part it can rebuild, it can't be put back
+/// either, so the writer refuses to save a workbook holding one of these instead of silently
+/// losing the part.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DroppedPart {
+    /// The package part name (`xl/model/item.data`).
+    pub name: String,
+    /// Its unpacked size in bytes, `None` when the package has no size for it (a missing part).
+    pub size: Option<u64>,
+    /// Why the keep failed: the limit or the budget it exhausted.
+    pub reason: String,
+}

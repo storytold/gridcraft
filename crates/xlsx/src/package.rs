@@ -64,6 +64,13 @@ impl<'a> Package<'a> {
         self.names.contains_key(&normalize(part))
     }
 
+    /// A part's unpacked size, read from the zip directory without decompressing it; `None` when
+    /// the package has no such part.
+    pub fn part_size(&mut self, part: &str) -> Option<u64> {
+        let index = *self.names.get(&normalize(part))?;
+        self.zip.by_index(index).ok().map(|file| file.size())
+    }
+
     /// Reads a part's bytes; `Ok(None)` when it doesn't exist.
     pub fn read(&mut self, part: &str) -> Result<Option<Vec<u8>>, IoError> {
         self.read_limited(part, MAX_PART)

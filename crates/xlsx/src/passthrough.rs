@@ -14,7 +14,9 @@
 //! kept XML are rewritten to match. Kept content is conservative:
 //! - Anything whose relationship graph reaches a part GridCraft reads and rewrites (worksheets,
 //!   drawings, charts, tables, PivotTables, comments, slicers…) is not kept: it would point at
-//!   content that no longer exists in the same form.
+//!   content that no longer exists in the same form. Data-model (external-cache) PivotTables are
+//!   the exception: [`crate::pivot_model::keep_external_pivots`] keeps their graph instead, since
+//!   the range-PivotTable reader does not model them.
 //! - External relationship targets (the path of a linked workbook) are kept as text and never
 //!   opened, followed or refreshed. A relative path to a linked workbook is rewritten when the
 //!   workbook is saved into another folder ([`rebase_links`]), so it still names the same file.
@@ -30,7 +32,7 @@ use std::fmt::Write as _;
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-use gridcraft_model::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml, Sheet, Visibility, Workbook};
+use gridcraft_model::{DroppedPart, Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml, Sheet, Visibility, Workbook};
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::QName;
@@ -55,9 +57,14 @@ pub use write::{KeptOut, SheetIds, WorkbookKept, workbook_elements, write_packag
 /// Most bytes kept for one workbook.
 pub const MAX_KEPT_TOTAL: usize = 256 * 1024 * 1024;
 /// Largest single kept part.
+///
+/// The data model (`xl/model/item.data`) is exempt in neither direction: a model above this limit
+/// is not read (parsing it would cost more than it is worth), and the workbook then cannot be
+/// saved as XLSX until the caller accepts losing it, because the writer refuses
+/// ([`crate::IoError::DroppedPart`]) rather than drop it silently.
 pub const MAX_KEPT_PART: u64 = 64 * 1024 * 1024;
 /// Most parts kept for one workbook.
-const MAX_KEPT_PARTS: usize = 4096;
+pub(crate) const MAX_KEPT_PARTS: usize = 4096;
 /// Most relationships read from one rels part.
 const MAX_RELS: usize = 10_000;
 /// Largest relationships, content-types or VML part read here.
@@ -73,6 +80,8 @@ const MAX_FRAGMENT_DEPTH: usize = 256;
 thread_local! {
     /// A smaller kept-bytes allowance for tests on this thread.
     pub(crate) static KEPT_TOTAL_FOR_TEST: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_KEPT_TOTAL) };
+    /// A smaller kept-parts allowance for tests on this thread.
+    pub(crate) static KEPT_PARTS_FOR_TEST: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_KEPT_PARTS) };
 }
 
 fn kept_total() -> usize {
@@ -86,13 +95,25 @@ fn kept_total() -> usize {
     }
 }
 
+/// The kept-part allowance for one workbook: [`MAX_KEPT_PARTS`], or the test allowance.
+fn kept_parts() -> usize {
+    #[cfg(test)]
+    {
+        KEPT_PARTS_FOR_TEST.with(std::cell::Cell::get)
+    }
+    #[cfg(not(test))]
+    {
+        MAX_KEPT_PARTS
+    }
+}
+
 const NS_REL_STRICT: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships";
 const CT_VML: &str = "application/vnd.openxmlformats-officedocument.vmlDrawing";
 
 /// Relationship kinds (last segment of the type) kept from the package root.
 const PACKAGE_ROOTS: &[&str] = &["custom-properties", "extensibility", "webextensiontaskpanes"];
 /// Relationship kinds kept from the workbook without a workbook element.
-const WORKBOOK_ROOTS: &[&str] = &["customXml", "connections", "xmlMaps"];
+const WORKBOOK_ROOTS: &[&str] = &["customXml", "connections", "xmlMaps", "powerPivotData"];
 /// Relationship kinds kept from a sheet without a sheet element.
 const SHEET_ROOTS: &[&str] = &["queryTable", "tableSingleCells"];
 /// Sheet relationship kinds that mean the sheet XML may hold elements worth keeping.
@@ -147,15 +168,16 @@ const REWRITTEN: &[&str] = &[
     "slicercache",
     "timeline",
     "timelinecache",
-    "powerpivotdata",
 ];
 
 /// Relationship kinds a chart sheet reaches that are otherwise rewritten: its drawing, chart and
 /// their style, colour and shape parts are kept byte for byte (the chart sheet is not modelled).
 const CHART_SHEET_GRAPH: &[&str] = &["chartsheet", "drawing", "chart", "chartex", "chartstyle", "chartcolorstyle", "chartusershapes"];
 
-/// Part-name prefixes (lower case) GridCraft's writer never produces: kept parts there keep their
-/// original names. Anything else is renamed so it can't collide with written parts.
+/// Part-name prefixes (lower case) where a kept part keeps its original name when no other part
+/// has claimed it. The pivot writer also claims names in `xl/pivotCache/` and `xl/pivotTables/`
+/// through the same name table, so a collision there is renamed. Anything else is always
+/// renamed so it can't collide with written parts.
 const OWN_DIRS: &[&str] = &[
     "customxml/",
     "docprops/custom.xml",
@@ -169,6 +191,9 @@ const OWN_DIRS: &[&str] = &[
     "xl/activex/",
     "xl/webextensions/",
     "xl/printersettings/",
+    "xl/pivotcache/",
+    "xl/pivottables/",
+    "xl/model/",
 ];
 
 fn kind(rel_type: &str) -> &str {
@@ -184,7 +209,7 @@ fn rewritten(r: &PreservedRel) -> bool {
     !r.external && REWRITTEN.contains(&kind(&r.rel_type).to_ascii_lowercase().as_str())
 }
 
-fn rels_part_name(part: &str) -> String {
+pub(crate) fn rels_part_name(part: &str) -> String {
     let (dir, file) = package::split_dir(part);
     if dir.is_empty() { format!("_rels/{file}.rels") } else { format!("{dir}/_rels/{file}.rels") }
 }

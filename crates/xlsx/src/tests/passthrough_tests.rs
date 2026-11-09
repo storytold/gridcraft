@@ -1003,3 +1003,49 @@ fn a_sheet_of_modelled_controls_keeps_nothing_for_them() {
     assert_eq!(sh.controls.len(), 2);
     assert!(sh.preserved.is_none(), "{:?}", sh.preserved);
 }
+
+#[test]
+fn pivot_caches_children_ignores_a_longer_element_name() {
+    // `pivot_caches_children` scans for the `<pivotCaches` prefix; a longer element name that
+    // starts with those bytes must not count as the wrapper. Regression test for the boundary
+    // check: without it the scan would cut children out of `<pivotCachesExtra>`.
+    use crate::write::pivot_caches_children_for_test;
+    let xml = "<pivotCachesExtra><pivotCache cacheId=\"9\"/></pivotCachesExtra>\
+        <pivotCaches><pivotCache cacheId=\"1\"/></pivotCaches>";
+    let children = pivot_caches_children_for_test(xml);
+    assert_eq!(children.matches("<pivotCache ").count(), 1, "only the real wrapper contributes: {children}");
+    assert!(children.contains("cacheId=\"1\""), "{children}");
+}
+
+#[test]
+fn pivot_caches_children_keeps_wrapper_namespace_bindings() {
+    // A kept `<pivotCaches>` wrapper may bind a prefix other than the workbook's `r` (kept XML
+    // is preserved verbatim). The merge drops the wrappers but keeps the children, so each
+    // child's kept prefix must stay bound — otherwise the saved workbook has an unbound prefix.
+    use crate::write::pivot_caches_children_for_test;
+    let xml = "<pivotCaches xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><pivotCache cacheId=\"1\" rel:id=\"rId1\"/></pivotCaches>\
+        <pivotCaches xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><pivotCache cacheId=\"5\" rel:id=\"rId2\"/></pivotCaches>";
+    let children = pivot_caches_children_for_test(xml);
+    assert_eq!(children.matches("<pivotCache ").count(), 2, "both wrappers contribute: {children}");
+    assert!(
+        children.contains("xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""),
+        "each child must carry its wrapper's binding: {children}"
+    );
+    // The binding goes before the self-closing `/`: `<a/>` must not become `<a/ xmlns:b="…">`.
+    assert!(!children.contains("/ xmlns:"), "no binding lands after the self-closing slash: {children}");
+    assert!(crate::xml::parse(format!("<pivotCaches>{children}</pivotCaches>").as_bytes()).is_ok(), "the merged children parse: {children}");
+}
+
+#[test]
+fn pivot_caches_children_does_not_match_a_prefix_of_another_binding() {
+    // A child declaring `xmlns:related` does not satisfy the wrapper's `xmlns:rel`: substring
+    // matching would omit `xmlns:rel` and leave the child's `rel:id` unbound.
+    use crate::write::pivot_caches_children_for_test;
+    let xml = "<pivotCaches xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><pivotCache cacheId=\"1\" xmlns:related=\"urn:x\" rel:id=\"rId1\"/></pivotCaches>";
+    let children = pivot_caches_children_for_test(xml);
+    assert!(
+        children.contains("xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""),
+        "the exact binding is kept: {children}"
+    );
+    assert!(crate::xml::parse(format!("<pivotCaches>{children}</pivotCaches>").as_bytes()).is_ok(), "the merged children parse: {children}");
+}

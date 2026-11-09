@@ -53,6 +53,12 @@ pub struct KeptReader {
     overrides: HashMap<String, String>,
     budget: usize,
     parts_left: usize,
+    /// Whether the workbook's model database (`xl/model/item.data`) was dropped by the budget.
+    model_dropped: bool,
+    /// The model database when the reader could not keep it — above
+    /// [`crate::passthrough::MAX_KEPT_PART`], or out of keep budget or part slots — which makes
+    /// saving refuse rather than lose it.
+    dropped_model: Option<DroppedPart>,
 }
 
 impl KeptReader {
@@ -63,7 +69,9 @@ impl KeptReader {
             defaults: HashMap::new(),
             overrides: HashMap::new(),
             budget: kept_total(),
-            parts_left: MAX_KEPT_PARTS,
+            parts_left: kept_parts(),
+            model_dropped: false,
+            dropped_model: None,
         };
         if let Ok(root) = raw_rels(cx, "")
             && root.iter().any(|r| r.rel_type.starts_with("http://purl.oclc.org/"))
@@ -87,6 +95,29 @@ impl KeptReader {
             None => k.on = false,
         }
         k
+    }
+
+    /// Whether unmodelled content is kept at all: false for Strict Open XML packages and for
+    /// packages whose content types can't be read, where nothing can be written back faithfully.
+    pub fn keeps(&self) -> bool {
+        self.on
+    }
+
+    /// Whether the workbook's model database survived the keep budget.
+    ///
+    /// `xl/model/item.data` can exceed [`crate::passthrough::MAX_KEPT_PART`]; when it is dropped the
+    /// model-backed PivotTables must not be kept either, or the saved package would hold pivots
+    /// whose model is gone.
+    pub fn keeps_model_data(&self) -> bool {
+        !self.model_dropped
+    }
+
+    /// The model database the reader could not keep, if any, with the reason.
+    ///
+    /// Such a part can't be kept, so saving the workbook would lose the model: the writer refuses
+    /// it instead ([`crate::IoError::DroppedPart`]).
+    pub fn dropped_model(&self) -> Option<DroppedPart> {
+        self.dropped_model.clone()
     }
 
     fn content_type(&self, part: &str) -> Option<String> {
@@ -122,7 +153,7 @@ impl KeptReader {
                 return Err("its relationships are nested too deeply".into());
             }
             if parts.len() >= self.parts_left {
-                return Err("it has too many parts".into());
+                return Err(format!("it has too many parts: no slot left for {name} ({} parts)", self.parts_left));
             }
             let content_type = self.content_type(&name).ok_or_else(|| format!("{name} has no content type"))?;
             let data = match cx.pkg.read_limited(&name, MAX_KEPT_PART) {
@@ -132,7 +163,7 @@ impl KeptReader {
             };
             bytes = bytes.saturating_add(data.len());
             if bytes > self.budget {
-                return Err("it is too large".into());
+                return Err(format!("it is too large: {name} needs {bytes} bytes and only {} are left", self.budget));
             }
             let rels = raw_rels(cx, &name)?;
             for r in rels.iter().filter(|r| !r.external) {
@@ -210,6 +241,19 @@ impl KeptReader {
         for r in wb_rels.iter().filter(|r| is_kind(r, WORKBOOK_ROOTS)) {
             if let Err(why) = self.keep(cx, &mut p, std::slice::from_ref(r), &mut seen) {
                 cx.warn(format!("{} part {} was dropped: {why}", kind(&r.rel_type), r.target));
+                // A dangling workbook relationship names a target the package never held: nothing
+                // was lost (`closure` fails those with "is missing"), so it is warned about above
+                // and not recorded as a drop — recording it would refuse every later save and skip
+                // model-backed PivotTables for a model that was never there.
+                if kind(&r.rel_type) == "powerPivotData" && cx.pkg.has(&r.target) {
+                    self.model_dropped = true;
+                    // The model exists but could not be kept: remember it with the reason, so the
+                    // writer refuses instead of writing the package without its data model.
+                    // Any keep failure counts, not only the per-part size limit: parts kept
+                    // earlier can use up the byte budget or the part slots first, and the save
+                    // must lose nothing either way.
+                    self.dropped_model = Some(DroppedPart { name: r.target.clone(), size: cx.pkg.part_size(&r.target), reason: why });
+                }
             }
         }
         // Chart sheets: the sheet entry (name, state, position) plus the chart sheet part and the

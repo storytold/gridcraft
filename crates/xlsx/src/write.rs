@@ -157,8 +157,11 @@ impl Out {
         self.part(&format!("xl/media/{file}"), None, data.to_vec());
         file
     }
-    pub fn default_type(&mut self, ext: &str, ct: &str) {
-        self.defaults.entry(ext.to_string()).or_insert_with(|| ct.to_string());
+    /// Declares `ct` as the content type a `.ext` part gets by default. Returns whether the
+    /// default for `ext` is that type: the first registration wins, so a part whose own type
+    /// differs must still carry an `Override`.
+    pub fn default_type(&mut self, ext: &str, ct: &str) -> bool {
+        self.defaults.entry(ext.to_string()).or_insert_with(|| ct.to_string()).eq_ignore_ascii_case(ct)
     }
 }
 
@@ -181,6 +184,185 @@ pub fn abs_range(r: &RangeRef) -> String {
         return format!("${}${}", c(r.start.col), r.start.row + 1);
     }
     format!("${}${}:${}${}", c(r.start.col), r.start.row + 1, c(r.end.col), r.end.row + 1)
+}
+
+/// The `<pivotCache>` children of every kept `<pivotCaches>` element, concatenated.
+///
+/// Kept XML is preserved verbatim, so a wrapper may bind a prefix the fresh workbook root does
+/// not declare (`xmlns:rel`, say, where the root only has `xmlns:r`). The wrappers are dropped
+/// but the children are kept, so each wrapper's own bindings are re-declared on its children and
+/// the merged children stay well-formed — even when two wrappers bind the same prefix to
+/// different namespaces, because every binding is scoped to its own child.
+fn pivot_caches_children(xml: &str) -> String {
+    const OPEN: &str = "<pivotCaches";
+    const CLOSE: &str = "</pivotCaches>";
+    let mut children = String::new();
+    let mut rest = xml;
+    while let Some(open) = rest.find(OPEN) {
+        let Some(after) = rest.get(open..) else { break };
+        // `OPEN` is a prefix: only `<pivotCaches` followed by whitespace, `>` or `/` opens the
+        // element. Anything else (a longer element name starting with those bytes) is skipped.
+        let is_open = after
+            .get(OPEN.len()..OPEN.len() + 1)
+            .is_some_and(|next| next == " " || next == ">" || next == "/" || next.starts_with(['\t', '\n', '\r']));
+        if !is_open {
+            rest = after.get(OPEN.len()..).unwrap_or("");
+            continue;
+        }
+        let Some(tag_end) = after.find('>').map(|i| open + i) else { break };
+        let Some(tag) = rest.get(open..=tag_end) else { break };
+        let after_tag = rest.get(tag_end + 1..).unwrap_or("");
+        // `<pivotCaches/>` holds no children: skip it rather than stop at it.
+        if rest.get(tag_end.saturating_sub(1)..tag_end) == Some("/") {
+            rest = after_tag;
+            continue;
+        }
+        let Some(end) = after_tag.find(CLOSE) else { break };
+        let body = after_tag.get(..end).unwrap_or("");
+        children.push_str(&scope_wrapper_bindings(tag, body));
+        rest = after_tag.get(end + CLOSE.len()..).unwrap_or("");
+    }
+    children
+}
+
+/// The wrapper's own `xmlns`/`xmlns:prefix` bindings (`xmlns:rel="…"`, say), in opener order.
+///
+/// Read off the opener text: the kept fragment is not well-formed XML on its own (one slot can
+/// hold several sibling elements), so a real parser cannot see it. Every binding starts after
+/// whitespace (never at the `<pivotCaches` name itself) and is `name="value"` with a double
+/// quote — the writer only emits double quotes, and kept fragments come from the same reader.
+fn wrapper_bindings(tag: &str) -> Vec<&str> {
+    let mut bindings = Vec::new();
+    for piece in tag.split(|c: char| c.is_whitespace()) {
+        // The opener's closing `>` rides on the last piece (`…"…">`); drop it before matching.
+        // A self-closing `/>` opener holds no children and never reaches this scan.
+        let piece = piece.strip_suffix('>').unwrap_or(piece);
+        let Some(name) = piece.strip_prefix("xmlns") else { continue };
+        let name = name.split('=').next().unwrap_or("");
+        if !name.is_empty() && !name.starts_with(':') {
+            continue;
+        }
+        if name.contains(['>', '/', '<', '"', '\'']) {
+            continue;
+        }
+        if !piece.contains('=') || !piece.ends_with('"') || piece.matches('"').count() != 2 {
+            continue;
+        }
+        if !bindings.iter().any(|kept: &&str| kept.split('=').next() == piece.split('=').next()) {
+            bindings.push(piece);
+        }
+    }
+    bindings
+}
+
+/// The wrapper's own `xmlns`/`xmlns:prefix` bindings, re-declared on every top-level child so
+/// the surviving children keep the prefixes their attributes use.
+///
+/// `<pivotCache>` children are empty elements in practice but the writer does not assume it:
+/// the bindings go on each top-level child's own opener, and nested tags inherit them from
+/// their parent. A child that already declares a prefix keeps its own binding; the wrapper's
+/// copy of that prefix is dropped on that child, so conflicting bindings stay scoped.
+fn scope_wrapper_bindings(tag: &str, body: &str) -> String {
+    let bindings = wrapper_bindings(tag);
+    if bindings.is_empty() {
+        return body.to_string();
+    }
+    if bindings.iter().any(|binding| binding.starts_with("xmlns:r=")) {
+        // The fresh workbook root already binds `r` to the relationships namespace — the shape
+        // `keep_external_pivots` and `add_pivot_cache` write — so re-declaring it on every child
+        // would only bloat the saved workbook. Other prefixes still need their own bindings.
+        let extra: Vec<&&str> = bindings.iter().filter(|binding| !binding.starts_with("xmlns:r=")).collect();
+        if extra.is_empty() {
+            return body.to_string();
+        }
+        scope_with_bindings(&extra, body)
+    } else {
+        scope_with_bindings(&bindings.iter().collect::<Vec<_>>(), body)
+    }
+}
+
+/// The `bindings` re-declared on every top-level child of `body`, so the surviving children
+/// keep the prefixes their attributes use. `<pivotCache>` children are empty elements in
+/// practice but the writer does not assume it: the bindings go on each top-level child's own
+/// opener, and nested tags inherit them from their parent. A child that already declares a
+/// prefix keeps its own binding; the wrapper's copy of that prefix is dropped on that child,
+/// so conflicting bindings stay scoped.
+fn scope_with_bindings(bindings: &[&&str], body: &str) -> String {
+    let mut scoped = String::with_capacity(body.len() + bindings.iter().map(|binding| binding.len()).sum::<usize>());
+    let mut rest = body;
+    let mut depth = 0usize;
+    while let Some(start) = rest.find('<') {
+        let Some(tag_end) = rest.get(start..).and_then(|tag| tag.find('>')).map(|offset| start + offset) else { break };
+        let opener = rest.get(start..=tag_end).unwrap_or("");
+        let self_closed = opener.ends_with("/>") || opener.starts_with("<?") || opener.starts_with("<!");
+        let verbatim = opener.starts_with("</") || opener.starts_with("<!--") || opener.starts_with("<?") || opener.starts_with("<!");
+        // Comments, declarations and close tags carry no prefix bindings of their own: copy them
+        // verbatim and leave the depth alone. A comment's text may mention `cacheId="` or look
+        // like markup; treating it as a child would corrupt the kept comment on the way through.
+        if verbatim {
+            scoped.push_str(rest.get(..=tag_end).unwrap_or(""));
+            rest = rest.get(tag_end + 1..).unwrap_or("");
+            // A comment's own `-->` already closed it above; only a `</…>` closes an element.
+            if opener.starts_with("</") {
+                depth = depth.saturating_sub(1);
+            }
+            continue;
+        }
+        if depth == 0 {
+            // Compare exact attribute names: a child declaring `xmlns:related` must not count
+            // as satisfying the wrapper's `xmlns:rel` — substring matching would omit `xmlns:rel`
+            // and leave the child's `rel:id` unbound in the saved workbook.
+            let missing: Vec<&str> =
+                bindings.iter().copied().copied().filter(|binding| !has_attr_name(opener, binding.split('=').next().unwrap_or(""))).collect();
+            if missing.is_empty() {
+                scoped.push_str(rest.get(..=tag_end).unwrap_or(""));
+            } else {
+                let joined = missing.iter().map(|binding| binding.to_string()).collect::<Vec<_>>().join(" ");
+                // A self-closing opener ends in `/>`: the bindings go before the `/`, or `<a/>`
+                // becomes the malformed `<a/ xmlns:b="…">`.
+                let insert_at = if self_closed { tag_end.saturating_sub(1) } else { tag_end };
+                scoped.push_str(rest.get(..insert_at).unwrap_or(""));
+                scoped.push(' ');
+                scoped.push_str(&joined);
+                scoped.push_str(rest.get(insert_at..=tag_end).unwrap_or(""));
+            }
+        } else {
+            scoped.push_str(rest.get(..=tag_end).unwrap_or(""));
+        }
+        rest = rest.get(tag_end + 1..).unwrap_or("");
+        if !self_closed {
+            depth += 1;
+        }
+    }
+    scoped.push_str(rest);
+    scoped
+}
+
+/// Whether `opener` (a `<…>` tag; comments and declarations already excluded by the caller)
+/// declares the attribute `name`: exact name match, so `xmlns:rel` does not match
+/// `xmlns:related`. A boundary (`=`, whitespace, `/`, `>`) must follow the name, and
+/// whitespace, `<` or the string start must precede it.
+fn has_attr_name(opener: &str, name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let mut rest = opener;
+    while let Some(found) = rest.find(name) {
+        let before_ok = found == 0 || rest.get(..found).is_some_and(|head| head.ends_with([' ', '\t', '\n', '\r', '<']));
+        let after = rest.get(found + name.len()..).unwrap_or("");
+        let after_ok = after.starts_with(['=', ' ', '\t', '\n', '\r', '/', '>']);
+        if before_ok && after_ok {
+            return true;
+        }
+        rest = after;
+    }
+    false
+}
+/// The `<pivotCache>`-child scan, exposed so an integration test can pin the element-name
+/// boundary without going through a whole workbook write.
+#[cfg(test)]
+pub(crate) fn pivot_caches_children_for_test(xml: &str) -> String {
+    pivot_caches_children(xml)
 }
 
 /// Refuses sheet names XLSX cannot hold. The reader repairs such names (cuts, strips, renames
@@ -239,6 +421,11 @@ fn workbook_view_attrs(wb: &Workbook) -> String {
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
 pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
+    // Fail closed: the reader could not keep the data model, so this package can't be written
+    // back without losing the model. Refuse before writing anything.
+    if let Some(model) = wb.dropped_model.as_ref() {
+        return Err(IoError::DroppedPart { part: model.name.clone(), reason: model.reason.clone() });
+    }
     if wb.sheets.is_empty() {
         return Err(IoError::Format("a workbook needs at least one sheet".into()));
     }
@@ -282,7 +469,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     };
 
     let mut wb_rels = Rels::default();
-    let (sheets_xml, kept, pivots) = write_sheets(wb, &mut out, active, &mut wb_rels);
+    let (sheets_xml, kept, pivots) = write_sheets(wb, &mut out, active, &mut wb_rels)?;
 
     let names = write_defined_names(wb, &kept, &out.chart_names);
 
@@ -343,7 +530,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         w.push_str(" fullCalcOnLoad=\"1\"");
     }
     w.push_str("/>");
-    w.push_str(&pivots.workbook_xml(&mut wb_rels));
+    w.push_str(&pivot_caches_element(&pivots, &kept, wb, &mut wb_rels));
     let exts = crate::passthrough::workbook_elements(wb, "ext");
     if !exts.is_empty() {
         let _ = write!(w, "<extLst>{exts}</extLst>");
@@ -475,15 +662,54 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     zip.finish()
 }
 
+/// The workbook's `<pivotCaches>` element, or an empty string when the workbook has no caches.
+///
+/// It holds the caches of the range PivotTables GridCraft models and those of the data-model
+/// PivotTables kept as pass-through content; one element holds both, so the children of each are
+/// written inside a single wrapper.
+fn pivot_caches_element(pivots: &crate::pivot::PivotWriter, kept: &crate::passthrough::WorkbookKept, wb: &Workbook, wb_rels: &mut Rels) -> String {
+    let mut caches = String::new();
+    for xml in [pivots.workbook_xml(wb_rels), kept.element(wb, "pivotCaches")] {
+        caches.push_str(&pivot_caches_children(&xml));
+    }
+    if caches.is_empty() { String::new() } else { format!("<pivotCaches>{caches}</pivotCaches>") }
+}
+
+/// One past the highest `cacheId` the workbook's kept `<pivotCaches>` element uses.
+///
+/// The element is parsed as XML and only the `cacheId` attributes of its `pivotCache` children
+/// count: a `cacheId="` inside a comment, a text node or another attribute is not a cache id, and
+/// treating it as one would allocate an id Excel resolves to the wrong cache.
+fn next_kept_cache_id(xml: &str) -> Result<u32, IoError> {
+    if xml.trim().is_empty() {
+        return Ok(1);
+    }
+    // The kept slot can hold more than one `<pivotCaches>` element (one per kept part), which is
+    // not a well-formed document on its own, so a wrapper gives them a single root.
+    let wrapped = format!("<keptPivotCaches>{xml}</keptPivotCaches>");
+    let root = crate::xml::parse(wrapped.as_bytes())?;
+    let mut next = 1u32;
+    for caches in root.kids("pivotCaches") {
+        for cache in caches.kids("pivotCache") {
+            if let Some(id) = cache.attr_u32("cacheId") {
+                next = next.max(id.saturating_add(1));
+            }
+        }
+    }
+    Ok(next)
+}
+
 fn write_sheets(
     wb: &Workbook,
     out: &mut Out,
     active: usize,
     wb_rels: &mut Rels,
-) -> (String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter) {
+) -> Result<(String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter), IoError> {
     // Kept content first: the chart sheets among the worksheets need their relationship ids.
     let kept = crate::passthrough::write_workbook(wb, wb_rels, out);
-    let mut pivots = crate::pivot::PivotWriter::default();
+    // Kept data-model caches and the range PivotTables written below share the workbook's
+    // `<pivotCaches>` element, so the generated ids start above the kept ones.
+    let mut pivots = crate::pivot::PivotWriter::new(next_kept_cache_id(&kept.element(wb, "pivotCaches"))?);
     let mut sheets_xml = String::new();
     let any_visible = wb.sheets.iter().any(|s| s.visibility == Visibility::Visible);
     let mut ids = crate::passthrough::SheetIds::new(wb, &kept);
@@ -509,7 +735,7 @@ fn write_sheets(
     }
     sheets_xml.push_str(&kept.sheet_entries(wb.sheets.len(), true, &mut ids));
 
-    (sheets_xml, kept, pivots)
+    Ok((sheets_xml, kept, pivots))
 }
 
 fn write_defined_names(wb: &Workbook, kept: &crate::passthrough::WorkbookKept, chart_names: &[String]) -> String {
