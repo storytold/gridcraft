@@ -26,6 +26,7 @@ async fn pick_picture(max: f64) -> Option<(String, Vec<u8>)> {
     let _ = input.style().set_property("display", "none");
     // Some browsers only fire `change` for an input that is in the document: the input is
     // attached before the picker opens and removed on every path below.
+    let body = document.body()?;
     body.append_child(&input).ok()?;
     let chosen: std::rc::Rc<std::cell::RefCell<Option<web_sys::File>>> = Default::default();
     let promise = {
