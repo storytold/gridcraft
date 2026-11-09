@@ -49,6 +49,7 @@ fn parse_points(t: &str) -> Vec<[f32; 2]> {
     t.split(';').filter_map(|pt| pt.split_once(',').and_then(|(x, y)| Some([x.parse().ok()?, y.parse().ok()?]))).collect()
 }
 
+/// Insert an original ink stroke as an unlinked shape anchored to the selected cells.
 fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     let pts: Vec<[f64; 2]> = p
         .get("points")

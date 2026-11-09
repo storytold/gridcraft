@@ -14,6 +14,7 @@ fn png(fill: u8) -> Vec<u8> {
     v
 }
 
+/// Build a worksheet containing the supplied synthetic picture IDs and media bytes.
 fn sheet_with(name: &str, pictures: &[(u32, &[u8])]) -> Arc<Sheet> {
     let mut s = Sheet::new(name);
     for (id, data) in pictures {

@@ -14,6 +14,7 @@ fn s() -> Session {
     s
 }
 
+/// Drawing destinations follow rename, undo/redo, JSON serialization and reordered XLSX saves.
 #[test]
 fn drawing_part_links_follow_sheet_rename_reorder_and_json_roundtrip() {
     use gridcraft_model::{DrawingHyperlink, Image};
@@ -53,6 +54,51 @@ fn drawing_part_links_follow_sheet_rename_reorder_and_json_roundtrip() {
             assert_eq!(link.internal_sheet.as_deref(), Some("Renamed"));
             assert_eq!(link.target, "../worksheets/sheet2.xml#B2");
         }
+    }
+}
+
+/// Deleting a destination removes its click link, even if the sheet name is reused later.
+#[test]
+fn drawing_part_links_do_not_retarget_a_recreated_sheet() {
+    use gridcraft_model::{DrawingHyperlink, Image};
+    let mut session = s();
+    session.execute("insert.shape", json!({"kind": "rectangle"})).unwrap();
+    session.execute("home.insertSheet", json!({"name": "Destination"})).unwrap();
+    {
+        let sheet = std::sync::Arc::make_mut(&mut session.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sheet.shapes[0].hyperlink =
+            Some(DrawingHyperlink { target: "../worksheets/sheet2.xml#B2".into(), internal_sheet: Some("Destination".into()), ..Default::default() });
+        sheet.images.push(Image {
+            hyperlink: sheet.shapes[0].hyperlink.clone(),
+            id: 100,
+            anchor: Default::default(),
+            data: b"original".to_vec().into(),
+            mime: "image/png".into(),
+            alt: String::new(),
+        });
+        let mut external = sheet.shapes[0].clone();
+        external.id = 101;
+        external.hyperlink = Some(DrawingHyperlink { target: "https://example.org/".into(), external: true, ..Default::default() });
+        sheet.shapes.push(external);
+    }
+    let before = session.doc().unwrap().wb.clone();
+    session.execute("home.deleteSheet", json!({"sheet": "Destination"})).unwrap();
+    let check = |wb: &gridcraft_model::Workbook| {
+        let sheet = wb.sheet(0).unwrap();
+        assert!(sheet.images[0].hyperlink.is_none());
+        assert!(sheet.shapes[0].hyperlink.is_none());
+        assert_eq!(sheet.shapes[1].hyperlink.as_ref().unwrap().target, "https://example.org/");
+    };
+    check(&session.doc().unwrap().wb);
+    session.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(session.doc().unwrap().wb, before);
+    session.execute("edit.redo", json!({})).unwrap();
+    check(&session.doc().unwrap().wb);
+    session.execute("home.insertSheet", json!({"name": "Destination"})).unwrap();
+    let mut wb = session.doc().unwrap().wb.as_ref().clone();
+    for _ in 0..2 {
+        wb = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap().0;
+        check(&wb);
     }
 }
 
@@ -3724,6 +3770,7 @@ fn tiny_png() -> Vec<u8> {
     png
 }
 
+/// Add a synthetic image at the requested cell with the specified anchor movement mode.
 fn add_image(s: &mut Session, cell: &str, mode: gridcraft_model::AnchorMode) -> u32 {
     let d = s.doc_mut().unwrap();
     let wb = std::sync::Arc::make_mut(&mut d.wb);

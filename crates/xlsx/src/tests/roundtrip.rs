@@ -17,6 +17,7 @@ fn rr(a: &str) -> RangeRef {
     RangeRef::parse(a).unwrap()
 }
 
+/// Build an original workbook containing representative data, styles, objects and worksheet metadata.
 fn sample() -> Workbook {
     let mut wb = Workbook::new();
     wb.date_system = DateSystem::D1904;

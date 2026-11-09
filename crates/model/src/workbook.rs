@@ -605,6 +605,7 @@ mod tests {
         assert!(wb.check_sheet_name("Budget 2026", None).is_ok());
     }
 
+    /// Object ID allocation remains unique at integer limits and with existing IDs.
     #[test]
     fn object_ids_never_overflow_or_repeat() {
         let mut wb = Workbook::new();

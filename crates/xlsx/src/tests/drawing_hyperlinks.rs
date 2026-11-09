@@ -4,6 +4,7 @@ use std::io::{Cursor, Read};
 use super::{make_zip, minimal};
 use crate::{read_xlsx, write_xlsx};
 
+/// Build an original drawing package with linked and unlinked pictures and shapes.
 fn fixture() -> Vec<u8> {
     let mut objects = String::new();
     for (id, picture, linked) in [(2, true, true), (3, false, true), (4, true, false), (5, false, false)] {
@@ -47,12 +48,14 @@ fn fixture() -> Vec<u8> {
     parts.push(("xl/media/original.png".into(), b"\x89PNG\r\n\x1a\noriginal-test-payload".to_vec()));
     make_zip(&parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect::<Vec<_>>())
 }
+/// Parse one asserted XML part from a generated package.
 fn xml(bytes: &[u8], part: &str) -> crate::xml::El {
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
     let mut data = Vec::new();
     z.by_name(part).unwrap().read_to_end(&mut data).unwrap();
     crate::xml::parse(&data).unwrap()
 }
+/// Both click relationships and their metadata survive two saves while unlinked objects stay unlinked.
 #[test]
 fn picture_and_shape_click_links_survive_two_saves() {
     let mut bytes = fixture();
@@ -89,6 +92,7 @@ fn picture_and_shape_click_links_survive_two_saves() {
     }
 }
 
+/// Rewrite one synthetic package part without changing the other entries.
 fn replace_part(bytes: Vec<u8>, part: &str, from: &str, to: &str) -> Vec<u8> {
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
     let mut parts = Vec::new();
@@ -105,6 +109,7 @@ fn replace_part(bytes: Vec<u8>, part: &str, from: &str, to: &str) -> Vec<u8> {
     make_zip(&parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect::<Vec<_>>())
 }
 
+/// Missing or mismatched relationships cannot manufacture click links.
 #[test]
 fn missing_and_wrong_kind_relationships_do_not_create_click_links() {
     let missing = replace_part(fixture(), "xl/drawings/original.xml", "r:id=\"url\"", "r:id=\"missing\"");
@@ -121,6 +126,7 @@ fn missing_and_wrong_kind_relationships_do_not_create_click_links() {
     assert!(rels.kids("Relationship").all(|r| !r.attr("Type").unwrap().ends_with("/hyperlink")));
 }
 
+/// JSON preserves click metadata and older object records still deserialize without links.
 #[test]
 fn drawing_links_survive_json_and_old_objects_default_to_no_link() {
     let (wb, _) = read_xlsx(&fixture()).unwrap();
@@ -139,6 +145,7 @@ fn drawing_links_survive_json_and_old_objects_default_to_no_link() {
     assert!(serde_json::to_value(&sheet.shapes[1]).unwrap().get("hyperlink").is_none());
 }
 
+/// Equation and ink shape serialization retains whole-object click metadata.
 #[test]
 fn equation_and_ink_shapes_keep_their_click_metadata() {
     use gridcraft_model::{Color, ShapeKind};
@@ -160,6 +167,7 @@ fn equation_and_ink_shapes_keep_their_click_metadata() {
     }
 }
 
+/// Internal links follow imported worksheet identities after part relocation and sheet reordering.
 #[test]
 fn relocated_part_links_map_to_the_written_worksheet_after_reordering() {
     let mut z = zip::ZipArchive::new(Cursor::new(fixture())).unwrap();
@@ -206,6 +214,7 @@ fn relocated_part_links_map_to_the_written_worksheet_after_reordering() {
     }
 }
 
+/// External and fragment destinations remain intact while unsupported package destinations warn.
 #[test]
 fn external_sheet_locations_are_unchanged_and_other_package_parts_warn() {
     let bytes = replace_part(
@@ -228,6 +237,7 @@ fn external_sheet_locations_are_unchanged_and_other_package_parts_warn() {
     assert!(report.warnings.iter().any(|w| w.contains("drawing click link to an unsupported package part")));
 }
 
+/// Connector shapes read their click metadata from connector nonvisual properties.
 #[test]
 fn connector_shape_click_links_use_their_nonvisual_properties() {
     let bytes = replace_part(fixture(), "xl/drawings/original.xml", "xdr:nvSpPr", "xdr:nvCxnSpPr");
@@ -239,6 +249,7 @@ fn connector_shape_click_links_use_their_nonvisual_properties() {
     assert_eq!(wb.sheet(0).unwrap().shapes[0].hyperlink.as_ref().unwrap().tooltip.as_deref(), Some("Jump & back"));
 }
 
+/// Skipped worksheets and duplicate relationship IDs do not misidentify the surviving destination.
 #[test]
 fn internal_link_names_match_skipped_sheets_and_duplicate_relationship_ids() {
     let bytes = replace_part(

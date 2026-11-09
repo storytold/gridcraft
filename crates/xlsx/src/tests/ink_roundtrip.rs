@@ -50,6 +50,7 @@ fn has_caption(element: &El) -> bool {
     (element.name == "t" && !element.text.is_empty()) || element.children.iter().any(has_caption)
 }
 
+/// Exported ink retains a visible unfilled path with its original stroke formatting.
 #[test]
 fn exported_ink_has_a_visible_unfilled_path_and_correct_stroke() {
     let mut sheet = Sheet::new("Ink");

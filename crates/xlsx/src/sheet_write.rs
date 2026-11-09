@@ -328,6 +328,7 @@ fn write_sheet_notes(s: &mut String, sheet: &Sheet, si: usize, kept: &crate::pas
     s.push_str(&kept.elements(&controls));
 }
 
+/// Create a click relationship, remapping internal worksheet identities to current output part paths.
 fn drawing_link(link: Option<&gridcraft_model::DrawingHyperlink>, wb: &Workbook, rels: &mut Rels) -> Option<String> {
     let link = link.filter(|l| !l.target.is_empty())?;
     if let Some(name) = &link.internal_sheet {
@@ -338,6 +339,7 @@ fn drawing_link(link: Option<&gridcraft_model::DrawingHyperlink>, wb: &Workbook,
     Some(if link.external { rels.add_external("hyperlink", &link.target) } else { rels.add("hyperlink", &link.target) })
 }
 
+/// Write drawing objects with shared media and individual click relationships.
 fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, rels: &mut Rels, out: &mut Out) {
     // Drawing: pictures, charts, shapes.
     if !sheet.images.is_empty() || !sheet.charts.is_empty() || !sheet.shapes.is_empty() {

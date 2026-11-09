@@ -128,6 +128,7 @@ fn mime_for(name: &str) -> &'static str {
     }
 }
 
+/// Read supported floating objects and their click metadata from an original drawing part.
 pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(), IoError> {
     let Some(x) = cx.optional_xml(part)? else { return Ok(()) };
     let rels = cx.pkg.rels(part)?;
@@ -222,6 +223,7 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
     Ok(())
 }
 
+/// Read a valid click relationship, resolving supported package destinations to worksheet identities.
 fn read_click(cx: &mut Ctx<'_>, obj: &El, rels: &[crate::package::Rel]) -> Option<DrawingHyperlink> {
     let props = obj.child("nvPicPr").or_else(|| obj.child("nvSpPr")).or_else(|| obj.child("nvCxnSpPr"))?.child("cNvPr")?;
     let click = props.child("hlinkClick")?;
@@ -245,6 +247,7 @@ fn read_click(cx: &mut Ctx<'_>, obj: &El, rels: &[crate::package::Rel]) -> Optio
     })
 }
 
+/// Read supported shape geometry, formatting and whole-object click metadata.
 fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     let sp = obj.child("spPr")?;
     if let Some(shape) = ink::read(obj, anchor) {
@@ -485,6 +488,7 @@ pub enum Obj<'a> {
     Shape(&'a Shape, Option<String>),
 }
 
+/// Emit a click element only when a retained link has an assigned relationship ID.
 fn click_xml(link: Option<&DrawingHyperlink>, id: Option<&str>) -> String {
     let (Some(link), Some(id)) = (link, id) else { return String::new() };
     let mut s = format!("<a:hlinkClick r:id=\"{}\"", esc_attr(id));

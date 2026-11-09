@@ -1066,6 +1066,7 @@ fn insert_sparkline(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Insert a picture at the requested anchor without an inherited click link.
 fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
     let placement = str_param(p, "placement").unwrap_or("overCells");
     if !matches!(placement, "cell" | "overCells") {
@@ -1165,6 +1166,7 @@ fn validate_cell_picture(data: &[u8]) -> Result<&'static str> {
     Ok(mime)
 }
 
+/// Insert the requested shape and initialize its formatting and anchor.
 fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
     let kind = match str_param(p, "kind").unwrap_or("rectangle") {
         "roundedRectangle" => ShapeKind::RoundedRectangle,
@@ -1821,6 +1823,7 @@ fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Insert a generated icon shape without imported click metadata.
 fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").unwrap_or("check").to_string();
     let size = f64_param(p, "size").unwrap_or(48.0).clamp(8.0, 1000.0) as f32;

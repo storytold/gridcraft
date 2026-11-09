@@ -318,6 +318,7 @@ pub(super) fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Insert a generated icon shape without imported click metadata.
 pub(super) fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").unwrap_or("check").to_string();
     let size = f64_param(p, "size").unwrap_or(48.0).clamp(8.0, 1000.0) as f32;

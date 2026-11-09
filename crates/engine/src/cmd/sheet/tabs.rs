@@ -36,6 +36,7 @@ fn edit_doc<R>(d: &mut crate::DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -
     crate::cmd::commit(d, f)
 }
 
+/// Delete a worksheet and invalidate references and drawing links to its old identity.
 pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let i = target_sheet(s, p)?;
     let d = s.doc()?;
@@ -54,6 +55,13 @@ pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             let keys: Vec<(CellRef, Arc<gridcraft_model::Formula>)> =
                 cx.wb.sheets.get(si).map(|s| s.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect()).unwrap_or_default();
             let Some(sh) = cx.wb.sheet_mut(si) else { continue };
+            // Remove the complete link so neither its logical identity nor raw part path can
+            // accidentally point at a newly inserted sheet after this destination is deleted.
+            for link in sh.images.iter_mut().map(|i| &mut i.hyperlink).chain(sh.shapes.iter_mut().map(|s| &mut s.hyperlink)) {
+                if link.as_ref().and_then(|l| l.internal_sheet.as_deref()).is_some_and(|sheet| sheet.eq_ignore_ascii_case(&name)) {
+                    *link = None;
+                }
+            }
             for (c, f) in keys {
                 // Only formulas whose tree changes are rewritten; the others keep their text.
                 let changed = f.with_expr(|e| Some(gridcraft_formula::adjust::delete_sheet(e.clone(), &name, &order)).filter(|ne| ne != e));
@@ -95,6 +103,7 @@ pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     ok()
 }
 
+/// Rename a worksheet and update formula, chart and drawing-link destinations in the same undo step.
 pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     if s.doc()?.wb.protected_structure {
         return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));

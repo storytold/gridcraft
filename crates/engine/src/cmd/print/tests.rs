@@ -499,6 +499,7 @@ fn rich_sheet_renders() {
     assert!(contains(&pdf, "(A long piece of text that overflows into neighbours) Tj"));
 }
 
+/// Print rendering includes charts and pictures at their worksheet anchors.
 #[test]
 fn charts_and_images_are_drawn() {
     let mut s = s();
