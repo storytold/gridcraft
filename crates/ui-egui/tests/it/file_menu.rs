@@ -818,7 +818,21 @@ fn typed_file_names_are_cleaned() {
     assert_eq!(clean_file_stem("a\tb", "pdf").as_deref(), Some("ab"));
     assert_eq!(clean_file_stem("x .xlsx", "xlsx").as_deref(), Some("x"));
     assert_eq!(clean_file_stem("café.XLSX", "xlsx").as_deref(), Some("café"));
-    for nothing in ["", "   ", "/", ".", "..", ".xlsx"] {
+    assert_eq!(clean_file_stem("Q1: plan?", "xlsx").as_deref(), Some("Q1  plan"));
+    for nothing in ["", "   ", "/", ".", "..", ".xlsx", "*", "<>|"] {
         assert_eq!(clean_file_stem(nothing, "xlsx"), None, "{nothing:?}");
     }
+}
+
+/// The name typed on Save As is still used when Export, not Save As, is the page that saves.
+#[test]
+fn export_page_uses_the_name_typed_on_save_as() {
+    let files = Arc::new(Mutex::new(Vec::<String>::new()));
+    let capture = files.clone();
+    let mut h = harness(Services { download: Some(Box::new(move |name, _| capture.lock().unwrap().push(name.to_string()))), ..Default::default() });
+    choose(&mut h, "Save As");
+    type_file_name(&mut h, "Plan");
+    choose(&mut h, "Export");
+    click(&mut h, "Create PDF");
+    assert_eq!(*files.lock().unwrap(), ["Plan.pdf"]);
 }
