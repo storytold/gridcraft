@@ -1668,10 +1668,7 @@ mod tests {
         // `&#83;CRIPT` selects SCRIPT there and misses here, leaving a stale log Size.
         let content = [0xFF, 0xFE]
             .into_iter()
-            .chain(
-                encode_utf16("<BackupLog><BackupFile><Path>x</Path><StoragePath>&#83;CRIPT</StoragePath><Size>7</Size></BackupFile></BackupLog>")
-                    .into_iter(),
-            )
+            .chain(encode_utf16("<BackupLog><BackupFile><Path>x</Path><StoragePath>&#83;CRIPT</StoragePath><Size>7</Size></BackupFile></BackupLog>"))
             .collect::<Vec<u8>>();
         let updated = update_log_content(&content, "SCRIPT", 42).ok_or_else(|| ModelFileError::Corrupt("the encoded path must match".into()))?;
         let text = decode_utf16(&updated[2..], true)?;
