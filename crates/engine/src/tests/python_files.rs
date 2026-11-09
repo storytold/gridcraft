@@ -23,7 +23,7 @@ fn cache(s: &mut Session, cell: &str, value: Value, type_name: &str) {
     let sh = wb.sheet_mut(0).unwrap();
     let c = sh.cells.get_mut(CellRef::parse(cell).unwrap()).unwrap();
     let p = Arc::make_mut(c.py.as_mut().unwrap());
-    p.output = Some(PyOutput { value, type_name: type_name.into(), preview: String::new(), convertible: true });
+    p.output = Some(PyOutput { value, type_name: type_name.into(), preview: String::new(), convertible: true, ..Default::default() });
 }
 
 fn array(rows: usize, cols: usize, data: Vec<Value>) -> Value {
@@ -669,7 +669,7 @@ fn a_dropped_python_result_keeps_its_spill_as_values() {
     // and C1's well-formed result keeps its spill.
     let mut wb = Workbook::new();
     let sh = wb.sheet_mut(0).unwrap();
-    let out = |value: Value| Some(PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true });
+    let out = |value: Value| Some(PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true, ..Default::default() });
     let col = array(3, 1, vec![Value::Number(7.0), Value::Number(8.0), Value::Number(9.0)]);
     let bad = Value::Array(Arc::new(Array { rows: 3, cols: 1, data: vec![Value::Number(7.0)] }));
     for (at, code, value) in [("A1", "y".repeat(9_000), col.clone()), ("B1", "b".into(), bad), ("C1", "c".into(), col)] {

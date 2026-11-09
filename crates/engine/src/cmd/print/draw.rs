@@ -265,6 +265,7 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
     // Cheap pre-filter: blank, unstyled cells outside tables and conditional formats draw nothing.
     let skip = |c: &CellRef| {
         sh.cond_formats.is_empty()
+            && sh.picture_at(*c).is_none()
             && sh.value_ref(*c).is_none_or(|v| v.is_empty())
             && sh.style_id(*c) == StyleId::DEFAULT
             && (sh.tables.is_empty() || sh.table_at(*c).is_none())
@@ -279,6 +280,7 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
                 || l.cf.is_some()
                 || merges.iter().any(|m| m.start == *c)
                 || !sh.value(*c).is_empty()
+                || sh.picture_at(*c).is_some()
                 || l.style.borders != Borders::default()
                 || l.style.num_fmt.as_str() == "checkbox"
         })
@@ -342,7 +344,7 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
         if w <= 0.0 || h <= 0.0 {
             continue;
         }
-        if let Some(picture) = sh.cell_pictures.get(c) {
+        if let Some(picture) = sh.picture_at(*c) {
             draw_cell_picture(pg, &picture.data, (x, y, w, h), b.k);
         } else if let Some(on) = checkbox_state(l, &sh.value(*c)) {
             draw_checkbox(pg, (x, y, w, h), b.k, on);
