@@ -67,9 +67,22 @@ pub fn open_bytes_with_password(name: &str, bytes: &[u8], password: Option<&str>
 /// the text it holds, with no number, date or boolean conversion (identifiers such as GTINs, SKUs
 /// and ZIP codes survive). It does not apply to other formats.
 pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
+    open_bytes_measured(name, bytes, password, csv_as_text, None)
+}
+
+/// [`open_bytes_with`], fitting rows of wrapped text with `measure`, the front end's text widths,
+/// when there is one: the built-in estimate is wider than the grid's fonts and can make rows a
+/// line taller than Excel does.
+pub fn open_bytes_measured(
+    name: &str,
+    bytes: &[u8],
+    password: Option<&str>,
+    csv_as_text: bool,
+    measure: Option<&crate::TextWidth>,
+) -> Result<(Workbook, Vec<String>)> {
     if gridcraft_xlsx::sniff(bytes) != gridcraft_xlsx::Format::Encrypted {
         let (mut wb, warnings) = open_plain(name, bytes, csv_as_text)?;
-        fit_imported_rows(&mut wb);
+        fit_imported_rows(&mut wb, measure);
         return Ok((wb, warnings));
     }
     // A scheme no password opens is said straight away, rather than after asking for one.
@@ -83,7 +96,7 @@ pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_
         return Err(EngineError::Other(format!("We can't open '{name}': the encrypted file is damaged (it holds another encrypted file).")));
     }
     let (mut wb, mut warnings) = open_plain(name, &plain, csv_as_text)?;
-    fit_imported_rows(&mut wb);
+    fit_imported_rows(&mut wb, measure);
     warnings.insert(0, DECRYPTED_NOTICE.into());
     Ok((wb, warnings))
 }
@@ -92,7 +105,7 @@ pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_
 /// height grow to fit their content. Rows the file made taller keep their height — our
 /// line-height estimate can differ from Excel's, and shrinking files that already look
 /// right would be a visible regression. Custom-height rows are left alone entirely.
-fn fit_imported_rows(wb: &mut Workbook) {
+fn fit_imported_rows(wb: &mut Workbook, measure: Option<&crate::TextWidth>) {
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheet(si) else { continue };
         let mut rows: Vec<u32> = sh.cells.iter().map(|(c, _)| c.row).collect();
@@ -100,7 +113,7 @@ fn fit_imported_rows(wb: &mut Workbook) {
         rows.dedup();
         for row in rows {
             let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
-            crate::cmd::auto_row_height(wb, si, row);
+            crate::cmd::auto_row_height_measured(wb, si, row, measure);
             let Some(before) = before else { continue };
             let after = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
             if after.is_none_or(|a| before > a + 0.5)

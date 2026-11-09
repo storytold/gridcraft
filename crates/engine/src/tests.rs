@@ -6144,6 +6144,34 @@ fn a_saved_workbook_keeps_its_values_until_an_edit_reaches_them() {
     assert_eq!(v(&saved, "C1"), Value::Number(7.0));
 }
 
+/// Rows of wrapped text that a file leaves to fit on open fit with the front end's text widths when
+/// there is one: the built-in estimate is wider than the grid's fonts and could make a row a line
+/// taller than the text takes (Excel fits the row to the lines the text really takes).
+#[test]
+fn rows_of_wrapped_text_fit_with_the_front_ends_measure_on_open() {
+    let mut s = s();
+    s.execute("home.columnWidth", json!({"range": "A1", "chars": 45})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Check whether it was chosen on purpose or should be on, and keep it so."})).unwrap();
+    s.execute("home.wrapText", json!({"range": "A1", "on": true})).unwrap();
+    // As a file that saves no row heights.
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).rows.clear();
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let height = |measure: Option<&crate::TextWidth>| {
+        let (wb, _) = crate::io::open_bytes_measured("book.xlsx", &bytes, None, false, measure).unwrap();
+        wb.sheets[0].row_height(0)
+    };
+    let one_line = wb.sheets[0].default_row_height;
+    // The estimate folds this text onto two lines.
+    assert!(height(None) > one_line + 1.0);
+    // A front end whose font fits it on one line keeps the row one line tall.
+    let narrow: crate::TextWidth = std::sync::Arc::new(|text: &str, _: &gridcraft_model::Font, _| text.chars().count() as f32 * 4.0);
+    assert_eq!(height(Some(&narrow)), one_line);
+    // And one whose font is wider folds it as the estimate does.
+    let wide: crate::TextWidth = std::sync::Arc::new(|text: &str, _: &gridcraft_model::Font, _| text.chars().count() as f32 * 9.0);
+    assert!(height(Some(&wide)) > one_line + 1.0);
+}
+
 /// A per-test unique suffix for temp dir names.
 #[cfg(not(target_arch = "wasm32"))]
 fn unique_nonce() -> u64 {

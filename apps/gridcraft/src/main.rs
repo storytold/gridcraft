@@ -331,9 +331,8 @@ fn main() -> eframe::Result<()> {
     // Files named on the command line (a double-click on Windows and Linux) open as File › Open
     // opens them: a password-protected one asks for its password, and errors are shown, not
     // only logged. Each replaces the untouched blank Book1, as a file opened from Finder does.
-    for f in &files {
-        app.open_path(f);
-    }
+    // They open on the first frame, once the fonts the grid draws with can measure them.
+    app.open_on_first_frame(files);
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("GridCraft")
         .with_inner_size([1440.0, 900.0])

@@ -687,8 +687,11 @@ fn same_content(a: Option<&gridcraft_model::Cell>, b: Option<&gridcraft_model::C
 /// words (egui's LayoutJob), so dividing the total width by the column width undercounts: each
 /// drawn line ends early at the last word that fits. A word wider than the column breaks
 /// mid-word, the way egui does. (#1969)
-fn wrapped_line_count(line: &str, width: f32, size: f32, bold: bool) -> f32 {
-    let word_w = |w: &str| crate::cmd::format::approx_text_width(w, size, bold);
+fn wrapped_line_count(line: &str, width: f32, word_w: &dyn Fn(&str) -> f32) -> f32 {
+    // A line that fits is one line: one measure, the usual case.
+    if word_w(line) <= width {
+        return 1.0;
+    }
     let space_w = word_w(" ");
     let mut lines = 1.0f32;
     let mut used = 0.0f32;
@@ -721,6 +724,13 @@ fn wrapped_line_count(line: &str, width: f32, size: f32, bold: bool) -> f32 {
 /// Line breaks in a cell's text count only when the cell wraps, as in Excel: with Wrap Text off
 /// a multi-line value shows on one line and AutoFit gives a one-line row.
 pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
+    auto_row_height_measured(wb, si, row, None);
+}
+
+/// [`auto_row_height`], folding wrapped text with `measure` (the front end's own text widths) when
+/// there is one, else with [`format::approx_text_width`]. The estimate is wider than the fonts the
+/// grid draws with, so it can count a line more than the text takes.
+pub fn auto_row_height_measured(wb: &mut Workbook, si: usize, row: u32, measure: Option<&crate::TextWidth>) {
     let Some(sh) = wb.sheet(si) else { return };
     if sh.rows.get(&row).is_some_and(|i| i.custom) {
         return;
@@ -769,7 +779,11 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
             if st.align.wrap {
                 let text = crate::display::cell_text(wb, sh, CellRef::new(row, c));
                 let w = sh.col_width(c).max(1.0) - 6.0;
-                lines = text.lines().map(|l| wrapped_line_count(l, w.max(1.0), size, st.font.bold)).sum::<f32>().max(1.0);
+                let word_w = |s: &str| match measure {
+                    Some(m) => m(s, &st.font, true),
+                    None => crate::cmd::format::approx_text_width(s, size, st.font.bold),
+                };
+                lines = text.lines().map(|l| wrapped_line_count(l, w.max(1.0), &word_w)).sum::<f32>().max(1.0);
             }
         } else if st.font.size <= gridcraft_model::DEFAULT_FONT_SIZE {
             continue;

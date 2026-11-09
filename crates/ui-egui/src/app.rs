@@ -30,6 +30,7 @@ impl SheetApp {
     pub fn new(session: Session, services: Services) -> SheetApp {
         SheetApp {
             session,
+            startup_files: Vec::new(),
             ui: UiState::default(),
             chrome: Chrome::default(),
             views: HashMap::new(),
@@ -106,6 +107,9 @@ impl SheetApp {
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.ensure_text_width(ctx);
+        for path in std::mem::take(&mut self.startup_files) {
+            self.open_path(&path);
+        }
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped. One
         // made with a switch to the control's tab waits, with its window, for the next `ui` of
