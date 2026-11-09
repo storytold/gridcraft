@@ -925,6 +925,7 @@ fn evaluate(s: &mut Session, p: &Json) -> Result<Json> {
 fn calc_now(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc_mut()?;
     let mut wb = (*d.wb).clone();
+    crate::cmd::sync_active_cell(&mut wb, d.selection.active);
     d.calc.recalc_all(&mut wb);
     d.wb = std::sync::Arc::new(wb);
     Ok(json!({"cells": d.calc.last_recalc_cells}))

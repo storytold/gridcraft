@@ -407,6 +407,8 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     };
     let r = f(&mut ctx)?;
     let Ctx { mut wb, mut changed, structural, mut fit_rows, protection_checked, edits, .. } = ctx;
+    // `CELL` without a reference reads the active cell when it calculates.
+    sync_active_cell(&mut wb, sel.active);
     // Equations whose source changed (or that arrived without a layout, as from a paste) are
     // laid out here, so painting only ever reads the cache.
     wb.refresh_equations();
@@ -713,6 +715,18 @@ fn wrapped_line_count(line: &str, width: f32, size: f32, bold: bool) -> f32 {
         }
     }
     lines
+}
+
+/// Records `active` as the active sheet's active cell, which `CELL` without a reference reads when
+/// it calculates (as Excel does) and which is saved with the file. Leaves the sheet alone when it
+/// already has it.
+pub(crate) fn sync_active_cell(wb: &mut Workbook, active: CellRef) {
+    let si = wb.active_sheet();
+    if let Some(sh) = wb.sheets.get_mut(si)
+        && sh.view_active != active
+    {
+        std::sync::Arc::make_mut(sh).view_active = active;
+    }
 }
 
 /// Recomputes an automatic row height from its content: the largest font, and wrapped text.

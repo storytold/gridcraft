@@ -256,7 +256,13 @@ impl<'h> Evaluator<'h> {
         };
         let area = match args.get(1).map(|a| self.eval(a)) {
             Some(Ev::R(a)) => a.first().copied(),
-            None => Some(Area { sheet: self.sheet, range: RangeRef::cell(self.at) }),
+            // Without a reference, the active cell of the active sheet when it calculates, as in
+            // Excel (observed: not the formula's own cell, nor the last cell changed).
+            None => {
+                let wb = self.host.workbook();
+                let si = wb.active_sheet();
+                Some(Area { sheet: si, range: RangeRef::cell(wb.sheet(si).map(|s| s.view_active).unwrap_or_default()) })
+            }
             _ => return err(CellError::Value),
         };
         let Some(a) = area else { return err(CellError::Ref) };
