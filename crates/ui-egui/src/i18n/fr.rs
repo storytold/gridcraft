@@ -67,6 +67,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Volet\nFormat",
         "Format" => "Format",
         "Insert" => "Insertion",
+        "Header Menu|Insert" => "Insertion",
         "Insert Cells…" => "Insérer des cellules…",
         "Delete" => "Supprimer",
         "Delete Cells…" => "Supprimer des cellules…",

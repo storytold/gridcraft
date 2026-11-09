@@ -95,11 +95,12 @@ fn save_changes_yields_to_manual_check_results_and_accepts_fresh_input_afterward
             );
             assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
             if key != Key::Escape {
-                assert!(h.state().updates_rt.result_open);
+                let label = if outcome.is_none() { "Checking for updates…" } else { "OK" };
+                assert!(h.query_by_label(label).is_some(), "the result card still owns input");
                 h.key_press(Key::Escape);
                 h.run_steps(3);
             }
-            assert!(!h.state().updates_rt.result_open);
+            assert_eq!(h.state().updates_rt.updater.status(), &Status::Idle);
             if let Some(path) = image {
                 h.render().unwrap().save(std::path::Path::new(&path).with_extension("save.png")).unwrap();
             }
@@ -141,7 +142,7 @@ fn manual_check_result_cancels_armed_and_pending_answers_on_dismissal() {
                     }
                 }
                 h.run_steps(3);
-                assert!(!h.state().updates_rt.result_open);
+                assert_eq!(h.state().updates_rt.updater.status(), &Status::Idle);
                 assert!(
                     h.state().session.documents().iter().any(|d| d.uid == uid && d.is_dirty()),
                     "pending={pending}, failed={failed}, click_ok={click_ok}"
@@ -171,7 +172,7 @@ fn manual_check_owns_its_first_pass_when_escape_and_an_answer_release_are_queued
             h.input_mut().events.push(egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: egui::Modifiers::NONE });
         }
         h.run_steps(3);
-        assert!(!h.state().updates_rt.result_open);
+        assert_eq!(h.state().updates_rt.updater.status(), &Status::Idle);
         assert!(
             h.state().session.documents().iter().any(|d| d.uid == uid && d.is_dirty()),
             "pending={pending} must not answer through the first result pass"
@@ -258,4 +259,23 @@ fn update_prompt_cancels_armed_and_pending_answers_even_on_its_dismissal_frame()
             assert!(h.state().session.documents().iter().all(|d| d.uid != uid));
         }
     }
+}
+
+#[test]
+fn result_window_shows_every_status_but_idle() {
+    let shown = [
+        Status::Checking,
+        Status::UpToDate,
+        Status::Failed("no network".into()),
+        Status::Installing,
+        Status::Ready,
+        Status::Managed,
+        Status::Updated("0.2.0".into()),
+        Status::InstallFailed("disk full".into()),
+    ];
+    for status in &shown {
+        assert!(result_window_shows(status, false), "{status:?}");
+        assert!(!result_window_shows(status, true), "{status:?} over the prompt");
+    }
+    assert!(!result_window_shows(&Status::Idle, false));
 }
