@@ -124,6 +124,10 @@ pub struct Out {
     pub drawings: u32,
     pub tables: u32,
     pub comments: u32,
+    /// VML drawings written, the last VML shape-id block used, and control properties parts.
+    pub vmls: u32,
+    pub vml_block: u32,
+    pub ctrl_props: u32,
     /// Authors of threaded comments, in first-use order; written to `xl/persons/person.xml`.
     pub persons: Vec<String>,
     pub table_id: u32,
@@ -267,6 +271,9 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         drawings: 0,
         tables: 0,
         comments: 0,
+        vmls: 0,
+        vml_block: 0,
+        ctrl_props: 0,
         persons: vec![],
         table_id: 0,
         dynamic_arrays: false,
@@ -305,6 +312,9 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     if wb.date_system == gridcraft_core::DateSystem::D1904 {
         w.push_str(" date1904=\"1\"");
     }
+    if wb.remove_personal_info {
+        w.push_str(" filterPrivacy=\"1\"");
+    }
     w.push_str("/>");
     if wb.protected_structure {
         let pw = wb.structure_password.as_ref().map(|h| crate::sheet_write::password_attrs(h, "workbook")).unwrap_or_default();
@@ -337,6 +347,9 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     }
     if wb.calc.precision_as_displayed {
         w.push_str(" fullPrecision=\"0\"");
+    }
+    if wb.calc.r1c1 {
+        w.push_str(" refMode=\"R1C1\"");
     }
     if out.needs_calc {
         w.push_str(" fullCalcOnLoad=\"1\"");
@@ -411,13 +424,16 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
 
     // Document properties.
     let p = &wb.props;
+    // "Remove personal information on save": the author and company are not saved (#3089).
+    let private = |v: &String| if wb.remove_personal_info { String::new() } else { v.clone() };
+    let (author, company) = (private(&p.author), private(&p.company));
     let mut core = format!(
         "{XML_DECL}<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:dcmitype=\"http://purl.org/dc/dcmitype/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">"
     );
     for (tag, v) in [
         ("dc:title", &p.title),
         ("dc:subject", &p.subject),
-        ("dc:creator", &p.author),
+        ("dc:creator", &author),
         ("cp:keywords", &p.keywords),
         ("dc:description", &p.description),
     ] {
@@ -429,8 +445,8 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     out.part("docProps/core.xml", Some("application/vnd.openxmlformats-package.core-properties+xml"), core.into_bytes());
     let mut app = String::from(XML_DECL);
     app.push_str("<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\" xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes\"><Application>GridCraft</Application>");
-    if !p.company.is_empty() {
-        let _ = write!(app, "<Company>{}</Company>", esc(&p.company));
+    if !company.is_empty() {
+        let _ = write!(app, "<Company>{}</Company>", esc(&company));
     }
     app.push_str("</Properties>");
     out.part("docProps/app.xml", Some("application/vnd.openxmlformats-officedocument.extended-properties+xml"), app.into_bytes());
