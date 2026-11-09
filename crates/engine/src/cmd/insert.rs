@@ -1880,10 +1880,10 @@ mod tests {
             .collect()
     }
 
+    /// #3512: a chart of another sheet's data went on the data's sheet, and a sheet-qualified
+    /// `at` was refused, so a dashboard sheet could not chart other sheets.
     #[test]
     fn chart_goes_on_the_active_sheet_or_the_sheet_at_names() {
-        // #3512: a chart of another sheet's data went on the data's sheet, and a sheet-qualified
-        // `at` was refused, so a dashboard sheet could not chart other sheets.
         let mut s = Session::new();
         s.new_workbook();
         s.execute("sheet.rename", json!({"name": "Summary"})).unwrap();

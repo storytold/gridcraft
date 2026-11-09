@@ -125,6 +125,7 @@ pub fn tool_definitions() -> Vec<Value> {
     tools
 }
 
+/// Every tool with its JSON input schema, before [`tool_definitions`] adds the `window`/`doc` target.
 fn base_tool_definitions() -> Vec<Value> {
     let empty = || obj(json!({}), &[]);
     vec![
