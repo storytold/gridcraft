@@ -955,7 +955,7 @@ fn an_oversized_model_part_refuses_to_save() {
         other => panic!("expected DroppedPart, got {other:?}"),
     }
     let message = error.to_string();
-    for needle in ["xl/model/item.data", "too large", "raise the pass-through limits", "without the model"] {
+    for needle in ["xl/model/item.data", "too large", "saving is refused"] {
         assert!(message.contains(needle), "{needle} missing from: {message}");
     }
 }
@@ -987,7 +987,7 @@ fn a_model_dropped_by_the_keep_budget_refuses_to_save() {
         other => panic!("expected DroppedPart, got {other:?}"),
     }
     let message = error.to_string();
-    for needle in ["xl/model/item.data", "only 4 are left", "without the model"] {
+    for needle in ["xl/model/item.data", "only 4 are left", "saving is refused"] {
         assert!(message.contains(needle), "{needle} missing from: {message}");
     }
 }
@@ -1009,7 +1009,7 @@ fn a_model_dropped_by_the_kept_part_count_refuses_to_save() {
 
     let error = write_xlsx(&wb).expect_err("saving must lose nothing");
     let message = error.to_string();
-    for needle in ["xl/model/item.data", "too many parts", "without the model"] {
+    for needle in ["xl/model/item.data", "too many parts", "saving is refused"] {
         assert!(message.contains(needle), "{needle} missing from: {message}");
     }
 }

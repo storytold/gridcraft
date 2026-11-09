@@ -73,8 +73,12 @@ pub enum IoError {
     #[error("the file is too large: {0}")]
     TooLarge(String),
     /// Saving would silently lose a part the reader could not keep.
+    ///
+    /// The keep budgets are fixed and every save path refuses the same way, so no recovery
+    /// option is offered: reopening the file and saving again, or saving from the engine,
+    /// reaches this same refusal rather than a workaround.
     #[error(
-        "the workbook's data model {} could not be kept ({}), so saving it would lose the model, which the PivotTables built on it need; raise the pass-through limits, or save a copy of the workbook without the model",
+        "the workbook's data model {} could not be kept ({}), so saving is refused: it would lose the model the PivotTables built on it need",
         part,
         reason
     )]

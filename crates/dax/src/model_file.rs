@@ -230,12 +230,10 @@ fn decode_storage_entity(entity: &str) -> Option<String> {
     if let Some(named) = quick_xml::escape::resolve_predefined_entity(entity) {
         return Some(named.to_string());
     }
-    let (digits, radix) = match entity.strip_prefix('#') {
-        Some(rest) => match rest.strip_prefix('x').or_else(|| rest.strip_prefix('X')) {
-            Some(hex) => (hex, 16),
-            None => (rest, 10),
-        },
-        None => return None,
+    let rest = entity.strip_prefix('#')?;
+    let (digits, radix) = match rest.strip_prefix('x').or_else(|| rest.strip_prefix('X')) {
+        Some(hex) => (hex, 16),
+        None => (rest, 10),
     };
     if digits.is_empty() || digits.len() > 7 {
         return None;
@@ -1668,7 +1666,13 @@ mod tests {
         // `script_from_log` matches via the XML-decoded `StoragePath` text, but
         // `update_log_content` used to compare the raw text — an entity-encoded path such as
         // `&#83;CRIPT` selects SCRIPT there and misses here, leaving a stale log Size.
-        let content = [0xFF, 0xFE].into_iter().chain(encode_utf16("<BackupLog><BackupFile><Path>x</Path><StoragePath>&#83;CRIPT</StoragePath><Size>7</Size></BackupFile></BackupLog>").into_iter()).collect::<Vec<u8>>();
+        let content = [0xFF, 0xFE]
+            .into_iter()
+            .chain(
+                encode_utf16("<BackupLog><BackupFile><Path>x</Path><StoragePath>&#83;CRIPT</StoragePath><Size>7</Size></BackupFile></BackupLog>")
+                    .into_iter(),
+            )
+            .collect::<Vec<u8>>();
         let updated = update_log_content(&content, "SCRIPT", 42).ok_or_else(|| ModelFileError::Corrupt("the encoded path must match".into()))?;
         let text = decode_utf16(&updated[2..], true)?;
         assert!(text.contains("<StoragePath>&#83;CRIPT</StoragePath>"), "the stored bytes keep their encoding: {text}");

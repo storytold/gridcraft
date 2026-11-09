@@ -1027,5 +1027,8 @@ fn pivot_caches_children_keeps_wrapper_namespace_bindings() {
         <pivotCaches xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><pivotCache cacheId=\"5\" rel:id=\"rId2\"/></pivotCaches>";
     let children = pivot_caches_children_for_test(xml);
     assert_eq!(children.matches("<pivotCache ").count(), 2, "both wrappers contribute: {children}");
-    assert!(children.contains("xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""), "each child must carry its wrapper's binding: {children}");
+    assert!(
+        children.contains("xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""),
+        "each child must carry its wrapper's binding: {children}"
+    );
 }

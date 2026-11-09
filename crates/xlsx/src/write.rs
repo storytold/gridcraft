@@ -267,7 +267,7 @@ fn scope_wrapper_bindings(tag: &str, body: &str) -> String {
     if bindings.is_empty() {
         return body.to_string();
     }
-    let scoped = if bindings.iter().any(|binding| binding.starts_with("xmlns:r=")) {
+    if bindings.iter().any(|binding| binding.starts_with("xmlns:r=")) {
         // The fresh workbook root already binds `r` to the relationships namespace — the shape
         // `keep_external_pivots` and `add_pivot_cache` write — so re-declaring it on every child
         // would only bloat the saved workbook. Other prefixes still need their own bindings.
@@ -278,8 +278,7 @@ fn scope_wrapper_bindings(tag: &str, body: &str) -> String {
         scope_with_bindings(&extra, body)
     } else {
         scope_with_bindings(&bindings.iter().collect::<Vec<_>>(), body)
-    };
-    return scoped;
+    }
 }
 
 /// The `bindings` re-declared on every top-level child of `body`, so the surviving children
@@ -310,7 +309,8 @@ fn scope_with_bindings(bindings: &[&&str], body: &str) -> String {
             continue;
         }
         if depth == 0 {
-            let missing: Vec<&str> = bindings.iter().copied().copied().filter(|binding| !opener.contains(binding.split('=').next().unwrap_or(""))).collect();
+            let missing: Vec<&str> =
+                bindings.iter().copied().copied().filter(|binding| !opener.contains(binding.split('=').next().unwrap_or(""))).collect();
             if missing.is_empty() {
                 scoped.push_str(rest.get(..=tag_end).unwrap_or(""));
             } else {
