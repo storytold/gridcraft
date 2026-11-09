@@ -1,6 +1,7 @@
 use egui::accesskit::Role;
 use egui_kittest::kittest::Queryable;
 use gridcraft_engine::Session;
+use gridcraft_engine::model::{ObjKind, ObjRef};
 use serde_json::json;
 
 #[test]
@@ -10,7 +11,7 @@ fn format_chart_pane_controls_the_engine_data_table() {
     session.execute("range.setValues", json!({"range": "A1", "values": [["Quarter", "North", "South"], ["Q1", 10, 30], ["Q2", 30, 10]]})).unwrap();
     let id = session.execute("insert.chart", json!({"range": "A1:C3", "type": "column", "at": "E3"})).unwrap()["chart"].as_u64().unwrap() as u32;
     let mut h = crate::support::harness(session, 4);
-    h.state_mut().selected_chart = Some(id);
+    h.state_mut().selected_object = Some(ObjRef::new(ObjKind::Chart, id));
     h.state_mut().grid.pane = Some("formatChart".into());
     h.run_steps(2);
     h.get_by_role_and_label(Role::DisclosureTriangle, "Data Table").click();

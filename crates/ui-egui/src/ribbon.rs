@@ -8,7 +8,9 @@ use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Cat, Tokens};
-use crate::widgets::{big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, split_button, toggle_button};
+use crate::widgets::{
+    big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, small_toggle_button, split_button, toggle_button,
+};
 
 mod automate;
 mod contextual;
@@ -282,7 +284,7 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
         if sh.table_at(d.selection.active).is_some() {
             v.push("Table Design");
         }
-        if app.selected_chart.is_some_and(|id| sh.charts.iter().any(|c| c.id == id)) {
+        if app.selected_chart().is_some_and(|id| sh.charts.iter().any(|c| c.id == id)) {
             v.push("Chart Design");
         }
         if app.grid.hf_edit.is_some() {

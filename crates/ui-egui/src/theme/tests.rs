@@ -13,7 +13,7 @@ fn fallback_faces_are_appended_to_every_family() {
         if fb_keys.is_empty() {
             return; // no fallback face on this machine (minimal Linux)
         }
-        for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
+        for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO, MATH, MATH_ITALIC, MATH_BOLD] {
             let chain = fonts.families.get(&FontFamily::Name(role.into())).map(Vec::as_slice).unwrap_or_default();
             // The optional craft-fonts faces follow the system fallbacks at the very end.
             let end = chain.iter().rposition(|k| !k.starts_with("craft-")).map_or(0, |i| i + 1);

@@ -15,12 +15,39 @@ use super::{
 #[cfg(test)]
 use super::{CellRef, Pos2};
 
+/// The line positions and outlines of sheet `si`: the ones built for it before while it is the
+/// same sheet, else built now and kept (see `GridState::lines`).
+fn sheet_lines(app: &mut SheetApp, wb: &Workbook, si: usize) -> Option<super::geo::SheetLines> {
+    let sheet = wb.sheets.get(si)?;
+    if let Some((built_from, lines)) = &app.grid.lines
+        && is_sheet(built_from, wb, si)
+    {
+        return Some(lines.clone());
+    }
+    let lines = super::geo::SheetLines::of(sheet);
+    app.grid.lines = Some((Arc::downgrade(sheet), lines.clone()));
+    Some(lines)
+}
+
+/// Whether `built_from` still is sheet `si` of `wb`, unchanged (see `GridState::lines`).
+fn is_sheet(built_from: &std::sync::Weak<Sheet>, wb: &Workbook, si: usize) -> bool {
+    wb.sheets.get(si).is_some_and(|s| built_from.upgrade().is_some_and(|b| Arc::ptr_eq(&b, s)))
+}
+
+/// The conditional formatting cache kept for sheet `si` while it is unchanged, else a new one.
+fn kept_cf(app: &mut SheetApp, wb: &Workbook, si: usize) -> CfCache {
+    match app.grid.cf.take() {
+        Some((built_from, cf)) if is_sheet(&built_from, wb, si) => cf,
+        _ => CfCache::new(),
+    }
+}
+
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let available = ui.available_rect_before_wrap();
     // A right-to-left sheet has its vertical scrollbar on the left.
     let rtl = app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.right_to_left);
-    let bar = 14.0_f32.min(available.width());
+    let bar = vertical_bar_width(app, available);
     let rect = if rtl {
         Rect::from_min_max(pos2(available.left() + bar, available.top()), available.max)
     } else {
@@ -44,15 +71,16 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     } else {
         Rect::from_min_max(pos2((rect.left() + ruler).min(rect.right()), (rect.top() + ruler).min(rect.bottom())), rect.max)
     };
+    let Some(lines) = sheet_lines(app, &wb, si) else { return };
     let make_geo = |app: &mut SheetApp, scroll: egui::Vec2| -> Geo {
         if paper {
-            let probe = Geo::new(sh, grid_rect, scroll);
+            let probe = Geo::with_lines(sh, grid_rect, scroll, &lines);
             if let Some(g) = crate::paper_view::grid_for(app, &wb, si, sh, probe.cells.size(), scroll) {
                 let g = crate::paper_view::with_dragged_margin(app, &wb, si, g);
-                return Geo::paged(sh, grid_rect, scroll, g);
+                return Geo::paged_with_lines(sh, grid_rect, scroll, g, &lines);
             }
         }
-        Geo::new(sh, rect, scroll)
+        Geo::with_lines(sh, rect, scroll, &lines)
     };
     // Scrolling.
     let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.time));
@@ -115,7 +143,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
     update_zoom_glide(app, ui, place, sh.zoom, now);
     view.scroll = view.scroll.max(egui::Vec2::ZERO);
-    let (mut max_x, mut max_y) = (sh.col_left(MAX_COLS - 20) as f32, sh.row_top(MAX_ROWS - 40) as f32);
+    let (mut max_x, mut max_y) = (lines.ci.start(MAX_COLS - 20) as f32, lines.ri.start(MAX_ROWS - 40) as f32);
     if paper {
         // Page layout units run past sheet units (margins and gaps); the end is known once the
         // pages reach the last row / column.
@@ -146,7 +174,10 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     painter.rect_filled(rect, 0.0, t.grid_bg);
     // Everything up to the headers is painted in logical (left-to-right) coordinates.
     let mirror_from = painter.add(egui::Shape::Noop);
-    let mut cf = CfCache::new();
+    // A rule over a whole column scans it for its statistics: done once per change of the sheet,
+    // not every frame.
+    let cf_sheet = wb.sheets.get(si).map(Arc::downgrade);
+    let mut cf = kept_cf(app, &wb, si);
     let quads = if geo.paper.is_some() {
         crate::paper_view::paint_pages(
             crate::paper_view::PagePaintInput {
@@ -168,10 +199,11 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             &mut cf,
         )
     };
+    app.grid.cf = cf_sheet.map(|s| (s, cf));
     // Objects above cells. A hidden object can't stay selected: Delete or the Format pane would act
     // on something the user can't see.
     if crate::chartview::objects_hidden(&wb) {
-        app.selected_chart = None;
+        app.selected_object = None;
     }
     let objects = crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
     paint_overlays(OverlayInput {
@@ -211,6 +243,12 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     ui.painter().rect_filled(Rect::from_min_max(pos2(track_x.0, rect.top()), pos2(track_x.1, rect.bottom())), 0.0, t.tab_bar);
     vertical_scrollbar(app, ui, sh, &geo, track_x, max_y, &t);
     update_clipboard_repaint(app, ui, now);
+}
+
+/// The vertical scroll bar's width: none when the workbook hides it (File › Options ›
+/// Display options for this workbook), and the grid takes its room.
+fn vertical_bar_width(app: &SheetApp, available: Rect) -> f32 {
+    if app.session.active().is_none_or(|d| d.wb.view.show_vertical_scroll) { 14.0_f32.min(available.width()) } else { 0.0 }
 }
 
 fn vertical_scroll_track(available: Rect, grid: Rect, rtl: bool) -> (f32, f32) {
@@ -404,7 +442,19 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
             continue;
         }
         let p = painter.with_clip_rect(*clip);
-        paint_quadrant(QuadrantPaint { painter: &p, geo, workbook: wb, sheet_index: si, sheet: sh, rows: *rows, cols: *cols, cf, tokens: t });
+        let active_row = app.ui.highlight_active_row.then_some(sel.active.row);
+        paint_quadrant(QuadrantPaint {
+            painter: &p,
+            geo,
+            workbook: wb,
+            sheet_index: si,
+            sheet: sh,
+            rows: *rows,
+            cols: *cols,
+            cf,
+            tokens: t,
+            active_row,
+        });
         paint_selection(SelectionPaintInput { painter: &p, geo, sheet: sh, selection: sel, outline, tokens: t, app, rows: *rows, cols: *cols });
     }
     // Freeze lines.
@@ -420,13 +470,17 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
 /// The worksheet is painted virtually, so it needs its own scrollbar rather than a
 /// ScrollArea containing all million rows. Keep the scroll extent stable during a drag.
 fn vertical_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, sh: &Sheet, geo: &Geo, track_x: (f32, f32), limit: f32, t: &Tokens) {
+    // A workbook that hides its vertical scroll bar leaves it no width.
+    if track_x.1 <= track_x.0 {
+        return;
+    }
     let track = Rect::from_min_max(pos2(track_x.0, geo.cells.top() + geo.frozen_h), pos2(track_x.1, geo.cells.bottom()));
     if track.height() <= 0.0 || track.width() <= 0.0 {
         return;
     }
     let visible = track.height() / geo.z;
     let scroll = app.view().scroll.y;
-    let last = sh.used_range().map(|r| r.end.row.saturating_add(10)).unwrap_or(100).clamp(100, MAX_ROWS - 1);
+    let last = geo.used.map(|r| r.end.row.saturating_add(10)).unwrap_or(100).clamp(100, MAX_ROWS - 1);
     let content = geo.scroll_top_of(sh, last);
     let extent = (content - visible).max(scroll).max(0.0).min(limit);
     let id = ui.scope_id().with("vscroll");
@@ -479,7 +533,7 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
     let Some(sh) = wb.active() else { return };
     let visible = ((geo.cells.width() - geo.frozen_w) / geo.z).max(0.0);
     let scroll = app.view().scroll.x;
-    let last = sh.used_range().map(|r| r.end.col.saturating_add(10)).unwrap_or(26).clamp(26, MAX_COLS - 1);
+    let last = geo.used.map(|r| r.end.col.saturating_add(10)).unwrap_or(26).clamp(26, MAX_COLS - 1);
     let content = geo.scroll_left_of(sh, last);
     let extent = (content - visible).max(scroll).max(0.0);
     let id = ui.scope_id().with("hscroll");
@@ -552,7 +606,7 @@ pub(crate) fn paint_headers(
     for (rows, cols, clip) in quads {
         let pc = p.with_clip_rect(Rect::from_min_max(pos2(clip.left(), top.top()), pos2(clip.right(), top.bottom())));
         if cols.0 <= cols.1 {
-            for c in cols.0..=cols.1 {
+            for c in geo.shown_cols(cols.0, cols.1) {
                 if !done_cols.insert((c, clip.left() as i32)) {
                     continue;
                 }
@@ -593,7 +647,7 @@ pub(crate) fn paint_headers(
         }
         let pr = p.with_clip_rect(Rect::from_min_max(pos2(left.left(), clip.top()), pos2(left.right(), clip.bottom())));
         if rows.0 <= rows.1 {
-            for rr in rows.0..=rows.1 {
+            for rr in geo.shown_rows(rows.0, rows.1) {
                 if !done_rows.insert((rr, clip.top() as i32)) {
                     continue;
                 }
