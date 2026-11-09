@@ -304,11 +304,9 @@ fn an_interval_keyword_is_not_shadowed_by_a_table_or_measure_name() {
         columns: vec![ModelColumn { name: "Id".into(), data_type: Some("Int64".into()) }],
         rows: Vec::new(),
     });
-    for formula in [
-        "DATEADD ( Date[Date], 1, YEAR )",
-        "DATESINPERIOD ( Date[Date], Date[Date], -12, YEAR )",
-        "PARALLELPERIOD ( Date[Date], 1, YEAR )",
-    ] {
+    for formula in
+        ["DATEADD ( Date[Date], 1, YEAR )", "DATESINPERIOD ( Date[Date], Date[Date], -12, YEAR )", "PARALLELPERIOD ( Date[Date], 1, YEAR )"]
+    {
         match bind(&table_model, formula) {
             BoundExpr::Call { args, .. } => {
                 let position = args.len() - 1;
@@ -322,13 +320,7 @@ fn an_interval_keyword_is_not_shadowed_by_a_table_or_measure_name() {
         }
     }
     let mut measure_model = sample_model();
-    measure_model.measures.push(Measure {
-        name: "Year".into(),
-        formula: "SUM ( Sales[Amount] )".into(),
-        table: None,
-        format: None,
-        expr: None,
-    });
+    measure_model.measures.push(Measure { name: "Year".into(), formula: "SUM ( Sales[Amount] )".into(), table: None, format: None, expr: None });
     measure_model.parse_formulas().expect("model parses");
     match bind(&measure_model, "DATEADD ( Date[Date], 1, YEAR )") {
         BoundExpr::Call { args, .. } => {
@@ -337,7 +329,6 @@ fn an_interval_keyword_is_not_shadowed_by_a_table_or_measure_name() {
         other => panic!("expected a call, got {other:?}"),
     }
 }
-
 
 #[test]
 fn documented_order_keywords_bind_at_their_argument_positions() {
