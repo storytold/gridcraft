@@ -350,3 +350,34 @@ fn upward_text_with_middle_align_is_centred_in_a_merged_block() {
     assert!((bb.center().y - rect.center().y).abs() < 0.01, "{bb:?} not centred in {rect:?}");
     assert!((bb.center().x - rect.center().x).abs() < 0.01, "{bb:?} not centred in {rect:?}");
 }
+
+#[test]
+fn a_wheel_turn_without_ctrl_ends_a_ctrl_wheel_touch() {
+    use super::end_stuck_ctrl_wheel;
+    use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase, vec2};
+    let wheel = |phase, modifiers| Event::MouseWheel { unit: MouseWheelUnit::Point, delta: vec2(0.0, 3.0), phase, modifiers };
+    let end = Event::MouseWheel { unit: MouseWheelUnit::Point, delta: egui::Vec2::ZERO, phase: TouchPhase::End, modifiers: Modifiers::NONE };
+    let mut ctrl_wheel = false;
+    // Wayland: a plain turn starts a touch that never ends; nothing to change yet.
+    let mut events = vec![wheel(TouchPhase::Start, Modifiers::NONE), wheel(TouchPhase::Move, Modifiers::NONE)];
+    end_stuck_ctrl_wheel(&mut events, &mut ctrl_wheel);
+    assert_eq!(events.len(), 2);
+    // Ctrl+wheel in the same touch zooms, as it should.
+    let mut events = vec![wheel(TouchPhase::Move, Modifiers::CTRL)];
+    end_stuck_ctrl_wheel(&mut events, &mut ctrl_wheel);
+    assert_eq!(events, vec![wheel(TouchPhase::Move, Modifiers::CTRL)]);
+    // Ctrl released, in a later frame: the touch ends first, so egui scrolls this turn.
+    let mut events = vec![wheel(TouchPhase::Move, Modifiers::NONE)];
+    end_stuck_ctrl_wheel(&mut events, &mut ctrl_wheel);
+    assert_eq!(events, vec![end, wheel(TouchPhase::Move, Modifiers::NONE)]);
+    // Later plain turns pass through untouched.
+    let mut events = vec![wheel(TouchPhase::Move, Modifiers::NONE)];
+    end_stuck_ctrl_wheel(&mut events, &mut ctrl_wheel);
+    assert_eq!(events, vec![wheel(TouchPhase::Move, Modifiers::NONE)]);
+    // Cmd (macOS command flag) counts as Ctrl; a touch that ends by itself needs nothing extra.
+    let cmd = wheel(TouchPhase::Start, Modifiers::COMMAND);
+    let mut events = vec![cmd, wheel(TouchPhase::End, Modifiers::NONE), wheel(TouchPhase::Move, Modifiers::NONE)];
+    end_stuck_ctrl_wheel(&mut events, &mut ctrl_wheel);
+    assert_eq!(events.len(), 3);
+    assert!(!ctrl_wheel);
+}

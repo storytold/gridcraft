@@ -68,6 +68,33 @@ pub const WHEEL_ZOOM_LADDER: [u16; 22] = [10, 12, 15, 18, 21, 25, 30, 35, 42, 50
 /// Seconds without Ctrl+wheel input after which part of a notch turned so far is forgotten.
 const WHEEL_ZOOM_IDLE: f64 = 0.75;
 
+/// Ends a wheel "touch" that still carries Ctrl/Cmd when a wheel event without it comes in, so
+/// the wheel scrolls again once Ctrl is released (#2213).
+///
+/// On Wayland winit starts a touch for a high-resolution wheel and never ends it; while in a
+/// touch egui keeps every modifier it has seen, so one Ctrl+wheel turn made each later turn zoom.
+/// `ctrl_wheel` remembers between frames whether the current touch has seen Ctrl/Cmd.
+pub(crate) fn end_stuck_ctrl_wheel(events: &mut Vec<egui::Event>, ctrl_wheel: &mut bool) {
+    let mut out = Vec::with_capacity(events.len());
+    for e in events.drain(..) {
+        if let egui::Event::MouseWheel { unit, phase, modifiers, .. } = &e {
+            let ctrl = modifiers.ctrl || modifiers.command;
+            match phase {
+                egui::TouchPhase::Start => *ctrl_wheel = ctrl,
+                egui::TouchPhase::Move if ctrl => *ctrl_wheel = true,
+                egui::TouchPhase::Move if *ctrl_wheel => {
+                    out.push(egui::Event::MouseWheel { unit: *unit, delta: egui::Vec2::ZERO, phase: egui::TouchPhase::End, modifiers: *modifiers });
+                    *ctrl_wheel = false;
+                }
+                egui::TouchPhase::Move => {}
+                egui::TouchPhase::End | egui::TouchPhase::Cancel => *ctrl_wheel = false,
+            }
+        }
+        out.push(e);
+    }
+    *events = out;
+}
+
 /// The zoom one Ctrl+wheel notch goes to from `zoom`: the next step on [`WHEEL_ZOOM_LADDER`] in
 /// that direction, skipping a step less than 5% away (121% out goes to 100%, not 120%), but never
 /// 100% or the 10% / 400% limits (99% or 101% towards 100% goes to 100%).
