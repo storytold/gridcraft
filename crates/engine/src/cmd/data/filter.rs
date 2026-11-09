@@ -634,7 +634,12 @@ pub fn filter_list(wb: &Workbook, sheet: usize, col: u32) -> FilterList {
             _ => leaves.push((key, texts, on)),
         }
     }
-    FilterList { dates: date_nodes(&leaves, 0, leaf, ""), values: seen.into_iter().map(|((_, t), on)| (t, on)).collect(), truncated }
+    // Text in the order a sort gives it (Arabic by its letters, not its marks or digit script).
+    let mut values: Vec<_> = seen.into_iter().collect();
+    values.sort_by(|((a, ta), _), ((b, tb), _)| {
+        a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then_with(|| gridcraft_core::compare_text(&a.2, &b.2)).then_with(|| ta.cmp(tb))
+    });
+    FilterList { dates: date_nodes(&leaves, 0, leaf, ""), values: values.into_iter().map(|((_, t), on)| (t, on)).collect(), truncated }
 }
 
 /// The fewest `dates` that select the checked leaves the search shows (counts from
