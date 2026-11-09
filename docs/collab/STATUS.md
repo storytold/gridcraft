@@ -1,7 +1,7 @@
 # Real-time collaboration: status and acceptance evidence
 
 - Date: 2026-11-09
-- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), HEAD `7f114d0f`
+- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), HEAD `59eb9e06` (code; this page is the docs commit on top)
 - Base: `origin/main` = `2c58c769` (rebased 2026-11-08)
 - PR: <https://github.com/storytold/gridcraft/pull/3613> (draft)
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
@@ -80,29 +80,39 @@ has both sides implemented here.
 | §1 session model | one session per file, owner/editor/viewer, presence (sheet, cell/range, selection, viewport), join/leave/reconnect | `4396ad93`, `56cff6ae`; `cargo test -p gridcraft-collab` (21) — `hub` presence/role tests; server socket tests `two_editors_converge_on_one_book`, `a_viewer_is_refused_before_the_engine` |
 | §2 book sync | op unit = one user action (`command`/`structural`), sheet keys stable across restarts, authoritative recalculation on one engine `Session`, delta of changed cells (spills included) instead of the workbook, `baseVersion`/`epoch` conflict rules | `5a307189`, `12628770`, `f828c9fb`; collab delta/dedup/epoch tests; server acceptance `a_dynamic_array_spills_and_the_spill_survives_a_commit`, `a_large_range_travels_and_commits` (A1:E2000, 10 000 cells); client `a_structural_command_lands_on_both_replicas` |
 | §3 presence/UX | overlay of other participants' selections, participant list, status bar, viewer refused locally and by the server | `56cff6ae`; `crates/ui-egui/src/collab.rs`, `apps/gridcraft/src/collab_ui.rs`; client `a_viewer_is_refused_locally_and_still_receives`; server `a_viewer_is_refused_before_the_engine`; server `a_viewer_is_refused_before_the_engine` |
-| §4 undo/redo | per-actor steps (≤200), undo/redo are new room operations, refuse with `conflict` when someone else changed the cell, history survives reconnect while the server runs, not a server restart | `f828c9fb`, `30ebbb73`; collab undo/redo/conflict tests; client `undo_reverses_only_the_actors_own_step` / `redo_puts_the_step_back_on_every_replica` |
+| §4 undo/redo | per-actor steps (≤200), undo/redo are new room operations, refuse with `conflict` when someone else changed the cell, history survives reconnect while the server runs, not a server restart; a structural step (row or sheet insert/delete) is reversed from whole-sheet images in one operation (`applied.images`, epoch grows, sheet keys kept) | `f828c9fb`, `30ebbb73`, `59eb9e06`; collab undo/redo/conflict and structural-image tests; client `undo_reverses_only_the_actors_own_step` / `redo_puts_the_step_back_on_every_replica` / `structural_undo_restores_rows_and_sheets_on_every_replica` |
 | §5 roles | viewer cannot write; role re-read from the signed JWT on every message; lease and takeover | `4bd61141`, `4396ad93`; server socket tests `a_bad_token_never_joins`, `the_lease_allows_one_session_and_the_owner_takes_over` |
 | §6 compat/save | feature `collab` off by default; single-user build unchanged; commit returns the authoritative `.xlsx`, opened by LibreOffice in the acceptance test | `56cff6ae`, `39ac1a28`; server acceptance `a_committed_file_opens_in_libreoffice`; `cargo check -p gridcraft` without the feature |
 | §7 server | `apps/gridcraft-collab-server`: HTTP session lifecycle, WS transport, JWT (HS256/ES256/EdDSA), healthcheck, `/metrics`, journal + snapshots + restart + compaction, no cell values or tokens in logs | `4bd61141`, `39ac1a28`, `f2346c30`; `server.md`; 19 unit + 7 socket + 5 persistence + 5 acceptance |
 | §8 tests | unit, two clients, same-cell conflict, structural edits with participants, formulas/dynamic arrays, reconnect/catch-up, viewer, 10 000 cells, commit opens in LibreOffice | counts below; `7ed43c2a` |
 
-## 4. Test run after the rebase (2026-11-09)
+## 4. Test run after the rebase and the structural-undo slice (2026-11-09)
+
+Run for the structural-undo commit (`59eb9e06`):
 
 ```text
-cargo +1.95.0 test -p gridcraft-collab                     21 passed
-cargo +1.95.0 test -p gridcraft-collab-client               5 passed
+cargo +1.95.0 test -p gridcraft-collab                     28 passed
+cargo +1.95.0 test -p gridcraft-collab-client               6 passed
 cargo +1.95.0 test -p gridcraft-collab-server --all-targets 19 unit + 7 socket + 5 persistence + 5 acceptance, all passed
-cargo +1.95.0 test -p gridcraft-engine --lib              898 passed
-cargo +1.95.0 clippy --all-targets -- -D warnings          collab, client, server, engine, ui-egui: clean
-cargo +1.95.0 fmt --all -- --check                         clean
-cargo +1.95.0 xtask layers                                 OK: 21 crates, no layering violations
-cargo +1.95.0 check -p gridcraft                           ok (single-user build)
-cargo +1.95.0 check -p gridcraft --features collab        ok
-cargo check -p gridcraft-web --target wasm32-unknown-unknown  ok
-trunk build (0.22.1)                                       ok
-cargo test -p gridcraft-collab-web                          5 passed
-cargo test -p gridcraft-web                                11 passed
+cargo test -p gridcraft-collab-web -p gridcraft-web         5 + 11 passed
+cargo check -p gridcraft-collab-web -p gridcraft-web --target wasm32-unknown-unknown  ok
+cargo fmt --all -- --check                                 clean
+cargo clippy -p gridcraft-collab -p gridcraft-collab-client -p gridcraft-collab-server
+  -p gridcraft-engine -p gridcraft-collab-web --all-targets -- -D warnings -A deprecated
+                                                          clean
 ```
+
+The host now carries clippy and rustfmt only for its default toolchain
+(1.99.1), not for `1.95.0`. Under 1.99.1 the clippy run reports one
+pre-existing deprecation in `apps/gridcraft-collab-server/src/metrics.rs`
+(`fetch_update` renamed to `try_update`; main's code, untouched here), excluded
+with `-A deprecated`. `1.95.0` builds and runs every test above.
+
+Earlier, after the rebase (before this slice), the same branch passed
+`cargo +1.95.0 test -p gridcraft-engine --lib` (898) and the full `cargo
++1.95.0 clippy --all-targets -- -D warnings` (collab, client, server, engine,
+ui-egui); `cargo xtask layers` and the single-user / `--features collab`
+checks are unchanged by this slice.
 
 The earlier "no wasm32 std" note no longer applies: the remote build host has
 the wasm32 target and trunk 0.22.1. The native transport is still not compiled
@@ -124,7 +134,13 @@ for WASM; the browser uses `crates/collab-web` and the host bridge.
 
 1. The cabinet's server-to-server commit callback: the HTTP `commit` endpoint exists,
    the outgoing call is integration work.
-2. Structural undo (row/sheet insert-delete) — planned for v2; merge undo/redo exists.
+2. Structural undo (row/sheet insert-delete) is one operation with whole-sheet
+   images (`applied.images`), refused as `conflict` when any operation came after
+   the step. Three limits remain: the image does not carry workbook-level
+   metadata (defined names, protection of structure) or a sheet's `preserved`
+   blobs; one image must fit 8 MiB (`too_large`), so chunking is the follow-up;
+   and undo/redo effects are still not journaled, so a reconnect between an undo
+   and the next snapshot can miss it (the same gap the cell undo has).
 3. TLS termination is the ingress proxy's job; the process speaks HTTP/WS.
 4. Multiple windows of one user share one `actorId`.
 5. One room mutex per process; document isolation is by `fileId`. Many large
