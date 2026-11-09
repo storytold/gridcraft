@@ -52,6 +52,10 @@ pub fn parse_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
 /// Text that Excel's "Number Stored as Text" check flags: it would be a number if typed (signs,
 /// thousands separators, currency, percent, exponent, a parenthesised negative). Dates, times and
 /// fractions kept as text are not flagged, as in Excel.
+///
+/// Euro amounts are flagged too: the euro sign before or after the amount, with at most a plain
+/// space between them, a minus before the sign or the amount, and the amount in European
+/// (`1.234,56`) or en-US (`65.00`) form, as in `65,00€`, `-6,04 €`, `€ 1.234,56` and `65.00€`.
 pub fn number_stored_as_text(s: &str) -> Option<f64> {
     let t = s.trim();
     // The same parentheses typed entry reads, accounting forms included: `$(5)`, `(5)%`.
@@ -64,9 +68,10 @@ pub fn number_stored_as_text(s: &str) -> Option<f64> {
 
 /// Euro amounts as European bank exports write them, which Excel in a European locale flags:
 /// `65,00€`, `-6,04 €`, `€ 1.234,56` (comma decimal, dot thousands), and the en-US body `65.00€`.
-/// Only a plain space may stand between the amount and the sign: Excel (pt-PT) flags none of these
-/// with a no-break or narrow no-break space.
-// ponytail: euro sign only; plain `65,00` needs the workbook's number locale, which isn't modelled yet.
+/// Only a plain space may stand between the amount and the sign: Excel (pt-PT) does not flag these
+/// forms when a no-break or narrow no-break space is used.
+// Limitation: euro sign only; a plain `65,00` needs the workbook's number locale, which isn't
+// modelled yet (#889).
 fn euro_text(t: &str) -> Option<f64> {
     let (neg, t) = match t.strip_prefix('-') {
         Some(r) => (true, r.trim_start_matches(' ')),
@@ -84,7 +89,8 @@ fn euro_text(t: &str) -> Option<f64> {
     Some(if neg { -n } else { n })
 }
 
-/// `1.234,56`: dot thousands in groups of three, an optional comma decimal part.
+/// `1.234,56`: dot thousands in groups of three, an optional comma decimal part. Rejected: a group
+/// after the first that isn't exactly three digits, and an empty decimal part (`1,`).
 fn european_number(s: &str) -> Option<f64> {
     let (int, frac) = s.rsplit_once(',').map_or((s, None), |(a, b)| (a, Some(b)));
     let groups: Vec<&str> = int.split('.').collect();
