@@ -27,9 +27,11 @@
 | `GRIDCRAFT_COLLAB_SNAPSHOT_SECS` | нет | `300` | период фонового снапшота по времени |
 
 Лимиты транспорта: входящий кадр ≤ 1 MiB, сообщение ≤ 9 MiB; образ структурного
-undo/redo (`{book, images}`: листы, preserved-блоки листов, defined names и защита
-структуры) уходит частями `applied{more:true}` по 512 КиБ до base64 (`imagePart`), кадр
-остаётся < 1 MiB (ADR-0013); чанк снапшота 768 КиБ до base64.
+undo/redo (`{book, images}`: листы, preserved-блоки листов, defined names, защита
+структуры, package/книжные `preserved` с chart sheets, VBA-проект, стили, `calc`) уходит
+частями `applied{more:true}` по 512 КиБ до base64 (`imagePart`), кадр остаётся < 1 MiB
+(ADR-0013); лимит одной операции — 32 MiB, больше — `rejected{code:"too_large"}` **до**
+мутации; чанк снапшота 768 КиБ до base64.
 
 ## Хранилище
 

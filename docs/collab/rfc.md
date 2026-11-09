@@ -147,7 +147,7 @@ WebSocket, WSS. Один фрейм — один JSON-объект. Лимиты
 | `hello` | C→S | `token, name, lastVersion` | auth + join; подписанный токен только здесь, не в URL |
 | `welcome` | S→C | `sessionId, actorId, role, version, epoch, sheets[], participants, lease` | старт; `sheets` — карта `sheetKey ↔ имя` |
 | `op` | C→S | `opId, doc, baseVersion, epoch, kind, target, payload, preview?` | операция |
-| `applied` | S→C | `opId, version, epoch, result{command?,delta?}, actorId, sheets?, images?, book?, more?, imagePart{seq,total,data}?` | авторитетный результат; `book` — состояние уровня книги у границы структурного шага (defined names, защита структуры), `imagePart` — часть образа, `more:true` до последней |
+| `applied` | S→C | `opId, version, epoch, result{command?,delta?}, actorId, sheets?, images?, book?, more?, imagePart{seq,total,data}?` | авторитетный результат; `book` — состояние уровня книги у границы структурного шага (defined names, защита структуры, package/книжные `preserved` и chart sheets, VBA-проект, стили, `calc`), `imagePart` — часть образа, `more:true` до последней |
 | `rejected` | S→C | `opId, code, retryable, hint{version,epoch}, details?` | отказ |
 | `presence` | C↔S | `sheetKey, active, ranges[], viewport, editing?` | эфемерно |
 | `resync` | C→S | `from` | запрос базы/хвоста |
@@ -250,20 +250,20 @@ OT не используется: сервер применяет к head (ADR-0
   после** правки: адреса ниже вставки сдвигаются, а удалённый лист нечем диффить. Undo/redo
   такого шага — одна операция: `applied.images` несёт листы целиком (`SheetImage` с
   `preserved`-блоками листа, которые не входят в JSON листа), `applied.book` — состояние
-  уровня книги той же границы (`WorkbookMeta`: defined names со scope и защита структуры с
-  хэшем пароля). Клиент заменяет листы и состояние книги одним вызовом
+  уровня книги той же границы (`WorkbookMeta`: defined names со scope, защита структуры с
+  хэшем пароля, package/книжные `preserved` с chart sheets, VBA-проект, стили, `calc`).
+  Клиент заменяет листы и состояние книги одним вызовом
   (`Session::restore_structural`) и только затем применяет `applied.sheets`; `epoch` растёт.
   Образ больше кадра едет частями `imagePart` (ADR-0013) — в части едет весь образ
   (`{book, images}`), поэтому состояние книги не дублируется на каждой части и не теряется
   при чанкинге: клиент собирает его до применения и при обрыве последовательности не меняет
   документ, а просит догон с версии до первой части. Обратный шаг применяется, только пока
   комната стоит на версии шага; иначе `conflict{retryable:true}` — чужая правка не
-  перезаписывается. Отказ (конфликт или образ, который не к чему применить: пустой набор
-  листов, scope имени вне образа) приходит **до** мутации: документ остаётся прежним.
-  Вне образа остаются части уровня пакета (workbook `preserved`: package/workbook rels,
-  VBA-проект, chart sheets) — они не меняются структурным шагом и остаются с книгой;
-  стили, темы и `calc` тоже живут вне образа и пересчитываются движком. Прежний предел 8 МиБ
-  (`too_large`) снят чанкингом.
+  перезаписывается. Отказ (конфликт, образ больше лимита операции ≤ 32 MiB, или образ,
+  который не к чему применить: пустой набор листов, scope имени вне образа, стили без
+  Normal-стиля, непригодный `calc`) приходит **до** мутации: документ и версия остаются
+  прежними. Тема остаётся вне образа: структурный шаг её не меняет. Прежний предел 8 МиБ
+  (`too_large`) снят чанкингом; лимит операции 32 MiB — тот же, что у дельты (§4.1).
 - История не пишется в файл и не уходит в кабинет.
 - Offline: только повтор непринятых `command`-операций с `baseVersion`; `structural`
   offline запрещён (адреса разъедутся). Автономной сходимости нет.
