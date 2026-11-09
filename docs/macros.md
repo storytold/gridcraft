@@ -1,6 +1,6 @@
 # Macros
 
-> **Last updated:** 2026-11-03 · **Change:** minor (`macro.save` checks a new or changed shortcut as Record Macro does; earlier: a close that waits on the step editor's question runs in the editor's window, and a further close asked meanwhile waits for the answer or is refused; earlier: closing a workbook or quitting asks about the step editor's unsaved draft first; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
+> **Last updated:** 2026-11-09 · **Change:** minor (`macro.save` checks a new or changed shortcut as Record Macro does; earlier: a close that waits on the step editor's question runs in the editor's window, and a further close asked meanwhile waits for the answer or is refused; earlier: closing a workbook or quitting asks about the step editor's unsaved draft first; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
 
 GridCraft macros are typed, declarative lists of commands, not VBA. Every step runs a GridCraft
 command (the same ids the ribbon, CLI and MCP use) or one of three bounded control steps. A macro
@@ -246,9 +246,11 @@ kept but does not run the macro.
 {name, to}`. Saving under a name a macro has is refused unless `replace: true` is passed, and
 renaming to one is refused; names compare ignoring the case of the letters A to Z. A renamed macro is checked
 against every limit again, its size included. A new or changed shortcut is checked as Record Macro
-checks it: one letter from A to Z that neither GridCraft nor another macro uses, so a saved
-shortcut always runs its macro; a shortcut the macro already has is kept as it is. Saving,
-renaming and deleting are undoable.
+checks it: one letter from A to Z that neither GridCraft nor another macro uses, written alone
+(`m`) or after Ctrl+Shift or Cmd+Shift (`Ctrl+Shift+M`), in either case, so it runs its macro.
+A shortcut the macro already has, in any of these forms, is kept as it is, even on a letter
+GridCraft uses, where it does not run the macro (see above). A refused save leaves the macro as it
+was. Saving, renaming and deleting are undoable.
 
 Macros are saved in the workbook: as a field in GridCraft's JSON format, and in xlsx as hidden
 defined names (`_gc_macro_<n>_<k>`, the macro's JSON split into string literals within Excel's

@@ -2456,6 +2456,21 @@ fn save_checks_a_new_or_changed_shortcut_and_keeps_one_the_macro_has() {
     put(&mut s, json!({"name": "Theirs", "shortcut": "Ctrl+Shift+S", "steps": []}));
     s.execute("macro.save", json!({"name": "Theirs", "shortcut": "Ctrl+Shift+S", "description": "edited", "steps": [], "replace": true})).unwrap();
     assert_eq!(s.execute("macro.get", json!({"name": "Theirs"})).unwrap()["description"], "edited");
-    let e = s.execute("macro.save", json!({"name": "Theirs", "shortcut": "Ctrl+Shift+T", "steps": [], "replace": true})).unwrap_err().to_string();
+    // The same letter written another way is the shortcut the macro has, not a new one.
+    for same in ["s", " S ", "ctrl+shift+s", "Cmd+Shift+S", "⌘⇧S"] {
+        s.execute("macro.save", json!({"name": "Theirs", "shortcut": same, "description": "edited", "steps": [], "replace": true}))
+            .unwrap_or_else(|e| panic!("{same}: {e}"));
+        s.execute("macro.save", json!({"name": "Theirs", "shortcut": "Ctrl+Shift+S", "description": "edited", "steps": [], "replace": true}))
+            .unwrap();
+    }
+    // A refused replace leaves the macro as it was: steps, description and shortcut.
+    let before = s.execute("macro.get", json!({"name": "Theirs"})).unwrap();
+    let moved = json!({
+        "name": "Theirs", "shortcut": "Ctrl+Shift+T", "description": "moved",
+        "steps": [{"command": "home.bold", "params": {"range": "A1"}}], "replace": true
+    });
+    let e = s.execute("macro.save", moved).unwrap_err().to_string();
     assert!(e.contains("AutoSum"), "{e}");
+    assert_eq!(s.execute("macro.get", json!({"name": "Theirs"})).unwrap(), before);
+    assert_eq!(before["shortcut"], "Ctrl+Shift+S");
 }
