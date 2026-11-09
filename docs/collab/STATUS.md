@@ -714,8 +714,9 @@ cargo test --workspace -j 8 --no-fail-fast                        every target o
 
 Test totals: `gridcraft-collab` 45, `gridcraft-collab-client` 13 converge + 5 parts,
 `gridcraft-collab-server` 34 unit + 8 socket + 9 persistence + 5 acceptance + 6 callback + 2
-logging, `gridcraft-collab-web` 6, plus calc 116, chart 80, cli 27+11, core 40, formula 108,
-functions 35, model 164, xlsx 364, engine 898, ui-egui 1180 and the remaining crates — all passed.
+logging, `gridcraft-collab-web` 6; engine 898 unit + 108 integration, ui-egui 304 unit + 1180
+integration, xlsx 364, calc 116, chart 80, functions 164, model 43, numfmt 39, math 23, formula
+35, core 40, cli 27 + 11, web 11, pdf 19, mcp 25, xtask 25 and the remaining crates — all passed.
 
 The three failures are not caused by this change (the diff is one file, `metrics.rs`) and are
 host-environment tests that also failed before it:
