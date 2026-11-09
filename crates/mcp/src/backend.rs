@@ -19,6 +19,11 @@ pub trait Backend {
 
 /// Read/write timeout on the control connection.
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long to wait for a reply: a request that asks to wait for Python cells may hold it.
+fn read_timeout(params: &Value) -> Duration {
+    if gridcraft_engine::python::reply_may_be_held(params) { IO_TIMEOUT.saturating_add(gridcraft_engine::python::MAX_WAIT) } else { IO_TIMEOUT }
+}
+
 /// Longest reply line accepted from the app (guards against a runaway peer).
 const MAX_REPLY: u64 = 256 * 1024 * 1024;
 
@@ -89,13 +94,15 @@ impl Remote {
         }
     }
 
-    fn roundtrip(&mut self, line: &str) -> std::io::Result<String> {
+    fn roundtrip(&mut self, line: &str, timeout: Duration) -> std::io::Result<String> {
         if self.conn.is_none() {
             self.reconnect()?;
         }
         let Some((reader, writer)) = self.conn.as_mut() else {
             return Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected"));
         };
+        // On the handle the reader reads: on Windows a clone keeps a timeout of its own.
+        reader.get_ref().set_read_timeout(Some(timeout)).ok();
         writer.write_all(line.as_bytes())?;
         writer.write_all(b"\n")?;
         writer.flush()?;
@@ -112,13 +119,14 @@ impl Backend for Remote {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
+        let timeout = read_timeout(&params);
         let line = json!({"id": id, "method": method, "params": params}).to_string();
         // One retry with a fresh connection (the app may have restarted).
-        let reply = match self.roundtrip(&line) {
+        let reply = match self.roundtrip(&line, timeout) {
             Ok(r) => r,
             Err(_) => {
                 self.conn = None;
-                self.roundtrip(&line).map_err(|e| {
+                self.roundtrip(&line, timeout).map_err(|e| {
                     self.conn = None;
                     format!("GridCraft app at {} is not reachable: {e}", self.addr)
                 })?
@@ -138,5 +146,25 @@ impl Backend for Remote {
 
     fn describe(&self) -> String {
         format!("connected to the GridCraft app at {}", self.addr)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A request that asks to wait for Python cells may hold its reply: a client that gave up early
+    /// would call a save still coming a failure, and its retry would ask for the save again.
+    #[test]
+    fn a_held_reply_gets_the_time_it_may_take() {
+        let plain = read_timeout(&json!({"command": "cell.set", "params": {}}));
+        assert_eq!(plain, IO_TIMEOUT);
+        for held in [
+            json!({"command": "file.save", "params": {"path": "x", "wait": true}}),
+            json!({"command": "file.save", "wait": true, "params": {}}),
+            json!({"path": "x", "waitSeconds": 5}),
+        ] {
+            assert!(read_timeout(&held) >= gridcraft_engine::python::MAX_WAIT + IO_TIMEOUT, "{held}");
+        }
     }
 }

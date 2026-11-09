@@ -21,6 +21,10 @@
 //! - at the end, undoing everything gives back the starting workbook and redoing everything the
 //!   final one (view state aside), and both keep the Watch Window list, which isn't an edit.
 //!
+//! A second test runs the same checks with Python cells running, through a fake worker whose results
+//! depend only on the code: Python settles after each step, the results written make no undo step, and
+//! the run order the session keeps is always the workbook's.
+//!
 //! Knobs (environment variables):
 //! - `GRIDCRAFT_FUZZ_SEEDS` (default 6) and `GRIDCRAFT_FUZZ_STEPS` (default 40): the budget. Soak with
 //!   `GRIDCRAFT_FUZZ_SEEDS=200 GRIDCRAFT_FUZZ_STEPS=200 cargo test --release -p gridcraft-engine --test it command_sequence_fuzz::`.
@@ -29,13 +33,16 @@
 //!   still fails the same way, printed as `execute` calls ready for a regression test.
 //! - `GRIDCRAFT_FUZZ_KEEP_GOING=1`: report every failing seed instead of stopping at the first.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
+use gridcraft_core::{Array, CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
 use gridcraft_engine::calc::Calc;
 use gridcraft_engine::model::{CalcMode, Formula, Sheet, SheetViewMode, Workbook};
-use gridcraft_engine::{EngineError, Session, command_specs, find_command, io};
+use gridcraft_engine::{EngineError, PythonCapability, Session, command_specs, find_command, io, python_order};
+use gridcraft_python::fake::FakeTransport;
+use gridcraft_python::protocol::Table;
+use gridcraft_python::{Input, Output, PyError};
 use serde_json::{Value as Json, json};
 
 const SAMPLES: [&str; 3] = ["sales", "budget", "grades"];
@@ -56,6 +63,8 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("file.saveAs", "writes files"),
     ("file.exportCsv", "writes files"),
     ("file.exportHtml", "writes files"),
+    ("python.saveCsv", "writes files"),
+    ("python.saveImage", "writes files"),
     ("file.exportPdf", "renders a PDF: slow, and may write files"),
     ("file.print", "renders a PDF: slow"),
     ("window.activate", "switches documents"),
@@ -64,6 +73,22 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("insert.picture", "reads files"),
     ("pageLayout.background", "reads files"),
     ("formulas.calculationOptions", "manual and iterative calculation differ from a full recalc by design"),
+    ("python.calculation", "under manual calculation, cells stay as they were until someone runs them, by design"),
+];
+
+/// The commands that run Python cells or report on them.
+const PYTHON_RUNS: &[&str] = &[
+    "python.run",
+    "python.runAll",
+    "python.stop",
+    "python.reset",
+    "python.environment",
+    "python.diagnostics",
+    "python.runLog",
+    "python.clearRunLog",
+    "python.refreshEnvironment",
+    "python.table",
+    "python.image",
 ];
 
 // ---------------------------------------------------------------- deterministic randomness
@@ -113,6 +138,15 @@ fn env_num(name: &str, default: u64) -> u64 {
 
 #[test]
 fn command_sequences_keep_the_workbook_consistent() {
+    run_seeds(false);
+}
+
+#[test]
+fn command_sequences_with_python_cells_running_keep_the_workbook_consistent() {
+    run_seeds(true);
+}
+
+fn run_seeds(python: bool) {
     let seeds = env_num("GRIDCRAFT_FUZZ_SEEDS", 6);
     let steps = env_num("GRIDCRAFT_FUZZ_STEPS", 40) as usize;
     let keep_going = std::env::var_os("GRIDCRAFT_FUZZ_KEEP_GOING").is_some();
@@ -122,9 +156,9 @@ fn command_sequences_keep_the_workbook_consistent() {
     };
     let mut reports = Vec::new();
     for seed in list {
-        let (sample, sequence, failure) = run_seed(seed, steps);
+        let (sample, sequence, failure) = run_seed(seed, steps, python);
         if let Some(f) = failure {
-            reports.push(report(seed, steps, sample, &sequence, &f));
+            reports.push(report(seed, steps, sample, &sequence, &f, python));
             if !keep_going {
                 break;
             }
@@ -133,7 +167,7 @@ fn command_sequences_keep_the_workbook_consistent() {
     assert!(reports.is_empty(), "{} failing seed(s)\n\n{}", reports.len(), reports.join("\n\n"));
 }
 
-fn report(seed: u64, steps: usize, sample: &str, sequence: &[Step], f: &Failure) -> String {
+fn report(seed: u64, steps: usize, sample: &str, sequence: &[Step], f: &Failure, python: bool) -> String {
     let at = match sequence.get(f.step) {
         Some((id, p)) => format!("step {} of {}: `{id}` {p}", f.step, sequence.len()),
         None => format!("end-of-run checks after {} steps", sequence.len()),
@@ -149,12 +183,12 @@ fn report(seed: u64, steps: usize, sample: &str, sequence: &[Step], f: &Failure)
         out.push_str(&format!("    {i:4} {id} {p}\n"));
     }
     if std::env::var_os("GRIDCRAFT_FUZZ_SHRINK").is_some() {
-        let min = shrink(sample, &sequence[..end], f.kind);
+        let min = shrink(sample, &sequence[..end], f.kind, python);
         out.push_str(&format!("  minimal sequence ({} steps) from file.new {{\"sample\": \"{sample}\"}}:\n", min.len()));
         for (id, p) in &min {
             out.push_str(&format!("    s.execute(\"{id}\", json!({p})).ok();\n"));
         }
-        if let Some(f) = replay(sample, &min) {
+        if let Some(f) = replay(sample, &min, python) {
             out.push_str(&format!("  which fails with [{}]: {}\n", f.kind, f.what));
         }
     } else {
@@ -164,13 +198,13 @@ fn report(seed: u64, steps: usize, sample: &str, sequence: &[Step], f: &Failure)
 }
 
 /// Generates and runs one seed's sequence; returns the sample, the steps run and the first failure.
-fn run_seed(seed: u64, steps: usize) -> (&'static str, Vec<Step>, Option<Failure>) {
+fn run_seed(seed: u64, steps: usize, python: bool) -> (&'static str, Vec<Step>, Option<Failure>) {
     let mut rng = Rng(seed.wrapping_mul(0xA24B_AED4_963E_E407) ^ 0x5EED);
     let sample = SAMPLES[(seed % SAMPLES.len() as u64) as usize];
-    let mut h = Harness::new(sample);
+    let mut h = Harness::new(sample, python);
     let mut sequence = Vec::new();
     for i in 0..steps {
-        let (id, params) = generate(&mut rng, &h.s);
+        let (id, params) = generate(&mut rng, &h.s, python);
         sequence.push((id.clone(), params.clone()));
         if let Err(f) = h.step(i, &id, &params) {
             return (sample, sequence, Some(f));
@@ -181,8 +215,8 @@ fn run_seed(seed: u64, steps: usize) -> (&'static str, Vec<Step>, Option<Failure
 }
 
 /// Runs a recorded sequence with the same checks.
-fn replay(sample: &str, steps: &[Step]) -> Option<Failure> {
-    let mut h = Harness::new(sample);
+fn replay(sample: &str, steps: &[Step], python: bool) -> Option<Failure> {
+    let mut h = Harness::new(sample, python);
     for (i, (id, p)) in steps.iter().enumerate() {
         if let Err(f) = h.step(i, id, p) {
             return Some(f);
@@ -192,7 +226,7 @@ fn replay(sample: &str, steps: &[Step]) -> Option<Failure> {
 }
 
 /// Greedy delta debugging: drop chunks of steps while the run still fails the same way.
-fn shrink(sample: &str, steps: &[Step], kind: &str) -> Vec<Step> {
+fn shrink(sample: &str, steps: &[Step], kind: &str, python: bool) -> Vec<Step> {
     let mut cur = steps.to_vec();
     let mut chunk = cur.len().div_ceil(2).max(1);
     loop {
@@ -201,7 +235,7 @@ fn shrink(sample: &str, steps: &[Step], kind: &str) -> Vec<Step> {
         while i < cur.len() {
             let mut trial = cur.clone();
             trial.drain(i..(i + chunk).min(trial.len()));
-            if replay(sample, &trial).is_some_and(|f| f.kind == kind) {
+            if replay(sample, &trial, python).is_some_and(|f| f.kind == kind) {
                 cur = trial;
                 removed = true;
             } else {
@@ -240,11 +274,37 @@ fn guarded<T>(step: usize, kind: &'static str, f: impl FnOnce() -> Result<T, Str
 }
 
 impl Harness {
-    fn new(sample: &str) -> Harness {
+    fn new(sample: &str, python: bool) -> Harness {
         let mut s = Session::new();
         s.execute("file.new", json!({"sample": sample})).expect("sample opens");
+        if python {
+            let t = FakeTransport::answering(fake_answer);
+            s.set_python_capability(PythonCapability {
+                enabled: true,
+                transport: Some(Arc::new(move || Box::new(t.sharing()))),
+                ..PythonCapability::default()
+            });
+        }
         let base = s.doc().expect("document").wb.clone();
         Harness { s, base }
+    }
+
+    /// Lets Python finish, in a session that runs it.
+    fn settle(&mut self, step: usize) -> Result<(), Failure> {
+        let mut polls = 0;
+        while self.s.python_busy() {
+            self.s.python_poll(std::time::Duration::from_millis(2));
+            polls += 1;
+            if polls > 20_000 {
+                return Err(fail(step, "python", "Python never settled"));
+            }
+        }
+        let order = python_order(&self.s.doc().expect("document").wb);
+        let tracked = self.s.python_tracked_cells();
+        if self.s.python_capability().is_some() && order != tracked {
+            return Err(fail(step, "python", format!("the session runs cells in the order {tracked:?}, and the workbook's is {order:?}")));
+        }
+        Ok(())
     }
 
     fn wb(&self) -> Arc<Workbook> {
@@ -261,14 +321,16 @@ impl Harness {
         if self.s.documents().len() != 1 {
             return Err(fail(i, "documents", format!("`{id}` changed the number of open documents; exclude it in EXCLUDED")));
         }
-        let after = self.wb();
         let spec = find_command(id).expect("generated ids are registered");
+        let after = self.wb();
         if !spec.undoable
             && !matches!(id, "edit.undo" | "edit.redo")
             && let Some(diff) = content_diff(&before, &after)
         {
             return Err(fail(i, "not undoable", format!("non-undoable `{id}` changed cell content: {diff}")));
         }
+        self.settle(i)?;
+        let after = self.wb();
         self.check_state(i)?;
         if (i + 1).is_multiple_of(ROUNDTRIP_EVERY) {
             guarded(i, "xlsx roundtrip", || roundtrip_diff(&after))?;
@@ -303,6 +365,7 @@ impl Harness {
                 return Err(fail(i, "undo", "undo never empties its history"));
             }
         }
+        self.settle(i)?;
         let undone = self.wb();
         if let Some(diff) = workbook_diff(&self.base, &undone) {
             return Err(fail(i, "undo", format!("undoing all {n} steps doesn't give back the starting workbook: {diff}")));
@@ -317,6 +380,7 @@ impl Harness {
                 return Err(fail(i, "panic", format!("`edit.redo` panicked while redoing everything: {msg}")));
             }
         }
+        self.settle(i)?;
         if let Some(diff) = workbook_diff(&end, &self.wb()) {
             return Err(fail(i, "redo", format!("redoing all {n} steps doesn't give back the final workbook: {diff}")));
         }
@@ -337,7 +401,7 @@ impl Harness {
 // ---------------------------------------------------------------- invariants
 
 fn has_content(c: &gridcraft_engine::model::Cell) -> bool {
-    c.formula.is_some() || !c.value.is_empty()
+    c.formula.is_some() || c.py.is_some() || !c.value.is_empty()
 }
 
 /// Cells whose formula or constant differs (computed values of formulas aside).
@@ -352,9 +416,11 @@ fn content_diff(a: &Workbook, b: &Workbook) -> Option<String> {
         }
         for c in x.cells.diff(&y.cells) {
             let content = |s: &Sheet| {
-                s.cell(c).filter(|c| has_content(c)).map(|c| match &c.formula {
-                    Some(f) => format!("={}", f.text),
-                    None => format!("{:?}", c.value),
+                // A Python cell's content is its code: its value is what running it gives.
+                s.cell(c).filter(|c| has_content(c)).map(|c| match (&c.formula, &c.py) {
+                    (Some(f), _) => format!("={}", f.text),
+                    (None, Some(py)) => format!("PY {} {:?}", py.object, py.code),
+                    (None, None) => format!("{:?}", c.value),
                 })
             };
             if content(x) != content(y) {
@@ -425,6 +491,7 @@ fn same_value(a: &Value, b: &Value) -> bool {
 
 /// The first cell whose displayed value (own value or spilled) differs between two workbooks.
 fn value_diff(a: &Workbook, b: &Workbook, what: &str) -> Option<String> {
+    let has_python = a.sheets.iter().any(|s| s.cells.iter().any(|(_, c)| c.py.is_some()));
     for (x, y) in a.sheets.iter().zip(&b.sheets) {
         let mut keys: BTreeSet<CellRef> = BTreeSet::new();
         for s in [x, y] {
@@ -436,9 +503,13 @@ fn value_diff(a: &Workbook, b: &Workbook, what: &str) -> Option<String> {
             // A file caches the Python errors as #VALUE! (they aren't error codes of the file
             // format), in a Python cell and in the formulas that read one; reading it back runs
             // nothing.
-            let python_error = matches!(va, Value::Error(CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked))
-                && vb == Value::Error(CellError::Value);
-            if !same_value(&va, &vb) && !python_error {
+            let python_error =
+                matches!(va, Value::Error(CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked | CellError::Connect))
+                    && vb == Value::Error(CellError::Value);
+            // So does a result of a Python cell that shows #SPILL! or #CALC! (blocked, or empty): a
+            // formula shows them again when it recalculates, and a reloaded Python cell runs nothing.
+            let python_result = has_python && matches!(va, Value::Error(CellError::Spill | CellError::Calc)) && vb == Value::Error(CellError::Value);
+            if !same_value(&va, &vb) && !python_error && !python_result {
                 let f = x.cell(c).and_then(|c| c.formula.as_ref()).map(|f| format!(" (formula ={})", f.text)).unwrap_or_default();
                 return Some(format!("{}!{c}{f}: {va:?} in memory, {vb:?} after {what}", x.name));
             }
@@ -470,6 +541,10 @@ fn roundtrip_diff(wb: &Workbook) -> Result<(), String> {
     let names = |wb: &Workbook| wb.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
     if names(wb) != names(&back) {
         return Err(format!("sheets {:?} reload as {:?}", names(wb), names(&back)));
+    }
+    let init = |wb: &Workbook| wb.python_env.as_ref().map(|e| (e.code.clone(), e.user_modified));
+    if init(wb) != init(&back) {
+        return Err(format!("initialization code {:?} reloads as {:?}", init(wb), init(&back)));
     }
     for (x, y) in wb.sheets.iter().zip(&back.sheets) {
         let formulas = |s: &Sheet| s.cells.iter().filter_map(|(c, cell)| Some((c, normalized_formula(cell.formula.as_ref()?)))).collect::<Vec<_>>();
@@ -794,10 +869,28 @@ const CURATED: &[(&str, usize)] = &[
     ("edit.replace", 1),
     ("python.set", 3),
     ("python.output", 2),
+    ("python.clear", 1),
 ];
 
-fn generate(rng: &mut Rng, s: &Session) -> Step {
+fn generate(rng: &mut Rng, s: &Session, python: bool) -> Step {
     let wb = wb_of(s);
+    if python && rng.chance(35) {
+        let id = *rng.pick(&[
+            "python.set",
+            "python.set",
+            "python.set",
+            "python.output",
+            "python.clear",
+            "python.displayOverCells",
+            "python.createReference",
+            "python.run",
+            "python.runAll",
+            "python.reset",
+            "python.stop",
+            "python.initialization",
+        ]);
+        return (id.to_string(), python_params(rng, wb, id));
+    }
     if rng.chance(82) {
         let total: usize = CURATED.iter().map(|(_, w)| w).sum();
         let mut roll = rng.below(total);
@@ -808,9 +901,72 @@ fn generate(rng: &mut Rng, s: &Session) -> Step {
             roll -= w;
         }
     }
-    let specs: Vec<_> = command_specs().iter().filter(|c| !EXCLUDED.iter().any(|(x, _)| *x == c.id)).collect();
+    // Where Python doesn't run, these only say so; leaving them out keeps each seed's sequence.
+    let specs: Vec<_> =
+        command_specs().iter().filter(|c| !EXCLUDED.iter().any(|(x, _)| *x == c.id) && (python || !PYTHON_RUNS.contains(&c.id))).collect();
     let spec = specs[rng.below(specs.len())];
     (spec.id.to_string(), doc_params(rng, wb, spec.params))
+}
+
+/// A Python command's params, with what the ones that run cells take.
+fn python_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
+    match id {
+        "python.run" => json!({"cell": near_cell(rng).a1()}),
+        "python.runAll" | "python.reset" | "python.stop" => json!({}),
+        "python.displayOverCells" => json!({"cell": near_cell(rng).a1(), "at": near_cell(rng).a1()}),
+        // An id that may be a linked picture's, or may be no picture at all.
+        "python.createReference" => json!({"id": rng.below(8)}),
+        // Code that works, code that fails, no code, and asking what it is.
+        "python.initialization" => match rng.below(5) {
+            0 => json!({}),
+            1 => json!({"code": ""}),
+            2 => json!({"code": "\"not valid"}),
+            3 => json!({"code": "a = 1\nb = 2"}),
+            _ => json!({"code": "x".repeat(rng.int(1, 100) as usize)}),
+        },
+        other => curated_params(rng, wb, other),
+    }
+}
+
+/// The fake worker's answer: it follows the code alone, without what its references spell (moving
+/// cells rewrites those and runs nothing), so that a cell that reads other Python cells settles and
+/// the same code always gives the same result, as the undo checks need.
+fn fake_answer(code: &str, inputs: &BTreeMap<String, Input>) -> Result<Output, PyError> {
+    if code.starts_with("[[") {
+        let data = vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()];
+        return Ok(Output::Value(Array::new(2, 2, data).map_or(Value::Empty, Value::from)));
+    }
+    if code.starts_with('"') {
+        return Err(PyError { message: "SyntaxError: bad".into(), kind: Some("python.syntax".into()), ..PyError::default() });
+    }
+    if code.is_empty() {
+        return Ok(Output::Value(Value::Empty));
+    }
+    if code.chars().filter(|c| *c == '\n').count() == 2 {
+        return Ok(Output::object("dict", "{}"));
+    }
+    if code.chars().filter(|c| *c == '\n').count() == 1 {
+        return Ok(Output::Value(Value::text("one\ntwo\nthree")));
+    }
+    if code.chars().filter(|c| *c == '\n').count() == 4 {
+        // A real picture, since the files keep it: one blue pixel.
+        let mut bytes = Vec::new();
+        let drawn = image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 120, 200, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png);
+        return match (drawn, gridcraft_python::Picture::from_bytes(bytes, 1)) {
+            (Ok(()), Ok(mut picture)) => {
+                picture.floor = Some([1, 1]);
+                Ok(Output::picture(picture))
+            }
+            _ => Ok(Output::object("dict", "{}")),
+        };
+    }
+    if code.chars().filter(|c| *c == '\n').count() == 3 {
+        let table = Table { rows: 1, cols: 1, data: vec![Value::Number(1.0)], total_rows: 9, total_cols: 1, ..Table::default() };
+        return Ok(Output::Object { type_name: "DataFrame".into(), preview: "df".into(), size: vec![9, 1], table: Some(table), picture: None });
+    }
+    let spelled: usize = gridcraft_engine::model::python::xl_calls(code).iter().filter_map(|c| c.span.as_ref()).map(|s| s.len()).sum();
+    Ok(Output::Value(Value::Number((code.len().saturating_sub(spelled) + inputs.len()) as f64)))
 }
 
 fn curated_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
@@ -830,7 +986,11 @@ fn curated_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
         "python.set" => {
             // Code with xl() references (which follow structural edits), quotes and line breaks;
             // sometimes long enough to meet the formula limit.
-            let mut code = match rng.below(5) {
+            let mut code = match rng.below(8) {
+                // What `fake_answer` makes a text with line breaks of, and a table of.
+                5 => "s = 'text'\ns".to_string(),
+                6 => "a = 1\nb = 2\nc = 3\nframe".to_string(),
+                7 => "a = 1\nb = 2\nc = 3\nd = 4\nplot".to_string(),
                 0 => format!("xl(\"{}\") + 1", near_range(rng).a1()),
                 1 => format!("a = xl('{}')\nb = \"q\\\"uote\"\na", near_cell(rng).a1()),
                 2 => "[[1, 2], [3, 4]]".to_string(),
@@ -852,7 +1012,18 @@ fn curated_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
             if rng.chance(50) {
                 p["mode"] = json!(if rng.chance(50) { "object" } else { "value" });
             }
+            if rng.chance(30) {
+                p["lines"] = json!(if rng.chance(70) { "rows" } else { "cell" });
+            }
             p
+        }
+        // Mostly the cells python.set writes to; sometimes the active cell.
+        "python.clear" => {
+            if rng.chance(20) {
+                json!({})
+            } else {
+                json!({"cell": near_cell(rng).a1()})
+            }
         }
         "range.fill" => json!({"range": near_range(rng).a1(), "input": input(rng, wb)}),
         "selection.set" => {
@@ -1131,7 +1302,7 @@ fn params_docs_parse_into_keys() {
 #[test]
 fn view_mode_switch_is_not_an_undo_difference() {
     for id in ["view.pageBreakPreview", "view.pageLayout"] {
-        let failure = replay("sales", &[(id.to_string(), json!({"sheet": 0}))]);
+        let failure = replay("sales", &[(id.to_string(), json!({"sheet": 0}))], false);
         assert!(failure.is_none(), "`{id}`: {failure:?}");
     }
 }

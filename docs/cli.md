@@ -32,6 +32,8 @@ cargo install --path apps/gridcraft-cli     # or: cargo run -p gridcraft-cli -- 
 | `functions [--json] [--search X] [--category C]` | `gridcraft-cli functions --search lookup` |
 | `mcp [--connect PORT] [--in FILE \| --sample NAME]` | MCP server on stdio ([mcp.md](mcp.md)). |
 | `send <port> <method> [json]` | `gridcraft-cli send 7979 engine.execute '{"command":"home.bold","params":{"range":"A1:C1"}}'` — one control-channel request to a running app (`gridcraft --control 7979`). |
+| `sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]` | `gridcraft-cli sandbox-check`: whether this system confines programs (see below) |
+| `python-check [--python PATH] [--code CODE]...` | `gridcraft-cli python-check --code '1 + 1'`: which Python cells would use here and what it can do (see below) |
 | `version` | Prints `gridcraft-cli <version>`. |
 
 ## `run`
@@ -58,6 +60,36 @@ gridcraft-cli run --in book.xlsx \
 ```
 
 Command ids and parameters: `gridcraft-cli commands`.
+
+## `python-check`
+
+```text
+gridcraft-cli python-check [--python PATH] [--code CODE]...
+```
+
+Which Python cells would use on this machine, and what it can do. It prints whether the system has a
+sandbox, where uv is, the interpreter found (uv's environments and Pythons first, or `--python`),
+what runs, the package folders, what the sandbox lets it read, and the packages it can import, as
+listed from inside the sandbox. Each `--code` runs through the same worker and sandbox as a Python
+cell, in one shared set of variables, and prints its result. The code comes from this command line,
+never from a workbook: the CLI doesn't run Python cells. When no Python is found it prints the uv
+commands that set one up. Exit status: 0 when Python started and all the code ran, 1 otherwise, 2
+when GridCraft has no sandbox for this kind of system.
+
+## `sandbox-check`
+
+```text
+gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
+```
+
+Whether this system confines programs ([sandbox.md](sandbox.md)). Without a program it starts a
+confined copy of itself that tries what the sandbox must deny and prints one line per attempt
+(`denied: …`, `allowed: …`, `works: …`, `broken: …`). With a program it runs that program confined,
+with the given read and executable paths and the system's shared libraries, and passes its output
+through untouched; its own lines then go to standard error. `--read`, `--exec` and the program
+are absolute paths. Exit status: 0 when every attempt is as required (or the program succeeded), 1 otherwise,
+2 when GridCraft has no sandbox for this kind of system (a launch refused on a supported system,
+such as a Linux kernel without Landlock, is 1).
 
 ## `check`
 

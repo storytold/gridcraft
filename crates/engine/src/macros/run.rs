@@ -1051,6 +1051,8 @@ struct Saved {
     unlocked_ranges: Vec<(String, String)>,
     trust: Trust,
     go_to_recent: Vec<String>,
+    held_link: Option<crate::cmd::object_clipboard::HeldLink>,
+    object_clipboard: Option<crate::cmd::object_clipboard::ObjectClipboard>,
     clipboard: Option<crate::Clipboard>,
     prefs: crate::Prefs,
     mode: crate::Mode,
@@ -1081,6 +1083,8 @@ impl Saved {
             unlocked_ranges: d.map(|d| d.unlocked_ranges.clone()).unwrap_or_default(),
             trust: d.map_or(Trust::Local, |d| d.trust),
             go_to_recent: d.map(|d| d.go_to_recent.clone()).unwrap_or_default(),
+            held_link: d.and_then(|d| d.held_link.clone()),
+            object_clipboard: s.object_clipboard.clone(),
             clipboard: s.clipboard.clone(),
             prefs: s.prefs.clone(),
             mode: s.mode,
@@ -1112,9 +1116,11 @@ impl Saved {
             d.unlocked_ranges = self.unlocked_ranges;
             d.trust = self.trust;
             d.go_to_recent = self.go_to_recent;
+            d.held_link = self.held_link;
         }
         s.active = self.active.min(s.docs.len().saturating_sub(1));
         s.clipboard = self.clipboard;
+        s.object_clipboard = self.object_clipboard;
         s.prefs = self.prefs;
         s.mode = self.mode;
         s.truncate_journal(self.journal);

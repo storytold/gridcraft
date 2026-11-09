@@ -1,0 +1,17 @@
+[package]
+name = "gridcraft-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft Python cells: interpreter detection, the worker shim, its JSON-lines protocol and the client that drives it"
+
+[lints]
+workspace = true
+
+[dependencies]
+gridcraft-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+gridcraft-sandbox = { workspace = true }

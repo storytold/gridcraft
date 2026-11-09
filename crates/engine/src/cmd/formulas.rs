@@ -927,7 +927,10 @@ fn calc_now(s: &mut Session, _: &Json) -> Result<Json> {
     let mut wb = (*d.wb).clone();
     d.calc.recalc_all(&mut wb);
     d.wb = std::sync::Arc::new(wb);
-    Ok(json!({"cells": d.calc.last_recalc_cells}))
+    let cells = d.calc.last_recalc_cells;
+    // Under manual calculation this is also how waiting Python cells run.
+    s.python_calculate_now();
+    Ok(json!({"cells": cells}))
 }
 
 fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {

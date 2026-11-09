@@ -59,6 +59,8 @@ fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
     let html = if p.get("html").and_then(Json::as_bool) == Some(true) { crate::io::range_html(&wb, sheet, range, &text) } else { None };
     let clip = Clipboard { wb, sheet, range, cut, doc_uid: d.uid, text: text.clone(), areas, selected, trust: d.trust };
     s.clipboard = Some(clip);
+    // One clipboard: this copy is the newer one, also where no host clipboard says so.
+    s.forget_object_clipboard();
     let mut result = json!({"range": range.a1(), "text": text});
     if let Some(html) = html {
         result["html"] = Json::String(html);

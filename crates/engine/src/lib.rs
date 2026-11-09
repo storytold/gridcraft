@@ -20,6 +20,7 @@ pub mod outline;
 pub mod paper;
 pub mod pivot;
 pub mod pivot_calc;
+pub mod python;
 pub mod recent;
 pub mod record;
 pub mod sample;
@@ -35,6 +36,7 @@ use gridcraft_model::Workbook;
 use serde::Serialize;
 use serde_json::Value as Json;
 
+pub use cmd::object_clipboard::OTHER_WORKBOOK;
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command, register_test_command};
 pub use gridcraft_calc as calc;
 pub use gridcraft_core as core;
@@ -42,6 +44,10 @@ pub use gridcraft_formula as formula;
 pub use gridcraft_math as math;
 pub use gridcraft_model as model;
 pub use gridcraft_numfmt as numfmt;
+pub use python::{
+    FoundPython, PythonCalculation, PythonCapability, PythonDiagnosticEntry, PythonEnvironment, PythonRun, PythonRunning, PythonSearch, PythonState,
+    python_order, search_pythons,
+};
 pub use selection::Selection;
 pub use windows::{Target, TargetGuard, WindowState, WindowView};
 
@@ -224,6 +230,8 @@ pub struct DocState {
     /// The references `edit.goTo` with `record: true` went to in this document, newest first,
     /// without names, each area written with its sheet (`Sheet1!B14:C22,Sheet1!F19:G30`).
     pub go_to_recent: Vec<String>,
+    /// The link of the picture copied from this workbook.
+    pub(crate) held_link: Option<cmd::object_clipboard::HeldLink>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -330,6 +338,7 @@ impl DocState {
             touched: None,
             edits: None,
             go_to_recent: vec![],
+            held_link: None,
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -470,6 +479,8 @@ pub struct Session {
     /// Window activation counter (most recently used order).
     activation: u64,
     pub clipboard: Option<Clipboard>,
+    /// The floating object last copied or cut, which only its own workbook can paste.
+    pub object_clipboard: Option<cmd::object_clipboard::ObjectClipboard>,
     pub prefs: Prefs,
     pub mode: Mode,
     /// Commands run so far, without their passwords ([`cmd::journal_params`]).
@@ -531,11 +542,21 @@ pub struct Session {
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
+    /// Python cells: what the app allows, and each open workbook's worker and cells ([`python`]).
+    pub(crate) python: python::Runtime,
 }
 
 impl Session {
     pub fn new() -> Session {
         Session::default()
+    }
+    /// Drops the floating object on the object clipboard: a copy of cells replaces it, and so does
+    /// anything newer on the system clipboard.
+    pub fn forget_object_clipboard(&mut self) {
+        self.object_clipboard = None;
+        for d in &mut self.docs {
+            d.held_link = None;
+        }
     }
     pub fn documents(&self) -> &[DocState] {
         &self.docs
@@ -593,6 +614,8 @@ impl Session {
     pub fn close_document(&mut self, i: usize) {
         if i < self.docs.len() {
             let d = self.docs.remove(i);
+            // Its worker stops with it, whatever it was running.
+            self.python.forget(d.uid);
             self.groups.retain(|g| g.doc != d.uid);
             // A macro being debugged in this workbook ends with it; its group just went.
             if self.macro_debug.as_ref().is_some_and(|m| m.doc == d.uid) {
@@ -772,6 +795,7 @@ impl Session {
                     macros::debug::recover(self);
                     self.trim_history();
                     self.group_step = None;
+                    self.python_after_command();
                 }
                 return Err(EngineError::Internal(id.to_string(), msg));
             }
@@ -815,6 +839,15 @@ impl Session {
                 self.push_journal(id, cmd::journal_params(&params));
                 recent::note(&mut self.prefs.recent_functions, id, &params);
             }
+        }
+        // A linked picture goes with its source, in the command that removed the source, so that
+        // command's undo step brings both back.
+        if spec.undoable
+            && result.is_ok()
+            && let Some(uid) = doc_uid
+            && let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid)
+        {
+            python::links::prune(d);
         }
         // Inside an undo group the group owns the step. A command that ended a group open before
         // it leaves the group its step and makes one of its own for what it changed after the end.
@@ -880,6 +913,7 @@ impl Session {
         if self.depth == 0 {
             self.trim_history();
             self.group_step = None;
+            self.python_after_command();
         } else if let Some(uid) = doc_uid {
             self.bound_tail(uid);
         }

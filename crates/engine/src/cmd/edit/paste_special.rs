@@ -387,6 +387,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let passive =
         matches!(what, What::ColumnWidths | What::Comments) || (!link && matches!(what, What::Formats | What::Values | What::ValuesAndNumberFormats));
     if !same_doc && !passive {
+        s.python_note_pasted(&clip);
         let d = s.doc_mut()?;
         d.trust = d.trust.receive(clip.trust);
     }
@@ -596,15 +597,22 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
 }
 
 /// Runs `f` over every reference a floating object holds (a chart's series values, categories,
-/// name and bubble sizes, and the source block it was made from, and a form control's linked
-/// cell). Every edit that moves
+/// name and bubble sizes, and the source block it was made from, a form control's linked cell, and
+/// the Python cell a linked picture shows). Every edit that moves
 /// references calls it: inserting and deleting lines and cells and cut-moves (through
 /// [`rewrite_all_formulas`]), and renaming and deleting sheets. `f` maps a reference held by an
 /// object on the sheet named `host` to its new form; text that does not parse is kept. A source
 /// block that no longer exists is dropped.
 pub(crate) fn rewrite_cell_links(wb: &mut gridcraft_model::Workbook, f: impl Fn(&str, gridcraft_formula::Expr) -> gridcraft_formula::Expr) {
     for si in 0..wb.sheets.len() {
-        let Some(host) = wb.sheets.get(si).filter(|s| !s.charts.is_empty() || !s.controls.is_empty()).map(|s| s.name.clone()) else { continue };
+        let Some(host) = wb
+            .sheets
+            .get(si)
+            .filter(|s| !s.charts.is_empty() || !s.controls.is_empty() || s.images.iter().any(|i| i.python_source.is_some()))
+            .map(|s| s.name.clone())
+        else {
+            continue;
+        };
         let Some(sh) = wb.sheet_mut(si) else { continue };
         let fix = |text: &str| -> String {
             match gridcraft_formula::parse(text) {
@@ -624,6 +632,16 @@ pub(crate) fn rewrite_cell_links(wb: &mut gridcraft_model::Workbook, f: impl Fn(
         for c in sh.controls.iter_mut() {
             c.link = c.link.as_deref().map(fix);
         }
+        // One that no longer names a cell goes with its source: see `crate::python::links::prune`.
+        for i in sh.images.iter_mut() {
+            i.python_source = i.python_source.as_deref().map(fix);
+        }
+    }
+    // The picture on the object clipboard isn't on a sheet, and its reference names its own sheet.
+    if let Some((_, text)) = wb.held_link.as_mut()
+        && let Ok(expr) = gridcraft_formula::parse(text)
+    {
+        *text = gridcraft_formula::print(&f("\u{0}", expr));
     }
 }
 
