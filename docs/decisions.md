@@ -135,7 +135,10 @@ LaTeX subset:
   access. Indexing is not counted; the fuzz run covers it.
 - **Fuzzing.** 70,000 random token strings and 50,000 mutations of valid equations: no panic,
   no input slower than 5 ms. Self-referencing and exponential macros stop at the parser's
-  1,000-expansion limit. Nesting deeper than 32 is refused ("Recursion limit exceeded"), and
+  1,000-expansion limit, which counts expansions and not their size: a definition whose
+  argument doubles on every call never reaches it. The wrapper therefore refuses macro
+  definitions (`\def`, `\newcommand`, `\let` and the like) before RaTeX sees the source, and
+  caps the padded size of matrices at 2,500 cells. Nesting deeper than 32 is refused ("Recursion limit exceeded"), and
   the deepest accepted input needs under 256 KB of stack in a release build, well inside the
   smallest main-thread stack we run on (1 MB on Windows). Absurd sizes (`\rule{1e308em}{1em}`)
   lay out with huge dimensions, so the wrapper caps them.
