@@ -56,7 +56,7 @@ fn a_startup_file_opens_on_the_first_frame_with_rows_fit_by_the_grids_fonts() {
     assert_eq!(d.wb.sheets[0].value(gridcraft_engine::core::CellRef::new(2, 0)).display(), "Short.", "the file opened");
     // Its rows are the ones the grid's own measure gives, not the estimate's.
     let measure = app.session.text_width.clone().expect("the grid's measure is installed");
-    let bytes = std::fs::read(&path).unwrap();
+    let bytes = std::fs::read(path).unwrap();
     let (expected, _) = gridcraft_engine::io::open_bytes_measured("book.xlsx", &bytes, None, false, Some(&measure)).unwrap();
     for row in 0..3 {
         assert_eq!(d.wb.sheets[0].row_height(row), expected.sheets[0].row_height(row), "row {}", row + 1);
