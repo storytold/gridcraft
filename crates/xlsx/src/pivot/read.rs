@@ -1,6 +1,6 @@
 use super::{
-    CellRef, Ctx, DateSystem, El, HashMap, IoError, MAX_FIELDS, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout,
-    PivotShowAs, PivotSort, PivotTable, PivotValue, RangeRef, abs_range, func_caption, func_from, number_to_text, quote_sheet, same,
+    CellRef, Ctx, DateSystem, EXT_FILTER_ORDER, El, HashMap, IoError, MAX_FIELDS, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc,
+    PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, RangeRef, abs_range, func_caption, func_from, number_to_text, quote_sheet, same,
 };
 
 // ================================================================ reading
@@ -321,6 +321,50 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         if pt.values_on_rows { rows_values.or_else(|| x.attr_u32("dataPosition").map(|p| p as usize)).filter(|p| *p < pt.rows.len()) } else { None };
     filters.extend(page_filters);
     filters.extend(axis_filters);
+    // Native page and axis lists lose their interleaving. Apply the optional GridCraft order
+    // only if it accounts for every native filter exactly once; malformed metadata falls back.
+    if let Some(order) = x
+        .child("extLst")
+        .into_iter()
+        .flat_map(|list| list.kids("ext"))
+        .find(|ext| ext.attr("uri") == Some(EXT_FILTER_ORDER))
+        .and_then(|ext| ext.child("filterOrder"))
+    {
+        // An all-selected axis filter has no hidden native items, so recover it only when
+        // our metadata names an actual axis field. Bound extension entries by native fields.
+        let limit = filters.len().saturating_add(pt.rows.len()).saturating_add(pt.columns.len()).min(MAX_FIELDS);
+        let entries: Vec<&El> = order.kids("field").take(limit.saturating_add(1)).collect();
+        let mut candidate = filters.clone();
+        for entry in &entries {
+            let Some(name) = entry.attr("name") else { continue };
+            if !entry.flag("allSelected", false) || candidate.iter().any(|filter| same(&filter.source_col, name)) {
+                continue;
+            }
+            if pt.rows.iter().chain(pt.columns.iter()).any(|field| same(&field.source_col, name))
+                && let Some(field) = cache.fields.iter().find(|field| same(&field.name, name))
+            {
+                let labels = field.labels().to_vec();
+                if !labels.is_empty() {
+                    candidate.push(PivotFilter { source_col: name.to_string(), selected: Some(labels) });
+                }
+            }
+        }
+        let names: Vec<Option<&str>> = entries.iter().map(|field| field.attr("name")).collect();
+        if names.len() == candidate.len() && names.iter().all(Option::is_some) {
+            let mut remaining = candidate;
+            let mut ordered = Vec::with_capacity(remaining.len());
+            for name in names {
+                if let Some(pos) = remaining.iter().position(|filter| same(&filter.source_col, name.unwrap_or_default())) {
+                    ordered.push(remaining.remove(pos));
+                } else {
+                    break;
+                }
+            }
+            if remaining.is_empty() {
+                filters = ordered;
+            }
+        }
+    }
     pt.filters = filters;
 
     // Values.

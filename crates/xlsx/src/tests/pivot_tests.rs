@@ -235,6 +235,40 @@ fn pivots_round_trip() {
 }
 
 #[test]
+fn pivot_filter_order_round_trips_across_axis_and_page_fields() {
+    let mut wb = workbook();
+    let filters = [
+        PivotFilter { source_col: "Region".into(), selected: Some(vec!["East".into()]) },
+        PivotFilter { source_col: "Channel".into(), selected: Some(vec!["Online".into()]) },
+        PivotFilter { source_col: "Product".into(), selected: Some(vec!["A".into()]) },
+    ];
+    for order in [[0, 1, 2], [2, 0, 1], [1, 2, 0]] {
+        let expected: Vec<PivotFilter> = order.iter().map(|&i| filters[i].clone()).collect();
+        wb.sheet_mut(1).unwrap().pivots[0].filters = expected.clone();
+        let bytes = write_xlsx(&wb).unwrap();
+        let table = xml::parse(unzip(&bytes).get("xl/pivotTables/pivotTable1.xml").unwrap()).unwrap();
+        assert_eq!(table.children.last().map(|child| child.name.as_str()), Some("extLst"));
+        let (reopened, _) = read_xlsx(&bytes).unwrap();
+        assert_eq!(reopened.sheet(1).unwrap().pivots[0].filters, expected);
+        let (reopened_again, _) = read_xlsx(&write_xlsx(&reopened).unwrap()).unwrap();
+        assert_eq!(reopened_again.sheet(1).unwrap().pivots[0].filters, expected);
+    }
+}
+
+#[test]
+fn pivot_filter_order_keeps_explicit_all_items_axis_selection() {
+    let mut wb = workbook();
+    let expected = vec![
+        PivotFilter { source_col: "Product".into(), selected: Some(vec!["A".into(), "B".into(), "C".into()]) },
+        PivotFilter { source_col: "Region".into(), selected: Some(vec!["East".into()]) },
+        PivotFilter { source_col: "Channel".into(), selected: Some(vec!["Online".into()]) },
+    ];
+    wb.sheet_mut(1).unwrap().pivots[0].filters = expected.clone();
+    let (reopened, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(reopened.sheet(1).unwrap().pivots[0].filters, expected);
+}
+
+#[test]
 fn pivot_package_structure() {
     let parts = unzip(&write_xlsx(&workbook()).unwrap());
     assert_pivot_content_types(&parts);
@@ -503,6 +537,14 @@ fn with_pivot(table: &str, cache: Option<&str>) -> Vec<u8> {
 const GOOD_CACHE: &str = r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:B3"/></cacheSource><cacheFields count="2"><cacheField name="K"><sharedItems><s v="x"/><n v="2"/><m/><b v="1"/><d v="2024-01-01T00:00:00"/></sharedItems></cacheField><cacheField name="V"><sharedItems/><fieldGroup base="0"><rangePr startNum="0" endNum="10" groupInterval="5"/><groupItems><s v="0-4"/></groupItems></fieldGroup></cacheField></cacheFields></pivotCacheDefinition>"#;
 
 #[test]
+fn pivot_filter_order_ignores_stale_extension() {
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D1:F5"/><pivotFields><pivotField axis="axisRow"><items><item x="0" h="1"/><item x="1"/></items></pivotField><pivotField axis="axisPage"/></pivotFields><rowFields><field x="0"/></rowFields><pageFields><pageField fld="1"/></pageFields><extLst><ext uri="{9189856B-82B7-4F3C-895E-34A918DB704C}"><filterOrder><field name="K"/><field name="Missing"/></filterOrder></ext></extLst></pivotTableDefinition>"#;
+    let (wb, _) = read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap();
+    let filters = &wb.sheet(0).unwrap().pivots[0].filters;
+    assert_eq!(filters.iter().map(|f| f.source_col.as_str()).collect::<Vec<_>>(), vec!["V", "K"]);
+}
+
+#[test]
 fn hostile_pivot_parts_warn_not_panic() {
     let tables = [
         "garbage <<<",
@@ -759,4 +801,31 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     let t = &one["xl/pivotTables/pivotTable1.xml"];
     assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
     assert!(!t.contains("hideValuesRow"), "{t}");
+}
+
+/// #553 and #1447: the two optional PivotTable features share one definition-level extLst.
+#[test]
+fn filter_order_and_hidden_values_row_share_one_extension_list() {
+    let cols = [
+        ("Region", vec![Value::text("East"), Value::text("West")]),
+        ("Channel", vec![Value::text("Online"), Value::text("Store")]),
+        ("Sales", vec![Value::number(10.0), Value::number(20.0)]),
+        ("Qty", vec![Value::number(1.0), Value::number(2.0)]),
+    ];
+    let parts = small_pivot(&cols, |p| {
+        p.rows = vec![field("Region")];
+        p.values = ["Sales", "Qty"].into_iter().map(|source_col| PivotValue { source_col: source_col.into(), ..PivotValue::default() }).collect();
+        p.filters = ["Region", "Channel"]
+            .into_iter()
+            .map(|source_col| PivotFilter { source_col: source_col.into(), selected: Some(vec!["East".into()]) })
+            .collect();
+    });
+    assert!(parts["xl/pivotTables/pivotTable1.xml"].contains("https://getartcraft.com/ns/gridcraft/pivot-filter-order/1"));
+    let table = xml::parse(parts["xl/pivotTables/pivotTable1.xml"].as_bytes()).unwrap();
+    let lists: Vec<_> = table.kids("extLst").collect();
+    assert_eq!(lists.len(), 1);
+    let extensions: Vec<_> = lists[0].kids("ext").collect();
+    assert_eq!(extensions.len(), 2);
+    assert!(extensions.iter().any(|ext| ext.child("pivotTableDefinition").is_some()));
+    assert!(extensions.iter().any(|ext| ext.child("filterOrder").is_some()));
 }

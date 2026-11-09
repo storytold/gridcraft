@@ -719,11 +719,30 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
         let _ = write!(s, " name=\"{}\"", esc_attr(&pt.style));
     }
     s.push_str(" showRowHeaders=\"1\" showColHeaders=\"1\" showRowStripes=\"0\" showColStripes=\"0\" showLastColumn=\"1\"/>");
-    if hide_values_row {
-        let _ = write!(
-            s,
-            "<extLst><ext uri=\"{EXT_X14_PIVOT_TABLE}\" xmlns:x14=\"{NS_X14}\"><x14:pivotTableDefinition hideValuesRow=\"1\"/></ext></extLst>"
-        );
+    if hide_values_row || pt.filters.len() > 1 {
+        // A PivotTable definition has one extLst. Keep both the standard x14 values-row
+        // extension and our optional filter-order extension inside that same list.
+        s.push_str("<extLst>");
+        if hide_values_row {
+            let _ = write!(s, "<ext uri=\"{EXT_X14_PIVOT_TABLE}\" xmlns:x14=\"{NS_X14}\"><x14:pivotTableDefinition hideValuesRow=\"1\"/></ext>");
+        }
+        if pt.filters.len() > 1 {
+            let _ = write!(s, "<ext uri=\"{EXT_FILTER_ORDER}\" xmlns:gc=\"{NS_FILTER_ORDER}\"><gc:filterOrder>");
+            for filter in &pt.filters {
+                let all_selected = pt.rows.iter().chain(pt.columns.iter()).any(|field| same(&field.source_col, &filter.source_col))
+                    && c.fields.iter().find(|field| same(&field.name, &filter.source_col)).is_some_and(|field| {
+                        let labels = field.item_labels();
+                        filter.selected.as_ref().is_some_and(|selected| {
+                            !labels.is_empty()
+                                && selected.len() == labels.len()
+                                && labels.iter().all(|label| selected.iter().any(|item| same(item, label)))
+                        })
+                    });
+                let _ = write!(s, "<gc:field name=\"{}\"{} />", esc_attr(&filter.source_col), if all_selected { " allSelected=\"1\"" } else { "" });
+            }
+            s.push_str("</gc:filterOrder></ext>");
+        }
+        s.push_str("</extLst>");
     }
     s.push_str("</pivotTableDefinition>");
     s
