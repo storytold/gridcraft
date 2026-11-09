@@ -14,6 +14,7 @@ const NS: &str = "http://schemas.openxmlformats.org/";
 const WIDTHS: [f64; 8] = [1.0, 2.5, 5.0, 8.43, 10.0, 13.7, 20.0, 30.0];
 const CASES: [(&str, u16); 4] = [("Calibri", 11), ("Calibri", 12), ("Calibri", 14), ("Arial", 16)];
 
+/// Compute the PNG chunk CRC for contributor-generated picture bytes.
 fn crc(bytes: &[u8]) -> u32 {
     let mut c = u32::MAX;
     for b in bytes {
@@ -25,6 +26,7 @@ fn crc(bytes: &[u8]) -> u32 {
     !c
 }
 
+/// Append one PNG chunk with its length, type, payload and CRC.
 fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&(data.len() as u32).to_be_bytes());
     out.extend_from_slice(kind);
@@ -53,6 +55,7 @@ fn picture() -> Vec<u8> {
     png
 }
 
+/// Build original fixed-size picture markup for the named metrics control.
 fn pic(id: u32, name: &str) -> String {
     format!(
         "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{id}\" name=\"{name}\"/><xdr:cNvPicPr/></xdr:nvPicPr>\
@@ -62,6 +65,7 @@ fn pic(id: u32, name: &str) -> String {
     )
 }
 
+/// Generate the synthetic XLSX package for one default-font and column-width control.
 fn original(font: &str, size: u16) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
@@ -111,6 +115,7 @@ fn original(font: &str, size: u16) -> Result<Vec<u8>, Box<dyn std::error::Error>
     Ok(zip.finish()?.into_inner())
 }
 
+/// Write the eight font and worksheet-layout comparison fixtures to the requested output directory.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arg = std::env::args().nth(1).unwrap_or_else(|| "plan/excel/column-metrics".to_string());
     let dir = Path::new(&arg);
