@@ -43,7 +43,10 @@ impl Histogram {
             bucket.fetch_add(1, Ordering::Relaxed);
         }
         self.count.fetch_add(1, Ordering::Relaxed);
-        let _ = self.sum_micros.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |sum| Some(sum.saturating_add(micros)));
+        // `fetch_update` is `try_update` since Rust 1.99. The closure always returns `Some`, so
+        // an `Err` (the sum left as it was) cannot happen; the check keeps that explicit.
+        let updated = self.sum_micros.try_update(Ordering::Relaxed, Ordering::Relaxed, |sum| Some(sum.saturating_add(micros)));
+        debug_assert!(updated.is_ok(), "the sum_micros closure always returns Some");
     }
 
     pub fn count(&self) -> u64 {
