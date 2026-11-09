@@ -24,6 +24,7 @@ mod pt;
 mod ro;
 mod ru;
 mod sr;
+mod sv;
 mod tr;
 mod uk;
 mod vi;
@@ -53,10 +54,11 @@ pub enum Language {
     Vi,
     Nl,
     Ro,
+    Sv,
 }
 
 impl Language {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::En,
         Self::Es,
         Self::El,
@@ -75,6 +77,7 @@ impl Language {
         Self::Vi,
         Self::Nl,
         Self::Ro,
+        Self::Sv,
         Self::Tr,
     ];
 
@@ -109,6 +112,7 @@ impl Language {
             Self::Vi => "Tiếng Việt",
             Self::Nl => "Nederlands",
             Self::Ro => "Română",
+            Self::Sv => "Svenska",
         }
     }
 
@@ -134,6 +138,7 @@ impl Language {
             Self::Vi => "vi",
             Self::Nl => "nl",
             Self::Ro => "ro",
+            Self::Sv => "sv",
         }
     }
 
@@ -168,6 +173,7 @@ impl Language {
             "vi" => Some(Self::Vi),
             "nl" => Some(Self::Nl),
             "ro" => Some(Self::Ro),
+            "sv" => Some(Self::Sv),
             _ => None,
         }
     }
@@ -214,6 +220,7 @@ impl Language {
             Self::Vi => vi::translate(text),
             Self::Nl => nl::translate(text),
             Self::Ro => ro::translate(text),
+            Self::Sv => sv::translate(text),
         };
         translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
@@ -474,6 +481,9 @@ mod tests {
         assert_eq!(Language::from_tag("ro-RO"), Some(Language::Ro));
         assert_eq!(Language::from_tag("ro_MD.UTF-8"), Some(Language::Ro));
         assert_eq!(Language::parse("ro"), Some(Language::Ro));
+        assert_eq!(Language::from_tag("sv-SE"), Some(Language::Sv));
+        assert_eq!(Language::from_tag("sv_SE.UTF-8"), Some(Language::Sv));
+        assert_eq!(Language::parse("sv"), Some(Language::Sv));
     }
     #[test]
     fn an_unset_language_preference_is_english_until_the_app_applies_the_system_one() {
