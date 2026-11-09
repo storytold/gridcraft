@@ -22,7 +22,7 @@ the manifest and the measurements.
 - **The weights never ship.** They are far too large for the repository and for release
   packages. The repository holds only the manifest: id, revision, file paths, byte sizes,
   SHA-256, licence and source URL. `gridcraft-ink` (L1, wasm-clean) owns the manifest and the
-  directory rules; `gridcraft-ink-rten` (L6, native) is the only crate that reads a model file.
+  directory rules; `gridcraft-ink-rten` (L6, native) is the only crate that parses a model file for inference (other crates read model files for SHA-256 verification and import/download checks, but never parse them).
 - **Two install paths, both user-initiated.** The model panel downloads the files over HTTPS
   after an explicit click (streamed to a temporary file, size and SHA-256 checked, then renamed
   into place), or the person copies the files into the model directory and uses Import… (or

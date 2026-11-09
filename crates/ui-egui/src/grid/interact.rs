@@ -303,6 +303,15 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
             return true;
         }
     }
+    // A pen/actionPen drag released outside the cells never re-enters the block above, so its
+    // `drag_stopped` would leave stale stroke points for the next stroke to append to (and a
+    // stale start time and cell). Drop the pending stroke instead of committing it.
+    if resp.drag_stopped() && matches!(app.session.draw_tool.as_str(), "pen" | "actionPen") {
+        app.grid.ink.clear();
+        app.grid.ink_started = None;
+        app.grid.ink_cell = None;
+        return true;
+    }
     false
 }
 
