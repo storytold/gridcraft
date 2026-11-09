@@ -85,7 +85,7 @@ pub fn slicer_items(wb: &Workbook, sheet: usize, sl: &Slicer) -> Vec<(String, bo
         .collect()
 }
 
-/// Writes the slicer's current selection into the sheet filter and re-applies it.
+/// Re-applies slicer `id`'s selected filter values to its target table's sheet autofilter.
 fn reapply_slicer(wb: &mut Workbook, sheet: usize, id: u32) {
     let info = wb.sheet(sheet).and_then(|sh| {
         let sl = sh.slicers.iter().find(|s| s.id == id)?;
@@ -111,6 +111,7 @@ fn reapply_slicer(wb: &mut Workbook, sheet: usize, id: u32) {
     super::data::apply_filter(wb, target_sheet);
 }
 
+/// Inserts a slicer for a table column on the active sheet or the named table's sheet.
 fn insert_slicer(s: &mut Session, p: &Json) -> Result<Json> {
     // A table named by `table` is found on any sheet, as the other table commands find it, and the slicer goes on that
     // table's sheet. Looked up on the active sheet only, a named table on another sheet gave "Select a cell inside a
@@ -230,6 +231,7 @@ fn slicer_select_all(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Deletes a slicer and clears its column filter criterion from the target table's sheet.
 fn slicer_delete(s: &mut Session, p: &Json) -> Result<Json> {
     let (idx, id) = find_slicer(s, p)?;
     let sheet = s.doc()?.wb.active_sheet();
@@ -269,6 +271,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    /// Verifies that a slicer placed on another sheet filters and clears the target table's sheet.
     fn cross_sheet_slicer_filters_and_clears_target_table_sheet() {
         let mut s = Session::new();
         s.new_workbook();

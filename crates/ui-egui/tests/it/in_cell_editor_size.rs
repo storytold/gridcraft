@@ -87,6 +87,7 @@ fn one_long_line_widens_the_editor_but_keeps_the_row_height() {
 }
 
 #[test]
+/// Verifies that pressing Ctrl+B while editing in-cell toggles bold on the cell without closing the editor.
 fn ctrl_b_while_editing_in_cell_toggles_bold_and_keeps_editor_open() {
     let mut h = harness();
     click_cell(&mut h, "B2");

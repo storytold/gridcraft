@@ -855,6 +855,7 @@ fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
     }
 }
 
+/// Reads worksheet-level `slicer` parts and stores their `(cache, caption, columnCount)` definitions on `cx`.
 fn read_sheet_slicer_defs(cx: &mut Ctx<'_>, rels: &[crate::package::Rel]) -> Result<(), IoError> {
     cx.sheet_slicer_defs.clear();
     cx.sheet_slicer_frames.clear();
@@ -873,6 +874,7 @@ fn read_sheet_slicer_defs(cx: &mut Ctx<'_>, rels: &[crate::package::Rel]) -> Res
     Ok(())
 }
 
+/// Records a table's numeric `id`, name, and `tableColumn` id-to-name map on `cx` for `x15:tableSlicerCache` resolution.
 fn record_file_table(cx: &mut Ctx<'_>, x: &El, t: &gridcraft_model::Table) {
     if t.id == 0 {
         return;

@@ -78,6 +78,7 @@ pub fn minimal(sheet_body: &str, extra_parts: &[(&str, &str)], wb_extra_rels: &s
 }
 
 #[test]
+/// Verifies that a cross-sheet `.xlsx` table slicer (`x15:tableSlicerCache`) imports cleanly without skipped-object warnings.
 fn cross_sheet_table_slicer_imports_without_skipped_object_warning() {
     let wb_xml = r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Dashboard" sheetId="1" r:id="rId1"/><sheet name="Tracker" sheetId="2" r:id="rId2"/></sheets></workbook>"#;
     let wb_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.microsoft.com/office/2007/relationships/slicerCache" Target="slicerCaches/slicerCache1.xml"/></Relationships>"#;

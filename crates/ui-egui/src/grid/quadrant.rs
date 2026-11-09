@@ -524,6 +524,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     paint_text_decorations(&cp, TextDecoration { x, y, width: w, height: gh, color, underline: st.font.underline, strike: st.font.strike });
 }
 
+/// Paints an upright cell galley, adding a slight horizontal overstrike pass only when `font.bold` has no dedicated bold font face.
 fn paint_upright_galley(
     cp: &Painter,
     pos: Pos2,

@@ -557,6 +557,7 @@ pub fn parse_print_titles(text: &str) -> (TitleSpan, TitleSpan) {
     (rows, cols)
 }
 
+/// Reads workbook-level `slicerCache` parts and records their table/column mappings on `cx`.
 fn read_slicer_caches(cx: &mut Ctx<'_>, wb_rels: &[crate::package::Rel]) -> Result<(), IoError> {
     for r in wb_rels.iter().filter(|r| r.kind.eq_ignore_ascii_case("slicerCache")).cloned().collect::<Vec<_>>() {
         if let Some(x) = cx.optional_xml(&r.target)?
@@ -572,19 +573,23 @@ fn read_slicer_caches(cx: &mut Ctx<'_>, wb_rels: &[crate::package::Rel]) -> Resu
     Ok(())
 }
 
+/// Matches drawing slicer graphicFrames on `sheet_idx` to worksheet slicer definitions and queues them for attachment.
 fn collect_sheet_slicers(cx: &mut Ctx<'_>, sheet_idx: usize) {
-    for (sname, anchor) in std::mem::take(&mut cx.sheet_slicer_frames) {
+    let frames = std::mem::take(&mut cx.sheet_slicer_frames);
+    let single_frame = frames.len() == 1;
+    for (sname, anchor) in frames {
         let def = cx
             .sheet_slicer_defs
             .get(&sname)
             .cloned()
-            .or_else(|| (cx.sheet_slicer_defs.len() == 1).then(|| cx.sheet_slicer_defs.values().next().cloned()).flatten());
+            .or_else(|| (single_frame && cx.sheet_slicer_defs.len() == 1).then(|| cx.sheet_slicer_defs.values().next().cloned()).flatten());
         if let Some((cache_name, caption, columns)) = def {
             cx.pending_slicers.push((sheet_idx, cache_name, caption, anchor, columns));
         }
     }
 }
 
+/// Resolves queued slicers against loaded tables and attaches them to their target sheets.
 fn attach_pending_slicers(cx: &mut Ctx<'_>, wb: &mut Workbook) {
     for (sheet_idx, cache_name, caption, anchor, columns) in std::mem::take(&mut cx.pending_slicers) {
         let Some((table_id, col_id, source_name)) = cx.slicer_caches.get(&cache_name).cloned() else { continue };

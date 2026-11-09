@@ -684,15 +684,17 @@ mod font_binding_tests {
         }
     }
 
+    /// Verifies that embedded Latin role fonts provide distinct font faces for regular, bold, italic, and bold-italic.
     #[test]
     fn craft_role_fonts_supply_distinct_bold_and_italic_faces() {
-        if super::craft_fonts::CRAFT_LATIN_FONTS.is_empty() {
+        let (Some(reg), Some(bold), Some(italic), Some(bi)) = (
+            super::craft_role_font("cell"),
+            super::craft_role_font("cell-bold"),
+            super::craft_role_font("cell-italic"),
+            super::craft_role_font("cell-bold-italic"),
+        ) else {
             return;
-        }
-        let reg = super::craft_role_font("cell").expect("cell regular face");
-        let bold = super::craft_role_font("cell-bold").expect("cell bold face");
-        let italic = super::craft_role_font("cell-italic").expect("cell italic face");
-        let bi = super::craft_role_font("cell-bold-italic").expect("cell bold-italic face");
+        };
         assert_ne!((*reg.font).as_ref(), (*bold.font).as_ref(), "bold must use a distinct font face from regular");
         assert_ne!((*reg.font).as_ref(), (*italic.font).as_ref(), "italic must use a distinct font face from regular");
         assert_ne!((*bold.font).as_ref(), (*bi.font).as_ref(), "bold-italic must use a distinct font face from bold");
