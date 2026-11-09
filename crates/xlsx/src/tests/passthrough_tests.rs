@@ -1031,4 +1031,7 @@ fn pivot_caches_children_keeps_wrapper_namespace_bindings() {
         children.contains("xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""),
         "each child must carry its wrapper's binding: {children}"
     );
+    // The binding goes before the self-closing `/`: `<a/>` must not become `<a/ xmlns:b="…">`.
+    assert!(!children.contains("/ xmlns:"), "no binding lands after the self-closing slash: {children}");
+    assert!(crate::xml::parse(format!("<pivotCaches>{children}</pivotCaches>").as_bytes()).is_ok(), "the merged children parse: {children}");
 }

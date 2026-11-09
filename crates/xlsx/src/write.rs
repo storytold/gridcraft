@@ -315,10 +315,13 @@ fn scope_with_bindings(bindings: &[&&str], body: &str) -> String {
                 scoped.push_str(rest.get(..=tag_end).unwrap_or(""));
             } else {
                 let joined = missing.iter().map(|binding| binding.to_string()).collect::<Vec<_>>().join(" ");
-                scoped.push_str(rest.get(..tag_end).unwrap_or(""));
+                // A self-closing opener ends in `/>`: the bindings go before the `/`, or `<a/>`
+                // becomes the malformed `<a/ xmlns:b="…">`.
+                let insert_at = if self_closed { tag_end.saturating_sub(1) } else { tag_end };
+                scoped.push_str(rest.get(..insert_at).unwrap_or(""));
                 scoped.push(' ');
                 scoped.push_str(&joined);
-                scoped.push_str(rest.get(tag_end..=tag_end).unwrap_or(""));
+                scoped.push_str(rest.get(insert_at..=tag_end).unwrap_or(""));
             }
         } else {
             scoped.push_str(rest.get(..=tag_end).unwrap_or(""));
