@@ -195,9 +195,11 @@ fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
     assert!(h.state().backstage.is_none());
 }
 
+/// File › Options headings and the Sheet Options "View" checkboxes show each catalog's label without
+/// its `context|` prefix.
 #[test]
 fn translated_options_headings_show_no_context_prefix() {
-    for language in [Language::Fr, Language::Sr, Language::Nl, Language::Ro] {
+    for language in [Language::Fr, Language::Sr, Language::Nl, Language::Ro, Language::Lv] {
         let mut h = harness(Services::default());
         h.state_mut().run("app.language.set", serde_json::json!({"language": language.code()})).unwrap();
         h.state_mut().run("file.options", serde_json::json!({})).unwrap();
