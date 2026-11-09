@@ -183,12 +183,7 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
         Ok(Json::Null)
     })?;
     let v = s.doc()?.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
-    // The recorder replays the stored value, not the typed text: a formula (`=…`) and
-    // formula-like typed text (`+SUM(1)`, `+123`, `'=1+1`) replay parsed, so the script keeps
-    // the value the cell read; anything else replays verbatim. The decision is made here,
-    // where typed input ran, so the recorder only carries it.
-    let parse = is_formula_input(&input) || is_signed_number_text(&input) || input.starts_with('\'');
-    Ok(json!({"cell": at.a1(), "value": v.display(), "parse": parse}))
+    Ok(json!({"cell": at.a1(), "value": v.display()}))
 }
 
 pub(crate) fn json_to_input(v: &Json) -> String {

@@ -925,7 +925,7 @@ fn the_recorder_keeps_top_level_calls_with_where_they_ran() {
     assert_eq!((first.doc, first.sheet), (d.uid, d.wb.active_sheet()));
     assert_eq!(first.sheet_name, d.wb.active().unwrap().name);
     assert_eq!(first.selection.a1(), "B2:C3", "the selection before the command ran");
-    assert_eq!(first.params, json!({"cell": "B2", "input": "10", "parse": false}));
+    assert_eq!(first.params, json!({"cell": "B2", "input": "10"}));
     assert_eq!(s.depth(), 0);
     let rec = s.stop_recording().unwrap();
     assert_eq!(rec.dropped, 0);

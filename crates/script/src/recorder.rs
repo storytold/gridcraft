@@ -114,13 +114,13 @@ fn step_call(step: &JournalStep) -> Option<(BridgeCall, String)> {
         "cell.set" => {
             let cell = p.get("cell").and_then(Json::as_str)?;
             let value = p.get("input")?;
-            // The literal is the recorded value as-is; the engine resolves what the cell stored
-            // and records whether the replay parses (the journal's `parse`, decided where typed
-            // input ran), so the script replays the stored value either way.
+            // The literal is what the engine resolved the cell to store: `record()` already
+            // substituted the stored value for the typed text, like a range write's values. The
+            // replay stores it verbatim (`parse: false`), because the shim drops `parse`.
             let literal = js_literal(value)?;
             let mut call = range_call("Range.setValue", step, cell, "value", value.clone());
             if let Json::Object(map) = &mut call.params {
-                map.insert("parse".into(), Json::Bool(p.get("parse").and_then(Json::as_bool).unwrap_or(true)));
+                map.insert("parse".into(), Json::Bool(false));
             }
             Some((call, format!("{}.setValue({literal});", target(step, cell))))
         }
@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(r.calls.len(), 4);
         assert_eq!(r.calls[3].method, "Range.setValues");
         assert_eq!(r.calls[0].params["value"], json!(42));
-        assert_eq!(r.calls[0].params["parse"], json!(true), "typed input is replayed as typed");
+        assert_eq!(r.calls[0].params["parse"], json!(false), "the stored value replays verbatim");
         assert_eq!(r.calls[3].params["parse"], json!(true), "a range write parses as the command did");
         assert_eq!(r.calls[1].params["value"], json!("Sales"));
         assert!(r.skipped.is_empty());
@@ -470,20 +470,19 @@ mod tests {
     }
 
     #[test]
-    fn typed_inputs_keep_their_reading_in_literal_form() {
-        // The journal carries whether the typed input was parsed, decided in the command where
-        // typed input ran: a parsed value (`42`) replays parsed, verbatim text (`Sales`) replays
-        // as-is, so the script keeps what the cell stored either way.
-        let r = record(&[step("cell.set", json!({"cell": "A1", "input": "42", "parse": true}))]);
-        assert!(r.code.contains("setValue(\"42\");"), "{}", r.code);
-        assert_eq!(r.calls[0].params["value"], json!("42"));
-        assert_eq!(r.calls[0].params["parse"], json!(true));
-        let verbatim = record(&[step("cell.set", json!({"cell": "B1", "input": "Sales", "parse": false}))]);
-        assert!(verbatim.code.contains("setValue(\"Sales\");"), "{}", verbatim.code);
-        assert_eq!(verbatim.calls[0].params["parse"], json!(false));
-        // An old entry without the flag replays parsed, as before.
-        let legacy = record(&[step("cell.set", json!({"cell": "C1", "input": "42"}))]);
-        assert_eq!(legacy.calls[0].params["parse"], json!(true));
+    fn cell_writes_keep_the_stored_value_verbatim() {
+        // `record()` substitutes what the cell stored (a number stays a number, formula-like
+        // text keeps its marker); the recorder emits that literal verbatim, because the shim
+        // drops `parse`.
+        let number = record(&[step("cell.set", json!({"cell": "A1", "input": 42}))]);
+        assert!(number.code.contains("setValue(42);"), "{}", number.code);
+        assert_eq!(number.calls[0].params["parse"], json!(false));
+        // Formula-like text the cell kept as text carries its marker; a literal leading
+        // apostrophe is itself text, so the engine doubles it when substituting the stored
+        // value, and the recorder emits that verbatim.
+        let text = record(&[step("cell.set", json!({"cell": "B1", "input": "''=1+1"}))]);
+        assert!(text.code.contains("setValue(\"''=1+1\");"), "{}", text.code);
+        assert_eq!(text.calls[0].params["parse"], json!(false));
     }
 
     #[test]

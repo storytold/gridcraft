@@ -946,8 +946,9 @@ fn range_set(s: &mut Session, method: &str, params: &Json) -> Result<Json, Bridg
             if !values.is_array() {
                 return Err(BridgeError::invalid_argument("setValues takes rows of values"));
             }
-            // `parse` keeps typed input typed: a recorded `cell.set` replays "42" as the number the
-            // person typed, while a verbatim `setValues` write stays text.
+            // The saved script carries stored values verbatim (`parse: false`): `record()`
+            // substitutes what the cell stored, like a range write's values, because the shim
+            // drops `parse`.
             let parse = params.get("parse").and_then(Json::as_bool).unwrap_or(false);
             command(s, "range.setValues", json!({"sheet": sheet, "range": range, "values": values, "parse": parse}))?;
         }
