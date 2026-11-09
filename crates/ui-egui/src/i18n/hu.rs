@@ -169,7 +169,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Calculate Now" => "Számítás most",
         "Calculate Sheet" => "Munkalap számítása",
         "Automatic" => "Automatikus",
-        "Automatic Except for Data Tables" => "Automatikus, kivéve az adattabla",
+        "Automatic Except for Data Tables" => "Automatikus, kivéve az adattábla",
         "Manual" => "Kézi",
         "Sort &\nFilter" => "Rendezés és\nszűrés",
         "Sort" => "Rendezés",
