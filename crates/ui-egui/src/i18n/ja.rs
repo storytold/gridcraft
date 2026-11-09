@@ -1172,6 +1172,11 @@ pub(super) const EXTRA: &[(&str, &str)] = &[
     ("Office Scripts", "Office スクリプト"),
     ("Office\nScripts", "Office\nスクリプト"),
     ("Record", "記録"),
+    ("One undo step per run.", "実行ごとに 1 つの元に戻すステップ。"),
+    (
+        "A failed run or timeout rolls back workbook changes, not external ones.",
+        "失敗した実行やタイムアウトは、外部ではなくブックの変更をロールバックします。",
+    ),
     ("Scripts", "スクリプト"),
     ("Run Script", "スクリプトの実行"),
     ("Record Script", "スクリプトの記録"),

@@ -722,8 +722,8 @@ impl Session {
                     None => match Self::whole_number(crate::cmd::inspect::value_json(&sheet.value(at))) {
                         // Text the replay would read as a formula goes back with the apostrophe
                         // that marks it text; a stored leading apostrophe is itself text, so it
-                        // is kept verbatim (the replay strips one only before formula-like
-                        // text). Both are one coherent encoding, decoded in `range_set_values`.
+                        // goes back doubled (the replay strips one). One encoding, decoded in
+                        // `range_set_values`.
                         Json::String(text) if crate::cmd::edit::is_formula_input(&text) => Json::String(format!("'{text}")),
                         Json::String(text) if crate::cmd::edit::is_signed_number_text(&text) => Json::String(format!("'{text}")),
                         Json::String(text) if text.starts_with('\'') => Json::String(format!("'{text}")),

@@ -348,7 +348,8 @@ fn recorded_cell_value(s: &mut Session, params: &Json) -> Option<Json> {
             _ => Json::Number(n),
         },
         // Text a verbatim replay would read as a formula goes back with the apostrophe that
-        // marks it text; a stored leading apostrophe is itself text, so it is kept verbatim.
+        // marks it text; a stored leading apostrophe is itself text, so it goes back doubled
+        // (the replay strips one).
         Json::String(text) if crate::cmd::edit::is_formula_input(&text) => Json::String(format!("'{text}")),
         Json::String(text) if crate::cmd::edit::is_signed_number_text(&text) => Json::String(format!("'{text}")),
         Json::String(text) if text.starts_with('\'') => Json::String(format!("'{text}")),

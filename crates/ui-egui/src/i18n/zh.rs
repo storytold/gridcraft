@@ -483,6 +483,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
 脚本"
         }
         "Record" => "录制",
+        "One undo step per run." => "每次运行一个撤消步骤。",
+        "A failed run or timeout rolls back workbook changes, not external ones." => "运行失败或超时会回滚工作簿更改，而非外部更改。",
         "Scripts" => "脚本",
         "Run Script" => "运行脚本",
         "Record Script" => "录制脚本",

@@ -1028,6 +1028,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
 do Office"
         }
         "Record" => "Gravar",
+        "One undo step per run." => "Uma anulação por execução.",
+        "A failed run or timeout rolls back workbook changes, not external ones." => {
+            "Uma execução falhada ou expirada reverte as alterações do livro, não as externas."
+        }
         "Scripts" => "Scripts",
         "Run Script" => "Executar script",
         "Record Script" => "Gravar script",

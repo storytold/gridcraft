@@ -562,6 +562,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
 scripts"
         }
         "Record" => "Opnemen",
+        "One undo step per run." => "Eén stap ongedaan maken per uitvoering.",
+        "A failed run or timeout rolls back workbook changes, not external ones." => {
+            "Een mislukte of getimede uitvoering draait werkmapwijzigingen terug, geen externe."
+        }
         "Scripts" => "Scripts",
         "Run Script" => "Script uitvoeren",
         "Record Script" => "Script opnemen",

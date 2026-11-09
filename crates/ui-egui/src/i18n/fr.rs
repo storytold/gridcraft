@@ -487,6 +487,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
 Office"
         }
         "Record" => "Enregistrer",
+        "One undo step per run." => "Une annulation par exécution.",
+        "A failed run or timeout rolls back workbook changes, not external ones." => {
+            "Une exécution échouée ou expirée annule les modifications du classeur, pas les effets externes."
+        }
         "Scripts" => "Scripts",
         "Run Script" => "Exécuter le script",
         "Record Script" => "Enregistrer le script",

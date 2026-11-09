@@ -491,6 +491,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
 스크립트"
         }
         "Record" => "기록",
+        "One undo step per run." => "실행당 하나의 실행 취소 단계.",
+        "A failed run or timeout rolls back workbook changes, not external ones." => {
+            "실패한 실행이나 시간 초과는 외부 변경이 아닌 통합 문서 변경을 되돌립니다."
+        }
         "Scripts" => "스크립트",
         "Run Script" => "스크립트 실행",
         "Record Script" => "스크립트 기록",

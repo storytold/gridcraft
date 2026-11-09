@@ -270,8 +270,24 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                     // the text it is given, so the marker is never stripped there. A formula is
                     // still a formula, which is what `=` means in a cell.
                     Json::String(text) if !parse && !text.starts_with('=') => {
-                        let text =
-                            (!verbatim).then(|| text.strip_prefix('\'').filter(|rest| is_formula_input(rest))).flatten().unwrap_or(text.as_str());
+                        // One coherent encoding with the capture: a leading `'` before
+                        // formula-like or signed text is the marker that keeps it a text
+                        // (`'=1+1` → `=1+1`); a doubled `''` is a literal apostrophe, so one
+                        // comes back off (`''abc` → `'abc`). `setText`/`setTexts` (`verbatim`)
+                        // stores the text given, so the marker is never stripped there.
+                        let text = if verbatim {
+                            text.as_str()
+                        } else if text.starts_with("''") {
+                            // A doubled `''` is a literal apostrophe: strip one, keep the rest,
+                            // whatever it reads as (`''abc` → `'abc`).
+                            &text[1..]
+                        } else if let Some(rest) = text.strip_prefix('\'') {
+                            // Otherwise the marker strips only before formula-like or signed
+                            // text (`'=1+1` → `=1+1`); before anything else it is text itself.
+                            if is_formula_input(rest) || is_signed_number_text(rest) { rest } else { text.as_str() }
+                        } else {
+                            text.as_str()
+                        };
                         if text.is_empty() {
                             // An empty string clears the cell, as `null` and the default path do:
                             // an empty text cell is not blank, and a script clearing cells with

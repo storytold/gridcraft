@@ -527,6 +527,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
 de Office"
         }
         "Record" => "Grabar",
+        "One undo step per run." => "Un paso de deshacer por ejecución.",
+        "A failed run or timeout rolls back workbook changes, not external ones." => {
+            "Una ejecución fallida o agotada revierte los cambios del libro, no los externos."
+        }
         "Scripts" => "Scripts",
         "Run Script" => "Ejecutar script",
         "Record Script" => "Grabar script",

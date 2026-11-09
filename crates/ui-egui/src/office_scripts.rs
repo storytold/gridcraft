@@ -286,9 +286,13 @@ fn editor(app: &mut SheetApp, ui: &mut Ui, open: &mut bool) {
             *open = false;
         }
         ui.label(
-            RichText::new(lang.tr("Every script runs as one undo step; a failed run or timeout rolls back workbook changes, not external ones."))
-                .small()
-                .color(Tokens::get(ui.ctx()).text_dim),
+            RichText::new(format!(
+                "{} {}",
+                lang.tr("One undo step per run."),
+                lang.tr("A failed run or timeout rolls back workbook changes, not external ones.")
+            ))
+            .small()
+            .color(Tokens::get(ui.ctx()).text_dim),
         );
     });
 }

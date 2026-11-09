@@ -495,6 +495,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
 Office"
         }
         "Record" => "Запись",
+        "One undo step per run." => "Одна отмена на запуск.",
+        "A failed run or timeout rolls back workbook changes, not external ones." => {
+            "Неудачный запуск или тайм-аут откатывает изменения книги, а не внешние."
+        }
         "Scripts" => "Сценарии",
         "Run Script" => "Запустить сценарий",
         "Record Script" => "Записать сценарий",
