@@ -83,6 +83,8 @@ fn windows_and_mac_variants() {
     let mac_cmd = Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE };
     let ctrl = Modifiers::CTRL;
     let run = |id: &'static str| Some(Shortcut::Run(id, json!({})));
+    assert_eq!(lookup(Key::P, Some(Key::P), CTRL_SHIFT, false), Some(Shortcut::DatePicker));
+    assert_eq!(lookup(Key::P, Some(Key::P), Modifiers { shift: true, ..mac_cmd }, true), Some(Shortcut::DatePicker));
     assert_eq!(lookup(Key::L, Some(Key::L), cmd, false), run("insert.table"));
     assert_eq!(lookup(Key::L, Some(Key::L), mac_cmd, true), run("home.alignLeft"));
     assert_eq!(lookup(Key::E, Some(Key::E), mac_cmd, true), run("home.alignCenter"));
