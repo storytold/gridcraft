@@ -1682,6 +1682,48 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
 }
 
+/// A bar chart with three outer category levels on a narrow chart, in the default size, still draws
+/// its bars: the labels and levels share at most 60% of the width.
+#[test]
+fn three_outer_levels_leave_bars_room() {
+    let mut d = sample(ChartKind::BarClustered);
+    let level = |a: &str, b: &str| -> Vec<String> { vec![a.to_string(); 3].into_iter().chain(vec![b.to_string(); 3]).collect() };
+    d.category_levels = vec![
+        level("A long outer group", "Another outer group"),
+        level("Middle level one", "Middle level two"),
+        level("Top level name", "Top level other"),
+    ];
+    d.categories = (1..=6).map(|i| format!("A long category name {i}")).collect();
+    // Wide value labels: the right margin reaches its cap too.
+    for s in &mut d.series {
+        s.number_format = "#,##0.00\" units of something\"".into();
+    }
+    let colors: Vec<_> = d.series.iter().map(|s| s.color).collect();
+    let mut c = chart(ChartKind::BarClustered);
+    c.legend = LegendPos::None;
+    let p = render(&c, &d, 320.0, 300.0, &ApproxMeasure);
+    let bars = p.iter().filter(|p| matches!(p, Prim::Rect { fill: Some(f), w, h, .. } if colors.contains(f) && *w > 0.5 && *h > 0.5)).count();
+    assert!(bars >= d.series.len() * 2, "{bars} bars drawn");
+}
+
+/// The cap on axis and legend sizes never shrinks the default size, even on a small chart.
+#[test]
+fn the_default_label_size_is_kept_on_small_charts() {
+    let d = sample(ChartKind::ColumnClustered);
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.legend = LegendPos::Bottom;
+    let p = render(&c, &d, 160.0, 90.0, &ApproxMeasure);
+    let sizes: Vec<f32> = p
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Text { size, rotation, .. } if *rotation == 0.0 => Some(*size),
+            _ => None,
+        })
+        .collect();
+    assert!(!sizes.is_empty());
+    assert!(sizes.iter().all(|s| *s >= 9.0 - 1e-3), "{sizes:?}");
+}
+
 /// Axis labels in a huge size (the file allows up to 400 pt) still leave the plot its room, with
 /// outer category levels too: every series is drawn, on column and bar charts.
 #[test]

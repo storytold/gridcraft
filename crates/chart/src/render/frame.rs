@@ -103,8 +103,8 @@ impl ValAxis<'_> {
 /// Draws gridlines, axis labels and the category axis line; returns the plot rectangle.
 pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis>, horizontal: bool, grid: bool) -> Bx {
     // A row of axis labels takes at most 15% of the height, so a huge size from the file still
-    // leaves the plot room, outer category levels included.
-    let fit = |l: Look| Look { size: l.size.min((area.h * 0.15 / 1.4).max(1.0)), ..l };
+    // leaves the plot room, outer category levels included. The default size is never reduced.
+    let fit = |l: Look| Look { size: l.size.min((area.h * 0.15 / 1.4).max(LABEL_SIZE)), ..l };
     let (vl, cl) = (fit(Look::of(ctx.text.value_axis, LABEL_SIZE)), fit(Look::of(ctx.text.category_axis, LABEL_SIZE)));
     let ls = vl.size.max(cl.size);
     let lh = ls * 1.4;
@@ -199,8 +199,15 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
         };
         let lw = (labels.iter().take(2000).map(|t| ctx.look_tw(t, cl)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.35);
         // Outer levels stand in columns left of the labels, each as wide as its longest name.
-        let level_w: Vec<f32> =
+        let mut level_w: Vec<f32> =
             outer.iter().map(|l| (l.iter().take(2000).map(|t| ctx.look_tw(t, cl)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.15)).collect();
+        // The labels and their outer levels share at most 60% of the width, so the bars keep room
+        // even with three levels on a narrow chart; the levels narrow to fit.
+        let room = (area.w * 0.6 - lw).max(0.0);
+        let wanted: f32 = level_w.iter().sum();
+        if wanted > room {
+            level_w.iter_mut().for_each(|w| *w *= room / wanted);
+        }
         let levels_w: f32 = level_w.iter().sum();
         let right = ylabels.last().map(|(_, t)| ctx.look_tw(t, vl) / 2.0).unwrap_or(0.0).min(area.w * 0.2) + 2.0;
         let left = (lw + levels_w).max(stub);
