@@ -1068,6 +1068,11 @@ impl Dialog {
                 d.result = app.session.run("review.checkAccessibility", json!({})).ok();
                 d
             }
+            "checkPerformance" => {
+                let mut d = Dialog::custom("checkPerformance", "Workbook Performance", json!({}));
+                d.result = Some(app.session.run("review.checkPerformance", json!({})).unwrap_or_else(|e| json!({"error": crate::clean_error(&e)})));
+                d
+            }
             "errorChecking" => {
                 let mut d = Dialog::custom("errorChecking", "Error Checking", json!({}));
                 d.result = app.session.run("formulas.errorChecking", json!({})).ok();

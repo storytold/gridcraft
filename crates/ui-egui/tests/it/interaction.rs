@@ -699,6 +699,148 @@ fn select_data_dialog_sets_the_category_axis_labels() {
 }
 
 #[test]
+fn check_performance_dialog_reports_optimizable_cells_and_goes_to_one() {
+    let mut s = blank();
+    s.execute("home.bold", json!({"range": "B2"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().ui.ribbon_tab = "Review".into();
+    h.run_steps(2);
+    h.state_mut().open_dialog("checkPerformance", json!({}));
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().expect("the Workbook Performance pane opens");
+    assert_eq!(d.title, "Workbook Performance");
+    let report = d.result.as_ref().unwrap();
+    assert_eq!((report["usedCells"].as_u64(), report["optimizableCells"].as_u64()), (Some(1), Some(1)));
+    assert_eq!(report["cells"][0]["cell"], "B2");
+    assert!(h.query_by_label("1 cells used · 1 can be optimized").is_some());
+    h.get_by_label("Go To").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.active().unwrap().selection.active, CellRef::new(1, 1));
+    assert!(h.state().dialog.is_some(), "Go To keeps the pane open, as Excel does");
+}
+
+#[test]
+/// A pane belongs to the window it was opened in: switching to another workbook's window leaves
+/// it there, reporting and optimizing its own workbook, never the one in front.
+fn check_performance_stays_with_its_workbook_window() {
+    let mut s = blank();
+    s.execute("home.bold", json!({"range": "B2"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("checkPerformance", json!({}));
+    h.run_steps(2);
+    assert!(h.query_by_label("1 cells used · 1 can be optimized").is_some());
+
+    h.state_mut().run("file.new", json!({})).unwrap();
+    h.state_mut().run("home.bold", json!({"range": "C3"})).unwrap();
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "another window starts without the pane");
+
+    h.state_mut().run("window.activate", json!({"index": 0})).unwrap();
+    h.run_steps(2);
+    let report = h.state().dialog.as_ref().expect("the pane stayed in its window").result.clone().unwrap();
+    assert_eq!(report["cells"][0]["cell"], "B2", "the report describes its own workbook");
+    assert_eq!(report["optimizableCells"].as_u64(), Some(1));
+
+    h.get_by_label("Optimize all").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.documents().len(), 2);
+    let bold = |h: &mut egui_kittest::Harness<'static, SheetApp>, doc: usize, cell: &str| {
+        h.state_mut().run("window.activate", json!({"index": doc})).unwrap();
+        h.state_mut().run("cell.get", json!({"cell": cell})).unwrap()["style"]["font"]["bold"].clone()
+    };
+    assert_eq!(bold(&mut h, 0, "B2"), json!(false), "the workbook the pane belongs to was optimized");
+    assert_eq!(bold(&mut h, 1, "C3"), json!(true), "the other workbook keeps its formatting");
+}
+
+#[test]
+fn check_performance_dialog_says_when_there_is_nothing_to_fix() {
+    let mut h = harness(blank());
+    h.state_mut().open_dialog("checkPerformance", json!({}));
+    h.run_steps(2);
+    assert!(h.query_by_label("0 cells used · 0 can be optimized").is_some());
+    assert!(h.query_by_label("No performance issues found.").is_some());
+}
+
+#[test]
+fn check_performance_dialog_labels_come_from_the_translation_catalog() {
+    let mut s = blank();
+    s.execute("home.bold", json!({"range": "B2"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().run("app.language.set", json!({"language": "pt"})).unwrap();
+    h.state_mut().open_dialog("checkPerformance", json!({}));
+    h.run_steps(2);
+    assert!(h.query_by_label("1 células usadas · 1 podem ser otimizadas").is_some(), "the counts are translated");
+    assert!(h.query_by_label("Otimizar tudo").is_some());
+    assert!(h.query_by_label("Otimizar planilha").is_some());
+    assert!(h.query_by_label("Células a otimizar").is_some());
+    assert!(h.query_by_label("Ir para").is_some());
+    assert!(
+        h.query_by_label("Otimizar também limpa a formatação definida em células vazias, como preenchimentos, bordas e formatos de número.")
+            .is_some(),
+        "the warning about deliberate formatting is translated"
+    );
+    h.get_by_label("Otimizar tudo").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Nenhum problema de desempenho encontrado.").is_some());
+}
+
+#[test]
+fn check_performance_optimize_all_clears_unused_formatting_and_refreshes() {
+    let mut s = blank();
+    s.execute("home.bold", json!({"range": "A1"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("checkPerformance", json!({}));
+    h.run_steps(2);
+    assert!(h.query_by_label("1 cells used · 1 can be optimized").is_some());
+    assert!(h.query_by_label("Optimize sheet").is_some());
+    h.get_by_label("Optimize all").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("No performance issues found.").is_some());
+}
+
+#[test]
+fn check_performance_optimize_sheet_clears_only_that_sheet() {
+    let mut s = blank();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    for (sheet, cell) in [(0, "A1"), (1, "B2")] {
+        s.execute("home.bold", json!({"sheet": sheet, "range": cell, "on": true})).unwrap();
+    }
+    let mut h = harness(s);
+    h.state_mut().open_dialog("checkPerformance", json!({}));
+    h.run_steps(2);
+    assert_eq!(h.query_all_by_label("Optimize sheet").count(), 2);
+    h.get_all_by_label("Optimize sheet").next().expect("a sheet row").click();
+    h.run_steps(3);
+    let report = h.state().dialog.as_ref().unwrap().result.clone().unwrap();
+    assert_eq!(report["optimizableCells"], 1);
+    assert_eq!((report["sheets"][0]["optimizableCells"].as_u64(), report["sheets"][1]["optimizableCells"].as_u64()), (Some(0), Some(1)));
+}
+
+/// The pane keeps pointing at the sheet each row was drawn for when sheets move underneath it: a
+/// positional index would clear the formatting of whichever sheet took that place.
+#[test]
+fn check_performance_optimize_sheet_follows_its_sheet_when_sheets_move() {
+    let mut s = blank();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    for (sheet, cell) in [(0, "A1"), (1, "B2")] {
+        s.execute("home.bold", json!({"sheet": sheet, "range": cell, "on": true})).unwrap();
+    }
+    let mut h = harness(s);
+    h.state_mut().open_dialog("checkPerformance", json!({}));
+    h.run_steps(2);
+    // Sheet1 now sits at index 1, but the open pane still lists it first.
+    h.state_mut().session.execute("sheet.move", json!({"sheet": 0, "to": 1})).unwrap();
+    h.run_steps(2);
+    h.get_all_by_label("Optimize sheet").next().expect("the Sheet1 row").click();
+    h.run_steps(3);
+    let report = h.state().dialog.as_ref().unwrap().result.clone().unwrap();
+    let rows = report["sheets"].as_array().unwrap().clone();
+    let optimizable = |name: &str| rows.iter().find(|s| s["name"] == name).unwrap()["optimizableCells"].as_u64();
+    assert_eq!(optimizable("Sheet1"), Some(0), "the sheet the row was drawn for was optimized");
+    assert_eq!(optimizable("Two"), Some(1), "the sheet that took index 0 keeps its formatting");
+}
+
+#[test]
 /// Each listed dialog opens, passes accessibility and closes.
 fn dialogs_open_and_close() {
     let mut h = harness(blank());
