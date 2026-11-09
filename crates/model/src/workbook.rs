@@ -11,6 +11,13 @@ use crate::cell::Formula;
 use crate::sheet::Sheet;
 use crate::style::{StyleTable, Theme};
 
+/// Most equation source, in bytes, one [`Workbook::refresh_equations`] lays out: about 2,500
+/// typical equations, or a few seconds of the slowest 4 KB sources.
+pub const MAX_EQUATION_LAYOUT_BYTES: usize = 128 * 1024;
+
+/// Why an equation past [`MAX_EQUATION_LAYOUT_BYTES`] has no layout.
+pub const EQUATION_BUDGET_MESSAGE: &str = "This workbook has more equations than are laid out at once; edit this equation to lay it out.";
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CalcMode {
     #[default]
@@ -88,6 +95,10 @@ pub struct CalcSettings {
     pub max_change: f64,
     /// Use precision as displayed.
     pub precision_as_displayed: bool,
+    /// R1C1 reference style (`<calcPr refMode="R1C1"/>`): kept with the file and written back;
+    /// GridCraft itself shows and takes A1 references.
+    #[serde(default)]
+    pub r1c1: bool,
 }
 
 impl Default for CalcSettings {
@@ -98,6 +109,7 @@ impl Default for CalcSettings {
             max_iterations: Self::DEFAULT_ITERATIONS,
             max_change: Self::DEFAULT_CHANGE,
             precision_as_displayed: false,
+            r1c1: false,
         }
     }
 }
@@ -193,6 +205,12 @@ pub struct Workbook {
     pub calc: CalcSettings,
     #[serde(default, skip_serializing_if = "is_all")]
     pub show_objects: ShowObjects,
+    /// Trust Center › Privacy Options › "Remove personal information from file properties on save"
+    /// (`<workbookPr filterPrivacy="1"/>`): kept with the file, and while it is on the author and
+    /// company are left out of the XLSX files GridCraft writes, as Excel leaves them empty. Other
+    /// formats aren't filtered: the workbook's own serialization still holds them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remove_personal_info: bool,
     /// Read and set with [`Workbook::active_sheet`] and [`Workbook::set_active_sheet`].
     pub active_sheet: ActiveSheet,
     /// The workbook window's display settings (`<workbookView>`), kept across an open + save.
@@ -331,6 +349,7 @@ impl Workbook {
             date_system: DateSystem::D1900,
             calc: CalcSettings::default(),
             show_objects: ShowObjects::All,
+            remove_personal_info: false,
             active_sheet: ActiveSheet::default(),
             view: WorkbookView::default(),
             props: DocProps::default(),
@@ -463,26 +482,79 @@ impl Workbook {
         }
         None
     }
-    pub fn next_object_id(&self) -> u32 {
-        let mut m = 0;
-        for s in &self.sheets {
-            for c in &s.charts {
-                m = m.max(c.id);
-            }
-            for c in &s.images {
-                m = m.max(c.id);
-            }
-            for c in &s.shapes {
-                m = m.max(c.id);
-            }
-            for c in &s.tables {
-                m = m.max(c.id);
-            }
-            for c in &s.slicers {
-                m = m.max(c.id);
+    /// Rebuilds the cached layout of every equation whose source changed (or was never laid
+    /// out, as after loading a file). One call lays out at most [`MAX_EQUATION_LAYOUT_BYTES`] of
+    /// source: one equation can take a tenth of a second to lay out, so a file with thousands of
+    /// them would otherwise hold the app for minutes. Equations past the budget get an error
+    /// instead (they show their source; editing one lays it out).
+    pub fn refresh_equations(&mut self) {
+        let stale = |s: &crate::Shape| s.kind == crate::ShapeKind::Equation && s.math.get(&s.text).is_none();
+        let mut budget = MAX_EQUATION_LAYOUT_BYTES;
+        // Only sheets with a stale equation are copied (sheets are shared with undo snapshots).
+        for sh in self.sheets.iter_mut().filter(|sh| sh.shapes.iter().any(stale)) {
+            for s in Arc::make_mut(sh).shapes.iter_mut().filter(|s| stale(s)) {
+                // A source over the length cap never gets here: the cache answers for it without
+                // a lookup. An empty source still costs a call.
+                let cost = s.text.len().max(1);
+                if cost > budget {
+                    s.math.refuse(&s.text, EQUATION_BUDGET_MESSAGE);
+                    continue;
+                }
+                budget -= cost;
+                s.math.refresh(&s.text);
             }
         }
-        m + 1
+    }
+
+    /// A free id for a new chart, picture, shape, table, slicer or form control: one more than the largest in
+    /// use, or, when that is `u32::MAX` (a file can carry any id), the lowest free one.
+    pub fn next_object_id(&self) -> u32 {
+        self.free_object_ids(1).first().copied().unwrap_or(u32::MAX)
+    }
+
+    /// `count` distinct ids no object in the workbook uses, sorted: the ones above the largest id
+    /// in use while they last, then the lowest free ones. Fewer come back only when the id space
+    /// is exhausted.
+    pub fn free_object_ids(&self, count: usize) -> Vec<u32> {
+        let mut used: Vec<u32> = self
+            .sheets
+            .iter()
+            .flat_map(|s| {
+                s.charts
+                    .iter()
+                    .map(|o| o.id)
+                    .chain(s.images.iter().map(|o| o.id))
+                    .chain(s.shapes.iter().map(|o| o.id))
+                    .chain(s.tables.iter().map(|o| o.id))
+                    .chain(s.slicers.iter().map(|o| o.id))
+                    .chain(s.controls.iter().map(|o| o.id))
+            })
+            .collect();
+        used.sort_unstable();
+        used.dedup();
+        let max = used.last().copied().unwrap_or(0);
+        let mut out = Vec::with_capacity(count.min(1 << 16));
+        let mut next = max.checked_add(1);
+        while out.len() < count
+            && let Some(id) = next
+        {
+            out.push(id);
+            next = id.checked_add(1);
+        }
+        // Past the top: the gaps below the largest id, from 1 (0 is never an object's id).
+        let mut taken = used.iter().copied().peekable();
+        let mut id = 1u32;
+        while out.len() < count && id < max {
+            while taken.next_if(|&t| t < id).is_some() {}
+            if taken.peek() == Some(&id) {
+                taken.next();
+            } else {
+                out.push(id);
+            }
+            id += 1;
+        }
+        out.sort_unstable();
+        out
     }
 }
 
@@ -531,5 +603,71 @@ mod tests {
         assert!(wb.check_sheet_name("a/b", None).is_err());
         assert!(wb.check_sheet_name(&"x".repeat(32), None).is_err());
         assert!(wb.check_sheet_name("Budget 2026", None).is_ok());
+    }
+
+    #[test]
+    fn object_ids_never_overflow_or_repeat() {
+        let mut wb = Workbook::new();
+        let image = |id| crate::Image { id, anchor: Default::default(), data: Default::default(), mime: String::new(), alt: String::new() };
+        assert_eq!(wb.next_object_id(), 1);
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.images.push(image(7));
+        }
+        assert_eq!(wb.next_object_id(), 8);
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(crate::FormControl { id: 12, ..Default::default() });
+        }
+        assert_eq!(wb.next_object_id(), 13, "form controls take ids from the same sequence");
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.images.push(image(u32::MAX));
+        }
+        // An id read from a file at the maximum: the lowest free id, not the maximum again.
+        assert_eq!(wb.next_object_id(), 1);
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.images.push(image(1));
+            sh.images.push(image(3));
+        }
+        assert_eq!(wb.next_object_id(), 2);
+        assert_eq!(wb.free_object_ids(4), vec![2, 4, 5, 6], "the gaps, skipping 1, 3 and 7");
+        let mut wb = Workbook::new();
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.images.push(image(u32::MAX - 1));
+        }
+        assert_eq!(wb.free_object_ids(3), vec![1, 2, u32::MAX], "the top first, then from 1");
+    }
+
+    /// A form control's id is in use like any object's: the free ids skip it, also when it is the
+    /// largest id a file could carry.
+    #[test]
+    fn free_object_ids_skip_a_form_controls_id() {
+        let mut wb = Workbook::new();
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(crate::FormControl { id: 3, ..Default::default() });
+            sh.controls.push(crate::FormControl { id: u32::MAX, ..Default::default() });
+        }
+        assert_eq!(wb.free_object_ids(4), vec![1, 2, 4, 5], "3 and the largest id are taken");
+        assert_eq!(wb.next_object_id(), 1);
+    }
+
+    /// A file can use the largest id and the one below it: nothing is free above them, so the free
+    /// ids are the lowest unused ones from 1 (0 is never an object's id), and a large request is
+    /// served in time linear in the count and the ids in use.
+    #[test]
+    fn free_object_ids_come_from_below_when_nothing_is_free_above() {
+        let mut wb = Workbook::new();
+        let image = |id| crate::Image { id, anchor: Default::default(), data: Default::default(), mime: String::new(), alt: String::new() };
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.images.push(image(u32::MAX));
+            sh.images.push(image(u32::MAX - 1));
+            sh.images.push(image(0));
+        }
+        assert_eq!(wb.free_object_ids(3), vec![1, 2, 3]);
+        assert_eq!(wb.next_object_id(), 1);
+        // The 100,000 lowest free ids: distinct, ascending, none of them in use.
+        let many = wb.free_object_ids(100_000);
+        assert_eq!(many.len(), 100_000);
+        assert!(many.windows(2).all(|w| w[0] < w[1]), "ascending without repeats");
+        assert!(!many.contains(&0) && !many.contains(&(u32::MAX - 1)) && !many.contains(&u32::MAX));
+        assert_eq!(wb.free_object_ids(0), Vec::<u32>::new());
     }
 }

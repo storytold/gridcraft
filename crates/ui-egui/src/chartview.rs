@@ -1,10 +1,10 @@
 //! Floating objects on the sheet: charts (rendered by `gridcraft-chart` into primitives that
-//! we paint with egui), pictures and shapes.
+//! we paint with egui), pictures, shapes, equations, slicers and form controls (`form_controls.rs`).
 
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
-use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Workbook};
+use gridcraft_engine::model::{Anchor, ObjKind, ObjRef, ShapeKind, Sheet, Workbook};
 
 use crate::SheetApp;
 use crate::grid::Geo;
@@ -265,7 +265,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         return painted;
     }
     // Source outlines stay in cell space beneath every floating object.
-    if let Some(ch) = sh.charts.iter().find(|ch| app.selected_chart == Some(ch.id))
+    if let Some(ch) = sh.charts.iter().find(|ch| app.selected_chart() == Some(ch.id))
         && anchor_rect(geo, sh, &ch.anchor).intersects(p.clip_rect())
     {
         for s in &ch.series {
@@ -316,11 +316,12 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                 p.add(PathShape::convex_polygon(vec![pos2(r.center().x, r.top()), r.right_bottom(), r.left_bottom()], fill, Stroke::new(1.0, line)));
             }
             ShapeKind::Ink => {
-                let w = gridcraft_engine::cmd::draw::ink_width(sp) * geo.z;
+                let pt = gridcraft_engine::cmd::draw::ink_width(sp);
+                let w = pt * geo.z;
                 let pts: Vec<Pos2> =
                     gridcraft_engine::cmd::draw::ink_points(sp).iter().map(|q| pos2(r.left() + q[0] * geo.z, r.top() + q[1] * geo.z)).collect();
                 if pts.len() >= 2 {
-                    let col = if w > 8.0 { line.gamma_multiply(0.45) } else { line };
+                    let col = ink_color(line, pt);
                     p.add(PathShape::line(pts, PathStroke::new(w, col)));
                 }
                 label = false;
@@ -330,6 +331,10 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                     let t = Tokens::get(p.ctx());
                     crate::icons::paint_on_sheet(p, r, icon, if fill == Color32::TRANSPARENT { t.cell_text } else { fill });
                 }
+                label = false;
+            }
+            ShapeKind::Equation => {
+                crate::equation::paint_shape(p, r, sp, wb, geo.z);
                 label = false;
             }
             ShapeKind::Line | ShapeKind::Arrow => {
@@ -345,9 +350,6 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         if label && !sp.text.is_empty() && !app.editing_text_box(sp.id) {
             paint_shape_text(p, wb, sp, r, geo.z);
         }
-        if label && sp.kind == ShapeKind::TextBox && app.selected_chart == Some(sp.id) {
-            selection_frame(p, r);
-        }
         done(start, r);
     }
     for im in &sh.images {
@@ -360,9 +362,6 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         } else {
             p.rect_filled(r, 0.0, Tokens::get(p.ctx()).sheet_track);
-        }
-        if app.selected_chart == Some(im.id) {
-            selection_frame(p, r);
         }
         done(start, r);
     }
@@ -379,12 +378,30 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         let m = EguiMeasure { painter: p, z: geo.z };
         let prims = gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m);
         paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
-        if app.selected_chart == Some(ch.id) {
-            selection_frame(p, r);
-        }
         done(start, r);
     }
-    paint_slicers(app, p, geo, wb, si, sh);
+    paint_slicers(p, geo, wb, si, sh);
+    // Form controls sit above every other object.
+    let hover = p.ctx().input(|i| i.pointer.hover_pos()).map(|h| geo.mirror_pos(h)).filter(|h| geo.in_cells(*h));
+    for c in &sh.controls {
+        let r = anchor_rect(geo, sh, &c.anchor);
+        // A slider's value shows beside it while it is dragged.
+        if !r.expand(24.0).intersects(p.clip_rect()) {
+            continue;
+        }
+        let start = p.add(egui::Shape::Noop);
+        crate::form_controls::paint(p, r, c, geo.z, crate::form_controls::look(app, geo, c, r, hover));
+        done(start, r);
+    }
+    // The selected object's frame and handles go over every object, and move with it on a
+    // right-to-left sheet.
+    if let Some(r) = app.selected_object.and_then(|o| object_rect(geo, sh, o))
+        && r.intersects(p.clip_rect())
+    {
+        let start = p.add(egui::Shape::Noop);
+        selection_frame(p, r);
+        done(start, r);
+    }
     painted
 }
 
@@ -421,7 +438,7 @@ pub fn slicer_layout(rect: Rect, z: f32, n: usize, columns: u32) -> SlicerLayout
     SlicerLayout { header, clear, tiles }
 }
 
-fn paint_slicers(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) {
+fn paint_slicers(p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) {
     let tk = theme::Tokens::get(p.ctx());
     for sl in &sh.slicers {
         let r = anchor_rect(geo, sh, &sl.anchor);
@@ -454,9 +471,6 @@ fn paint_slicers(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usiz
             p.rect_filled(*tr, 3.0 * geo.z, fill);
             let cp = p.with_clip_rect(tr.intersect(p.clip_rect()));
             cp.text(tr.left_center() + vec2(6.0 * geo.z, 0.0), Align2::LEFT_CENTER, val, theme::ui_font(12.0 * geo.z), fg);
-        }
-        if app.selected_chart == Some(sl.id) {
-            selection_frame(p, r);
         }
     }
 }
@@ -496,41 +510,101 @@ pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) ->
 fn selection_frame(p: &Painter, r: Rect) {
     let t = Tokens::get(p.ctx());
     p.rect_stroke(r, 0.0, Stroke::new(1.0, t.sheet_control_border), StrokeKind::Outside);
-    for c in [r.left_top(), r.center_top(), r.right_top(), r.left_center(), r.right_center(), r.left_bottom(), r.center_bottom(), r.right_bottom()] {
+    for h in crate::objects::Handle::ALL {
+        let c = h.pos(r);
         p.circle_filled(c, 4.0, t.sheet_control_bg);
         p.circle_stroke(c, 4.0, Stroke::new(1.0, t.sheet_control_border));
     }
-    let _ = Align2::CENTER_CENTER;
 }
 
-/// The topmost object under `p`: (kind, id, rect).
-pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static str, u32, Rect)> {
-    if app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
+/// Where object `o` sits on the sheet (logical coordinates), when it exists on `sh`.
+pub fn object_rect(geo: &Geo, sh: &Sheet, o: ObjRef) -> Option<Rect> {
+    sh.object_anchor(o).map(|a| anchor_rect(geo, sh, &a))
+}
+
+/// The resize handle of the selected object under `p`, with the object and its rect. Handles
+/// reach a little outside their object, so they win over [`hit`], but like it only over the cell
+/// area: a handle that lies under the headers, the formula bar or a scroll bar leaves the press
+/// to them. Nothing while objects are hidden.
+pub fn selected_handle(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect, crate::objects::Handle)> {
+    if !geo.cells.contains(p) || app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
         return None;
+    }
+    let o = app.selected_object?;
+    let r = object_rect(geo, sh, o)?;
+    crate::objects::handle_at(r, p).map(|h| (o, r, h))
+}
+
+/// The topmost object under `p` and its rect: form controls paint on top, so they are hit first,
+/// then slicers, charts, pictures and shapes (equations included), each from the top of its stack.
+/// Nothing is hit outside the cell area or while objects are hidden.
+pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect)> {
+    if !geo.cells.contains(p) || app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
+        return None;
+    }
+    for c in sh.controls.iter().rev() {
+        let r = anchor_rect(geo, sh, &c.anchor);
+        if r.contains(p) {
+            return Some((ObjRef::new(ObjKind::Control, c.id), r));
+        }
     }
     for sl in sh.slicers.iter().rev() {
         let r = anchor_rect(geo, sh, &sl.anchor);
-        if r.contains(p) && geo.cells.contains(p) {
-            return Some(("slicer", sl.id, r));
+        if r.contains(p) {
+            return Some((ObjRef::new(ObjKind::Slicer, sl.id), r));
         }
     }
     for ch in sh.charts.iter().rev() {
         let r = anchor_rect(geo, sh, &ch.anchor);
-        if r.expand(4.0).contains(p) && geo.cells.contains(p) {
-            return Some(("chart", ch.id, r));
+        if r.expand(4.0).contains(p) {
+            return Some((ObjRef::new(ObjKind::Chart, ch.id), r));
         }
     }
     for im in sh.images.iter().rev() {
         let r = anchor_rect(geo, sh, &im.anchor);
-        if r.contains(p) && geo.cells.contains(p) {
-            return Some(("image", im.id, r));
+        if r.contains(p) {
+            return Some((ObjRef::new(ObjKind::Image, im.id), r));
         }
     }
     for s in sh.shapes.iter().rev() {
         let r = anchor_rect(geo, sh, &s.anchor);
-        if r.expand(3.0).contains(p) && geo.cells.contains(p) {
-            return Some(("shape", s.id, r));
+        if r.expand(3.0).contains(p) {
+            let kind = if s.kind == ShapeKind::Equation { ObjKind::Equation } else { ObjKind::Shape };
+            return Some((ObjRef::new(kind, s.id), r));
         }
     }
     None
+}
+
+/// The colour ink is painted in: a highlighter (a stroke over 8 pt wide) is translucent, by its
+/// width in points, so the live pen stroke and the committed ink agree at every zoom.
+pub(crate) fn ink_color(line: Color32, width_pt: f32) -> Color32 {
+    if width_pt > 8.0 { line.gamma_multiply(0.45) } else { line }
+}
+
+#[cfg(test)]
+mod tests {
+    use gridcraft_chart::Measure;
+
+    use super::*;
+
+    /// The production measure is not monotone for labels with a line break: egui lays the text out
+    /// line by line, so ending a prefix with `\n…` can be narrower than the shorter `iii…`. The
+    /// chart's label fitting must not assume otherwise (#1152).
+    #[test]
+    fn egui_measure_shrinks_when_a_prefix_ends_in_a_line_break() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(theme::pinned_font_definitions());
+        let mut checked = false;
+        // Fonts are ready from the second pass on.
+        for _ in 0..2 {
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                let m = EguiMeasure { painter: ui.painter(), z: 1.0 };
+                let (short, long) = (m.text_width("iii…", 11.0, false), m.text_width("iiii\n…", 11.0, false));
+                checked = long < short;
+            });
+            out.textures_delta.clear();
+        }
+        assert!(checked);
+    }
 }

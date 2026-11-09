@@ -20,7 +20,7 @@ fn rr(a: &str) -> RangeRef {
 fn sample() -> Workbook {
     let mut wb = Workbook::new();
     wb.date_system = DateSystem::D1904;
-    wb.calc = CalcSettings { mode: CalcMode::Manual, iterative: true, max_iterations: 42, max_change: 0.5, precision_as_displayed: true };
+    wb.calc = CalcSettings { mode: CalcMode::Manual, iterative: true, max_iterations: 42, max_change: 0.5, precision_as_displayed: true, r1c1: true };
     wb.protected_structure = true;
     wb.structure_password = Some(gridcraft_model::PasswordHash::new_sha512("s3cret", b"0123456789abcdef"));
     wb.props = DocProps {
@@ -64,7 +64,7 @@ fn sample() -> Workbook {
     };
 
     let mut s = Sheet::new("Data & Stuff");
-    let set = |s: &mut Sheet, a: &str, v: Value, style: StyleId| s.cells.set(at(a), Cell { value: v, formula: None, style });
+    let set = |s: &mut Sheet, a: &str, v: Value, style: StyleId| s.cells.set(at(a), Cell { value: v, formula: None, style, py: None });
     set(&mut s, "A1", Value::text("Region"), bold);
     set(&mut s, "B1", Value::text("Amount"), bold);
     set(&mut s, "C1", Value::text("  spaced\nline _x0041_ \u{1} "), StyleId::DEFAULT);
@@ -301,6 +301,7 @@ fn sample() -> Workbook {
         even_footer: "&R&A".into(),
         hf_scale_with_doc: false,
         hf_align_with_margins: true,
+        page_order: PageOrder::OverThenDown,
     };
     s.sparklines.push(Sparkline { cell: at("J2"), source: "B2:B3".into(), kind: SparklineKind::WinLoss, color: Color::Rgb(0x112233), markers: true });
     s.tables.push(Table {
@@ -351,6 +352,7 @@ fn sample() -> Workbook {
         alt: "Logo \"x\"".into(),
     });
     s.shapes.push(Shape {
+        math: Default::default(),
         id: 11,
         kind: ShapeKind::Ellipse,
         anchor: Anchor { cell: at("E10"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0, mode: AnchorMode::Absolute },
@@ -360,6 +362,7 @@ fn sample() -> Workbook {
         format: Default::default(),
     });
     s.shapes.push(Shape {
+        math: Default::default(),
         id: 12,
         kind: ShapeKind::Arrow,
         anchor: Anchor { cell: at("E14"), dx: 0.0, dy: 0.0, width: 64.0, height: 0.0, ..Default::default() },
@@ -369,6 +372,7 @@ fn sample() -> Workbook {
         format: Default::default(),
     });
     s.shapes.push(Shape {
+        math: Default::default(),
         id: 13,
         kind: ShapeKind::TextBox,
         anchor: Anchor { cell: at("E16"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0, ..Default::default() },
@@ -407,8 +411,11 @@ fn sample() -> Workbook {
         }],
         legend: LegendPos::Bottom,
         data_labels: true,
+        data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: Some("Region".into()),
         y_title: Some("Amount".into()),
         source: None,
@@ -448,6 +455,9 @@ fn sample() -> Workbook {
     });
     s.charts.push(combo);
     s.charts.push(Chart { kind: ChartKind::Waterfall, legend: LegendPos::None, title: None, ..base_chart.clone() });
+    let mut doughnut = Chart { kind: ChartKind::Doughnut, hole_size: 25, first_slice_angle: 180, legend: LegendPos::Right, ..base_chart.clone() };
+    doughnut.series.push(base_chart.series[0].clone());
+    s.charts.push(doughnut);
 
     wb.sheets = vec![Arc::new(s)];
     let mut s2 = Sheet::new("Hidden");
@@ -589,6 +599,7 @@ fn assert_drawing_and_chart_roundtrip(a: &Sheet, b: &Sheet) {
         assert_eq!(y.title, x.title);
         assert_eq!(y.legend, x.legend);
         assert_eq!(y.data_labels, x.data_labels);
+        assert_eq!((y.hole_size, y.first_slice_angle), (x.hole_size, x.first_slice_angle));
         if !matches!(x.kind, ChartKind::Pie | ChartKind::Doughnut) {
             assert_eq!(y.gridlines, x.gridlines);
             assert_eq!((&y.x_title, &y.y_title), (&x.x_title, &x.y_title));
@@ -854,7 +865,7 @@ fn writing_repairs_invalid_models() {
         table_type: None,
         connection_id: None,
     });
-    s.cells.set(at("B2"), Cell { value: Value::Number(1.0), formula: None, style: StyleId(9999) });
+    s.cells.set(at("B2"), Cell { value: Value::Number(1.0), formula: None, style: StyleId(9999), py: None });
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     let s = back.sheet(0).unwrap();
     assert_eq!(s.visibility, Visibility::Visible, "at least one sheet stays visible");
@@ -1672,4 +1683,67 @@ fn workbook_view_writer_clamps_out_of_range_model_values() {
         let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
         assert_eq!(back.view.tab_ratio, 1000);
     }
+}
+
+#[test]
+fn generated_rule_formulas_use_the_top_left_cell_of_every_area() {
+    // Issue #3152: the areas aren't in top-to-bottom order; the formula is written for C2, not C5.
+    let mut wb = Workbook::new();
+    let red = Box::new(Style::default());
+    wb.sheet_mut(0).unwrap().cond_formats.push(CondFormat {
+        ranges: vec![rr("C5:C6"), rr("C2:C3")],
+        rule: CfRule::ContainsText { text: "x".into(), style: red },
+        priority: 1,
+        stop_if_true: false,
+    });
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut xml = String::new();
+    z.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut xml).unwrap();
+    assert!(xml.contains("<formula>NOT(ISERROR(SEARCH(\"x\",C2)))</formula>"), "{xml}");
+}
+
+#[test]
+fn r1c1_reference_style_is_kept() {
+    // #2809: `<calcPr refMode="R1C1"/>` was dropped on open, so a workbook saved by Excel in R1C1
+    // style came back in A1 style.
+    let bytes = super::minimal("<sheetData/>", &[], "", r#"<calcPr calcId="191029" refMode="R1C1"/>"#);
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    assert!(wb.calc.r1c1);
+    let saved = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+    assert_eq!(book.child("calcPr").and_then(|c| c.attr("refMode")), Some("R1C1"));
+    // A1 is the default and isn't written.
+    let saved = write_xlsx(&Workbook::new()).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+    assert_eq!(book.child("calcPr").and_then(|c| c.attr("refMode")), None);
+}
+
+#[test]
+fn remove_personal_information_is_kept_and_honoured() {
+    // #3089: `<workbookPr filterPrivacy="1"/>` was dropped, so a workbook cleaned of personal
+    // information came back with it switched off, and GridCraft wrote the author and company back.
+    let bytes = super::minimal("<sheetData/>", &[], "", r#"<workbookPr filterPrivacy="1"/>"#);
+    let (mut wb, _) = read_xlsx(&bytes).unwrap();
+    assert!(wb.remove_personal_info);
+    wb.props.author = "Jane Example".into();
+    wb.props.company = "Example Co".into();
+    wb.props.title = "Budget".into();
+    let saved = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+    assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), Some("1"));
+    let core = String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap();
+    let app = String::from_utf8(pkg.read("docProps/app.xml").unwrap().unwrap()).unwrap();
+    assert!(!core.contains("Jane Example") && !app.contains("Example Co"), "{core}\n{app}");
+    assert!(core.contains("<dc:title>Budget</dc:title>"), "other properties stay: {core}");
+    // Off (the default), nothing changes.
+    wb.remove_personal_info = false;
+    let saved = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+    assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), None);
+    assert!(String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap().contains("Jane Example"));
 }

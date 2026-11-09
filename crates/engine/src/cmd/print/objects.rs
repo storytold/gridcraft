@@ -29,6 +29,26 @@ pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32
 }
 
 /// Sheet pixel rectangle of an anchor.
+/// Most source lines printed for an equation that has no layout.
+pub(super) const MAX_FALLBACK_LINES: usize = 500;
+
+/// The lines of `text` printed in place of an equation that has no layout: those of its first
+/// `MAX_SOURCE_BYTES` (a longer source never lays out, and a file can carry megabytes) that fit a
+/// frame `h` points tall at `line_h` points per line (at least the first), and never more than
+/// [`MAX_FALLBACK_LINES`]. A single `pg.text` call would print every newline as `?`.
+pub(super) fn fallback_lines(text: &str, h: f32, line_h: f32) -> impl Iterator<Item = &str> {
+    let text = crate::cmd::equation::source_excerpt(text);
+    let fit = h / line_h;
+    let n = if fit >= MAX_FALLBACK_LINES as f32 {
+        MAX_FALLBACK_LINES
+    } else if fit >= 1.0 {
+        fit as usize
+    } else {
+        1
+    };
+    text.lines().take(n)
+}
+
 fn anchor_rect(sh: &Sheet, a: &Anchor) -> (f64, f64, f64, f64) {
     (sh.col_left(a.cell.col) + a.dx as f64, sh.row_top(a.cell.row) + a.dy as f64, a.width.max(0.0) as f64, a.height.max(0.0) as f64)
 }
@@ -79,6 +99,25 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
             continue;
         }
         let (x, y, w, h) = place(r);
+        if shp.kind == ShapeKind::Equation {
+            let ink = rgb_of(shp.line, wb).unwrap_or([0, 0, 0]);
+            match shp.math.get(&shp.text) {
+                Some(Ok(list)) => crate::cmd::equation::draw_pdf(pg, list, (x, y, w, h), crate::cmd::equation::PADDING * b.k, ink),
+                _ => {
+                    // No layout (the source does not parse, or the file was past the layout
+                    // budget): the source, one text run per line, as many as the frame holds.
+                    let line_h = 12.0 * b.scale;
+                    // A long line stays inside the frame; this clip nests in the block's.
+                    pg.save();
+                    pg.clip_rect(x, y, w, h);
+                    for (i, line) in fallback_lines(&shp.text, h, line_h).enumerate() {
+                        pg.text(x + 2.0 * b.k, y + line_h * (i + 1) as f32, 10.0 * b.scale, Font::Courier, ink, line);
+                    }
+                    pg.restore();
+                }
+            }
+            continue;
+        }
         draw_shape(pg, wb, shp, b, (x, y, w, h));
     }
     for ch in &sh.charts {

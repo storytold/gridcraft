@@ -507,15 +507,15 @@ fn pending_sequences_are_silent_no_ops() {
 fn pending_sequences_go_live_when_the_command_lands() {
     // The command lands in the catalog (here: a test-registered stand-in).
     // The sequence must run it with no table edit.
-    gridcraft_engine::register_test_command("insert.equation", |s, _| {
+    gridcraft_engine::register_test_command("insert.object", |s, _| {
         s.execute("cell.set", json!({"cell": "Z9", "input": "live"}))?;
         Ok(json!({}))
     });
     let mut h = harness(blank());
-    sequence(&mut h, &[Key::N, Key::E], false); // NE -> insert.equation
+    sequence(&mut h, &[Key::N, Key::J], false); // NJ -> insert.object
     assert_eq!(value(&h, "Z9"), Value::from("live"), "the pending sequence ran the landed command");
     assert_eq!(
-        h.state().session.journal.iter().filter(|(id, _)| id == "insert.equation").count(),
+        h.state().session.journal.iter().filter(|(id, _)| id == "insert.object").count(),
         1,
         "the landed command is journaled like any live command"
     );

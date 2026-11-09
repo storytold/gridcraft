@@ -153,6 +153,7 @@ pub(super) fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
         line,
         text: str_param(p, "text").unwrap_or("").into(),
         format: Default::default(),
+        math: Default::default(),
     };
     let sheet = d.wb.active_sheet();
     edit(s, |cx| {
