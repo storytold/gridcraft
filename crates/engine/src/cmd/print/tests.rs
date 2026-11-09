@@ -124,6 +124,35 @@ fn header_footer_section_edits_are_undoable_and_views_are_per_sheet() {
 }
 
 #[test]
+fn preview_reports_margins_and_where_the_table_sits() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [3, 4]]})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"margins": {"left": 1, "right": 0.5, "top": 2, "bottom": 0.5, "header": 0.4, "footer": 0.3}})).unwrap();
+    let page = s.execute("file.printPreview", json!({"page": 1})).unwrap()["page"].clone();
+    assert_eq!(page["margins"]["left"], 1.0);
+    assert_eq!(page["margins"]["top"], 2.0);
+    let inch = |key: &str| page["margins"][key].as_f64().unwrap();
+    assert!((inch("header") - 0.4).abs() < 1e-6);
+    assert_eq!(page["content"]["x"], 72.0);
+    assert_eq!(page["content"]["y"], 144.0);
+    // Two 64px columns and two 20px rows at 0.75pt per pixel.
+    assert_eq!(page["content"]["width"], 96.0);
+    assert_eq!(page["content"]["height"], 30.0);
+    assert_eq!(page["body"]["x"], 72.0);
+    // Centred horizontally: (612 - 72 - 36 - 96) / 2 past the left margin.
+    s.execute("pageLayout.pageSetup", json!({"centerH": true})).unwrap();
+    let page = s.execute("file.printPreview", json!({"page": 1})).unwrap()["page"].clone();
+    assert_eq!(page["centerH"], true);
+    assert_eq!(page["content"]["x"], 72.0 + 204.0);
+    assert_eq!(page["content"]["y"], 144.0);
+    // Margins finer than a thousandth of an inch come back as they were set, so the Print page
+    // can save an untouched margin without changing it.
+    s.execute("pageLayout.pageSetup", json!({"margins": {"left": 0.700_787}})).unwrap();
+    let page = s.execute("file.printPreview", json!({"page": 1})).unwrap()["page"].clone();
+    assert!((page["margins"]["left"].as_f64().unwrap() - 0.700_787).abs() < 1e-6);
+}
+
+#[test]
 fn page_count_300_rows_letter_portrait() {
     let mut s = s();
     let rows: Vec<Vec<Json>> = (1..=300).map(|i| vec![json!(i)]).collect();
