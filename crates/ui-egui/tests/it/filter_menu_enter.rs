@@ -85,3 +85,29 @@ fn enter_with_nothing_checked_keeps_the_menu_open() {
     assert!(h.state().grid.filter_menu.is_some(), "the menu stays open");
     assert_eq!(active(&h), "A1");
 }
+
+#[test]
+fn filter_menu_uses_the_interface_language_and_preserves_values() {
+    for (language, labels, search_all, apply) in [
+        ("en", ["↑  Sort Ascending", "↓  Sort Descending", "Filter", "(Select All)", "Clear Filter"], "(Select All Search Results)", "Apply"),
+        ("tr", ["↑  Artan Sırala", "↓  Azalan Sırala", "Filtre", "(Tümünü Seç)", "Filtreyi Temizle"], "(Tüm Arama Sonuçlarını Seç)", "Uygula"),
+    ] {
+        let mut h = filter_menu_open();
+        h.state_mut().run("app.language.set", json!({"language": language})).unwrap();
+        h.run_steps(3);
+        for label in labels.into_iter().chain([apply, "Apple", "Banana", "Cherry"]) {
+            assert!(h.query_by_label(label).is_some(), "{language}: missing {label}");
+        }
+        // TextEdit exposes its editable value to accessibility, so inspect the painted hint.
+        let search = if language == "tr" { "Ara" } else { "Search" };
+        assert!(h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == search)));
+        h.input_mut().events.push(Event::Text("an".into()));
+        h.run_steps(2);
+        assert!(h.query_by_label(search_all).is_some(), "{language}: search selection label");
+        h.get_by_label(apply).click();
+        h.run_steps(2);
+        assert_eq!(hidden(&h), [true, false, true]);
+        assert!(h.state().grid.filter_menu.is_none());
+        assert_eq!(active(&h), "A1");
+    }
+}

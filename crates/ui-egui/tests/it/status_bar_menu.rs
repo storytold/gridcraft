@@ -58,3 +58,24 @@ fn right_clicking_the_status_bar_text_opens_the_menu() {
         assert!(h.query_by_label("Numerical Count").is_some(), "a right-click on {text:?} opens the statistics menu");
     }
 }
+
+#[test]
+fn selection_statistics_use_the_interface_language() {
+    for (language, labels, menu_labels) in [
+        ("en", ["Average: 4", "Count: 3", "Numerical Count: 3", "Minimum: -1", "Maximum: 9", "Sum: 12"], ["Count", "Sum"]),
+        ("tr", ["Ortalama: 4", "Sayı: 3", "Sayısal Sayı: 3", "En Küçük: -1", "En Büyük: 9", "Toplam: 12"], ["Sayı", "Toplam"]),
+        ("pt-BR", ["Média: 4", "Contagem: 3", "Numerical Count: 3", "Minimum: -1", "Maximum: 9", "Soma: 12"], ["Contagem", "Soma"]),
+    ] {
+        let mut h = harness();
+        h.state_mut().run("app.language.set", json!({"language": language})).unwrap();
+        h.state_mut().run("view.statusBar", json!({"numericalCount": true, "minimum": true, "maximum": true})).unwrap();
+        h.run_steps(3);
+        for label in labels {
+            assert!(h.query_by_label(label).is_some(), "{language}: missing {label}");
+        }
+        right_click(&mut h, pos2(300.0, 787.0));
+        for label in menu_labels {
+            assert!(h.query_by_label(label).is_some(), "{language}: missing menu label {label}");
+        }
+    }
+}
