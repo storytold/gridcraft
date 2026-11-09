@@ -1511,6 +1511,58 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
     assert!(b.autofilter.is_none(), "a sheet filter inside a table would be invalid");
 }
 
+/// The `filter_button` guard fell out of the fold condition when this branch merged main: without
+/// it a partial sheet AutoFilter inside a table whose Filter Button is off is copied into
+/// `Table::filter`, and reopening applies the criteria over the table's whole range instead of the
+/// sheet range they were set on.
+#[test]
+fn a_partial_sheet_filter_is_not_folded_into_a_table_with_filter_button_off() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    for (a, v) in [
+        ("A3", "Id"),
+        ("B3", "Region"),
+        ("C3", "Q"),
+        ("D3", "Kind"),
+        ("E3", "Note"),
+        ("A4", "1"),
+        ("B4", "East"),
+        ("C4", "7"),
+        ("D4", "x"),
+        ("E4", "k"),
+    ] {
+        s.set_value(at(a), Value::text(v));
+    }
+    let column =
+        |name: &str| TableColumn { name: name.into(), totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None };
+    s.tables.push(Table {
+        id: 1,
+        name: "Sales".into(),
+        range: rr("A3:E4"),
+        header_row: true,
+        totals_row: false,
+        columns: vec![column("Id"), column("Region"), column("Q"), column("Kind"), column("Note")],
+        style: "TableStyleMedium2".into(),
+        banded_rows: true,
+        banded_cols: false,
+        first_col: false,
+        last_col: false,
+        filter_button: false,
+        filter: vec![],
+        table_type: None,
+        connection_id: None,
+    });
+    // A partial sheet filter strictly inside the table, sharing its first column.
+    s.autofilter =
+        Some(AutoFilter { range: rr("A3:E3"), criteria: vec![(1, FilterCriterion::Values { values: vec!["East".into()], blanks: false })] });
+
+    let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let b = back.sheet(0).unwrap();
+    let t = b.tables.first().expect("the table survived");
+    assert!(t.filter.is_empty(), "a partial sheet AutoFilter must not become the table's filter: {:?}", t.filter);
+}
+
 #[test]
 fn workbook_view_settings_survive_a_round_trip() {
     // #3057: a workbook Excel saved with the sheet tabs and both scroll bars hidden
