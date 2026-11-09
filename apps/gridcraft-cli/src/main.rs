@@ -189,9 +189,8 @@ fn install_translate(session: &mut Session) {
     // Same opener the desktop installs: the engine's install commands refresh the running
     // session's backend through it after their own verified install.
     session.translate_backend_opener = Some(std::sync::Arc::new(|s: &Session, id: &str| {
-        (!s.translate_models_dir.trim().is_empty() && gridcraft_translate::manifest::valid_id(id)).then(|| {
-            gridcraft_translate_candle::installed_backend_for(std::path::Path::new(&s.translate_models_dir), id)
-        })
+        (!s.translate_models_dir.trim().is_empty() && gridcraft_translate::manifest::valid_id(id))
+            .then(|| gridcraft_translate_candle::installed_backend_for(std::path::Path::new(&s.translate_models_dir), id))
     }));
 }
 

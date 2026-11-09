@@ -301,13 +301,8 @@ pub fn models_root() -> PathBuf {
 /// installed manifest when `id` is unknown or not installed, so an install always becomes
 /// usable; `None` only when no verified model directory exists at all.
 pub fn installed_backend(root: &Path) -> Option<std::sync::Arc<dyn gridcraft_translate::Backend>> {
-    installed_backend_for(root, "qwen3-1.7b").or_else(|| {
-        manifest::MANIFESTS.iter().find_map(|m| {
-            (m.id != "qwen3-1.7b")
-                .then(|| installed_backend_for(root, m.id))
-                .flatten()
-        })
-    })
+    installed_backend_for(root, "qwen3-1.7b")
+        .or_else(|| manifest::MANIFESTS.iter().find_map(|m| (m.id != "qwen3-1.7b").then(|| installed_backend_for(root, m.id)).flatten()))
 }
 
 /// Opens the installed model `id` when its directory verifies; `None` otherwise.

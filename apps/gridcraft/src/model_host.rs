@@ -91,8 +91,7 @@ pub fn refresh(session: &mut Session) {
     session.translate_fetcher = Some(Arc::new(HttpFetcher));
     session.translate_backend = gridcraft_translate_candle::installed_backend(&root);
     session.translate_backend_opener = Some(Arc::new(|s: &Session, id: &str| {
-        (!s.translate_models_dir.trim().is_empty() && gridcraft_translate::manifest::valid_id(id)).then(|| {
-            gridcraft_translate_candle::installed_backend_for(std::path::Path::new(&s.translate_models_dir), id)
-        })
+        (!s.translate_models_dir.trim().is_empty() && gridcraft_translate::manifest::valid_id(id))
+            .then(|| gridcraft_translate_candle::installed_backend_for(std::path::Path::new(&s.translate_models_dir), id))
     }));
 }
