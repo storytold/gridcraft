@@ -259,18 +259,18 @@ impl EditState {
         if word.is_empty() || word.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             return;
         }
-        let u = word.to_ascii_uppercase();
+        let folded_word = gridcraft_engine::formula::fold_name(&word);
         // Not after a column letter of a reference like A1 (digits follow) – fine either way.
         self.autocomplete = names
             .iter()
             .filter(|n| {
-                let upper = n.to_ascii_uppercase();
-                upper.starts_with(&u) || upper.split(|c: char| !c.is_alphanumeric()).any(|part| part.starts_with(&u))
+                let folded_name = gridcraft_engine::formula::fold_name(n);
+                folded_name.starts_with(&folded_word) || folded_name.split(|c: char| !c.is_alphanumeric()).any(|part| part.starts_with(&folded_word))
             })
             .take(12)
             .cloned()
             .collect();
-        if self.autocomplete.len() == 1 && self.autocomplete[0] == u {
+        if self.autocomplete.len() == 1 && gridcraft_engine::formula::fold_name(&self.autocomplete[0]) == folded_word {
             self.autocomplete.clear();
         }
         self.ac_index = self.ac_index.min(self.autocomplete.len().saturating_sub(1));
@@ -356,14 +356,8 @@ impl EditState {
                 '{' | '[' => depth -= 1,
                 '(' => {
                     if depth == 0 {
-                        let name: String = chars[..i]
-                            .iter()
-                            .rev()
-                            .take_while(|c| c.is_ascii_alphanumeric() || **c == '.' || **c == '_')
-                            .collect::<String>()
-                            .chars()
-                            .rev()
-                            .collect();
+                        let name: String =
+                            chars[..i].iter().rev().take_while(|c| is_formula_name_char(**c)).collect::<String>().chars().rev().collect();
                         if name.is_empty() {
                             return None;
                         }
@@ -544,7 +538,7 @@ mod tests {
     #[test]
     fn autocomplete_keeps_unicode_letters_in_names() {
         let names = vec!["BI_Économie".to_string()];
-        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=BI_É".into(), true, false);
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=BI_é".into(), true, false);
         e.update_autocomplete(&names);
         assert_eq!(e.autocomplete, names);
     }

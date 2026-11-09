@@ -585,6 +585,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
                 d.wb.names
                     .iter()
                     .filter(|n| n.scope.is_none() || n.scope == Some(ed.sheet))
+                    .filter(|n| !n.hidden)
                     .filter(|n| custom_lambda(&d.wb, ed.sheet, &n.name, ed.locale).is_some())
                     .map(|n| n.name.clone()),
             );
