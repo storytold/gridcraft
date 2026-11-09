@@ -42,9 +42,7 @@ pub fn effect_label(effect: &str) -> &'static str {
 /// the pen blue used for an unknown name.
 pub fn effect_base(effect: &str) -> Color32 {
     // Single source: the engine's texture table. An unknown name falls back to pen blue.
-    let hex = gridcraft_engine::cmd::draw::parse_effect(effect)
-        .map(gridcraft_engine::cmd::draw::effect_base)
-        .unwrap_or("#1F5FC9");
+    let hex = gridcraft_engine::cmd::draw::parse_effect(effect).map(gridcraft_engine::cmd::draw::effect_base).unwrap_or("#1F5FC9");
     gridcraft_engine::model::Color::from_hex(hex)
         .and_then(|c| c.resolve(&gridcraft_engine::model::Theme::default()))
         .map(crate::theme::color32)

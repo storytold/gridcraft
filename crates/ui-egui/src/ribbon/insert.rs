@@ -333,7 +333,6 @@ fn hex_color(hex: &str) -> egui::Color32 {
         .unwrap_or(egui::Color32::GRAY)
 }
 
-
 /// The sixteen solid colours Excel offers for a pen.
 const PEN_SOLIDS: [&str; 16] = [
     "#000000", "#FFFFFF", "#A5A5A5", "#D9D9D9", "#C00000", "#FF0000", "#FFC000", "#FFFF00", "#92D050", "#00B050", "#00B0F0", "#0070C0", "#002060",
@@ -402,9 +401,7 @@ fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::dr
                 if resp.on_hover_text(tr.tr(pen_icon::effect_label(name))).clicked() {
                     // The engine resets the colour when only the effect changes, so carry the
                     // texture's base colour from the single remaining engine table.
-                    let base = gridcraft_engine::cmd::draw::parse_effect(name)
-                        .map(gridcraft_engine::cmd::draw::effect_base)
-                        .unwrap_or("#1F5FC9");
+                    let base = gridcraft_engine::cmd::draw::parse_effect(name).map(gridcraft_engine::cmd::draw::effect_base).unwrap_or("#1F5FC9");
                     apply_pen_change(app, id, tool, base, width, Some(name));
                     ui.close();
                 }

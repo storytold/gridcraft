@@ -688,7 +688,15 @@ fn paint_ink_texture(p: &Painter, pts: &[Pos2], width: f32, effect: gridcraft_en
 
 /// A textured Fountain or Brush Pen: the same per-segment widths `paint_tapered` uses, with the
 /// effect's bands as the colour instead of the pen colour.
-fn paint_tapered_texture(p: &Painter, pts: &[Pos2], width: f32, pressure: &[u16], effect: gridcraft_engine::model::InkEffect, anchor: [f32; 2], z: f32) {
+fn paint_tapered_texture(
+    p: &Painter,
+    pts: &[Pos2],
+    width: f32,
+    pressure: &[u16],
+    effect: gridcraft_engine::model::InkEffect,
+    anchor: [f32; 2],
+    z: f32,
+) {
     let name = gridcraft_engine::cmd::draw::effect_name(effect);
     let bands = crate::pen_icon::effect_colors(name);
     if bands.is_empty() || pts.len() < 2 {

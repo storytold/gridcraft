@@ -60,14 +60,10 @@ fn update_pen_clears_a_texture_when_only_a_solid_colour_is_sent() {
     let pen = serde_json::json!({"brush": "pen", "color": "#FF0000", "width": 1.0, "effect": "galaxy"});
     let added = s.execute("draw.addPen", pen.clone()).unwrap();
     let id = added["pen"].as_u64().expect("addPen returns the gallery id");
-    let solid = s
-        .execute("draw.updatePen", serde_json::json!({"id": id, "color": "#FF0000", "effect": ""}))
-        .unwrap();
+    let solid = s.execute("draw.updatePen", serde_json::json!({"id": id, "color": "#FF0000", "effect": ""})).unwrap();
     assert_eq!(solid["color"], serde_json::json!("#FF0000"), "solid colour sticks");
     assert!(solid["effect"].is_null(), "texture cleared: {solid:?}");
-    let textured = s
-        .execute("draw.updatePen", serde_json::json!({"id": id, "effect": "galaxy"}))
-        .unwrap();
+    let textured = s.execute("draw.updatePen", serde_json::json!({"id": id, "effect": "galaxy"})).unwrap();
     assert_eq!(textured["effect"], serde_json::json!("galaxy"), "texture applies: {textured:?}");
     assert_eq!(textured["color"], serde_json::json!("#5B3EA8"), "colour resets to the texture base");
 }
