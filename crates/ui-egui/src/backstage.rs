@@ -229,7 +229,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     Page::Info => info(app, ui, &mut bs),
                     Page::SaveAs => save_as(app, ui, &mut bs, &mut out),
                     Page::Print => print(app, ui, &mut bs, &mut out),
-                    Page::Export => export(app, ui, &mut out),
+                    Page::Export => export(app, ui, bs.save_name.as_deref(), &mut out),
                     Page::Options => options(app, ui),
                     Page::Account => account(app, ui),
                 }
@@ -727,10 +727,11 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
 }
 
-fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
+/// File › Export: a copy under the name typed on Save As (`typed`), when there is one.
+fn export(app: &mut SheetApp, ui: &mut Ui, typed: Option<&str>, out: &mut Outcome) {
     let lang = app.ui.language;
     if action_row(ui, Icon::Paper, lang.tr("Create PDF"), lang.tr("Save the sheet as a PDF document that keeps its page layout.")).clicked()
-        && export_as(app, "pdf")
+        && export_as_named(app, "pdf", typed)
     {
         out.close = true;
     }
@@ -740,7 +741,7 @@ fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
         ("csv", Icon::TextColumns, "CSV (Comma delimited)", "Save the active sheet as comma-separated text."),
         ("html", Icon::Link, "Web Page (.html)", "Save the workbook as a web page."),
     ] {
-        if action_row(ui, icon, lang.tr(title), lang.tr(detail)).clicked() && export_as(app, fmt) {
+        if action_row(ui, icon, lang.tr(title), lang.tr(detail)).clicked() && export_as_named(app, fmt, typed) {
             out.close = true;
         }
     }
@@ -753,11 +754,15 @@ fn workbook_stem(app: &SheetApp) -> String {
 }
 
 /// The file name typed on Save As, ready to use before `ext`: control characters are dropped, a
-/// folder separator (a name can't hold one) becomes a space, spaces at both ends go, and a
+/// folder separator or a character Windows refuses (`: * ? " < > |`) becomes a space, spaces at both ends go, and a
 /// trailing `.ext` is cut so "Budget.xlsx" doesn't save as "Budget.xlsx.xlsx". `None` when
 /// nothing is left, so the workbook's own name is used instead.
 pub fn clean_file_stem(typed: &str, ext: &str) -> Option<String> {
-    let mut name: String = typed.chars().filter(|c| !c.is_control()).map(|c| if matches!(c, '/' | '\\') { ' ' } else { c }).collect();
+    let mut name: String = typed
+        .chars()
+        .filter(|c| !c.is_control())
+        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { ' ' } else { c })
+        .collect();
     name = name.trim().to_string();
     let suffix = format!(".{ext}");
     if name.len() >= suffix.len() && name.to_ascii_lowercase().ends_with(&suffix) {
