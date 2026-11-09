@@ -363,12 +363,15 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
                     Some(c) => c.clone(),
                     None => {
                         let c = if literal {
-                            let style = if input.contains('\n') && !cx.wb.styles.get(style).align.wrap {
+                            // The destination's own style decides the wrapping: the cell takes the
+                            // derived style, but stays cached under the original one, which is
+                            // what every later destination of this fill looks itself up by.
+                            let cell_style = if input.contains('\n') && !cx.wb.styles.get(style).align.wrap {
                                 cx.wb.styles.derive(style, |s| s.align.wrap = true)
                             } else {
                                 style
                             };
-                            Some(Cell { value: Value::text(input.as_str()), formula: None, style, py: None })
+                            Some(Cell { value: Value::text(input.as_str()), formula: None, style: cell_style, py: None })
                         } else {
                             input_to_cell(&input, sheet, at, &mut cx.wb)?
                         };

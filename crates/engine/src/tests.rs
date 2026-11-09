@@ -6556,3 +6556,23 @@ fn a_multiline_literal_is_wrapped_and_kept_whole() {
     assert_eq!(cell.value, Value::text("one\ntwo"));
     assert!(d.wb.styles.get(sh.style_id(CellRef::parse("B2").unwrap())).align.wrap);
 }
+
+/// Repeating a multiline literal fill reuses the one wrapping style it derived: the destinations
+/// are cached by their own style, and the style table does not grow with the fills or the cells.
+#[test]
+fn repeated_multiline_literal_fills_derive_the_wrapping_style_once() {
+    let mut s = s();
+    let before = s.doc().unwrap().wb.styles.len();
+    for _ in 0..3 {
+        s.execute("range.fill", json!({"range": "A1:C2", "input": "one\ntwo", "literal": true})).unwrap();
+    }
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    let wrapping = sh.style_id(CellRef::parse("A1").unwrap());
+    assert!(d.wb.styles.get(wrapping).align.wrap, "the fill wraps the text");
+    assert_eq!(d.wb.styles.len(), before + 1, "three fills of six cells derive one wrapping style, not one per cell");
+    for at in ["C1", "A2", "C2"] {
+        assert_eq!(sh.style_id(CellRef::parse(at).unwrap()), wrapping, "{at} shares the derived style");
+        assert_eq!(sh.cell(CellRef::parse(at).unwrap()).map(|c| c.value.clone()), Some(Value::text("one\ntwo")));
+    }
+}
