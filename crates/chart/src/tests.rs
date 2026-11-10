@@ -61,6 +61,7 @@ fn chart(kind: ChartKind) -> Chart {
 
 fn series(name: &str, values: &[f64], color: Rgba, kind: ChartKind) -> SeriesData {
     SeriesData {
+        line_width: None,
         name: name.into(),
         values: values.iter().map(|v| Some(*v)).collect(),
         x: Some(values.iter().enumerate().map(|(i, _)| Some(i as f64 * 1.5 + 2.0)).collect()),
@@ -539,6 +540,7 @@ fn resolve_from_workbook() {
     let mut c = chart(ChartKind::ColumnClustered);
     c.series = vec![
         Series {
+            line_width: None,
             name: Some("Sales!$B$1".into()),
             categories: Some("Sales!$A$2:$A$4".into()),
             values: "Sales!$B$2:$B$4".into(),
@@ -551,6 +553,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
         },
         Series {
+            line_width: None,
             name: None,
             categories: None,
             values: "=Sales!$C$2:$C$4".into(),
@@ -563,6 +566,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
         },
         Series {
+            line_width: None,
             name: Some("Literal".into()),
             categories: None,
             values: "{1,2,3,4}".into(),
@@ -602,6 +606,7 @@ fn resolve_from_workbook() {
     let mut c = chart(ChartKind::Combo);
     c.series = vec![
         Series {
+            line_width: None,
             name: None,
             categories: None,
             values: "Sales!B2:B4".into(),
@@ -614,6 +619,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
         },
         Series {
+            line_width: None,
             name: None,
             categories: None,
             values: "Sales!B2:B4".into(),
@@ -631,6 +637,7 @@ fn resolve_from_workbook() {
     assert_eq!(d.series[1].kind, ChartKind::Line);
     let mut c = chart(ChartKind::Bubble);
     c.series = vec![Series {
+        line_width: None,
         name: None,
         categories: Some("Sales!B2:B4".into()),
         values: "Sales!B2:B4".into(),
@@ -649,6 +656,7 @@ fn resolve_from_workbook() {
     // Bad formulas never panic.
     let mut c = chart(ChartKind::Line);
     c.series = vec![Series {
+        line_width: None,
         name: Some("=Nope!A1".into()),
         categories: Some("((".into()),
         values: "Missing!A1:A3".into(),
@@ -942,6 +950,7 @@ fn fuzz_random_data_and_sizes() {
         };
         let series: Vec<SeriesData> = (0..nser)
             .map(|i| SeriesData {
+                line_width: None,
                 name: format!("S{i}"),
                 values: (0..npts).map(|_| val(&mut r)).collect(),
                 x: if r.next().is_multiple_of(2) { Some((0..npts).map(|_| val(&mut r)).collect()) } else { None },
@@ -1354,6 +1363,7 @@ fn pie_points_follow_workbook_theme() {
     wb.theme.colors[5] = 0x8AA1B8;
     let mut c = chart(ChartKind::Pie);
     c.series = vec![Series {
+        line_width: None,
         name: None,
         categories: None,
         values: "{5,3}".into(),
@@ -1630,6 +1640,7 @@ fn a_series_named_by_a_name_on_a_sheet_with_an_apostrophe_resolves() {
     });
     let mut c = chart(ChartKind::ColumnClustered);
     c.series = vec![Series {
+        line_width: None,
         name: Some("'Bob''s'!Title".into()),
         categories: None,
         values: "'Bob''s'!$A$2:$A$3".into(),
@@ -1666,6 +1677,7 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     });
     let mut c = chart(ChartKind::ColumnClustered);
     c.series = vec![Series {
+        line_width: None,
         name: Some("'a!b'!Title".into()),
         categories: None,
         values: "'a!b'!$A$2:$A$3".into(),
@@ -1679,4 +1691,33 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
+}
+
+/// A series line is drawn with the width the file gives it, bounded; without one, with the
+/// kind's default.
+#[test]
+fn series_lines_take_their_width() {
+    let color = [0x00, 0xB0, 0xF0, 0xFF];
+    let widths = |kind: ChartKind, line_width: Option<f32>| -> Vec<f32> {
+        let mut s = series("S", &[1.0, 3.0, 2.0, 4.0], color, kind);
+        s.line_width = line_width;
+        let data = ChartData { series: vec![s], ..ChartData::default() };
+        // Without a legend: its key keeps its own width.
+        let c = Chart { legend: LegendPos::None, ..chart(kind) };
+        render(&c, &data, 640.0, 400.0, &ApproxMeasure)
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Line { color: c, width, .. } if *c == color => Some(*width),
+                _ => None,
+            })
+            .collect()
+    };
+    for (kind, default) in [(ChartKind::Line, 2.25), (ChartKind::ScatterLines, 2.0), (ChartKind::Radar, 2.0)] {
+        assert!(!widths(kind, None).is_empty(), "{kind:?} draws its line");
+        assert!(widths(kind, None).iter().all(|w| *w == default), "{kind:?}: {:?}", widths(kind, None));
+        assert!(widths(kind, Some(5.0)).iter().all(|w| *w == 5.0), "{kind:?}");
+        // A hairline stays visible; a line wider than the plot is bounded.
+        assert!(widths(kind, Some(0.0)).iter().all(|w| *w == 0.25), "{kind:?}");
+        assert!(widths(kind, Some(1584.0)).iter().all(|w| *w == 20.0), "{kind:?}");
+    }
 }

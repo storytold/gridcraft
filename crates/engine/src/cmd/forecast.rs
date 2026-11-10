@@ -404,6 +404,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         let col_ref = |c: u32| format!("{q}!${0}$2:${0}${end_row}", col_letters(c));
         let series = (1..width)
             .map(|c| Series {
+                line_width: None,
                 name: Some(format!("{q}!${}$1", col_letters(c))),
                 categories: Some(col_ref(0)),
                 values: col_ref(c),

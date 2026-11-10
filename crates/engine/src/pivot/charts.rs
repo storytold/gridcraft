@@ -66,6 +66,7 @@ pub fn chart_series(sheet: &str, origin: CellRef, out: &Output) -> Vec<Series> {
         .iter()
         .filter_map(|(c, name)| {
             Some(Series {
+                line_width: None,
                 name: Some(format!("\"{}\"", name.replace('"', "\"\""))),
                 categories: categories.clone(),
                 values: rows_ref(sheet, origin, *c, &rows)?,

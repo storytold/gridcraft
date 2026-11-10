@@ -494,6 +494,9 @@ pub struct Series {
     /// Trendlines fitted to this series (Excel allows several per series).
     #[serde(default)]
     pub trendlines: Vec<Trendline>,
+    /// Width in points of the series line (line, scatter and radar series); `None` = default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_width: Option<f32>,
 }
 
 /// Regression a trendline fits (`c:trendlineType`).
