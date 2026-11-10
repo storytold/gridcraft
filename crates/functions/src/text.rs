@@ -28,17 +28,27 @@ fn check_len(s: String) -> R<Value> {
 
 /// Pushes `piece` onto `out`, failing once the result exceeds the cell limit.
 fn push_capped(out: &mut String, piece: &str) -> R<()> {
-    out.push_str(piece);
-    if out.len() > MAX_TEXT * 4 {
+    // Checked before copying, so one oversized piece is refused without being appended.
+    if out.len().saturating_add(piece.len()) > MAX_TEXT * 4 {
         return Err(CellError::Value);
     }
+    out.push_str(piece);
     Ok(())
+}
+
+/// `v.to_text()` without copying text values.
+fn piece(v: &Value) -> R<std::borrow::Cow<'_, str>> {
+    match v {
+        Value::Text(t) => Ok(std::borrow::Cow::Borrowed(t)),
+        Value::Array(a) => a.data.first().map_or(Ok(std::borrow::Cow::Borrowed("")), piece),
+        _ => v.to_text().map(std::borrow::Cow::Owned),
+    }
 }
 
 fn concatenate(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let mut out = String::new();
     for x in a {
-        push_capped(&mut out, &scalar(x).to_text()?)?;
+        push_capped(&mut out, &piece(&scalar(x))?)?;
     }
     check_len(out)
 }
@@ -47,7 +57,7 @@ fn concat(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let mut out = String::new();
     for x in a {
         for v in as_array(&x.value).iter() {
-            push_capped(&mut out, &v.to_text()?)?;
+            push_capped(&mut out, &piece(v)?)?;
         }
     }
     check_len(out)
@@ -78,13 +88,15 @@ fn textjoin(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let mut out = String::new();
     let mut joined = 0usize;
     for v in items.iter().flat_map(|x| x.iter()) {
-        let s = v.to_text()?;
+        let s = piece(v)?;
         if ignore && s.is_empty() {
             continue;
         }
-        if joined > 0 && !delims.data.is_empty() {
-            let d = delims.data.get((joined - 1) % delims.data.len()).map(Value::to_text).transpose()?.unwrap_or_default();
-            push_capped(&mut out, &d)?;
+        if joined > 0
+            && !delims.data.is_empty()
+            && let Some(d) = delims.data.get((joined - 1) % delims.data.len())
+        {
+            push_capped(&mut out, &piece(d)?)?;
         }
         push_capped(&mut out, &s)?;
         joined += 1;
