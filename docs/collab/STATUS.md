@@ -1332,17 +1332,17 @@ cargo check -p gridcraft-collab-web -p gridcraft-web
 `io::tests::save_keeps_the_destination_access_restrictions` (`mode 664`, the build host's
 temporary directory) — the host-environment failure §10, §15 and §20.2 already record, in a file
 this slice does not touch; the other 898 engine tests pass. Counts over the four collaboration
-packages: 160 passed, 0 failed, before this slice 158 (the two new tests and the two new unit
-tests are this slice's). No CI run covers `8e76f729` yet: the workflows on `8208607f` sit in
-`action_required` until a maintainer approves them, and the new head is not on the PR at all until
-the push.
+packages: 160 passed, 0 failed; before this slice 156 — the four new tests are this slice's. No CI
+run covers `8e76f729` yet: the workflows on `8208607f` sit in `action_required` until a maintainer
+approves them, and the new head is not on the PR at all until the push.
 
 ### 21.3 Answering the review
 
-All six threads were answered on 2026-11-10T21:5xZ, one reply per comment id, each naming the
+All six threads were answered on 2026-11-10T20:4xZ, one reply per comment id, each naming the
 commit and the test or the exact paragraph, and each saying the commit is local until the branch
-is pushed — the wording §18.7 and §20.3 used, because it is still true. The finding outside the
-diff (`client.rs`) has no thread of its own; its reply is the one on the `synced.rs` thread, which
-lists the four code fixes with their tests. Where a finding could not be reproduced by a socket
+is pushed — the wording §18.7 and §20.3 used, which was still true when they were posted; the
+push, if it comes before the next pass, is recorded in the bus thread `status/gridcraft`. The
+finding outside the diff (`client.rs`) has no thread of its own; its reply is the one on the
+`synced.rs` thread, which lists the four code fixes with their tests. Where a finding could not be reproduced by a socket
 test (the trimmed-journal race) the reply says so and names the pure decision the test covers
 instead of claiming a test that cannot be written deterministically.
