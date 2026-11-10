@@ -100,18 +100,32 @@ Denylist — свойство **сервера**, не клиента: кома�
  "applied":{"opId":"...","version":42,"epoch":7,"actor":"ann",
             "result":{"command":{"id":"cell.set","params":{"cell":"B2","input":"=SUM(A1:A9)"}},
                       "delta":[{"sheet":"<sheetKey>",
-                                "cells":[{"a1":"B2","value":45,"formula":"=SUM(A1:A9)","style":3}],
-                                "objectsDeleted":[12],"objectsCreated":[13]}]},
-            "sheets":null,"images":null,"book":null,"more":false}}
+                                "cells":[{"a1":"B2","value":{"t":"Number","v":45.0},"formula":"=SUM(A1:A9)","style":3}],
+                                "objects_deleted":[12],"objects_created":[13]}]}}}
 ```
+
+Значение ячейки — не скаляр, а сериализованная форма `Value`
+(`crates/core/src/value.rs`: `#[serde(tag = "t", content = "v")]`): число —
+`{"t":"Number","v":45.0}`, текст — `{"t":"Text","v":"…"}`, логическое —
+`{"t":"Bool","v":true}`, ошибка — `{"t":"Error","v":"#DIV/0!"}`, пустая —
+`{"t":"Empty"}`. Клиент разбирает `value` в `Value`, а не в `f64`.
+Поля `Applied`, которые не заданы, в кадр не пишутся (`skip_serializing_if`),
+а не приходят как `null`.
 
 `result.delta` — **массив** дельт по листам (одна операция может тронуть несколько),
 `result.command` — эхо команды (`{id, params}`), `result.delta` и он хотя бы один
-присутствуют. Отказ — `{"type":"rejected","rejected":{"opId","code","retryable","hint?","message?}}`.
+присутствуют — **кроме структурного undo/redo**: `Room::reverse_sheets` не шлёт
+ни команду, ни дельту, потому что адреса после шага могли сдвинуться; восстановленное
+состояние едет в `images` (листы) и `book` (имена, защита структуры), а карта листов —
+в `sheets` (RFC §6, ADR-0010/ADR-0013). Клиент обязан принять `applied`, у которого
+`result.command` и `result.delta` пусты, но `images` задан, и заменить листы из
+`images`, а не считать такой кадр ошибкой. Отказ —
+`{"type":"rejected","rejected":{"opId","code","retryable","hint?","message?}}`.
 
-Дельта обязательна: вычисленные значения — содержимое XLSX (`<v>`), а пересчёт
+Дельта обязательна для каждой команды: вычисленные значения — содержимое XLSX (`<v>`), а пересчёт
 недетерминирован (`NOW`, `RAND`, `OFFSET`/`INDIRECT`, Python-ячейки,
-`precision_as_displayed`). Клиент не выводит истину из своего исполнения.
+`precision_as_displayed`). Клиент не выводит истину из своего исполнения. Исключение одно —
+структурный undo/redo выше: там авторитетна не дельта, а образ листов.
 
 ### 3.2. Идентификаторы (ADR-0002)
 

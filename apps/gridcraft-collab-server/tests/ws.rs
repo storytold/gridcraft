@@ -242,6 +242,10 @@ fn a1(workbook: &gridcraft_engine::model::Workbook) -> gridcraft_engine::core::V
     workbook.sheet(0).map(|sheet| sheet.value(gridcraft_engine::core::CellRef::new(0, 0))).unwrap_or(gridcraft_engine::core::Value::Empty)
 }
 
+fn a2(workbook: &gridcraft_engine::model::Workbook) -> gridcraft_engine::core::Value {
+    workbook.sheet(0).map(|sheet| sheet.value(gridcraft_engine::core::CellRef::new(1, 0))).unwrap_or(gridcraft_engine::core::Value::Empty)
+}
+
 /// A replica that joins a room the cabinet opened from a file has to adopt that file: at version
 /// 0 the journal holds nothing to replay, so a join with `lastVersion: 0` that got no workbook
 /// would keep its own document and the two replicas would silently diverge.
@@ -263,6 +267,37 @@ async fn a_join_of_a_session_opened_from_bytes_receives_the_workbook() {
     assert_eq!(next(&mut ann).await["type"], "resynced");
     let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsx", &workbook).expect("the room's workbook");
     assert_eq!(a1(&workbook), gridcraft_engine::core::Value::Number(7.0), "the replica gets the document the room holds");
+}
+
+/// The same rule once the room has moved on: a seeded document with an edit on top still has to
+/// reach a version-zero joiner as a workbook. The tail alone would replay the edit onto whatever
+/// document that joiner happened to hold and then tell it it sits at the room's version
+/// (CodeRabbit 5848894080, `ws.rs:179`).
+#[tokio::test]
+async fn a_version_zero_join_of_a_seeded_room_with_edits_receives_the_workbook() {
+    let server = start().await;
+    let mut source = gridcraft_engine::Session::new();
+    source.new_workbook();
+    source.execute("cell.set", json!({ "cell": "A1", "input": 7 })).expect("the file's cell");
+    let bytes = gridcraft_engine::io::save_bytes(&source.doc().expect("a document").wb, "plan.xlsx").expect("the file");
+    let session = create_with_bytes(&server, 94, &bytes).await;
+
+    let mut ann = open(&server, &session, "ann", Role::Editor, 94).await;
+    let sheet = sheet_key(&next(&mut ann).await);
+    let _ = read_snapshot(&mut ann).await;
+    assert_eq!(next(&mut ann).await["type"], "resynced");
+    ann.send(Message::text(op("op-1", "cell.set", json!({ "input": 8 }), &sheet, "A2"))).await.unwrap();
+    assert_eq!(next(&mut ann).await["applied"]["version"], 1);
+
+    let mut bob = open_at(&server, &session, "bob", Role::Editor, 94, 0).await;
+    let welcome = next(&mut bob).await;
+    assert_eq!(welcome["type"], "welcome");
+    assert_eq!(welcome["version"], 1, "the room has one edit on top of the seed");
+    let (version, _epoch, workbook_bytes) = read_snapshot(&mut bob).await;
+    assert_eq!(version, 1, "the workbook is the room's head, not the seed");
+    let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsx", &workbook_bytes).expect("the room's workbook");
+    assert_eq!(a1(&workbook), gridcraft_engine::core::Value::Number(7.0), "the seed is in the workbook");
+    assert_eq!(a2(&workbook), gridcraft_engine::core::Value::Number(8.0), "and so is the edit");
 }
 
 /// The other side of the same rule: a room a participant opened as an empty workbook has no

@@ -123,7 +123,11 @@ impl Client {
             actor: welcome.actor_id.clone(),
             window_id: cfg.window_id.clone(),
             role: Some(welcome.role),
-            version: welcome.version,
+            // The version this replica actually holds, never the head the welcome reports: the
+            // catch-up has not been applied yet, and a socket that drops now would advertise a
+            // version whose operations it never received (CodeRabbit 5848894080, `client.rs:121`).
+            // Applied, Snapshot and Resynced advance it as the catch-up lands.
+            version: cfg.last_version,
             epoch: welcome.epoch,
             sheets: welcome.sheets.clone(),
             participants: welcome.participants.clone(),
@@ -321,7 +325,10 @@ fn handle(
                 state.session_id = session_id;
                 state.actor = actor_id;
                 state.role = Some(role);
-                state.version = version;
+                // `version` is the room's head, not this replica's position: the catch-up frames
+                // that follow are what move it. Taking the head here would make the next hello
+                // claim operations this replica never got if the socket drops first
+                // (CodeRabbit 5848894080, `client.rs:121`).
                 state.epoch = epoch;
                 state.sheets = sheets;
                 state.participants = participants;
@@ -418,7 +425,7 @@ fn text(frame: Message) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gridcraft_collab::{Applied, Kind, Outcome, Payload, RejectCode, Rejected, Target};
+    use gridcraft_collab::{Applied, Kind, Outcome, Payload, RejectCode, Rejected, Role, Target};
 
     fn op(op_id: &str) -> ClientOp {
         ClientOp {
@@ -466,5 +473,37 @@ mod tests {
 
         handle(ServerMessage::Rejected { rejected: rejected("ann-1") }, &shared, &events, &mut snapshot, &mut pending);
         assert!(pending.is_empty(), "a refused operation is answered too");
+    }
+
+    /// A welcome carries the room's head, not this replica's position. Taking it as the position
+    /// would make the next reconnect hello claim operations the catch-up never delivered
+    /// (CodeRabbit 5848894080, `client.rs:121`).
+    #[test]
+    fn a_welcome_does_not_move_the_reconnect_cursor() {
+        let shared = Arc::new(Mutex::new(State { version: 3, ..State::default() }));
+        let (events, _receiver) = mpsc::unbounded_channel();
+        let mut snapshot = None;
+        let mut pending = Vec::new();
+
+        handle(
+            ServerMessage::Welcome {
+                session_id: "s1".into(),
+                actor_id: "ann".into(),
+                role: Role::Editor,
+                version: 9,
+                epoch: 4,
+                sheets: Vec::new(),
+                participants: Vec::new(),
+                lease: None,
+            },
+            &shared,
+            &events,
+            &mut snapshot,
+            &mut pending,
+        );
+
+        let state = shared.lock().unwrap().clone();
+        assert_eq!(state.version, 3, "the catch-up has not been applied: the cursor stays where the document is");
+        assert_eq!(state.epoch, 4, "the room's epoch does come with the welcome");
     }
 }

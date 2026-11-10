@@ -12,10 +12,10 @@
 - PR: <https://github.com/storytold/gridcraft/pull/3613> — open, **not a draft** since
   2026-11-10T14:56:54Z, `mergeable = MERGEABLE`
 - Gate on this head: none yet. The four workflows created on `2a245f91` (`CI`, `House rules`,
-  `Nix`, `SonarCloud`, 2026-11-10T17:19:42Z) all sit in `action_required` with no job started;
-  the workflows created by the push of `f51237ea` have not started either, and CodeRabbit's review
-  on it has not landed. The evidence in this page is the host runs of §17, §18.6 and §20.2, not a
-  CI pass.
+  `Nix`, `SonarCloud`, 2026-11-10T17:19:42Z) all sit in `action_required` with no job started.
+  The push of `f51237ea` is still the human step §19 names, so its workflows will be created only
+  when that push happens; CodeRabbit's review on it has not landed either. The evidence in this
+  page is the host runs of §17, §18.6 and §20.2, not a CI pass.
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
 - Session handoff (project-level, outside this repository):
   `docs/collab/STATUS.md` in the cabinet project directory. This page is the canonical record and

@@ -173,10 +173,12 @@ async fn resync(app: &Arc<App>, session_id: &str, conn_id: &u64, tx: &mpsc::Send
     let mut sent = from;
     let mut used_snapshot = false;
     // A replica that holds no document of its own joins at version 0; when the room's document
-    // came from the cabinet and no operation was applied yet, the journal holds nothing to send,
-    // so the workbook itself is the answer. Without it both sides claim version 0 and keep
-    // different documents (CodeRabbit 5846575558, `collab_ui.rs:36`).
-    let mut want_base = from > head || from < base || (from == 0 && head == 0 && seeded);
+    // came from the cabinet, the journal tells it only what changed after the seed, so replaying
+    // that tail onto its own workbook leaves it with a document the room never had while it
+    // reports the room's version. A version-zero joiner therefore takes the workbook whenever the
+    // room was seeded — with an empty journal as much as with edits on top of it
+    // (CodeRabbit 5846575558 `collab_ui.rs:36`; 5848894080 `ws.rs:179`).
+    let mut want_base = from > head || from < base || (from == 0 && seeded);
     loop {
         if want_base {
             used_snapshot = true;
@@ -205,6 +207,13 @@ async fn resync(app: &Arc<App>, session_id: &str, conn_id: &u64, tx: &mpsc::Send
                     sent = applied.version;
                 }
             }
+            // The journal is empty while the head is above what this connection holds: a snapshot
+            // ran between `unregister` and now and trimmed away exactly the operations it missed.
+            // Registering it would tell it to resume at a version it never received
+            // (CodeRabbit 5848894080, `ws.rs:243`).
+            CatchUp::Trimmed => {
+                want_base = true;
+            }
             CatchUp::Registered { version, epoch } => {
                 if !used_snapshot {
                     app.metrics.catchups.fetch_add(1, Ordering::Relaxed);
@@ -219,6 +228,10 @@ async fn resync(app: &Arc<App>, session_id: &str, conn_id: &u64, tx: &mpsc::Send
 enum CatchUp {
     /// Operations the connection has not seen. It stays out of the live broadcast while they go.
     Tail(Vec<gridcraft_collab::Applied>),
+    /// The journal no longer holds what the connection missed: a snapshot trimmed the tail it
+    /// needed. The workbook is the only sound answer, so the connection stays out of the
+    /// broadcast and the caller sends the base.
+    Trimmed,
     /// Nothing is missing: the connection is back in the broadcast, and `version` is its head.
     Registered { version: u64, epoch: u64 },
 }
@@ -235,11 +248,39 @@ async fn catch_up(app: &App, session_id: &str, conn_id: &u64, tx: &mpsc::Sender<
     let Some(doc) = app.doc(session_id).await else { return CatchUp::Registered { version: 0, epoch: 0 } };
     let mut doc = doc.lock().await;
     let entries = doc.journal_after(sent);
-    if !entries.is_empty() {
-        return CatchUp::Tail(entries);
+    // The tail and the head are read under one lock, and an empty tail below the head means the
+    // journal was trimmed past `sent` — not that nothing happened. `u64::MAX` (a client asking
+    // for the workbook outright) is above any head, so rejection still registers the connection.
+    let head = doc.gateway.hub().version(session_id).unwrap_or(0);
+    match missed(entries.is_empty(), head, sent) {
+        Miss::Tail => return CatchUp::Tail(entries),
+        Miss::Trimmed => return CatchUp::Trimmed,
+        Miss::Nothing => {}
     }
     doc.conns.insert(*conn_id, tx.clone());
-    CatchUp::Registered { version: doc.gateway.hub().version(session_id).unwrap_or(0), epoch: doc.gateway.hub().epoch(session_id).unwrap_or(0) }
+    CatchUp::Registered { version: head, epoch: doc.gateway.hub().epoch(session_id).unwrap_or(0) }
+}
+
+/// What the journal says about a connection that holds `sent`, given whether the tail was empty
+/// and the head, both read under one critical section.
+#[derive(Debug, PartialEq, Eq)]
+enum Miss {
+    /// The journal holds operations this connection has not seen.
+    Tail,
+    /// The journal is empty although the head is above `sent`: a snapshot trimmed it.
+    Trimmed,
+    /// Nothing is missing.
+    Nothing,
+}
+
+fn missed(tail_empty: bool, head: u64, sent: u64) -> Miss {
+    if !tail_empty {
+        Miss::Tail
+    } else if head > sent {
+        Miss::Trimmed
+    } else {
+        Miss::Nothing
+    }
 }
 
 /// Why the workbook could not be sent: the connection is gone, or it can be told why not.
@@ -555,5 +596,20 @@ fn broadcast(metrics: &crate::metrics::Metrics, others: &[(u64, mpsc::Sender<Ser
         if tx.try_send(message.clone()).is_err() {
             metrics.dropped.fetch_add(1, Ordering::Relaxed);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Miss, missed};
+
+    /// A tail that a snapshot trimmed away is not "nothing to send": the connection would be told
+    /// to resume at a version whose operations it never received (CodeRabbit 5848894080).
+    #[test]
+    fn an_empty_tail_below_the_head_is_a_trimmed_journal() {
+        assert_eq!(missed(true, 7, 5), Miss::Trimmed, "versions 6 and 7 left with the trimmed journal");
+        assert_eq!(missed(true, 5, 5), Miss::Nothing, "nothing happened since the base");
+        assert_eq!(missed(false, 5, 5), Miss::Tail, "the tail is the answer when it holds anything");
+        assert_eq!(missed(true, 5, u64::MAX), Miss::Nothing, "a client asking for the workbook is above any head");
     }
 }

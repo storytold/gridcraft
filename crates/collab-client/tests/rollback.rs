@@ -6,7 +6,9 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use gridcraft_collab::{ClientMessage, ClientOp, Presence, RejectCode, Rejected, Role, SheetName};
+use gridcraft_collab::{
+    Applied, CellChange, ClientMessage, ClientOp, CommandEcho, Outcome, Presence, RejectCode, Rejected, Role, SheetDelta, SheetName,
+};
 use gridcraft_collab_client::{Event, Link, State, Synced, Welcome};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
@@ -92,6 +94,12 @@ fn value(session: &Session, a1: &str) -> Value {
     session.doc().expect("a document").wb.active().expect("a sheet").value(at)
 }
 
+/// What the formula bar shows for a cell: the formula, the Python code or the value.
+fn input(session: &Session, a1: &str) -> String {
+    let at = CellRef::parse(a1).expect("a valid address");
+    session.doc().expect("a document").wb.active().and_then(|sheet| sheet.cell(at)).map(|cell| cell.input_text()).unwrap_or_default()
+}
+
 #[test]
 fn a_refused_earlier_preview_does_not_undo_the_later_one() {
     let (mut synced, sink, mut session) = replica();
@@ -111,8 +119,8 @@ fn a_refused_earlier_preview_does_not_undo_the_later_one() {
     );
 }
 
-/// The workbook the client asked for replaces the document and ends the pending previews: the
-/// preview the room refused is gone, and what the room did keep is what this replica now shows.
+/// The workbook the client asked for replaces the document: the preview the room refused is gone,
+/// and what the room did keep is what this replica now shows.
 #[test]
 fn the_workbook_a_client_asked_for_replaces_the_refused_preview() {
     let (mut synced, sink, mut session) = replica();
@@ -149,4 +157,55 @@ fn a_refused_last_preview_is_rolled_back_locally() {
         "a plain rollback needs no catch-up: {:?}",
         sink.sent()
     );
+}
+
+/// A preview made while the workbook this replica asked for is in transit keeps its place in the
+/// room. The socket is handled in order, so the server runs the snapshot request before this
+/// preview and the workbook that comes back does not contain it; the answer to the preview then
+/// arrives with the command echo only, because the document it lands in is no longer the one the
+/// preview was made on (CodeRabbit 5848894080, `synced.rs:385`).
+#[test]
+fn a_preview_made_while_the_workbook_was_in_transit_is_replayed() {
+    let (mut synced, sink, mut session) = replica();
+    synced.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": "=1+1" })).expect("preview C");
+    assert_eq!(input(&session, "A1"), "=1+1", "the preview holds the formula");
+
+    let mut room = Session::new();
+    room.new_workbook();
+    let bytes = gridcraft_engine::io::save_bytes(&room.doc().expect("a document").wb, "session.xlsx").expect("a workbook");
+    sink.push(Event::Snapshot { version: 3, epoch: 0, bytes });
+    let _ = synced.poll(&mut session);
+    assert_eq!(value(&session, "A1"), Value::Empty, "the workbook the room sent does not hold the preview");
+
+    sink.push(Event::Applied(Applied {
+        op_id: "w1-0".into(),
+        version: 4,
+        epoch: 0,
+        actor: "ann".into(),
+        result: Outcome {
+            command: Some(CommandEcho { id: "cell.set".into(), params: json!({ "cell": "A1", "input": "=1+1" }) }),
+            delta: Some(vec![SheetDelta {
+                sheet: "0".into(),
+                cells: vec![CellChange {
+                    a1: "A1".into(),
+                    value: json!({ "t": "Number", "v": 2.0 }),
+                    formula: Some("1+1".into()),
+                    style: None,
+                    py: None,
+                    array: None,
+                    dynamic: false,
+                }],
+                objects_deleted: Vec::new(),
+                objects_created: Vec::new(),
+            }]),
+        },
+        sheets: None,
+        images: None,
+        book: None,
+        more: false,
+        image_part: None,
+    }));
+    let _ = synced.poll(&mut session);
+    assert_eq!(input(&session, "A1"), "=1+1", "the command is replayed; patching the value alone would leave a constant");
+    assert_eq!(value(&session, "A1"), Value::Number(2.0));
 }

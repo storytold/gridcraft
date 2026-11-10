@@ -407,7 +407,15 @@ impl Synced {
                             }
                             let sheets = self.link.state().sheets;
                             self.apply_sheets(&sheets);
-                            self.pending.clear();
+                            // The document the previews sat on is gone. An `applied` still in
+                            // flight may have been sent before the snapshot request and so is not
+                            // in this workbook: it has to be replayed in full, not patched as if
+                            // this replica's preview were still in front (CodeRabbit 5848894080,
+                            // `synced.rs:385`). The entry stays, with its preview unmarked, until
+                            // the answer to the operation arrives.
+                            for pending in &mut self.pending {
+                                pending.previewed = false;
+                            }
                         }
                     }
                 }
@@ -547,7 +555,14 @@ impl Synced {
             // The author previewed a merge command; nobody previewed a structural one, and another
             // window of the same person did not preview it here.
             let structural = applied.sheets.is_some();
-            let mine = applied.actor == self.actor && self.previewed_here(applied);
+            // The preview has to still be in the document, not merely have this window's id in
+            // the operation: a workbook that replaced the document took every preview with it, so
+            // an answer from before that swap is replayed like a remote command. An operation the
+            // transport did not queue here has no preview to lose — this replica never made one
+            // (CodeRabbit 5848894080, `synced.rs:385`).
+            let mine = applied.actor == self.actor
+                && self.previewed_here(applied)
+                && self.pending.iter().find(|pending| pending.op_id == applied.op_id).is_none_or(|pending| pending.previewed);
             if !mine || structural {
                 let _ = session.apply_remote(&command.id, command.params.clone());
             }
