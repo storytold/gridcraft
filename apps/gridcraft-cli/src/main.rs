@@ -9,7 +9,8 @@
 //! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet]
 //! gridcraft-cli commands [--json] [--search X]
 //! gridcraft-cli functions [--json] [--search X] [--category C]
-//! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
+//! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME] [--automation-read-root DIR]
+//!                   [--automation-write-root DIR] [--allow-commands LIST|@FILE]
 //! gridcraft-cli send <port> <method> [json]
 //! gridcraft-cli version | --version
 //! ```
@@ -47,7 +48,14 @@ const USAGE: &str = "usage:
                      blank lines and lines starting with # or // are skipped
   gridcraft-cli commands [--json] [--search X]
   gridcraft-cli functions [--json] [--search X] [--category C]
-  gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
+  gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME] [--automation-read-root DIR]
+                    [--automation-write-root DIR] [--allow-commands LIST|@FILE]
+                     the roots confine the files the agent's commands read and write; with
+                     one root given, the access the other would grant is denied, and with
+                     neither, files are not confined. --allow-commands holds the agent to
+                     the commands listed (ids like home.bold, groups like home.*, or @FILE);
+                     scripts are held to it too. All three confine the headless server only
+                     and are an error with --connect
   gridcraft-cli send <port> <method> [json]
   gridcraft-cli version";
 
@@ -522,13 +530,80 @@ fn functions(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// The value of option `name`, which may be given at most once: a confinement flag given twice
+/// must not quietly drop one of its values.
+fn once<'a>(a: &'a Args, name: &str) -> Result<Option<&'a str>, String> {
+    if a.opts.iter().filter(|(n, _)| n == name).count() > 1 {
+        return Err(format!("--{name} given twice"));
+    }
+    Ok(a.opt(name))
+}
+
+/// `--automation-read-root`, `--automation-write-root` and `--allow-commands` (inline, or `@FILE`
+/// with one id or `group.*` per line). Any problem is an error at startup, never a server that
+/// runs unconfined.
+fn automation_flags(a: &Args) -> Result<Option<std::sync::Arc<gridcraft_engine::automation::Automation>>, String> {
+    use gridcraft_engine::automation::{Automation, CommandAllowlist, MAX_LIST_BYTES};
+    let read = once(a, "automation-read-root")?.map(std::path::Path::new);
+    let write = once(a, "automation-write-root")?.map(std::path::Path::new);
+    let commands = match once(a, "allow-commands")? {
+        None => None,
+        // `--allow-commands --connect 7979` would otherwise take `--connect` as the list.
+        Some(spec) if spec.starts_with("--") => return Err("--allow-commands needs a value".into()),
+        Some(spec) => {
+            let text = match spec.strip_prefix('@') {
+                Some(path) => read_list_file(path, MAX_LIST_BYTES)?,
+                None => spec.to_string(),
+            };
+            Some(CommandAllowlist::parse(&text).map_err(|e| format!("--allow-commands: {e}"))?)
+        }
+    };
+    Ok(Automation::new(read, write, commands).map_err(|e| format!("mcp: {e}"))?.map(std::sync::Arc::new))
+}
+
+/// The text of an `@FILE` command list, at most `max` bytes. Only a regular file (or a link to one)
+/// is read: a pipe, socket or device (`/dev/zero`, a FIFO that sends a short list and stays open)
+/// found at the first check is refused before it is opened, since opening or reading it could block
+/// startup forever. The check and the open are not atomic: another program that swaps a FIFO in
+/// between can still make the open wait for a writer (the same check-then-open race as the
+/// automation roots). The read itself stops after `max + 1` bytes, whatever the file's metadata
+/// says, so a file that grows while it is read can't make startup read on; anything longer than
+/// `max` is refused, never cut short.
+fn read_list_file(path: &str, max: usize) -> Result<String, String> {
+    use std::io::Read;
+    let not_regular = || format!("--allow-commands: {path} is not a regular file");
+    let cannot_read = |e: std::io::Error| format!("--allow-commands: {path}: {e}");
+    if !std::fs::metadata(path).map_err(cannot_read)?.is_file() {
+        return Err(not_regular());
+    }
+    let file = std::fs::File::open(path).map_err(cannot_read)?;
+    // Checked again on the opened file: a path swapped after the first look for a device or other
+    // non-regular file that opened without waiting is refused here, before any read.
+    if !file.metadata().map_err(cannot_read)?.is_file() {
+        return Err(not_regular());
+    }
+    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
+    let mut bytes = Vec::new();
+    file.take(limit).read_to_end(&mut bytes).map_err(cannot_read)?;
+    if bytes.len() > max {
+        return Err(format!("--allow-commands: {path} is too long (more than {max} bytes)"));
+    }
+    String::from_utf8(bytes).map_err(|_| format!("--allow-commands: {path} is not UTF-8 text"))
+}
+
 /// `mcp` (headless, in-process engine) or `mcp --connect PORT|HOST:PORT` (drive a running app
 /// started with `gridcraft --control PORT`). JSON-RPC on stdin/stdout; logs on stderr.
 fn mcp(args: &[String]) -> Result<(), String> {
     use gridcraft_mcp::{Backend, Headless, Remote, Server, control_addr};
-    let a = Args::parse(args, &["connect", "in", "sample"], &[])?;
+    let a = Args::parse(args, &["connect", "in", "sample", "automation-read-root", "automation-write-root", "allow-commands"], &[])?;
+    // The confinement flags first: a flag that swallowed the next option says so, rather than
+    // the option's operand turning up as an unexpected argument.
+    let automation = automation_flags(&a)?;
     a.no_extra(0)?;
     let backend: Box<dyn Backend> = match a.opt("connect") {
+        Some(_) if automation.is_some() => {
+            return Err("mcp: --automation-read-root, --automation-write-root and --allow-commands confine the headless server; a running app is not confined by them".into());
+        }
         Some(c) => {
             let addr = control_addr(c);
             Box::new(
@@ -537,6 +612,17 @@ fn mcp(args: &[String]) -> Result<(), String> {
             )
         }
         None => {
+            if let Some(au) = &automation {
+                // Every thread of this process, before `--in` is opened: it must be inside the read root too.
+                gridcraft_engine::automation::confine_process(au.clone());
+                let show = |r: Option<&std::path::Path>| r.map_or_else(|| "none".to_string(), |p| p.display().to_string());
+                let commands = au.commands().map_or_else(|| "all".to_string(), |l| l.describe().join(", "));
+                eprintln!(
+                    "gridcraft-cli: files confined: read root {}, write root {}; commands: {commands}",
+                    show(au.read_root()),
+                    show(au.write_root())
+                );
+            }
             let session = match (a.opt("in"), a.opt("sample")) {
                 (Some(p), _) => open(p)?,
                 (None, Some(name)) => {
@@ -546,7 +632,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
                 }
                 (None, None) => blank(),
             };
-            Box::new(Headless::with_session(session))
+            Box::new(Headless::with_session(session).with_automation(automation))
         }
     };
     eprintln!("gridcraft-cli: MCP server on stdio ({})", backend.describe());
@@ -579,6 +665,52 @@ fn send(args: &[String]) -> Result<(), String> {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    /// A fresh, empty folder for one test.
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("gridcraft-allowlist-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// An `@FILE` list is read up to its limit; one byte more, non-UTF-8 text or a folder is refused.
+    #[test]
+    fn a_list_file_is_read_up_to_its_limit_and_no_further() {
+        let dir = scratch("limit");
+        let at = |name: &str, text: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, text).unwrap();
+            path.to_string_lossy().into_owned()
+        };
+        assert_eq!(read_list_file(&at("exact", "home.*\ncell"), 11).unwrap(), "home.*\ncell");
+        assert!(read_list_file(&at("long", "home.*\ncell."), 11).unwrap_err().contains("too long"));
+        std::fs::write(dir.join("latin1"), [b'c', b'a', b'f', 0xE9]).unwrap();
+        assert!(read_list_file(&dir.join("latin1").to_string_lossy(), 11).unwrap_err().contains("not UTF-8"));
+        assert!(read_list_file(&dir.join("missing").to_string_lossy(), 11).is_err());
+        assert!(read_list_file(&dir.to_string_lossy(), 11).unwrap_err().contains("not a regular file"));
+        let limit = gridcraft_engine::automation::MAX_LIST_BYTES;
+        assert!(read_list_file(&at("over", &"#".repeat(limit + 1)), limit).unwrap_err().contains("too long"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Devices and FIFOs are refused before they are opened; a link to a regular file still reads.
+    #[cfg(unix)]
+    #[test]
+    fn streams_and_devices_are_refused_before_they_are_opened() {
+        let limit = gridcraft_engine::automation::MAX_LIST_BYTES;
+        assert!(read_list_file("/dev/zero", limit).unwrap_err().contains("not a regular file"));
+        // A FIFO with no writer: opening it would block for good. The test would hang if it were.
+        let dir = scratch("fifo");
+        let fifo = dir.join("list");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()), "mkfifo");
+        assert!(read_list_file(&fifo.to_string_lossy(), limit).unwrap_err().contains("not a regular file"));
+        // A link to a regular file is still a regular file.
+        std::fs::write(dir.join("real"), "home.bold").unwrap();
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("link")).unwrap();
+        assert_eq!(read_list_file(&dir.join("link").to_string_lossy(), limit).unwrap(), "home.bold");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn parses_commands() {
