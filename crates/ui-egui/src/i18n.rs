@@ -241,11 +241,12 @@ impl Language {
             "grouped shapes are not supported and were skipped",
         ];
         for base in DRAWING_WARNINGS {
-            if let Some(suffix) = warning.strip_prefix(base) {
-                if suffix.starts_with(" (") && suffix.ends_with(')') {
-                    let translated = self.translation(base).unwrap_or(base);
-                    return format!("{translated}{suffix}");
-                }
+            if let Some(suffix) = warning.strip_prefix(base)
+                && suffix.starts_with(" (")
+                && suffix.ends_with(')')
+            {
+                let translated = self.translation(base).unwrap_or(base);
+                return format!("{translated}{suffix}");
             }
         }
         self.translation(warning).unwrap_or(warning).to_owned()
