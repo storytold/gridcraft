@@ -605,6 +605,20 @@ fn a_grouped_action_that_panics_is_rolled_back_before_the_panic_goes_on() {
 }
 
 #[test]
+fn a_panic_inside_edit_dax_view_keeps_the_stored_view() {
+    // `edit_dax_view` used to `take` the view before running its closure, so a panic
+    // left the default in place; editing a clone keeps the stored view (CodeRabbit, #3412).
+    let mut s = s();
+    s.edit_dax_view(|view| view.show_hidden = true);
+    assert!(s.dax_view.show_hidden);
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        s.edit_dax_view(|_| panic!("inside the view edit"));
+    }));
+    assert!(caught.is_err(), "the panic goes on to the caller");
+    assert!(s.dax_view.show_hidden, "the stored view is unchanged, not reset");
+}
+
+#[test]
 fn a_group_ended_by_a_command_that_then_panics_keeps_its_step() {
     // The command takes a token the test left for it, ends or rolls back that group, and panics.
     // The group's token went with the command, so the group stays ended; its step runs from the

@@ -974,9 +974,10 @@ impl Session {
     }
 
     /// Changes the Power Pivot window's view state, recording the change as
-    /// [`Session::set_dax_model`] does.
+    /// [`Session::set_dax_model`] does. Edits a clone so a panic inside `f`
+    /// leaves the stored view untouched instead of reset to default.
     pub fn edit_dax_view(&mut self, f: impl FnOnce(&mut cmd::dax::ModelView)) {
-        let mut view = std::mem::take(&mut self.dax_view);
+        let mut view = self.dax_view.clone();
         f(&mut view);
         let before = std::mem::replace(&mut self.dax_view, view);
         let changes = daxstate::view_changes(&before, &self.dax_view);
