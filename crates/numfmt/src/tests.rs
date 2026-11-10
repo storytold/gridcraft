@@ -53,6 +53,14 @@ fn the_separators_come_from_the_region_and_a_typed_code_is_read_with_them() {
     assert_eq!(regional_code("dd.mm.yyyy", it), "dd.mm.yyyy");
     assert_eq!(regional_code("hh:mm:ss.000", it), "hh:mm:ss.000");
     assert_eq!(canonical_code("dd/mm/yyyy", fr), "dd/mm/yyyy");
+    // A grouping separator right after the digits scales the value, and it has no digit after it,
+    // so both directions translate it as well, including a run of them.
+    assert_eq!(regional_code("0.0,", it), "0,0.");
+    assert_eq!(canonical_code("0,0.", it), "0.0,");
+    assert_eq!(regional_code("0.0,,", it), "0,0..");
+    assert_eq!(canonical_code("0,0..", it), "0.0,,");
+    let scaled = NumberFormat::parse_in("0,0.", it);
+    assert_eq!(scaled.code(), "0.0,");
 }
 
 #[test]
