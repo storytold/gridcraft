@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-09 · **Change:** minor (§5: remaining work reflects landed CJK fallback and Arabic shaping/bidi; earlier: §17: Excel's compact ink traces decode and its brush decides the tool, not the pressure channel; earlier: native Office InkML ink in xlsx; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-09 · **Change:** minor (§17: brushes paint with an imported repeating texture; earlier: Excel's compact ink traces decode and its brush decides the tool, not the pressure channel; earlier: native Office InkML ink in xlsx; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -59,6 +59,12 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora). Arabic shared shaping/bidi,
   editing and cell Context/LTR/RTL now have focused regressions and full gates. Arabic font
   delivery and PDF output are separate PRs; other script shaping still needs verification.
+- **Missing:** CJK font fallback, complex shaping (Arabic, Devanagari, Thai), bidi, non-Latin PDF.
+- **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32), and for
+  Arabic (system, fontconfig and craft-fonts faces); a UI font with Arabic of its own (DejaVu Sans
+  in the Flatpak) still draws interface Arabic ahead of fontconfig's choice (#229); #142
+  (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora); no shaping for Arabic or
+  Devanagari; PDF writer uses 14 standard fonts only.
 - **Impact:** blocks most of the world's users even with an English UI.
 - **Estimate:** 12–20 h. [localization-parity.md](localization-parity.md)
 
@@ -199,7 +205,6 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-09 | minor | §5: remaining work reflects the landed localization (system-font fallback for CJK, Thai, Hebrew and Arabic; Arabic shared shaping/bidi, editing and cell Context/LTR/RTL with regressions and full gates); still missing: cross-platform script coverage, Devanagari/Thai shaping verification, non-Latin PDF and Arabic UI layout |
 | 2026-11-08 | minor | §17: brushes paint with a repeating image the person imports (PNG/JPEG, content-addressed workbook store, `draw.textureImport`/`draw.textureRemove`/`draw.textureList`), tiled along and across the stroke and tinted by the brush colour; the textures, each stroke's texture id and repeat size, the brush subtype and the draw order travel in a veryHidden `GridCraft Ink` worksheet Excel preserves, written only while such data exists and kept (not dropped) when a newer layout is opened here |
 | 2026-11-08 | minor | §17: Excel's compact ink traces decode, its brush decides the tool (the pressure channel says nothing), `*` keeps the difference order, a damaged InkML part no longer stops the workbook opening, a multi-trace part reads as one stroke per trace, and a copied sheet's ink is rekeyed; legacy DrawingML ink is not upgraded on save and Excel drops the private draw-order brush property (the `GridCraft Ink` sheet returns it) |
 | 2026-11-07 | minor | §17: native Office InkML ink in xlsx (`xdr:contentPart` + InkML part + PNG fallback); brush kind, effect, pressure and draw order round-trip |
@@ -210,6 +215,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-11-01 | minor | §4: chart data tables implemented for column, bar, line, area and compatible combo charts, with legend keys and border settings, live source values, XLSX round-trip and print/PDF; other chart gaps remain. |
 | 2026-10-31 | minor | §13: Solver Options (Max Evaluations, Integer Optimality and the Evolutionary options), saved with the model |
 | 2026-10-31 | minor | §13: Solver Load/Save Model (`data.solverSaveModel`, `data.solverLoadModel`) and Reset All (`data.solverReset`), with buttons in the Solver Parameters dialog |
+| 2026-10-26 | minor | Arabic shared bidi display/editing and persisted cell reading direction; other script and PDF work remain separate |
+| 2026-10-26 | minor | §5: Arabic text renders in cells and the interface: a system Arabic face (Tahoma, Arial or Segoe UI on Windows, Geeza Pro on macOS, Noto Sans or Naskh Arabic on Linux) joins the script fallbacks, fontconfig's Arabic choice, when it has Arabic letters, leads the Arabic fallbacks and draws Arabic wherever the UI or cell font has none, such as the default cell fonts (part of #229; a UI font with Arabic of its own, such as DejaVu Sans in the Flatpak, still draws interface Arabic, left for a follow-up), and craft-fonts' Noto Sans Arabic is a required face allowed on the web. Workbook fonts without Arabic keep every script fallback. Shaping and bidirectional layout remain separate work |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |
