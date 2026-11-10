@@ -200,7 +200,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Ink Stroke",
             [],
             None,
-            "{points: [[x,y],…] in sheet points (at most 20000; |x| and |y| at most 1e7), brush|kind?: pen|pencil|highlighter|fountainPen|brushPen, color?: #RRGGBB (an invalid colour is an error), width?: mm (millimetres: 1 mm = 3.7795 pt; callers that pass points must convert), widthMm?: mm, effect?: rainbow|galaxy|lava|ocean|roseGold|gold|silver|bronze|none, pressure?: [0..32767] once per point (a wrong length or a non-number is an error)} → {shape}",
+            "{points: [[x,y],…] in sheet points (at most 20000; |x| and |y| at most 1e7), brush|kind?: pen|pencil|highlighter|fountainPen|brushPen, color?: #RRGGBB (an invalid colour is an error), width?: mm (millimetres: 1 mm = 3.7795 pt; callers that pass points must convert), widthMm?: mm, effect?: rainbow|galaxy|lava|ocean|roseGold|gold|silver|bronze|none, pressure?: [0..32767] at most one per point, values clamped (more entries than points or a non-number is an error; a shorter array is kept and the painter tapers the whole stroke instead)} → {shape}",
             has_doc,
             stroke
         ),
