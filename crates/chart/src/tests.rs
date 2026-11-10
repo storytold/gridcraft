@@ -1715,6 +1715,9 @@ fn series_lines_take_their_width() {
     for (kind, default) in [(ChartKind::Line, 2.25), (ChartKind::ScatterLines, 2.0), (ChartKind::Radar, 2.0)] {
         assert!(!widths(kind, None).is_empty(), "{kind:?} draws its line");
         assert!(widths(kind, None).iter().all(|w| *w == default), "{kind:?}: {:?}", widths(kind, None));
+        for width in [5.0, 0.0, 18.0, 1584.0] {
+            assert!(!widths(kind, Some(width)).is_empty(), "{kind:?}: {width} pt draws its line");
+        }
         // 5 pt is 6.67 px, the chart's unit.
         assert!(widths(kind, Some(5.0)).iter().all(|w| (*w - 5.0 * 96.0 / 72.0).abs() < 1e-4), "{kind:?}");
         // A hairline stays visible; a line wider than the plot is bounded.
