@@ -4,6 +4,8 @@
 
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "სქემა",
+        "Decorative Text" => "დეკორატიული ტექსტი",
         "Paste" => "ჩასმა",
         "Paste Values" => "მნიშვნელობების ჩასმა",
         "Paste Formulas" => "ფორმულების ჩასმა",
