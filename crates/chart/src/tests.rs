@@ -1715,3 +1715,21 @@ fn long_category_labels_wrap_in_their_slot() {
     assert!(!words.iter().any(|t| t.contains('\u{2026}')), "{words:?}");
     assert!(words.len() > d.categories.len(), "wrapped onto more than one line each: {words:?}");
 }
+
+/// A chart too short for wrapped category labels keeps its plot and thins the labels instead.
+#[test]
+fn a_short_chart_thins_long_labels_instead_of_losing_its_plot() {
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.title = None;
+    c.x_title = None;
+    c.y_title = None;
+    let mut d = sample(ChartKind::ColumnClustered);
+    d.series.truncate(1);
+    d.categories =
+        vec!["First insurer adopted".into(), "Second insurance company".into(), "Third regional division".into(), "Fourth national company".into()];
+    d.series[0].values.truncate(4);
+    let prims = render(&c, &d, 420.0, 48.0, &ApproxMeasure);
+    assert!(prims.iter().any(|p| matches!(p, Prim::Rect { fill: Some(f), .. } if *f == d.series[0].color)), "the bars are drawn: {prims:?}");
+}

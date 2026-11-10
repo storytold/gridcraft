@@ -316,7 +316,9 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     // Outer levels padded to the slots (forecast slots stay in the last group).
     let outer: Vec<Vec<String>> =
         data.category_levels.iter().map(|l| (0..ncat_slots).map(|j| l.get(j).cloned().unwrap_or_default()).collect()).collect();
-    let (area, table) = super::table::reserve(ctx, chart, data, area, ncat_slots);
+    // The value axis's labels take the plot's left edge when wider than the table's names.
+    let value_labels = y1.labels().iter().map(|(_, t)| ctx.tw(t, LABEL_SIZE)).fold(0.0f32, f32::max) + 6.0;
+    let (area, table) = super::table::reserve(ctx, chart, data, area, ncat_slots, value_labels);
     let category_axis = super::table::category_axis(&table, &labels, &outer);
     let plot = frame(ctx, area, category_axis, &y1, y2.as_ref(), horizontal, chart.gridlines);
     if !plot.ok() {

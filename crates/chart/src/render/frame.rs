@@ -93,7 +93,7 @@ pub(super) struct ValAxis<'a> {
 }
 
 impl ValAxis<'_> {
-    fn labels(&self) -> Vec<(f64, String)> {
+    pub(super) fn labels(&self) -> Vec<(f64, String)> {
         self.scale.ticks().into_iter().map(|v| (v, self.fmt.format(v, Some(self.scale.step)))).collect()
     }
 }
@@ -183,7 +183,14 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
         };
         let rows = wrapped.as_ref().map_or(1, |w| w.iter().map(Vec::len).max().unwrap_or(1));
         let extra = lh * (rows - 1) as f32;
-        let plot = Bx { x: area.x + left, y: area.y + lh * 0.5, w: area.w - left - right, h: area.h - lh * 1.5 - 4.0 - lh * levels - extra };
+        let mut plot = Bx { x: area.x + left, y: area.y + lh * 0.5, w: area.w - left - right, h: area.h - lh * 1.5 - 4.0 - lh * levels - extra };
+        // A chart too short for the wrapped rows keeps one row and thins its labels, as before.
+        let (wrapped, rows) = if wrapped.is_some() && !plot.ok() {
+            plot.h += extra;
+            (None, 1)
+        } else {
+            (wrapped, rows)
+        };
         if !plot.ok() {
             return plot;
         }

@@ -32,7 +32,8 @@ pub(super) fn category_axis<'a>(layout: &Option<Layout>, labels: &'a [String], o
 
 /// Reserve at most half the available height. A table that cannot fit is explicitly labelled
 /// instead of dropping rows or allocating a series × point-sized matrix.
-pub(super) fn reserve(ctx: &mut Ctx, chart: &Chart, data: &ChartData, mut area: Bx, columns: usize) -> (Bx, Option<Layout>) {
+/// `value_labels` is the width the value axis's labels take beside the plot.
+pub(super) fn reserve(ctx: &mut Ctx, chart: &Chart, data: &ChartData, mut area: Bx, columns: usize, value_labels: f32) -> (Bx, Option<Layout>) {
     if chart.data_table.is_none() || !chart.supports_data_table() {
         return (area, None);
     }
@@ -41,8 +42,10 @@ pub(super) fn reserve(ctx: &mut Ctx, chart: &Chart, data: &ChartData, mut area: 
     let key_width = if chart.data_table.as_ref().is_some_and(|t| t.show_keys) { 22.0 } else { 0.0 };
     let names = data.series.iter().take(32).map(|s| ctx.tw(&s.name, LABEL_SIZE)).fold(0.0f32, f32::max);
     let stub = (names + key_width + 10.0).clamp(24.0, (area.w * 0.3).max(24.0));
-    // The plot takes the width beside the stub, so a column is about this wide.
-    let column = (area.w - stub - 4.0) / columns.max(1) as f32;
+    // The plot takes the width beside the stub or the value labels, whichever is wider, as the
+    // frame lays it out, so a column is this wide.
+    let left = value_labels.min(area.w * 0.4).max(stub);
+    let column = (area.w - left - 4.0) / columns.max(1) as f32;
     let cat_lines = if columns == 0 || columns > 128 {
         1
     } else {
