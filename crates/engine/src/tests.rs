@@ -19,6 +19,44 @@ fn v(s: &Session, a: &str) -> Value {
 }
 
 #[test]
+fn format_cells_reading_order_survives_undo_and_xlsx() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 123 ABC"})).unwrap();
+    s.execute("home.bold", json!({"range": "A1"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": "RightToLeft"}}})).unwrap();
+    let alignment = |s: &Session| {
+        let d = s.doc().unwrap();
+        let style = d.wb.styles.get(d.wb.active().unwrap().style_id(CellRef::new(0, 0)));
+        assert!(style.font.bold);
+        serde_json::to_value(style.align).unwrap()
+    };
+    assert_eq!(alignment(&s)["reading_order"], "RightToLeft");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(alignment(&s)["reading_order"].is_null());
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(alignment(&s)["reading_order"], "RightToLeft");
+    for order in [json!("invalid"), json!(2)] {
+        assert!(s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": order}}})).is_err());
+        assert_eq!(alignment(&s)["reading_order"], "RightToLeft");
+    }
+    let wb = &s.doc().unwrap().wb;
+    let (reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(wb).unwrap()).unwrap();
+    let cell = CellRef::new(0, 0);
+    assert_eq!(reopened.styles.get(reopened.active().unwrap().style_id(cell)), wb.styles.get(wb.active().unwrap().style_id(cell)));
+    assert_eq!(reopened.active().unwrap().value(cell), Value::text("مرحبا 123 ABC"));
+    for order in ["LeftToRight", "Context"] {
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": order}}})).unwrap();
+        assert_eq!(alignment(&s)["reading_order"], order);
+    }
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": null}}})).unwrap();
+    assert!(alignment(&s)["reading_order"].is_null());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(alignment(&s)["reading_order"], "Context");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(alignment(&s)["reading_order"].is_null());
+}
+
+#[test]
 fn entering_empty_cells_preserves_whole_sheet_formatting() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "existing"})).unwrap();
@@ -1491,6 +1529,28 @@ fn case_sensitive_sort_puts_lowercase_first() {
     s.execute("data.sort", json!({"range": "A1:A6", "header": false, "matchCase": true, "keys": [{"column": "A"}]})).unwrap();
     let col: Vec<Value> = (1..=6).map(|r| v(&s, &format!("A{r}"))).collect();
     assert_eq!(col, ["a", "A", "aB", "Ab", "b", "B"].map(Value::from));
+}
+
+#[test]
+fn data_sort_orders_vowelled_arabic_by_letters() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["بيت"], ["بَاب"], ["تمر"], ["\u{200F}بحر"]]})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A4", "header": false, "keys": [{"column": "A"}]})).unwrap();
+    let col: Vec<Value> = (1..=4).map(|r| v(&s, &format!("A{r}"))).collect();
+    assert_eq!(col, ["بَاب", "\u{200F}بحر", "بيت", "تمر"].map(Value::from));
+}
+
+#[test]
+fn data_sort_orders_marks_and_digit_scripts_like_excel() {
+    // Excel 16.0 (build 20527, en-US) sorts this column, as text, into exactly this order.
+    let want = ["١٢", "۱۲", "ب\u{064E}1", "ب\u{064E}١", "بa", "\u{200F}باب", "ب\u{064B}اب", "ب\u{064E}اب", "ب\u{0652}اب", "ب\u{0651}اب"];
+    let mut s = s();
+    s.execute("home.numberFormat", json!({"range": "A1:A10", "code": "@"})).unwrap();
+    let input: Vec<Vec<&str>> = want.iter().rev().map(|t| vec![*t]).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": input})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A10", "header": false, "keys": [{"column": "A"}]})).unwrap();
+    let col: Vec<Value> = (1..=10).map(|r| v(&s, &format!("A{r}"))).collect();
+    assert_eq!(col, want.map(Value::from));
 }
 
 #[test]
