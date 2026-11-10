@@ -489,8 +489,12 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let Some(mut ed) = app.editor.take() else { return EditorInfo::default() };
     let mine = ed.from_formula_bar == (id == egui::Id::unique("gridcraft.formula_bar"));
     // Keys the editor handles itself (before the TextEdit sees them), only where it has focus.
+    // A widget that just lost focus (the Name Box, say) leaves `focused` on none for the rest of
+    // the frame: that is its own focus-loss frame, not the editor's, so the editor must not take
+    // the same key (Escape would cancel the draft).
     let focused = ui.ctx().memory(|m| m.focused());
-    let has_focus = focused == Some(id) || (mine && (ed.request_focus || focused.is_none()));
+    let name_box_had_focus = ui.ctx().memory(|m| m.had_focus_last_frame(egui::Id::unique("gridcraft.name_box")));
+    let has_focus = focused == Some(id) || (mine && (ed.request_focus || (focused.is_none() && !name_box_had_focus)));
     let EditorKeyOutcome { action, arrow, cancel, to_python } = editor_shortcuts(app, ui, id, &mut ed, mine, has_focus);
     // The text widget.
     let refs = formula_refs(&ed.text);

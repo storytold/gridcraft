@@ -674,8 +674,18 @@ fn baseline_offset_factor(primary: &FontData, fallback: &FontData) -> Option<f32
 fn align_script_baselines(fonts: &mut FontDefinitions) {
     let craft_text: Vec<String> =
         craft_font_faces().into_iter().filter(|(_, font)| font.scripts.iter().any(|script| *script != "Zsym")).map(|(key, _)| key).collect();
-    for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO, MATH, MATH_ITALIC, MATH_BOLD] {
-        let family = FontFamily::Name(role.into());
+    // Every named family carries the system and craft script faces, including workbook fonts bound
+    // under their own names: align each against that family's own primary face.
+    let names: Vec<_> = fonts
+        .families
+        .keys()
+        .filter_map(|family| match family {
+            FontFamily::Name(name) => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    for name in names {
+        let family = FontFamily::Name(name.clone());
         let Some(chain) = fonts.families.get(&family).cloned() else { continue };
         let Some(primary) = chain.first().and_then(|key| fonts.font_data.get(key)).cloned() else { continue };
         let mut adjusted: Vec<String> = Vec::with_capacity(chain.len());
@@ -689,7 +699,7 @@ fn align_script_baselines(fonts: &mut FontDefinitions) {
                 adjusted.push(key);
                 continue;
             };
-            let variant = format!("{key}@{role}");
+            let variant = format!("{key}@{name}");
             if !fonts.font_data.contains_key(&variant) {
                 let mut fd = (*face).clone();
                 fd.tweak.y_offset_factor = factor;
@@ -751,5 +761,23 @@ mod font_binding_tests {
             let FontFamily::Name(fam) = cell_family(&name, seed % 2 == 0, seed % 3 == 0) else { continue };
             assert!(crate::fonts::is_bound(&fam), "{name:?} → unbound {fam:?}");
         }
+    }
+
+    #[test]
+    fn installed_named_families_align_their_script_fallbacks() {
+        let mut fonts = FontDefinitions::default();
+        let primary = "fnt:Test:nn";
+        let script = "sys-cjk-han-ja";
+        fonts.font_data.insert(primary.into(), Arc::new(FontData::from_static(epaint_default_fonts::UBUNTU_LIGHT)));
+        fonts.font_data.insert(script.into(), Arc::new(FontData::from_static(epaint_default_fonts::UBUNTU_LIGHT)));
+        let family = FontFamily::Name("fnt:Test:nn".into());
+        fonts.families.insert(family.clone(), vec![primary.into(), script.into()]);
+
+        align_script_baselines(&mut fonts);
+
+        let chain = fonts.families.get(&family).expect("the installed family stays");
+        let variant = chain.iter().find(|key| key.starts_with(script) && key.contains('@')).expect("the script face is aligned for this family");
+        let expected = baseline_offset_factor(&fonts.font_data[primary], &fonts.font_data[script]).expect("font metrics");
+        assert_eq!(fonts.font_data[variant.as_str()].tweak.y_offset_factor, expected);
     }
 }

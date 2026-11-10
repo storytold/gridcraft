@@ -109,6 +109,23 @@ fn leaving_the_grid_keeps_text_the_ime_committed() {
 }
 
 #[test]
+fn escape_in_the_name_box_keeps_the_committed_draft() {
+    let mut h = harness();
+    // Leave committed text as an open draft, then move the keyboard to the Name Box.
+    h.input_mut().events.push(Event::Ime(ImeEvent::Commit("a".into())));
+    h.input_mut().events.push(Event::Ime(ImeEvent::Preedit { text: "b".into(), active_range_chars: None }));
+    h.run_steps(4);
+    h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("gridcraft.name_box")));
+    h.run_steps(4);
+    assert_eq!(h.state().editor.as_ref().map(|ed| ed.text.as_str()), Some("a"));
+
+    // Escape closes the Name Box; its focus-loss frame must not also cancel the cell draft.
+    key(&mut h, Key::Escape);
+    let ed = h.state().editor.as_ref().expect("Escape in the Name Box must not cancel the cell draft");
+    assert_eq!(ed.text, "a");
+}
+
+#[test]
 fn a_commit_on_a_selected_cell_starts_an_edit_with_its_text() {
     let mut h = harness();
     ime(&mut h, ImeEvent::Commit("abc".into()));
