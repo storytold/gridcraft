@@ -77,18 +77,17 @@ pub(super) fn begin_groups(ui: &Ui) {
 
 /// Records that the group named `label` ends at `right` and the next one starts there. Only valid
 /// between `begin_groups` and `paint_group_labels` while a tab draws inside `show()` (see the
-/// invariant on `begin_groups`): with no spans entry the span is dropped and `start_id` still
-/// advances, so an out-of-order call leaves stale state until the next `begin_groups`.
+/// invariant on `begin_groups`).
 fn end_group(ui: &Ui, label: &str, right: f32, separator: bool) {
-    let tracking = ui.ctx().data(|d| d.get_temp::<Vec<GroupSpan>>(spans_id()).is_some());
-    debug_assert!(tracking, "sep/group_end called outside show(): begin_groups did not start group tracking");
     let left = ui.ctx().data(|d| d.get_temp::<f32>(start_id())).unwrap_or(right);
     let label = crate::i18n::current(ui.ctx()).tr(label).to_owned();
     ui.ctx().data_mut(|d| {
-        if let Some(mut spans) = d.get_temp::<Vec<GroupSpan>>(spans_id()) {
-            spans.push(GroupSpan { label, left, right, separator });
-            d.insert_temp(spans_id(), spans);
-        }
+        let Some(mut spans) = d.get_temp::<Vec<GroupSpan>>(spans_id()) else {
+            debug_assert!(false, "sep/group_end called outside show(): begin_groups did not start group tracking");
+            return;
+        };
+        spans.push(GroupSpan { label, left, right, separator });
+        d.insert_temp(spans_id(), spans);
         d.insert_temp(start_id(), right);
     });
 }
