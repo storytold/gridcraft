@@ -636,11 +636,12 @@ mod tests {
 
     /// Measured on a synthetic chart in Excel: a red bar at 67% (255, 84, 84 on white), 37.7 x
     /// 62.3 pt, with a 56 pt inner shadow, 4 pt to the left, black at half opacity, is
-    /// 205, 68, 68 at its centre: about a fifth darker.
+    /// 205, 68, 68 at its centre: about a fifth darker. In pixels, the chart's unit.
     #[test]
     fn an_inner_shadow_darkens_a_bar_as_excel_does() {
-        let shadow = crate::BarShadow { blur: 56.0, dx: -4.0, dy: 0.0, color: [0, 0, 0, 128] };
-        let k = inner_shadow_strength(37.7, 62.3, &shadow) * 128.0 / 255.0;
+        let px = 96.0 / 72.0;
+        let shadow = crate::BarShadow { blur: 56.0 * px, dx: -4.0 * px, dy: 0.0, color: [0, 0, 0, 128] };
+        let k = inner_shadow_strength(37.7 * px, 62.3 * px, &shadow) * 128.0 / 255.0;
         assert!((k - 0.196).abs() < 0.02, "{k}");
         // Without blur only the offset strip is shaded; a bar far larger than the blur is barely
         // touched in the middle.

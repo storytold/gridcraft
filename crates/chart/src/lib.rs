@@ -156,8 +156,8 @@ pub struct UpDownBars {
     pub down_shadow: Option<BarShadow>,
 }
 
-/// An inner shadow resolved for drawing: lengths in chart units, the colour's alpha the shadow's
-/// opacity.
+/// An inner shadow resolved for drawing: lengths in chart units (pixels at 100%), the colour's
+/// alpha the shadow's opacity.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BarShadow {
     pub blur: f32,

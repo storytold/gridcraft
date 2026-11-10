@@ -380,11 +380,14 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             Some((rgba(color, None, [0, 0, 0]), width.filter(|w| w.is_finite()).map_or(0.75, |w| w.clamp(0.25, 20.0))))
         }
     };
+    // Shadow lengths are in points; the chart draws in pixels at 100%.
+    const PX_PER_PT: f32 = 96.0 / 72.0;
     let shadow = |s: Option<gridcraft_model::InnerShadow>| {
         s.map(|s| {
             let (sin, cos) = s.direction.to_radians().sin_cos();
-            let d = s.distance.clamp(0.0, 1584.0);
-            crate::BarShadow { blur: s.blur.clamp(0.0, 1584.0), dx: d * cos, dy: d * sin, color: rgba(Some(s.color), Some(s.opacity), [0, 0, 0]) }
+            let d = s.distance.clamp(0.0, 1584.0) * PX_PER_PT;
+            let blur = s.blur.clamp(0.0, 1584.0) * PX_PER_PT;
+            crate::BarShadow { blur, dx: d * cos, dy: d * sin, color: rgba(Some(s.color), Some(s.opacity), [0, 0, 0]) }
         })
     };
     let up_down = chart.up_down_bars.map(|u| crate::UpDownBars {

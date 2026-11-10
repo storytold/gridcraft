@@ -1793,6 +1793,16 @@ fn up_down_bar_opacity_reaches_the_drawing() {
     let ud = resolve(&wb, 0, &c).up_down.unwrap();
     assert_eq!(ud.down, [0xFF, 0, 0, 171]);
     assert_eq!(ud.up, [0xF9, 0xF9, 0xF9, 0xFF]);
+    // Outlines: Excel's default, none; a shadow's points become the chart's pixels.
+    assert_eq!((ud.up_outline, ud.down_outline), (Some(([0, 0, 0, 0xFF], 0.75)), Some(([0, 0, 0, 0xFF], 0.75))));
+    let u = c.up_down_bars.as_mut().unwrap();
+    u.down_outline = gridcraft_model::BarOutline::None;
+    u.down_shadow = Some(gridcraft_model::InnerShadow { blur: 56.0, distance: 4.0, direction: 180.0, color: Color::Rgb(0), opacity: 50 });
+    let ud = resolve(&wb, 0, &c).up_down.unwrap();
+    assert_eq!(ud.down_outline, None);
+    let s = ud.down_shadow.unwrap();
+    assert!((s.blur - 74.667).abs() < 0.01 && (s.dx + 5.333).abs() < 0.01 && s.dy.abs() < 0.01, "{s:?}");
+    assert_eq!(s.color, [0, 0, 0, 128]);
 }
 
 /// Up/down bar outlines and inner shadows: the shadow tints the bar, `a:noFill` drops the outline,
