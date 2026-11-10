@@ -11,6 +11,7 @@ description = "GridCraft desktop app"
 workspace = true
 
 [dependencies]
+x11rb = { version = "=0.13.2", default-features = false }
 gridcraft-engine = { workspace = true }
 gridcraft-ui-egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "clipboard"] }

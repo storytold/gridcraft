@@ -2045,6 +2045,7 @@ dependencies = [
  "serde_json",
  "winit",
  "winresource",
+ "x11rb",
 ]
 
 [[package]]
