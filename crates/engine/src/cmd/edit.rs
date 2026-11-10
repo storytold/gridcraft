@@ -247,7 +247,7 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
 // ---------------------------------------------------------------- clear
 
 /// The rows of `range` an applied filter hides (rows hidden by hand are not among them).
-fn filtered_rows(sh: &gridcraft_model::Sheet, range: RangeRef) -> std::collections::BTreeSet<u32> {
+pub(crate) fn filtered_rows(sh: &gridcraft_model::Sheet, range: RangeRef) -> std::collections::BTreeSet<u32> {
     let spans = sh.filter_row_spans();
     if spans.is_empty() {
         return Default::default();

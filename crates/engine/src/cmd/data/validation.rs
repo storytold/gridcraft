@@ -238,12 +238,16 @@ pub fn check_literal_fill_validation(wb: &Workbook, sheet: usize, ranges: &[Rang
     }
     let mut scratch = None;
     let mut warning = None;
-    for at in ranges.iter().flat_map(RangeRef::iter) {
-        if let Some(issue) = check_entry(wb, sheet, at, input, true, &mut scratch) {
-            if issue.0.error_style == ErrorStyle::Stop {
-                return Some(issue);
+    let sh = wb.sheet(sheet)?;
+    for range in ranges {
+        let filtered = crate::cmd::edit::filtered_rows(sh, *range);
+        for at in range.iter().filter(|at| !filtered.contains(&at.row)) {
+            if let Some(issue) = check_entry(wb, sheet, at, input, true, &mut scratch) {
+                if issue.0.error_style == ErrorStyle::Stop {
+                    return Some(issue);
+                }
+                warning = Some(issue);
             }
-            warning = Some(issue);
         }
     }
     warning

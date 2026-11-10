@@ -575,3 +575,23 @@ fn literal_fill_validation_restores_the_previous_candidate() {
     session.execute("range.fill", json!({"range":"A1:B1", "input":"other", "literal":true})).unwrap();
     assert_eq!(session.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 1)), Value::text("other"));
 }
+
+#[test]
+fn literal_fill_validation_ignores_filtered_rows() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session
+        .execute("range.setValues", json!({"range":"A1", "values":[["Value", "Tag"], ["old", "show"], ["old", "hide"], ["old", "show"]]}))
+        .unwrap();
+    session.execute("data.filter", json!({"range":"A1:B4"})).unwrap();
+    session.execute("data.filterBy", json!({"column":"B", "values":["show"]})).unwrap();
+    session.execute("data.validation", json!({"range":"A3", "type":"custom", "formula1":"=A3=\"allow\""})).unwrap();
+
+    let range = RangeRef::parse("A2:A4").unwrap();
+    let wb = &session.doc().unwrap().wb;
+    assert!(super::check_literal_fill_validation(wb, 0, &[range], "blocked").is_none());
+
+    session.execute("data.validation", json!({"range":"A4", "type":"custom", "formula1":"=A4=\"allow\""})).unwrap();
+    let wb = &session.doc().unwrap().wb;
+    assert!(super::check_literal_fill_validation(wb, 0, &[range], "blocked").is_some());
+}

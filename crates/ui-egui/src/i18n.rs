@@ -327,7 +327,7 @@ impl Language {
         if let Some(target) = warning.strip_prefix("chart ").and_then(|s| s.strip_suffix(" has no supported plot and was skipped")) {
             return self.tr("chart {target} has no supported plot and was skipped").replace("{target}", target);
         }
-        self.tr(warning).to_owned()
+        self.translation(warning).unwrap_or(warning).to_owned()
     }
 
     /// Ribbon tabs can be nouns while their corresponding commands are verbs.
@@ -466,6 +466,12 @@ fn name_sort_key(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unmatched_import_warnings_keep_pipe_delimited_data() {
+        assert_eq!(Language::Fr.open_warning("Archive|Open"), "Archive|Open");
+        assert_eq!(Language::Fr.open_warning("Open"), "Ouvrir");
+    }
 
     /// Descriptions must not collapse distinct operations into the same translated operation.
     #[test]
