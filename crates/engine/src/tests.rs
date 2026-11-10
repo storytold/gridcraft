@@ -1744,23 +1744,38 @@ fn open_keeps_custom_height_rows() {
     assert_eq!(s.doc().unwrap().wb.active().unwrap().row_height(4), 25.0, "custom-height rows are left alone on open");
 }
 
-#[test] // C — Review Focus 2 (Some→Some: the fit shrinks the row, the clamp keeps the taller height)
-fn open_never_shrinks_taller_auto_rows() {
+/// Excel fits a row the file saved taller than its content, without `customHeight`, on open
+/// (checked on a synthetic workbook: saved 30 pt with one line of text, it opens 14.4 pt).
+#[test]
+fn open_fits_taller_auto_rows_to_their_content() {
+    let fitted = |name: &str, big: bool| {
+        let mut s = Session::new();
+        s.execute("file.open", json!({"name": name, "base64": crate::io::base64_encode(&big_font_workbook(Some((60.0, false, false)), big))}))
+            .unwrap();
+        s.doc().unwrap().wb.active().unwrap().row_height(4)
+    };
     let mut s = Session::new();
-    s.execute("file.open", json!({"name": "tall.xlsx", "base64": crate::io::base64_encode(&big_font_workbook(Some((60.0, false, false)), true))}))
-        .unwrap();
-    assert_eq!(s.doc().unwrap().wb.active().unwrap().row_height(4), 60.0, "open is grow-only: a 60px auto-height row keeps its height");
+    s.execute("file.open", json!({"name": "fit.xlsx", "base64": crate::io::base64_encode(&big_font_workbook(None, true))})).unwrap();
+    let big_font_row = s.doc().unwrap().wb.active().unwrap().row_height(4);
+    assert_eq!(fitted("tall.xlsx", true), big_font_row, "a 60px auto row of 20pt text: the 20pt row height");
+    let default_h = gridcraft_model::Workbook::new().active().unwrap().row_height(0);
+    assert_eq!(fitted("tall-plain.xlsx", false), default_h, "a 60px auto row of plain text: one line");
 }
 
-#[test] // C′ — Review Focus 2 (Some→None: a plain tall row's entry is removed by the fit, the clamp restores it)
-fn open_restores_height_of_plain_rows_the_fit_removed() {
+/// An empty row saved with a height but no `customHeight` opens at the default, as in Excel; a
+/// custom one keeps its height.
+#[test]
+fn open_fits_empty_auto_rows_to_the_default() {
+    let mut wb = gridcraft_model::Workbook::new();
+    let default_h = wb.active().unwrap().row_height(0);
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.rows.entry(2).or_default().size = Some(40.0);
+    let e = sh.rows.entry(3).or_default();
+    (e.size, e.custom) = (Some(40.0), true);
     let mut s = Session::new();
-    s.execute(
-        "file.open",
-        json!({"name": "tall-plain.xlsx", "base64": crate::io::base64_encode(&big_font_workbook(Some((60.0, false, false)), false))}),
-    )
-    .unwrap();
-    assert_eq!(s.doc().unwrap().wb.active().unwrap().row_height(4), 60.0, "a tall plain row keeps its height after the fit removes its entry");
+    s.execute("file.open", json!({"name": "empty.xlsx", "base64": crate::io::base64_encode(&gridcraft_xlsx::write_xlsx(&wb).unwrap())})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!((sh.row_height(2), sh.row_height(3)), (default_h, 40.0));
 }
 
 #[test] // D — Review Focus 5
@@ -1770,7 +1785,7 @@ fn open_fitting_keeps_hidden_rows_hidden() {
         .unwrap();
     let sh = s.doc().unwrap().wb.active().unwrap();
     let info = sh.rows.get(&4).unwrap();
-    assert!(info.size.is_some_and(|h| h >= 20.0), "hidden row grows or keeps its height, got {:?}", info.size);
+    assert!(info.size.is_some_and(|h| h >= 30.0), "hidden row fits its 20pt text, got {:?}", info.size);
     assert!(info.hidden, "fitting a hidden row must not unhide it");
 }
 
