@@ -401,6 +401,8 @@ fn sample() -> Workbook {
         },
     });
     let base_chart = Chart {
+        gridline_width: None,
+        gridline_color: None,
         id: 20,
         kind: ChartKind::ColumnClustered,
         anchor: Anchor { cell: at("J5"), dx: 0.0, dy: 0.0, width: 480.0, height: 288.0, ..Default::default() },

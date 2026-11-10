@@ -1,8 +1,8 @@
 use super::frame::{Bx, CatAxis, ValAxis, frame, on, value_range};
 use super::legend::{cat_label, point_color};
 use super::{
-    AXIS, Chart, ChartData, Ctx, DOWN, Fmt, GRID, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_MARKERS, MAX_SERIES, MAX_WEDGES, Prim,
-    QuartileMethod, Rgba, STOCK, SeriesData, TAU, TEXT, UP, VAlign, WHITE, clean, nice_scale,
+    AXIS, Chart, ChartData, Ctx, DOWN, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_MARKERS, MAX_SERIES, MAX_WEDGES, Prim, QuartileMethod,
+    Rgba, STOCK, SeriesData, TAU, TEXT, UP, VAlign, WHITE, clean, nice_scale,
 };
 
 // ---------------------------------------------------------------- histogram
@@ -464,7 +464,7 @@ pub(super) fn radar(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
             } else if let Some(p) = ring.first().copied() {
                 ring.push(p);
             }
-            ctx.line(ring, GRID, 0.75);
+            ctx.line(ring, ctx.grid.0, ctx.grid.1);
         }
         if ti % every == 0 {
             ctx.text(cx - 3.0, cy - rr, &f.format(t, Some(sc.step)), LABEL_SIZE * 0.9, TEXT, (HAlign::Right, VAlign::Middle));
@@ -473,7 +473,7 @@ pub(super) fn radar(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let step = ncat.div_ceil(72).max(1);
     for j in (0..ncat).step_by(step) {
         let a = ang(j);
-        ctx.line(vec![[cx, cy], pt(a, r)], GRID, 0.75);
+        ctx.line(vec![[cx, cy], pt(a, r)], ctx.grid.0, ctx.grid.1);
         let p = pt(a, r + 6.0);
         let (sa, ca) = (a.sin(), a.cos());
         let align = if sa > 0.1 {

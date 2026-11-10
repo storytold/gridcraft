@@ -132,6 +132,9 @@ pub struct ChartData {
     /// Workbook-theme colours for the points of pie-like charts, repeating (point `j` uses entry `j % len`); empty uses the default theme.
     #[serde(default)]
     pub palette: Vec<Rgba>,
+    /// The chart's gridline colour against the workbook theme; `None` is GridCraft's light grey.
+    #[serde(default)]
+    pub gridline_color: Option<Rgba>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
