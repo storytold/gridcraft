@@ -279,7 +279,7 @@ perform a full recalc; readiness estimates and migration qualification are uncha
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-10 | Honour fullCalcOnLoad unless an explicit recalculation parameter overrides it; report the chosen policy in the info bar without a modal; keep the writer's missing-result flag and explicitly unflag cache-preserving fixtures. |
+| 2026-11-10 | minor | Honour fullCalcOnLoad unless an explicit recalculation parameter overrides it; report the chosen policy in the info bar without a modal; keep the writer's missing-result flag and explicitly unflag cache-preserving fixtures. |
 | 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |
 | 2026-11-05 | minor | Reconcile upstream form-control progress with the CJK baseline update |
 | 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |

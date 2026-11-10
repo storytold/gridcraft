@@ -205,7 +205,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-10 | Honour fullCalcOnLoad unless an explicit recalculation parameter overrides it; report the chosen policy in the info bar without a modal; keep the writer's missing-result flag and explicitly unflag cache-preserving fixtures. |
+| 2026-11-10 | minor | Honour fullCalcOnLoad unless an explicit recalculation parameter overrides it; report the chosen policy in the info bar without a modal; keep the writer's missing-result flag and explicitly unflag cache-preserving fixtures. |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |

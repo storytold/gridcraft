@@ -187,7 +187,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-10 | Honour fullCalcOnLoad unless an explicit recalculation parameter overrides it; report the chosen policy in the info bar without a modal; keep the writer's missing-result flag and explicitly unflag cache-preserving fixtures. |
+| 2026-11-10 | minor | Honour fullCalcOnLoad unless an explicit recalculation parameter overrides it; report the chosen policy in the info bar without a modal; keep the writer's missing-result flag and explicitly unflag cache-preserving fixtures. |
 | 2026-11-10 | minor | `.xls` import: every formula except a Ctrl+Shift+Enter array is read as a legacy one with Excel's implicit `@` (a title row `=Other!A1:G1` shows its first cell instead of `#SPILL!`), one-cell Ctrl+Shift+Enter arrays stay arrays, and `@` of a 2-D range meets the formula's row and column (#410, PR #1367) |
 | 2026-11-02 | minor | XLSX: buttons, scroll bars and spin buttons read and written (control properties parts, `<controls>`, VML `x:ClientData`); other form controls stay with pass-through; a button's command, fixed input or output cell travels in a hidden defined name and comes back only while the file still assigns the button's macro (or none, for a command) |
 | 2026-11-03 | minor | SYLK (`.slk`) import: values, R1C1 formulas as A1 (shared formulas too) with cached results, number formats and column widths; import only (#1481) |
