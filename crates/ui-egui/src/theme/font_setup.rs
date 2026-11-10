@@ -1,6 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
 use super::Blob;
-use super::font_fallback::load_fallback;
+use super::font_fallback::{load_fallback, load_preferred_arabic};
 use super::{Arc, Color32, FontData, FontDefinitions, FontFamily, FontId};
 
 /// A font from the optional craft-fonts build input (`CRAFT_FONTS_DIR` at build time; see
@@ -13,6 +13,19 @@ pub struct CraftFont {
     /// ISO 15924 scripts the family is intended for, from the craft-fonts manifest.
     pub scripts: &'static [&'static str],
     pub bytes: &'static [u8],
+}
+
+impl CraftFont {
+    /// CJK fallback faces share the primary baseline; symbols keep their centered metrics.
+    fn font_data(&self) -> FontData {
+        let mut data = FontData::from_static(self.bytes);
+        data.tweak.set_baseline_fallback(
+            self.scripts
+                .iter()
+                .any(|script| matches!(*script, "Hani" | "Hans" | "Hant" | "Jpan" | "Hira" | "Kana" | "Hrkt" | "Hang" | "Kore" | "Bopo")),
+        );
+        data
+    }
 }
 
 mod craft_fonts {
@@ -152,7 +165,7 @@ fn font_file(path: &str, index: u32) -> Option<Blob> {
         let bytes: &[u8] = (**blob).as_ref();
         return font_parses(bytes, index).then(|| std::sync::Arc::clone(blob));
     }
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = crate::fonts::read_font(std::path::Path::new(path))?;
     if !font_parses(&bytes, index) {
         log::warn!("skipping font {path} (face {index}): not a font file egui can read");
         return None;
@@ -199,7 +212,7 @@ pub(super) fn craft_font_faces() -> Vec<(String, &'static CraftFont)> {
 fn add_craft_fonts(fonts: &mut FontDefinitions) -> Vec<String> {
     let mut keys = Vec::new();
     for (key, font) in craft_font_faces() {
-        fonts.font_data.insert(key.clone(), Arc::new(FontData::from_static(font.bytes)));
+        fonts.font_data.insert(key.clone(), Arc::new(font.font_data()));
         keys.push(key);
     }
     keys
@@ -473,36 +486,44 @@ pub fn font_definitions_for_language(language: crate::i18n::Language) -> FontDef
 /// machine see the same font set. Craft-fonts remains a pinned build input rather than a repository
 /// asset; without it only egui's bundled faces are available, which is the documented no-font mode.
 pub fn pinned_font_definitions() -> FontDefinitions {
-    font_definitions_impl(crate::i18n::Language::En, &[], false)
+    font_definitions_impl(crate::i18n::Language::En, Vec::new(), false)
 }
 
 /// [`font_definitions_for_language`] that also binds the workbook fonts in `used` that are
 /// installed, so cells set in them render with them; the rest fall back to the roles. The bound
 /// families are recorded in [`crate::fonts`] so [`cell_family`] only names a family egui has.
 pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -> FontDefinitions {
-    font_definitions_impl(language, used, true)
+    let installed = crate::fonts::installed_among(used).into_iter().map(|family| {
+        let faces = crate::fonts::faces_of(&family);
+        (family, faces)
+    });
+    font_definitions_impl(language, installed.collect(), true)
 }
 
 /// Builds the role font chains, script fallbacks, installed workbook fonts and optional craft-font faces, drops unparseable data and records which families were bound.
-fn font_definitions_impl(language: crate::i18n::Language, used: &[String], system: bool) -> FontDefinitions {
+pub(super) fn font_definitions_impl(
+    language: crate::i18n::Language,
+    installed: Vec<(String, Vec<crate::fonts::Face>)>,
+    system: bool,
+) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let base_prop: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let base_mono: Vec<String> = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
     let mut bound: Vec<String> = Vec::new();
     // The non-Latin fallback faces have to sit at the end of each chain: a Latin font owns Latin,
     // and epaint picks the first face that has the glyph, so they only catch their own scripts.
-    let fallback = if system { load_fallback(&mut fonts, HanOrder::of(language)) } else { Vec::new() };
+    let fallback = if system {
+        let mut fallback = load_preferred_arabic(&mut fonts);
+        fallback.extend(load_fallback(&mut fonts, HanOrder::of(language)));
+        fallback
+    } else {
+        Vec::new()
+    };
     let hack = fonts.font_data.contains_key(HACK).then_some(HACK);
     for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO, MATH, MATH_ITALIC, MATH_BOLD] {
         let chain = build_role_chain(&mut fonts, role, &base_prop, &base_mono, &fallback, hack, system);
         fonts.families.insert(FontFamily::Name(role.into()), chain);
         bound.push(role.to_string());
-    }
-    // Installed workbook fonts, so a cell's chosen font actually renders in it.
-    if system {
-        for family in crate::fonts::installed_among(used) {
-            bound.extend(crate::fonts::bind_family(&mut fonts, &family));
-        }
     }
     // Interface text (formula bar, name box, dialogs) falls back to the cell font before the
     // script faces: whatever a cell can draw, the formula bar can draw too, even where no script
@@ -511,6 +532,11 @@ fn font_definitions_impl(language: crate::i18n::Language, used: &[String], syste
     // Default proportional text in widgets uses the UI font.
     if let Some(ui) = fonts.families.get(&FontFamily::Name(UI.into())).cloned() {
         fonts.families.insert(FontFamily::Proportional, ui);
+    }
+    // Installed workbook fonts, so a cell's chosen font actually renders in it. They are bound
+    // after the proportional chain has the script faces, which their chains end with.
+    for (family, faces) in installed {
+        bound.extend(crate::fonts::bind_faces(&mut fonts, &family, &faces));
     }
     // The optional craft-fonts faces go at the very end of every family: a system or bundled face
     // that has the script keeps its glyph shapes, while the permitted OFL faces cover scripts and
@@ -614,6 +640,22 @@ fn append_craft_faces(fonts: &mut FontDefinitions) {
 #[cfg(test)]
 mod font_binding_tests {
     use super::*;
+
+    /// Synthetic bytes make this metadata check independent of the host's installed fonts.
+    #[test]
+    fn craft_cjk_scripts_opt_into_the_shared_baseline() {
+        use egui::epaint::text::FallbackAlign;
+        const CJK: &[&[&str]] = &[&["Hani", "Hans"], &["Hant", "Bopo"], &["Jpan", "Latn"], &["Hira", "Kana"], &["Hrkt", "Latn"], &["Hang", "Kore"]];
+        for scripts in CJK {
+            let font = CraftFont { family: "Synthetic", style: "Regular", scripts, bytes: epaint_default_fonts::UBUNTU_LIGHT };
+            assert_eq!(font.font_data().tweak.fallback_align, FallbackAlign::Baseline);
+        }
+        const OTHER: &[&[&str]] = &[&["Zsym", "Zsye"], &["Latn", "Arab"]];
+        for scripts in OTHER {
+            let font = CraftFont { family: "Synthetic", style: "Regular", scripts, bytes: epaint_default_fonts::UBUNTU_LIGHT };
+            assert_eq!(font.font_data().tweak.fallback_align, FallbackAlign::Center, "symbols and non-CJK keep their alignment");
+        }
+    }
 
     /// The families [`font_definitions`] always binds, whatever is installed.
     fn always_bound() -> Vec<String> {
