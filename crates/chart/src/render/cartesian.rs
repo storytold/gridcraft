@@ -575,7 +575,6 @@ type LinePoints = (bool, Option<Vec<Option<[f32; 2]>>>);
 /// from the first line series to the last, `cw / (1 + gap / 100)` wide and outlined in black, light
 /// where the last is higher and dark where it is lower; equal values give a black line.
 fn up_down_bars(ctx: &mut Ctx, ud: &crate::UpDownBars, lines: &[LinePoints], cw: f32) {
-    const OUTLINE: Rgba = [0, 0, 0, 0xFF];
     let primary: Vec<&Vec<Option<[f32; 2]>>> = lines.iter().filter(|(secondary, _)| !secondary).filter_map(|(_, p)| p.as_ref()).collect();
     let [first, .., last] = primary.as_slice() else { return };
     let w = cw / (1.0 + ud.gap.clamp(0.0, 500.0) / 100.0);
@@ -583,17 +582,74 @@ fn up_down_bars(ctx: &mut Ctx, ud: &crate::UpDownBars, lines: &[LinePoints], cw:
         let (Some(a), Some(b)) = (a, b) else { continue };
         let (top, bottom) = (a[1].min(b[1]), a[1].max(b[1]));
         if bottom - top < 0.5 {
-            ctx.hline(a[0] - w / 2.0, a[0] + w / 2.0, a[1], OUTLINE, 1.0);
-        } else {
-            let fill = if b[1] < a[1] { ud.up } else { ud.down };
-            ctx.rect(a[0] - w / 2.0, top, w, bottom - top, fill, Some((OUTLINE, 0.75)));
+            // Equal ends: a flat down bar, its outline (else a sliver of its fill) as a line.
+            let (color, width) = ud.down_outline.map_or((ud.down, 1.0), |(c, w)| (c, w.max(1.0)));
+            ctx.hline(a[0] - w / 2.0, a[0] + w / 2.0, a[1], color, width);
+            continue;
+        }
+        let up = b[1] < a[1];
+        let (fill, outline, shadow) = if up { (ud.up, ud.up_outline, ud.up_shadow) } else { (ud.down, ud.down_outline, ud.down_shadow) };
+        let (x, h) = (a[0] - w / 2.0, bottom - top);
+        ctx.out.push(Prim::Rect { x, y: top, w, h, fill: Some(fill), stroke: None, radius: 0.0 });
+        if let Some(s) = shadow {
+            let strength = inner_shadow_strength(w, h, &s);
+            if strength > 0.0 {
+                let [r, g, b, alpha] = s.color;
+                let alpha = (f32::from(alpha) * strength).round() as u8;
+                ctx.out.push(Prim::Rect { x, y: top, w, h, fill: Some([r, g, b, alpha]), stroke: None, radius: 0.0 });
+            }
+        }
+        if outline.is_some() {
+            ctx.out.push(Prim::Rect { x, y: top, w, h, fill: None, stroke: outline, radius: 0.0 });
         }
     }
+}
+
+/// How much of an inner shadow covers the middle of a `w` x `h` shape, 0 to 1: the shape's
+/// outside, offset and blurred (Gaussian, sigma a third of the blur radius), as seen at its
+/// centre. One even tint stands for Excel's shading, which deepens toward the edges; on a
+/// synthetic chart this matches the centre of Excel's bar.
+fn inner_shadow_strength(w: f32, h: f32, s: &crate::BarShadow) -> f32 {
+    let sigma = s.blur / 3.0;
+    if sigma < 0.01 {
+        // Unblurred: the offset alone shades a strip; spread over the shape, as an even tint.
+        let covered = (s.dx.abs().min(w) * h + s.dy.abs().min(h) * w - s.dx.abs().min(w) * s.dy.abs().min(h)) / (w * h).max(f32::MIN_POSITIVE);
+        return covered.clamp(0.0, 1.0);
+    }
+    // Share of the blurred shape (moved by the offset) at its centre, per axis.
+    let inside = |half: f32, d: f32| phi((half - d) / sigma) - phi((-half - d) / sigma);
+    (1.0 - inside(w / 2.0, s.dx) * inside(h / 2.0, s.dy)).clamp(0.0, 1.0)
+}
+
+/// The standard normal cumulative distribution (Abramowitz and Stegun 7.1.26, error below 1.5e-7).
+fn phi(x: f32) -> f32 {
+    let z = f64::from(x) / std::f64::consts::SQRT_2;
+    let t = 1.0 / (1.0 + 0.327_591_1 * z.abs());
+    let poly = t * (0.254_829_592 + t * (-0.284_496_736 + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
+    let erf = 1.0 - poly * (-z * z).exp();
+    (0.5 * (1.0 + erf.copysign(z))) as f32
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Measured on a synthetic chart in Excel: a red bar at 67% (255, 84, 84 on white), 37.7 x
+    /// 62.3 pt, with a 56 pt inner shadow, 4 pt to the left, black at half opacity, is
+    /// 205, 68, 68 at its centre: about a fifth darker.
+    #[test]
+    fn an_inner_shadow_darkens_a_bar_as_excel_does() {
+        let shadow = crate::BarShadow { blur: 56.0, dx: -4.0, dy: 0.0, color: [0, 0, 0, 128] };
+        let k = inner_shadow_strength(37.7, 62.3, &shadow) * 128.0 / 255.0;
+        assert!((k - 0.196).abs() < 0.02, "{k}");
+        // Without blur only the offset strip is shaded; a bar far larger than the blur is barely
+        // touched in the middle.
+        let sharp = crate::BarShadow { blur: 0.0, dx: 10.0, dy: 0.0, color: [0, 0, 0, 255] };
+        assert!((inner_shadow_strength(40.0, 100.0, &sharp) - 0.25).abs() < 1e-4);
+        let small = crate::BarShadow { blur: 3.0, dx: 0.0, dy: 0.0, color: [0, 0, 0, 255] };
+        assert!(inner_shadow_strength(200.0, 200.0, &small) < 1e-3);
+        assert!((phi(0.0) - 0.5).abs() < 1e-6 && (phi(1.0) - 0.841_344_7).abs() < 1e-5);
+    }
 
     #[test]
     fn empty_series_get_no_span_entries() {

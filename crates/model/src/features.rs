@@ -563,6 +563,44 @@ pub struct ChartUpDownBars {
     /// Opacity of the down fill in percent; `None` is opaque.
     #[serde(default)]
     pub down_opacity: Option<u8>,
+    /// Outline of an up bar.
+    #[serde(default)]
+    pub up_outline: BarOutline,
+    /// Outline of a down bar.
+    #[serde(default)]
+    pub down_outline: BarOutline,
+    /// Inner shadow of an up bar (`a:innerShdw`).
+    #[serde(default)]
+    pub up_shadow: Option<InnerShadow>,
+    /// Inner shadow of a down bar.
+    #[serde(default)]
+    pub down_shadow: Option<InnerShadow>,
+}
+
+/// The outline of a chart shape (`a:ln`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum BarOutline {
+    /// No `a:ln`: Excel draws its default thin black outline.
+    #[default]
+    Auto,
+    /// `a:ln` with `a:noFill`: no outline.
+    None,
+    /// An outline of its own; `None` parts keep the default colour or width.
+    Solid { color: Option<Color>, width: Option<f32> },
+}
+
+/// A shadow cast inside a shape (`a:innerShdw`), as if the shape were a hole lit from aside.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InnerShadow {
+    /// Blur radius in points.
+    pub blur: f32,
+    /// Offset of the shadow in points.
+    pub distance: f32,
+    /// Direction of the offset in degrees, clockwise from pointing right.
+    pub direction: f32,
+    pub color: Color,
+    /// Opacity in percent.
+    pub opacity: u8,
 }
 
 /// A chart's data table (`c:dTable`), independent of the chart legend.

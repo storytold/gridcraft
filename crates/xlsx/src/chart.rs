@@ -5,7 +5,9 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
-use gridcraft_model::{Chart, ChartKind, ChartUpDownBars, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
+use gridcraft_model::{
+    BarOutline, Chart, ChartKind, ChartUpDownBars, Color, DefinedName, InnerShadow, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook,
+};
 
 use crate::drawing::{dml_color, srgb};
 use crate::xml::{El, esc, num};
@@ -268,6 +270,10 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         down: u.path(&["downBars", "spPr", "solidFill"]).and_then(dml_color),
         up_opacity: u.path(&["upBars", "spPr", "solidFill"]).and_then(fill_opacity),
         down_opacity: u.path(&["downBars", "spPr", "solidFill"]).and_then(fill_opacity),
+        up_outline: bar_outline(u.path(&["upBars", "spPr"])),
+        down_outline: bar_outline(u.path(&["downBars", "spPr"])),
+        up_shadow: u.path(&["upBars", "spPr", "effectLst", "innerShdw"]).map(inner_shadow),
+        down_shadow: u.path(&["downBars", "spPr", "effectLst", "innerShdw"]).map(inner_shadow),
     });
     let doughnut = plot.child("doughnutChart");
     let hole_size = doughnut.and_then(|g| g.child_val("holeSize")).and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(75).clamp(10, 90);
@@ -678,22 +684,84 @@ fn fill_opacity(fill: &El) -> Option<u8> {
     alpha.is_finite().then(|| (alpha / 1000.0).round().clamp(0.0, 100.0) as u8)
 }
 
+/// Widest line DrawingML allows (`ST_LineWidth`), in points.
+const MAX_OUTLINE_PT: f64 = 1584.0;
+/// Largest shadow blur or distance kept, in points (`ST_PositiveCoordinate` allows far more,
+/// which no chart needs).
+const MAX_SHADOW_PT: f64 = 1584.0;
+
+/// A shape's outline from its `c:spPr`: none without `a:ln`, Excel's default then.
+fn bar_outline(sp: Option<&El>) -> BarOutline {
+    let Some(ln) = sp.and_then(|p| p.child("ln")) else { return BarOutline::Auto };
+    if ln.child("noFill").is_some() {
+        return BarOutline::None;
+    }
+    let width = ln.attr_f64("w").map(|w| w / EMU_PER_PT).filter(|w| w.is_finite() && *w >= 0.0).map(|w| w.min(MAX_OUTLINE_PT) as f32);
+    BarOutline::Solid { color: ln.child("solidFill").and_then(dml_color), width }
+}
+
+/// An `a:innerShdw`: lengths in points (bounded), the direction in degrees, black when its
+/// colour is a preset other than white.
+fn inner_shadow(e: &El) -> InnerShadow {
+    let pt =
+        |name: &str| e.attr_f64(name).map(|v| v / EMU_PER_PT).filter(|v| v.is_finite() && *v >= 0.0).map_or(0.0, |v| v.min(MAX_SHADOW_PT) as f32);
+    let direction = e.attr_f64("dir").filter(|d| d.is_finite()).map_or(0.0, |d| (d / 60000.0).rem_euclid(360.0) as f32);
+    let preset = e.child("prstClr").and_then(|c| c.attr("val"));
+    let color = dml_color(e).unwrap_or(if preset == Some("white") { Color::Rgb(0xFFFFFF) } else { Color::Rgb(0x000000) });
+    let opacity = e.children.iter().find(|c| c.name.ends_with("Clr")).and_then(|c| c.child("alpha")).and_then(|a| a.attr_f64("val"));
+    let opacity = opacity.filter(|a| a.is_finite()).map_or(100, |a| (a / 1000.0).round().clamp(0.0, 100.0) as u8);
+    InnerShadow { blur: pt("blurRad"), distance: pt("dist"), direction, color, opacity }
+}
+
 /// The chart's up/down bars, written in a primary line or stock group (`axes` 1 and 2).
 fn up_down_xml(ch: &Chart, axes: (u32, u32), wb: &Workbook) -> String {
     let Some(u) = ch.up_down_bars.filter(|_| axes.0 == 1) else { return String::new() };
-    let fill = |c: Option<Color>, opacity: Option<u8>| {
-        let Some(rgb) = c.and_then(|c| srgb(&c, &wb.theme)) else { return String::new() };
-        let colour = match opacity.filter(|o| *o < 100) {
+    let colour = |c: Color, opacity: Option<u8>| -> Option<String> {
+        let rgb = srgb(&c, &wb.theme)?;
+        Some(match opacity.filter(|o| *o < 100) {
             Some(o) => rgb.replacen("/>", &format!("><a:alpha val=\"{}\"/></a:srgbClr>", u32::from(o) * 1000), 1),
             None => rgb,
-        };
-        format!("<c:spPr><a:solidFill>{colour}</a:solidFill></c:spPr>")
+        })
+    };
+    let emu = |pt: f64, max: f64| (pt.clamp(0.0, max) * EMU_PER_PT).round() as i64;
+    let sp_pr = |fill: Option<Color>, opacity: Option<u8>, outline: BarOutline, shadow: Option<InnerShadow>| {
+        let mut x = String::new();
+        if let Some(c) = fill.and_then(|c| colour(c, opacity)) {
+            let _ = write!(x, "<a:solidFill>{c}</a:solidFill>");
+        }
+        match outline {
+            BarOutline::Auto => {}
+            BarOutline::None => x.push_str("<a:ln><a:noFill/></a:ln>"),
+            BarOutline::Solid { color, width } => {
+                x.push_str("<a:ln");
+                if let Some(w) = width.filter(|w| w.is_finite()) {
+                    let _ = write!(x, " w=\"{}\"", emu(f64::from(w), MAX_OUTLINE_PT));
+                }
+                x.push('>');
+                if let Some(c) = color.and_then(|c| colour(c, None)) {
+                    let _ = write!(x, "<a:solidFill>{c}</a:solidFill>");
+                }
+                x.push_str("</a:ln>");
+            }
+        }
+        if let Some(s) = shadow
+            && let Some(c) = colour(s.color, Some(s.opacity))
+        {
+            let dir = (f64::from(s.direction).rem_euclid(360.0) * 60000.0).round() as i64 % 21_600_000;
+            let _ = write!(
+                x,
+                "<a:effectLst><a:innerShdw blurRad=\"{}\" dist=\"{}\" dir=\"{dir}\">{c}</a:innerShdw></a:effectLst>",
+                emu(f64::from(s.blur), MAX_SHADOW_PT),
+                emu(f64::from(s.distance), MAX_SHADOW_PT)
+            );
+        }
+        if x.is_empty() { x } else { format!("<c:spPr>{x}</c:spPr>") }
     };
     format!(
         "<c:upDownBars><c:gapWidth val=\"{}\"/><c:upBars>{}</c:upBars><c:downBars>{}</c:downBars></c:upDownBars>",
         u.gap_width.min(500),
-        fill(u.up, u.up_opacity),
-        fill(u.down, u.down_opacity)
+        sp_pr(u.up, u.up_opacity, u.up_outline, u.up_shadow),
+        sp_pr(u.down, u.down_opacity, u.down_outline, u.down_shadow)
     )
 }
 

@@ -146,6 +146,25 @@ pub struct UpDownBars {
     pub up: Rgba,
     /// Fill where it is lower.
     pub down: Rgba,
+    /// Outline of an up bar (colour, width); `None` draws none.
+    pub up_outline: Option<(Rgba, f32)>,
+    /// Outline of a down bar, which also draws a bar where the two series are equal.
+    pub down_outline: Option<(Rgba, f32)>,
+    /// Inner shadow of an up bar.
+    pub up_shadow: Option<BarShadow>,
+    /// Inner shadow of a down bar.
+    pub down_shadow: Option<BarShadow>,
+}
+
+/// An inner shadow resolved for drawing: lengths in chart units, the colour's alpha the shadow's
+/// opacity.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BarShadow {
+    pub blur: f32,
+    /// Offset of the shadow.
+    pub dx: f32,
+    pub dy: f32,
+    pub color: Rgba,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

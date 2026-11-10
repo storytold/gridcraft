@@ -1749,7 +1749,15 @@ fn up_down_bars_join_the_first_and_last_lines() {
             .collect()
     };
     assert!(bars(&d).is_empty(), "no bars unless the chart has them");
-    d.up_down = Some(crate::UpDownBars { gap: 150.0, up, down });
+    d.up_down = Some(crate::UpDownBars {
+        down_shadow: None,
+        up_shadow: None,
+        down_outline: Some(([0, 0, 0, 255], 0.75)),
+        up_outline: Some(([0, 0, 0, 255], 0.75)),
+        gap: 150.0,
+        up,
+        down,
+    });
     let drawn = bars(&d);
     assert_eq!(drawn.iter().map(|b| b.2).collect::<Vec<_>>(), vec![up, down, up], "c1 up, c2 down, c3 equal (a line), c4 up");
     // 40% of a category at a gap of 150: c1 and c2 are one category apart.
@@ -1771,8 +1779,57 @@ fn up_down_bar_opacity_reaches_the_drawing() {
     wb.sheet_mut(0).unwrap().set_value(CellRef::new(0, 0), Value::Number(1.0));
     let mut c = chart(ChartKind::Line);
     c.series = vec![Series { values: "Sheet1!$A$1:$A$1".into(), ..Default::default() }];
-    c.up_down_bars = Some(ChartUpDownBars { gap_width: 150, up: None, down: Some(Color::Rgb(0xFF0000)), up_opacity: None, down_opacity: Some(67) });
+    c.up_down_bars = Some(ChartUpDownBars {
+        down_shadow: None,
+        up_shadow: None,
+        down_outline: Default::default(),
+        up_outline: Default::default(),
+        gap_width: 150,
+        up: None,
+        down: Some(Color::Rgb(0xFF0000)),
+        up_opacity: None,
+        down_opacity: Some(67),
+    });
     let ud = resolve(&wb, 0, &c).up_down.unwrap();
     assert_eq!(ud.down, [0xFF, 0, 0, 171]);
     assert_eq!(ud.up, [0xF9, 0xF9, 0xF9, 0xFF]);
+}
+
+/// Up/down bar outlines and inner shadows: the shadow tints the bar, `a:noFill` drops the outline,
+/// and a flat bar is then a sliver of its fill (as in Excel, on a synthetic chart).
+#[test]
+fn up_down_bars_take_their_outline_and_shadow() {
+    let mut d = sample(ChartKind::Line);
+    d.series.truncate(2);
+    d.series[0].values = vec![Some(40.0), Some(25.0)];
+    d.series[1].values = vec![Some(20.0), Some(25.0)];
+    let red = [0xFF, 0, 0, 171];
+    let shadow = crate::BarShadow { blur: 56.0, dx: -4.0, dy: 0.0, color: [0, 0, 0, 128] };
+    d.up_down = Some(crate::UpDownBars {
+        gap: 150.0,
+        up: [0xF9, 0xF9, 0xF9, 0xFF],
+        down: red,
+        up_outline: Some(([0, 0, 0, 255], 0.75)),
+        down_outline: None,
+        up_shadow: None,
+        down_shadow: Some(shadow),
+    });
+    let mut c = chart(ChartKind::Line);
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    let prims = render(&c, &d, 600.0, 400.0, &ApproxMeasure);
+    let rects: Vec<&Prim> = prims.iter().filter(|p| matches!(p, Prim::Rect { fill: Some(f), .. } if *f == red)).collect();
+    assert_eq!(rects.len(), 1, "one down bar");
+    let Prim::Rect { x, y, w, h, stroke, .. } = rects[0] else { panic!("a rect: {:?}", rects[0]) };
+    assert_eq!(*stroke, None, "no outline");
+    // The tint over it, and nothing outlining it.
+    let tint = prims.iter().find_map(|p| match p {
+        Prim::Rect { x: tx, y: ty, fill: Some([0, 0, 0, a]), .. } if tx == x && ty == y => Some(*a),
+        _ => None,
+    });
+    assert!(tint.is_some(), "the shadow tints the bar");
+    assert!(!prims.iter().any(|p| matches!(p, Prim::Rect { x: ox, y: oy, fill: None, .. } if ox == x && oy == y)));
+    assert!(*w > 0.0 && *h > 0.0);
+    // The flat second category: a sliver of the down fill, there being no outline.
+    assert!(prims.iter().any(|p| matches!(p, Prim::Line { color, pts, .. } if *color == red && pts.len() == 2)));
 }

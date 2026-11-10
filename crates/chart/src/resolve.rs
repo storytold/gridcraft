@@ -372,10 +372,29 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
         let a = opacity.map_or(255, |o| (f32::from(o.min(100)) * 2.55).round() as u8);
         [r, g, b, a]
     };
+    // Excel's default bar outline: thin and black.
+    let outline = |o: gridcraft_model::BarOutline| match o {
+        gridcraft_model::BarOutline::Auto => Some(([0, 0, 0, 0xFF], 0.75)),
+        gridcraft_model::BarOutline::None => None,
+        gridcraft_model::BarOutline::Solid { color, width } => {
+            Some((rgba(color, None, [0, 0, 0]), width.filter(|w| w.is_finite()).map_or(0.75, |w| w.clamp(0.25, 20.0))))
+        }
+    };
+    let shadow = |s: Option<gridcraft_model::InnerShadow>| {
+        s.map(|s| {
+            let (sin, cos) = s.direction.to_radians().sin_cos();
+            let d = s.distance.clamp(0.0, 1584.0);
+            crate::BarShadow { blur: s.blur.clamp(0.0, 1584.0), dx: d * cos, dy: d * sin, color: rgba(Some(s.color), Some(s.opacity), [0, 0, 0]) }
+        })
+    };
     let up_down = chart.up_down_bars.map(|u| crate::UpDownBars {
         gap: f32::from(u.gap_width.min(500)),
         up: rgba(u.up, u.up_opacity, [0xF9, 0xF9, 0xF9]),
         down: rgba(u.down, u.down_opacity, [0x3F, 0x3F, 0x3F]),
+        up_outline: outline(u.up_outline),
+        down_outline: outline(u.down_outline),
+        up_shadow: shadow(u.up_shadow),
+        down_shadow: shadow(u.down_shadow),
     });
     ChartData { categories, category_levels, series, palette, up_down }
 }
