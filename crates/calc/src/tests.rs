@@ -1923,8 +1923,8 @@ fn offset_extreme_arguments_return_ref() {
 }
 
 /// `@` intersects a reference with the formula's row (a column range) or column (a row range);
-/// a 2D range or one the formula does not line up with gives #VALUE!. An array gives its
-/// top-left value. Legacy formulas read from files use it where Excel intersects implicitly.
+/// a 2D range both (circular when it includes the formula's cell); a range the formula does not
+/// line up with gives #VALUE!. An array gives its top-left value. Legacy formulas read from files use it where Excel intersects implicitly.
 #[test]
 fn implicit_intersection_operator() {
     let mut t = T::new();
@@ -1941,9 +1941,22 @@ fn implicit_intersection_operator() {
     t.set("D3", "=SUM(@A1:A3)");
     assert_eq!(t.num("B2"), 2f64.tanh());
     assert_eq!(t.num("B7"), 5f64.tanh());
-    for at in ["B3", "B9", "E9"] {
+    for at in ["B9", "E9"] {
         assert_eq!(t.get(at), Value::Error(CellError::Value), "{at}");
     }
+    // A 2D range that includes the formula's own cell is a circular reference (Excel shows 0).
+    assert_eq!(t.get("B3"), Value::Error(CellError::Circ));
+    // From another sheet a 2D range intersects on both row and column; outside it is #VALUE!.
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Other")));
+    for (at, input) in [("B2", "=@Sheet1!A1:C3"), ("C1", "=@Sheet1!A1:C3"), ("B9", "=@Sheet1!A1:C3"), ("E2", "=@Sheet1!A1:C3")] {
+        t.wb.sheet_mut(1).unwrap().cells.set(c(at), Cell::formula(Formula::new(input)));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    let other = |at: &str| t.wb.sheet(1).unwrap().value(c(at));
+    assert_eq!(other("B2"), Value::Number(2f64.tanh())); // Sheet1!B2
+    assert_eq!(other("C1"), Value::Number(0.0));
+    assert_eq!(other("B9"), Value::Error(CellError::Value));
+    assert_eq!(other("E2"), Value::Error(CellError::Value));
     assert_eq!(t.num("D1"), 7.0);
     assert_eq!(t.num("D2"), 2.0);
     assert_eq!(t.num("D3"), 3.0);
