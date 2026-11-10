@@ -636,6 +636,42 @@ fn summarize_rejects_cross_column_table_filters_that_leak_rows() {
 }
 
 #[test]
+fn summarize_detects_a_leak_when_a_group_filter_replaces_a_query_filter() {
+    // The query filter keeps only East rows and the table argument carries every East row, so a
+    // comparison against the query filters alone sees no leak. The West group then replaces the
+    // Region filter, and its per-column sets admit the West (5, 8) row the predicate removed:
+    // aggregating it would return 19 instead of 14. The check must run despite the query filter.
+    let mut model = DataModel {
+        tables: vec![table(
+            "Sales",
+            vec![column("Region", "String"), column("Amount", "Double"), column("Cost", "Double")],
+            vec![
+                vec![text("East"), money(5.0), money(3.0)],
+                vec![text("East"), money(9.0), money(8.0)],
+                vec![text("West"), money(5.0), money(3.0)],
+                vec![text("West"), money(9.0), money(8.0)],
+                vec![text("West"), money(5.0), money(8.0)],
+            ],
+        )],
+        relationships: Vec::new(),
+        measures: Vec::new(),
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expression = parse_expression(
+        "CALCULATETABLE(SUMMARIZE(FILTER(ALL(Sales), Sales[Amount] > Sales[Cost]), Sales[Region], \"T\", SUM(Sales[Amount])), Sales[Region] = \"East\")",
+    )
+    .expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expression).expect("bind");
+    let message = match evaluator.evaluate_table(&bound) {
+        Ok(table) => panic!("the West group's replaced filter admits the removed row; returned {table:?}"),
+        Err(error) => error.to_string(),
+    };
+    assert!(message.contains("SUMMARIZE"), "error names the operation: {message}");
+    assert!(message.contains("table argument"), "error names the table argument: {message}");
+}
+
+#[test]
 fn issue_subtotal_marks_only_the_rolled_up_rows() {
     let table = eval_table("SUMMARIZE(Sales, ROLLUP(Sales[Region]), \"IsSubtotal\", ISSUBTOTAL(Sales[Region]))").expect("issue subtotal");
     assert_columns(&table, &["Region", "IsSubtotal"]);

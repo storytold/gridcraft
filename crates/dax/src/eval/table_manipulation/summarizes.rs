@@ -502,8 +502,23 @@ struct GroupContext<'a> {
 /// projection onto the table's own columns, so a projection or deduplicated argument (which
 /// keeps every distinct projected row) still qualifies. This is measured once per call, not once
 /// per group: the check itself is the quadratic part the finding is about.
-fn group_source_can_leak(ev: &Evaluator<'_>, table: &TableValue, filters: &FilterContext) -> bool {
+///
+/// A group filter replaces the query filter on its column (`FilterContext::set` overwrites), and
+/// [`apply_table_values`] does the same for every table column. When the query filters a column a
+/// group can replace, the group's effective filters can be *wider* than the query filters, so the
+/// comparison below proves nothing and the per-group check stays on. A filter on any other column
+/// is only ever added to, which is why the comparison is still valid for it.
+fn group_source_can_leak(ev: &Evaluator<'_>, table: &TableValue, filters: &FilterContext, group_columns: &[ColumnRef]) -> bool {
     let Some(lineage) = table.lineage else { return false };
+    let mut replaced: BTreeSet<(usize, usize)> = group_columns.iter().map(|column| (column.table, column.column)).collect();
+    for column in &table.columns {
+        if let Some(index) = ev.model().column_index(lineage, &column.name) {
+            replaced.insert((lineage, index));
+        }
+    }
+    if filters.filters.keys().any(|key| replaced.contains(key)) {
+        return true;
+    }
     // The table argument may be a projection that reorders or drops columns, so its columns are
     // matched to model columns by name. A column the model does not know cannot participate.
     let positions: Vec<(usize, usize)> = table
@@ -619,7 +634,7 @@ fn summarize(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resul
     }
     // Decided once: only a table argument that lost lineage rows can leak, and then the check
     // runs once per group rather than once per group and expression.
-    let check_leak = group_source_can_leak(ev, &table, &ctx.filters);
+    let check_leak = group_source_can_leak(ev, &table, &ctx.filters, &layout.columns);
     let mut output = Vec::with_capacity(rows.len());
     for (values, active, group_rows) in rows {
         let mut row = values.clone();
@@ -672,7 +687,7 @@ fn group_by(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result
         output_columns.push(TableColumn { name: name.clone() });
     }
     let active = vec![true; columns.len()];
-    let check_leak = group_source_can_leak(ev, &table, &ctx.filters);
+    let check_leak = group_source_can_leak(ev, &table, &ctx.filters, &columns);
     let mut rows = Vec::with_capacity(details.len());
     for (values, group_rows) in &details {
         let current = TableValue::new(table.columns.clone(), group_rows.clone()).with_lineage_if(table.lineage);
