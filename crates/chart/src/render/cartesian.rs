@@ -6,6 +6,7 @@ use super::{
     Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, MIN_BAR_PX, Prim, Rgba, Scale,
     SeriesData, TEXT, VAlign, WHITE, clean, nice_scale,
 };
+use gridcraft_model::{LabelPosition, SeriesLabels};
 
 // ---------------------------------------------------------------- cartesian (column/bar/line/area/combo)
 
@@ -330,7 +331,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
 
     let (slot_of, nslots) = column_slots(&fams, &sec);
     let bw = cw / (nslots + 1.5);
-    let labels_on = chart.data_labels && ncat <= MAX_LABELS;
+    let labels_on = ncat <= MAX_LABELS;
     // Area labels wait until every area is filled, so a later (stacked) area can't paint over them.
     let mut area_labels = Vec::new();
 
@@ -352,6 +353,8 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 Some(r) => r,
                 None => continue,
             };
+            let sl = series_labels(chart, s).filter(|_| labels_on);
+            let label = |j: usize, v: f64| sl.map(|l| label_text(&l, s, &cat_label(data, j), &fmt.format(v, None)));
             match pass {
                 0 => {
                     let mut top = Vec::with_capacity(ncat * 2);
@@ -362,11 +365,11 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                         top.push([c, vpos(t, &sc)]);
                         base.push([c, vpos(b, &sc)]);
                         // Source values (not stack totals), just above the top edge like the line labels.
-                        if labels_on
-                            && sp.is_some()
+                        if sp.is_some()
                             && let Some(v) = s.values.get(j).copied().flatten()
+                            && let Some(text) = label(j, v)
                         {
-                            area_labels.push((c, vpos(t, &sc) - 5.0, fmt.format(v, None)));
+                            area_labels.push((c, vpos(t, &sc) - 5.0, text));
                         }
                     }
                     if top.len() == 1 {
@@ -384,7 +387,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 1 => {
                     let k = slot_of.get(i).copied().unwrap_or(0) as f32;
                     // Hairline bars are merged per pixel column (their envelope is what shows).
-                    let cull = merge_hairlines(bw, labels_on);
+                    let cull = merge_hairlines(bw, sl.is_some());
                     let mut sink = BarSink::new(bw, horizontal, s.color, nslots, k);
                     for (j, sp) in row.iter().enumerate() {
                         let Some((b, t)) = sp else { continue };
@@ -393,29 +396,18 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();
                         sink.bar(ctx, cull, c, lo, len);
-                        if labels_on && let Some(v) = s.values.get(j).copied().flatten() {
-                            let t = fmt.format(v, None);
+                        if let (Some(v), Some(l)) = (s.values.get(j).copied().flatten(), sl)
+                            && let Some(t) = label(j, v)
+                        {
                             let stacked = fam != Fam::Col;
-                            let mid = (pb + pt) / 2.0;
-                            if horizontal {
-                                let y = c + nslots * bw / 2.0 - (k + 0.5) * bw;
-                                if stacked {
-                                    ctx.text(mid, y, &t, LABEL_SIZE, on(s.color), (HAlign::Center, VAlign::Middle));
-                                } else if v >= 0.0 {
-                                    ctx.text(pb.max(pt) + 3.0, y, &t, LABEL_SIZE, TEXT, (HAlign::Left, VAlign::Middle));
-                                } else {
-                                    ctx.text(lo - 3.0, y, &t, LABEL_SIZE, TEXT, (HAlign::Right, VAlign::Middle));
-                                }
-                            } else {
-                                let x = c - nslots * bw / 2.0 + (k + 0.5) * bw;
-                                if stacked {
-                                    ctx.text(x, mid, &t, LABEL_SIZE, on(s.color), (HAlign::Center, VAlign::Middle));
-                                } else if v >= 0.0 {
-                                    ctx.text(x, lo - 2.0, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
-                                } else {
-                                    ctx.text(x, lo + len + 2.0, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Top));
-                                }
-                            }
+                            let default = if stacked { LabelPosition::Center } else { LabelPosition::OutsideEnd };
+                            let at = BarLabel {
+                                base: pb,
+                                end: pt,
+                                across: if horizontal { c + nslots * bw / 2.0 - (k + 0.5) * bw } else { c - nslots * bw / 2.0 + (k + 0.5) * bw },
+                            };
+                            let color = if stacked && l.position.is_none() { on(s.color) } else { TEXT };
+                            draw_bar_label(ctx, &t, &at, l.position.unwrap_or(default), l.rotation, horizontal, color);
                         }
                     }
                     sink.finish(ctx);
@@ -427,10 +419,12 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                     if k == ChartKind::LineMarkers && cw >= 3.0 {
                         draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
                     }
-                    if labels_on {
+                    if let Some(l) = sl {
                         for (j, p) in pts.iter().enumerate() {
-                            if let (Some(p), Some(v)) = (p, s.values.get(j).copied().flatten()) {
-                                ctx.text(p[0], p[1] - 5.0, &fmt.format(v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+                            if let (Some(p), Some(v)) = (p, s.values.get(j).copied().flatten())
+                                && let Some(t) = label(j, v)
+                            {
+                                draw_point_label(ctx, &t, *p, l.position, l.rotation);
                             }
                         }
                     }
@@ -536,10 +530,11 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
                 draw_markers(ctx, px.iter().flatten().copied(), 3.5, s.color);
             }
         }
-        if chart.data_labels && pts.len() <= MAX_LABELS {
-            for (p, raw) in px.iter().zip(pts) {
+        if let Some(l) = series_labels(chart, s).filter(|_| pts.len() <= MAX_LABELS) {
+            for (j, (p, raw)) in px.iter().zip(pts).enumerate() {
                 if let (Some(p), Some((_, y))) = (p, raw) {
-                    ctx.text(p[0], p[1] - 6.0, &fy.format(*y, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+                    let t = label_text(&l, s, &cat_label(data, j), &fy.format(*y, None));
+                    draw_point_label(ctx, &t, [p[0], p[1] - 1.0], l.position, l.rotation);
                 }
             }
         }
@@ -555,6 +550,75 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (xs.min, xs.max));
     }
     draw_trend_labels(ctx, plot, &trend_labels);
+}
+
+/// What a series' labels show: its own setting, else the chart's (values only). `None` when they
+/// show nothing.
+fn series_labels(chart: &Chart, s: &SeriesData) -> Option<SeriesLabels> {
+    let l = s.labels.unwrap_or(SeriesLabels { value: chart.data_labels, ..SeriesLabels::default() });
+    l.shows_anything().then_some(l)
+}
+
+/// A label's text: series name, category name and value, as Excel orders them, comma-separated.
+fn label_text(l: &SeriesLabels, s: &SeriesData, category: &str, value: &str) -> String {
+    let parts = [(l.series_name, s.name.as_str()), (l.category_name, category), (l.value, value)];
+    parts.iter().filter(|(on, t)| *on && !t.is_empty()).map(|(_, t)| *t).collect::<Vec<_>>().join(", ")
+}
+
+/// A bar's label anchors: where the bar starts and ends along the value axis, and its centre across.
+struct BarLabel {
+    base: f32,
+    end: f32,
+    across: f32,
+}
+
+/// A label at its place on a bar: outside or inside its end, at its centre, or inside its base.
+/// A rotated label (counter-clockwise degrees) runs along the bar from that place.
+fn draw_bar_label(ctx: &mut Ctx, t: &str, at: &BarLabel, pos: LabelPosition, rotation: f32, horizontal: bool, color: Rgba) {
+    let rot = -rotation.to_radians();
+    // +1 where the bar grows: up the screen for columns (y falls), right for bars.
+    let dir = if horizontal { (at.end - at.base).signum() } else { (at.base - at.end).signum() };
+    let dir = if dir == 0.0 { 1.0 } else { dir };
+    let (along, gap) = match pos {
+        LabelPosition::InsideBase => (at.base, 1.0),
+        LabelPosition::InsideEnd => (at.end, -1.0),
+        LabelPosition::Center | LabelPosition::BestFit => ((at.base + at.end) / 2.0, 0.0),
+        _ => (at.end, 1.0),
+    };
+    let off = if horizontal { gap * dir * 3.0 } else { -gap * dir * 3.0 };
+    let (x, y) = if horizontal { (along + off, at.across) } else { (at.across, along + off) };
+    // Where the text sits against its anchor: away from the bar's base or end, or centred.
+    let leading = gap > 0.0;
+    let align = match (horizontal, rotation != 0.0, gap == 0.0) {
+        (_, _, true) => (HAlign::Center, VAlign::Middle),
+        (true, _, false) => (if leading == (dir > 0.0) { HAlign::Left } else { HAlign::Right }, VAlign::Middle),
+        (false, true, false) => (if leading == (dir > 0.0) { HAlign::Left } else { HAlign::Right }, VAlign::Middle),
+        (false, false, false) => (HAlign::Center, if leading == (dir > 0.0) { VAlign::Bottom } else { VAlign::Top }),
+    };
+    let rot = if horizontal { 0.0 } else { rot };
+    ctx.out.push(Prim::Text { x, y, text: t.to_string(), size: LABEL_SIZE, color, bold: false, align: align.0, valign: align.1, rotation: rot });
+}
+
+/// A label beside a point: above it unless the series places it below, left, right or on it.
+fn draw_point_label(ctx: &mut Ctx, t: &str, p: [f32; 2], pos: Option<LabelPosition>, rotation: f32) {
+    let ((x, y), align) = match pos {
+        Some(LabelPosition::Below) => ((p[0], p[1] + 5.0), (HAlign::Center, VAlign::Top)),
+        Some(LabelPosition::Left) => ((p[0] - 5.0, p[1]), (HAlign::Right, VAlign::Middle)),
+        Some(LabelPosition::Right) => ((p[0] + 5.0, p[1]), (HAlign::Left, VAlign::Middle)),
+        Some(LabelPosition::Center) => ((p[0], p[1]), (HAlign::Center, VAlign::Middle)),
+        _ => ((p[0], p[1] - 5.0), (HAlign::Center, VAlign::Bottom)),
+    };
+    ctx.out.push(Prim::Text {
+        x,
+        y,
+        text: t.to_string(),
+        size: LABEL_SIZE,
+        color: TEXT,
+        bold: false,
+        align: align.0,
+        valign: align.1,
+        rotation: -rotation.to_radians(),
+    });
 }
 
 #[cfg(test)]

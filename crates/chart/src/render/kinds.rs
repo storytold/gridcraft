@@ -49,7 +49,7 @@ pub(super) fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         let top = plot.bottom() - ys.frac(*c as f64) * plot.h;
         let x = plot.x + b as f32 * cw;
         ctx.rect(x, top, cw, plot.bottom() - top, s.color, Some((WHITE, 0.75)));
-        if chart.data_labels {
+        if values_labelled(chart, data) {
             ctx.text(x + cw / 2.0, top - 2.0, &c.to_string(), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
         }
     }
@@ -111,7 +111,7 @@ pub(super) fn waterfall(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         if j + 1 < bars.len() && ncat <= 500 {
             ctx.out.push(Prim::Line { pts: vec![[x + bw, yt], [x + cw, yt]], color: AXIS, width: 0.75, dash: true });
         }
-        if chart.data_labels && ncat <= MAX_LABELS {
+        if values_labelled(chart, data) && ncat <= MAX_LABELS {
             let v = if *kind == 0 { *t } else { t - b };
             ctx.text(x + bw / 2.0, yb.min(yt) - 2.0, &f.format(v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
         }
@@ -150,7 +150,7 @@ pub(super) fn funnel(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         }
         if show {
             let yc = y + bh / 2.0;
-            if chart.data_labels {
+            if values_labelled(chart, data) {
                 let t = f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None);
                 let color = if ctx.tw(&t, LABEL_SIZE) + 4.0 <= bw { on(s.color) } else { TEXT };
                 ctx.text(plot.cx(), yc, &t, LABEL_SIZE, color, (HAlign::Center, VAlign::Middle));
@@ -245,7 +245,7 @@ pub(super) fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inne
         if sweep > 1e-4 {
             let fill = point_color(data, j);
             wedge(ctx, &ring, a, sweep, fill);
-            if (chart.data_labels || names) && vals.len() <= MAX_LABELS {
+            if (values_labelled(chart, data) || names) && vals.len() <= MAX_LABELS {
                 let t = if names { cat_label(data, j) } else { f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None) };
                 let mid = a + sweep / 2.0;
                 let rr = if ri > 0.0 { (r + ri) / 2.0 } else { r * 0.65 };
@@ -321,7 +321,7 @@ pub(super) fn doughnut(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx)
             if sweep > 1e-4 {
                 let fill = point_color(data, j);
                 wedge(ctx, &ring, a, sweep, fill);
-                if chart.data_labels && n <= MAX_LABELS {
+                if values_labelled(chart, data) && n <= MAX_LABELS {
                     let t = f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None);
                     let mid = a + sweep / 2.0;
                     let rr = (outer + inner) / 2.0;
@@ -425,7 +425,7 @@ pub(super) fn treemap(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         if b.w > 24.0 && b.h > LABEL_SIZE * 1.6 {
             let name = ctx.fit(&cat_label(data, j), LABEL_SIZE, b.w - 8.0);
             ctx.text(b.x + 4.0, b.y + 4.0, &name, LABEL_SIZE, on(fill), (HAlign::Left, VAlign::Top));
-            if chart.data_labels && b.h > LABEL_SIZE * 3.2 {
+            if values_labelled(chart, data) && b.h > LABEL_SIZE * 3.2 {
                 let t = ctx.fit(&f.format(v, None), LABEL_SIZE, b.w - 8.0);
                 ctx.text(b.x + 4.0, b.y + 4.0 + LABEL_SIZE * 1.4, &t, LABEL_SIZE, on(fill), (HAlign::Left, VAlign::Top));
             }
@@ -613,6 +613,12 @@ pub(super) fn stock(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
             _ => {}
         }
     }
+}
+
+/// Whether a pie-like or single-row chart labels its values: the chart says so, or a series does
+/// (Excel often keeps a pie's labels on its series).
+fn values_labelled(chart: &Chart, data: &ChartData) -> bool {
+    chart.data_labels || data.series.iter().any(|s| s.labels.is_some_and(|l| l.value))
 }
 
 #[cfg(test)]
