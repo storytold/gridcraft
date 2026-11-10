@@ -20,10 +20,7 @@ fn model() -> DataModel {
                     ModelColumn { name: "Name".into(), data_type: Some("String".into()) },
                 ],
                 // The one side spells the key as a decimal.
-                rows: vec![
-                    vec![Scalar::Decimal(1.0), Scalar::String("Widget".into())],
-                    vec![Scalar::Decimal(2.0), Scalar::String("Gadget".into())],
-                ],
+                rows: vec![vec![Scalar::Decimal(1.0), Scalar::String("Widget".into())], vec![Scalar::Decimal(2.0), Scalar::String("Gadget".into())]],
             },
             ModelTable {
                 name: "Sales".into(),

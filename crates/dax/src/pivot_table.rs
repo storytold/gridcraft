@@ -1014,7 +1014,8 @@ fn column_field_value(storage: &ModelStorage, table: usize, row: usize, field: &
         if key.is_blank() {
             return Scalar::Blank;
         }
-        let Some(next) = storage.relationships().get(hop.relationship).and_then(|relationship| relationship.rows_to_value(&key).first().copied()) else {
+        let Some(next) = storage.relationships().get(hop.relationship).and_then(|relationship| relationship.rows_to_value(&key).first().copied())
+        else {
             return Scalar::Blank;
         };
         current_table = hop.to_table;
@@ -1031,7 +1032,13 @@ fn column_field_value(storage: &ModelStorage, table: usize, row: usize, field: &
 fn model_field_value(model: &DataModel, lookups: &HopKeyLookups, row: &[Scalar], field: &BoundField) -> Scalar {
     let mut current = row;
     for hop in &field.hops {
-        let key = join_key(&current.get(hop.from_column).cloned().unwrap_or(Scalar::Blank));
+        let value = current.get(hop.from_column).cloned().unwrap_or(Scalar::Blank);
+        // A NaN never compares equal to itself, so it must not join a related row that happens to
+        // carry the same bit pattern: the row groups as an orphan, like `strict_eq` decides.
+        if matches!(&value, Scalar::Decimal(number) | Scalar::DateTime(number) if number.is_nan()) {
+            return Scalar::Blank;
+        }
+        let key = join_key(&value);
         // A BLANK key is an orphan here too — a relationship never joins one, even when the
         // related table has a BLANK key row of its own — so both paths group the row the same way.
         if key == ScalarKey::Blank {
@@ -1203,5 +1210,59 @@ mod tests {
         assert_eq!(model_field_value(&model, &lookups, &blank_key_row, &field), Scalar::Blank);
         let matched_row = model.tables[0].rows.get(1).cloned().unwrap_or_default();
         assert_eq!(model_field_value(&model, &lookups, &matched_row, &field), Scalar::String("Widget".into()));
+    }
+
+    /// Two NaN keys share their bit pattern, so `join_key` would pair them; a NaN never compares
+    /// equal to itself, so the model-row path must leave the row an orphan instead.
+    #[test]
+    fn a_nan_key_is_an_orphan_on_the_model_row_path() {
+        let mut model = DataModel {
+            tables: vec![
+                ModelTable {
+                    name: "Sales".into(),
+                    columns: vec![
+                        ModelColumn { name: "ProductKey".into(), data_type: Some("Double".into()) },
+                        ModelColumn { name: "Amount".into(), data_type: Some("Double".into()) },
+                    ],
+                    rows: vec![vec![Scalar::Decimal(f64::NAN), Scalar::Integer(10)], vec![Scalar::Decimal(1.0), Scalar::Integer(20)]],
+                },
+                ModelTable {
+                    name: "Product".into(),
+                    columns: vec![
+                        ModelColumn { name: "ProductKey".into(), data_type: Some("Double".into()) },
+                        ModelColumn { name: "Name".into(), data_type: Some("String".into()) },
+                    ],
+                    rows: vec![
+                        vec![Scalar::Decimal(f64::NAN), Scalar::String("Phantom".into())],
+                        vec![Scalar::Decimal(1.0), Scalar::String("Widget".into())],
+                    ],
+                },
+            ],
+            relationships: vec![Relationship {
+                from_table: "Sales".into(),
+                from_column: "ProductKey".into(),
+                to_table: "Product".into(),
+                to_column: "ProductKey".into(),
+                bidirectional: false,
+                inactive: false,
+            }],
+            measures: Vec::new(),
+        };
+        // The lookups are built from the same `join_key`, so the NaN pair is indexed together;
+        // only the source-side guard keeps it unmatched.
+        let field = BoundField {
+            field: PivotField { table: 1, column: 1, name: "Product[Name]".into() },
+            hops: vec![Hop { relationship: 0, from_column: 0, to_table: 1, to_column: 0 }],
+            label: "Product[Name]".into(),
+        };
+        let lookups = hop_key_lookups(&model, [&field]);
+        let nan_key_row = model.tables[0].rows.first().cloned().unwrap_or_default();
+        assert_eq!(model_field_value(&model, &lookups, &nan_key_row, &field), Scalar::Blank);
+        let matched_row = model.tables[0].rows.get(1).cloned().unwrap_or_default();
+        assert_eq!(model_field_value(&model, &lookups, &matched_row, &field), Scalar::String("Widget".into()));
+        // The model is not mutated by the check, and a NaN DateTime key is rejected the same way.
+        assert!(matches!(model.tables[0].rows[0][0], Scalar::Decimal(number) if number.is_nan()));
+        model.tables[0].rows[0][0] = Scalar::DateTime(f64::NAN);
+        assert_eq!(model_field_value(&model, &lookups, &nan_key_row, &field), Scalar::Blank);
     }
 }

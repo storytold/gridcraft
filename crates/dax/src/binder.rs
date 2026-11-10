@@ -319,14 +319,18 @@ impl<'a> Binder<'a> {
             // `DATEDIFF(a, b, YEAR)` into a variable reference.
             .filter(|keyword| {
                 let named = self.model.table_index(keyword).is_some() || self.model.measure_index(keyword).is_some();
-                // `DATEADD`'s interval is catalogued as `Text` but is a documented enumeration, so
-                // a variable named `MONTH` must not turn `DATEADD(d, 1, MONTH)` into a variable
-                // reference (whose value could even be a different interval).
-                let dateadd_interval = spec.name == "DATEADD"
-                    && index == 2
-                    && ["DAY", "MONTH", "QUARTER", "YEAR"].iter().any(|interval| keyword.eq_ignore_ascii_case(interval));
+                // `DATEADD`'s and `DATESINPERIOD`'s interval is catalogued as `Text` but is a
+                // documented enumeration, so a variable named `MONTH` must not turn
+                // `DATEADD(d, 1, MONTH)` or `DATESINPERIOD(d, s, -1, MONTH)` into a variable
+                // reference (whose value could even be a different interval). `WEEK` names an
+                // interval for `DATESINPERIOD` only.
+                let interval_keyword = match (spec.name, index) {
+                    ("DATEADD", 2) => ["DAY", "MONTH", "QUARTER", "YEAR"].iter().any(|interval| keyword.eq_ignore_ascii_case(interval)),
+                    ("DATESINPERIOD", 3) => ["DAY", "WEEK", "MONTH", "QUARTER", "YEAR"].iter().any(|interval| keyword.eq_ignore_ascii_case(interval)),
+                    _ => false,
+                };
                 let variable =
-                    matches!(expected, Some(ParamKind::Text)) && !dateadd_interval && vars.iter().any(|var| var.eq_ignore_ascii_case(keyword));
+                    matches!(expected, Some(ParamKind::Text)) && !interval_keyword && vars.iter().any(|var| var.eq_ignore_ascii_case(keyword));
                 !named && !variable
             });
             if let Some(keyword) = keyword {
