@@ -2,9 +2,15 @@ use serde_json::json;
 
 use super::*;
 
+/// Create a workbook using standard PDF fonts for portable stream assertions.
 fn s() -> Session {
     let mut s = Session::new();
     s.new_workbook();
+    // Stream/layout assertions use the standard-font path on every machine, including
+    // workstations that have Calibri installed. Installed-face embedding has its own test.
+    let mut normal = Style::default();
+    normal.font.name = "GridCraft PDF Test Sans".into();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).styles = gridcraft_model::StyleTable::with_default(normal);
     s
 }
 fn pdf_of(s: &mut Session, p: Json) -> (Vec<u8>, u64) {
@@ -482,6 +488,7 @@ fn save_as_pdf_writes_a_pdf_and_keeps_the_workbook_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Exercise combined sheet features through the standard-font PDF path.
 #[test]
 fn rich_sheet_renders() {
     let mut s = Session::new();
@@ -493,6 +500,7 @@ fn rich_sheet_renders() {
     s.execute("home.mergeCenter", json!({})).unwrap();
     s.execute("cell.set", json!({"cell": "J5", "input": "Merged"})).unwrap();
     s.execute("home.borders", json!({"range": "J5:K6", "preset": "outside", "style": "thick"})).unwrap_or_default();
+    s.execute("home.fontName", json!({"range": "H1:K6", "name": "GridCraft PDF Test Sans"})).unwrap();
     let (pdf, pages) = pdf_of(&mut s, json!({"sheets": "all"}));
     assert!(pages >= 1);
     assert!(contains(&pdf, "(Merged) Tj"));
@@ -866,6 +874,7 @@ fn an_equation_without_a_layout_prints_its_source_one_line_per_line() {
     assert_eq!(fallback_lines("a\nb", f32::NAN, 12.0).count(), 1);
 }
 
+/// Verify equation fallback text cannot escape its frame.
 #[test]
 fn the_fallback_text_is_clipped_to_the_equation_frame() {
     // A long line of a source that does not lay out, in a narrow frame (40 by 100 px, 30 by
@@ -881,6 +890,9 @@ fn the_fallback_text_is_clipped_to_the_equation_frame() {
             x.text = format!("frac{{{}", "l".repeat(200));
             x.anchor.width = 40.0;
             x.anchor.height = 100.0;
+        }
+        for shape in sh.shapes.iter_mut().filter(|x| x.kind == gridcraft_model::ShapeKind::TextBox) {
+            shape.format.font = Some("GridCraft PDF Test Sans".into());
         }
     }
     let mut t = Session::new();
@@ -937,4 +949,21 @@ fn equations_print_with_the_symbol_font() {
     assert!(contains(&pdf, "(\\345) Tj") && contains(&pdf, "(a) Tj"));
     // A glyph no standard font has is a [?] box.
     assert!(contains(&pdf, "(?) Tj"));
+}
+
+/// Verify the exporter retains an installed workbook family and Unicode glyphs.
+#[test]
+fn pdf_export_embeds_the_installed_workbook_family() {
+    if !matches!(Font::named("Calibri", false, false), Font::Embedded(_)) {
+        return;
+    }
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell": "A1", "input": "Unicode \u{0103}\u{0219}\u{021b}"})).unwrap();
+    let (pdf, _) = pdf_of(&mut session, json!({}));
+    assert!(contains(&pdf, "/BaseFont /Calibri"));
+    assert!(contains(&pdf, "/FontFile2"));
+    for code in ["0103", "0219", "021B"] {
+        assert!(contains(&pdf, &format!("> <{code}>")));
+    }
 }
