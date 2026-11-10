@@ -58,6 +58,8 @@ struct Ctx<'a> {
     m: &'a dyn Measure,
     /// The chart's own text styles (from its file); what they leave out keeps GridCraft's look.
     text: ChartTextStyles,
+    /// Their colours, resolved.
+    colors: crate::TextColors,
 }
 
 /// A kind of chart text as drawn: the chart's size, weight and capitals where its file gives
@@ -67,11 +69,16 @@ struct Look {
     size: f32,
     bold: bool,
     caps: bool,
+    /// The chart's colour for it; `None` draws the caller's.
+    color: Option<Rgba>,
 }
 
 impl Look {
     fn of(style: ChartTextStyle, size: f32) -> Look {
-        Look { size: style.size.unwrap_or(size), bold: style.bold.unwrap_or(false), caps: style.caps }
+        Look { size: style.size.unwrap_or(size), bold: style.bold.unwrap_or(false), caps: style.caps, color: None }
+    }
+    fn colored(self, color: Option<Rgba>) -> Look {
+        Look { color, ..self }
     }
     fn cased(self, s: &str) -> String {
         if self.caps { s.to_uppercase() } else { s.to_string() }
@@ -134,7 +141,7 @@ impl Ctx<'_> {
     }
     /// The data labels' look.
     fn labels(&self) -> Look {
-        Look::of(self.text.data_labels, LABEL_SIZE)
+        Look::of(self.text.data_labels, LABEL_SIZE).colored(self.colors.data_labels)
     }
     fn look_tw(&self, s: &str, l: Look) -> f32 {
         self.measure(&l.cased(s), l.size, l.bold)
@@ -148,6 +155,7 @@ impl Ctx<'_> {
         if s.is_empty() {
             return;
         }
+        let color = l.color.unwrap_or(color);
         self.out.push(Prim::Text { x, y, text: l.cased(s), size: l.size, color, bold: l.bold, align, valign, rotation: 0.0 });
     }
     fn text(&mut self, x: f32, y: f32, s: &str, size: f32, color: Rgba, (align, valign): (HAlign, VAlign)) {
@@ -179,6 +187,7 @@ fn sanitize_vals(v: &[Option<f64>]) -> Vec<Option<f64>> {
 pub(crate) fn sanitize(d: &ChartData) -> ChartData {
     ChartData {
         palette: d.palette.iter().take(MAX_POINTS).copied().collect(),
+        text_colors: d.text_colors,
         categories: d.categories.iter().take(MAX_POINTS).cloned().collect(),
         category_levels: d.category_levels.iter().take(3).map(|l| l.iter().take(MAX_POINTS).cloned().collect()).collect(),
         series: d
@@ -257,12 +266,12 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
         return vec![];
     }
     let data = sanitized(data);
-    let mut ctx = Ctx { out: Vec::new(), m, text: chart.text };
+    let mut ctx = Ctx { out: Vec::new(), m, text: chart.text, colors: data.text_colors };
     ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
     let mut area = Bx { x: pad, y: pad, w: w - 2.0 * pad, h: h - 2.0 * pad };
     if let Some(t) = chart_title(chart, &data) {
-        let look = Look::of(ctx.text.title, TITLE_SIZE);
+        let look = Look::of(ctx.text.title, TITLE_SIZE).colored(ctx.colors.title);
         let size = look.size.min(h * 0.12).max(4.0);
         let look = Look { size, ..look };
         let t = ctx.look_fit(&t, look, area.w);

@@ -556,6 +556,8 @@ pub struct ChartTextStyle {
     pub bold: Option<bool>,
     /// Drawn in capitals (`cap="all"`).
     pub caps: bool,
+    /// Text colour.
+    pub color: Option<Color>,
 }
 
 /// The text styles of a chart's parts.

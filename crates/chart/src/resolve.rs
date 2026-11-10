@@ -366,7 +366,16 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
     let categories = categories.unwrap_or_else(|| (1..=n).map(|i| i.to_string()).collect());
     let palette = default_palette(&wb.theme, n.min(PALETTE_CYCLE));
-    ChartData { categories, category_levels, series, palette }
+    let rgba = |t: gridcraft_model::ChartTextStyle| t.color.and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]);
+    let t = &chart.text;
+    let text_colors = crate::TextColors {
+        title: rgba(t.title),
+        legend: rgba(t.legend),
+        data_labels: rgba(t.data_labels),
+        category_axis: rgba(t.category_axis),
+        value_axis: rgba(t.value_axis),
+    };
+    ChartData { categories, category_levels, series, palette, text_colors }
 }
 
 #[cfg(test)]
