@@ -237,20 +237,42 @@ pub(crate) fn date_weekday(serial: f64) -> i64 {
     if weekday == 0 { 7 } else { weekday }
 }
 
-pub(crate) fn eomonth(serial: f64, months: i64) -> f64 {
-    let (year, month, _) = date_parts(serial);
-    let total = year * 12 + month - 1 + months;
-    let y = total.div_euclid(12);
-    let m = total.rem_euclid(12) + 1;
-    date_serial(y, m, days_in_month(y, m), 0, 0, 0)
+/// The largest magnitude that fits an `i64`, as `f64` (2^63).
+pub(crate) const I64_MAX_EXCLUSIVE: f64 = 9_223_372_036_854_775_808.0;
+
+/// Truncates a numeric argument to an `i64`, rejecting values that cannot be represented.
+///
+/// `as i64` saturates instead: `1e19` becomes `i64::MAX`, whose month arithmetic then overflows.
+pub(crate) fn truncated_integer(value: f64, name: &str, position: usize) -> Result<i64, EvalError> {
+    if !value.is_finite() || value < -I64_MAX_EXCLUSIVE || value >= I64_MAX_EXCLUSIVE {
+        return Err(EvalError::new(format!("{name} argument {position} is out of range for an integer")));
+    }
+    Ok(value.trunc() as i64)
 }
 
-pub(crate) fn edate(serial: f64, months: i64) -> f64 {
-    let (year, month, day) = date_parts(serial);
-    let total = year * 12 + month - 1 + months;
+pub(crate) fn eomonth(serial: f64, months: i64) -> Result<f64, EvalError> {
+    let (year, month, _) = date_parts(serial);
+    let total = month_offset_total(year, month, months, "EOMONTH")?;
     let y = total.div_euclid(12);
     let m = total.rem_euclid(12) + 1;
-    date_serial(y, m, day.min(days_in_month(y, m)), 0, 0, 0)
+    Ok(date_serial(y, m, days_in_month(y, m), 0, 0, 0))
+}
+
+pub(crate) fn edate(serial: f64, months: i64) -> Result<f64, EvalError> {
+    let (year, month, day) = date_parts(serial);
+    let total = month_offset_total(year, month, months, "EDATE")?;
+    let y = total.div_euclid(12);
+    let m = total.rem_euclid(12) + 1;
+    Ok(date_serial(y, m, day.min(days_in_month(y, m)), 0, 0, 0))
+}
+
+/// The zero-based month number reached `months` after `year`-`month`, checked so an offset near
+/// the `i64` limits reports an error instead of overflowing.
+fn month_offset_total(year: i64, month: i64, months: i64, name: &str) -> Result<i64, EvalError> {
+    year.checked_mul(12)
+        .and_then(|total| total.checked_add(month - 1))
+        .and_then(|total| total.checked_add(months))
+        .ok_or_else(|| EvalError::new(format!("{name} result is out of range")))
 }
 
 /// The local date as an Excel serial (TODAY).
@@ -348,9 +370,9 @@ pub(crate) fn round_direction(value: f64, digits: i32, up: bool) -> f64 {
     rounded / factor
 }
 
-pub(crate) fn gcd(mut a: i64, mut b: i64) -> i64 {
-    a = a.abs();
-    b = b.abs();
+/// Greatest common divisor of the magnitudes, so `i64::MIN` is handled without overflowing.
+pub(crate) fn gcd(a: i64, b: i64) -> u64 {
+    let (mut a, mut b) = (a.unsigned_abs(), b.unsigned_abs());
     while b != 0 {
         let t = a % b;
         a = b;
@@ -359,8 +381,13 @@ pub(crate) fn gcd(mut a: i64, mut b: i64) -> i64 {
     a
 }
 
-pub(crate) fn lcm(a: i64, b: i64) -> i64 {
-    if a == 0 || b == 0 { 0 } else { (a / gcd(a, b) * b).abs() }
+/// Least common multiple, or `None` when it does not fit an `i64` (`lcm(2^62, 2)` is 2^63).
+pub(crate) fn lcm(a: i64, b: i64) -> Option<i64> {
+    if a == 0 || b == 0 {
+        return Some(0);
+    }
+    let value = (a.unsigned_abs() / gcd(a, b)).checked_mul(b.unsigned_abs())?;
+    i64::try_from(value).ok()
 }
 
 /// Applies a scalar aggregation over already-evaluated values.
@@ -603,6 +630,31 @@ mod tests {
         // The `*A` variants keep their own coercion: text counts as 0 and TRUE as 1.
         assert_eq!(aggregate_values("MINA", &non_numeric).expect("MINA"), Scalar::Decimal(0.0));
         assert_eq!(aggregate_values("COUNTA", &non_numeric).expect("COUNTA"), Scalar::Integer(2));
+    }
+
+    #[test]
+    fn month_offsets_that_overflow_error_instead_of_wrapping() {
+        let january_15th = date_serial(2024, 1, 15, 0, 0, 0);
+        // A month offset near `i64::MAX` cannot be added to the date's own month number.
+        assert!(edate(january_15th, i64::MAX).is_err());
+        assert!(eomonth(january_15th, i64::MAX).is_err());
+        // Valid offsets keep the existing end-of-month clamping.
+        assert_eq!(edate(date_serial(2024, 1, 31, 0, 0, 0), 1), Ok(date_serial(2024, 2, 29, 0, 0, 0)));
+        assert_eq!(eomonth(january_15th, 1), Ok(date_serial(2024, 2, 29, 0, 0, 0)));
+        assert_eq!(eomonth(date_serial(2023, 12, 31, 0, 0, 0), 0), Ok(date_serial(2023, 12, 31, 0, 0, 0)));
+    }
+
+    #[test]
+    fn gcd_and_lcm_report_overflow_instead_of_wrapping() {
+        // i64::MIN has no positive i64 counterpart, but its magnitude is a valid u64.
+        assert_eq!(gcd(i64::MIN, 6), 2);
+        assert_eq!(gcd(-12, 18), 6);
+        assert_eq!(gcd(0, 0), 0);
+        assert_eq!(lcm(0, i64::MIN), Some(0));
+        assert_eq!(lcm(4, 6), Some(12));
+        assert_eq!(lcm(-4, 6), Some(12));
+        // 2^62 * 3 does not fit an i64.
+        assert_eq!(lcm(1_i64 << 62, 3), None);
     }
 
     #[test]

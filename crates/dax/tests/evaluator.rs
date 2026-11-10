@@ -498,7 +498,18 @@ fn relationship_modifiers_apply_inside_calculate() {
 
 #[test]
 fn unbounded_scalar_functions_return_errors() {
-    for formula in ["FACT(171)", "REPT(\"x\", 100000)"] {
+    for formula in [
+        "FACT(171)",
+        "REPT(\"x\", 100000)",
+        // A month offset that does not fit an i64 must error, not saturate and then overflow.
+        "EDATE(DATE(2024, 1, 15), 1e19)",
+        "EOMONTH(DATE(2024, 1, 15), 1e19)",
+        // Nor may a representable offset overflow the month arithmetic.
+        "EDATE(DATE(2024, 1, 15), 9223372036854774784)",
+        "EOMONTH(DATE(2024, 1, 15), 9223372036854774784)",
+        // 2^62 * 3 is past i64::MAX.
+        "LCM(4611686018427387904, 3)",
+    ] {
         let model = model();
         let evaluator = Evaluator::new(&model).expect("evaluator");
         let expr = parse_expression(formula).expect("parse");

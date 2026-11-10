@@ -16,16 +16,13 @@ use std::collections::BTreeSet;
 
 use crate::ast::Literal;
 
-use super::support::{args, eval_all, eval_table, frame_for, total_order};
+use super::support::{args, eval_all, eval_table, frame_for, total_order, truncated_integer};
 use super::*;
 
 /// FNV-1a 64-bit offset basis and prime. `HASH` uses a fixed, version-independent algorithm so
 /// the value is stable across runs and platforms (the real engine's algorithm is undocumented).
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-
-/// The largest magnitude that fits an `i64`, as `f64` (2^63).
-const I64_MAX_EXCLUSIVE: f64 = 9_223_372_036_854_775_808.0;
 
 pub(crate) fn call(ev: &Evaluator<'_>, name: &str, exprs: &[BoundExpr], ctx: &mut Context) -> Option<Result<Scalar, EvalError>> {
     let result = match name.to_ascii_uppercase().as_str() {
@@ -74,14 +71,6 @@ fn shift_bits(number: i64, shift: i64, left: bool) -> i64 {
         return if direction_left || number >= 0 { 0 } else { -1 };
     }
     if direction_left { ((number as u64) << magnitude) as i64 } else { number >> magnitude }
-}
-
-/// Truncates a numeric argument to an `i64`, rejecting values that cannot be represented.
-fn truncated_integer(value: f64, name: &str, position: usize) -> Result<i64, EvalError> {
-    if !value.is_finite() || value < -I64_MAX_EXCLUSIVE || value >= I64_MAX_EXCLUSIVE {
-        return Err(EvalError::new(format!("{name} argument {position} is out of range for an integer")));
-    }
-    Ok(value.trunc() as i64)
 }
 
 // ---------------------------------------------------------------------------------------------

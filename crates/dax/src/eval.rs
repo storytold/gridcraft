@@ -1973,8 +1973,14 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
             }
         }
         "UNICHAR" => Ok(char::from_u32(number(0)?.max(0.0) as u32).map(|c| Scalar::String(c.to_string())).unwrap_or(Scalar::Blank)),
-        "GCD" => Ok(Scalar::Integer(gcd(number(0)? as i64, number(1)? as i64))),
-        "LCM" => Ok(Scalar::Integer(lcm(number(0)? as i64, number(1)? as i64))),
+        "GCD" => {
+            let (a, b) = (truncated_integer(number(0)?, name, 1)?, truncated_integer(number(1)?, name, 2)?);
+            Ok(Scalar::Integer(i64::try_from(gcd(a, b)).map_err(|_| EvalError::new("GCD result is out of range"))?))
+        }
+        "LCM" => {
+            let (a, b) = (truncated_integer(number(0)?, name, 1)?, truncated_integer(number(1)?, name, 2)?);
+            Ok(Scalar::Integer(lcm(a, b).ok_or_else(|| EvalError::new("LCM result is out of range"))?))
+        }
         "PI" => Ok(Scalar::Decimal(std::f64::consts::PI)),
         "DEGREES" => Ok(Scalar::Decimal(number(0)?.to_degrees())),
         "RADIANS" => Ok(Scalar::Decimal(number(0)?.to_radians())),
@@ -2037,8 +2043,8 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
         "HOUR" => Ok(Scalar::Integer((number(0)?.fract() * 24.0).floor() as i64)),
         "MINUTE" => Ok(Scalar::Integer(((number(0)?.fract() * 24.0).fract() * 60.0).floor() as i64)),
         "SECOND" => Ok(Scalar::Integer((((number(0)?.fract() * 24.0).fract() * 60.0).fract() * 60.0).round() as i64)),
-        "EOMONTH" => Ok(Scalar::DateTime(eomonth(number(0)?, number(1)? as i64))),
-        "EDATE" => Ok(Scalar::DateTime(edate(number(0)?, number(1)? as i64))),
+        "EOMONTH" => Ok(Scalar::DateTime(eomonth(number(0)?, truncated_integer(number(1)?, name, 2)?)?)),
+        "EDATE" => Ok(Scalar::DateTime(edate(number(0)?, truncated_integer(number(1)?, name, 2)?)?)),
         "PATHLENGTH" => Ok(Scalar::Integer(text(0)?.split('|').count() as i64)),
         "PATHCONTAINS" => {
             let path = text(0)?;
