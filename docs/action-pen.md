@@ -186,11 +186,12 @@ from the validation parquet with, in outline:
 
 ```python
 rows = pyarrow.parquet.read_table("validation.parquet").to_pylist()[:40]
+inputs = []
 for r in rows:
     im = PIL.Image.open(io.BytesIO(r["image"]["bytes"])).convert("RGB").resize((384, 384), PIL.Image.BICUBIC)
     x = (numpy.asarray(im, dtype="float32") / 255.0 - 0.5) / 0.5
     inputs.append(x.transpose(2, 0, 1))
-inputs.tofile("inputs.bin")
+numpy.stack(inputs).astype("<f4").tofile("inputs.bin")
 open("truth.txt", "w").write("\n".join(r["text"] for r in rows) + "\n")
 ```
 

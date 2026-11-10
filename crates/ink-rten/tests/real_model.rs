@@ -38,10 +38,8 @@ fn cer(recognised: &str, truth: &str) -> f64 {
 #[test]
 #[ignore = "needs the downloaded model and the IAM line data (see docs/action-pen.md)"]
 fn recognises_iam_validation_lines() {
-    let (Some(model_root), Some(data)) = (env_path("GRIDCRAFT_TROCR_MODEL"), env_path("GRIDCRAFT_TROCR_LINES")) else {
-        eprintln!("set GRIDCRAFT_TROCR_MODEL (models root) and GRIDCRAFT_TROCR_LINES (data dir)");
-        return;
-    };
+    let model_root = env_path("GRIDCRAFT_TROCR_MODEL").expect("set GRIDCRAFT_TROCR_MODEL (models root)");
+    let data = env_path("GRIDCRAFT_TROCR_LINES").expect("set GRIDCRAFT_TROCR_LINES (data dir)");
     let recognizer = gridcraft_ink_rten::RtenRecognizer::load(&model_root).expect("the model loads and verifies");
     let raw = std::fs::read(data.join("inputs.bin")).expect("inputs.bin");
     let truth = std::fs::read_to_string(data.join("truth.txt")).expect("truth.txt");

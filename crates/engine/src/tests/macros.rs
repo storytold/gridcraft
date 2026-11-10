@@ -1238,6 +1238,45 @@ fn the_policy_keeps_macros_away_from_files_and_the_app() {
 }
 
 #[test]
+fn the_model_commands_are_file_steps_the_check_stops_before() {
+    let mut s = s();
+    // A private model root: `ink.modelRemove` deletes `<root>/trocr-small-handwritten`.
+    let root = std::env::temp_dir().join(format!("gc-macro-ink-{}-{}", std::process::id(), 7));
+    let dir = root.join("trocr-small-handwritten");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("encoder.onnx"), b"model").unwrap();
+    s.models_dir = Some(root.display().to_string());
+
+    // Each touches the model's files whatever its parameters are, so a macro must declare it.
+    for (id, params) in [("ink.modelImport", json!({"path": "nowhere"})), ("ink.modelRemove", json!({}))] {
+        put(&mut s, json!({"name": "Ink", "steps": [{"command": id, "params": params}]}));
+        let err = s.execute("macro.run", json!({"name": "Ink"})).unwrap_err().to_string();
+        assert!(err.contains(&format!("Step 1 ({id})")) && err.contains(&format!("Add {id} to the macro's permissions")), "{id}: {err}");
+        assert!(dir.join("encoder.onnx").is_file(), "{id}: refused before it ran");
+    }
+
+    // Declared, the person approves the macro before either step runs, even dry.
+    let steps = json!([{"command": "ink.modelImport", "params": {"path": "nowhere"}}, {"command": "ink.modelRemove", "params": {}}]);
+    put(&mut s, json!({"name": "Ink", "steps": steps, "permissions": ["ink.modelImport", "ink.modelRemove"]}));
+    let r = s.execute("macro.run", json!({"name": "Ink"}));
+    let Err(EngineError::Approve(q)) = &r else { panic!("{r:?}") };
+    assert!(q.contains("ink.modelImport, which copies the handwriting model's files"), "{q}");
+    assert!(q.contains("ink.modelRemove, which deletes the handwriting model's files"), "{q}");
+    let c = s.execute("macro.check", json!({"name": "Ink"})).unwrap();
+    assert_eq!(c["needsApproval"].as_array().map(Vec::len), Some(2), "{c}");
+    assert!(c.get("footprint").is_none() && dir.join("encoder.onnx").is_file(), "{c}");
+
+    // Approved, the check's dry run stops before the first command: nothing is copied or deleted.
+    let _ = s.execute("macro.run", json!({"name": "Ink", "approve": true}));
+    let c = s.execute("macro.check", json!({"name": "Ink"})).unwrap();
+    assert_eq!(c["footprint"]["partial"]["step"], "1", "{c}");
+    assert!(c.get("errors").is_none() || c["errors"].as_array().is_some_and(Vec::is_empty), "the dry run never reached the import: {c}");
+    let left: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(left, ["encoder.onnx"], "the check copies and deletes nothing");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn macros_from_a_file_ask_before_running() {
     let mut s = s();
     let mut wb = gridcraft_model::Workbook::new();
