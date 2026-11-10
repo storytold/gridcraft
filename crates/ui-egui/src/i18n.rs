@@ -307,7 +307,7 @@ pub fn set_current(ctx: &egui::Context, language: Language) {
 
 /// egui context-data key holding the decimal separator of the frame being drawn.
 fn decimal_separator_key() -> egui::Id {
-    egui::Id::new("gridcraft.decimal_separator")
+    egui::Id::unique("gridcraft.decimal_separator")
 }
 
 /// The decimal separator the current frame is using. Defaults to `DecimalSeparator::Dot`.
