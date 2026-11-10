@@ -208,7 +208,8 @@ impl SheetApp {
                     match a.rule.error_style {
                         ErrorStyle::Stop => Some((title, a.message)),
                         ErrorStyle::Warning if accepted.as_deref() != Some(text.as_str()) => {
-                            let ask = json!({"title": title, "message": a.message, "messageCustom": !a.rule.error_message.is_empty(), "text": text, "doc": ed.doc, "cell": ed.cell.a1(), "dr": dr, "dc": dc});
+                            let checked_selection = self.session.active().map(|d| d.selection.a1());
+                            let ask = json!({"title": title, "message": a.message, "messageCustom": !a.rule.error_message.is_empty(), "text": text, "doc": ed.doc, "cell": ed.cell.a1(), "selection": checked_selection, "dr": dr, "dc": dc});
                             self.editor = Some(ed);
                             self.session.mode = gridcraft_engine::Mode::Edit;
                             self.open_dialog(FILL_WARNING_DIALOG, ask);
@@ -266,7 +267,9 @@ impl SheetApp {
     /// values). No keeps the draft open and writes nothing. Yes fills the selection with the entry
     /// the question was about; it doesn't ask that question again, while a Stop is still refused.
     /// The answer applies only to the draft it was asked for: another draft (or none) is left alone.
-    /// Returns whether the fill was written.
+    /// It also applies only to the selection the question checked: if the selection moved while
+    /// the question was open, the new selection is checked on its own rules (asked, refused, or
+    /// filled) instead of inheriting this answer. Returns whether the fill was written.
     pub fn answer_fill_warning(&mut self, yes: bool, ask: &serde_json::Map<String, serde_json::Value>) -> bool {
         let text = ask.get("text").and_then(serde_json::Value::as_str);
         let same = |ed: &editor::EditState| {
@@ -278,8 +281,16 @@ impl SheetApp {
             ed.request_focus = true;
             return false;
         };
-        ed.fill_warning_accepted = Some(text.to_string());
         let step = |k: &str| ask.get(k).and_then(serde_json::Value::as_i64).unwrap_or(0);
+        // Yes waives the Warning of the selection the question checked, not of any selection
+        // the user has moved to since: a moved selection goes through the check again, so its
+        // own Warning is asked and a Stop there is still refused.
+        let checked = ask.get("selection").and_then(serde_json::Value::as_str);
+        let current = self.session.active().map(|d| d.selection.a1());
+        if checked != current.as_deref() {
+            return self.commit_edit(step("dr"), step("dc"), false, true);
+        }
+        ed.fill_warning_accepted = Some(text.to_string());
         self.commit_edit(step("dr"), step("dc"), false, true)
     }
 
@@ -683,6 +694,33 @@ mod fill_validation_tests {
         assert!(app.answer_fill_warning(true, &ask), "Yes writes the fill");
         assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Number(5.0); 3]);
         assert!(app.editor.is_none(), "the draft is committed");
+    }
+
+    #[test]
+    fn a_yes_for_a_moved_selection_asks_again_instead_of_filling() {
+        let mut app = book();
+        rule(&mut app, "A2", "warning");
+        rule(&mut app, "C2", "warning");
+        let undo = undo_len(&app);
+        assert!(!ctrl_enter(&mut app, "A1:A3", "A1", "5"));
+        let ask = warning_values(&app);
+        assert_eq!(ask.get("message"), Some(&json!("warning at A2")));
+
+        // The selection moves while the question is open (a right-click elsewhere).
+        app.run("selection.set", json!({"range": "C1:C3", "active": "C1"})).unwrap();
+
+        assert!(!app.answer_fill_warning(true, &ask), "Yes was for the old selection: it asks again, writes nothing");
+        assert_eq!(column(&app, &["A1", "A2", "A3", "C1", "C2", "C3"]), vec![Value::Empty; 6]);
+        assert_eq!(undo_len(&app), undo, "no undo step");
+        assert_eq!(draft(&app), Some("5"), "the draft stays in the cell");
+
+        let ask = warning_values(&app);
+        assert_eq!(ask.get("message"), Some(&json!("warning at C2")), "the new selection's own Warning is asked");
+        assert_eq!(ask.get("selection"), Some(&json!("C1:C3")), "the question names the checked selection");
+
+        assert!(app.answer_fill_warning(true, &ask), "Yes for the checked selection fills it");
+        assert_eq!(column(&app, &["C1", "C2", "C3"]), vec![Value::Number(5.0); 3]);
+        assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Empty; 3], "the first selection was never written");
     }
 
     #[test]
