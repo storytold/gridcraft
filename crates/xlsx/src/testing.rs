@@ -43,8 +43,19 @@ pub fn encrypt_workbook_standard(package: &[u8], password: &str) -> Vec<u8> {
 }
 
 /// A small Excel 97-2003 `.xls` workbook (one sheet, "Sheet1", with 42 in A1) encrypted with
-/// RC4 and `password`, as Excel does with a password to open.
+/// RC4 (version 1.1) and `password`.
 pub fn encrypt_xls_workbook(password: &str) -> Vec<u8> {
+    compound_file(&[("Workbook", &crate::xls::crypt::encrypt(&xls_workbook_stream(), password))])
+}
+
+/// [`encrypt_xls_workbook`] with RC4 CryptoAPI and a 128-bit key, as current Excel encrypts an
+/// `.xls` saved with a password.
+pub fn encrypt_xls_workbook_cryptoapi(password: &str) -> Vec<u8> {
+    compound_file(&[("Workbook", &crate::xls::crypt::encrypt_cryptoapi(&xls_workbook_stream(), password, 128))])
+}
+
+/// The Workbook stream of [`encrypt_xls_workbook`], before encryption.
+fn xls_workbook_stream() -> Vec<u8> {
     fn rec(id: u16, payload: &[u8]) -> Vec<u8> {
         [&id.to_le_bytes()[..], &(payload.len() as u16).to_le_bytes(), payload].concat()
     }
@@ -52,8 +63,7 @@ pub fn encrypt_xls_workbook(password: &str) -> Vec<u8> {
     let boundsheet = |pos: u32| rec(0x0085, &[&pos.to_le_bytes()[..], &[0, 0, 6, 0], b"Sheet1"].concat());
     let globals = |pos: u32| [bof(0x0005), boundsheet(pos), rec(0x000A, &[])].concat();
     let sheet = [bof(0x0010), rec(0x0203, &[&[0u8, 0, 0, 0, 0, 0][..], &42f64.to_le_bytes()].concat()), rec(0x000A, &[])].concat();
-    let stream = [globals(globals(0).len() as u32), sheet].concat();
-    compound_file(&[("Workbook", &crate::xls::crypt::encrypt(&stream, password))])
+    [globals(globals(0).len() as u32), sheet].concat()
 }
 
 /// A version 3 compound file (512-byte sectors) holding `streams` under the root, laid out as

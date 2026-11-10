@@ -9,8 +9,8 @@
 //! and the calculation settings (mode, iteration, precision as displayed). Everything else
 //! (charts, pictures, comments, conditional formats, validation, macros) is skipped with a
 //! warning.
-//! Workbooks encrypted with RC4 are read with their password ([`read_xls_with_password`]);
-//! other encryption and pre-BIFF8 versions are refused.
+//! Workbooks encrypted with RC4 or RC4 CryptoAPI are read with their password
+//! ([`read_xls_with_password`]); other encryption and pre-BIFF8 versions are refused.
 //!
 //! Every formula in the file is a legacy (pre-dynamic-array) one, so it is read with Excel's
 //! implicit `@` (see `array_formula.rs`), like an `.xlsx` formula saved without `cm`.

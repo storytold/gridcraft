@@ -136,7 +136,7 @@ interface chrome is translated, never command ids or document text. The choice i
 system language.
 
 `{command: "file.open", params: {path: "Secret.xlsx", password: "…"}}` opens a password-protected
-workbook (Agile or Standard encryption, or RC4 for `.xls`). Without `password` it first tries
+workbook (Agile or Standard encryption, or RC4 and RC4 CryptoAPI for `.xls`). Without `password` it first tries
 Excel's default password (`VelvetSweatshop`, which Excel uses for read-only workbooks) and opens
 the workbook if that works, as Excel does; otherwise it returns an error containing
 "is password-protected. Enter its password to open it." and never opens a dialog; a wrong

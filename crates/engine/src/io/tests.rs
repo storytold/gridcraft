@@ -433,20 +433,24 @@ fn encrypted_workbook_is_reported_not_misread() {
 #[test]
 fn encrypted_xls_opens_with_the_default_or_its_own_password() {
     let a1 = |wb: &Workbook| wb.sheets[0].value(CellRef::new(0, 0));
-    // Excel's default password: opened without asking, and without the decrypted notice.
-    let file = gridcraft_xlsx::testing::encrypt_xls_workbook(DEFAULT_PASSWORD);
-    let (wb, warnings) = open_bytes("readonly.xls", &file).unwrap();
-    assert_eq!(a1(&wb), gridcraft_core::Value::Number(42.0));
-    assert!(!warnings.iter().any(|w| w == DECRYPTED_NOTICE), "{warnings:?}");
-    // A password of the user's own: asked for, checked, then opened with the notice.
-    let file = gridcraft_xlsx::testing::encrypt_xls_workbook("synthetic-pw-7251");
-    let msg = open_bytes("secret.xls", &file).unwrap_err().to_string();
-    assert!(msg.contains(PASSWORD_REQUIRED), "got: {msg}");
-    let msg = open_bytes_with_password("secret.xls", &file, Some("nope")).unwrap_err().to_string();
-    assert!(msg.contains(WRONG_PASSWORD), "got: {msg}");
-    let (wb, warnings) = open_bytes_with_password("secret.xls", &file, Some("synthetic-pw-7251")).unwrap();
-    assert_eq!(a1(&wb), gridcraft_core::Value::Number(42.0));
-    assert_eq!(warnings[0], DECRYPTED_NOTICE);
+    // RC4 1.1, and RC4 CryptoAPI as current Excel writes it.
+    let schemes: [fn(&str) -> Vec<u8>; 2] = [gridcraft_xlsx::testing::encrypt_xls_workbook, gridcraft_xlsx::testing::encrypt_xls_workbook_cryptoapi];
+    for (n, encrypt) in schemes.into_iter().enumerate() {
+        // Excel's default password: opened without asking, and without the decrypted notice.
+        let file = encrypt(DEFAULT_PASSWORD);
+        let (wb, warnings) = open_bytes("readonly.xls", &file).unwrap();
+        assert_eq!(a1(&wb), gridcraft_core::Value::Number(42.0), "scheme {n}");
+        assert!(!warnings.iter().any(|w| w == DECRYPTED_NOTICE), "scheme {n}: {warnings:?}");
+        // A password of the user's own: asked for, checked, then opened with the notice.
+        let file = encrypt("synthetic-pw-7251");
+        let msg = open_bytes("secret.xls", &file).unwrap_err().to_string();
+        assert!(msg.contains(PASSWORD_REQUIRED), "scheme {n}, got: {msg}");
+        let msg = open_bytes_with_password("secret.xls", &file, Some("nope")).unwrap_err().to_string();
+        assert!(msg.contains(WRONG_PASSWORD), "scheme {n}, got: {msg}");
+        let (wb, warnings) = open_bytes_with_password("secret.xls", &file, Some("synthetic-pw-7251")).unwrap();
+        assert_eq!(a1(&wb), gridcraft_core::Value::Number(42.0), "scheme {n}");
+        assert_eq!(warnings[0], DECRYPTED_NOTICE, "scheme {n}");
+    }
 }
 
 #[test]
