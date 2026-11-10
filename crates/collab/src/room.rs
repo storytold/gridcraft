@@ -17,7 +17,7 @@ use serde_json::Value as Json;
 use crate::delta::delta_for;
 use crate::keys::SheetKeys;
 use crate::ops::{Class, classify};
-use crate::protocol::{Applied, CellChange, ClientOp, CommandEcho, Hint, Kind, Outcome, RejectCode, Rejected, SheetDelta, SheetImage, SheetName};
+use crate::protocol::{Applied, ClientOp, CommandEcho, Hint, Kind, Outcome, RejectCode, Rejected, SheetDelta, SheetImage, SheetName};
 
 /// How many applied operations the room remembers for idempotent resends (ADR-0003).
 pub const DEDUP_WINDOW: usize = 10_000;
@@ -217,6 +217,10 @@ impl Room {
         normalise(&mut params, &op.payload.cmd, &name, op.target.a1.as_deref());
         session.apply_remote(&op.payload.cmd, params.clone()).map_err(|e| self.reject(&op, RejectCode::Invalid, false, &e.to_string()))?;
         let changed = session.take_changed();
+        // The command's own cells, without the formulas it only re-evaluated: a step keeps what
+        // the command wrote. An undo that required a recalculated dependent to still hold its
+        // value would refuse an edit of a cell nobody touched (a volatile formula, a spill).
+        let written = session.take_written();
         let (delta, sheets) = {
             let d = session.active().ok_or_else(|| self.reject(&op, RejectCode::Internal, false, "no document"))?;
             let delta = delta_for(&d.wb, &self.keys, &changed);
@@ -234,7 +238,7 @@ impl Room {
             Vec::new()
         } else {
             match (&before_wb, session.active()) {
-                (Some(before), Some(after)) => snapshots(before, &after.wb, &self.keys, &delta),
+                (Some(before), Some(after)) => snapshots(before, &after.wb, &self.keys, &delta, &written),
                 _ => Vec::new(),
             }
         };
@@ -321,8 +325,14 @@ impl Room {
         for (index, cells) in &groups {
             session.restore_cells(*index, cells).map_err(|e| self.undo_reject(RejectCode::Internal, false, &e.to_string()))?;
         }
-        let delta = delta_from(&step, false);
-        let _ = session.take_changed();
+        // The answer is the document, not only the step's own list: `restore_cells` leaves the
+        // restored cells and every formula it re-evaluated in `last_changed`, and a peer applies
+        // the same delta (formulas, styles and dependents included) through `restore_cells`.
+        let changed = session.take_changed();
+        let delta = match session.active() {
+            Some(d) => delta_for(&d.wb, &self.keys, &changed),
+            None => Vec::new(),
+        };
         self.version += 1;
         if let Some(steps) = self.history.get_mut(actor) {
             steps.pop_back();
@@ -380,8 +390,11 @@ impl Room {
         for (index, cells) in &groups {
             session.restore_cells(*index, cells).map_err(|e| self.redo_reject(RejectCode::Internal, false, &e.to_string()))?;
         }
-        let delta = delta_from(&step, true);
-        let _ = session.take_changed();
+        let changed = session.take_changed();
+        let delta = match session.active() {
+            Some(d) => delta_for(&d.wb, &self.keys, &changed),
+            None => Vec::new(),
+        };
         self.version += 1;
         if let Some(steps) = self.redo.get_mut(actor) {
             steps.pop_back();
@@ -438,7 +451,14 @@ impl Room {
                         let at = CellRef::parse(&change.a1).ok_or_else(|| self.replay_reject(applied, "a bad address in the journal"))?;
                         let value = serde_json::from_value::<Value>(change.value.clone())
                             .map_err(|_| self.replay_reject(applied, "a bad value in the journal"))?;
-                        let state = CellState { value, formula: change.formula.clone(), style: change.style.unwrap_or(0) };
+                        let state = CellState {
+                            value,
+                            formula: change.formula.clone(),
+                            style: change.style.unwrap_or(0),
+                            py: change.py.clone(),
+                            array: change.array,
+                            dynamic: change.dynamic,
+                        };
                         groups.entry(index).or_default().push((at, state));
                     }
                 }
@@ -636,7 +656,15 @@ fn sheet_map(wb: &Workbook, keys: &SheetKeys) -> Vec<SheetName> {
 
 /// The cells of one applied delta as snapshots: what they held in `before`, what they hold in
 /// `after`. Sheets are matched by session key, so a structural move cannot confuse the pair.
-fn snapshots(before: &Workbook, after: &Workbook, keys: &SheetKeys, delta: &[crate::protocol::SheetDelta]) -> Vec<CellSnap> {
+/// Only the cells the command itself `written` are snapshotted: the delta also carries the
+/// formulas the recalculation evaluated, whose content the command did not change.
+fn snapshots(
+    before: &Workbook,
+    after: &Workbook,
+    keys: &SheetKeys,
+    delta: &[SheetDelta],
+    written: &[gridcraft_calc::Key],
+) -> Vec<CellSnap> {
     let mut out = Vec::new();
     for sheet in delta {
         let Ok(key) = sheet.sheet.parse::<u64>() else { continue };
@@ -644,34 +672,25 @@ fn snapshots(before: &Workbook, after: &Workbook, keys: &SheetKeys, delta: &[cra
         let (Some(old), Some(new)) = (before.sheet(index), after.sheet(index)) else { continue };
         for change in &sheet.cells {
             let Some(at) = CellRef::parse(&change.a1) else { continue };
+            if !written.contains(&(index, at)) {
+                continue;
+            }
             out.push(CellSnap { sheet: sheet.sheet.clone(), a1: change.a1.clone(), before: snap(old, at), after: snap(new, at) });
         }
     }
     out
 }
 
-/// The delta of a step: the cells as they were before it (`after == false`) or as it left them.
-fn delta_from(step: &Step, after: bool) -> Vec<SheetDelta> {
-    let mut by_sheet: BTreeMap<String, Vec<CellChange>> = BTreeMap::new();
-    for cell in &step.cells {
-        let state = if after { &cell.after } else { &cell.before };
-        let Ok(value) = serde_json::to_value(&state.value) else { continue };
-        by_sheet.entry(cell.sheet.clone()).or_default().push(CellChange {
-            a1: cell.a1.clone(),
-            value,
-            formula: state.formula.clone(),
-            style: Some(state.style),
-        });
-    }
-    by_sheet.into_iter().map(|(sheet, cells)| SheetDelta { sheet, cells, objects_deleted: Vec::new(), objects_created: Vec::new() }).collect()
-}
-
 fn snap(sheet: &Sheet, at: CellRef) -> CellState {
     let cell = sheet.cell(at);
+    let formula = cell.and_then(|cell| cell.formula.as_ref());
     CellState {
         value: cell.map(|cell| cell.value.clone()).unwrap_or(Value::Empty),
-        formula: cell.and_then(|cell| cell.formula.as_ref().map(|formula| formula.text.clone())),
+        formula: formula.map(|formula| formula.text.clone()),
         style: sheet.style_id(at).0,
+        py: cell.and_then(|cell| cell.py.as_ref()).map(|py| py.code.clone()),
+        array: formula.and_then(|formula| formula.array),
+        dynamic: formula.is_some_and(|formula| formula.dynamic),
     }
 }
 

@@ -65,6 +65,17 @@ pub struct CellChange {
     pub formula: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<u32>,
+    /// The code of a Python cell (it has no formula). A command-less `applied` — an undo or redo
+    /// of a cell edit — carries it, so the replica restores the code rather than the constant the
+    /// cell last showed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub py: Option<String>,
+    /// The range of a legacy array formula whose text is in `formula`, and the dynamic-array mark:
+    /// restoring the text without them changes what the formula means.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub array: Option<gridcraft_core::RangeRef>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dynamic: bool,
 }
 
 /// The changed cells of one sheet, plus the objects the command removed or created.

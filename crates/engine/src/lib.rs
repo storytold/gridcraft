@@ -229,6 +229,10 @@ pub struct DocState {
     /// it to a front end that has to tell another party what changed (the collaboration layer).
     /// Not history and not saved.
     pub last_changed: Vec<gridcraft_calc::Key>,
+    /// The cells the command itself wrote, without the formulas the recalculation evaluated
+    /// afterwards: what an undo has to put back, and what a step of the undo history may require
+    /// to still hold its result. [`Session::take_written`] hands it over the same way.
+    pub last_written: Vec<gridcraft_calc::Key>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -336,6 +340,7 @@ impl DocState {
             edits: None,
             go_to_recent: vec![],
             last_changed: vec![],
+            last_written: vec![],
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -451,6 +456,17 @@ pub struct CellState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub formula: Option<String>,
     pub style: u32,
+    /// The code of a Python cell (which has no formula). An undo that kept only the value would
+    /// turn the cell into a constant and lose the code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub py: Option<String>,
+    /// The range of a legacy array formula (Ctrl+Shift+Enter) whose text this is. Restoring the
+    /// text alone would make it a single-cell formula, or a spill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub array: Option<RangeRef>,
+    /// The dynamic-array mark a file put on the formula; the writer keeps it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dynamic: bool,
 }
 
 /// Requests from commands to the UI (open a dialog, show a message…).
@@ -719,6 +735,7 @@ impl Session {
             && let Some(d) = self.active_mut()
         {
             d.last_changed.clear();
+            d.last_written.clear();
         }
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         if let Err(why) = (spec.enabled)(self) {
@@ -1196,29 +1213,59 @@ impl Session {
     }
 
     /// Restores cells exactly as a shared session's undo remembers them: value, formula text and
-    /// interned style. The dependency graph is rebuilt and the workbook recalculated, because a
-    /// restored formula changes what its dependents show.
+    /// its array flags, Python code and interned style. The dependency graph is rebuilt and the
+    /// workbook recalculated, because a restored formula changes what its dependents show; the
+    /// cells this call restored and every formula it re-evaluated are left in `last_changed`, so
+    /// the caller can tell another replica what the new document state is.
     pub fn restore_cells(&mut self, sheet: usize, cells: &[(CellRef, CellState)]) -> Result<()> {
         let Some(d) = self.active_mut() else { return Err(EngineError::NoDocument) };
-        let DocState { wb, calc, revision, .. } = d;
         {
-            let model = Arc::make_mut(wb);
+            let model = Arc::make_mut(&mut d.wb);
             let Some(sh) = model.sheet_mut(sheet) else { return Err(EngineError::Other("no such sheet".into())) };
             for (at, state) in cells {
-                if state.value.is_empty() && state.formula.is_none() {
+                if state.value.is_empty() && state.formula.is_none() && state.py.is_none() {
                     sh.remove_cell(*at);
                     continue;
                 }
-                let formula = state.formula.as_deref().map(|text| Arc::new(gridcraft_model::Formula::new(text)));
+                let formula = state.formula.as_deref().map(|text| {
+                    let mut formula = gridcraft_model::Formula::new(text);
+                    formula.array = state.array;
+                    formula.dynamic = state.dynamic;
+                    Arc::new(formula)
+                });
+                let py = state.py.as_deref().map(|code| Arc::new(gridcraft_model::PyCode::new(code)));
                 sh.set_cell(
                     *at,
-                    gridcraft_model::Cell { value: state.value.clone(), formula, style: gridcraft_model::StyleId(state.style), py: None },
+                    gridcraft_model::Cell { value: state.value.clone(), formula, style: gridcraft_model::StyleId(state.style), py },
                 );
             }
-            calc.rebuild(model);
-            calc.recalc_all(model);
+            d.calc.rebuild(model);
+            d.calc.recalc_all(model);
         }
-        *revision = revision.saturating_add(1);
+        d.revision = d.revision.saturating_add(1);
+        let evaluated = d.calc.take_evaluated();
+        // What the caller has to report: the cells this call put back and every formula the
+        // recalculation evaluated again (their displayed values moved with the restored cells),
+        // spilled blocks included, exactly as `cmd::commit` reports a command's effect.
+        let mut changed: Vec<gridcraft_calc::Key> = cells.iter().map(|(at, _)| (sheet, *at)).collect();
+        let mut spilled = 0u64;
+        for (sh, at) in &evaluated {
+            changed.push((*sh, *at));
+            if let Some(range) = d.wb.sheet(*sh).and_then(|s| s.spill_ranges.get(at).copied())
+                && range.count() <= 100_000
+                && spilled.saturating_add(range.count()) <= 200_000
+            {
+                spilled = spilled.saturating_add(range.count());
+                for row in range.start.row..=range.end.row {
+                    for col in range.start.col..=range.end.col {
+                        changed.push((*sh, CellRef::new(row, col)));
+                    }
+                }
+            }
+        }
+        changed.sort_unstable_by_key(|(s, c)| (*s, c.row, c.col));
+        changed.dedup();
+        d.last_changed = changed;
         Ok(())
     }
 
@@ -1336,6 +1383,14 @@ impl Session {
     /// another party what changed (the collaboration layer) reads it once per applied operation.
     pub fn take_changed(&mut self) -> Vec<gridcraft_calc::Key> {
         self.active_mut().map(|d| std::mem::take(&mut d.last_changed)).unwrap_or_default()
+    }
+
+    /// Takes the cells the last command itself wrote, leaving formulas the recalculation only
+    /// re-evaluated out. An undo step keeps these (that is what it puts back and what it requires
+    /// to still hold its result); the evaluated cells travel in the delta only, because the next
+    /// recalculation derives them again.
+    pub fn take_written(&mut self) -> Vec<gridcraft_calc::Key> {
+        self.active_mut().map(|d| std::mem::take(&mut d.last_written)).unwrap_or_default()
     }
 }
 

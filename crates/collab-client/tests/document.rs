@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use gridcraft_collab::{
-    Applied, CellChange, ClientMessage, ClientOp, CommandEcho, Kind, Outcome, Payload, Presence, Role, SheetDelta, SheetName, Target,
+    Applied, CellChange, ClientMessage, ClientOp, CommandEcho, Outcome, Presence, Role, SheetDelta, SheetName,
 };
 use gridcraft_collab_client::{Event, Link, State, Synced, Welcome};
 use gridcraft_engine::Session;
@@ -133,7 +133,15 @@ fn a_remote_operation_lands_in_the_shared_workbook() {
             command: Some(CommandEcho { id: "cell.set".into(), params: json!({ "sheet": "Sheet1", "cell": "A1", "input": 42 }) }),
             delta: Some(vec![SheetDelta {
                 sheet: "0".into(),
-                cells: vec![CellChange { a1: "A1".into(), value: json!(42), formula: None, style: Some(0) }],
+                cells: vec![CellChange {
+                    a1: "A1".into(),
+                    value: json!(42),
+                    formula: None,
+                    style: Some(0),
+                    py: None,
+                    array: None,
+                    dynamic: false,
+                }],
                 objects_deleted: Vec::new(),
                 objects_created: Vec::new(),
             }]),
@@ -150,6 +158,48 @@ fn a_remote_operation_lands_in_the_shared_workbook() {
     assert_eq!(value(&session, 0, "A1"), Value::Number(42.0), "the shared workbook gets the edit");
     assert_eq!(value(&session, 1, "A1"), Value::Empty, "the other open workbook is untouched");
     assert_eq!(session.active_index(), 1, "the window the user was in stays in front");
+}
+
+#[test]
+fn a_command_less_undo_restores_the_formula_on_a_peer() {
+    let (mut synced, sink, mut session) = replica();
+    let _ = synced.poll(&mut session);
+    session.execute("cell.set", json!({ "cell": "A1", "input": 10 })).expect("the constant the step left");
+
+    let applied = Applied {
+        op_id: "undo-ann-0".into(),
+        version: 3,
+        epoch: 0,
+        actor: "ann".into(),
+        result: Outcome {
+            command: None,
+            delta: Some(vec![SheetDelta {
+                sheet: "0".into(),
+                cells: vec![CellChange {
+                    a1: "A1".into(),
+                    value: json!(3),
+                    formula: Some("=1+2".into()),
+                    style: Some(0),
+                    py: None,
+                    array: None,
+                    dynamic: false,
+                }],
+                objects_deleted: Vec::new(),
+                objects_created: Vec::new(),
+            }]),
+        },
+        sheets: None,
+        images: None,
+        book: None,
+        more: false,
+        image_part: None,
+    };
+    sink.deliver(&applied);
+    let _ = synced.poll(&mut session);
+
+    let at = CellRef::parse("A1").expect("a valid address");
+    let cell = session.documents()[0].wb.active().and_then(|sheet| sheet.cell(at)).cloned().expect("the cell");
+    assert_eq!(cell.formula.as_ref().map(|formula| formula.text.clone()), Some("=1+2".into()), "the formula comes back, not only the value");
 }
 
 #[test]

@@ -459,7 +459,9 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     // commits appends, so every cell it changed is reported; the formulas the recalculation
     // evaluated are added because their displayed values change too, even though their content
     // did not.
-    d.last_changed.extend(changed);
+    d.last_changed.extend(changed.iter().copied());
+    // The cells the command wrote, before the evaluated ones join the list: an undo keeps these.
+    d.last_written.extend(changed);
     let evaluated = d.calc.take_evaluated();
     // Spilled blocks are reported too, but the whole list stays bounded: a sheet of large arrays
     // must not turn one edit into millions of delta entries.
@@ -482,6 +484,8 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     d.last_changed.sort_unstable_by_key(|(s, c)| (*s, c.row, c.col));
     d.last_changed.dedup();
+    d.last_written.sort_unstable_by_key(|(s, c)| (*s, c.row, c.col));
+    d.last_written.dedup();
     Ok(r)
 }
 

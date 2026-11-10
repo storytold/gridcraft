@@ -505,6 +505,72 @@ fn undo_is_refused_when_another_participant_holds_the_cell() {
 }
 
 #[test]
+fn an_undo_does_not_wait_for_a_recalculated_dependent() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, op("ann-b1", "cell.set", json!({"input": "=A1+C1"}), &sheet, "B1"), "ann").unwrap();
+    room.apply(&mut s, op("ann-a1", "cell.set", json!({"input": 3}), &sheet, "A1"), "ann").unwrap();
+    // Bob's edit moves B1's value without touching the cell ann's step wrote.
+    room.apply(&mut s, op("bob-c1", "cell.set", json!({"input": 5}), &sheet, "C1"), "bob").unwrap();
+    let undone = room.undo(&mut s, "ann", Some("ann-a1")).expect("a formula the recalculation evaluated is not part of the step");
+    assert_eq!(undone.version, 4);
+    assert_eq!(value_of(&s, 0, "A1"), Value::Empty);
+    assert_eq!(value_of(&s, 0, "B1"), Value::Number(5.0), "the recalculated dependent follows the restored cell");
+}
+
+#[test]
+fn an_undo_delta_carries_the_restored_formula_and_the_dependents() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, op("b1", "cell.set", json!({"input": "=A1*2"}), &sheet, "B1"), "ann").unwrap();
+    room.apply(&mut s, op("a1", "cell.set", json!({"input": 4}), &sheet, "A1"), "ann").unwrap();
+    let undone = room.undo(&mut s, "ann", Some("a1")).unwrap();
+    let delta = undone.result.delta.expect("cells changed");
+    let change = |a1: &str| delta.iter().flat_map(|d| &d.cells).find(|c| c.a1 == a1).cloned();
+    let a1 = change("A1").expect("A1 is in the delta");
+    assert!(a1.formula.is_none(), "the cell is a constant again");
+    let b1 = change("B1").expect("the recalculated dependent travels too");
+    assert_eq!(b1.formula.as_deref(), Some("A1*2"), "the dependent carries its formula, not only a value");
+    assert_eq!(serde_json::from_value::<Value>(b1.value.clone()).unwrap().as_f64(), Some(0.0));
+}
+
+#[test]
+fn a_cell_state_puts_python_code_and_an_array_formula_back() {
+    use gridcraft_core::RangeRef;
+    use gridcraft_engine::CellState;
+
+    let mut s = session();
+    let at = CellRef::new(0, 0);
+    let py = CellState { value: Value::Number(3.0), formula: None, style: 0, py: Some("1 + 2".into()), array: None, dynamic: false };
+    s.restore_cells(0, &[(at, py)]).expect("a Python cell is restored");
+    let area = RangeRef::new(at, CellRef::new(0, 1));
+    let array = CellState {
+        value: Value::Number(0.0),
+        formula: Some("=SUM(B1:C1)".into()),
+        style: 0,
+        py: None,
+        array: Some(area),
+        dynamic: true,
+    };
+    s.restore_cells(0, &[(CellRef::new(1, 0), array)]).expect("an array formula is restored");
+    let doc = s.doc().unwrap().wb.clone();
+    assert_eq!(doc.sheet(0).and_then(|sh| sh.cell(at)).and_then(|c| c.py.as_ref()).map(|p| p.code.clone()), Some("1 + 2".into()));
+    let formula = doc.sheet(0).and_then(|sh| sh.cell(CellRef::new(1, 0))).and_then(|c| c.formula.as_ref()).cloned().expect("the formula");
+    assert_eq!(formula.array, Some(area), "the array range survives the round trip");
+    assert!(formula.dynamic);
+
+    // The same two fields travel through a step of the room: the undo puts the code back.
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, op("set", "cell.set", json!({"input": 7}), &sheet, "A1"), "ann").unwrap();
+    room.undo(&mut s, "ann", Some("set")).unwrap();
+    let code = s.doc().unwrap().wb.sheet(0).and_then(|sh| sh.cell(at)).and_then(|c| c.py.as_ref()).map(|p| p.code.clone());
+    assert_eq!(code, Some("1 + 2".into()), "the undo restores the Python code, not the constant the cell showed");
+}
+
+#[test]
 fn redo_puts_back_what_undo_took_away_and_a_new_edit_ends_the_branch() {
     let mut s = session();
     let mut room = Room::new(&s);

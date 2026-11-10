@@ -631,11 +631,13 @@ mod tests {
         assert!(collab.on_text(&wire(&ServerMessage::Applied { applied: applied("w2-0", 5) }), &mut session));
         assert_eq!(value(&session, "A1"), Value::Number(5.0), "the other window's command runs on this replica");
 
-        // Both steps belong to the person the server named, so the room has something to undo.
-        assert!(
-            collab.execute(&mut session, "edit.undo", json!({})).is_some_and(|result| result.is_ok()),
-            "undo is offered for the actor the welcome named, not for the display name"
-        );
+        // Both steps belong to the person the server named, so the room has something to undo:
+        // the answer is about the connection (this replica has none), not "there is nothing to
+        // undo", which is what the display name would have produced.
+        match collab.execute(&mut session, "edit.undo", json!({})) {
+            Some(Err(error)) => assert_eq!(error, "the session is not connected", "the step is this actor's"),
+            other => panic!("expected the connection error, got {other:?}"),
+        }
     }
 
     /// Two windows of one person (RFC §13.6): the host bridge gets a row per window, so the

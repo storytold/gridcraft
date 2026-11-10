@@ -31,8 +31,10 @@ pub fn delta_for(workbook: &Workbook, keys: &SheetKeys, changed: &[Key]) -> Vec<
         // of its own but is part of what the user sees.
         let value = serde_json::to_value(sheet.value(*at)).unwrap_or(serde_json::Value::Null);
         let formula = cell.and_then(|c| c.formula.as_ref()).map(|f| f.text.clone());
+        let py = cell.and_then(|c| c.py.as_ref()).map(|p| p.code.clone());
+        let (array, dynamic) = cell.and_then(|c| c.formula.as_ref()).map_or((None, false), |f| (f.array, f.dynamic));
         let style = Some(sheet.style_id(*at).0);
-        out[slot].cells.push(CellChange { a1: at.a1(), value, formula, style });
+        out[slot].cells.push(CellChange { a1: at.a1(), value, formula, style, py, array, dynamic });
     }
     out
 }

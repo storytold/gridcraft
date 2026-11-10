@@ -21,7 +21,7 @@ use gridcraft_collab::{
     Applied, ClientMessage, ClientOp, IMAGE_LIMIT, IMAGE_PART, ImageBundle, Kind, Payload, Presence, RejectCode, Role, SheetDelta, SheetImage,
     SheetName, Target, classify,
 };
-use gridcraft_engine::Session;
+use gridcraft_engine::{CellState, Session};
 use gridcraft_engine::core::{CellRef, Value};
 use serde_json::{Value as Json, json};
 
@@ -570,7 +570,56 @@ impl Synced {
             self.apply_sheets(sheets);
         }
         if let Some(delta) = &applied.result.delta {
-            self.patch(session, delta);
+            if applied.result.command.is_none() {
+                // A command-less answer is a cell undo or redo: the delta is the document, so a
+                // restored formula, its array flags, its Python code and its style land here too.
+                // Patching values alone left a peer showing the step's old numbers under a formula
+                // it never got back.
+                self.restore(session, delta);
+            } else {
+                self.patch(session, delta);
+            }
+        }
+    }
+
+    /// Applies a command-less delta as cell state: every cell the undo or redo put back, with its
+    /// formula and flags, then the authoritative values of any spilled children (they live in the
+    /// sheet's spill map, not in a cell of their own). `restore_cells` recalculates, so the
+    /// dependents of a restored formula come out right without a second message.
+    fn restore(&mut self, session: &mut Session, delta: &[SheetDelta]) {
+        for sheet in delta {
+            let Some(index) = self.sheet_index(&sheet.sheet) else { continue };
+            let spill: Vec<CellRef> = self
+                .shared_document(session)
+                .and_then(|doc| doc.wb.sheet(index).map(|sheet| sheet.spill.keys().copied().collect()))
+                .unwrap_or_default();
+            let mut cells: Vec<(CellRef, CellState)> = Vec::with_capacity(sheet.cells.len());
+            let mut spilled: Vec<(CellRef, Value)> = Vec::new();
+            for change in &sheet.cells {
+                let Some(at) = CellRef::parse(&change.a1) else { continue };
+                let Ok(value) = serde_json::from_value::<Value>(change.value.clone()) else { continue };
+                if spill.contains(&at) {
+                    spilled.push((at, value));
+                    continue;
+                }
+                cells.push((
+                    at,
+                    CellState {
+                        value,
+                        formula: change.formula.clone(),
+                        style: change.style.unwrap_or(0),
+                        py: change.py.clone(),
+                        array: change.array,
+                        dynamic: change.dynamic,
+                    },
+                ));
+            }
+            if !cells.is_empty() {
+                let _ = session.restore_cells(index, &cells);
+            }
+            if !spilled.is_empty() {
+                let _ = session.apply_values(index, &spilled);
+            }
         }
     }
 
