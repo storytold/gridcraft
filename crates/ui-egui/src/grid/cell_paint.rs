@@ -176,11 +176,10 @@ pub(super) fn display_text(
 }
 
 pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
-    let pad_v = 1.5 * z;
-    let y_top = rect.top() + pad_v;
+    let y_top = rect.top() + 1.5 * z;
     // Not clamped to `y_top`: text taller than the row overflows upward (Bottom) or both ways
     // (Center), and the cell's clip rect trims it, so Middle and Bottom stay distinct from Top.
-    let y_bottom = rect.bottom() - gh - pad_v;
+    let y_bottom = rect.bottom() - gh - 0.5 * z;
     match valign {
         VAlign::Top => y_top,
         VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,
@@ -188,15 +187,29 @@ pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -
     }
 }
 
+/// Bounds of the primary font's line boxes, excluding extra row height added only for fallbacks.
+/// Centered fallbacks do not identify that baseline; empty or centered-only rows use their layout bounds.
+pub(crate) fn galley_baseline_bounds(galley: &egui::Galley) -> (f32, f32) {
+    let row_bounds = |row: &egui::epaint::text::PlacedRow| {
+        row.glyphs
+            .iter()
+            .find(|glyph| {
+                glyph.font_face_align == egui::epaint::text::FallbackAlign::Baseline
+                    || (glyph.font_face_ascent == glyph.font_ascent && glyph.font_face_height == glyph.font_height)
+            })
+            .map_or((row.rect().top(), row.rect().bottom()), |glyph| {
+                let top = row.pos.y + glyph.pos.y - glyph.font_ascent;
+                (top, top + glyph.font_height)
+            })
+    };
+    let first = galley.rows.first().map(|row| row_bounds(row).0);
+    let last = galley.rows.last().map(|row| row_bounds(row).1);
+    first.zip(last).unwrap_or((0.0, galley.size().y))
+}
+
 pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
-    let top_inset = 1.0 * z;
-    let y_top = rect.top() - top_inset;
-    let y_bottom = (rect.bottom() - gh - 0.5 * z).max(y_top);
-    match valign {
-        VAlign::Top => y_top,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,
-        VAlign::Bottom => y_bottom,
-    }
+    let y_top = wrapped_cell_text_y(VAlign::Top, rect, gh, z);
+    wrapped_cell_text_y(valign, rect, gh, z).max(y_top)
 }
 
 /// Where to put a `TextShape` holding a galley of `size` turned by `angle` (egui radians, so
