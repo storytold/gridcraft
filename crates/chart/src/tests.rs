@@ -1745,4 +1745,18 @@ fn a_pie_follows_its_series_labels() {
     let none = count(false, None);
     assert!(count(false, Some(SeriesLabels { value: true, ..Default::default() })) > none);
     assert_eq!(count(true, Some(SeriesLabels::default())), none);
+    // Category names when the series asks for them, not values.
+    let mut c = chart(ChartKind::Pie);
+    c.legend = LegendPos::None;
+    c.title = None;
+    let mut d = sample(ChartKind::Pie);
+    d.series[0].labels = Some(SeriesLabels { category_name: true, ..Default::default() });
+    let texts: Vec<String> = render(&c, &d, 640.0, 400.0, &ApproxMeasure)
+        .into_iter()
+        .filter_map(|p| match p {
+            Prim::Text { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.iter().any(|t| d.categories.contains(t)), "{texts:?}");
 }

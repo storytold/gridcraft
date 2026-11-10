@@ -245,8 +245,9 @@ pub(super) fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inne
         if sweep > 1e-4 {
             let fill = point_color(data, j);
             wedge(ctx, &ring, a, sweep, fill);
-            if (values_labelled(chart, s) || names) && vals.len() <= MAX_LABELS {
-                let t = if names { cat_label(data, j) } else { f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None) };
+            let value = || f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None);
+            let text = if names { Some(cat_label(data, j)) } else { point_label(chart, s, &cat_label(data, j), &value()) };
+            if let Some(t) = text.filter(|_| vals.len() <= MAX_LABELS) {
                 let mid = a + sweep / 2.0;
                 let rr = if ri > 0.0 { (r + ri) / 2.0 } else { r * 0.65 };
                 let room = sweep * rr;
@@ -321,8 +322,8 @@ pub(super) fn doughnut(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx)
             if sweep > 1e-4 {
                 let fill = point_color(data, j);
                 wedge(ctx, &ring, a, sweep, fill);
-                if values_labelled(chart, s) && n <= MAX_LABELS {
-                    let t = f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None);
+                let value = f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None);
+                if let Some(t) = point_label(chart, s, &cat_label(data, j), &value).filter(|_| n <= MAX_LABELS) {
                     let mid = a + sweep / 2.0;
                     let rr = (outer + inner) / 2.0;
                     if ctx.tw(&t, LABEL_SIZE) <= (sweep * rr).max(outer - inner) && sweep * rr >= LABEL_SIZE {
@@ -612,6 +613,19 @@ pub(super) fn stock(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
             }
             _ => {}
         }
+    }
+}
+
+/// A pie slice's or ring segment's label: what its series' own labels show (series name, category
+/// name, value, comma-separated as Excel orders them), else the value when the chart shows values.
+fn point_label(chart: &Chart, s: &SeriesData, category: &str, value: &str) -> Option<String> {
+    match s.labels {
+        Some(l) => {
+            let parts = [(l.series_name, s.name.as_str()), (l.category_name, category), (l.value, value)];
+            let t = parts.iter().filter(|(on, t)| *on && !t.is_empty()).map(|(_, t)| *t).collect::<Vec<_>>().join(", ");
+            (!t.is_empty()).then_some(t)
+        }
+        None => chart.data_labels.then(|| value.to_string()),
     }
 }
 
