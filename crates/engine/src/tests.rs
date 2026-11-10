@@ -6267,8 +6267,16 @@ fn file_open_fits_rows_with_the_sessions_measure() {
     let mut wb = (*s.doc().unwrap().wb).clone();
     std::sync::Arc::make_mut(&mut wb.sheets[0]).rows.clear();
     let one_line = wb.sheets[0].default_row_height;
-    let path = std::env::temp_dir().join(format!("gridcraft-fit-open-{}-{}.xlsx", std::process::id(), unique_nonce()));
-    std::fs::write(&path, gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+    /// Removes the test's file when the test ends, also when an assertion fails.
+    struct TempFile(std::path::PathBuf);
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let file = TempFile(std::env::temp_dir().join(format!("gridcraft-fit-open-{}-{}.xlsx", std::process::id(), unique_nonce())));
+    let path = &file.0;
+    std::fs::write(path, gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
     let opened = |measure: Option<crate::TextWidth>| {
         let mut s = Session::new();
         s.text_width = measure;
@@ -6277,7 +6285,6 @@ fn file_open_fits_rows_with_the_sessions_measure() {
     };
     let estimate = opened(None);
     let narrow = opened(Some(std::sync::Arc::new(|text: &str, _: &gridcraft_model::Font, _| text.chars().count() as f32 * 4.0)));
-    let _ = std::fs::remove_file(&path);
     assert!(estimate > one_line + 1.0, "the estimate folds the text");
     assert_eq!(narrow, one_line, "the session's measure fits it on one line");
 }
