@@ -25,4 +25,7 @@ fn the_style_is_read_where_excel_writes_it() {
     // Out of range: the default.
     assert_eq!(style(&alternate(r#"<c14:style val="7"/>"#, "")), 2);
     assert_eq!(style(r#"<c:style val="99"/>"#), 2);
+    // An invalid candidate gives way to the next valid one.
+    assert_eq!(style(&format!(r#"<c:style val="99"/>{}"#, alternate("", r#"<c:style val="26"/>"#))), 26);
+    assert_eq!(style(&alternate(r#"<c14:style val="141"/>"#, r#"<c:style val="0"/>"#)), 41);
 }

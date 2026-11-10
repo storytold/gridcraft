@@ -201,15 +201,18 @@ fn read_trendline(t: &El) -> Option<Trendline> {
 /// `c14:style` (the style plus 100) as the Choice and a `c:style` as the Fallback. Without one,
 /// Excel's default style 2.
 fn chart_style(root: &El) -> u32 {
+    // Each candidate must be a style itself: an invalid one gives way to the next.
+    let valid = |v: u32| (1..=48).contains(&v).then_some(v);
     let parse = |v: &str| v.trim().parse::<u32>().ok();
-    let direct = root.child_val("style").and_then(parse);
+    let direct = root.child_val("style").and_then(parse).and_then(valid);
     let alternate = || {
         root.kids("AlternateContent").find_map(|a| {
-            let fallback = a.path(&["Fallback", "style"]).and_then(|s| s.attr("val")).and_then(parse);
-            fallback.or_else(|| a.path(&["Choice", "style"]).and_then(|s| s.attr("val")).and_then(parse).and_then(|v| v.checked_sub(100)))
+            let fallback = a.path(&["Fallback", "style"]).and_then(|s| s.attr("val")).and_then(parse).and_then(valid);
+            fallback
+                .or_else(|| a.path(&["Choice", "style"]).and_then(|s| s.attr("val")).and_then(parse).and_then(|v| v.checked_sub(100)).and_then(valid))
         })
     };
-    direct.or_else(alternate).filter(|s| (1..=48).contains(s)).unwrap_or(2)
+    direct.or_else(alternate).unwrap_or(2)
 }
 
 fn rich_title(t: &El) -> Option<String> {
