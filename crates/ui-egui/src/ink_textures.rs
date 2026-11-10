@@ -68,22 +68,43 @@ impl Tier {
         Some(entry.texture.clone())
     }
 
-    /// Uploads `image` for `key` and trims the tier to its budgets. A hard ceiling applies to every
-    /// entry, the ones drawn this frame included: only the upload being inserted is spared, so one
-    /// frame painting many textures cannot grow the tier past `max_items`/`max_bytes`.
+    /// Uploads `image` for `key` and trims the tier to its budgets. Uploads no frame is painting
+    /// are dropped first, then the hard ceiling of twice the budget applies to the ones the current
+    /// frame is. A frame that shows more patterns than the budget therefore keeps its own uploads
+    /// (a hard ceiling is still a ceiling, at 2×) instead of evicting them and decoding every one
+    /// again on the next repaint; the next insert of a new pattern trims them back towards the
+    /// budget.
     fn insert(&mut self, ctx: &egui::Context, key: &str, image: Option<image::RgbaImage>, frame: u64) -> Option<TextureHandle> {
         let texture = image.as_ref().map(|image| upload(ctx, image));
         let bytes = texture.as_ref().map_or(0, |t| t.size()[0] * t.size()[1] * 4);
+        // The uploads no frame is painting: a gallery scrolled away from or a canvas that moved on
+        // should not keep pattern memory alive.
         while self.entries.len() >= self.max_items || self.bytes.saturating_add(bytes) > self.max_bytes {
-            let oldest = self.entries.iter().min_by_key(|(_, e)| e.used).map(|(key, _)| key.clone());
-            let Some(oldest) = oldest else { break };
-            if let Some(entry) = self.entries.remove(&oldest) {
-                self.bytes = self.bytes.saturating_sub(entry.bytes);
-            }
+            let Some(oldest) = self.oldest_drawn_before(frame) else { break };
+            self.remove(&oldest);
+        }
+        // The hard bound: even a frame painting more patterns than it holds never grows the tier
+        // past twice the budget, and only then are patterns it is painting dropped.
+        while self.entries.len() >= self.max_items.saturating_mul(2) || self.bytes.saturating_add(bytes) > self.max_bytes.saturating_mul(2) {
+            let Some(oldest) = self.oldest_drawn_before(u64::MAX) else { break };
+            self.remove(&oldest);
         }
         self.bytes = self.bytes.saturating_add(bytes);
         self.entries.insert(key.to_string(), Entry { texture: texture.clone(), bytes, used: frame });
         texture
+    }
+
+    /// The key of the upload drawn longest ago, ignoring any drawn at or after `before` (the frame
+    /// asking for room), so an insert cannot evict the uploads the same frame still needs.
+    fn oldest_drawn_before(&self, before: u64) -> Option<String> {
+        self.entries.iter().filter(|(_, e)| e.used < before).min_by_key(|(_, e)| e.used).map(|(key, _)| key.clone())
+    }
+
+    /// Drops one upload, taking its bytes off the budget.
+    fn remove(&mut self, key: &str) {
+        if let Some(entry) = self.entries.remove(key) {
+            self.bytes = self.bytes.saturating_sub(entry.bytes);
+        }
     }
 
     /// The upload for `key`, decoded at this tier's [`Self::side`] on first use and kept until the
@@ -463,8 +484,8 @@ mod tests {
         }
     }
 
-    /// The item ceiling is hard: a frame that paints more textures than the tier holds trims the
-    /// least recently drawn ones, this frame's included, so one frame cannot grow it without bound.
+    /// The item ceiling is still hard: a frame that paints more textures than the tier holds keeps
+    /// its own uploads only up to twice the budget, so one frame cannot grow it without bound.
     #[test]
     fn the_item_ceiling_holds_even_for_textures_the_frame_paints() {
         let ctx = egui::Context::default();
@@ -475,12 +496,54 @@ mod tests {
         for t in &textures {
             assert!(tier.texture(&ctx, &t.id, &t.data).is_some());
         }
-        assert_eq!(tier.entries.len(), 2, "the ceiling holds even for uploads this frame drew");
+        assert_eq!(tier.entries.len(), 4, "the hard bound is twice the item budget");
         assert!(tier.entries.contains_key(&textures[4].id), "the upload just inserted is kept");
     }
 
-    /// The byte ceiling is hard too: a frame painting textures past it drops older uploads rather
-    /// than growing the tier.
+    /// A frame that paints more patterns than the budget keeps them cached, so the next repaint is
+    /// all hits: evicting them each frame would decode and upload every one again (the stutter).
+    #[test]
+    fn a_frame_painting_past_the_budget_does_not_decode_again_on_the_next_repaint() {
+        let ctx = egui::Context::default();
+        let mut tier = Tier::new(THUMB_SIDE, usize::MAX, 2);
+        advance(&ctx);
+        let textures: Vec<InkTexture> = (0..4).map(|i| distinct(32, 32, i)).collect();
+        for t in &textures {
+            tier.texture(&ctx, &t.id, &t.data);
+        }
+        let keys = |tier: &Tier| {
+            let mut keys: Vec<String> = tier.entries.keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        let first = keys(&tier);
+        advance(&ctx);
+        for t in &textures {
+            assert!(tier.texture(&ctx, &t.id, &t.data).is_some());
+        }
+        assert_eq!(keys(&tier), first, "the repaint kept every upload the frame drew");
+    }
+
+    /// A new pattern trims a tier that overshot back towards the budget.
+    #[test]
+    fn a_new_pattern_trims_an_overshot_tier_back_to_the_budget() {
+        let ctx = egui::Context::default();
+        let mut tier = Tier::new(THUMB_SIDE, usize::MAX, 2);
+        advance(&ctx);
+        for i in 0..4 {
+            let t = distinct(32, 32, i);
+            tier.texture(&ctx, &t.id, &t.data);
+        }
+        assert_eq!(tier.entries.len(), 4, "one big frame overshoots to the hard bound");
+        advance(&ctx);
+        let fresh = distinct(32, 32, 9);
+        tier.texture(&ctx, &fresh.id, &fresh.data);
+        assert_eq!(tier.entries.len(), 2, "a later pattern trims the tier back to its budget");
+        assert!(tier.entries.contains_key(&fresh.id), "the new pattern is the one kept");
+    }
+
+    /// The byte ceiling is hard too: a frame painting textures past it keeps its own uploads only
+    /// up to twice the budget rather than growing the tier without bound.
     #[test]
     fn the_byte_ceiling_holds_even_for_textures_the_frame_paints() {
         let ctx = egui::Context::default();
@@ -491,8 +554,8 @@ mod tests {
         for t in &textures {
             tier.texture(&ctx, &t.id, &t.data);
         }
-        assert_eq!(tier.entries.len(), 2, "at most two uploads fit the byte budget");
-        assert!(tier.bytes <= one * 2, "the budget is not exceeded: {}", tier.bytes);
+        assert_eq!(tier.entries.len(), 4, "the hard bound is twice the byte budget");
+        assert_eq!(tier.bytes, one * 4, "the hard bound is exactly twice the budget: {}", tier.bytes);
         assert!(tier.entries.contains_key(&textures[3].id), "the upload just inserted is kept");
     }
 

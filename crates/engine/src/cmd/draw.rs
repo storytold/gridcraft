@@ -21,6 +21,12 @@ pub const MAX_TEXTURE_SCALE: f32 = gridcraft_model::MAX_INK_TEXTURE_SCALE;
 /// caller never loses data without hearing about it.
 pub const MAX_STROKE_POINTS: usize = 20_000;
 
+/// The furthest a stroke point may sit from the sheet's origin, in sheet points: the same bound the
+/// xlsx InkML reader and writer apply, so a stroke accepted here is one a save can write natively.
+/// A finite value like `1e300` would otherwise saturate the stroke's box to `f32::INFINITY` and
+/// format each point to hundreds of characters.
+pub const MAX_STROKE_COORD: f64 = 1e7;
+
 /// A numeric parameter: absent (or null) is `None`; a value present that is not a finite number is
 /// refused. Every `draw.*` parameter follows one policy: wrong types and unknown names are errors,
 /// while the documented ranges are clamped.
@@ -749,8 +755,8 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
                     let coord = |i: usize| -> Result<f64> {
                         pair.get(i)
                             .and_then(Json::as_f64)
-                            .filter(|v| v.is_finite())
-                            .ok_or_else(|| bad("draw.stroke", "each point's x and y must be finite numbers"))
+                            .filter(|v| v.is_finite() && v.abs() <= MAX_STROKE_COORD)
+                            .ok_or_else(|| bad("draw.stroke", "each point's x and y must be finite numbers within ±10,000,000 sheet points"))
                     };
                     Ok([coord(0)?, coord(1)?])
                 })

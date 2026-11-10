@@ -405,6 +405,14 @@ fn stroke_limits_are_errors_not_truncation() {
     // A malformed point or a wrong-typed width is refused rather than skipped.
     assert!(s.execute("draw.stroke", json!({"points": [[0, 0], ["x", 1]]})).is_err());
     assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [1, 1]], "width": "wide"})).is_err());
+    // A finite coordinate past the InkML reader and writer's bound is refused: it would saturate
+    // the stroke's box to an infinite anchor and format each point to hundreds of characters.
+    for far in [1e300, -1e300, crate::cmd::draw::MAX_STROKE_COORD * 2.0] {
+        let err = s.execute("draw.stroke", json!({"points": [[0, 0], [far, 1]]})).unwrap_err().to_string();
+        assert!(err.contains("10,000,000"), "{err}");
+    }
+    // The bound itself is accepted.
+    s.execute("draw.stroke", json!({"points": [[0, 0], [crate::cmd::draw::MAX_STROKE_COORD, 1]]})).unwrap();
 }
 
 /// A texture import takes one source: giving both a path and base64 is refused.

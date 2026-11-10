@@ -76,3 +76,26 @@ fn an_imported_texture_tile_names_its_texture() {
     assert!(h.query_by_label("stripes.png").is_some(), "the tile carries the texture's name");
     assert!(h.query_by_label("Import a texture…").is_some(), "the + tile says what it opens");
 }
+
+/// Deleting a pen from its dropdown while the gallery is being walked does not index past the end:
+/// `draw.deletePen` shrinks `draw_pens` inside the loop that is reading it (#3606 review).
+#[test]
+fn deleting_a_pen_from_its_dropdown_does_not_break_the_gallery_loop() {
+    let mut session = Session::new();
+    session.new_workbook();
+    for _ in 0..2 {
+        session.execute("draw.addPen", serde_json::json!({"brush": "pen"})).unwrap();
+    }
+    let mut h = draw_tab_with(session);
+    // Both custom pens answer as "Pen options"; take the first one, so a pen still follows it in
+    // the same frame's loop range.
+    h.query_all_by_label("Pen options")
+        .min_by(|a, b| a.rect().left().total_cmp(&b.rect().left()))
+        .expect("the two custom pens have chevrons")
+        .click();
+    h.run_steps(6);
+    h.get_by_label("Delete Tool").click();
+    h.run_steps(6);
+    assert_eq!(h.state().session.draw_pens.len(), 7, "one custom pen was deleted");
+    assert!(h.query_by_label("Delete Tool").is_none(), "the gallery still renders after the delete");
+}

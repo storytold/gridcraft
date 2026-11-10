@@ -285,7 +285,8 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
     let tr = crate::i18n::current(ui.ctx());
     for i in 0..app.session.draw_pens.len() {
         let (id, tool, color, effect, tip, selected) = {
-            let pen = &app.session.draw_pens[i];
+            // A dropdown opened in an earlier iteration can delete a pen and shrink the gallery.
+            let Some(pen) = app.session.draw_pens.get(i) else { break };
             let label = gridcraft_engine::cmd::draw::pen_label(pen).unwrap_or_else(|| pen_icon::tool_label(&pen.tool));
             (pen.id, pen.tool.clone(), hex_color(&pen.color), pen.effect.clone(), tr.tr(label), pen_in_hand(&app.session, pen))
         };
