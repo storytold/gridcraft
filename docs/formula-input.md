@@ -46,5 +46,7 @@ display language; elsewhere from the system's language and region tag, through t
 knows. With a decimal comma `"1,5"*1` is
 1.5, `"1.000,5"*1` is 1000.5, `"1,0000"*1` is 1, and `"1.5"*1` and `"$1,5"*1` are `#VALUE!`. So a
 workbook relying on such text can calculate differently on another system, also as in Excel.
-The CLI and the engine's commands always read a decimal point, as do `NUMBERVALUE`, filters and
-typed entry. Dates in text aren't affected: they still read month first.
+Everything that reads text as a number this way in the desktop app follows the setting, data
+validation and conditional formatting thresholds included. The CLI never sets it, so it always
+reads a decimal point; so do `NUMBERVALUE`, filters and typed entry, everywhere. Dates in text
+aren't affected: they still read month first.

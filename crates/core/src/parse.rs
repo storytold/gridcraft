@@ -142,8 +142,15 @@ fn parse_decimal_comma_text(t: &str, sys: DateSystem, n: &NumberText) -> Option<
     }
     // Text that turns out not to be a plain number reads as it was written.
     let original = t;
-    // One group character, whatever form it was typed in: `.` here stands for any of them.
-    let canon: String = t.chars().map(|c| if c != ',' && n.is_group(c) { '.' } else { c }).collect();
+    // One group character between digits, whatever form it was typed in: `.` here stands for any
+    // of them. Elsewhere a space stays a space (French writes `12,5 %`).
+    let chars: Vec<char> = t.chars().collect();
+    let digit = |i: Option<&char>| i.is_some_and(char::is_ascii_digit);
+    let canon: String = chars
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| if c != ',' && n.is_group(c) && i > 0 && digit(chars.get(i - 1)) && digit(chars.get(i + 1)) { '.' } else { c })
+        .collect();
     let t = canon.trim();
     let is_core = |c: char| c.is_ascii_digit() || matches!(c, '.' | ',');
     let start = t.find(is_core)?;
@@ -877,6 +884,9 @@ mod decimal_comma_tests {
             assert_eq!(coerce_number_text("Mar 4, 2026"), with_decimal_comma(false, || coerce_number_text("Mar 4, 2026")));
             assert!(coerce_number_text("Mar 4, 2026").is_some());
             assert_eq!(coerce_number_text("10 AM"), Some(10.0 / 24.0));
+            // A space before a percent sign, or after a sign, isn't a group.
+            assert_eq!(coerce_number_text("12,5 %"), Some(0.125));
+            assert_eq!(coerce_number_text("- 1 000,5"), Some(-1000.5));
         });
     }
 
