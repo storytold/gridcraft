@@ -1948,7 +1948,7 @@ fn floor_multiple(value: f64, significance: f64) -> Result<Scalar, EvalError> {
 fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
     let arg = |index: usize| args.get(index).ok_or_else(|| EvalError::new(format!("{name} is missing argument {}", index + 1)));
     let number = |index: usize| arg(index)?.to_number().ok_or_else(|| EvalError::new(format!("{name} argument {} must be numeric", index + 1)));
-    let text = |index: usize| Ok::<String, EvalError>(arg(index)?.to_text());
+    let text = |index: usize| Ok::<String, EvalError>(arg(index)?.to_dax_text());
     match name.to_ascii_uppercase().as_str() {
         "ABS" => Ok(Scalar::Decimal(number(0)?.abs())),
         "ROUND" => Ok(Scalar::Decimal(round_to(number(0)?, number(1)? as i32))),

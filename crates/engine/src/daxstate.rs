@@ -136,7 +136,14 @@ pub(crate) fn model_changes(before: &Option<DataModel>, after: Option<&DataModel
 /// Appends one change per table, column type, measure and relationship the two models differ in.
 /// A table whose columns and rows match is compared column type by column type; any other
 /// difference is a change of the whole table.
+///
+/// A collection's removed entities are emitted before its other changes and by descending index:
+/// a rollback reverts the newest change first, so the removals come back by ascending index and
+/// the entities end up in their original order (CodeRabbit, #3412). Editing additions before the
+/// removals would instead insert each entity at an index the still-present addition shifted.
 fn model_entities(before: &DataModel, after: &DataModel, out: &mut Vec<Change>) {
+    let mut removed: Vec<Change> = Vec::new();
+    let mut changed: Vec<Change> = Vec::new();
     for name in names_union(before.tables.iter().map(|table| &table.name), after.tables.iter().map(|table| &table.name)) {
         let found = (before.table_index(&name), after.table_index(&name));
         let at = found.0.or(found.1).unwrap_or(0);
@@ -147,24 +154,35 @@ fn model_entities(before: &DataModel, after: &DataModel, out: &mut Vec<Change>) 
                     continue;
                 }
                 if same_table_shape(was, is) {
-                    column_types(&name, was, is, out);
+                    column_types(&name, was, is, &mut changed);
                 } else {
-                    out.push(Change::new(Key::Table(name), Entity::Table(Some(was.clone())), Entity::Table(Some(is.clone())), at));
+                    changed.push(Change::new(Key::Table(name), Entity::Table(Some(was.clone())), Entity::Table(Some(is.clone())), at));
                 }
             }
-            (Some(was), None) => out.push(Change::new(Key::Table(name), Entity::Table(Some(was.clone())), Entity::Table(None), at)),
-            (None, Some(is)) => out.push(Change::new(Key::Table(name), Entity::Table(None), Entity::Table(Some(is.clone())), at)),
+            (Some(was), None) => removed.push(Change::new(Key::Table(name), Entity::Table(Some(was.clone())), Entity::Table(None), at)),
+            (None, Some(is)) => changed.push(Change::new(Key::Table(name), Entity::Table(None), Entity::Table(Some(is.clone())), at)),
             (None, None) => {}
         }
     }
+    out.extend(removed.drain(..).rev());
+    out.extend(changed);
+
+    let mut removed: Vec<Change> = Vec::new();
+    let mut changed: Vec<Change> = Vec::new();
     for name in names_union(before.measures.iter().map(|measure| &measure.name), after.measures.iter().map(|measure| &measure.name)) {
         let found = (before.measure_index(&name), after.measure_index(&name));
         let (was, is) = (found.0.map(|i| &before.measures[i]), found.1.map(|i| &after.measures[i]));
         if was == is {
             continue;
         }
-        out.push(Change::new(Key::Measure(name), Entity::Measure(was.cloned()), Entity::Measure(is.cloned()), found.0.unwrap_or(0)));
+        let change = Change::new(Key::Measure(name), Entity::Measure(was.cloned()), Entity::Measure(is.cloned()), found.0.unwrap_or(0));
+        if is.is_none() { removed.push(change) } else { changed.push(change) }
     }
+    out.extend(removed.drain(..).rev());
+    out.extend(changed);
+
+    let mut removed: Vec<Change> = Vec::new();
+    let mut changed: Vec<Change> = Vec::new();
     for key in relationship_keys(before, after) {
         let found = (
             before.relationships.iter().position(|relationship| key.matches(relationship)),
@@ -174,8 +192,11 @@ fn model_entities(before: &DataModel, after: &DataModel, out: &mut Vec<Change>) 
         if was == is {
             continue;
         }
-        out.push(Change::new(Key::Relationship(key), Entity::Relationship(was.cloned()), Entity::Relationship(is.cloned()), found.0.unwrap_or(0)));
+        let change = Change::new(Key::Relationship(key), Entity::Relationship(was.cloned()), Entity::Relationship(is.cloned()), found.0.unwrap_or(0));
+        if is.is_none() { removed.push(change) } else { changed.push(change) }
     }
+    out.extend(removed.drain(..).rev());
+    out.extend(changed);
 }
 
 /// A table whose columns and rows are the same on both sides: only their declared types can have
@@ -414,7 +435,7 @@ fn write(model: &mut Option<DataModel>, metadata: &mut ModelMetadata, view: &mut
 
 #[cfg(test)]
 mod tests {
-    use gridcraft_dax::model::ModelMetadata;
+    use gridcraft_dax::model::{ModelMetadata, ModelTable};
 
     use super::*;
 
@@ -514,6 +535,27 @@ mod tests {
         let columns = &current.as_ref().expect("model").tables[0].columns;
         assert_eq!(columns[0].data_type, None, "the group's column type went");
         assert_eq!(columns[1].data_type.as_deref(), Some("Currency"), "the other group's type stayed");
+    }
+
+    /// A collection replaced wholesale reverts to its original entities, in their original order.
+    #[test]
+    fn a_replaced_collection_reverts_to_its_original_order() {
+        let table = |name: &str| ModelTable { name: name.into(), columns: Vec::new(), rows: Vec::new() };
+
+        let before = Some(DataModel { tables: vec![table("A"), table("B"), table("C")], ..DataModel::default() });
+        let after = Some(DataModel { tables: vec![table("D")], ..DataModel::default() });
+        let changes = model_changes(&before, after.as_ref());
+        let mut current = after;
+        revert_all(&changes, &mut current, &mut ModelMetadata::default(), &mut ModelView::default());
+        assert_eq!(current, before, "the tables come back in their original order");
+
+        // An entity added ahead of a surviving one must not shift the restored one.
+        let before = Some(DataModel { tables: vec![table("A"), table("B")], ..DataModel::default() });
+        let after = Some(DataModel { tables: vec![table("D"), table("A")], ..DataModel::default() });
+        let changes = model_changes(&before, after.as_ref());
+        let mut current = after;
+        revert_all(&changes, &mut current, &mut ModelMetadata::default(), &mut ModelView::default());
+        assert_eq!(current, before, "the removal is restored behind the survivor");
     }
 
     /// A view edit reverts that table's sort and filters only: a toggle another edit set stays.

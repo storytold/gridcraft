@@ -151,8 +151,8 @@ fn contains_row(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Re
 }
 
 fn contains_string(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, exact: bool) -> Result<Scalar, EvalError> {
-    let within = ev.eval(args.first().ok_or_else(|| EvalError::new("CONTAINSSTRING needs a text"))?, ctx)?.to_text();
-    let find = ev.eval(args.get(1).ok_or_else(|| EvalError::new("CONTAINSSTRING needs a search text"))?, ctx)?.to_text();
+    let within = ev.eval(args.first().ok_or_else(|| EvalError::new("CONTAINSSTRING needs a text"))?, ctx)?.to_dax_text();
+    let find = ev.eval(args.get(1).ok_or_else(|| EvalError::new("CONTAINSSTRING needs a search text"))?, ctx)?.to_dax_text();
     if exact {
         // Case- and accent-sensitive, wildcards are plain characters.
         return Ok(Scalar::Boolean(within.contains(&find)));
@@ -712,8 +712,8 @@ fn phrase_matches(tokens: &[String], query: &[String]) -> bool {
 
 fn text_contains(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
     let mode = match_mode(ev, args, ctx, 2)?;
-    let within = ev.eval(args.first().ok_or_else(|| EvalError::new("TEXTCONTAINS needs a column"))?, ctx)?.to_text();
-    let search = ev.eval(args.get(1).ok_or_else(|| EvalError::new("TEXTCONTAINS needs a search text"))?, ctx)?.to_text();
+    let within = ev.eval(args.first().ok_or_else(|| EvalError::new("TEXTCONTAINS needs a column"))?, ctx)?.to_dax_text();
+    let search = ev.eval(args.get(1).ok_or_else(|| EvalError::new("TEXTCONTAINS needs a search text"))?, ctx)?.to_dax_text();
     let tokens = tokenize(&within);
     let query = tokenize(&search);
     if query.is_empty() {
@@ -728,8 +728,8 @@ fn text_contains(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> R
 
 fn text_similarity(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
     let argument = args.first().ok_or_else(|| EvalError::new("TEXTSIMILARITY needs a column"))?;
-    let within = ev.eval(argument, ctx)?.to_text();
-    let search = ev.eval(args.get(1).ok_or_else(|| EvalError::new("TEXTSIMILARITY needs a search text"))?, ctx)?.to_text();
+    let within = ev.eval(argument, ctx)?.to_dax_text();
+    let search = ev.eval(args.get(1).ok_or_else(|| EvalError::new("TEXTSIMILARITY needs a search text"))?, ctx)?.to_dax_text();
     let mode = match_mode(ev, args, ctx, 2)?;
     let corpus = column_corpus(ev, argument);
     // A model column can be large; when scoring every value against the query would exceed the
@@ -743,7 +743,7 @@ fn text_similarity(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) ->
 fn column_corpus(ev: &Evaluator<'_>, expr: &BoundExpr) -> Vec<String> {
     let Ok((table, column)) = column_ref(ev, expr) else { return Vec::new() };
     let Some(model_table) = ev.model().tables.get(table) else { return Vec::new() };
-    model_table.rows.iter().filter_map(|row| row.get(column)).map(|value| value.to_text()).collect()
+    model_table.rows.iter().filter_map(|row| row.get(column)).map(Scalar::to_dax_text).collect()
 }
 
 /// BM25 relevance over the column's values (k1 = 1.2, b = 0.75). The score is an opaque ranking

@@ -343,12 +343,57 @@ pub(crate) fn round_to(value: f64, digits: i32) -> f64 {
     if digits < -308 {
         return 0.0;
     }
-    let factor = 10f64.powi(digits);
-    let scaled = value * factor;
-    if !scaled.is_finite() {
+    if !value.is_finite() || value == 0.0 {
         return value;
     }
-    scaled.round() / factor
+    // Excel rounds the 15-significant-digit decimal the user typed, not the binary double it
+    // became: 1.005 is stored just below the midpoint, and 1.005 * 100 = 100.49999999999999, so
+    // scaling and rounding gives 1.00 instead of DAX's 1.01. Round the decimal string instead,
+    // half away from zero.
+    let digits = i64::from(digits.clamp(-400, 400));
+    let text = format!("{:.14e}", value.abs());
+    let Some((mantissa, exponent)) = text.split_once('e') else { return value };
+    let Ok(exponent) = exponent.parse::<i64>() else { return value };
+    let mut decimal: Vec<u8> = mantissa.bytes().filter(u8::is_ascii_digit).map(|byte| byte - b'0').collect();
+    // value = 0.d1d2…d15 × 10^(exponent+1); keep the digits down to the requested place.
+    let keep = exponent + 1 + digits;
+    if keep >= decimal.len() as i64 {
+        // Nothing to round off, but Excel still keeps only 15 significant digits, which drops
+        // binary noise such as 0.1 + 0.2 = 0.30000000000000004.
+        return format!("{:.14e}", value).parse().unwrap_or(value);
+    }
+    if keep < 0 {
+        return 0.0;
+    }
+    let keep = keep as usize;
+    let round_up = decimal.get(keep).is_some_and(|&digit| digit >= 5);
+    decimal.truncate(keep);
+    let mut scale = exponent + 1;
+    if round_up {
+        let mut index = keep;
+        loop {
+            if index == 0 {
+                decimal.insert(0, 1);
+                scale += 1;
+                break;
+            }
+            index -= 1;
+            match decimal.get_mut(index) {
+                Some(digit) if *digit == 9 => *digit = 0,
+                Some(digit) => {
+                    *digit += 1;
+                    break;
+                }
+                None => break,
+            }
+        }
+    }
+    if decimal.is_empty() {
+        return 0.0;
+    }
+    let digits_text: String = decimal.iter().map(|digit| char::from(b'0' + digit)).collect();
+    let rounded: f64 = format!("0.{digits_text}e{scale}").parse().unwrap_or(value.abs());
+    if value < 0.0 { -rounded } else { rounded }
 }
 
 /// ROUNDUP/ROUNDDOWN: `up` rounds away from zero, otherwise toward zero. Excel and DAX define
@@ -646,6 +691,19 @@ mod tests {
         assert_eq!(edate(date_serial(2024, 1, 31, 0, 0, 0), 1), Ok(date_serial(2024, 2, 29, 0, 0, 0)));
         assert_eq!(eomonth(january_15th, 1), Ok(date_serial(2024, 2, 29, 0, 0, 0)));
         assert_eq!(eomonth(date_serial(2023, 12, 31, 0, 0, 0), 0), Ok(date_serial(2023, 12, 31, 0, 0, 0)));
+    }
+
+    #[test]
+    fn round_to_rounds_the_decimal_midpoint_away_from_zero() {
+        // Excel rounds the decimal the user typed: the binary double of 1.005 sits just below the
+        // midpoint, and ROUND must still carry to 1.01 (CodeRabbit, #3412).
+        assert_eq!(round_to(1.005, 2), 1.01);
+        assert_eq!(round_to(2.675, 2), 2.68);
+        assert_eq!(round_to(-1.005, 2), -1.01);
+        assert_eq!(round_to(1.234, 2), 1.23);
+        assert_eq!(round_to(10.0, 0), 10.0);
+        // Binary noise below 15 significant digits is dropped, as Excel drops it.
+        assert_eq!(round_to(0.1 + 0.2, 15), 0.3);
     }
 
     #[test]

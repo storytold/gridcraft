@@ -950,6 +950,69 @@ fn rollup_selections(dimensions: &[RollupDimension]) -> Result<Vec<Vec<usize>>, 
     Ok(selections)
 }
 
+/// The value candidates of every group column for a selection: a rolled-up column contributes only
+/// `None`, and the other columns contribute their domain under the selection's filters.
+fn selection_domains(
+    ev: &Evaluator<'_>,
+    columns: &[ColumnRef],
+    rolled: &BTreeSet<usize>,
+    filters: &FilterContext,
+) -> Result<Vec<Vec<Option<Scalar>>>, EvalError> {
+    let mut domains: Vec<Vec<Option<Scalar>>> = Vec::with_capacity(columns.len());
+    let mut combinations = 1usize;
+    for (index, column) in columns.iter().enumerate() {
+        if rolled.contains(&index) {
+            domains.push(vec![None]);
+        } else {
+            let values = column_domain(ev, column, filters);
+            combinations = combinations.saturating_mul(values.len().max(1));
+            domains.push(values.into_iter().map(Some).collect());
+        }
+    }
+    if combinations > MAX_GROUP_ROWS {
+        return Err(EvalError::new("SUMMARIZECOLUMNS produced too many rows"));
+    }
+    Ok(domains)
+}
+
+/// The varying group columns of a selection and the projection keys the table actually holds.
+fn auto_exist_projection(columns: &[ColumnRef], rolled: &BTreeSet<usize>, table_rows: &[Vec<Scalar>]) -> (Vec<usize>, BTreeSet<Vec<ScalarKey>>) {
+    let varying: Vec<usize> = (0..columns.len()).filter(|index| !rolled.contains(index)).collect();
+    let mut projections: BTreeSet<Vec<ScalarKey>> = BTreeSet::new();
+    for row in table_rows {
+        projections.insert(varying.iter().map(|&index| row.get(columns[index].column).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect());
+    }
+    (varying, projections)
+}
+
+/// The filter context of one rollup selection: the base filters plus the `ROLLUPADDISSUBTOTAL`
+/// filters that name this selection. `depth` counts the levels kept, so 0 is full detail and
+/// `levels` is every level rolled up: a filter written after a level applies to that level's
+/// subtotal (the following levels rolled up), and the grand-total filter only to the last
+/// selection.
+fn selection_filters(
+    ev: &Evaluator<'_>,
+    dimensions: &[RollupDimension<'_>],
+    selection: &[usize],
+    base_group: &FilterContext,
+    base_measure: &FilterContext,
+    ctx: &mut Context,
+) -> Result<(FilterContext, FilterContext), EvalError> {
+    let mut group = base_group.clone();
+    let mut measure = base_measure.clone();
+    for (dimension, depth) in dimensions.iter().zip(selection) {
+        let levels = dimension.levels.len();
+        for (expr, level) in &dimension.filters {
+            let applies = if *level == usize::MAX { *depth == levels } else { *depth == levels - *level - 1 };
+            if applies {
+                apply_filter_arg(ev, expr, &mut group, ctx)?;
+                apply_filter_arg(ev, expr, &mut measure, ctx)?;
+            }
+        }
+    }
+    Ok((group, measure))
+}
+
 fn rolled_columns(dimensions: &[RollupDimension], selection: &[usize]) -> BTreeSet<usize> {
     let mut rolled = BTreeSet::new();
     for (dimension, depth) in dimensions.iter().zip(selection) {
@@ -1018,40 +1081,14 @@ fn summarize_columns(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
 
     let mut rows: Vec<Vec<Scalar>> = Vec::new();
     for selection in rollup_selections(&parsed.dimensions)? {
-        let mut group_filters = base_group_filters.clone();
-        let mut measure_filters = base_measure_filters.clone();
-        if level_filters {
-            for (dimension, depth) in parsed.dimensions.iter().zip(&selection) {
-                let levels = dimension.levels.len();
-                for (expr, level) in &dimension.filters {
-                    // `depth` counts the levels kept: 0 is full detail, `levels` is every level
-                    // rolled up. A filter named after a level applies to that level's subtotal —
-                    // the selection where the following levels are rolled up — and the grand-total
-                    // filter only to the last selection.
-                    let applies = if *level == usize::MAX { *depth == levels } else { *depth == levels - *level - 1 };
-                    if applies {
-                        apply_filter_arg(ev, expr, &mut group_filters, ctx)?;
-                        apply_filter_arg(ev, expr, &mut measure_filters, ctx)?;
-                    }
-                }
-            }
-        }
+        let (group_filters, measure_filters) = if level_filters {
+            selection_filters(ev, &parsed.dimensions, &selection, &base_group_filters, &base_measure_filters, ctx)?
+        } else {
+            (base_group_filters.clone(), base_measure_filters.clone())
+        };
         let auto_exist_rows = if level_filters { materialize(&measure_filters) } else { auto_exist_rows.clone() };
         let rolled = rolled_columns(&parsed.dimensions, &selection);
-        let mut domains: Vec<Vec<Option<Scalar>>> = Vec::with_capacity(parsed.columns.len());
-        let mut combinations = 1usize;
-        for (index, column) in parsed.columns.iter().enumerate() {
-            if rolled.contains(&index) {
-                domains.push(vec![None]);
-            } else {
-                let values = column_domain(ev, column, &group_filters);
-                combinations = combinations.saturating_mul(values.len().max(1));
-                domains.push(values.into_iter().map(Some).collect());
-            }
-        }
-        if combinations > MAX_GROUP_ROWS {
-            return Err(EvalError::new("SUMMARIZECOLUMNS produced too many rows"));
-        }
+        let domains = selection_domains(ev, &parsed.columns, &rolled, &group_filters)?;
         let mut flags = Vec::new();
         for (dimension, depth) in parsed.dimensions.iter().zip(&selection) {
             let keep = dimension.levels.len().saturating_sub(*depth);
@@ -1063,16 +1100,7 @@ fn summarize_columns(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
         // per-combination check below then only looks a key up. The empty projection is the grand
         // total, which exists whenever the table has a row under the measure filters.
         let auto_exist = match (auto_exist_only, &auto_exist_rows) {
-            (true, Some(table_rows)) => {
-                let varying: Vec<usize> = (0..parsed.columns.len()).filter(|index| !rolled.contains(index)).collect();
-                let mut projections: BTreeSet<Vec<ScalarKey>> = BTreeSet::new();
-                for row in table_rows {
-                    projections.insert(
-                        varying.iter().map(|&index| row.get(parsed.columns[index].column).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect(),
-                    );
-                }
-                Some((varying, projections))
-            }
+            (true, Some(table_rows)) => Some(auto_exist_projection(&parsed.columns, &rolled, table_rows)),
             _ => None,
         };
         let mut products: Vec<Vec<Option<Scalar>>> = vec![Vec::new()];

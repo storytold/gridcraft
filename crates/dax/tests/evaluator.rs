@@ -519,6 +519,12 @@ fn unbounded_scalar_functions_return_errors() {
 }
 
 #[test]
+fn text_functions_convert_numbers_the_way_dax_does() {
+    // DAX text for 10 is "10", not the storage spelling "10.0", so LEN counts two characters.
+    assert_eq!(eval("LEN(DIVIDE(20, 2))"), Scalar::Integer(2));
+}
+
+#[test]
 fn date_with_an_out_of_range_month_does_not_overflow() {
     // A huge negative month literal saturates to i64::MIN; normalizing it must not panic.
     assert!(matches!(eval("DATE(2024, -1e19, 1)"), Scalar::DateTime(_)));

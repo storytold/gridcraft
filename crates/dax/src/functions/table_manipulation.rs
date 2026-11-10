@@ -523,7 +523,6 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[
             "SUMMARIZECOLUMNS ( Sales[Region], \"Amount\", SUM ( Sales[Amount] ) )",
             "SUMMARIZECOLUMNS ( 'Product'[Brand], 'Date'[Calendar Year], \"Amount\", [Sales Amount] )",
-            "SUMMARIZECOLUMNS ( )",
         ],
     ),
     spec(
