@@ -25,7 +25,12 @@ mod font_setup;
 
 pub use font_fallback::symbol_face_installed;
 #[cfg(test)]
-use font_fallback::{cjk_han_japanese, cjk_han_simplified, cjk_hangul, fallback_faces, hebrew, lao, symbols_more, thai};
+use font_fallback::{
+    PREFERRED_ARABIC, arabic, cjk_han_japanese, cjk_han_simplified, cjk_hangul, fallback_faces, hebrew, lao, load_faces, preferred_file,
+    symbols_more, thai,
+};
+#[cfg(all(test, unix, not(target_os = "macos")))]
+use font_fallback::{covers_arabic, fontconfig_arabic, parse_fc_match};
 use font_setup::pick;
 pub use font_setup::{
     CELL, CELL_BOLD, CELL_BOLD_ITALIC, CELL_ITALIC, CraftFont, HanOrder, MATH, MATH_BOLD, MATH_ITALIC, MONO, SERIF, UI, UI_BOLD, available_text,
@@ -41,7 +46,7 @@ pub fn install_fonts(ctx: &egui::Context, fonts: FontDefinitions) {
 }
 
 #[cfg(test)]
-use font_setup::{candidates, craft_font_faces, try_load};
+use font_setup::{candidates, craft_font_faces, font_definitions_impl, try_load};
 #[cfg(test)]
 pub(crate) use font_setup::{drop_unparseable_fonts, font_parses};
 
@@ -71,6 +76,8 @@ pub struct Tokens {
     pub header_sel_text: Color32,
     pub header_all_bg: Color32,
     pub sel_fill: Color32,
+    /// The tint over the active cell's row (File ▸ Options ▸ General).
+    pub active_row: Color32,
     pub sel_border: Color32,
     pub input_bg: Color32,
     pub input_border: Color32,
@@ -110,8 +117,17 @@ pub struct Tokens {
     pub sheet_control_bg: Color32,
     pub sheet_control_border: Color32,
     pub sheet_control_text: Color32,
-    /// A placeholder fill on the sheet (a picture that has not loaded).
+    /// A placeholder fill on the sheet (a picture that has not loaded), and a form slider's track.
     pub sheet_track: Color32,
+    /// A form slider's thumb.
+    pub sheet_thumb: Color32,
+    /// A form button or spin arrow under the pointer, and pressed.
+    pub sheet_control_hover: Color32,
+    pub sheet_control_pressed: Color32,
+    /// The filled part of a form slider's track (from the minimum to the thumb).
+    pub sheet_fill: Color32,
+    /// The ring around the form control that takes the arrow keys.
+    pub sheet_focus: Color32,
     /// The macro recording dot (Record Macro, the status bar).
     pub recording: Color32,
     /// A breakpoint dot in the macro step editor's gutter.
@@ -187,6 +203,11 @@ const SHEET_CONTROL_BG: Color32 = rgb(0xF3F3F3);
 const SHEET_CONTROL_BORDER: Color32 = rgb(0x8A8A8A);
 const SHEET_CONTROL_TEXT: Color32 = rgb(0x1F1F1F);
 const SHEET_TRACK: Color32 = rgb(0xD6D6D6);
+const SHEET_THUMB: Color32 = rgb(0x6B6B6B);
+const SHEET_CONTROL_HOVER: Color32 = rgb(0xE4E4E4);
+const SHEET_CONTROL_PRESSED: Color32 = rgb(0xCFCFCF);
+const SHEET_FILL: Color32 = rgb(0x107C41);
+const SHEET_FOCUS: Color32 = rgb(0x107C41);
 /// The PY tag on Python cells: a deep green, white text on it.
 const SHEET_PY_TAG: Color32 = rgb(0x1E6E4E);
 
@@ -225,6 +246,7 @@ impl Tokens {
             header_sel_text: pick(dark, Color32::from_rgb(0x0B, 0x5E, 0x31), Color32::from_rgb(0x6F, 0xD3, 0x9A)),
             header_all_bg: pick(dark, Color32::from_rgb(0xC8, 0xE6, 0xD3), Color32::from_rgb(0x2E, 0x55, 0x3E)),
             sel_fill: pick(dark, Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x1C), Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x24)),
+            active_row: pick(dark, Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x2C), Color32::from_rgba_unmultiplied(0x6F, 0xD3, 0x9A, 0x30)),
             sel_border: Color32::from_rgb(0x10, 0x7C, 0x41),
             input_bg: pick(dark, Color32::WHITE, Color32::from_rgb(0x1F, 0x1F, 0x1F)),
             input_border: pick(dark, Color32::from_rgb(0xD1, 0xD1, 0xD1), Color32::from_rgb(0x50, 0x50, 0x50)),
@@ -262,6 +284,11 @@ impl Tokens {
             sheet_control_border: SHEET_CONTROL_BORDER,
             sheet_control_text: SHEET_CONTROL_TEXT,
             sheet_track: SHEET_TRACK,
+            sheet_thumb: SHEET_THUMB,
+            sheet_control_hover: SHEET_CONTROL_HOVER,
+            sheet_control_pressed: SHEET_CONTROL_PRESSED,
+            sheet_fill: SHEET_FILL,
+            sheet_focus: SHEET_FOCUS,
             recording: pick(dark, rgb(0xC42B1C), rgb(0xF1705F)),
             breakpoint: pick(dark, rgb(0xD13438), rgb(0xF1707A)),
             sheet_macro_input: SHEET_MACRO_INPUT,
@@ -415,6 +442,12 @@ mod contrast_tests {
         add("selection border on sheet", t.sel_border, t.grid_bg, GLYPH);
         add("sheet control text", t.sheet_control_text, t.sheet_control_bg, TEXT);
         add("sheet control border on sheet", t.sheet_control_border, t.grid_bg, GLYPH);
+        add("slider thumb on track", t.sheet_thumb, t.sheet_track, GLYPH);
+        add("sheet control text on hover", t.sheet_control_text, t.sheet_control_hover, TEXT);
+        add("sheet control text when pressed", t.sheet_control_text, t.sheet_control_pressed, TEXT);
+        add("slider fill on sheet", t.sheet_fill, t.grid_bg, GLYPH);
+        add("slider fill on track", t.sheet_fill, t.sheet_track, GLYPH);
+        add("control focus ring on sheet", t.sheet_focus, t.grid_bg, GLYPH);
         add("recording dot on ribbon", t.recording, t.ribbon, GLYPH);
         add("recording dot on status bar", t.recording, t.status_bar, GLYPH);
         for (name, c) in [
@@ -471,6 +504,10 @@ mod contrast_tests {
         assert_eq!(
             (l.sheet_control_bg, l.sheet_control_border, l.sheet_control_text, l.sheet_track),
             (d.sheet_control_bg, d.sheet_control_border, d.sheet_control_text, d.sheet_track)
+        );
+        assert_eq!(
+            (l.sheet_thumb, l.sheet_control_hover, l.sheet_control_pressed, l.sheet_fill, l.sheet_focus),
+            (d.sheet_thumb, d.sheet_control_hover, d.sheet_control_pressed, d.sheet_fill, d.sheet_focus)
         );
         assert_eq!(
             (l.sheet_macro_input, l.sheet_macro_footprint, l.sheet_macro_conflict, l.sheet_macro_target),

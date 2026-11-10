@@ -128,6 +128,32 @@ impl Selection {
     }
 }
 
+impl Selection {
+    /// Ctrl+. (Next Corner of Selection): the active cell moves clockwise to the next corner of
+    /// the current area (top-left, top-right, bottom-right, bottom-left) and becomes the anchor,
+    /// so Shift+arrows then move the opposite corner. The area stays selected. From a cell that
+    /// isn't a corner the next corner is the top-left one; a single cell stays where it is.
+    pub fn next_corner(&mut self) {
+        self.next_corner_by(Some);
+    }
+
+    /// [`Selection::next_corner`] where `stop` says where each corner takes the active cell: the
+    /// top-left cell of a merged cell the corner is in, or `None` for a corner that can't be
+    /// selected (it is skipped). Corners that end up on the active cell are one stop with it.
+    pub fn next_corner_by(&mut self, stop: impl Fn(CellRef) -> Option<CellRef>) {
+        let r = self.current();
+        let corners = [r.start, CellRef::new(r.start.row, r.end.col), r.end, CellRef::new(r.end.row, r.start.col)];
+        let next = match corners.iter().rposition(|c| stop(*c) == Some(self.active)) {
+            Some(i) => (1..=4).filter_map(|k| corners.get((i + k) % 4)).filter_map(|c| stop(*c)).find(|c| *c != self.active),
+            None => corners.iter().find_map(|c| stop(*c)),
+        };
+        if let Some(next) = next {
+            self.active = next;
+            self.anchor = next;
+        }
+    }
+}
+
 /// Ctrl+arrow: jump to the edge of the current data region (Excel's End mode).
 pub fn jump(sheet: &Sheet, from: CellRef, dr: i64, dc: i64) -> CellRef {
     if dr == 0 && dc == 0 {

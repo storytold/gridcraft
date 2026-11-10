@@ -1,3 +1,4 @@
+use super::active_row::paint_active_row;
 use super::cell_paint::{
     Look, MergedArea, cell_text_y, center_across_end, col32, display_text, look, merged_edges, paint_border, paint_cf_icon, painted_halign,
     rotated_text_pos, shrink_font, wrapped_cell_text_y,
@@ -102,6 +103,8 @@ pub(crate) struct QuadrantPaint<'a> {
     pub(crate) cols: (u32, u32),
     pub(crate) cf: &'a mut CfCache,
     pub(crate) tokens: &'a Tokens,
+    /// The row to tint, when "Highlight the active cell's row" is on.
+    pub(crate) active_row: Option<u32>,
 }
 
 /// Paint a worksheet quadrant, including backgrounds, borders, and text.
@@ -118,6 +121,8 @@ pub(crate) fn paint_quadrant(mut quadrant: QuadrantPaint<'_>) {
     let cells = visible_cells(&quadrant);
     let looks = paint_backgrounds(&mut quadrant, &cells, &merges);
     let outside = outside_text_cells(&mut quadrant, &merges);
+    // Over the fills and under the text and borders.
+    paint_active_row(&quadrant, None);
     paint_cells(&mut quadrant, &looks, &outside, &merges);
     paint_borders(&mut quadrant, &looks, &merges);
     paint_sparklines(&quadrant, range);
@@ -142,42 +147,31 @@ fn paint_gridlines(q: &QuadrantPaint<'_>) {
     if sh.show_gridlines {
         let stroke = Stroke::new(1.0, t.gridline);
         let top = geo.y(sh, r0);
-        let bottom = geo.y(sh, r1 + 1);
+        let bottom = geo.y_end(sh, r1);
         let left = geo.x(sh, c0);
-        let right = geo.x(sh, c1 + 1);
-        for c in c0..=c1 + 1 {
-            if c <= c1 && sh.col_width(c) == 0.0 {
-                continue;
-            }
-            let x = geo.x(sh, c).round() - 0.5;
+        let right = geo.x_end(sh, c1);
+        let xs = geo.shown_cols(c0, c1).map(|c| geo.x(sh, c)).chain([right]);
+        for x in xs {
+            let x = x.round() - 0.5;
             p.line_segment([pos2(x, top), pos2(x, bottom)], stroke);
         }
-        for r in r0..=r1 + 1 {
-            if r <= r1 && sh.row_height(r) == 0.0 {
-                continue;
-            }
-            let y = geo.y(sh, r).round() - 0.5;
+        let ys = geo.shown_rows(r0, r1).map(|r| geo.y(sh, r)).chain([bottom]);
+        for y in ys {
+            let y = y.round() - 0.5;
             p.line_segment([pos2(left, y), pos2(right, y)], stroke);
         }
     }
 }
 
 fn visible_cells(q: &QuadrantPaint<'_>) -> Vec<CellRef> {
-    let sh = q.sheet;
+    let geo = q.geo;
     let (r0, r1) = q.rows;
     let (c0, c1) = q.cols;
     // Merged areas: blank them (no inner gridlines) and paint as one cell.
+    let cols: Vec<u32> = geo.shown_cols(c0, c1).collect();
     let mut cells: Vec<CellRef> = Vec::new();
-    for r in r0..=r1 {
-        if sh.row_height(r) == 0.0 {
-            continue;
-        }
-        for c in c0..=c1 {
-            if sh.col_width(c) == 0.0 {
-                continue;
-            }
-            cells.push(CellRef::new(r, c));
-        }
+    for r in geo.shown_rows(r0, r1) {
+        cells.extend(cols.iter().map(|&c| CellRef::new(r, c)));
     }
     cells
 }
@@ -224,15 +218,11 @@ fn outside_text_cells(q: &mut QuadrantPaint<'_>, merges: &[RangeRef]) -> Vec<(Ce
     // Text cells just outside the quadrant whose text may overflow into it: the nearest non-empty
     // cell left of `c0` and right of `c1` in each row (within the same frozen / scrolled pane).
     let mut outside: Vec<(CellRef, Rect, Look, Option<CfLook>)> = Vec::new();
-    let same_pane = |col: u32| (col < geo.fc) == (c0 < geo.fc);
-    for r in r0..=r1 {
-        if sh.row_height(r) == 0.0 {
-            continue;
-        }
+    for r in geo.shown_rows(r0, r1) {
         let left = (c0.saturating_sub(20)..c0).rev().map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
         let right = (c1.saturating_add(1)..=c1.saturating_add(20).min(MAX_COLS - 1)).map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
         for n in [left, right].into_iter().flatten() {
-            if same_pane(n.col) && sh.col_width(n.col) > 0.0 && in_merge(n).is_none() {
+            if geo.same_col_pane(n.col, c0) && sh.col_width(n.col) > 0.0 && in_merge(n).is_none() {
                 let (lk, cfl) = look(wb, si, sh, n, cf);
                 outside.push((n, geo.cell_rect(sh, n), lk, cfl));
             }
@@ -278,6 +268,9 @@ fn paint_cell_decorations(q: &QuadrantPaint<'_>, c: CellRef, rect: Rect, lk: &Lo
     false
 }
 
+/// Most repeats of a fill character laid out in one cell.
+const MAX_FILL_REPEATS: usize = 8192;
+
 fn paint_data_bar(p: &egui::Painter, rect: Rect, frac: f32, rgb: [u8; 3], gradient: bool) {
     let bar = Rect::from_min_size(pos2(rect.left() + 2.0, rect.top() + 2.0), vec2((rect.width() - 4.0) * frac, rect.height() - 4.0));
     let col = theme::color32(rgb);
@@ -321,6 +314,7 @@ fn should_expand_text(filter_space: f32, overflows: bool, across_end: u32, col: 
 ///
 /// Handles text layout, wrapping, alignment, overflow into neighbouring cells,
 /// and clipping, while preserving cell decoration and merged-cell constraints.
+#[allow(clippy::cognitive_complexity)] // Cell rendering keeps layout, overflow, rotation, and decoration decisions in one ordered pass.
 fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLook>), merges: &[RangeRef]) {
     let (cell, rect, lk, cfl) = painted;
     let c = *cell;
@@ -333,7 +327,9 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let z = geo.z;
     let (c0, c1) = q.cols;
     let in_merge = |cell| merges.iter().find(|m| m.contains(cell)).copied();
-    let empty_ok = |cell| sh.value_ref(cell).is_none_or(Value::is_empty) && in_merge(cell).is_none();
+    // Text overflows only into empty cells of its own pane: the frozen and scrolled columns move
+    // apart when scrolling (#2544).
+    let empty_ok = |cell: CellRef| geo.same_col_pane(cell.col, c.col) && sh.value_ref(cell).is_none_or(Value::is_empty) && in_merge(cell).is_none();
     if paint_cell_decorations(q, c, *rect, lk, cfl.as_ref()) {
         return;
     }
@@ -368,11 +364,13 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         return;
     }
     let color = ncolor.unwrap_or(lk.text_color);
+    let direction = crate::text_direction::cell_direction(st.align.reading_order, &text);
     let halign = match st.align.h {
         HAlign::General => match v {
             Value::Number(_) => HAlign::Right,
             Value::Bool(_) | Value::Error(_) => HAlign::Center,
             _ if numeric => HAlign::Right,
+            _ if direction == egui::epaint::text::TextDirection::RightToLeft && !sh.right_to_left => HAlign::Right,
             _ => HAlign::Left,
         },
         h => painted_halign(h, geo.rtl),
@@ -399,16 +397,18 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
             return;
         }
         let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w);
-        job.halign = match halign {
+        job.direction = direction;
+        job.halign_min_is_start = false;
+        job.halign = match painted_halign(halign, geo.rtl) {
             HAlign::Center | HAlign::CenterAcross => egui::Align::Center,
             HAlign::Right => egui::Align::RIGHT,
             _ => egui::Align::LEFT,
         };
         let galley = p.layout_job(job);
         let x = match halign {
-            HAlign::Center | HAlign::CenterAcross => rect.center().x,
-            HAlign::Right => rect.right() - pad,
-            _ => text_left + pad + indent,
+            HAlign::Center | HAlign::CenterAcross => rect.center().x - galley.rect.center().x,
+            HAlign::Right => rect.right() - pad - galley.rect.right(),
+            _ => text_left + pad + indent - galley.rect.left(),
         };
         let y = wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z);
         let text_clip = wrapped_text_clip(p, *rect, &galley, y, st.align.v);
@@ -426,7 +426,13 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         .flatten();
     let shrunk = small.is_some();
     let font = small.unwrap_or(font);
-    let mut galley = p.layout_no_wrap(first_line.clone(), font.clone(), color);
+    let layout = |text: String| {
+        let mut job = egui::text::LayoutJob::simple(text, font.clone(), color, f32::INFINITY);
+        job.direction = direction;
+        job.halign_min_is_start = false;
+        p.layout_job(job)
+    };
+    let mut galley = layout(first_line.clone());
     let mut w = galley.size().x;
     // Numbers and dates never overflow: they show #### when too narrow.
     let hashed = !shrunk && (numeric || matches!(v, Value::Number(_))) && w > avail_w - 2.0 * pad && st.align.h != HAlign::Fill;
@@ -434,7 +440,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         // Measured on `#` itself: it is wider than `0` in some fonts, and #### must fit its cell.
         let hash_w = p.layout_no_wrap("#".to_string(), font.clone(), color).size().x.max(1.0);
         let n = ((avail_w - 2.0 * pad) / hash_w).floor().max(1.0) as usize;
-        galley = p.layout_no_wrap("#".repeat(n), font.clone(), color);
+        galley = layout("#".repeat(n));
         w = galley.size().x;
     }
     // Repeat fill (`*` in number formats) / Fill alignment. A number already shown as #### keeps
@@ -445,12 +451,13 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     {
         let base_w = w;
         let cw = p.layout_no_wrap(ch.to_string(), font.clone(), color).size().x.max(1.0);
-        let n = (((avail_w - 2.0 * pad) - base_w) / cw).floor().max(0.0) as usize;
+        // A merged cell's width counts offscreen columns: no screen shows more repeats than this.
+        let n = ((((avail_w - 2.0 * pad) - base_w) / cw).floor().max(0.0) as usize).min(MAX_FILL_REPEATS);
         let mut s = first_line.clone();
         if first_line.is_char_boundary(pos) {
             s.insert_str(pos, &ch.to_string().repeat(n));
         }
-        galley = p.layout_no_wrap(s, font.clone(), color);
+        galley = layout(s);
         w = galley.size().x;
     }
     // Center Across Selection: the text is centred over this cell and the empty cells to its right that also use it.
@@ -469,12 +476,12 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         let mut right = rect.right();
         let mut left = rect.left();
         if across_end > c.col {
-            right = geo.x(sh, across_end + 1);
+            right = geo.x_end(sh, across_end);
         }
         if matches!(halign, HAlign::Left | HAlign::Center | HAlign::Justify) {
             let mut cc = c.col + 1;
             while right - rect.left() < w + 2.0 * pad && cc < MAX_COLS && empty_ok(CellRef::new(c.row, cc)) && cc <= c1 + 20 {
-                right = geo.x(sh, cc + 1);
+                right = geo.x_end(sh, cc);
                 cc += 1;
             }
         }
@@ -493,9 +500,11 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
             let extra_r = Rect::from_min_max(pos2(rect.right() - 1.0, inner.top()), inner.max);
             if extra_l.width() > 0.0 {
                 p.rect_filled(extra_l, 0.0, t.grid_bg);
+                paint_active_row(q, Some(extra_l));
             }
             if extra_r.width() > 0.0 {
                 p.rect_filled(extra_r, 0.0, t.grid_bg);
+                paint_active_row(q, Some(extra_r));
             }
         }
     }
@@ -512,12 +521,13 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         let angle = -(st.align.rotation as f32).to_radians();
         // Upright (±90°) wrapped text wraps to the row height: lines then stack across the column.
         let galley = if st.align.wrap && st.align.rotation.abs() == 90 {
-            let job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, (rect.height() - 2.0 * pad).max(4.0));
+            let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, (rect.height() - 2.0 * pad).max(4.0));
+            job.direction = direction;
             p.layout_job(job)
         } else {
             galley.clone()
         };
-        let pos = rotated_text_pos(*rect, galley.size(), angle, painted_halign(st.align.h, geo.rtl), st.align.v, pad, indent);
+        let pos = rotated_text_pos(*rect, galley.size(), angle, halign, st.align.v, pad, indent);
         let mut shape = egui::epaint::TextShape::new(pos, galley, color);
         shape.angle = angle;
         cp.add(shape);

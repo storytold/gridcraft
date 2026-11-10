@@ -163,10 +163,26 @@ pub(crate) fn paint_pages(input: PagePaintInput<'_>, cf: &mut CfCache) -> Vec<gr
         }
         painted += 1;
         let pc = p.with_clip_rect(clip);
-        grid::paint_quadrant(grid::QuadrantPaint { painter: &pc, geo, workbook: wb, sheet_index: si, sheet: sh, rows, cols, cf, tokens: t });
+        let active_row = app.ui.highlight_active_row.then_some(sel.active.row);
+        grid::paint_quadrant(grid::QuadrantPaint {
+            painter: &pc,
+            geo,
+            workbook: wb,
+            sheet_index: si,
+            sheet: sh,
+            rows,
+            cols,
+            cf,
+            tokens: t,
+            active_row,
+        });
         if !pg.is_data_page(i, j) {
             // "Click to add data" pages: faded until something is typed there.
             pc.rect_filled(clip, 0.0, t.grid_bg.gamma_multiply(0.75));
+            // The fade would all but hide the active row's band: it goes on again.
+            if let Some(band) = active_row.and_then(|row| grid::active_row_band(geo, sh, row, rows, cols)) {
+                pc.rect_filled(band, 0.0, t.active_row);
+            }
             let size = (14.0 * geo.z / DISPLAY_SCALE).clamp(8.0, 22.0);
             pc.text(clip.center(), Align2::CENTER_CENTER, tr(app, "Click to add data"), theme::ui_font(size), Color32::from_gray(150));
         }
