@@ -671,7 +671,7 @@ fn fallback_png(shape: &Shape, ink: &InkStyle, points: &[[i64; 2]], color: [u8; 
         (radius, pw, ph, sprite.saturating_mul(dabs))
     };
     let (mut radius, mut pw, mut ph, mut work) = plan(max_scale);
-    if work > *budget && *budget > 0 {
+    if work > *budget {
         // Shrink until the estimate fits: work grows with the square of the scale (both the sprite
         // and the dab count scale with it).
         let factor = (*budget as f64 / work as f64).sqrt().clamp(0.02, 1.0);
