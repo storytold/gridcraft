@@ -11,6 +11,18 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
         resp.request_focus();
     }
     let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
+    // A composition that opened the cell editor as a preview still belongs to the grid: show each
+    // preedit in the editor without taking focus, which would interrupt the composition.
+    if app.editor.as_ref().is_some_and(|ed| ed.ime_preview)
+        && app.dialog.is_none()
+        && app.message.is_none()
+        && !menu_owns_keyboard(app)
+        && ctx.memory(|m| m.has_focus(resp.id))
+    {
+        let events = grid_events(app, ctx, sh);
+        start_ime_edit(app, ctx, resp, geo, sh, &events);
+        return;
+    }
     // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
     // So do the fill menu (its Esc closes it, not the copy) and the right-drag that opens it (an
     // arrow key would move the selection the menu fills from), and a macro's question.
@@ -163,9 +175,11 @@ fn menu_owns_keyboard(app: &SheetApp) -> bool {
 }
 
 /// While the grid has focus it owns the IME, as Excel's sheet does, so a composition can start with
-/// a cell merely selected. The first preedit opens the cell editor (whose text field then owns the
-/// composition and shows it); a commit already in the batch fills the editor directly. Returns
-/// whether the batch started an edit, in which case the rest of it belongs to the new editor.
+/// a cell merely selected. The first preedit opens the cell editor as a preview of the composition
+/// but leaves the IME context on the grid: moving focus to the editor would interrupt the
+/// composition and lose its first kana. The preview follows each preedit; a commit puts the
+/// committed text in the editor and gives it the keyboard, which is safe once the composition has
+/// ended. Returns whether the batch belongs to the IME, in which case no grid key handling runs.
 fn start_ime_edit(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet, events: &[egui::Event]) -> bool {
     if ctx.memory(|m| m.has_focus(resp.id)) {
         if resp.gained_focus() {
@@ -177,21 +191,60 @@ fn start_ime_edit(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response
         let ime = egui::output::IMEOutput::new(resp.id, app.grid.ime_generation.max(1), egui::IMEPurpose::Normal, cell, cursor);
         ctx.output_mut(|o| o.ime = Some(ime));
     }
-    if let Some(text) = events.iter().find_map(|ev| match ev {
-        egui::Event::Ime(egui::ImeEvent::Commit(text)) if !text.is_empty() => Some(text.clone()),
-        _ => None,
-    }) {
-        app.begin_edit(Some(text), false);
-        if let Some(ed) = app.editor.as_mut() {
-            ed.caret = ed.text.chars().count();
+    let previewing = app.editor.as_ref().is_some_and(|ed| ed.ime_preview);
+    // The IME may send several updates in one batch: a preedit, its commit, a new preedit. Follow
+    // them in order, as the editor's own text field would, so committed text is kept once.
+    let mut committed = app.editor.as_ref().map(|ed| ed.ime_committed.clone()).unwrap_or_default();
+    let mut preedit = String::new();
+    let mut composing = false;
+    let mut saw_ime = false;
+    for ev in events {
+        if let egui::Event::Ime(ev) = ev {
+            saw_ime = true;
+            match ev {
+                egui::ImeEvent::Preedit { text, .. } => {
+                    preedit.clone_from(text);
+                    composing = !text.is_empty();
+                }
+                egui::ImeEvent::Commit(text) => {
+                    committed.push_str(text);
+                    preedit.clear();
+                    composing = false;
+                }
+                _ => {}
+            }
+        }
+    }
+    if previewing {
+        if !saw_ime {
+            // Keep the composition (and the grid's keyboard) until the IME commits or clears it.
+            return true;
+        }
+        match app.editor.as_mut() {
+            Some(ed) if composing => ed.show_ime_preview(&committed, &preedit),
+            Some(ed) => ed.finish_ime_preview(committed),
+            None => return false,
         }
         return true;
     }
-    if events.iter().any(|ev| matches!(ev, egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) if !text.is_empty())) {
-        app.begin_edit(Some(String::new()), false);
-        return true;
+    if !saw_ime {
+        return false;
     }
-    false
+    if composing {
+        app.begin_edit(Some(String::new()), false);
+        if let Some(ed) = app.editor.as_mut() {
+            ed.show_ime_preview(&committed, &preedit);
+        }
+        return app.editor.is_some();
+    }
+    if committed.is_empty() {
+        return false;
+    }
+    app.begin_edit(Some(committed), false);
+    if let Some(ed) = app.editor.as_mut() {
+        ed.caret = ed.text.chars().count();
+    }
+    true
 }
 
 /// This frame's input events, without those the focused form control took.
