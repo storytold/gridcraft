@@ -1727,3 +1727,22 @@ fn series_labels_override_the_charts() {
     // Anchored near the base: below the axis labels' midline, in the plot's lower part.
     assert!(named.iter().all(|t| t.2 > 200.0), "{named:?}");
 }
+
+/// A pie labels its values as its series says: shown there though the chart's are off, hidden
+/// there though the chart's are on.
+#[test]
+fn a_pie_follows_its_series_labels() {
+    use gridcraft_model::SeriesLabels;
+    let count = |chart_labels: bool, series: Option<SeriesLabels>| {
+        let mut c = chart(ChartKind::Pie);
+        c.legend = LegendPos::None;
+        c.title = None;
+        c.data_labels = chart_labels;
+        let mut d = sample(ChartKind::Pie);
+        d.series[0].labels = series;
+        render(&c, &d, 640.0, 400.0, &ApproxMeasure).iter().filter(|p| matches!(p, Prim::Text { .. })).count()
+    };
+    let none = count(false, None);
+    assert!(count(false, Some(SeriesLabels { value: true, ..Default::default() })) > none);
+    assert_eq!(count(true, Some(SeriesLabels::default())), none);
+}
