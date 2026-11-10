@@ -24,6 +24,8 @@ pub(crate) struct HtmlCell {
     pub text: String,
     pub num: Option<f64>,
     pub header: bool,
+    /// Versioned source formatting from GridCraft's own copy, never arbitrary CSS.
+    pub style: Option<gridcraft_model::Style>,
 }
 
 /// The cells of the first table in `html`, row by row, read no further than `max_rows` rows of
@@ -38,6 +40,7 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
     }
     let mut cell: Option<OpenCell> = None;
     let mut in_table = false;
+    let mut styles: Vec<gridcraft_model::Style> = Vec::new();
     let mut rest = html;
     while !rest.is_empty() && !grid.full {
         let Some(lt) = rest.find('<') else {
@@ -73,6 +76,7 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
                     break; // a nested table: the outer one is the clipboard grid, stop here
                 }
                 in_table = true;
+                styles = source_styles(attrs);
             }
             ("table", true) => {
                 grid.finish(&mut cell);
@@ -90,7 +94,11 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
                 let num = attr(attrs, "x:num").or_else(|| attr(attrs, "sdval")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| n.is_finite());
                 let colspan = span(attrs, "colspan", MAX_SPAN);
                 let rowspan = span(attrs, "rowspan", MAX_ROW_SPAN);
-                cell = Some(OpenCell { cell: HtmlCell { text: String::new(), num, header: name == "th" }, colspan, rowspan });
+                cell = Some(OpenCell {
+                    cell: HtmlCell { text: String::new(), num, header: name == "th", style: source_style(attrs, &styles) },
+                    colspan,
+                    rowspan,
+                });
             }
             ("td" | "th", true) | ("tr", true) => grid.finish(&mut cell),
             ("br", _) => {
@@ -103,6 +111,33 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
     }
     grid.finish(&mut cell);
     grid.rows
+}
+
+/// Most distinct styles one GridCraft copy carries: one per cell of the largest HTML copy.
+const MAX_SOURCE_STYLES: usize = 10_000;
+
+/// The table's GridCraft source styles: bounded and fully specified, or none at all, so invalid
+/// metadata leaves an ordinary text/HTML paste alone.
+fn source_styles(attrs: &str) -> Vec<gridcraft_model::Style> {
+    let Some(encoded) = attr(attrs, "data-gridcraft-styles-v1") else { return Vec::new() };
+    let Ok(styles) = serde_json::from_str::<Vec<gridcraft_model::Style>>(&decode_entities(encoded)) else { return Vec::new() };
+    let valid = |s: &gridcraft_model::Style| {
+        s.font.size.is_finite()
+            && (1.0..=4096.0).contains(&s.font.size)
+            && s.font.name.len() <= 1024
+            && s.num_fmt.as_str().len() <= 4096
+            && ((-90..=90).contains(&s.align.rotation) || s.align.rotation == 255)
+    };
+    if styles.len() > MAX_SOURCE_STYLES || !styles.iter().all(valid) {
+        return Vec::new();
+    }
+    styles
+}
+
+/// A cell's source style: its `data-gridcraft-s` index into the table's styles.
+fn source_style(attrs: &str, styles: &[gridcraft_model::Style]) -> Option<gridcraft_model::Style> {
+    let i: usize = attr(attrs, "data-gridcraft-s")?.trim().parse().ok()?;
+    styles.get(i).cloned()
 }
 
 /// A `colspan`/`rowspan` attribute: at least 1, at most `max` (the sheet's extent), so a hostile
@@ -277,7 +312,7 @@ const ENTITY_WINDOW: usize = 12;
 
 /// HTML text to plain text: entities decoded, whitespace runs (and `<br>`) collapsed to one
 /// space, trimmed. The text only serves to match a cell with the tab-separated text.
-fn decode(raw: &str) -> String {
+fn decode_entities(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut rest = raw;
     while let Some(amp) = rest.find('&') {
@@ -315,6 +350,11 @@ fn decode(raw: &str) -> String {
         }
     }
     out.push_str(rest);
+    out
+}
+
+fn decode(raw: &str) -> String {
+    let out = decode_entities(raw);
     let mut text = String::with_capacity(out.len());
     let mut space = false;
     for c in out.chars() {
