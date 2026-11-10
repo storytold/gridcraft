@@ -230,3 +230,5 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-10-11 | minor | XLSX: Allow Edit Ranges (`protectedRanges`) read and written with their password hashes (#307) |
 | 2026-10-10 | minor | Encrypted and `.xls` files are now recognised and refused with a message (#17) |
 | 2026-10-10 | major | Created: every Excel format with our read/write support; XLSB and ODS values-only imports recorded; `.xls`, encryption and large files flagged as beta gates |
+
+- 2026-11-02 — PR #2430 follows #722: imported manual-order cache references are deduplicated before cloning labels; first valid references win. Explicit source-order reset and changed grouping clear obsolete manual ranks.

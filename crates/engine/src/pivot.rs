@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use gridcraft_core::date::datetime_from_serial;
 pub use gridcraft_core::quote_sheet;
-use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, split_sheet};
+use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, number_to_text, split_sheet};
 use gridcraft_model::{
     BorderLine, BorderStyle, Cell, Chart, Color, Fill, HAlign, NumFmt, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs,
     PivotSort, PivotTable, PivotValue, Series, Style, StyleId, Workbook,
@@ -32,7 +32,6 @@ pub use items::{distinct_labels, func_caption, item_label};
 use output::data_cols_exceed_sheet;
 pub use output::{CellKind, OutCell, Output, RowKind};
 use output::{cell_style, look};
-
 /// Largest source block read (cells).
 pub const MAX_SOURCE_CELLS: u64 = 10_000_000;
 /// Largest report written (cells).
@@ -58,11 +57,51 @@ pub struct Source {
     /// Numeric with a date number format.
     pub dates: Vec<bool>,
     pub rows: Vec<Vec<Value>>,
+    /// The sheet row of each record (blank rows are skipped).
+    pub record_rows: Vec<u32>,
 }
 
 impl Source {
     pub fn col(&self, name: &str) -> Option<usize> {
         self.headers.iter().position(|h| h.eq_ignore_ascii_case(name))
+    }
+    /// Per record: the column's cell is a number whose own format is a date (Excel caches such
+    /// a number as `<d>` and sorts it after errors), and no cell of the column holds that number
+    /// with a non-date format: a number in any General cell is a number item, whatever the row
+    /// order or report filter. Looks up each distinct style once.
+    pub fn date_cells(&self, wb: &Workbook, col: usize) -> Vec<bool> {
+        let (Some(sh), Ok(off)) = (wb.sheet(self.sheet), u32::try_from(col)) else {
+            return vec![false; self.rows.len()];
+        };
+        let c = self.range.start.col + off;
+        let mut memo: HashMap<StyleId, bool> = HashMap::new();
+        let mut dates: Vec<bool> = self
+            .rows
+            .iter()
+            .zip(&self.record_rows)
+            .map(|(rec, &row)| {
+                rec.get(col).is_some_and(Value::is_number)
+                    && *memo
+                        .entry(sh.style_id(CellRef::new(row, c)))
+                        .or_insert_with_key(|id| crate::display::number_format(wb.styles.get(*id).num_fmt.as_str()).is_date())
+            })
+            .collect();
+        if !dates.contains(&true) {
+            return dates;
+        }
+        let number = |rec: &Vec<Value>| match rec.get(col) {
+            Some(Value::Number(n)) => Some(n.to_bits()),
+            _ => None,
+        };
+        let general: HashSet<u64> = dates.iter().zip(&self.rows).filter(|(d, _)| !**d).filter_map(|(_, rec)| number(rec)).collect();
+        if !general.is_empty() {
+            for (d, rec) in dates.iter_mut().zip(&self.rows) {
+                if *d && number(rec).is_some_and(|n| general.contains(&n)) {
+                    *d = false;
+                }
+            }
+        }
+        dates
     }
 }
 
@@ -156,6 +195,7 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
     }
     let w = headers.len();
     let mut rows = Vec::new();
+    let mut record_rows = Vec::new();
     let mut numeric = vec![true; w];
     let mut any = vec![false; w];
     if r.end.row > r.start.row {
@@ -176,6 +216,7 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
                     }
                 }
             }
+            record_rows.push(row);
             rows.push(rec);
         }
     }
@@ -183,7 +224,7 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
         *n = *n && *a;
     }
     let dates = numeric.iter().zip(formats.iter()).map(|(n, f)| *n && crate::display::number_format(f).is_date()).collect();
-    Ok(Source { sheet: si, range: r, headers, formats, numeric, dates, rows })
+    Ok(Source { sheet: si, range: r, headers, formats, numeric, dates, rows, record_rows })
 }
 
 /// Computes a PivotTable report from the workbook.

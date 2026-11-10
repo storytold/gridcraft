@@ -65,14 +65,34 @@ fn axis_field<'a>(cmd: &str, pt: &'a mut PivotTable, field: &str) -> Result<&'a 
 pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.sort";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
+    let source_order = str_param(p, "order").is_some_and(|v| v.eq_ignore_ascii_case("source"));
     let order = match str_param(p, "order").unwrap_or("asc").to_ascii_lowercase().as_str() {
         "asc" | "ascending" | "a-z" => PivotSort::Asc,
         "desc" | "descending" | "z-a" => PivotSort::Desc,
         "none" | "manual" | "source" => PivotSort::None,
-        o => return Err(bad(C, format!("unknown order `{o}` (asc|desc|none)"))),
+        o => return Err(bad(C, format!("unknown order `{o}` (asc|desc|none|source)"))),
     };
+    // Sort by a value field (its caption or source field) instead of by the item labels.
+    let by = str_param(p, "by").map(str::to_string);
     update(s, p, |pt, _, _| {
-        axis_field(C, pt, &field)?.sort = order;
+        let by = match by {
+            Some(b) => Some(
+                pt.values
+                    .iter()
+                    .find(|v| v.name.eq_ignore_ascii_case(&b))
+                    .or_else(|| pt.values.iter().find(|v| v.source_col.eq_ignore_ascii_case(&b)))
+                    .map(|v| v.name.clone())
+                    .ok_or_else(|| bad(C, format!("`{b}` isn't in the values area")))?,
+            ),
+            None => None,
+        };
+        let f = axis_field(C, pt, &field)?;
+        f.sort = order;
+        f.sort_by = by;
+        f.sort_scope.clear();
+        if source_order {
+            f.item_order.clear();
+        }
         Ok(json!({}))
     })
 }
@@ -90,6 +110,9 @@ pub(super) fn group(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         let f = axis_field(C, pt, &field)?;
+        if f.date_group != by {
+            f.item_order.clear();
+        }
         f.date_group = by;
         f.collapsed_items.clear();
         Ok(json!({}))
@@ -164,7 +187,11 @@ pub(super) fn layout(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         if let Some((on, top)) = subtotals {
+            // Design › Subtotals applies to every field, replacing per-field settings.
             pt.subtotals = on;
+            for f in pt.rows.iter_mut().chain(pt.columns.iter_mut()) {
+                f.subtotal = None;
+            }
             if let Some(t) = top {
                 pt.subtotals_top = t;
             }
