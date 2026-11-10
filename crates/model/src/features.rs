@@ -230,6 +230,30 @@ pub enum CfRule {
     },
 }
 
+impl CfRule {
+    /// The differential style a matching rule applies; colour scales, data bars and icon sets have none.
+    pub fn style(&self) -> Option<&Style> {
+        match self {
+            CfRule::CellIs { style, .. }
+            | CfRule::Expression { style, .. }
+            | CfRule::ContainsText { style, .. }
+            | CfRule::NotContainsText { style, .. }
+            | CfRule::BeginsWith { style, .. }
+            | CfRule::EndsWith { style, .. }
+            | CfRule::Blanks { style }
+            | CfRule::NoBlanks { style }
+            | CfRule::Errors { style }
+            | CfRule::NoErrors { style }
+            | CfRule::Duplicate { style }
+            | CfRule::Unique { style }
+            | CfRule::Top10 { style, .. }
+            | CfRule::AboveAverage { style, .. }
+            | CfRule::TimePeriod { style, .. } => Some(style),
+            CfRule::ColorScale { .. } | CfRule::DataBar { .. } | CfRule::IconSet { .. } => None,
+        }
+    }
+}
+
 /// Number of icons in an icon set (`3Arrows` → 3, `5Quarters` → 5), always 3 to 5.
 pub fn icon_count(set: &str) -> usize {
     set.chars().next().and_then(|c| c.to_digit(10)).unwrap_or(3).clamp(3, 5) as usize
@@ -540,6 +564,12 @@ impl Trendline {
     }
 }
 
+/// Charts saved before `hole_size` existed were drawn with a 50% hole. New charts and charts read
+/// from XLSX set 75 explicitly (Excel's default), so only a missing JSON field keeps the old look.
+fn default_hole_size() -> u8 {
+    50
+}
+
 /// A chart's data table (`c:dTable`), independent of the chart legend.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -569,6 +599,13 @@ pub struct Chart {
     pub data_table: Option<ChartDataTable>,
     pub gridlines: bool,
     pub style: u32,
+    /// Doughnut hole size as a percentage of the plot radius (Excel's 10–90 range). New charts and
+    /// XLSX imports use Excel's 75; a document saved before this field existed reads as 50.
+    #[serde(default = "default_hole_size")]
+    pub hole_size: u8,
+    /// Pie/doughnut first slice angle in degrees clockwise from 12 o'clock (0–359).
+    #[serde(default)]
+    pub first_slice_angle: u16,
     pub x_title: Option<String>,
     pub y_title: Option<String>,
     /// Source range when created from a selection (for Switch Row/Column).
@@ -1085,6 +1122,39 @@ mod trendline_forecast_tests {
         assert_eq!(Trendline::clamp_forecast(f64::INFINITY), 0.0);
         assert_eq!(Trendline::clamp_forecast(f64::NEG_INFINITY), 0.0);
         assert_eq!(Trendline::clamp_forecast(1e300), Trendline::MAX_FORECAST);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chart_without_hole_size_keeps_the_legacy_hole() {
+        let chart = Chart {
+            id: 1,
+            kind: ChartKind::Doughnut,
+            anchor: Anchor::default(),
+            title: None,
+            series: vec![],
+            legend: LegendPos::Right,
+            data_labels: false,
+            data_table: None,
+            gridlines: false,
+            style: 1,
+            hole_size: 75,
+            first_slice_angle: 0,
+            x_title: None,
+            y_title: None,
+            source: None,
+            by_rows: false,
+            pivot: None,
+        };
+        let mut json = serde_json::to_value(&chart).expect("serialize chart");
+        json.as_object_mut().expect("chart object").remove("hole_size");
+        let legacy: Chart = serde_json::from_value(json).expect("deserialize legacy chart");
+        assert_eq!(legacy.hole_size, 50, "documents saved before hole_size existed keep the old 50% hole");
+        assert_eq!(chart.hole_size, 75, "new charts keep Excel's 75% default");
     }
 }
 
