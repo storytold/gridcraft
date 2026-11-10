@@ -59,6 +59,35 @@ fn pdf_export_keeps_safe_links_on_their_printed_pages() {
 }
 
 #[test]
+fn pdf_export_rotates_a_shape_outline_and_its_text() {
+    let make_page = |rotation| {
+        let mut s = s();
+        let id = s
+            .execute(
+                "insert.shape",
+                json!({"kind": "rectangle", "at": "A1", "width": 120, "height": 60, "text": "TURNED", "fill": "#FF0000", "line": "#0000FF"}),
+            )
+            .unwrap()["shape"]
+            .as_u64()
+            .unwrap();
+        if rotation != 0 {
+            s.execute("object.move", json!({"kind": "shape", "id": id, "at": "A1", "rotation": rotation})).unwrap();
+        }
+        pdf_pages(&mut s).remove(0)
+    };
+    let upright = make_page(0);
+    let turned = make_page(90);
+    let red_path = |page: &str| {
+        let start = page.find("1 0 0 rg").expect("red rectangle fill");
+        let tail = &page[start..];
+        let end = tail.find(" f").expect("filled rectangle path") + 2;
+        &tail[..end]
+    };
+    assert_ne!(red_path(&upright), red_path(&turned), "the rectangle's printed outline is rotated");
+    assert!(turned.contains("0 -1 1 0") && turned.contains("(TURNED) Tj"), "shape text uses the rotation matrix: {turned}");
+}
+
+#[test]
 fn header_sections_split_join_and_field_names() {
     let spec = "&L&\"Arial,Bold\"Sales &&Co&CPage &P of &N&R&D";
     let parts = split_header_footer(spec);

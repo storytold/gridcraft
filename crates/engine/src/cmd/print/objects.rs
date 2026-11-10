@@ -1,6 +1,6 @@
 use super::draw::{Block, PdfMeasure, Xf, draw_prims, rgb_of};
 use super::text::wrap_lines;
-use super::{Anchor, Font, Page, RangeRef, Rect, ShapeKind, Sheet, Value, Workbook};
+use super::{Anchor, Font, Page, Point, RangeRef, Rect, ShapeKind, Sheet, Value, Workbook};
 
 /// Cell pictures fit the current cell (or merged-cell) rectangle without changing aspect ratio.
 pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32, f32), k: f32) {
@@ -153,29 +153,42 @@ fn draw_sparklines(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Bloc
 fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Block, (x, y, w, h): (f32, f32, f32, f32)) {
     let fill = rgb_of(shp.fill, wb);
     let line = rgb_of(shp.line, wb).filter(|_| !shp.format.no_line).map(|c| (c, (0.75 * b.k).max(0.25)));
+    let angle = if shp.rotation.is_finite() { shp.rotation.to_radians() } else { 0.0 };
+    let (sn, cs) = angle.sin_cos();
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    let turn = |[px, py]: [f32; 2]| {
+        let (dx, dy) = (px - cx, py - cy);
+        [cx + dx * cs - dy * sn, cy + dx * sn + dy * cs]
+    };
     match shp.kind {
         ShapeKind::Ellipse => {
             let pts: Vec<[f32; 2]> = (0..72)
                 .map(|i| {
                     let a = i as f32 / 72.0 * std::f32::consts::TAU;
-                    [x + w / 2.0 + w / 2.0 * a.cos(), y + h / 2.0 + h / 2.0 * a.sin()]
+                    turn([x + w / 2.0 + w / 2.0 * a.cos(), y + h / 2.0 + h / 2.0 * a.sin()])
                 })
                 .collect();
             pg.polygon(&pts, fill, line);
         }
-        ShapeKind::Triangle => pg.polygon(&[[x + w / 2.0, y], [x + w, y + h], [x, y + h]], fill, line),
+        ShapeKind::Triangle => {
+            let pts = [[x + w / 2.0, y], [x + w, y + h], [x, y + h]].map(turn);
+            pg.polygon(&pts, fill, line);
+        }
         ShapeKind::Line | ShapeKind::Arrow => {
             let c = line.map(|l| l.0).or(fill).unwrap_or([0, 0, 0]);
-            pg.stroke_line(x, y, x + w, y + h, (1.0 * b.k).max(0.3), c);
+            let [x0, y0] = turn([x, y]);
+            let [x1, y1] = turn([x + w, y + h]);
+            pg.stroke_line(x0, y0, x1, y1, (1.0 * b.k).max(0.3), c);
             if shp.kind == ShapeKind::Arrow {
                 let ang = h.atan2(w);
                 let al = 8.0 * b.k;
-                let p = |da: f32| [x + w - al * (ang + da).cos(), y + h - al * (ang + da).sin()];
-                pg.polygon(&[[x + w, y + h], p(0.4), p(-0.4)], Some(c), None);
+                let p = |da: f32| turn([x + w - al * (ang + da).cos(), y + h - al * (ang + da).sin()]);
+                pg.polygon(&[turn([x + w, y + h]), p(0.4), p(-0.4)], Some(c), None);
             }
         }
         _ => {
-            pg.polygon(&[[x, y], [x + w, y], [x + w, y + h], [x, y + h]], fill, line);
+            let pts = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].map(turn);
+            pg.polygon(&pts, fill, line);
         }
     }
     if shp.text.is_empty() {
@@ -203,7 +216,8 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
             ShapeTextAlign::Center => x + (w - lw) / 2.0,
             ShapeTextAlign::Right => x + w - 2.0 * b.k - lw,
         };
-        pg.text(lx, yy, size, font, color, l);
+        let [tx, ty] = turn([lx, yy]);
+        pg.text_rotated(Point::new(tx, ty), size, font, color, l, angle);
         yy += size * 1.2;
     }
 }
