@@ -287,7 +287,9 @@ impl<'a> Binder<'a> {
                 // PATHITEM's optional Type is documented as `TEXT`/`INTEGER` but catalogued as
                 // `Any` so that the numeric `0`/`1` spellings still bind.
                 "PATHITEM" | "PATHITEMREVERSE" if index == 2 => clause_keyword(arg, &["TEXT", "INTEGER"]),
-                _ if matches!(expected, Some(ParamKind::Text)) => keyword_name(arg),
+                // A `Text` position is an expression unless the catalog documents an interval word
+                // there: an unresolved bare name (`LEN(Foo)`) must be an error, not text "Foo".
+                _ if matches!(expected, Some(ParamKind::Text)) && text_enum_position(spec.name, index) => keyword_name(arg),
                 _ => visual_keyword_name(spec.name, index, arg),
             }
             // A real table, measure or variable name always wins: `RANK(Sales, ORDERBY(...))`
@@ -300,6 +302,20 @@ impl<'a> Binder<'a> {
             }
         }
         Ok(BoundExpr::Call { spec, args })
+    }
+}
+
+/// Functions whose catalogued `Text` parameter is a bare interval word rather than an expression.
+/// Everything else at a `Text` position is bound as an expression, so an unresolved bare name
+/// there reports "unknown name" instead of silently becoming text.
+fn text_enum_position(name: &str, index: usize) -> bool {
+    match name.to_ascii_uppercase().as_str() {
+        "DATEADD" | "DATESINPERIOD" => index == 2,
+        // `RANK ( [<ties>], <relation>, <orderBy>…[, <blank>] )`: SKIP or DENSE first, and the
+        // blank policy (DEFAULT/FIRST/LAST) later; ROWNUMBER takes the same blank policy.
+        "RANK" => index == 0 || index == 3,
+        "ROWNUMBER" => index == 2,
+        _ => false,
     }
 }
 

@@ -48,6 +48,18 @@ fn bind(model: &DataModel, formula: &str) -> BoundExpr {
 }
 
 #[test]
+fn an_unresolved_bare_name_is_not_text() {
+    // A `Text` argument position holds an expression unless the catalog documents an interval or
+    // policy word there, so `LEN(Foo)` must report the unknown name, not measure "Foo".
+    let model = sample_model();
+    let expr = parse_expression("LEN ( Foo )").expect("formula parses");
+    let error = Binder::new(&model).bind_expression(&expr).expect_err("unknown name");
+    assert!(error.message.contains("unknown name"), "{error:?}");
+    // The documented interval word still binds.
+    bind(&model, "DATEADD ( 'Date'[Date], 1, MONTH )");
+}
+
+#[test]
 fn binds_qualified_columns_tables_and_measures() {
     let model = sample_model();
     match bind(&model, "SUM ( Sales[Amount] )") {

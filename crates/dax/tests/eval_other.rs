@@ -207,8 +207,9 @@ fn rownumber_numbers_rows_in_order() {
     // Amount order: 10, 20, 20, 30, 40. Row numbers preserve the relation's row order for ties:
     // [1, 4, 2, 5, 3] sums to 15.
     assert_eq!(scalar("SUMX(Sales, ROWNUMBER(Sales, ORDERBY(Sales[Amount])))"), Scalar::Decimal(15.0));
-    assert_eq!(scalar("MAXX(Sales, ROWNUMBER(Sales, ORDERBY(Sales[Amount])))"), Scalar::Decimal(5.0));
-    assert_eq!(scalar("MINX(Sales, ROWNUMBER(Sales, ORDERBY(Sales[Amount])))"), Scalar::Decimal(1.0));
+    // ROWNUMBER is an integer, so MINX/MAXX keep that type.
+    assert_eq!(scalar("MAXX(Sales, ROWNUMBER(Sales, ORDERBY(Sales[Amount])))"), Scalar::Integer(5));
+    assert_eq!(scalar("MINX(Sales, ROWNUMBER(Sales, ORDERBY(Sales[Amount])))"), Scalar::Integer(1));
     // Descending order reverses the numbering: [5, 2, 3, 1, 4], so the weighted sum is
     // 10*5 + 30*2 + 20*3 + 40*1 + 20*4 = 290.
     assert_eq!(scalar("SUMX(Sales, ROWNUMBER(Sales, ORDERBY(Sales[Amount], DESC)) * Sales[Amount])"), Scalar::Decimal(290.0));

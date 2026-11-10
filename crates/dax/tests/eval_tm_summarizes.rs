@@ -509,7 +509,8 @@ fn groupby_aggregates_the_current_group() {
 fn summarize_columns_performs_context_transition() {
     // Inside the row context of Sales each row filters all its columns, so only its own product
     // remains in a nested SUMMARIZECOLUMNS. Without context transition every row would see two.
-    assert_eq!(eval("MAXX(Sales, COUNTROWS(SUMMARIZECOLUMNS(Sales[Product])))"), Ok(money(1.0)));
+    // COUNTROWS is an integer, so MAXX keeps that type.
+    assert_eq!(eval("MAXX(Sales, COUNTROWS(SUMMARIZECOLUMNS(Sales[Product])))"), Ok(Scalar::Integer(1)));
 }
 
 #[test]

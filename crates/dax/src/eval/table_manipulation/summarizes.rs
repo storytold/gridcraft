@@ -323,7 +323,12 @@ fn related_value(ev: &Evaluator<'_>, row: &[Scalar], links: &[RelatedLink], cach
         let Some(target_table) = model.tables.get(link.target_table) else { continue };
         for index in indices {
             let Some(target_row) = target_table.rows.get(*index) else { continue };
-            if target_row.get(link.target_key).is_some_and(|value| value.strict_eq(key)) {
+            // ScalarKey compares text case-insensitively, so the re-check must too: a bucket found
+            // with `"east"` has to accept the `"East"` row it holds.
+            if target_row.get(link.target_key).is_some_and(|value| match (value, key) {
+                (Scalar::String(_), Scalar::String(_)) => ScalarKey::from(value) == ScalarKey::from(key),
+                _ => value.strict_eq(key),
+            }) {
                 return target_row.get(link.target_column).cloned();
             }
         }

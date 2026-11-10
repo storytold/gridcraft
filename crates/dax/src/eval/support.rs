@@ -437,6 +437,11 @@ pub(crate) fn lcm(a: i64, b: i64) -> Option<i64> {
     i64::try_from(value).ok()
 }
 
+/// The numeric values an aggregation may read: text, logicals and blanks are not numbers.
+fn numeric_scalar(values: &[Scalar]) -> impl Iterator<Item = &Scalar> {
+    values.iter().filter(|value| matches!(value, Scalar::Integer(_) | Scalar::Currency(_) | Scalar::Decimal(_) | Scalar::DateTime(_)))
+}
+
 /// Applies a scalar aggregation over already-evaluated values.
 pub(crate) fn aggregate_values(name: &str, values: &[Scalar]) -> Result<Scalar, EvalError> {
     // Plain aggregations take numeric values only: DAX specifies that SUM/AVERAGE/MIN/MAX/PRODUCT
@@ -468,8 +473,10 @@ pub(crate) fn aggregate_values(name: &str, values: &[Scalar]) -> Result<Scalar, 
             Ok(Scalar::Decimal(sum / values.len() as f64))
         }
         "PRODUCT" => Ok(if numbers.is_empty() { Scalar::Blank } else { Scalar::Decimal(numbers.iter().product()) }),
-        "MIN" => Ok(numbers.iter().copied().reduce(f64::min).map(Scalar::Decimal).unwrap_or(Scalar::Blank)),
-        "MAX" => Ok(numbers.iter().copied().reduce(f64::max).map(Scalar::Decimal).unwrap_or(Scalar::Blank)),
+        // MIN/MAX keep the selected value's own type: a date column's maximum stays a date, and
+        // an integer column's stays an integer (DAX's MIN/MAX do not coerce).
+        "MIN" => Ok(numeric_scalar(values).min_by(|left, right| total_order(left, right)).cloned().unwrap_or(Scalar::Blank)),
+        "MAX" => Ok(numeric_scalar(values).max_by(|left, right| total_order(left, right)).cloned().unwrap_or(Scalar::Blank)),
         "MINA" => Ok(values
             .iter()
             .filter(|value| !value.is_blank())
@@ -670,7 +677,7 @@ mod tests {
         assert_eq!(aggregate_values("SUM", &values).expect("SUM"), Scalar::Decimal(14.0));
         assert_eq!(aggregate_values("AVERAGE", &values).expect("AVERAGE"), Scalar::Decimal(3.5));
         assert_eq!(aggregate_values("MIN", &values).expect("MIN"), Scalar::Decimal(0.5));
-        assert_eq!(aggregate_values("MAX", &values).expect("MAX"), Scalar::Decimal(10.0));
+        assert_eq!(aggregate_values("MAX", &values).expect("MAX"), Scalar::DateTime(10.0));
         assert_eq!(aggregate_values("PRODUCT", &values).expect("PRODUCT"), Scalar::Decimal(15.0));
         // A column holding only text, logicals and blanks has no numeric observations at all.
         let non_numeric = [Scalar::String("5".into()), Scalar::Boolean(false), Scalar::Blank];

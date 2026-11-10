@@ -86,7 +86,8 @@ fn an_invalid_type_or_non_numeric_item_is_an_error() {
 #[test]
 fn resolves_a_path_column_in_row_context() {
     // The right-most AccountKey of every path: 3, 5 and 7.
-    assert_eq!(value("MAXX(Account, PATHITEMREVERSE(Account[AccountPath], 1, 1))"), Scalar::Decimal(7.0));
+    // The item is an integer, so MAXX keeps that type; SUMX accumulates in a decimal.
+    assert_eq!(value("MAXX(Account, PATHITEMREVERSE(Account[AccountPath], 1, 1))"), Scalar::Integer(7));
     assert_eq!(value("SUMX(Account, PATHITEMREVERSE(Account[AccountPath], 1, 1))"), Scalar::Decimal(15.0));
 }
 
