@@ -62,6 +62,8 @@ pub enum EditError {
     NotShared(String),
     /// The engine refused the local preview.
     Engine(String),
+    /// The session belongs to another open workbook than the one in front.
+    OtherDocument,
     /// The connection is gone.
     Disconnected,
 }
@@ -72,6 +74,7 @@ impl std::fmt::Display for EditError {
             EditError::Viewer => f.write_str("viewers cannot edit"),
             EditError::NotShared(id) => write!(f, "`{id}` does not travel in a shared session"),
             EditError::Engine(e) => f.write_str(e),
+            EditError::OtherDocument => f.write_str("this session belongs to another open workbook"),
             EditError::Disconnected => f.write_str("the session is not connected"),
         }
     }
@@ -89,6 +92,9 @@ pub struct Synced {
     names: BTreeMap<String, String>,
     seq: u64,
     client_id: String,
+    /// The workbook this session shares, by `DocState::uid`, fixed when the replica first acts:
+    /// the room holds one document, and the user may open or switch to another one afterwards.
+    doc_uid: Option<u64>,
     pending: Vec<Pending>,
     /// The applied steps of this participant that `undo` may reverse, oldest first.
     own: VecDeque<String>,
@@ -120,6 +126,7 @@ impl Synced {
             names: BTreeMap::new(),
             seq: 0,
             client_id,
+            doc_uid: None,
             pending: Vec::new(),
             own: VecDeque::new(),
             notice: None,
@@ -141,6 +148,49 @@ impl Synced {
 
     pub fn actor(&self) -> &str {
         &self.actor
+    }
+
+    /// Fixes this replica on the workbook it joined with, once. The session holds one document;
+    /// everything the replica applies or sends is that workbook's, not whichever window the user
+    /// switched to afterwards.
+    fn bind(&mut self, session: &Session) {
+        if self.doc_uid.is_none() {
+            self.doc_uid = session.active().map(|doc| doc.uid);
+        }
+    }
+
+    /// The document of this session, whatever window is in front; `None` once it was closed.
+    pub fn shared_document<'a>(&self, session: &'a Session) -> Option<&'a gridcraft_engine::DocState> {
+        let uid = self.doc_uid?;
+        session.documents().iter().find(|doc| doc.uid == uid)
+    }
+
+    /// Whether an edit made in the active window belongs to this session. A command for another
+    /// open workbook stays local: it is not the document the room shares.
+    pub fn shares_active_document(&self, session: &Session) -> bool {
+        self.doc_uid.is_none_or(|uid| session.active().is_some_and(|doc| doc.uid == uid))
+    }
+
+    /// Switches the session to the shared workbook while a remote operation is applied and
+    /// returns the window that was in front. A remote operation belongs to one document; applying
+    /// it to whichever workbook is active would write cells into an unrelated file.
+    fn enter_shared(&self, session: &mut Session) -> Option<usize> {
+        let uid = self.doc_uid?;
+        let index = session.document_index(uid)?;
+        let was = session.active_index();
+        if index != was {
+            session.set_active(index);
+        }
+        Some(was)
+    }
+
+    /// Puts the window that was in front back after `enter_shared`, unless the document went away
+    /// in between (a close command cannot run here, but a restore may drop it).
+    fn leave_shared(&self, session: &mut Session, was: Option<usize>) {
+        let Some(was) = was else { return };
+        if was < session.documents().len() && self.doc_uid.is_some_and(|uid| session.document_index(uid).is_some()) {
+            session.set_active(was);
+        }
     }
 
     /// The local index of a sheet key, for drawing another participant's cursor.
@@ -196,11 +246,15 @@ impl Synced {
     /// the preview back. A structural command is only sent: it is exclusive on the server and the
     /// client must not guess the resulting addresses.
     pub fn execute(&mut self, session: &mut Session, id: &str, params: Json) -> Result<Json, EditError> {
+        self.bind(session);
         if id == "edit.undo" {
             return self.undo();
         }
         if id == "edit.redo" {
             return self.redo();
+        }
+        if !self.shares_active_document(session) {
+            return Err(EditError::OtherDocument);
         }
         let state = self.link.state();
         if state.role == Some(Role::Viewer) {
@@ -250,6 +304,13 @@ impl Synced {
     /// A structural undo/redo may arrive in parts (ADR-0013). The parts are collected here and the
     /// caller sees one completed `applied`; until the last part nothing touches the document.
     pub fn poll(&mut self, session: &mut Session) -> Vec<Event> {
+        self.bind(session);
+        // The person is the server's actor (the JWT subject), not the display name a host page
+        // sent: operations, the undo stack and the role belong to the actor.
+        let actor = self.link.state().actor;
+        if !actor.is_empty() && actor != self.actor {
+            self.actor = actor;
+        }
         let mut out = Vec::new();
         while let Some(event) = self.link.poll() {
             let event = match event {
@@ -331,16 +392,24 @@ impl Synced {
                 }
                 Event::Snapshot { bytes, .. } => {
                     if let Ok((workbook, _warnings)) = gridcraft_engine::io::open_bytes("session.xlsx", bytes) {
-                        *session = Session::new();
-                        session.add_document(gridcraft_engine::DocState::from_saved(
-                            workbook,
-                            None,
-                            "session.xlsx".into(),
-                            gridcraft_engine::Trust::FromFile,
-                        ));
-                        let sheets = self.link.state().sheets;
-                        self.apply_sheets(&sheets);
-                        self.pending.clear();
+                        self.bind(session);
+                        if let Some(uid) = self.doc_uid {
+                            // Only the shared document is replaced: the other open workbooks,
+                            // their unsaved edits and the session's preferences stay.
+                            let next = gridcraft_engine::DocState::from_saved(
+                                workbook,
+                                None,
+                                "session.xlsx".into(),
+                                gridcraft_engine::Trust::FromFile,
+                            );
+                            if session.swap_document(uid, next).is_err() {
+                                self.notice = Some("the document of this session is gone; reconnecting".into());
+                                self.link.send_message(ClientMessage::Resync { from: self.link.state().version });
+                            }
+                            let sheets = self.link.state().sheets;
+                            self.apply_sheets(&sheets);
+                            self.pending.clear();
+                        }
                     }
                 }
                 Event::Reconnected { .. } => {
@@ -469,10 +538,17 @@ impl Synced {
     /// Applies one confirmed operation: the command first (structure, formulas, styles), then the
     /// authoritative values of every cell the server listed.
     fn apply(&mut self, session: &mut Session, applied: &Applied) {
+        let restore = self.enter_shared(session);
+        self.apply_here(session, applied);
+        self.leave_shared(session, restore);
+    }
+
+    fn apply_here(&mut self, session: &mut Session, applied: &Applied) {
         if let Some(command) = &applied.result.command {
-            // The author previewed a merge command; nobody previewed a structural one.
+            // The author previewed a merge command; nobody previewed a structural one, and another
+            // window of the same person did not preview it here.
             let structural = applied.sheets.is_some();
-            let mine = applied.actor == self.actor;
+            let mine = applied.actor == self.actor && self.previewed_here(applied);
             if !mine || structural {
                 let _ = session.apply_remote(&command.id, command.params.clone());
             }
@@ -511,6 +587,12 @@ impl Synced {
         }
     }
 
+    /// Whether this window is the one that previewed `applied`: the operation id carries the
+    /// window that made it (RFC §13.6), so another window of the same person is not this one.
+    fn previewed_here(&self, applied: &Applied) -> bool {
+        applied.op_id.strip_prefix(&self.client_id).is_some_and(|rest| rest.starts_with('-'))
+    }
+
     fn apply_sheets(&mut self, sheets: &[SheetName]) {
         self.keys.clear();
         self.names.clear();
@@ -523,7 +605,7 @@ impl Synced {
     /// The sheet key, name and address the command applies to, taken from the UI's selection when
     /// the parameters do not carry them.
     fn target(&self, session: &Session) -> Result<(String, String, String), EditError> {
-        let doc = session.doc().map_err(|e| EditError::Engine(e.to_string()))?;
+        let doc = self.shared_document(session).ok_or(EditError::OtherDocument)?;
         let index = doc.wb.active_sheet();
         let sheet = doc.wb.sheet(index).ok_or_else(|| EditError::Engine("no such sheet".into()))?;
         let key = self

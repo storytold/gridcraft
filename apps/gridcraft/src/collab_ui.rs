@@ -105,7 +105,7 @@ impl Adapter {
             return;
         }
         self.last_presence = now;
-        let Some(doc) = session.active() else { return };
+        let Some(doc) = self.synced.shared_document(session) else { return };
         let Some(sheet) = doc.wb.sheet(doc.wb.active_sheet()) else { return };
         let Some(key) = self.synced.key_for_name(&sheet.name) else { return };
         let selection = &doc.selection;
@@ -117,10 +117,15 @@ impl Adapter {
 impl Collab for Adapter {
     fn execute(&mut self, session: &mut Session, id: &str, params: Json) -> Option<Result<Json, String>> {
         // Commands outside the allowlist (files, view, printing, code) stay local, and so does the
-        // UI command surface; only what travels in a session is taken over. Undo and redo are the
+        // UI command surface; only what travels in a session is taken over. An edit made in
+        // another open workbook is not this session's document either: it stays local instead of
+        // being sent as an operation on a sheet name that happens to match. Undo and redo are the
         // exception inside the allowlist: they are not sent as commands — the room turns them into
         // an operation of its own — and the engine's local history knows nothing about the other
         // replicas, so handing them to it would undo a preview here only.
+        if !self.synced.shares_active_document(session) {
+            return None;
+        }
         if !matches!(id, "edit.undo" | "edit.redo") {
             classify(id)?;
         }

@@ -610,6 +610,29 @@ impl Session {
         self.activate_window(w);
         self.docs.len() - 1
     }
+    /// Replaces the content of an open document with a fresh state — the authoritative workbook a
+    /// session snapshot carries — without touching the other open workbooks, the windows or the
+    /// session's preferences. The document keeps its `uid`, so its windows still show it, and its
+    /// history starts empty: the snapshot is the room's state, and the steps behind it belong to
+    /// the room, not to this replica.
+    pub fn swap_document(&mut self, uid: u64, mut content: DocState) -> Result<()> {
+        let index = self.document_index(uid).ok_or(EngineError::NoDocument)?;
+        let Some(old) = self.docs.get(index) else { return Err(EngineError::NoDocument) };
+        content.uid = uid;
+        // The window's identity and where Save goes stay with the open document; only the
+        // workbook, its calculation state and its history are the snapshot's.
+        content.path = old.path.clone();
+        content.title = old.title.clone();
+        // Nothing that kept a copy of the old content may outlive it: an open undo group would put
+        // the previous workbook back, and a debugger would step through a document that is gone.
+        self.groups.retain(|group| group.doc != uid);
+        if self.macro_debug.as_ref().is_some_and(|debugger| debugger.doc == uid) {
+            self.macro_debug = None;
+        }
+        self.docs[index] = content;
+        Ok(())
+    }
+
     /// Closes a workbook and its windows; the most recently active remaining window comes forward.
     pub fn close_document(&mut self, i: usize) {
         if i < self.docs.len() {

@@ -323,7 +323,7 @@ impl Collab {
             return;
         }
         self.last_presence_ms = now;
-        let Some(doc) = session.active() else { return };
+        let Some(doc) = self.sync.shared_document(session) else { return };
         let Some(sheet) = doc.wb.sheet(doc.wb.active_sheet()) else { return };
         let Some(key) = self.sync.key_for_name(&sheet.name) else { return };
         let selection = &doc.selection;
@@ -371,6 +371,10 @@ impl CollabTrait for Collab {
     }
 
     fn execute(&mut self, session: &mut Session, id: &str, params: serde_json::Value) -> Option<Result<serde_json::Value, String>> {
+        // An edit made in another open workbook is not this session's document: it stays local.
+        if !self.sync.shares_active_document(session) {
+            return None;
+        }
         // Undo and redo bypass the gate: they are operations of the room, not commands, and the
         // engine's local history would undo a preview on this replica only.
         if !matches!(id, "edit.undo" | "edit.redo") {
@@ -435,7 +439,7 @@ impl CollabTrait for Collab {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gridcraft_collab::{ClientOp, Kind, Payload, Room, ServerMessage, SheetName, Target};
+    use gridcraft_collab::{Applied, ClientOp, CommandEcho, Kind, Outcome, Payload, Room, ServerMessage, SheetName, Target};
     use gridcraft_engine::core::{CellRef, Value};
     use gridcraft_ui_egui::collab::Collab as CollabTrait;
     use serde_json::json;
@@ -584,6 +588,54 @@ mod tests {
             assert!(result.is_some_and(|r| r.is_err()), "`{id}` answered by the room, which holds no step yet");
         }
         assert_eq!(value(&session, "A1"), Value::Number(1.0), "the local history is untouched");
+    }
+
+    /// The person is the server's actor (the JWT subject), not the display name the page sent;
+    /// and a command another window of the same person sent still has to run here, while this
+    /// window's own previewed command must not run twice.
+    #[test]
+    fn the_actor_and_the_window_come_from_the_server() {
+        let mut collab = Collab::offline("s1", "Ann Display", Role::Editor, "w1");
+        let mut session = replica();
+        let welcome = wire(&ServerMessage::Welcome {
+            session_id: "s1".into(),
+            actor_id: "ann-jwt".into(),
+            role: Role::Editor,
+            version: 0,
+            epoch: 0,
+            sheets: vec![SheetName { key: "1".into(), name: "Sheet1".into() }],
+            participants: Vec::new(),
+            lease: None,
+        });
+        assert!(collab.on_text(&welcome, &mut session));
+
+        let applied = |op_id: &str, input: u32| Applied {
+            op_id: op_id.into(),
+            version: 1,
+            epoch: 0,
+            actor: "ann-jwt".into(),
+            result: Outcome {
+                command: Some(CommandEcho { id: "cell.set".into(), params: json!({ "sheet": "Sheet1", "cell": "A1", "input": input }) }),
+                delta: None,
+            },
+            sheets: None,
+            images: None,
+            book: None,
+            more: false,
+            image_part: None,
+        };
+        // This window previewed `w1-0`: its command is not run a second time.
+        assert!(collab.on_text(&wire(&ServerMessage::Applied { applied: applied("w1-0", 3) }), &mut session));
+        assert_eq!(value(&session, "A1"), Value::Empty, "own preview is not replayed");
+        // Another window of the same person did not preview `w2-0` here: the command runs.
+        assert!(collab.on_text(&wire(&ServerMessage::Applied { applied: applied("w2-0", 5) }), &mut session));
+        assert_eq!(value(&session, "A1"), Value::Number(5.0), "the other window's command runs on this replica");
+
+        // Both steps belong to the person the server named, so the room has something to undo.
+        assert!(
+            collab.execute(&mut session, "edit.undo", json!({})).is_some_and(|result| result.is_ok()),
+            "undo is offered for the actor the welcome named, not for the display name"
+        );
     }
 
     /// Two windows of one person (RFC §13.6): the host bridge gets a row per window, so the
