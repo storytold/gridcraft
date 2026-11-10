@@ -28,6 +28,18 @@ fn t(code: &str, s: &str) -> String {
 }
 
 #[test]
+fn the_separators_come_from_the_region_and_a_typed_code_is_read_with_them() {
+    let pt = gridcraft_core::region::lookup("pt-BR");
+    let it = gridcraft_core::region::lookup("it-IT");
+    let n = Value::Number(334106.29);
+    assert_eq!(format_value(&n, &NumberFormat::parse("#,##0.00"), S).text, "334,106.29");
+    assert_eq!(format_value_in(&n, &NumberFormat::parse("#,##0.00"), S, pt).text, "334.106,29");
+    let typed = NumberFormat::parse_in("#.##0,00", it);
+    assert_eq!(typed.code(), "#,##0.00");
+    assert_eq!(format_value_in(&n, &typed, S, it).text, "334.106,29");
+}
+
+#[test]
 fn numbers() {
     assert_eq!(f("0.00", 1234.567), "1234.57");
     assert_eq!(f("#,##0", 1234567.0), "1,234,567");

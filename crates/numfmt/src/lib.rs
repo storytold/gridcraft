@@ -183,6 +183,14 @@ impl NumberFormat {
         NumberFormat { inner: Arc::new(Inner { code: code.to_string(), general: false, sections, num_sections, text_section, invalid: false }) }
     }
 
+    /// Parses a format code typed with the region's own separators. Excel stores the canonical
+    /// `.` decimal and `,` grouping, but people type the code their region uses (`#.##0,00` in
+    /// it-IT), so a code entered by hand is translated before parsing. Quoted text, bracket tags
+    /// and escaped characters keep their own separators.
+    pub fn parse_in(code: &str, region: &Region) -> NumberFormat {
+        NumberFormat::parse(&regional_code(code, region))
+    }
+
     pub fn general() -> NumberFormat {
         NumberFormat::parse("General")
     }
@@ -397,6 +405,46 @@ impl NumberFormat {
             None => Formatted { text: t.to_string(), color: None, fill: None, numeric: false },
         }
     }
+}
+
+/// `code` with the region's separators translated to the canonical `.` decimal and `,`
+/// grouping. A region that already writes those characters is returned unchanged.
+fn regional_code(code: &str, region: &Region) -> String {
+    if region.decimal == '.' {
+        return code.to_string();
+    }
+    let mut out = String::with_capacity(code.len());
+    let mut quoted = false;
+    let mut bracketed = false;
+    let mut escaped = false;
+    for c in code.chars() {
+        match c {
+            _ if escaped => {
+                escaped = false;
+                out.push(c);
+            }
+            '\\' if !quoted && !bracketed => {
+                escaped = true;
+                out.push(c);
+            }
+            '"' if !bracketed => {
+                quoted = !quoted;
+                out.push(c);
+            }
+            '[' if !quoted => {
+                bracketed = true;
+                out.push(c);
+            }
+            ']' if !quoted => {
+                bracketed = false;
+                out.push(c);
+            }
+            _ if quoted || bracketed => out.push(c),
+            '.' | ',' => out.push(if c == region.decimal { '.' } else { ',' }),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// Formats a cell value for display in `region`.
