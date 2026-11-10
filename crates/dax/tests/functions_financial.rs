@@ -3,6 +3,9 @@
 use gridcraft_dax::functions::{FunctionCategory, FunctionSpec, ParamKind, ReturnType, catalog, lookup};
 use gridcraft_dax::{Expr, ValidationErrorKind, parse_expression, validate_expression};
 
+mod common;
+use common::overload_kinds;
+
 fn financial_catalog() -> Vec<&'static FunctionSpec> {
     catalog().iter().filter(|spec| spec.category == FunctionCategory::Financial).collect()
 }
@@ -70,10 +73,6 @@ fn spec(name: &str) -> &'static FunctionSpec {
     lookup(name).unwrap_or_else(|| panic!("{name} is missing from the catalog"))
 }
 
-fn errors(src: &str) -> Vec<gridcraft_dax::ValidationError> {
-    validate_expression(&parse(src))
-}
-
 /// A parseable argument of the requested kind.
 fn sample(kind: ParamKind) -> &'static str {
     match kind {
@@ -93,8 +92,8 @@ fn call(name: &str, arity: usize, params: &[ParamKind]) -> String {
     format!("{name} ( {} )", arguments.join(", "))
 }
 
-fn overload_kinds(spec: &FunctionSpec, arity: usize) -> Option<Vec<ParamKind>> {
-    spec.overload_for(arity).map(|overload| overload.params.to_vec())
+fn errors(src: &str) -> Vec<gridcraft_dax::ValidationError> {
+    validate_expression(&parse(src))
 }
 
 #[test]

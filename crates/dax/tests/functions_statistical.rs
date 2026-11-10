@@ -1,7 +1,9 @@
 //! Integration tests for the statistical catalog.
 
+use gridcraft_dax::ValidationErrorKind;
 use gridcraft_dax::functions::{FunctionCategory, FunctionFlags, FunctionSpec, ParamKind, ReturnType, catalog, lookup};
-use gridcraft_dax::{Expr, ExprKind, ValidationError, ValidationErrorKind, parse_expression, validate_call, validate_expression};
+mod common;
+use common::{assert_invalid_kind, assert_valid, call_errors, spec};
 
 /// Every statistical function in dax.guide index order, with its documented arity range.
 /// `usize::MAX` marks the open-ended signatures of LINEST, LINESTX and SAMPLE.
@@ -55,36 +57,6 @@ fn statistical_catalog() -> Vec<&'static FunctionSpec> {
     catalog().iter().filter(|spec| spec.category == FunctionCategory::Statistical).collect()
 }
 
-fn parse(src: &str) -> Expr {
-    match parse_expression(src) {
-        Ok(expr) => expr,
-        Err(error) => panic!("{src:?} did not parse: {error}"),
-    }
-}
-
-fn spec(name: &str) -> &'static FunctionSpec {
-    match lookup(name) {
-        Some(spec) => spec,
-        None => panic!("{name} is missing from the catalog"),
-    }
-}
-
-fn expression_errors(src: &str) -> Vec<ValidationError> {
-    validate_expression(&parse(src))
-}
-
-fn assert_valid(src: &str) {
-    let errors = expression_errors(src);
-    assert!(errors.is_empty(), "{src:?} should validate, got {errors:?}");
-}
-
-fn assert_invalid_kind(src: &str, kind: ValidationErrorKind) -> Vec<ValidationError> {
-    let errors = expression_errors(src);
-    assert!(!errors.is_empty(), "{src:?} should be rejected");
-    assert!(errors.iter().any(|error| error.kind == kind), "{src:?} should report {kind:?}, got {errors:?}");
-    errors
-}
-
 fn argument(kind: ParamKind) -> &'static str {
     match kind {
         ParamKind::Column => "Sales[Amount]",
@@ -127,14 +99,6 @@ fn call_with_extra(name: &str) -> String {
     let mut args: Vec<&str> = (0..spec.max_args).map(|index| argument(overload.kind_at(index).expect("kind for max"))).collect();
     args.push("1");
     format!("{name} ( {} )", args.join(", "))
-}
-
-fn call_errors(src: &str) -> Vec<ValidationError> {
-    let expr = parse(src);
-    match &expr.kind {
-        ExprKind::Call(call) => validate_call(call),
-        other => panic!("{src:?} is not a call: {other:?}"),
-    }
 }
 
 #[test]

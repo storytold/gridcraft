@@ -1,0 +1,786 @@
+# Filter functions — declarative catalog data, one row per function.
+# Loaded by the shared `catalog` module; see its docs for the schema.
+
+[[function]]
+name = "ALL"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "excel"
+description = "Returns a table ignoring any filters on it, or every value of a column ignoring the filters on that column. As a table expression it materialises all rows (or all distinct values of one or more columns). Without arguments it works only inside CALCULATE/CALCULATETABLE and clears the whole filter context."
+examples = ["ALL ( Sales )", "ALL ( Sales[Region] )", "ALL ( Sales, Sales[Region], Sales[Country] )", "ALL ( )"]
+[[function.params]]
+name = "TableNameOrColumnName"
+kind = "Reference"
+optional = true
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Reference"]
+variadic = false
+[[function.signature]]
+kinds = ["Reference", "Column"]
+variadic = true
+
+[[function]]
+name = "ALLCROSSFILTERED"
+min = 1
+max = 1
+returns = "table"
+flags = "excel"
+description = "Removes, as a CALCULATE modifier only, every filter on a table and on the tables that cross-filter it through weak or bidirectional relationships. Unlike ALL it never returns a materialised table, so it cannot be used as a table expression."
+examples = ["ALLCROSSFILTERED ( Sales )", "ALLCROSSFILTERED ( 'Product' )"]
+[[function.params]]
+name = "TableName"
+kind = "Table"
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+
+[[function]]
+name = "ALLEXCEPT"
+min = 2
+max = 0
+max_open = true
+returns = "table"
+flags = "excel"
+description = "Removes all filters from a table except those on the listed columns. As a CALCULATE modifier it keeps only the named column filters; as a table expression it materialises the unique combinations of the table's remaining columns."
+examples = ["ALLEXCEPT ( Sales, Sales[Region] )", "ALLEXCEPT ( 'Product', 'Product'[Color], 'Product'[Brand] )"]
+[[function.params]]
+name = "TableName"
+kind = "Table"
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+optional = true
+[[function.signature]]
+kinds = ["Table", "Column"]
+variadic = true
+
+[[function]]
+name = "ALLNOBLANKROW"
+min = 1
+max = 0
+max_open = true
+returns = "table"
+flags = "excel"
+description = "Like ALL, removes the filters on a table or on the listed columns, but always excludes the blank row that the engine adds for an invalid relationship. Real blank values stored in the columns are kept in the result."
+examples = ["ALLNOBLANKROW ( Customer )", "ALLNOBLANKROW ( Customer[Country], Customer[City] )"]
+[[function.params]]
+name = "TableNameOrColumnName"
+kind = "Reference"
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+optional = true
+[[function.signature]]
+kinds = ["Reference"]
+variadic = false
+[[function.signature]]
+kinds = ["Reference", "Column"]
+variadic = true
+
+[[function]]
+name = "ALLSELECTED"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "excel"
+description = "Restores the filters that came from outside the query while ignoring the filters applied inside it, so the result reflects the outer shadow filter context. As a table expression it needs at least one argument; without arguments it is only a CALCULATE modifier."
+examples = ["ALLSELECTED ( Sales )", "ALLSELECTED ( Sales[Region] )", "ALLSELECTED ( )"]
+[[function.params]]
+name = "TableNameOrColumnName"
+kind = "Reference"
+optional = true
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Reference"]
+variadic = false
+[[function.signature]]
+kinds = ["Reference", "Column"]
+variadic = true
+
+[[function]]
+name = "ALLSELECTEDAPPLY"
+min = 1
+max = 1
+returns = "table"
+flags = "internal"
+description = "Marks a table expression supplied to GROUPCROSSAPPLY or GROUPCROSSAPPLYTABLE so that it starts hidden from the filter context and only becomes active when ALLSELECTED runs inside CALCULATE. Used internally by Power BI composite models."
+examples = ["ALLSELECTEDAPPLY ( VALUES ( Product[Color] ) )"]
+[[function.params]]
+name = "TableExpression"
+kind = "Table"
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+
+[[function]]
+name = "ALLSELECTEDREMOVE"
+min = 1
+max = 0
+max_open = true
+returns = "table"
+flags = "internal"
+description = "In GROUPCROSSAPPLY or GROUPCROSSAPPLYTABLE, hides the listed columns of a table expression from a later ALLSELECTED so they no longer participate in the restored filter context. With no column argument every column of the expression is hidden."
+examples = ["ALLSELECTEDREMOVE ( VALUES ( Product[Color] ) )", "ALLSELECTEDREMOVE ( VALUES ( Product[Color] ), Product[Color] )"]
+[[function.params]]
+name = "TableExpression"
+kind = "Table"
+[[function.params]]
+name = "Column"
+kind = "Column"
+optional = true
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Column"]
+variadic = true
+
+[[function]]
+name = "ALWAYSAPPLY"
+min = 1
+max = 1
+returns = "table"
+flags = "internal"
+description = "In GROUPCROSSAPPLY or GROUPCROSSAPPLYTABLE, forces a filter table to influence the measures even if the current filter context is unchanged, for example when the table is empty. Used internally by Power BI composite models."
+examples = ["ALWAYSAPPLY ( FILTER ( VALUES ( Product[Color] ), FALSE ) )"]
+[[function.params]]
+name = "TableExpression"
+kind = "Table"
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+
+[[function]]
+name = "CALCULATE"
+min = 1
+max = 0
+max_open = true
+returns = "any"
+flags = "excel"
+description = "Evaluates an expression in a filter context modified by its filter arguments: table expressions replace the filters on their columns, boolean predicates are wrapped in FILTER over ALL, and context transition turns any row context into an equivalent filter context. Returns the scalar result of the expression."
+examples = ["CALCULATE ( SUM ( Sales[Amount] ), Sales[Region] = \"East\" )", "CALCULATE ( [Sales Amount], ALL ( Product ) )"]
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.params]]
+name = "Filter"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Expression"]
+variadic = false
+[[function.signature]]
+kinds = ["Expression", "Any"]
+variadic = true
+
+[[function]]
+name = "CALCULATETABLE"
+min = 1
+max = 0
+max_open = true
+returns = "table"
+flags = "excel"
+description = "Runs a table expression under the filter context built by its filter arguments, with the same filter semantics and context transition as CALCULATE but returning a table instead of a scalar."
+examples = ["CALCULATETABLE ( VALUES ( Product[Color] ), Product[Brand] = \"GridCraft\" )"]
+[[function.params]]
+name = "Table"
+kind = "Table"
+[[function.params]]
+name = "Filter"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Any"]
+variadic = true
+
+[[function]]
+name = "DEPENDON"
+min = 2
+max = 0
+max_open = true
+returns = "table"
+flags = "internal"
+description = "Anchors a table expression to outer columns: its first columns are matched, in order, against the current values of the listed outer columns, acting as an inner join and hiding the matched columns from the result. Used internally by Power BI composite models."
+examples = ["DEPENDON ( Sales, Sales[OrderDate] )", "DEPENDON ( FILTER ( Sales, Sales[Amount] > 0 ), Sales[OrderDate] )"]
+[[function.params]]
+name = "TableExpression"
+kind = "Table"
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+optional = true
+[[function.signature]]
+kinds = ["Table", "Column"]
+variadic = true
+
+[[function]]
+name = "FILTER"
+min = 2
+max = 2
+returns = "table"
+flags = "iterator-excel"
+description = "Returns the rows of a table for which the predicate is TRUE. The predicate runs in a row context, so it can read the current row's columns; context transition applies when it calls a measure, and BLANK evaluates as FALSE. Filter context is preserved, not replaced."
+examples = ["FILTER ( Sales, Sales[Amount] > 0 )", "FILTER ( ALL ( Sales ), Sales[Region] = \"East\" )"]
+[[function.params]]
+name = "Table"
+kind = "Table"
+[[function.params]]
+name = "FilterExpression"
+kind = "Logical"
+[[function.signature]]
+kinds = ["Table", "Logical"]
+variadic = false
+
+[[function]]
+name = "FILTERCLUSTER"
+min = 4
+max = 0
+max_open = true
+returns = "table"
+flags = "internal"
+description = "Internal helper for GROUPCROSSAPPLY and GROUPCROSSAPPLYTABLE that assembles the correlated join over a set of groups: group-by columns, filter tables and table scans are combined with autoexist semantics, and the literal separator only marks where the table scans begin. Used internally by Power BI composite models."
+examples = ["FILTERCLUSTER ( Product[Category], ALL ( Product ), \"\", ALL ( Sales ) )"]
+[[function.params]]
+name = "GroupBy_ColumnName"
+kind = "Column"
+[[function.params]]
+name = "FilterTable"
+kind = "Table"
+[[function.params]]
+name = "Separator"
+kind = "Text"
+[[function.params]]
+name = "TableScan"
+kind = "Table"
+[[function.signature]]
+kinds = ["Column", "Any", "Text", "Any"]
+variadic = true
+
+[[function]]
+name = "GROUPCROSSAPPLY"
+min = 2
+max = 0
+max_open = true
+returns = "table"
+flags = "internal"
+description = "Aggregates by the group-by columns across cross-joined filter tables, with no implicit autoexist. Each name/expression pair adds a column, and rows whose expressions are all blank are dropped. Used internally by Power BI composite models."
+examples = ["GROUPCROSSAPPLY ( 'Date'[Year], ALL ( 'Date' ) )", "GROUPCROSSAPPLY ( 'Date'[Year], ALL ( 'Date' ), \"Sales\", [Sales Amount] )"]
+[[function.params]]
+name = "GroupBy_ColumnName"
+kind = "Column"
+[[function.params]]
+name = "FilterTable"
+kind = "Table"
+[[function.params]]
+name = "Name"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "Expression"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Column", "Table"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Any", "Any"]
+variadic = true
+
+[[function]]
+name = "GROUPCROSSAPPLYTABLE"
+min = 2
+max = 0
+max_open = true
+returns = "table"
+flags = "internal"
+description = "Like GROUPCROSSAPPLY, but the trailing name/table-expression pairs add whole tables evaluated under the filter tables' context instead of scalar expressions. Used internally by Power BI composite models."
+examples = ["GROUPCROSSAPPLYTABLE ( 'Date'[Year], ALL ( 'Date' ), \"Colors\", VALUES ( 'Product'[Color] ) )"]
+[[function.params]]
+name = "GroupBy_ColumnName"
+kind = "Column"
+[[function.params]]
+name = "FilterTable"
+kind = "Table"
+[[function.params]]
+name = "Name"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "TableExpression"
+kind = "Table"
+optional = true
+[[function.signature]]
+kinds = ["Column", "Table"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Any", "Any"]
+variadic = true
+
+[[function]]
+name = "INDEX"
+min = 1
+max = 7
+returns = "table"
+flags = "internal"
+description = "Returns, as a one-row table, the row at an absolute position (1-based, negative counts from the end) within each partition of the relation, sorted by the ORDERBY clause. An out-of-range or zero position yields an empty table; the relation defaults to ALLSELECTED over the ordering and partitioning columns."
+examples = ["INDEX ( 1, Sales, ORDERBY ( Sales[OrderDate] ) )", "INDEX ( -1, ALLSELECTED ( Sales ) )", "INDEX ( 1, Sales, ORDERBY ( Sales[OrderDate] ), KEEP, PARTITIONBY ( Sales[Region] ) )"]
+[[function.params]]
+name = "Position"
+kind = "Number"
+[[function.params]]
+name = "Relation"
+kind = "Table"
+optional = true
+[[function.params]]
+name = "OrderBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Blanks"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "PartitionBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "MatchBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Reset"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Table"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Table", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Table", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Table", "Any", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Table", "Any", "Any", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Table", "Any", "Any", "Any", "Any", "Any"]
+variadic = false
+
+[[function]]
+name = "KEEPFILTERS"
+min = 1
+max = 1
+returns = "any"
+flags = "excel"
+description = "Filter modifier that makes its argument intersect the existing filter context instead of replacing it, so a conflicting existing filter is kept. Applies to a CALCULATE or CALCULATETABLE filter argument and also preserves the filter context during context transition in an iterator."
+examples = ["KEEPFILTERS ( Product[Color] = \"Red\" )", "KEEPFILTERS ( VALUES ( Product[Color] ) )"]
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.signature]]
+kinds = ["Expression"]
+variadic = false
+
+[[function]]
+name = "LOOKUP"
+min = 3
+max = 0
+max_open = true
+returns = "any"
+flags = "internal"
+description = "Searches the cells identified by the search column/value pairs and returns a column value or an expression evaluated over those cells; filters on columns not listed stay applied. Only one cell may match, and the optional behaviour argument selects Explicit or Inferred handling of associated columns."
+examples = ["LOOKUP ( [Sales Amount], 'Date'[Year], 2018 )", "LOOKUP ( [Sales Amount], 'Date'[Year], 2018, \"Inferred\" )"]
+[[function.params]]
+name = "Result_ColumnOrExpression"
+kind = "Any"
+[[function.params]]
+name = "Search_Column"
+kind = "Column"
+[[function.params]]
+name = "Search_Value"
+kind = "Any"
+[[function.params]]
+name = "Search_Column"
+kind = "Column"
+optional = true
+[[function.params]]
+name = "Search_Value"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "AssociatedColumnsBehavior"
+kind = "Text"
+optional = true
+[[function.signature]]
+kinds = ["Any", "Column", "Any"]
+variadic = true
+
+[[function]]
+name = "LOOKUPVALUE"
+min = 3
+max = 0
+max_open = true
+returns = "any"
+flags = "excel"
+description = "Returns the result column value from the row where every search column/value pair matches, ignoring the current filter context. With no match it returns BLANK or the alternate result; identical values in several matching rows return that value, while different values return the alternate result or an error."
+examples = ["LOOKUPVALUE ( Product[Color], Product[ProductKey], 1 )", "LOOKUPVALUE ( Product[Color], Product[ProductKey], 1, \"Unknown\" )"]
+[[function.params]]
+name = "Result_ColumnName"
+kind = "Column"
+[[function.params]]
+name = "Search_ColumnName"
+kind = "Column"
+[[function.params]]
+name = "Search_Value"
+kind = "Any"
+[[function.params]]
+name = "Search_ColumnName"
+kind = "Column"
+optional = true
+[[function.params]]
+name = "Search_Value"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Alternate_Result"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Column", "Column", "Any"]
+variadic = true
+
+[[function]]
+name = "LOOKUPWITHTOTALS"
+min = 3
+max = 0
+max_open = true
+returns = "any"
+flags = "internal"
+description = "Searches the cells identified by the search column/value pairs, like LOOKUP, but resets the non-specified columns to their grand total instead of keeping the current filters. Equivalent to COLLAPSEALL around LOOKUP."
+examples = ["LOOKUPWITHTOTALS ( [Sales Amount], [Year], 2018 )"]
+[[function.params]]
+name = "Result_ColumnOrExpression"
+kind = "Any"
+[[function.params]]
+name = "Search_Column"
+kind = "Column"
+[[function.params]]
+name = "Search_Value"
+kind = "Any"
+[[function.params]]
+name = "Search_Column"
+kind = "Column"
+optional = true
+[[function.params]]
+name = "Search_Value"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Any", "Column", "Any"]
+variadic = true
+
+[[function]]
+name = "MATCHBY"
+min = 0
+max = 0
+max_open = true
+returns = "any"
+flags = "internal"
+description = "Declares the columns that identify the current row for a window function such as INDEX, OFFSET or WINDOW. It is a clause, not a value: it can only appear inside a window function and does not change the filter context by itself."
+examples = ["MATCHBY ( Sales[OrderKey] )", "MATCHBY ( )"]
+[[function.params]]
+name = "MatchBy_ColumnName"
+kind = "Column"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Column"]
+variadic = true
+
+[[function]]
+name = "NONFILTER"
+min = 1
+max = 1
+returns = "table"
+flags = "internal"
+description = "In GROUPCROSSAPPLY or GROUPCROSSAPPLYTABLE, keeps a table expression out of the filter context permanently, even when its columns carry lineage, as if they were extension columns. Used internally by Power BI composite models."
+examples = ["NONFILTER ( VALUES ( Product[Color] ) )"]
+[[function.params]]
+name = "TableExpression"
+kind = "Table"
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+
+[[function]]
+name = "OFFSET"
+min = 1
+max = 7
+returns = "table"
+flags = "internal"
+description = "Returns the row that is a number of rows before or after the current row within each partition of the relation, ordered by the ORDERBY clause. The result is a one-row table; a delta moving outside the partition yields an empty table."
+examples = ["OFFSET ( -1, Sales, ORDERBY ( Sales[OrderDate] ) )", "OFFSET ( 1, Sales )"]
+[[function.params]]
+name = "Delta"
+kind = "Number"
+[[function.params]]
+name = "Relation"
+kind = "Table"
+optional = true
+[[function.params]]
+name = "OrderBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Blanks"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "PartitionBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "MatchBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Reset"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Table"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Table", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Table", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Table", "Any", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Table", "Any", "Any", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Table", "Any", "Any", "Any", "Any", "Any"]
+variadic = false
+
+[[function]]
+name = "ORDERBY"
+min = 0
+max = 0
+max_open = true
+returns = "any"
+flags = "internal"
+description = "Declares the sort expressions and directions (ASC or DESC, optionally with BLANKS FIRST or BLANKS LAST) used by a window function such as INDEX, OFFSET or WINDOW. It is a clause rather than a value and cannot be evaluated on its own."
+examples = ["ORDERBY ( Sales[Amount], DESC )", "ORDERBY ( Sales[OrderDate], ASC )", "ORDERBY ( )"]
+[[function.params]]
+name = "OrderBy_Expression"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "OrderBy_Direction"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Any"]
+variadic = true
+
+[[function]]
+name = "PARTITIONBY"
+min = 0
+max = 0
+max_open = true
+returns = "any"
+flags = "internal"
+description = "Declares the model columns that partition the relation of a window function such as INDEX, OFFSET or WINDOW. It is a clause rather than a value, and the columns must have a valid data lineage."
+examples = ["PARTITIONBY ( Sales[Region] )", "PARTITIONBY ( )"]
+[[function.params]]
+name = "PartitionBy_ColumnName"
+kind = "Column"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Column"]
+variadic = true
+
+[[function]]
+name = "REMOVEFILTERS"
+min = 0
+max = 0
+max_open = true
+returns = "any"
+flags = "excel"
+description = "Alias for ALL with the same filter-removal semantics: it clears the filters on the named table or columns, or every filter when called without arguments. It is only valid as a CALCULATE or CALCULATETABLE modifier and never returns a table."
+examples = ["REMOVEFILTERS ( Sales )", "REMOVEFILTERS ( Sales[Region] )", "REMOVEFILTERS ( )"]
+[[function.params]]
+name = "TableNameOrColumnName"
+kind = "Reference"
+optional = true
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Reference"]
+variadic = false
+[[function.signature]]
+kinds = ["Reference", "Column"]
+variadic = true
+
+[[function]]
+name = "SELECTEDVALUE"
+min = 1
+max = 2
+returns = "any"
+flags = "excel"
+description = "Returns the value of a column when the filter context leaves exactly one distinct value, otherwise returns the alternate result (BLANK when omitted). Equivalent to IF ( HASONEVALUE ( column ), VALUES ( column ), alternate )."
+examples = ["SELECTEDVALUE ( Product[Color] )", "SELECTEDVALUE ( Product[Color], \"Multiple colors\" )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.params]]
+name = "AlternateResult"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Any"]
+variadic = false
+
+[[function]]
+name = "SHADOWCLUSTER"
+min = 1
+max = 1
+returns = "table"
+flags = "internal"
+description = "In GROUPCROSSAPPLY or GROUPCROSSAPPLYTABLE, marks a table expression as a shadow so that it is only enabled inside an ALLSELECTED context. Used internally by Power BI composite models."
+examples = ["SHADOWCLUSTER ( VALUES ( Product[Color] ) )"]
+[[function.params]]
+name = "TableExpression"
+kind = "Table"
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+
+[[function]]
+name = "WINDOW"
+min = 2
+max = 10
+returns = "table"
+flags = "internal"
+description = "Returns the rows between a start and an end boundary within each partition of the relation, ordered by the ORDERBY clause. REL boundaries count rows from the current row while ABS boundaries are absolute positions in the partition; the result is a table."
+examples = ["WINDOW ( 1, ABS, 1, ABS, Sales, ORDERBY ( Sales[OrderDate] ) )", "WINDOW ( -1, REL, 1, REL, Sales )"]
+[[function.params]]
+name = "From"
+kind = "Number"
+[[function.params]]
+name = "FromType"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "To"
+kind = "Number"
+[[function.params]]
+name = "ToType"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Relation"
+kind = "Table"
+optional = true
+[[function.params]]
+name = "OrderBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Blanks"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "PartitionBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "MatchBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Reset"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Number", "Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Any", "Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Any", "Number", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Any", "Number", "Any", "Table"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Any", "Number", "Any", "Table", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Any", "Number", "Any", "Table", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Any", "Number", "Any", "Table", "Any", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Any", "Number", "Any", "Table", "Any", "Any", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Any", "Number", "Any", "Table", "Any", "Any", "Any", "Any", "Any"]
+variadic = false

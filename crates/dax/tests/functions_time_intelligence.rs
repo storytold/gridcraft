@@ -1,7 +1,10 @@
 //! Integration tests for the time intelligence catalog and its static validation.
 
 use gridcraft_dax::functions::{BlankPolicy, FunctionCategory, FunctionSpec, ParamKind, ReturnType, catalog, lookup};
-use gridcraft_dax::{Expr, ExprKind, ValidationError, ValidationErrorKind, parse_expression, validate_call, validate_expression};
+use gridcraft_dax::{ValidationError, ValidationErrorKind, validate_expression};
+
+mod common;
+use common::{assert_invalid_kind, assert_valid, call_errors, expression_errors, overload_kinds, parse, spec};
 
 fn time_intelligence_catalog() -> Vec<&'static FunctionSpec> {
     catalog().iter().filter(|spec| spec.category == FunctionCategory::TimeIntelligence).collect()
@@ -55,48 +58,6 @@ const FUNCTIONS: [(&str, usize, usize); 45] = [
     ("TOTALWTD", 2, 3),
     ("TOTALYTD", 2, 4),
 ];
-
-fn parse(src: &str) -> Expr {
-    match parse_expression(src) {
-        Ok(expr) => expr,
-        Err(error) => panic!("{src:?} did not parse: {error}"),
-    }
-}
-
-fn spec(name: &str) -> &'static FunctionSpec {
-    match lookup(name) {
-        Some(spec) => spec,
-        None => panic!("{name} is missing from the catalog"),
-    }
-}
-
-fn expression_errors(src: &str) -> Vec<ValidationError> {
-    validate_expression(&parse(src))
-}
-
-fn call_errors(src: &str) -> Vec<ValidationError> {
-    let expr = parse(src);
-    match &expr.kind {
-        ExprKind::Call(call) => validate_call(call),
-        other => panic!("{src:?} is not a call: {other:?}"),
-    }
-}
-
-fn assert_valid(src: &str) {
-    let errors = expression_errors(src);
-    assert!(errors.is_empty(), "{src:?} should validate, got {errors:?}");
-}
-
-fn assert_invalid_kind(src: &str, kind: ValidationErrorKind) -> Vec<ValidationError> {
-    let errors = expression_errors(src);
-    assert!(!errors.is_empty(), "{src:?} should be rejected");
-    assert!(errors.iter().any(|error| error.kind == kind), "{src:?} should report {kind:?}, got {errors:?}");
-    errors
-}
-
-fn overload_kinds(spec: &FunctionSpec, arity: usize) -> Option<Vec<ParamKind>> {
-    spec.overload_for(arity).map(|overload| overload.params.to_vec())
-}
 
 #[test]
 fn catalog_has_every_time_intelligence_function_exactly_once_in_index_order() {

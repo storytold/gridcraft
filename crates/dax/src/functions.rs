@@ -680,6 +680,26 @@ pub static AGGREGATION: [FunctionSpec; 22] = [
     },
 ];
 
+pub mod catalog;
+
+/// All aggregation functions, in the order listed by dax.guide. Rows live in
+/// `aggregation.toml`; see [`catalog`] for the schema.
+pub fn aggregation() -> &'static [FunctionSpec] {
+    use std::sync::LazyLock;
+
+    static TABLE: LazyLock<Result<Vec<FunctionSpec>, catalog::CatalogError>> =
+        LazyLock::new(|| catalog::load(FunctionCategory::Aggregation, include_str!("functions/aggregation.toml")));
+
+    // As in the per-category tables: checked-in data is validated by
+    // `catalog::load`; corruption is a programmer error, not runtime input.
+    #[allow(clippy::panic)]
+    let ready = match &*TABLE {
+        Ok(functions) => functions,
+        Err(error) => panic!("invalid catalog table aggregation.toml: {error}"),
+    };
+    ready
+}
+
 pub mod date_time;
 pub mod filter;
 pub mod financial;
@@ -698,21 +718,21 @@ pub mod visual_calculations;
 /// Every function from every category, in dax.guide category order.
 static CATALOG: std::sync::LazyLock<Vec<FunctionSpec>> = std::sync::LazyLock::new(|| {
     let mut all = Vec::with_capacity(600);
-    all.extend_from_slice(&AGGREGATION);
-    all.extend_from_slice(date_time::FUNCTIONS);
-    all.extend_from_slice(filter::FUNCTIONS);
-    all.extend_from_slice(financial::FUNCTIONS);
-    all.extend_from_slice(information::FUNCTIONS);
-    all.extend_from_slice(logical::FUNCTIONS);
-    all.extend_from_slice(math_trig::FUNCTIONS);
-    all.extend_from_slice(other::FUNCTIONS);
-    all.extend_from_slice(parent_child::FUNCTIONS);
-    all.extend_from_slice(relationships::FUNCTIONS);
-    all.extend_from_slice(statistical::FUNCTIONS);
-    all.extend_from_slice(table_manipulation::FUNCTIONS);
-    all.extend_from_slice(text::FUNCTIONS);
-    all.extend_from_slice(time_intelligence::FUNCTIONS);
-    all.extend_from_slice(visual_calculations::FUNCTIONS);
+    all.extend(aggregation());
+    all.extend(date_time::functions());
+    all.extend(filter::functions());
+    all.extend(financial::functions());
+    all.extend(information::functions());
+    all.extend(logical::functions());
+    all.extend(math_trig::functions());
+    all.extend(other::functions());
+    all.extend(parent_child::functions());
+    all.extend(relationships::functions());
+    all.extend(statistical::functions());
+    all.extend(table_manipulation::functions());
+    all.extend(text::functions());
+    all.extend(time_intelligence::functions());
+    all.extend(visual_calculations::functions());
     all
 });
 

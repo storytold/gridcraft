@@ -1,0 +1,422 @@
+# DateAndTime functions — declarative catalog data, one row per function.
+# Loaded by the shared `catalog` module; see its docs for the schema.
+
+[[function]]
+name = "CALENDAR"
+min = 2
+max = 2
+returns = "table"
+flags = "standard"
+description = "CALENDAR ( <StartDate>, <EndDate> ) returns a single-column table named Date with every day from StartDate to EndDate, both included. Dates are stored as numbers, so integer bounds such as CALENDAR ( 1, 100 ) are accepted; a date table should cover whole years for time-intelligence compatibility."
+examples = ["CALENDAR ( DATE ( 2024, 1, 1 ), DATE ( 2024, 12, 31 ) )", "CALENDAR ( DATE ( 2023, 7, 1 ), DATE ( 2024, 6, 30 ) )"]
+[[function.params]]
+name = "StartDate"
+kind = "Date"
+[[function.params]]
+name = "EndDate"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date", "Date"]
+variadic = false
+
+[[function]]
+name = "CALENDARAUTO"
+min = 0
+max = 1
+returns = "table"
+flags = "standard"
+description = "CALENDARAUTO ( [<FiscalYearEndMonth>] ) scans the imported date columns and returns a contiguous Date table covering whole fiscal years. FiscalYearEndMonth is 1-12 and defaults to 12 (December); calculated tables and calculated columns are ignored, and the model must contain at least one imported datetime column or the call fails."
+examples = ["CALENDARAUTO ()", "CALENDARAUTO ( 6 )"]
+[[function.params]]
+name = "FiscalYearEndMonth"
+kind = "Number"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Number"]
+variadic = false
+
+[[function]]
+name = "DATE"
+min = 3
+max = 3
+returns = "datetime"
+flags = "standard"
+description = "DATE ( <Year>, <Month>, <Day> ) builds a DateTime from numeric parts. Years 0-99 add 1900 (DATE ( 98, 1, 2 ) is 1998-01-02) while years below -1800 or above 9999 raise an error; month and day overflow roll into neighbouring months and days (DATE ( 2024, 13, 1 ) is 2025-01-01)."
+examples = ["DATE ( 2024, 1, 1 )", "DATE ( 2024, 13, 1 )", "DATE ( YEAR ( Sales[Order Date] ), 1, 1 )"]
+[[function.params]]
+name = "Year"
+kind = "Number"
+[[function.params]]
+name = "Month"
+kind = "Number"
+[[function.params]]
+name = "Day"
+kind = "Number"
+[[function.signature]]
+kinds = ["Number", "Number", "Number"]
+variadic = false
+
+[[function]]
+name = "DATEDIFF"
+min = 3
+max = 3
+returns = "integer"
+flags = "standard"
+description = "DATEDIFF ( <Date1>, <Date2>, <Interval> ) counts the Interval boundaries crossed between two dates, positively when Date2 is later and negatively otherwise. Interval is an unquoted keyword: SECOND, MINUTE, HOUR, DAY, WEEK, MONTH, QUARTER or YEAR."
+examples = ["DATEDIFF ( DATE ( 2024, 1, 1 ), DATE ( 2024, 12, 31 ), DAY )", "DATEDIFF ( DATE ( 2024, 1, 1 ), DATE ( 2024, 1, 31 ), MONTH )"]
+[[function.params]]
+name = "Date1"
+kind = "Date"
+[[function.params]]
+name = "Date2"
+kind = "Date"
+[[function.params]]
+name = "Interval"
+kind = "Any"
+[[function.signature]]
+kinds = ["Date", "Date", "Any"]
+variadic = false
+
+[[function]]
+name = "DATEVALUE"
+min = 1
+max = 1
+returns = "datetime"
+flags = "standard"
+description = "DATEVALUE ( <DateText> ) converts a text date to a DateTime using the locale of the model, so \"1/8/2009\" may mean January 8 or August 1. A missing year is taken from the current year and any time portion is ignored."
+examples = ["DATEVALUE ( \"2024-01-01\" )", "DATEVALUE ( \"1/8/2009\" )"]
+[[function.params]]
+name = "DateText"
+kind = "Text"
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+
+[[function]]
+name = "DAY"
+min = 1
+max = 1
+returns = "integer"
+flags = "standard"
+description = "DAY ( <Date> ) returns the day of the month as an integer from 1 to 31. A text argument is converted with the same rules as DATEVALUE, so the locale of the model decides how the text is read."
+examples = ["DAY ( DATE ( 2024, 1, 15 ) )", "DAY ( Sales[Order Date] )"]
+[[function.params]]
+name = "Date"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "EDATE"
+min = 2
+max = 2
+returns = "datetime"
+flags = "standard"
+description = "EDATE ( <StartDate>, <Months> ) shifts a date by the given number of months, keeping the day of the month and clamping to the end of shorter months (2024-01-31 plus one month is 2024-02-29). Unlike EOMONTH it does not move to the end of the month."
+examples = ["EDATE ( DATE ( 2024, 1, 31 ), 1 )", "EDATE ( Sales[Order Date], -3 )"]
+[[function.params]]
+name = "StartDate"
+kind = "Date"
+[[function.params]]
+name = "Months"
+kind = "Number"
+[[function.signature]]
+kinds = ["Date", "Number"]
+variadic = false
+
+[[function]]
+name = "EOMONTH"
+min = 2
+max = 2
+returns = "datetime"
+flags = "standard"
+description = "EOMONTH ( <StartDate>, <Months> ) returns the last day of the month that is Months before or after StartDate; 0 gives the end of the current month. There is no SOMONTH, so the start of a month is EOMONTH ( <date>, -1 ) + 1."
+examples = ["EOMONTH ( DATE ( 2024, 1, 15 ), 0 )", "EOMONTH ( Sales[Order Date], 1 )"]
+[[function.params]]
+name = "StartDate"
+kind = "Date"
+[[function.params]]
+name = "Months"
+kind = "Number"
+[[function.signature]]
+kinds = ["Date", "Number"]
+variadic = false
+
+[[function]]
+name = "HOUR"
+min = 1
+max = 1
+returns = "integer"
+flags = "standard"
+description = "HOUR ( <Datetime> ) gives the hour as an integer from 0 to 23. A string that holds only a time, such as \"16:48:00\", is accepted and parsed using the client computer's locale and time settings."
+examples = ["HOUR ( TIME ( 16, 48, 23 ) )", "HOUR ( Sales[Order Time] )"]
+[[function.params]]
+name = "Datetime"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "MINUTE"
+min = 1
+max = 1
+returns = "integer"
+flags = "standard"
+description = "MINUTE ( <Datetime> ) gives the minute as an integer from 0 to 59. A string that holds only a time, such as \"16:48:00\", is accepted and parsed using the client computer's locale and time settings."
+examples = ["MINUTE ( TIME ( 16, 48, 23 ) )", "MINUTE ( Sales[Order Time] )"]
+[[function.params]]
+name = "Datetime"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "MONTH"
+min = 1
+max = 1
+returns = "integer"
+flags = "standard"
+description = "MONTH ( <Date> ) gives 1 for January through 12 for December. Text arguments are read with the same rules as DATEVALUE."
+examples = ["MONTH ( DATE ( 2024, 1, 15 ) )", "MONTH ( Sales[Order Date] )"]
+[[function.params]]
+name = "Date"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "NETWORKDAYS"
+min = 2
+max = 4
+returns = "integer"
+flags = "engine"
+description = "NETWORKDAYS ( <start_date>, <end_date> [, <weekend>] [, <holidays>] ) counts whole workdays between two dates, both included, skipping weekends and holidays. The weekend code defaults to 1 (Saturday and Sunday), accepts 2-7 for other pairs and 11-17 for a single day; holidays is a single-column table of dates. Not available in Excel's DAX engine."
+examples = ["NETWORKDAYS ( DATE ( 2024, 1, 1 ), DATE ( 2024, 1, 31 ) )", "NETWORKDAYS ( DATE ( 2024, 1, 1 ), DATE ( 2024, 1, 31 ), 1, { DATE ( 2024, 1, 15 ) } )"]
+[[function.params]]
+name = "start_date"
+kind = "Date"
+[[function.params]]
+name = "end_date"
+kind = "Date"
+[[function.params]]
+name = "weekend"
+kind = "Number"
+optional = true
+[[function.params]]
+name = "holidays"
+kind = "Table"
+optional = true
+[[function.signature]]
+kinds = ["Date", "Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Date", "Date", "Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Date", "Date", "Number", "Table"]
+variadic = false
+
+[[function]]
+name = "NOW"
+min = 0
+max = 0
+returns = "datetime"
+flags = "volatile-excel"
+description = "Date and time at the moment of evaluation. Volatile: it is evaluated once per query and moves only when the model or the containing calculated column is refreshed, not continuously."
+examples = ["NOW ()", "YEAR ( NOW () )"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "QUARTER"
+min = 1
+max = 1
+returns = "integer"
+flags = "standard"
+description = "QUARTER ( <Date> ) gives the calendar quarter number, 1 for January-March through 4 for October-December; fiscal periods are not followed. Text arguments are read with the same rules as DATEVALUE."
+examples = ["QUARTER ( DATE ( 2024, 5, 15 ) )", "QUARTER ( Sales[Order Date] )"]
+[[function.params]]
+name = "Date"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "SECOND"
+min = 1
+max = 1
+returns = "integer"
+flags = "standard"
+description = "SECOND ( <Datetime> ) gives the second as an integer from 0 to 59. A string that holds only a time, such as \"16:48:23\", is accepted and parsed using the client computer's locale and time settings."
+examples = ["SECOND ( TIME ( 16, 48, 23 ) )", "SECOND ( Sales[Order Time] )"]
+[[function.params]]
+name = "Datetime"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "TIME"
+min = 3
+max = 3
+returns = "datetime"
+flags = "standard"
+description = "TIME ( <Hour>, <Minute>, <Second> ) builds a time on the 1899-12-30 epoch. Overflowing arguments wrap inside the same day instead of raising an error (TIME ( 10, 90, 0 ) is 11:30 and TIME ( 50, 0, 0 ) is 02:00), and each argument is limited to 32,767."
+examples = ["TIME ( 16, 48, 23 )", "TIME ( 10, 90, 0 )"]
+[[function.params]]
+name = "Hour"
+kind = "Number"
+[[function.params]]
+name = "Minute"
+kind = "Number"
+[[function.params]]
+name = "Second"
+kind = "Number"
+[[function.signature]]
+kinds = ["Number", "Number", "Number"]
+variadic = false
+
+[[function]]
+name = "TIMEVALUE"
+min = 1
+max = 1
+returns = "datetime"
+flags = "standard"
+description = "TIMEVALUE ( <TimeText> ) converts a text time to a DateTime, ignoring any date portion of the string. Parsing uses the client computer's locale, date and time settings, so the same text can fail or mean a different time on another machine."
+examples = ["TIMEVALUE ( \"16:48:23\" )", "TIMEVALUE ( \"4:48:47 PM\" )"]
+[[function.params]]
+name = "TimeText"
+kind = "Text"
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+
+[[function]]
+name = "TODAY"
+min = 0
+max = 0
+returns = "datetime"
+flags = "volatile-excel"
+description = "TODAY () returns the current date at 12:00:00 AM. Volatile: it is evaluated once per query and only changes when the model or the containing calculated column is refreshed, not continuously."
+examples = ["TODAY ()", "TODAY () - Sales[Order Date]"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "UTCNOW"
+min = 0
+max = 0
+returns = "datetime"
+flags = "volatile-excel"
+description = "UTCNOW () gives the date and time at the moment of evaluation, expressed in Coordinated Universal Time. Volatile: it is evaluated once per query. The Power BI Service always runs on UTC and applies no daylight saving, so NOW and UTCNOW agree there."
+examples = ["UTCNOW ()", "NOW () - UTCNOW ()"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "UTCTODAY"
+min = 0
+max = 0
+returns = "datetime"
+flags = "volatile-excel"
+description = "UTCTODAY () returns the current date at 12:00:00 AM in Coordinated Universal Time. Volatile: it is evaluated once per query and only changes when the model is refreshed."
+examples = ["UTCTODAY ()", "TODAY () - UTCTODAY ()"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "WEEKDAY"
+min = 1
+max = 2
+returns = "integer"
+flags = "standard"
+description = "WEEKDAY ( <Date> [, <ReturnType>] ) returns the day of the week. ReturnType 1 (default) numbers Sunday 1 through Saturday 7, 2 numbers Monday 1 through Sunday 7, 3 numbers Monday 0 through Sunday 6, and 11-17 start the week on Monday through Sunday. A text argument is converted with the same rules as DATEVALUE."
+examples = ["WEEKDAY ( DATE ( 2024, 1, 1 ) )", "WEEKDAY ( Sales[Order Date], 2 )"]
+[[function.params]]
+name = "Date"
+kind = "Date"
+[[function.params]]
+name = "ReturnType"
+kind = "Number"
+optional = true
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Date", "Number"]
+variadic = false
+
+[[function]]
+name = "WEEKNUM"
+min = 1
+max = 2
+returns = "integer"
+flags = "standard"
+description = "WEEKNUM ( <Date> [, <ReturnType>] ) gives the week number within the year. ReturnType 1 (default) and 2-17 use system 1, where the week containing January 1 is week 1; ReturnType 21 uses ISO 8601 system 2, where the week containing the first Thursday is week 1. Text arguments are read with the same rules as DATEVALUE."
+examples = ["WEEKNUM ( DATE ( 2024, 1, 15 ) )", "WEEKNUM ( Sales[Order Date], 21 )"]
+[[function.params]]
+name = "Date"
+kind = "Date"
+[[function.params]]
+name = "ReturnType"
+kind = "Number"
+optional = true
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Date", "Number"]
+variadic = false
+
+[[function]]
+name = "YEAR"
+min = 1
+max = 1
+returns = "integer"
+flags = "standard"
+description = "YEAR ( <Date> ) gives the calendar year as a four-digit integer between 1900 and 9999. Text arguments are read with the same rules as DATEVALUE."
+examples = ["YEAR ( DATE ( 2024, 1, 1 ) )", "YEAR ( Sales[Order Date] )"]
+[[function.params]]
+name = "Date"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "YEARFRAC"
+min = 2
+max = 3
+returns = "decimal"
+flags = "standard"
+description = "YEARFRAC ( <StartDate>, <EndDate> [, <Basis>] ) returns the fraction of a year between two dates. Basis selects the day-count convention: 0 (default) US 30/360, 1 actual/actual, 2 actual/360, 3 actual/365 and 4 European 30/360. Because of a known bug in age calculations, dax.guide suggests INT arithmetic instead."
+examples = ["YEARFRAC ( DATE ( 2024, 1, 1 ), DATE ( 2024, 12, 31 ) )", "YEARFRAC ( DATE ( 2024, 1, 1 ), DATE ( 2024, 12, 31 ), 1 )"]
+[[function.params]]
+name = "StartDate"
+kind = "Date"
+[[function.params]]
+name = "EndDate"
+kind = "Date"
+[[function.params]]
+name = "Basis"
+kind = "Number"
+optional = true
+[[function.signature]]
+kinds = ["Date", "Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Date", "Date", "Number"]
+variadic = false

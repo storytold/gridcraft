@@ -1,0 +1,244 @@
+# Logical functions — declarative catalog data, one row per function.
+# Loaded by the shared `catalog` module; see its docs for the schema.
+
+[[function]]
+name = "AND"
+min = 2
+max = 2
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when both logical arguments are TRUE, and FALSE otherwise. The function accepts exactly two arguments; use the `&&` operator to combine three or more conditions without nesting. Like the operator, it does not short-circuit when evaluated eagerly."
+examples = ["AND ( Sales[Amount] > 0, Sales[Quantity] > 0 )", "AND ( TRUE, FALSE )"]
+[[function.params]]
+name = "Logical1"
+kind = "Logical"
+[[function.params]]
+name = "Logical2"
+kind = "Logical"
+[[function.signature]]
+kinds = ["Logical", "Logical"]
+variadic = false
+
+[[function]]
+name = "BITAND"
+min = 2
+max = 2
+returns = "integer"
+flags = "engine"
+description = "Returns the bitwise AND of two integers. Both arguments are converted to integers; the result is a signed 64-bit integer."
+examples = ["BITAND ( 5, 3 )", "BITAND ( 13, 25 )"]
+[[function.params]]
+name = "Number1"
+kind = "Number"
+[[function.params]]
+name = "Number2"
+kind = "Number"
+[[function.signature]]
+kinds = ["Number", "Number"]
+variadic = false
+
+[[function]]
+name = "BITOR"
+min = 2
+max = 2
+returns = "integer"
+flags = "engine"
+description = "Returns the bitwise OR of two integers. Both arguments are converted to integers; the result is a signed 64-bit integer."
+examples = ["BITOR ( 5, 3 )", "BITOR ( 13, 25 )"]
+[[function.params]]
+name = "Number1"
+kind = "Number"
+[[function.params]]
+name = "Number2"
+kind = "Number"
+[[function.signature]]
+kinds = ["Number", "Number"]
+variadic = false
+
+[[function]]
+name = "BITXOR"
+min = 2
+max = 2
+returns = "integer"
+flags = "engine"
+description = "Returns the bitwise XOR of two integers. Both arguments are converted to integers; the result is a signed 64-bit integer."
+examples = ["BITXOR ( 5, 3 )", "BITXOR ( 13, 25 )"]
+[[function.params]]
+name = "Number1"
+kind = "Number"
+[[function.params]]
+name = "Number2"
+kind = "Number"
+[[function.signature]]
+kinds = ["Number", "Number"]
+variadic = false
+
+[[function]]
+name = "COALESCE"
+min = 2
+max = 0
+max_open = true
+returns = "any"
+flags = "engine"
+description = "The first argument whose value is not BLANK; when every argument is blank the result is BLANK. At least two arguments are required, and later arguments are not evaluated once a non-blank value is found. Unlike a chain of IF/ISBLANK checks, the result type follows the first non-blank argument."
+examples = ["COALESCE ( Sales[Discount], 0 )", "COALESCE ( Store[Area Manager], \"** Not Assigned **\" )", "COALESCE ( [Sales Amount], [Budget Amount], 0 )"]
+[[function.params]]
+name = "Value1"
+kind = "Any"
+[[function.params]]
+name = "Value2"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any", "Any"]
+variadic = true
+
+[[function]]
+name = "FALSE"
+min = 0
+max = 0
+returns = "boolean"
+flags = "excel"
+description = "Returns the logical value FALSE. `FALSE` without parentheses is the same constant; FALSE is converted to 0 when a numeric result is required."
+examples = ["FALSE ()", "IF ( Sales[Amount] > 0, TRUE (), FALSE () )"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "IF"
+min = 2
+max = 3
+returns = "any"
+flags = "excel"
+description = "Evaluates the logical test and returns `ResultIfTrue` when it is TRUE and `ResultIfFalse` otherwise. When the third argument is omitted a FALSE test returns BLANK. Only the selected branch is evaluated in the regular (strict) execution plan, and the result type follows the selected branch or the common type of both branches."
+examples = ["IF ( Sales[Amount] > 0, 1, 0 )", "IF ( [Sales Amount] > 1000, \"Large\", \"Small\" )", "IF ( Sales[Quantity] > 0, Sales[Amount] )"]
+[[function.params]]
+name = "LogicalTest"
+kind = "Logical"
+[[function.params]]
+name = "ResultIfTrue"
+kind = "Any"
+[[function.params]]
+name = "ResultIfFalse"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Logical", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Logical", "Any", "Any"]
+variadic = false
+
+[[function]]
+name = "IF.EAGER"
+min = 2
+max = 3
+returns = "any"
+flags = "eager"
+description = "Same conditional semantics as IF, but forces an eager execution plan in which both branch expressions are evaluated before the test chooses one. It exists only for query optimisation and should be used only after measuring a clear advantage over IF; the result type is Variant when the branches differ."
+examples = ["IF.EAGER ( Sales[Amount] > 0, 1, 0 )", "IF.EAGER ( [Sales Amount] > 1000, \"Large\", \"Small\" )"]
+[[function.params]]
+name = "LogicalTest"
+kind = "Logical"
+[[function.params]]
+name = "ResultIfTrue"
+kind = "Any"
+[[function.params]]
+name = "ResultIfFalse"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Logical", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Logical", "Any", "Any"]
+variadic = false
+
+[[function]]
+name = "IFERROR"
+min = 2
+max = 2
+returns = "any"
+flags = "discouraged"
+description = "Yields `ValueIfError` when the first argument raises an error, and otherwise repeats the first argument's value; faster than the equivalent `IF ( ISERROR ( Value ), ValueIfError, Value )`. Neither IFERROR nor ISERROR catches every runtime error, because block-mode execution can bypass the check, so both are discouraged."
+examples = ["IFERROR ( 1 / 0, 0 )", "IFERROR ( VALUE ( Sales[Text] ), BLANK () )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.params]]
+name = "ValueIfError"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any", "Any"]
+variadic = false
+
+[[function]]
+name = "NOT"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "Returns the opposite Boolean value: TRUE for a FALSE argument and FALSE for a TRUE argument. NOT is an operator exposed through function syntax."
+examples = ["NOT ( Sales[Amount] > 0 )", "NOT ( TRUE )"]
+[[function.params]]
+name = "Logical"
+kind = "Logical"
+[[function.signature]]
+kinds = ["Logical"]
+variadic = false
+
+[[function]]
+name = "OR"
+min = 2
+max = 2
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when either logical argument is TRUE, and FALSE when both are FALSE. The function accepts exactly two arguments; use the `||` operator to combine three or more conditions without nesting."
+examples = ["OR ( Sales[Amount] > 0, Sales[Quantity] > 0 )", "OR ( TRUE, FALSE )"]
+[[function.params]]
+name = "Logical1"
+kind = "Logical"
+[[function.params]]
+name = "Logical2"
+kind = "Logical"
+[[function.signature]]
+kinds = ["Logical", "Logical"]
+variadic = false
+
+[[function]]
+name = "SWITCH"
+min = 3
+max = 0
+max_open = true
+returns = "any"
+flags = "excel"
+description = "Compares the expression with each value in turn and returns the result paired with the first match; when nothing matches it returns the optional else argument, or BLANK when that argument is omitted. Values and results come in pairs, so the call needs an odd number of arguments when there is no else and an even number when there is one. All results and the else value must have the same data type. Using TRUE as the expression turns SWITCH into a cleaner alternative to cascading IF calls."
+examples = ["SWITCH ( [X], 1, \"a\", 2, \"b\", \"other\" )", "SWITCH ( Sales[Region], \"North\", 1, \"South\", 2, 0 )", "SWITCH ( TRUE (), Sales[Amount] > 1000, \"Large\", Sales[Amount] > 100, \"Medium\", \"Small\" )"]
+[[function.params]]
+name = "Expression"
+kind = "Any"
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.params]]
+name = "Result"
+kind = "Any"
+[[function.params]]
+name = "Else"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Any", "Any", "Any"]
+variadic = true
+
+[[function]]
+name = "TRUE"
+min = 0
+max = 0
+returns = "boolean"
+flags = "excel"
+description = "Returns the logical value TRUE. `TRUE` without parentheses is the same constant; TRUE is converted to 1 when a numeric result is required."
+examples = ["TRUE ()", "IF ( Sales[Amount] > 0, TRUE (), FALSE () )"]
+[[function.signature]]
+kinds = []
+variadic = false

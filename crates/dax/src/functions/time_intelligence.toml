@@ -1,0 +1,913 @@
+# TimeIntelligence functions — declarative catalog data, one row per function.
+# Loaded by the shared `catalog` module; see its docs for the schema.
+
+[[function]]
+name = "CLOSINGBALANCEMONTH"
+min = 2
+max = 3
+returns = "any"
+flags = "excel"
+description = "Evaluates the expression at the last date of the current month, after applying the optional filter. It opens a month-to-date window only at its closing date, so a filter on the date table is replaced by ENDOFMONTH; the date table must be contiguous and marked as a date table for the relationship to be treated as a calendar."
+examples = ["CLOSINGBALANCEMONTH ( [Sales Amount], 'Date'[Date] )"]
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "Filter"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Expression", "Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Expression", "Date", "Any"]
+variadic = false
+
+[[function]]
+name = "CLOSINGBALANCEQUARTER"
+min = 2
+max = 3
+returns = "any"
+flags = "excel"
+description = "Evaluates the expression at the last date of the current quarter, after applying the optional filter. The quarter is derived from the marked date table, so missing dates or a relationship not based on the date column invalidate the closing balance."
+examples = ["CLOSINGBALANCEQUARTER ( [Sales Amount], 'Date'[Date] )"]
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "Filter"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Expression", "Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Expression", "Date", "Any"]
+variadic = false
+
+[[function]]
+name = "CLOSINGBALANCEWEEK"
+min = 2
+max = 3
+returns = "any"
+flags = "engine"
+description = "Evaluates the expression at the last date of the current week of a model calendar, after applying the optional filter. Week boundaries come from the calendar definition, so a plain date column is not accepted and the calendar must define week categories."
+examples = ["CLOSINGBALANCEWEEK ( [Sales Amount], Gregorian )"]
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.params]]
+name = "Calendar"
+kind = "Table"
+[[function.params]]
+name = "Filter"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Expression", "Table"]
+variadic = false
+[[function.signature]]
+kinds = ["Expression", "Table", "Any"]
+variadic = false
+
+[[function]]
+name = "CLOSINGBALANCEYEAR"
+min = 2
+max = 4
+returns = "any"
+flags = "excel"
+description = "Evaluates the expression at the last date of the current year, after applying the optional filter. Pass YearEndDate to make the closing date follow a fiscal year; the date table must contain every day of that fiscal year and stay marked as a date table."
+examples = ["CLOSINGBALANCEYEAR ( [Sales Amount], 'Date'[Date] )", "CLOSINGBALANCEYEAR ( [Sales Amount], 'Date'[Date], ALL ( Sales ), \"6/30/2008\" )"]
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "Filter"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "YearEndDate"
+kind = "Text"
+optional = true
+[[function.signature]]
+kinds = ["Expression", "Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Expression", "Date", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Expression", "Date", "Any", "Text"]
+variadic = false
+
+[[function]]
+name = "DATEADD"
+min = 3
+max = 5
+returns = "table"
+flags = "excel"
+description = "Shifts the dates visible in the filter context by NumberOfIntervals units of Interval (DAY, MONTH, QUARTER or YEAR) and returns the dates that exist in the date column. Extension and Truncation are available only for a model calendar; for a date column DATEADD accepts exactly three arguments. With a calendar, YEAR follows the calendar's year definition, which may be a fiscal year."
+examples = ["DATEADD ( 'Date'[Date], -1, YEAR )", "DATEADD ( Gregorian, 1, MONTH )", "DATEADD ( Gregorian, 1, MONTH, EXTENDING, ANCHORED )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "NumberOfIntervals"
+kind = "Number"
+[[function.params]]
+name = "Interval"
+kind = "Text"
+[[function.params]]
+name = "Extension"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "Truncation"
+kind = "Text"
+optional = true
+[[function.signature]]
+kinds = ["Date", "Number", "Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Date", "Number", "Text", "Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Date", "Number", "Text", "Text", "Text"]
+variadic = false
+
+[[function]]
+name = "DATESBETWEEN"
+min = 3
+max = 3
+returns = "table"
+flags = "excel"
+description = "Returns the dates between two inclusive boundaries that exist in the date column. A BLANK StartDate begins at MIN ( Dates ), a BLANK EndDate ends at MAX ( Dates ), and a StartDate after EndDate returns an empty table. The result keeps the lineage of the marked date table, so the date table must be contiguous for windows to be meaningful."
+examples = ["DATESBETWEEN ( 'Date'[Date], DATE ( 2008, 8, 1 ), DATE ( 2008, 8, 31 ) )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "StartDate"
+kind = "Date"
+[[function.params]]
+name = "EndDate"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date", "Date", "Date"]
+variadic = false
+
+[[function]]
+name = "DATESINPERIOD"
+min = 4
+max = 5
+returns = "table"
+flags = "excel"
+description = "Returns the dates from StartDate over NumberOfIntervals units of Interval (DAY, WEEK, MONTH, QUARTER or YEAR); a negative count looks backwards. BLANK StartDate uses the minimum date in the column. EndBehavior (PRECISE or ENDALIGNED) is available only with a model calendar; consider WINDOW when the interval arithmetic is not needed."
+examples = ["DATESINPERIOD ( 'Date'[Date], MAX ( 'Date'[Date] ), -12, MONTH )", "DATESINPERIOD ( Gregorian, DATE ( 2008, 2, 29 ), -1, MONTH, ENDALIGNED )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "StartDate"
+kind = "Date"
+[[function.params]]
+name = "NumberOfIntervals"
+kind = "Number"
+[[function.params]]
+name = "Interval"
+kind = "Text"
+[[function.params]]
+name = "EndBehavior"
+kind = "Text"
+optional = true
+[[function.signature]]
+kinds = ["Date", "Date", "Number", "Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Date", "Date", "Number", "Text", "Text"]
+variadic = false
+
+[[function]]
+name = "DATESMTD"
+min = 1
+max = 1
+returns = "table"
+flags = "excel"
+description = "Month-to-date window: from the first day of the month up to whatever latest date the filter context exposes, restricted to dates present in the column. This is syntax sugar for DATESBETWEEN over the current month and requires a marked, contiguous date table."
+examples = ["DATESMTD ( 'Date'[Date] )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "DATESQTD"
+min = 1
+max = 1
+returns = "table"
+flags = "excel"
+description = "Quarter-to-date window: from the first day of the current quarter up to whatever latest date the filter context exposes. Quarter boundaries come from the marked date table, so an incomplete or unmarked date table breaks the window."
+examples = ["DATESQTD ( 'Date'[Date] )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "DATESWTD"
+min = 1
+max = 1
+returns = "table"
+flags = "engine"
+description = "Returns the week-to-date window of a model calendar: dates from the first day of the current week through the last visible date. Week numbering and the first day of the week come from the calendar definition, not from the date column, and the function is not available to Excel's DAX engine."
+examples = ["DATESWTD ( Gregorian )"]
+[[function.params]]
+name = "Calendar"
+kind = "Table"
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+
+[[function]]
+name = "DATESYTD"
+min = 1
+max = 2
+returns = "table"
+flags = "excel"
+description = "Year-to-date window: from the start of the year up to whatever latest date the filter context exposes, keeping only dates present in the column. YearEndDate selects a fiscal year end (for example \"6/30\"); the date table must cover whole fiscal years and be marked as a date table for the window to be correct."
+examples = ["DATESYTD ( 'Date'[Date] )", "DATESYTD ( 'Date'[Date], \"6/30/2008\" )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "YearEndDate"
+kind = "Text"
+optional = true
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Date", "Text"]
+variadic = false
+
+[[function]]
+name = "ENDOFMONTH"
+min = 1
+max = 1
+returns = "table"
+flags = "excel"
+description = "Returns the last date of the month visible in the filter context as a single-row table, restricted to dates present in the date column. Use it as a CALCULATE modifier for semi-additive measures; the marked date table must contain the month-end date."
+examples = ["ENDOFMONTH ( 'Date'[Date] )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "ENDOFQUARTER"
+min = 1
+max = 1
+returns = "table"
+flags = "excel"
+description = "Returns the last date of the quarter visible in the filter context as a single-row table, restricted to dates present in the date column. Quarter boundaries follow the marked date table; a non-contiguous table can omit the quarter-end date."
+examples = ["ENDOFQUARTER ( 'Date'[Date] )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "ENDOFWEEK"
+min = 1
+max = 1
+returns = "table"
+flags = "engine"
+description = "Returns the last date of the week visible in the filter context for a model calendar. The week definition, including the first day of the week, comes from the calendar, so a date column is not accepted and Excel's DAX engine does not support the function."
+examples = ["ENDOFWEEK ( Gregorian )"]
+[[function.params]]
+name = "Calendar"
+kind = "Table"
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+
+[[function]]
+name = "ENDOFYEAR"
+min = 1
+max = 2
+returns = "table"
+flags = "excel"
+description = "Returns the last date of the year visible in the filter context as a single-row table. YearEndDate selects a fiscal year end; without it the window is December 31. The date table must be marked and must contain the resulting date."
+examples = ["ENDOFYEAR ( 'Date'[Date] )", "ENDOFYEAR ( 'Date'[Date], \"6/30/2008\" )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "YearEndDate"
+kind = "Text"
+optional = true
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Date", "Text"]
+variadic = false
+
+[[function]]
+name = "FIRSTDATE"
+min = 1
+max = 1
+returns = "table"
+flags = "excel"
+description = "Returns the first date visible in the filter context, as a single-row table, restricted to dates that exist in the date column. Blanks are considered, unlike FIRSTNONBLANK; the column's table needs the date table marking so that time intelligence windows behave correctly."
+examples = ["FIRSTDATE ( 'Date'[Date] )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "FIRSTNONBLANK"
+min = 2
+max = 2
+returns = "table"
+flags = "iterator-excel"
+description = "Iterates the column in its sort order and returns the first value for which the expression is not blank, as a single-column, single-row table. The column need not be a date, but over a marked date table it defines the start of the time window; the iterator can cause performance and memory issues on large models, so prefer an optimized pattern."
+examples = ["FIRSTNONBLANK ( 'Date'[Date], [Sales Amount] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.signature]]
+kinds = ["Column", "Expression"]
+variadic = false
+
+[[function]]
+name = "FIRSTNONBLANKVALUE"
+min = 2
+max = 2
+returns = "any"
+flags = "iterator-excel"
+description = "Returns the expression evaluated at the start of the visible time window: the first value of the column whose expression is not blank, without returning a table. It is the scalar counterpart of FIRSTNONBLANK and is commonly used for semi-additive measures over a marked date table; the evaluation is an iterator, so large models pay per-row cost."
+examples = ["FIRSTNONBLANKVALUE ( 'Date'[Date], [Sales Amount] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.signature]]
+kinds = ["Column", "Expression"]
+variadic = false
+
+[[function]]
+name = "LASTDATE"
+min = 1
+max = 1
+returns = "table"
+flags = "excel"
+description = "Returns the last date visible in the filter context, as a single-row table, restricted to dates that exist in the date column. It is the anchor of many YTD windows; a missing or unmarked date table makes the result follow partial selections instead of the calendar."
+examples = ["LASTDATE ( 'Date'[Date] )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "LASTNONBLANK"
+min = 2
+max = 2
+returns = "table"
+flags = "iterator-excel"
+description = "Iterates the column in its sort order and returns the last value for which the expression is not blank, as a single-column, single-row table. The column need not be a date, but over a marked date table it defines the end of the time window; the iterator can be expensive, so dax.guide recommends optimized semi-additive patterns."
+examples = ["LASTNONBLANK ( 'Date'[Date], [Sales Amount] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.signature]]
+kinds = ["Column", "Expression"]
+variadic = false
+
+[[function]]
+name = "LASTNONBLANKVALUE"
+min = 2
+max = 2
+returns = "any"
+flags = "iterator-excel"
+description = "Returns the expression evaluated at the end of the visible time window: the last value of the column whose expression is not blank, without returning a table. It is the scalar counterpart of LASTNONBLANK and a typical semi-additive pattern over a marked date table; the per-row iteration is costly on large models."
+examples = ["LASTNONBLANKVALUE ( 'Date'[Date], [Sales Amount] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.signature]]
+kinds = ["Column", "Expression"]
+variadic = false
+
+[[function]]
+name = "NEXTDAY"
+min = 1
+max = 1
+returns = "table"
+flags = "excel"
+description = "Returns the day after the last date visible in the filter context, as a single-row table restricted to dates present in the date column. Because the date table must be contiguous, a missing next day yields an empty table."
+examples = ["NEXTDAY ( 'Date'[Date] )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "NEXTMONTH"
+min = 1
+max = 1
+returns = "table"
+flags = "excel"
+description = "Returns all dates of the month after the last date visible in the filter context. The month boundaries come from the marked date table, so gaps in the calendar produce incomplete results and a bad relationship makes the window follow the wrong selection."
+examples = ["NEXTMONTH ( 'Date'[Date] )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "NEXTQUARTER"
+min = 1
+max = 1
+returns = "table"
+flags = "excel"
+description = "Returns all dates of the quarter after the last date visible in the filter context. The quarter is derived from the marked date table; the result keeps the date column lineage and excludes dates absent from the calendar."
+examples = ["NEXTQUARTER ( 'Date'[Date] )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "NEXTWEEK"
+min = 1
+max = 1
+returns = "table"
+flags = "engine"
+description = "Returns all dates of the week after the last date visible in the filter context, using the week definition of a model calendar. A plain date column cannot supply week boundaries, and Excel's embedded DAX engine does not expose the calendar-based function."
+examples = ["NEXTWEEK ( Gregorian )"]
+[[function.params]]
+name = "Calendar"
+kind = "Table"
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+
+[[function]]
+name = "NEXTYEAR"
+min = 1
+max = 2
+returns = "table"
+flags = "excel"
+description = "Returns all dates of the year after the last date visible in the filter context. YearEndDate shifts the year to a fiscal calendar; the date table must contain the whole following year, be contiguous and be marked as a date table."
+examples = ["NEXTYEAR ( 'Date'[Date] )", "NEXTYEAR ( 'Date'[Date], \"6/30/2008\" )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "YearEndDate"
+kind = "Text"
+optional = true
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Date", "Text"]
+variadic = false
+
+[[function]]
+name = "OPENINGBALANCEMONTH"
+min = 2
+max = 3
+returns = "any"
+flags = "excel"
+description = "Evaluates the expression on the final date of the preceding month, after applying the optional filter. The opening balance uses the marked date table's month boundaries, so the relationship and date coverage must be valid or the window slides on partial data."
+examples = ["OPENINGBALANCEMONTH ( [Sales Amount], 'Date'[Date] )"]
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "Filter"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Expression", "Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Expression", "Date", "Any"]
+variadic = false
+
+[[function]]
+name = "OPENINGBALANCEQUARTER"
+min = 2
+max = 3
+returns = "any"
+flags = "excel"
+description = "Evaluates the expression on the final date of the preceding quarter, after applying the optional filter. Quarter boundaries come from the marked date table; an unmarked table or a relationship not based on the date column changes the opening period."
+examples = ["OPENINGBALANCEQUARTER ( [Sales Amount], 'Date'[Date] )"]
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "Filter"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Expression", "Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Expression", "Date", "Any"]
+variadic = false
+
+[[function]]
+name = "OPENINGBALANCEWEEK"
+min = 2
+max = 3
+returns = "any"
+flags = "engine"
+description = "Evaluates the expression on the final date of the preceding week of a model calendar, after applying the optional filter. The calendar defines the week, so a date column is not accepted and the function is unavailable to Excel's DAX engine."
+examples = ["OPENINGBALANCEWEEK ( [Sales Amount], Gregorian )"]
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.params]]
+name = "Calendar"
+kind = "Table"
+[[function.params]]
+name = "Filter"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Expression", "Table"]
+variadic = false
+[[function.signature]]
+kinds = ["Expression", "Table", "Any"]
+variadic = false
+
+[[function]]
+name = "OPENINGBALANCEYEAR"
+min = 2
+max = 4
+returns = "any"
+flags = "excel"
+description = "Evaluates the expression on the final date of the preceding year, after applying the optional filter. YearEndDate aligns the opening balance with a fiscal year; the date table must cover entire fiscal years and be marked as a date table."
+examples = ["OPENINGBALANCEYEAR ( [Sales Amount], 'Date'[Date] )", "OPENINGBALANCEYEAR ( [Sales Amount], 'Date'[Date], ALL ( Sales ), \"6/30/2008\" )"]
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "Filter"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "YearEndDate"
+kind = "Text"
+optional = true
+[[function.signature]]
+kinds = ["Expression", "Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Expression", "Date", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Expression", "Date", "Any", "Text"]
+variadic = false
+
+[[function]]
+name = "PARALLELPERIOD"
+min = 3
+max = 3
+returns = "table"
+flags = "excel"
+description = "Moves the visible first and last dates by NumberOfIntervals units of MONTH, QUARTER or YEAR, then returns the contiguous dates between the moved boundaries, expanding partial periods to complete ones. Only dates in the marked date column appear, so a discontinuous calendar leaves gaps."
+examples = ["PARALLELPERIOD ( 'Date'[Date], -1, YEAR )", "PARALLELPERIOD ( 'Date'[Date], 0, MONTH )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "NumberOfIntervals"
+kind = "Number"
+[[function.params]]
+name = "Interval"
+kind = "Text"
+[[function.signature]]
+kinds = ["Date", "Number", "Text"]
+variadic = false
+
+[[function]]
+name = "PREVIOUSDAY"
+min = 1
+max = 1
+returns = "table"
+flags = "excel"
+description = "Returns the day before the first date visible in the filter context, as a single-row table restricted to dates present in the date column. The marked date table must be contiguous; otherwise the previous day may not exist in the model."
+examples = ["PREVIOUSDAY ( 'Date'[Date] )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "PREVIOUSMONTH"
+min = 1
+max = 1
+returns = "table"
+flags = "excel"
+description = "Returns all dates of the month before the first date visible in the filter context. Month boundaries come from the marked date table; gaps in the calendar or an incorrect relationship make the previous month incomplete."
+examples = ["PREVIOUSMONTH ( 'Date'[Date] )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "PREVIOUSQUARTER"
+min = 1
+max = 1
+returns = "table"
+flags = "excel"
+description = "Returns all dates of the quarter before the first date visible in the filter context. The quarter is derived from the marked date table, so the table must contain every day of the previous quarter for the window to be complete."
+examples = ["PREVIOUSQUARTER ( 'Date'[Date] )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "PREVIOUSWEEK"
+min = 1
+max = 1
+returns = "table"
+flags = "engine"
+description = "Returns all dates of the week before the first date visible in the filter context, using a model calendar's week definition. Week boundaries are calendar metadata, so a date column is not accepted and Excel's DAX engine cannot call the function."
+examples = ["PREVIOUSWEEK ( Gregorian )"]
+[[function.params]]
+name = "Calendar"
+kind = "Table"
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+
+[[function]]
+name = "PREVIOUSYEAR"
+min = 1
+max = 2
+returns = "table"
+flags = "excel"
+description = "Returns all dates of the year before the first date visible in the filter context, optionally aligned to a fiscal year end. The marked date table must include the whole previous year, including leap days, for the window to be complete."
+examples = ["PREVIOUSYEAR ( 'Date'[Date] )", "PREVIOUSYEAR ( 'Date'[Date], \"6/30/2008\" )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "YearEndDate"
+kind = "Text"
+optional = true
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Date", "Text"]
+variadic = false
+
+[[function]]
+name = "SAMEPERIODLASTYEAR"
+min = 1
+max = 1
+returns = "table"
+flags = "excel"
+description = "Returns the dates of the same period one year earlier, preserving the number of days rather than the month boundaries. It is syntax sugar for DATEADD ( Dates, -1, YEAR ) and relies on a marked, contiguous date table; a fiscal year requires adapting the offset or the calendar definition."
+examples = ["SAMEPERIODLASTYEAR ( 'Date'[Date] )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "STARTOFMONTH"
+min = 1
+max = 1
+returns = "table"
+flags = "excel"
+description = "Returns the first date of the month visible in the filter context, as a single-row table restricted to dates in the date column. The marked date table must contain the month's first day for the result to be non-empty."
+examples = ["STARTOFMONTH ( 'Date'[Date] )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "STARTOFQUARTER"
+min = 1
+max = 1
+returns = "table"
+flags = "excel"
+description = "Returns the first date of the quarter visible in the filter context, as a single-row table restricted to dates in the date column. Quarter boundaries follow the marked date table, so an incomplete calendar can omit the first day."
+examples = ["STARTOFQUARTER ( 'Date'[Date] )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+
+[[function]]
+name = "STARTOFWEEK"
+min = 1
+max = 1
+returns = "table"
+flags = "engine"
+description = "Returns the first date of the week visible in the filter context for a model calendar. The calendar defines the first day of the week, so a date column is not accepted and the function is not available to Excel's embedded DAX engine."
+examples = ["STARTOFWEEK ( Gregorian )"]
+[[function.params]]
+name = "Calendar"
+kind = "Table"
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+
+[[function]]
+name = "STARTOFYEAR"
+min = 1
+max = 2
+returns = "table"
+flags = "excel"
+description = "Returns the first date of the year visible in the filter context as a single-row table. YearEndDate shifts the start to a fiscal year; the date table must be marked and include every day from the fiscal-year start through year end."
+examples = ["STARTOFYEAR ( 'Date'[Date] )", "STARTOFYEAR ( 'Date'[Date], \"6/30/2008\" )"]
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "YearEndDate"
+kind = "Text"
+optional = true
+[[function.signature]]
+kinds = ["Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Date", "Text"]
+variadic = false
+
+[[function]]
+name = "TOTALMTD"
+min = 2
+max = 3
+returns = "any"
+flags = "excel"
+description = "Evaluates the expression over the month-to-date window, from the first day of the month through the last visible date, after applying the optional filter. It is syntax sugar for CALCULATE with DATESMTD and depends on a marked, contiguous date table."
+examples = ["TOTALMTD ( SUM ( Sales[Amount] ), 'Date'[Date] )"]
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "Filter"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Expression", "Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Expression", "Date", "Any"]
+variadic = false
+
+[[function]]
+name = "TOTALQTD"
+min = 2
+max = 3
+returns = "any"
+flags = "excel"
+description = "Evaluates the expression over the quarter-to-date window, from the first day of the quarter through the last visible date, after applying the optional filter. It is syntax sugar for CALCULATE with DATESQTD and requires the date table to be marked."
+examples = ["TOTALQTD ( SUM ( Sales[Amount] ), 'Date'[Date] )"]
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "Filter"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Expression", "Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Expression", "Date", "Any"]
+variadic = false
+
+[[function]]
+name = "TOTALWTD"
+min = 2
+max = 3
+returns = "any"
+flags = "engine"
+description = "Evaluates the expression over the week-to-date window defined by a model calendar, from the first day of the week through the last visible date, after applying the optional filter. Week boundaries come from the calendar, and Excel's DAX engine does not support the function."
+examples = ["TOTALWTD ( SUM ( Sales[Amount] ), Gregorian )"]
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.params]]
+name = "Calendar"
+kind = "Table"
+[[function.params]]
+name = "Filter"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Expression", "Table"]
+variadic = false
+[[function.signature]]
+kinds = ["Expression", "Table", "Any"]
+variadic = false
+
+[[function]]
+name = "TOTALYTD"
+min = 2
+max = 4
+returns = "any"
+flags = "excel"
+description = "Evaluates the expression over the year-to-date window, from the first day of the year through the last visible date, after applying the optional filter. It is syntax sugar for CALCULATE with DATESYTD; YearEndDate selects a fiscal year and the date table must be marked and cover whole fiscal years."
+examples = ["TOTALYTD ( SUM ( Sales[Amount] ), 'Date'[Date] )", "TOTALYTD ( SUM ( Sales[Amount] ), 'Date'[Date], Sales[Region] = \"US\" )", "TOTALYTD ( SUM ( Sales[Amount] ), 'Date'[Date], ALL ( Sales ), \"6/30/2008\" )"]
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.params]]
+name = "Dates"
+kind = "Date"
+[[function.params]]
+name = "Filter"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "YearEndDate"
+kind = "Text"
+optional = true
+[[function.signature]]
+kinds = ["Expression", "Date"]
+variadic = false
+[[function.signature]]
+kinds = ["Expression", "Date", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Expression", "Date", "Any", "Text"]
+variadic = false

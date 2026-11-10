@@ -1,7 +1,10 @@
 //! Integration tests for the information catalog and its static validation.
 
 use gridcraft_dax::functions::{FunctionCategory, FunctionSpec, ParamKind, ReturnType, catalog, lookup};
-use gridcraft_dax::{Expr, ExprKind, ValidationError, ValidationErrorKind, parse_expression, validate_call, validate_expression};
+use gridcraft_dax::{ExprKind, ValidationErrorKind, validate_expression};
+
+mod common;
+use common::{call_errors, parse, spec};
 
 fn information_catalog() -> Vec<&'static FunctionSpec> {
     catalog().iter().filter(|spec| spec.category == FunctionCategory::Information).collect()
@@ -125,28 +128,6 @@ const FUNCTIONS: [(&str, usize, usize); 114] = [
     ("USEROBJECTID", 0, 0),
     ("USERPRINCIPALNAME", 0, 0),
 ];
-
-fn parse(src: &str) -> Expr {
-    match parse_expression(src) {
-        Ok(expr) => expr,
-        Err(error) => panic!("{src:?} did not parse: {error}"),
-    }
-}
-
-fn spec(name: &str) -> &'static FunctionSpec {
-    match lookup(name) {
-        Some(spec) => spec,
-        None => panic!("{name} is missing from the catalog"),
-    }
-}
-
-fn call_errors(src: &str) -> Vec<ValidationError> {
-    let expr = parse(src);
-    match &expr.kind {
-        ExprKind::Call(call) => validate_call(call),
-        other => panic!("{src:?} is not a call: {other:?}"),
-    }
-}
 
 fn assert_valid(src: &str) {
     let errors = validate_expression(&parse(src));

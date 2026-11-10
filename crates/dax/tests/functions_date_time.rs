@@ -1,7 +1,10 @@
 //! Integration tests for the date and time catalog.
 
 use gridcraft_dax::functions::{FunctionCategory, FunctionSpec, ParamKind, ReturnType, catalog, lookup};
-use gridcraft_dax::{Expr, ExprKind, ValidationErrorKind, parse_expression, validate_call, validate_expression};
+use gridcraft_dax::{ExprKind, ValidationErrorKind, validate_call, validate_expression};
+
+mod common;
+use common::{parse, spec};
 
 const FUNCTIONS: [(&str, usize, usize); 24] = [
     ("CALENDAR", 2, 2),
@@ -32,20 +35,6 @@ const FUNCTIONS: [(&str, usize, usize); 24] = [
 
 fn date_time_catalog() -> Vec<&'static FunctionSpec> {
     catalog().iter().filter(|spec| spec.category == FunctionCategory::DateAndTime).collect()
-}
-
-fn parse(src: &str) -> Expr {
-    match parse_expression(src) {
-        Ok(expr) => expr,
-        Err(error) => panic!("{src:?} did not parse: {error}"),
-    }
-}
-
-fn spec(name: &str) -> &'static FunctionSpec {
-    match lookup(name) {
-        Some(spec) => spec,
-        None => panic!("{name} is missing from the catalog"),
-    }
 }
 
 fn call_errors(src: &str) -> Vec<gridcraft_dax::ValidationError> {

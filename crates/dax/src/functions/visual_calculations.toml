@@ -1,0 +1,440 @@
+# VisualCalculations functions — declarative catalog data, one row per function.
+# Loaded by the shared `catalog` module; see its docs for the schema.
+
+[[function]]
+name = "COLLAPSE"
+min = 1
+max = 0
+max_open = true
+returns = "any"
+flags = "visual"
+description = "Retrieves a context with the detail levels above the current one removed, or returns its first argument evaluated in that coarser context. Navigation-only calls (an axis or a list of columns) can be used inside CALCULATE. Available only in Power BI visual calculations; `N` defaults to one level."
+examples = ["COLLAPSE ( [Sales Amount], ROWS )", "COLLAPSE ( [Sales Amount], ROWS, 2 )", "COLLAPSE ( [Sales Amount], [Month] )", "COLLAPSE ( ROWS, 1 )"]
+[[function.params]]
+name = "Expression"
+kind = "Any"
+[[function.params]]
+name = "Axis"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Column"
+kind = "Column"
+optional = true
+[[function.params]]
+name = "N"
+kind = "Number"
+optional = true
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Any", "Any"]
+variadic = true
+
+[[function]]
+name = "COLLAPSEALL"
+min = 1
+max = 2
+returns = "any"
+flags = "visual"
+description = "Removes every detail level along an axis, returning the expression evaluated at the highest level of that axis. The inverse of EXPANDALL. Available only in Power BI visual calculations."
+examples = ["COLLAPSEALL ( [Sales Amount], ROWS )", "COLLAPSEALL ( ROWS )", "COLLAPSEALL ( [Sales Amount], COLUMNS )"]
+[[function.params]]
+name = "Expression"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Axis"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Any", "Any"]
+variadic = false
+
+[[function]]
+name = "EXPAND"
+min = 1
+max = 0
+max_open = true
+returns = "any"
+flags = "visual"
+description = "Retrieves a context with additional detail levels compared to the current one, or returns its first argument evaluated in that finer context. Navigation-only calls (an axis or a list of columns) can be used inside CALCULATE. Available only in Power BI visual calculations; `N` defaults to one level."
+examples = ["EXPAND ( [Sales Amount], ROWS )", "EXPAND ( [Sales Amount], ROWS, 2 )", "EXPAND ( [Sales Amount], [Month] )"]
+[[function.params]]
+name = "Expression"
+kind = "Any"
+[[function.params]]
+name = "Axis"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Column"
+kind = "Column"
+optional = true
+[[function.params]]
+name = "N"
+kind = "Number"
+optional = true
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Any", "Any"]
+variadic = true
+
+[[function]]
+name = "EXPANDALL"
+min = 1
+max = 2
+returns = "any"
+flags = "visual"
+description = "Adds every detail level along an axis, returning the expression evaluated at the lowest level of that axis. The inverse of COLLAPSEALL. Available only in Power BI visual calculations."
+examples = ["EXPANDALL ( [Sales Amount], ROWS )", "EXPANDALL ( ROWS )", "EXPANDALL ( [Sales Amount], COLUMNS )"]
+[[function.params]]
+name = "Expression"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Axis"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Any", "Any"]
+variadic = false
+
+[[function]]
+name = "FIRST"
+min = 1
+max = 5
+returns = "any"
+flags = "visual"
+description = "Returns the value of a column in the first row of an axis or partition. OrderBy columns define the sort order; Blanks accepts DEFAULT, FIRST or LAST and Reset accepts NONE, LOWESTPARENT, HIGHESTPARENT or a level number. Available only in Power BI visual calculations."
+examples = ["FIRST ( [Sales Amount] )", "FIRST ( [Sales Amount], ROWS )", "FIRST ( [Sales Amount], ROWS, [Month], DEFAULT, NONE )"]
+[[function.params]]
+name = "Column"
+kind = "Column"
+[[function.params]]
+name = "Axis"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "OrderBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Blanks"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Reset"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Any", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Any", "Any", "Any", "Any"]
+variadic = false
+
+[[function]]
+name = "LAST"
+min = 1
+max = 5
+returns = "any"
+flags = "visual"
+description = "Returns the value of a column in the last row of an axis or partition. OrderBy columns define the sort order; Blanks accepts DEFAULT, FIRST or LAST and Reset accepts NONE, LOWESTPARENT, HIGHESTPARENT or a level number. Available only in Power BI visual calculations."
+examples = ["LAST ( [Sales Amount] )", "LAST ( [Sales Amount], ROWS )", "LAST ( [Sales Amount], ROWS, [Month], FIRST, LOWESTPARENT )"]
+[[function.params]]
+name = "Column"
+kind = "Column"
+[[function.params]]
+name = "Axis"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "OrderBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Blanks"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Reset"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Any", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Any", "Any", "Any", "Any"]
+variadic = false
+
+[[function]]
+name = "MOVINGAVERAGE"
+min = 2
+max = 7
+returns = "numeric"
+flags = "visual"
+description = "Calculates the average of the values in a sliding window of WindowSize rows along an axis. IncludeCurrent defaults to TRUE; when FALSE the window holds the previous WindowSize rows. OrderBy, Blanks and Reset behave as in FIRST. Available only in Power BI visual calculations."
+examples = ["MOVINGAVERAGE ( [Sales Amount], 6 )", "MOVINGAVERAGE ( [Sales Amount], 3, FALSE )", "MOVINGAVERAGE ( [Sales Amount], 6, TRUE, ROWS )", "MOVINGAVERAGE ( [Sales Amount], 12, TRUE, ROWS, [Month], DEFAULT, NONE )"]
+[[function.params]]
+name = "Column"
+kind = "Column"
+[[function.params]]
+name = "WindowSize"
+kind = "Number"
+[[function.params]]
+name = "IncludeCurrent"
+kind = "Boolean"
+optional = true
+[[function.params]]
+name = "Axis"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "OrderBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Blanks"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Reset"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Column", "Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Number", "Boolean"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Number", "Boolean", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Number", "Boolean", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Number", "Boolean", "Any", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Number", "Boolean", "Any", "Any", "Any", "Any"]
+variadic = false
+
+[[function]]
+name = "NEXT"
+min = 1
+max = 6
+returns = "any"
+flags = "visual"
+description = "Returns the value of a column the given number of rows after the current row on an axis. Steps defaults to 1 and must be at least 1. OrderBy, Blanks and Reset behave as in FIRST. Available only in Power BI visual calculations."
+examples = ["NEXT ( [Sales Amount] )", "NEXT ( [Sales Amount], 1, ROWS )", "NEXT ( [Sales Amount], 2, ROWS, [Month], LAST, HIGHESTPARENT )"]
+[[function.params]]
+name = "Column"
+kind = "Column"
+[[function.params]]
+name = "Steps"
+kind = "Number"
+optional = true
+[[function.params]]
+name = "Axis"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "OrderBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Blanks"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Reset"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Number", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Number", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Number", "Any", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Number", "Any", "Any", "Any", "Any"]
+variadic = false
+
+[[function]]
+name = "PREVIOUS"
+min = 1
+max = 6
+returns = "any"
+flags = "visual"
+description = "Returns the value of a column the given number of rows before the current row on an axis. Steps defaults to 1 and is negated internally, so it must be at least 1. OrderBy, Blanks and Reset behave as in FIRST. Available only in Power BI visual calculations."
+examples = ["PREVIOUS ( [Sales Amount] )", "PREVIOUS ( [Sales Amount], 1, ROWS )", "PREVIOUS ( [Sales Amount], 2, ROWS, [Month], DEFAULT, LOWESTPARENT )"]
+[[function.params]]
+name = "Column"
+kind = "Column"
+[[function.params]]
+name = "Steps"
+kind = "Number"
+optional = true
+[[function.params]]
+name = "Axis"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "OrderBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Blanks"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Reset"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Number", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Number", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Number", "Any", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Number", "Any", "Any", "Any", "Any"]
+variadic = false
+
+[[function]]
+name = "RANGE"
+min = 1
+max = 6
+returns = "table"
+flags = "visual"
+description = "Returns the interval of rows within an axis that starts Step rows before (negative Step) or after (non-negative Step) the current row, optionally including the current row. The result is normally passed to CALCULATE. Available only in Power BI visual calculations."
+examples = ["RANGE ( 6 )", "RANGE ( -5, TRUE, ROWS )", "RANGE ( 12, FALSE, ROWS, [Month], DEFAULT, NONE )"]
+[[function.params]]
+name = "Step"
+kind = "Number"
+[[function.params]]
+name = "IncludeCurrent"
+kind = "Boolean"
+optional = true
+[[function.params]]
+name = "Axis"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "OrderBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Blanks"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Reset"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Boolean"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Boolean", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Boolean", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Boolean", "Any", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Boolean", "Any", "Any", "Any", "Any"]
+variadic = false
+
+[[function]]
+name = "RUNNINGSUM"
+min = 1
+max = 5
+returns = "numeric"
+flags = "visual"
+description = "Calculates the cumulative sum of a column from the start of the axis or partition up to the current row. OrderBy, Blanks and Reset behave as in FIRST. Available only in Power BI visual calculations."
+examples = ["RUNNINGSUM ( [Sales Amount] )", "RUNNINGSUM ( [Sales Amount], ROWS )", "RUNNINGSUM ( [Sales Amount], ROWS, [Month], DEFAULT, NONE )"]
+[[function.params]]
+name = "Column"
+kind = "Column"
+[[function.params]]
+name = "Axis"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "OrderBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Blanks"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Reset"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Any", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Any", "Any", "Any", "Any"]
+variadic = false

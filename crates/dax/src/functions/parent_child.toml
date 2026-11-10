@@ -1,0 +1,103 @@
+# ParentChild functions — declarative catalog data, one row per function.
+# Loaded by the shared `catalog` module; see its docs for the schema.
+
+[[function]]
+name = "PATH"
+min = 2
+max = 2
+returns = "string"
+flags = "standard"
+description = "Returns a text string containing the delimited list of IDs that starts at the top of a parent-child hierarchy and ends with the current row, separating the identifiers with the vertical bar. Both arguments must be column references, not expressions, and must share a data type (integer or text); the parent value must exist in the ID column. A blank parent returns just the ID, a blank ID returns BLANK, and an ID that contains a vertical bar returns an error. Duplicate IDs with different parents return an error; with the same parent the common parent is returned."
+examples = ["PATH ( Account[AccountKey], Account[ParentAccountKey] )", "PATH ( Employee[EmployeeKey], Employee[ParentEmployeeKey] )"]
+[[function.params]]
+name = "ID_ColumnName"
+kind = "Column"
+[[function.params]]
+name = "Parent_ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column", "Column"]
+variadic = false
+
+[[function]]
+name = "PATHCONTAINS"
+min = 2
+max = 2
+returns = "boolean"
+flags = "standard"
+description = "Returns TRUE when the item appears as a whole segment of the delimited path, and FALSE otherwise. The path is normally the result of PATH. An integer item is converted to text before the comparison; when that conversion fails the function returns an error."
+examples = ["PATHCONTAINS ( Account[AccountPath], 2 )", "PATHCONTAINS ( Account[AccountPath], \"24\" )", "PATHCONTAINS ( \"1|24|2\", 2 )"]
+[[function.params]]
+name = "Path"
+kind = "Text"
+[[function.params]]
+name = "Item"
+kind = "Any"
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = false
+
+[[function]]
+name = "PATHITEM"
+min = 2
+max = 3
+returns = "any"
+flags = "standard"
+description = "Returns the item at the given position in the delimited path, counting from the left end where 1 is the top of the hierarchy. A position below 1 or beyond the number of items returns BLANK. The optional Type selects the result: TEXT (or 0), the default, returns a string, while INTEGER (or 1) converts the item to an integer. The result type therefore follows the Type argument. An invalid Type enumeration raises an error."
+examples = ["PATHITEM ( Account[AccountPath], 1 )", "PATHITEM ( Account[AccountPath], 2, INTEGER )", "PATHITEM ( Account[AccountPath], 3, TEXT )", "PATHITEM ( \"123|456|789|764\", 2 )"]
+[[function.params]]
+name = "Path"
+kind = "Text"
+[[function.params]]
+name = "Position"
+kind = "Number"
+[[function.params]]
+name = "Type"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Text", "Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Number", "Any"]
+variadic = false
+
+[[function]]
+name = "PATHITEMREVERSE"
+min = 2
+max = 3
+returns = "any"
+flags = "standard"
+description = "Returns the item at the given position in the delimited path, counting backwards from the last item, so position 1 is the current item and position 2 is its immediate parent. A position below 1 or beyond the number of items returns BLANK. The optional Type selects the result: TEXT (or 0), the default, returns a string, while INTEGER (or 1) converts the item to an integer, so the result type follows the Type argument. An invalid Type enumeration raises an error."
+examples = ["PATHITEMREVERSE ( Account[AccountPath], 1 )", "PATHITEMREVERSE ( Account[AccountPath], 2, INTEGER )", "PATHITEMREVERSE ( Account[AccountPath], 3, TEXT )", "PATHITEMREVERSE ( \"123|456|789|764\", 2 )"]
+[[function.params]]
+name = "Path"
+kind = "Text"
+[[function.params]]
+name = "Position"
+kind = "Number"
+[[function.params]]
+name = "Type"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Text", "Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Number", "Any"]
+variadic = false
+
+[[function]]
+name = "PATHLENGTH"
+min = 1
+max = 1
+returns = "integer"
+flags = "standard"
+description = "Counts the items in a delimited path, the current item included, so a root node's path has length 1. The path is normally the result of PATH, but any text with vertical-bar separators (including a literal such as \"123|456|789|764\") is accepted."
+examples = ["PATHLENGTH ( Account[AccountPath] )", "PATHLENGTH ( \"123|456|789|764\" )"]
+[[function.params]]
+name = "Path"
+kind = "Text"
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
