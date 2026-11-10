@@ -349,6 +349,14 @@ mod tests {
         }
     }
 
+    /// Ukrainian Chart uses the shared craft-i18n term, which is not the Diagram word.
+    #[test]
+    fn ukrainian_chart_uses_the_shared_term() {
+        assert_eq!(Language::Uk.translated("Chart"), Some("Діаграма"));
+        assert_eq!(Language::Uk.translated("Insert Chart"), Some("Вставити діаграму"));
+        assert_eq!(Language::Uk.translated("Diagram"), Some("Схема"));
+    }
+
     /// Help tables are sorted and unique: lookups binary-search them.
     #[test]
     fn function_help_tables_are_sorted_and_unique() {
