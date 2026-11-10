@@ -39,6 +39,12 @@ impl Scale {
                 // Snap away accumulated float error.
                 let snapped = v;
                 if snapped.abs() < self.step * 1e-9 { 0.0 } else { snapped }
+                let v = self.min + i as f64 * self.step;
+                // Snap away accumulated float error, but only onto a multiple of the step that is
+                // really that close: a `min` off the step grid must keep its own ticks.
+                let snapped = (v / self.step).round() * self.step;
+                let v = if (snapped - v).abs() < self.step * 1e-9 { snapped } else { v };
+                if v.abs() < self.step * 1e-9 { 0.0 } else { v }
             })
             .collect()
     }

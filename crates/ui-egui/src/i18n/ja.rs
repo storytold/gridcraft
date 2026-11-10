@@ -11,6 +11,8 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Chart|Series", "系列"),
     ("Chart|Line", "線"),
     ("Chart|Border", "枠線"),
+    ("Diagram", "図解"),
+    ("Decorative Text", "装飾文字"),
     ("Paste", "貼り付け"),
     ("Paste Values", "値の貼り付け"),
     ("Paste Formulas", "数式の貼り付け"),

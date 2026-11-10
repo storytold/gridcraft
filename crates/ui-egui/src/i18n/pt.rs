@@ -23,6 +23,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Lossless PNG; higher resolution creates a larger image." => "PNG sem perdas; resoluções maiores geram imagens maiores.",
         "SVG stays sharp at any size. Fonts are not embedded." => "O SVG mantém a nitidez em qualquer tamanho. As fontes não são incorporadas.",
         "Transparent Background" => "Fundo Transparente",
+        "Diagram" => "Diagrama",
+        "Decorative Text" => "Texto decorativo",
         "Paste" => "Colar",
         "Paste Values" => "Colar Valores",
         "Paste Formulas" => "Colar Fórmulas",
