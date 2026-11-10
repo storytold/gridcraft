@@ -3,10 +3,12 @@
 - Date: 2026-11-10
 - Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), code head `6a9b143c` (code
   and tests). `0b7d6aff` is the pushed head of PR #3613 and of
-  `fork/feature/realtime-collaboration` — a docs commit on top of `6a9b143c`. The revision of
-  this page that you are reading is one further **local docs commit on top of `0b7d6aff`,
-  not pushed** — the tip of the branch, the `docs(collab)` commit that `git log -1` names (a
-  commit cannot spell its own hash; the bus record `status/gridcraft` quotes it)
+  `fork/feature/realtime-collaboration` — a docs commit on top of `6a9b143c`. Two **local**
+  commits sit on top of it, not pushed: `ae4311ee` (this page) and `34e54b81`
+  (`collab-client`: the eight-megabyte converge test collects the frames it asserts on, §17).
+  The revision of this page that you are reading is one further **local docs commit on top of
+  `34e54b81`, not pushed** — the tip of the branch, the `docs(collab)` commit that `git log -1`
+  names (a commit cannot spell its own hash; the bus record `status/gridcraft` quotes it)
 - Base: `origin/main` = `2c58c769` (rebased 2026-11-08)
 - PR: <https://github.com/storytold/gridcraft/pull/3613> (draft)
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
@@ -834,3 +836,54 @@ local docs commit that carries this text is not pushed and changes nothing outsi
    callback idempotent.
 3. The craft-libs pin removal, which waits for `storytold/craft-libs` to merge the six
    collaboration messages (§6.6): on 2026-11-10 `main` did not contain `7666e2b1`.
+
+## 17. A red gate on the eight-megabyte test and what closed it (2026-11-10)
+
+The gate on `0b7d6aff` (run `42720341961`) failed at `cargo nextest run --workspace` on one test:
+`gridcraft-collab-client::converge`,
+`an_eight_megabyte_sheet_image_travels_in_parts_and_converges`, assertion at
+`crates/collab-client/tests/converge.rs:492`, "one applied per edit on the author; rejected []",
+`left: 0`, `right: 12`. The author received none of the twelve `applied` frames; the peer received
+all twelve; the other twelve tests of the file passed; `fmt` and `clippy` were green.
+
+**The cause was in the test, not in the server.** The test sent twelve 700 KiB `cell.set`
+operations, then waited with `settle`, which polls the connection and **throws the events away**,
+and only then called `settle_events`, which collects them. `settle` returns when two polls 25 ms
+apart see nothing, which is shorter than it takes a loaded runner to hand twelve large frames to
+both connections: whatever arrived during that wait was dropped before the assertion counted it.
+
+Reproduced on the `agents` host with the test alone: 5 of 40 runs failed with the same assertion.
+Instrumenting `settle` showed the failing runs had already consumed 4 of the author's 12 applied
+frames (`applied a=4 b=0`), so the collection that followed saw 8 and the assertion said
+`left: 8, right: 12`; on the CI runner the wait consumed all twelve, hence `left: 0`. The frames
+themselves were delivered and applied by the client — the transport advances
+`state().version` when it queues an `applied` — so nothing on the server or client side was wrong.
+
+**The fix (`34e54b81`).** `settle_events` now takes the version the operation must reach, collects
+every frame on the way, and only then requires one quiet round:
+
+- it polls both connections and appends whatever arrived until neither is busy;
+- it waits until both replicas are at `version` (12 after the twelve edits, 13 after the insert,
+  14 after the undo, 15 after the redo) instead of trusting a fixed quiet window to be long
+  enough for the first frame;
+- the quiet round after the version catches a trailing frame, so a duplicate `applied` is still
+  counted.
+
+The test no longer calls `settle` before collecting, and the assertions are unchanged: twelve
+`applied` per replica for the twelve edits, and exactly one for the undo and one for the redo, on
+both the author and the peer.
+
+**Evidence (remote host, `34e54b81`).**
+
+```text
+converge: an_eight_megabyte_sheet_image_travels_in_parts_and_converges alone, 60 runs   60 ok, 0 failed
+converge: whole file, 12 runs with 8 busy CPU hogs                                      13 passed each, 0 failed
+cargo test -p gridcraft-collab-client                                    13 + 5 passed, 0 failed, EXIT 0
+cargo test -p gridcraft-collab                                           45 passed, 0 failed, EXIT 0
+cargo test -p gridcraft-collab-server --all-targets                      34+5+6+2+9+8 passed, EXIT 0
+cargo fmt --all -- --check                                               clean, EXIT 0
+cargo clippy --workspace --all-targets -j 4 -- -D warnings               clean, EXIT 0
+```
+
+Before the fix the same host failed the single test 5 of 40 runs. The fix is a **local** commit on
+top of `ae4311ee`: PR #3613 and `0b7d6aff` are unchanged, nothing is pushed.
