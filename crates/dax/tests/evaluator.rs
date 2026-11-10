@@ -519,6 +519,12 @@ fn unbounded_scalar_functions_return_errors() {
 }
 
 #[test]
+fn date_with_an_out_of_range_month_does_not_overflow() {
+    // A huge negative month literal saturates to i64::MIN; normalizing it must not panic.
+    assert!(matches!(eval("DATE(2024, -1e19, 1)"), Scalar::DateTime(_)));
+}
+
+#[test]
 fn scalar_json_round_trip_preserves_variants() {
     for value in [Scalar::Currency(123_456), Scalar::DateTime(45293.5), Scalar::Integer(7), Scalar::Decimal(1.5), Scalar::Blank] {
         let json = serde_json::to_value(&value).expect("serialize");

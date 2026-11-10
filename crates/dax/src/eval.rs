@@ -48,6 +48,7 @@ mod visual;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::{Arc, Mutex};
 
 use crate::ast::{BinaryOp, Literal, UnaryOp};
 use crate::binder::{BindError, Binder, BoundExpr};
@@ -247,6 +248,11 @@ impl StorageCounters {
     }
 }
 
+/// One validated `PATH` hierarchy: every ID to its parent, a root's parent being `Blank`.
+pub(crate) type ParentMap = Arc<BTreeMap<ScalarKey, ScalarKey>>;
+/// The key a `PATH` hierarchy is cached under: table, ID column, parent column.
+type ParentMapKey = (usize, usize, usize);
+
 /// An evaluator with pre-bound measures and one columnar copy of the model.
 pub struct Evaluator<'a> {
     model: &'a DataModel,
@@ -258,6 +264,9 @@ pub struct Evaluator<'a> {
     /// is the behaviour this evaluator had before storage existed.
     storage_error: Option<StorageError>,
     counters: StorageCounters,
+    /// Validated `PATH` hierarchies, keyed by table and ID/parent column. Building one costs a
+    /// pass over the table, so evaluating `PATH` once per row would otherwise be quadratic.
+    path_parents: Mutex<BTreeMap<ParentMapKey, ParentMap>>,
 }
 
 impl<'a> Evaluator<'a> {
@@ -280,7 +289,7 @@ impl<'a> Evaluator<'a> {
             Ok(storage) => (Some(storage), None),
             Err(error) => (None, Some(error)),
         };
-        Ok(Evaluator { model, measures, storage, storage_error, counters: StorageCounters::default() })
+        Ok(Evaluator { model, measures, storage, storage_error, counters: StorageCounters::default(), path_parents: Mutex::new(BTreeMap::new()) })
     }
 
     /// The columnar substrate, when the model could be materialized.
@@ -418,6 +427,18 @@ impl<'a> Evaluator<'a> {
         let filters = self.transitioned_filters(ctx);
         let mut inner = Context { filters, rows: Vec::new(), vars: Vec::new() };
         self.eval(expr, &mut inner)
+    }
+
+    /// The validated `PATH` hierarchy for these columns, when this evaluator already built it.
+    pub(crate) fn path_parents(&self, table: usize, id_column: usize, parent_column: usize) -> Option<ParentMap> {
+        self.path_parents.lock().ok()?.get(&(table, id_column, parent_column)).cloned()
+    }
+
+    /// Remembers a validated `PATH` hierarchy for the rest of this evaluator's life.
+    pub(crate) fn remember_path_parents(&self, table: usize, id_column: usize, parent_column: usize, parents: ParentMap) {
+        if let Ok(mut maps) = self.path_parents.lock() {
+            maps.entry((table, id_column, parent_column)).or_insert(parents);
+        }
     }
 
     pub(crate) fn column_value(&self, table: usize, column: usize, ctx: &mut Context) -> Result<Scalar, EvalError> {

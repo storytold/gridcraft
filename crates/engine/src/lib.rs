@@ -803,9 +803,10 @@ impl Session {
                     .map(ToString::to_string)
                     .or_else(|| p.downcast_ref::<String>().cloned())
                     .unwrap_or_else(|| "panic".into());
-                // Restore the workbook and its history as they were, and drop the undo groups the
-                // command opened.
-                self.groups.retain(|g| g.id < first_group);
+                // Restore the workbook and its history as they were, and roll back the undo groups
+                // the command opened — with their `dataModel.*` edits, which are session state
+                // with no undo step of their own (CodeRabbit, #3412).
+                self.rollback_groups_from(first_group);
                 let group_open = before.as_ref().is_some_and(|(uid, ..)| self.groups.iter().any(|g| g.doc == *uid));
                 if let Some((uid, wb, sel)) = &before
                     && let Some(d) = self.docs.iter_mut().find(|d| d.uid == *uid)

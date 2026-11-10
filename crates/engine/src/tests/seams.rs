@@ -644,6 +644,37 @@ fn a_group_ended_by_a_command_that_then_panics_keeps_its_step() {
 }
 
 #[test]
+fn a_command_that_panics_reverts_the_data_model_edits_of_the_groups_it_opened() {
+    // A nested `group_begin` records `dataModel.*` edits on the inner group. A panic used to drop
+    // that group without reverting them, so a later rollback of the outer group could not take
+    // them back (CodeRabbit, #3412).
+    crate::cmd::register_undoable_test_command("test.groupModelThenPanic", |s, _| {
+        let _token = s.group_begin("Inner")?;
+        s.execute("dataModel.addMeasure", json!({"name": "Doomed", "formula": "1", "table": "Sales"}))?;
+        panic!("after a model edit");
+    });
+    let mut s = s();
+    let mut model = gridcraft_dax::DataModel::default();
+    model.tables.push(gridcraft_dax::model::ModelTable {
+        name: "Sales".into(),
+        columns: vec![gridcraft_dax::model::ModelColumn { name: "Region".into(), data_type: None }],
+        rows: Vec::new(),
+    });
+    model.parse_formulas().expect("model parses");
+    s.dax_model = Some(model);
+    let outer = s.group_begin("Outer").unwrap();
+    let err = s.execute("test.groupModelThenPanic", json!({})).unwrap_err().to_string();
+    assert!(err.contains("after a model edit"), "{err}");
+    assert!(
+        s.dax_model.as_ref().unwrap().measure_index("Doomed").is_none(),
+        "the panicking command's data-model edit is reverted, not left in the model"
+    );
+    // The outer group's rollback then finds a model the dropped group no longer haunts.
+    s.group_rollback(outer).expect("rollback");
+    assert!(s.dax_model.as_ref().unwrap().measure_index("Doomed").is_none());
+}
+
+#[test]
 fn a_command_that_fails_rolls_back_the_groups_it_opened() {
     // A `?` between `group_begin` and `group_end` used to leave the group open for good: Undo
     // and Redo refused, and later edits made no steps.

@@ -169,9 +169,11 @@ const EXCEL_EPOCH_CE_DAYS: i64 = 693_594;
 /// 1900 leap-year compatibility bug; DAX/Excel only differ there.
 pub(crate) fn date_serial(year: i64, month: i64, day: i64, hour: i64, minute: i64, second: i64) -> f64 {
     // Normalize out-of-range months the way Excel does (DATE(2024, 13, 1) is 2025-01-01). The day
-    // counts on from the first of that month, so day 0 is the last day of the month before.
-    let months = month - 1;
-    let year = year.saturating_add(months.div_euclid(12));
+    // counts on from the first of that month, so day 0 is the last day of the month before. The
+    // arithmetic is in `i128`: `month - 1` overflows for `i64::MIN`, which a saturating cast of a
+    // huge negative literal produces.
+    let months = i128::from(month) - 1;
+    let year = i64::try_from(i128::from(year) + months.div_euclid(12)).unwrap_or(if months < 0 { i64::MIN } else { i64::MAX });
     let month = u32::try_from(months.rem_euclid(12) + 1).unwrap_or(1);
     let days = month_start_ce_days(year, month) - i128::from(EXCEL_EPOCH_CE_DAYS) + i128::from(day) - 1;
     days as f64 + (hour as f64 * 3600.0 + minute as f64 * 60.0 + second as f64) / 86400.0
@@ -599,6 +601,8 @@ mod tests {
         assert_eq!(date_serial(2024, 13, 1, 0, 0, 0), date_serial(2025, 1, 1, 0, 0, 0));
         assert_eq!(date_serial(2024, 0, 1, 0, 0, 0), date_serial(2023, 12, 1, 0, 0, 0));
         assert_eq!(date_serial(2024, 3, 0, 0, 0, 0), date_serial(2024, 2, 29, 0, 0, 0));
+        // `i64::MIN - 1` must not overflow: it is what a huge negative month literal produces.
+        assert!(date_serial(2024, i64::MIN, 1, 0, 0, 0).is_finite());
         assert_eq!(days_in_month(2024, 2), 29);
         assert_eq!(days_in_month(2023, 2), 28);
         assert_eq!(days_in_month(1900, 2), 28);

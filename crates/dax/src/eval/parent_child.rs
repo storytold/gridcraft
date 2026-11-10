@@ -8,6 +8,8 @@
 //! below 1 or past the end of the path is BLANK, exactly like an out-of-range `PATHITEM`.
 #![allow(unused_imports)]
 
+use std::sync::Arc;
+
 use super::*;
 
 pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Option<Result<Scalar, EvalError>> {
@@ -45,7 +47,54 @@ fn path(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -
     if id.to_text().contains(SEPARATOR) {
         return Err(EvalError::new(format!("{name} ID `{}` contains the hierarchy separator", id.to_text())));
     }
-    let table = ev.model().tables.get(id_table).ok_or_else(|| EvalError::new(format!("{name} table is out of range")))?;
+    // The validated map depends only on the table and the two columns, so one build serves every
+    // row of the query (and every later evaluation over this evaluator).
+    let parents = match ev.path_parents(id_table, id_column, parent_column) {
+        Some(parents) => parents,
+        None => {
+            let parents = Arc::new(parent_map(ev, name, id_table, id_column, parent_column)?);
+            ev.remember_path_parents(id_table, id_column, parent_column, Arc::clone(&parents));
+            parents
+        }
+    };
+    let mut chain = vec![ScalarKey::from(&id)];
+    let mut seen: BTreeSet<ScalarKey> = chain.iter().cloned().collect();
+    let mut current = ScalarKey::from(&id);
+    loop {
+        let Some(parent) = parents.get(&current).cloned() else {
+            return Err(EvalError::new(format!("{name} ID `{}` is not part of the hierarchy", current.to_scalar().to_text())));
+        };
+        if matches!(parent, ScalarKey::Blank) {
+            break;
+        }
+        if !seen.insert(parent.clone()) {
+            return Err(EvalError::new(format!("{name} hierarchy has a cycle at `{}`", parent.to_scalar().to_text())));
+        }
+        chain.push(parent.clone());
+        current = parent;
+    }
+    chain.reverse();
+    Ok(Scalar::String(chain.iter().map(|key| key.to_scalar().to_dax_text()).collect::<Vec<_>>().join(&SEPARATOR.to_string())))
+}
+
+/// How many times a `PATH` parent map was built. The scale test asserts that one build serves a
+/// whole query, which is what keeps repeated per-row evaluation from being quadratic.
+#[cfg(test)]
+static PARENT_MAP_BUILDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The validated parent map of a hierarchy: one parent per ID, and every parent either blank or an
+/// ID of the hierarchy.
+fn parent_map(
+    ev: &Evaluator<'_>,
+    name: &str,
+    table: usize,
+    id_column: usize,
+    parent_column: usize,
+) -> Result<BTreeMap<ScalarKey, ScalarKey>, EvalError> {
+    #[cfg(test)]
+    PARENT_MAP_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+    let table = ev.model().tables.get(table).ok_or_else(|| EvalError::new(format!("{name} table is out of range")))?;
 
     // One parent per ID. The same ID with the same parent twice is Excel's common-parent case; a
     // second, different parent makes the hierarchy ambiguous.
@@ -75,25 +124,7 @@ fn path(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -
             return Err(EvalError::new(format!("{name} parent `{}` is not an ID of the hierarchy", parent.to_scalar().to_text())));
         }
     }
-
-    let mut chain = vec![ScalarKey::from(&id)];
-    let mut seen: BTreeSet<ScalarKey> = chain.iter().cloned().collect();
-    let mut current = ScalarKey::from(&id);
-    loop {
-        let Some(parent) = parents.get(&current).cloned() else {
-            return Err(EvalError::new(format!("{name} ID `{}` is not part of the hierarchy", current.to_scalar().to_text())));
-        };
-        if matches!(parent, ScalarKey::Blank) {
-            break;
-        }
-        if !seen.insert(parent.clone()) {
-            return Err(EvalError::new(format!("{name} hierarchy has a cycle at `{}`", parent.to_scalar().to_text())));
-        }
-        chain.push(parent.clone());
-        current = parent;
-    }
-    chain.reverse();
-    Ok(Scalar::String(chain.iter().map(|key| key.to_scalar().to_dax_text()).collect::<Vec<_>>().join(&SEPARATOR.to_string())))
+    Ok(parents)
 }
 
 /// The table and column a `PATH` argument names; anything else is an error, as the catalog says.
@@ -141,5 +172,51 @@ fn item_reverse(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Co
         item.trim().parse::<i64>().map(Scalar::Integer).map_err(|_| EvalError::new(format!("{name} item `{item}` is not an integer")))
     } else {
         Ok(Scalar::String((*item).to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PARENT_MAP_BUILDS;
+    use crate::binder::Binder;
+    use crate::model::{DataModel, ModelColumn, ModelTable};
+    use crate::value::Scalar;
+    use crate::{Evaluator, FilterContext, ScalarKey, parse_expression};
+
+    /// A hierarchy of `rows` accounts where account `n` has parent `n / 2`: the depth is
+    /// logarithmic, so the test measures the map build rather than the chain walk.
+    fn binary_hierarchy(rows: i64) -> DataModel {
+        let mut model = DataModel {
+            tables: vec![ModelTable {
+                name: "Account".into(),
+                columns: vec![
+                    ModelColumn { name: "AccountKey".into(), data_type: Some("Int64".into()) },
+                    ModelColumn { name: "ParentAccountKey".into(), data_type: Some("Int64".into()) },
+                ],
+                rows: (1..=rows).map(|key| vec![Scalar::Integer(key), if key == 1 { Scalar::Blank } else { Scalar::Integer(key / 2) }]).collect(),
+            }],
+            relationships: Vec::new(),
+            measures: Vec::new(),
+        };
+        model.parse_formulas().expect("model parses");
+        model
+    }
+
+    #[test]
+    fn a_scale_query_builds_the_parent_map_once() {
+        // PATH once per row of a 3,000-row hierarchy: the map must be built for the first row and
+        // reused for the rest, not rebuilt per row (CodeRabbit, #3412).
+        let model = binary_hierarchy(3_000);
+        let evaluator = Evaluator::new(&model).expect("evaluator");
+        let expr = parse_expression("PATH(Account[AccountKey], Account[ParentAccountKey])").expect("parse");
+        let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+        let builds_before = PARENT_MAP_BUILDS.load(std::sync::atomic::Ordering::Relaxed);
+        for key in 1..=3_000 {
+            let mut filters = FilterContext::default();
+            filters.set(0, 0, [ScalarKey::from(&Scalar::Integer(key))]);
+            let path = evaluator.evaluate_with(&bound, filters).expect("evaluate");
+            assert!(matches!(path, Scalar::String(_)), "row {key} evaluates to a path");
+        }
+        assert_eq!(PARENT_MAP_BUILDS.load(std::sync::atomic::Ordering::Relaxed) - builds_before, 1, "one parent map serves every row of the query");
     }
 }
