@@ -45,7 +45,7 @@ min = 3
 max = 5
 returns = "decimal"
 flags = "standard"
-description = "Inverse of the beta cumulative distribution function: returns the x for which BETA.DIST ( x, Alpha, Beta, TRUE ) equals Probability. Probability must be strictly between 0 and 1, Alpha and Beta must be positive, A must be less than B, and the result lies between A and B; A and B default to 0 and 1."
+description = "Inverse of the beta cumulative distribution function: returns the x for which BETA.DIST ( x, Alpha, Beta, TRUE ) equals Probability. Probability must be greater than 0 and at most 1, Alpha and Beta must be positive, A must be less than B, and the result lies between A and B; A and B default to 0 and 1."
 examples = ["BETA.INV ( 0.5, 3.51, 4.02 )", "BETA.INV ( 0.75, 3.51, 4.02, 0, 10 )"]
 [[function.params]]
 name = "Probability"

@@ -103,17 +103,22 @@ fn changing_a_value_to_another_existing_value_round_trips() {
     let mut model = original.clone();
     let target = column_mut(&mut model, &table_name, &column_name);
     // Point one row at another row's value: the id set is unchanged, so only the column's `.idf`
-    // has to move, while the hierarchy and its hash index stay exactly as Excel wrote them.
-    let rows: Vec<usize> = target.values.iter().enumerate().filter(|(_, value)| numeric(value).is_some()).map(|(row, _)| row).collect();
-    assert!(rows.len() >= 2, "value-encoded column needs two numeric rows");
-    let source = target.values[rows[0]].clone();
-    let destination = target.values[rows[1]].clone();
+    // has to move, while the hierarchy and its hash index stay exactly as Excel wrote them. The
+    // destination row must hold a different value, or the edit is a no-op in disguise.
+    let first = target.values.iter().position(|value| numeric(value).is_some()).expect("value-encoded column needs a numeric row");
+    let source = target.values[first].clone();
+    let second = target
+        .values
+        .iter()
+        .position(|value| numeric(value).is_some() && numeric(value) != numeric(&source))
+        .expect("value-encoded column needs two distinct numeric values");
+    let destination = target.values[second].clone();
     assert_ne!(numeric(&source), numeric(&destination));
-    target.values[rows[1]] = source.clone();
+    target.values[second] = source.clone();
 
     let written = write_model(&base, &model).expect("write");
     let back = read_model(&written).expect("read back");
-    assert_eq!(column(&back, &table_name, &column_name).values[rows[1]], source);
+    assert_eq!(column(&back, &table_name, &column_name).values[second], source);
     assert_only_column_changed(&model, &back, &table_name, &column_name);
 
     // The hierarchy itself did not change ids, so Excel's hash index must still be valid byte for

@@ -557,10 +557,17 @@ fn pivot_caches_element(pivots: &crate::pivot::PivotWriter, kept: &crate::passth
 
 /// One past the highest `cacheId` the workbook's kept `<pivotCaches>` element uses.
 fn next_kept_cache_id(kept: &crate::passthrough::WorkbookKept, wb: &Workbook) -> u32 {
-    let xml = kept.element(wb, "pivotCaches");
+    scan_next_cache_id(&kept.element(wb, "pivotCaches"))
+}
+
+/// Scans raw preserved XML for `cacheId` values. The input file's quoting is
+/// preserved verbatim, so both `cacheId="5"` and `cacheId='5'` occur.
+fn scan_next_cache_id(xml: &str) -> u32 {
     let mut next = 1;
-    for (index, _) in xml.match_indices("cacheId=\"") {
-        let digits: String = xml.get(index + "cacheId=\"".len()..).unwrap_or_default().chars().take_while(|c| c.is_ascii_digit()).collect();
+    for (index, _) in xml.match_indices("cacheId=") {
+        let rest = xml.get(index + "cacheId=".len()..).unwrap_or_default();
+        let Some(rest) = rest.strip_prefix('"').or_else(|| rest.strip_prefix('\'')) else { continue };
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
         if let Ok(id) = digits.parse::<u32>() {
             next = next.max(id.saturating_add(1));
         }
@@ -676,7 +683,7 @@ const METADATA: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"ye
 
 #[cfg(test)]
 mod tests {
-    use super::pivot_caches_parts;
+    use super::{pivot_caches_parts, scan_next_cache_id};
 
     #[test]
     fn a_kept_pivot_caches_element_is_found_under_any_prefix() {
@@ -696,5 +703,18 @@ mod tests {
         // A self-closing kept wrapper has no children, and anything without the element yields none.
         assert_eq!(pivot_caches_parts("<x:pivotCaches xmlns:x=\"urn:x\"/>").1, "");
         assert_eq!(pivot_caches_parts("<workbook/>").1, "");
+    }
+
+    #[test]
+    fn single_quoted_cache_ids_still_reserve_the_next_id() {
+        // Preserved XML keeps the input file's quoting, so `cacheId='5'` must
+        // reserve 6 just like `cacheId="5"` does (CodeRabbit, #3412).
+        for xml in [
+            "<pivotCaches><pivotCache cacheId='5' r:id='rId9'/></pivotCaches>",
+            "<pivotCaches><pivotCache cacheId=\"5\" r:id=\"rId9\"/></pivotCaches>",
+        ] {
+            assert_eq!(scan_next_cache_id(xml), 6, "next id after a kept cacheId 5 in {xml}");
+        }
+        assert_eq!(scan_next_cache_id("<pivotCaches/>"), 1);
     }
 }
