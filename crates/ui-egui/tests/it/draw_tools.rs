@@ -86,6 +86,8 @@ fn deleting_a_pen_from_its_dropdown_does_not_break_the_gallery_loop() {
     for _ in 0..2 {
         session.execute("draw.addPen", serde_json::json!({"brush": "pen"})).unwrap();
     }
+    // Put a default pen back in hand, so neither custom pen's tile carries the "(selected)" suffix.
+    session.execute("draw.pen", serde_json::json!({"on": true, "pen": 0})).unwrap();
     let mut h = draw_tab_with(session);
     // Both custom pens answer as "Pen options"; take the first one, so a pen still follows it in
     // the same frame's loop range.
