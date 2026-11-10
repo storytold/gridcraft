@@ -160,9 +160,9 @@ impl SheetApp {
         }
         let Some(d) = self.session.active() else { return };
         let title = format!("{}{}", d.display_title(), if d.is_dirty() { " — Edited" } else { "" });
-        let title = crate::build_config::window_title(&title);
+        // The compiled identity is fixed: compare the workbook title before allocating its prefix.
         if self.grid.last_title.as_deref() != Some(title.as_str()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(crate::build_config::window_title(&title).into_owned()));
             self.grid.last_title = Some(title);
         }
     }

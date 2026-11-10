@@ -258,7 +258,7 @@ fn window_title(app: &SheetApp, window: u64) -> String {
     let title = app.session.window_title(window).unwrap_or_default();
     let dirty = app.session.window(window).and_then(|w| app.session.documents().iter().find(|d| d.uid == w.doc_uid)).is_some_and(|d| d.is_dirty());
     let title = if dirty { format!("{title} — Edited") } else { title };
-    crate::build_config::window_title(&title)
+    crate::build_config::window_title(&title).into_owned()
 }
 
 /// Outer rectangles for `n` windows arranged within `bounds` as View › Arrange All's `arrange`
