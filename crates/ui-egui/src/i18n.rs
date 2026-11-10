@@ -97,10 +97,32 @@ fn number_text_from(windows: Option<(String, Option<String>, Option<String>)>, t
         return NumberText { decimal, group, currency };
     }
     let Some(tag) = tag else { return NumberText::POINT };
-    if let Some(region) = covering_region(tag) {
+    let clean = tag.split('.').next().unwrap_or(tag).replace('_', "-");
+    // A region of its own first; then a territory that writes numbers unlike its language's
+    // usual region (Spanish in Mexico, English in South Africa); then the language's region.
+    if let Some(region) = gridcraft_engine::core::region::find(&clean) {
+        return NumberText::of_region(region);
+    }
+    if let Some(n) = territory_number_text(&clean) {
+        return n;
+    }
+    if let Some(region) = covering_region(&clean) {
         return NumberText::of_region(region);
     }
     if tag_uses_decimal_comma(tag) { NumberText::ITALIAN } else { NumberText::POINT }
+}
+
+/// Territories whose numbers differ from their language's usual region, as in the tag table:
+/// a decimal point in Switzerland, Liechtenstein, Mexico, Central America, the United States and
+/// Latin America's `419`; a decimal comma with no-break spaces and the rand in South Africa (CLDR).
+#[cfg(not(target_arch = "wasm32"))]
+fn territory_number_text(tag: &str) -> Option<NumberText> {
+    let territory = tag.split('-').skip(1).find(|p| p.len() == 2 || p.len() == 3)?.to_ascii_uppercase();
+    match territory.as_str() {
+        "CH" | "LI" | "MX" | "GT" | "HN" | "NI" | "PA" | "PE" | "PR" | "SV" | "DO" | "US" | "419" => Some(NumberText::POINT),
+        "ZA" => Some(NumberText { decimal: ',', group: '\u{a0}', currency: "R" }),
+        _ => None,
+    }
 }
 
 /// The `Region` for a tag when one has its language (`Region::lookup` otherwise falls back to
@@ -641,6 +663,11 @@ mod decimal_comma_region_tests {
         assert_eq!((fr.decimal, fr.group), (',', '\u{a0}'));
         assert_eq!(number_text_from(None, Some("pt-BR")).currency, "R$");
         assert_eq!(number_text_from(None, Some("de-CH")).decimal, '.');
+        // Territories that write numbers unlike their language's usual region.
+        for tag in ["es-MX", "es-US", "es-419", "it-CH", "fr-CH", "de-CH"] {
+            assert_eq!(number_text_from(None, Some(tag)).decimal, '.', "{tag}");
+        }
+        assert_eq!(number_text_from(None, Some("en-ZA")), NumberText { decimal: ',', group: '\u{a0}', currency: "R" });
         // A language Region doesn't cover goes by the table.
         assert_eq!(number_text_from(None, Some("pl-PL")), NumberText::ITALIAN);
         assert_eq!(number_text_from(None, Some("en-US")), NumberText::POINT);

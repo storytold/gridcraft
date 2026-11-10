@@ -88,10 +88,15 @@ pub fn set_system_number_text(n: NumberText) {
 
 /// Runs `f` with `n` on this thread, whatever the system's setting.
 pub fn with_number_text<R>(n: NumberText, f: impl FnOnce() -> R) -> R {
-    let before = NUMBER_TEXT.replace(Some(n));
-    let result = f();
-    NUMBER_TEXT.set(before);
-    result
+    /// Puts the thread's previous setting back, also when `f` panics.
+    struct Restore(Option<NumberText>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            NUMBER_TEXT.set(self.0);
+        }
+    }
+    let _restore = Restore(NUMBER_TEXT.replace(Some(n)));
+    f()
 }
 
 /// [`with_number_text`] with Italian settings (`on`) or a decimal point.
@@ -135,6 +140,8 @@ fn parse_decimal_comma_text(t: &str, sys: DateSystem, n: &NumberText) -> Option<
     if !n.is_group('.') && t.contains('.') {
         return None;
     }
+    // Text that turns out not to be a plain number reads as it was written.
+    let original = t;
     // One group character, whatever form it was typed in: `.` here stands for any of them.
     let canon: String = t.chars().map(|c| if c != ',' && n.is_group(c) { '.' } else { c }).collect();
     let t = canon.trim();
@@ -152,7 +159,7 @@ fn parse_decimal_comma_text(t: &str, sys: DateSystem, n: &NumberText) -> Option<
     });
     let plain = |s: &str| s.chars().all(|c| matches!(c, '+' | '-' | '(' | ')' | '%' | ' '));
     if !plain(head) || !(exponent || plain(tail)) {
-        return parse_numeric(t, sys).map(|(n, _)| n);
+        return parse_numeric(original, sys).map(|(n, _)| n);
     }
     let (whole, fraction) = core.split_once(',').map_or((core, None), |(w, f)| (w, Some(f)));
     if fraction.is_some_and(|f| f.contains([',', '.'])) || (whole.is_empty() && fraction.is_none_or(str::is_empty)) {
@@ -865,6 +872,12 @@ mod decimal_comma_tests {
         });
         // A decimal-point region reads as before.
         with_number_text(region("en-GB"), || assert_eq!(coerce_number_text("1,000.5"), Some(1000.5)));
+        // Dates and times in text read as written, spaces and all, where a space groups digits.
+        with_number_text(region("fr-FR"), || {
+            assert_eq!(coerce_number_text("Mar 4, 2026"), with_decimal_comma(false, || coerce_number_text("Mar 4, 2026")));
+            assert!(coerce_number_text("Mar 4, 2026").is_some());
+            assert_eq!(coerce_number_text("10 AM"), Some(10.0 / 24.0));
+        });
     }
 
     /// Commands and normalized text don't follow the setting.
