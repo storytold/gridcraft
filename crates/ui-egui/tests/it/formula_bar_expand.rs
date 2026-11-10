@@ -1,6 +1,6 @@
 //! Ctrl+Shift+U (Control+Shift+U in Excel for Mac) expands and collapses the formula bar.
 
-use egui::{Event, Key, Modifiers};
+use egui::{Event, Key, Modifiers, vec2};
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
 use gridcraft_ui_egui::keymap::{Shortcut, lookup};
@@ -83,4 +83,81 @@ fn expand_formula_bar_command_sets_or_toggles_the_state() {
     assert_eq!(h.state_mut().run("view.expandFormulaBar", json!({"on": true})), Ok(json!({"on": true})));
     assert_eq!(h.state_mut().run("view.expandFormulaBar", json!({})), Ok(json!({"on": false})));
     assert!(!expanded(&h));
+}
+
+fn drag(h: &mut Harness, from: egui::Pos2, to: egui::Pos2) {
+    use egui::PointerButton;
+    h.input_mut().events.extend([
+        Event::PointerMoved(from),
+        Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+    ]);
+    h.step();
+    for i in 1..=6 {
+        h.input_mut().events.push(Event::PointerMoved(from + (to - from) * (i as f32 / 6.0)));
+        h.step();
+    }
+    h.input_mut().events.push(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(20);
+}
+
+fn bar(h: &Harness) -> gridcraft_ui_egui::formula_bar::BarLayout {
+    gridcraft_ui_egui::formula_bar::BarLayout::get(&h.ctx)
+}
+
+#[test]
+fn dragging_the_bottom_edge_sets_the_height_that_expanding_returns_to() {
+    let mut h = harness();
+    h.run_steps(20);
+    let start = bar(&h);
+    assert_eq!(start.visible_lines, 1, "one line of text shows a one-line bar");
+    assert!(
+        start.handle.height() > 0.0 && (start.handle.bottom() - start.field.bottom()).abs() <= 4.0,
+        "the handle is the bar's bottom edge: {start:?}"
+    );
+    // Drag the edge down about five and a half rows: the bar snaps to whole lines.
+    let row = 17.0;
+    drag(&mut h, start.handle.center(), start.handle.center() + vec2(0.0, 5.5 * row));
+    let lines = h.state().ui.formula_bar_lines;
+    assert!(expanded(&h), "a taller bar is expanded");
+    assert!((6..=7).contains(&lines), "about six more lines: {lines}");
+    assert_eq!(bar(&h).visible_lines, lines, "the field shows the dragged lines: {:?}", bar(&h));
+    // Collapse, then expand: back to the dragged height, not the default five lines.
+    ctrl_shift_u(&mut h, CTRL_SHIFT);
+    h.run_steps(20);
+    assert!(!expanded(&h));
+    assert_eq!(bar(&h).visible_lines, 1);
+    ctrl_shift_u(&mut h, CTRL_SHIFT);
+    h.run_steps(20);
+    assert_eq!(bar(&h).visible_lines, lines, "expanding returns to the dragged height");
+    // Dragging the edge up to one line collapses the bar and keeps the expanded height.
+    let edge = bar(&h).handle.center();
+    drag(&mut h, edge, edge - vec2(0.0, 20.0 * row));
+    assert!(!expanded(&h), "a one-line bar is collapsed");
+    assert_eq!(bar(&h).visible_lines, 1);
+    assert_eq!(h.state().ui.formula_bar_lines, lines);
+}
+
+#[test]
+fn expand_formula_bar_with_lines_sets_the_expanded_height() {
+    let mut h = harness();
+    assert_eq!(h.state_mut().run("view.expandFormulaBar", json!({"lines": 8})), Ok(json!({"on": true, "lines": 8})));
+    assert_eq!(h.state_mut().run("view.expandFormulaBar", json!({"lines": 1})), Ok(json!({"on": false, "lines": 8})), "one line collapses");
+    assert_eq!(h.state_mut().run("view.expandFormulaBar", json!({})), Ok(json!({"on": true})));
+    assert_eq!(h.state().ui.formula_bar_lines, 8, "expanding returns to the set height");
+    assert_eq!(h.state_mut().run("view.expandFormulaBar", json!({"lines": 0})), Ok(json!({"on": false, "lines": 8})), "zero lines is one line");
+    assert_eq!(h.state_mut().run("view.expandFormulaBar", json!({"lines": u64::MAX})), Ok(json!({"on": true, "lines": 100})), "capped");
+}
+
+#[test]
+fn an_expanded_formula_bar_leaves_room_for_the_worksheet_in_a_short_window() {
+    // At 400 pt the title bar and ribbon leave about 236 pt: half the window as a formula bar
+    // would leave the status bar and sheet tabs no room for any of the grid.
+    let mut session = Session::new();
+    session.new_workbook();
+    let mut h = crate::common::harness_with(crate::common::builder().with_size(vec2(1200.0, 400.0)), crate::common::app(session), 4);
+    h.state_mut().run("view.expandFormulaBar", json!({"lines": 100})).unwrap();
+    h.run_steps(60);
+    let cells = h.state().grid.cells_rect.expect("the grid is drawn");
+    assert!(cells.height() >= 40.0, "a couple of rows stay visible under a {} pt bar: {cells:?}", bar(&h).height);
+    assert!(bar(&h).visible_lines > 1, "the bar is still expanded");
 }

@@ -26,6 +26,64 @@ fn python_tokens() {
 }
 
 #[test]
+fn underline_splits_sections_at_the_mark() {
+    let t = Tokens::light();
+    let font = FontId::new(12.0, FontFamily::Monospace);
+    let marked = |job: &egui::text::LayoutJob| -> Vec<String> {
+        job.sections
+            .iter()
+            .filter(|s| s.format.underline.width > 0.0)
+            .map(|s| job.text[s.byte_range.start.0..s.byte_range.end.0].to_string())
+            .collect()
+    };
+    let mut job = layout_job("a + \\foo", Lang::Latex, &font, t.text, &t.syntax, 100.0);
+    underline(&mut job, 4..8, t.danger);
+    assert_eq!(marked(&job), vec!["\\foo"]);
+    let total: usize = job.sections.iter().map(|s| s.byte_range.end.0 - s.byte_range.start.0).sum();
+    assert_eq!(total, job.text.len(), "sections still cover the text");
+    // An empty mark at the end underlines the last character; out-of-range marks are clamped.
+    let mut job = layout_job("x^", Lang::Latex, &font, t.text, &t.syntax, 100.0);
+    underline(&mut job, 2..2, t.danger);
+    assert_eq!(marked(&job), vec!["^"]);
+    let mut job = layout_job("\u{e9}", Lang::Latex, &font, t.text, &t.syntax, 100.0);
+    underline(&mut job, 50..99, t.danger);
+    assert!(job.sections.iter().any(|s| s.format.underline.width > 0.0));
+}
+
+#[test]
+fn a_stale_mark_inside_a_multibyte_char_snaps_to_char_boundaries() {
+    // The editor's mark comes from the text before this frame's edit: `a\foo` had its error at
+    // 1..5, then an `é` (two bytes) was typed at the start, so byte 1 is inside it.
+    let t = Tokens::light();
+    let font = FontId::new(12.0, FontFamily::Monospace);
+    let ctx = egui::Context::default();
+    for text in ["\u{e9}\\foo", "\u{e9}\u{e9}\u{4e2d}x", "\u{1F600}", "a\u{e9}"] {
+        for start in 0..=text.len() + 1 {
+            for end in 0..=text.len() + 1 {
+                let mut job = layout_job(text, Lang::Latex, &font, t.text, &t.syntax, 200.0);
+                underline(&mut job, start..end, t.danger);
+                for s in &job.sections {
+                    let r = s.byte_range.start.0..s.byte_range.end.0;
+                    assert!(text.is_char_boundary(r.start) && text.is_char_boundary(r.end), "{text:?} {start}..{end}: {r:?}");
+                }
+                let total: usize = job.sections.iter().map(|s| s.byte_range.end.0 - s.byte_range.start.0).sum();
+                assert_eq!(total, text.len(), "sections still cover {text:?}");
+                // Laying the job out slices the text at every section: it must not panic.
+                let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let _ = ui.fonts_mut(|f| f.layout_job(job.clone()));
+                });
+                out.textures_delta.clear();
+            }
+        }
+    }
+    let mut job = layout_job("\u{e9}\\foo", Lang::Latex, &font, t.text, &t.syntax, 200.0);
+    underline(&mut job, 1..5, t.danger);
+    let marked: Vec<&str> =
+        job.sections.iter().filter(|s| s.format.underline.width > 0.0).map(|s| &job.text[s.byte_range.start.0..s.byte_range.end.0]).collect();
+    assert_eq!(marked.concat(), "\u{e9}\\fo", "the mark grows out to the whole characters it touches");
+}
+
+#[test]
 fn latex_tokens() {
     let s = spans("\\frac{a^2}{3} % half\n\\{", Lang::Latex);
     assert_eq!(
@@ -279,6 +337,41 @@ fn tab_and_enter_under_modifiers_never_reach_the_field() {
 }
 
 #[test]
+fn a_stop_key_ends_the_pass_in_input_order() {
+    let stop = |ev: &egui::Event| matches!(ev, egui::Event::Key { key: Key::Enter, pressed: true, modifiers, .. } if modifiers.command);
+    // The typing before it is applied; the keys after it are dropped, other input stays.
+    let mut events = vec![
+        egui::Event::Text("a".into()),
+        key(Key::Enter, Modifiers::COMMAND),
+        egui::Event::Text("b".into()),
+        egui::Event::PointerMoved(egui::Pos2::ZERO),
+        key(Key::Tab, Modifiers::NONE),
+    ];
+    let (mut s, mut sel) = (String::new(), (0, 0));
+    let out = apply_in_order_until(&mut events, &mut s, &mut sel, Lang::Python, &stop);
+    assert_eq!(s, "a");
+    assert_eq!(out.stop, Some(key(Key::Enter, Modifiers::COMMAND)));
+    assert_eq!(events, vec![egui::Event::PointerMoved(egui::Pos2::ZERO)]);
+    assert!(out.held.is_empty());
+    // After a key the field acts on, it waits for the next pass with the editor's keys
+    // before it, so the edit it ends includes them.
+    let mut events = vec![key(Key::A, Modifiers::COMMAND), key(Key::Tab, Modifiers::NONE), key(Key::Enter, Modifiers::COMMAND)];
+    let out = apply_in_order_until(&mut events, &mut s, &mut sel, Lang::Python, &stop);
+    assert_eq!(out.stop, None);
+    assert_eq!(events, vec![key(Key::A, Modifiers::COMMAND)]);
+    assert_eq!(out.held, vec![key(Key::Tab, Modifiers::NONE), key(Key::Enter, Modifiers::COMMAND)]);
+    // Next pass: the Tab, then the stop.
+    let mut events = out.held;
+    let out = apply_in_order_until(&mut events, &mut s, &mut sel, Lang::Python, &stop);
+    assert_eq!(s, "a    ");
+    assert_eq!(out.stop, Some(key(Key::Enter, Modifiers::COMMAND)));
+    // Without a stop the editor behaves as before: the caller's key is the field's.
+    let mut events = vec![key(Key::Enter, Modifiers::COMMAND)];
+    let out = apply_in_order(&mut events, &mut s, &mut sel, Lang::Python);
+    assert_eq!((out.stop, events.len()), (None, 1));
+}
+
+#[test]
 fn events_after_a_held_key_wait_with_it_and_pointer_events_do_not() {
     let mut events = vec![
         key(Key::X, Modifiers::NONE),
@@ -365,4 +458,25 @@ fn a_repeat_pass_of_the_frame_counts_as_the_next_pass() {
     h.input_mut().events.extend([key(Key::A, Modifiers::COMMAND), key(Key::Tab, Modifiers::NONE)]);
     h.run_steps(1);
     assert_eq!(h.state().0, "    a\n    b");
+}
+
+/// Whether a frame drew text with an underline.
+fn draws_underline(mark: Option<std::ops::Range<usize>>) -> bool {
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut text = String::from("x^{2");
+        code_editor_marked(ui, egui::Id::unique("marked"), &mut text, Lang::Latex, 3, mark.clone());
+    });
+    out.textures_delta.clear();
+    out.shapes.iter().any(|s| match &s.shape {
+        egui::Shape::Text(t) => t.galley.job.sections.iter().any(|sec| sec.format.underline.width > 0.0),
+        _ => false,
+    })
+}
+
+#[test]
+fn the_marked_editor_underlines_its_mark() {
+    // The equation editor marks an error's position; the code field draws it.
+    assert!(draws_underline(Some(3..4)));
+    assert!(!draws_underline(None));
 }

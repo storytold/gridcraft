@@ -1,6 +1,6 @@
 # Keep whole-axis PivotTable sources on XLSX save
 
-> **Last updated:** 2026-10-28
+> **Last updated:** 2026-11-10
 
 A PivotTable whose source is `Sheet1!$A:$B` used to save the source as the current
 used rectangle, for example `A1:B3`. After reopening that XLSX file, Refresh All
@@ -74,10 +74,11 @@ a valid input for Refresh or that a desktop Excel comparison was performed.
 
 ## Compatibility with current main
 
-The contribution is aligned with main `43284377d2466037628e57d8ad0c891778fdb45c` (v0.13.0).
+The contribution is aligned with main `a36e4987c1b5b53af69a3f3573418e18612d1a4e`.
 Cache generation follows the upstream `pivot/write.rs` split, including its field
 and grouping helpers. The extracted `write_sheets` helper propagates cache-limit
-errors before package publication; the upstream worksheet writer remains intact.
+errors before package publication. The upstream `write_xlsx_named_with` entry
+point still passes `FunctionInfo` to the worksheet writer for legacy formulas.
 Shared helpers and the reader remain in their upstream modules.
 The engine regressions run in the consolidated `it` test binary. The earlier
 non-Linux desktop-theme workaround is removed from this contribution because
@@ -89,6 +90,7 @@ Enable show details option are retained alongside cache-budget error propagation
 
 | Date | Change |
 |---|---|
+| 2026-11-10 | Align with main at `a36e4987`, keeping legacy formula export and PivotTable cache-limit errors on the named XLSX save path |
 | 2026-10-28 | Align with v0.13.0 main; retain extracted cache/grouping and sheet-writing helpers, propagating save errors without changing either cache limit |
 | 2026-10-27 | Move cache serialization into the upstream writer module; preserve declared origins, bounded scans, save failures and all existing synthetic regressions |
 | 2026-10-26 | Align with main at `f6b0cec`, retaining shared-window active-sheet handling, original sheet IDs and Enable show details serialization alongside declared sources, cache origins and unchanged save limits |
