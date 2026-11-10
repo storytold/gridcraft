@@ -105,10 +105,33 @@ fn a_refused_earlier_preview_does_not_undo_the_later_one() {
     assert!(matches!(events.first(), Some(Event::Rejected(_))));
     assert_eq!(value(&session, "A1"), Value::Number(2.0), "B's preview is not the one that was refused");
     assert!(
-        sink.sent().iter().any(|message| matches!(message, ClientMessage::Resync { .. })),
-        "the replica asks for the document instead of guessing: {:?}",
+        sink.sent().iter().any(|message| matches!(message, ClientMessage::Snapshot)),
+        "the replica asks for the authoritative workbook, not a tail that cannot hold the refused edit: {:?}",
         sink.sent()
     );
+}
+
+/// The workbook the client asked for replaces the document and ends the pending previews: the
+/// preview the room refused is gone, and what the room did keep is what this replica now shows.
+#[test]
+fn the_workbook_a_client_asked_for_replaces_the_refused_preview() {
+    let (mut synced, sink, mut session) = replica();
+    synced.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": 1 })).expect("preview A");
+    synced.execute(&mut session, "cell.set", json!({ "cell": "B1", "input": 2 })).expect("preview B");
+    sink.push(Event::Rejected(Rejected { op_id: "w1-0".into(), code: RejectCode::Invalid, retryable: false, hint: None, message: None }));
+    let _ = synced.poll(&mut session);
+    assert!(sink.sent().iter().any(|message| matches!(message, ClientMessage::Snapshot)));
+
+    // The server's answer: the workbook as the room has it — A1 and B1 empty, C1 set by a peer.
+    let mut room = Session::new();
+    room.new_workbook();
+    room.execute("cell.set", json!({ "cell": "C1", "input": 7 })).expect("the room's own edit");
+    let bytes = gridcraft_engine::io::save_bytes(&room.doc().expect("a document").wb, "session.xlsx").expect("a workbook");
+    sink.push(Event::Snapshot { version: 3, epoch: 0, bytes });
+    let _ = synced.poll(&mut session);
+    assert_eq!(value(&session, "A1"), Value::Empty, "the refused preview is gone with the document it lived in");
+    assert_eq!(value(&session, "B1"), Value::Empty, "so is the preview that sat on top of it");
+    assert_eq!(value(&session, "C1"), Value::Number(7.0), "the replica now holds the room's document");
 }
 
 #[test]

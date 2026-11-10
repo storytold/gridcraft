@@ -5,7 +5,7 @@ use gridcraft_ui_egui::{Inbox, Services, SheetApp};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
 
-use crate::host_session::{HostAction, HostInbox, HostState};
+use crate::host_session::{HostAction, HostInbox, HostSession, HostState};
 use gridcraft_collab_web::HostParticipant;
 
 const CANVAS_ID: &str = "gridcraft_canvas";
@@ -117,6 +117,7 @@ pub fn start() {
                         app,
                         inbox,
                         bridge: app_bridge,
+                        host_session: None,
                         prefs,
                         host_events: shell_events,
                         host_state: HostState::default(),
@@ -156,6 +157,9 @@ struct WebShell {
     host_state: HostState,
     /// The last `session-state` sent: status and participants, to send only changes.
     last_host_state: Option<(String, Vec<HostParticipant>)>,
+    /// The room this window dialed, and the token it joined with: a repeated `gridcraft:session`
+    /// for it is a token update, not a new session.
+    host_session: Option<HostSession>,
     /// Browser clock of the last presence post (5–10 Hz, ADR-0006).
     last_presence_ms: f64,
 }
@@ -228,6 +232,21 @@ impl WebShell {
         for event in events {
             match self.host_state.on_event(event) {
                 HostAction::Connect(session) => {
+                    // A repeated `gridcraft:session` for the room this window already dialed keeps
+                    // the client: its unconfirmed operations are still in the transport's resend
+                    // queue, and a new client could not send them again. Only the JWT is replaced
+                    // (the cabinet pushes a fresh one before the old expires).
+                    if let Some(current) = self.host_session.as_ref()
+                        && current.same_room(&session)
+                        && let Some(collab) = self.app.collab.as_mut()
+                    {
+                        if current.token() != session.token() {
+                            collab.renew_token(session.token());
+                            self.app.message = Some(("GridCraft".into(), "Collaboration token renewed".into()));
+                        }
+                        self.host_session = Some(session);
+                        continue;
+                    }
                     // The window id (RFC §13.6): random, one per browser window's session, reused
                     // by the link's reconnect. The cabinet's participant list keys a row by it.
                     let client_id = format!("web-{}-{}", js_sys::Date::now() as u64, (js_sys::Math::random() * 1e9) as u64);
@@ -238,11 +257,17 @@ impl WebShell {
                         Ok(collab) => {
                             self.app.collab = Some(Box::new(collab));
                             self.app.host_session_id = Some(session_id.clone());
+                            self.host_session = Some(session);
                             self.app.message = Some(("GridCraft".into(), format!("Joined collaboration session {session_id}")));
                         }
                         Err(message) => {
-                            self.app.host_session_id = None;
-                            self.app.message = Some(("GridCraft".into(), format!("Collaboration is unavailable: {message}")));
+                            // A failed dial must not unmake the session this window is already in:
+                            // Save would post the local replica as `gridcraft:save` and the bridge
+                            // would mark a stale copy saved. The previous client and its session id
+                            // stay; only the message says the new room was not opened.
+                            let kept = self.app.host_session_id.is_some();
+                            let suffix = if kept { "; the current session stays open" } else { "" };
+                            self.app.message = Some(("GridCraft".into(), format!("Collaboration is unavailable: {message}{suffix}")));
                         }
                     }
                 }

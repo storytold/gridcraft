@@ -7,7 +7,7 @@ use base64::Engine;
 use futures_util::SinkExt;
 use gridcraft_collab::Role;
 use serde_json::{Value, json};
-use support::{SERVICE, create, http, next, now, op, open, open_at, sheet_key, start};
+use support::{SERVICE, create, create_with_bytes, http, next, now, op, open, open_at, read_snapshot, send_json, sheet_key, start};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -236,4 +236,62 @@ async fn metrics_count_op_latency_and_reconnects() {
     assert!(page.contains("gridcraft_collab_resync_snapshots_total 0"), "{page}");
     assert!(page.contains("gridcraft_collab_op_latency_seconds_count 1"), "{page}");
     assert!(page.contains("gridcraft_collab_op_latency_seconds_bucket{le=\"+Inf\"} 1"), "{page}");
+}
+
+fn a1(workbook: &gridcraft_engine::model::Workbook) -> gridcraft_engine::core::Value {
+    workbook.sheet(0).map(|sheet| sheet.value(gridcraft_engine::core::CellRef::new(0, 0))).unwrap_or(gridcraft_engine::core::Value::Empty)
+}
+
+/// A replica that joins a room the cabinet opened from a file has to adopt that file: at version
+/// 0 the journal holds nothing to replay, so a join with `lastVersion: 0` that got no workbook
+/// would keep its own document and the two replicas would silently diverge.
+#[tokio::test]
+async fn a_join_of_a_session_opened_from_bytes_receives_the_workbook() {
+    let server = start().await;
+    let mut source = gridcraft_engine::Session::new();
+    source.new_workbook();
+    source.execute("cell.set", json!({ "cell": "A1", "input": 7 })).expect("the file's cell");
+    let bytes = gridcraft_engine::io::save_bytes(&source.doc().expect("a document").wb, "plan.xlsx").expect("the file");
+    let session = create_with_bytes(&server, 91, &bytes).await;
+
+    let mut ann = open(&server, &session, "ann", Role::Editor, 91).await;
+    let welcome = next(&mut ann).await;
+    assert_eq!(welcome["type"], "welcome");
+    assert_eq!(welcome["version"], 0, "no operation has been applied yet");
+    let (version, _epoch, workbook) = read_snapshot(&mut ann).await;
+    assert_eq!(version, 0);
+    assert_eq!(next(&mut ann).await["type"], "resynced");
+    let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsx", &workbook).expect("the room's workbook");
+    assert_eq!(a1(&workbook), gridcraft_engine::core::Value::Number(7.0), "the replica gets the document the room holds");
+}
+
+/// The other side of the same rule: a room a participant opened as an empty workbook has no
+/// authoritative copy to hand out, so the first client's document stays its own.
+#[tokio::test]
+async fn a_join_of_a_room_that_started_empty_gets_no_workbook() {
+    let server = start().await;
+    let session = create(&server, 92, false).await;
+    let mut ann = open(&server, &session, "ann", Role::Editor, 92).await;
+    assert_eq!(next(&mut ann).await["type"], "welcome");
+    let early = tokio::time::timeout(std::time::Duration::from_millis(300), next(&mut ann)).await;
+    assert!(early.is_err(), "nothing follows a welcome into an empty room: {:?}", early.ok());
+}
+
+/// A replica that cannot be repaired from the tail asks for the workbook itself and gets it at
+/// the head, then the ordinary resynced marker.
+#[tokio::test]
+async fn a_client_can_ask_for_the_whole_workbook() {
+    let server = start().await;
+    let session = create(&server, 93, false).await;
+    let mut ann = open(&server, &session, "ann", Role::Editor, 93).await;
+    let sheet = sheet_key(&next(&mut ann).await);
+    ann.send(Message::text(op("op-1", "cell.set", json!({ "input": 5 }), &sheet, "A1"))).await.unwrap();
+    assert_eq!(next(&mut ann).await["applied"]["version"], 1);
+
+    send_json(&mut ann, &json!({ "type": "snapshot" })).await;
+    let (version, _epoch, bytes) = read_snapshot(&mut ann).await;
+    assert_eq!(version, 1);
+    assert_eq!(next(&mut ann).await["type"], "resynced");
+    let (workbook, _warnings) = gridcraft_engine::io::open_bytes("plan.xlsx", &bytes).expect("the room's workbook");
+    assert_eq!(a1(&workbook), gridcraft_engine::core::Value::Number(5.0));
 }

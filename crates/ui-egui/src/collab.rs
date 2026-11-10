@@ -93,6 +93,10 @@ pub trait Collab {
     fn take_notice(&mut self) -> Option<String> {
         None
     }
+    /// Replaces the session credential without opening a new session. The host emits
+    /// `gridcraft:session` again when the cabinet renews the token; a transport that can swap the
+    /// JWT in place keeps its unconfirmed operations, and one that cannot says nothing.
+    fn renew_token(&mut self, _token: &str) {}
 }
 
 impl SheetApp {

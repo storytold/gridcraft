@@ -45,11 +45,19 @@ pub enum ClientMessage {
     Presence {
         presence: Option<Presence>,
     },
-    /// Ask for everything after `from`. v1 has no snapshot in the gateway yet, so it answers with
-    /// `error` and the client reopens the document.
+    /// Ask for everything after `from`: the journal tail when it still covers `from`, the whole
+    /// workbook (as `snapshot` chunks) otherwise. A client whose replica cannot be rebuilt from
+    /// the tail asks with [`ClientMessage::Snapshot`] instead.
     Resync {
         from: u64,
     },
+    /// Ask for the authoritative workbook at the current head, whatever `from` would return.
+    ///
+    /// A replica that holds unsendable local state — a refused preview with a later preview on
+    /// top of it, an image that half arrived — cannot be repaired by replaying operations it
+    /// already has, and the operation it has to shed may never have reached the journal. The
+    /// document itself is then the only correct answer (RFC §4.6).
+    Snapshot,
     Ping {
         nonce: u64,
     },
@@ -224,6 +232,11 @@ impl Gateway {
             ClientMessage::Resync { from } => vec![ServerMessage::Error {
                 code: "resync".into(),
                 message: format!("resync is served by the transport, not the room (from {from})"),
+                retryable: true,
+            }],
+            ClientMessage::Snapshot => vec![ServerMessage::Error {
+                code: "resync".into(),
+                message: "the workbook is served by the transport, not the room".into(),
                 retryable: true,
             }],
             ClientMessage::Ping { nonce } => vec![ServerMessage::Pong { nonce }],

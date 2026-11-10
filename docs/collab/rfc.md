@@ -54,42 +54,60 @@ presence, согласованный пересчёт формул, per-user und
 Единица — **транзакция одного пользовательского действия**: нормализованное намерение
 клиента + авторитетный результат сервера.
 
+Кадр — конверт с тегом `type`; операция лежит в поле `op`
+(`crates/collab/src/gateway.rs`, `ClientMessage::Op`):
+
 ```json
-{"opId":"<uuid>","doc":"<fileId>","baseVersion":41,"kind":"command|structural",
- "target":{"sheet":"<sheetKey>","a1":"B2:D9"},
- "payload":{"cmd":"cell.set","params":{"cell":"B2","input":"=SUM(A1:A9)"}},
- "preview":"<uuid клиента>"}
+{"type":"op",
+ "op":{"opId":"<uuid>","doc":"<fileId>","baseVersion":41,"epoch":7,
+       "kind":"command","target":{"sheet":"<sheetKey>","a1":"B2"},
+       "payload":{"cmd":"cell.set","params":{"cell":"B2","input":"=SUM(A1:A9)"}},
+       "preview":"<uuid клиента>"}}
 ```
 
 GridCraft использует два `kind`:
 
 - `command` — команда реестра, у которой параметры **уже нормализованы**: `sheet` и
-  `range`/адреса явные, `selection` не подразумевается. UI-вызов
-  `home.bold` без диапазона на проводе превращается в `format.bold {range:"Sheet1!B2:D9"}`.
+  `range`/адреса явные, `selection` не подразумевается. UI-вызов `home.bold` без
+  диапазона на проводе превращается в `home.bold {range:"B2:D9","on":true}` (тот же
+  `id` реестра: отдельной группы `format.*` в движке нет).
 - `structural` — команды, меняющие структуру и адреса: `sheet.insertRows`,
   `sheet.deleteRows`, `sheet.insertCells`, `sheet.deleteCells`, `sheet.move`,
   `sheet.delete`, `sheet.rename`, `table.*` со сдвигом. Они эксклюзивны (ADR-0004).
 
-Allowlist v1 (по группам `crates/engine/src/cmd/*`): `cell.*`, `range.*`, `edit.*`
-(кроме undo/redo), `format.*`, `home.*` (форматирование), `data.*` без внешних
-источников, `insert.comment`/`review.*`, `formulas.*` (кроме what-if), `table.*`,
-`sheet.*` (structural), `pivot.refresh`, `chart.*` (без внешних данных).
-Denylist v1: `file.*`, `app.*`, `ui.*`, `view.*`, `print.*`, `macro.*`, `automate.*`,
-`python.*` (исполнение кода — только локально), `data.getData`/`fromTextCsv`,
-`link.open`, `password`/протекция, `mcp`.
+Allowlist v1 — ровно то, что перечисляет `crates/collab/src/ops.rs`
+(`ALLOWED_PREFIXES`): `cell.*`, `range.*`, `edit.*`, `home.*`, `data.*`, `formulas.*`,
+`review.*`, `table.*`, `sheet.*`, `insert.*`, `object.*`, `arrange.*`, `chart.*`,
+`pivot.*`, `slicer.*`, `control.*`, `draw.*`, `stash.*`.
+Structural (`STRUCTURAL_PREFIXES` + `STRUCTURAL_IDS`): `home.insert*`,
+`home.delete*`, `sheet.move*`, `sheet.rename`, `table.*`, `data.sort*`,
+`data.subtotal`, `data.removeDuplicates` — они двигают адреса и потому идут только
+на `baseVersion == head`.
+Denylist v1 (`DENIED_PREFIXES` + `DENIED_IDS`): `file.*`, `app.*`, `ui.*`, `view.*`,
+`print.*`, `macro.*`, `automate.*`, `python.*` (исполнение кода — только локально),
+`mcp.*`, `edit.undo`/`edit.redo` (это операции комнаты, а не команды),
+`data.getData`/`data.fromTextCsv`, `link.open`, `file.print`,
+`ui.printSubmit`/`ui.printSettings`.
+Группы вне списка (`format.*`, `password.*`, …) в v1 не едут: команда получает
+`forbidden`, пока группа не проверена.
 Denylist — свойство **сервера**, не клиента: команда вне allowlist получает
 `rejected{code:"forbidden"}`.
 
 Ответ сервера — авторитетная **дельта значений**:
 
 ```json
-{"type":"applied","opId":"...","version":42,
- "result":{"command":{"id":"cell.set","params":{...}},
-           "delta":{"sheet":"<sheetKey>",
-                    "cells":[{"a1":"B2","value":"45","formula":"=SUM(A1:A9)","style":"<StyleId>"}],
-                    "spill":{"C2:C9":["…"]},
-                    "objects":{"deleted":[12],"created":[13]}}}}
+{"type":"applied",
+ "applied":{"opId":"...","version":42,"epoch":7,"actor":"ann",
+            "result":{"command":{"id":"cell.set","params":{"cell":"B2","input":"=SUM(A1:A9)"}},
+                      "delta":[{"sheet":"<sheetKey>",
+                                "cells":[{"a1":"B2","value":45,"formula":"=SUM(A1:A9)","style":3}],
+                                "objectsDeleted":[12],"objectsCreated":[13]}]},
+            "sheets":null,"images":null,"book":null,"more":false}}
 ```
+
+`result.delta` — **массив** дельт по листам (одна операция может тронуть несколько),
+`result.command` — эхо команды (`{id, params}`), `result.delta` и он хотя бы один
+присутствуют. Отказ — `{"type":"rejected","rejected":{"opId","code","retryable","hint?","message?}}`.
 
 Дельта обязательна: вычисленные значения — содержимое XLSX (`<v>`), а пересчёт
 недетерминирован (`NOW`, `RAND`, `OFFSET`/`INDIRECT`, Python-ячейки,
@@ -147,15 +165,23 @@ WebSocket, WSS. Один фрейм — один JSON-объект. Лимиты
 | `hello` | C→S | `token, name, lastVersion, windowId?` | auth + join; подписанный токен только здесь, не в URL; `windowId` — окно клиента (RFC §13.6), пусто у старого клиента — одно неявное окно |
 | `welcome` | S→C | `sessionId, actorId, role, version, epoch, sheets[], participants, lease` | старт; `sheets` — карта `sheetKey ↔ имя` |
 | `op` | C→S | `opId, doc, baseVersion, epoch, kind, target, payload, preview?` | операция |
-| `applied` | S→C | `opId, version, epoch, result{command?,delta?}, actorId, sheets?, images?, book?, more?, imagePart{seq,total,data}?` | авторитетный результат; `book` — состояние уровня книги у границы структурного шага (defined names, защита структуры, package/книжные `preserved` и chart sheets, VBA-проект, стили, `calc`), `imagePart` — часть образа, `more:true` до последней |
-| `rejected` | S→C | `opId, code, retryable, hint{version,epoch}, details?` | отказ |
+| `applied` | S→C | `opId, version, epoch, actor, result{command?,delta?}, sheets?, images?, book?, more?, imagePart{seq,total,data}?` | авторитетный результат; `book` — состояние уровня книги у границы структурного шага (defined names, защита структуры, package/книжные `preserved` и chart sheets, VBA-проект, стили, `calc`), `imagePart` — часть образа, `more:true` до последней |
+| `rejected` | S→C | `opId, code, retryable, hint{version,epoch}?, message?` | отказ |
 | `presence` | C↔S | клиент: `sheetKey, active, ranges[], viewport, editing?`; сервер: `participants[]` с `actor, windowId, name, role, presence?` | эфемерно; одна запись на **окно** (`windowId` рядом с `actor`), две строки для двух окон одного пользователя |
-| `resync` | C→S | `from` | запрос базы/хвоста |
+| `resync` | C→S | `from` | запрос хвоста журнала; если `from` вне `[base, head]`, сервер отвечает книгой |
+| `snapshot` | C→S | — | клиент потерял базу и просит именно авторитетную книгу, не хвост (отказ превью, половина образа) |
 | `snapshot` | S→C | `mode:"base", version, epoch, total, seq, bytes(base64)` | авторитетная книга чанками по 768 КиБ |
 | `resynced` | S→C | `version, epoch` | догон закончен; дальше идут живые `applied` |
-| `commit` / `commit-result` | C↔S / S→C | `expectedVersion?` / `bytes, sha256, version, warnings[]` | сборка файла |
+| `committed` | S→C | `version, sha256, cabinet{version,etag}` | кабинет принял коммит; `version` — версия документа в комнате на момент сборки |
 | `ping`/`pong` | C↔S | `nonce` | heartbeat и продление lease |
 | `error` | S→C | `code, message, retryable` | фатальная ошибка соединения |
+
+Commit по WebSocket не едет. Файл собирает HTTP-эндпоинт кабинета
+`POST /v1/sessions/{id}/commit` (`?expectedVersion=<версия документа>`), ответ —
+`{name, bytes(base64 .xlsx), sha256, version, warnings[], cabinet?}`
+(`apps/gridcraft-collab-server/src/http.rs`, ADR-0009). Когда настроен
+`COLLAB_CABINET_URL`, сервер сам публикует файл в кабинет и рассылает участникам
+`committed`.
 
 `code` ∈ `auth|lease|forbidden|invalid|stale|conflict|too-large|rate-limit|internal`.
 
@@ -289,8 +315,13 @@ OT не используется: сервер применяет к head (ADR-0
 - `warnings[]` — из `ReadReport::warnings` исходного чтения и из списка известных
   непромоделированных частей (`docs/gaps.md` §3); клиент/кабинет показывает список,
   а не булев флаг.
-- `expectedVersion` (версия файла в кабинете) → `409`; сессия не перезаписывает,
-  кабинет предлагает «сохранить копию».
+- `expectedVersion` в запросе `POST /v1/sessions/{id}/commit` — это версия
+  **документа в комнате** (счётчик `version`), а не версия файла в кабинете:
+  несовпадение → `409`, комната не меняется. Версия файла кабинета — отдельное
+  значение: сервер шлёт в кабинет **etag прошлого коммита** под тем же именем
+  `expectedVersion` в теле callback'а (`crates/cabinet.rs`, `INTEGRATION.md` §5.2),
+  а `409` от кабинета превращается в `rejected{code:"cabinetConflict"}`. Передавать
+  etag кабинета в HTTP-запрос нельзя — это `409` на валидный коммит.
 - Триггеры: явное «Сохранить», выход последнего участника, TTL сессии (по умолчанию —
   явное + выход последнего).
 - После commit сессия живёт, `dirty=false`, ключи не меняются; файл в сессию не

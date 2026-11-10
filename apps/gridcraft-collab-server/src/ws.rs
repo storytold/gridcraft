@@ -44,7 +44,12 @@ pub(crate) async fn run(app: Arc<App>, session_id: String, mut socket: WebSocket
         return;
     }
     broadcast(&app.metrics, &others, &ServerMessage::Presence { participants });
-    if last_version < version_of(&welcome) && !resync(&app, &session_id, &conn_id, &tx, &mut socket, last_version).await {
+    // A replica that is behind takes the catch-up. One that is not — but joins a room whose
+    // document came from the cabinet at version 0 — takes it too: the journal has nothing to
+    // replay, and without the workbook the two replicas would keep different documents while
+    // both claiming version 0 (CodeRabbit 5846575558, `collab_ui.rs:36`).
+    let behind = last_version < version_of(&welcome) || (last_version == 0 && seeded(&app, &session_id).await);
+    if behind && !resync(&app, &session_id, &conn_id, &tx, &mut socket, last_version).await {
         leave(&app, &session_id, &connection.actor, &connection.window_id, Some(&conn_id)).await;
         return;
     }
@@ -164,67 +169,112 @@ const SNAPSHOT_CHUNK: usize = 768 * 1024;
 /// The connection is taken out of the live broadcast for the duration — otherwise a delta could
 /// overtake the snapshot — and put back only after the last missing operation has been sent.
 async fn resync(app: &Arc<App>, session_id: &str, conn_id: &u64, tx: &mpsc::Sender<ServerMessage>, socket: &mut WebSocket, from: u64) -> bool {
-    let (head, base) = unregister(app, session_id, conn_id).await;
+    let (head, base, seeded) = unregister(app, session_id, conn_id).await;
     let mut sent = from;
     let mut used_snapshot = false;
-    if from > head || from < base {
-        used_snapshot = true;
-        app.metrics.resync_snapshots.fetch_add(1, Ordering::Relaxed);
-        let Some((version, epoch, workbook)) = snapshot_source(app, session_id).await else { return false };
-        let written = tokio::task::spawn_blocking(move || gridcraft_xlsx::write_xlsx(&workbook)).await;
-        let bytes = match written {
-            Ok(Ok(bytes)) => bytes,
-            Ok(Err(e)) => {
-                log::error!("snapshot for resync failed session={session_id}: {e}");
-                return reject_resync(app, session_id, conn_id, tx, socket, "the snapshot cannot be built").await;
-            }
-            Err(e) => {
-                log::error!("snapshot task failed session={session_id}: {e}");
-                return reject_resync(app, session_id, conn_id, tx, socket, "the snapshot cannot be built").await;
-            }
-        };
-        if !send_snapshot(socket, version, epoch, &bytes).await {
-            return false;
-        }
-        sent = version;
-    }
+    // A replica that holds no document of its own joins at version 0; when the room's document
+    // came from the cabinet and no operation was applied yet, the journal holds nothing to send,
+    // so the workbook itself is the answer. Without it both sides claim version 0 and keep
+    // different documents (CodeRabbit 5846575558, `collab_ui.rs:36`).
+    let mut want_base = from > head || from < base || (from == 0 && head == 0 && seeded);
     loop {
-        let entries = {
-            let Some(doc) = app.doc(session_id).await else { return false };
-            let doc = doc.lock().await;
-            doc.journal_after(sent)
-        };
-        if entries.is_empty() {
-            let (version, epoch) = re_register(app, session_id, conn_id, tx).await;
-            if !used_snapshot {
-                app.metrics.catchups.fetch_add(1, Ordering::Relaxed);
+        if want_base {
+            used_snapshot = true;
+            app.metrics.resync_snapshots.fetch_add(1, Ordering::Relaxed);
+            match send_base(app, session_id, socket).await {
+                Ok(version) => sent = version,
+                Err(BaseError::Refused(why)) => return reject_resync(app, session_id, conn_id, tx, socket, why).await,
+                Err(BaseError::Gone) => return false,
             }
-            return send(socket, &ServerMessage::Resynced { version, epoch }).await.is_ok();
+            want_base = false;
         }
-        for applied in &entries {
-            for frame in frames(&ServerMessage::Applied { applied: applied.clone() }) {
-                if send(socket, &frame).await.is_err() {
-                    return false;
+        match catch_up(app, session_id, conn_id, tx, sent).await {
+            CatchUp::Tail(entries) => {
+                // A snapshot trimmed the journal past `sent` between two iterations: the tail no
+                // longer covers what this connection missed, so the workbook is the answer.
+                if entries.first().is_some_and(|applied| applied.version > sent.saturating_add(1)) {
+                    want_base = true;
+                    continue;
+                }
+                for applied in &entries {
+                    for frame in frames(&ServerMessage::Applied { applied: applied.clone() }) {
+                        if send(socket, &frame).await.is_err() {
+                            return false;
+                        }
+                    }
+                    sent = applied.version;
                 }
             }
-            sent = applied.version;
+            CatchUp::Registered { version, epoch } => {
+                if !used_snapshot {
+                    app.metrics.catchups.fetch_add(1, Ordering::Relaxed);
+                }
+                return send(socket, &ServerMessage::Resynced { version, epoch }).await.is_ok();
+            }
         }
     }
 }
 
-async fn unregister(app: &App, session_id: &str, conn_id: &u64) -> (u64, u64) {
-    let Some(doc) = app.doc(session_id).await else { return (0, 0) };
+/// What one critical section over the document decided for a connection that is catching up.
+enum CatchUp {
+    /// Operations the connection has not seen. It stays out of the live broadcast while they go.
+    Tail(Vec<gridcraft_collab::Applied>),
+    /// Nothing is missing: the connection is back in the broadcast, and `version` is its head.
+    Registered { version: u64, epoch: u64 },
+}
+
+/// One critical section over the document: the operations the connection still needs, or — when
+/// there is none — the head, with the connection put back into the live broadcast.
+///
+/// Reading the tail and re-registering under one lock is what makes the answer sound. Between a
+/// separate read and a separate insert an operation of another connection can be applied,
+/// broadcast to a set that does not contain this one and journaled; the client is then told the
+/// new head in `resynced` without ever receiving the delta, and it has no version gap to notice
+/// (CodeRabbit 5846575558, `ws.rs:202`).
+async fn catch_up(app: &App, session_id: &str, conn_id: &u64, tx: &mpsc::Sender<ServerMessage>, sent: u64) -> CatchUp {
+    let Some(doc) = app.doc(session_id).await else { return CatchUp::Registered { version: 0, epoch: 0 } };
+    let mut doc = doc.lock().await;
+    let entries = doc.journal_after(sent);
+    if !entries.is_empty() {
+        return CatchUp::Tail(entries);
+    }
+    doc.conns.insert(*conn_id, tx.clone());
+    CatchUp::Registered { version: doc.gateway.hub().version(session_id).unwrap_or(0), epoch: doc.gateway.hub().epoch(session_id).unwrap_or(0) }
+}
+
+/// Why the workbook could not be sent: the connection is gone, or it can be told why not.
+enum BaseError {
+    Refused(&'static str),
+    Gone,
+}
+
+/// Sends the authoritative workbook of the session at its head, chunked.
+async fn send_base(app: &Arc<App>, session_id: &str, socket: &mut WebSocket) -> Result<u64, BaseError> {
+    let Some((version, epoch, workbook)) = snapshot_source(app, session_id).await else { return Err(BaseError::Gone) };
+    let written = tokio::task::spawn_blocking(move || gridcraft_xlsx::write_xlsx(&workbook)).await;
+    let bytes = match written {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(e)) => {
+            log::error!("snapshot for resync failed session={session_id}: {e}");
+            return Err(BaseError::Refused("the snapshot cannot be built"));
+        }
+        Err(e) => {
+            log::error!("snapshot task failed session={session_id}: {e}");
+            return Err(BaseError::Refused("the snapshot cannot be built"));
+        }
+    };
+    if !send_snapshot(socket, version, epoch, &bytes).await {
+        return Err(BaseError::Gone);
+    }
+    Ok(version)
+}
+
+async fn unregister(app: &App, session_id: &str, conn_id: &u64) -> (u64, u64, bool) {
+    let Some(doc) = app.doc(session_id).await else { return (0, 0, false) };
     let mut doc = doc.lock().await;
     doc.conns.remove(conn_id);
     let head = doc.gateway.hub().version(session_id).unwrap_or(0);
-    (head, doc.snapshot_version)
-}
-
-async fn re_register(app: &App, session_id: &str, conn_id: &u64, tx: &mpsc::Sender<ServerMessage>) -> (u64, u64) {
-    let Some(doc) = app.doc(session_id).await else { return (0, 0) };
-    let mut doc = doc.lock().await;
-    doc.conns.insert(*conn_id, tx.clone());
-    (doc.gateway.hub().version(session_id).unwrap_or(0), doc.gateway.hub().epoch(session_id).unwrap_or(0))
+    (head, doc.snapshot_version, doc.seeded)
 }
 
 async fn snapshot_source(app: &App, session_id: &str) -> Option<(u64, u64, std::sync::Arc<gridcraft_model::Workbook>)> {
@@ -236,8 +286,15 @@ async fn snapshot_source(app: &App, session_id: &str) -> Option<(u64, u64, std::
     Some((version, epoch, workbook))
 }
 
-async fn reject_resync(app: &App, session_id: &str, conn_id: &u64, tx: &mpsc::Sender<ServerMessage>, socket: &mut WebSocket, why: &str) -> bool {
-    let _ = re_register(app, session_id, conn_id, tx).await;
+async fn reject_resync(
+    app: &App,
+    session_id: &str,
+    conn_id: &u64,
+    tx: &mpsc::Sender<ServerMessage>,
+    socket: &mut WebSocket,
+    why: &'static str,
+) -> bool {
+    let _ = catch_up(app, session_id, conn_id, tx, u64::MAX).await;
     let error = ServerMessage::Error { code: "internal".into(), message: why.into(), retryable: true };
     send(socket, &error).await.is_ok()
 }
@@ -254,6 +311,13 @@ async fn send_snapshot(socket: &mut WebSocket, version: u64, epoch: u64, bytes: 
         }
     }
     true
+}
+
+/// Whether the room's document came from outside (the cabinet's bytes or the volume), so a
+/// replica that joins at version 0 has to adopt it.
+async fn seeded(app: &App, session_id: &str) -> bool {
+    let Some(doc) = app.doc(session_id).await else { return false };
+    doc.lock().await.seeded
 }
 
 /// The version the welcome message reports, without re-encoding the whole message.
@@ -307,6 +371,11 @@ async fn pump(
     }
     if let ClientMessage::Resync { from } = message {
         return resync(app, session_id, conn_id, tx, socket, from).await;
+    }
+    // The client holds no usable document — a refused preview the journal tail cannot cover — and
+    // asks for the workbook itself: the same catch-up from above the head, which sends the base.
+    if matches!(&message, ClientMessage::Snapshot) {
+        return resync(app, session_id, conn_id, tx, socket, u64::MAX).await;
     }
     let now = now_secs();
     let journal_op = match &message {

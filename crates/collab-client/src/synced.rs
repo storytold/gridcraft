@@ -378,8 +378,11 @@ impl Synced {
                         let later_preview = self.pending[index.saturating_add(1)..].iter().any(|pending| pending.previewed);
                         let pending = self.pending.remove(index);
                         if pending.previewed && later_preview {
+                            // The refused preview sits under a later one in this replica's history
+                            // and never reached the journal, so no tail can take it back: only the
+                            // authoritative workbook can (RFC §4.6).
                             self.notice = Some("an earlier edit was refused; reloading the document from the session".into());
-                            self.link.send_message(ClientMessage::Resync { from: self.link.state().version });
+                            self.link.send_message(ClientMessage::Snapshot);
                         } else if pending.previewed {
                             let _ = session.execute("edit.undo", json!({}));
                         }

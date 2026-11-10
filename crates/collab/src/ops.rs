@@ -31,6 +31,13 @@ const DENIED_IDS: &[&str] =
 /// that was accepted against the old addresses may land on another row: it is structural here too.
 const STRUCTURAL_PREFIXES: &[&str] = &["home.insert", "home.delete", "sheet.move", "sheet.rename", "table.", "data.sort"];
 
+/// Structural commands that no prefix of theirs covers. `data.subtotal` writes total rows below
+/// each group, which shifts every row under it, and `data.removeDuplicates` compacts the kept rows
+/// upwards: a merge edit accepted against the old addresses lands on another row, and an undo of a
+/// subtotal leaves its outline behind. Classification happens before the operation runs, so the
+/// room still requires `base_version == head` for them (CodeRabbit 5846575558, `ops.rs:32`).
+const STRUCTURAL_IDS: &[&str] = &["data.subtotal", "data.removeDuplicates"];
+
 /// Groups allowed to travel in v1. Anything outside them is refused even if it looks harmless:
 /// a new command group has to be reviewed before it replicates.
 const ALLOWED_PREFIXES: &[&str] = &[
@@ -62,7 +69,7 @@ pub fn classify(id: &str) -> Option<Class> {
     if !ALLOWED_PREFIXES.iter().any(|p| id.starts_with(p)) {
         return None;
     }
-    if STRUCTURAL_PREFIXES.iter().any(|p| id.starts_with(p)) {
+    if STRUCTURAL_IDS.contains(&id) || STRUCTURAL_PREFIXES.iter().any(|p| id.starts_with(p)) {
         return Some(Class::Structural);
     }
     Some(Class::Merge)

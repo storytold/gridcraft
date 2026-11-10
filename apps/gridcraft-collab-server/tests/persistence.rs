@@ -432,6 +432,10 @@ async fn a_structural_undo_restores_the_package_state_after_a_restart() {
         let mut ann = open(&server, &session, "ann", Role::Editor, 61).await;
         let welcome = next(&mut ann).await;
         let sheet = sheet_key(&welcome);
+        // The room was opened from the cabinet's bytes at version 0: the join takes the workbook
+        // (which is the file this suite just built), then the catch-up marker.
+        let _ = read_snapshot(&mut ann).await;
+        assert_eq!(next(&mut ann).await["type"], "resynced");
 
         let op_at = |op_id: &str, base_version: u64, epoch: u64, kind: &str, cmd: &str, params: serde_json::Value, target: &str| {
             json!({

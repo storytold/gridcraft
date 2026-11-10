@@ -129,6 +129,10 @@ fn the_allowlist_separates_structural_from_merge_and_denies_code() {
     assert_eq!(classify("data.sort"), Some(Class::Structural));
     assert_eq!(classify("data.sortAscending"), Some(Class::Structural));
     assert_eq!(classify("data.sortDescending"), Some(Class::Structural));
+    // A subtotal writes total rows and shifts what is under them; removing duplicates compacts
+    // the kept rows upwards. Both move addresses, so neither is a merge edit.
+    assert_eq!(classify("data.subtotal"), Some(Class::Structural));
+    assert_eq!(classify("data.removeDuplicates"), Some(Class::Structural));
     assert_eq!(classify("data.validation"), Some(Class::Merge));
     assert_eq!(classify("file.open"), None);
     assert_eq!(classify("python.run"), None);
@@ -534,6 +538,24 @@ fn an_undo_delta_carries_the_restored_formula_and_the_dependents() {
     let b1 = change("B1").expect("the recalculated dependent travels too");
     assert_eq!(b1.formula.as_deref(), Some("A1*2"), "the dependent carries its formula, not only a value");
     assert_eq!(serde_json::from_value::<Value>(b1.value.clone()).unwrap().as_f64(), Some(0.0));
+}
+
+/// One cell undo reports the restored cell and what reads it, not every formula of the book: the
+/// delta, the journal line and every peer's patch follow what actually moved.
+#[test]
+fn a_cell_undo_reports_only_the_restored_cells_and_their_dependents() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, op("far", "cell.set", json!({"input": "=1+1"}), &sheet, "H1"), "ann").unwrap();
+    room.apply(&mut s, op("b1", "cell.set", json!({"input": "=A1*2"}), &sheet, "B1"), "ann").unwrap();
+    room.apply(&mut s, op("a1", "cell.set", json!({"input": 4}), &sheet, "A1"), "ann").unwrap();
+    let undone = room.undo(&mut s, "ann", Some("a1")).unwrap();
+    let delta = undone.result.delta.expect("cells changed");
+    let cells: Vec<&str> = delta.iter().flat_map(|sheet| &sheet.cells).map(|cell| cell.a1.as_str()).collect();
+    assert!(cells.contains(&"A1"), "the restored cell travels: {cells:?}");
+    assert!(cells.contains(&"B1"), "the dependent it moved travels: {cells:?}");
+    assert!(!cells.contains(&"H1"), "a formula nothing restored depends on is not in the answer: {cells:?}");
 }
 
 #[test]

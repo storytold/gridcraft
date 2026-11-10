@@ -185,6 +185,11 @@ pub(crate) struct Doc {
     /// Whether a base for this document has been written (at `snapshot_version`) or was restored
     /// from the volume. A snapshot with nothing newer than that base has nothing to do.
     pub persisted: bool,
+    /// Whether this room's document came from outside — the cabinet's `initialBytes` or the volume
+    /// of an earlier run — rather than from an empty workbook the first participant scales up. A
+    /// replica that joins a seeded room at version 0 has to adopt that document, because the
+    /// journal holds nothing to replay (RFC §4.6; CodeRabbit 5846575558, `collab_ui.rs:36`).
+    pub seeded: bool,
     /// Serialises the writes of this document's volume state — a snapshot's base, journal and
     /// metadata, and the metadata a commit or a takeover writes. Kept out of the document lock so
     /// the (blocking) file write does not stop the message loop.
@@ -281,6 +286,9 @@ impl App {
         }
         let requested_name = request.initial_name.clone().unwrap_or_else(|| format!("Book{}", request.file_id));
         let stored = self.load_stored(request.file_id).map_err(ApiError::internal)?;
+        // The room's document is authoritative when it came from the cabinet or from the volume;
+        // an empty workbook a first participant opened is not (see `Doc::seeded`).
+        let seeded = stored.is_some() || request.initial_bytes.is_some();
         let (session, keys, state, journal, created_at, name, base_version, cabinet) = match stored {
             Some(loaded) => (
                 loaded.session,
@@ -342,6 +350,7 @@ impl App {
                 journal,
                 snapshot_version: base_version,
                 persisted: false,
+                seeded,
                 snapshot_lock: Arc::new(Mutex::new(())),
             };
             inner.docs.insert(session_id.clone(), Entry { file_id: request.file_id, doc: Arc::new(Mutex::new(doc)) });
@@ -396,15 +405,22 @@ impl App {
     fn load_stored(&self, file_id: i64) -> Result<Option<Loaded>, StoreError> {
         let Some(store) = &self.store else { return Ok(None) };
         let Some(meta) = store.read_meta(file_id)? else { return Ok(None) };
-        let bytes = store.read_base(file_id)?.ok_or_else(|| StoreError::Load(format!("fileId {file_id} has meta but no base")))?;
+        // The three files of a snapshot are named after the version `meta.json` records: a crash
+        // between two writes of the next snapshot leaves this one whole.
+        let bytes = store
+            .read_base(file_id, meta.base_version)?
+            .ok_or_else(|| StoreError::Load(format!("fileId {file_id} has meta but no base at version {}", meta.base_version)))?;
         let (workbook, _warnings) = gridcraft_engine::io::open_bytes(&meta.name, &bytes).map_err(|e| StoreError::Xlsx(e.to_string()))?;
-        let keys = store.read_keys(file_id)?.ok_or_else(|| StoreError::Load(format!("fileId {file_id} has no sheet keys")))?;
+        let keys = store
+            .read_keys(file_id, meta.base_version)?
+            .ok_or_else(|| StoreError::Load(format!("fileId {file_id} has no sheet keys at version {}", meta.base_version)))?;
         let keys = SheetKeys::from_file(&workbook, keys);
-        let state = store.read_state(file_id)?.unwrap_or_default();
+        let state = store.read_state(file_id, meta.base_version)?.unwrap_or_default();
         let mut session = Session::new();
         session.add_document(DocState::from_saved(workbook, None, meta.name.clone(), Trust::FromFile));
         let mut room = Room::restore(keys, state);
-        let journal = store.read_journal(file_id)?;
+        // A torn tail a crash left behind is dropped on disk here, before this session appends.
+        let journal = store.read_journal_repairing(file_id)?;
         // The base is at `base_version` and the journal holds every version after it, undo and
         // redo included: a gap would replay a document that never existed.
         let mut expected = meta.base_version;
@@ -571,6 +587,8 @@ impl App {
                             journal: loaded.journal,
                             snapshot_version: scanned.base_version,
                             persisted: true,
+                            // The volume holds this document's base: a joining replica adopts it.
+                            seeded: true,
                             snapshot_lock: Arc::new(Mutex::new(())),
                         };
                         inner.docs.insert(scanned.session_id.clone(), Entry { file_id: scanned.file_id, doc: Arc::new(Mutex::new(doc)) });

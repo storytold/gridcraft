@@ -1213,8 +1213,9 @@ impl Session {
     }
 
     /// Restores cells exactly as a shared session's undo remembers them: value, formula text and
-    /// its array flags, Python code and interned style. The dependency graph is rebuilt and the
-    /// workbook recalculated, because a restored formula changes what its dependents show; the
+    /// its array flags, Python code and interned style. The graph nodes of the restored cells are
+    /// updated and only what depends on them is recalculated, as a command's own commit does: a
+    /// whole-workbook rebuild would hand every formula of the book to the delta of one undo. The
     /// cells this call restored and every formula it re-evaluated are left in `last_changed`, so
     /// the caller can tell another replica what the new document state is.
     pub fn restore_cells(&mut self, sheet: usize, cells: &[(CellRef, CellState)]) -> Result<()> {
@@ -1236,8 +1237,13 @@ impl Session {
                 let py = state.py.as_deref().map(|code| Arc::new(gridcraft_model::PyCode::new(code)));
                 sh.set_cell(*at, gridcraft_model::Cell { value: state.value.clone(), formula, style: gridcraft_model::StyleId(state.style), py });
             }
-            d.calc.rebuild(model);
-            d.calc.recalc_all(model);
+        }
+        {
+            // Only the restored cells and their dependents: `cells_changed` also puts the graph
+            // nodes of the restored cells up to date, which is all a cell-level restore needs.
+            let model = Arc::make_mut(&mut d.wb);
+            let keys: Vec<gridcraft_calc::Key> = cells.iter().map(|(at, _)| (sheet, *at)).collect();
+            d.calc.cells_changed(model, &keys);
         }
         d.revision = d.revision.saturating_add(1);
         let evaluated = d.calc.take_evaluated();

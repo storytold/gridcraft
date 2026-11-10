@@ -70,6 +70,16 @@ impl HostSession {
         self.token = token.into();
     }
 
+    /// Whether `other` names the room this window already dialed: the same session, the same
+    /// socket URL and the same role.
+    ///
+    /// A repeated `gridcraft:session` for it is a token update, not a new session: a fresh client
+    /// would drop the operations this one has not had confirmed, and the room cannot ask for them
+    /// again (CodeRabbit 5846575558, `web.rs:247`).
+    pub fn same_room(&self, other: &HostSession) -> bool {
+        self.session_id == other.session_id && self.ws_url == other.ws_url && self.role == other.role
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn parsed_role(&self) -> Result<Role, String> {
         serde_json::from_value::<Role>(serde_json::Value::String(self.role.clone()))
@@ -434,6 +444,12 @@ impl CollabTrait for Collab {
     fn take_notice(&mut self) -> Option<String> {
         self.sync.take_notice()
     }
+
+    /// A renewed cabinet token replaces the one the link dialed with; the session, its document
+    /// and its unconfirmed operations stay (`Collab::renew_token`).
+    fn renew_token(&mut self, token: &str) {
+        Self::renew_token(self, token);
+    }
 }
 
 #[cfg(test)]
@@ -480,6 +496,23 @@ mod tests {
         assert!(debug.contains("s1"), "{debug}");
         assert!(!debug.contains("jwt-secret"), "{debug}");
         assert!(debug.contains("<redacted>"), "{debug}");
+    }
+
+    /// A repeated `gridcraft:session` for the room this window already dialed is a token update:
+    /// the same session, URL and role keep their client (and its unconfirmed operations), and
+    /// only a fresh JWT is applied. Another room is a new session.
+    #[test]
+    fn a_repeated_session_names_the_same_room_only_for_the_same_session_url_and_role() {
+        let current = HostSession::new("s1", "wss://collab.example/ws", "jwt-old", "editor");
+        assert!(current.same_room(&HostSession::new("s1", "wss://collab.example/ws", "jwt-new", "editor")), "a new token is the same room");
+        assert!(!current.same_room(&HostSession::new("s2", "wss://collab.example/ws", "jwt-old", "editor")), "another session is another room");
+        assert!(!current.same_room(&HostSession::new("s1", "wss://other.example/ws", "jwt-old", "editor")), "another server is another room");
+        assert!(!current.same_room(&HostSession::new("s1", "wss://collab.example/ws", "jwt-old", "viewer")), "another role is another session");
+        let mut renewed = current.clone();
+        renewed.set_token("jwt-new");
+        assert_eq!(renewed.token(), "jwt-new");
+        assert!(current.same_room(&renewed));
+        assert!(!format!("{renewed:?}").contains("jwt-new"), "the token stays out of Debug");
     }
 
     #[test]

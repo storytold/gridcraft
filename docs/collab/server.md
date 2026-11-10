@@ -33,6 +33,17 @@
 Имена `COLLAB_CABINET_*` — общие из `INTEGRATION.md` §5.2; те же переменные с префиксом
 `GRIDCRAFT_COLLAB_` (`GRIDCRAFT_COLLAB_CABINET_URL` и т. д.) принимаются как синонимы.
 
+Про `COLLAB_CABINET_URL` (CodeRabbit 5846575558, `server.md:28`):
+
+- принимается только `http://`: TLS терминирует ingress, `https://` останавливает
+  старт сервера с сообщением об этом (`config.rs`, `Target::parse`); логин и пароль
+  в URL тоже отвергаются;
+- запрос несёт `Authorization: Bearer COLLAB_CABINET_TOKEN` и собранный `.xlsx` в
+  теле, то есть **без TLS**. Эндпоинт кабинета должен быть доступен серверу только
+  по доверенному каналу: loopback или приватная сеть, либо тот же ingress через
+  `http://` внутри кластера. Публиковать `COLLAB_CABINET_URL` в интернет нельзя;
+- токен и тело запроса не попадают ни в лог, ни в метрику, ни в URL.
+
 Лимиты транспорта: входящий кадр ≤ 1 MiB, сообщение ≤ 9 MiB; образ структурного
 undo/redo (`{book, images}`: листы, preserved-блоки листов, defined names, защита
 структуры, package/книжные `preserved` с chart sheets, VBA-проект, стили, `calc`) уходит
