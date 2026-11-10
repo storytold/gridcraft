@@ -197,6 +197,21 @@ fn read_trendline(t: &El) -> Option<Trendline> {
     })
 }
 
+/// The chart's style (1-48). Excel 2010 and later save it inside `mc:AlternateContent`: a
+/// `c14:style` (the style plus 100) as the Choice and a `c:style` as the Fallback. Without one,
+/// Excel's default style 2.
+fn chart_style(root: &El) -> u32 {
+    let parse = |v: &str| v.trim().parse::<u32>().ok();
+    let direct = root.child_val("style").and_then(parse);
+    let alternate = || {
+        root.kids("AlternateContent").find_map(|a| {
+            let fallback = a.path(&["Fallback", "style"]).and_then(|s| s.attr("val")).and_then(parse);
+            fallback.or_else(|| a.path(&["Choice", "style"]).and_then(|s| s.attr("val")).and_then(parse).and_then(|v| v.checked_sub(100)))
+        })
+    };
+    direct.or_else(alternate).filter(|s| (1..=48).contains(s)).unwrap_or(2)
+}
+
 fn rich_title(t: &El) -> Option<String> {
     let tx = t.child("tx")?;
     if let Some(rich) = tx.child("rich") {
@@ -279,7 +294,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
             outline: bool_val(t, "showOutline"),
         }),
         gridlines: val_axes.iter().any(|a| a.child("majorGridlines").is_some()),
-        style: root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2),
+        style: chart_style(root),
         hole_size,
         first_slice_angle,
         x_title: x_ax.and_then(|a| a.child("title")).and_then(rich_title),
