@@ -24,22 +24,26 @@ chrono = { workspace = true }
 # Icon + VERSIONINFO for gridcraft.exe; build.rs only uses it when the target is Windows.
 winresource = "0.1"
 
-[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Retain X11 fallback; draw Wayland client-side controls without bundled title fonts.
+winit = { version = "0.30", default-features = false, features = ["x11", "wayland-csd-adwaita-notitle"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Same craft-libs revision as the workspace's craft-update and craft-window (see the root
 # Cargo.toml).
-craft-print = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
+craft-print = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
 craft-update = { workspace = true }
 rfd = { workspace = true }
-arboard = { workspace = true }
+arboard = { workspace = true, features = ["image-data"] }
 gridcraft-mcp = { workspace = true }
 # The control channel's token (OS random numbers); already in the tree.
 getrandom = "0.4"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
-arboard = { workspace = true, features = ["wayland-data-control"] }
+arboard = { workspace = true, features = ["image-data", "wayland-data-control"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Blocks on the start-up DirectX 12 adapter probe (`graphics.rs`); already in the tree via eframe.

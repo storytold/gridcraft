@@ -9,6 +9,17 @@ use super::{
 /// sheet is `sheet`, else the prefix, else the active one. The selection belongs to the active
 /// sheet, so another sheet needs explicit lines.
 fn line_targets(s: &Session, p: &Json, rows: bool) -> Result<(usize, Vec<(u32, u32)>)> {
+    let (sheet, lines) = resolve_lines(s, p, rows)?;
+    // Sizes and visibility are formatting of the line, which a protected sheet must allow.
+    if rows {
+        crate::cmd::refuse_unless_allowed(s, sheet, "Formatting rows", |p| p.format_rows)?;
+    } else {
+        crate::cmd::refuse_unless_allowed(s, sheet, "Formatting columns", |p| p.format_columns)?;
+    }
+    Ok((sheet, lines))
+}
+
+fn resolve_lines(s: &Session, p: &Json, rows: bool) -> Result<(usize, Vec<(u32, u32)>)> {
     let key = if rows { "rows" } else { "cols" };
     let mut sheet = target_sheet(s, p)?;
     if let Some(t) = str_param(p, key) {
@@ -118,10 +129,53 @@ pub fn approx_text_width(text: &str, size: f32, bold: bool) -> f32 {
             c if c.is_ascii_uppercase() => 0.65,
             c if c.is_ascii_digit() => 0.56,
             c if c.is_ascii() => 0.52,
-            _ => 1.0,
+            c if is_zero_width(c) => 0.0,
+            c => arabic_em(c).unwrap_or(1.0),
         };
     }
     w * size * if bold { 1.07 } else { 1.0 } * 96.0 / 72.0
+}
+
+/// Arabic vowel and Quranic marks, which sit on the previous letter, and invisible format
+/// characters such as direction marks and zero-width joiners.
+fn is_zero_width(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0610}'..='\u{061A}'
+            | '\u{061C}'
+            | '\u{064B}'..='\u{065F}'
+            | '\u{0670}'
+            | '\u{06D6}'..='\u{06DC}'
+            | '\u{06DF}'..='\u{06E4}'
+            | '\u{06E7}'..='\u{06E8}'
+            | '\u{06EA}'..='\u{06ED}'
+            | '\u{0897}'..='\u{089F}'
+            | '\u{08CA}'..='\u{08E1}'
+            | '\u{08E3}'..='\u{08FF}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2069}'
+            | '\u{FE20}'..='\u{FE2F}'
+            | '\u{FEFF}'
+    )
+}
+
+/// Width in ems of an Arabic-script character, measured from shaped Noto Sans Arabic, Noto Naskh
+/// Arabic and DejaVu Sans: joined letters average about half an em, word ligatures such as ﷺ and the
+/// rial sign about 1.2 em, the honorific ligatures (U+FD40–FD4B) about 1.6 em, and the bismillah
+/// ligature about 11 em. The later honorific ligatures (U+FBC3–FBD2, U+FD4C–FD4F, U+FD90–FD91,
+/// U+FDC8–FDCF) are not measured and get the 1.6 em of their siblings rather than the letter width.
+/// Arabic-Indic digits are as wide as ASCII digits (0.53–0.57 em in Noto Sans Arabic, Arial, Tahoma
+/// and Times New Roman); Arabic punctuation (0.2–0.5 em in the same fonts) keeps the letter width.
+fn arabic_em(c: char) -> Option<f32> {
+    match c {
+        '\u{FDFD}' => Some(11.0),
+        '\u{FBC3}'..='\u{FBD2}' | '\u{FD40}'..='\u{FD4F}' | '\u{FD90}'..='\u{FD91}' | '\u{FDC8}'..='\u{FDCF}' => Some(1.6),
+        '\u{FDF0}'..='\u{FDFC}' | '\u{FDFE}'..='\u{FDFF}' => Some(1.2),
+        '\u{0660}'..='\u{0669}' | '\u{06F0}'..='\u{06F9}' => Some(0.56),
+        '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{0870}'..='\u{08FF}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFC}' => Some(0.48),
+        _ => None,
+    }
 }
 
 /// Distinct texts AutoFit measures exactly; past this many, `Session::text_width` is asked for a

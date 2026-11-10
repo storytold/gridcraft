@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::cell::{Cell, CellPicture};
 use crate::features::{
-    Anchor, AutoFilter, Chart, Comment, CondFormat, Hyperlink, Image, LineInfo, ObjKind, ObjRef, PivotTable, PrintSettings, Shape, ShapeKind,
-    SheetProtection, Slicer, Sparkline, Table, Validation,
+    Anchor, AutoFilter, Chart, Comment, CondFormat, FormControl, Hyperlink, Image, LineInfo, ObjKind, ObjRef, PivotTable, PrintSettings, Shape,
+    ShapeKind, SheetProtection, Slicer, Sparkline, Table, Validation,
 };
 use crate::store::CellStore;
 use crate::style::{Color, StyleId};
@@ -147,6 +147,10 @@ pub struct Sheet {
     /// On-sheet slicer widgets (filter a table column by clicking value tiles).
     #[serde(default)]
     pub slicers: Vec<Slicer>,
+    /// Form controls (buttons, sliders, spin buttons). They paint above every other object and
+    /// take clicks first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub controls: Vec<FormControl>,
     /// PivotTables whose output lives on this sheet.
     #[serde(default)]
     pub pivots: Vec<PivotTable>,
@@ -270,6 +274,7 @@ impl Sheet {
             shapes: vec![],
             sparklines: vec![],
             slicers: vec![],
+            controls: vec![],
             pivots: vec![],
             protection: None,
             edit_ranges: vec![],
@@ -336,6 +341,8 @@ impl Sheet {
             if s.kind == ShapeKind::Equation { ObjKind::Equation } else { ObjKind::Shape }
         } else if self.slicers.iter().any(|o| o.id == id) {
             ObjKind::Slicer
+        } else if self.controls.iter().any(|o| o.id == id) {
+            ObjKind::Control
         } else {
             return None;
         };
@@ -356,6 +363,7 @@ impl Sheet {
             ObjKind::Shape => self.shapes.iter().find(|c| c.id == o.id).map(|c| c.anchor),
             ObjKind::Slicer => self.slicers.iter().find(|c| c.id == o.id).map(|c| c.anchor),
             ObjKind::Equation => self.shapes.iter().find(|c| c.id == o.id && c.kind == ShapeKind::Equation).map(|c| c.anchor),
+            ObjKind::Control => self.controls.iter().find(|c| c.id == o.id).map(|c| c.anchor),
         }
     }
 
@@ -366,6 +374,7 @@ impl Sheet {
             ObjKind::Shape => self.shapes.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
             ObjKind::Slicer => self.slicers.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
             ObjKind::Equation => self.shapes.iter_mut().find(|c| c.id == o.id && c.kind == ShapeKind::Equation).map(|c| &mut c.anchor),
+            ObjKind::Control => self.controls.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
         }
     }
 
@@ -382,12 +391,13 @@ impl Sheet {
             ObjKind::Shape => take(&mut self.shapes, |c| c.id == o.id),
             ObjKind::Slicer => take(&mut self.slicers, |c| c.id == o.id),
             ObjKind::Equation => take(&mut self.shapes, |c| c.id == o.id && c.kind == ShapeKind::Equation),
+            ObjKind::Control => take(&mut self.controls, |c| c.id == o.id),
         }
     }
 
-    /// Every floating object's anchor in a fixed order (charts, images, shapes, slicers) that
-    /// [`Sheet::object_anchors_mut`] repeats, so a pass can compute new anchors from the old ones
-    /// and write them back in step.
+    /// Every floating object's anchor in a fixed order (charts, images, shapes, slicers, controls)
+    /// that [`Sheet::object_anchors_mut`] repeats, so a pass can compute new anchors from the old
+    /// ones and write them back in step.
     pub fn object_anchors(&self) -> impl Iterator<Item = &Anchor> {
         self.charts
             .iter()
@@ -395,6 +405,7 @@ impl Sheet {
             .chain(self.images.iter().map(|o| &o.anchor))
             .chain(self.shapes.iter().map(|o| &o.anchor))
             .chain(self.slicers.iter().map(|o| &o.anchor))
+            .chain(self.controls.iter().map(|o| &o.anchor))
     }
 
     pub fn object_anchors_mut(&mut self) -> impl Iterator<Item = &mut Anchor> {
@@ -404,6 +415,7 @@ impl Sheet {
             .chain(self.images.iter_mut().map(|o| &mut o.anchor))
             .chain(self.shapes.iter_mut().map(|o| &mut o.anchor))
             .chain(self.slicers.iter_mut().map(|o| &mut o.anchor))
+            .chain(self.controls.iter_mut().map(|o| &mut o.anchor))
     }
     /// Displayed value of a cell: its own value, or a spilled value.
     pub fn value(&self, c: CellRef) -> Value {
@@ -530,12 +542,14 @@ impl Sheet {
     /// sheet AutoFilter while it has criteria, or a hidden data row of a filtered table.
     /// Other hidden rows were hidden by hand.
     pub fn is_row_filtered(&self, row: u32) -> bool {
-        if !self.is_row_hidden(row) {
-            return false;
-        }
-        let in_sheet_filter =
-            self.autofilter.as_ref().is_some_and(|af| !af.criteria.is_empty() && row > af.range.start.row && row <= af.range.end.row);
-        in_sheet_filter || self.tables.iter().any(|t| !t.filter.is_empty() && t.data_range().is_some_and(|r| row >= r.start.row && row <= r.end.row))
+        self.is_row_hidden(row) && self.filter_row_spans().iter().any(|&(first, last)| row >= first && row <= last)
+    }
+    /// The row spans (first, last) an applied filter can hide: the data rows of the sheet
+    /// AutoFilter while it has criteria, and of each filtered table.
+    pub fn filter_row_spans(&self) -> Vec<(u32, u32)> {
+        let sheet = self.autofilter.as_ref().filter(|af| !af.criteria.is_empty()).map(|af| (af.range.start.row.saturating_add(1), af.range.end.row));
+        let tables = self.tables.iter().filter(|t| !t.filter.is_empty()).filter_map(|t| t.data_range()).map(|r| (r.start.row, r.end.row));
+        sheet.into_iter().chain(tables).collect()
     }
     pub fn is_col_hidden(&self, col: u32) -> bool {
         self.cols.get(&col).is_some_and(|r| r.hidden)
@@ -603,7 +617,9 @@ impl LineIndex {
         let mut prev = 0u32;
         for (&line, info) in custom {
             pos += (line - prev) as f64 * default;
-            let size = if info.hidden { 0.0 } else { info.size.map_or(default, |s| s as f64) };
+            // A negative size (only a malformed file has one) counts as zero, so positions only
+            // grow and the searches below stay valid.
+            let size = if info.hidden { 0.0 } else { info.size.map_or(default, |s| s as f64).max(0.0) };
             lines.push((line, pos, size));
             pos += size;
             prev = line + 1;
@@ -620,6 +636,44 @@ impl LineIndex {
                 None => line as f64 * self.default,
             },
         }
+    }
+    /// The first line at or after `line` (and before the axis end) with a size above zero, or
+    /// `None` when every line from there on is hidden or zero-sized. O(log n): a run of hidden
+    /// lines all start where the next shown line starts, so one search steps over the whole run.
+    pub fn next_visible(&self, line: u32) -> Option<u32> {
+        if line >= self.max {
+            return None;
+        }
+        let i = self.lines.partition_point(|e| e.0 < line);
+        let custom = self.lines.get(i).is_some_and(|e| e.0 == line);
+        if !custom && self.default > 0.0 {
+            return Some(line);
+        }
+        // Every line from `line` up to the answer is zero-sized, so they all start at `p`; the
+        // last custom line starting at `p` either has a size (the answer) or is the end of the run.
+        let p = self.start(line);
+        let k = self.lines.partition_point(|e| e.1 <= p);
+        let &(last, _, size) = self.lines.get(k.checked_sub(1)?)?;
+        if last < line {
+            return None;
+        }
+        if size > 0.0 {
+            return Some(last).filter(|l| *l < self.max);
+        }
+        // The line after the run has no custom line (a custom one would start at `p` too and be
+        // part of the run): it is shown when the default size is.
+        let next = last.checked_add(1).filter(|n| *n < self.max)?;
+        (self.default > 0.0).then_some(next)
+    }
+    /// The lines from `first` to `last` (inclusive) with a size above zero, in order. Runs of
+    /// hidden lines cost one O(log n) step each, not one per line.
+    pub fn visible(&self, first: u32, last: u32) -> impl Iterator<Item = u32> + '_ {
+        let mut next = self.next_visible(first);
+        std::iter::from_fn(move || {
+            let line = next.filter(|l| *l <= last)?;
+            next = line.checked_add(1).and_then(|n| self.next_visible(n));
+            Some(line)
+        })
     }
     /// The line containing `pos`.
     pub fn at(&self, pos: f64) -> u32 {
@@ -680,6 +734,63 @@ fn line_at(pos: f64, default: f64, custom: &BTreeMap<u32, LineInfo>, max: u32) -
 mod tests {
     use super::*;
     use crate::cell::Formula;
+
+    /// `LineIndex::visible` lists exactly the lines a line-by-line size check shows, for hidden
+    /// runs at the start, in the middle and up to the end of the axis, custom sizes (zero and
+    /// negative included), lines with only a style, and a zero default size.
+    #[test]
+    fn visible_lines_match_a_line_by_line_check() {
+        let max = 400u32;
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut rnd = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        for case in 0..300 {
+            let mut custom = BTreeMap::new();
+            let runs = rnd(6);
+            for _ in 0..runs {
+                let start = rnd(u64::from(max)) as u32;
+                let len = rnd(if case % 3 == 0 { 400 } else { 30 }) as u32;
+                for l in start..(start + len).min(max) {
+                    custom.insert(l, LineInfo { hidden: true, ..Default::default() });
+                }
+            }
+            // Runs that start at the first line or end at the last one.
+            if case % 5 == 0 {
+                for l in 0..rnd(20) as u32 {
+                    custom.insert(l, LineInfo { hidden: true, ..Default::default() });
+                }
+            }
+            if case % 5 == 1 {
+                for l in max - rnd(20) as u32 - 1..max {
+                    custom.insert(l, LineInfo { hidden: true, ..Default::default() });
+                }
+            }
+            for _ in 0..rnd(8) {
+                let size = [Some(0.0), Some(3.0), Some(20.0), Some(-5.0), None][rnd(5) as usize];
+                custom.insert(rnd(u64::from(max)) as u32, LineInfo { size, ..Default::default() });
+            }
+            let default = if case % 7 == 0 { 0.0 } else { 15.0 };
+            let size = |l: u32| match custom.get(&l) {
+                Some(i) if i.hidden => 0.0,
+                Some(LineInfo { size: Some(s), .. }) => s.max(0.0),
+                _ => default,
+            };
+            let index = LineIndex::new(&custom, default, max);
+            for (first, last) in [(0, max - 1), (rnd(u64::from(max)) as u32, max - 1), (5, 5), (max - 1, max - 1)] {
+                let want: Vec<u32> = (first..=last).filter(|&l| size(l) > 0.0).collect();
+                assert_eq!(index.visible(first, last).collect::<Vec<_>>(), want, "case {case}, {first}..={last}");
+            }
+            assert_eq!(index.next_visible(max), None);
+        }
+        // The row after a million hidden rows comes straight after the last shown one.
+        let custom: BTreeMap<u32, LineInfo> = (47..1_048_422).map(|r| (r, LineInfo { hidden: true, ..Default::default() })).collect();
+        let index = LineIndex::new(&custom, 15.0, 1_048_576);
+        assert_eq!(index.visible(40, 1_048_424).collect::<Vec<_>>(), [40, 41, 42, 43, 44, 45, 46, 1_048_422, 1_048_423, 1_048_424]);
+    }
 
     #[test]
     fn a_sheet_keeps_its_identity_through_clones_and_a_new_sheet_gets_its_own() {
@@ -870,6 +981,8 @@ mod tests {
                 data_table: None,
                 gridlines: false,
                 style: 0,
+                hole_size: 75,
+                first_slice_angle: 0,
                 x_title: None,
                 y_title: None,
                 source: None,
@@ -890,6 +1003,7 @@ mod tests {
             ObjKind::Slicer => {
                 s.slicers.push(Slicer { id, table: String::new(), column: String::new(), caption: String::new(), anchor, selected: None, columns: 1 })
             }
+            ObjKind::Control => s.controls.push(FormControl { id, anchor, ..Default::default() }),
         }
     }
 
@@ -911,13 +1025,15 @@ mod tests {
             (ObjKind::Slicer, 1),
             (ObjKind::Image, 4),
             (ObjKind::Equation, 6),
+            (ObjKind::Control, 13),
             (ObjKind::Shape, 12),
             (ObjKind::Equation, 8),
+            (ObjKind::Control, 15),
         ];
         for &(kind, id) in &inserted {
             push_object(&mut s, kind, id, Anchor { cell: CellRef::new(id, 0), ..Default::default() });
         }
-        let per_kind = s.charts.len() + s.images.len() + s.shapes.len() + s.slicers.len();
+        let per_kind = s.charts.len() + s.images.len() + s.shapes.len() + s.slicers.len() + s.controls.len();
         assert_eq!(per_kind, inserted.len());
         assert_eq!(s.object_anchors().count(), per_kind, "object_anchors visits every collection");
         assert_eq!(s.object_anchors_mut().count(), per_kind, "object_anchors_mut visits every collection");
@@ -928,10 +1044,10 @@ mod tests {
         }
         let marks: Vec<f32> = s.object_anchors().map(|a| a.dx).collect();
         assert_eq!(marks, (0..per_kind).map(|i| i as f32).collect::<Vec<f32>>());
-        // The sequence is the documented one (charts, images, shapes, slicers, each in insertion
-        // order; equations are shapes) and every object appears in it once.
+        // The sequence is the documented one (charts, images, shapes, slicers, controls, each in
+        // insertion order; equations are shapes) and every object appears in it once.
         let collection = |k: ObjKind| if k == ObjKind::Equation { ObjKind::Shape } else { k };
-        let documented: Vec<u32> = [ObjKind::Chart, ObjKind::Image, ObjKind::Shape, ObjKind::Slicer]
+        let documented: Vec<u32> = [ObjKind::Chart, ObjKind::Image, ObjKind::Shape, ObjKind::Slicer, ObjKind::Control]
             .iter()
             .flat_map(|&k| inserted.iter().filter(move |(kind, _)| collection(*kind) == k).map(|&(_, id)| id))
             .collect();
