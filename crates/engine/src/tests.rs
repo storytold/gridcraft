@@ -4982,6 +4982,22 @@ fn filter_labels_are_the_regions_text_not_the_canonical_value() {
     assert_eq!(hidden(&s), vec![2]);
 }
 
+/// The clipboard's text is read back by `edit.paste`, which reads en-US: a number copied from a
+/// region pastes back as the same number, not as the region's grouped text read the en-US way.
+#[test]
+fn copied_numbers_paste_back_as_the_same_numbers_in_a_region() {
+    let mut s = s();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).region = gridcraft_core::region::find("de-DE").unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1234.5]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1", "code": "#,##0.00"})).unwrap();
+    assert_eq!(crate::display::cell_text(&s.doc().unwrap().wb, s.doc().unwrap().wb.active().unwrap(), CellRef::parse("A1").unwrap()), "1.234,50");
+    let text = s.execute("edit.copy", json!({"range": "A1"})).unwrap()["text"].as_str().unwrap().to_string();
+    // Another session has no internal clipboard, so the paste goes through the text.
+    let mut other = self::s();
+    other.execute("edit.paste", json!({"text": text, "at": "B2"})).unwrap();
+    assert_eq!(v(&other, "B2").as_f64(), Some(1234.5), "{text:?}");
+}
+
 /// "Set precision as displayed" (formulas.calculationOptions `precisionAsDisplayed`). Behaviour
 /// observed in Excel through COM with synthetic values: turning it on rounds existing constants
 /// and formulas to their formats; constants typed or reformatted while it is on are rounded at

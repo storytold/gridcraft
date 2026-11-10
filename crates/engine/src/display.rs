@@ -161,14 +161,10 @@ pub fn value_text_as_in(wb: &Workbook, v: &Value, code: &str, region: &Region) -
     }
 }
 
-/// Tab-separated text of a range, as the system clipboard gets it.
+/// Tab-separated text of a range, as the system clipboard gets it. Always en-US, whatever the
+/// workbook's region: `edit.paste` and Get Data from a range read it back the en-US way, so a
+/// regional `1.234,50` would come back as text.
 pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
-    range_text_in(wb, sheet, r, wb.region)
-}
-
-/// [`range_text`] in an explicit region. Text that goes back through the invariant CSV reader
-/// (Get Data from a range) uses en-US.
-pub fn range_text_in(wb: &Workbook, sheet: usize, r: RangeRef, region: &Region) -> String {
     let Some(sh) = wb.sheet(sheet) else { return String::new() };
     let mut out = String::new();
     let r = clipboard_range(r);
@@ -182,7 +178,7 @@ pub fn range_text_in(wb: &Workbook, sheet: usize, r: RangeRef, region: &Region) 
                 out.push('\t');
             }
             first = false;
-            let t = cell_text_in(wb, sh, CellRef::new(row, col), region);
+            let t = cell_text_in(wb, sh, CellRef::new(row, col), &gridcraft_core::region::EN_US);
             // Like Excel, only text with a tab or line break is quoted (its quotes doubled);
             // `say "hi"` is copied as it is (#2225).
             if t.contains(['\t', '\n', '\r']) {
