@@ -182,6 +182,13 @@ pub(crate) struct Doc {
     pub journal: Vec<JournalEntry>,
     /// The version `base.xlsx` is at.
     pub snapshot_version: u64,
+    /// Whether a base for this document has been written (at `snapshot_version`) or was restored
+    /// from the volume. A snapshot with nothing newer than that base has nothing to do.
+    pub persisted: bool,
+    /// Serialises the writes of this document's volume state — a snapshot's base, journal and
+    /// metadata, and the metadata a commit or a takeover writes. Kept out of the document lock so
+    /// the (blocking) file write does not stop the message loop.
+    pub snapshot_lock: Arc<Mutex<()>>,
 }
 
 impl Doc {
@@ -327,7 +334,16 @@ impl App {
                 updated_at: now,
                 cabinet,
             };
-            let doc = Doc { meta, gateway, conns: BTreeMap::new(), actors: BTreeMap::new(), journal, snapshot_version: base_version };
+            let doc = Doc {
+                meta,
+                gateway,
+                conns: BTreeMap::new(),
+                actors: BTreeMap::new(),
+                journal,
+                snapshot_version: base_version,
+                persisted: false,
+                snapshot_lock: Arc::new(Mutex::new(())),
+            };
             inner.docs.insert(session_id.clone(), Entry { file_id: request.file_id, doc: Arc::new(Mutex::new(doc)) });
             lease.expires_at
         };
@@ -348,8 +364,8 @@ impl App {
         if self.store.is_some() {
             // A new session writes its base at once, so a crash before the first periodic
             // snapshot still leaves a restorable room. A continued one only needs its id updated.
-            let persisted = if fresh { self.snapshot(&session_id).await } else { self.write_meta(&session_id).await };
-            if let Err(e) = persisted {
+            let written = if fresh { self.snapshot(&session_id).await } else { self.write_meta(&session_id).await };
+            if let Err(e) = written {
                 log::error!("session {} not persisted: {e}", session_id);
             }
         }
@@ -435,6 +451,10 @@ impl App {
     async fn write_meta(&self, session_id: &str) -> Result<(), StoreError> {
         let Some(store) = &self.store else { return Ok(()) };
         let Some(doc) = self.doc(session_id).await else { return Ok(()) };
+        // The same serialisation a snapshot takes, so a snapshot that captured older metadata
+        // cannot overwrite the session id or the cabinet etag this write carries.
+        let lock = { doc.lock().await.snapshot_lock.clone() };
+        let _serialised = lock.lock().await;
         let meta = {
             let doc = doc.lock().await;
             let version = doc.gateway.hub().version(session_id).unwrap_or(0);
@@ -450,6 +470,12 @@ impl App {
     pub async fn snapshot(&self, session_id: &str) -> Result<(), StoreError> {
         let Some(store) = self.store.clone() else { return Ok(()) };
         let Some(doc) = self.doc(session_id).await else { return Ok(()) };
+        // One snapshot of a document at a time. Every operation past `snapshot_ops` reports the
+        // snapshot as due, and the periodic tick, `flush` and a session open can all fire: without
+        // this, a capture at version 5 could write its base after a capture at 10 had trimmed the
+        // journal to 11, and the volume would hold a base and a journal a restart refuses.
+        let lock = { doc.lock().await.snapshot_lock.clone() };
+        let _serialised = lock.lock().await;
         let snapshot = {
             let doc = doc.lock().await;
             let (Some(workbook), Some(keys), Some(state)) =
@@ -457,6 +483,10 @@ impl App {
             else {
                 return Ok(());
             };
+            // Nothing happened since the last base was written: the volume is this version.
+            if doc.persisted && state.version <= doc.snapshot_version {
+                return Ok(());
+            }
             let base_version = state.version;
             store::Snapshot { meta: stored_meta(session_id, &doc.meta, state.version, state.epoch, base_version), workbook, keys, state }
         };
@@ -472,6 +502,7 @@ impl App {
         doc.journal.retain(|entry| entry.applied.version > version);
         store.write_journal(file_id, &doc.journal)?;
         doc.snapshot_version = version;
+        doc.persisted = true;
         drop(doc);
         self.metrics.snapshots.fetch_add(1, Ordering::Relaxed);
         self.metrics.last_snapshot_at.store(now_secs(), Ordering::Relaxed);
@@ -539,6 +570,8 @@ impl App {
                             actors: BTreeMap::new(),
                             journal: loaded.journal,
                             snapshot_version: scanned.base_version,
+                            persisted: true,
+                            snapshot_lock: Arc::new(Mutex::new(())),
                         };
                         inner.docs.insert(scanned.session_id.clone(), Entry { file_id: scanned.file_id, doc: Arc::new(Mutex::new(doc)) });
                         restored += 1;
@@ -904,5 +937,31 @@ mod tests {
         assert!(tokio::time::timeout(Duration::from_millis(100), app.session_info(&first.session_id)).await.is_err());
         drop(guard);
         assert!(app.session_info(&first.session_id).await.is_ok());
+    }
+
+    /// A snapshot only writes when the volume does not already hold that version: two snapshots
+    /// with no operation in between, a periodic tick racing a session open, and a stale capture
+    /// cannot put an older base on disk than the journal it trims.
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn a_snapshot_with_nothing_new_does_not_rewrite_the_base() {
+        static N: AtomicU64 = AtomicU64::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("gridcraft-collab-snapshot-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let cfg = Config::default();
+        let app = App::with_store(cfg.clone(), JwtConfig::hs256(b"test-secret").unwrap(), Store::open(&root).unwrap());
+        let created = app
+            .create_session(
+                CreateSession { file_id: 7, app: cfg.app.clone(), owner: "ann".into(), initial_name: None, initial_bytes: None, takeover: false },
+                1,
+            )
+            .await
+            .unwrap();
+        let after_open = app.metrics.snapshots.load(Ordering::Relaxed);
+        assert_eq!(after_open, 1, "a fresh session writes its base at once");
+        app.snapshot(&created.session_id).await.unwrap();
+        assert_eq!(app.metrics.snapshots.load(Ordering::Relaxed), after_open, "nothing happened since the base");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

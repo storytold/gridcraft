@@ -298,10 +298,23 @@ impl Store {
     }
 
     fn atomic(&self, file_id: i64, name: &str, bytes: &[u8]) -> Result<(), StoreError> {
+        use std::io::Write;
+
+        // Every write gets its own temporary path. Two writers of one document can overlap — a
+        // snapshot's `meta.json` and the metadata a commit stores, two commits, a slow snapshot
+        // and a new one — and a shared `{name}.tmp` let them interleave their bytes, or made one
+        // `rename` fail with `NotFound` after the other had already moved the file. The bytes are
+        // on disk before the rename, so a crash still leaves either the old file or the new one.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
         let dir = self.dir(file_id);
         fs::create_dir_all(&dir)?;
-        let tmp = dir.join(format!("{name}.tmp"));
-        fs::write(&tmp, bytes)?;
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = dir.join(format!("{name}.{}.{seq}.tmp", std::process::id()));
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
         fs::rename(&tmp, dir.join(name))?;
         Ok(())
     }
@@ -317,6 +330,30 @@ mod tests {
         let root = std::env::temp_dir().join(format!("gridcraft-collab-store-{}-{n}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         Store::open(&root).unwrap()
+    }
+
+    /// Every writer gets its own temporary path: two overlapping writes of one file must not
+    /// interleave their bytes or make each other's `rename` fail.
+    #[test]
+    fn concurrent_writes_of_one_file_do_not_collide() {
+        use std::sync::Arc;
+
+        let store = Arc::new(store());
+        let mut handles = Vec::new();
+        for writer in 0..8u64 {
+            let store = store.clone();
+            handles.push(std::thread::spawn(move || {
+                for round in 0..20u64 {
+                    let state = gridcraft_collab::RoomState { version: writer * 100 + round, epoch: 0, seen: Vec::new() };
+                    store.write_state(1, &state).expect("one atomic write");
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("no writer panics");
+        }
+        let state = store.read_state(1).expect("the file decodes").expect("the file is there");
+        assert!(state.version < 800, "the file holds one writer's value, not a mixture");
     }
 
     fn entry(version: u64) -> JournalEntry {
