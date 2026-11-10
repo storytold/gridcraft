@@ -137,7 +137,8 @@ impl SheetApp {
     /// bridge then counts the workbook as saved (it clears the dirty flag after the frame).
     fn autosave_to_host(&mut self) {
         let Ok(r) = self.session.run("file.saveBytes", json!({"format": "xlsx"})) else { return };
-        let (Some(b), Some(dl)) = (r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode), &self.services.download) else {
+        let (Some(b), Some(dl)) = (r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode), &self.services.download)
+        else {
             return;
         };
         let name = r.get("name").and_then(Json::as_str).unwrap_or("Book.xlsx").to_string();
