@@ -245,6 +245,17 @@ fn rank_requires_a_current_row() {
 }
 
 #[test]
+fn rank_and_rownumber_accept_keywords_at_any_layout_position() {
+    // Blanks/reset words bind past the relation/order slots when earlier optionals are omitted.
+    assert_eq!(scalar("SUMX(Sales, RANK(Sales, ORDERBY(Sales[Amount]), LAST))"), Scalar::Decimal(14.0));
+    assert_eq!(
+        scalar("SUMX(Sales, ROWNUMBER(Sales, ORDERBY(Sales[Amount]), DEFAULT, PARTITIONBY(Sales[Region]), MATCHBY(Sales[Region]), HIGHESTPARENT))"),
+        // HIGHESTPARENT restarts the numbering per parent, so every row is 1.
+        Scalar::Decimal(5.0)
+    );
+}
+
+#[test]
 fn info_storage_tables_has_the_documented_schema() {
     let table = match eval_table("INFO.STORAGETABLES()") {
         Ok(table) => table,

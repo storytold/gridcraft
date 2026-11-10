@@ -273,6 +273,10 @@ impl<'a> Binder<'a> {
                 "CROSSFILTER" if index == 2 => {
                     clause_keyword(arg, &["ONE", "ONEWAY", "ONEWAY_LEFTFILTERSRIGHT", "ONEWAY_RIGHTFILTERSLEFT", "BOTH", "TWOWAY", "NONE"])
                 }
+                // RANK/ROWNUMBER take ties, blanks and reset words wherever the optional
+                // layout puts them; `parse_window` rejects words that fit no slot. A table,
+                // measure or variable with the same name still wins via `bare_name_resolves`.
+                "RANK" | "ROWNUMBER" => clause_keyword(arg, &["DENSE", "SKIP", "DEFAULT", "FIRST", "LAST", "NONE", "LOWESTPARENT", "HIGHESTPARENT"]),
                 // Window/relation clauses take bare enum words: `ORDERBY(x, DESC)`,
                 // `WINDOW(1, ABS, 1, ABS, ...)`, `INDEX(..., KEEP, PARTITIONBY(...))`, and the
                 // LOOKUP associated-columns behaviour (`INFERRED`).
@@ -311,10 +315,8 @@ impl<'a> Binder<'a> {
 fn text_enum_position(name: &str, index: usize) -> bool {
     match name.to_ascii_uppercase().as_str() {
         "DATEADD" | "DATESINPERIOD" => index == 2,
-        // `RANK ( [<ties>], <relation>, <orderBy>…[, <blank>] )`: SKIP or DENSE first, and the
-        // blank policy (DEFAULT/FIRST/LAST) later; ROWNUMBER takes the same blank policy.
-        "RANK" => index == 0 || index == 3,
-        "ROWNUMBER" => index == 2,
+        // `RANK`/`ROWNUMBER` window words are accepted by their own match arm
+        // above, which takes them at every position; nothing else needs this path.
         _ => false,
     }
 }

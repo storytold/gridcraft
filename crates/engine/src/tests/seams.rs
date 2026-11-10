@@ -675,6 +675,32 @@ fn a_command_that_panics_reverts_the_data_model_edits_of_the_groups_it_opened() 
 }
 
 #[test]
+fn a_group_that_outlives_its_document_still_takes_back_later_model_edits() {
+    // A `grouped` closure that closes its document and then edits the model used to leave
+    // that edit unrecorded: with no active document `record_dax` returned early, so the
+    // closure's rollback could not take it back (CodeRabbit, #3412).
+    let mut s = s();
+    let mut model = gridcraft_dax::DataModel::default();
+    model.tables.push(gridcraft_dax::model::ModelTable {
+        name: "Sales".into(),
+        columns: vec![gridcraft_dax::model::ModelColumn { name: "Region".into(), data_type: None }],
+        rows: Vec::new(),
+    });
+    model.parse_formulas().expect("model parses");
+    s.dax_model = Some(model);
+    let result: crate::Result<()> = s.grouped("Close Then Edit", |s| {
+        s.close_document(0);
+        s.execute("dataModel.addMeasure", json!({"name": "Doomed", "formula": "1", "table": "Sales"}))?;
+        Err(crate::EngineError::Other("step 2 failed".into()))
+    });
+    assert!(result.unwrap_err().to_string().contains("step 2 failed"));
+    assert!(
+        s.dax_model.as_ref().unwrap().measure_index("Doomed").is_none(),
+        "the edit after the close is rolled back with the group, not left in the model"
+    );
+}
+
+#[test]
 fn a_command_that_fails_rolls_back_the_groups_it_opened() {
     // A `?` between `group_begin` and `group_end` used to leave the group open for good: Undo
     // and Redo refused, and later edits made no steps.

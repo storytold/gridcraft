@@ -985,17 +985,22 @@ impl Session {
 
     /// Hands data-model changes to the innermost undo group open on the active document, where the
     /// command that made them is running. With no group open they are nobody's to take back.
+    /// When the active document has no open group, a `grouped` closure that outlived its own
+    /// document is still on the hook for the edits it makes next: they go to its innermost
+    /// surviving group (whose document already closed) so its rollback takes them back.
     fn record_dax(&mut self, mut changes: Vec<daxstate::Change>) {
         if changes.is_empty() {
             return;
         }
-        let Some(doc) = self.active().map(|d| d.uid) else { return };
-        let Some(g) = self.groups.iter_mut().rev().find(|g| g.doc == doc) else { return };
+        let active = self.active().map(|d| d.uid);
+        let position =
+            active.and_then(|doc| self.groups.iter().rposition(|g| g.doc == doc)).or_else(|| self.groups.iter().rposition(|g| g.doc_state.is_none()));
+        let Some(position) = position else { return };
         for change in &mut changes {
             change.seq = self.dax_seq;
             self.dax_seq = self.dax_seq.saturating_add(1);
         }
-        g.dax.extend(changes);
+        self.groups[position].dax.extend(changes);
     }
 
     /// Runs `f` as one undo step labelled `label` on the active document: whatever commands `f`
