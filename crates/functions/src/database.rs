@@ -93,16 +93,18 @@ fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> Vec<usize> {
     (1..db.rows)
         .filter(|&rec| {
             all_match
-                || rows.iter().any(|(r, conds)| {
-                    // Out of work: a computed criterion would fail at once, so records are left out cheaply.
-                    !ctx.exhausted()
-                        && conds.iter().all(|(c, col, cr)| match col {
-                            Some(f) => cr.matches(db.get(rec, *f).unwrap_or(&Value::Empty)),
-                            // Under a label that names no field, only a formula (a computed
-                            // criterion) can hold.
-                            None => ctx.computed_criterion(*r, *c, db, rec).unwrap_or(false),
-                        })
-                })
+                // Out of work: a computed criterion would fail at once, so records are left out
+                // without scanning the criteria rows; the per-row check still stops mid-scan.
+                || (!ctx.exhausted()
+                    && rows.iter().any(|(r, conds)| {
+                        !ctx.exhausted()
+                            && conds.iter().all(|(c, col, cr)| match col {
+                                Some(f) => cr.matches(db.get(rec, *f).unwrap_or(&Value::Empty)),
+                                // Under a label that names no field, only a formula (a computed
+                                // criterion) can hold.
+                                None => ctx.computed_criterion(*r, *c, db, rec).unwrap_or(false),
+                            })
+                    }))
         })
         .collect()
 }
