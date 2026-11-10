@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{
     Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, Formula, LineInfo, NoteBox, NoteCorner, Orientation,
-    Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
+    PageOrder, Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
 };
 
 use crate::drawing::{Obj, image_content_type, image_ext};
@@ -78,7 +78,9 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     let dynamic: BTreeMap<CellRef, RangeRef> = sheet
         .spill_ranges
         .iter()
-        .filter(|(a, r)| !r.is_single() && sheet.cells.get(**a).is_some_and(|c| c.formula.as_ref().is_some_and(|f| f.array.is_none())))
+        .filter(|(a, r)| {
+            !r.is_single() && sheet.cells.get(**a).is_some_and(|c| c.py.is_some() || c.formula.as_ref().is_some_and(|f| f.array.is_none()))
+        })
         .map(|(a, r)| (*a, *r))
         .collect();
     let mut extra: BTreeMap<CellRef, Value> = BTreeMap::new();
@@ -279,29 +281,51 @@ fn write_sheet_extensions(s: &mut String, sheet: &Sheet, prio: &[u32]) {
 }
 
 fn write_sheet_notes(s: &mut String, sheet: &Sheet, si: usize, kept: &crate::passthrough::SheetKept<'_>, rels: &mut Rels, out: &mut Out) {
-    // Notes: comments part + VML so Excel shows them. Threaded comments also get a legacy note
-    // (its text with the replies as lines, for readers without threaded comments) linked by id.
-    if !sheet.comments.is_empty() {
-        out.comments += 1;
-        let n = out.comments;
-        let ids = thread_ids(sheet, si);
-        out.part(&format!("xl/comments{n}.xml"), Some(CT_COMMENTS), comments_xml(sheet, &ids).into_bytes());
-        if !ids.is_empty() {
-            let x = threaded_xml(sheet, &ids, &mut out.persons);
-            out.part(&format!("xl/threadedComments/threadedComment{n}.xml"), Some(CT_THREADED_COMMENTS), x.into_bytes());
-            rels.add_uri(REL_THREADED_COMMENT, &format!("../threadedComments/threadedComment{n}.xml"));
+    // Notes and form controls share one legacy VML drawing: notes need it for Excel to show them,
+    // and controls carry their `x:ClientData` there. Shape ids come from 1024-id blocks listed in
+    // the drawing's idmap (after the blocks kept header and footer drawings use), notes first, so
+    // a control's `shapeId` names its VML shape. Threaded comments also get a legacy note (its
+    // text with the replies as lines, for readers without threaded comments) linked by id.
+    let mut controls = String::new();
+    if !sheet.comments.is_empty() || !sheet.controls.is_empty() {
+        let shapes = (sheet.comments.len() as u64).saturating_add(sheet.controls.len() as u64);
+        let blocks = u32::try_from(shapes.saturating_add(1).div_ceil(1024)).unwrap_or(u32::MAX).max(1);
+        let first = out.kept.notes_block(out.vml_block.saturating_add(1));
+        out.vml_block = out.vml_block.saturating_add(blocks);
+        let idmap = (first..first.saturating_add(blocks)).map(|b| b.to_string()).collect::<Vec<_>>().join(",");
+        // With a kept drawing, our shapes join it in a block of their own.
+        let base = kept.shape_base().unwrap_or(u64::from(first) * 1024);
+        let notes = sheet.comments.len() as u64;
+        let mut control_shapes = String::new();
+        if !sheet.controls.is_empty() {
+            let w = crate::controls::write(out, rels, sheet, |i| base + 1 + notes + i as u64);
+            controls = w.entries;
+            control_shapes = format!("{}{}", crate::controls::SHAPETYPE, w.vml);
         }
+        if !sheet.comments.is_empty() {
+            out.comments += 1;
+            let n = out.comments;
+            let ids = thread_ids(sheet, si);
+            out.part(&format!("xl/comments{n}.xml"), Some(CT_COMMENTS), comments_xml(sheet, &ids).into_bytes());
+            if !ids.is_empty() {
+                let x = threaded_xml(sheet, &ids, &mut out.persons);
+                out.part(&format!("xl/threadedComments/threadedComment{n}.xml"), Some(CT_THREADED_COMMENTS), x.into_bytes());
+                rels.add_uri(REL_THREADED_COMMENT, &format!("../threadedComments/threadedComment{n}.xml"));
+            }
+            rels.add("comments", &format!("../comments{n}.xml"));
+        }
+        out.vmls += 1;
+        let v = out.vmls;
         out.default_type("vml", "application/vnd.openxmlformats-officedocument.vmlDrawing");
-        let vml_name = format!("xl/drawings/vmlDrawing{n}.vml");
-        let vml = kept.notes_vml(vml_xml(sheet, out.kept.notes_block(n)), &vml_name, out);
+        let vml_name = format!("xl/drawings/vmlDrawing{v}.vml");
+        let vml = kept.notes_vml(vml_xml(sheet, &idmap, base, &control_shapes), &vml_name, out);
         out.part(&vml_name, None, vml.into_bytes());
-        rels.add("comments", &format!("../comments{n}.xml"));
-        let rid = rels.add("vmlDrawing", &format!("../drawings/vmlDrawing{n}.vml"));
+        let rid = rels.add("vmlDrawing", &format!("../drawings/vmlDrawing{v}.vml"));
         let _ = write!(s, "<legacyDrawing r:id=\"{rid}\"/>");
     } else if let Some(rid) = kept.lone_vml(rels, out) {
         let _ = write!(s, "<legacyDrawing r:id=\"{rid}\"/>");
     }
-    s.push_str(&kept.elements());
+    s.push_str(&kept.elements(&controls));
 }
 
 fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, rels: &mut Rels, out: &mut Out) {
@@ -368,7 +392,12 @@ fn write_sheet_printing<'a>(s: &mut String, sheet: &'a Sheet, rels: &mut Rels, o
     }
     // Unmodelled content kept from the source file (printer settings, controls, OLE objects…).
     let kept = crate::passthrough::SheetKept::write(sheet, rels, out);
-    let m = |i: usize| num(p.margins.get(i).copied().unwrap_or(0.75) as f64);
+    // Margins are kept as f32: widen each through its shortest decimal, so 0.3 is written as
+    // `0.3`, as Excel writes it, and not as `0.30000001192092896` (#1609).
+    let m = |i: usize| {
+        let inches = p.margins.get(i).copied().unwrap_or(0.75);
+        num(inches.to_string().parse::<f64>().unwrap_or(f64::from(inches)))
+    };
     let _ =
         write!(s, "<pageMargins left=\"{}\" right=\"{}\" top=\"{}\" bottom=\"{}\" header=\"{}\" footer=\"{}\"/>", m(0), m(1), m(2), m(3), m(4), m(5));
     s.push_str("<pageSetup");
@@ -382,6 +411,10 @@ fn write_sheet_printing<'a>(s: &mut String, sheet: &'a Sheet, rels: &mut Rels, o
     }
     if let Some((w, h)) = p.fit_to {
         let _ = write!(s, " fitToWidth=\"{w}\" fitToHeight=\"{h}\"");
+    }
+    // Only "over, then down" is written, as Excel does: `downThenOver` is the schema default.
+    if p.page_order != PageOrder::DownThenOver {
+        let _ = write!(s, " pageOrder=\"{}\"", p.page_order.id());
     }
     let _ = write!(s, " orientation=\"{}\"", if p.orientation == Orientation::Landscape { "landscape" } else { "portrait" });
     if let Some(id) = kept.page_setup_id() {
@@ -610,22 +643,28 @@ fn write_sheet_data(s: &mut String, data: SheetCellData<'_>, sid: &dyn Fn(gridcr
             continue;
         }
         s.push('>');
-        for &(cell_ref, cell) in cells {
+        for &(cell_ref, mut cell) in cells {
             let ov = overrides.get(&cell_ref);
             let ex = extra.get(&cell_ref);
             let mut legacy_cell = None;
             let array = dynamic.get(&cell_ref).copied().or_else(|| {
-                let f = cell?.formula.as_ref().filter(|f| f.array.is_none() && !f.dynamic)?;
+                let f = cell?.formula.as_ref().filter(|f| f.array.is_none())?;
+                if f.dynamic {
+                    return Some(RangeRef::cell(cell_ref));
+                }
                 match crate::array_formula::export(workbook, index, cell_ref, f, out.functions, &mut out.names) {
                     crate::array_formula::Export::Unchanged => None,
                     crate::array_formula::Export::Dynamic => Some(RangeRef::cell(cell_ref)),
-                    crate::array_formula::Export::Legacy(expr) => {
-                        legacy_cell = cell.map(|x| Cell { formula: Some(std::sync::Arc::new(Formula::from_expr(expr))), ..x.clone() });
+                    // Every `@` is one Excel implies in a legacy formula: write it without them.
+                    crate::array_formula::Export::Legacy(e) => {
+                        legacy_cell = cell.map(|x| Cell { formula: Some(std::sync::Arc::new(Formula::from_expr(e))), ..x.clone() });
                         None
                     }
                 }
             });
-            let cell = legacy_cell.as_ref().or(cell);
+            if legacy_cell.is_some() {
+                cell = legacy_cell.as_ref();
+            }
             write_cell(
                 s,
                 CellWriteInput {
@@ -726,6 +765,17 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         return;
     }
     let formula = if ov.is_some() { None } else { cell.and_then(|x| x.formula.as_ref()) };
+    // A Python cell is saved as [MS-XLSX] 2.3.10 specifies, `_xlfn._xlws.PY(index,0|1)` with its
+    // code as script `index` of the Python part, and with its cached value; an application without
+    // Python shows the value (and #NAME? if it recalculates).
+    let py_text = if ov.is_some() || formula.is_some() {
+        None
+    } else {
+        cell.and_then(|x| x.py.as_ref()).map(|p| {
+            out.python_scripts.push(p.code.clone());
+            crate::python_part::file_formula(out.python_scripts.len().saturating_sub(1), p.object)
+        })
+    };
     let value: Value = match (ov, extra) {
         (Some(t), _) => Value::text(t.as_str()),
         (None, Some(v)) => v.clone(),
@@ -738,8 +788,10 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     let value = match value {
         Value::Error(CellError::Circ) => Value::Number(0.0),
         // #SPILL! and #CALC! are not error codes of the file format (Excel refuses a file that
-        // caches them); Excel itself caches them as #VALUE!.
-        Value::Error(CellError::Spill | CellError::Calc) => Value::Error(CellError::Value),
+        // caches them); Excel itself caches them as #VALUE!. The Python errors are the same kind.
+        Value::Error(CellError::Spill | CellError::Calc | CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked) => {
+            Value::Error(CellError::Value)
+        }
         v => v,
     };
     // A formula read with dynamic-array metadata keeps it, even where the shape analysis would
@@ -747,11 +799,12 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     let own = formula.filter(|f| f.dynamic && f.array.is_none()).map(|_| RangeRef::cell(c));
     let dynamic = dynamic.or(own.as_ref());
     // A non-spilling formula may still need array evaluation to avoid implicit intersection.
-    if dynamic.is_some() && formula.is_some_and(|f| f.array.is_none()) {
+    if dynamic.is_some() && (formula.is_some_and(|f| f.array.is_none()) || py_text.is_some()) {
         s.push_str(" cm=\"1\"");
         out.dynamic_arrays = true;
     }
-    if let Some(f) = formula {
+    let text = formula.map(|f| esc(&crate::fmla::to_file(f))).or_else(|| py_text.map(|t| esc(&t)));
+    if let Some(text) = text {
         let t = match &value {
             Value::Text(_) => " t=\"str\"",
             Value::Bool(_) => " t=\"b\"",
@@ -760,8 +813,7 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         };
         s.push_str(t);
         s.push('>');
-        let text = esc(&crate::fmla::to_file(f));
-        match (f.array, dynamic) {
+        match (formula.and_then(|f| f.array), dynamic) {
             (Some(r), _) => {
                 let _ = write!(s, "<f t=\"array\" ref=\"{}\">{text}</f>", r.a1());
             }

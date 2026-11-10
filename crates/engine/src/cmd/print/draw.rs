@@ -2,8 +2,8 @@ use super::layout::{DENSE_BLOCK, SheetLayout};
 use super::objects::draw_cell_picture;
 use super::text::{TextPlacement, draw_text};
 use super::{
-    BorderLine, BorderStyle, Borders, CellRef, Color, Font, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, Underline, Workbook,
-    split_sheet,
+    BorderLine, BorderStyle, Borders, CellRef, Color, Font, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, Underline, Value,
+    Workbook, split_sheet,
 };
 
 // ---------------------------------------------------------------- drawing
@@ -280,6 +280,7 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
                 || merges.iter().any(|m| m.start == *c)
                 || !sh.value(*c).is_empty()
                 || l.style.borders != Borders::default()
+                || l.style.num_fmt.as_str() == "checkbox"
         })
         .collect();
     let rect_of = |c: CellRef| -> (f32, f32, f32, f32, bool) {
@@ -343,11 +344,44 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
         }
         if let Some(picture) = sh.cell_pictures.get(c) {
             draw_cell_picture(pg, &picture.data, (x, y, w, h), b.k);
+        } else if let Some(on) = checkbox_state(l, &sh.value(*c)) {
+            draw_checkbox(pg, (x, y, w, h), b.k, on);
         } else {
             draw_text(pg, b, TextPlacement { cell: *c, look: l, rect: (x, y, w, h), merged, merges: &merges, limits: (bx, bx + bw) });
         }
     }
     pg.restore();
+}
+
+/// A checkbox cell prints TRUE/FALSE (and empty) as a box, as on screen (#2972); other values
+/// print as text.
+fn checkbox_state(l: &Look, v: &Value) -> Option<bool> {
+    if l.style.num_fmt.as_str() != "checkbox" || l.cf.as_ref().is_some_and(|cf| cf.hide_value) {
+        return None;
+    }
+    match v {
+        Value::Bool(on) => Some(*on),
+        Value::Empty => Some(false),
+        _ => None,
+    }
+}
+
+/// A checkbox centred in the cell: white with a grey outline, or green with a white tick.
+fn draw_checkbox(pg: &mut Page, (x, y, w, h): (f32, f32, f32, f32), k: f32, on: bool) {
+    let s = (13.2 * k).min(w - 2.0 * k).min(h - 2.0 * k);
+    if s <= 0.0 {
+        return;
+    }
+    let (bx, by) = (x + (w - s) / 2.0, y + (h - s) / 2.0);
+    let corners = [[bx, by], [bx + s, by], [bx + s, by + s], [bx, by + s]];
+    if on {
+        let green = [0x10, 0x7C, 0x41];
+        pg.polygon(&corners, Some(green), Some((green, 0.75 * k)));
+        let tick = [[bx + 0.22 * s, by + 0.52 * s], [bx + 0.42 * s, by + 0.72 * s], [bx + 0.78 * s, by + 0.30 * s]];
+        pg.polyline(&tick, 0.14 * s, [0xFF, 0xFF, 0xFF], &[]);
+    } else {
+        pg.polygon(&corners, Some([0xFF, 0xFF, 0xFF]), Some(([110, 110, 110], 0.75 * k)));
+    }
 }
 
 pub(super) struct PendingPdfLink {

@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-24 · **Change:** minor (engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -16,6 +16,7 @@ including tests, 2026-10-10.
 | L0 | `numfmt` | ~2.1k | Excel number-format codes (sections, conditions, colours, dates, elapsed time, fractions, scientific, fill), General, `TEXT()`; en-US only |
 | L1 | `formula` | ~1.7k | Tokenizer, parser, AST, printer (A1 and R1C1), reference adjustment for copy, fill and structural edits |
 | L1 | `functions` | ~13.4k | The function library: `FnSpec` registry (name, arity, category, scalar args, signature, description) and pure implementations; automatic array lifting |
+| L1 | `math` | ~1.1k | Equations: LaTeX laid out by RaTeX (MIT, pinned) into plain glyph, rule and path data, and LaTeX to Office Math; every entry point capped and panic-guarded |
 | L2 | `model` | ~2.2k | Workbook, sheets, copy-on-write cell store (64-row bands behind `Arc`), interned styles, names, tables, CF, validation, comments, charts, shapes, images, sparklines, print settings, protection |
 | L2 | `calc` | ~2.9k | Evaluator (references, names, tables, LET/LAMBDA, special forms like OFFSET/INDIRECT/SUBTOTAL) and dependency-graph recalculation with dynamic arrays, spills and cycle detection; single-threaded |
 | L2 | `xlsx` | ~10.7k | XLSX read/write (transitional and strict read), CSV/TSV, XLSB and ODS data import, PivotTable caches, DrawingML charts and drawings; byte slices only (WASM-safe); lenient reader that reports warnings |
@@ -59,13 +60,20 @@ drawing its own:
   `icons::paint_on_sheet`) keep their light values. `theme::contrast_tests` holds every
   foreground/background pair to WCAG 2 (4.5:1 for text, 3:1 for glyphs) in both themes; a new
   token pair is added there. Icons (`icons.rs`, drawn in code) take their paper and category
-  colours (`theme::Cat`) from the tokens.
+  colours (`theme::Cat`) from the tokens; `icons::paint_accent` gives an icon an accent colour,
+  drawn on its coloured part when it has one (the spine and glyph of `Icon::FnBook`).
 - **Ribbon widgets**: `widgets.rs` has the buttons every tab is built from (`big_button`,
-  `small_button`, `split_button`, `big_split_button`, `toggle_button`), translated through
-  `i18n` in one place. Split buttons return the main and arrow responses separately, with
-  accessible names (`AutoSum`, `AutoSum options`). The ribbon card scrolls a tab wider than the
-  window, with arrows at its edges; `ribbon::RibbonOverflow` records the groups' size each frame,
+  `small_button`, `small_button_accent`, `split_button`, `big_split_button`, `toggle_button`),
+  translated through `i18n` in one place. Split buttons return the main and arrow responses
+  separately, with accessible names (`AutoSum`, `AutoSum options`); big and small buttons
+  report their label (an icon-only one its tooltip) as their accessible name. The ribbon card
+  scrolls a tab wider than the window, with arrows at its edges; `ribbon::RibbonOverflow` records the groups' size each frame,
   and a test keeps every tab within the card's three rows.
+- **Function Library**: `function_library.rs` holds the function categories (engine id and
+  label, in the Insert Function dialog's order), the function list built once from
+  `cmd::formulas::function_list`, and the menus of Formulas › Function Library, including the
+  AutoSum menu that Home › Editing shares. Recently Used and the Insert Function dialog's Most
+  Recently Used category list what `formulas.recentlyUsed` returns.
 - **Code editor**: `widgets::code_editor(ui, id, &mut text, Lang, max_lines)` (`code_editor.rs`)
   edits code in the monospace font with `Tokens::syntax` colours: Python (keywords, strings
   including triple-quoted ones, numbers, comments, builtins) and LaTeX (commands, scripts,
@@ -76,6 +84,14 @@ drawing its own:
   ahead of its input, so the field never gets a Tab or an Enter of a focused editor; and it
   scrolls past `max_lines` with the caret in view. The tokenizer and the key edits are pure functions with tests, including
   hostile input.
+- **CJK text baselines**: system CJK fallback faces and permitted embedded faces tagged with
+  CJK scripts use epaint's baseline fallback alignment in cells, editors and window titles.
+  Other scripts, symbols and emoji keep their existing alignment. Baseline alignment can
+  increase line height; manual row heights and clipping remain unchanged. Reports:
+  [#1265](https://github.com/storytold/gridcraft/issues/1265) and
+  [#2621](https://github.com/storytold/gridcraft/issues/2621).
+- **Code editor marks**: `code_editor_marked` underlines a byte range in the error colour (the
+  equation editor marks the position of a LaTeX error with it).
 - **Formula bar**: grows with its content from one line to `formula_bar::MAX_LINES` (five), then
   scrolls; one line is Excel's 30 px unless the font's rows need more (`formula_bar::one_line`;
   the Windows UI font's row is 17.28 px), so every counted line fits whatever the font;
@@ -98,12 +114,23 @@ Actions made of many commands (macros, a debugger that runs one step per call) u
   every group it opened, as `group_rollback` does. `Session::abort_groups(doc)`, and the command
   `automate.stopAction` on the active workbook, roll back the groups left open on a document (a
   debugger the person abandons, a caller that dropped its token), so Undo works there again. The
+  command runs on its own: a step of a script or macro may not stop the action it is part of, and
+  a recording leaves it out, so playing the recording back never stops the run. The
   history limit is applied when the outermost command finishes; until then the steps made inside
   it are bounded on their own.
+- **Recently used functions** (`recent.rs`). `Prefs::recent_functions` holds the ten functions
+  most recently entered in a formula, newest first. `Session::execute` updates it for every
+  `cell.*` and `range.*` command it journals, from any source (interface, control channel, MCP,
+  script). It reads at most 2,000 of the formulas a command enters, starting from the last one
+  (the most recent), so a large paste costs no more than that; `formulas.recentlyUsed` returns
+  it. It is kept with the other preferences (`prefs.json`, the browser's storage on the
+  web) and read leniently, so a malformed value loses only this list. It does not read the
+  journal back, so the journal's trimming does not affect it.
 - **Recording buffer** (`record.rs`). `Session::start_recording` collects each successful
   top-level command with the document, sheet and selection it ran in, without secret parameters.
   Commands run by other commands are not recorded, nor is a menu-style call that only opened a
-  dialog (the dialog's confirming call is the step), and the buffer is independent of the journal
+  dialog (the dialog's confirming call is the step; a run that changed the workbook before a step
+  of it opened a dialog is recorded), and the buffer is independent of the journal
   (Automate › Record Actions still records through the journal).
 - **Document trust.** `DocState::trust` is `Local` for workbooks made in the session and
   `FromFile` for workbooks opened from a file. `Trust` has no default: `DocState::new` takes it,
@@ -120,10 +147,75 @@ Actions made of many commands (macros, a debugger that runs one step per call) u
   other than tab, line feed and carriage return, U+FFFE, U+FFFF) are stored as the noncharacter
   U+FDD0 and four hex digits, as is U+FDD0 itself, and read back as they were. `stash::items`
   and `stash::keys` list the items under a key prefix in one pass over the names, at most
-  10,000 of them (`stash::MAX_ITEMS`). The older single-name `_sc_<key>` items are read as well.
+  10,000 of them (`stash::MAX_ITEMS`) with a count of the rest, so a caller can say what it did
+  not list. The older single-name `_sc_<key>` items are read as well.
   `formulas.defineName` and `formulas.deleteName` refuse a name the workbook holds such an item
   under (a hidden workbook-scope name of either shape; a visible one is the person's own), and
   `formulas.createFromSelection` skips such labels, unless `force: true` is passed.
+
+The macro engine (`engine/src/macros/`, commands in `cmd/macros.rs`, described in
+[`macros.md`](macros.md)) is built on these: a run is an undo group, the recorder reads the
+recording buffer, the policy asks before a macro in a `FromFile` workbook runs, and xlsx keeps
+macros as chunked hidden names (`_gc_macro_<n>_<k>`: macro `n`, chunk `k`).
+
+## Python cells
+
+A Python cell is a `Cell` whose `py` holds a `model::PyCode`: the code, the return type (an Excel
+value or a Python object, the `0` or `1` of Excel's `PY(code, return_type)`), the last result and a
+stale flag. Its `value` is the cached result, so formulas, display and saving read it like any
+other cell. `model::python` has the text forms: `PY("…"&"…",n)` with literals of at most 255
+characters (the function's syntax, which some files hold), the `_xlfn._xlws.` prefix, the
+8,192-character limit measured on that formula (`PyCode::fits`), and the `xl("…")` literals in
+code, which structural edits rewrite like formula references.
+
+Only those edits rewrite them: inserting or deleting cells, rows and columns, a cut and paste, and
+renaming or deleting a sheet. An edit that would make a cell's code longer than the limit (a
+longer sheet name, `Z1` becoming `AA1`, a cut to another sheet that qualifies the references) is
+refused and changes nothing, since code over the limit would be dropped to its value on the next
+open. Copying, filling and sorting carry the code unchanged, so an `xl()`
+reference acts as an absolute reference. A sort that moves a Python cell to another row leaves its
+code reading the cells it named before (a formula moved by the same sort has its relative references
+shifted), and references to the sorted cells from other cells, formulas and Python code alike, keep
+naming the same positions.
+
+Calc treats a Python cell as a graph node that reads nothing: a pass takes its kept result instead
+of evaluating it, so an array result spills, is blocked and unblocked, and reaches its dependents
+through the same code as a formula's. The xlsx reader and writer map Python cells to and from
+`_xlfn._xlws.PY(index,n)` formulas with cached values and the workbook's Python part, which holds
+the code (`xlsx::python_part`, [MS-XLSX] 2.3.10); `io::adopt_python` and `io::enforce_python_limits`
+bound what a file can make the app hold (result size, spill ranges, total rebuilt cells, code
+size). This build runs no Python: `python.set` stores code, and new or changed code shows
+`#BLOCKED!`.
+
+In ui-egui, Python mode is a state of the shared cell editor (`EditState::python`) that edits in
+the formula bar only, through `code_editor::code_field`: the code editor's in-order key handling
+(`apply_in_order_until`) with stop keys for commit, cancel and leaving the mode. A locked cell on
+a protected sheet is refused before a draft exists. Committing a Python edit
+(`commit_python_edit`) runs no command when the code is unchanged (no undo step), and none when
+sheet protection locked the cell while the draft was open (the draft is dropped with the warning).
+With all code deleted it runs `cell.set` with empty input on a Python cell, which clears it, and
+nothing on any other cell. Any other commit runs `python.set`; when that refuses, the message
+shows and the edit stays open. Drafts, Python or not, follow their sheet by its runtime identity
+(`Sheet::uid`, `model::SheetUid`, found again by `EditState::sheet_in`), so a sheet inserted,
+deleted or moved while one is open never takes it. After every command the open draft is pointed
+at its sheet again, so it is drawn, pointed from and committed there, and its point-mode anchor
+(held by sheet index) is let go when the sheet order changed. A draft is dropped then, with a
+message, when its sheet is gone, or when it holds Python code (in Python mode, or begun on a Python
+cell) that sheet protection now hides, as the Python editor window closes then.
+
+## Equations
+
+An equation is a shape (`ShapeKind::Equation`) whose `text` is its LaTeX source; it selects,
+opens and deletes as its own object kind (`ObjKind::Equation`). `gridcraft-math` is the only
+code that calls the layout engine (RaTeX), and only through `layout`, `check` and `to_omml`,
+which cap the source (4 KB, nesting 32) and run under `catch_unwind`. The result is cached on
+the shape (`Shape::math`, never saved); `Workbook::refresh_equations` rebuilds stale layouts when
+a document is created and on every commit, so painting only reads the cache and nothing in a
+paint path can reach the layout engine. One call lays out at most 128 KB of source
+(`MAX_EQUATION_LAYOUT_BYTES`); equations past it keep an error and show their source until edited,
+so a file with thousands of equations opens in bounded time. The equation editor's preview and the gallery are the
+only other callers, through the same guarded entry points. The gate that admitted RaTeX is
+recorded in [`decisions.md`](decisions.md) and re-run by `crates/math/tests/gate.rs`.
 
 ## Agent control
 
@@ -150,6 +242,15 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
+| 2026-11-02 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
+| 2026-11-01 | trivial | Equations: the layout cache answers for a source over the cap by its length alone, without hashing it |
+| 2026-11-01 | minor | Equations: the `math` crate (L1), the layout cache and code editor marks |
+| 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
+| 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
+| 2026-10-31 | minor | System and embedded CJK fallback faces share the Latin baseline without changing other script, symbol or emoji alignment |
+| 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
+| 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

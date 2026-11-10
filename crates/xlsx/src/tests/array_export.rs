@@ -333,9 +333,10 @@ fn implicit_intersection_metadata_respects_function_argument_context() {
             ("SUM(A1:A3)", false),
             ("SUMPRODUCT(A1:A3*B1:B3)", false),
             ("SUMPRODUCT(SQRT(A1:A3))", false),
-            // An `@` that legacy Excel implies is dropped (the reader puts it back), and so is an
-            // `@` of one value (`SQRT(@A1:A1)` after deleting rows under `SQRT(@A1:A3)`); any
-            // other `@` is written as `_xlfn.SINGLE`, which only dynamic-array formulas evaluate.
+            // An `@` that legacy Excel implies is dropped (the reader puts it back), and so is one
+            // of a range an edit made one cell (`SQRT(@A1:A1)` after deleting rows under
+            // `SQRT(@A1:A3)`). An `@` of one value stays as `_xlfn.SINGLE` in a legacy formula, as
+            // Excel writes it; any other `@` makes the formula a dynamic-array one.
             ("SQRT(@A1:A3)", false),
             ("@A1:A3*2", false),
             ("@(A1:A3*2)", true),

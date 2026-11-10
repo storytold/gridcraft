@@ -15,15 +15,18 @@ mod array_formula;
 mod cfb;
 mod chart;
 mod chartex;
+mod controls;
 mod crypto;
 mod csv;
 mod drawing;
 mod feature_bags;
 mod fmla;
 mod ods;
+mod omml;
 mod package;
 mod passthrough;
 mod pivot;
+mod python_part;
 mod read;
 mod richdata;
 mod sheet_read;
@@ -45,7 +48,7 @@ use gridcraft_core::DateSystem;
 use gridcraft_model::Workbook;
 
 pub use crypto::{DecryptError, check_encryption, decrypt};
-pub use csv::{MAX_CSV_BYTES, read_csv, write_csv, write_csv_limited};
+pub use csv::{MAX_CSV_BYTES, decode_text, read_csv, read_csv_with_report, write_csv, write_csv_limited};
 pub use ods::read_ods;
 pub use package::MAX_PART;
 pub use passthrough::rebase_links;
@@ -108,12 +111,38 @@ impl Default for FunctionInfo {
 /// package relationships, so every main-part content type is accepted), with the default
 /// [`FunctionInfo`].
 pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
-    read::read_xlsx(bytes, FunctionInfo::default())
+    read::read_xlsx(bytes, ReadOptions::default())
 }
 
-/// [`read_xlsx`] with the function library's facts.
-pub fn read_xlsx_with(bytes: &[u8], functions: FunctionInfo) -> Result<(Workbook, ReadReport), IoError> {
-    read::read_xlsx(bytes, functions)
+/// Caller-supplied function facts for [`read_xlsx_with`]: both legacy-formula [`FunctionInfo`]
+/// and Google Sheets export unwrap predicate (`#2871`).
+#[derive(Clone, Copy, Default)]
+pub struct ReadOptions<'a> {
+    pub functions: FunctionInfo,
+    pub known_function: Option<&'a dyn Fn(&str) -> bool>,
+}
+
+impl<'a> From<FunctionInfo> for ReadOptions<'a> {
+    fn from(functions: FunctionInfo) -> Self {
+        Self { functions, known_function: None }
+    }
+}
+
+impl<'a> From<(FunctionInfo, &'a dyn Fn(&str) -> bool)> for ReadOptions<'a> {
+    fn from((functions, known): (FunctionInfo, &'a dyn Fn(&str) -> bool)) -> Self {
+        Self { functions, known_function: Some(known) }
+    }
+}
+
+impl<'a, F: Fn(&str) -> bool> From<&'a F> for ReadOptions<'a> {
+    fn from(known: &'a F) -> Self {
+        Self { functions: FunctionInfo::default(), known_function: Some(known) }
+    }
+}
+
+/// [`read_xlsx`] with caller-supplied function facts and/or Google Sheets export unwrap predicate (#2871).
+pub fn read_xlsx_with<'a>(bytes: &[u8], opts: impl Into<ReadOptions<'a>>) -> Result<(Workbook, ReadReport), IoError> {
+    read::read_xlsx(bytes, opts.into())
 }
 
 /// The part of a zip package that declares more than [`MAX_PART`] unpacked bytes, with that size:
@@ -185,12 +214,12 @@ pub fn write_xlsx_with(wb: &Workbook, kind: XlsxKind, functions: FunctionInfo) -
 /// Writes a workbook as the given member of the `.xlsx` family for the file `book_name` (a bare
 /// file name, used for the workbook in a PivotChart's link to its PivotTable).
 pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: &str) -> Result<Vec<u8>, IoError> {
-    write_xlsx_named_with(wb, kind, book_name, FunctionInfo::default())
+    write::write_xlsx_named(wb, kind, Some(book_name))
 }
 
-/// [`write_xlsx_named`] with the function library's facts.
+/// Writes a workbook with caller-supplied function facts and file name.
 pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: &str, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
-    write::write_xlsx_named(wb, kind, Some(book_name), functions)
+    write::write_xlsx_named_with(wb, kind, Some(book_name), functions)
 }
 
 /// CSV import options.

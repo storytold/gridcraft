@@ -390,11 +390,12 @@ impl NativeMenu {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // No `use super::*`: tests/mac_menu_appkit.rs builds this file with cfg(test) but no test
+    // harness, so the #[test] functions are left out and a module-level import would be unused.
 
     #[test]
     fn file_menu_has_export_as_pdf_dispatching_the_command() {
-        let tree = tree();
+        let tree = super::tree();
         let (_, file) = tree.iter().find(|(title, _)| *title == "File").expect("File menu");
         let item = file.iter().find(|e| e.0 == "Export as PDF…").expect("Export as PDF… in the File menu");
         assert_eq!(item.1, "file.exportPdf");
@@ -403,23 +404,23 @@ mod tests {
 
     #[test]
     fn help_menu_checks_for_updates_through_the_registered_command() {
-        let tree = tree();
+        let tree = super::tree();
         let (_, help) = tree.iter().find(|(title, _)| *title == "Help").expect("Help menu");
         let item = help.iter().find(|e| e.0 == "Check for Updates…").expect("Check for Updates… in the Help menu");
         assert_eq!(item.1, "app.checkForUpdates");
-        let mut app = SheetApp::new(gridcraft_engine::Session::new(), Default::default());
+        let mut app = super::SheetApp::new(gridcraft_engine::Session::new(), Default::default());
         assert!(app.run(item.1, serde_json::json!({})).is_ok());
     }
 
     #[test]
     fn theme_choices_use_the_shared_preference_command() {
-        let mut app = SheetApp::new(gridcraft_engine::Session::new(), Default::default());
+        let mut app = super::SheetApp::new(gridcraft_engine::Session::new(), Default::default());
         for mode in ["dark", "system", "light"] {
-            assert!(select_theme(&mut app, &format!("theme:{mode}")));
+            assert!(super::select_theme(&mut app, &format!("theme:{mode}")));
             assert_eq!(app.ui.theme_mode(), mode);
             assert!(app.message.is_none());
         }
-        assert!(!select_theme(&mut app, "view.formulaBar"));
+        assert!(!super::select_theme(&mut app, "view.formulaBar"));
         assert_eq!(app.ui.theme_mode(), "light");
     }
 }
