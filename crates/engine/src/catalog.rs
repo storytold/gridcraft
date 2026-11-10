@@ -346,8 +346,9 @@ mod feature_name_tests {
     #[test]
     fn own_feature_labels_keep_command_ids() {
         for (id, expected) in [("insert.smartArt", "Diagram"), ("insert.wordArt", "Decorative Text")] {
-            let entry = super::CATALOG.iter().find(|entry| entry.0 == id).expect("existing catalog id");
-            assert_eq!(entry.3, expected);
+            let entries: Vec<_> = super::CATALOG.iter().filter(|entry| entry.0 == id).collect();
+            assert_eq!(entries.len(), 1, "{id} appears once");
+            assert_eq!(entries[0].3, expected);
         }
     }
 }

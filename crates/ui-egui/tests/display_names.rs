@@ -31,10 +31,9 @@ fn literals(source: &str) -> Vec<String> {
     while at < chars.len() {
         if chars.get(at..at + 12) == Some(&['#', '[', 'c', 'f', 'g', '(', 't', 'e', 's', 't', ')', ']']) {
             at += 12;
-            let rest: String = chars[at..].iter().collect();
-            if rest.trim_start().starts_with("mod ") {
-                test_module = true;
-            }
+            // Any test-only item (module, fn, use, const...) ends at its closing brace or at a
+            // `;` outside braces, so its literals are skipped and later production is scanned.
+            test_module = true;
         } else if chars.get(at..at + 2) == Some(&['/', '/']) {
             while at < chars.len() && chars[at] != '\n' {
                 at += 1;
@@ -94,6 +93,13 @@ fn literals(source: &str) -> Vec<String> {
             if !test_module {
                 out.push(text);
             }
+        } else if chars[at] == '\'' && chars.get(at + 1) == Some(&'\\') {
+            // An escaped character literal such as '\'', '\"' or '\u{22}': skip to its closing quote.
+            at += 3;
+            while at < chars.len() && chars[at] != '\'' && chars[at] != '\n' {
+                at += 1;
+            }
+            at += 1;
         } else if chars[at] == '\'' && chars.get(at + 2) == Some(&'\'') {
             at += 3; // A character literal such as '"', not the start of a string.
         } else {
@@ -116,14 +122,22 @@ fn literals(source: &str) -> Vec<String> {
     out
 }
 
-fn check_tree(path: &Path, failures: &mut Vec<String>) {
+#[derive(Default)]
+struct Scan {
+    files: usize,
+    literals: usize,
+    catalog: bool,
+    failures: Vec<String>,
+}
+
+fn check_tree(path: &Path, scan: &mut Scan) {
     if path.is_dir() {
         for entry in std::fs::read_dir(path).expect("source directory") {
             let path = entry.expect("source entry").path();
             if path.file_name().is_some_and(|name| name == "tests") {
                 continue;
             }
-            check_tree(&path, failures);
+            check_tree(&path, scan);
         }
     } else if path.extension().is_some_and(|ext| ext == "rs") {
         let name = path.file_name().expect("source filename").to_string_lossy();
@@ -131,10 +145,13 @@ fn check_tree(path: &Path, failures: &mut Vec<String>) {
             return;
         }
         let source = std::fs::read_to_string(path).expect("UTF-8 Rust source");
+        scan.files += 1;
+        scan.catalog |= name == "catalog.rs";
         // Skip only inline test modules, not later production following test-only imports.
         for text in literals(&source) {
+            scan.literals += 1;
             if banned_display(&text) {
-                failures.push(format!("{}: {text:?}", path.display()));
+                scan.failures.push(format!("{}: {text:?}", path.display()));
             }
         }
     }
@@ -143,13 +160,17 @@ fn check_tree(path: &Path, failures: &mut Vec<String>) {
 #[test]
 fn production_display_names_stay_neutral() {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut failures = Vec::new();
+    let mut scan = Scan::default();
     for root in ROOTS {
         let root = base.join(root);
         assert!(root.exists(), "missing display source: {}", root.display());
-        check_tree(&root, &mut failures);
+        check_tree(&root, &mut scan);
     }
-    assert!(failures.is_empty(), "Banned display names:\n{}", failures.join("\n"));
+    // A scan that silently finds nothing would pass vacuously.
+    assert!(scan.catalog, "engine catalog.rs was not scanned");
+    assert!(scan.files >= 50, "only {} source files scanned", scan.files);
+    assert!(scan.literals >= 5_000, "only {} literals scanned", scan.literals);
+    assert!(scan.failures.is_empty(), "Banned display names:\n{}", scan.failures.join("\n"));
 }
 
 #[test]
@@ -163,8 +184,19 @@ fn guard_distinguishes_labels_from_identifiers_and_comments() {
     assert!(!banned_display("filter.cameraRaw"));
     assert!(!banned_display("tool.guidedUpright"));
     assert!(!banned_display("insert.smartArt"));
+    for identifier in ["mySmartArt", "SmartArt2", "_SmartArt_", "WordArtStyle"] {
+        assert!(!banned_display(identifier), "{identifier}");
+    }
+    for label in ["Use SmartArt here", "WordArt…", "(SmartArt)"] {
+        assert!(banned_display(label), "{label}");
+    }
     assert_eq!(literals("// \"ignored\"\n/* \"ignored\" */ \"label\""), ["label"]);
     assert_eq!(literals("r#\"raw label\"#"), ["raw label"]);
+    assert_eq!(literals("r##\"a \"# b\"## \"next\""), ["a \"# b", "next"]);
+    assert_eq!(literals("\"say \\\"hi\\\"\" \"next\""), ["say \"hi\"", "next"]);
+    assert_eq!(literals("/* outer /* \"inner\" */ \"still\" */ \"label\""), ["label"]);
+    assert_eq!(literals("let q = '\\''; let d = '\\\"'; let u = '\\u{22}'; \"label\""), ["label"]);
+    assert_eq!(literals("let d = '\"'; \"label\""), ["label"]);
 }
 
 #[test]
@@ -175,4 +207,9 @@ fn guard_scans_production_after_test_only_items() {
     "###;
     assert_eq!(literals(source), ["live label"]);
     assert_eq!(literals("#[cfg(test)] mod tests; fn live() { let _ = \"live label\"; }"), ["live label"]);
+    let items = r#"#[cfg(test)] pub mod a { "x"; }
+        #[cfg(test)] fn helper() { "y"; }
+        #[cfg(test)] const C: &str = "z";
+        fn live() { "live"; }"#;
+    assert_eq!(literals(items), ["live"]);
 }
