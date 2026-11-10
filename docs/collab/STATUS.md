@@ -1,14 +1,17 @@
 # Real-time collaboration: status and acceptance evidence
 
 - Date: 2026-11-10
-- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), code head `6a9b143c` (code
+- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), code head `a2251b0e` (code
   and tests). `0b7d6aff` is the pushed head of PR #3613 and of
-  `fork/feature/realtime-collaboration` — a docs commit on top of `6a9b143c`. Two **local**
-  commits sit on top of it, not pushed: `ae4311ee` (this page) and `34e54b81`
-  (`collab-client`: the eight-megabyte converge test collects the frames it asserts on, §17).
-  The revision of this page that you are reading is one further **local docs commit on top of
-  `34e54b81`, not pushed** — the tip of the branch, the `docs(collab)` commit that `git log -1`
-  names (a commit cannot spell its own hash; the bus record `status/gridcraft` quotes it)
+  `fork/feature/realtime-collaboration` — a docs commit on top of `6a9b143c`. **Local** commits sit
+  on top of it, not pushed: `ae4311ee` (this page), `34e54b81`
+  (`collab-client`: the eight-megabyte converge test collects the frames it asserts on, §17),
+  `46783412` (the page that records the red gate), and the review-fix slice of §18 — eight commits
+  from `d91f838a` (a sort is structural) to `3e04a7eb` (server snapshots and temporary files) plus
+  `a2251b0e` (their rustfmt pass). The revision of this page that you are reading is one further
+  **local docs commit on top of `a2251b0e`, not pushed** — the tip of the branch, the `docs(collab)`
+  commit that `git log -1` names (a commit cannot spell its own hash; the bus record
+  `status/gridcraft` quotes it)
 - Base: `origin/main` = `2c58c769` (rebased 2026-11-08)
 - PR: <https://github.com/storytold/gridcraft/pull/3613> (draft)
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
@@ -887,3 +890,167 @@ cargo clippy --workspace --all-targets -j 4 -- -D warnings               clean, 
 
 Before the fix the same host failed the single test 5 of 40 runs. The fix is a **local** commit on
 top of `ae4311ee`: PR #3613 and `0b7d6aff` are unchanged, nothing is pushed.
+
+## 18. CodeRabbit's fourteen Major findings on `46783412` (2026-11-10)
+
+Review `5844270617` landed at 15:17Z on the PR head `46783412`: fourteen comments, all Major.
+Every one was checked against the code before anything changed. All fourteen were still valid, so
+all fourteen are fixed — each by a commit on top of `46783412` on
+`feature/realtime-collaboration`. The commits are local: nothing is pushed, `main` is untouched,
+no CI file is changed.
+
+| # | Finding | What the code did | Commit |
+|---|---|---|---|
+| 1 | `apps/gridcraft-collab-server/src/lib.rs:466` | `snapshot()` had no per-document exclusion: a capture at v5 could write its base after a capture at v10 had trimmed the journal to 11, and `load_stored` then refuses the directory ("the journal jumps") | `d35fa3e2` |
+| 2 | `apps/gridcraft-collab-server/src/store.rs:300` | every write used `{name}.tmp`; two writers of one file (snapshot `meta.json` and a commit's, two commits) could interleave bytes or fail each other's `rename` | `d35fa3e2` |
+| 3 | `apps/gridcraft/src/collab_ui.rs:118` | `classify(id)?` answers `None` for `edit.undo`/`edit.redo`, so `Adapter::execute` returned `None` and the engine's local history undid a preview on this replica only | `b4079dae` |
+| 4 | `crates/collab-client/src/client.rs:280` | the transport's resend queue kept every operation after `applied`/`rejected`; a reconnect re-sent answered operations, and one outside the dedup window would be applied again | `0ea76265` |
+| 5 | `crates/collab-client/src/synced.rs:312` | a refused preview was rolled back with `session.execute("edit.undo")`, which undoes the *newest* local step: with two previews pending, a refusal of the first removed the second | `282f3da9` |
+| 6 | `crates/collab-client/src/synced.rs:324` | a snapshot replaced the whole `Session` (`*session = Session::new()`), closing the other open workbooks and resetting their preferences | `1878b640` |
+| 7 | `crates/collab-client/src/synced.rs:517` | `target`, remote application and presence all used the *active* workbook; with two open, a local edit went to the room as an operation on a same-named sheet, and a remote operation could be written into the other file | `1878b640` |
+| 8 | `crates/collab-web/src/lib.rs:250` | `Synced`'s actor came from the page's display name, not from the server's welcome: with a display name ≠ JWT subject the undo stack stayed empty, and another window of the same actor's command was replayed here | `1878b640` |
+| 9 | `crates/collab-web/src/lib.rs:373` | the same `classify` gate as #3, in the web adapter | `b4079dae` |
+| 10 | `crates/collab/src/ops.rs:29` | the engine marks a sort structural (`cx.structural = true`) and moves cells, styles, row heights and object anchors, but `classify` ordered it as a merge edit | `d91f838a` |
+| 11 | `crates/collab/src/room.rs:233` | a step kept every cell in the delta, dependents the recalculation evaluated included; an undo then required a dependent to still hold its value and refused an edit of a cell nobody touched | `deffb80f` |
+| 12 | `crates/collab/src/room.rs:321` | a cell undo's `applied` carried only the step's own list; `restore_cells` recalculated without recording it, so peers patched values only and kept no restored formula or style | `deffb80f` |
+| 13 | `crates/engine/src/lib.rs:446` | `CellState` kept value, formula text and style: an undo of a Python cell wrote a constant, and an array formula came back as a single-cell one | `deffb80f` |
+| 14 | `crates/ui-egui/src/app/commands.rs:75` | the editor's commit (`cell.set`, `range.fill`) and a form control's value called `session.run` directly: in a live session they stayed local and never reached the room | `5d8cc3c4` |
+
+### 18.1 Server: one snapshot per document, one temporary file per write
+
+`Doc` gains `snapshot_lock: Arc<tokio::sync::Mutex<()>>` and `persisted: bool`. `snapshot()` takes
+that lock before it captures the workbook and holds it through the blocking write, the journal
+trim and `snapshot_version`; a capture with nothing newer than the base on disk returns without
+writing (`persisted && state.version <= snapshot_version`). `write_meta` takes the same lock, so a
+snapshot that captured older metadata cannot overwrite a takeover's session id or a commit's
+cabinet etag. The lock is separate from the document lock, so the file write still does not stop
+the message loop of that document.
+
+`Store::atomic` writes to `{name}.{pid}.{seq}.tmp`, calls `sync_all` on it and then renames: two
+writers of one file cannot collide, and a crash still leaves either the old file or the complete
+new one.
+
+Tests: `a_snapshot_with_nothing_new_does_not_rewrite_the_base` (a fresh session writes its base
+once; a second snapshot with no operation in between writes nothing),
+`concurrent_writes_of_one_file_do_not_collide` (8 threads × 20 writes of `seen.json`; every write
+returns `Ok` and the file decodes to one writer's value).
+
+### 18.2 Routing: undo/redo, the resend queue, and edits the UI made by itself
+
+`edit.undo` and `edit.redo` stay in the allowlist only to be refused as *commands*; they are
+operations of the room. Both adapters now skip the `classify` gate for exactly those two ids, so
+`Synced::execute` reaches its `Undo`/`Redo` branch instead of the engine's local history. The
+transport drops an operation from its resend queue when the server answers it, with `applied` or
+with `rejected`.
+
+The editor's commit and a form control's value go through a new `SheetApp::run_shared`, which asks
+the collaboration layer first and falls back to `Session::run` — the same dispatch the ribbon uses.
+Draft handling, gesture undo and the local path for non-shared commands are unchanged.
+
+Tests: `undo_and_redo_reach_the_session_not_the_local_history`,
+`an_answered_operation_leaves_the_resend_queue`,
+`a_committed_cell_edit_goes_through_the_session`,
+`a_fill_committed_from_the_editor_goes_through_the_session`.
+
+### 18.3 Client: one document, one person, and a rollback that is the rollback of the refusal
+
+`Synced` records the `DocState::uid` it joined with, resolves its target through that document,
+applies every remote operation to it (switching the session there and back when another workbook is
+in front), and reports presence for it. An edit made in another workbook returns `None` from the
+adapter, so it stays local. A snapshot replaces only that document through the new
+`Session::swap_document(uid, state)`, which keeps the `uid` and the window and starts the document's
+history empty; other workbooks, their unsaved state and `session.prefs` stay.
+
+The actor comes from the server's welcome (`State::actor`, the JWT subject) and is adopted on the
+first poll; whether a command still has to run is decided by the operation id's window prefix
+(`{windowId}-{seq}`), not by the actor alone, so another window of the same person is not mistaken
+for this one while this window's own preview is not replayed.
+
+A refused preview is rolled back only when it is the newest preview. If a later preview is pending,
+the engine's undo would take that one back instead, so the replica asks for the document
+(`Resync`) and says so.
+
+Tests: `an_edit_in_another_workbook_stays_local`, `a_remote_operation_lands_in_the_shared_workbook`,
+`a_snapshot_replaces_only_the_shared_workbook`, `a_command_less_undo_restores_the_formula_on_a_peer`,
+`a_refused_earlier_preview_does_not_undo_the_later_one`,
+`a_refused_last_preview_is_rolled_back_locally`, `the_actor_and_the_window_come_from_the_server`.
+
+### 18.4 Undo steps: what the command wrote, and an answer that carries the document
+
+The engine now reports two lists: `take_changed` (as before, the cells whose displayed values moved,
+including dependents and spills) and `take_written` (only the cells the command itself wrote). The
+room snapshots a step from `take_written` and builds its delta from `take_changed`. An undo
+therefore validates only the cells the participant's command wrote — a volatile formula or a spill
+that somebody else's edit re-evaluated no longer refuses it — while the answer still carries every
+cell whose value moved.
+
+`restore_cells` leaves the restored cells and every formula it re-evaluated in `last_changed`, so the
+undo's `applied` is built from the document rather than from the step's own list, and the client
+applies a command-less `applied` through `restore_cells` (formula, array flags, Python code and
+style) instead of patching values. Spilled children still go through `apply_values`, because their
+value lives in the sheet's spill map and not in a cell of their own.
+
+`CellState` and `CellChange` gain `py`, `array` and `dynamic` (all `#[serde(default)]`, so old
+journal entries and old deltas still read): a Python cell's code and an array formula's range come
+back with the undo, on the author, on every peer and after a restart.
+
+Tests: `an_undo_does_not_wait_for_a_recalculated_dependent`,
+`an_undo_delta_carries_the_restored_formula_and_the_dependents`,
+`a_cell_state_puts_python_code_and_an_array_formula_back`.
+
+### 18.5 A sort is a structural edit
+
+`data.sort` (and `sortAscending`/`sortDescending`) is in `STRUCTURAL_PREFIXES`. The engine already
+treats it as structural — it rewrites formulas, moves row heights and re-anchors objects, then
+recalculates — so the room now requires `base_version == head` for it and bumps the epoch, instead
+of ordering it against concurrent cell edits addressed with the pre-sort positions.
+
+Test: `the_allowlist_separates_structural_from_merge_and_denies_code` gains the three prefixes.
+
+### 18.6 Gates (remote host `agents`, 2026-11-10)
+
+Every crate the fourteen fixes touch was tested on the build host, on **`a2251b0e`** — the code head
+after the formatting pass; the commit on top of it changes only this page. No CI run has covered
+these commits (nothing is pushed), so this host run is the evidence for them:
+
+```text
+cargo test -p gridcraft-collab                                48 passed, 0 failed, EXIT 0
+cargo test -p gridcraft-collab-client --all-targets           1 lib + 13 converge + 4 document
+                                                              + 5 parts + 2 rollback, 0 failed, EXIT 0
+cargo test -p gridcraft-collab-server --all-targets           36 unit + 8 socket + 9 persistence
+                                                              + 5 acceptance + 6 callback + 2 logging,
+                                                              0 failed, EXIT 0
+cargo test -p gridcraft-collab-web                            8 passed, 0 failed, EXIT 0
+cargo test -p gridcraft-ui-egui --test it collab_dispatch     2 passed, 1182 filtered out, EXIT 0
+cargo test -p gridcraft-engine --lib                          898 passed, 1 failed, EXIT 101
+cargo fmt --all -- --check                                    clean, EXIT 0
+cargo clippy -p gridcraft-collab -p gridcraft-collab-client
+  -p gridcraft-collab-web -p gridcraft-collab-server
+  -p gridcraft-engine -p gridcraft-ui-egui --all-targets
+  -j 8 -- -D warnings                                         clean, EXIT 0
+```
+
+The one engine failure is the host-environment test §10 and §15 already record:
+`io::tests::save_keeps_the_destination_access_restrictions` (it checks permission bits under the
+build host's temporary directory, which yields mode `664`). The engine code it measures is not
+touched by this slice; the other 898 unit tests pass, including every collaboration-facing one
+(`restore_cells`, `last_written`, the array/Python round trip).
+
+The whole `--workspace` run was not repeated: the crates above are the ones the diff changes
+(`crates/collab`, `crates/collab-client`, `crates/collab-web`, `crates/engine`,
+`crates/ui-egui`, `apps/gridcraft`, `apps/gridcraft-collab-server`), and `apps/gridcraft` has no
+test binary of its own — its adapter change is exercised through `collab_web`'s and
+`collab-client`'s tests of the same code they share.
+
+### 18.7 Answering the review
+
+No finding was rejected: each one named a real path in the code and each is fixed above. All
+fourteen GitHub review threads were answered on 2026-11-10 (one reply per comment id, quoting the
+fix and its test). The PR head did not move: it is still `46783412`, the replies say plainly that
+the commit hashes are local until the branch is pushed, and a reply on a line of an older commit
+still shows the discussion resolved by the commit named in its text.
+
+What is left for a person: push `feature/realtime-collaboration` (nine commits on top of
+`46783412` — the review fixes and their formatting pass, none touching `.github/` or `main` — and
+this page on top of them). The PR then moves from `46783412` to the tip, and its CI runs on the
+fixed head; until then the gates in §18.6 are the host run, not a CI pass.
