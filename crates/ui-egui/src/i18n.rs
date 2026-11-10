@@ -235,6 +235,19 @@ impl Language {
         if let Some(target) = warning.strip_prefix("chart ").and_then(|s| s.strip_suffix(" has no supported plot and was skipped")) {
             return self.tr("chart {target} has no supported plot and was skipped").replace("{target}", target);
         }
+        const DRAWING_WARNINGS: [&str; 3] = [
+            "a histogram, waterfall, treemap… chart without its chart part was skipped",
+            "an embedded object (SmartArt, OLE…) was skipped",
+            "grouped shapes are not supported and were skipped",
+        ];
+        for base in DRAWING_WARNINGS {
+            if let Some(suffix) = warning.strip_prefix(base) {
+                if suffix.starts_with(" (") && suffix.ends_with(')') {
+                    let translated = self.translation(base).unwrap_or(base);
+                    return format!("{translated}{suffix}");
+                }
+            }
+        }
         self.translation(warning).unwrap_or(warning).to_owned()
     }
 
@@ -595,6 +608,23 @@ mod open_warning_tests {
         let warning = "skipped record `A|B` in book.slk";
         for language in [Language::En, Language::De, Language::Ru] {
             assert_eq!(language.open_warning(warning), warning);
+        }
+    }
+
+    #[test]
+    fn drawing_warning_translation_preserves_its_location() {
+        let suffix = " (xl/drawings/drawing1.xml, object 7)";
+        let cases = [
+            (
+                "a histogram, waterfall, treemap… chart without its chart part was skipped",
+                "Histogram, vodopádový nebo stromový graf… bez příslušné části grafu byl přeskočen.",
+            ),
+            ("an embedded object (SmartArt, OLE…) was skipped", "Vložený objekt (SmartArt, OLE…) byl přeskočen."),
+            ("grouped shapes are not supported and were skipped", "Seskupené obrazce nejsou podporovány a byly přeskočeny."),
+        ];
+
+        for (warning, translation) in cases {
+            assert_eq!(Language::Cs.open_warning(&format!("{warning}{suffix}")), format!("{translation}{suffix}"));
         }
     }
 }
