@@ -373,10 +373,7 @@ mod tests {
     fn non_finite_decimals_and_dates_are_refused_by_serialization() {
         for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             for scalar in [Scalar::Decimal(value), Scalar::DateTime(value)] {
-                assert!(
-                    serde_json::to_value(&scalar).is_err(),
-                    "{scalar:?} must not serialize: JSON has no non-finite number"
-                );
+                assert!(serde_json::to_value(&scalar).is_err(), "{scalar:?} must not serialize: JSON has no non-finite number");
             }
         }
     }

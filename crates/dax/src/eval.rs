@@ -47,8 +47,8 @@ mod visual;
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use crate::ast::{BinaryOp, Literal, UnaryOp};
 use crate::binder::{BindError, Binder, BoundExpr};
