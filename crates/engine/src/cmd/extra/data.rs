@@ -112,7 +112,8 @@ pub(super) fn from_table_range(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
     let r = if r.is_single() { crate::selection::current_region(sh, r.start) } else { r };
-    let text = crate::display::range_text(&d.wb, d.wb.active_sheet(), r);
+    // The invariant CSV reader parses this text, so it is written with en-US separators.
+    let text = crate::display::range_text_in(&d.wb, d.wb.active_sheet(), r, &gridcraft_core::region::EN_US);
     from_csv(s, &json!({"text": text, "delimiter": "\t", "sheet": format!("{} (2)", sh.name).chars().take(31).collect::<String>()}))
 }
 

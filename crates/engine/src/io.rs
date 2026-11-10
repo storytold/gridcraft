@@ -553,6 +553,8 @@ pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
 /// Save As CSV/Text writes "the text and values as they are displayed in cells" with "all
 /// characters in each cell" (Microsoft Support, *Excel formatting and features that are not
 /// transferred to other file formats*): number formats applied, never column-width `#####`.
+/// Always with en-US separators and names, whatever the workbook's region: CSV is read back with
+/// en-US rules (`gridcraft_xlsx::read_csv`), so a regional `1.000` would reopen as 1.
 fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
     gridcraft_xlsx::write_csv(sh, delimiter, |c| {
         // General's grid-width formatting rounds large identifiers to scientific notation.
@@ -563,7 +565,7 @@ fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
         {
             number.to_string()
         } else {
-            crate::display::value_text(wb, sh, c)
+            crate::display::value_text_in(wb, sh, c, &gridcraft_core::region::EN_US)
         }
     })
     .map_err(|e| EngineError::Other(e.to_string()))

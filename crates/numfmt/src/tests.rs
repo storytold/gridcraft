@@ -673,7 +673,7 @@ fn text_uncached(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellE
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys);
+    let (f, overflow) = fmt.format_number(n, sys, &EN_US);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 
@@ -902,6 +902,146 @@ fn closed_brackets_still_hold_their_semicolons() {
     assert_eq!(f("\"[\"0;0", 5.0), "[5");
 }
 
+fn fin(region: &str, code: &str, n: f64) -> String {
+    format_value_in(&Value::Number(n), &NumberFormat::parse(code), S, gridcraft_core::region::find(region).unwrap()).text
+}
+
+#[test]
+fn regional_separators() {
+    assert_eq!(fin("en-US", "#,##0.00", 1234567.891), "1,234,567.89");
+    assert_eq!(fin("pt-BR", "#,##0.00", 1234567.891), "1.234.567,89");
+    assert_eq!(fin("de-DE", "#,##0.00", -1234.5), "-1.234,50");
+    assert_eq!(fin("fr-FR", "#,##0.00", 1234567.891), "1\u{a0}234\u{a0}567,89");
+    assert_eq!(fin("ru-RU", "#,##0", 1234567.0), "1\u{a0}234\u{a0}567");
+    assert_eq!(fin("de-DE", "0.00", 3.14259), "3,14");
+    assert_eq!(fin("de-DE", "0.0E+00", 12345.0), "1,2E+04");
+    assert_eq!(fin("de-DE", "#,##0.00\\ \"€\"", 1234.5), "1.234,50 €");
+    assert_eq!(fin("de-DE", "0.00%", 0.1234), "12,34%");
+    assert_eq!(fin("de-DE", "#,##0,", 1234567.0), "1.235");
+    assert_eq!(fin("de-DE", "0.0,\"x\"", 5000.0), "5,0x");
+    assert_eq!(fin("de-CH", "#,##0.00", 1234567.891), "1'234'567.89");
+    assert_eq!(fin("fr-CH", "#,##0.00", -1234.5), "-1'234.50");
+    assert_eq!(fin("nl-NL", "m/d/yyyy", 46290.0), "25-09-2026");
+}
+
+#[test]
+fn indian_grouping_displays_three_then_two() {
+    assert_eq!(fin("en-IN", "#,##0.00", 1234567.89), "12,34,567.89");
+    assert_eq!(fin("en-IN", "#,##0", 123456789.0), "12,34,56,789");
+    assert_eq!(fin("en-IN", "#,##0", 999.0), "999");
+    assert_eq!(fin("en-IN", "#,##0", 1000.0), "1,000");
+    assert_eq!(fin("en-IN", "#,##0", 100000.0), "1,00,000");
+    assert_eq!(fin("en-IN", "#,##0", -12345678.0), "-1,23,45,678");
+    assert_eq!(fin("en-IN", "#,###", 1234567.0), "12,34,567");
+    assert_eq!(fin("en-GB", "#,##0", 1234567.0), "1,234,567");
+}
+
+#[test]
+fn general_uses_the_regional_decimal() {
+    assert_eq!(fin("de-DE", "General", 1.5), "1,5");
+    assert_eq!(fin("pt-BR", "General", -0.25), "-0,25");
+    assert_eq!(fin("en-GB", "General", 1.5), "1.5");
+    assert_eq!(fin("de-DE", "General", 1234567.0), "1234567");
+    assert_eq!(fin("de-DE", "\"x\"General", 2.5), "x2,5");
+    assert_eq!(format_general_fit_in(1.25, 11, gridcraft_core::region::find("fr-FR").unwrap()).as_deref(), Some("1,25"));
+    assert_eq!(fin("de-DE", "@", 2.5), "2,5");
+}
+
+#[test]
+fn month_and_day_names_and_am_pm_in_the_region() {
+    // 25 September 2026 is a Friday.
+    assert_eq!(fin("en-US", "dddd mmmm", 46290.0), "Friday September");
+    assert_eq!(fin("de-DE", "dddd, mmmm yyyy", 46290.0), "Freitag, September 2026");
+    assert_eq!(fin("de-DE", "ddd mmm", 46290.0), "Fr Sep");
+    assert_eq!(fin("fr-FR", "dddd d mmmm yyyy", 46290.0), "vendredi 25 septembre 2026");
+    assert_eq!(fin("fr-FR", "mmm", 46290.0), "sept.");
+    assert_eq!(fin("es-ES", "dddd", 46290.0), "viernes");
+    assert_eq!(fin("pt-BR", "mmmm", 46250.0), "agosto");
+    assert_eq!(fin("ja-JP", "mmmm dddd", 46290.0), "9月 金曜日");
+    assert_eq!(fin("zh-CN", "mmmm", 46290.0), "九月");
+    assert_eq!(fin("zh-CN", "mmmmm", 46290.0), "九");
+    assert_eq!(fin("en-GB", "mmm", 46290.0), "Sept");
+    // The month with a day is the genitive form where there is one.
+    assert_eq!(fin("ru-RU", "mmmm", 46290.0), "сентябрь");
+    assert_eq!(fin("ru-RU", "d mmmm yyyy", 46290.0), "25 сентября 2026");
+    assert_eq!(fin("cs-CZ", "d. mmmm yyyy", 46290.0), "25. září 2026");
+    assert_eq!(fin("cs-CZ", "mmmm", 46250.0), "srpen");
+    assert_eq!(fin("en-US", "h:mm AM/PM", 46290.75), "6:00 PM");
+    assert_eq!(fin("ja-JP", "h:mm AM/PM", 46290.75), "6:00 午後");
+    assert_eq!(fin("ko-KR", "h:mm AM/PM", 46290.25), "6:00 오전");
+    assert_eq!(fin("es-ES", "h:mm AM/PM", 46290.75), "6:00 p. m.");
+    // A/P keeps the letters of the code.
+    assert_eq!(fin("ja-JP", "h:mm A/P", 46290.75), "6:00 P");
+}
+
+#[test]
+fn built_in_formats_14_and_22_show_the_regions_short_date() {
+    // 25 September 2026 18:00.
+    let v = 46290.75;
+    assert_eq!(fin("en-US", "m/d/yyyy", v), "9/25/2026");
+    assert_eq!(fin("en-US", "m/d/yyyy h:mm", v), "9/25/2026 18:00");
+    assert_eq!(fin("en-GB", "m/d/yyyy", v), "25/09/2026");
+    assert_eq!(fin("en-GB", "m/d/yyyy h:mm", v), "25/09/2026 18:00");
+    assert_eq!(fin("en-IN", "m/d/yyyy", v), "25/09/2026");
+    assert_eq!(fin("de-DE", "m/d/yyyy", v), "25.09.2026");
+    assert_eq!(fin("de-DE", "m/d/yyyy h:mm", v), "25.09.2026 18:00");
+    assert_eq!(fin("pt-BR", "m/d/yyyy", v), "25/09/2026");
+    assert_eq!(fin("ru-RU", "m/d/yyyy", v), "25.09.2026");
+    assert_eq!(fin("cs-CZ", "m/d/yyyy", v), "25.09.2026");
+    assert_eq!(fin("ja-JP", "m/d/yyyy", v), "2026/9/25");
+    assert_eq!(fin("ko-KR", "m/d/yyyy", v), "2026-09-25");
+    assert_eq!(fin("zh-TW", "m/d/yyyy h:mm", v), "2026/9/25 18:00");
+    // Other date codes are written out as they are.
+    assert_eq!(fin("de-DE", "d-mmm-yy", v), "25-Sep-26");
+    assert_eq!(fin("en-GB", "yyyy-mm-dd", v), "2026-09-25");
+    assert_eq!(fin("de-DE", "[$-409]m/d/yyyy", v), "9/25/2026");
+    assert_eq!(fin("de-DE", "m/d/yyyy", 0.5), "00.01.1900");
+    assert_eq!(fin("de-DE", "m/d/yyyy", -1.0), "########");
+}
+
+#[test]
+fn system_long_date_and_time_follow_the_region() {
+    let v = 46290.75;
+    // The code ribbon's Long Date and Time write.
+    let long = "[$-F800]dddd, mmmm dd, yyyy";
+    let time = "[$-F400]h:mm:ss AM/PM";
+    assert_eq!(fin("en-US", long, v), "Friday, September 25, 2026");
+    assert_eq!(fin("en-US", time, v), "6:00:00 PM");
+    assert_eq!(fin("en-GB", long, v), "Friday, 25 September 2026");
+    assert_eq!(fin("en-GB", time, v), "18:00:00");
+    assert_eq!(fin("de-DE", long, v), "Freitag, 25. September 2026");
+    assert_eq!(fin("de-DE", time, v), "18:00:00");
+    assert_eq!(fin("pt-BR", long, v), "sexta-feira, 25 de setembro de 2026");
+    assert_eq!(fin("es-ES", long, v), "viernes, 25 de septiembre de 2026");
+    assert_eq!(fin("fr-FR", long, v), "vendredi 25 septembre 2026");
+    assert_eq!(fin("ru-RU", long, v), "25 сентября 2026 г.");
+    assert_eq!(fin("ja-JP", long, v), "2026年9月25日");
+    assert_eq!(fin("ko-KR", long, v), "2026년 9월 25일 금요일");
+    assert_eq!(fin("ko-KR", time, v), "오후 6:00:00");
+    // As Excel writes it into files, and the newer tags.
+    assert_eq!(fin("de-DE", "[$-F800]dddd\\,\\ mmmm\\ dd\\,\\ yyyy", v), "Freitag, 25. September 2026");
+    assert_eq!(fin("de-DE", "[$-x-sysdate]dddd, mmmm dd, yyyy", v), "Freitag, 25. September 2026");
+    assert_eq!(fin("de-DE", "[$-x-systime]h:mm:ss AM/PM", v), "18:00:00");
+    assert!(NumberFormat::parse(long).is_date());
+    assert_eq!(NumberFormat::parse(long).kind(), FormatKind::Date);
+    // Without a region the tag shows what the code says.
+    assert_eq!(f(long, v), "Friday, September 25, 2026");
+}
+
+#[test]
+fn en_us_region_matches_the_unqualified_functions() {
+    for (code, n) in [
+        ("#,##0.00", 1234.5),
+        ("General", 0.1),
+        ("m/d/yyyy h:mm", 46290.75),
+        ("mmm d", 46290.0),
+        ("[$-F800]dddd, mmmm dd, yyyy", 46290.0),
+        ("h:mm AM/PM", 0.75),
+    ] {
+        assert_eq!(fin("en-US", code, n), f(code, n), "{code}");
+    }
+}
+
 const JAN_1_2001: f64 = 36892.0;
 
 #[test]
@@ -1091,6 +1231,37 @@ fn misplaced_calendar_prefix_is_rejected() {
         assert_eq!(f(code, 46314.0), "46314", "{code}");
         assert!(NumberFormat::parse(code).is_general(), "{code}");
     }
+}
+
+#[test]
+fn region_codes_that_point_at_each_other_do_not_recurse() {
+    // A hand-built region whose short date is the datetime code and the reverse: substituting
+    // built-in 14 and 22 must stop after one step.
+    let mut crafted = gridcraft_core::region::EN_US;
+    crafted.short_date = "m/d/yyyy h:mm";
+    crafted.datetime = "m/d/yyyy";
+    let show = |code: &str| format_value_in(&Value::Number(46290.75), &NumberFormat::parse(code), S, &crafted).text;
+    assert_eq!(show("m/d/yyyy"), "9/25/2026 18:00");
+    assert_eq!(show("m/d/yyyy h:mm"), "9/25/2026");
+}
+
+#[test]
+fn fractional_seconds_use_the_regional_decimal() {
+    // 61.25 seconds.
+    let v = 61.25 / 86_400.0;
+    assert_eq!(fin("de-DE", "mm:ss.00", v), "01:01,25");
+    assert_eq!(fin("en-US", "mm:ss.00", v), "01:01.25");
+    assert_eq!(fin("fr-FR", "[s].0", 61.25 / 86_400.0), "61,3");
+    assert_eq!(fin("de-DE", "ss\\.00", v), "01.00", "an escaped point is only a literal");
+    assert_eq!(fin("de-DE", "ss\".\"00", v), "01.00", "so is a quoted one");
+}
+
+#[test]
+fn blank_placeholders_pad_the_regional_grouping() {
+    assert_eq!(fin("en-US", "???,???", 1234.0), "  1,234");
+    // Indian grouping: the blank before the fifth digit carries its separator's space too.
+    assert_eq!(fin("en-IN", "???,???", 1234.0), "   1,234");
+    assert_eq!(fin("en-IN", "??,??,???", 123456.0), " 1,23,456");
 }
 
 #[test]
