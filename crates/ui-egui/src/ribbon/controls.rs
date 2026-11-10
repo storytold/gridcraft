@@ -1,9 +1,140 @@
-use super::{Rect, Sense, SheetApp, Stroke, StrokeKind, Style, Tokens, Ui, keytip_table, pos2, theme, vec2};
+use super::{Align2, Color32, Rect, Sense, SheetApp, Stroke, StrokeKind, Style, Tokens, Ui, keytip_table, pos2, theme, vec2};
 
-pub(super) fn sep(ui: &mut Ui) {
-    let t = Tokens::get(ui.ctx());
+/// The ribbon card's group-label band: Excel names every group under its buttons, in a band of
+/// this height below them.
+pub const RIBBON_LABEL_H: f32 = 18.0;
+
+/// One group's name and the rect its label was painted in, in screen coordinates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupLabel {
+    /// The group's Excel name (translated).
+    pub label: String,
+    /// What was painted: `label`, shortened with an ellipsis when the group is narrower.
+    pub painted: String,
+    pub rect: Rect,
+}
+
+/// The group names painted in the card's label band this frame, recorded for the tests.
+#[derive(Clone, Debug)]
+pub struct RibbonLabels {
+    /// The band the names are painted in, below the buttons.
+    pub band: Rect,
+    pub labels: Vec<GroupLabel>,
+}
+
+impl Default for RibbonLabels {
+    fn default() -> Self {
+        Self { band: Rect::NOTHING, labels: Vec::new() }
+    }
+}
+
+impl RibbonLabels {
+    /// Returns the identifier for the recorded labels.
+    fn id() -> egui::Id {
+        egui::Id::unique("ribbon_group_labels")
+    }
+
+    /// Last frame's labels.
+    pub fn get(ctx: &egui::Context) -> RibbonLabels {
+        ctx.data(|d| d.get_temp(Self::id())).unwrap_or_default()
+    }
+}
+
+/// A group's span while its tab is drawn: the name of the group that ended at `right` and where
+/// it started, both in screen coordinates; `separator` is set when a group separator ends it.
+#[derive(Clone, Debug)]
+struct GroupSpan {
+    label: String,
+    left: f32,
+    right: f32,
+    separator: bool,
+}
+
+fn spans_id() -> egui::Id {
+    egui::Id::unique("ribbon_group_spans")
+}
+
+fn start_id() -> egui::Id {
+    egui::Id::unique("ribbon_group_start")
+}
+
+/// Starts a tab's groups at the cursor. Called by the ribbon before the active tab draws its
+/// groups.
+pub(super) fn begin_groups(ui: &Ui) {
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(spans_id(), Vec::<GroupSpan>::new());
+        d.insert_temp(start_id(), ui.cursor().min.x);
+    });
+}
+
+/// Records that the group named `label` ends at `right` and the next one starts there.
+fn end_group(ui: &Ui, label: &str, right: f32, separator: bool) {
+    let left = ui.ctx().data(|d| d.get_temp::<f32>(start_id())).unwrap_or(right);
+    let label = crate::i18n::current(ui.ctx()).tr(label).to_owned();
+    ui.ctx().data_mut(|d| {
+        if let Some(mut spans) = d.get_temp::<Vec<GroupSpan>>(spans_id()) {
+            spans.push(GroupSpan { label, left, right, separator });
+            d.insert_temp(spans_id(), spans);
+        }
+        d.insert_temp(start_id(), right);
+    });
+}
+
+/// The separator after a group, named with that group's Excel label. The gap is laid out here;
+/// the line itself is painted with the labels, so it can run through the label band (a painter
+/// inside the scroll area is clipped to the buttons' height).
+pub(crate) fn sep(ui: &mut Ui, label: &str) {
     let (r, _) = ui.allocate_exact_size(vec2(13.0, 72.0), Sense::hover());
-    ui.painter().line_segment([pos2(r.center().x, r.top() + 6.0), pos2(r.center().x, r.bottom() - 6.0)], Stroke::new(1.0, t.separator));
+    end_group(ui, label, r.center().x, true);
+}
+
+/// Ends the last group of a tab, after which no separator is drawn.
+pub(crate) fn group_end(ui: &mut Ui, label: &str) {
+    end_group(ui, label, ui.cursor().min.x, false);
+}
+
+/// Paints the separators (from the buttons into the label band) and each group's name centred in
+/// the band, clipped to the card's content viewport so a scrolled group is cut at the card's edge
+/// as Excel's is. Returns what was painted.
+pub(super) fn paint_group_labels(ui: &Ui, content: Rect, band: Rect, viewport: Rect) -> RibbonLabels {
+    let t = Tokens::get(ui.ctx());
+    let spans = ui.ctx().data_mut(|d| d.remove_temp::<Vec<GroupSpan>>(spans_id())).unwrap_or_default();
+    ui.ctx().data_mut(|d| d.remove_temp::<f32>(start_id()));
+    let line_top = content.top() + 6.0;
+    let line_bottom = band.bottom() - 2.0;
+    let lines = ui.painter().with_clip_rect(Rect::from_min_max(pos2(viewport.left(), line_top), pos2(viewport.right(), line_bottom)));
+    let clip = Rect::from_min_max(pos2(viewport.left(), band.top()), pos2(viewport.right(), band.bottom()));
+    let painter = ui.painter().with_clip_rect(clip);
+    let font = theme::ui_font(11.0);
+    let labels: Vec<GroupLabel> = spans
+        .into_iter()
+        .map(|s| {
+            if s.separator {
+                lines.line_segment([pos2(s.right, line_top), pos2(s.right, line_bottom)], Stroke::new(1.0, t.separator));
+            }
+            let painted = fit_label(&painter, &s.label, &font, (s.right - s.left - 8.0).max(0.0));
+            let rect = Rect::from_min_max(pos2(s.left, band.top()), pos2(s.right, band.bottom()));
+            painter.text(rect.center(), Align2::CENTER_CENTER, painted.clone(), font.clone(), t.text_dim);
+            GroupLabel { label: s.label, painted, rect }
+        })
+        .collect();
+    let snapshot = RibbonLabels { band, labels };
+    ui.ctx().data_mut(|d| d.insert_temp(RibbonLabels::id(), snapshot.clone()));
+    snapshot
+}
+
+/// `label`, shortened with an ellipsis until it fits `max_w` (or empty when nothing fits), as
+/// Excel shortens a group name wider than its group.
+fn fit_label(painter: &egui::Painter, label: &str, font: &egui::FontId, max_w: f32) -> String {
+    let width = |text: &str| painter.layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE).size().x;
+    if width(label) <= max_w {
+        return label.to_owned();
+    }
+    let mut text = label.to_owned();
+    while !text.is_empty() && width(&format!("{text}…")) > max_w {
+        text.pop();
+    }
+    if text.is_empty() { String::new() } else { format!("{text}…") }
 }
 
 pub(super) fn active_style(app: &SheetApp) -> Style {

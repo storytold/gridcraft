@@ -1,4 +1,4 @@
-use super::controls::{control_keytip, sep};
+use super::controls::{control_keytip, group_end, sep};
 use super::{Icon, SheetApp, Ui, big_button, json};
 use crate::theme::Tokens;
 use crate::widgets::{big_split_button, small_button, small_toggle_button};
@@ -69,7 +69,7 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
             app.open_dialog("macros", json!({}));
         }
     });
-    sep(ui);
+    sep(ui, "Macros");
     let __k = big_button(ui, Icon::Script, "Command\nPalette", "Search and run any command", false);
     control_keytip(app, ui, &__k, "commandSearch");
     if __k.clicked() {
@@ -95,4 +95,5 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("about", json!({}));
     }
+    group_end(ui, "Tools");
 }

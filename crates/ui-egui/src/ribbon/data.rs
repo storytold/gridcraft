@@ -1,4 +1,4 @@
-use super::controls::{act, control_keytip, keytip, menu_items, sep};
+use super::controls::{act, control_keytip, group_end, keytip, menu_items, sep};
 use super::{Icon, SheetApp, Ui, big_button, json, keytip_table, small_button};
 
 pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
@@ -7,7 +7,7 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
     if gd.clicked() {
         app.open_dialog("open", json!({}));
     }
-    sep(ui);
+    sep(ui, "Get & Transform Data");
     ui.vertical(|ui| {
         let __k = small_button(ui, Icon::SortAsc, "", "Sort A to Z", false);
         control_keytip(app, ui, &__k, "data.sortAscending");
@@ -47,7 +47,7 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
             app.open_dialog("advancedFilter", json!({}));
         }
     });
-    sep(ui);
+    sep(ui, "Sort & Filter");
     let __k = big_button(ui, Icon::TextColumns, "Text to\nColumns", "Text to Columns", false);
     control_keytip(app, ui, &__k, "dialog:textToColumns");
     if __k.clicked() {
@@ -78,7 +78,7 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    sep(ui);
+    sep(ui, "Data Tools");
     let wi = big_button(ui, Icon::Calc, "What-If\nAnalysis", "What-If Analysis", true);
     for sequence in
         keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["dialog:goalSeek", "data.scenarioManager", "data.dataTable"])
@@ -99,7 +99,7 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
     if big_button(ui, Icon::ChartLine, "Forecast\nSheet", "Forecast Sheet", false).clicked() {
         app.open_dialog("forecastSheet", json!({}));
     }
-    sep(ui);
+    sep(ui, "Forecast");
     ui.vertical(|ui| {
         let __k = small_button(ui, Icon::Group, "Group", "Group", false);
         control_keytip(app, ui, &__k, "data.group");
@@ -128,12 +128,13 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
             app.open_dialog("outlineSettings", json!({}));
         }
     });
-    sep(ui);
+    sep(ui, "Outline");
     if big_button(ui, Icon::ChartBar, "Data\nAnalysis", "Data Analysis", false).clicked() {
         app.open_dialog("analysisToolPak", json!({}));
     }
-    sep(ui);
+    // Excel's Analysis group holds Data Analysis and Solver together.
     if big_button(ui, Icon::Function, "Solver", "Solver", false).clicked() {
         app.open_dialog("solver", json!({}));
     }
+    group_end(ui, "Analysis");
 }

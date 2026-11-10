@@ -5,7 +5,7 @@ use egui::vec2;
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::icons::Icon;
-use gridcraft_ui_egui::ribbon::{RibbonOverflow, TABS};
+use gridcraft_ui_egui::ribbon::{RIBBON_LABEL_H, RibbonLabels, RibbonOverflow, TABS};
 use gridcraft_ui_egui::{SheetApp, widgets};
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
@@ -35,6 +35,33 @@ fn every_tab_fits_the_card_height() {
         assert!(o.visible_height > 0.0, "{tab}: the card was laid out");
         assert!(o.content_height <= o.visible_height + 0.5, "{tab}: {} px of groups in {} px", o.content_height, o.visible_height);
     }
+}
+
+#[test]
+fn every_tab_names_its_groups_in_the_label_band() {
+    // Excel's card has a third band under the buttons naming each group; the band sits below the
+    // rows the buttons use, and each name is centred in its group's width.
+    for tab in TABS {
+        let h = app_at(1440.0, tab);
+        let o = RibbonOverflow::get(&h.ctx);
+        let labels = RibbonLabels::get(&h.ctx);
+        assert!(!labels.labels.is_empty(), "{tab}: the tab names its groups");
+        assert!((labels.band.height() - RIBBON_LABEL_H).abs() < 0.5, "{tab}: the band is {} px tall", labels.band.height());
+        assert!(o.content_height <= o.visible_height + 0.5, "{tab}: {} px of buttons in {} px", o.content_height, o.visible_height);
+        assert!(o.visible_height + RIBBON_LABEL_H <= 94.5, "{tab}: buttons and band fit the card's inner box");
+        let mut right = f32::NEG_INFINITY;
+        for g in &labels.labels {
+            assert!(g.label.starts_with(g.painted.trim_end_matches('…')), "{tab}: {} was painted as {}", g.label, g.painted);
+            assert!((g.rect.center().y - labels.band.center().y).abs() < 0.5, "{tab}: {} is painted in the band", g.label);
+            assert!(g.rect.top() >= labels.band.top() - 0.5 && g.rect.bottom() <= labels.band.bottom() + 0.5, "{tab}: {} stays in the band", g.label);
+            assert!(g.rect.left() >= right - 0.5, "{tab}: {} overlaps the label before it", g.label);
+            right = g.rect.right();
+        }
+    }
+    // Home carries Excel's group names, in Excel's order.
+    let h = app_at(1440.0, "Home");
+    let names: Vec<String> = RibbonLabels::get(&h.ctx).labels.into_iter().map(|g| g.label).collect();
+    assert_eq!(names, ["Clipboard", "Font", "Alignment", "Number", "Styles", "Cells", "Editing"]);
 }
 
 #[test]

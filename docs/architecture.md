@@ -67,8 +67,14 @@ drawing its own:
   translated through `i18n` in one place. Split buttons return the main and arrow responses
   separately, with accessible names (`AutoSum`, `AutoSum options`); big and small buttons
   report their label (an icon-only one its tooltip) as their accessible name. The ribbon card
-  scrolls a tab wider than the window, with arrows at its edges; `ribbon::RibbonOverflow` records the groups' size each frame,
-  and a test keeps every tab within the card's three rows.
+  has Excel's three bands: the tab strip, the buttons (76 px of content) and a group-label band
+  `ribbon::RIBBON_LABEL_H` (18 px) tall that names every group in the dim text token at 11 pt
+  (the card is 106 px expanded). A tab's groups are delimited by `ribbon::sep`, which takes the
+  Excel name of the group it closes and runs its line through the label band; `group_end` names
+  the last group without a separator. The card scrolls a tab wider than the window, with arrows
+  at its edges (the labels scroll and clip with the groups); `ribbon::RibbonOverflow` records the
+  groups' size each frame, `ribbon::RibbonLabels` the names painted, and a test keeps every tab
+  within the card's three rows and checks a name per group.
 - **Function Library**: `function_library.rs` holds the function categories (engine id and
   label, in the Insert Function dialog's order), the function list built once from
   `cmd::formulas::function_list`, and the menus of Formulas › Function Library, including the

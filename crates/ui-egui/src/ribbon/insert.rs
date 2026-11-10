@@ -1,4 +1,4 @@
-use super::controls::{act, anchor_keytip, control_keytip, invoke, popup_command, sep};
+use super::controls::{act, anchor_keytip, control_keytip, group_end, invoke, popup_command, sep};
 use super::{
     Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, big_split_button, icons, json, small_button, small_toggle_button, vec2,
 };
@@ -15,7 +15,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "insert.table", json!({}));
     }
-    sep(ui);
+    sep(ui, "Tables");
     let pic = big_button(ui, Icon::Picture, "Pictures", "Insert a picture", true);
     anchor_keytip(app, ui, &pic, &["insert.picture"]);
     pic.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Pictures"));
@@ -65,7 +65,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     });
-    sep(ui);
+    sep(ui, "Illustrations");
     let __k = big_button(ui, Icon::Chart, "Recommended\nCharts", "Recommended Charts", false);
     control_keytip(app, ui, &__k, "insert.recommendedCharts");
     if __k.clicked() {
@@ -152,11 +152,11 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     });
-    sep(ui);
+    sep(ui, "Charts");
     if big_button(ui, Icon::Filter, "Slicer", "Insert a slicer to filter a table", false).clicked() {
         act(app, "insert.slicer", json!({}));
     }
-    sep(ui);
+    sep(ui, "Filters");
     let sp = big_button(ui, Icon::Sparkline, "Sparklines", "Sparklines", true);
     anchor_keytip(app, ui, &sp, &["dialog:sparkline"]);
     egui::Popup::menu(&sp).show(|ui| {
@@ -166,7 +166,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         }
     });
-    sep(ui);
+    sep(ui, "Sparklines");
     // Form controls: draw a button, slider or spin button on the sheet (a click places it at its
     // default size). Their key tips run the command at the active cell.
     use gridcraft_engine::model::ControlKind;
@@ -186,12 +186,12 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         }
     });
-    sep(ui);
+    sep(ui, "Form Controls");
     // Cell Controls.
     if big_button(ui, Icon::Checkbox, "Checkbox", "Insert checkboxes in the selected cells", false).clicked() {
         act(app, "insert.checkbox", json!({}));
     }
-    sep(ui);
+    sep(ui, "Cell Controls");
     let __k = big_button(ui, Icon::Link, "Link", "Insert Link", false);
     control_keytip(app, ui, &__k, "dialog:insertLink");
     if __k.clicked() {
@@ -202,7 +202,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("comment", json!({"threaded": true}));
     }
-    sep(ui);
+    sep(ui, "Links");
     let __k = big_button(ui, Icon::TextBox, "Text\nBox", "Text Box", false);
     control_keytip(app, ui, &__k, "insert.textBox");
     if __k.clicked() {
@@ -215,7 +215,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
         crate::paper_view::start_editing(app);
     }
     // Symbols: Equation, then Symbol.
-    sep(ui);
+    sep(ui, "Text");
     let (eq, eq_menu) = big_split_button(ui, Icon::Equation, "Equation", "Insert an equation, or pick one from the gallery");
     control_keytip(app, ui, &eq, "dialog:equation");
     if eq.clicked() {
@@ -251,6 +251,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     });
+    group_end(ui, "Symbols");
 }
 
 pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
@@ -260,7 +261,7 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "draw.lasso", json!({}));
     }
-    sep(ui);
+    sep(ui, "Tools");
     for (label, color) in [("Pen\nBlue", "#1F5FC9"), ("Pen\nBlack", "#000000"), ("Pen\nRed", "#D13B2F"), ("Highlighter", "#F2E33A")] {
         let on = tool == "pen" && app.session.draw_color.eq_ignore_ascii_case(color);
         let r = big_button(ui, Icon::Pen, label, "Draw with ink", false);
@@ -279,10 +280,11 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
     if er.clicked() {
         act(app, "draw.eraser", json!({}));
     }
-    sep(ui);
+    sep(ui, "Pens");
     let __k = big_button(ui, Icon::Shapes, "Ink to\nShape", "Convert the last ink stroke to a shape", false);
     control_keytip(app, ui, &__k, "draw.inkToShape");
     if __k.clicked() {
         act(app, "draw.inkToShape", json!({}));
     }
+    group_end(ui, "Convert");
 }

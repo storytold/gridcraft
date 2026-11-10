@@ -1,4 +1,4 @@
-use super::controls::{act, checkbox_on, control_keytip, invoke, keytip, menu_items, popup_command, sep};
+use super::controls::{act, checkbox_on, control_keytip, group_end, invoke, keytip, menu_items, popup_command, sep};
 use super::{Icon, Rect, SheetApp, Tokens, Ui, big_button, json, keytip_table, pos2, theme, vec2};
 
 /// Draws the View tab: view modes, ruler/gridlines/formula-bar/headings toggles, zoom, freeze panes, theme, animations, interface size and language.
@@ -16,7 +16,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
             act(app, cmd, json!({}));
         }
     }
-    sep(ui);
+    sep(ui, "Workbook Views");
     let s = app.session.active().and_then(|d| d.wb.active().map(|s| (s.show_gridlines, s.show_headings))).unwrap_or((true, true));
     let lang = app.ui.language;
     let page_layout =
@@ -52,7 +52,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
             act(app, "view.headings", json!({"on": h}));
         }
     });
-    sep(ui);
+    sep(ui, "Show");
     let __k = big_button(ui, Icon::Zoom, "Zoom", "Zoom…", false);
     control_keytip(app, ui, &__k, "dialog:zoom");
     if __k.clicked() {
@@ -69,7 +69,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
         let r = app.grid.cells_rect.unwrap_or(Rect::from_min_size(pos2(0.0, 0.0), vec2(1200.0, 700.0)));
         act(app, "view.zoomToSelection", json!({"viewWidth": r.width(), "viewHeight": r.height()}));
     }
-    sep(ui);
+    sep(ui, "Zoom");
     let __k = big_button(ui, Icon::NewFile, "New\nWindow", "New Window", false);
     control_keytip(app, ui, &__k, "view.newWindow");
     if __k.clicked() {
@@ -125,7 +125,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
             act(app, "view.animations", json!({"on": animations}));
         }
     });
-    sep(ui);
+    sep(ui, "Window");
     // Interface size (issue #230): scales the whole window on top of the desktop's scale.
     ui.vertical(|ui| {
         let label = ui.label(egui::RichText::new(lang.tr("Interface size")).font(theme::ui_font(11.5)).color(t.text_dim));
@@ -161,6 +161,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
             .response
             .labelled_by(label.id);
     });
+    group_end(ui, "Interface");
 }
 
 /// View › Switch Windows: the open workbooks, the active one checked and unsaved ones marked;

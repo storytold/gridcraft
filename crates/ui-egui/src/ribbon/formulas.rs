@@ -1,4 +1,4 @@
-use super::controls::{act, anchor_keytip, control_keytip, invoke, keytip, menu_items, popup_command, sep};
+use super::controls::{act, anchor_keytip, control_keytip, group_end, invoke, keytip, menu_items, popup_command, sep};
 use super::{Cat, Icon, SheetApp, Tokens, Ui, big_button, big_split_button, json, keytip_table, small_button, small_split_button};
 use crate::function_library;
 use crate::icons::FnGlyph;
@@ -97,7 +97,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     }
-    sep(ui);
+    sep(ui, "Function Library");
     let __k = big_button(ui, Icon::Name, "Name\nManager", "Name Manager", false);
     control_keytip(app, ui, &__k, "dialog:nameManager");
     if __k.clicked() {
@@ -148,7 +148,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             act(app, "formulas.createFromSelection", json!({}));
         }
     });
-    sep(ui);
+    sep(ui, "Defined Names");
     ui.vertical(|ui| {
         if small_button(ui, Icon::Trace, "Trace Precedents", "Trace Precedents", false).clicked()
             && let Ok(r) = app.run("formulas.tracePrecedents", json!({}))
@@ -211,7 +211,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     if big_button(ui, Icon::Search, "Watch\nWindow", "Watch Window", false).clicked() {
         app.grid.pane = Some("watch".into());
     }
-    sep(ui);
+    sep(ui, "Formula Auditing");
     let co = big_button(ui, Icon::Calc, "Calculation\nOptions", "Calculation Options", true);
     for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["formulas.calculationOptions"]) {
         keytip(app, ui, sequence, co.rect.center_bottom());
@@ -239,6 +239,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             act(app, "formulas.calculateSheet", json!({}));
         }
     });
+    group_end(ui, "Calculation");
 }
 
 #[cfg(test)]

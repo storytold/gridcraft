@@ -1,4 +1,4 @@
-use super::controls::{act, anchor_keytip, checkbox_on, control_keytip, invoke, keytip, menu_items, sep};
+use super::controls::{act, anchor_keytip, checkbox_on, control_keytip, group_end, invoke, keytip, menu_items, sep};
 use super::{Color32, Icon, Sense, SheetApp, Tokens, Ui, big_button, json, keytip_table, vec2};
 
 pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
@@ -17,7 +17,7 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
             });
         }
     });
-    sep(ui);
+    sep(ui, "Themes");
     let m = big_button(ui, Icon::Margins, "Margins", "Margins", true);
     for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["pageLayout.margins", "dialog:pageSetup"]) {
         keytip(app, ui, sequence, m.rect.center_bottom());
@@ -106,7 +106,7 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("pageSetup", json!({"tab": "Sheet"}));
     }
-    sep(ui);
+    sep(ui, "Page Setup");
     let sh = app
         .session
         .active()
@@ -155,4 +155,5 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     if r.clicked() {
         act(app, "view.rightToLeft", json!({"on": !rtl}));
     }
+    group_end(ui, "Sheet Options");
 }

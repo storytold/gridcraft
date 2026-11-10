@@ -1,4 +1,4 @@
-use super::controls::{act, anchor_keytip, control_keytip, keytip, menu_items, sep};
+use super::controls::{act, anchor_keytip, control_keytip, group_end, keytip, menu_items, sep};
 use super::galleries::{paint_table_swatch, table_gallery};
 use super::{Color32, Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, icon_button, json, keytip_table, vec2};
 
@@ -25,7 +25,7 @@ pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("tableResize", json!({}));
     }
-    sep(ui);
+    sep(ui, "Properties");
     let __k = big_button(ui, Icon::Duplicates, "Remove\nDuplicates", "Remove Duplicates", false);
     control_keytip(app, ui, &__k, "data.removeDuplicates");
     if __k.clicked() {
@@ -36,11 +36,11 @@ pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "table.convertToRange", json!({"table": tname}));
     }
-    sep(ui);
+    // Excel keeps Insert Slicer in its Tools group.
     if big_button(ui, Icon::Filter, "Insert\nSlicer", "Insert Slicer", false).clicked() {
         act(app, "table.insertSlicer", json!({"table": tname}));
     }
-    sep(ui);
+    sep(ui, "Tools");
     ui.vertical(|ui| {
         for (label, cmd, v) in [
             ("Header Row", "table.headerRow", header && filter),
@@ -65,8 +65,9 @@ pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
             }
         }
     });
-    sep(ui);
+    sep(ui, "Table Style Options");
     table_style_strip(app, ui, &tname, &style);
+    group_end(ui, "Table Styles");
 }
 
 /// The first page of Excel's Table Styles gallery, drawn in the ribbon. The More arrow opens the
@@ -183,4 +184,5 @@ pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
         act(app, "chart.delete", json!({"chart": id}));
         app.selected_object = None;
     }
+    group_end(ui, "Chart");
 }
