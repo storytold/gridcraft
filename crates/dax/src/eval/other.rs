@@ -492,7 +492,10 @@ fn window(ev: &Evaluator<'_>, name: &str, exprs: &[BoundExpr], ctx: &mut Context
             return Err(EvalError::new(format!("{name} could not resolve the relation table")));
         }
         relation_table = candidate;
-        table = ev.table(relation_table, &ctx.filters);
+        // The documented default is ALLSELECTED of the ordering and partitioning columns:
+        // with no outer shadow context the unfiltered table is the bounded equivalent,
+        // as in `filter::default_relation`.
+        table = ev.table(relation_table, &FilterContext::default());
     }
 
     let mut order = spec.order;

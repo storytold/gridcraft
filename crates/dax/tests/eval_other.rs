@@ -2,7 +2,7 @@
 
 use gridcraft_dax::model::{DataModel, ModelColumn, ModelTable};
 use gridcraft_dax::value::{Scalar, TableValue};
-use gridcraft_dax::{Binder, Evaluator, parse_expression};
+use gridcraft_dax::{Binder, Evaluator, FilterContext, ScalarKey, parse_expression};
 
 fn model() -> DataModel {
     let mut model = DataModel {
@@ -235,6 +235,23 @@ fn rank_and_rownumber_partition_and_order_blanks() {
     // LAST puts the blank at the end, FIRST at the beginning.
     assert_eq!(scalar("SUMX(Points, IF(Points[Value] = BLANK(), ROWNUMBER(Points, ORDERBY(Points[Value]), LAST), 0))"), Scalar::Decimal(3.0));
     assert_eq!(scalar("SUMX(Points, IF(Points[Value] = BLANK(), ROWNUMBER(Points, ORDERBY(Points[Value]), FIRST), 0))"), Scalar::Decimal(1.0));
+}
+
+#[test]
+fn rank_with_an_omitted_relation_ranks_against_the_unfiltered_table() {
+    // A single-value filter on the ordering column identifies the current row; the default
+    // relation is ALLSELECTED of the ordering columns, so the rank still counts the rows
+    // the filter hides (CodeRabbit, #3412).
+    let model = model();
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expr = parse_expression("RANK(ORDERBY(Sales[Amount]))").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+    let table = model.table_index("Sales").expect("Sales");
+    let column = model.column_index(table, "Amount").expect("Amount");
+    let mut filters = FilterContext::default();
+    filters.set(table, column, [ScalarKey::from(&Scalar::Integer(20))]);
+    let rank = evaluator.evaluate_with(&bound, filters).expect("rank");
+    assert_eq!(rank, Scalar::Integer(2));
 }
 
 #[test]
