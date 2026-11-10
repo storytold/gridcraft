@@ -215,6 +215,11 @@ impl Language {
         }
     }
 
+    /// The catalog's own translation of `text`, or `None` when it falls back to English.
+    fn translated(self, text: &str) -> Option<&'static str> {
+        self.translation(text)
+    }
+
     /// Translates an interface label; untranslated labels fall back to English.
     ///
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
@@ -357,6 +362,23 @@ fn name_sort_key(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every shipped catalog names GridCraft's own Diagram and Decorative Text features, and
+    /// Diagram never repeats that catalog's chart word (both sit on the Insert tab).
+    #[test]
+    fn every_catalog_has_distinct_diagram_and_decorative_text() {
+        for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
+            let code = language.code();
+            let diagram = language.translated("Diagram");
+            assert!(diagram.is_some(), "{code}: Diagram");
+            assert!(language.translated("Decorative Text").is_some(), "{code}: Decorative Text");
+            for chart in ["Chart", "Charts"] {
+                if let Some(chart_text) = language.translated(chart) {
+                    assert_ne!(diagram, Some(chart_text), "{code}: Diagram equals {chart}");
+                }
+            }
+        }
+    }
 
     /// Help tables are sorted and unique: lookups binary-search them.
     #[test]
