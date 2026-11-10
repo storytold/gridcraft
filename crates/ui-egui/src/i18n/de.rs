@@ -4,6 +4,8 @@
 /// Returns the German translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Schema",
+        "Decorative Text" => "Dekorativer Text",
         "Paste" => "Einfügen",
         "Paste Values" => "Werte einfügen",
         "Paste Formulas" => "Formeln einfügen",
@@ -57,6 +59,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Format-\nbereich",
         "Format" => "Format",
         "Insert" => "Einfügen",
+        "Header Menu|Insert" => "Zellen einfügen",
         "Insert Cells…" => "Zellen einfügen…",
         "Delete" => "Löschen",
         "Select Data…" => "Daten auswählen…",
@@ -407,6 +410,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legende: Unten",
         "Legend: Top" => "Legende: Oben",
         "Legend: Right" => "Legende: Rechts",
+        "First slice angle" => "Winkel des ersten Segments",
+        "Doughnut hole size" => "Größe des Ringlochs",
         "Gridlines: None" => "Gitternetzlinien: Keine",
         "Gridlines: Show" => "Gitternetzlinien: Anzeigen",
         "Chart\nTitle" => "Diagramm-\ntitel",
@@ -474,7 +479,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         // grid.rs cell and row/column header context menus.
         "Cut" => "Ausschneiden",
         "Copy" => "Kopieren",
-        "Insert…" => "Einfügen…",
+        "Insert…" => "Zellen einfügen…",
         "Delete…" => "Löschen…",
         "Filter by Selected Cell's Value" => "Nach Wert der gewählten Zelle filtern",
         "New Comment" => "Neuer Kommentar",

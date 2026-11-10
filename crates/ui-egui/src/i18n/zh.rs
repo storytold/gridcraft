@@ -3,6 +3,8 @@
 /// Returns the Chinese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "图示",
+        "Decorative Text" => "装饰文字",
         "Paste" => "粘贴",
         "Paste Values" => "粘贴值",
         "Paste Formulas" => "粘贴公式",
@@ -62,6 +64,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "格式\n窗格",
         "Format" => "格式",
         "Insert" => "插入",
+        "Header Menu|Insert" => "插入",
         "Insert Cells…" => "插入单元格…",
         "Delete" => "删除",
         "Delete Cells…" => "删除单元格…",
@@ -258,6 +261,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "图例：底部",
         "Legend: Top" => "图例：顶部",
         "Legend: Right" => "图例：右侧",
+        "First slice angle" => "第一扇区起始角度",
+        "Doughnut hole size" => "圆环图内径大小",
         "Gridlines: None" => "网格线：无",
         "Gridlines: Show" => "网格线：显示",
         "Chart\nTitle" => "图表\n标题",

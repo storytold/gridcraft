@@ -1,6 +1,8 @@
 /// Returns the Polish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Diagram",
+        "Decorative Text" => "Tekst ozdobny",
         "Paste" => "Wklej",
         "Paste Values" => "Wklej wartości",
         "Paste Formulas" => "Wklej formuły",
@@ -56,6 +58,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Okienko\nformatowania",
         "Format" => "Formatuj",
         "Insert" => "Wstaw",
+        "Header Menu|Insert" => "Wstaw",
         "Insert Cells…" => "Wstaw komórki…",
         "Delete" => "Usuń",
         "Delete Cells…" => "Usuń komórki…",
@@ -251,6 +254,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legenda: u dołu",
         "Legend: Top" => "Legenda: u góry",
         "Legend: Right" => "Legenda: z prawej",
+        "First slice angle" => "Kąt pierwszego wycinka",
+        "Doughnut hole size" => "Rozmiar otworu pączka",
         "Gridlines: None" => "Linie siatki: brak",
         "Gridlines: Show" => "Linie siatki: pokaż",
         "Chart\nTitle" => "Tytuł\nwykresu",

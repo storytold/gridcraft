@@ -4,6 +4,8 @@
 /// Returns the Turkish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Diyagram",
+        "Decorative Text" => "Dekoratif Metin",
         "Paste" => "Yapıştır",
         "Paste Values" => "Değerleri Yapıştır",
         "Paste Formulas" => "Formülleri Yapıştır",
@@ -59,6 +61,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Biçim\nBölmesi",
         "Format" => "Biçim",
         "Insert" => "Ekle",
+        "Header Menu|Insert" => "Ekle",
         "Insert Cells…" => "Hücre Ekle…",
         "Delete" => "Sil",
         "Delete Cells…" => "Hücreleri Sil…",
@@ -367,6 +370,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Gösterge: Alt",
         "Legend: Top" => "Gösterge: Üst",
         "Legend: Right" => "Gösterge: Sağ",
+        "First slice angle" => "İlk dilim açısı",
+        "Doughnut hole size" => "Donut deliği boyutu",
         "Gridlines: None" => "Kılavuz Çizgileri: Yok",
         "Gridlines: Show" => "Kılavuz Çizgileri: Göster",
         "Chart\nTitle" => "Grafik\nBaşlığı",

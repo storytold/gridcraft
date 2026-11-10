@@ -8,6 +8,8 @@
 /// Returns the Romanian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Schemă",
+        "Decorative Text" => "Text decorativ",
         "Paste" => "Lipire",
         "Paste Values" => "Lipire valori",
         "Paste Formulas" => "Lipire formule",
@@ -63,6 +65,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Panou\nformatare",
         "Format" => "Format",
         "Insert" => "Inserare",
+        "Header Menu|Insert" => "Inserare",
         "Insert Cells…" => "Inserare celule…",
         "Delete" => "Ștergere",
         "Delete Cells…" => "Ștergere celule…",
@@ -258,6 +261,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legendă: jos",
         "Legend: Top" => "Legendă: sus",
         "Legend: Right" => "Legendă: dreapta",
+        "First slice angle" => "Unghiul primei felii",
+        "Doughnut hole size" => "Dimensiunea găurii gogoașei",
         "Gridlines: None" => "Linii de grilă: niciuna",
         "Gridlines: Show" => "Linii de grilă: afișare",
         "Chart\nTitle" => "Titlu\ndiagramă",

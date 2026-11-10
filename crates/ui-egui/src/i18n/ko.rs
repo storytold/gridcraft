@@ -3,6 +3,8 @@
 /// Returns the Korean translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "다이어그램",
+        "Decorative Text" => "장식 텍스트",
         "Paste" => "붙여넣기",
         "Paste Values" => "값 붙여넣기",
         "Paste Formulas" => "수식 붙여넣기",
@@ -62,6 +64,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "서식\n창",
         "Format" => "서식",
         "Insert" => "삽입",
+        "Header Menu|Insert" => "삽입",
         "Insert Cells…" => "셀 삽입…",
         "Delete" => "삭제",
         "Delete Cells…" => "셀 삭제…",
@@ -258,6 +261,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "범례: 아래쪽",
         "Legend: Top" => "범례: 위쪽",
         "Legend: Right" => "범례: 오른쪽",
+        "First slice angle" => "첫째 조각의 각도",
+        "Doughnut hole size" => "도넛 구멍 크기",
         "Gridlines: None" => "눈금선: 없음",
         "Gridlines: Show" => "눈금선: 표시",
         "Chart\nTitle" => "차트\n제목",

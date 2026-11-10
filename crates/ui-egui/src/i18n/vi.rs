@@ -4,6 +4,8 @@
 /// Returns the Vietnamese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Sơ đồ",
+        "Decorative Text" => "Chữ trang trí",
         "Paste" => "Dán",
         "Paste Values" => "Dán giá trị",
         "Paste Formulas" => "Dán công thức",
@@ -64,6 +66,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Ngăn\nđịnh dạng",
         "Format" => "Định dạng",
         "Insert" => "Chèn",
+        "Header Menu|Insert" => "Chèn",
         "Insert Cells…" => "Chèn ô…",
         "Delete" => "Xóa",
         "Delete Cells…" => "Xóa ô…",
@@ -265,6 +268,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Chú giải: Dưới",
         "Legend: Top" => "Chú giải: Trên",
         "Legend: Right" => "Chú giải: Phải",
+        "First slice angle" => "Góc lát đầu tiên",
+        "Doughnut hole size" => "Kích thước lỗ bánh donut",
         "Gridlines: None" => "Đường lưới: Không",
         "Gridlines: Show" => "Đường lưới: Hiện",
         "Chart\nTitle" => "Tiêu đề\nbiểu đồ",

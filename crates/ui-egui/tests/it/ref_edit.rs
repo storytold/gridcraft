@@ -1637,3 +1637,249 @@ fn solver_load_model_after_a_cross_sheet_pick_reads_the_dialogs_sheet() {
     assert!(field(&h, "variables").contains("B2"), "{:?}", field(&h, "variables"));
     assert_eq!(selection(&h).0, 0, "back on the dialog's sheet");
 }
+
+/// Shows the sheet at `index` from a script, as a sheet tab click or the control channel does.
+fn show_sheet(h: &mut H, index: usize) {
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": index})).unwrap();
+    h.run_steps(3);
+}
+
+#[test]
+fn a_sheet_shown_before_the_first_pick_is_not_the_dialogs_sheet() {
+    // Goal Seek opened on Sheet1 (B5 selected); Rates is shown before any box picks.
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    show_sheet(&mut h, 1);
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "A2", "A3");
+    assert_eq!(field(&h, "changing"), "Rates!$A$2:$A$3", "Rates is not the dialog's sheet: the pick carries its name");
+    // Back on the dialog's own sheet, a pick needs no sheet name, and Cancel puts back the
+    // selection the dialog was opened with, not the one picked there.
+    show_sheet(&mut h, 0);
+    drag(&mut h, "C3", "C3");
+    assert_eq!(field(&h, "changing"), "$C$3");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(selection(&h), (0, "B5".into()), "back on the sheet the dialog was opened on, with its selection");
+}
+
+#[test]
+fn solver_and_data_analysis_keep_the_sheet_they_were_opened_on() {
+    for (name, params, button, key_name) in [("solver", json!({}), 0, "objective"), ("analysisToolPak", json!({"tool": "descriptive"}), 0, "range")] {
+        let mut h = harness(two_sheets());
+        h.state_mut().open_dialog(name, params);
+        h.run_steps(4);
+        show_sheet(&mut h, 1);
+        click_button(&mut h, "Collapse dialog", button);
+        drag(&mut h, "B2", "B2");
+        assert_eq!(field(&h, key_name), "Rates!$B$2", "{name}: a pick on a sheet shown after opening carries its name");
+        key(&mut h, Key::Escape, Modifiers::NONE);
+        key(&mut h, Key::Escape, Modifiers::NONE);
+        assert!(h.state().dialog.is_none(), "{name}");
+        assert_eq!(selection(&h), (0, "B5".into()), "{name}: Cancel goes back to the sheet it was opened on");
+    }
+}
+
+#[test]
+fn ok_without_a_pick_runs_on_the_sheet_the_dialog_was_opened_on() {
+    // Data Analysis opened on Sheet1, Rates shown, then OK with typed, unqualified references:
+    // they mean Sheet1's cells, and the report lands on Sheet1.
+    let mut h = harness(two_sheets());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
+    h.run_steps(4);
+    show_sheet(&mut h, 1);
+    let d = h.state_mut().dialog.as_mut().unwrap();
+    d.values.insert("range".into(), json!("B1:B6"));
+    d.values.insert("outputTo".into(), json!("range"));
+    d.values.insert("output".into(), json!("$H$1"));
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    let wb = &h.state().session.active().unwrap().wb;
+    assert!(!wb.sheets[0].value(CellRef::parse("H1").unwrap()).is_empty(), "the report is on the dialog's own sheet");
+    assert!(wb.sheets[1].value(CellRef::parse("H1").unwrap()).is_empty(), "not on the sheet shown when OK was pressed");
+    assert_eq!(selection(&h).0, 0);
+}
+
+#[test]
+fn a_tool_chosen_on_another_sheet_takes_that_sheets_selection_with_its_name() {
+    let mut h = harness(two_sheets());
+    h.state_mut().open_dialog("analysisToolPak", json!({}));
+    h.run_steps(4);
+    show_sheet(&mut h, 1);
+    h.state_mut().session.execute("selection.set", json!({"range": "A1:A6"})).unwrap();
+    h.state_mut().dialog.as_mut().unwrap().values.insert("pick".into(), json!("descriptive"));
+    h.run_steps(2);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert_eq!(field(&h, "range"), "Rates!A1:A6", "the input range keeps the sheet it was selected on");
+}
+
+#[test]
+fn the_opened_sheet_renamed_or_deleted_before_the_first_pick() {
+    // Renamed: still the dialog's sheet, found by identity.
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    h.state_mut().session.execute("sheet.rename", json!({"sheet": 0, "name": "Model"})).unwrap();
+    show_sheet(&mut h, 1);
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "A2", "A2");
+    assert_eq!(field(&h, "changing"), "Rates!$A$2");
+    show_sheet(&mut h, 0);
+    drag(&mut h, "C3", "C3");
+    assert_eq!(field(&h, "changing"), "$C$3", "the renamed sheet is the dialog's own");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(selection(&h), (0, "B5".into()));
+
+    // Deleted: the sheet shown afterwards does not become the dialog's, so picks carry its name
+    // and OK is refused rather than reading the dialog's references against it.
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    h.state_mut().session.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h), ["Rates"]);
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "A2", "A2");
+    assert_eq!(field(&h, "changing"), "Rates!$A$2");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some(), "the dialog stays open");
+    let message = h.state().message.as_ref().map(|m| m.1.clone()).unwrap_or_default();
+    assert!(message.contains("was deleted"), "{message}");
+}
+
+#[test]
+fn a_dialog_opened_by_the_control_channel_keeps_the_sheet_it_was_opened_on() {
+    let mut h = harness(two_sheets());
+    let r = control(&mut h, "ui.dialog", json!({"name": "goalSeek"}));
+    assert_eq!(r["result"]["dialog"], json!("goalSeek"), "{r}");
+    let r = control(&mut h, "engine.execute", json!({"command": "sheet.activate", "params": {"sheet": 1}}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "A2", "A2");
+    assert_eq!(field(&h, "changing"), "Rates!$A$2");
+    let r = control(&mut h, "ui.dialog.cancel", json!({}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert_eq!(selection(&h), (0, "B5".into()), "a scripted cancel goes back to the sheet the dialog was opened on");
+}
+
+/// A single click on `cell`, however soon after the last one: the harness clicks faster than a
+/// double-click, which would start editing the cell instead.
+fn single_click(h: &mut H, cell: &str) {
+    h.state_mut().grid.last_click = None;
+    let pos = cell_pos(h, cell);
+    click_at(h, pos);
+}
+
+#[test]
+fn a_click_on_the_cell_already_selected_picks_it() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    // Not picking: a click on the selected cell changes no box.
+    single_click(&mut h, "B5");
+    assert_eq!((field(&h, "set"), field(&h, "changing")), ("B5".into(), String::new()));
+    // Clicking into a box keeps its text: the earlier click is not taken for a pick.
+    let boxes = dialog_boxes(&h);
+    click_at(&mut h, boxes[2].center());
+    assert_eq!(field(&h, "changing"), "", "focusing the box alone writes nothing");
+    // Picking: B5 is still the selection, and a click on it writes it.
+    assert_eq!(selection(&h), (0, "B5".into()));
+    single_click(&mut h, "B5");
+    assert_eq!(field(&h, "changing"), "$B$5", "a click on the cell already selected is a pick");
+    // A drag still picks a range, and after typing over it, a click on the cell already selected
+    // writes that cell again.
+    drag(&mut h, "C3", "D4");
+    assert_eq!(field(&h, "changing"), "$C$3:$D$4");
+    single_click(&mut h, "C3");
+    assert_eq!(field(&h, "changing"), "$C$3");
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "X1");
+    assert_eq!(field(&h, "changing"), "X1");
+    single_click(&mut h, "C3");
+    assert_eq!(field(&h, "changing"), "$C$3", "the click replaces the typed text although the selection is unchanged");
+    assert_eq!(field(&h, "set"), "B5", "only the box being picked into changes");
+    assert!(h.state().editor.is_none(), "no cell is being edited");
+}
+
+/// A click on `cell` at a fraction of its width (a link's text sits in its first 80%), with
+/// `modifiers` held.
+fn click_cell_with(h: &mut H, cell: &str, modifiers: Modifiers) {
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let r = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll).cell_rect(sheet, CellRef::parse(cell).unwrap());
+    let pos = egui::pos2(r.left() + r.width() * 0.3, r.center().y);
+    h.state_mut().grid.last_click = None;
+    h.input_mut().events.extend([
+        Event::ModifiersChanged(modifiers),
+        Event::PointerMoved(pos),
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers },
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers },
+    ]);
+    h.run_steps(3);
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+}
+
+#[test]
+fn while_picking_a_click_on_a_link_or_checkbox_picks_its_cell_only() {
+    let mut s = workbook();
+    for (cell, target) in [("C3", "Sheet1!B5"), ("C4", "Sheet1!F9"), ("C5", "https://example.org/a")] {
+        s.execute("cell.set", json!({"cell": cell, "input": "link"})).unwrap();
+        s.execute("insert.link", json!({"cell": cell, "target": target})).unwrap();
+    }
+    s.execute("insert.checkbox", json!({"range": "C6"})).unwrap();
+    let mut h = harness(s);
+    open_goal_seek(&mut h);
+    let boxes = dialog_boxes(&h);
+    click_at(&mut h, boxes[2].center());
+    // Ctrl+click on a link back to the cell already selected: the cell clicked is the pick.
+    click_cell_with(&mut h, "C3", Modifiers::COMMAND);
+    assert_eq!(field(&h, "changing"), "$C$3", "the link is not followed back to B5");
+    // A link to another cell on the same sheet, with and without Ctrl: no Go To, the cell picks.
+    click_cell_with(&mut h, "C4", Modifiers::COMMAND);
+    assert_eq!(field(&h, "changing"), "$C$4");
+    click_cell_with(&mut h, "C4", Modifiers::NONE);
+    assert_eq!(field(&h, "changing"), "$C$4");
+    assert_eq!(selection(&h), (0, "C4".into()), "the link to F9 was not followed");
+    // A web link asks nothing, so the dialog being filled stays.
+    click_cell_with(&mut h, "C5", Modifiers::NONE);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("goalSeek"));
+    assert_eq!(field(&h, "changing"), "$C$5");
+    // A checkbox cell is picked, not toggled.
+    let checked = |h: &H| h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::parse("C6").unwrap());
+    let before = checked(&h);
+    click_cell_with(&mut h, "C6", Modifiers::NONE);
+    assert_eq!(field(&h, "changing"), "$C$6");
+    assert_eq!(checked(&h), before, "the checkbox was not toggled");
+}
+
+#[test]
+fn a_second_quick_click_on_a_cell_picks_it_instead_of_editing() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    let boxes = dialog_boxes(&h);
+    click_at(&mut h, boxes[2].center());
+    // The last click on the grid was on B5 a moment ago (before the box was clicked into), so
+    // this click would be a double-click.
+    let now = gridcraft_engine::core::date::unix_now_ms().unwrap();
+    h.state_mut().grid.last_click = Some((CellRef::parse("B5").unwrap(), now));
+    let pos = cell_pos(&h, "B5");
+    click_at(&mut h, pos);
+    assert!(h.state().editor.is_none(), "the click does not start editing the cell");
+    assert_eq!(field(&h, "changing"), "$B$5", "the click picks the cell");
+}
+
+#[test]
+fn a_click_on_the_selected_cell_picks_into_a_collapsed_box_on_another_sheet() {
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    next_sheet(&mut h);
+    assert_eq!(selection(&h), (1, "A1".into()));
+    assert_eq!(field(&h, "changing"), "", "showing another sheet is not a pick");
+    single_click(&mut h, "A1");
+    assert_eq!(field(&h, "changing"), "Rates!$A$1", "a click on that sheet's selected cell is");
+}

@@ -165,11 +165,11 @@ Implemented:
 
 Missing:
 
-- `insert.smartArt` SmartArt (Illustrations)
+- `insert.smartArt` Diagram (Illustrations)
 - `insert.screenshot` Screenshot (Illustrations)
 - `insert.map` Maps (Charts)
 - `insert.timeline` Timeline (Filters)
-- `insert.wordArt` WordArt (Text)
+- `insert.wordArt` Decorative Text (Text)
 - `insert.signatureLine` Signature Line (Text)
 - `insert.object` Object (Text)
 

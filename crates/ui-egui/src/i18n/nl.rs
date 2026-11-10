@@ -3,6 +3,8 @@
 /// Returns the Dutch translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Diagram",
+        "Decorative Text" => "Decoratieve tekst",
         "Paste" => "Plakken",
         "Paste Values" => "Waarden plakken",
         "Paste Formulas" => "Formules plakken",
@@ -61,6 +63,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Opmaak-\nvenster",
         "Format" => "Opmaak",
         "Insert" => "Invoegen",
+        "Header Menu|Insert" => "Invoegen",
         "Insert Cells…" => "Cellen invoegen…",
         "Delete" => "Verwijderen",
         "Delete Cells…" => "Cellen verwijderen…",
@@ -264,6 +267,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legenda: onder",
         "Legend: Top" => "Legenda: boven",
         "Legend: Right" => "Legenda: rechts",
+        "First slice angle" => "Hoek eerste punt",
+        "Doughnut hole size" => "Grootte van het donutgat",
         "Gridlines: None" => "Rasterlijnen: geen",
         "Gridlines: Show" => "Rasterlijnen: weergeven",
         "Chart\nTitle" => "Grafiek-\ntitel",

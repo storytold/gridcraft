@@ -3,6 +3,8 @@
 /// Returns the Serbian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Dijagram",
+        "Decorative Text" => "Ukrasni tekst",
         "Paste" => "Nalepi",
         "Paste Values" => "Nalepi vrednosti",
         "Paste Formulas" => "Nalepi formule",
@@ -63,6 +65,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Okno za\noblikovanje",
         "Format" => "Oblikovanje",
         "Insert" => "Umetni",
+        "Header Menu|Insert" => "Umetni",
         "Insert Cells…" => "Umetni ćelije…",
         "Delete" => "Obriši",
         "Delete Cells…" => "Obriši ćelije…",
@@ -263,6 +266,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legenda: Dole",
         "Legend: Top" => "Legenda: Gore",
         "Legend: Right" => "Legenda: Desno",
+        "First slice angle" => "Ugao prve kriške",
+        "Doughnut hole size" => "Veličina rupe prstena",
         "Gridlines: None" => "Linije mreže: Ništa",
         "Gridlines: Show" => "Linije mreže: Prikaži",
         "Chart\nTitle" => "Naslov\ngrafikona",
