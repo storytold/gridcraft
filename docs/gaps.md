@@ -54,11 +54,13 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
 ### 5. Text in non-Latin scripts doesn't render or export (L)
-- **Missing:** CJK font fallback, complex shaping (Arabic in cells and exports, Devanagari, Thai), bidi, non-Latin PDF.
-- **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32); #142
-  (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora); the Arabic interface
-  (`ar`) is shaped, laid out right to left and mirrored, but Arabic and Hebrew text inside cells has no
-  bidi (#696) and Devanagari has no shaping; PDF writer uses 14 standard fonts only.
+- **Missing:** CJK font fallback, Devanagari and Thai shaping verification, non-Latin PDF.
+- **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32), and for
+  Arabic (system, fontconfig and craft-fonts faces); Arabic has shared shaping and bidi, editing and
+  per-cell Context/LTR/RTL reading direction, and the Arabic interface (`ar`) is laid out right to
+  left and mirrored; a UI font with Arabic of its own (DejaVu Sans in the Flatpak) still draws
+  interface Arabic ahead of fontconfig's choice (#229); #142 (Chinese text) awaits confirmation; #54
+  (symbols as boxes on Fedora); Devanagari has no shaping; PDF writer uses 14 standard fonts only.
 - **Impact:** blocks most of the world's users even with an English UI.
 - **Estimate:** 12–20 h. [localization-parity.md](localization-parity.md)
 
@@ -194,6 +196,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-11-01 | minor | §4: chart data tables implemented for column, bar, line, area and compatible combo charts, with legend keys and border settings, live source values, XLSX round-trip and print/PDF; other chart gaps remain. |
 | 2026-10-31 | minor | §13: Solver Options (Max Evaluations, Integer Optimality and the Evolutionary options), saved with the model |
 | 2026-10-31 | minor | §13: Solver Load/Save Model (`data.solverSaveModel`, `data.solverLoadModel`) and Reset All (`data.solverReset`), with buttons in the Solver Parameters dialog |
+| 2026-10-26 | minor | Arabic shared bidi display/editing and persisted cell reading direction; other script and PDF work remain separate |
+| 2026-10-26 | minor | §5: Arabic text renders in cells and the interface: a system Arabic face (Tahoma, Arial or Segoe UI on Windows, Geeza Pro on macOS, Noto Sans or Naskh Arabic on Linux) joins the script fallbacks, fontconfig's Arabic choice, when it has Arabic letters, leads the Arabic fallbacks and draws Arabic wherever the UI or cell font has none, such as the default cell fonts (part of #229; a UI font with Arabic of its own, such as DejaVu Sans in the Flatpak, still draws interface Arabic, left for a follow-up), and craft-fonts' Noto Sans Arabic is a required face allowed on the web. Workbook fonts without Arabic keep every script fallback. Shaping and bidirectional layout remain separate work |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |

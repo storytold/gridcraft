@@ -1817,6 +1817,13 @@ Macro",
     ("Format Control…", "تنسيق عنصر التحكم…"),
     ("First slice angle", "زاوية الشريحة الأولى"),
     ("Doughnut hole size", "حجم ثقب الحلقة"),
+    // From main (2026-11)
+    ("Diagram", "رسم تخطيطي"),
+    ("Decorative Text", "نص زخرفي"),
+    ("Reading direction", "اتجاه القراءة"),
+    ("Context", "حسب السياق"),
+    ("Left to right", "من اليسار إلى اليمين"),
+    ("Right to left", "من اليمين إلى اليسار"),
 ];
 
 /// The Arabic for `text`, or `None` while it has no entry.
