@@ -1,7 +1,7 @@
 //! Hand-written packages exercising specific reader paths.
 
 use gridcraft_core::{CellError, CellRef, DateSystem, RangeRef, Value};
-use gridcraft_model::{CalcMode, CfRule, Color, GradientKind, GradientStop, HAlign, PatternType, StyleId, Underline, Visibility};
+use gridcraft_model::{CalcMode, CfRule, Color, FilterCriterion, GradientKind, GradientStop, HAlign, PatternType, StyleId, Underline, Visibility};
 
 use super::minimal;
 use crate::read_xlsx;
@@ -677,6 +677,21 @@ fn text_box_formatting_is_read_and_written() {
     assert_eq!(rgb(g.text_color), rgb(f.text_color));
     assert_eq!(rgb(g.text_outline.map(|o| o.0)), rgb(f.text_outline.map(|o| o.0)));
     assert_eq!(g.text_outline.map(|o| o.1), Some(1.5));
+}
+
+/// A colour filter can name a differential format whose fill is a gradient. The reader imports that
+/// fill with an automatic `fg` (normalization), so the filter must take the first gradient stop.
+#[test]
+fn a_colour_filter_reads_a_gradient_dxfs_first_stop() {
+    let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <dxfs count="1"><dxf><fill><gradientFill degree="90"><stop position="0"><color rgb="FFFF0000"/></stop><stop position="1"><color rgb="FF0000FF"/></stop></gradientFill></fill></dxf></dxfs>
+    </styleSheet>"#;
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>N</t></is></c></row><row r="2"><c r="A2"><v>1</v></c></row></sheetData>
+      <autoFilter ref="A1:A2"><filterColumn colId="0"><colorFilter dxfId="0"/></filterColumn></autoFilter>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles)], rels, "")).unwrap();
+    let af = wb.sheet(0).unwrap().autofilter.as_ref().expect("the sheet's autoFilter");
+    assert_eq!(af.criteria, vec![(0, FilterCriterion::FillColor(Color::Rgb(0xFF0000)))]);
 }
 
 /// #1013: cell format 0 is the workbook's Normal cell format. A file that gives it a number
