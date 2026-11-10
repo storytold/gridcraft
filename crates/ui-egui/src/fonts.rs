@@ -19,6 +19,24 @@ use std::sync::OnceLock;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_FONT_FILE: u64 = 64 << 20;
 
+/// Reads a font file of at most [`MAX_FONT_FILE`] bytes, even when it grows after it was found.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_font(path: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let file = std::fs::File::open(path).ok()?;
+    if file.metadata().ok()?.len() > MAX_FONT_FILE {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_FONT_FILE + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= MAX_FONT_FILE).then_some(bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn read_font(_path: &std::path::Path) -> Option<Vec<u8>> {
+    None
+}
+
 /// A face keeps at most this many family names, so a hostile `name` table can't grow the catalog.
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_FAMILY_NAMES: usize = 16;
@@ -172,7 +190,7 @@ pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<Face> {
             if !is_font || std::fs::metadata(&path).map(|m| m.len() > MAX_FONT_FILE).unwrap_or(true) {
                 continue;
             }
-            let Ok(data) = std::fs::read(&path) else { continue };
+            let Some(data) = read_font(&path) else { continue };
             for (index, family, names, style) in file_faces(&data) {
                 out.push(Face { family, names, path: path.clone(), index, weight: style_weight(&style), italic: style_italic(&style) });
             }
@@ -317,13 +335,9 @@ fn face_key(face: &Face) -> String {
 /// no role is ever left pointing at missing data (egui panics on that). A family with no faces
 /// binds nothing.
 ///
-/// Each role's chain ends with the configured fallback and egui's default proportional fonts, so
-/// glyphs the installed font lacks (emoji, a stray script) still render.
+/// Each role's chain ends with egui's default proportional fonts, so glyphs the installed font
+/// lacks (emoji, a stray script) still render.
 pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face]) -> Vec<String> {
-    bind_faces_with_fallback(fonts, family, faces, &[])
-}
-
-fn bind_faces_with_fallback(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face], fallback: &[String]) -> Vec<String> {
     if faces.is_empty() {
         return Vec::new();
     }
@@ -339,7 +353,7 @@ fn bind_faces_with_fallback(fonts: &mut egui::FontDefinitions, family: &str, fac
                 continue;
             }
             if !fonts.font_data.contains_key(&key) {
-                let Ok(bytes) = std::fs::read(&face.path) else { continue };
+                let Some(bytes) = read_font(&face.path) else { continue };
                 let mut fd = egui::FontData::from_owned(bytes);
                 fd.index = face.index;
                 fonts.font_data.insert(key.clone(), std::sync::Arc::new(fd));
@@ -350,21 +364,11 @@ fn bind_faces_with_fallback(fonts: &mut egui::FontDefinitions, family: &str, fac
             continue;
         }
         chain.extend(base.iter().cloned());
-        chain.extend(fallback.iter().cloned());
         let role = role_key(family, bold, italic);
         fonts.families.insert(egui::FontFamily::Name(role.clone().into()), chain);
         bound.push(role);
     }
     bound
-}
-
-/// Bind every installed face of `family`, found by any of its names (see [`bind_faces`]).
-pub fn bind_family(fonts: &mut egui::FontDefinitions, family: &str) -> Vec<String> {
-    bind_faces_with_fallback(fonts, family, &faces_of(family), &[])
-}
-
-pub(crate) fn bind_family_with_fallback(fonts: &mut egui::FontDefinitions, family: &str, fallback: &[String]) -> Vec<String> {
-    bind_faces_with_fallback(fonts, family, &faces_of(family), fallback)
 }
 
 /// The role families currently bound to font data. `cell_family` consults this, so it never names a
@@ -473,17 +477,16 @@ mod tests {
         let face = Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into()], path, index: 0, weight: 300.0, italic: false };
 
         let mut fonts = egui::FontDefinitions::default();
-        let fallback_key = "sys-cjk-han-zh".to_string();
-        fonts.font_data.insert(fallback_key.clone(), std::sync::Arc::new(egui::FontData::from_static(epaint_default_fonts::UBUNTU_LIGHT)));
-        let bound = bind_faces_with_fallback(&mut fonts, "Ubuntu", std::slice::from_ref(&face), std::slice::from_ref(&fallback_key));
+        let bound = bind_faces(&mut fonts, "Ubuntu", std::slice::from_ref(&face));
         assert_eq!(bound.len(), 4, "regular, bold, italic and bold-italic roles");
         for key in &bound {
             let chain = fonts.families.get(&egui::FontFamily::Name(key.as_str().into())).expect("role family");
             assert!(chain.iter().all(|k| fonts.font_data.contains_key(k)), "every chained key has data");
-            assert!(chain.contains(&fallback_key), "configured script fallback is available to installed roles");
         }
         // A family with no faces binds nothing and never touches the map.
         assert!(bind_faces(&mut fonts, "No Such Font", &[]).is_empty());
+        std::fs::File::create(&face.path).expect("sparse file").set_len(MAX_FONT_FILE + 1).expect("oversized file");
+        assert!(read_font(&face.path).is_none(), "an oversized font is not read");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
