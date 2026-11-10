@@ -21,6 +21,8 @@ jobs:
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
+      # Ubuntu on PRs; Windows on main, manual runs and PRs labelled `full-ci` (no macOS on PRs/main).
+      os: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && '["ubuntu-24.04","windows-latest"]' || '["ubuntu-24.04"]' }}
       # The same craft-fonts commit as release.yml and freebsd.yml, so the gate tests the fonts that ship.
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       packages: >-
