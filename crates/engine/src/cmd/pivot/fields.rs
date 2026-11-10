@@ -251,15 +251,31 @@ pub(super) fn fields(s: &mut Session, p: &Json) -> Result<Json> {
                 if pt.values.iter().any(|f| f.source_col.eq_ignore_ascii_case(h)) {
                     areas.push("values");
                 }
-                if pt.filters.iter().any(|f| f.source_col.eq_ignore_ascii_case(h)) && !in_axes(pt, h) {
+                let is_filter = pt.filters.iter().any(|f| f.source_col.eq_ignore_ascii_case(h)) && !in_axes(pt, h);
+                if is_filter {
                     areas.push("filters");
                 }
+                // Full value list + current selection, only for fields actually on the
+                // Filters shelf -- the pane needs this to offer a real value-picker
+                // (checkboxes calling pivot.filter), not just the 5-item hover preview.
+                let (all_values, selected) = if is_filter {
+                    let sel = pt
+                        .filters
+                        .iter()
+                        .find(|f| f.source_col.eq_ignore_ascii_case(h))
+                        .and_then(|f| f.selected.clone());
+                    (pv::distinct_labels(&d.wb, src, c, PivotDateGroup::None, 1000), sel)
+                } else {
+                    (vec![], None)
+                };
                 json!({
                     "name": h,
                     "numeric": src.numeric.get(c).copied().unwrap_or(false),
                     "date": src.dates.get(c).copied().unwrap_or(false),
                     "samples": pv::distinct_labels(&d.wb, src, c, PivotDateGroup::None, 5),
                     "areas": areas,
+                    "allValues": all_values,
+                    "selected": selected,
                 })
             })
             .collect(),

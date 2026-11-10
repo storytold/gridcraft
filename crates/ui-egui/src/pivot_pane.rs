@@ -90,7 +90,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 ui.label(egui::RichText::new(lang.tr(label)).strong());
                 egui::Frame::NONE.fill(t.window).corner_radius(4.0).inner_margin(4.0).show(ui, |ui| {
                     ui.set_min_size(vec2(ui.available_width(), 60.0));
-                    for f in area_with_values(key) {
+                    let area_list = area_with_values(key);
+                    let n_area = area_list.len();
+                    for (idx_in_area, f) in area_list.into_iter().enumerate() {
                         let is_values = f == VALUES_FIELD;
                         let b = ui.add(
                             egui::Button::new(egui::RichText::new(format!("{f} ▾")).font(theme::ui_font(12.0)))
@@ -108,8 +110,67 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                                     app.run_or_alert("pivot.moveField", json!({"pivot": name, "field": f, "from": key, "to": to}));
                                 }
                             }
+                            // Reorder within the same area (e.g. make Branch the outer row
+                            // field instead of Territory) -- pivot.moveField already supports
+                            // from == to with a position, this was just never exposed here.
+                            if !is_values && n_area > 1 {
+                                ui.separator();
+                                if idx_in_area > 0 && ui.button(lang.tr("Move Up")).clicked() {
+                                    app.run_or_alert(
+                                        "pivot.moveField",
+                                        json!({"pivot": name, "field": f, "from": key, "to": key, "position": idx_in_area - 1}),
+                                    );
+                                }
+                                if idx_in_area + 1 < n_area && ui.button(lang.tr("Move Down")).clicked() {
+                                    app.run_or_alert(
+                                        "pivot.moveField",
+                                        json!({"pivot": name, "field": f, "from": key, "to": key, "position": idx_in_area + 1}),
+                                    );
+                                }
+                            }
                             if is_values {
                                 return;
+                            }
+                            if *key == "filters" {
+                                if let Some(field_info) = fields.iter().find(|x| x["name"].as_str() == Some(f.as_str())) {
+                                    let all_values: Vec<String> =
+                                        field_info["allValues"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                                    let selected: Option<Vec<String>> = field_info["selected"]
+                                        .as_array()
+                                        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect());
+                                    if !all_values.is_empty() {
+                                        ui.separator();
+                                        ui.label(egui::RichText::new(lang.tr("Filter Values")).strong());
+                                        egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                                            for vs in &all_values {
+                                                let mut checked = selected.as_ref().is_none_or(|s| s.iter().any(|x| x == vs));
+                                                if ui.checkbox(&mut checked, vs).changed() {
+                                                    let mut new_sel: Vec<String> = selected.clone().unwrap_or_else(|| all_values.clone());
+                                                    if checked {
+                                                        if !new_sel.iter().any(|x| x == vs) {
+                                                            new_sel.push(vs.clone());
+                                                        }
+                                                    } else {
+                                                        new_sel.retain(|x| x != vs);
+                                                    }
+                                                    // An empty selection is rejected by pivot.filter ("You must
+                                                    // select at least one item"); unchecking the pane's only
+                                                    // remaining item is a no-op rather than an error.
+                                                    if !new_sel.is_empty() {
+                                                        let send_all = new_sel.len() == all_values.len();
+                                                        app.run_or_alert(
+                                                            "pivot.filter",
+                                                            json!({"pivot": name, "field": f, "selected": if send_all { Json::Null } else { json!(new_sel) }}),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        });
+                                        if ui.button(lang.tr("Select All")).clicked() {
+                                            app.run_or_alert("pivot.filter", json!({"pivot": name, "field": f, "selected": Json::Null}));
+                                        }
+                                    }
+                                }
                             }
                             if *key == "values" {
                                 ui.separator();
