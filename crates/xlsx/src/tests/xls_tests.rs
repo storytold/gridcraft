@@ -774,7 +774,7 @@ fn legacy_array_follower_caches_stay_sparse_on_import_and_xlsx_save() {
         (Some(num(0.0)), Value::Number(0.0)),
         (Some(special(1, 0)), Value::Bool(false)),
         (Some(special(2, 0x07)), Value::Error(CellError::Div0)),
-        (Some(special(3, 0)), Value::Empty),
+        (Some(special(3, 0)), Value::from("")),
         (None, Value::Empty),
     ] {
         let mut stream = sample(false);

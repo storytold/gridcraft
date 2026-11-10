@@ -187,7 +187,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-10 | minor | XLS import moves stored legacy-array followers into sparse spill caches and keeps declared ranges before cached open; empty and absent followers stay missing, while unsupported formulas keep their values as ordinary cells. |
+| 2026-11-10 | minor | XLS import moves stored legacy-array followers into sparse spill caches and keeps declared ranges before cached open; genuinely absent followers stay sparse, while unsupported formulas keep their values as ordinary cells. |
 | 2026-11-10 | minor | Native JSON retains sparse spill values and ranges, including unmarked and unsupported arrays, without evaluating cached formulas; older JSON that omitted spill data requires explicit recalculation to reconstruct supported arrays. |
 | 2026-11-10 | minor | Honour fullCalcOnLoad unless an explicit recalculation parameter overrides it; report the chosen policy in the info bar without a modal; keep the writer's missing-result flag and explicitly unflag cache-preserving fixtures. |
 | 2026-11-10 | minor | `.xls` import: every formula except a Ctrl+Shift+Enter array is read as a legacy one with Excel's implicit `@` (a title row `=Other!A1:G1` shows its first cell instead of `#SPILL!`), one-cell Ctrl+Shift+Enter arrays stay arrays, and `@` of a 2-D range meets the formula's row and column (#410, PR #1367) |
