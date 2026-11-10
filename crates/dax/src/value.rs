@@ -143,7 +143,14 @@ impl Scalar {
             Scalar::Boolean(true) => "TRUE".into(),
             Scalar::Boolean(false) => "FALSE".into(),
             Scalar::Integer(value) => value.to_string(),
-            Scalar::Currency(value) => format!("{:.4}", *value as f64 / 10_000.0),
+            Scalar::Currency(value) => {
+                // Integer arithmetic keeps every digit of the scaled range (about 19 significant
+                // digits); an f64 round trip would lose the low ones. The four fractional digits
+                // are the storage form, so they are kept as written.
+                let sign = if *value < 0 { "-" } else { "" };
+                let magnitude = value.unsigned_abs();
+                format!("{sign}{}.{:04}", magnitude / 10_000, magnitude % 10_000)
+            }
             Scalar::Decimal(value) => {
                 if value.fract() == 0.0 {
                     format!("{value:.1}")
@@ -339,5 +346,30 @@ impl EvalError {
 
     pub fn not_implemented(name: &str) -> Self {
         EvalError::new(format!("DAX function `{name}` is not implemented by this evaluator"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `to_text` must print every digit of a large scaled currency, which an `f64` division drops
+    /// for values above about 9e11 (the documented DAX currency range reaches about 9.2e14).
+    #[test]
+    fn currency_to_text_keeps_the_low_digits() {
+        assert_eq!(Scalar::Currency(123_456_789_012_345_678).to_text(), "12345678901234.5678");
+        assert_eq!(Scalar::Currency(2_000_000_000_000_001).to_text(), "200000000000.0001");
+        assert_eq!(Scalar::Currency(-123_456_789_012_345_678).to_text(), "-12345678901234.5678");
+        assert_eq!(Scalar::Currency(i64::MIN).to_text(), "-922337203685477.5808");
+        assert_eq!(Scalar::Currency(i64::MAX).to_text(), "922337203685477.5807");
+    }
+
+    /// The four-decimal storage form is preserved, including trailing zeros and small values.
+    #[test]
+    fn currency_to_text_keeps_four_fractional_digits() {
+        assert_eq!(Scalar::Currency(1).to_text(), "0.0001");
+        assert_eq!(Scalar::Currency(10_000).to_text(), "1.0000");
+        assert_eq!(Scalar::Currency(0).to_text(), "0.0000");
+        assert_eq!(Scalar::Currency(-1).to_text(), "-0.0001");
     }
 }

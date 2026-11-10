@@ -200,3 +200,34 @@ fn measures_at_scale_share_one_substrate() {
     let stats: StorageStats = evaluator.storage_stats();
     assert!(stats.aggregates >= 2 && stats.count_rows == 1, "{stats:?}");
 }
+
+/// A `SUMMARIZE` over the full source table must not rescan the lineage table for every group.
+///
+/// The per-group leak check is skipped when the table argument already carries every lineage row
+/// the query filters admit, because no narrower per-group filter can then select a row outside the
+/// table. Without that decision the check runs once per group (and once per added expression), so
+/// 50 product groups over 100k rows read 5M rows from storage; with it the reads stay linear.
+#[test]
+fn summarize_at_scale_reads_the_lineage_once_per_call() {
+    let model = model();
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expression = parse_expression("SUMMARIZE(Sales, Sales[ProductKey], \"Amount\", SUM(Sales[Amount]))").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expression).expect("bind");
+    let table = evaluator.evaluate_table(&bound).expect("summarize");
+    assert_eq!(table.rows.len(), 50, "one row per product key");
+
+    let mut sum = 0i64;
+    for row in &table.rows {
+        match row.get(1) {
+            Some(Scalar::Decimal(value)) => sum += *value as i64,
+            other => panic!("expected a decimal amount, got {other:?}"),
+        }
+    }
+    // sum of (row % 1000) over 100k rows = 100 blocks of 0..999.
+    assert_eq!(sum, 49_950_000);
+
+    let stats = evaluator.storage_stats();
+    eprintln!("SUMMARIZE at scale: {stats:?}");
+    assert!(stats.rows_from_storage < 6 * ROWS as u64, "the leak check must not rescan the lineage per group: {stats:?}");
+    assert_eq!(stats.row_scan_fallbacks, 0);
+}

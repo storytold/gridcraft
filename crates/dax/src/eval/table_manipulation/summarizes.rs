@@ -493,7 +493,45 @@ struct GroupContext<'a> {
     rows: &'a [Vec<Scalar>],
 }
 
-fn eval_in_group(ev: &Evaluator<'_>, ctx: &Context, expression: &BoundExpr, group: &GroupContext<'_>, operation: &str) -> Result<Scalar, EvalError> {
+/// Whether the leak check in [`group_filters`] can possibly find a row.
+///
+/// Only a table argument that lost lineage rows under the query's filters can have a group whose
+/// column filters select a row the group does not own. When the argument already carries every
+/// lineage row those filters admit, every narrower per-group filter selects rows out of that same
+/// set, and every such row is in the table — hence in a group the key selects. The comparison is a
+/// projection onto the table's own columns, so a projection or deduplicated argument (which
+/// keeps every distinct projected row) still qualifies. This is measured once per call, not once
+/// per group: the check itself is the quadratic part the finding is about.
+fn group_source_can_leak(ev: &Evaluator<'_>, table: &TableValue, filters: &FilterContext) -> bool {
+    let Some(lineage) = table.lineage else { return false };
+    // The table argument may be a projection that reorders or drops columns, so its columns are
+    // matched to model columns by name. A column the model does not know cannot participate.
+    let positions: Vec<(usize, usize)> = table
+        .columns
+        .iter()
+        .enumerate()
+        .filter_map(|(position, column)| ev.model().column_index(lineage, &column.name).map(|index| (position, index)))
+        .collect();
+    if positions.is_empty() {
+        return false;
+    }
+    let present: BTreeSet<Vec<ScalarKey>> = table
+        .rows
+        .iter()
+        .map(|row| positions.iter().map(|(position, _)| row.get(*position).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect())
+        .collect();
+    let project = |row: &[Scalar]| -> Vec<ScalarKey> {
+        positions.iter().map(|(_, index)| row.get(*index).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect()
+    };
+    ev.table(lineage, filters).rows.iter().any(|row| !present.contains(&project(row)))
+}
+
+/// Builds the filter context a group's expressions evaluate in and rejects a table argument whose
+/// column filters would select rows outside the group.
+///
+/// Run once per group, never per expression: every expression of a group shares the same filters
+/// and the same leak verdict.
+fn group_filters(ev: &Evaluator<'_>, ctx: &Context, group: &GroupContext<'_>, check_leak: bool, operation: &str) -> Result<FilterContext, EvalError> {
     let mut filters = ctx.filters.clone();
     // The table argument's own rows bound the group: `SUMMARIZE(FILTER(...), ...)` must not see
     // rows the filter removed. Applying the group's rows as column filters keeps the lineage
@@ -518,12 +556,10 @@ fn eval_in_group(ev: &Evaluator<'_>, ctx: &Context, expression: &BoundExpr, grou
     // deduplicate while keeping the lineage (`VALUES`, `DISTINCT`, column-form `ALL`) legitimately
     // own fewer rows than the lineage has, so only a lineage row that projects to a column
     // combination the group does not own is a leak.
-    if let Some(lineage) = group.source.lineage
+    if check_leak
+        && let Some(lineage) = group.source.lineage
         && !group.rows.is_empty()
     {
-        // The table argument may be a projection that reorders or drops columns, so its columns
-        // are matched to model columns by name. A column the model does not know cannot
-        // participate in the comparison.
         let mapped: Vec<(usize, usize)> = group
             .source
             .columns
@@ -549,6 +585,10 @@ fn eval_in_group(ev: &Evaluator<'_>, ctx: &Context, expression: &BoundExpr, grou
             }
         }
     }
+    Ok(filters)
+}
+
+fn eval_in_group(ev: &Evaluator<'_>, ctx: &Context, expression: &BoundExpr, filters: FilterContext) -> Result<Scalar, EvalError> {
     let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
     ev.eval(expression, &mut inner)
 }
@@ -577,22 +617,26 @@ fn summarize(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resul
     for (name, _) in &parsed.expressions {
         columns.push(TableColumn { name: name.clone() });
     }
+    // Decided once: only a table argument that lost lineage rows can leak, and then the check
+    // runs once per group rather than once per group and expression.
+    let check_leak = group_source_can_leak(ev, &table, &ctx.filters);
     let mut output = Vec::with_capacity(rows.len());
     for (values, active, group_rows) in rows {
         let mut row = values.clone();
         // Detail rows have every column active; a ROLLUP row deactivates the rolled-up columns.
         let rolled_up: Vec<(usize, usize)> =
             layout.columns.iter().zip(&active).filter(|(_, active)| !**active).map(|(column, _)| (column.table, column.column)).collect();
+        let filters = group_filters(
+            ev,
+            ctx,
+            &GroupContext { columns: &layout.columns, values: &values, active: &active, source: &table, rows: &group_rows },
+            check_leak,
+            "SUMMARIZE",
+        )?;
         {
             let _guard = SubtotalGuard::push(rolled_up);
             for (_, expression) in &parsed.expressions {
-                row.push(eval_in_group(
-                    ev,
-                    ctx,
-                    expression,
-                    &GroupContext { columns: &layout.columns, values: &values, active: &active, source: &table, rows: &group_rows },
-                    "SUMMARIZE",
-                )?);
+                row.push(eval_in_group(ev, ctx, expression, filters.clone())?);
             }
         }
         output.push(row);
@@ -628,20 +672,22 @@ fn group_by(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result
         output_columns.push(TableColumn { name: name.clone() });
     }
     let active = vec![true; columns.len()];
+    let check_leak = group_source_can_leak(ev, &table, &ctx.filters);
     let mut rows = Vec::with_capacity(details.len());
     for (values, group_rows) in &details {
         let current = TableValue::new(table.columns.clone(), group_rows.clone()).with_lineage_if(table.lineage);
         let mut row = values.clone();
+        let filters = group_filters(
+            ev,
+            ctx,
+            &GroupContext { columns: &columns, values, active: &active, source: &table, rows: group_rows },
+            check_leak,
+            "GROUPBY",
+        )?;
         {
             let _guard = CurrentGroupGuard::push(current);
             for (_, expression) in &parsed.expressions {
-                row.push(eval_in_group(
-                    ev,
-                    ctx,
-                    expression,
-                    &GroupContext { columns: &columns, values, active: &active, source: &table, rows: group_rows },
-                    "GROUPBY",
-                )?);
+                row.push(eval_in_group(ev, ctx, expression, filters.clone())?);
             }
         }
         rows.push(row);
