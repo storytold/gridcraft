@@ -267,7 +267,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-10 | Keep shared custom number formats and accept percent-prefixed Turkish interactive input; explicit locale snapshots carry the percent-prefix convention without changing Romanian or en-US entry. |
+| 2026-11-10 | minor | Keep shared custom number formats and accept percent-prefixed Turkish interactive input; explicit locale snapshots carry the percent-prefix convention without changing Romanian or en-US entry. |
 | 2026-11-05 | trivial | host copy/cut captures the numeric region; matching HTML validates exact numbers against source formats, retains hidden zeros and calendar epochs; synthetic cross-session regressions, no readiness change; the existing HTML size/cell caps and plain-text fallback remain; native Excel/OS clipboard interoperability is not newly qualified |
 | 2026-11-05 | minor | Reconcile upstream form-control coverage with the CJK baseline and cell-alignment updates |
 | 2026-11-04 | minor | Preserve leading and trailing blank lines in wrapped cells when calculating vertical alignment; regression covers single, multiple and all-empty lines |

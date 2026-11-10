@@ -266,7 +266,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-10 | Keep shared custom number formats and accept percent-prefixed Turkish interactive input; explicit locale snapshots carry the percent-prefix convention without changing Romanian or en-US entry. |
+| 2026-11-10 | minor | Keep shared custom number formats and accept percent-prefixed Turkish interactive input; explicit locale snapshots carry the percent-prefix convention without changing Romanian or en-US entry. |
 | 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |
 | 2026-11-05 | trivial | host copy/cut captures the numeric region; matching HTML validates exact numbers against source formats, retains hidden zeros and calendar epochs; synthetic cross-session regressions, no readiness change; the existing HTML size/cell caps and plain-text fallback remain; native Excel/OS clipboard interoperability is not newly qualified |
 | 2026-11-05 | minor | Reconcile upstream form-control progress with the CJK baseline update |
