@@ -1693,8 +1693,8 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
 }
 
-/// A series line is drawn with the width the file gives it, bounded; without one, with the
-/// kind's default.
+/// A series line is drawn with the width the file gives it, in points, bounded; without one, with
+/// the kind's default.
 #[test]
 fn series_lines_take_their_width() {
     let color = [0x00, 0xB0, 0xF0, 0xFF];
@@ -1715,7 +1715,8 @@ fn series_lines_take_their_width() {
     for (kind, default) in [(ChartKind::Line, 2.25), (ChartKind::ScatterLines, 2.0), (ChartKind::Radar, 2.0)] {
         assert!(!widths(kind, None).is_empty(), "{kind:?} draws its line");
         assert!(widths(kind, None).iter().all(|w| *w == default), "{kind:?}: {:?}", widths(kind, None));
-        assert!(widths(kind, Some(5.0)).iter().all(|w| *w == 5.0), "{kind:?}");
+        // 5 pt is 6.67 px, the chart's unit.
+        assert!(widths(kind, Some(5.0)).iter().all(|w| (*w - 5.0 * 96.0 / 72.0).abs() < 1e-4), "{kind:?}");
         // A hairline stays visible; a line wider than the plot is bounded.
         assert!(widths(kind, Some(0.0)).iter().all(|w| *w == 0.25), "{kind:?}");
         assert!(widths(kind, Some(1584.0)).iter().all(|w| *w == 20.0), "{kind:?}");

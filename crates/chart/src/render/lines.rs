@@ -134,13 +134,15 @@ pub(super) fn decimate_area(top: Vec<[f32; 2]>, base: Vec<[f32; 2]>, max: usize)
     poly
 }
 
-/// Widest series line drawn, in points: Excel takes up to 1584 pt, which would cover the plot.
+/// Chart units (pixels at 100%) per point.
+const PX_PER_PT: f32 = 96.0 / 72.0;
+/// Widest series line drawn, in chart units: Excel takes up to 1584 pt, which would cover the plot.
 const MAX_SERIES_LINE: f32 = 20.0;
 
-/// The width a series line is drawn with: the file's (bounded, a hairline at least), else
-/// `default`.
+/// The width a series line is drawn with: the file's, from points to chart units (bounded, a
+/// hairline at least), else `default`.
 pub(super) fn series_line_width(s: &crate::SeriesData, default: f32) -> f32 {
-    s.line_width.filter(|w| w.is_finite()).map_or(default, |w| w.clamp(0.25, MAX_SERIES_LINE))
+    s.line_width.filter(|w| w.is_finite()).map_or(default, |w| (w * PX_PER_PT).clamp(0.25, MAX_SERIES_LINE))
 }
 
 /// Draws a polyline split at gaps (`None`), decimated when long. With `smooth` (the plot box),
