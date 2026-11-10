@@ -267,6 +267,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | Compiled distribution labels: validate display names, test both startup policies and menu escaping, and reuse the cached identity in window titles. |
 | 2026-11-05 | trivial | PR #3167: escape literal menu ampersands and place labelled distribution identity before workbook names so truncation retains it; synthetic menu-name and real egui glyph-layout regressions, with no native GUI qualification. |
 | 2026-11-05 | minor | Reconcile upstream form-control coverage with the CJK baseline and cell-alignment updates |
 | 2026-11-04 | minor | Preserve leading and trailing blank lines in wrapped cells when calculating vertical alignment; regression covers single, multiple and all-empty lines |

@@ -266,6 +266,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | Compiled distribution labels: validate display names, test both startup policies and menu escaping, and reuse the cached identity in window titles. |
 | 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |
 | 2026-11-05 | trivial | PR #3167: escape literal menu ampersands and place labelled distribution identity before workbook names so truncation retains it; synthetic menu-name and real egui glyph-layout regressions, with no native GUI qualification. |
 | 2026-11-05 | minor | Reconcile upstream form-control progress with the CJK baseline update |
