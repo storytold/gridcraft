@@ -5,7 +5,7 @@
 //! as a nested pass with its own input, so a close button can be pressed on one window.
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use egui::{Context, RawInput, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
 use gridcraft_engine::{Session, core::CellRef, core::Value};
@@ -13,13 +13,38 @@ use gridcraft_ui_egui::doc_windows::DocWindows;
 use gridcraft_ui_egui::{SaveAnswer, SheetApp};
 use serde_json::json;
 
+/// A window, its content line count, expansion flag, and remembered expanded height.
+type BarState = (u64, usize, bool, usize);
+
 thread_local! {
+    /// All viewport paints use one deterministic, monotonically advancing clock.
+    static PAINT_TIME: Cell<f64> = const { Cell::new(0.0) };
+    /// A child viewport whose registered callback paints twice on the next driver frame.
+    static EXTRA_PAINT: Cell<Option<ViewportId>> = const { Cell::new(None) };
     /// Each viewport's input for the next frame (focus, close button).
     static INFOS: RefCell<egui::ViewportIdMap<ViewportInfo>> = RefCell::new(egui::ViewportIdMap::default());
     /// The viewport commands the app sent this frame.
     static SENT: RefCell<Vec<(ViewportId, ViewportCommand)>> = const { RefCell::new(Vec::new()) };
     /// Input events for the root window's next frame (a key pressed in it).
     static EVENTS: RefCell<Vec<egui::Event>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Builds each viewport's input through the same backend path, including extra paints.
+fn viewport_input(id: ViewportId, parent: Option<ViewportId>) -> RawInput {
+    let time = PAINT_TIME.with(|t| {
+        let next = t.get() + 1.0 / 60.0;
+        t.set(next);
+        next
+    });
+    let mut input = RawInput {
+        viewport_id: id,
+        time: Some(time),
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+        ..Default::default()
+    };
+    input.viewports = INFOS.with(|i| i.borrow().clone());
+    input.viewports.entry(id).or_default().parent = parent;
+    input
 }
 
 fn record(mut out: egui::FullOutput) {
@@ -39,17 +64,21 @@ struct Desk {
 }
 
 impl Desk {
+    /// Creates one workbook and installs the viewport backend with a fresh deterministic clock
+    /// and no extra paints, then initializes its native-window mapping.
     fn new(quit_with_last_window: bool) -> Desk {
         INFOS.with(|i| i.borrow_mut().clear());
+        PAINT_TIME.with(|t| t.set(0.0));
+        EXTRA_PAINT.with(|p| p.set(None));
         let ctx = Context::default();
         ctx.set_embed_viewports(false);
         Context::set_immediate_viewport_renderer(|ctx, viewport| {
             let id = viewport.ids.this;
-            let mut input = RawInput { viewport_id: id, ..RawInput::default() };
-            input.viewports = INFOS.with(|i| i.borrow().clone());
-            input.viewports.entry(id).or_default().parent = Some(viewport.ids.parent);
+            let paints = if EXTRA_PAINT.with(|p| p.get()) == Some(id) { 2 } else { 1 };
             let mut cb = viewport.viewport_ui_cb;
-            record(ctx.run_ui(input, |ui| cb(ui)));
+            for _ in 0..paints {
+                record(ctx.run_ui(viewport_input(id, Some(viewport.ids.parent)), |ui| cb(ui)));
+            }
         });
         let mut session = Session::new();
         session.new_workbook();
@@ -64,9 +93,7 @@ impl Desk {
     /// commands sent.
     fn frame_with(&mut self, act: impl FnOnce(&mut SheetApp, &Context)) -> Vec<(ViewportId, ViewportCommand)> {
         SENT.with(|s| s.borrow_mut().clear());
-        let mut input = RawInput { viewport_id: ViewportId::ROOT, ..RawInput::default() };
-        input.viewports = INFOS.with(|i| i.borrow().clone());
-        input.viewports.entry(ViewportId::ROOT).or_default();
+        let mut input = viewport_input(ViewportId::ROOT, None);
         input.events = EVENTS.with(|e| std::mem::take(&mut *e.borrow_mut()));
         let Desk { ctx, app, windows } = self;
         let mut act = Some(act);
@@ -89,11 +116,116 @@ impl Desk {
         (0..n).flat_map(|_| self.frame_with(|_, _| {})).collect()
     }
 
+    /// Paints through DocWindows, with an extra callback paint for the selected child. The root
+    /// owns the driver, so its extra paint is a full driver frame; observe each such frame.
+    fn frame_with_extra_paint(&mut self, window: u64, mut observe: impl FnMut(&mut Desk)) {
+        let vp = self.viewport(window);
+        EXTRA_PAINT.with(|p| p.set((vp != ViewportId::ROOT).then_some(vp)));
+        for _ in 0..if vp == ViewportId::ROOT { 2 } else { 1 } {
+            self.frames(1);
+            observe(self);
+        }
+        EXTRA_PAINT.with(|p| p.set(None));
+    }
+
+    /// Reads a window's actual grid position and verifies that the layout cache and manual
+    /// state belong to its selected content, including collapsed multiline cells.
+    fn bar_position(&mut self, state: BarState) -> (f32, f32) {
+        let (window, lines, expanded, remembered) = state;
+        self.app.enter_window(window);
+        assert_eq!(self.app.ui.formula_bar_expanded, expanded, "window {window}'s expansion");
+        assert_eq!(self.app.ui.formula_bar_lines, remembered, "window {window}'s remembered height");
+        let layout = gridcraft_ui_egui::formula_bar::BarLayout::get(&self.ctx, Some(window));
+        assert_eq!(layout.lines, lines, "window {window}'s cached content lines");
+        (layout.height, self.app.grid.rect.unwrap().top())
+    }
+
+    /// Expected height from the selected content in automatic mode, or this window's manual
+    /// height when expanded. The test viewport has room for every manual height used here.
+    fn bar_target(&self, state: BarState) -> f32 {
+        use gridcraft_ui_egui::formula_bar::{MAX_LINES, one_line};
+        let (_, lines, expanded, remembered) = state;
+        let shown = if expanded { remembered } else { lines.clamp(1, MAX_LINES) };
+        let row = self.ctx.fonts_mut(|f| f.row_height(&gridcraft_ui_egui::theme::ui_font(13.0)));
+        one_line(row) + (shown - 1) as f32 * row
+    }
+
+    /// Verifies settled heights and returns grid positions for comparison across root adoption.
+    fn assert_bars(&mut self, states: &[BarState]) -> Vec<(f32, f32)> {
+        states
+            .iter()
+            .map(|&state| {
+                let position = self.bar_position(state);
+                let target = self.bar_target(state);
+                assert!((position.0 - target).abs() < 0.5, "window {}: {position:?}, target {target}", state.0);
+                position
+            })
+            .collect()
+    }
+
+    /// Checks every driver frame for backwards movement, overshoot, and a grid movement that
+    /// disagrees with the bar. Unchanged neighbors must remain stationary throughout the ease.
+    fn check_bar_motion(&mut self, state: BarState, start: (f32, f32), previous: (f32, f32)) -> ((f32, f32), bool) {
+        let current = self.bar_position(state);
+        let target = self.bar_target(state);
+        let target_top = start.1 + target - start.0;
+        assert!(
+            current.1 >= start.1.min(target_top) - 0.5 && current.1 <= start.1.max(target_top) + 0.5,
+            "window {}: grid overshot {start:?} -> {target_top}: {current:?}",
+            state.0
+        );
+        assert!(
+            (current.1 - target_top).abs() <= (previous.1 - target_top).abs() + 0.05,
+            "window {}: grid moved away from {target_top}: {previous:?} -> {current:?}",
+            state.0
+        );
+        assert!(
+            ((current.1 - start.1) - (current.0 - start.0)).abs() < 0.5,
+            "window {}: grid and bar moved differently: {start:?} -> {current:?}",
+            state.0
+        );
+        let settled = (current.0 - target).abs() < 0.01
+            && (current.1 - target_top).abs() < 0.5
+            && (current.0 - previous.0).abs() < 0.01
+            && (current.1 - previous.1).abs() < 0.01;
+        (current, settled)
+    }
+
+    /// Polls for three consecutive settled frames, with a bounded timeout and rotating extra
+    /// paints. It checks transitions as they happen instead of sleeping a fixed frame count.
+    fn settle_bars(&mut self, states: &[BarState]) {
+        let start: Vec<_> = states
+            .iter()
+            .map(|state| {
+                self.app.enter_window(state.0);
+                let layout = gridcraft_ui_egui::formula_bar::BarLayout::get(&self.ctx, Some(state.0));
+                (layout.height, self.app.grid.rect.unwrap().top())
+            })
+            .collect();
+        let mut previous = start.clone();
+        let mut stable = 0;
+        for frame in 0..90 {
+            self.frame_with_extra_paint(states[frame % states.len()].0, |desk| {
+                let mut settled = true;
+                for (i, &state) in states.iter().enumerate() {
+                    let (position, at_target) = desk.check_bar_motion(state, start[i], previous[i]);
+                    previous[i] = position;
+                    settled &= at_target;
+                }
+                stable = if settled { stable + 1 } else { 0 };
+            });
+            if stable >= 3 {
+                return;
+            }
+        }
+        panic!("formula bars did not settle: {states:?}, positions {previous:?}");
+    }
+
     fn viewport(&self, window: u64) -> ViewportId {
         self.windows.viewport_of(window).unwrap_or_else(|| panic!("window {window} has no native window"))
     }
 
-    /// The user presses window `window`'s close button.
+    /// Presses the close button and renders three frames so any root adoption has repainted.
     fn close(&mut self, window: u64) -> Vec<(ViewportId, ViewportCommand)> {
         let vp = self.viewport(window);
         INFOS.with(|i| i.borrow_mut().entry(vp).or_default().events.push(ViewportEvent::Close));
@@ -146,82 +278,53 @@ fn sent_to(sent: &[(ViewportId, ViewportCommand)], vp: ViewportId, cmd: &Viewpor
     sent.iter().any(|(id, c)| *id == vp && c == cmd)
 }
 
-/// The formula bar's cached line count and animation must belong to the workbook window,
-/// including when another window gets an extra paint or takes over the root viewport (#3614).
+/// Checks every transition frame for independent content-driven heights under unequal repaint
+/// schedules, then verifies that a repainted survivor keeps its geometry after root adoption.
 #[test]
 fn formula_bar_heights_settle_independently_in_multiple_windows() {
+    use gridcraft_ui_egui::formula_bar::MAX_LINES;
     let mut desk = Desk::new(true);
     desk.ctx.set_fonts(gridcraft_ui_egui::theme::pinned_font_definitions());
     desk.app.use_prepared_fonts();
     for _ in 0..2 {
         desk.app.run("file.new", json!({})).unwrap();
-        desk.frames(2);
+        desk.frames(1); // Register the new viewport before observing its transitions.
     }
     let windows = [desk.window_of(0), desk.window_of(1), desk.window_of(2)];
-    desk.frames(30);
-    let tops: Vec<f32> = windows
-        .iter()
-        .map(|&w| {
-            desk.app.enter_window(w);
-            desk.app.grid.rect.unwrap().top()
-        })
-        .collect();
-    let row_h = desk.ctx.fonts_mut(|f| f.row_height(&gridcraft_ui_egui::theme::ui_font(13.0)));
+    let mut states = windows.map(|w| (w, 1, false, MAX_LINES));
+    desk.settle_bars(&states);
     for (window, text) in windows.into_iter().zip(["one\ntwo\nthree\nfour", "one", ""]) {
         desk.app.enter_window(window);
         desk.app.run("cell.set", json!({"cell": "A1", "input": text})).unwrap();
     }
-    desk.frames(30);
-
-    let check = |desk: &mut Desk, extra: [usize; 3], shown: &[u64]| {
-        for (i, &window) in windows.iter().enumerate().filter(|(_, w)| shown.contains(w)) {
-            desk.app.enter_window(window);
-            let top = desk.app.grid.rect.unwrap().top();
-            let expected = tops[i] + extra[i] as f32 * row_h;
-            assert!((top - expected).abs() < 0.5, "window {window}: grid top {top}, expected {expected}");
-        }
-    };
-    for frame in 0..30 {
-        desk.frames(1);
-        if frame % 3 == 0 {
-            // Native windows can repaint at different rates. Paint only the second window
-            // once more, using the same context and its real viewport and application state.
-            let vp = desk.viewport(windows[1]);
-            let mut input = RawInput { viewport_id: vp, ..Default::default() };
-            input.viewports.entry(vp).or_default();
-            let out = desk.ctx.clone().run_ui(input, |ui| {
-                desk.app.show_window(windows[1]);
-                desk.app.ui(ui);
-            });
-            record(out);
-        }
-        check(&mut desk, [3, 0, 0], &windows);
+    states[0].1 = 4;
+    desk.settle_bars(&states);
+    for window in windows {
+        desk.frame_with_extra_paint(window, |desk| {
+            desk.assert_bars(&states);
+        });
     }
 
-    // Changing one window's selection height must not move either neighbor.
     desk.app.enter_window(windows[1]);
     desk.app.run("cell.set", json!({"cell": "A1", "input": "one\ntwo"})).unwrap();
-    desk.frames(30);
-    check(&mut desk, [3, 1, 0], &windows);
-
-    // Closing the root's saved workbook moves a remaining window into the root viewport.
-    // Its formula-bar state follows the workbook window, rather than the old viewport owner.
+    states[1].1 = 2;
+    desk.settle_bars(&states);
+    let before = desk.assert_bars(&states[1..]);
     desk.app.enter_window(windows[0]);
     let d = desk.app.session.doc_mut().unwrap();
     d.saved = d.wb.clone();
-    desk.close(windows[0]);
-    check(&mut desk, [3, 1, 0], &windows[1..]);
-    desk.frames(30);
-    assert_eq!(desk.windows.shown_windows().len(), 2);
-    check(&mut desk, [3, 1, 0], &windows[1..]);
+    desk.close(windows[0]); // Includes three frames, not just a close event.
+    assert_ne!(desk.windows.root_window(), Some(windows[0]));
+    assert_eq!(desk.viewport(desk.windows.root_window().unwrap()), ViewportId::ROOT);
+    assert_eq!(desk.assert_bars(&states[1..]), before, "root adoption changed a survivor's painted geometry");
+    desk.settle_bars(&states[1..]);
 }
 
-/// Verifies that new windows start collapsed and keep independent expansion flags and dragged
-/// heights across switches and toggles, including two views of one workbook and root adoption.
+/// Checks independent expansion and remembered heights, including automatic multiline height,
+/// a second view of one workbook, root adoption, and fresh state after closing and reopening.
 #[test]
 fn formula_bar_expansion_and_remembered_height_belong_to_each_window() {
-    use gridcraft_ui_egui::formula_bar::{BarLayout, MAX_LINES, one_line};
-
+    use gridcraft_ui_egui::formula_bar::{BarLayout, MAX_LINES};
     let mut desk = Desk::new(true);
     desk.ctx.set_fonts(gridcraft_ui_egui::theme::pinned_font_definitions());
     desk.app.use_prepared_fonts();
@@ -231,30 +334,19 @@ fn formula_bar_expansion_and_remembered_height_belong_to_each_window() {
     let second = desk.window_of(1);
     assert!(!desk.app.ui.formula_bar_expanded, "a new workbook starts collapsed");
     assert_eq!(desk.app.ui.formula_bar_lines, MAX_LINES);
+    desk.app.run("cell.set", json!({"cell":"A1", "input":"one\ntwo\nthree"})).unwrap();
     desk.app.run("view.expandFormulaBar", json!({"lines": 3})).unwrap();
     desk.app.run("view.expandFormulaBar", json!({"on": false})).unwrap();
-    // A second view of the same workbook has its own bar too.
+    desk.frames(1); // Register the new viewport, then observe both windows' transitions.
+    desk.settle_bars(&[(first, 1, true, 8), (second, 3, false, 3)]);
+
     desk.app.run("view.newWindow", json!({})).unwrap();
     let third = desk.app.session.active_window().unwrap();
-    assert_eq!(desk.app.ui.formula_bar_lines, MAX_LINES, "a new view does not inherit another window's dragged height");
+    assert!(!desk.app.ui.formula_bar_expanded);
+    assert_eq!(desk.app.ui.formula_bar_lines, MAX_LINES);
+    desk.frames(1); // Register this view of the same multiline cell.
     desk.app.run("view.expandFormulaBar", json!({"lines": 6})).unwrap();
-    desk.frames(30);
-
-    let row_h = desk.ctx.fonts_mut(|f| f.row_height(&gridcraft_ui_egui::theme::ui_font(13.0)));
-    let check = |desk: &mut Desk, states: &[(u64, bool, usize)]| {
-        for &(window, expanded, lines) in states {
-            desk.app.enter_window(window);
-            assert_eq!(desk.app.ui.formula_bar_expanded, expanded, "window {window}'s expansion");
-            assert_eq!(desk.app.ui.formula_bar_lines, lines, "window {window}'s remembered height");
-            let height = BarLayout::get(&desk.ctx, Some(window)).height;
-            let expected = one_line(row_h) + if expanded { (lines - 1) as f32 * row_h } else { 0.0 };
-            assert!((height - expected).abs() < 0.5, "window {window}: height {height}, expected {expected}");
-        }
-    };
-    for _ in 0..3 {
-        desk.frames(1);
-        check(&mut desk, &[(first, true, 8), (second, false, 3), (third, true, 6)]);
-    }
+    desk.settle_bars(&[(first, 1, true, 8), (second, 3, false, 3), (third, 3, true, 6)]);
 
     desk.app.enter_window(second);
     assert_eq!(desk.app.run("view.expandFormulaBar", json!({})).unwrap(), json!({"on": true}));
@@ -262,13 +354,24 @@ fn formula_bar_expansion_and_remembered_height_belong_to_each_window() {
     assert_eq!(desk.app.run("view.expandFormulaBar", json!({"lines": 1})).unwrap(), json!({"on": false, "lines": 8}));
     desk.app.enter_window(third);
     desk.app.run("view.expandFormulaBar", json!({"on": false})).unwrap();
-    desk.frames(30);
-    check(&mut desk, &[(first, false, 8), (second, true, 3), (third, false, 6)]);
-
+    let survivors = [(second, 3, true, 3), (third, 3, false, 6)];
+    desk.settle_bars(&[(first, 1, false, 8), survivors[0], survivors[1]]);
+    let before = desk.assert_bars(&survivors);
     desk.close(first);
-    check(&mut desk, &[(second, true, 3), (third, false, 6)]);
-    desk.frames(30);
-    check(&mut desk, &[(second, true, 3), (third, false, 6)]);
+    assert_ne!(desk.windows.root_window(), Some(first));
+    assert_eq!(desk.viewport(desk.windows.root_window().unwrap()), ViewportId::ROOT);
+    assert_eq!(desk.assert_bars(&survivors), before, "root adoption changed a survivor's painted geometry");
+    desk.settle_bars(&survivors);
+
+    desk.close(second);
+    desk.app.run("file.new", json!({})).unwrap();
+    let fresh = desk.app.session.active_window().unwrap();
+    assert!(![first, second, third].contains(&fresh));
+    assert!(!desk.app.ui.formula_bar_expanded);
+    assert_eq!(desk.app.ui.formula_bar_lines, MAX_LINES);
+    assert_eq!(BarLayout::get(&desk.ctx, Some(fresh)), BarLayout::default(), "a new window inherited a closed window's layout");
+    desk.frames(1);
+    desk.settle_bars(&[(third, 3, false, 6), (fresh, 1, false, MAX_LINES)]);
 }
 
 #[test]

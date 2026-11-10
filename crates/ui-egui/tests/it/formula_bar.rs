@@ -51,8 +51,10 @@ fn alt_enter(h: &mut Harness) {
     h.run_steps(2);
 }
 
+/// Reads the layout after the harness has initialized its workbook-window identity.
 fn layout(h: &Harness) -> BarLayout {
-    BarLayout::get(&h.ctx, h.state().ui_window())
+    let window = h.state().ui_window().expect("the harness has a workbook window");
+    BarLayout::get(&h.ctx, Some(window))
 }
 
 fn row_height(h: &Harness) -> f32 {
@@ -61,6 +63,28 @@ fn row_height(h: &Harness) -> f32 {
 
 fn same(a: Rect, b: Rect) -> bool {
     (a.min - b.min).length() < 0.5 && (a.max - b.max).length() < 0.5
+}
+
+/// Window-specific layout keys and the no-window fallback must not alias; an unused key
+/// returns a default layout without reading another window's cached line count or geometry.
+#[test]
+fn layout_cache_isolates_windows_and_the_no_window_fallback() {
+    let ctx = egui::Context::default();
+    let keys = [Some(1), Some(2), None];
+    for (i, &key) in keys.iter().enumerate() {
+        assert_eq!(BarLayout::get(&ctx, key), BarLayout::default());
+        for &other in &keys[i + 1..] {
+            assert_ne!(BarLayout::id(key), BarLayout::id(other));
+        }
+        let layout = BarLayout { lines: i + 2, height: 40.0 + i as f32, ..Default::default() };
+        ctx.data_mut(|d| d.insert_temp(BarLayout::id(key), layout));
+    }
+    for (i, &key) in keys.iter().enumerate() {
+        let layout = BarLayout::get(&ctx, key);
+        assert_eq!(layout.lines, i + 2);
+        assert_eq!(layout.height, 40.0 + i as f32);
+    }
+    assert_eq!(BarLayout::get(&ctx, Some(3)), BarLayout::default());
 }
 
 #[test]
