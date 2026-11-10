@@ -414,8 +414,10 @@ impl NumberFormat {
 }
 
 /// `code` with the region's separators translated to the canonical `.` decimal and `,`
-/// grouping. A region that already writes those characters is returned unchanged.
-fn regional_code(code: &str, region: &Region) -> String {
+/// grouping, and the other way round. The translation is its own inverse, so a caller shows a
+/// stored code with it and reads the edited code back with it. A region that writes the canonical
+/// characters is returned unchanged.
+pub fn regional_code(code: &str, region: &Region) -> String {
     if region.decimal == '.' {
         return code.to_string();
     }
