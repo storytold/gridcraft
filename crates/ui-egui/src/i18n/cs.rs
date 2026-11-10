@@ -172,6 +172,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Circle Invalid Data" => "Zakroužkovat neplatná data",
         "Clear Validation" => "Vymazat ověření",
         "Group" => "Seskupit",
+        "Auto Outline" => "Automatický přehled",
         "Ungroup" => "Zrušit seskupení",
         "Show Detail" => "Zobrazit podrobnosti",
         "Hide Detail" => "Skrýt podrobnosti",

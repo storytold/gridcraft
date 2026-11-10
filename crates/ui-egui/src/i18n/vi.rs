@@ -192,6 +192,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Circle Invalid Data" => "Khoanh dữ liệu không hợp lệ",
         "Clear Validation" => "Xóa xác thực",
         "Group" => "Nhóm",
+        "Auto Outline" => "Đại cương tự động",
         "Ungroup" => "Bỏ nhóm",
         "Show Detail" => "Hiện chi tiết",
         "Hide Detail" => "Ẩn chi tiết",

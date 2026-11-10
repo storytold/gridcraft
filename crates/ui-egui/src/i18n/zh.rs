@@ -190,6 +190,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Circle Invalid Data" => "圈出无效数据",
         "Clear Validation" => "清除验证",
         "Group" => "组合",
+        "Auto Outline" => "自动建立分级显示",
         "Ungroup" => "取消组合",
         "Show Detail" => "显示明细数据",
         "Hide Detail" => "隐藏明细数据",

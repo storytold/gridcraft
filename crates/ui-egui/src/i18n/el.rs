@@ -171,6 +171,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Circle Invalid Data" => "Κύκλωση μη έγκυρων δεδομένων",
         "Clear Validation" => "Κατάργηση επικύρωσης",
         "Group" => "Ομαδοποίηση",
+        "Auto Outline" => "Αυτόματη διάρθρωση",
         "Ungroup" => "Κατάργηση ομαδοποίησης",
         "Show Detail" => "Εμφάνιση λεπτομερειών",
         "Hide Detail" => "Απόκρυψη λεπτομερειών",
