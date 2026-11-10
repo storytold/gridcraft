@@ -9,7 +9,7 @@ use crate::{EngineError, Result};
 
 mod sylk;
 
-/// The function library's answers to what the XLSX reader and writer need to know about functions
+/// The function library's answers to what the XLSX and XLS readers and the XLSX writer need to know about functions
 /// (which names are built in, which parameters take a single value).
 pub const XLSX_FUNCTIONS: gridcraft_xlsx::FunctionInfo = gridcraft_xlsx::FunctionInfo {
     is_builtin: |name| gridcraft_functions::lookup(name).is_some(),
@@ -271,7 +271,8 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
     let kind = FileKind::from_path(name);
     let sniffed = gridcraft_xlsx::sniff(bytes);
     if sniffed == gridcraft_xlsx::Format::Xls {
-        let (wb, report) = gridcraft_xlsx::read_xls(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
+        let (wb, report) =
+            gridcraft_xlsx::read_xls_with(bytes, XLSX_FUNCTIONS).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
         return Ok((wb, report.warnings));
     }
     if sniffed == gridcraft_xlsx::Format::LegacyBinary {
