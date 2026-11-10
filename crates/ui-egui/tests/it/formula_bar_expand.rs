@@ -100,8 +100,10 @@ fn drag(h: &mut Harness, from: egui::Pos2, to: egui::Pos2) {
     h.run_steps(20);
 }
 
+/// Reads the layout after the harness has initialized its workbook-window identity.
 fn bar(h: &Harness) -> gridcraft_ui_egui::formula_bar::BarLayout {
-    gridcraft_ui_egui::formula_bar::BarLayout::get(&h.ctx)
+    let window = h.state().ui_window().expect("the harness has a workbook window");
+    gridcraft_ui_egui::formula_bar::BarLayout::get(&h.ctx, Some(window))
 }
 
 #[test]

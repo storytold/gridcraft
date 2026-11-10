@@ -29,6 +29,9 @@ pub struct WindowUi {
     /// The ribbon tab this window shows. A contextual tab depends on this window's selection, so
     /// another window's frame must not reset it.
     ribbon_tab: String,
+    /// The formula bar's manual expansion and last dragged height belong to this window.
+    formula_bar_expanded: bool,
+    formula_bar_lines: usize,
     /// The status bar's Ready/Enter/Edit, which follows the window's cell draft.
     mode: gridcraft_engine::Mode,
     /// A key tip's control request waiting for the frame that draws this window's ribbon.
@@ -37,10 +40,12 @@ pub struct WindowUi {
 
 impl WindowUi {
     /// A new window's state. The last border, fill and font colour picked carry over, as they are
-    /// the user's recent choices rather than the window's; so does the ribbon tab.
+    /// the user's recent choices rather than the window's; so does the ribbon tab. The formula
+    /// bar starts collapsed, with the default expanded height.
     fn fresh(like: &grid::GridState, ribbon_tab: &str) -> WindowUi {
         WindowUi {
             ribbon_tab: ribbon_tab.to_string(),
+            formula_bar_lines: crate::formula_bar::MAX_LINES,
             grid: grid::GridState {
                 last_border: like.last_border.clone(),
                 last_fill: like.last_fill.clone(),
@@ -71,6 +76,8 @@ impl SheetApp {
             tab_run,
             open_switch_windows,
             ribbon_tab,
+            formula_bar_expanded,
+            formula_bar_lines,
             mode,
             keytip_invoke_next,
         } = w;
@@ -88,6 +95,8 @@ impl SheetApp {
         std::mem::swap(&mut self.tab_run, tab_run);
         std::mem::swap(&mut self.open_switch_windows, open_switch_windows);
         std::mem::swap(&mut self.ui.ribbon_tab, ribbon_tab);
+        std::mem::swap(&mut self.ui.formula_bar_expanded, formula_bar_expanded);
+        std::mem::swap(&mut self.ui.formula_bar_lines, formula_bar_lines);
         std::mem::swap(&mut self.session.mode, mode);
         std::mem::swap(&mut self.ui.keytip_invoke_next, keytip_invoke_next);
     }

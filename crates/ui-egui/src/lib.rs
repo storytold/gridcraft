@@ -90,8 +90,10 @@ pub struct UiState {
     pub system_theme: bool,
     pub ribbon_tab: String,
     pub ribbon_collapsed: bool,
+    /// Whether the current workbook window's formula bar is manually expanded. Like the ribbon
+    /// tab, this is parked in `WindowUi` when another window is drawn or activated.
     pub formula_bar_expanded: bool,
-    /// Lines the expanded formula bar shows: the height its bottom edge was last dragged to.
+    /// Lines this window's expanded formula bar shows: the height its bottom edge was last dragged to.
     /// Expanding it again (the chevron, Ctrl+Shift+U) returns to that height.
     pub formula_bar_lines: usize,
     pub status_bar: bool,
