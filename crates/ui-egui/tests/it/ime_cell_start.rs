@@ -1,7 +1,7 @@
 //! The grid owns the IME while a cell is selected, as Excel's sheet does: the first kana opens the
 //! cell editor, so Japanese can be typed without pressing F2 first.
 
-use egui::{Event, ImeEvent};
+use egui::{Event, ImeEvent, Key};
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
@@ -25,6 +25,11 @@ fn harness() -> Harness {
 
 fn ime(h: &mut Harness, event: ImeEvent) {
     h.input_mut().events.push(Event::Ime(event));
+    h.run_steps(4);
+}
+
+fn key(h: &mut Harness, key: Key) {
+    h.input_mut().events.push(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
     h.run_steps(4);
 }
 
@@ -57,6 +62,24 @@ fn a_preedit_on_a_selected_cell_previews_the_composition_without_taking_focus() 
     assert_eq!(ed.text, "nihon");
     assert!(!ed.ime_preview, "the composition preview is over");
     assert!(editor_focused(&h), "the editor takes the keyboard");
+}
+
+#[test]
+fn an_empty_preedit_cancels_the_composition_preview() {
+    let mut h = harness();
+    ime(&mut h, ImeEvent::Preedit { text: "ni".into(), active_range_chars: None });
+    assert!(h.state().editor.is_some(), "the composition opened the editor");
+    ime(&mut h, ImeEvent::Preedit { text: String::new(), active_range_chars: None });
+    assert!(h.state().editor.is_none(), "a composition cleared with nothing committed cancels the edit");
+}
+
+#[test]
+fn escape_cancels_a_preview_without_an_ime_clearing_event() {
+    let mut h = harness();
+    ime(&mut h, ImeEvent::Preedit { text: "ni".into(), active_range_chars: None });
+    assert!(h.state().editor.is_some(), "the composition opened the editor");
+    key(&mut h, Key::Escape);
+    assert!(h.state().editor.is_none(), "Escape cancels the preview when the IME sends no clearing event");
 }
 
 #[test]

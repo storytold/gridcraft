@@ -217,7 +217,19 @@ fn start_ime_edit(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response
     }
     if previewing {
         if !saw_ime {
+            // An IME or platform may cancel a composition without sending Commit or an empty
+            // Preedit (an IME mode toggle, a focus change), leaving the preview with no way out:
+            // Escape closes it. A live composition's Escape normally never reaches the app.
+            if events.iter().any(|ev| matches!(ev, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. })) {
+                app.cancel_edit();
+            }
             // Keep the composition (and the grid's keyboard) until the IME commits or clears it.
+            return true;
+        }
+        if !composing && committed.is_empty() {
+            // The composition ended with nothing committed (Esc, or Backspace deleting the whole
+            // preedit): cancel rather than leave an empty draft that Enter would commit over the cell.
+            app.cancel_edit();
             return true;
         }
         match app.editor.as_mut() {
