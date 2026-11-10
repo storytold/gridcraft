@@ -171,6 +171,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         .open(&mut win_open);
     let window = match d.name.as_str() {
         "insertPicture" => window.default_height(240.0),
+        "importTexture" => window.default_height(220.0),
         "advancedFilter" => window.default_height(0.0),
         _ => window,
     };
@@ -242,7 +243,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     });
                     if let Some((name, bytes)) = arrived {
                         d.picture_inbox = None;
-                        if bytes.len() > 16 * 1024 * 1024 {
+                        // Empty bytes are a pick the browser refused to read for its size.
+                        if bytes.is_empty() || bytes.len() > 16 * 1024 * 1024 {
+                            // The rejected pick replaces the earlier one, so OK cannot import it.
+                            d.values.remove("base64");
+                            d.values.remove("alt");
                             app.message = Some((d.title.clone(), "Choose a PNG or JPEG no larger than 16 MB.".into()));
                         } else {
                             d.values.remove("path");
@@ -285,6 +290,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     }
                     ok_cancel(ui, &mut confirm, &mut open);
                 }
+                "importTexture" => import_texture(app, &mut d, ui, &mut confirm, &mut open),
                 "pickList" => {
                     let items: Vec<String> = app
                         .session
@@ -493,6 +499,61 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     } else if let Some(back) = d.back.take() {
         app.dialog = Some(*back);
     }
+}
+
+/// The Import Brush Texture dialog: the same native and browser pickers as a picture; the engine
+/// command takes either a path or the picked bytes, so the web build never needs a path.
+fn import_texture(app: &mut SheetApp, d: &mut Dialog, ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
+    let arrived = d.picture_inbox.as_ref().and_then(|inbox| inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop());
+    if let Some((name, bytes)) = arrived {
+        d.picture_inbox = None;
+        // Empty bytes are a pick the browser refused to read for its size.
+        if bytes.is_empty() || bytes.len() > 16 * 1024 * 1024 {
+            // The rejected pick replaces the earlier one, so OK cannot import it — including a
+            // path typed before the pick, which would otherwise be imported while the dialog
+            // said no image was chosen.
+            d.values.remove("base64");
+            d.values.remove("name");
+            d.values.remove("path");
+            app.message = Some((d.title.clone(), "Choose a PNG or JPEG no larger than 16 MiB and 8192 pixels a side.".into()));
+        } else {
+            d.values.remove("path");
+            d.values.insert("name".into(), json!(name));
+            d.values.insert("base64".into(), json!(gridcraft_engine::io::base64_encode(&bytes)));
+        }
+    }
+    // The limits are part of the dialog, not only of the error after a rejected pick.
+    let limits = "PNG or JPEG, up to 16 MiB, 8192 pixels a side and 16 million pixels.";
+    if app.services.pick_picture_async.is_some() {
+        ui.label(d.values.get("name").and_then(Json::as_str).unwrap_or("No image selected"));
+        ui.label(egui::RichText::new(limits).small());
+    } else {
+        ui.label("Image file path (PNG or JPEG):");
+        ui.label(egui::RichText::new(limits).small());
+        let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
+        if ui.text_edit_singleline(&mut path).changed() {
+            // A typed path replaces a picked file: both its bytes and its name, which would
+            // otherwise label the texture with the name of the file picked before.
+            d.values.remove("base64");
+            d.values.remove("name");
+            d.values.insert("path".into(), json!(path));
+        }
+    }
+    if (app.services.pick_picture.is_some() || app.services.pick_picture_async.is_some()) && ui.button("Browse…").clicked() {
+        if let Some(start) = &app.services.pick_picture_async {
+            let inbox = crate::Inbox::default();
+            start(inbox.clone());
+            d.picture_inbox = Some(inbox);
+        } else if let Some(pick) = &app.services.pick_picture
+            && let Some(path) = pick()
+        {
+            d.values.remove("base64");
+            let name = std::path::Path::new(&path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("");
+            d.values.insert("name".into(), json!(name));
+            d.values.insert("path".into(), json!(path));
+        }
+    }
+    ok_cancel(ui, confirm, open);
 }
 
 /// OK in Open Hyperlink; returns whether the prompt closes. A pass that carries control-channel

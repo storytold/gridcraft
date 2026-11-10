@@ -43,6 +43,12 @@ pub struct Ctx<'a> {
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
     /// The code of the workbook's Python cells, from its Python part.
     pub python: crate::python_part::ScriptsIn,
+    /// The parts `[Content_Types].xml` declares as InkML: read at most once per package, so a
+    /// workbook with many drawings does not decompress and parse that part again per drawing.
+    pub inkml_parts: Option<Arc<HashSet<String>>>,
+    /// Ink creation ids the workbook already holds: a trace that needs a new id mints one no
+    /// earlier stroke uses, across every drawing part, not just its own.
+    pub ink_keys: HashSet<String>,
 }
 
 impl Ctx<'_> {
@@ -241,6 +247,21 @@ fn selected_workbook_view(workbook: &El) -> Option<&El> {
     views.kids("workbookView").find(|view| view.attr("visibility").unwrap_or("visible") == "visible").or_else(|| views.child("workbookView"))
 }
 
+/// Reads GridCraft's veryHidden ink sheet: `None` when `sheet` is an ordinary one, and
+/// `Some(None)` for ours with a damaged or newer layout (its data is skipped, with a warning).
+fn read_ink_sheet(cx: &mut Ctx<'_>, sheet: &Sheet) -> Option<Option<crate::ink_sheet::InkSheetData>> {
+    if !crate::ink_sheet::is_ink_sheet(sheet) {
+        return None;
+    }
+    match crate::ink_sheet::parse(sheet) {
+        Some(data) => Some(Some(data)),
+        None => {
+            cx.warn("the GridCraft ink sheet has an unknown layout; its ink data was skipped");
+            Some(None)
+        }
+    }
+}
+
 pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) -> bool>) -> Result<(Workbook, ReadReport), IoError> {
     let pkg = Package::open(bytes)?;
     let mut cx = Ctx {
@@ -261,6 +282,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         shared_formula_bytes: 0,
         known_function,
         python: Default::default(),
+        inkml_parts: None,
+        ink_keys: HashSet::new(),
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -312,6 +335,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
     let mut pivot_caches = crate::pivot::CachesIn::new(&wb_xml, &wb_rels);
     let sheet_els: Vec<El> = wb_xml.child("sheets").map(|s| s.kids("sheet").cloned().collect()).unwrap_or_default();
     let mut names = SheetNames::default();
+    let mut ink_data: Option<crate::ink_sheet::InkSheetData> = None;
     for (i, se) in sheet_els.iter().enumerate() {
         let name = se.attr("name").unwrap_or("").to_string();
         let rel = se.attr("id").and_then(|id| wb_rels.iter().find(|r| r.id == id)).cloned();
@@ -339,6 +363,21 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
                 (Sheet::new(name.clone()), Default::default())
             }
         };
+        sheet.visibility = match se.attr("state") {
+            Some("hidden") => Visibility::Hidden,
+            Some("veryHidden") => Visibility::VeryHidden,
+            _ => Visibility::Visible,
+        };
+        // GridCraft's own veryHidden ink sheet: read for the textures and per-stroke data Excel
+        // can't hold, then dropped from the model (it is written again on save only while that
+        // data exists), so it never shows as a sheet and never reaches the passthrough. One this
+        // version cannot read (a damaged layout, or one a newer GridCraft wrote) stays an ordinary
+        // model sheet, so saving here never deletes data a later version still understands.
+        if let Some(Some(data)) = read_ink_sheet(&mut cx, &sheet) {
+            ink_data = ink_data.or(Some(data));
+            file_to_model.push(None);
+            continue;
+        }
         match crate::pivot::read_pivots(&mut cx, &mut pivot_caches, &rel.target, &name) {
             Ok(p) => sheet.pivots = p,
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
@@ -346,11 +385,6 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         }
         sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &read_controls);
         sheet.file_id = se.attr_u32("sheetId").unwrap_or(0);
-        sheet.visibility = match se.attr("state") {
-            Some("hidden") => Visibility::Hidden,
-            Some("veryHidden") => Visibility::VeryHidden,
-            _ => Visibility::Visible,
-        };
         file_to_model.push(Some(wb.sheets.len()));
         wb.sheets.push(Arc::new(sheet));
     }
@@ -359,6 +393,9 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
     }
     wb.set_active_sheet(file_to_model.get(active_tab).copied().flatten().unwrap_or(0));
+    if let Some(data) = ink_data {
+        crate::ink_sheet::apply_to_workbook(&mut wb, &data);
+    }
 
     // Defined names. Chartex parts refer to their data through hidden `_xlchart.*` names.
     let mut chart_names: Vec<(String, String)> = vec![];

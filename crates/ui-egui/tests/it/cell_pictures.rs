@@ -109,6 +109,32 @@ fn picture_file_pickers_preserve_placement_and_isolate_canceled_results() {
     assert!(sheet.cell(CellRef::new(0, 0)).is_none());
 }
 
+/// A rejected browser pick replaces the earlier accepted one, so OK cannot import the stale image.
+#[test]
+fn a_rejected_browser_pick_drops_the_earlier_accepted_picture() {
+    // The second pick arrives as empty bytes (the browser refused it for its size): the dialog
+    // must clear the `base64` payload the first pick stored, or OK would insert that earlier
+    // image without the user noticing.
+    let requests: Arc<Mutex<Vec<Inbox>>> = Arc::default();
+    let send = requests.clone();
+    let mut h = harness(Services { pick_picture_async: Some(Box::new(move |inbox| send.lock().unwrap().push(inbox))), ..Default::default() });
+    h.state_mut().open_dialog("insertPicture", json!({"placement": "cell"}));
+    h.run_steps(6);
+    h.get_by_label("Browse…").click();
+    h.run_steps(6);
+    let bytes = png();
+    requests.lock().unwrap().pop().unwrap().lock().unwrap().push(("first.png".into(), bytes));
+    h.run_steps(6);
+    assert!(h.state().dialog.as_ref().unwrap().values.contains_key("base64"), "the accepted pick is staged");
+    h.get_by_label("Browse…").click();
+    h.run_steps(6);
+    requests.lock().unwrap().pop().unwrap().lock().unwrap().push(("too-big.png".into(), Vec::new()));
+    h.run_steps(6);
+    let d = h.state().dialog.as_ref().expect("the dialog stays open for another try");
+    assert!(!d.values.contains_key("base64"), "the rejected pick clears the staged bytes");
+    assert!(!d.values.contains_key("alt"), "the staged name is cleared too: {:?}", d.values.get("alt"));
+}
+
 #[test]
 fn pictures_fit_current_geometry_and_selection_cannot_erase_them() {
     let mut h = harness(Default::default());

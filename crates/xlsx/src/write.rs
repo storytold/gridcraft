@@ -118,6 +118,10 @@ pub struct Out {
     /// References of chartex parts, defined as hidden `_xlchart.v1.N` names.
     pub chart_names: Vec<String>,
     pub drawings: u32,
+    /// InkML parts written (`xl/ink/inkN.xml`).
+    pub inks: u32,
+    /// Fallback-picture raster budget left in this save, in pixels.
+    pub ink_pixels: u64,
     pub tables: u32,
     pub comments: u32,
     /// VML drawings written, the last VML shape-id block used, and control properties parts.
@@ -236,6 +240,16 @@ fn workbook_view_attrs(wb: &Workbook) -> String {
     attrs
 }
 
+/// A copy of `wb` with the veryHidden `GridCraft Ink` sheet appended, when a save must keep
+/// textures or GridCraft-only stroke data; `None` when there is nothing to keep.
+fn workbook_with_ink_sheet(wb: &Workbook) -> Option<Workbook> {
+    let data = crate::ink_sheet::from_workbook(wb)?;
+    let name = crate::ink_sheet::unique_name(wb);
+    let mut copy = wb.clone();
+    copy.sheets.push(std::sync::Arc::new(crate::ink_sheet::build(&name, &data)));
+    Some(copy)
+}
+
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
 pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
@@ -246,6 +260,12 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         return Err(IoError::Format("a static cell picture cannot also contain a formula".into()));
     }
     check_sheet_names(wb)?;
+    // GridCraft-only ink data (imported textures, a stroke's texture/subtype) has no place in
+    // InkML: Excel drops it. It travels in a veryHidden worksheet, added to a copy of the workbook
+    // and only while there is such data, so a workbook Excel can represent whole is written as
+    // Excel would write it.
+    let with_ink = workbook_with_ink_sheet(wb);
+    let wb = with_ink.as_ref().unwrap_or(wb);
     let mut out = Out {
         parts: vec![],
         overrides: vec![],
@@ -257,6 +277,8 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         book_name: book_name.filter(|n| !n.is_empty() && !n.contains(['[', ']'])).unwrap_or(DEFAULT_BOOK_NAME).to_string(),
         chart_names: vec![],
         drawings: 0,
+        inks: 0,
+        ink_pixels: crate::drawing::MAX_FALLBACK_PIXELS_PER_SAVE,
         tables: 0,
         comments: 0,
         vmls: 0,

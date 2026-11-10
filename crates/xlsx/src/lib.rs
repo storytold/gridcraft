@@ -21,6 +21,7 @@ mod csv;
 mod drawing;
 mod feature_bags;
 mod fmla;
+mod ink_sheet;
 mod ods;
 mod omml;
 mod package;
@@ -49,6 +50,8 @@ use gridcraft_model::Workbook;
 
 pub use crypto::{DecryptError, check_encryption, decrypt};
 pub use csv::{MAX_CSV_BYTES, decode_text, read_csv, read_csv_with_report, write_csv, write_csv_limited};
+pub use drawing::creation_id;
+pub use ink_sheet::{INK_SHEET_NAME, InkExtras, InkSheetData};
 pub use ods::read_ods;
 pub use package::MAX_PART;
 pub use passthrough::rebase_links;
@@ -72,6 +75,10 @@ pub enum IoError {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ReadReport {
     pub warnings: Vec<String>,
+    /// How many times the reader decompressed `[Content_Types].xml` to find the InkML parts, so a
+    /// test can keep that lookup to one read per package.
+    #[cfg(test)]
+    pub content_types_reads: u32,
 }
 
 impl ReadReport {

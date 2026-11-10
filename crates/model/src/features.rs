@@ -317,6 +317,7 @@ pub struct Validation {
 }
 
 impl Default for Validation {
+    /// A blank validation with no rule and no message shown.
     fn default() -> Self {
         Validation {
             ranges: vec![],
@@ -581,6 +582,7 @@ pub struct ChartDataTable {
 }
 
 impl Default for ChartDataTable {
+    /// Excel's default data table: keys shown, every border on.
     fn default() -> Self {
         Self { show_keys: true, horizontal_border: true, vertical_border: true, outline: true }
     }
@@ -673,6 +675,223 @@ pub enum ShapeKind {
     Equation,
 }
 
+/// A brush kind of the Draw tab (Excel's Add menu).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InkTool {
+    #[default]
+    Pen,
+    Pencil,
+    Highlighter,
+    FountainPen,
+    BrushPen,
+}
+
+/// A pen texture (Excel's eight effects). The stroke's `line` colour is the texture's base colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InkEffect {
+    Rainbow,
+    Galaxy,
+    Lava,
+    Ocean,
+    RoseGold,
+    Gold,
+    Silver,
+    Bronze,
+}
+
+/// The bounds a brush's InkML `width`/`height` are kept in, in cm: a thousandth of a centimetre at
+/// the least, a metre at most. The InkML reader and the JSON reader apply the same range, so a
+/// hand-edited file cannot put a brush outside what the file format holds.
+pub const MIN_INK_CM: f32 = 0.001;
+pub const MAX_INK_CM: f32 = 100.0;
+/// The default brush thickness in cm: Excel's plain Pen.
+pub const DEFAULT_INK_CM: f32 = 0.05;
+/// The most pressure samples one stroke may carry, matching the InkML reader's point limit.
+pub const MAX_INK_PRESSURE: usize = 20_000;
+/// The highest pressure a device records: Excel's `F` channel is 15 bits.
+pub const MAX_INK_PRESSURE_VALUE: u16 = 32_767;
+/// The bounds of a stroke's texture repeat size (how many stroke widths one repeat spans),
+/// shared with the engine's pen and the hidden-sheet reader.
+pub const MIN_INK_TEXTURE_SCALE: f32 = 0.5;
+pub const MAX_INK_TEXTURE_SCALE: f32 = 512.0;
+
+/// A stroke's brush: the Draw-tab kind, its size, texture and the per-point data the file keeps.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InkStyle {
+    pub tool: InkTool,
+    /// Stroke width in cm (InkML `width`).
+    #[serde(deserialize_with = "ink_cm")]
+    pub width_cm: f32,
+    /// Stroke height in cm (InkML `height`): the brush's thickness across the stroke in the file,
+    /// six times the width for a Pencil and twice for a Highlighter. It is not what GridCraft
+    /// paints across a stroke: the engine's `across_cm` measures a Pencil at 0.8 of its width and
+    /// a Highlighter at this height.
+    #[serde(deserialize_with = "ink_cm")]
+    pub height_cm: f32,
+    /// A pen texture; `None` is a solid stroke.
+    pub effect: Option<InkEffect>,
+    /// Texture phase (InkML `anchorX`/`anchorY`), in the texture's own units.
+    #[serde(deserialize_with = "ink_anchor")]
+    pub anchor: [f32; 2],
+    /// Texture scale (InkML `scaleFactor`): a positive finite factor, else 1.
+    #[serde(deserialize_with = "ink_scale")]
+    pub scale: f32,
+    /// Pressure per point (`0..=32767`); empty when the device did not record any.
+    #[serde(deserialize_with = "ink_pressure")]
+    pub pressure: Vec<u16>,
+    /// Draw order, for Ink Replay.
+    pub order: u32,
+    /// GridCraft's own texture: a content-addressed id into the workbook's texture store. Excel
+    /// has no equivalent and drops it; the bytes live once on the workbook, not on every stroke.
+    pub texture: Option<String>,
+    /// How the texture repeats along the stroke: how many stroke widths one repeat spans.
+    #[serde(deserialize_with = "ink_texture_scale")]
+    pub texture_scale: f32,
+    /// The stroke's stable `a16:creationId` GUID (braces included), assigned when the stroke is
+    /// created and never changed: moving or recolouring it keeps the key. Excel preserves the
+    /// GUID across saves, so a map keyed by it survives an Excel round trip.
+    pub key: Option<String>,
+}
+
+/// A brush dimension read from JSON, clamped to the InkML reader's range; a value that is not a
+/// finite number takes the plain pen's thickness instead of poisoning every measurement.
+fn ink_cm<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    let v = f32::deserialize(d)?;
+    Ok(if v.is_finite() { v.clamp(MIN_INK_CM, MAX_INK_CM) } else { DEFAULT_INK_CM })
+}
+
+/// A texture phase read from JSON: each component finite, else 0.
+fn ink_anchor<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[f32; 2], D::Error> {
+    let v = <[f32; 2]>::deserialize(d)?;
+    let finite = |v: f32| if v.is_finite() { v } else { 0.0 };
+    Ok([finite(v[0]), finite(v[1])])
+}
+
+/// A texture scale read from JSON: positive and finite, else 1 (the InkML reader's default).
+fn ink_scale<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    let v = f32::deserialize(d)?;
+    Ok(if v.is_finite() && v > 0.0 { v } else { 1.0 })
+}
+
+/// A repeat size read from JSON, kept finite and within [`MIN_INK_TEXTURE_SCALE`]–[`MAX_INK_TEXTURE_SCALE`].
+fn ink_texture_scale<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    let v = f32::deserialize(d)?;
+    Ok(if v.is_finite() && v > 0.0 { v.clamp(MIN_INK_TEXTURE_SCALE, MAX_INK_TEXTURE_SCALE) } else { 1.0 })
+}
+
+/// Pressure samples read from JSON: at most [`MAX_INK_PRESSURE`] of them, each within the 15-bit
+/// range the file format holds.
+fn ink_pressure<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u16>, D::Error> {
+    let v = Vec::<u16>::deserialize(d)?;
+    Ok(v.into_iter().take(MAX_INK_PRESSURE).map(|p| p.min(MAX_INK_PRESSURE_VALUE)).collect())
+}
+
+impl Default for InkStyle {
+    /// An untooled, untextured swatch: the shape's own colour and no pressure or key.
+    fn default() -> Self {
+        InkStyle {
+            tool: InkTool::default(),
+            width_cm: DEFAULT_INK_CM,
+            height_cm: DEFAULT_INK_CM,
+            effect: None,
+            anchor: [0.0, 0.0],
+            scale: 1.0,
+            pressure: Vec::new(),
+            order: 0,
+            texture: None,
+            texture_scale: 1.0,
+            key: None,
+        }
+    }
+}
+
+/// The canonical form of an `a16:creationId` value: `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`
+/// with hexadecimal digits (case-insensitive), in lowercase. `None` for anything else, so a key
+/// read from a file or restored from JSON can never be written back as invalid ST_Guid.
+pub fn ink_guid(value: &str) -> Option<String> {
+    let v = value.trim();
+    let b = v.as_bytes();
+    if b.len() != 38 || b.first() != Some(&b'{') || b.last() != Some(&b'}') {
+        return None;
+    }
+    let dashed = [9, 14, 19, 24];
+    for (i, byte) in b.iter().enumerate() {
+        if i == 0 || i == 37 {
+            continue;
+        }
+        if dashed.contains(&i) {
+            if *byte != b'-' {
+                return None;
+            }
+        } else if !byte.is_ascii_hexdigit() {
+            return None;
+        }
+    }
+    Some(v.to_ascii_lowercase())
+}
+
+/// A stroke's stable key: `existing` in its canonical lowercase form when it is an ST_Guid, else
+/// a fresh deterministic one (a SHA-256 of a process-wide counter, so tests and repeated runs
+/// agree and no clock is read).
+///
+/// The GUID is spelled out here rather than taken from a UUID crate because the key must be
+/// reproducible: a save with no edit has to produce the same bytes, and a wasm build has no random
+/// source to seed a v4 from. The key is only unique within one process, though — see
+/// [`ink_creation_id_free`] before assigning one to a new stroke.
+pub fn ink_creation_id(existing: Option<&str>) -> String {
+    if let Some(guid) = existing.and_then(ink_guid) {
+        return guid;
+    }
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let mut h = sha2::Sha256::new();
+    use sha2::Digest as _;
+    h.update(b"gridcraft-ink-key");
+    h.update(n.to_le_bytes());
+    let d = h.finalize();
+    let b = |i: usize| d.get(i).copied().unwrap_or(0);
+    format!(
+        "{{{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-4{:01x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
+        b(0),
+        b(1),
+        b(2),
+        b(3),
+        b(4),
+        b(5),
+        b(6) & 0x0f,
+        b(7),
+        (b(8) & 0x3f) | 0x80,
+        b(9),
+        b(10),
+        b(11),
+        b(12),
+        b(13),
+        b(14),
+        b(15)
+    )
+}
+
+/// A fresh key for a new stroke: the first one [`ink_creation_id`] mints that `taken` does not
+/// already hold.
+///
+/// The counter behind [`ink_creation_id`] starts at zero in every process, so a reopened workbook
+/// carries keys from the earlier process whose first fresh key is the same GUID again. Handing that
+/// key to a second stroke would put two `a16:creationId`s in one file and quietly break the map the
+/// key exists for. `taken` answers from the workbook's own strokes, a finite set, so the loop only
+/// moves the counter forward and ends.
+pub fn ink_creation_id_free(mut taken: impl FnMut(&str) -> bool) -> String {
+    loop {
+        let key = ink_creation_id(None);
+        if !taken(&key) {
+            return key;
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
     pub id: u32,
@@ -687,6 +906,10 @@ pub struct Shape {
     /// An equation's layout, rebuilt from `text` and never saved.
     #[serde(skip)]
     pub math: EquationCache,
+    /// A native Office ink stroke's brush; `None` for the legacy DrawingML polyline an older
+    /// GridCraft wrote (and for every non-ink shape).
+    #[serde(default)]
+    pub ink: Option<InkStyle>,
 }
 
 /// The laid-out form of an equation's LaTeX source. It is derived data: rebuilt by
@@ -866,6 +1089,7 @@ pub struct FormControl {
 }
 
 impl Default for FormControl {
+    /// A control with no action that is printed and locked when the sheet is protected.
     fn default() -> Self {
         FormControl {
             id: 0,
@@ -1155,6 +1379,113 @@ mod tests {
         let legacy: Chart = serde_json::from_value(json).expect("deserialize legacy chart");
         assert_eq!(legacy.hole_size, 50, "documents saved before hole_size existed keep the old 50% hole");
         assert_eq!(chart.hole_size, 75, "new charts keep Excel's 75% default");
+    }
+
+    /// An ink style round trips through JSON, and older files without one read as no style.
+    #[test]
+    fn ink_style_round_trips_through_json_and_older_shapes_default_to_none() {
+        let key = "{11111111-2222-4333-8444-555555555555}";
+        let shape = Shape {
+            id: 3,
+            kind: ShapeKind::Ink,
+            anchor: Anchor::default(),
+            fill: Color::Rgb(2 << 16),
+            line: Color::Rgb(0xA12BCD),
+            text: "0,0;40,20".into(),
+            format: ShapeFormat::default(),
+            math: EquationCache::default(),
+            ink: Some(InkStyle {
+                tool: InkTool::BrushPen,
+                width_cm: 0.35,
+                height_cm: 0.35,
+                effect: Some(InkEffect::Galaxy),
+                anchor: [-1_303.866_2, -1016.0],
+                scale: 0.5,
+                pressure: vec![0, 32_767],
+                order: 7,
+                texture: Some("tex-1".into()),
+                texture_scale: 2.0,
+                key: Some(key.into()),
+            }),
+        };
+        let json = serde_json::to_string(&shape).expect("serialize ink");
+        let back: Shape = serde_json::from_str(&json).expect("deserialize ink");
+        assert_eq!(back, shape);
+        assert_eq!(back.ink.as_ref().and_then(|i| i.key.as_deref()), Some(key));
+
+        let mut legacy = serde_json::to_value(&shape).expect("serialize ink");
+        legacy.as_object_mut().expect("object").remove("ink");
+        let old: Shape = serde_json::from_value(legacy).expect("older shape");
+        assert!(old.ink.is_none(), "a shape saved before InkStyle keeps opening");
+
+        // With no serialized fields at all, InkStyle takes its usable defaults.
+        let bare: InkStyle = serde_json::from_str("{}").expect("bare ink style");
+        assert_eq!((bare.tool, bare.effect, bare.texture, bare.key), (InkTool::Pen, None, None, None));
+        assert_eq!(bare.scale, 1.0);
+        assert_eq!(bare.texture_scale, 1.0);
+        assert!(bare.width_cm > 0.0);
+    }
+
+    /// InkStyle fields read from JSON are kept within the ranges the InkML reader enforces, so a
+    /// hand-edited file cannot put a brush outside what the format holds or poison measurements.
+    #[test]
+    fn ink_style_fields_are_clamped_on_deserialize() {
+        let style: InkStyle =
+            serde_json::from_str(r#"{"width_cm":1e38,"height_cm":-4,"anchor":[1e38,-2],"scale":-1,"pressure":[1,32768,40000],"texture_scale":1e9}"#)
+                .expect("reads");
+        assert_eq!(style.width_cm, MAX_INK_CM);
+        assert_eq!(style.height_cm, MIN_INK_CM);
+        assert_eq!(style.anchor, [1e38, -2.0], "finite anchors are kept as they are");
+        assert_eq!(style.scale, 1.0, "a negative scale takes the default");
+        assert_eq!(style.pressure, vec![1, MAX_INK_PRESSURE_VALUE, MAX_INK_PRESSURE_VALUE]);
+        assert_eq!(style.texture_scale, MAX_INK_TEXTURE_SCALE);
+        // JSON has no NaN or infinity, so a number too large for f32 is refused by the reader
+        // rather than stored as one; the finite guard is the second line of defence.
+        assert!(serde_json::from_str::<InkStyle>(r#"{"width_cm":1e40}"#).is_err());
+    }
+
+    /// A valid creation id is kept as it is, and a minted one is unique.
+    #[test]
+    fn ink_creation_id_keeps_a_valid_key_and_mints_unique_ones() {
+        let valid = "{11111111-2222-4333-8444-555555555555}";
+        assert_eq!(ink_creation_id(Some(valid)), valid);
+        let a = ink_creation_id(None);
+        let b = ink_creation_id(None);
+        assert_ne!(a, b);
+        for k in [a, b] {
+            assert!(k.starts_with('{') && k.ends_with('}'), "{k}");
+            assert_eq!(ink_guid(&k).as_deref(), Some(k.as_str()), "{k} is an ST_Guid");
+        }
+        // Anything that is not an ST_Guid is replaced rather than trusted...
+        for bad in ["{x}", "not a guid", &"x".repeat(200), "{11111111-2222-4333-8444-55555555555}", "{11111111-2222-4333-8444-5555555555555}"] {
+            assert_ne!(ink_creation_id(Some(bad)), bad);
+        }
+        // ...and a valid GUID in another case takes its canonical lowercase form, so one identity
+        // never becomes two.
+        let upper = "{ABCDEF01-2345-6789-ABCD-EF0123456789}";
+        assert_eq!(ink_guid(upper).as_deref(), Some("{abcdef01-2345-6789-abcd-ef0123456789}"));
+        assert_eq!(ink_creation_id(Some(upper)), "{abcdef01-2345-6789-abcd-ef0123456789}");
+        assert_eq!(ink_guid(" {abcdef01-2345-6789-abcd-ef0123456789} ").as_deref(), Some("{abcdef01-2345-6789-abcd-ef0123456789}"));
+    }
+
+    /// A new key is minted past every key the workbook already holds.
+    #[test]
+    fn a_new_key_is_minted_past_the_keys_the_workbook_already_holds() {
+        // A reopened workbook holds keys minted by an earlier process, whose counter started at
+        // zero: the first keys this process mints are very likely among them. Refusing the first
+        // three stands in for that workbook and pins the retry.
+        let mut held: Vec<String> = Vec::new();
+        let key = ink_creation_id_free(|k| {
+            let refuse = held.len() < 3;
+            if refuse {
+                held.push(k.to_string());
+            }
+            refuse
+        });
+        assert_eq!(held.len(), 3, "the mint retried past the keys the workbook holds");
+        assert!(!held.iter().any(|h| h == &key), "a held key was handed out again: {key}");
+        // A key nothing holds is used straight away.
+        assert!(!held.iter().any(|h| h == &ink_creation_id_free(|_| false)));
     }
 }
 

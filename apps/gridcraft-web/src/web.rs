@@ -8,6 +8,95 @@ use wasm_bindgen::JsValue;
 const CANVAS_ID: &str = "gridcraft_canvas";
 const LOADING_ID: &str = "gridcraft_loading";
 
+/// The largest picture a dialog takes, the same 16 MB its message names.
+const MAX_PICTURE_BYTES: f64 = 16.0 * 1024.0 * 1024.0;
+
+/// Picks a picture and reads it only when it fits `max`: the file's own size is checked first, so
+/// choosing a huge image cannot turn into an allocation that takes the tab down. An oversized pick
+/// answers empty bytes, which the dialog reports as too large. Closing the dialog without a
+/// choice answers no pick: the `cancel` listener ends the wait, the input (attached so `change`
+/// fires everywhere) is removed on every path, and each handler clears both listeners so no pick
+/// leaks a handler.
+async fn pick_picture(max: f64) -> Option<(String, Vec<u8>)> {
+    use wasm_bindgen::JsCast as _;
+    let document = web_sys::window()?.document()?;
+    let input = document.create_element("input").ok()?.dyn_into::<web_sys::HtmlInputElement>().ok()?;
+    input.set_type("file");
+    input.set_accept("image/png,image/jpeg");
+    // The input is only a picker handle: keep it out of the page layout.
+    if input.style().set_property("display", "none").is_err() {
+        return None;
+    }
+    // Some browsers only fire `change` for an input that is in the document: the input is
+    // attached before the picker opens and removed on every path below.
+    let body = document.body()?;
+    if body.append_child(&input).is_err() {
+        return None;
+    }
+    let chosen: std::rc::Rc<std::cell::Cell<Option<web_sys::File>>> = Default::default();
+    // Each handler clears both listeners and drops both closures, so neither a change nor a
+    // cancel leaks the other handler. The two closures share one box: whichever runs first
+    // takes both out, and the second firing (some browsers fire both) finds nothing to do.
+    type Handlers = Option<(wasm_bindgen::closure::Closure<dyn FnMut()>, wasm_bindgen::closure::Closure<dyn FnMut()>)>;
+    let handlers: std::rc::Rc<std::cell::RefCell<Handlers>> = Default::default();
+    let promise = {
+        let chosen = chosen.clone();
+        let handlers = handlers.clone();
+        let input = input.clone();
+        js_sys::Promise::new(&mut move |resolve, _reject| {
+            let finish = {
+                let handlers = handlers.clone();
+                let input = input.clone();
+                let resolve = resolve.clone();
+                move || {
+                    input.set_onchange(None);
+                    if let Some((change, cancel)) = handlers.borrow_mut().take() {
+                        let _ = input.remove_event_listener_with_callback("cancel", cancel.as_ref().unchecked_ref());
+                        std::mem::drop((change, cancel));
+                    }
+                    let _ = resolve.call0(&wasm_bindgen::JsValue::UNDEFINED);
+                }
+            };
+            let finish = std::rc::Rc::new(finish);
+            let input_for_change = input.clone();
+            let finish_for_change = finish.clone();
+            let chosen_for_change = chosen.clone();
+            let change: wasm_bindgen::closure::Closure<dyn FnMut()> = wasm_bindgen::closure::Closure::new(move || {
+                if let Some(file) = input_for_change.files().and_then(|files| files.get(0)) {
+                    chosen_for_change.set(Some(file));
+                }
+                finish_for_change();
+            });
+            input.set_onchange(Some(change.as_ref().unchecked_ref()));
+            let finish_for_cancel = finish.clone();
+            // Closing the dialog without a choice fires `cancel`, not `change`: without this the
+            // wait below never ends and the input stays in the page.
+            let cancel: wasm_bindgen::closure::Closure<dyn FnMut()> = wasm_bindgen::closure::Closure::new(move || {
+                finish_for_cancel();
+            });
+            if input.add_event_listener_with_callback("cancel", cancel.as_ref().unchecked_ref()).is_err() {
+                // Without the cancel listener a dismissed picker would never end the wait and the
+                // input would stay in the page: resolve now and take the input out.
+                finish();
+                input.remove();
+                return;
+            }
+            *handlers.borrow_mut() = Some((change, cancel));
+            let _ = input.click();
+        })
+    };
+    let done = wasm_bindgen_futures::JsFuture::from(promise).await;
+    let _ = body.remove_child(&input);
+    done.ok()?;
+    let file = chosen.take()?;
+    let name = file.name();
+    if file.size() > max {
+        return Some((name, Vec::new()));
+    }
+    let buffer = wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await.ok()?;
+    Some((name, js_sys::Uint8Array::new(&buffer).to_vec()))
+}
+
 /// Starts the eframe web runner for the GridCraft canvas. It adjusts the WebGPU device limits to the adapter's, optionally selects the WebGL backend from the query string, and builds the shell with the requested sample or host bridge, browser language rules, stored preferences and the loading/error page state.
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
@@ -211,11 +300,12 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
         pick_picture_async: Some(Box::new(move |inbox| {
             let ctx = picture_ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                let Some(file) = rfd::AsyncFileDialog::new().add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"]).pick_file().await else {
+                let Some((name, bytes)) = pick_picture(MAX_PICTURE_BYTES).await else {
                     return;
                 };
-                let bytes = file.read().await;
-                inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((file.file_name(), bytes));
+                // Empty bytes report a pick the picker refused for its size: the dialogs show
+                // their own "no larger than 16 MB" message and nothing is decoded.
+                inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((name, bytes));
                 ctx.request_repaint();
             });
         })),

@@ -1036,6 +1036,18 @@ impl Footprint {
     }
 }
 
+/// The Draw tab's view state (tool, brush, colour, thickness, texture and the pen gallery).
+struct DrawState {
+    tool: String,
+    color: String,
+    width: f32,
+    brush: String,
+    effect: String,
+    pens: Vec<crate::cmd::draw::DrawPen>,
+    texture: String,
+    texture_scale: f32,
+}
+
 /// Session state a dry run may touch, put back afterwards. The workbook, its selection and its
 /// history are put back by the dry run's undo group.
 struct Saved {
@@ -1063,7 +1075,7 @@ struct Saved {
     last_find: Option<Json>,
     hide_ruler: bool,
     windows: (Vec<crate::WindowState>, Option<u64>, u64, u64),
-    draw: (String, String, f32),
+    draw: DrawState,
     comments_pane: bool,
     show_all_notes: bool,
 }
@@ -1091,7 +1103,16 @@ impl Saved {
             last_find: s.last_find.clone(),
             hide_ruler: s.hide_ruler,
             windows: (s.windows.clone(), s.active_window, s.next_window, s.activation),
-            draw: (s.draw_tool.clone(), s.draw_color.clone(), s.draw_width),
+            draw: DrawState {
+                tool: s.draw_tool.clone(),
+                color: s.draw_color.clone(),
+                width: s.draw_width,
+                brush: s.draw_brush.clone(),
+                effect: s.draw_effect.clone(),
+                pens: s.draw_pens.clone(),
+                texture: s.draw_texture.clone(),
+                texture_scale: s.draw_texture_scale,
+            },
             comments_pane: s.comments_pane,
             show_all_notes: s.show_all_notes,
         };
@@ -1125,7 +1146,15 @@ impl Saved {
         s.last_find = self.last_find;
         s.hide_ruler = self.hide_ruler;
         (s.windows, s.active_window, s.next_window, s.activation) = self.windows;
-        (s.draw_tool, s.draw_color, s.draw_width) = self.draw;
+        let draw = self.draw;
+        s.draw_tool = draw.tool;
+        s.draw_color = draw.color;
+        s.draw_width = draw.width;
+        s.draw_brush = draw.brush;
+        s.draw_effect = draw.effect;
+        s.draw_pens = draw.pens;
+        s.draw_texture = draw.texture;
+        s.draw_texture_scale = draw.texture_scale;
         s.comments_pane = self.comments_pane;
         s.show_all_notes = self.show_all_notes;
     }
