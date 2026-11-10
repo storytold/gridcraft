@@ -16,6 +16,7 @@ struct Objects {
     image: ObjRef,
     shape: ObjRef,
     text_box: ObjRef,
+    equation: ObjRef,
     /// A slicer lying over the chart's right edge: slicers paint on top and take the click.
     slicer: ObjRef,
 }
@@ -41,12 +42,14 @@ fn fixture() -> (Harness, Objects) {
         id(&s.execute("insert.chart", json!({"range": "B1:B5", "type": "column", "at": "D8", "width": 220, "height": 140})).unwrap(), "chart");
     let shape = id(&s.execute("insert.shape", json!({"kind": "rectangle", "at": "C20", "width": 120, "height": 80})).unwrap(), "shape");
     let text_box = id(&s.execute("insert.textBox", json!({"at": "H20", "width": 140, "height": 60, "text": "Note"})).unwrap(), "shape");
+    let equation = id(&s.execute("insert.equation", json!({"latex": "a^2+b^2=c^2", "cell": "C26", "size": 16})).unwrap(), "equation");
     let image = id(&s.execute("insert.picture", json!({"base64": tiny_png(), "at": "M8", "width": 60, "height": 60})).unwrap(), "image");
     let objs = Objects {
         chart: ObjRef::new(ObjKind::Chart, chart),
         image: ObjRef::new(ObjKind::Image, image),
         shape: ObjRef::new(ObjKind::Shape, shape),
         text_box: ObjRef::new(ObjKind::Shape, text_box),
+        equation: ObjRef::new(ObjKind::Equation, equation),
         slicer: ObjRef::new(ObjKind::Slicer, slicer),
     };
     let mut h = egui_kittest::Harness::builder()
@@ -108,6 +111,18 @@ fn click(h: &mut Harness, p: Pos2) {
     h.run_steps(2);
 }
 
+fn click_with(h: &mut Harness, p: Pos2, modifiers: Modifiers) {
+    h.run_steps(30);
+    for pressed in [true, false] {
+        h.input_mut().events.push(Event::ModifiersChanged(modifiers));
+        h.input_mut().events.push(Event::PointerMoved(p));
+        h.input_mut().events.push(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers });
+        h.step();
+    }
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+}
+
 fn double_click(h: &mut Harness, p: Pos2) {
     // Separate the gesture from earlier clicks (egui's triple-click window).
     h.run_steps(45);
@@ -136,10 +151,58 @@ fn kept(h: &Harness) -> Value {
     h.state().session.doc().unwrap().wb.active().unwrap().value(at("R30"))
 }
 
+/// A form control over a slicer's value tile is the topmost object there, so a click that
+/// `form_controls::interact` leaves to the grid (Cmd+click selects the control; a click on a
+/// selected control moves it) takes the generic object path and never toggles the tile beneath.
+#[test]
+fn a_control_over_a_slicer_tile_keeps_the_generic_path_on_a_selecting_click() {
+    let (mut h, o) = fixture();
+    let slicer = rect(&h, o.slicer);
+    // A button exactly over the slicer's first value tile: the tile in screen units at the
+    // grid's scale, then the button's anchor in sheet units from the slicer's own.
+    let (z, anchor, n, columns) = {
+        let app = h.state();
+        let d = app.session.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        let sl = sh.slicers.iter().find(|s| s.id == o.slicer.id).unwrap();
+        let geo = Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
+        (geo.z, sl.anchor, gridcraft_engine::cmd::slicer::slicer_items(&d.wb, d.wb.active_sheet(), sl).len(), sl.columns)
+    };
+    let layout = chartview::slicer_layout(slicer, z, n, columns);
+    let tile = layout.tiles[0];
+    let params = json!({
+        "at": anchor.cell.a1(),
+        "dx": anchor.dx + (tile.left() - slicer.left()) / z,
+        "dy": anchor.dy + (tile.top() - slicer.top()) / z,
+        "width": tile.width() / z,
+        "height": tile.height() / z,
+        "text": "Over",
+    });
+    let button = ObjRef::new(ObjKind::Control, id(&h.state_mut().run("insert.button", params).unwrap(), "control"));
+    h.run_steps(2);
+    assert!(rect(&h, button).contains(tile.center()), "the button covers the tile: {:?} vs {tile:?}", rect(&h, button));
+    let filter =
+        |h: &Harness| h.state().session.doc().unwrap().wb.active().unwrap().slicers.iter().find(|s| s.id == o.slicer.id).unwrap().selected.clone();
+    assert_eq!(filter(&h), None);
+    // Cmd+click selects the control without working it, and the tile beneath stays as it was.
+    click_with(&mut h, tile.center(), Modifiers::COMMAND);
+    assert_eq!(h.state().selected_object, Some(button), "the control is selected");
+    assert_eq!(filter(&h), None, "the tile under the control was not toggled");
+    // A click on the selected control is for moving it, not for the tile beneath either.
+    click(&mut h, tile.center());
+    assert_eq!(h.state().selected_object, Some(button));
+    assert_eq!(filter(&h), None, "still no toggle");
+    // The tile itself, clear of the control, still toggles.
+    let free = layout.tiles[1].center();
+    h.state_mut().selected_object = None;
+    click(&mut h, free);
+    assert!(filter(&h).is_some(), "a click on an uncovered tile toggles it");
+}
+
 #[test]
 fn a_click_selects_every_kind_and_slicers_win_over_charts() {
     let (mut h, o) = fixture();
-    for obj in [o.chart, o.image, o.shape, o.text_box, o.slicer] {
+    for obj in [o.chart, o.image, o.shape, o.text_box, o.equation, o.slicer] {
         let p = grab_point(&h, &o, obj);
         click(&mut h, p);
         assert_eq!(h.state().selected_object, Some(obj), "{obj:?}");
@@ -155,7 +218,7 @@ fn a_click_selects_every_kind_and_slicers_win_over_charts() {
 #[test]
 fn every_handle_resizes_only_its_own_edges() {
     let (mut h, o) = fixture();
-    for obj in [o.shape, o.image, o.slicer, o.chart] {
+    for obj in [o.shape, o.image, o.equation, o.slicer, o.chart] {
         let p = grab_point(&h, &o, obj);
         click(&mut h, p);
         for handle in Handle::ALL {
@@ -251,6 +314,7 @@ fn double_clicks_route_by_kind() {
         let sh = h.state().session.doc().unwrap().wb.active().unwrap();
         assert_eq!(open_action(sh, o.text_box), OpenAction::EditText(o.text_box.id));
         assert_eq!(open_action(sh, o.chart), OpenAction::FormatChart(o.chart.id));
+        assert_eq!(open_action(sh, o.equation), OpenAction::EditEquation(o.equation.id));
         for obj in [o.shape, o.image, o.slicer] {
             assert_eq!(open_action(sh, obj), OpenAction::Select, "{obj:?}");
         }
@@ -266,6 +330,12 @@ fn double_clicks_route_by_kind() {
     double_click(&mut h, p);
     assert_eq!(h.state().grid.pane.as_deref(), Some("formatChart"));
     assert_eq!(h.state().selected_object, Some(o.chart));
+
+    let p = grab_point(&h, &o, o.equation);
+    double_click(&mut h, p);
+    assert_eq!(h.state().selected_object, Some(o.equation));
+    assert_eq!(h.state().dialog.as_ref().map(|d| (d.name(), d.title.as_str())), Some(("equation", "Edit Equation")), "equations open the editor");
+    h.state_mut().dialog = None;
 
     for obj in [o.shape, o.image, o.slicer] {
         let p = grab_point(&h, &o, obj);

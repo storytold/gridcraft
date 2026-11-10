@@ -52,7 +52,7 @@ fn workbook() -> Workbook {
         let r = r as u32 + 1;
         data.cells.set(CellRef::new(r, 0), Cell::value(Value::text(*a)));
         data.cells.set(CellRef::new(r, 1), Cell::value(Value::text(*b)));
-        data.cells.set(CellRef::new(r, 2), Cell { value: Value::number(*d), formula: None, style: date_style });
+        data.cells.set(CellRef::new(r, 2), Cell { value: Value::number(*d), formula: None, style: date_style, py: None });
         data.cells.set(CellRef::new(r, 3), Cell::value(Value::number(*u)));
         data.cells.set(CellRef::new(r, 4), Cell::value(Value::number(*s)));
         data.cells.set(CellRef::new(r, 5), Cell::value(Value::text(*ch)));
@@ -762,7 +762,7 @@ fn early_dates_in_caches_count_real_days() {
     // 1900 calendar's 1900-01-01, which it reads as serial 2.
     let mut wb = workbook();
     let date_style = wb.sheet(0).unwrap().cells.get(at("C2")).unwrap().style;
-    wb.sheet_mut(0).unwrap().cells.set(at("C2"), Cell { value: Value::number(1.5), formula: None, style: date_style });
+    wb.sheet_mut(0).unwrap().cells.set(at("C2"), Cell { value: Value::number(1.5), formula: None, style: date_style, py: None });
     let parts = unzip(&write_xlsx(&wb).unwrap());
     let caches: String =
         parts.iter().filter(|(k, _)| k.contains("pivotCacheDefinition")).map(|(_, v)| String::from_utf8_lossy(v).into_owned()).collect();

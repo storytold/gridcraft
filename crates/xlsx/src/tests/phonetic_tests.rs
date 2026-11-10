@@ -33,7 +33,7 @@ fn part(bytes: &[u8], name: &str) -> String {
 }
 
 fn text_cell(sheet: &mut gridcraft_model::Sheet, a: &str, text: &str) {
-    sheet.cells.set(at(a), Cell { value: Value::text(text), formula: None, style: StyleId::DEFAULT });
+    sheet.cells.set(at(a), Cell { value: Value::text(text), formula: None, style: StyleId::DEFAULT, py: None });
 }
 
 #[test]

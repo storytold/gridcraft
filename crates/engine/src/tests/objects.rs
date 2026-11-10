@@ -19,9 +19,9 @@ fn id_of(v: &serde_json::Value, key: &str) -> u32 {
     v[key].as_u64().unwrap() as u32
 }
 
-/// A table with one object of each kind on the first sheet: a chart, a picture, a shape and a
-/// slicer, in `ObjKind::ALL` order.
-fn every_kind(s: &mut Session) -> [ObjRef; 4] {
+/// A table with one object of each kind on the first sheet: a chart, a picture, a shape, a
+/// slicer, an equation and a form control, in `ObjKind::ALL` order.
+fn every_kind(s: &mut Session) -> [ObjRef; 6] {
     s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Qty"], ["East", 3], ["West", 5], ["East", 2], ["North", 8]]})).unwrap();
     s.execute("insert.table", json!({"range": "A1:B5", "name": "Sales"})).unwrap();
     let chart = id_of(&s.execute("insert.chart", json!({"range": "B1:B5", "type": "column", "at": "D2"})).unwrap(), "chart");
@@ -29,7 +29,16 @@ fn every_kind(s: &mut Session) -> [ObjRef; 4] {
     let shape = id_of(&s.execute("insert.shape", json!({"kind": "ellipse", "at": "H18"})).unwrap(), "shape");
     s.execute("selection.set", json!({"cell": "A2"})).unwrap();
     let slicer = id_of(&s.execute("insert.slicer", json!({"column": "Region", "at": "L2"})).unwrap(), "slicer");
-    [ObjRef::new(ObjKind::Chart, chart), ObjRef::new(ObjKind::Image, image), ObjRef::new(ObjKind::Shape, shape), ObjRef::new(ObjKind::Slicer, slicer)]
+    let equation = id_of(&s.execute("insert.equation", json!({"latex": "x^2", "cell": "L18"})).unwrap(), "equation");
+    let control = id_of(&s.execute("insert.slider", json!({"at": "P18", "link": "$B$7"})).unwrap(), "control");
+    [
+        ObjRef::new(ObjKind::Chart, chart),
+        ObjRef::new(ObjKind::Image, image),
+        ObjRef::new(ObjKind::Shape, shape),
+        ObjRef::new(ObjKind::Slicer, slicer),
+        ObjRef::new(ObjKind::Equation, equation),
+        ObjRef::new(ObjKind::Control, control),
+    ]
 }
 
 #[test]
@@ -45,6 +54,9 @@ fn every_kind_is_found_moved_and_deleted_by_kind_and_id() {
         s.execute("object.setAnchorMode", json!({"kind": o.kind.name(), "id": o.id, "mode": "absolute"})).unwrap();
         assert_eq!(sheet(&s, 0).object_anchor(o).unwrap().mode, AnchorMode::Absolute);
     }
+    // An equation is a shape too; a plain shape is not an equation.
+    assert!(sheet(&s, 0).has_object(ObjRef::new(ObjKind::Shape, objs[4].id)));
+    assert!(s.execute("object.delete", json!({"kind": "equation", "id": objs[2].id})).is_err());
     // A kind that does not match the id, an unknown id or kind, and a missing kind are refused.
     assert!(s.execute("object.delete", json!({"kind": "slicer", "id": objs[0].id})).is_err());
     assert!(s.execute("object.delete", json!({"kind": "chart", "id": 9999})).is_err());
@@ -58,9 +70,9 @@ fn every_kind_is_found_moved_and_deleted_by_kind_and_id() {
             assert!(sheet(&s, 0).has_object(*later), "deleting {o:?} leaves {later:?}");
         }
     }
-    // One undo step per delete brings the slicer back.
+    // One undo step per delete brings the control, deleted last, back.
     s.execute("edit.undo", json!({})).unwrap();
-    assert!(sheet(&s, 0).has_object(objs[3]));
+    assert!(sheet(&s, 0).has_object(objs[5]));
 }
 
 #[test]
@@ -74,9 +86,11 @@ fn selection_pane_lists_and_stacks_slicers() {
     for k in ObjKind::ALL {
         assert!(kinds.contains(&k.name()), "{k:?} listed in {kinds:?}");
     }
-    assert_eq!(kinds.last(), Some(&"slicer"), "slicers stack on top");
+    assert_eq!(kinds.last(), Some(&"control"), "form controls stack on top");
+    assert_eq!(kinds.get(kinds.len() - 2), Some(&"slicer"), "slicers stack above charts, pictures and shapes");
     let names: Vec<&str> = items.iter().map(|o| o["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"Region") && names.contains(&"Qty"), "{names:?}");
+    assert!(names.contains(&format!("Slider {}", objs[5].id).as_str()), "{names:?}");
     assert_eq!(sheet(&s, 0).slicers.first().map(|c| c.id), Some(objs[3].id));
     s.execute("arrange.sendBackward", json!({"kind": "slicer", "id": second, "toBack": true})).unwrap();
     assert_eq!(sheet(&s, 0).slicers.first().map(|c| c.id), Some(second));
@@ -112,17 +126,17 @@ fn cell_of(s: &Session, o: ObjRef) -> String {
 fn every_kind_follows_row_and_column_edits_and_sorts() {
     let mut s = s();
     let objs = every_kind(&mut s);
-    // Anchors: chart D2, picture D18, shape H18, slicer L2.
+    // Anchors: chart D2, picture D18, shape H18, slicer L2, equation L18, slider P18.
     s.execute("object.setAnchorMode", json!({"kind": "shape", "id": objs[2].id, "mode": "absolute"})).unwrap();
     let cells = |s: &Session| objs.map(|o| cell_of(s, o));
-    assert_eq!(cells(&s), ["D2", "D18", "H18", "L2"]);
+    assert_eq!(cells(&s), ["D2", "D18", "H18", "L2", "L18", "P18"]);
     s.execute("home.insertRows", json!({"rows": "10:11"})).unwrap();
-    assert_eq!(cells(&s), ["D2", "D20", "H18", "L2"], "rows inserted above move the objects below them; an absolute shape stays");
+    assert_eq!(cells(&s), ["D2", "D20", "H18", "L2", "L20", "P20"], "rows inserted above move the objects below them; an absolute shape stays");
     s.execute("home.insertColumns", json!({"cols": "C:C"})).unwrap();
-    assert_eq!(cells(&s), ["E2", "E20", "H18", "M2"]);
+    assert_eq!(cells(&s), ["E2", "E20", "H18", "M2", "M20", "Q20"]);
     s.execute("home.deleteColumns", json!({"cols": "C:C"})).unwrap();
     s.execute("home.deleteRows", json!({"rows": "10:11"})).unwrap();
-    assert_eq!(cells(&s), ["D2", "D18", "H18", "L2"]);
+    assert_eq!(cells(&s), ["D2", "D18", "H18", "L2", "L18", "P18"]);
     // Sorting moves a picture anchored inside the sorted block with its row.
     s.execute("range.setValues", json!({"range": "T1", "values": [["k"], [3], [1], [2]]})).unwrap();
     let pic = ObjRef::new(ObjKind::Image, super::add_image(&mut s, "T2", AnchorMode::MoveAndSize));
@@ -251,6 +265,7 @@ fn a_copied_sheet_gives_its_objects_fresh_ids() {
             .chain(sh.images.iter().map(|c| c.id))
             .chain(sh.shapes.iter().map(|c| c.id))
             .chain(sh.slicers.iter().map(|c| c.id))
+            .chain(sh.controls.iter().map(|c| c.id))
             .collect()
     };
     let mut ids: Vec<u32> = wb.sheets.iter().flat_map(|sh| ids_of(sh)).collect();
@@ -259,9 +274,11 @@ fn a_copied_sheet_gives_its_objects_fresh_ids() {
     ids.dedup();
     assert_eq!(ids.len(), 2 * objs.len(), "every object id stays unique across the workbook");
     let copy = sheet(&s, 1);
-    for (o, id) in objs.iter().zip(ids_of(copy)) {
-        assert_eq!(copy.object_ref(id).map(|c| c.kind), Some(o.kind));
-    }
+    let mut kinds: Vec<&str> = ids_of(copy).into_iter().filter_map(|id| copy.object_ref(id)).map(|o| o.kind.name()).collect();
+    let mut want: Vec<&str> = objs.iter().map(|o| o.kind.name()).collect();
+    kinds.sort_unstable();
+    want.sort_unstable();
+    assert_eq!(kinds, want, "the copies keep their kinds");
     assert!(s.doc().unwrap().wb.next_object_id() > *ids.last().unwrap_or(&0));
 }
 
@@ -300,6 +317,26 @@ fn object_ids_stay_unique_when_a_file_used_the_largest_id() {
     ids.sort_unstable();
     ids.dedup();
     assert_eq!(ids.len(), 6, "every shape id is distinct across both sheets");
+}
+
+/// A copied sheet's form controls take free ids like its other objects: a file's control can
+/// carry the largest id, and the ids the copy asks for count the controls.
+#[test]
+fn a_copied_sheets_form_controls_take_free_ids_too() {
+    let mut s = s();
+    let slider = id_of(&s.execute("insert.slider", json!({"at": "B2", "link": "$A$1"})).unwrap(), "control");
+    s.execute("insert.button", json!({"at": "B6"})).unwrap();
+    s.execute("insert.shape", json!({"kind": "rectangle", "at": "D2"})).unwrap();
+    // The file's slider carries the largest id (set on the model, as a loaded file would).
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().controls.iter_mut().find(|o| o.id == slider).unwrap().id = u32::MAX;
+    s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let mut ids: Vec<u32> = wb.sheets.iter().flat_map(|sh| sh.controls.iter().map(|o| o.id).chain(sh.shapes.iter().map(|o| o.id))).collect();
+    assert_eq!(ids.len(), 6);
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 6, "every control and shape id is distinct across both sheets: {ids:?}");
+    assert_eq!(ids.iter().filter(|&&i| i == u32::MAX).count(), 1, "only the file's slider keeps the largest id");
 }
 
 /// A file's anchors are not held to the 10,000 points `object.move` gives a new size. A picture
@@ -358,4 +395,107 @@ fn chart_set_keeps_a_chart_size_a_file_made_larger_than_the_limit() {
     assert_eq!(size(&s), (11_990.0, 250.0), "a resize shrinks by what it asks");
     s.execute("chart.set", json!({"chart": chart, "width": 50_000, "height": 50_000})).unwrap();
     assert_eq!(size(&s), (11_990.0, 10_000.0), "hostile sizes are capped at the current width and at 10,000");
+}
+
+#[test]
+fn arrange_and_align_match_a_shape_id_to_its_kind() {
+    // `arrange.*` and `arrange.align` under `kind: "equation"` act on equations only: an
+    // ordinary shape's id given as an equation is refused by `arrange` and left in place by
+    // `align`, as `object.delete` refuses it. An equation is a shape too, so its id works under
+    // `shape`, as for the other object commands; an unknown kind, and an id of no object of the
+    // kind, are refused instead of acting on whatever shape has the id.
+    let mut s = s();
+    let objs = every_kind(&mut s);
+    let (shape, equation) = (objs[2], objs[4]);
+    let order = |s: &Session| -> Vec<u32> { sheet(s, 0).shapes.iter().map(|c| c.id).collect() };
+    assert_eq!(order(&s), vec![shape.id, equation.id]);
+    assert!(s.execute("arrange.bringForward", json!({"kind": "equation", "id": shape.id, "toFront": true})).is_err());
+    assert_eq!(order(&s), vec![shape.id, equation.id], "the shape is not reordered as an equation");
+    s.execute("arrange.sendBackward", json!({"kind": "equation", "id": equation.id, "toBack": true})).unwrap();
+    assert_eq!(order(&s), vec![equation.id, shape.id]);
+    s.execute("arrange.bringForward", json!({"kind": "shape", "id": equation.id, "toFront": true})).unwrap();
+    assert_eq!(order(&s), vec![shape.id, equation.id], "an equation is a shape too");
+    assert!(s.execute("arrange.bringForward", json!({"kind": "widget", "id": shape.id})).is_err());
+    assert!(s.execute("arrange.bringForward", json!({"kind": "chart", "id": 9999})).is_err());
+    assert!(s.execute("arrange.bringForward", json!({"kind": "shape", "id": objs[0].id})).is_err(), "a chart's id is not a shape");
+    // Align: the shape's id given as an equation is refused and nothing moves; the two equations
+    // line up on their own.
+    let second = ObjRef::new(ObjKind::Equation, id_of(&s.execute("insert.equation", json!({"latex": "y", "cell": "B30"})).unwrap(), "equation"));
+    let before = (anchor_of(&s, shape), anchor_of(&s, equation));
+    assert!(s.execute("arrange.align", json!({"kind": "equation", "ids": [shape.id, equation.id, second.id], "align": "left"})).is_err());
+    assert_eq!((anchor_of(&s, shape), anchor_of(&s, equation)), before, "nothing is aligned with a refused id");
+    s.execute("arrange.align", json!({"kind": "equation", "ids": [equation.id, second.id], "align": "left"})).unwrap();
+    let (a, b) = (sheet(&s, 0).object_anchor(equation).unwrap(), sheet(&s, 0).object_anchor(second).unwrap());
+    assert_eq!((a.cell.col, a.dx), (b.cell.col, b.dx), "the equations line up");
+    assert!(s.execute("arrange.align", json!({"kind": "widget", "ids": [shape.id, equation.id], "align": "left"})).is_err());
+}
+
+#[test]
+fn arrange_refuses_a_kind_that_is_present_but_not_a_name() {
+    // `kind` is `shape` only when the parameter is absent: `null`, a number or another non-name
+    // is refused, so a shape's id is not reordered or aligned under it. The `object.*` commands
+    // refuse the same values, their kind being required.
+    let mut s = s();
+    let objs = every_kind(&mut s);
+    let (shape, equation) = (objs[2], objs[4]);
+    let order = |s: &Session| -> Vec<u32> { sheet(s, 0).shapes.iter().map(|c| c.id).collect() };
+    let before = (order(&s), anchor_of(&s, shape));
+    for kind in [json!(null), json!(7), json!(["shape"]), json!({"kind": "shape"}), json!(true)] {
+        assert!(s.execute("arrange.bringForward", json!({"kind": kind, "id": shape.id, "toFront": true})).is_err(), "{kind}");
+        assert!(s.execute("arrange.align", json!({"kind": kind, "ids": [shape.id, equation.id], "align": "left"})).is_err(), "{kind}");
+        assert!(s.execute("object.move", json!({"kind": kind, "id": shape.id, "at": "A1"})).is_err(), "{kind}");
+    }
+    assert_eq!((order(&s), anchor_of(&s, shape)), before, "nothing moved");
+    // Absent, the kind is `shape`, as before.
+    s.execute("arrange.bringForward", json!({"id": shape.id, "toFront": true})).unwrap();
+    assert_eq!(order(&s).last(), Some(&shape.id));
+}
+
+#[test]
+fn align_refuses_an_id_that_is_not_an_object_of_the_kind() {
+    // `arrange.align` and `arrange.group` refuse an id in `ids` that is not an object of the
+    // kind, or not a number, as `arrange` and the `object.*` commands refuse it, instead of
+    // aligning the rest and reporting success; nothing moves. With fewer than two ids they
+    // change nothing and succeed.
+    let mut s = s();
+    let objs = every_kind(&mut s);
+    let (shape, equation) = (objs[2], objs[4]);
+    let second = ObjRef::new(ObjKind::Equation, id_of(&s.execute("insert.equation", json!({"latex": "y", "cell": "B30"})).unwrap(), "equation"));
+    let before = (anchor_of(&s, shape), anchor_of(&s, equation), anchor_of(&s, second));
+    for ids in [
+        json!([shape.id, equation.id, second.id]),
+        json!([equation.id, second.id, 9999]),
+        json!([equation.id, second.id, -1]),
+        json!([equation.id, second.id, "x"]),
+        json!([equation.id, second.id, 1e12]),
+        json!([equation.id, second.id, null]),
+    ] {
+        assert!(s.execute("arrange.align", json!({"kind": "equation", "ids": ids, "align": "left"})).is_err(), "{ids}");
+        assert!(s.execute("arrange.group", json!({"kind": "equation", "ids": ids})).is_err(), "{ids}");
+    }
+    assert_eq!((anchor_of(&s, shape), anchor_of(&s, equation), anchor_of(&s, second)), before, "nothing moved");
+    s.execute("arrange.align", json!({"kind": "equation", "ids": [equation.id], "align": "left"})).unwrap();
+    s.execute("arrange.align", json!({"kind": "equation", "align": "left"})).unwrap();
+    assert_eq!(anchor_of(&s, equation), before.1, "fewer than two ids change nothing");
+    s.execute("arrange.align", json!({"kind": "equation", "ids": [equation.id, second.id], "align": "left"})).unwrap();
+    let (a, b) = (sheet(&s, 0).object_anchor(equation).unwrap(), sheet(&s, 0).object_anchor(second).unwrap());
+    assert_eq!((a.cell.col, a.dx), (b.cell.col, b.dx), "the equations line up");
+}
+
+#[test]
+fn align_refuses_ids_that_are_not_an_array() {
+    // `ids` may be absent (nothing to align) but, present, must be an array of object ids: `null`,
+    // a number, a string or an object is refused by `arrange.align` and `arrange.group`, and
+    // nothing moves.
+    let mut s = s();
+    let objs = every_kind(&mut s);
+    let (shape, equation) = (objs[2], objs[4]);
+    let before = (anchor_of(&s, shape), anchor_of(&s, equation));
+    for ids in [json!(null), json!(7), json!("x"), json!({"ids": [1]})] {
+        assert!(s.execute("arrange.align", json!({"kind": "shape", "ids": ids, "align": "left"})).is_err(), "{ids}");
+        assert!(s.execute("arrange.group", json!({"kind": "shape", "ids": ids})).is_err(), "{ids}");
+    }
+    s.execute("arrange.align", json!({"kind": "shape", "align": "left"})).unwrap();
+    s.execute("arrange.group", json!({"kind": "shape"})).unwrap();
+    assert_eq!((anchor_of(&s, shape), anchor_of(&s, equation)), before, "nothing moved");
 }
