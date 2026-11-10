@@ -430,46 +430,70 @@ pub fn canonical_code(code: &str, region: &Region) -> String {
     remap_separators(code, region.decimal, '.', region.group, ',')
 }
 
-/// `code` with `from_decimal`/`from_group` written as `to_decimal`/`to_group`. The two source
-/// characters are distinct in every region, and quoted text, `[...]` tags and `\` escapes are
-/// copied untouched because their separators belong to the text, not to the format.
+/// `code` with `from_decimal`/`from_group` written as `to_decimal`/`to_group`. A separator counts
+/// only between two digit placeholders (`0`, `#`, `?`), which is where a number format uses one,
+/// so the `.` of `dd.mm.yyyy` and of `hh:mm:ss.000` stays a date separator. Quoted text, `[...]`
+/// tags and `\` escapes are copied untouched because theirs belong to the text, not to the format.
 fn remap_separators(code: &str, from_decimal: char, to_decimal: char, from_group: char, to_group: char) -> String {
     if from_decimal == to_decimal && from_group == to_group {
         return code.to_string();
     }
+    let chars: Vec<char> = code.chars().collect();
     let mut out = String::with_capacity(code.len());
     let mut quoted = false;
     let mut bracketed = false;
     let mut escaped = false;
-    for c in code.chars() {
+    // The last character copied outside quoted text, a `[...]` tag or an escape.
+    let mut prev: Option<char> = None;
+    for (i, &c) in chars.iter().enumerate() {
+        let next = chars.get(i + 1).copied();
         match c {
             _ if escaped => {
                 escaped = false;
                 out.push(c);
+                prev = None;
             }
             '\\' if !quoted && !bracketed => {
                 escaped = true;
                 out.push(c);
+                prev = None;
             }
             '"' if !bracketed => {
                 quoted = !quoted;
                 out.push(c);
+                prev = None;
             }
             '[' if !quoted => {
                 bracketed = true;
                 out.push(c);
+                prev = None;
             }
             ']' if !quoted => {
                 bracketed = false;
                 out.push(c);
+                prev = None;
             }
-            _ if quoted || bracketed => out.push(c),
-            _ if c == from_decimal => out.push(to_decimal),
-            _ if c == from_group => out.push(to_group),
-            _ => out.push(c),
+            _ if quoted || bracketed => {
+                out.push(c);
+                prev = None;
+            }
+            _ if (c == from_decimal || c == from_group) && prev.is_some_and(is_digit_placeholder) && next.is_some_and(is_digit_placeholder) => {
+                out.push(if c == from_decimal { to_decimal } else { to_group });
+                prev = Some(c);
+            }
+            _ => {
+                out.push(c);
+                prev = Some(c);
+            }
         }
     }
     out
+}
+
+/// A digit placeholder in a format code: the characters a decimal or thousands separator sits
+/// between in a number, and the ones a date or time code never has around its own `.`.
+fn is_digit_placeholder(c: char) -> bool {
+    matches!(c, '0' | '#' | '?')
 }
 
 /// Formats a cell value for display in `region`.
