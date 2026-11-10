@@ -81,6 +81,16 @@ pub use services::{Chrome, Inbox, Services};
 pub use state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
 pub mod desktop_theme;
 
+/// The decimal separator used in formula entry and display. This is a UI preference
+/// (File ▸ Options ▸ Advanced) that can differ from the system locale.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DecimalSeparator {
+    #[default]
+    Dot,
+    Comma,
+}
+
 /// Persisted UI preferences.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -106,6 +116,9 @@ pub struct UiState {
     /// AutoSave (the title-bar switch): save saved-to-file .xlsx workbooks shortly after every
     /// change. A preference like the rest of this struct — it stays on across restarts (#1901).
     pub autosave: bool,
+    /// Decimal separator for formula entry and display (File ▸ Options ▸ Advanced). Dot is the
+    /// default; Comma forces the Spanish formula locale (function names, list separator).
+    pub decimal_separator: DecimalSeparator,
     pub recent: Vec<String>,
     /// One-shot keytip request for a ribbon control: set when a keytip action resolves to
     /// [`keytips::Action::Control`], consumed (and cleared) by the control's render site.
@@ -156,6 +169,7 @@ impl Default for UiState {
             autocomplete: true,
             highlight_active_row: false,
             autosave: false,
+            decimal_separator: DecimalSeparator::default(),
             recent: vec![],
             keytip_invoke: None,
             keytip_invoke_next: None,
