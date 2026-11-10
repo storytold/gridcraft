@@ -303,10 +303,15 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
             return true;
         }
     }
-    // A pen/actionPen drag released outside the cells never re-enters the block above, so its
+    // A pen/actionPen stroke released outside the cells never re-enters the block above, so its
     // `drag_stopped` would leave stale stroke points for the next stroke to append to (and a
-    // stale start time and cell). Drop the pending stroke instead of committing it.
-    if resp.drag_stopped() && matches!(app.session.draw_tool.as_str(), "pen" | "actionPen") {
+    // stale start time and cell). Drop the pending stroke instead of committing it. Only a
+    // pending stroke is consumed: a freeze-handle or header drag has no ink, and its release must
+    // reach `handle_release` so the drag (and a pending freeze change) finishes on this frame.
+    if resp.drag_stopped()
+        && !app.grid.ink.is_empty()
+        && matches!(app.session.draw_tool.as_str(), "pen" | "actionPen")
+    {
         app.grid.ink.clear();
         app.grid.ink_started = None;
         app.grid.ink_cell = None;
