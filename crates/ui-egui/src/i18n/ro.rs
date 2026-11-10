@@ -8,6 +8,8 @@
 /// Returns the Romanian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Schemă",
+        "Decorative Text" => "Text decorativ",
         "Paste" => "Lipire",
         "Paste Values" => "Lipire valori",
         "Paste Formulas" => "Lipire formule",
@@ -1066,6 +1068,33 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Afișare",
         "Collapse dialog" => "Restrângere casetă de dialog",
         "Expand dialog" => "Extindere casetă de dialog",
+        "Options|Data" => "Date",
+        "Automatic data conversion" => "Conversie automată a datelor",
+        "Enable all default data conversions below when entering, pasting, or opening text files" => {
+            "Activarea tuturor conversiilor de date implicite de mai jos la introducerea, lipirea sau deschiderea fișierelor text"
+        }
+        "Remove leading zeros and convert to a number" => "Eliminarea zerourilor inițiale și conversia în număr",
+        "Off: 0123 stays text, leading zeros included." => "Dezactivat: 0123 rămâne text, cu tot cu zerourile inițiale.",
+        "Keep first 15 digits of long numbers and display in scientific notation" => {
+            "Păstrarea primelor 15 cifre ale numerelor lungi și afișarea în notație științifică"
+        }
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text." => {
+            "Dezactivat: niciun număr nu este trunchiat sau transformat în notație științifică. Ce nu poate afișa formatul General așa cum a fost scris rămâne text."
+        }
+        "Keep numbers with more than" => "Păstrarea numerelor cu mai mult de",
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost." => {
+            "11 (implicit): se convertesc doar numerele pe care formatul General le afișează exact așa cum au fost scrise, deci codurile și codurile de bare de 12 cifre rămân text. Valorile de la 12 la 15 permit afișarea științifică, de exemplu 1.24412E+11, pentru numere cu cel mult atâtea cifre; nicio cifră nu se pierde."
+        }
+        "digits as text" => "cifre ca text",
+        "Convert digits surrounding the letter \"E\" to a number in scientific notation" => {
+            "Conversia cifrelor din jurul literei „E” într-un număr în notație științifică"
+        }
+        "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Dezactivat: 1244121406E6 rămâne text în loc să devină 1.24412E+15.",
+        "Convert continuous letters and numbers to a date" => "Conversia literelor și cifrelor continue într-o dată",
+        "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft nu face niciodată această conversie: 12JAN2026 rămâne text.",
+        "Data conversion settings apply to every workbook; they are not saved in the file." => {
+            "Setările de conversie a datelor se aplică tuturor registrelor de lucru; nu sunt salvate în fișier."
+        }
         _ => return None,
     })
 }

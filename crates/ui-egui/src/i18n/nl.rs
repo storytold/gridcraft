@@ -3,6 +3,8 @@
 /// Returns the Dutch translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Diagram",
+        "Decorative Text" => "Decoratieve tekst",
         "Paste" => "Plakken",
         "Paste Values" => "Waarden plakken",
         "Paste Formulas" => "Formules plakken",
@@ -556,6 +558,33 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Weergeven",
         "Collapse dialog" => "Dialoogvenster samenvouwen",
         "Expand dialog" => "Dialoogvenster uitvouwen",
+        "Options|Data" => "Gegevens",
+        "Automatic data conversion" => "Automatische gegevensconversie",
+        "Enable all default data conversions below when entering, pasting, or opening text files" => {
+            "Alle onderstaande standaardgegevensconversies inschakelen bij het invoeren, plakken of openen van tekstbestanden"
+        }
+        "Remove leading zeros and convert to a number" => "Voorloopnullen verwijderen en naar een getal converteren",
+        "Off: 0123 stays text, leading zeros included." => "Uit: 0123 blijft tekst, inclusief voorloopnullen.",
+        "Keep first 15 digits of long numbers and display in scientific notation" => {
+            "Eerste 15 cijfers van lange getallen behouden en in wetenschappelijke notatie weergeven"
+        }
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text." => {
+            "Uit: geen enkel getal wordt ingekort of omgezet in wetenschappelijke notatie. Wat de opmaak Algemeen niet kan weergeven zoals het is geschreven, blijft tekst."
+        }
+        "Keep numbers with more than" => "Getallen met meer dan",
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost." => {
+            "11 (standaard): alleen getallen die de opmaak Algemeen precies weergeeft zoals ze zijn geschreven, worden geconverteerd, zodat codes en barcodes van 12 cijfers tekst blijven. 12 tot 15 staat wetenschappelijke weergave toe, zoals 1.24412E+11, voor getallen met maximaal zoveel cijfers; er gaat nooit een cijfer verloren."
+        }
+        "digits as text" => "cijfers als tekst behouden",
+        "Convert digits surrounding the letter \"E\" to a number in scientific notation" => {
+            "Cijfers rond de letter ‘E’ converteren naar een getal in wetenschappelijke notatie"
+        }
+        "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Uit: 1244121406E6 blijft tekst in plaats van 1.24412E+15 te worden.",
+        "Convert continuous letters and numbers to a date" => "Doorlopende letters en cijfers naar een datum converteren",
+        "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft voert deze conversie nooit uit: 12JAN2026 blijft tekst.",
+        "Data conversion settings apply to every workbook; they are not saved in the file." => {
+            "Instellingen voor gegevensconversie gelden voor elke werkmap; ze worden niet in het bestand opgeslagen."
+        }
         _ => return None,
     })
 }
