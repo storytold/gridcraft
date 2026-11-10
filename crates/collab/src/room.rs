@@ -658,13 +658,7 @@ fn sheet_map(wb: &Workbook, keys: &SheetKeys) -> Vec<SheetName> {
 /// `after`. Sheets are matched by session key, so a structural move cannot confuse the pair.
 /// Only the cells the command itself `written` are snapshotted: the delta also carries the
 /// formulas the recalculation evaluated, whose content the command did not change.
-fn snapshots(
-    before: &Workbook,
-    after: &Workbook,
-    keys: &SheetKeys,
-    delta: &[SheetDelta],
-    written: &[gridcraft_calc::Key],
-) -> Vec<CellSnap> {
+fn snapshots(before: &Workbook, after: &Workbook, keys: &SheetKeys, delta: &[SheetDelta], written: &[gridcraft_calc::Key]) -> Vec<CellSnap> {
     let mut out = Vec::new();
     for sheet in delta {
         let Ok(key) = sheet.sheet.parse::<u64>() else { continue };

@@ -10,9 +10,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use gridcraft_collab::{
-    Applied, CellChange, ClientMessage, ClientOp, CommandEcho, Outcome, Presence, Role, SheetDelta, SheetName,
-};
+use gridcraft_collab::{Applied, CellChange, ClientMessage, ClientOp, CommandEcho, Outcome, Presence, Role, SheetDelta, SheetName};
 use gridcraft_collab_client::{Event, Link, State, Synced, Welcome};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
@@ -110,10 +108,7 @@ fn an_edit_in_another_workbook_stays_local() {
     synced.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": 1 })).expect("the shared workbook is bound");
     session.new_workbook();
     assert!(!synced.shares_active_document(&session), "the window in front is not the session's workbook");
-    assert_eq!(
-        synced.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": 2 })),
-        Err(gridcraft_collab_client::EditError::OtherDocument)
-    );
+    assert_eq!(synced.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": 2 })), Err(gridcraft_collab_client::EditError::OtherDocument));
     assert_eq!(value(&session, 1, "A1"), Value::Empty, "the other workbook is not written through the session");
 }
 
@@ -135,7 +130,7 @@ fn a_remote_operation_lands_in_the_shared_workbook() {
                 sheet: "0".into(),
                 cells: vec![CellChange {
                     a1: "A1".into(),
-                    value: json!(42),
+                    value: serde_json::to_value(Value::Number(42.0)).expect("a cell value"),
                     formula: None,
                     style: Some(0),
                     py: None,
@@ -177,7 +172,7 @@ fn a_command_less_undo_restores_the_formula_on_a_peer() {
                 sheet: "0".into(),
                 cells: vec![CellChange {
                     a1: "A1".into(),
-                    value: json!(3),
+                    value: serde_json::to_value(Value::Number(3.0)).expect("a cell value"),
                     formula: Some("=1+2".into()),
                     style: Some(0),
                     py: None,
@@ -199,7 +194,8 @@ fn a_command_less_undo_restores_the_formula_on_a_peer() {
 
     let at = CellRef::parse("A1").expect("a valid address");
     let cell = session.documents()[0].wb.active().and_then(|sheet| sheet.cell(at)).cloned().expect("the cell");
-    assert_eq!(cell.formula.as_ref().map(|formula| formula.text.clone()), Some("=1+2".into()), "the formula comes back, not only the value");
+    assert_eq!(cell.value, Value::Number(3.0), "the restored value landed");
+    assert_eq!(cell.formula.as_ref().map(|formula| formula.text.clone()), Some("1+2".into()), "the formula comes back, not only the value");
 }
 
 #[test]

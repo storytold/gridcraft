@@ -21,8 +21,8 @@ use gridcraft_collab::{
     Applied, ClientMessage, ClientOp, IMAGE_LIMIT, IMAGE_PART, ImageBundle, Kind, Payload, Presence, RejectCode, Role, SheetDelta, SheetImage,
     SheetName, Target, classify,
 };
-use gridcraft_engine::{CellState, Session};
 use gridcraft_engine::core::{CellRef, Value};
+use gridcraft_engine::{CellState, Session};
 use serde_json::{Value as Json, json};
 
 use crate::link::{Event, Link, State, Welcome};
@@ -396,12 +396,8 @@ impl Synced {
                         if let Some(uid) = self.doc_uid {
                             // Only the shared document is replaced: the other open workbooks,
                             // their unsaved edits and the session's preferences stay.
-                            let next = gridcraft_engine::DocState::from_saved(
-                                workbook,
-                                None,
-                                "session.xlsx".into(),
-                                gridcraft_engine::Trust::FromFile,
-                            );
+                            let next =
+                                gridcraft_engine::DocState::from_saved(workbook, None, "session.xlsx".into(), gridcraft_engine::Trust::FromFile);
                             if session.swap_document(uid, next).is_err() {
                                 self.notice = Some("the document of this session is gone; reconnecting".into());
                                 self.link.send_message(ClientMessage::Resync { from: self.link.state().version });

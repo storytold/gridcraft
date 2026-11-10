@@ -546,14 +546,7 @@ fn a_cell_state_puts_python_code_and_an_array_formula_back() {
     let py = CellState { value: Value::Number(3.0), formula: None, style: 0, py: Some("1 + 2".into()), array: None, dynamic: false };
     s.restore_cells(0, &[(at, py)]).expect("a Python cell is restored");
     let area = RangeRef::new(at, CellRef::new(0, 1));
-    let array = CellState {
-        value: Value::Number(0.0),
-        formula: Some("=SUM(B1:C1)".into()),
-        style: 0,
-        py: None,
-        array: Some(area),
-        dynamic: true,
-    };
+    let array = CellState { value: Value::Number(0.0), formula: Some("=SUM(B1:C1)".into()), style: 0, py: None, array: Some(area), dynamic: true };
     s.restore_cells(0, &[(CellRef::new(1, 0), array)]).expect("an array formula is restored");
     let doc = s.doc().unwrap().wb.clone();
     assert_eq!(doc.sheet(0).and_then(|sh| sh.cell(at)).and_then(|c| c.py.as_ref()).map(|p| p.code.clone()), Some("1 + 2".into()));

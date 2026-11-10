@@ -1234,10 +1234,7 @@ impl Session {
                     Arc::new(formula)
                 });
                 let py = state.py.as_deref().map(|code| Arc::new(gridcraft_model::PyCode::new(code)));
-                sh.set_cell(
-                    *at,
-                    gridcraft_model::Cell { value: state.value.clone(), formula, style: gridcraft_model::StyleId(state.style), py },
-                );
+                sh.set_cell(*at, gridcraft_model::Cell { value: state.value.clone(), formula, style: gridcraft_model::StyleId(state.style), py });
             }
             d.calc.rebuild(model);
             d.calc.recalc_all(model);
