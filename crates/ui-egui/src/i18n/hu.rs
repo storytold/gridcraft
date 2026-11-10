@@ -9,6 +9,8 @@
 /// Returns the Hungarian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Séma",
+        "Decorative Text" => "Díszítő szöveg",
         "Paste" => "Beillesztés",
         "Paste Values" => "Értékek beillesztése",
         "Paste Formulas" => "Képletek beillesztése",
