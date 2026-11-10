@@ -1,6 +1,6 @@
 # Roadmap detail
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (test command) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-26 · **Change:** minor (`cargo xtask bench`: measured recalc baselines) · **Target:** Microsoft Excel (Microsoft 365)
 
 Forward-looking plan. The one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work
 list is [`gaps.md`](gaps.md); numbers and method are in
@@ -107,12 +107,14 @@ to check our files, and Windows machines with the reported GPU drivers.
 - Function coverage: the script method in [function-parity.md](function-parity.md). A
   `cargo xtask functions` that diffs the registry against a checked-in Excel name list would make
   it a CI number (1–2 h).
-- No `cargo xtask scorecard` or `bench` yet.
+- `cargo xtask bench`: recalc, entry, sort and XLSX timings on fixed in-code workbooks, compared
+  with a local baseline (`--save`). No `cargo xtask scorecard` yet.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Measuring: `cargo xtask bench` |
 | 2026-10-23 | minor | Measuring: tests run through `cargo xtask test` |
 | 2026-10-11 | minor | PivotTable calculated fields landed |
 | 2026-10-10 | minor | Current focus and M15 updated for the 10-10 merges |
