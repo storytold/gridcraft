@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-09 · **Change:** minor (Arabic bidi display, editing, reading direction, font fallback, AutoFit and sorting; B1/B2 calendar formats; PDF headers and footers retain font/style runs; Greek and Cyrillic retain independent fallbacks; PDF Unicode aliases retain their text; multiple named PDF font families; per-export TrueType fonts through CLI/MCP; missing translations are reported without failing checks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (shared CJK/Latin fallback baselines; Arabic bidi display, editing, reading direction, font fallback, AutoFit and sorting; B1/B2 calendar formats; PDF headers and footers retain font/style runs; Greek and Cyrillic retain independent fallbacks; PDF Unicode aliases retain their text; multiple named PDF font families; per-export TrueType fonts through CLI/MCP; missing translations are reported without failing checks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -61,7 +61,10 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
   #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
   `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed
   Noto CJK and WenQuanYi faces can render Chinese without a broad filesystem grant. This does
-  not change the installed-font catalogue or add bundled fonts. Lao falls back to Lao Sangam MN / Lao MN (macOS),
+  not change the installed-font catalogue or add bundled fonts. System CJK fallback faces and
+  embedded faces tagged with CJK scripts share the Latin baseline in cells, editors and titles
+  (#1265, #2621); other script, emoji and symbol fallbacks retain their alignment.
+  Lao falls back to Lao Sangam MN / Lao MN (macOS),
   Leelawadee UI / DokChampa (Windows) or Noto Sans Lao / Phetsarath OT (Linux). Arabic falls back to a system Arabic face, fontconfig's
   Arabic choice or craft-fonts' Noto Sans Arabic; fontconfig's choice leads these fallbacks, but a UI font with Arabic of its
   own (DejaVu Sans in the Flatpak) still draws interface Arabic (#229). egui uses harfrust shaping and Unicode bidi layout;
@@ -129,7 +132,9 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | trivial | Reconcile upstream CJK baseline and legacy-formula changes with per-export PDF fonts; retain both feature histories |
 | 2026-11-09 | trivial | Reconcile upstream Arabic text layout, fallback and calendar progress with TrueType PDF export capabilities and limits |
+| 2026-10-31 | minor | System and embedded CJK text fallbacks share the Latin baseline in cells, editors and window titles; other scripts, symbols and emoji keep their alignment |
 | 2026-10-26 | minor | Shared bidi layout supports Arabic clusters, marks, visual cursor navigation and directional accessibility; cell Context/LTR/RTL is stored separately from sheet RTL and round-trips through XLSX |
 | 2026-10-26 | minor | Arabic text renders in cells and the interface: a system Arabic face (Tahoma, Arial or Segoe UI on Windows, Geeza Pro on macOS, Noto Sans or Naskh Arabic on Linux) joins the script fallbacks, fontconfig's Arabic choice, when it has Arabic letters, leads the Arabic fallbacks and draws Arabic wherever the UI or cell font has none, such as the default cell fonts (part of #229; a UI font with Arabic of its own, such as DejaVu Sans in the Flatpak, still draws interface Arabic, left for a follow-up), and craft-fonts' Noto Sans Arabic is a required face allowed on the web. Workbook fonts without Arabic keep every script fallback. Shaping and bidirectional layout remain separate work |
 | 2026-10-27 | minor | Number formats honour the `B1`/`B2` calendar prefixes: never shown; `B2` renders year, month, day and Arabic month and weekday names in the tabular Hijri calendar (1 Jan 2001 = 6 Shawwal 1421; leap years 2, 5, 7, 10, 13, 15, 18, 21, 24, 26 and 29 of the 30-year cycle, which is what Excel shows). Checked against Excel 16.0 (build 20527, en-US) on every serial and about 1,700 format/value pairs: a locale or currency tag before `B2` keeps the date Gregorian, a misplaced `B` and digit or a prefix before a number format is rejected, serial 60 has no Hijri date, serial 0 shows as serial 1, two-word month names use a no-break space. Not matched: Excel's weekday/month-name mix-ups in one `B2` section and its weekday-only quirks |

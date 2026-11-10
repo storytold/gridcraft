@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (expanded PDF header/footer text and font runs share a 64 KiB section cap; linear PDF wrapping retains explicit and whole-line fallback font metrics; Python mode in the shared editor and Python cells as data; equations: the math crate, layout cache and Symbol PDF encoding; custom fonts measure large equation glyphs and placeholders; recently used functions in preferences; Function Library module and accent icons; toolkit-independent PDF fallback loading shared by desktop and CLI; macro PDF font reads require explicit permission and approval disclosure; macro engine and hidden macro storage; PDF font exports use the current Point/Rect geometry API and explicit imports; PDF headers and footers retain font/style runs; Greek and Cyrillic retain independent fallbacks; PDF font selection follows the split print and theme modules; PDF font sets remain fixed after the first page and fallback loading supports late registration; PDF Unicode aliases retain their text; multiple named PDF font families; per-document PDF text faces and measurement; engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (shared CJK/Latin fallback baselines; expanded PDF header/footer text and font runs share a 64 KiB section cap; linear PDF wrapping retains explicit and whole-line fallback font metrics; Python mode in the shared editor and Python cells as data; equations: the math crate, layout cache and Symbol PDF encoding; custom fonts measure large equation glyphs and placeholders; recently used functions in preferences; Function Library module and accent icons; toolkit-independent PDF fallback loading shared by desktop and CLI; macro PDF font reads require explicit permission and approval disclosure; macro engine and hidden macro storage; PDF font exports use the current Point/Rect geometry API and explicit imports; PDF headers and footers retain font/style runs; Greek and Cyrillic retain independent fallbacks; PDF font selection follows the split print and theme modules; PDF font sets remain fixed after the first page and fallback loading supports late registration; PDF Unicode aliases retain their text; multiple named PDF font families; per-document PDF text faces and measurement; engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -97,6 +97,12 @@ drawing its own:
   ahead of its input, so the field never gets a Tab or an Enter of a focused editor; and it
   scrolls past `max_lines` with the caret in view. The tokenizer and the key edits are pure functions with tests, including
   hostile input.
+- **CJK text baselines**: system CJK fallback faces and permitted embedded faces tagged with
+  CJK scripts use epaint's baseline fallback alignment in cells, editors and window titles.
+  Other scripts, symbols and emoji keep their existing alignment. Baseline alignment can
+  increase line height; manual row heights and clipping remain unchanged. Reports:
+  [#1265](https://github.com/storytold/gridcraft/issues/1265) and
+  [#2621](https://github.com/storytold/gridcraft/issues/2621).
 - **Code editor marks**: `code_editor_marked` underlines a byte range in the error colour (the
   equation editor marks the position of a LaTeX error with it).
 - **Formula bar**: grows with its content from one line to `formula_bar::MAX_LINES` (five), then
@@ -249,6 +255,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | trivial | Reconcile upstream CJK baseline and legacy-formula changes with per-export PDF fonts; retain both feature histories |
 | 2026-11-05 | trivial | Reconcile form controls with PDF font capabilities and move misplaced PDF progress entries into the revision history |
 | 2026-11-04 | minor | Header/footer sections cap expanded fields and literal text at 64 KiB before copying into plain text and styled runs; oversized fields are omitted whole and later content may still fit |
 | 2026-11-03 | minor | PDF wrapping composes font measurements instead of remeasuring growing lines; explicit faces and whole-line Unicode fallback selection retain matching widths, and long words stop at the line limit |
@@ -270,6 +277,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | 2026-10-25 | minor | Embedded PDF fonts keep distinct Unicode characters searchable/copyable when they share a glyph; supplementary characters use UTF-16 extraction mappings, per-face Unicode maps are bounded across pages, and automatic fallback reads reject oversized/non-regular files before parsing |
 | 2026-10-25 | minor | PDF exports preserve multiple workbook font families through named CLI/MCP mappings, with independent styles/resources and widths; up to 32 mappings and 256 MiB of font faces per export |
 | 2026-10-25 | minor | Per-document PDF text faces with matching layout metrics; engine validates and reads export font paths within the file sandbox and a 64 MiB cap |
+| 2026-10-31 | minor | System and embedded CJK fallback faces share the Latin baseline without changing other script, symbol or emoji alignment |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
 | 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
