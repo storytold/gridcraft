@@ -7,6 +7,7 @@ use super::{Dialog, Json, SheetApp, json, vec2};
 pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     use crate::function_library::{self as lib, ALL, MOST_RECENTLY_USED};
     let language = app.ui.language;
+    let decimal_separator = app.ui.decimal_separator;
     ui.horizontal(|ui| {
         ui.label(language.tr("Search:"));
         let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text(language.tr("e.g. lookup, average, date")));
@@ -55,7 +56,7 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
         d.list_index = 0;
     }
     d.values.insert("category".into(), json!(category));
-    let locale = language.formula_locale();
+    let locale = language.formula_locale(decimal_separator);
     // The names and descriptions searched are the ones shown, so in the interface language.
     let q = d.search.trim().to_lowercase();
     let matches = |f: &lib::FnEntry| {
