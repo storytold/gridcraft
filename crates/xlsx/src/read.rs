@@ -216,6 +216,7 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
     }
     wb.date_system = cx.date_system;
     if let Some(c) = xml.child("calcPr") {
+        wb.calc.full_calc_on_load = c.flag("fullCalcOnLoad", false);
         wb.calc.mode = match c.attr("calcMode") {
             Some("manual") => CalcMode::Manual,
             Some("autoNoTable") => CalcMode::AutomaticExceptTables,

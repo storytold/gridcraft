@@ -22,8 +22,27 @@ fn fixture() -> Json {
         cell.value = value;
         sheet.set_cell(CellRef::parse(at).unwrap(), cell);
     }
-    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let bytes = full_calc_on_load(gridcraft_xlsx::write_xlsx(&wb).unwrap(), false);
     json!({"name": "synthetic-caches.xlsx", "base64": gridcraft_engine::io::base64_encode(&bytes)})
+}
+
+/// These fixtures deliberately model files that do not request full recalculation. The
+/// production writer still truthfully requests it when a formula has no saved result.
+fn full_calc_on_load(bytes: Vec<u8>, enabled: bool) -> Vec<u8> {
+    let mut source = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for index in 0..source.len() {
+        let mut part = source.by_index(index).unwrap();
+        let mut data = Vec::new();
+        part.read_to_end(&mut data).unwrap();
+        if part.name() == "xl/workbook.xml" {
+            let xml = String::from_utf8(data).unwrap().replace(" fullCalcOnLoad=\"1\"", "");
+            data = if enabled { xml.replace("<calcPr ", "<calcPr fullCalcOnLoad=\"1\" ") } else { xml }.into_bytes();
+        }
+        output.start_file(part.name(), zip::write::SimpleFileOptions::default()).unwrap();
+        output.write_all(&data).unwrap();
+    }
+    output.finish().unwrap().into_inner()
 }
 
 /// Read a result through the public workbook model.
@@ -84,7 +103,7 @@ fn cached_open_can_explicitly_recalculate_all_on_open() {
 fn cached_open_without_saved_formula_results_has_no_cache_warning() {
     let mut s = Session::new();
     let wb = Workbook::new();
-    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let bytes = full_calc_on_load(gridcraft_xlsx::write_xlsx(&wb).unwrap(), false);
     let opened = s.execute("file.open", json!({"name": "empty.xlsx", "base64": gridcraft_engine::io::base64_encode(&bytes)})).unwrap();
     assert!(opened["warnings"].as_array().unwrap().is_empty());
 }
@@ -129,7 +148,7 @@ fn cached_open_preserves_stub_results_through_unrelated_edits() {
         cell.value = value;
         wb.sheet_mut(0).unwrap().set_cell(CellRef::parse(at).unwrap(), cell);
     }
-    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let bytes = full_calc_on_load(gridcraft_xlsx::write_xlsx(&wb).unwrap(), false);
     let mut s = Session::new();
     s.execute("file.open", json!({"name": "synthetic-stubs.xlsx", "base64": gridcraft_engine::io::base64_encode(&bytes)})).unwrap();
     s.execute("cell.set", json!({"cell": "Z20", "input": "1"})).unwrap();
@@ -147,7 +166,7 @@ fn cached_open_respects_manual_calculation_after_open() {
     let bytes = gridcraft_engine::io::base64_decode(params["base64"].as_str().unwrap()).unwrap();
     let (mut wb, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
     wb.calc.mode = CalcMode::Manual;
-    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let bytes = full_calc_on_load(gridcraft_xlsx::write_xlsx(&wb).unwrap(), false);
     let mut s = Session::new();
     s.execute("file.open", json!({"name": "manual.xlsx", "base64": gridcraft_engine::io::base64_encode(&bytes)})).unwrap();
     s.execute("cell.set", json!({"cell": "A1", "input": "20"})).unwrap();
@@ -213,7 +232,7 @@ fn cached_open_filename_results_follow_explicit_recalculation_policy() {
         cell.value = cached;
         wb.sheet_mut(0).unwrap().set_cell(CellRef::parse(at).unwrap(), cell);
     }
-    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let bytes = full_calc_on_load(gridcraft_xlsx::write_xlsx(&wb).unwrap(), false);
     let params = json!({"name": "opened-synthetic.xlsx", "base64": gridcraft_engine::io::base64_encode(&bytes)});
     let mut cached = Session::new();
     let opened = cached.execute("file.open", params.clone()).unwrap();
@@ -252,7 +271,7 @@ fn cached_open_retains_array_followers_without_recalculating_the_anchor() {
             sheet.spill.insert(CellRef::parse(at).unwrap(), value.clone());
         }
         sheet.set_cell(CellRef::parse("B1").unwrap(), Cell::formula(Formula::new("A2+1")));
-        let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+        let bytes = full_calc_on_load(gridcraft_xlsx::write_xlsx(&wb).unwrap(), false);
         let mut opened = Session::new();
         opened.execute("file.open", json!({"name": "synthetic-array.xlsx", "base64": gridcraft_engine::io::base64_encode(&bytes)})).unwrap();
         for round in 0..2 {
@@ -293,7 +312,7 @@ fn cached_open_protects_legacy_array_followers_without_stored_values() {
         if cached_tail {
             sh.spill.insert(CellRef::parse("A3").unwrap(), Value::Number(31.0));
         }
-        let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+        let bytes = full_calc_on_load(gridcraft_xlsx::write_xlsx(&wb).unwrap(), false);
         let mut s = Session::new();
         s.execute("file.open", json!({"name": "synthetic-sparse-legacy.xlsx", "base64": gridcraft_engine::io::base64_encode(&bytes)})).unwrap();
         assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().spill.is_empty(), !cached_tail);
@@ -336,7 +355,7 @@ fn legacy_array_clear_fixture(cached: bool, filtered: bool) -> Json {
         });
         sh.rows.entry(2).or_default().hidden = true;
     }
-    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let bytes = full_calc_on_load(gridcraft_xlsx::write_xlsx(&wb).unwrap(), false);
     json!({"name": "synthetic-array-clear.xlsx", "base64": gridcraft_engine::io::base64_encode(&bytes)})
 }
 
@@ -413,7 +432,7 @@ fn cached_open_keeps_followers_of_missing_failed_array_anchors() {
             sh.spill.insert(CellRef::parse("A2").unwrap(), Value::Number(31.0));
             sh.spill.insert(CellRef::parse("A3").unwrap(), Value::Number(42.0));
             sh.set_cell(CellRef::parse("C1").unwrap(), Cell::formula(Formula::new("A2+1")));
-            let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+            let bytes = full_calc_on_load(gridcraft_xlsx::write_xlsx(&wb).unwrap(), false);
             let mut s = Session::new();
             let opened = s
                 .execute("file.open", json!({"name": "synthetic-missing-array-anchor.xlsx", "base64": gridcraft_engine::io::base64_encode(&bytes)}))
@@ -447,4 +466,26 @@ fn cached_open_notice_is_not_a_message_box() {
     let opened = s.execute("file.open", fixture()).unwrap();
     assert_eq!(opened["warnings"][0], gridcraft_engine::io::CACHED_RESULTS_NOTICE);
     assert!(!s.take_ui_requests().iter().any(|r| matches!(r, gridcraft_engine::UiRequest::Message(_))));
+}
+
+/// An explicit true OR false wins; absent parameters follow the workbook's flag.
+#[test]
+fn full_calc_on_load_and_explicit_open_parameters_choose_the_reported_policy() {
+    for (flag, parameter, expected) in [(true, None, 11.0), (false, None, 999.0), (true, Some(false), 999.0), (false, Some(true), 11.0)] {
+        let mut params = fixture();
+        let bytes = gridcraft_engine::io::base64_decode(params["base64"].as_str().unwrap()).unwrap();
+        let bytes = full_calc_on_load(bytes, flag);
+        assert_eq!(gridcraft_xlsx::read_xlsx(&bytes).unwrap().0.calc.full_calc_on_load, flag);
+        params["base64"] = json!(gridcraft_engine::io::base64_encode(&bytes));
+        if let Some(recalculate) = parameter {
+            params["recalculate"] = json!(recalculate);
+        }
+        let mut s = Session::new();
+        let opened = s.execute("file.open", params).unwrap();
+        assert_eq!(value(&s, "F1"), Value::Number(expected), "flag={flag}, parameter={parameter:?}");
+        assert_eq!(value(&s, "D1"), Value::Number(30.0), "missing results are calculated either way");
+        let notice = if expected == 999.0 { gridcraft_engine::io::CACHED_RESULTS_NOTICE } else { gridcraft_engine::io::RECALCULATED_RESULTS_NOTICE };
+        assert_eq!(opened["warnings"][0], notice);
+        assert!(!s.take_ui_requests().iter().any(|r| matches!(r, gridcraft_engine::UiRequest::Message(_))));
+    }
 }

@@ -85,6 +85,10 @@ impl WorkbookView {
 /// File › Options › Formulas › Calculation options, stored per workbook (`<calcPr>`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CalcSettings {
+    /// The source workbook asks for a full recalculation on open. An explicit open parameter
+    /// overrides this hint; the XLSX writer independently flags formulas without saved results.
+    #[serde(default)]
+    pub full_calc_on_load: bool,
     pub mode: CalcMode,
     /// Enable iterative calculation: circular references are calculated repeatedly instead of
     /// reporting an error.
@@ -104,6 +108,7 @@ pub struct CalcSettings {
 impl Default for CalcSettings {
     fn default() -> Self {
         CalcSettings {
+            full_calc_on_load: false,
             mode: CalcMode::Automatic,
             iterative: false,
             max_iterations: Self::DEFAULT_ITERATIONS,

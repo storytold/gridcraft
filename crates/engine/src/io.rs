@@ -59,8 +59,11 @@ pub const WRONG_PASSWORD: &str = "The password is incorrect.";
 pub const DECRYPTED_NOTICE: &str = "This workbook was password-protected. GridCraft saves it without the password.";
 /// The first open warning of a workbook whose saved formula results were kept.
 pub const CACHED_RESULTS_NOTICE: &str = "Saved formula results were kept and may be out of date. Missing results were calculated. Editing formulas or their inputs, structural edits and Calculate Now recalculate with GridCraft's supported functions; unsupported results can become errors.";
-/// Open warnings that only the info bar shows; opening never stops on a message box for them.
-pub const INFO_BAR_NOTICES: [&str; 2] = [DECRYPTED_NOTICE, CACHED_RESULTS_NOTICE];
+/// The first open warning when saved formula results were recalculated.
+pub const RECALCULATED_RESULTS_NOTICE: &str =
+    "Formula results were recalculated on open using GridCraft's supported functions; unsupported results can become errors.";
+/// Open notices report the chosen calculation policy without interrupting the open.
+pub const INFO_BAR_NOTICES: [&str; 3] = [DECRYPTED_NOTICE, CACHED_RESULTS_NOTICE, RECALCULATED_RESULTS_NOTICE];
 
 /// Parses a file's bytes into a workbook. `name` picks the format by extension when the bytes
 /// don't say. An encrypted workbook needs [`open_bytes_with_password`].

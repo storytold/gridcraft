@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -62,14 +62,15 @@ including tests, 2026-10-10.
 
 ### Imported formula results
 
-`file.open` now uses `DocState::from_cached`: saved nonempty results are kept, missing
-formula results are calculated with `Calc::recalc_missing`, and the full dependency graph
-remains available for edits. The open response and import message warn that saved results
-may be stale. For XLSX input, `file.open` deliberately retains saved nonempty results even
-when `calcPr` requests `fullCalcOnLoad`; that file flag does not override this open policy.
-Callers requiring a full recalculation on open must explicitly pass `recalculate: true`.
-Calculate Now also performs the
-existing full recalculation. Neither option makes unsupported functions calculable.
+`file.open` uses `DocState::from_cached` when no full recalculation is requested: saved
+nonempty results are kept, missing formula results are calculated with `Calc::recalc_missing`,
+and the full dependency graph remains available for edits. The source workbook's
+`calcPr fullCalcOnLoad` flag requests a full recalculation by default. An explicit
+`recalculate: true` or `recalculate: false` always overrides that flag. The open response
+and info bar report whether saved results were kept or recalculated; neither notice opens
+a modal message box. Calculate Now also performs a full recalculation. Neither policy
+makes unsupported functions calculable. The writer still sets `fullCalcOnLoad` when a
+formula has no saved result; cache-preserving test fixtures explicitly remove that flag.
 Unresolved function calls retain their explicit argument dependencies but are not made
 volatile merely because the function is absent. Workbook-defined calls and supported
 dynamic references still recalculate normally. Structural edits still use a full recalc.
@@ -286,6 +287,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | Honour fullCalcOnLoad unless an explicit recalculation parameter overrides it; report the chosen policy in the info bar without a modal; keep the writer's missing-result flag and explicitly unflag cache-preserving fixtures. |
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-02 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-11-01 | trivial | Equations: the layout cache answers for a source over the cap by its length alone, without hashing it |
