@@ -1,5 +1,18 @@
 use super::*;
 
+#[test]
+fn format_colors_resolve_named_and_indexed_rgb_safely() {
+    assert_eq!(FormatColor::Green.rgb(), Some([0, 255, 0]));
+    assert_eq!(FormatColor::Black.rgb(), Some([0, 0, 0]));
+    assert_eq!(FormatColor::Indexed(1).rgb(), Some([0, 0, 0]));
+    assert_eq!(FormatColor::Indexed(10).rgb(), Some([0, 128, 0]));
+    assert_eq!(FormatColor::Indexed(46).rgb(), Some([255, 102, 0]));
+    assert_eq!(FormatColor::Indexed(56).rgb(), Some([51, 51, 51]));
+    for index in [0, 57, 255] {
+        assert_eq!(FormatColor::Indexed(index).rgb(), None);
+    }
+}
+
 const S: DateSystem = DateSystem::D1900;
 
 fn f(code: &str, n: f64) -> String {
@@ -145,6 +158,18 @@ fn fractions() {
     assert_eq!(f("# ???/???", 0.5), "   1/2  ");
 }
 
+/// A fraction without a whole part puts the whole value in the numerator; large values must
+/// not saturate at u64::MAX.
+#[test]
+fn fraction_numerator_beyond_u64() {
+    assert_eq!(f("?/1000000000", 2e10), "20000000000000000000/1000000000");
+    assert_eq!(f("?/?", 1e20), "100000000000000000000/1");
+    assert_eq!(f("?/100", 1e18), "100000000000000000000/100");
+    assert_eq!(f("??/??", 1e25), "10000000000000000000000000/1 ");
+    assert!(!f("?/10", 1e300).contains("18446744073709551615"));
+    assert_eq!(f("?/1000000000", 2.5), "2500000000/1000000000");
+}
+
 /// Fraction sections with literal text, as Excel renders them (observed `TEXT()` results).
 #[test]
 fn fractions_with_literals() {
@@ -222,7 +247,7 @@ fn question_mark_pads_thousands_separator() {
 }
 
 #[test]
-fn literals_and_fill() {
+fn literals_and_fill() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(f("\"$\"#,##0.00", 3.0), "$3.00");
     assert_eq!(f("$#,##0.00", -3.0), "-$3.00");
     assert_eq!(f("[$€-407]#,##0.00", 1234.5), "€1,234.50");
@@ -231,7 +256,7 @@ fn literals_and_fill() {
     assert_eq!(f("(0)", 5.0), "(5)");
     let r = full("*-0", Value::Number(5.0));
     assert_eq!((r.text.as_str(), r.fill), ("5", Some(('-', 0))));
-    let acct = builtin_format(44).unwrap();
+    let acct = builtin_format(44).ok_or("none")?;
     let r = full(acct, Value::Number(0.0));
     assert_eq!((r.text.as_str(), r.fill), (" $-   ", Some((' ', 2))));
     let r = full(acct, Value::Number(1234.5));
@@ -242,6 +267,7 @@ fn literals_and_fill() {
     assert_eq!((r.text.as_str(), r.numeric), (" abc ", false));
     let r = full("-* 0", Value::Number(-5.0));
     assert_eq!((r.text.as_str(), r.fill), ("--5", Some((' ', 2))));
+    Ok(())
 }
 
 #[test]
@@ -254,6 +280,10 @@ fn dates_and_times() {
     assert_eq!(f("d-mmm-yy", 46302.0), "7-Oct-26");
     assert_eq!(f("e", 46302.0), "2026");
     assert_eq!(f("YYYY-MM-DD", 46302.0), "2026-10-07");
+}
+
+#[test]
+fn time_formats() {
     assert_eq!(f("yyyy-mm-dd hh:mm:ss", 46302.5), "2026-10-07 12:00:00");
     assert_eq!(f("h:mm AM/PM", 0.75), "6:00 PM");
     assert_eq!(f("h AM/PM", 0.0), "12 AM");
@@ -265,6 +295,10 @@ fn dates_and_times() {
     assert_eq!(f("[s]", 1.0 / 1440.0), "60");
     assert_eq!(f("mm:ss.0", 61.2 / 86400.0), "01:01.2");
     assert_eq!(f("mm:ss.00", 61.25 / 86400.0), "01:01.25");
+}
+
+#[test]
+fn date_serial_boundaries() {
     assert_eq!(f("h:mm:ss", 0.5 + 59.6 / 86400.0), "12:01:00");
     assert_eq!(f("h:mm", 0.5 + 40.0 / 86400.0), "12:00");
     assert_eq!(f("m/d/yyyy", 60.0), "2/29/1900");
@@ -317,12 +351,12 @@ fn general() {
 }
 
 #[test]
-fn kinds() {
+fn kinds() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(NumberFormat::general().kind(), FormatKind::General);
     assert_eq!(NumberFormat::parse("0.00").kind(), FormatKind::Number);
     assert_eq!(NumberFormat::parse("#,##0.00;[Red](#,##0.00)").kind(), FormatKind::Number);
     assert_eq!(NumberFormat::parse("\"$\"#,##0.00").kind(), FormatKind::Currency);
-    assert_eq!(NumberFormat::parse(builtin_format(44).unwrap()).kind(), FormatKind::Accounting);
+    assert_eq!(NumberFormat::parse(builtin_format(44).ok_or("none")?).kind(), FormatKind::Accounting);
     assert_eq!(NumberFormat::parse("m/d/yyyy").kind(), FormatKind::Date);
     assert_eq!(NumberFormat::parse("h:mm AM/PM").kind(), FormatKind::Time);
     assert_eq!(NumberFormat::parse("0%").kind(), FormatKind::Percentage);
@@ -331,10 +365,11 @@ fn kinds() {
     assert_eq!(NumberFormat::parse("@").kind(), FormatKind::Text);
     assert_eq!(NumberFormat::parse("00000").kind(), FormatKind::Special);
     assert_eq!(NumberFormat::parse("\"hello\"").kind(), FormatKind::Custom);
+    Ok(())
 }
 
 #[test]
-fn builtins() {
+fn builtins() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(builtin_format(0), Some("General"));
     assert_eq!(builtin_format(14), Some("m/d/yyyy"));
     assert_eq!(builtin_format(49), Some("@"));
@@ -350,9 +385,10 @@ fn builtins() {
             assert_eq!(builtin_id(code), Some(id));
         }
     }
-    assert_eq!(f(builtin_format(5).unwrap(), -1234.0), "($1,234)");
-    assert_eq!(f(builtin_format(12).unwrap(), 0.5), " 1/2");
-    assert_eq!(f(builtin_format(47).unwrap(), 61.2 / 86400.0), "0101.2");
+    assert_eq!(f(builtin_format(5).ok_or("none")?, -1234.0), "($1,234)");
+    assert_eq!(f(builtin_format(12).ok_or("none")?, 0.5), " 1/2");
+    assert_eq!(f(builtin_format(47).ok_or("none")?, 61.2 / 86400.0), "0101.2");
+    Ok(())
 }
 
 #[test]
@@ -819,28 +855,29 @@ fn format_codes_are_capped_at_255_characters() {
     assert_eq!(f(&huge, 0.5), "0.5");
 }
 
-/// Parses and renders `code` on a worker thread; panics if that takes more than 20 s, so a quadratic
+/// Parses and renders `code` on a worker thread; errors if that takes more than 20 s, so a quadratic
 /// parser fails the test instead of hanging CI. Not a benchmark: at this size an O(n^2) pass takes
 /// minutes and an O(n) pass milliseconds, so the margin is decades wide.
-fn finishes_in_time(code: String) -> String {
+fn finishes_in_time(code: String) -> Result<String, std::sync::mpsc::RecvTimeoutError> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         // Uncapped: `parse` turns a code past 255 characters into General before the parser sees it.
         let _ = tx.send(format_value(&Value::Number(1234.5), &NumberFormat::parse_uncapped(&code), S).text);
     });
-    rx.recv_timeout(std::time::Duration::from_secs(20)).expect("format code did not parse and render in time")
+    rx.recv_timeout(std::time::Duration::from_secs(20))
 }
 
 #[test]
-fn hostile_codes_parse_in_linear_time() {
+fn hostile_codes_parse_in_linear_time() -> Result<(), std::sync::mpsc::RecvTimeoutError> {
     let n = 1_000_000;
     // Unclosed brackets, a run of commas after a digit, a run of fraction bars.
-    assert!(finishes_in_time("[".repeat(n)).starts_with('['));
-    finishes_in_time(format!("0{}", ",".repeat(n)));
-    finishes_in_time(format!("0{}", "/".repeat(n)));
-    finishes_in_time(format!("0{}0", ",".repeat(n)));
+    assert!(finishes_in_time("[".repeat(n))?.starts_with('['));
+    finishes_in_time(format!("0{}", ",".repeat(n)))?;
+    finishes_in_time(format!("0{}", "/".repeat(n)))?;
+    finishes_in_time(format!("0{}0", ",".repeat(n)))?;
     // Unclosed brackets mixed with semicolons: each is a literal and a section separator stays one.
-    finishes_in_time("[;".repeat(n / 2));
+    finishes_in_time("[;".repeat(n / 2))?;
+    Ok(())
 }
 
 #[test]
@@ -863,4 +900,355 @@ fn closed_brackets_still_hold_their_semicolons() {
     assert_eq!(parse::parse_sections("[unknown;x]0;0").len(), 2);
     assert_eq!(f("0\\[0", 5.0), "0[5");
     assert_eq!(f("\"[\"0;0", 5.0), "[5");
+}
+
+const JAN_1_2001: f64 = 36892.0;
+
+#[test]
+fn b1_prefix_is_hidden_and_gregorian() {
+    assert_eq!(f("B1dd/mm/yyyy", 46314.0), "19/10/2026");
+    assert_eq!(f("b1dddd, mmmm d, yyyy", 46314.0), "Monday, October 19, 2026");
+    assert_eq!(f("B1yyyy-mm-dd hh:mm", 46314.5), "2026-10-19 12:00");
+}
+
+#[test]
+fn b2_prefix_renders_hijri_date() {
+    assert_eq!(f("B2dd/mm/yyyy", JAN_1_2001), "06/10/1421");
+    assert_eq!(f("b2d/m/yy", JAN_1_2001), "6/10/21");
+    assert_eq!(f("B2dddd dd/mm/yyyy hh:mm", JAN_1_2001 + 0.75), "الإثنين 06/10/1421 18:00");
+    assert_eq!(text_function(&Value::Number(46314.0), "B2dd/mm/yyyy", S).as_deref(), Ok("08/05/1448"));
+    assert_eq!(f("B2e", 46314.0), "1448");
+    assert_eq!(f("B2ee", 46314.0), "1448");
+    assert_eq!(f("B2d/m/yyyy;@", 46314.0), "8/5/1448");
+}
+
+/// Under `B2`, Excel shows Arabic weekday names, the full name for `ddd` as well as `dddd`.
+#[test]
+fn b2_prefix_names_weekdays_in_arabic() {
+    // Monday 19 and Tuesday 20 October 2026.
+    assert_eq!(f("B2dddd", 46314.0), "الإثنين");
+    assert_eq!(f("B2ddd", 46314.0), "الإثنين");
+    assert_eq!(f("B2dddd", 46315.0), "الثلاثاء");
+    assert_eq!(f("B1dddd", 46314.0), "Monday");
+    assert_eq!(f("B1ddd", 46315.0), "Tue");
+    // Every weekday has a name.
+    for v in 46314..46321 {
+        assert!(!f("B2dddd", v as f64).is_empty());
+    }
+}
+
+/// `B2` on a General or text section changes nothing: Excel shows the plain serial.
+#[test]
+fn b2_prefix_on_general_and_text_sections() {
+    assert_eq!(f("B2General", 46314.0), "46314");
+    assert_eq!(f("B2@", 46314.0), "46314");
+}
+
+#[test]
+fn b2_prefix_names_hijri_months() {
+    assert_eq!(f("B2d mmmm yyyy", JAN_1_2001), "6 شوال 1421");
+    assert_eq!(f("B2mmm", 37034.0), "ربيع\u{a0}الأول");
+    assert_eq!(f("B2mmmm", JAN_1_2001 + 23.0), "شوال");
+    assert_eq!(f("B2mmmm", JAN_1_2001 + 24.0), "ذو\u{a0}القعدة");
+    assert_eq!(f("B2mmmmm", JAN_1_2001 + 24.0), "ذ");
+}
+
+/// All twelve month names and seven weekday names as Excel 16.0 (build 20527, en-US) shows them,
+/// read with TEXT and a cell format: two-word month names are joined by a no-break space.
+#[test]
+fn b2_names_match_excel() {
+    let months = [
+        (46219.0, "صفر"),
+        (46248.0, "ربيع\u{a0}الأول"),
+        (46278.0, "ربيع\u{a0}الثاني"),
+        (46307.0, "جمادى\u{a0}الأولى"),
+        (46337.0, "جمادى\u{a0}الثانية"),
+        (46366.0, "رجب"),
+        (46396.0, "شعبان"),
+        (46425.0, "رمضان"),
+        (46455.0, "شوال"),
+        (46484.0, "ذو\u{a0}القعدة"),
+        (46514.0, "ذو\u{a0}الحجة"),
+        (46543.0, "محرم"),
+    ];
+    for (serial, name) in months {
+        assert_eq!(f("B2dd", serial), "01", "{serial}");
+        assert_eq!(f("B2mmmm", serial), name, "{serial}");
+        assert_eq!(f("B2mmm", serial), name, "{serial}");
+        assert_eq!(f("B2mmmmmm", serial), name, "{serial}");
+    }
+    // Sunday 18 to Saturday 24 October 2026.
+    let days = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+    for (k, name) in days.iter().enumerate() {
+        let serial = 46313.0 + k as f64;
+        assert_eq!(f("B2dddd", serial), *name, "{serial}");
+        assert_eq!(f("B2ddd", serial), *name, "{serial}");
+    }
+    assert_eq!(f("B2yy", 46314.0), "48");
+    assert_eq!(f("B2y", 46314.0), "48");
+    assert_eq!(f("B2yyy", 46314.0), "1448");
+    assert_eq!(f("B2yyyyy", 46314.0), "1448");
+}
+
+#[test]
+fn b2_month_and_year_rollover() {
+    assert_eq!(f("B2dd/mm/yyyy", 36915.0), "29/10/1421");
+    assert_eq!(f("B2dd/mm/yyyy", 36916.0), "01/11/1421");
+    assert_eq!(f("B2dd/mm/yyyy", 36974.0), "29/12/1421");
+    assert_eq!(f("B2dd/mm/yyyy", 36975.0), "01/01/1422");
+    assert_eq!(f("B2dd/mm/yyyy", 37683.0), "30/12/1423");
+    assert_eq!(f("B2dd/mm/yyyy", 37684.0), "01/01/1424");
+}
+
+/// Cycle years 15 (1425, leap) and 16 (1426, not leap): Excel's leap year is 15, not 16. The
+/// 2 March 2005 and 29 January 2006 values were read from Excel by a reviewer; the year
+/// boundaries follow from them and the 354/355-day years. The same comparison covered every
+/// serial from 36,000 to 49,000 with no disagreement.
+#[test]
+fn b2_leap_year_is_cycle_year_15() {
+    assert_eq!(f("B2yyyy-mm-dd", 38413.0), "1426-01-21"); // 2005-03-02, from Excel
+    assert_eq!(f("B2yyyy-mm-dd", 38746.0), "1426-12-29"); // 2006-01-29, from Excel
+    assert_eq!(f("B2dd/mm/yyyy", 38037.0), "29/12/1424"); // 2004-02-20
+    assert_eq!(f("B2dd/mm/yyyy", 38038.0), "01/01/1425"); // 2004-02-21
+    assert_eq!(f("B2dd/mm/yyyy", 38392.0), "30/12/1425"); // 2005-02-09
+    assert_eq!(f("B2dd/mm/yyyy", 38393.0), "01/01/1426"); // 2005-02-10
+    assert_eq!(f("B2dd/mm/yyyy", 38747.0), "01/01/1427"); // 2006-01-30
+    // Anchors the reviewer read from Excel.
+    assert_eq!(f("B2dd/mm/yyyy", 46314.0), "08/05/1448"); // 2026-10-19
+    assert_eq!(f("B2dd/mm/yyyy", 46313.0), "07/05/1448"); // 2026-10-18
+    assert_eq!(f("B2dd/mm/yyyy", JAN_1_2001), "06/10/1421");
+    assert_eq!(f("B2dd/mm/yyyy", 61.0), "29/10/1317"); // 1900-03-01
+    assert_eq!(f("B2dd/mm/yyyy", 64970.0), "01/01/1501"); // 2077-11-16
+    assert_eq!(f("B2dd/mm/yyyy", 64971.0), "02/01/1501"); // 2077-11-17
+    assert_eq!(f("B2dd/mm/yyyy", 0.0), "29/08/1317");
+    assert_eq!(f("B2dd/mm/yyyy", 2958465.0), "03/04/9666"); // 9999-12-31
+}
+
+/// Excel honours `B2` after a colour tag, but a `[$-...]` locale tag before it keeps the date
+/// Gregorian (the prefix is still hidden); `B2[$-401]` is Hijri.
+#[test]
+fn calendar_prefix_and_bracket_tags() {
+    assert_eq!(f("[Red]B2dd/mm/yyyy", 46314.0), "08/05/1448");
+    assert_eq!(f("[<0]0;B2dd/mm/yyyy", JAN_1_2001), "06/10/1421");
+    assert_eq!(f("B2[$-401]dd/mm/yyyy", 46314.0), "08/05/1448");
+    for code in ["[$-401]B2dd/mm/yyyy", "[$-409]B2dd/mm/yyyy", "[$-1010401]B2dd/mm/yyyy", "[$-ar-SA]B2dd/mm/yyyy"] {
+        assert_eq!(f(code, 46314.0), "19/10/2026", "{code}");
+        assert_eq!(text_function(&Value::Number(46314.0), code, S).as_deref(), Ok("19/10/2026"), "{code}");
+    }
+    assert_eq!(f("[Red][$-401]B1dd/mm/yyyy", JAN_1_2001), "01/01/2001");
+    // Checked in Excel 16.0 (build 20527, en-US): a currency tag cancels `B2` like a locale tag,
+    // a tag after the prefix does not, and a repeated prefix is accepted.
+    assert_eq!(f("[$€-407]B2dd/mm/yyyy", 46314.0), "€19/10/2026");
+    assert_eq!(f("[$$-409]B2dd/mm/yyyy", 46314.0), "$19/10/2026");
+    assert_eq!(f("[$-401][Red]B2dd/mm/yyyy", 46314.0), "19/10/2026");
+    assert_eq!(f("B2[Red]dd/mm/yyyy", 46314.0), "08/05/1448");
+    for code in ["B2B2dd/mm/yyyy", "B2B2B2dd/mm/yyyy", "B2b2dd/mm/yyyy", "[Red]B2B2dd/mm/yyyy"] {
+        assert_eq!(f(code, 46314.0), "08/05/1448", "{code}");
+    }
+    assert_eq!(f("B1B1dd/mm/yyyy", 46314.0), "19/10/2026");
+    assert_eq!(f("B2 dd/mm/yyyy", 46314.0), " 08/05/1448");
+    assert_eq!(f("B2\"x\"dd", 46314.0), "x08");
+    for code in ["B1\"x\"", "B2\"x\""] {
+        assert_eq!(f(code, 46314.0), "x", "{code}");
+    }
+    for code in ["B1General", "B1@", "0;0;0;B2@", "0;B2dd/mm/yyyy"] {
+        assert_eq!(f(code, 46314.0), "46314", "{code}");
+    }
+}
+
+/// A quoted `B2` is literal text; any other `B` and digit makes Excel reject the code (`TEXT` is
+/// `#VALUE!`), as does a prefix before a number format. A rejected code shows as General. All
+/// checked in Excel 16.0 (build 20527, en-US), with TEXT and with a cell format.
+#[test]
+fn misplaced_calendar_prefix_is_rejected() {
+    assert_eq!(f("\"B2\"dd/mm/yyyy", 46314.0), "B219/10/2026");
+    assert_eq!(f("dd/\"B2\"/yyyy", 46314.0), "19/B2/2026");
+    for code in [
+        "B0dd/mm/yyyy",
+        "B3dd/mm/yyyy",
+        "B4dd/mm/yyyy",
+        "B9dd/mm/yyyy",
+        "B02dd",
+        "B12dd",
+        "B21dd",
+        "B1B2dd/mm/yyyy",
+        "B2B1dd/mm/yyyy",
+        "B2[Red]B2dd/mm/yyyy",
+        "B2 B2dd",
+        "dd/mm/yyyyB2",
+        "dd/mm/yyyyB1",
+        "dd B2 mm",
+        "dd b2 mm",
+        "dd \\B2 yyyy",
+        "B2\\B2dd",
+        "B20.00",
+        "B2#,##0",
+        "B10.00",
+        "B1#,##0",
+        "0;B3dd",
+    ] {
+        assert_eq!(text_function(&Value::Number(46314.0), code, S), Err(CellError::Value), "{code}");
+        assert_eq!(f(code, 46314.0), "46314", "{code}");
+        assert!(NumberFormat::parse(code).is_general(), "{code}");
+    }
+}
+
+#[test]
+fn b2_edges_of_the_date_range() {
+    // Serial 60 is the 1900 system's fictitious 29 February: Excel has no Hijri date for it.
+    assert_eq!(text_function(&Value::Number(60.0), "B2dd/mm/yyyy", S), Err(CellError::Value));
+    assert_eq!(f("B2dd/mm/yyyy", 60.0), "########");
+    assert_eq!(f("B1dd/mm/yyyy", 60.0), "29/02/1900");
+    assert_eq!(f("B2dd/mm/yyyy", 59.0), "28/10/1317");
+    assert_eq!(f("B2dd/mm/yyyy", 61.0), "29/10/1317");
+    // So does any clock part (Excel 16.0, build 20527, en-US), but not an elapsed `[h]`, a literal,
+    // or a locale tag that cancels `B2`.
+    for code in ["B2hh:mm", "B2hh", "B2ss", "B2am/pm", "B2hh:mm AM/PM", "B2[$-401]hh:mm", "B2dd/mm/yyyy;\"x\""] {
+        assert_eq!(text_function(&Value::Number(60.0), code, S), Err(CellError::Value), "{code}");
+        assert_eq!(text_function(&Value::Number(60.5), code, S), Err(CellError::Value), "{code}");
+    }
+    assert_eq!(f("B2[h]", 60.0), "1440");
+    assert_eq!(f("B2\"x\"", 60.0), "x");
+    assert_eq!(f("[$-401]B2hh:mm", 60.0), "00:00");
+    assert_eq!(f("B1hh:mm", 60.0), "00:00");
+    assert_eq!(f("B2hh:mm", 61.0), "00:00");
+    // Serial 0 shows as serial 1.
+    assert_eq!(f("B2dd/mm/yyyy", 0.0), "29/08/1317");
+    assert_eq!(f("B2dd/mm/yyyy", 1.0), "29/08/1317");
+    // No upper limit short of 31 December 9999: 16 and 17 November 2077, 31 December 9999.
+    assert_eq!(f("B2dd/mm/yyyy", 64970.0), "01/01/1501");
+    assert_eq!(f("B2dd/mm/yyyy", 64971.0), "02/01/1501");
+    assert_eq!(f("B2dd/mm/yyyy", 2958465.0), "03/04/9666");
+    // In the 1904 system, serial 60 is a real day.
+    assert_ne!(format_value(&Value::Number(60.0), &NumberFormat::parse("B2dd/mm/yyyy"), DateSystem::D1904).text, "########");
+}
+
+#[test]
+fn b2_out_of_range_does_not_panic() {
+    for v in [-1.0, 0.0, 60.0, 60.5, 2958465.0, 2958466.0, 1e300, f64::NAN] {
+        let _ = f("B2dd/mm/yyyy mmmm dddd", v);
+        let _ = text_function(&Value::Number(v), "B2dd/mm/yyyy mmmm dddd", S);
+    }
+    assert_eq!(f("B2dd/mm/yyyy", -1.0), f("dd/mm/yyyy", -1.0));
+    assert_eq!(f("B2dd/mm/yyyy", 2958466.0), f("dd/mm/yyyy", 2958466.0));
+    // Before 1 Muharram 1 AH there is no Hijri date (no serial reaches it).
+    let before_epoch = gridcraft_core::date::DateTime { year: 600, month: 3, day: 9, ..Default::default() };
+    assert!(calendar::Calendar::Hijri.date(&before_epoch).is_none());
+}
+
+/// "Set precision as displayed": the value each format stores. Expected values observed in Excel
+/// (COM, `Workbook.PrecisionAsDisplayed = True`) with synthetic values.
+#[test]
+fn round_as_displayed_matches_excel() {
+    let r = |code: &str, n: f64| NumberFormat::parse(code).round_as_displayed(n);
+    let cases: &[(&str, f64, f64)] = &[
+        ("0", 527.91, 528.0),
+        ("0", 2.5, 3.0),
+        ("0", -2.5, -3.0),
+        ("0.00", 1.005, 1.01),
+        ("0.00", 1.23456, 1.23),
+        ("#.##", 1.23456, 1.23),
+        ("#.##", 1.2, 1.2),
+        ("?.??", 1.23456, 1.23),
+        ("0.0??", 1.23456, 1.235),
+        ("0%", 0.123456, 0.12),
+        ("0.0%", 0.123456, 0.123),
+        ("0.00%", 0.123456, 0.1235),
+        ("$#,##0.00", 1234.5678, 1234.57),
+        ("#,##0", 1234.5678, 1235.0),
+        ("0.0,,", 1234567.891, 1200000.0),
+        ("#,##0,", 1234567.891, 1235000.0),
+        ("0.0,", 1234567.891, 1234600.0),
+        ("# ?/?", 0.3333333, 1.0 / 3.0),
+        ("# ??/??", 0.3333333, 1.0 / 3.0),
+        ("# ?/8", 0.3, 0.25),
+        ("# ?/4", 2.71829, 2.75),
+        ("?/?", 0.123, 0.125),
+        ("0.00E+00", 123456.789, 123000.0),
+        ("##0.0E+0", 123456.789, 120000.0),
+        ("0.0E+0", 0.000123456, 0.00012),
+        ("##0.E+0", 98765.4, 100000.0),
+        ("###.00E+0", 98765.4, 98800.0),
+        ("000.0E+0", 0.0123456, 0.012),
+        ("0.00E+0\" u\"", 98765.4, 98800.0),
+        ("0.0%E+0", 12345.0, 12345.0),
+        ("0.00;(0.00)", -1.23456, -1.23),
+        ("0.00;(0.0)", -1.23456, -1.2),
+        ("0.0 \"kg\"", 1.23456, 1.2),
+        ("0.00;-0.00;\"zero\"", 0.001, 0.0),
+        ("0.00_);(0.00)", 1.23456, 1.23),
+        ("#,##0.0_);[Red](#,##0.0)", 2.345, 2.3),
+        // Kept at full precision.
+        ("General", 1.0 / 3.0, 1.0 / 3.0),
+        ("m/d/yyyy", 45000.75, 45000.75),
+        ("h:mm", 45000.123456, 45000.123456),
+        ("h:mm:ss", 45000.123456, 45000.123456),
+        ("[h]:mm", 1.2345678, 1.2345678),
+        ("mm:ss.0", 0.0001234567, 0.0001234567),
+        ("d", 45000.6, 45000.6),
+        ("@", 1.23456, 1.23456),
+        ("\"x\"", 1.23456, 1.23456),
+        (";;;", 1.23456, 1.23456),
+        // Conditions are ignored: the sign picks the section (first for positives, second for
+        // negatives), whatever section displays the number.
+        ("[<1]0.00;0", 1.0 / 3.0, 0.33),
+        ("[<1]0.00;0", 2.0 + 1.0 / 3.0, 2.33),
+        ("[<1]0.00;0", 12345.678, 12345.68),
+        ("[<1]0.00;0", -10.0 / 3.0, -3.0),
+        ("[<1]0.00;0", -1.0 / 3.0, 0.0),
+        ("[>1]0.0;0.000", 1.0 / 3.0, 0.3),
+        ("[>1]0.0;0.000", -10.0 / 3.0, -3.333),
+        ("[>=100]0;0.000", 2.0 + 1.0 / 3.0, 2.0),
+        ("[>=100]0;0.000", -200.0 - 1.0 / 3.0, -200.333),
+        ("[<0]0.0;0.000", -2.0 - 1.0 / 3.0, -2.333),
+        ("[>100]0;[<-100]0.0;0.000", -2.0 - 1.0 / 3.0, -2.3),
+        ("[<=-1]0.0;[>=1]0.000;0.00000", -2.0 - 1.0 / 3.0, -2.333),
+        ("0.0;[<-5]0.000", -2.0 - 1.0 / 3.0, -2.333),
+        ("[<1]0.00%;0", 2.0 + 1.0 / 3.0, 2.3333),
+        ("[<1]0.00;0.0,", -2345.6789, -2300.0),
+        ("[<1]0.0E+0;0", 1.0 / 3.0, 0.33),
+        ("[<1]# ?/?;0", 2.3, 16.0 / 7.0),
+        ("[<1]0.00;?/8", -2.0 - 1.0 / 3.0, -2.375),
+        ("[<1]0.00;0.0;0.000;@", -2.0 - 1.0 / 3.0, -2.3),
+        ("[<1]\"x\";0.0", 2.0 + 1.0 / 3.0, 2.0 + 1.0 / 3.0),
+        ("[<1]\"x\";0.0", -2.0 - 1.0 / 3.0, -2.3),
+        ("[<1]m/d/yyyy;0.0", 2.0 + 1.0 / 3.0, 2.0 + 1.0 / 3.0),
+        ("[<1]0.0;m/d/yyyy", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        // One section with a condition: negatives keep the full value, unless an `@` section
+        // follows (then the first section applies, as without a condition).
+        ("[<1]0.00", 2.0 + 1.0 / 3.0, 2.33),
+        ("[<1]0.00", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        ("[>=-100]0.0", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        ("[<1]0.00;@", -2.0 - 1.0 / 3.0, -2.33),
+        ("[<1]0.0%;@", -2.0 - 1.0 / 3.0, -2.333),
+        ("0.00;@", -2.0 - 1.0 / 3.0, -2.33),
+        // A completely empty section passes to the next; a colour or a literal doesn't.
+        ("0.0;;0.000", -2.0 - 1.0 / 3.0, -2.333),
+        ("[<1]0.0;;0.000", -2.0 - 1.0 / 3.0, -2.333),
+        ("[<1]0.0;;0.0%", -2.0 - 1.0 / 3.0, -2.333),
+        (";0.0", 2.0 + 1.0 / 3.0, 2.3),
+        (";;0.0", 2.0 + 1.0 / 3.0, 2.3),
+        (";;0.0", -2.0 - 1.0 / 3.0, -2.3),
+        ("0.0;;", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        ("0.0;;@", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        ("[<1]0.00;", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        ("0.0;[Red];0.000", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        ("[<1]0.0;\" \";0.000", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        ("[<1];0.0;0.00", 2.0 + 1.0 / 3.0, 2.0 + 1.0 / 3.0),
+    ];
+    for &(code, n, want) in cases {
+        assert_eq!(r(code, n), want, "{code} with {n}");
+    }
+    // A negative that rounds to zero stores 0, not -0.
+    let z = r("0.00", -0.004);
+    assert!(z == 0.0 && z.is_sign_positive());
+    // Non-finite and extreme inputs come back unchanged or finite, never a panic.
+    assert!(r("0.00", f64::NAN).is_nan());
+    assert_eq!(r("0.00", f64::INFINITY), f64::INFINITY);
+    assert_eq!(r("0", 1e300 * 10.0), 1e301);
+    assert_eq!(r("0.0,,,,,,,,,,", 1.234e35), 1.234e35);
+    assert_eq!(r("0.000000000000000000000000000000", 1.0 / 3.0), 0.333333333333333);
+    assert_eq!(r("0%%%%%%%%%%%%%%%%%%%%%%%%", f64::MAX), f64::MAX);
+    assert_eq!(r("0", f64::MAX), f64::MAX);
+    assert_eq!(r("0.0E+0", f64::MIN_POSITIVE), 2.2e-308);
 }

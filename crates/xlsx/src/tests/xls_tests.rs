@@ -307,56 +307,72 @@ fn reads_values_formulas_formats_and_layout() {
         assert!(report.warnings[0].contains("Excel 97-2003"), "{:?}", report.warnings);
         assert!(report.warnings.iter().any(|w| w.contains("Chart sheets")));
         assert_eq!(wb.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Sheet1", "Data"]);
-        assert_eq!(v(&wb, 0, "A1"), Value::from("Hello"));
-        assert_eq!(v(&wb, 0, "B1"), Value::Number(1.5));
-        assert_eq!(v(&wb, 0, "C1"), Value::Number(42.0));
-        assert_eq!(v(&wb, 0, "D1"), Value::from("Wörld"));
-        assert_eq!(v(&wb, 0, "A2"), Value::Bool(true));
-        assert_eq!(v(&wb, 0, "B2"), Value::Error(CellError::Div0));
-        assert_eq!(v(&wb, 0, "C2"), Value::Number(7.0));
-        assert_eq!(v(&wb, 0, "D2"), Value::Number(1.5));
-        // Formulas: text plus the cached result.
-        assert_eq!(ftext(&wb, "A3").as_deref(), Some("B1*2"));
-        assert_eq!(v(&wb, 0, "A3"), Value::Number(3.0));
-        assert_eq!(ftext(&wb, "B3").as_deref(), Some("SUM(B1:C1)"));
-        assert_eq!(ftext(&wb, "C3").as_deref(), Some("A1&\"!\""));
-        assert_eq!(v(&wb, 0, "C3"), Value::from("Hello!"));
-        assert_eq!(ftext(&wb, "D3").as_deref(), Some("B1>1"));
-        assert_eq!(v(&wb, 0, "D3"), Value::Bool(true));
-        assert_eq!(ftext(&wb, "E3").as_deref(), Some("Rate*2"));
-        assert_eq!(ftext(&wb, "F3").as_deref(), Some("ROUND(B1,0)"));
-        assert_eq!(ftext(&wb, "G3").as_deref(), Some("Data!A1"));
-        assert_eq!(v(&wb, 0, "H3"), Value::Error(CellError::NA));
-        // Shared formula: relative offsets resolve per cell.
-        assert_eq!(ftext(&wb, "B5").as_deref(), Some("A5*10"));
-        assert_eq!(ftext(&wb, "B6").as_deref(), Some("A6*10"));
-        // Array formula: the anchor holds it; the other cell's cached result is dropped so that
-        // the formula fills the range on recalculation (as when an .xlsx is read, #156).
-        let c5 = wb.sheets[0].cell(CellRef::parse("C5").unwrap()).unwrap().formula.clone().unwrap();
-        assert_eq!((c5.text.as_str(), c5.array), ("A5:A6*2", Some(RangeRef::parse("C5:C6").unwrap())));
-        assert_eq!(ftext(&wb, "C6"), None);
-        assert_eq!(v(&wb, 0, "C6"), Value::Empty);
-        // Number formats, merges, sizes, names, print area; embedded chart records ignored.
-        let sh = &wb.sheets[0];
-        assert_eq!(wb.styles.get(sh.style_id(CellRef::parse("A4").unwrap())).num_fmt.as_str(), "yyyy-mm-dd");
-        assert_eq!(wb.styles.get(sh.style_id(CellRef::parse("B4").unwrap())).num_fmt.as_str(), "0.00%");
-        assert_eq!(sh.merges, vec![RangeRef::parse("A7:B7").unwrap()]);
-        assert!(sh.cols.get(&0).unwrap().size.unwrap() > sh.default_col_width);
-        assert_eq!(sh.rows.get(&0).unwrap().size, Some(40.0));
-        assert!(!sh.rows.get(&0).unwrap().hidden && sh.rows.get(&0).unwrap().custom);
-        assert_eq!(sh.print.print_area, RangeRef::parse("A1:B2"));
-        assert_eq!(v(&wb, 0, "J10"), Value::Empty);
-        assert_eq!(wb.names.len(), 1);
-        assert_eq!((wb.names[0].name.as_str(), wb.names[0].formula.as_str()), ("Rate", "Data!$A$1"));
-        assert_eq!(v(&wb, 1, "A1"), Value::Number(7.0));
-        assert_eq!(wb.date_system, DateSystem::D1900);
-        // The import saves as .xlsx and reads back.
-        let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
-        assert_eq!(back.sheets[0].cell(CellRef::parse("A3").unwrap()).unwrap().formula.as_ref().unwrap().text, "B1*2");
-        assert_eq!(back.sheets[0].value(CellRef::parse("C3").unwrap()), Value::from("Hello!"));
+        assert_values_roundtrip(&wb);
+        assert_formula_roundtrip(&wb);
+        assert_layout_roundtrip(&wb);
+        assert_xlsx_conversion(&wb);
     }
     let (wb, _) = read_xls(&compound("Workbook", &sample(true))).unwrap();
     assert_eq!(wb.date_system, DateSystem::D1904);
+}
+
+fn assert_values_roundtrip(wb: &gridcraft_model::Workbook) {
+    assert_eq!(v(wb, 0, "A1"), Value::from("Hello"));
+    assert_eq!(v(wb, 0, "B1"), Value::Number(1.5));
+    assert_eq!(v(wb, 0, "C1"), Value::Number(42.0));
+    assert_eq!(v(wb, 0, "D1"), Value::from("Wörld"));
+    assert_eq!(v(wb, 0, "A2"), Value::Bool(true));
+    assert_eq!(v(wb, 0, "B2"), Value::Error(CellError::Div0));
+    assert_eq!(v(wb, 0, "C2"), Value::Number(7.0));
+    assert_eq!(v(wb, 0, "D2"), Value::Number(1.5));
+}
+
+fn assert_formula_roundtrip(wb: &gridcraft_model::Workbook) {
+    // Formulas: text plus the cached result.
+    assert_eq!(ftext(wb, "A3").as_deref(), Some("B1*2"));
+    assert_eq!(v(wb, 0, "A3"), Value::Number(3.0));
+    assert_eq!(ftext(wb, "B3").as_deref(), Some("SUM(B1:C1)"));
+    assert_eq!(ftext(wb, "C3").as_deref(), Some("A1&\"!\""));
+    assert_eq!(v(wb, 0, "C3"), Value::from("Hello!"));
+    assert_eq!(ftext(wb, "D3").as_deref(), Some("B1>1"));
+    assert_eq!(v(wb, 0, "D3"), Value::Bool(true));
+    assert_eq!(ftext(wb, "E3").as_deref(), Some("Rate*2"));
+    assert_eq!(ftext(wb, "F3").as_deref(), Some("ROUND(B1,0)"));
+    assert_eq!(ftext(wb, "G3").as_deref(), Some("Data!A1"));
+    assert_eq!(v(wb, 0, "H3"), Value::Error(CellError::NA));
+    // Shared formula: relative offsets resolve per cell.
+    assert_eq!(ftext(wb, "B5").as_deref(), Some("A5*10"));
+    assert_eq!(ftext(wb, "B6").as_deref(), Some("A6*10"));
+    // Array formula: the anchor holds it; the other cell's cached result is dropped so that
+    // the formula fills the range on recalculation (as when an .xlsx is read, #156).
+    let c5 = wb.sheets[0].cell(CellRef::parse("C5").unwrap()).unwrap().formula.clone().unwrap();
+    assert_eq!((c5.text.as_str(), c5.array), ("A5:A6*2", Some(RangeRef::parse("C5:C6").unwrap())));
+    assert_eq!(ftext(wb, "C6"), None);
+    assert_eq!(v(wb, 0, "C6"), Value::Empty);
+}
+
+fn assert_layout_roundtrip(wb: &gridcraft_model::Workbook) {
+    // Number formats, merges, sizes, names, print area; embedded chart records ignored.
+    let sh = &wb.sheets[0];
+    assert_eq!(wb.styles.get(sh.style_id(CellRef::parse("A4").unwrap())).num_fmt.as_str(), "yyyy-mm-dd");
+    assert_eq!(wb.styles.get(sh.style_id(CellRef::parse("B4").unwrap())).num_fmt.as_str(), "0.00%");
+    assert_eq!(sh.merges, vec![RangeRef::parse("A7:B7").unwrap()]);
+    assert!(sh.cols.get(&0).unwrap().size.unwrap() > sh.default_col_width);
+    assert_eq!(sh.rows.get(&0).unwrap().size, Some(40.0));
+    assert!(!sh.rows.get(&0).unwrap().hidden && sh.rows.get(&0).unwrap().custom);
+    assert_eq!(sh.print.print_area, RangeRef::parse("A1:B2"));
+    assert_eq!(v(wb, 0, "J10"), Value::Empty);
+    assert_eq!(wb.names.len(), 1);
+    assert_eq!((wb.names[0].name.as_str(), wb.names[0].formula.as_str()), ("Rate", "Data!$A$1"));
+    assert_eq!(v(wb, 1, "A1"), Value::Number(7.0));
+    assert_eq!(wb.date_system, DateSystem::D1900);
+}
+
+fn assert_xlsx_conversion(wb: &gridcraft_model::Workbook) {
+    // The import saves as .xlsx and reads back.
+    let (back, _) = read_xlsx(&write_xlsx(wb).unwrap()).unwrap();
+    assert_eq!(back.sheets[0].cell(CellRef::parse("A3").unwrap()).unwrap().formula.as_ref().unwrap().text, "B1*2");
+    assert_eq!(back.sheets[0].value(CellRef::parse("C3").unwrap()), Value::from("Hello!"));
 }
 
 #[test]
@@ -394,14 +410,14 @@ fn refuses_encrypted_old_and_foreign_files() {
 
 #[test]
 fn rc4_encrypted_workbooks_read_with_their_password() {
-    use crate::{DecryptError, is_encrypted_xls, read_xls_with_password};
+    use crate::{DecryptError, FunctionInfo, is_encrypted_xls, read_xls_with_password};
     let plain = compound("Workbook", &sample(false));
     let file = compound("Workbook", &crate::xls::crypt::encrypt(&sample(false), "VelvetSweatshop"));
     assert_eq!(sniff(&file), Format::Xls);
     assert!(is_encrypted_xls(&file) && !is_encrypted_xls(&plain));
     assert!(read_xls(&file).unwrap_err().to_string().contains("password-protected"));
-    assert!(matches!(read_xls_with_password(&file, "velvetsweatshop"), Err(IoError::Decrypt(DecryptError::WrongPassword))));
-    let (wb, _) = read_xls_with_password(&file, "VelvetSweatshop").unwrap();
+    assert!(matches!(read_xls_with_password(&file, "velvetsweatshop", FunctionInfo::default()), Err(IoError::Decrypt(DecryptError::WrongPassword))));
+    let (wb, _) = read_xls_with_password(&file, "VelvetSweatshop", FunctionInfo::default()).unwrap();
     let (expected, _) = read_xls(&plain).unwrap();
     assert_eq!(wb.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Sheet1", "Data"]);
     assert_eq!(v(&wb, 0, "D1"), Value::from("Wörld"));
@@ -409,7 +425,7 @@ fn rc4_encrypted_workbooks_read_with_their_password() {
     assert_eq!(v(&wb, 1, "A1"), Value::Number(7.0));
     assert_eq!(wb.sheets[0].cells, expected.sheets[0].cells);
     // A password-free workbook ignores the password.
-    assert!(read_xls_with_password(&plain, "x").is_ok());
+    assert!(read_xls_with_password(&plain, "x", FunctionInfo::default()).is_ok());
 
     // A sheet over several 1024-byte blocks, with records straddling the boundaries.
     let boundsheet = |pos: u32| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 4, 0], b"Long"]));
@@ -421,20 +437,20 @@ fn rc4_encrypted_workbooks_read_with_their_password() {
     }
     stream.extend(eof());
     let file = compound("Workbook", &crate::xls::crypt::encrypt(&stream, "a longer pass"));
-    let (wb, _) = read_xls_with_password(&file, "a longer pass").unwrap();
+    let (wb, _) = read_xls_with_password(&file, "a longer pass", FunctionInfo::default()).unwrap();
     for r in [0u32, 56, 57, 499] {
         assert_eq!(wb.sheets[0].value(CellRef::new(r, 0)), Value::Number(f64::from(r)), "row {r}");
     }
 
     // Schemes no password opens are said as such.
     let with_filepass = |payload: &[u8]| compound("Workbook", &cat(&[&bof(0x0005), &rec(0x002F, payload), &eof()]));
-    let unsupported = |payload: &[u8]| match read_xls_with_password(&with_filepass(payload), "x") {
+    let unsupported = |payload: &[u8]| match read_xls_with_password(&with_filepass(payload), "x", FunctionInfo::default()) {
         Err(IoError::Decrypt(DecryptError::Unsupported(s))) => s,
         other => panic!("{other:?}"),
     };
     assert_eq!(unsupported(&[0, 0, 0x34, 0x12, 0x78, 0x56]), "XOR obfuscation");
     assert_eq!(unsupported(&cat(&[&[1, 0, 4, 0, 2, 0], &[0; 64]])), "RC4 CryptoAPI");
-    assert!(matches!(read_xls_with_password(&with_filepass(&[1, 0, 1, 0, 1, 0, 9]), "x"), Err(IoError::Decrypt(DecryptError::Malformed(_)))));
+    assert!(matches!(read_xls_with_password(&with_filepass(&[1, 0, 1, 0, 1, 0, 9]), "x", FunctionInfo::default()), Err(IoError::Decrypt(DecryptError::Malformed(_)))));
 }
 
 #[test]
@@ -500,6 +516,20 @@ fn hostile_xls_input_never_panics_or_hangs() {
 }
 
 #[test]
+fn dialog_sheets_are_skipped_not_read_as_worksheets() {
+    let boundsheet = |pos: u32, name: &str| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, name.len() as u8, 0], name.as_bytes()]));
+    let globals = |positions: [u32; 2]| cat(&[&bof(0x0005), &boundsheet(positions[0], "Dialog1"), &boundsheet(positions[1], "Sheet1"), &eof()]);
+    let dialog = cat(&[&bof(0x0010), &rec(0x0081, &[0x10, 0x00]), &rec(0x0203, &cat(&[&cell(0, 0, 0), &1.0f64.to_le_bytes()])), &eof()]);
+    let worksheet = cat(&[&bof(0x0010), &rec(0x0081, &[0x01, 0x04]), &rec(0x0203, &cat(&[&cell(0, 0, 0), &7.0f64.to_le_bytes()])), &eof()]);
+    let first = globals([0; 2]).len() as u32;
+    let stream = cat(&[&globals([first, first + dialog.len() as u32]), &dialog, &worksheet]);
+    let (wb, report) = read_xls(&compound("Workbook", &stream)).unwrap();
+    assert_eq!(wb.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Sheet1"]);
+    assert_eq!(v(&wb, 0, "A1"), Value::Number(7.0));
+    assert!(report.warnings.iter().any(|w| w.contains("Dialog sheets")), "{:?}", report.warnings);
+}
+
+#[test]
 fn sheets_share_one_record_budget() {
     // Many BoundSheet records point into one long substream (at successive nested BOFs), so each
     // sheet would read the whole tail. The record allowance is shared, not per sheet.
@@ -523,8 +553,11 @@ fn sheets_share_one_record_budget() {
     stream.extend(eof());
     let file = compound("Workbook", &stream);
     // About n × 2,000 records in all: over a 100,000 shared allowance, though each sheet alone fits.
-    assert!(matches!(crate::xls::read_xls_with(&file, crate::xls::Budget::with_max_records(100_000), None), Err(IoError::TooLarge(_))));
-    assert!(crate::xls::read_xls_with(&file, crate::xls::Budget::with_max_records(10_000_000), None).is_ok());
+    assert!(matches!(
+        crate::xls::read_xls_budgeted(&file, crate::xls::Budget::with_max_records(100_000), crate::FunctionInfo::default(), None),
+        Err(IoError::TooLarge(_))
+    ));
+    assert!(crate::xls::read_xls_budgeted(&file, crate::xls::Budget::with_max_records(10_000_000), crate::FunctionInfo::default(), None).is_ok());
 
     // Two sheets at the same offset are refused outright.
     let mut dup = bof(0x0005);
@@ -638,4 +671,138 @@ fn a_format_shorter_than_its_count_keeps_its_characters() {
     assert_eq!(fmt("A2"), "yyyy-mm-dd");
     assert_eq!(fmt("A3"), "0.000");
     assert!(report.warnings.iter().any(|w| w.contains("declared length")), "{:?}", report.warnings);
+}
+
+/// A workbook whose "Report" sheet holds legacy formulas over ranges of "Data": Data!A1 = 11,
+/// B1:G1 = 1, A2 = 5, A3 = 7, and Report!B1:G1 filled, so a formula in Report!A1 that spilled
+/// would be blocked.
+fn legacy_formulas_book() -> Vec<u8> {
+    let area3d = |r0: u16, r1: u16, c0: u16, c1: u16| cat(&[&[0x3B], &0u16.to_le_bytes(), &u16s(&[r0, r1, c0, c1])]);
+    let a2a3 = area3d(1, 2, 0, 0);
+    let sum = |inner: &[u8]| cat(&[inner, &[0x22, 1], &4u16.to_le_bytes()]);
+    let boundsheet = |pos: u32, name: &str| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, name.len() as u8, 0], name.as_bytes()]));
+    let globals = |p1: u32, p2: u32| {
+        cat(&[
+            &bof(0x0005),
+            &boundsheet(p1, "Data"),
+            &boundsheet(p2, "Report"),
+            &rec(0x01AE, &u16s(&[2, 0x0401])),
+            &rec(0x0017, &cat(&[&u16s(&[1]), &u16s(&[0, 0, 0])])),
+            &eof(),
+        ])
+    };
+    let number = |r: u16, c: u16, n: f64| rec(0x0203, &cat(&[&cell(r, c, 0), &n.to_le_bytes()]));
+    let mut data = bof(0x0010);
+    data.extend(number(0, 0, 11.0));
+    for c in 1..7 {
+        data.extend(number(0, c, 1.0));
+    }
+    data.extend(number(1, 0, 5.0));
+    data.extend(number(2, 0, 7.0));
+    data.extend(eof());
+    let shared = cat(&[&a2a3, &ptg_int(10), &[0x05]]);
+    let array = cat(&[&a2a3, &ptg_int(2), &[0x05]]);
+    let single_array = sum(&cat(&[&a2a3, &ptg_int(2), &[0x05]]));
+    let mut report = bof(0x0010);
+    for c in 1..7 {
+        report.extend(number(0, c, 0.0));
+    }
+    report.extend(cat(&[
+        // A1 = Data!A1:G1, A2 = +Data!A1:G1 (a title row repeated from another sheet).
+        &formula(0, 0, num(11.0), &area3d(0, 0, 0xC000, 6 | 0xC000)),
+        &formula(1, 0, num(11.0), &cat(&[&area3d(0, 0, 0xC000, 6 | 0xC000), &[0x12]])),
+        // C2:C3 share Data!$A$2:$A$3*10.
+        &formula(1, 2, num(50.0), &exp(1, 2)),
+        &rec(0x04BC, &cat(&[&u16s(&[1, 2]), &[2, 2, 0, 2], &(shared.len() as u16).to_le_bytes(), &shared])),
+        &formula(2, 2, num(70.0), &exp(1, 2)),
+        // D2:D3 = {Data!$A$2:$A$3*2}, entered with Ctrl+Shift+Enter.
+        &formula(1, 3, num(10.0), &exp(1, 3)),
+        &rec(0x0221, &cat(&[&u16s(&[1, 2]), &[3, 3], &[0; 6], &(array.len() as u16).to_le_bytes(), &array])),
+        &formula(2, 3, num(14.0), &exp(1, 3)),
+        // H1 = {SUM(Data!$A$2:$A$3*2)}, a one-cell Ctrl+Shift+Enter array.
+        &formula(0, 7, num(24.0), &exp(0, 7)),
+        &rec(0x0221, &cat(&[&u16s(&[0, 0]), &[7, 7], &[0; 6], &(single_array.len() as u16).to_le_bytes(), &single_array])),
+        // H2 = MAX(SUM(Data!$A$2:$A$3/12),0), H3 = SUM(Data!$A$2:$A$3), H4 = SQRT(Data!$A$2:$A$3).
+        &formula(1, 7, num(5.0 / 12.0), &cat(&[&sum(&cat(&[&a2a3, &ptg_int(12), &[0x06]])), &ptg_int(0), &[0x22, 2], &7u16.to_le_bytes()])),
+        &formula(2, 7, num(12.0), &sum(&a2a3)),
+        &formula(3, 7, special(2, 0x0F), &cat(&[&a2a3, &[0x21], &20u16.to_le_bytes()])),
+        &eof(),
+    ]));
+    let p1 = globals(0, 0).len() as u32;
+    let p2 = p1 + data.len() as u32;
+    cat(&[&globals(p1, p2), &data, &report])
+}
+
+#[test]
+fn legacy_formulas_read_with_implicit_intersection() {
+    let bytes = compound("Workbook", &legacy_formulas_book());
+    let formula = |wb: &gridcraft_model::Workbook, a1: &str| {
+        let f = wb.sheets[1].cell(CellRef::parse(a1).unwrap()).and_then(|c| c.formula.clone()).unwrap();
+        (f.text.clone(), f.array)
+    };
+    let range = |a1: &str| RangeRef::parse(a1);
+    let (wb, _) = read_xls(&bytes).unwrap();
+    // Every .xls formula is legacy: a range where one value is expected is intersected.
+    assert_eq!(formula(&wb, "A1"), ("@Data!A1:G1".into(), None));
+    assert_eq!(formula(&wb, "A2"), ("+@Data!A1:G1".into(), None));
+    // Shared formulas too, each cell on its own.
+    assert_eq!(formula(&wb, "C2"), ("@Data!$A$2:$A$3*10".into(), None));
+    assert_eq!(formula(&wb, "C3"), ("@Data!$A$2:$A$3*10".into(), None));
+    // Ctrl+Shift+Enter arrays, one cell or several, stay arrays and are not intersected.
+    assert_eq!(formula(&wb, "D2"), ("Data!$A$2:$A$3*2".into(), range("D2:D3")));
+    assert_eq!(formula(&wb, "H1"), ("SUM(Data!$A$2:$A$3*2)".into(), range("H1")));
+    // An operation inside SUM takes values; SUM of the range itself is left alone.
+    assert_eq!(formula(&wb, "H2"), ("MAX(SUM(@Data!$A$2:$A$3/12),0)".into(), None));
+    assert_eq!(formula(&wb, "H3"), ("SUM(Data!$A$2:$A$3)".into(), None));
+    assert_eq!(formula(&wb, "H4"), ("SQRT(@Data!$A$2:$A$3)".into(), None));
+
+    // The caller's function facts decide: here SQRT takes its argument as a whole.
+    let library = crate::FunctionInfo { is_builtin: |_| true, is_scalar_arg: |n, _| n != "SQRT" };
+    let (custom, _) = crate::read_xls_with(&bytes, library).unwrap();
+    assert_eq!(formula(&custom, "H4"), ("SQRT(Data!$A$2:$A$3)".into(), None));
+    assert_eq!(formula(&custom, "A1"), ("@Data!A1:G1".into(), None));
+
+    // Saved as .xlsx, they stay legacy: no dynamic-array metadata, no _xlfn.SINGLE, and they read
+    // back as they were opened.
+    let saved = write_xlsx(&wb).unwrap();
+    let mut sheet = String::new();
+    std::io::Read::read_to_string(
+        &mut zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap().by_name("xl/worksheets/sheet2.xml").unwrap(),
+        &mut sheet,
+    )
+    .unwrap();
+    assert!(!sheet.contains("cm=") && !sheet.contains("SINGLE"), "{sheet}");
+    assert!(sheet.contains("<f>Data!A1:G1</f>") && sheet.contains("<f>MAX(SUM(Data!$A$2:$A$3/12),0)</f>"), "{sheet}");
+    let (back, _) = read_xlsx(&saved).unwrap();
+    for a1 in ["A1", "A2", "C2", "C3", "D2", "H1", "H2", "H3", "H4"] {
+        assert_eq!(formula(&back, a1), formula(&wb, a1), "{a1}");
+    }
+}
+
+fn one_sheet_with(sheet_records: &[u8]) -> Vec<u8> {
+    let globals = |pos: u32| cat(&[&bof(0x0005), &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 6, 0], b"Sheet1"])), &eof()]);
+    let sheet = cat(&[&bof(0x0010), sheet_records, &rec(0x0203, &cat(&[&cell(0, 0, 0), &7.0f64.to_le_bytes()])), &eof()]);
+    compound("Workbook", &cat(&[&globals(globals(0).len() as u32), &sheet]))
+}
+
+#[test]
+fn xls_window2_right_to_left_sheet_opens_right_to_left() {
+    let window2 = |flags: u16| rec(0x023E, &u16s(&[flags, 0, 0, 64, 0, 0, 0, 0, 0]));
+    let view = |file: &[u8]| {
+        let (wb, _) = read_xls(file).unwrap();
+        let sh = &wb.sheets[0];
+        (sh.right_to_left, sh.show_gridlines, sh.show_headings, sh.show_zeros, sh.show_formulas)
+    };
+    assert_eq!(view(&one_sheet_with(&window2(0x0040 | 0x0004))), (true, false, true, false, false));
+    assert_eq!(view(&one_sheet_with(&window2(0x0001 | 0x0002 | 0x0010))), (false, true, false, true, true));
+}
+
+#[test]
+fn xls_short_window2_is_ignored() {
+    for payload in [&[][..], &[0x40][..], &[0x40, 0][..], &[0x40, 0, 0, 0, 0, 0, 0, 0, 0][..]] {
+        let (wb, _) = read_xls(&one_sheet_with(&rec(0x023E, payload))).unwrap();
+        let sh = &wb.sheets[0];
+        assert_eq!((sh.right_to_left, sh.show_gridlines, sh.show_headings, sh.show_zeros), (false, true, true, true));
+        assert_eq!(v(&wb, 0, "A1"), Value::Number(7.0));
+    }
 }

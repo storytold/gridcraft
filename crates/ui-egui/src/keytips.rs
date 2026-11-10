@@ -10,7 +10,12 @@ pub mod keytip_table;
 pub enum Action {
     Tab(&'static str),
     Command(&'static str),
+    /// A command run with fixed params (a JSON object literal from keytips.json `params`), for
+    /// menu items that share one command id, like the Borders presets (HBO bottom, HBN none).
+    CommandWith(&'static str, &'static str),
     Dialog(&'static str),
+    /// A dialog opened with fixed params, like Format Cells on its Border tab (HBM).
+    DialogWith(&'static str, &'static str),
     /// The target command does not exist yet: the sequence is reserved, its badge shows, and
     /// invoking it is a silent no-op until the command lands (see keytips.json `pending`).
     Pending(&'static str),
@@ -24,6 +29,8 @@ pub enum Action {
 pub struct KeyTips {
     prefix: Option<String>,
     alt_armed: bool,
+    // Left Alt is down: Alt+H (held, as Excel allows) types keytip letters.
+    alt_held: bool,
     // Keep consuming a held mnemonic after its action closes keytips.
     held: Vec<Key>,
 }
@@ -36,6 +43,7 @@ impl KeyTips {
     pub fn clear(&mut self) {
         self.prefix = None;
         self.alt_armed = false;
+        self.alt_held = false;
         self.held.clear();
     }
 
@@ -61,6 +69,9 @@ impl KeyTips {
                 Event::PointerButton { pressed: true, .. } | Event::MouseWheel { .. } | Event::WindowFocused(false) | Event::Ime(_) => self.clear(),
                 Event::Copy | Event::Cut | Event::Paste(_) => self.clear(),
                 Event::ModifiersChanged(m) => {
+                    if !m.alt {
+                        self.alt_held = false;
+                    }
                     if command_modifier(*m) || (mac && m.alt) {
                         self.clear();
                     } else if m.shift {
@@ -68,6 +79,7 @@ impl KeyTips {
                     }
                 }
                 Event::Key { key: Key::AltLeft, pressed, repeat, modifiers, .. } if !mac && !command_modifier(*modifiers) && !modifiers.shift => {
+                    self.alt_held = *pressed;
                     if *pressed {
                         if !repeat {
                             self.alt_armed = true;
@@ -80,8 +92,20 @@ impl KeyTips {
                 }
                 Event::Key { key, pressed, repeat, modifiers, .. } => {
                     self.alt_armed = false;
+                    // A letter typed with left Alt held continues a sequence (Alt+H, O, A), as
+                    // in Excel; any other Alt combination cancels keytips.
+                    let alt_letter =
+                        self.alt_held && modifiers.alt && !modifiers.shift && !command_modifier(*modifiers) && key.name().len() == 1 && {
+                            let next = format!("{}{}", self.prefix.as_deref().unwrap_or_default(), key.name());
+                            keytip_table::lookup(&next).is_some() || keytip_table::has_deeper(&next)
+                        };
+                    if alt_letter && *pressed && self.prefix.is_none() {
+                        self.prefix = Some(String::new());
+                    }
+                    // The release of that letter still carries Alt.
+                    let alt_release = !*pressed && self.held.contains(key);
                     if command_modifier(*modifiers)
-                        || modifiers.alt
+                        || (modifiers.alt && !alt_letter && !alt_release)
                         || matches!(key, Key::AltLeft | Key::AltRight | Key::ControlLeft | Key::ControlRight | Key::SuperLeft | Key::SuperRight)
                     {
                         self.clear();

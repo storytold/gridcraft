@@ -127,6 +127,12 @@ fn styles_theme_and_sizes() {
     let bytes = minimal(body, &[("xl/styles.xml", styles), ("xl/theme/theme1.xml", theme)], rels, "");
     let (wb, _) = read_xlsx(&bytes).unwrap();
     let s = wb.sheet(0).unwrap();
+    assert_style_definitions(&wb, s);
+    assert_theme(&wb);
+    assert_sheet_settings(s);
+}
+
+fn assert_style_definitions(wb: &gridcraft_model::Workbook, s: &gridcraft_model::Sheet) {
     let st1 = wb.styles.get(s.cell(at("A1")).unwrap().style);
     assert_eq!(st1.num_fmt.as_str(), "0.000\"kg\"");
     assert!(st1.font.bold && st1.font.italic && st1.font.strike);
@@ -152,6 +158,9 @@ fn styles_theme_and_sizes() {
     assert_eq!(st3.fill.pattern, PatternType::DarkGrid);
     assert_eq!(st3.fill.fg, Color::Theme(5, 0));
     assert_eq!(wb.styles.get(s.cell(at("D1")).unwrap().style).num_fmt.as_str(), "General");
+}
+
+fn assert_theme(wb: &gridcraft_model::Workbook) {
     // Theme: file order dk1, lt1… maps to lt1, dk1… in the model.
     assert_eq!(wb.theme.colors[0], 0xFFFFFF);
     assert_eq!(wb.theme.colors[1], 0x000000);
@@ -159,6 +168,9 @@ fn styles_theme_and_sizes() {
     assert_eq!(wb.theme.colors[3], 0x44546A);
     assert_eq!(wb.theme.colors[4], 0x4472C4);
     assert_eq!(wb.theme.major_font, "Calibri Light");
+}
+
+fn assert_sheet_settings(s: &gridcraft_model::Sheet) {
     // Sheet settings.
     assert_eq!(s.tab_color, Some(Color::Rgb(0x00B050)));
     assert_eq!(s.freeze, Some((2, 1)));
@@ -187,6 +199,67 @@ fn styles_theme_and_sizes() {
     }
     assert_eq!(s.print.paper, "A4");
     assert_eq!(s.print.fit_to, Some((1, 0)));
+}
+
+/// A differential format's face, size and scheme survive a save, and so do the parts it states at
+/// their default value: a bold, italic or underline turned off, a protection (#1209). Read as
+/// unset, a header dxf that turns bold off lost it and the table style made the header bold again.
+#[test]
+fn dxf_font_and_parts_stated_at_their_defaults_survive_save() {
+    let dxfs = concat!(
+        r#"<dxf><font><b val="0"/><i val="0"/><strike val="0"/><u val="none"/><sz val="11"/><name val="Calibri"/><scheme val="minor"/></font></dxf>"#,
+        r#"<dxf><protection locked="1" hidden="0"/></dxf>"#,
+        r#"<dxf><font><b/></font><protection locked="0" hidden="1"/></dxf>"#,
+        r#"<dxf><font><sz val="9"/><name val="Arial"/></font></dxf>"#,
+    );
+    let styles = format!(
+        r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+      <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+      <borders count="1"><border/></borders>
+      <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>
+      <dxfs count="4">{dxfs}</dxfs>
+    </styleSheet>"#
+    );
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <conditionalFormatting sqref="A1"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>
+      <conditionalFormatting sqref="A2"><cfRule type="cellIs" dxfId="1" priority="2" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>
+      <conditionalFormatting sqref="A3"><cfRule type="cellIs" dxfId="2" priority="3" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>
+      <conditionalFormatting sqref="A4"><cfRule type="cellIs" dxfId="3" priority="4" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>"#;
+    let bytes = minimal(body, &[("xl/styles.xml", &styles)], rels, "");
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let out = crate::write_xlsx(&wb).unwrap();
+    let st = crate::package::Package::open(&out).unwrap().read("xl/styles.xml").unwrap().unwrap();
+    let st = String::from_utf8(st).unwrap();
+    let written = st.split_once("<dxfs").and_then(|(_, r)| r.split_once("</dxfs>")).map(|(d, _)| d);
+    assert_eq!(written, Some(format!(r#" count="4">{dxfs}"#).as_str()));
+}
+
+/// A dxf writes its parts in schema order: the border comes before the protection.
+#[test]
+fn dxf_border_is_written_before_protection() {
+    let dxfs = r#"<dxf><border><left style="thin"><color rgb="FF000000"/></left></border><protection locked="0" hidden="1"/></dxf>"#;
+    let styles = format!(
+        r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+      <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+      <borders count="1"><border/></borders>
+      <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>
+      <dxfs count="1">{dxfs}</dxfs>
+    </styleSheet>"#
+    );
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <conditionalFormatting sqref="A1"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>"#;
+    let bytes = minimal(body, &[("xl/styles.xml", &styles)], rels, "");
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let out = crate::write_xlsx(&wb).unwrap();
+    let st = crate::package::Package::open(&out).unwrap().read("xl/styles.xml").unwrap().unwrap();
+    let st = String::from_utf8(st).unwrap();
+    let dx = st.split_once("<dxfs").and_then(|(_, r)| r.split_once("</dxfs>")).map(|(d, _)| d).unwrap_or_default();
+    let (b, p) = (dx.find("<border"), dx.find("<protection"));
+    assert!(b.is_some() && p.is_some() && b < p, "{dx}");
 }
 
 #[test]
@@ -381,7 +454,7 @@ fn drawing_with_picture_and_chart() {
     let (wb, _) = read_xlsx(&bytes).unwrap();
     let s = wb.sheet(0).unwrap();
     let img = &s.images[0];
-    assert_eq!(img.data, png);
+    assert_eq!(*img.data, png);
     assert_eq!(img.mime, "image/png");
     assert_eq!(img.alt, "logo");
     assert_eq!(img.anchor.cell, at("B3"));
@@ -475,8 +548,11 @@ fn chartex_parts_as_excel_expects_them() {
         }],
         legend: LegendPos::Bottom,
         data_labels: false,
+        data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,
@@ -510,6 +586,50 @@ fn chartex_parts_as_excel_expects_them() {
     assert!(back.names.is_empty());
     let s = &back.sheet(0).unwrap().charts[0].series[0];
     assert_eq!((s.name.as_deref(), s.categories.as_deref(), s.values.as_str()), (Some("Data!$B$1"), Some("Data!$A$2:$A$5"), "Data!$B$2:$B$5"));
+}
+
+#[test]
+fn doughnut_writes_every_series_as_a_ring_with_hole_and_angle() {
+    use gridcraft_model::{Chart, ChartKind, LegendPos, Series};
+    let ser = |name: &str, values: &str| Series {
+        name: Some(name.into()),
+        categories: Some("Data!$A$2:$A$4".into()),
+        values: values.into(),
+        ..Default::default()
+    };
+    let mut wb = gridcraft_model::Workbook::new();
+    let mut sheet = gridcraft_model::Sheet::new("Data");
+    sheet.charts.push(Chart {
+        id: 1,
+        kind: ChartKind::Doughnut,
+        anchor: Default::default(),
+        title: None,
+        series: vec![ser("Outer", "Data!$B$2:$B$4"), ser("Inner", "Data!$C$2:$C$4")],
+        legend: LegendPos::Right,
+        data_labels: false,
+        data_table: None,
+        gridlines: false,
+        style: 2,
+        hole_size: 25,
+        first_slice_angle: 180,
+        x_title: None,
+        y_title: None,
+        source: None,
+        by_rows: false,
+        pivot: None,
+    });
+    wb.sheets = vec![std::sync::Arc::new(sheet)];
+    let bytes = crate::write_xlsx(&wb).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+    let mut cx = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("xl/charts/chart1.xml").unwrap(), &mut cx).unwrap();
+    assert!(cx.contains("<c:doughnutChart>"), "{cx}");
+    assert_eq!(cx.matches("<c:ser>").count(), 2, "one series per ring: {cx}");
+    assert!(cx.contains("<c:holeSize val=\"25\"/>"), "{cx}");
+    assert!(cx.contains("<c:firstSliceAng val=\"180\"/>"), "{cx}");
+    let (back, _) = crate::read_xlsx(&bytes).unwrap();
+    let ch = &back.sheet(0).unwrap().charts[0];
+    assert_eq!((ch.kind, ch.series.len(), ch.hole_size, ch.first_slice_angle), (ChartKind::Doughnut, 2, 25, 180));
 }
 
 /// #377: a WordArt-style text box keeps its run size, bold, typeface, text fill and outline, its
@@ -553,6 +673,36 @@ fn text_box_formatting_is_read_and_written() {
     assert_eq!(g.text_outline.map(|o| o.1), Some(1.5));
 }
 
+/// #1013: cell format 0 is the workbook's Normal cell format. A file that gives it a number
+/// format, fill, alignment or protection must keep all of it for cells that omit their style (or
+/// say s="0"), not only the font.
+#[test]
+fn the_default_cell_format_keeps_every_property_of_xf_zero() {
+    let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+      <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF00B050"/><bgColor indexed="64"/></patternFill></fill></fills>
+      <borders count="1"><border/></borders>
+      <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+      <cellXfs count="2"><xf numFmtId="2" fontId="0" fillId="1" borderId="0" applyNumberFormat="1" applyFill="1" applyAlignment="1" applyProtection="1"><alignment horizontal="center"/><protection locked="0"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>
+    </styleSheet>"#;
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>5</v></c><c r="B1" s="0"><v>5</v></c></row></sheetData>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles)], rels, "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    let check = |st: &gridcraft_model::Style, when: &str| {
+        assert_eq!(st.num_fmt.as_str(), "0.00", "number format {when}");
+        assert_eq!(st.fill.pattern, PatternType::Solid, "fill {when}");
+        assert_eq!(st.fill.fg, Color::Rgb(0x00B050), "fill colour {when}");
+        assert_eq!(st.align.h, HAlign::Center, "alignment {when}");
+        assert!(!st.protection.locked, "protection {when}");
+    };
+    check(wb.styles.get(StyleId::DEFAULT), "after reading");
+    assert_eq!(s.cell(at("A1")).unwrap().style, StyleId::DEFAULT);
+    assert_eq!(s.cell(at("B1")).unwrap().style, StyleId::DEFAULT);
+    let (back, _) = read_xlsx(&crate::write_xlsx(&wb).unwrap()).unwrap();
+    check(back.styles.get(StyleId::DEFAULT), "after saving");
+}
+
 /// `_xludf.` marks a user-defined call even when a built-in has the same name; dropping it turns
 /// the call into the built-in, and `_xludf.EOMONTH()` into a call Excel repairs away (#726).
 #[test]
@@ -575,5 +725,147 @@ fn user_defined_function_prefix_round_trips() {
     for (a, f) in cases {
         let cell = sheet.child("sheetData").unwrap().kids("row").flat_map(|r| r.kids("c")).find(|c| c.attr("r") == Some(a)).unwrap();
         assert_eq!(cell.child("f").unwrap().text, f, "written {a}");
+    }
+}
+
+/// A formula saved without dynamic-array metadata is a legacy formula: Excel intersects a range
+/// given where one value is expected with the formula's row or column, and shows the formula with
+/// `@` there. Dynamic-array formulas (`cm`) and Ctrl+Shift+Enter arrays are read as written.
+#[test]
+fn legacy_formulas_read_with_implicit_intersection() {
+    let body = r#"<sheetData>
+      <row r="1"><c r="A1"><v>1</v></c></row>
+      <row r="2"><c r="A2"><v>2</v></c><c r="B2"><f>TANH(A1:A3)</f><v>0.96</v></c><c r="C2" cm="1"><f t="array" ref="C2:C4">TANH(A1:A3)</f><v>0.76</v></c><c r="D2"><f t="array" ref="D2:D4">TANH(A1:A3)</f><v>0.76</v></c></row>
+      <row r="3"><c r="A3"><v>3</v></c><c r="B3"><f>SUM(A1:A3)</f><v>6</v></c><c r="E3"><f>SUMPRODUCT(A1:A3*A1:A3)</f><v>14</v></c></row>
+      <row r="4"><c r="B4"><f>A1:A3+Vals*2</f></c><c r="E4"><f>INDEX(A1:C3,0,1)</f></c><c r="F4"><f>IF(A1&gt;0,A1:A3,0)</f></c><c r="G4"><f>SUM(IF(A1:A3&gt;1,A1:A3))</f></c></row>
+      <row r="5"><c r="A5"><v>4</v></c><c r="B5"><v>5</v></c><c r="C5"><v>6</v></c></row>
+      <row r="7"><c r="B7"><f>TANH(A5:C5)</f></c><c r="C7"><f>COUNTIF(A1:A3,"&gt;1")+ROWS(A1:A3)</f></c><c r="D7"><f>ROW(A1:A3)</f></c><c r="E7"><f>T(A5:C5)</f></c></row>
+    </sheetData>"#;
+    let names = r#"<definedNames><definedName name="Vals">Data!$A$1:$A$3</definedName></definedNames>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", names)).unwrap();
+    let s = wb.sheet(0).unwrap();
+    let f = |a: &str| s.cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| (f.text.clone(), f.array)).unwrap();
+    let cases = [
+        ("B2", "TANH(@A1:A3)"),
+        ("C2", "TANH(A1:A3)"),
+        ("B3", "SUM(A1:A3)"),
+        ("E3", "SUMPRODUCT(A1:A3*A1:A3)"),
+        ("B4", "@A1:A3+@Vals*2"),
+        ("E4", "@INDEX(A1:C3,0,1)"),
+        ("F4", "IF(A1>0,@A1:A3,0)"),
+        ("G4", "SUM(IF(@A1:A3>1,A1:A3))"),
+        ("B7", "TANH(@A5:C5)"),
+        ("C7", "COUNTIF(A1:A3,\">1\")+ROWS(A1:A3)"),
+        ("D7", "@ROW(A1:A3)"),
+        // T reads a reference's top-left cell rather than intersecting it.
+        ("E7", "@T(A5:C5)"),
+    ];
+    for (a, text) in cases {
+        assert_eq!(f(a), (text.to_string(), None), "{a}");
+    }
+    assert_eq!(f("D2"), ("TANH(A1:A3)".to_string(), RangeRef::parse("D2:D4")));
+}
+
+/// The caller's function facts decide what a legacy formula means: an add-in function takes the
+/// range whole and its result is intersected; a parameter the library says takes an array is not
+/// intersected. Saving the intersected add-in call writes it back as the legacy formula it was.
+#[test]
+fn legacy_formulas_use_the_callers_function_facts() {
+    let body = r#"<sheetData>
+      <row r="1"><c r="A1"><v>1</v></c></row>
+      <row r="2"><c r="A2"><v>2</v></c><c r="B2"><f>MYUDF(A1:A3)</f></c><c r="C2"><f>TANH(A1:A3)</f></c></row>
+      <row r="3"><c r="A3"><v>3</v></c></row>
+    </sheetData>"#;
+    let bytes = minimal(body, &[], "", "");
+    let library = crate::FunctionInfo { is_builtin: |n| n != "MYUDF", is_scalar_arg: |n, _| n != "TANH" };
+    let text =
+        |wb: &gridcraft_model::Workbook, a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap();
+    let (plain, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(text(&plain, "B2"), "MYUDF(@A1:A3)", "without facts every function is built in");
+    assert_eq!(text(&plain, "C2"), "TANH(@A1:A3)");
+    let (wb, _) = crate::read_xlsx_with(&bytes, library).unwrap();
+    assert_eq!(text(&wb, "B2"), "@MYUDF(A1:A3)");
+    assert_eq!(text(&wb, "C2"), "TANH(A1:A3)");
+    let out = crate::write_xlsx_with(&wb, crate::XlsxKind::Workbook, library).unwrap();
+    let mut pkg = crate::package::Package::open(&out).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    let b2 = sheet.child("sheetData").unwrap().kids("row").flat_map(|r| r.kids("c")).find(|c| c.attr("r") == Some("B2")).unwrap();
+    assert_eq!(b2.attr("cm"), None);
+    assert_eq!(b2.child("f").map(|f| f.text.as_str()), Some("MYUDF(A1:A3)"));
+    let (back, _) = crate::read_xlsx_with(&out, library).unwrap();
+    assert_eq!(text(&back, "B2"), "@MYUDF(A1:A3)");
+}
+
+/// Legacy IF does not evaluate its condition as an array inside SUMPRODUCT, nor IFERROR and IFNA
+/// their arguments (that needs Ctrl+Shift+Enter): they are intersected there, while IF's results
+/// stay arrays.
+#[test]
+fn legacy_if_and_iferror_arguments_are_intersected_inside_array_functions() {
+    let body = r#"<sheetData>
+      <row r="1"><c r="A1"><v>1</v></c></row>
+      <row r="2"><c r="A2"><v>2</v></c><c r="D2"><f>SUMPRODUCT(IFERROR(A1:A3/A1:A3,0))</f></c><c r="E2"><f>SUMPRODUCT(IFNA(A1:A3,0),A1:A3)</f></c></row>
+      <row r="3"><c r="A3"><v>3</v></c></row>
+      <row r="4"><c r="D4"><f>SUMPRODUCT(IF(A1:A3&gt;1,1,0))</f></c><c r="E4"><f>SUMPRODUCT(IF(A1&gt;1,A1:A3,0))</f></c></row>
+    </sheetData>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let text = |a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap();
+    assert_eq!(text("D2"), "SUMPRODUCT(IFERROR(@A1:A3/@A1:A3,0))");
+    assert_eq!(text("E2"), "SUMPRODUCT(IFNA(@A1:A3,0),A1:A3)");
+    assert_eq!(text("D4"), "SUMPRODUCT(IF(@A1:A3>1,1,0))");
+    assert_eq!(text("E4"), "SUMPRODUCT(IF(A1>1,A1:A3,0))");
+}
+/// `customWidth="1"` pins a column even when its width rounds to the default: Standard Width does not
+/// move it, and a save must keep its `<col>` (openpyxl writes 9.08 for Excel's 8.43, #1607).
+#[test]
+fn custom_widths_equal_to_the_default_round_trip() {
+    let body = r#"<sheetFormatPr baseColWidth="8" defaultRowHeight="15"/>
+      <cols><col min="4" max="5" width="9.08" customWidth="1"/><col min="6" max="6" width="9.140625" customWidth="1"/><col min="7" max="7" width="9.2" customWidth="1"/><col min="8" max="8" width="9.140625"/></cols>
+      <sheetData/>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.default_col_width, 64.0);
+    for c in 3..=6 {
+        assert_eq!(s.cols.get(&c).and_then(|i| i.size), Some(64.0), "read col {c}");
+    }
+    assert_eq!(s.cols.get(&7), None, "a width without customWidth equal to the default stays the default");
+    let bytes = crate::write_xlsx(&wb).unwrap();
+    let mut pkg = crate::package::Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    let cols: Vec<_> =
+        sheet.child("cols").unwrap().kids("col").map(|c| (c.attr_u32("min"), c.attr_u32("max"), c.flag("customWidth", false))).collect();
+    assert_eq!(cols, [(Some(4), Some(7), true)]);
+}
+
+#[test]
+fn every_skipped_drawing_object_is_reported() {
+    let frame = |row: u32, rid: &str| {
+        format!(
+            r#"<xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>{row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="C"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/drawing/2014/chartex">{rid}</a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>"#,
+            row + 5
+        )
+    };
+    let missing = r#"<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId9"/>"#;
+    let gone = r#"<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId1"/>"#;
+    let drawing = format!(
+        r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">{}{}{}{}{}</xdr:wsDr>"#,
+        frame(0, ""),
+        frame(10, ""),
+        frame(20, ""),
+        frame(30, missing),
+        frame(40, gone)
+    );
+    let drels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart9.xml"/></Relationships>"#;
+    let srels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#;
+    let bytes = super::minimal(
+        r#"<sheetData/><drawing r:id="rId1"/>"#,
+        &[("xl/worksheets/_rels/sheet1.xml.rels", srels), ("xl/drawings/drawing1.xml", &drawing), ("xl/drawings/_rels/drawing1.xml.rels", drels)],
+        "",
+        "",
+    );
+    let (_, rep) = read_xlsx(&bytes).unwrap();
+    for n in 1..=5 {
+        let tag = format!("object {n})");
+        let hits = rep.warnings.iter().filter(|w| w.contains("skipped") && w.contains("drawing1.xml") && w.contains(&tag)).count();
+        assert_eq!(hits, 1, "object {n}: {:?}", rep.warnings);
     }
 }
