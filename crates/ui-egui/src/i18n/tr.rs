@@ -1293,6 +1293,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Circular References: {cell}" => "Döngüsel Başvurular: {cell}",
         "Formula Bar|Enter" => "Girişi Onayla",
         "Page {page}" => "Sayfa {page}",
+        "Diagram" => "Diyagram",
+        "Decorative Text" => "Dekoratif Metin",
         "Paste" => "Yapıştır",
         "Paste Values" => "Değerleri Yapıştır",
         "Paste Formulas" => "Formülleri Yapıştır",

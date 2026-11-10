@@ -825,6 +825,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "— VBA project (preserved, not run)" => "— Projet VBA (conservé, non exécuté)",
         "— {steps} steps" => "— {steps} étapes",
         "€ Euro" => "€ Euro",
+        "Diagram" => "Diagramme",
+        "Decorative Text" => "Texte décoratif",
         "Different First Page" => "Première page différente",
         "Different Odd & Even Pages" => "Pages paires et impaires différentes",
         "Scale with Document" => "Mettre à l'échelle avec le document",

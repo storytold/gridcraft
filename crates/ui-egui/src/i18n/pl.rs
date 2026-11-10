@@ -463,6 +463,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "{contributors} contributors · {commits} commits" => "Współtwórcy: {contributors} · commity: {commits}",
         "Page {page}" => "Strona {page}",
+        "Diagram" => "Diagram",
+        "Decorative Text" => "Tekst ozdobny",
         "Paste" => "Wklej",
         "Paste Values" => "Wklej wartości",
         "Paste Formulas" => "Wklej formuły",

@@ -82,6 +82,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "{count} items in this file were handled differently. First: {warning}" => "Элементов файла, обработанных иначе: {count}. Первый: {warning}",
         "Paste Special|Add" => "Сложить",
         "Text to Columns|Comma" => "Запятая",
+        "Diagram" => "Схема",
+        "Decorative Text" => "Декоративный текст",
         "Paste" => "Вставить",
         "Paste Values" => "Вставить значения",
         "Paste Formulas" => "Вставить формулы",

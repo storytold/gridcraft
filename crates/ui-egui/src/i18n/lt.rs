@@ -121,6 +121,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Change Chart Type" => "Keisti diagramos tipą",
         "Change File Type" => "Keisti failo tipą",
         "Chart" => "Diagrama",
+        "Diagram" => "Schema",
+        "Decorative Text" => "Dekoratyvus tekstas",
         "Chart\nTitle" => "Diagramos\npavadinimas",
         "Chart Design" => "Diagramos dizainas",
         "Chart Title" => "Diagramos pavadinimas",

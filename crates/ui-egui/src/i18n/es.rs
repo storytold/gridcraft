@@ -760,6 +760,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "— VBA project (preserved, not run)" => "— Proyecto VBA (conservado, no ejecutado)",
         "— {steps} steps" => "— {steps} pasos",
         "€ Euro" => "€ Euro",
+        "Diagram" => "Diagrama",
+        "Decorative Text" => "Texto decorativo",
         "Paste" => "Pegar",
         "Paste Values" => "Pegar valores",
         "Paste Formulas" => "Pegar fórmulas",

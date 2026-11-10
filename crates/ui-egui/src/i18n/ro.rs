@@ -11,6 +11,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Borders|None" => "Niciunul",
         "Report Layout|Outline" => "Contur",
         "Page {page}" => "Pagina {page}",
+        "Diagram" => "Schemă",
+        "Decorative Text" => "Text decorativ",
         "Paste" => "Lipire",
         "Paste Values" => "Lipire valori",
         "Paste Formulas" => "Lipire formule",

@@ -589,6 +589,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Product" => "ნამრავლი",
         "Include forecast statistics" => "პროგნოზის სტატისტიკის ჩართვა",
         "Chart" => "დიაგრამა",
+        "Diagram" => "სქემა",
+        "Decorative Text" => "დეკორატიული ტექსტი",
         "Line chart" => "ხაზოვანი დიაგრამა",
         "Column chart" => "სვეტოვანი დიაგრამა",
         "At each change in (column letter):" => "ყოველი ცვლილებისას სვეტში (ასო):",

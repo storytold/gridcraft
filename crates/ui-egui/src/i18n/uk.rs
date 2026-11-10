@@ -6,6 +6,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Borders|None" => "Без меж",
         "Report Layout|Outline" => "Структурна форма",
         "Page {page}" => "Сторінка {page}",
+        "Diagram" => "Схема",
+        "Decorative Text" => "Декоративний текст",
         "Paste" => "Вставити",
         "Paste Values" => "Вставити значення",
         "Paste Formulas" => "Вставити формули",

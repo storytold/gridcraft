@@ -213,6 +213,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Trascina per riempire le celle. Trascina dall'interno di una cella per selezionare un intervallo."
         }
         "Page {page}" => "Pagina {page}",
+        "Diagram" => "Diagramma",
+        "Decorative Text" => "Testo decorativo",
         "Paste" => "Incolla",
         "Paste Values" => "Incolla valori",
         "Paste Formulas" => "Incolla formule",

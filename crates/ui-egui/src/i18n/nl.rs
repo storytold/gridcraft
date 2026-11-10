@@ -5,6 +5,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Series{n}" => "Reeks {n}",
         "Page {page}" => "Pagina {page}",
+        "Diagram" => "Diagram",
+        "Decorative Text" => "Decoratieve tekst",
         "Paste" => "Plakken",
         "Paste Values" => "Waarden plakken",
         "Paste Formulas" => "Formules plakken",

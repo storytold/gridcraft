@@ -62,6 +62,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "{count} items in this file were handled differently. First: {warning}" => {
             "이 파일의 {count}개 항목이 다르게 처리되었습니다. 첫 번째 항목: {warning}"
         }
+        "Diagram" => "다이어그램",
+        "Decorative Text" => "장식 텍스트",
         "Paste" => "붙여넣기",
         "Paste Values" => "값 붙여넣기",
         "Paste Formulas" => "수식 붙여넣기",

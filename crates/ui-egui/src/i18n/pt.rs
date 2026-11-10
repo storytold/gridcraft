@@ -42,6 +42,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "{count} items in this file were handled differently. First: {warning}" => {
             "{count} itens deste arquivo foram processados de forma diferente. Primeiro: {warning}"
         }
+        "Diagram" => "Diagrama",
+        "Decorative Text" => "Texto decorativo",
         "Paste" => "Colar",
         "Paste Values" => "Colar Valores",
         "Paste Formulas" => "Colar Fórmulas",

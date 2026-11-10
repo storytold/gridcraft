@@ -285,11 +285,16 @@ impl Language {
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
     /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
     pub fn tr(self, text: &str) -> &str {
-        self.translation(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+        self.translated(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
 
     /// Raw catalog lookup for contextual labels and shared message templates.
     pub fn translation(self, text: &str) -> Option<&'static str> {
+        self.translated(text)
+    }
+
+    /// The catalog's own translation of `text`, or `None` when it falls back to English.
+    fn translated(self, text: &str) -> Option<&'static str> {
         match self {
             Self::En => None,
             Self::Es => es::translate(text),
@@ -511,6 +516,23 @@ mod tests {
             for (english, identifier) in examples {
                 if let Some(translated) = language.function_description(english) {
                     assert!(translated.contains(identifier), "{language:?}: missing {identifier} in {translated}");
+                }
+            }
+        }
+    }
+
+    /// Every shipped catalog names GridCraft's own Diagram and Decorative Text features, and
+    /// Diagram never repeats that catalog's chart word (both sit on the Insert tab).
+    #[test]
+    fn every_catalog_has_distinct_diagram_and_decorative_text() {
+        for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
+            let code = language.code();
+            let diagram = language.translated("Diagram");
+            assert!(diagram.is_some(), "{code}: Diagram");
+            assert!(language.translated("Decorative Text").is_some(), "{code}: Decorative Text");
+            for chart in ["Chart", "Charts"] {
+                if let Some(chart_text) = language.translated(chart) {
+                    assert_ne!(diagram, Some(chart_text), "{code}: Diagram equals {chart}");
                 }
             }
         }

@@ -169,6 +169,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Change Chart Type" => "Ändra diagramtyp",
         "Change File Type" => "Ändra filtyp",
         "Chart" => "Diagram",
+        "Diagram" => "Flödesschema",
+        "Decorative Text" => "Dekorativ text",
         "Chart\nTitle" => "Diagram-\nrubrik",
         "Chart Design" => "Diagramdesign",
         "Chart Title" => "Diagramrubrik",

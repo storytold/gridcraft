@@ -6,6 +6,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Series{n}" => "Chuỗi {n}",
         "Page {page}" => "Trang {page}",
+        "Diagram" => "Sơ đồ",
+        "Decorative Text" => "Chữ trang trí",
         "Paste" => "Dán",
         "Paste Values" => "Dán giá trị",
         "Paste Formulas" => "Dán công thức",

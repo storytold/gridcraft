@@ -62,6 +62,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "{count} items in this file were handled differently. First: {warning}" => {
             "{count} stavki u ovoj datoteci obrađeno je drugačije. Prvo: {warning}"
         }
+        "Diagram" => "Dijagram",
+        "Decorative Text" => "Ukrasni tekst",
         "Paste" => "Nalepi",
         "Paste Values" => "Nalepi vrednosti",
         "Paste Formulas" => "Nalepi formule",

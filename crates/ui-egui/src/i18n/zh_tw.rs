@@ -656,6 +656,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Center Across Selection" => "跨欄置中",
         "Change Chart Type" => "更改圖表型別",
         "Chart" => "圖表",
+        "Diagram" => "示意圖",
+        "Decorative Text" => "藝術字",
         "Chart Title" => "圖表標題",
         "Chart data range:" => "圖表資料區域：",
         "Check Accessibility" => "檢查輔助功能",

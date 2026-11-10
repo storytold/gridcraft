@@ -62,6 +62,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "{count} items in this file were handled differently. First: {warning}" => {
             "{count} položek v tomto souboru bylo zpracováno jinak. První: {warning}"
         }
+        "Diagram" => "Diagram",
+        "Decorative Text" => "Ozdobný text",
         "Paste" => "Vložit",
         "Paste Values" => "Vložit hodnoty",
         "Paste Formulas" => "Vložit vzorce",

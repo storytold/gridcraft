@@ -591,6 +591,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Product" => "Produkt",
         "Include forecast statistics" => "Medtag prognosestatistik",
         "Chart" => "Diagram",
+        "Diagram" => "Skema",
+        "Decorative Text" => "Dekorativ tekst",
         "Line chart" => "Kurvediagram",
         "Column chart" => "Søjlediagram",
         "At each change in (column letter):" => "Ved hver ændring i (kolonnebogstav):",

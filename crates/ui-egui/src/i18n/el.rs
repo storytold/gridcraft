@@ -8,6 +8,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Report Layout|Outline" => "Διάρθρωση",
         "Borders|None" => "Κανένα",
         "Page {page}" => "Σελίδα {page}",
+        "Diagram" => "Διάγραμμα",
+        "Decorative Text" => "Διακοσμητικό κείμενο",
         "Paste" => "Επικόλληση",
         "Paste Values" => "Επικόλληση τιμών",
         "Paste Formulas" => "Επικόλληση τύπων",

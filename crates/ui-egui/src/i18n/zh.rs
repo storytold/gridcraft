@@ -874,6 +874,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "— VBA project (preserved, not run)" => "— VBA 工程（保留，不运行）",
         "— {steps} steps" => "— {steps} 步",
         "€ Euro" => "€ 欧元",
+        "Diagram" => "图示",
+        "Decorative Text" => "装饰文字",
         "Paste" => "粘贴",
         "Paste Values" => "粘贴值",
         "Paste Formulas" => "粘贴公式",

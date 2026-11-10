@@ -843,6 +843,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Resize\nTable" => "Tabellengröße\nändern",
         "Resize Table" => "Tabellengröße ändern",
         "Scroll ribbon left" => "Menüband nach links scrollen",
+        "Diagram" => "Schema",
+        "Decorative Text" => "Dekorativer Text",
         "Paste" => "Einfügen",
         "Paste Values" => "Werte einfügen",
         "Paste Formulas" => "Formeln einfügen",
