@@ -372,9 +372,11 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
         let a = opacity.map_or(255, |o| (f32::from(o.min(100)) * 2.55).round() as u8);
         [r, g, b, a]
     };
-    // Excel's default bar outline: thin and black.
+    // Excel's default bar outline follows the chart style (measured on a synthetic chart): thin
+    // and black for styles 1-16 and 33-40, none for 17-32 and 41-48.
+    let default_outline = (!matches!(chart.style, 17..=32 | 41..=48)).then_some(([0, 0, 0, 0xFF], 0.75));
     let outline = |o: gridcraft_model::BarOutline| match o {
-        gridcraft_model::BarOutline::Auto => Some(([0, 0, 0, 0xFF], 0.75)),
+        gridcraft_model::BarOutline::Auto => default_outline,
         gridcraft_model::BarOutline::None => None,
         gridcraft_model::BarOutline::Solid { color, width } => {
             Some((rgba(color, None, [0, 0, 0]), width.filter(|w| w.is_finite()).map_or(0.75, |w| w.clamp(0.25, 20.0))))

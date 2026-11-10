@@ -1800,6 +1800,11 @@ fn up_down_bar_opacity_reaches_the_drawing() {
     u.down_shadow = Some(gridcraft_model::InnerShadow { blur: 56.0, distance: 4.0, direction: 180.0, color: Color::Rgb(0), opacity: 50 });
     let ud = resolve(&wb, 0, &c).up_down.unwrap();
     assert_eq!(ud.down_outline, None);
+    // Styles 17-32 and 41-48 draw no default outline.
+    for (style, outlined) in [(1, true), (16, true), (17, false), (26, false), (32, false), (33, true), (40, true), (41, false), (48, false)] {
+        let c = Chart { style, ..c.clone() };
+        assert_eq!(resolve(&wb, 0, &c).up_down.unwrap().up_outline.is_some(), outlined, "style {style}");
+    }
     let s = ud.down_shadow.unwrap();
     assert!((s.blur - 74.667).abs() < 0.01 && (s.dx + 5.333).abs() < 0.01 && s.dy.abs() < 0.01, "{s:?}");
     assert_eq!(s.color, [0, 0, 0, 128]);
