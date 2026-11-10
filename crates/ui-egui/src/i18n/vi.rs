@@ -477,6 +477,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Cài đặt chuyển đổi dữ liệu áp dụng cho mọi sổ làm việc; chúng không được lưu trong tệp."
         }
+        "Remove trailing zeros after the decimal separator" => "Loại bỏ các số 0 ở cuối sau dấu phân cách thập phân",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Tắt: 720.0 được hiển thị và lưu là 720.0, còn 3.10 là 3.10 (ô nhận định dạng số 0.0 hoặc 0.00). Giá trị vẫn là số. Đây không phải là tùy chọn của Excel."
+        }
         _ => return None,
     })
 }

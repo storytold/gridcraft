@@ -477,6 +477,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Veri dönüştürme ayarları tüm çalışma kitaplarına uygulanır; dosyaya kaydedilmez."
         }
+        "Remove trailing zeros after the decimal separator" => "Ondalık ayırıcıdan sonraki sondaki sıfırları kaldır",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Kapalı: 720.0, 720.0 olarak; 3.10 da 3.10 olarak gösterilir ve kaydedilir (hücre 0.0 veya 0.00 sayı biçimini alır). Sayı olarak kalır. Bir Excel seçeneği değildir."
+        }
         _ => return None,
     })
 }

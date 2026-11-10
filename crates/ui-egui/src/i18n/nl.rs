@@ -585,6 +585,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Instellingen voor gegevensconversie gelden voor elke werkmap; ze worden niet in het bestand opgeslagen."
         }
+        "Remove trailing zeros after the decimal separator" => "Volgnullen na het decimaalteken verwijderen",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Uit: 720.0 wordt weergegeven en opgeslagen als 720.0, en 3.10 als 3.10 (de cel krijgt de getalnotatie 0.0 of 0.00). Het blijft een getal. Geen Excel-optie."
+        }
         _ => return None,
     })
 }

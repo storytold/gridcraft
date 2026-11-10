@@ -1095,6 +1095,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Setările de conversie a datelor se aplică tuturor registrelor de lucru; nu sunt salvate în fișier."
         }
+        "Remove trailing zeros after the decimal separator" => "Eliminarea zerourilor de la final după separatorul zecimal",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Dezactivat: 720.0 se afișează și se salvează ca 720.0, iar 3.10 ca 3.10 (celula primește formatul de număr 0.0 sau 0.00). Rămâne număr. Nu este o opțiune Excel."
+        }
         _ => return None,
     })
 }

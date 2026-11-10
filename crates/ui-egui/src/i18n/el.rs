@@ -1043,6 +1043,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Οι ρυθμίσεις μετατροπής δεδομένων ισχύουν για κάθε βιβλίο εργασίας· δεν αποθηκεύονται στο αρχείο."
         }
+        "Remove trailing zeros after the decimal separator" => "Κατάργηση τελικών μηδενικών μετά το διαχωριστικό δεκαδικών",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Απενεργοποιημένο: το 720.0 εμφανίζεται και αποθηκεύεται ως 720.0 και το 3.10 ως 3.10 (το κελί παίρνει μορφή αριθμού 0.0 ή 0.00). Παραμένει αριθμός. Δεν είναι επιλογή του Excel."
+        }
         _ => return None,
     })
 }
