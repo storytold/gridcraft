@@ -5,7 +5,7 @@ use gridcraft_model::{Cell, Formula, StyleId};
 use serde_json::{Value as Json, json};
 
 use super::{
-    CommandSpec, EngineError, Result, bad, bool_param, can_redo, can_undo, cell_param, cell_param_on, cmd, edit, f64_param, has_clipboard, has_doc,
+    CommandSpec, EngineError, Result, bad, bool_param, can_redo, can_undo, cell_param, cell_param_on, cmd, edit, f64_param, has_doc,
     locked_cell_error, ok, split_sheet, str_param, target_range, target_ranges, target_sheet, u32_param,
 };
 use crate::selection::{current_region, jump};
@@ -106,8 +106,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 "Paste Special…",
                 ["Home", "Clipboard"],
                 Some("Ctrl+Alt+V"),
-                "{what: all|formulas|values|formats|comments|validation|allExceptBorders|columnWidths|formulasAndNumberFormats|valuesAndNumberFormats, operation?: none|add|subtract|multiply|divide, skipBlanks?, transpose?, link?}",
-                has_clipboard,
+                "{what: all|formulas|values|formats|comments|validation|allExceptBorders|columnWidths|formulasAndNumberFormats|valuesAndNumberFormats, operation?: none|add|subtract|multiply|divide, skipBlanks?, transpose?, link?, at?, text?, html?}",
+                has_doc,
                 paste_special
             )
         },

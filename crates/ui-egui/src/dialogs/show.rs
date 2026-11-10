@@ -430,7 +430,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         confirm = false;
     }
     if confirm && let Some(cmd) = d.command {
-        let params = build_params(&d);
+        let params = app.with_clipboard_for(cmd, build_params(&d));
         match app.run(cmd, params) {
             Ok(r) => {
                 open = false;

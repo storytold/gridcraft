@@ -669,6 +669,38 @@ fn table_dir(sh: &Sheet) -> &'static str {
     if sh.right_to_left { " dir=\"rtl\"" } else { "" }
 }
 
+/// Resolve source theme references before crossing a workbook boundary. The destination's
+/// theme and its existing cells are never changed by Keep Source Formatting.
+fn clipboard_style(source: &gridcraft_model::Style, theme: &gridcraft_model::Theme) -> gridcraft_model::Style {
+    use gridcraft_model::Color;
+    let mut style = source.clone();
+    let color = |c: &mut Color| {
+        if let Color::Theme(..) = c
+            && let Some([r, g, b]) = c.resolve(theme)
+        {
+            *c = Color::rgb(r, g, b);
+        }
+    };
+    color(&mut style.font.color);
+    color(&mut style.fill.fg);
+    color(&mut style.fill.bg);
+    for line in [
+        &mut style.borders.left,
+        &mut style.borders.right,
+        &mut style.borders.top,
+        &mut style.borders.bottom,
+        &mut style.borders.diag_down,
+        &mut style.borders.diag_up,
+    ] {
+        color(&mut line.color);
+    }
+    if style.font.minor && style.font.name == gridcraft_model::DEFAULT_FONT {
+        style.font.name.clone_from(&theme.minor_font);
+    }
+    style.font.minor = false;
+    style
+}
+
 const CLIPBOARD_HTML_MAX_BYTES: usize = 4 * 1024 * 1024;
 const CLIPBOARD_HTML_MAX_CELLS: u64 = 10_000;
 
@@ -680,8 +712,30 @@ pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &
         return None;
     }
     let sh = wb.sheet(sheet)?;
+    // Source formatting for another GridCraft window: each distinct style once on the table, and
+    // an index per cell, so a large copy stays within the HTML budget.
+    let mut index: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
+    let mut styles = Vec::new();
+    for row in (r.start.row..=r.end.row).filter(|&row| !sh.is_row_hidden(row)) {
+        for col in r.start.col..=r.end.col {
+            let id = sh.style_id(CellRef::new(row, col));
+            index.entry(id).or_insert_with(|| {
+                styles.push(clipboard_style(wb.styles.get(id), &wb.theme));
+                styles.len() - 1
+            });
+        }
+    }
+    if styles.iter().any(|s| s.font.name.len() > 1024 || s.num_fmt.as_str().len() > 4096) {
+        return None;
+    }
+    let styles = esc(&serde_json::to_string(&styles).ok()?);
     let mut out = ClipboardHtml(String::new());
-    write!(out, "<table{} style=\"border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt\">", table_dir(sh)).ok()?;
+    write!(
+        out,
+        "<table{} style=\"border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt\" data-gridcraft-styles-v1=\"{styles}\">",
+        table_dir(sh)
+    )
+    .ok()?;
     for row in r.start.row..=r.end.row {
         if sh.is_row_hidden(row) {
             continue;
@@ -703,8 +757,14 @@ pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &
             // is outside the range or hidden. This matches the plain-text copy.
             let text = crate::display::cell_text(wb, sh, c);
             let dir = CellDir::of(sh, c, &text);
-            let css = html_cell_css(wb, sh, c, dir);
-            write!(out, "<td style=\"border:1px solid #d4d4d4;padding:2px 4px;white-space:pre-wrap;{css}\"{}{span}>", dir.attr()).ok()?;
+            let css = esc(&html_cell_css(wb, sh, c, dir));
+            let source = index.get(&sh.style_id(c))?;
+            write!(
+                out,
+                "<td data-gridcraft-s=\"{source}\" style=\"border:1px solid #d4d4d4;padding:2px 4px;white-space:pre-wrap;{css}\"{}{span}>",
+                dir.attr()
+            )
+            .ok()?;
             let mut chars = text.chars().peekable();
             while let Some(ch) = chars.next() {
                 match ch {
@@ -817,7 +877,7 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
                 }
                 let text = crate::display::cell_text(wb, sh, c);
                 let dir = CellDir::of(sh, c, &text);
-                let css = html_cell_css(wb, sh, c, dir);
+                let css = esc(&html_cell_css(wb, sh, c, dir));
                 let span = sh
                     .merges
                     .iter()

@@ -6,7 +6,8 @@ use super::{
 
 #[allow(clippy::cognitive_complexity)] // The command applies the selected paste mode in one atomic edit.
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
-    let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
+    let clip = super::clipboard::paste_source(s, p)?;
+    let external = clip.doc_uid == 0;
     let what = match str_param(p, "what").unwrap_or("all") {
         "all" => What::All,
         "formulas" => What::Formulas,
@@ -24,6 +25,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let skip_blanks = bool_param(p, "skipBlanks").unwrap_or(false);
     let transpose = bool_param(p, "transpose").unwrap_or(false);
     let link = bool_param(p, "link").unwrap_or(false);
+    if link && external {
+        return Err(EngineError::Other("Paste Link needs cells copied in GridCraft; text from another app can't be linked.".into()));
+    }
     if link && !clip.areas.is_empty() {
         return Err(EngineError::Other("This action won't work on multiple selections.".into()));
     }
@@ -334,7 +338,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         let pasted = RangeRef::new(at, at.offset_clamped(i64::from(tiles_r * h) - 1, i64::from(tiles_c * w) - 1));
-        if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
+        if !link && !external && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
             paste_validations(cx, src_sheet, src, dest_sheet, pasted, PasteMode { transpose, skip_blanks, skip_rows: &skip_rows })?;
         }
         if what == What::ColumnWidths {

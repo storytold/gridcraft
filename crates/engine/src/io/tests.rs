@@ -240,8 +240,9 @@ fn html_export_of_latin_ltr_sheet_is_unchanged() {
              </table></body></html>"
     );
     let cell = "border:1px solid #d4d4d4;padding:2px 4px;white-space:pre-wrap;";
+    let clean = ["data-gridcraft-styles-v1", "data-gridcraft-s"].iter().fold(copied(&wb, "A1:B2"), |h, a| without_attr(&h, a));
     assert_eq!(
-        copied(&wb, "A1:B2"),
+        clean,
         format!(
             "<table style=\"border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt\">\
                  <tr><td style=\"{cell}text-align:left;\">Name</td><td style=\"{cell}text-align:center;\">Qty</td></tr>\
@@ -760,4 +761,16 @@ fn sylk_survives_huge_relative_offsets_and_width_floods() {
     flood.extend_from_slice(b"C;Y1;X1;K1\nE\n");
     let (wb, _) = open_bytes("widths.slk", &flood).unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::Number(1.0));
+}
+
+/// `html` without any ` name="…"` attribute: the clipboard's private GridCraft metadata.
+fn without_attr(html: &str, name: &str) -> String {
+    let marker = format!(" {name}=\"");
+    let (mut out, mut rest) = (String::new(), html);
+    while let Some(start) = rest.find(&marker) {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start + marker.len()..];
+        rest = &tail[tail.find('"').unwrap() + 1..];
+    }
+    out + rest
 }

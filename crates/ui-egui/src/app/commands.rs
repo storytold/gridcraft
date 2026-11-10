@@ -126,6 +126,7 @@ impl SheetApp {
             self.open_switch_windows = true;
             return;
         }
+        let params = self.with_clipboard_for(id, params);
         match self.run(id, params) {
             // A refused cell draft already shows its own message (with the rule's title).
             Err(e) if self.message.as_ref().is_some_and(|(_, m)| *m == e) => {}
