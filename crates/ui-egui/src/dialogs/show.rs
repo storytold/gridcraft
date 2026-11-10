@@ -350,6 +350,21 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         }
                     });
                 }
+                crate::app::FILL_WARNING_DIALOG => {
+                    // No (or closing it) keeps the draft and writes nothing; Yes fills the selection.
+                    let message = d.values.get("message").and_then(Json::as_str).unwrap_or_default().to_string();
+                    ui.add(egui::Label::new(app.ui.language.tr_error(&message)).wrap());
+                    ui.label(app.ui.language.tr("Continue?"));
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        for (label, yes) in [("Yes", true), ("No", false)] {
+                            if ui.button(app.ui.language.tr(label)).clicked() {
+                                open = false;
+                                app.answer_fill_warning(yes, &d.values);
+                            }
+                        }
+                    });
+                }
                 "start" => {
                     ui.heading("Start a new workbook");
                     ui.horizontal_wrapped(|ui| {

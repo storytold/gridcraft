@@ -225,19 +225,12 @@ pub fn list_items(wb: &Workbook, sheet: usize, at: CellRef, dv: &Validation) -> 
 pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
     let sh = wb.sheet(sheet)?;
     let dv = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(at)))?;
-    if dv.kind == ValidationKind::Any || !dv.show_error {
-        return None;
-    }
-    if input.is_empty() && dv.allow_blank {
+    if !alerts(dv) || (input.is_empty() && dv.allow_blank) {
         return None;
     }
     let v = gridcraft_core::parse::parse_input(input, wb.date_system).value;
-    // The formulas are written for the top-left cell of all the areas and see the value being entered,
-    // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).
-    let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
-    let original = wb;
     let entered;
-    let wb = if sh.value(at) == v {
+    let after = if sh.value(at) == v {
         wb
     } else {
         let mut w = wb.clone();
@@ -248,9 +241,37 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
         entered = w;
         &entered
     };
-    let eval = |f: &str| gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at));
+    if accepts(wb, after, sheet, at, dv, input, &v) {
+        return None;
+    }
+    Some((dv.clone(), refusal_message(dv)))
+}
+
+/// Whether a rule shows an error alert at all: "Any value" never refuses, and a rule whose Error
+/// Alert is switched off lets every entry through.
+fn alerts(dv: &Validation) -> bool {
+    dv.kind != ValidationKind::Any && dv.show_error
+}
+
+/// The message a rule's alert shows: its own, or the default one.
+fn refusal_message(dv: &Validation) -> String {
+    if dv.error_message.is_empty() {
+        "This value doesn't match the data validation restrictions defined for this cell.".to_string()
+    } else {
+        dv.error_message.clone()
+    }
+}
+
+/// Whether rule `dv` accepts `input` (parsed as `v`) entered at `at`. `original` is the workbook
+/// before the entry, `after` the one with the entry made (the same workbook when the cell already
+/// holds `v`).
+fn accepts(original: &Workbook, after: &Workbook, sheet: usize, at: CellRef, dv: &Validation, input: &str, v: &Value) -> bool {
+    // The formulas are written for the top-left cell of all the areas and see the value being entered,
+    // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).
+    let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
+    let eval = |f: &str| gridcraft_calc::evaluate(after, sheet, at, &formula_at(f, first, at));
     let num = |f: &str| eval(f).to_number().ok();
-    let ok = match dv.kind {
+    match dv.kind {
         // The list is the one the dropdown showed before the entry, as in Excel: a source that takes
         // in the cell itself (`=$A1:$A2` on A2:A3 is A2:A3 at A3) doesn't list the value being typed.
         ValidationKind::List => list_items(original, sheet, at, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
@@ -269,16 +290,127 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
             }
             None => false,
         },
-    };
-    if ok {
-        return None;
     }
-    let msg = if dv.error_message.is_empty() {
-        "This value doesn't match the data validation restrictions defined for this cell.".to_string()
-    } else {
-        dv.error_message.clone()
-    };
-    Some((dv.clone(), msg))
+}
+
+/// Most cells one area of a fill may hold. `range.fill` refuses a larger area, and the fill's
+/// validation check doesn't look at one ([`FillValidation::NotChecked`]).
+pub const MAX_FILL_AREA: u64 = 2_000_000;
+
+/// A destination of a fill whose rule refuses the input.
+#[derive(Clone, Debug)]
+pub struct FillAlert {
+    pub cell: CellRef,
+    pub rule: Validation,
+    pub message: String,
+}
+
+/// What the data validation of a fill's destinations says about the input (Ctrl+Enter). No write
+/// command enforces validation; this is the question the interface asks before it fills.
+#[derive(Clone, Debug)]
+pub enum FillValidation {
+    /// Every destination the fill writes accepts the input, or has no rule that alerts.
+    Passed,
+    /// The most severe refusal: the first Stop, else the first Warning, else the first
+    /// Information, in the order the fill visits the cells.
+    Alert(Box<FillAlert>),
+    /// An area is larger than [`MAX_FILL_AREA`], so nothing was checked. This is not a pass:
+    /// `range.fill` refuses such an area too.
+    NotChecked,
+}
+
+/// Checks `input` entered in every cell of `ranges` (Ctrl+Enter's fill) against each cell's rule.
+/// Only the cells the fill writes are asked: rows an applied filter hides are skipped by
+/// `range.fill` (#1175), so their rules don't decide it. A formula is judged per destination as
+/// [`check_validation`] judges a formula typed there; any other input with
+/// [`check_literal_fill_validation`].
+pub fn check_fill_validation(wb: &Workbook, sheet: usize, ranges: &[RangeRef], input: &str) -> FillValidation {
+    if !crate::cmd::edit::is_formula_input(input) {
+        return check_literal_fill_validation(wb, sheet, ranges, input);
+    }
+    if ranges.iter().any(|r| r.count() > MAX_FILL_AREA) {
+        return FillValidation::NotChecked;
+    }
+    let Some(sh) = wb.sheet(sheet) else { return FillValidation::Passed };
+    let refusals = fill_destinations(sh, ranges, input)
+        .into_iter()
+        .filter_map(|(at, _)| check_validation(wb, sheet, at, input).map(|(rule, message)| FillAlert { cell: at, rule, message }));
+    worst(refusals)
+}
+
+/// Checks a literal (non-formula) `input` filled into `ranges`. Every destination then holds the
+/// same value, so each rule is evaluated once against the workbook as the whole fill leaves it: a
+/// rule reading the other filled cells (a uniqueness rule) sees them filled. Rows an applied
+/// filter hides are neither written nor asked.
+pub fn check_literal_fill_validation(wb: &Workbook, sheet: usize, ranges: &[RangeRef], input: &str) -> FillValidation {
+    if ranges.iter().any(|r| r.count() > MAX_FILL_AREA) {
+        return FillValidation::NotChecked;
+    }
+    let Some(sh) = wb.sheet(sheet) else { return FillValidation::Passed };
+    let asked = fill_destinations(sh, ranges, input);
+    if asked.is_empty() {
+        return FillValidation::Passed;
+    }
+    let v = gridcraft_core::parse::parse_input(input, wb.date_system).value;
+    let mut after = wb.clone();
+    if let Some(out) = after.sheet_mut(sheet) {
+        for r in ranges {
+            let skip = crate::cmd::edit::filtered_rows(sh, *r);
+            for at in r.iter().filter(|at| !skip.contains(&at.row)) {
+                if sh.value(at) != v {
+                    let style = sh.style_id(at);
+                    out.cells.set(at, Cell { value: v.clone(), style, ..Default::default() });
+                }
+            }
+        }
+    }
+    worst(asked.into_iter().filter_map(|(at, i)| {
+        let dv = sh.validations.get(i)?;
+        (!accepts(wb, &after, sheet, at, dv, input, &v)).then(|| FillAlert { cell: at, rule: dv.clone(), message: refusal_message(dv) })
+    }))
+}
+
+/// The destinations a fill of `input` writes whose rule (the first that holds the cell, as
+/// [`check_validation`] finds it) shows an alert for it, with that rule's index, in the order the
+/// fill visits them: area by area, row by row. Each cell once.
+fn fill_destinations(sh: &gridcraft_model::Sheet, ranges: &[RangeRef], input: &str) -> Vec<(CellRef, usize)> {
+    let mut out: Vec<(usize, CellRef, usize)> = Vec::new();
+    for (n, r) in ranges.iter().enumerate() {
+        let skip = crate::cmd::edit::filtered_rows(sh, *r);
+        for (i, dv) in sh.validations.iter().enumerate() {
+            if !alerts(dv) || (input.is_empty() && dv.allow_blank) {
+                continue;
+            }
+            for part in dv.ranges.iter().filter_map(|vr| vr.intersection(r)) {
+                for at in part.iter().filter(|at| !skip.contains(&at.row)) {
+                    if sh.validations.iter().position(|d| d.ranges.iter().any(|x| x.contains(at))) == Some(i) {
+                        out.push((n, at, i));
+                    }
+                }
+            }
+        }
+    }
+    out.sort_by_key(|&(n, at, _)| (n, at.row, at.col));
+    let mut seen = std::collections::HashSet::new();
+    out.into_iter().filter(|&(_, at, _)| seen.insert(at)).map(|(_, at, i)| (at, i)).collect()
+}
+
+/// The most severe of the refusals, in order: the first Stop (looking no further), else the first
+/// Warning, else the first Information.
+fn worst(refusals: impl Iterator<Item = FillAlert>) -> FillValidation {
+    let (mut warning, mut information) = (None, None);
+    for a in refusals {
+        match a.rule.error_style {
+            ErrorStyle::Stop => return FillValidation::Alert(Box::new(a)),
+            ErrorStyle::Warning => {
+                warning.get_or_insert(a);
+            }
+            ErrorStyle::Information => {
+                information.get_or_insert(a);
+            }
+        }
+    }
+    warning.or(information).map_or(FillValidation::Passed, |a| FillValidation::Alert(Box::new(a)))
 }
 
 /// A formula written for `first`, as seen from `at` (relative references shifted).
