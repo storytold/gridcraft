@@ -248,6 +248,24 @@ pub(crate) fn sync_headers(cx: &mut crate::cmd::Ctx) {
             }
         }
     }
+    crate::table_columns::rewrite_masters(&mut cx.wb, |i, c, expr| {
+        expr.map(&mut |x| match x {
+            gridcraft_formula::Expr::Struct(mut st) => {
+                for (si, table, range, old, name) in &renames {
+                    let this = if st.table.is_empty() { i == *si && range.contains(c) } else { st.table.eq_ignore_ascii_case(table) };
+                    if this {
+                        for end in [&mut st.col_start, &mut st.col_end].into_iter().flatten() {
+                            if end.eq_ignore_ascii_case(old) {
+                                *end = name.clone();
+                            }
+                        }
+                    }
+                }
+                gridcraft_formula::Expr::Struct(st)
+            }
+            other => other,
+        })
+    });
     cx.structural = true;
 }
 

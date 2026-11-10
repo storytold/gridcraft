@@ -137,6 +137,8 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other(m));
     }
     let active_sheet = s.doc()?.wb.active_sheet();
+    let fill_table_formulas = s.prefs.fill_table_formulas;
+    let previous_formula = d.wb.sheet(sheet).and_then(|sh| sh.cell(at)).and_then(|c| c.formula.clone());
     edit(s, |cx| {
         if array {
             // Legacy Ctrl+Shift+Enter array formula over the selection, when the selection holds
@@ -173,6 +175,9 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
         }
         crate::cmd::data::grow_autofilter(sh, at);
         cx.touch(sheet, at);
+        if fill_table_formulas {
+            crate::table_columns::fill_column(cx, sheet, at, previous_formula.as_deref())?;
+        }
         Ok(Json::Null)
     })?;
     let v = s.doc()?.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();

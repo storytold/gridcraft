@@ -584,6 +584,10 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
             }
         }
     }
+    let hosts: Vec<_> = wb.sheets.iter().map(|sh| sh.name.clone()).collect();
+    crate::table_columns::rewrite_masters(wb, |si, _, expr| {
+        gridcraft_formula::adjust::adjust(expr, hosts.get(si).map(String::as_str).unwrap_or_default(), target, e)
+    });
     for n in wb.names.iter_mut() {
         if let Ok(expr) = gridcraft_formula::parse_name(&n.formula) {
             // Names are workbook-level: unqualified refs don't occur; qualified ones adjust.
