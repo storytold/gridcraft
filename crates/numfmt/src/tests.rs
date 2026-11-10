@@ -40,6 +40,13 @@ fn the_separators_come_from_the_region_and_a_typed_code_is_read_with_them() {
     let typed = NumberFormat::parse_in("#.##0,00", it);
     assert_eq!(typed.code(), "#,##0.00");
     assert_eq!(format_value_in(&n, &typed, S, it).text, "334.106,29");
+    // fr-FR groups with a non-breaking space, which is neither `.` nor `,`: showing a stored code
+    // swaps both separators, and reading the typed code back puts the canonical ones in place.
+    let fr = gridcraft_core::region::lookup("fr-FR");
+    assert_eq!(regional_code("#,##0.00", fr), "#\u{a0}##0,00");
+    let typed_fr = NumberFormat::parse_in("#\u{a0}##0,00", fr);
+    assert_eq!(typed_fr.code(), "#,##0.00");
+    assert_eq!(format_value_in(&n, &typed_fr, S, fr).text, "334\u{a0}106,29");
 }
 
 #[test]

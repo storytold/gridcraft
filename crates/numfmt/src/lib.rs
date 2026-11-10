@@ -183,10 +183,11 @@ impl NumberFormat {
 
     /// Parses a format code typed with the region's own separators. Excel stores the canonical
     /// `.` decimal and `,` grouping, but people type the code their region uses (`#.##0,00` in
-    /// it-IT), so a code entered by hand is translated before parsing. Quoted text, bracket tags
-    /// and escaped characters keep their own separators.
+    /// it-IT, `# ##0,00` with a non-breaking space in fr-FR), so a code entered by hand is
+    /// translated with [`canonical_code`] before parsing. Quoted text, bracket tags and escaped
+    /// characters keep their own separators.
     pub fn parse_in(code: &str, region: &Region) -> NumberFormat {
-        NumberFormat::parse(&regional_code(code, region))
+        NumberFormat::parse(&canonical_code(code, region))
     }
 
     pub fn general() -> NumberFormat {
@@ -413,12 +414,27 @@ impl NumberFormat {
     }
 }
 
-/// `code` with the region's separators translated to the canonical `.` decimal and `,`
-/// grouping, and the other way round. The translation is its own inverse, so a caller shows a
-/// stored code with it and reads the edited code back with it. A region that writes the canonical
-/// characters is returned unchanged.
+/// `code` with the canonical separators replaced by the region's: `.` becomes the region's
+/// decimal and `,` its thousands separator, so a stored code shows the way the region writes it.
+/// Quoted text, bracket tags and escaped characters keep their own separators. A region that
+/// writes the canonical characters gets the code back unchanged.
 pub fn regional_code(code: &str, region: &Region) -> String {
-    if region.decimal == '.' {
+    remap_separators(code, '.', region.decimal, ',', region.group)
+}
+
+/// `code` with the region's separators replaced by the canonical `,` thousands and `.` decimal,
+/// which is what Excel stores and what [`NumberFormat::parse`] reads. It covers the direction
+/// [`regional_code`] cannot: a region whose thousands separator is not `,` (fr-FR writes a
+/// non-breaking space) needs one function for showing a code and another for reading it back.
+pub fn canonical_code(code: &str, region: &Region) -> String {
+    remap_separators(code, region.decimal, '.', region.group, ',')
+}
+
+/// `code` with `from_decimal`/`from_group` written as `to_decimal`/`to_group`. The two source
+/// characters are distinct in every region, and quoted text, `[...]` tags and `\` escapes are
+/// copied untouched because their separators belong to the text, not to the format.
+fn remap_separators(code: &str, from_decimal: char, to_decimal: char, from_group: char, to_group: char) -> String {
+    if from_decimal == to_decimal && from_group == to_group {
         return code.to_string();
     }
     let mut out = String::with_capacity(code.len());
@@ -448,7 +464,8 @@ pub fn regional_code(code: &str, region: &Region) -> String {
                 out.push(c);
             }
             _ if quoted || bracketed => out.push(c),
-            '.' | ',' => out.push(if c == region.decimal { '.' } else { ',' }),
+            _ if c == from_decimal => out.push(to_decimal),
+            _ if c == from_group => out.push(to_group),
             _ => out.push(c),
         }
     }
