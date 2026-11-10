@@ -231,7 +231,7 @@ fn atomic(e: &Expr) -> bool {
 const MAX_DEPTH: usize = 256;
 
 /// What the analysis of one defined name leaves for a later formula that refers to it.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct NameInfo {
     kind: Kind,
     /// The definition reached a one-cell reference written as a range.
@@ -242,16 +242,24 @@ struct NameInfo {
     cost: usize,
     /// Nesting below the reference that the analysis reached.
     depth: usize,
+    /// Every name the analysis read, with its result (itself last): a hit records them all, as a
+    /// fresh analysis does, so a later reference to one of them in the formula costs nothing.
+    closure: Vec<(NameKey, Kind, bool)>,
 }
+
+/// A defined name as [`Legacy::names`] keys it: upper-case name, scope, collapsed.
+type NameKey = (String, usize, bool);
 
 /// Defined names analysed so far, shared by the formulas of one pass (reading a workbook, or
 /// writing one) so that a name is parsed and analysed once, not once per formula that refers
-/// to it. Keyed like [`Legacy::names`]. Only analyses that finished within their limits, met no
-/// cycle and did not depend on the formula's own position are kept; a later formula is charged
-/// the budget and nesting the analysis used, so it reaches the same limits a fresh analysis does.
+/// to it. Keyed like [`Legacy::names`]. Only analyses that finished within their limits, did not
+/// depend on the formula's own position and did not reuse a name the formula had already read
+/// (or meet a cycle) are kept. A hit charges the budget and nesting the analysis used and records
+/// every name it read, and is taken only when the formula can afford it, so a formula reads the
+/// same with the cache as without it.
 #[derive(Default)]
 pub(crate) struct NameCache {
-    map: HashMap<(String, usize, bool), NameInfo>,
+    map: HashMap<NameKey, NameInfo>,
     /// How many names were analysed (not found in the cache).
     pub(crate) analyses: usize,
 }
@@ -265,8 +273,11 @@ struct Legacy<'a> {
     shared: &'a mut NameCache,
     /// The analysis read a structured reference without a table name, which depends on `at`.
     position_dependent: bool,
-    /// The analysis met a name defined in terms of itself.
-    cyclic: bool,
+    /// The analysis reused a name this formula had already read, or met a cycle: its result
+    /// leaves out what that name cost.
+    reused: bool,
+    /// The names read so far in this formula, in order, with their results.
+    read: Vec<(NameKey, Kind, bool)>,
     /// The deepest nesting reached.
     deepest: usize,
     at: CellRef,
@@ -306,7 +317,8 @@ impl<'a> Legacy<'a> {
             wb,
             shared,
             position_dependent: false,
-            cyclic: false,
+            reused: false,
+            read: Vec::new(),
             deepest: 0,
             at,
             functions,
@@ -504,28 +516,34 @@ impl<'a> Legacy<'a> {
             let key = (bare.to_ascii_uppercase(), scope, self.collapsed);
             match self.names.get(&key) {
                 Some(Some((kind, one_cell_range))) => {
+                    self.reused = true;
                     self.one_cell_range |= *one_cell_range;
                     return *kind;
                 }
                 Some(None) => {
                     // A name defined in terms of itself has no legacy value to keep.
                     self.certain = false;
-                    self.cyclic = true;
+                    self.reused = true;
                     return Kind::Array;
                 }
                 None => {}
             }
-            if let Some(info) = self.shared.map.get(&key).copied() {
-                // Charged as the analysis was, so the formula meets the limits a fresh one does.
-                let reached = depth.saturating_add(1).saturating_add(info.depth);
-                self.deepest = self.deepest.max(reached);
+            let reached = depth.saturating_add(1);
+            // Taken only when the formula can afford it and has read none of the names it read:
+            // otherwise the fresh analysis below differs (cut short, or reusing those names).
+            let hit = self.shared.map.get(&key).filter(|i| {
+                reached + i.depth < MAX_DEPTH && i.cost <= self.remaining && i.closure.iter().all(|(k, _, _)| !self.names.contains_key(k))
+            });
+            if let Some(info) = hit {
+                // Charged and recorded as the analysis was: the formula reads as a fresh one does.
+                self.deepest = self.deepest.max(reached + info.depth);
                 self.certain &= info.certain;
                 self.one_cell_range |= info.one_cell_range;
-                if reached >= MAX_DEPTH || info.cost > self.remaining {
-                    self.complete = false;
+                self.remaining -= info.cost;
+                for (k, kind, one_cell_range) in &info.closure {
+                    self.names.insert(k.clone(), Some((*kind, *one_cell_range)));
                 }
-                self.remaining = self.remaining.saturating_sub(info.cost);
-                self.names.insert(key, Some((info.kind, info.one_cell_range)));
+                self.read.extend(info.closure.iter().cloned());
                 return info.kind;
             }
             let Ok(expr) = gridcraft_formula::parse_name(def.formula.trim_start_matches('=')) else { return Kind::Array };
@@ -535,31 +553,34 @@ impl<'a> Legacy<'a> {
             let locals = std::mem::take(&mut self.locals);
             let seen = std::mem::replace(&mut self.one_cell_range, false);
             let before = self.remaining;
+            let first_read = self.read.len();
             let outer = (
                 std::mem::replace(&mut self.certain, true),
                 std::mem::replace(&mut self.complete, true),
                 std::mem::replace(&mut self.position_dependent, false),
-                std::mem::replace(&mut self.cyclic, false),
+                std::mem::replace(&mut self.reused, false),
                 std::mem::replace(&mut self.deepest, 0),
             );
             let kind = self.kind_of(expr, def.scope.unwrap_or(scope), depth + 1);
             let one_cell_range = std::mem::replace(&mut self.one_cell_range, seen);
-            let info = NameInfo {
+            self.read.push((key.clone(), kind, one_cell_range));
+            let cacheable = self.complete && !self.position_dependent && !self.reused;
+            let info = cacheable.then(|| NameInfo {
                 kind,
                 one_cell_range,
                 certain: self.certain,
                 cost: before.saturating_sub(self.remaining),
                 depth: self.deepest.saturating_sub(depth + 1),
-            };
-            let cacheable = self.complete && !self.position_dependent && !self.cyclic;
+                closure: self.read[first_read..].to_vec(),
+            });
             self.certain &= outer.0;
             self.complete &= outer.1;
             self.position_dependent |= outer.2;
-            self.cyclic |= outer.3;
+            self.reused |= outer.3;
             self.deepest = self.deepest.max(outer.4);
             self.one_cell_range |= one_cell_range;
             self.locals = locals;
-            if cacheable && self.shared.map.len() < MAX_CACHED_NAMES {
+            if let Some(info) = info.filter(|_| self.shared.map.len() < MAX_CACHED_NAMES) {
                 self.shared.map.insert(key.clone(), info);
             }
             self.names.insert(key, Some((kind, one_cell_range)));
