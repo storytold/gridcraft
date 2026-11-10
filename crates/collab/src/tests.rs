@@ -124,6 +124,12 @@ fn the_allowlist_separates_structural_from_merge_and_denies_code() {
     assert_eq!(classify("home.insertRows"), Some(Class::Structural));
     assert_eq!(classify("home.deleteSheet"), Some(Class::Structural));
     assert_eq!(classify("table.style"), Some(Class::Structural));
+    // A sort moves cells, styles, row heights and object anchors: the engine runs it as a
+    // structural edit (`cx.structural`), so it may not be ordered like a value edit.
+    assert_eq!(classify("data.sort"), Some(Class::Structural));
+    assert_eq!(classify("data.sortAscending"), Some(Class::Structural));
+    assert_eq!(classify("data.sortDescending"), Some(Class::Structural));
+    assert_eq!(classify("data.validation"), Some(Class::Merge));
     assert_eq!(classify("file.open"), None);
     assert_eq!(classify("python.run"), None);
     assert_eq!(classify("edit.undo"), None);

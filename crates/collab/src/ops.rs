@@ -5,10 +5,10 @@
 //!
 //! - [`Class::Merge`] — the edit does not shift addresses; the server orders it and every client
 //!   receives the authoritative delta.
-//! - [`Class::Structural`] — an insert, a delete, a sheet move or a table edit that changes the
-//!   shape of the sheet: it rewrites formulas and object anchors across the workbook and runs a
-//!   full recalculation (`crates/engine/src/cmd/sheet.rs`), so it is exclusive and requires
-//!   `base_version == head`.
+//! - [`Class::Structural`] — an insert, a delete, a sheet move, a table edit or a sort that
+//!   changes the shape of the sheet: it rewrites formulas and object anchors across the workbook
+//!   and runs a full recalculation (`crates/engine/src/cmd/sheet.rs`, `crates/engine/src/cmd/data/sort.rs`),
+//!   so it is exclusive and requires `base_version == head`.
 
 /// The conflict class of an operation (ADR-0004).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,8 +25,11 @@ const DENIED_PREFIXES: &[&str] = &["file.", "app.", "ui.", "view.", "print.", "m
 const DENIED_IDS: &[&str] =
     &["edit.undo", "edit.redo", "data.getData", "data.fromTextCsv", "link.open", "file.print", "ui.printSubmit", "ui.printSettings"];
 
-/// Commands that change the shape of a sheet or the set of sheets.
-const STRUCTURAL_PREFIXES: &[&str] = &["home.insert", "home.delete", "sheet.move", "sheet.rename", "table."];
+/// Commands that change the shape of a sheet or the set of sheets. A sort moves cells, their
+/// styles, row heights and object anchors, and the engine rewrites formulas and runs a full
+/// recalculation for it exactly as it does for a row insert (`cx.structural`), so a merge edit
+/// that was accepted against the old addresses may land on another row: it is structural here too.
+const STRUCTURAL_PREFIXES: &[&str] = &["home.insert", "home.delete", "sheet.move", "sheet.rename", "table.", "data.sort"];
 
 /// Groups allowed to travel in v1. Anything outside them is refused even if it looks harmless:
 /// a new command group has to be reviewed before it replicates.
