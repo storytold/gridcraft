@@ -21,7 +21,7 @@ pub use cell::{Cell, CellPicture, Formula};
 pub use features::*;
 pub use macros::*;
 pub use password::PasswordHash;
-pub use preserved::{DroppedPart, Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml};
+pub use preserved::{DroppedPart, DroppedReason, Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml};
 pub use python::{PyCode, PyOutput};
 pub use sheet::{DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, LineIndex, Sheet, SheetUid, SheetViewMode, Visibility, points_to_chars};
 pub use store::CellStore;

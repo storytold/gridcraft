@@ -223,11 +223,16 @@ impl KeptReader {
             if let Err(why) = self.keep(cx, &mut p, std::slice::from_ref(r), &mut seen) {
                 cx.warn(format!("{} part {} was dropped: {why}", kind(&r.rel_type), r.target));
                 if kind(&r.rel_type) == "powerPivotData" {
-                    // The model exists but is too large to keep: remember it, so the writer refuses
-                    // instead of writing the package without its data model.
-                    if let Some(size) = cx.pkg.part_size(&r.target).filter(|size| *size > MAX_KEPT_PART) {
-                        self.dropped_model = Some(DroppedPart { name: r.target.clone(), size, limit: MAX_KEPT_PART });
-                    }
+                    // The model could not be kept, whatever the reason: remember it, so the writer
+                    // refuses instead of writing the package without its data model. Only the
+                    // pass-through limit has a size to report; every other failure carries the
+                    // reader's reason (the keep budget, the part count, a missing content type, a
+                    // read error).
+                    let reason = match cx.pkg.part_size(&r.target).filter(|size| *size > MAX_KEPT_PART) {
+                        Some(size) => DroppedReason::TooLarge { size, limit: MAX_KEPT_PART },
+                        None => DroppedReason::Unpreservable(why),
+                    };
+                    self.dropped_model = Some(DroppedPart { name: r.target.clone(), reason });
                 }
             }
         }

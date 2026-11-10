@@ -72,15 +72,12 @@ pub enum IoError {
     Format(String),
     #[error("the file is too large: {0}")]
     TooLarge(String),
-    /// Saving would silently lose a part the reader had to drop because it is larger than the
-    /// pass-through limit.
+    /// Saving would silently lose a part the reader had to drop: the pass-through limit, the keep
+    /// budget, a missing content type or a read error left the workbook without its data model.
     #[error(
-        "the workbook's data model {} ({} bytes) is larger than the {} limit for parts kept on save, so saving it would lose the model; raise the limit, or save a copy of the workbook without the model",
-        part,
-        size,
-        limit
+        "the workbook's data model {part} was not kept ({reason}), so saving it would lose the model; raise the limit, or save a copy of the workbook without the model"
     )]
-    DroppedPart { part: String, size: u64, limit: u64 },
+    DroppedPart { part: String, reason: String },
 }
 
 /// What a lenient read skipped or repaired.

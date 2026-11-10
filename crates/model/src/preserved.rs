@@ -94,18 +94,36 @@ impl Preserved {
     }
 }
 
-/// A kept part the reader dropped because it is larger than the pass-through limit: its package
-/// name, its unpacked size and the limit that applied.
+/// A part the reader could not keep: its package name and why it was dropped.
 ///
-/// GridCraft keeps unmodelled content so that a save never loses it. A part larger than the limit
-/// can't be kept, and unlike a part it can rebuild, it can't be put back either, so the writer
-/// refuses to save a workbook holding one of these instead of silently losing the part.
+/// GridCraft keeps unmodelled content so that a save never loses it. A part it can't keep — and
+/// unlike a part it can rebuild, can't put back either — makes the writer refuse to save the
+/// workbook rather than silently lose it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DroppedPart {
     /// The package part name (`xl/model/item.data`).
     pub name: String,
-    /// Its unpacked size in bytes.
-    pub size: u64,
-    /// The limit that made the reader drop it.
-    pub limit: u64,
+    /// Why the part could not be kept.
+    pub reason: DroppedReason,
+}
+
+/// Why the reader could not keep a part.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DroppedReason {
+    /// Larger than the limit for parts kept on save: the part's size and the limit that refused it.
+    TooLarge { size: u64, limit: u64 },
+    /// Any other preservation failure — the workbook's keep budget, the part count, a missing
+    /// content type, a read error — in the reader's words.
+    Unpreservable(String),
+}
+
+impl std::fmt::Display for DroppedReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DroppedReason::TooLarge { size, limit } => {
+                write!(f, "it is {size} bytes, larger than the {limit} byte limit for parts kept on save")
+            }
+            DroppedReason::Unpreservable(why) => f.write_str(why),
+        }
+    }
 }

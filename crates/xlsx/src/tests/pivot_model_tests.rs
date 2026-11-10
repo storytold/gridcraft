@@ -6,7 +6,7 @@ use std::io::Read;
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, Value};
-use gridcraft_model::{Cell, PivotField, PivotFunc, PivotTable, PivotValue, Sheet, Workbook};
+use gridcraft_model::{Cell, DroppedReason, PivotField, PivotFunc, PivotTable, PivotValue, Sheet, Workbook};
 
 use super::minimal;
 use crate::{
@@ -845,17 +845,16 @@ fn an_oversized_model_part_refuses_to_save() {
     );
     let dropped = wb.dropped_model.as_ref().expect("the dropped model is recorded on the workbook");
     assert_eq!(dropped.name, "xl/model/item.data");
-    assert_eq!(dropped.size, MAX_KEPT_PART + 1);
-    assert_eq!(dropped.limit, MAX_KEPT_PART);
+    assert_eq!(dropped.reason, DroppedReason::TooLarge { size: MAX_KEPT_PART + 1, limit: MAX_KEPT_PART });
     assert!(wb.preserved.as_deref().is_none_or(|p| !p.parts.iter().any(|q| q.name == "xl/model/item.data")), "the model part is not kept");
 
     // Saving refuses instead of writing a package that silently lost the model.
     let error = write_xlsx(&wb).expect_err("saving must lose nothing");
     match &error {
-        IoError::DroppedPart { part, size, limit } => {
+        IoError::DroppedPart { part, reason } => {
             assert_eq!(part, "xl/model/item.data");
-            assert_eq!(*size, MAX_KEPT_PART + 1);
-            assert_eq!(*limit, MAX_KEPT_PART);
+            assert!(reason.contains("67108865"), "{reason}");
+            assert!(reason.contains("67108864"), "{reason}");
         }
         other => panic!("expected DroppedPart, got {other:?}"),
     }
@@ -863,6 +862,29 @@ fn an_oversized_model_part_refuses_to_save() {
     for needle in ["xl/model/item.data", "67108865", "67108864", "raise the limit", "without the model"] {
         assert!(message.contains(needle), "{needle} missing from: {message}");
     }
+}
+
+#[test]
+fn a_model_dropped_by_the_keep_budget_refuses_to_save() {
+    // The model is within the per-part limit, but the workbook's keep budget has no room for it.
+    // Recording only size-limit drops would let the save succeed with the model gone.
+    crate::passthrough::KEPT_TOTAL_FOR_TEST.with(|c| c.set(4));
+    let read = read_xlsx(&with_model_part());
+    crate::passthrough::KEPT_TOTAL_FOR_TEST.with(|c| c.set(crate::passthrough::MAX_KEPT_TOTAL));
+    let (wb, report) = read.expect("the workbook still opens");
+    assert!(report.warnings.iter().any(|w| w.contains("powerPivotData") && w.contains("dropped")), "the drop is reported: {:?}", report.warnings);
+    let dropped = wb.dropped_model.as_ref().expect("every dropped model is recorded on the workbook");
+    assert_eq!(dropped.name, "xl/model/item.data");
+    assert!(matches!(&dropped.reason, DroppedReason::Unpreservable(why) if why.contains("too large")), "{:?}", dropped.reason);
+    let error = write_xlsx(&wb).expect_err("saving must lose nothing, whatever dropped the model");
+    match &error {
+        IoError::DroppedPart { part, reason } => {
+            assert_eq!(part, "xl/model/item.data");
+            assert!(reason.contains("too large"), "{reason}");
+        }
+        other => panic!("expected DroppedPart, got {other:?}"),
+    }
+    assert!(error.to_string().contains("without the model"), "{error}");
 }
 
 #[test]
