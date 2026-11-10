@@ -215,11 +215,6 @@ impl Language {
         }
     }
 
-    /// The catalog's own translation of `text`, or `None` when it falls back to English.
-    fn translated(self, text: &str) -> Option<&'static str> {
-        self.translation(text)
-    }
-
     /// Translates an interface label; untranslated labels fall back to English.
     ///
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
@@ -369,11 +364,11 @@ mod tests {
     fn every_catalog_has_distinct_diagram_and_decorative_text() {
         for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
             let code = language.code();
-            let diagram = language.translated("Diagram");
+            let diagram = language.translation("Diagram");
             assert!(diagram.is_some(), "{code}: Diagram");
-            assert!(language.translated("Decorative Text").is_some(), "{code}: Decorative Text");
+            assert!(language.translation("Decorative Text").is_some(), "{code}: Decorative Text");
             for chart in ["Chart", "Charts"] {
-                if let Some(chart_text) = language.translated(chart) {
+                if let Some(chart_text) = language.translation(chart) {
                     assert_ne!(diagram, Some(chart_text), "{code}: Diagram equals {chart}");
                 }
             }
