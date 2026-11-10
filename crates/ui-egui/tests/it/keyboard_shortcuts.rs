@@ -269,6 +269,42 @@ fn symbol_shortcuts_follow_the_character_the_layout_types() {
 }
 
 #[test]
+fn date_and_time_shortcuts_on_azerty_and_czech_keyboards() {
+    // French AZERTY types `;` and `:` unshifted on the US `,` and `.` keys; Czech QWERTZ types `;`
+    // unshifted on the US backtick key and `:` with Shift+. (US positions).
+    for (layout, semi_at, semi_m, colon_m) in [("fr", Key::Comma, CTRL, CTRL), ("cs", Key::Backtick, CTRL, CTRL_SHIFT)] {
+        let mut h = harness(book("C2"));
+        let size = style(&h, "C2").font.size;
+        key_on_layout(&mut h, Key::Semicolon, semi_at, semi_m);
+        assert_eq!(editor_text(&h), Some(today(&h)), "{layout}: Ctrl+;");
+        key(&mut h, Key::Escape, Modifiers::NONE);
+        key_on_layout(&mut h, Key::Colon, Key::Period, colon_m);
+        let time = editor_text(&h).unwrap_or_default();
+        assert!(time.contains(':') && (time.ends_with("AM") || time.ends_with("PM")), "{layout}: Ctrl+: gave {time:?}");
+        assert_eq!(style(&h, "C2").font.size, size, "{layout}: the font size changed");
+    }
+}
+
+#[test]
+fn layout_keys_type_their_character_in_a_cell_being_edited() {
+    // While a cell is edited the grid reads no shortcuts, so `;` and `:` (Shift+, and Shift+. on
+    // Croatian and German keyboards) are typed, and nothing changes the font size.
+    let mut h = harness(book("C2"));
+    let size = style(&h, "C2").font.size;
+    h.input_mut().events.push(Event::Text("x".into()));
+    h.run_steps(2);
+    for (typed, at, text) in [(Key::Semicolon, Key::Comma, ";"), (Key::Colon, Key::Period, ":")] {
+        let m = Modifiers::SHIFT;
+        h.input_mut().events.push(Event::Key { key: typed, physical_key: Some(at), pressed: true, repeat: false, modifiers: m });
+        h.input_mut().events.push(Event::Text(text.into()));
+        h.input_mut().events.push(Event::Key { key: typed, physical_key: Some(at), pressed: false, repeat: false, modifiers: m });
+        h.run_steps(2);
+    }
+    assert_eq!(editor_text(&h).as_deref(), Some("x;:"));
+    assert_eq!(style(&h, "C2").font.size, size);
+}
+
+#[test]
 fn us_symbol_shortcuts_keep_their_keys() {
     let mut h = harness(book("C2"));
     // Ctrl+;: the date. Ctrl+Shift+; arrives as `:` on Windows and as `;` with Shift elsewhere.
