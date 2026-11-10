@@ -1,4 +1,4 @@
-//! Synthetic, in-memory XLSX lifecycle checks: no Office-authored fixtures or filesystem I/O.
+//! Synthetic, in-memory XLSX and JSON lifecycle checks: no Office-authored fixtures or filesystem I/O.
 use std::io::{Cursor, Read, Write};
 
 use gridcraft_core::{CellError, CellRef, Value};
@@ -487,5 +487,80 @@ fn full_calc_on_load_and_explicit_open_parameters_choose_the_reported_policy() {
         let notice = if expected == 999.0 { gridcraft_engine::io::CACHED_RESULTS_NOTICE } else { gridcraft_engine::io::RECALCULATED_RESULTS_NOTICE };
         assert_eq!(opened["warnings"][0], notice);
         assert!(!s.take_ui_requests().iter().any(|r| matches!(r, gridcraft_engine::UiRequest::Message(_))));
+    }
+}
+
+/// JSON must keep actual spills, including arrays without import flags.
+#[test]
+fn cached_json_open_restores_unmarked_spills_before_missing_dependents() {
+    for manual in [false, true] {
+        let mut source = Session::new();
+        source.new_workbook();
+        for (at, input) in [("A1", "=SEQUENCE(3)"), ("C1", "=TRANSPOSE(A1#)"), ("H1", "=SEQUENCE(1)"), ("B10", "10"), ("B11", "=B10+1")] {
+            source.execute("cell.set", json!({"cell": at, "input": input})).unwrap();
+        }
+        let wb = std::sync::Arc::make_mut(&mut source.doc_mut().unwrap().wb);
+        wb.calc.mode = if manual { CalcMode::Manual } else { CalcMode::Automatic };
+        let sheet = wb.sheet_mut(0).unwrap();
+        sheet.cells.get_mut(CellRef::parse("B11").unwrap()).unwrap().value = Value::Number(999.0);
+        let mut unsupported = Cell::formula(Formula::new("SYNTHETIC_UNSUPPORTED()"));
+        unsupported.value = Value::Number(42.0);
+        sheet.set_cell(CellRef::parse("D10").unwrap(), unsupported);
+        for (at, formula) in [("G3", "ROWS(A1#)"), ("G4", "SUM(C1#)"), ("G5", "ROWS(H1#)")] {
+            sheet.set_cell(CellRef::parse(at).unwrap(), Cell::formula(Formula::new(formula)));
+        }
+        for at in ["A1", "C1", "H1"] {
+            let formula = sheet.cell(CellRef::parse(at).unwrap()).unwrap().formula.as_ref().unwrap();
+            assert!(!formula.dynamic && formula.array.is_none(), "ordinary entered arrays have no import flag");
+        }
+        let expected_spill = sheet.spill.clone();
+        let expected_ranges = sheet.spill_ranges.clone();
+        let saved = source.execute("file.saveBytes", json!({"format": "json"})).unwrap();
+        let mut opened = Session::new();
+        opened.execute("file.open", json!({"name": "synthetic-spills.json", "base64": saved["base64"], "recalculate": false})).unwrap();
+        for (at, expected) in
+            [("A2", 2.0), ("A3", 3.0), ("D1", 2.0), ("E1", 3.0), ("G3", 3.0), ("G4", 6.0), ("G5", 1.0), ("B11", 999.0), ("D10", 42.0)]
+        {
+            assert_eq!(value(&opened, at), Value::Number(expected), "manual={manual}, {at}");
+        }
+        let doc = opened.doc().unwrap();
+        let sheet = doc.wb.sheet(0).unwrap();
+        assert_eq!(sheet.spill, expected_spill);
+        assert_eq!(sheet.spill_ranges, expected_ranges);
+        assert_eq!(doc.calc.last_recalc_cells, 3, "only the three missing formulas are evaluated");
+        assert!(!doc.is_dirty());
+        assert!(sheet.cell(CellRef::parse("A2").unwrap()).is_none(), "followers stay derived, not editable constants");
+        opened.execute("cell.set", json!({"cell": "Z20", "input": "1"})).unwrap();
+        assert_eq!(value(&opened, "B11"), Value::Number(999.0));
+        assert_eq!(value(&opened, "D10"), Value::Number(42.0));
+    }
+}
+
+/// JSON keeps results no supported function can reconstruct, without densifying sparse ranges.
+#[test]
+fn cached_json_open_keeps_sparse_unsupported_array_caches() {
+    for kind in ["unmarked", "dynamic", "legacy"] {
+        let mut wb = Workbook::new();
+        let range = gridcraft_core::RangeRef::parse("A1:A1048576").unwrap();
+        let mut formula = Formula::new("SYNTHETIC_UNSUPPORTED_ARRAY()");
+        formula.dynamic = kind == "dynamic";
+        formula.array = (kind == "legacy").then_some(range);
+        let mut anchor = Cell::formula(formula);
+        anchor.value = Value::Number(17.0);
+        let sheet = wb.sheet_mut(0).unwrap();
+        sheet.set_cell(range.start, anchor);
+        sheet.spill_ranges.insert(range.start, range);
+        for (at, value) in [("A2", Value::Number(0.0)), ("A3", Value::from("")), ("A4", Value::Bool(false)), ("A5", Value::Error(CellError::Div0))] {
+            sheet.spill.insert(CellRef::parse(at).unwrap(), value);
+        }
+        let expected_spill = sheet.spill.clone();
+        let bytes = gridcraft_engine::io::save_bytes_as(&wb, "synthetic.json", gridcraft_engine::io::FileKind::Json).unwrap();
+        let mut opened = Session::new();
+        opened.execute("file.open", json!({"name": "synthetic-sparse.json", "base64": gridcraft_engine::io::base64_encode(&bytes)})).unwrap();
+        let doc = opened.doc().unwrap();
+        assert_eq!(value(&opened, "A1"), Value::Number(17.0), "{kind}");
+        assert_eq!(doc.wb.sheet(0).unwrap().spill, expected_spill, "{kind}");
+        assert_eq!(doc.wb.sheet(0).unwrap().spill_ranges.get(&range.start), Some(&range), "{kind}");
+        assert_eq!(doc.calc.last_recalc_cells, 0, "cached formulas must not be probed or evaluated");
     }
 }
