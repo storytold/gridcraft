@@ -1,7 +1,12 @@
 # Real-time collaboration: status and acceptance evidence
 
 - Date: 2026-11-10
-- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), HEAD `6a9b143c` (code and tests); this page rides on top of it
+- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), code head `6a9b143c` (code
+  and tests). `0b7d6aff` is the pushed head of PR #3613 and of
+  `fork/feature/realtime-collaboration` — a docs commit on top of `6a9b143c`. The revision of
+  this page that you are reading is one further **local docs commit on top of `0b7d6aff`,
+  not pushed** — the tip of the branch, the `docs(collab)` commit that `git log -1` names (a
+  commit cannot spell its own hash; the bus record `status/gridcraft` quotes it)
 - Base: `origin/main` = `2c58c769` (rebased 2026-11-08)
 - PR: <https://github.com/storytold/gridcraft/pull/3613> (draft)
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
@@ -745,8 +750,11 @@ No CI file is touched, nothing is pushed to `storytold/*`; the commit stays on
 
 ## 16. Two-client host run against a cabinet-like page (2026-11-10)
 
-**Head `6a9b143c`** on `feature/realtime-collaboration` carries the two host-bridge fixes this
-run found; this entry is the docs commit on top of it.
+**Code head `6a9b143c`** on `feature/realtime-collaboration` carries the two host-bridge fixes
+this run found. The docs commit that recorded the run is `0b7d6aff`, the pushed head of PR #3613
+and of `fork/feature/realtime-collaboration`. The text below is a later **local** docs commit on
+top of `0b7d6aff`, not pushed; it changed only this file, so the code of the branch is still
+`6a9b143c`.
 
 The browser half of §2 and §6.6, run the way `INTEGRATION.md` §6 describes it: a page frames two
 GridCraft clients, gives each its room token, opens the file the cabinet holds, and takes the
@@ -807,7 +815,13 @@ in `Drop`; the run above has no page error (only a 404 for the page's missing fa
 `cargo clippy -p gridcraft-collab-web -p gridcraft-web -p gridcraft-ui-egui --all-targets --
 -D warnings` clean. The wasm32 `clippy -D warnings` still stops on the pre-existing `dead_code`
 warning in `crates/ui-egui/src/backstage.rs` (`Modified`), untouched by this slice and present
-before it. No push was made and CI is unchanged.
+before it. The branch is pushed: `0b7d6aff` is the head of PR #3613 and of
+`fork/feature/realtime-collaboration`, and the PR records that push as its last update,
+2026-11-09T23:25:26Z. The workflows created on that head (`CI`, `House rules`, `Nix`,
+`SonarCloud`, 2026-11-09T23:25:33Z) did not run — they sit in `action_required` with no job
+started — so this head carries the gates above as run on the build host, not as a CI pass. The
+local docs commit that carries this text is not pushed and changes nothing outside
+`docs/collab/STATUS.md`.
 
 **What remains for a person.**
 
