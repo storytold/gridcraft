@@ -285,14 +285,24 @@ fn opt_in_export_single_value_for_the_excel_oracle() {
     };
     std::fs::write(&output, &written).expect("write output");
     let sum: f64 = column(&model, &table_name, &column_name).values.iter().filter_map(numeric).sum();
+    // How many rows still hold the value the edit replaced: the oracle compares the count, because
+    // a dictionary may legitimately keep a cached entry after the row changed (CodeRabbit, #3412).
+    let old_value = numeric(&old);
+    let old_remaining = column(&model, &table_name, &column_name)
+        .values
+        .iter()
+        .filter_map(numeric)
+        .filter(|number| old_value.is_some_and(|old| (number - old).abs() < 1.0e-9))
+        .count();
     if let Ok(path) = std::env::var("GRIDCRAFT_VERTIPAQ_EXCEL_EXPECT") {
         let expectation = serde_json::json!({
             "table": table_name,
             "column": column_name,
             "row": row,
-            "old": numeric(&old),
+            "old": old_value,
             "new": numeric(&new),
             "sum": sum,
+            "old_remaining": old_remaining,
         });
         std::fs::write(path, serde_json::to_vec_pretty(&expectation).expect("serialize")).expect("write expectation");
     }
@@ -318,10 +328,9 @@ fn opt_in_excel_resaved_part_reads_back() {
     let present: Vec<f64> = values.iter().filter_map(numeric).collect();
     assert!(present.iter().any(|number| (number - expected).abs() < 1.0e-9), "Excel's re-saved part lost the changed value {expected}");
     if (expected - discarded).abs() > 1.0e-9 {
-        assert!(
-            !present.iter().any(|number| (number - discarded).abs() < 1.0e-9),
-            "Excel's re-saved part still holds the replaced value {discarded}"
-        );
+        let remaining = present.iter().filter(|number| (*number - discarded).abs() < 1.0e-9).count() as u64;
+        let expected_remaining = expectation["old_remaining"].as_u64().expect("old_remaining");
+        assert_eq!(remaining, expected_remaining, "Excel's re-saved part has the wrong count of the replaced value {discarded}");
     }
     let sum: f64 = present.iter().sum();
     let expected_sum = expectation["sum"].as_f64().expect("sum");

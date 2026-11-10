@@ -14,7 +14,7 @@
 //!   value is a column read, so the model rows are neither walked nor cloned
 //!   ([`PivotTable::render_with_stats`] reports the counters).
 //! * Filters are applied first: a row must match every filter. A filter's `allowed` list is a set
-//!   of exact scalar values (case-sensitive for strings); an empty `allowed` list keeps no rows.
+//!   of scalar values (strings compare case-insensitively, as DAX does); an empty `allowed` list keeps no rows.
 //! * Row- and column-field values are grouped ascending in [`ScalarKey`] order, so BLANK sorts
 //!   first and is a group of its own (`(Blank)` in labels).
 //! * Cells are evaluated through the normal evaluator with a [`FilterContext`] holding the filters
@@ -128,7 +128,7 @@ pub enum PivotLayout {
 ///
 /// An empty `allowed` list keeps nothing (the pivot renders no rows), unless [`PivotFilter::all`]
 /// is set: that is the page field's `(All)` — a filter that names its field but keeps every value.
-/// Values compare exactly; string values are case-sensitive.
+/// Values compare by [`ScalarKey`]; string values compare case-insensitively.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PivotFilter {
     /// A field reference in `Table[Column]` form, resolved with [`crate::pivot::pivot_fields`].

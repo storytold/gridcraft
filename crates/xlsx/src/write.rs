@@ -236,7 +236,7 @@ fn namespace_attributes(tag: &str) -> String {
         let Some(eq) = rest.find('=') else { break };
         let name = rest[..eq].trim();
         let after = &rest[eq + 1..];
-        let Some(quote) = after.chars().next() else { break };
+        let Some(quote) = after.chars().next().filter(|q| matches!(q, '"' | '\'')) else { break };
         let Some(length) = after[1..].find(quote) else { break };
         let value = &after[1..1 + length];
         if name.starts_with("xmlns") {

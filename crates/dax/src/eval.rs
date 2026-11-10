@@ -52,7 +52,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::ast::{BinaryOp, Literal, UnaryOp};
 use crate::binder::{BindError, Binder, BoundExpr};
-use crate::model::DataModel;
+use crate::model::{DataModel, Relationship};
 use crate::storage::{ColumnKind, ModelStorage, StorageError, TableStorage};
 use crate::value::{EvalError, Scalar, ScalarKey, TableColumn, TableValue};
 
@@ -113,6 +113,12 @@ const FAMILIES: &[Family] = &[
 /// The names of the evaluator families linked into this build, in dispatch order.
 pub fn linked_families() -> impl Iterator<Item = &'static str> {
     FAMILIES.iter().map(|family| family.name)
+}
+
+/// How a relationship propagates filters when no modifier overrides it: an inactive relationship
+/// propagates nothing, otherwise the many-to-one direction, and both when it is bidirectional.
+fn default_direction(relationship: &Relationship) -> (bool, bool) {
+    if relationship.inactive { (false, false) } else { (true, relationship.bidirectional) }
 }
 
 /// A set of column-value filters. A column with several keys is an OR; different columns are
@@ -540,7 +546,11 @@ impl<'a> Evaluator<'a> {
         let mut rows = rows.unwrap_or_else(|| (0..table_storage.row_count()).collect());
 
         for (index, relationship) in storage.relationships().iter().enumerate() {
-            let (forward, backward) = filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
+            let (forward, backward) = filters.relationships.get(&index).copied().unwrap_or(if relationship.inactive {
+                (false, false)
+            } else {
+                (true, relationship.bidirectional)
+            });
             let (other, self_column, other_column) = if forward && relationship.from_table == table {
                 (relationship.to_table, relationship.from_column, relationship.to_column)
             } else if backward && relationship.to_table == table {
@@ -614,7 +624,7 @@ impl<'a> Evaluator<'a> {
             let (Some(from), Some(to)) = (self.model.table_index(&relationship.from_table), self.model.table_index(&relationship.to_table)) else {
                 continue;
             };
-            let (forward, backward) = filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
+            let (forward, backward) = filters.relationships.get(&index).copied().unwrap_or(default_direction(relationship));
             let (other, self_column, other_column) = if forward && from == table {
                 (to, &relationship.from_column, &relationship.to_column)
             } else if backward && to == table {
@@ -653,7 +663,7 @@ impl<'a> Evaluator<'a> {
             return true;
         }
         for (index, relationship) in self.model.relationships.iter().enumerate() {
-            let (forward, backward) = filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
+            let (forward, backward) = filters.relationships.get(&index).copied().unwrap_or(default_direction(relationship));
             let (Some(from), Some(to)) = (self.model.table_index(&relationship.from_table), self.model.table_index(&relationship.to_table)) else {
                 continue;
             };
@@ -1583,9 +1593,14 @@ impl<'a> Evaluator<'a> {
             _ => return Err(EvalError::new("CROSSFILTER needs ONE, BOTH or NONE")),
         };
         // `(forward, backward)`: which side of the relationship may pass a filter. The
-        // `ONEWAY_*` spellings name that side explicitly; `ONEWAY` is the default many-to-one.
+        // `ONEWAY_*` spellings name that side by the *argument order*: the first column is the
+        // left side, so the mapping depends on which endpoint `table_a` names.
+        let left_is_from = same(&relationship.from_table, &table_a_name);
         let state = match direction.as_str() {
-            "ONE" | "ONEWAY" | "ONEWAY_LEFTFILTERSRIGHT" => (true, false),
+            "ONE" | "ONEWAY" => (true, false),
+            "ONEWAY_LEFTFILTERSRIGHT" if left_is_from => (false, true),
+            "ONEWAY_LEFTFILTERSRIGHT" => (true, false),
+            "ONEWAY_RIGHTFILTERSLEFT" if left_is_from => (true, false),
             "ONEWAY_RIGHTFILTERSLEFT" => (false, true),
             "BOTH" | "TWOWAY" => (true, true),
             "NONE" => (false, false),

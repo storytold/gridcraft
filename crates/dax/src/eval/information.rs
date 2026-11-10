@@ -326,7 +326,7 @@ fn is_cross_filtered(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
     let mut pending: Vec<usize> = filtered.iter().copied().collect();
     while let Some(source) = pending.pop() {
         for (index, relationship) in ev.model().relationships.iter().enumerate() {
-            let (forward, backward) = ctx.filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
+            let (forward, backward) = ctx.filters.relationships.get(&index).copied().unwrap_or(super::default_direction(relationship));
             let (Some(from), Some(to)) = (ev.model().table_index(&relationship.from_table), ev.model().table_index(&relationship.to_table)) else {
                 continue;
             };
