@@ -111,6 +111,9 @@ sync_github_name = true
 [people.maxm11]
 sync_github_name = true
 
+[people.RockerHX]
+sync_github_name = true
+
 [people.luigiPinna]
 real_name = "Luigi Pinna"
 sync_github_name = true
