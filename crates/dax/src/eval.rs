@@ -1964,10 +1964,20 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
     let number = |index: usize| arg(index)?.to_number().ok_or_else(|| EvalError::new(format!("{name} argument {} must be numeric", index + 1)));
     let text = |index: usize| Ok::<String, EvalError>(arg(index)?.to_dax_text());
     match name.to_ascii_uppercase().as_str() {
-        "ABS" => Ok(Scalar::Decimal(number(0)?.abs())),
-        "ROUND" => Ok(Scalar::Decimal(round_to(number(0)?, number(1)? as i32))),
-        "ROUNDUP" => Ok(Scalar::Decimal(round_direction(number(0)?, number(1)? as i32, true))),
-        "INT" => Ok(Scalar::Integer(number(0)?.floor() as i64)),
+        // `ABS` keeps the numeric type (Currency, Decimal or Integer); only an
+        // unrepresentable `i64::MIN` falls back to Decimal (CodeRabbit, #3412).
+        "ABS" => match arg(0)? {
+            Scalar::Integer(value) => Ok(value.checked_abs().map(Scalar::Integer).unwrap_or(Scalar::Decimal(-(*value as f64)))),
+            Scalar::Currency(value) => Ok(value.checked_abs().map(Scalar::Currency).unwrap_or(Scalar::Decimal(-(*value as f64) / 10_000.0))),
+            _ => Ok(Scalar::Decimal(number(0)?.abs())),
+        },
+        // `INT` rounds toward negative infinity, keeping Currency as Currency and
+        // everything else as Integer (CodeRabbit, #3412).
+        "INT" => match arg(0)? {
+            Scalar::Integer(value) => Ok(Scalar::Integer(*value)),
+            Scalar::Currency(value) => Ok(Scalar::Currency(value.div_euclid(10_000) * 10_000)),
+            _ => Ok(Scalar::Integer(number(0)?.floor() as i64)),
+        },
         "TRUNC" => {
             let digits = if args.len() > 1 { number(1)? as i32 } else { 0 };
             Ok(Scalar::Decimal(round_direction(number(0)?, digits, false)))

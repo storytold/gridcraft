@@ -519,7 +519,8 @@ fn functions() -> TableValue {
                 blank(),
                 blank(),
                 blank(),
-                flag(!spec.flags.direct_query_limited),
+                // The catalog records calculated-column/RLS limits, not measure pushdown.
+                blank(),
                 blank(),
             ]
         })

@@ -528,6 +528,16 @@ fn text_functions_convert_numbers_the_way_dax_does() {
 }
 
 #[test]
+fn abs_and_int_keep_the_documented_numeric_types() {
+    // `ABS` strips the sign and keeps Currency, Decimal or Integer; `INT` rounds
+    // toward negative infinity, keeping Currency as Currency (CodeRabbit, #3412).
+    assert_eq!(eval("ABS(-1)"), Scalar::Integer(1));
+    assert_eq!(eval("ABS(-1.5)"), Scalar::Decimal(1.5));
+    assert_eq!(eval("INT(-2.1)"), Scalar::Integer(-3));
+    assert_eq!(eval("INT(7)"), Scalar::Integer(7));
+}
+
+#[test]
 fn date_with_an_out_of_range_month_does_not_overflow() {
     // A huge negative month literal saturates to i64::MIN; normalizing it must not panic.
     assert!(matches!(eval("DATE(2024, -1e19, 1)"), Scalar::DateTime(_)));

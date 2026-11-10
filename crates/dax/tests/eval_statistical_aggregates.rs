@@ -243,10 +243,16 @@ fn variance_and_standard_deviation() {
 
 #[test]
 fn variance_requires_two_values() {
-    assert!(eval("VAR.P(Single[Value])").is_err());
+    // Population statistics of one value are defined (0); only the sample forms
+    // divide by (count - 1) and need two observations (Excel agrees).
+    assert_eq!(eval("VAR.P(Single[Value])").expect("VAR.P single"), Scalar::Decimal(0.0));
+    assert_eq!(eval("STDEV.P(Single[Value])").expect("STDEV.P single"), Scalar::Decimal(0.0));
     assert!(eval("VAR.S(Single[Value])").is_err());
-    assert!(eval("STDEV.P(Single[Value])").is_err());
     assert!(eval("STDEV.S(Single[Value])").is_err());
+    assert_eq!(eval("VARX.P(Single, Single[Value])").expect("VARX.P single"), Scalar::Decimal(0.0));
+    assert_eq!(eval("STDEVX.P(Single, Single[Value])").expect("STDEVX.P single"), Scalar::Decimal(0.0));
+    assert!(eval("VARX.S(Single, Single[Value])").is_err());
+    assert!(eval("STDEVX.S(Single, Single[Value])").is_err());
     assert!(eval("VARX.P(Empty, Empty[Value])").is_err());
     assert!(eval("STDEVX.S(Empty, Empty[Value])").is_err());
     assert!(eval("VAR.P(Nulls[Value])").is_err());
@@ -473,4 +479,17 @@ fn statistical_aggregate_matches_documented_values() {
     let (value, stats) = eval_with_stats(&model, "STDEV.S(Sales[Amount])");
     assert_close_to(&value, (squares / 5.0).sqrt(), "STDEV.S");
     assert!(stats.aggregates > 0, "STDEV.S must read observations from storage, got {stats:?}");
+}
+
+#[test]
+fn abs_and_int_keep_currency_columns_as_currency() {
+    // UnitPrice is Currency ($20, $5, $12.50, $0.75): ABS keeps the type and INT
+    // floors toward negative infinity in whole units (CodeRabbit, #3412).
+    let model = documented_model();
+    let (value, _) = eval_with_stats(&model, "MAXX(Product, ABS(Product[UnitPrice]))");
+    assert_eq!(value, Scalar::Currency(200_000));
+    let (value, _) = eval_with_stats(&model, "MAXX(Product, INT(Product[UnitPrice]))");
+    assert_eq!(value, Scalar::Currency(200_000));
+    let (value, _) = eval_with_stats(&model, "MINX(Product, INT(Product[UnitPrice]))");
+    assert_eq!(value, Scalar::Currency(0));
 }

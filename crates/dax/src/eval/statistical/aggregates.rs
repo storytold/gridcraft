@@ -331,7 +331,9 @@ fn statistic_result(statistic: Statistic, mut observations: Vec<StatValue>) -> R
                     StatValue::Blank => None,
                 })
                 .collect();
-            if numbers.len() < 2 {
+            // The population variance of one value is defined (0); only the sample
+            // forms divide by (count - 1) and need two observations (Excel agrees).
+            if numbers.len() < 2 && statistic.sample() {
                 return Err(EvalError::new(format!("{name} requires at least two non-blank numeric values")));
             }
             let count = numbers.len() as f64;

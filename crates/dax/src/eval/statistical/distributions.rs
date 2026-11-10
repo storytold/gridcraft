@@ -913,7 +913,9 @@ fn gamma_cf(a: f64, x: f64) -> f64 {
     let mut d = 1.0 / b;
     let mut h = d;
     let mut converged = false;
-    for i in 1..10_000 {
+    // Like `gamma_series`, the fraction needs about `sqrt(a)` steps near the `x >= a + 1`
+    // boundary, so a huge shape needs far more than 10,000 terms (CodeRabbit, #3412).
+    for i in 1..1_000_000 {
         let index = i as f64;
         let an = -index * (index - a);
         b += 2.0;
