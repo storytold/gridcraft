@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (Diagram and Decorative Text labels, Diagram distinct from Chart; shared CJK/Latin fallback baselines; Arabic bidi display, editing, reading direction, font fallback, AutoFit and sorting; B1/B2 calendar formats; PDF headers and footers retain font/style runs; Greek and Cyrillic retain independent fallbacks; PDF Unicode aliases retain their text; multiple named PDF font families; per-export TrueType fonts through CLI/MCP; missing translations are reported without failing checks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (Ukrainian Chart is Діаграма; Diagram and Decorative Text labels, Diagram distinct from Chart; shared CJK/Latin fallback baselines; Arabic bidi display, editing, reading direction, font fallback, AutoFit and sorting; B1/B2 calendar formats; PDF headers and footers retain font/style runs; Greek and Cyrillic retain independent fallbacks; PDF Unicode aliases retain their text; multiple named PDF font families; per-export TrueType fonts through CLI/MCP; missing translations are reported without failing checks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -132,6 +132,8 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | trivial | Retain Ukrainian Chart terminology alongside per-export PDF font capabilities and histories |
+| 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |
 | 2026-11-10 | trivial | Reconcile upstream Diagram and Decorative Text labels with PDF font export capabilities and histories |
 | 2026-11-10 | minor | Diagram and Decorative Text labels in all 18 non-English catalogs; Diagram never repeats the catalog's chart word (German `Schema`, Ukrainian `Схема`, Romanian `Schemă`), see [feature-names.md](feature-names.md) |
 | 2026-11-10 | trivial | Reconcile upstream CJK baseline and legacy-formula changes with per-export PDF fonts; retain both feature histories |
