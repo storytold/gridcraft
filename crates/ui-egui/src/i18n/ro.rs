@@ -1090,14 +1090,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Conversia cifrelor din jurul literei „E” într-un număr în notație științifică"
         }
         "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Dezactivat: 1244121406E6 rămâne text în loc să devină 1.24412E+15.",
-        "Convert continuous letters and numbers to a date" => "Conversia literelor și cifrelor continue într-o dată",
-        "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft nu face niciodată această conversie: 12JAN2026 rămâne text.",
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Setările de conversie a datelor se aplică tuturor registrelor de lucru; nu sunt salvate în fișier."
         }
         "Remove trailing zeros after the decimal separator" => "Eliminarea zerourilor de la final după separatorul zecimal",
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "Dezactivat: 720.0 se afișează și se salvează ca 720.0, iar 3.10 ca 3.10 (celula primește formatul de număr 0.0 sau 0.00). Rămâne număr. Nu este o opțiune Excel."
+        }
+        "Convert text that looks like a date or time to a date" => "Conversia textului care arată ca o dată sau o oră într-o dată",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Dezactivat: 2.6.70, 3/4/2026 și 10:30 rămân text, așa cum au fost scrise. Nu este o opțiune Excel; acoperă și opțiunea Excel „Conversia literelor și cifrelor continue într-o dată” (12JAN2026 este întotdeauna text în GridCraft)."
         }
         _ => return None,
     })

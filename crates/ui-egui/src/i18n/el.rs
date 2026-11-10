@@ -1036,16 +1036,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => {
             "Απενεργοποιημένο: το 1244121406E6 παραμένει κείμενο αντί να γίνει 1.24412E+15."
         }
-        "Convert continuous letters and numbers to a date" => "Μετατροπή συνεχόμενων γραμμάτων και αριθμών σε ημερομηνία",
-        "GridCraft never makes this conversion: 12JAN2026 stays text." => {
-            "Το GridCraft δεν κάνει ποτέ αυτή τη μετατροπή: το 12JAN2026 παραμένει κείμενο."
-        }
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Οι ρυθμίσεις μετατροπής δεδομένων ισχύουν για κάθε βιβλίο εργασίας· δεν αποθηκεύονται στο αρχείο."
         }
         "Remove trailing zeros after the decimal separator" => "Κατάργηση τελικών μηδενικών μετά το διαχωριστικό δεκαδικών",
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "Απενεργοποιημένο: το 720.0 εμφανίζεται και αποθηκεύεται ως 720.0 και το 3.10 ως 3.10 (το κελί παίρνει μορφή αριθμού 0.0 ή 0.00). Παραμένει αριθμός. Δεν είναι επιλογή του Excel."
+        }
+        "Convert text that looks like a date or time to a date" => "Μετατροπή κειμένου που μοιάζει με ημερομηνία ή ώρα σε ημερομηνία",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Απενεργοποιημένο: τα 2.6.70, 3/4/2026 και 10:30 παραμένουν κείμενο, όπως γράφτηκαν. Δεν είναι επιλογή του Excel· καλύπτει επίσης την επιλογή του Excel «Μετατροπή συνεχόμενων γραμμάτων και αριθμών σε ημερομηνία» (το 12JAN2026 είναι πάντα κείμενο στο GridCraft)."
         }
         _ => return None,
     })

@@ -1028,14 +1028,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Konwertuj cyfry otaczające literę „E” na liczbę w notacji naukowej"
         }
         "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Wyłączone: 1244121406E6 pozostaje tekstem zamiast stać się 1.24412E+15.",
-        "Convert continuous letters and numbers to a date" => "Konwertuj ciągłe litery i cyfry na datę",
-        "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft nigdy nie wykonuje tej konwersji: 12JAN2026 pozostaje tekstem.",
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Ustawienia konwersji danych dotyczą wszystkich skoroszytów; nie są zapisywane w pliku."
         }
         "Remove trailing zeros after the decimal separator" => "Usuń zera końcowe po separatorze dziesiętnym",
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "Wyłączone: 720.0 jest wyświetlane i zapisywane jako 720.0, a 3.10 jako 3.10 (komórka otrzymuje format liczbowy 0.0 lub 0.00). Pozostaje liczbą. To nie jest opcja programu Excel."
+        }
+        "Convert text that looks like a date or time to a date" => "Konwertuj tekst wyglądający jak data lub godzina na datę",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Wyłączone: 2.6.70, 3/4/2026 i 10:30 pozostają tekstem, tak jak zostały wpisane. To nie jest opcja programu Excel; obejmuje też opcję Excela „Konwertuj ciągłe litery i cyfry na datę” (12JAN2026 jest w GridCraft zawsze tekstem)."
         }
         _ => return None,
     })

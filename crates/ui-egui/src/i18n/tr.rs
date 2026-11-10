@@ -470,16 +470,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "“E” harfini çevreleyen basamakları bilimsel gösterimde bir sayıya dönüştür"
         }
         "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Kapalı: 1244121406E6, 1.24412E+15 olmak yerine metin olarak kalır.",
-        "Convert continuous letters and numbers to a date" => "Ardışık harf ve sayıları tarihe dönüştür",
-        "GridCraft never makes this conversion: 12JAN2026 stays text." => {
-            "GridCraft bu dönüştürmeyi hiçbir zaman yapmaz: 12JAN2026 metin olarak kalır."
-        }
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Veri dönüştürme ayarları tüm çalışma kitaplarına uygulanır; dosyaya kaydedilmez."
         }
         "Remove trailing zeros after the decimal separator" => "Ondalık ayırıcıdan sonraki sondaki sıfırları kaldır",
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "Kapalı: 720.0, 720.0 olarak; 3.10 da 3.10 olarak gösterilir ve kaydedilir (hücre 0.0 veya 0.00 sayı biçimini alır). Sayı olarak kalır. Bir Excel seçeneği değildir."
+        }
+        "Convert text that looks like a date or time to a date" => "Tarih veya saate benzeyen metni tarihe dönüştür",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Kapalı: 2.6.70, 3/4/2026 ve 10:30 yazıldığı gibi metin olarak kalır. Bir Excel seçeneği değildir; Excel'in “Ardışık harf ve sayıları tarihe dönüştür” seçeneğini de kapsar (12JAN2026, GridCraft'ta her zaman metindir)."
         }
         _ => return None,
     })

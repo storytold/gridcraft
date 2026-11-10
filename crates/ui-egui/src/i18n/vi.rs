@@ -470,16 +470,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Chuyển đổi các chữ số quanh chữ cái “E” thành số dưới dạng ký hiệu khoa học"
         }
         "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Tắt: 1244121406E6 vẫn là văn bản thay vì trở thành 1.24412E+15.",
-        "Convert continuous letters and numbers to a date" => "Chuyển đổi chữ cái và số liên tiếp thành ngày",
-        "GridCraft never makes this conversion: 12JAN2026 stays text." => {
-            "GridCraft không bao giờ thực hiện chuyển đổi này: 12JAN2026 vẫn là văn bản."
-        }
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Cài đặt chuyển đổi dữ liệu áp dụng cho mọi sổ làm việc; chúng không được lưu trong tệp."
         }
         "Remove trailing zeros after the decimal separator" => "Loại bỏ các số 0 ở cuối sau dấu phân cách thập phân",
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "Tắt: 720.0 được hiển thị và lưu là 720.0, còn 3.10 là 3.10 (ô nhận định dạng số 0.0 hoặc 0.00). Giá trị vẫn là số. Đây không phải là tùy chọn của Excel."
+        }
+        "Convert text that looks like a date or time to a date" => "Chuyển đổi văn bản trông giống ngày hoặc giờ thành ngày",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Tắt: 2.6.70, 3/4/2026 và 10:30 vẫn là văn bản, đúng như đã viết. Đây không phải là tùy chọn của Excel; tùy chọn này cũng bao gồm tùy chọn “Chuyển đổi chữ cái và số liên tiếp thành ngày” của Excel (12JAN2026 luôn là văn bản trong GridCraft)."
         }
         _ => return None,
     })

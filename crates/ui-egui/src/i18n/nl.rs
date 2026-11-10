@@ -580,14 +580,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Cijfers rond de letter ‘E’ converteren naar een getal in wetenschappelijke notatie"
         }
         "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Uit: 1244121406E6 blijft tekst in plaats van 1.24412E+15 te worden.",
-        "Convert continuous letters and numbers to a date" => "Doorlopende letters en cijfers naar een datum converteren",
-        "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft voert deze conversie nooit uit: 12JAN2026 blijft tekst.",
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Instellingen voor gegevensconversie gelden voor elke werkmap; ze worden niet in het bestand opgeslagen."
         }
         "Remove trailing zeros after the decimal separator" => "Volgnullen na het decimaalteken verwijderen",
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "Uit: 720.0 wordt weergegeven en opgeslagen als 720.0, en 3.10 als 3.10 (de cel krijgt de getalnotatie 0.0 of 0.00). Het blijft een getal. Geen Excel-optie."
+        }
+        "Convert text that looks like a date or time to a date" => "Tekst die eruitziet als een datum of tijd naar een datum converteren",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Uit: 2.6.70, 3/4/2026 en 10:30 blijven tekst, zoals geschreven. Geen Excel-optie; het omvat ook de Excel-optie ‘Doorlopende letters en cijfers naar een datum converteren’ (12JAN2026 is in GridCraft altijd tekst)."
         }
         _ => return None,
     })
