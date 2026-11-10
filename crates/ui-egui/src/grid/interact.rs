@@ -218,7 +218,10 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
     let ctx = input.context.clone();
     if !app.session.draw_tool.is_empty() && in_cells {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
-        if app.session.draw_tool == "pen" {
+        // The pen and the Action Pen collect one stroke the same way; only the commit differs
+        // (ink shape, or text recognised from the stroke).
+        let drawing = app.session.draw_tool == "pen" || app.session.draw_tool == "actionPen";
+        if drawing {
             if let Some(p) = pos
                 && resp.dragged()
             {
@@ -226,6 +229,12 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                 let c = geo.cell_at(sh, p);
                 let sx = sh.col_left(c.col) as f32 + (p.x - geo.x(sh, c.col)) / geo.z;
                 let sy = sh.row_top(c.row) as f32 + (p.y - geo.y(sh, c.row)) / geo.z;
+                if app.grid.ink.is_empty() {
+                    app.grid.ink_started = Some(crate::clock::monotonic_ms());
+                    // The cell the stroke starts in, kept from the hit test: recomputing it from
+                    // the sheet points would round across a row boundary far down the sheet.
+                    app.grid.ink_cell = Some(c);
+                }
                 app.grid.ink.push([sx, sy]);
             }
             if !app.grid.ink.is_empty() {
@@ -247,9 +256,40 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                 let (color, width) = pen_ink(&app.session.draw_color, app.session.draw_width, &theme);
                 input.ui.painter().add(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(width * geo.z, color)));
             }
-            if resp.drag_stopped() && app.grid.ink.len() >= 2 {
+            if resp.drag_stopped() {
                 let pts: Vec<[f32; 2]> = std::mem::take(&mut app.grid.ink);
-                let _ = app.run("draw.stroke", json!({"points": pts}));
+                let ended = crate::clock::monotonic_ms();
+                let started = app.grid.ink_started.take().unwrap_or(ended);
+                let at = app.grid.ink_cell.take();
+                if app.session.draw_tool == "actionPen" {
+                    // One stroke in, one typed value out; a refusal (no model, protected cell)
+                    // is shown to the person rather than swallowed. The stroke's own times let
+                    // the engine tell a real pause from time spent recognising, and the cell it
+                    // started in is the target.
+                    if !pts.is_empty() {
+                        let mut payload = json!({"points": pts, "startedAt": started, "endedAt": ended});
+                        if let Some(at) = at {
+                            payload["cell"] = json!(at.a1());
+                        }
+                        app.run_or_alert("draw.actionPenInk", payload);
+                    }
+                } else if pts.len() >= 2 {
+                    let _ = app.run("draw.stroke", json!({"points": pts}));
+                }
+            }
+            // A tap is a one-point stroke: a decimal point or the dot of an "i" is a click, never
+            // a drag, and would otherwise be discarded. `clicked_by` is false after a drag, so a
+            // dragged stroke is never recognised twice.
+            if primary_clicked
+                && !resp.dragged()
+                && app.session.draw_tool == "actionPen"
+                && let Some(p) = pos
+            {
+                let c = geo.cell_at(sh, p);
+                let sx = sh.col_left(c.col) as f32 + (p.x - geo.x(sh, c.col)) / geo.z;
+                let sy = sh.row_top(c.row) as f32 + (p.y - geo.y(sh, c.row)) / geo.z;
+                let at = crate::clock::monotonic_ms();
+                app.run_or_alert("draw.actionPenInk", json!({"points": [[sx, sy]], "cell": c.a1(), "startedAt": at, "endedAt": at}));
             }
             return true;
         }
@@ -262,6 +302,17 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
             }
             return true;
         }
+    }
+    // A pen/actionPen stroke released outside the cells never re-enters the block above, so its
+    // `drag_stopped` would leave stale stroke points for the next stroke to append to (and a
+    // stale start time and cell). Drop the pending stroke instead of committing it. Only a
+    // pending stroke is consumed: a freeze-handle or header drag has no ink, and its release must
+    // reach `handle_release` so the drag (and a pending freeze change) finishes on this frame.
+    if resp.drag_stopped() && !app.grid.ink.is_empty() && matches!(app.session.draw_tool.as_str(), "pen" | "actionPen") {
+        app.grid.ink.clear();
+        app.grid.ink_started = None;
+        app.grid.ink_cell = None;
+        return true;
     }
     false
 }

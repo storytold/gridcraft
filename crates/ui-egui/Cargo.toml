@@ -14,6 +14,8 @@ workspace = true
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
 gridcraft-engine = { workspace = true }
 gridcraft-chart = { workspace = true }
+# The Action Pen: stroke rasterising, the recognizer trait and the model manifest.
+gridcraft-ink = { workspace = true }
 # `monochrome_emoji_fonts` restores the Noto Emoji and emoji-icon faces that 0.37 moved behind
 # this feature. The UI draws ✕, ◀, ↘ and 📋 as text; without these faces the strict kittest
 # harness (and a host with no symbol font) renders them as tofu.

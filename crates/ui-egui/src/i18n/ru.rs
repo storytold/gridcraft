@@ -130,6 +130,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Header & Footer" => "Верхний и нижний колонтитулы",
         "Draw with ink" => "Рисование от руки",
         "Eraser" => "Ластик",
+        "Action Pen" => "Перо действий",
+        "Write by hand and turn the writing into text in the cell" => "Пишите от руки, и текст появится в ячейке",
         "Ink to\nShape" => "Преобразовать рукописный\nввод в фигуру",
         "Select\nObjects" => "Выбрать\nобъекты",
         "Themes" => "Темы",

@@ -505,10 +505,23 @@ pub struct Session {
     pub macro_debug: Option<macros::debug::Debugger>,
     /// Where the macro recorder started (beside `recorder`, its buffer).
     pub macro_recording: Option<macros::recorder::RecordingStart>,
-    /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour and width.
+    /// Draw tab tool: "" (select), "pen", "eraser" or "actionPen"; pen colour and width.
     pub draw_tool: String,
     pub draw_color: String,
     pub draw_width: f32,
+    /// The Action Pen's recognizer, which the host installs when the handwriting model is
+    /// present. `None` (CLI, MCP, the web app, or no model) makes `draw.actionPen` refuse with
+    /// the directory to install the model in. The engine never loads a model itself: that is a
+    /// native-only runtime (`gridcraft-ink-rten`), see `docs/action-pen.md`.
+    pub ink: Option<std::sync::Arc<dyn gridcraft_ink::Recognizer>>,
+    /// Root directory of the handwriting models (`$GRIDCRAFT_MODELS` or the app's settings
+    /// folder), set by the host. Commands use it to find, verify, import and remove the model;
+    /// `None` when the host never set one.
+    pub models_dir: Option<String>,
+    /// The Action Pen handwriting entry being written: the strokes so far and the cell they
+    /// replace (`cmd::draw::InkEntry`). `None` when no entry is open; it ends on a pause, a
+    /// different cell, sheet or document, or the tool being turned off.
+    pub ink_entry: Option<cmd::draw::InkEntry>,
     /// Review › Show Comments: the Comments pane is open.
     pub comments_pane: bool,
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting

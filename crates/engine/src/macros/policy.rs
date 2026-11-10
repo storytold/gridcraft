@@ -1,6 +1,7 @@
 //! What a macro step may run. Macros run commands, so this keeps a macro from saving, opening or
 //! closing files, driving the app, running other macros, or reading and writing files without the
-//! person knowing. It goes by command id and the `path` parameter; the runner also runs every
+//! person knowing. It goes by command id and the `path` parameter, plus the two handwriting-model
+//! commands, which add or delete files wherever they are told to go; the runner also runs every
 //! step except an approved file step inside the scripts' file sandbox, so a command that touches a
 //! file under another parameter can't either.
 
@@ -50,9 +51,22 @@ const READS_FILES: &[&str] = &["data.getData", "data.fromTextCsv", "insert.pictu
 /// File commands that only produce bytes unless given a `path` (then they write a file).
 const EXPORTS: &[&str] = &["file.exportPdf", "file.exportCsv", "file.exportHtml", "file.print", "file.printPreview", "file.saveBytes"];
 
-/// Whether command `id` with `params` writes a file (an export or print given a `path`).
+/// Commands that add or delete the handwriting model's files, with what they do. They touch the
+/// file system whatever their parameters say, so a dry run stops before them and a macro has to
+/// declare them: `ink.modelRemove` deletes a folder the rollback can't put back.
+const MODEL_FILES: &[(&str, &str)] =
+    &[("ink.modelImport", "copies the handwriting model's files"), ("ink.modelRemove", "deletes the handwriting model's files")];
+
+/// Whether `id` is one of the handwriting-model commands, which touch the model's files whatever
+/// their parameters say.
+pub fn is_model_file(id: &str) -> bool {
+    MODEL_FILES.iter().any(|(m, _)| *m == id)
+}
+
+/// Whether command `id` with `params` leaves a file behind: an export or print given a `path`, or
+/// a handwriting-model command, which copies or deletes the model's files whatever its parameters.
 pub fn writes_file(id: &str, params: &Json) -> bool {
-    EXPORTS.contains(&id) && params.get("path").is_some_and(|p| !p.is_null())
+    is_model_file(id) || (EXPORTS.contains(&id) && params.get("path").is_some_and(|p| !p.is_null()))
 }
 
 /// The policy for running command `id` with `params` as a macro step in a document with `trust`.
@@ -70,6 +84,9 @@ pub fn macro_policy(id: &str, params: &Json, trust: Trust) -> Policy {
         Policy::Deny((*why).into())
     } else if let Some((_, why)) = DENIED_PREFIXES.iter().find(|(p, _)| id.starts_with(p)) {
         Policy::Deny((*why).into())
+    } else if let Some((_, what)) = MODEL_FILES.iter().find(|(m, _)| *m == id) {
+        // Whatever the parameters say: the command adds or deletes files where the model lives.
+        Policy::NeedsPermission((*what).into())
     } else if READS_FILES.contains(&id) && has_path {
         Policy::NeedsPermission("reads a file".into())
     } else {
@@ -134,6 +151,13 @@ mod tests {
                 assert!(matches!(macro_policy(id, &p, Trust::Local), Policy::NeedsPermission(_)), "{id} {p}");
             }
         }
+        // The model commands touch files wherever they are told to go.
+        for id in ["ink.modelImport", "ink.modelRemove"] {
+            for p in [&none, &path] {
+                assert!(matches!(macro_policy(id, p, Trust::Local), Policy::NeedsPermission(_)), "{id} {p}");
+                assert!(matches!(macro_policy(id, p, Trust::FromFile), Policy::NeedsPermission(_)), "{id} {p}");
+            }
+        }
         for id in ["cell.set", "home.bold", "view.macros", "edit.copy", "file.properties"] {
             assert_eq!(macro_policy(id, &none, Trust::Local), Policy::Allow, "{id}");
             assert!(matches!(macro_policy(id, &none, Trust::FromFile), Policy::Ask(_)), "{id}");
@@ -143,7 +167,14 @@ mod tests {
 
     #[test]
     fn every_listed_command_exists() {
-        for id in ALLOWED.iter().chain(READS_FILES).chain(EXPORTS).chain(DENIED.iter().map(|(id, _)| id)).chain(&["data.solver"]) {
+        for id in ALLOWED
+            .iter()
+            .chain(READS_FILES)
+            .chain(EXPORTS)
+            .chain(MODEL_FILES.iter().map(|(id, _)| id))
+            .chain(DENIED.iter().map(|(id, _)| id))
+            .chain(&["data.solver"])
+        {
             assert!(crate::find_command(id).is_some(), "{id}");
         }
     }

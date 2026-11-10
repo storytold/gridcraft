@@ -139,6 +139,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("insert.checkbox", "Insert", "Cell Controls", "Checkbox"),
     // Draw
     ("draw.pen", "Draw", "Tools", "Pen"),
+    ("draw.actionPen", "Draw", "Tools", "Action Pen"),
     ("draw.eraser", "Draw", "Tools", "Eraser"),
     ("draw.lasso", "Draw", "Tools", "Lasso Select"),
     ("draw.inkToShape", "Draw", "Convert", "Ink to Shape"),

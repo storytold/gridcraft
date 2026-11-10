@@ -39,6 +39,7 @@ pub mod function_library;
 pub mod grid;
 pub mod i18n;
 pub mod icons;
+pub mod inkpanel;
 pub mod keymap;
 pub mod keytips;
 pub mod macro_editor;
@@ -77,7 +78,7 @@ mod services;
 mod state;
 
 pub use clock::{monotonic_ms, now_ms};
-pub use services::{Chrome, Inbox, Services};
+pub use services::{Chrome, Inbox, ModelHost, Services};
 pub use state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
 pub mod desktop_theme;
 

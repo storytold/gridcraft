@@ -99,3 +99,29 @@ fn dragging_the_column_handle_when_scrolled_measures_the_last_frozen_column() {
     drag(&mut h, cols.center(), pos2(g.x(&sh, 1) + 10.0, g.cells.top() + 40.0));
     assert_eq!(freeze(&h), Some((0, 1)));
 }
+
+/// A pen tool must not swallow a freeze-handle release that ends outside the cells: there is no
+/// pending stroke, so the release belongs to the freeze drag and must finish on that frame
+/// (#3556).
+#[test]
+fn a_pen_tool_does_not_swallow_the_freeze_handle_release() {
+    let mut h = harness();
+    h.state_mut().session.draw_tool = "pen".into();
+    h.state_mut().run("view.freezePanes", serde_json::json!({"cell": "C1"})).unwrap();
+    h.run_steps(1);
+    assert_eq!(freeze(&h), Some((0, 2)));
+    let g = geo(&h);
+    let (cols, _) = freeze_handles(&g);
+    // The handle dragged back to the corner releases left of the cells, outside the grid.
+    let press = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    let (from, to) = (cols.center(), pos2(g.cells.left() - 5.0, cols.center().y));
+    h.input_mut().events.extend([Event::PointerMoved(from), press(from, true)]);
+    h.step();
+    for i in 1..=6 {
+        h.input_mut().events.push(Event::PointerMoved(from + (to - from) * (i as f32 / 6.0)));
+        h.step();
+    }
+    h.input_mut().events.push(press(to, false));
+    h.step();
+    assert_eq!(freeze(&h), None, "the release outside the cells unfreezes on the release frame");
+}

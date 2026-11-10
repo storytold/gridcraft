@@ -7,6 +7,7 @@
 mod common;
 
 mod accounting_fill;
+mod action_pen;
 mod active_row_highlight;
 mod advanced_filter;
 mod argument_names;

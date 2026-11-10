@@ -14,6 +14,7 @@ mod apple_events;
 mod control_server;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
+mod ink_host;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
@@ -21,6 +22,7 @@ mod print;
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::doc_windows::DocWindows;
@@ -206,6 +208,19 @@ fn services() -> Services {
         open_url: Some(Box::new(|url: &str| open_with_system(url))),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
+        // Draw › Action Pen: the model directory, its download worker (only run after a click)
+        // and the recognizer loader. Models never ship; see docs/action-pen.md.
+        models: Some(Arc::new(ink_host::Models::new())),
+        ink_loader: Some(Arc::new(ink_host::load_recognizer)),
+        pick_model_files: Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .add_filter("Handwriting model files", &["onnx", "json"])
+                .pick_files()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|p| p.to_str().map(str::to_string))
+                .collect()
+        })),
         ..Default::default()
     }
 }
@@ -319,6 +334,8 @@ fn main() -> eframe::Result<()> {
         log::warn!("sample {s}: {e}");
     }
     let mut app = SheetApp::new(session, services());
+    // The Action Pen finds its model directory, and loads the model when it is already installed.
+    app.start_ink();
     app.watch_desktop_theme();
     app.start_update_check();
     let control_port = control_port;

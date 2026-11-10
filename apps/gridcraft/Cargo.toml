@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 gridcraft-engine = { workspace = true }
 gridcraft-ui-egui = { workspace = true }
+gridcraft-ink = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "clipboard"] }
 egui = { workspace = true }
 serde_json = { workspace = true }
@@ -35,6 +36,11 @@ winit = { version = "0.30", default-features = false, features = ["x11", "waylan
 # Same craft-libs revision as the workspace's craft-update and craft-window (see the root
 # Cargo.toml).
 craft-print = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
+# Action Pen inference (rten + TrOCR small). Native only: the web app has no model directory.
+gridcraft-ink-rten = { workspace = true }
+# The Action Pen model download (streamed HTTPS into a temporary file, then verified). MIT OR
+# Apache-2.0; `tls` is rustls, so no system TLS library is needed.
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
 craft-update = { workspace = true }
 rfd = { workspace = true }
 arboard = { workspace = true, features = ["image-data"] }

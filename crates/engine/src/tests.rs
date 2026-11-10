@@ -6453,3 +6453,264 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
 }
+
+// ---------------------------------------------------------------- Action Pen (#1777)
+
+/// A session with a fixed-string recognizer installed, as the desktop app does once the model
+/// is loaded. No model file is involved.
+fn ink_session(text: &str) -> Session {
+    let mut s = s();
+    s.ink = Some(std::sync::Arc::new(gridcraft_ink::FixedRecognizer::new(text)));
+    s
+}
+
+#[test]
+fn action_pen_writes_recognized_digits_as_a_number_in_one_undo_step() {
+    let mut s = ink_session("42");
+    s.execute("range.setValues", json!({"range": "A1", "values": [["keep"]]})).unwrap();
+    let shapes_before = s.doc().unwrap().wb.active().unwrap().shapes.len();
+    let undo_before = s.doc().unwrap().undo.len();
+    let r = s.execute("draw.actionPenInk", json!({"points": [[10.0, 10.0], [40.0, 30.0], [70.0, 12.0]], "cell": "B2"})).unwrap();
+    assert_eq!(r["text"], json!("42"));
+    assert_eq!(v(&s, "B2"), Value::Number(42.0));
+    assert_eq!(v(&s, "A1"), Value::text("keep"));
+    // The stroke leaves no ink shape, and one undo step takes the value away again.
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes.len(), shapes_before);
+    assert_eq!(s.doc().unwrap().undo.len(), undo_before + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(v(&s, "B2").is_empty());
+    assert_eq!(v(&s, "A1"), Value::text("keep"));
+}
+
+#[test]
+fn action_pen_writes_words_as_text() {
+    let mut s = ink_session("hello");
+    s.execute("draw.actionPenInk", json!({"points": [[5.0, 5.0], [60.0, 20.0]], "cell": "C7"})).unwrap();
+    assert_eq!(v(&s, "C7"), Value::text("hello"));
+}
+
+/// Answers with the number of dark pixels in the middle third of the image: zero only when no
+/// ink crosses the centre, which proves two far-apart strokes were drawn without a segment
+/// joining them (and that both reached the image rather than only the last one).
+struct MiddleInk;
+
+impl gridcraft_ink::Recognizer for MiddleInk {
+    fn recognize(&self, image: &gridcraft_ink::raster::LineImage) -> std::result::Result<String, gridcraft_ink::Error> {
+        let (from, to) = (image.width / 3, 2 * image.width / 3);
+        let dark =
+            (0..image.height).flat_map(|y| (from..to).map(move |x| (x, y))).filter(|(x, y)| image.pixel(*x, *y).is_some_and(|p| p < 128)).count();
+        Ok(dark.to_string())
+    }
+    fn model_id(&self) -> &'static str {
+        gridcraft_ink::TROCR_SMALL_HANDWRITTEN.id
+    }
+}
+
+#[test]
+fn action_pen_recognises_consecutive_strokes_as_one_entry() {
+    let mut s = s();
+    s.ink = Some(std::sync::Arc::new(MiddleInk));
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let y = sh.row_top(1) + 6.0;
+    let left = sh.col_left(1) + 2.0;
+    let right = left + 60.0;
+    s.execute("draw.actionPenInk", json!({"points": [[left, y], [left, y + 30.0]], "cell": "B2"})).unwrap();
+    assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(1));
+    // The second stroke is part of the entry: the centre stays paper only when both strokes are
+    // in the image and no segment joins them (recognising the last stroke alone would put ink in
+    // the middle; joining the two would too).
+    let r = s.execute("draw.actionPenInk", json!({"points": [[right, y], [right, y + 30.0]], "cell": "B2"})).unwrap();
+    assert_eq!(r["text"], json!("0"), "the strokes were joined, or the first one was dropped");
+    assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(2));
+}
+
+#[test]
+fn action_pen_accepts_a_tap_as_a_one_point_stroke() {
+    let mut s = ink_session(".");
+    let r = s.execute("draw.actionPenInk", json!({"points": [[12.0, 8.0]], "cell": "B2"})).unwrap();
+    assert_eq!(r["text"], json!("."));
+    assert_eq!(v(&s, "B2"), Value::text("."));
+}
+
+#[test]
+fn action_pen_targets_the_cell_under_the_strokes_first_point() {
+    let mut s = ink_session("7");
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let (x, y) = (sh.col_left(1) + 8.0, sh.row_top(1) + 6.0);
+    let (up, left) = (sh.row_top(0) + 6.0, sh.col_left(0) + 8.0);
+    // B2 -> B1 -> A2. The bounding box's top-left corner is A1, which the stroke never enters.
+    s.execute("draw.actionPenInk", json!({"points": [[x, y], [x, up], [left, y]]})).unwrap();
+    assert_eq!(v(&s, "B2"), Value::Number(7.0));
+    assert!(v(&s, "A1").is_empty(), "the stroke never enters A1");
+}
+
+#[test]
+fn another_draw_tool_ends_the_handwriting_entry() {
+    let mut s = ink_session("1");
+    let at = json!([[10.0, 10.0], [20.0, 20.0]]);
+    let switch: [(&str, serde_json::Value); 3] = [("draw.pen", json!({"on": true})), ("draw.eraser", json!({"on": true})), ("draw.lasso", json!({}))];
+    for (tool, params) in switch {
+        s.execute("draw.actionPen", json!({"on": true})).unwrap();
+        s.execute("draw.actionPenInk", json!({"points": at, "cell": "B2"})).unwrap();
+        assert!(s.ink_entry.is_some(), "an entry is open before {tool}");
+        s.execute(tool, params).unwrap();
+        assert!(s.ink_entry.is_none(), "{tool} must end the entry, so it cannot leak into the next one");
+    }
+}
+
+#[test]
+fn the_pause_between_strokes_is_the_time_the_pen_was_up() {
+    let mut s = ink_session("1");
+    let at = json!([[10.0, 10.0], [20.0, 20.0]]);
+    // The commands arrive back to back, but the person paused for ten seconds between strokes.
+    s.execute("draw.actionPenInk", json!({"points": at, "cell": "B2", "startedAt": 1_000.0, "endedAt": 1_400.0})).unwrap();
+    s.execute("draw.actionPenInk", json!({"points": at.clone(), "cell": "B2", "startedAt": 11_000.0, "endedAt": 11_300.0})).unwrap();
+    assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(1), "a ten-second pen-up pause starts a new entry");
+    // Half a second of pen-up time keeps the entry, however long recognising the last one took.
+    s.execute("draw.actionPenInk", json!({"points": at.clone(), "cell": "B2", "startedAt": 11_800.0, "endedAt": 12_100.0})).unwrap();
+    assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(2), "the pause is pen-up time");
+    // A caller that resets its clock (pen-down before the previous pen-up) must not merge
+    // unrelated writing into one entry.
+    s.execute("draw.actionPenInk", json!({"points": at, "cell": "B2", "startedAt": 40.0, "endedAt": 70.0})).unwrap();
+    assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(1), "a rewound clock starts a new entry");
+}
+
+#[test]
+fn a_handwriting_entry_ends_on_a_pause_a_new_cell_or_leaving_the_tool() {
+    let mut s = ink_session("1");
+    let at = json!([[10.0, 10.0], [20.0, 20.0]]);
+    s.execute("draw.actionPenInk", json!({"points": at, "cell": "B2"})).unwrap();
+    s.execute("draw.actionPenInk", json!({"points": at.clone(), "cell": "B2"})).unwrap();
+    assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(2), "consecutive strokes share an entry");
+    // A different cell starts a new entry.
+    s.execute("draw.actionPenInk", json!({"points": at.clone(), "cell": "C3"})).unwrap();
+    assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(1));
+    // A pause longer than the entry gap starts a new entry.
+    if let Some(entry) = s.ink_entry.as_mut() {
+        entry.last = entry.last.map(|last| last - crate::cmd::draw::INK_ENTRY_GAP - std::time::Duration::from_millis(1));
+    }
+    s.execute("draw.actionPenInk", json!({"points": at, "cell": "C3"})).unwrap();
+    assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(1), "a pause ends the entry");
+    // Turning the tool off ends it too.
+    s.execute("draw.actionPen", json!({"on": false})).unwrap();
+    assert!(s.ink_entry.is_none());
+}
+
+#[test]
+fn action_pen_writes_under_the_stroke_when_no_cell_is_given() {
+    let mut s = ink_session("7");
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let (x, y) = (sh.col_left(2) + 8.0, sh.row_top(4) + 6.0);
+    s.execute("draw.actionPenInk", json!({"points": [[x, y], [x + 20.0, y + 10.0]]})).unwrap();
+    assert_eq!(v(&s, "C5"), Value::Number(7.0));
+}
+
+#[test]
+fn action_pen_without_a_recognizer_refuses_and_leaves_the_workbook_alone() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["keep"]]})).unwrap();
+    let before = s.doc().unwrap().wb.active().unwrap().cells.len();
+    let err = s.execute("draw.actionPen", json!({"on": true})).unwrap_err().to_string();
+    assert!(err.contains("not installed"), "{err}");
+    assert_ne!(s.draw_tool, "actionPen");
+    let err = s.execute("draw.actionPenInk", json!({"points": [[1.0, 1.0], [20.0, 20.0]]})).unwrap_err().to_string();
+    assert!(err.contains("not installed"), "{err}");
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().cells.len(), before);
+    assert!(v(&s, "A1") == Value::text("keep"));
+}
+
+#[test]
+fn action_pen_refuses_a_protected_cell() {
+    let mut s = ink_session("42");
+    s.execute("review.protectSheet", json!({"password": "pw"})).unwrap();
+    let err = s.execute("draw.actionPenInk", json!({"points": [[1.0, 1.0], [20.0, 20.0]], "cell": "B2"})).unwrap_err().to_string();
+    assert!(err.to_lowercase().contains("protect"), "{err}");
+    assert!(v(&s, "B2").is_empty());
+}
+
+#[test]
+fn action_pen_toggle_needs_the_model_and_leaving_it_does_not() {
+    let mut s = ink_session("1");
+    s.execute("draw.actionPen", json!({"on": true})).unwrap();
+    assert_eq!(s.draw_tool, "actionPen");
+    s.execute("draw.actionPen", json!({"on": false})).unwrap();
+    assert_ne!(s.draw_tool, "actionPen");
+    // A model that goes away: turning the tool off still works.
+    s.ink = None;
+    s.draw_tool = "actionPen".into();
+    s.execute("draw.actionPen", json!({"on": false})).unwrap();
+    assert_ne!(s.draw_tool, "actionPen");
+}
+
+#[test]
+fn ink_status_reports_the_model_contract() {
+    let mut s = s();
+    let st = s.execute("ink.status", json!({})).unwrap();
+    assert_eq!(st["model"], json!("trocr-small-handwritten"));
+    assert_eq!(st["licence"], json!("MIT"));
+    assert_eq!(st["bytes"], json!(87_496_990u64 + 158_814_912 + 4_494_727));
+    assert_eq!(st["ready"], json!(false));
+    assert_eq!(st["filesPresent"], json!(false));
+    assert!(st["hint"].as_str().is_some_and(|h| !h.is_empty()));
+    assert!(st["directory"].as_str().is_some());
+    // The backend seam: CPU is the only accelerator this build has, and it says so.
+    assert_eq!(st["accelerator"], json!("cpu"));
+    assert_eq!(st["accelerators"], json!(["cpu"]));
+    assert!(st["runtime"].as_str().is_some_and(|r| r.contains("rten")));
+    assert!(st["requestedAccelerator"].is_null());
+    assert!(st["acceleratorMessage"].is_null());
+    // Asking for an accelerator the build lacks is an answer, not an error: CPU still works.
+    let asked = s.execute("ink.status", json!({"accelerator": "openvino"})).unwrap();
+    assert_eq!(asked["accelerator"], json!("cpu"));
+    assert_eq!(asked["requestedAccelerator"], json!("openvino"));
+    let msg = asked["acceleratorMessage"].as_str().unwrap_or_default();
+    assert!(msg.contains("CPU") && msg.contains("OpenVINO"), "{msg}");
+    assert!(s.execute("ink.status", json!({"accelerator": "quantum"})).is_err());
+
+    // A configured directory with no files is "not installed" and every command says so.
+    // The directory is one this test created itself (see `exclusive_scratch` below), never the
+    // shared temp directory: `ink.modelRemove` must only ever delete test-owned files.
+    let scratch = exclusive_scratch("ink-engine").expect("a private scratch directory");
+    s.models_dir = Some(scratch.display().to_string());
+    let st = s.execute("ink.status", json!({})).unwrap();
+    assert_eq!(st["filesPresent"], json!(false));
+    assert!(s.execute("ink.modelRemove", json!({})).is_err());
+    assert!(s.execute("ink.modelImport", json!({"path": scratch.display().to_string()})).is_err());
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// A directory this test created itself. `create_dir` fails when the name is taken, so a path
+/// someone else already made (including a symlink planted in a shared temp directory) is skipped
+/// instead of followed — `ink.modelRemove` must only ever delete test-owned files.
+fn exclusive_scratch(tag: &str) -> Option<std::path::PathBuf> {
+    let base = std::env::temp_dir();
+    for nonce in 0..64u32 {
+        let dir = base.join(format!("gridcraft-{tag}-{}-{nonce}", std::process::id()));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return Some(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+#[test]
+fn ink_commands_never_panic_on_empty_or_hostile_params() {
+    let mut s = s();
+    // `ink.modelRemove` deletes `<root>/trocr-small-handwritten`: the root must be a directory
+    // this test created, never the shared temp directory with a developer's own model in it.
+    let scratch = exclusive_scratch("ink-hostile");
+    s.models_dir = scratch.as_ref().map(|dir| dir.display().to_string());
+    for id in ["draw.actionPen", "draw.actionPenInk", "ink.status", "ink.modelImport", "ink.modelRemove"] {
+        for p in [json!({}), json!([]), json!(7), json!("x"), json!({"points": "no", "path": "\u{0}../..", "on": "yes"})] {
+            let r = s.execute(id, p);
+            assert!(!matches!(r, Err(crate::EngineError::Internal(..))), "{id} panicked: {r:?}");
+            let asked = s.execute("ink.status", json!({"accelerator": "openvino"}));
+            assert!(!matches!(asked, Err(crate::EngineError::Internal(..))), "ink.status panicked: {asked:?}");
+        }
+    }
+    if let Some(dir) = scratch {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

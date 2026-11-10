@@ -1,6 +1,6 @@
 # Macros
 
-> **Last updated:** 2026-11-02 · **Change:** minor (form buttons run macros, `macro.run` takes `output`, and a button action kept in a hidden name comes back on reopen only while the file still agrees with it; earlier: a close that waits on the step editor's question runs in the editor's window, and a further close asked meanwhile waits for the answer or is refused; earlier: closing a workbook or quitting asks about the step editor's unsaved draft first; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
+> **Last updated:** 2026-11-09 · **Change:** minor (the handwriting model's `ink.modelImport` and `ink.modelRemove` are file steps: a macro must declare them and a dry run stops before them; earlier: form buttons run macros, `macro.run` takes `output`, and a button action kept in a hidden name comes back on reopen only while the file still agrees with it; earlier: a close that waits on the step editor's question runs in the editor's window, and a further close asked meanwhile waits for the answer or is refused; earlier: closing a workbook or quitting asks about the step editor's unsaved draft first; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
 
 GridCraft macros are typed, declarative lists of commands, not VBA. Every step runs a GridCraft
 command (the same ids the ribbon, CLI and MCP use) or one of three bounded control steps. A macro
@@ -112,7 +112,9 @@ doesn't exist, a cell outside the grid), is refused before anything runs:
    Properties runs, and so do exports and printing (`file.exportPdf`, `exportCsv`, `exportHtml`, `print`, `printPreview`, `saveBytes`)
    that only produce bytes. Reading or writing a file (`data.getData`, `data.fromTextCsv`,
    `insert.picture` or `pageLayout.background` with a `path`, or an export or print with a
-   `path`) needs the command in the macro's `permissions`. Any `path` other than `null` counts,
+   `path`) needs the command in the macro's `permissions`, and so do the handwriting model's
+   commands (`ink.modelImport` and `ink.modelRemove`), which copy or delete files where the model
+   lives whatever their parameters say. Any `path` other than `null` counts,
    including a blank one and a token, and the policy is checked again on the parameters as they
    are when the step runs. A macro that touches files, or that came with a workbook opened from
    a file, runs once the person approves it: the call fails with `approve: …` and runs with
@@ -180,8 +182,10 @@ columns shows the part of the sheet in use, as the run goes over it), the parame
 that just ran, the steps the run has executed (the dry runs not counted), and what the run has
 changed in its workbook: `changed` lists at most 500 entries (cell ranges, and sheets added,
 deleted or renamed) and `changedCells` counts the changed cells on the sheets it had at the start. `shifted` names the rule that made
-room at the start, and `wroteFiles` the files the run wrote, which stay when the run is rolled
-back; the answer to a rolled-back run says so in `message`. A run that ends (its last step, a
+room at the start, and `wroteFiles` the file steps the run reached, which rolling back the
+workbook can't undo: written files remain and removed files are not restored, so `message` says
+what was written and what is gone. A model step that failed partway may have done either. A run
+that ends (its last step, a
 Stop step, or a failed step, which rolls it back) or is stopped answers with `state` `finished`,
 `stopped` or `failed`.
 

@@ -25,6 +25,10 @@ gridcraft-ui-egui = { path = "crates/ui-egui" }
 gridcraft-mcp = { path = "crates/mcp" }
 gridcraft-pdf = { path = "crates/pdf" }
 gridcraft-math = { path = "crates/math" }
+# Ink: stroke rasterising and the handwriting model manifest (Action Pen). No runtime.
+gridcraft-ink = { path = "crates/ink" }
+# Action Pen inference (rten + the TrOCR export); native only, layer 6.
+gridcraft-ink-rten = { path = "crates/ink-rten" }
 # Every craft-libs crate (craft-update and craft-window here, craft-ui in ui-egui, craft-print in
 # the app) comes from one craft-libs revision.
 # craft-update: app-specific pretend versions apply to startup and manual checks.
