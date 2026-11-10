@@ -156,6 +156,9 @@ fn clip_label(s: &str, room: usize) -> String {
 /// The label of category `i` (value `v`) in at most `room` bytes: formatted with its source
 /// cell's number format when it is a number.
 fn category_label(wb: &Workbook, src: Option<(&gridcraft_model::Sheet, RangeRef)>, i: usize, v: &Value, room: usize) -> String {
+    if room == 0 {
+        return String::new(); // nothing fits: skip the number formatting
+    }
     if let (Some((s, r)), Value::Number(_)) = (src, v) {
         let w = r.width().max(1) as usize;
         let at = r.start.offset((i / w) as i64, (i % w) as i64);
@@ -167,6 +170,10 @@ fn category_label(wb: &Workbook, src: Option<(&gridcraft_model::Sheet, RangeRef)
         }
     }
     // Text is clipped before it is copied: the source may be one long shared string.
+    let mut v = v;
+    while let Value::Array(a) = v {
+        v = a.get(0, 0).unwrap_or(&Value::Empty);
+    }
     match v {
         Value::Text(t) => clip_label(t, room),
         _ => clip_label(&value_text(v), room),
@@ -181,23 +188,30 @@ fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str) -> (
     let vals = eval_list(wb, sheet, formula);
     let cells: Option<(usize, RangeRef)> = parse_ref(wb, sheet, formula);
     let src = cells.and_then(|(sh, r)| wb.sheet(sh).map(|s| (s, r)));
+    let value_range = src.and_then(|_| parse_ref(wb, sheet, values).map(|(_, r)| r));
+    // The retained levels are known before any label is charged: a cell on a discarded level
+    // gets no label and spends none of the budget. `None`: a flat list (every cell is a label).
+    let layout = src.and_then(|(_, r)| {
+        let levels = category_levels(&r, value_range.as_ref())?;
+        let (w, h) = (r.width().max(1) as usize, r.height().max(1) as usize);
+        (vals.len() == w.saturating_mul(h)).then_some((levels, w, h)) // else truncated or not a plain block
+    });
+    let kept =
+        |i: usize| layout.is_none_or(|(l, w, h)| if l.by_columns { i % w + 1 + l.outer as usize >= w } else { i / w + 1 + l.outer as usize >= h });
     let mut room = MAX_CATEGORY_BYTES;
     let texts: Vec<String> = vals
         .iter()
         .enumerate()
         .map(|(i, v)| {
+            if !kept(i) {
+                return String::new();
+            }
             let label = category_label(wb, src, i, v, room);
             room = room.saturating_sub(label.len());
             label
         })
         .collect();
-    let Some((_, r)) = src else { return (texts, vec![]) };
-    let value_range = parse_ref(wb, sheet, values).map(|(_, r)| r);
-    let Some(levels) = category_levels(&r, value_range.as_ref()) else { return (texts, vec![]) };
-    let (w, h) = (r.width().max(1) as usize, r.height().max(1) as usize);
-    if texts.len() != w.saturating_mul(h) {
-        return (texts, vec![]); // truncated or not a plain block: a flat list
-    }
+    let Some((levels, w, h)) = layout else { return (texts, vec![]) };
     let at = |row: usize, col: usize| texts.get(row * w + col).cloned().unwrap_or_default();
     let column = |c: usize| (0..h).map(|row| at(row, c)).collect::<Vec<String>>();
     let row = |rr: usize| (0..w).map(|c| at(rr, c)).collect::<Vec<String>>();
@@ -327,5 +341,25 @@ mod label_budget_tests {
         // Labels are cut at character boundaries.
         assert_eq!(super::clip_label("aé", 2), "a");
         assert_eq!(super::clip_label("aé", 3), "aé");
+    }
+
+    /// Cells on discarded outer levels (only the innermost labels and three outer levels are
+    /// kept) spend none of the byte budget.
+    #[test]
+    fn discarded_levels_do_not_spend_the_label_budget() {
+        let mut wb = Workbook::new();
+        let rows = 8000u32;
+        if let Some(sh) = wb.sheet_mut(0) {
+            for r in 0..rows {
+                for c in 0..5 {
+                    sh.set_value(gridcraft_core::CellRef::new(r, c), gridcraft_core::Value::text("x".repeat(255)));
+                }
+            }
+        }
+        // Five columns: column A is a fourth outer level and is discarded.
+        let (inner, outer) = super::category_table(&wb, 0, "=A1:E8000", "");
+        assert_eq!(outer.len(), 3);
+        assert_eq!(inner.last().map(String::len), Some(super::MAX_LABEL_CHARS));
+        assert_eq!(outer.first().and_then(|l| l.last()).map(String::len), Some(super::MAX_LABEL_CHARS));
     }
 }

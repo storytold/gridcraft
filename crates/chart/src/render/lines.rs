@@ -137,7 +137,7 @@ pub(super) fn decimate_area(top: Vec<[f32; 2]>, base: Vec<[f32; 2]>, max: usize)
 /// Draws a polyline split at gaps (`None`), decimated when long. With `smooth` (the plot box),
 /// each run is interpolated with a Catmull-Rom spline so the line curves through the data points.
 ///
-/// The points interpolation adds are budgeted across all the runs of the line, not per run:
+/// The points of the smoothed runs (data points included) are budgeted across all the runs of the line, not per run:
 /// short runs between gaps escape decimation, and 100 sub-segments each would turn a
 /// 100,000-point series of three-point runs into millions of points. Past the budget the
 /// remaining runs are drawn through their data points only.

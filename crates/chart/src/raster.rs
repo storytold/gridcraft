@@ -13,6 +13,9 @@ const SUB: usize = 4;
 /// image; once the allowance is spent the remaining fills are skipped. 2^28 is about a second,
 /// far beyond any chart.
 const MAX_SCAN_WORK: u64 = 1 << 28;
+/// Most points one filled path may have: more is skipped before any edge is built. Chart
+/// renderers cap and decimate their paths far below this; it only bounds direct callers.
+const MAX_FILL_POINTS: usize = 1 << 22;
 
 type Path = Vec<Vec<[f32; 2]>>;
 
@@ -49,6 +52,10 @@ impl Canvas {
 
     /// Fills a multi-contour path with the even-odd rule.
     fn fill(&mut self, path: &Path, color: Rgba) {
+        // Out of work, or more geometry than the allowance could ever scan: no edge list is built.
+        if self.work == 0 || path.iter().map(Vec::len).fold(0usize, usize::saturating_add) > MAX_FILL_POINTS {
+            return;
+        }
         // Each edge as [top y, bottom y, x0, y0, x1, y1].
         let mut edges: Vec<[f32; 6]> = Vec::new();
         let (mut minx, mut miny, mut maxx, mut maxy) = (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
@@ -95,12 +102,14 @@ impl Canvas {
             if active.is_empty() {
                 continue;
             }
-            let tests = (active.len() * SUB) as u64;
-            if tests > self.work {
+            // The row's edge tests and its `bw` accumulator clears and blends, charged before any of
+            // them, so rows with no coverage still count.
+            let cost = (active.len() * SUB) as u64 + bw as u64;
+            if cost > self.work {
                 self.work = 0;
                 return;
             }
-            self.work -= tests;
+            self.work -= cost;
             for v in self.acc.iter_mut().take(bw) {
                 *v = 0.0;
             }
@@ -136,7 +145,6 @@ impl Canvas {
             if !any {
                 continue;
             }
-            self.work = self.work.saturating_sub(bw as u64);
             for px in x0..x1 {
                 let cov = self.acc.get(px - x0).copied().unwrap_or(0.0);
                 if cov > 0.0 {
