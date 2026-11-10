@@ -157,8 +157,11 @@ impl Out {
         self.part(&format!("xl/media/{file}"), None, data.to_vec());
         file
     }
-    pub fn default_type(&mut self, ext: &str, ct: &str) {
-        self.defaults.entry(ext.to_string()).or_insert_with(|| ct.to_string());
+    /// Declares `ct` as the content type a `.ext` part gets by default. Returns whether the
+    /// default for `ext` is that type: the first registration wins, so a part whose own type
+    /// differs must still carry an `Override`.
+    pub fn default_type(&mut self, ext: &str, ct: &str) -> bool {
+        self.defaults.entry(ext.to_string()).or_insert_with(|| ct.to_string()).eq_ignore_ascii_case(ct)
     }
 }
 
@@ -181,6 +184,15 @@ pub fn abs_range(r: &RangeRef) -> String {
         return format!("${}${}", c(r.start.col), r.start.row + 1);
     }
     format!("${}${}:${}${}", c(r.start.col), r.start.row + 1, c(r.end.col), r.end.row + 1)
+}
+
+/// The `<pivotCache>` children of a `<pivotCaches>` element. Attributes on the element itself
+/// (a kept element's `xmlns:r`, say) are dropped: the workbook root declares every prefix.
+fn pivot_caches_children(xml: &str) -> &str {
+    let Some(open) = xml.find("<pivotCaches") else { return "" };
+    let Some(body) = xml.get(open..).and_then(|rest| rest.find('>')).map(|i| open + i + 1) else { return "" };
+    let Some(end) = xml.rfind("</pivotCaches>").filter(|end| *end >= body) else { return "" };
+    xml.get(body..end).unwrap_or("")
 }
 
 /// Refuses sheet names XLSX cannot hold. The reader repairs such names (cuts, strips, renames
@@ -239,6 +251,11 @@ fn workbook_view_attrs(wb: &Workbook) -> String {
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
 pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
+    // Fail closed: the reader dropped the data model because the part is above the keep limit, so
+    // this package can't be written back without losing the model. Refuse before writing anything.
+    if let Some(model) = wb.dropped_model.as_ref() {
+        return Err(IoError::DroppedPart { part: model.name.clone(), reason: model.reason.to_string() });
+    }
     if wb.sheets.is_empty() {
         return Err(IoError::Format("a workbook needs at least one sheet".into()));
     }
@@ -343,7 +360,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         w.push_str(" fullCalcOnLoad=\"1\"");
     }
     w.push_str("/>");
-    w.push_str(&pivots.workbook_xml(&mut wb_rels));
+    w.push_str(&pivot_caches_element(&pivots, &kept, wb, &mut wb_rels));
     let exts = crate::passthrough::workbook_elements(wb, "ext");
     if !exts.is_empty() {
         let _ = write!(w, "<extLst>{exts}</extLst>");
@@ -475,6 +492,32 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     zip.finish()
 }
 
+/// The workbook's `<pivotCaches>` element, or an empty string when the workbook has no caches.
+///
+/// It holds the caches of the range PivotTables GridCraft models and those of the data-model
+/// PivotTables kept as pass-through content; one element holds both, so the children of each are
+/// written inside a single wrapper.
+fn pivot_caches_element(pivots: &crate::pivot::PivotWriter, kept: &crate::passthrough::WorkbookKept, wb: &Workbook, wb_rels: &mut Rels) -> String {
+    let mut caches = String::new();
+    for xml in [pivots.workbook_xml(wb_rels), kept.element(wb, "pivotCaches")] {
+        caches.push_str(pivot_caches_children(&xml));
+    }
+    if caches.is_empty() { String::new() } else { format!("<pivotCaches>{caches}</pivotCaches>") }
+}
+
+/// One past the highest `cacheId` the workbook's kept `<pivotCaches>` element uses.
+fn next_kept_cache_id(kept: &crate::passthrough::WorkbookKept, wb: &Workbook) -> u32 {
+    let xml = kept.element(wb, "pivotCaches");
+    let mut next = 1;
+    for (index, _) in xml.match_indices("cacheId=\"") {
+        let digits: String = xml.get(index + "cacheId=\"".len()..).unwrap_or_default().chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(id) = digits.parse::<u32>() {
+            next = next.max(id.saturating_add(1));
+        }
+    }
+    next
+}
+
 fn write_sheets(
     wb: &Workbook,
     out: &mut Out,
@@ -483,7 +526,9 @@ fn write_sheets(
 ) -> (String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter) {
     // Kept content first: the chart sheets among the worksheets need their relationship ids.
     let kept = crate::passthrough::write_workbook(wb, wb_rels, out);
-    let mut pivots = crate::pivot::PivotWriter::default();
+    // Kept data-model caches and the range PivotTables written below share the workbook's
+    // `<pivotCaches>` element, so the generated ids start above the kept ones.
+    let mut pivots = crate::pivot::PivotWriter::new(next_kept_cache_id(&kept, wb));
     let mut sheets_xml = String::new();
     let any_visible = wb.sheets.iter().any(|s| s.visibility == Visibility::Visible);
     let mut ids = crate::passthrough::SheetIds::new(wb, &kept);

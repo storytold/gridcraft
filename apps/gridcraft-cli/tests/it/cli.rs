@@ -1,6 +1,9 @@
-use std::io::Write;
+use std::io::{Cursor, Write};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+
+use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_gridcraft-cli"))
@@ -187,6 +190,36 @@ fn check_rejects_an_empty_scan() {
 }
 
 #[test]
+fn dax_bind_resolves_model_names_and_measures() {
+    let dir = tmpdir("dax-bind");
+    let model = dir.join("model.json");
+    std::fs::write(
+        &model,
+        r#"{
+            "tables": [{"name":"Sales","columns":[{"name":"Region"},{"name":"Amount"}]}],
+            "relationships": [],
+            "measures": [
+                {"name":"Total Sales","formula":"SUM(Sales[Amount])","table":"Sales"},
+                {"name":"East Sales","formula":"CALCULATE([Total Sales], Sales[Region] = \"East\")","table":"Sales"},
+                {"name":"Per Zero","formula":"[Total Sales] / 0","table":"Sales"}
+            ]
+        }"#,
+    )
+    .unwrap();
+    let model = model.to_str().unwrap();
+
+    let out = ok(&["dax", "bind", "--model", model, "SUM(Sales[Amount])"]);
+    assert!(out.contains("Call") && out.contains("Column"), "{out}");
+    let out = ok(&["dax", "bind", "--model", model, "--measure", "East Sales"]);
+    assert!(out.contains("Measure(") && out.contains("dependencies: Total Sales"), "{out}");
+
+    let o = run(&["dax", "bind", "--model", model, "Sales[Missing]"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("unknown column"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn check_reports_a_depth_limited_scan_while_checking_readable_files() {
     let dir = tmpdir("check-depth");
     let book = dir.join("readable.xlsx");
@@ -241,4 +274,214 @@ fn a_script_line_with_an_unknown_key_stops_the_run() {
     assert!(usage.contains(r#"{"command": "id", "params": {…}}"#), "{usage}");
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dax_eval_model_rows_and_measures() {
+    let dir = tmpdir("dax-eval");
+    let model = dir.join("model.json");
+    std::fs::write(
+        &model,
+        r#"{
+            "tables": [{"name":"Sales","columns":[{"name":"Region"},{"name":"Amount"}],
+                        "rows":[["East",10],["West",20],["East",30]]}],
+            "relationships": [],
+            "measures": [
+                {"name":"Total Sales","formula":"SUM(Sales[Amount])","table":"Sales"},
+                {"name":"East Sales","formula":"CALCULATE([Total Sales], Sales[Region] = \"East\")","table":"Sales"},
+                {"name":"Per Zero","formula":"[Total Sales] / 0","table":"Sales"}
+            ]
+        }"#,
+    )
+    .unwrap();
+    let model = model.to_str().unwrap();
+
+    assert_eq!(ok(&["dax", "eval", "--model", model, "SUM(Sales[Amount])"]).trim(), "60.0");
+    assert_eq!(ok(&["dax", "eval", "--model", model, "--measure", "East Sales"]).trim(), "40.0");
+    let table = ok(&["dax", "eval", "--model", model, "--table", "FILTER(Sales, Sales[Amount] > 10)"]);
+    assert!(table.contains("\"columns\"") && table.contains("West"), "{table}");
+    let pivot = ok(&["dax", "pivot", "--model", model, "--measure", "Total Sales", "--rows", "Sales[Region]"]);
+    assert!(pivot.contains("East") && pivot.contains("40.0") && pivot.contains("West"), "{pivot}");
+    // A surplus positional would otherwise be dropped, grouping by fewer fields than asked.
+    let o = run(&["dax", "pivot", "--model", model, "--measure", "Total Sales", "--rows", "Sales[Region]", "Sales[Amount]"]);
+    assert_eq!(o.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("unexpected argument `Sales[Amount]`"), "{stderr}");
+
+    // JSON has no infinity, so a non-finite result must not print as `null` — that is BLANK.
+    let o = run(&["dax", "eval", "--model", model, "5 / 0"]);
+    assert_eq!(o.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("not a finite number"), "{stderr}");
+    let o = run(&["dax", "pivot", "--model", model, "--measure", "Per Zero", "--rows", "Sales[Region]"]);
+    assert_eq!(o.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("not a finite number"), "{stderr}");
+    // BLANK keeps its `null` rendering.
+    assert_eq!(ok(&["dax", "eval", "--model", model, "BLANK()"]).trim(), "null");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn dax_pivot_splits_only_on_separating_commas() {
+    let dir = tmpdir("dax-pivot-fields");
+    let model = dir.join("model.json");
+    std::fs::write(
+        &model,
+        r#"{
+            "tables": [{"name":"Sales, EU","columns":[{"name":"Last, First"},{"name":"Amount"},{"name":"A]B"}],
+                        "rows":[["Ada, Lovelace",10,"x"],["Alan, Turing",20,"y"]]}],
+            "relationships": [],
+            "measures": [{"name":"Total","formula":"SUM('Sales, EU'[Amount])","table":"Sales, EU"}]
+        }"#,
+    )
+    .unwrap();
+    let model = model.to_str().unwrap();
+
+    // The comma inside the quoted table name and the one inside the bracketed column name belong to
+    // the reference; only the comma between the two fields separates them.
+    let pivot = ok(&["dax", "pivot", "--model", model, "--measure", "Total", "--rows", "'Sales, EU'[Last, First], 'Sales, EU'[Amount]"]);
+    assert!(pivot.contains("\"Last, First\"") && pivot.contains("\"Amount\"") && pivot.contains("Ada, Lovelace"), "{pivot}");
+
+    // `--columns` splits the same way.
+    let pivot =
+        ok(&["dax", "pivot", "--model", model, "--measure", "Total", "--rows", "'Sales, EU'[Last, First]", "--columns", "'Sales, EU'[Amount]"]);
+    assert!(pivot.contains("Ada, Lovelace") && pivot.contains("10.0"), "{pivot}");
+
+    // A doubled bracket inside the column name is an escape, not the end of the reference.
+    let pivot = ok(&["dax", "pivot", "--model", model, "--measure", "Total", "--rows", "'Sales, EU'[A]]B]"]);
+    assert!(pivot.contains("\"A]B\""), "{pivot}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn dax_format_parse_and_errors() {
+    assert_eq!(ok(&["dax", "format", "1 + 2 * 3"]).trim(), "1 + 2 * 3");
+    assert_eq!(ok(&["dax", "format", "(1 + 2) * 3"]).trim(), "(1 + 2) * 3");
+    assert_eq!(ok(&["dax", "format", "-2 ^ 2"]).trim(), "-2 ^ 2");
+    assert!(ok(&["dax", "parse", "1 + 2 * 3"]).contains("Binary"));
+
+    assert_eq!(ok(&["dax", "format", "'Sales'[Amount] + 1"]).trim(), "'Sales'[Amount] + 1");
+    assert!(ok(&["dax", "parse", "'It''s'[A]]B]"]).contains("It's"));
+
+    let query = ok(&["dax", "format", "EVALUATE SUM('Sales'[Amount])"]);
+    assert_eq!(query.trim(), "EVALUATE SUM('Sales'[Amount])");
+    assert!(ok(&["dax", "parse", "EVALUATE 1"]).contains("Query"));
+
+    let define = ok(&["dax", "format", "DEFINE MEASURE Sales[M] = 1 VAR X = 2 EVALUATE Sales ORDER BY [M] DESC START AT 0"]);
+    assert_eq!(define.trim(), "DEFINE\n    MEASURE Sales[M] = 1\n    VAR X = 2\nEVALUATE Sales\nORDER BY\n    [M] DESC\nSTART AT 0");
+    assert!(ok(&["dax", "parse", "DEFINE MEASURE Sales[M] = 1 EVALUATE Sales"]).contains("Measure"));
+
+    let o = run(&["dax", "format", "DEFINE MEASURE Sales[M] = 1"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("EVALUATE"));
+
+    let o = run(&["dax", "parse", "1 +"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("expected expression"));
+    let o = run(&["dax", "format", "EVALUATE 1 +"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("end of input"));
+
+    let dir = tmpdir("dax");
+    let file = dir.join("expr.dax");
+    std::fs::write(&file, "1 + 2 * 3").unwrap();
+    assert_eq!(ok(&["dax", "format", "--file", file.to_str().unwrap()]).trim(), "1 + 2 * 3");
+    let _ = std::fs::remove_dir_all(dir);
+
+    // `dax measures` reads every input from options; a positional must not be silently dropped.
+    let o = run(&["dax", "measures", "--file", "/no/such/workbook.xlsx", "surplus"]);
+    assert_eq!(o.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("unexpected argument `surplus`"), "{stderr}");
+
+    let mut child = bin().args(["dax", "format"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"1 + 2 * 3").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), "1 + 2 * 3");
+}
+
+fn utf16(text: &str) -> Vec<u8> {
+    text.encode_utf16().flat_map(u16::to_le_bytes).collect()
+}
+
+/// Builds a minimal `xl/model/item.data` stream holding one MDX script.
+///
+/// `dax measures` only reads that container, so the tests need one without an Excel-written
+/// workbook behind it: a page of header metadata, the script itself, then the page-aligned virtual
+/// directory that indexes it. `ErrorCode` and `ApplyCompression` are off, so the embedded file is
+/// stored verbatim and needs no CRC trailer.
+fn model_item_data(script: &str) -> Vec<u8> {
+    const PAGE: usize = 4096;
+    const SIGNATURE: &str = "STREAM_STORAGE_SIGNATURE_)!@#$%^&*(";
+    let script_offset = PAGE;
+    let vdir_offset = (script_offset + script.len()).next_multiple_of(PAGE);
+    let vdir_xml = format!(
+        "<VirtualDirectory><BackupFile><Path>SCRIPT</Path><Size>{}</Size><m_cbOffsetHeader>{script_offset}</m_cbOffsetHeader><Delete>false</Delete><CreatedTimestamp>0</CreatedTimestamp><Access>0</Access><LastWriteTime>0</LastWriteTime></BackupFile></VirtualDirectory>",
+        script.len()
+    );
+    let vdir_bytes = utf16(&vdir_xml);
+    let header_xml = format!(
+        "<BackupLog><ErrorCode>false</ErrorCode><ApplyCompression>false</ApplyCompression><m_cbOffsetData>{PAGE}</m_cbOffsetData><m_cbOffsetHeader>{vdir_offset}</m_cbOffsetHeader><DataSize>{}</DataSize><Files>1</Files></BackupLog>",
+        vdir_bytes.len()
+    );
+    let header_bytes = utf16(&header_xml);
+    assert!(72 + header_bytes.len() <= PAGE, "header must fit in one page");
+    let mut bytes = Vec::with_capacity(vdir_offset + vdir_bytes.len());
+    bytes.extend_from_slice(&[0xFF, 0xFE]);
+    bytes.extend_from_slice(&utf16(SIGNATURE));
+    bytes.extend_from_slice(&header_bytes);
+    bytes.resize(PAGE, 0);
+    bytes.extend_from_slice(script.as_bytes());
+    bytes.resize(vdir_offset, 0);
+    bytes.extend_from_slice(&vdir_bytes);
+    bytes
+}
+
+/// Wraps a model stream in a package as `xl/model/item.data`, the only entry `dax measures` reads.
+fn workbook_with_model(item_data: &[u8]) -> Vec<u8> {
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    writer.start_file("xl/model/item.data", SimpleFileOptions::default()).unwrap();
+    writer.write_all(item_data).unwrap();
+    writer.finish().unwrap().into_inner()
+}
+
+#[test]
+fn dax_measures_requires_write_for_out_and_rewrites_the_model() {
+    const SCRIPT: &str = "<Load xmlns=\"http://schemas.microsoft.com/analysisservices/2003/engine\"><ObjectDefinition><MdxScript><Name>MdxScript</Name><Commands><Command><Text>CALCULATE;</Text></Command></Commands><CalculationProperties/></MdxScript></ObjectDefinition></Load>";
+    let dir = tmpdir("dax-measures");
+    let book = dir.join("book.xlsx");
+    std::fs::write(&book, workbook_with_model(&model_item_data(SCRIPT))).unwrap();
+    let book_s = book.to_str().unwrap();
+    let out = dir.join("out.xlsx");
+    let out_s = out.to_str().unwrap();
+
+    // Without `--write` the command only reports the current measures; a model with none is `[]`.
+    assert_eq!(ok(&["dax", "measures", "--file", book_s]).trim(), "[]");
+
+    // `--out` without `--write` would be silently ignored: the command would print the measures,
+    // report success and never create the requested file.
+    let o = run(&["dax", "measures", "--file", book_s, "--out", out_s]);
+    assert_eq!(o.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("dax measures --out needs --write"), "{stderr}");
+    assert!(!out.exists(), "rejected --out must not create the workbook");
+
+    // `--write` without `--out` keeps naming the missing half of the pair.
+    let measures_json = dir.join("measures.json");
+    std::fs::write(&measures_json, r#"[{"table":"Sales","name":"Total","formula":"SUM(Sales[Amount])","format":"0.00"}]"#).unwrap();
+    let o = run(&["dax", "measures", "--file", book_s, "--write", measures_json.to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("dax measures --write needs --out"), "{stderr}");
+
+    // The documented pair rewrites the measures into `--out`.
+    ok(&["dax", "measures", "--file", book_s, "--write", measures_json.to_str().unwrap(), "--out", out_s]);
+    let written = ok(&["dax", "measures", "--file", out_s]);
+    assert!(written.contains("\"name\": \"Total\"") && written.contains("SUM(Sales[Amount])"), "{written}");
+    // `--file` is only read: the source workbook still holds no measures.
+    assert_eq!(ok(&["dax", "measures", "--file", book_s]).trim(), "[]");
+
+    let _ = std::fs::remove_dir_all(dir);
 }

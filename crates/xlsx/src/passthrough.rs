@@ -30,7 +30,9 @@ use std::fmt::Write as _;
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-use gridcraft_model::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml, Sheet, Visibility, Workbook};
+use gridcraft_model::{
+    DroppedPart, DroppedReason, Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml, Sheet, Visibility, Workbook,
+};
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::QName;
@@ -55,6 +57,11 @@ pub use write::{KeptOut, SheetIds, WorkbookKept, workbook_elements, write_packag
 /// Most bytes kept for one workbook.
 pub const MAX_KEPT_TOTAL: usize = 256 * 1024 * 1024;
 /// Largest single kept part.
+///
+/// The data model (`xl/model/item.data`) is exempt in neither direction: a model above this limit
+/// is not read (parsing it would cost more than it is worth), and the workbook then cannot be
+/// saved as XLSX until the caller accepts losing it, because the writer refuses
+/// ([`crate::IoError::DroppedPart`]) rather than drop it silently.
 pub const MAX_KEPT_PART: u64 = 64 * 1024 * 1024;
 /// Most parts kept for one workbook.
 const MAX_KEPT_PARTS: usize = 4096;
@@ -92,7 +99,7 @@ const CT_VML: &str = "application/vnd.openxmlformats-officedocument.vmlDrawing";
 /// Relationship kinds (last segment of the type) kept from the package root.
 const PACKAGE_ROOTS: &[&str] = &["custom-properties", "extensibility", "webextensiontaskpanes"];
 /// Relationship kinds kept from the workbook without a workbook element.
-const WORKBOOK_ROOTS: &[&str] = &["customXml", "connections", "xmlMaps"];
+const WORKBOOK_ROOTS: &[&str] = &["customXml", "connections", "xmlMaps", "powerPivotData"];
 /// Relationship kinds kept from a sheet without a sheet element.
 const SHEET_ROOTS: &[&str] = &["queryTable", "tableSingleCells"];
 /// Sheet relationship kinds that mean the sheet XML may hold elements worth keeping.
@@ -147,7 +154,6 @@ const REWRITTEN: &[&str] = &[
     "slicercache",
     "timeline",
     "timelinecache",
-    "powerpivotdata",
 ];
 
 /// Relationship kinds a chart sheet reaches that are otherwise rewritten: its drawing, chart and
@@ -169,6 +175,9 @@ const OWN_DIRS: &[&str] = &[
     "xl/activex/",
     "xl/webextensions/",
     "xl/printersettings/",
+    "xl/pivotcache/",
+    "xl/pivottables/",
+    "xl/model/",
 ];
 
 fn kind(rel_type: &str) -> &str {
@@ -184,7 +193,7 @@ fn rewritten(r: &PreservedRel) -> bool {
     !r.external && REWRITTEN.contains(&kind(&r.rel_type).to_ascii_lowercase().as_str())
 }
 
-fn rels_part_name(part: &str) -> String {
+pub(crate) fn rels_part_name(part: &str) -> String {
     let (dir, file) = package::split_dir(part);
     if dir.is_empty() { format!("_rels/{file}.rels") } else { format!("{dir}/_rels/{file}.rels") }
 }

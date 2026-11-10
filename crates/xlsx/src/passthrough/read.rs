@@ -53,6 +53,9 @@ pub struct KeptReader {
     overrides: HashMap<String, String>,
     budget: usize,
     parts_left: usize,
+    /// The model database when it was dropped because it is larger than
+    /// [`crate::passthrough::MAX_KEPT_PART`], which makes saving refuse rather than lose it.
+    dropped_model: Option<DroppedPart>,
 }
 
 impl KeptReader {
@@ -64,6 +67,7 @@ impl KeptReader {
             overrides: HashMap::new(),
             budget: kept_total(),
             parts_left: MAX_KEPT_PARTS,
+            dropped_model: None,
         };
         if let Ok(root) = raw_rels(cx, "")
             && root.iter().any(|r| r.rel_type.starts_with("http://purl.oclc.org/"))
@@ -87,6 +91,14 @@ impl KeptReader {
             None => k.on = false,
         }
         k
+    }
+
+    /// The model database the size limit made the reader drop, if any.
+    ///
+    /// Such a part can't be kept, so saving the workbook would lose the model: the writer refuses
+    /// it instead ([`crate::IoError::DroppedPart`]).
+    pub fn dropped_model(&self) -> Option<DroppedPart> {
+        self.dropped_model.clone()
     }
 
     fn content_type(&self, part: &str) -> Option<String> {
@@ -210,6 +222,18 @@ impl KeptReader {
         for r in wb_rels.iter().filter(|r| is_kind(r, WORKBOOK_ROOTS)) {
             if let Err(why) = self.keep(cx, &mut p, std::slice::from_ref(r), &mut seen) {
                 cx.warn(format!("{} part {} was dropped: {why}", kind(&r.rel_type), r.target));
+                if kind(&r.rel_type) == "powerPivotData" {
+                    // The model could not be kept, whatever the reason: remember it, so the writer
+                    // refuses instead of writing the package without its data model. Only the
+                    // pass-through limit has a size to report; every other failure carries the
+                    // reader's reason (the keep budget, the part count, a missing content type, a
+                    // read error).
+                    let reason = match cx.pkg.part_size(&r.target).filter(|size| *size > MAX_KEPT_PART) {
+                        Some(size) => DroppedReason::TooLarge { size, limit: MAX_KEPT_PART },
+                        None => DroppedReason::Unpreservable(why),
+                    };
+                    self.dropped_model = Some(DroppedPart { name: r.target.clone(), reason });
+                }
             }
         }
         // Chart sheets: the sheet entry (name, state, position) plus the chart sheet part and the
