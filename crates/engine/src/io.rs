@@ -888,12 +888,12 @@ thread_local! {
 /// While one is alive, [`read_file`] and [`write_file`] on this thread refuse every path: a
 /// stored script's steps run inside one (#2178), so no command reaches the file system from a
 /// script whatever its parameters are called. Dropping it (also on unwind) lifts the refusal.
-pub(crate) struct ScriptSandbox(());
+pub struct ScriptSandbox(std::marker::PhantomData<*const ()>);
 
 impl ScriptSandbox {
-    pub(crate) fn enter() -> Self {
+    pub fn enter() -> Self {
         let _ = SCRIPT_SANDBOX.try_with(|c| c.set(c.get().saturating_add(1)));
-        ScriptSandbox(())
+        ScriptSandbox(std::marker::PhantomData)
     }
 }
 
