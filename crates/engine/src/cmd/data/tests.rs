@@ -592,6 +592,18 @@ fn fill_check_asks_every_destination_not_only_the_first() {
 }
 
 #[test]
+fn fill_check_asks_destinations_in_every_area_of_a_multi_area_fill() {
+    // A Stop in a later area of a multi-area fill decides the whole fill, for a literal
+    // input and for a formula judged per destination alike.
+    let s = fill_rules(&[("C2", "stop")]);
+    assert_eq!(alert(fill_check(&s, "A1:A2,C1:C2", "5")), ("C2".into(), ErrorStyle::Stop));
+    assert!(matches!(fill_check(&s, "A1:A2,C1:C2", "50"), FillValidation::Passed));
+    let mut s = fill_rules(&[]);
+    s.execute("data.validation", json!({"range": "C2", "type": "custom", "formula1": "=FALSE"})).unwrap();
+    assert_eq!(alert(fill_check(&s, "A1:A2,C1:C2", "=ROW()")), ("C2".into(), ErrorStyle::Stop));
+}
+
+#[test]
 fn fill_check_reports_the_most_severe_style_first_met() {
     // A Stop later in the fill wins over a Warning and an Information met before it.
     let s = fill_rules(&[("A1", "information"), ("A2", "warning"), ("A3", "stop")]);

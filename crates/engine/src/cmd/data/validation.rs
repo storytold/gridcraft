@@ -332,10 +332,41 @@ pub fn check_fill_validation(wb: &Workbook, sheet: usize, ranges: &[RangeRef], i
         return FillValidation::NotChecked;
     }
     let Some(sh) = wb.sheet(sheet) else { return FillValidation::Passed };
-    let refusals = fill_destinations(sh, ranges, input)
-        .into_iter()
-        .filter_map(|(at, _)| check_validation(wb, sheet, at, input).map(|(rule, message)| FillAlert { cell: at, rule, message }));
-    worst(refusals)
+    // One scratch workbook for every destination, restored to the original cell before the
+    // next destination is entered, instead of a fresh workbook (and sheet) clone per cell:
+    // each check still sees the original workbook plus only its own entry, exactly as
+    // `check_validation` presents it, so the refusal results are unchanged.
+    let v = gridcraft_core::parse::parse_input(input, wb.date_system).value;
+    let mut scratch: Option<Workbook> = None;
+    let mut entered: Option<CellRef> = None;
+    let mut refusals: Vec<FillAlert> = Vec::new();
+    for (at, _) in fill_destinations(sh, ranges, input) {
+        let Some(dv) = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(at))) else { continue };
+        if !alerts(dv) || (input.is_empty() && dv.allow_blank) {
+            continue;
+        }
+        let after: &Workbook = if sh.value(at) == v {
+            wb
+        } else {
+            if scratch.is_none() {
+                scratch = Some(wb.clone());
+            }
+            if let Some(out) = scratch.as_mut().and_then(|w| w.sheet_mut(sheet)) {
+                if let Some(prev) = entered.take() {
+                    let original = sh.cells.get(prev).cloned().unwrap_or_default();
+                    out.cells.set(prev, original);
+                }
+                let style = sh.style_id(at);
+                out.cells.set(at, Cell { value: v.clone(), style, ..Default::default() });
+            }
+            entered = Some(at);
+            scratch.as_ref().unwrap_or(wb)
+        };
+        if !accepts(wb, after, sheet, at, dv, input, &v) {
+            refusals.push(FillAlert { cell: at, rule: dv.clone(), message: refusal_message(dv) });
+        }
+    }
+    worst(refusals.into_iter())
 }
 
 /// Checks a literal (non-formula) `input` filled into `ranges`. Every destination then holds the

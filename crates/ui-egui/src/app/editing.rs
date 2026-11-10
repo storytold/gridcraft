@@ -208,8 +208,7 @@ impl SheetApp {
                     match a.rule.error_style {
                         ErrorStyle::Stop => Some((title, a.message)),
                         ErrorStyle::Warning if accepted.as_deref() != Some(text.as_str()) => {
-                            let ask =
-                                json!({"title": title, "message": a.message, "text": text, "doc": ed.doc, "cell": ed.cell.a1(), "dr": dr, "dc": dc});
+                            let ask = json!({"title": title, "message": a.message, "messageCustom": !a.rule.error_message.is_empty(), "text": text, "doc": ed.doc, "cell": ed.cell.a1(), "dr": dr, "dc": dc});
                             self.editor = Some(ed);
                             self.session.mode = gridcraft_engine::Mode::Edit;
                             self.open_dialog(FILL_WARNING_DIALOG, ask);
@@ -642,6 +641,19 @@ mod fill_validation_tests {
     }
 
     #[test]
+    fn a_stop_in_a_later_area_of_a_multi_area_fill_refuses_every_write() {
+        let mut app = book();
+        rule(&mut app, "C2", "stop");
+        let undo = undo_len(&app);
+
+        assert!(!ctrl_enter(&mut app, "A1:A2,C1:C2", "A1", "5"), "the fill is refused");
+
+        assert_eq!(column(&app, &["A1", "A2", "C1", "C2"]), vec![Value::Empty; 4], "no area is written");
+        assert_eq!(app.message, Some(("stop title".into(), "stop at C2".into())));
+        assert_eq!(undo_len(&app), undo, "no undo step");
+    }
+
+    #[test]
     fn a_warning_on_another_destination_asks_and_no_writes_nothing() {
         let mut app = book();
         rule(&mut app, "A2", "warning");
@@ -652,6 +664,7 @@ mod fill_validation_tests {
         let ask = warning_values(&app);
         assert_eq!(ask.get("title"), Some(&json!("warning title")));
         assert_eq!(ask.get("message"), Some(&json!("warning at A2")));
+        assert_eq!(ask.get("messageCustom"), Some(&json!(true)), "the rule's own message is flagged as custom text");
         assert_eq!(app.dialog.as_ref().map(|d| d.title.as_str()), Some("warning title"));
 
         assert!(!app.answer_fill_warning(false, &ask), "No writes nothing");

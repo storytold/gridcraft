@@ -121,6 +121,21 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
     v
 }
 
+/// The window title for a dialog: interface dialogs translate their label, while the fill
+/// Warning dialog is titled with the rule's own error title (or "GridCraft") -- user text,
+/// not an interface label, so it is shown verbatim; `tr` would strip a `context|` prefix
+/// from it and could replace a title that matches a translation key.
+fn window_title(language: crate::i18n::Language, d: &Dialog) -> String {
+    if d.name == crate::app::FILL_WARNING_DIALOG { d.title.clone() } else { language.tr(&d.title).to_owned() }
+}
+
+/// The fill Warning dialog's message: a rule's own error message is user text and is shown
+/// verbatim; only the generated default message goes through translation.
+fn fill_warning_message(language: crate::i18n::Language, values: &Map<String, Json>) -> String {
+    let message = values.get("message").and_then(Json::as_str).unwrap_or_default().to_string();
+    if values.get("messageCustom").and_then(Json::as_bool).unwrap_or(false) { message } else { language.tr_error(&message) }
+}
+
 /// Takes and draws the active dialog, dispatches its body by name, consumes picture-inbox results, runs OK/confirm commands, handles Esc/close and restores the back-dialog stack.
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
@@ -160,7 +175,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         _ => 380.0,
     };
     let window_id = egui::Id::unique("dialog").with(&d.name);
-    let window = egui::Window::new(app.ui.language.tr(&d.title))
+    let window = egui::Window::new(window_title(app.ui.language, &d))
         .id(window_id)
         .collapsible(false)
         .resizable(false)
@@ -352,8 +367,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 }
                 crate::app::FILL_WARNING_DIALOG => {
                     // No (or closing it) keeps the draft and writes nothing; Yes fills the selection.
-                    let message = d.values.get("message").and_then(Json::as_str).unwrap_or_default().to_string();
-                    ui.add(egui::Label::new(app.ui.language.tr_error(&message)).wrap());
+                    ui.add(egui::Label::new(fill_warning_message(app.ui.language, &d.values)).wrap());
                     ui.label(app.ui.language.tr("Continue?"));
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
