@@ -283,6 +283,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     // Table Design
     ("table.rename", "Table Design", "Properties", "Table Name"),
     ("table.resize", "Table Design", "Properties", "Resize Table"),
+    ("table.unlink", "Table Design", "External Table Data", "Unlink"),
     ("table.summarizePivot", "Table Design", "Tools", "Summarize with PivotTable"),
     ("table.removeDuplicates", "Table Design", "Tools", "Remove Duplicates"),
     ("table.convertToRange", "Table Design", "Tools", "Convert to Range"),

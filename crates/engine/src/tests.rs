@@ -1842,6 +1842,193 @@ fn tables_and_structured_refs() {
 }
 
 #[test]
+fn table_unlink_drops_the_external_binding_and_keeps_the_data() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Qty"], ["x", 2], ["y", 5]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3", "header": true, "name": "Data"})).unwrap();
+    s.execute("table.totalRow", json!({"on": true, "table": "Data"})).unwrap();
+    s.execute("table.style", json!({"table": "Data", "style": "TableStyleMedium9"})).unwrap();
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        let t = &mut wb.sheet_mut(0).unwrap().tables[0];
+        t.table_type = Some("xml".into());
+        t.connection_id = Some(7);
+        t.columns[0].unique_name = Some("ItemID".into());
+        t.columns[0].xml =
+            Some(gridcraft_model::XmlColumnPr { map_id: 1, xpath: "/DataList/Item/Item".into(), data_type: "string".into(), denormalized: false });
+        t.filter = vec![(1, gridcraft_model::FilterCriterion::Values { values: vec!["2".into()], blanks: false })];
+    }
+    {
+        let d = s.doc().unwrap();
+        let t = &d.wb.active().unwrap().tables[0];
+        assert!(t.is_external());
+        assert!(t.totals_row);
+        assert_eq!(t.style, "TableStyleMedium9");
+        assert_eq!(t.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Item", "Qty"]);
+    }
+
+    s.execute("table.unlink", json!({"table": "Data"})).unwrap();
+    {
+        let d = s.doc().unwrap();
+        let t = &d.wb.active().unwrap().tables[0];
+        assert!(!t.is_external());
+        assert_eq!(t.table_type, None);
+        assert_eq!(t.connection_id, None);
+        assert!(t.columns.iter().all(|c| c.unique_name.is_none() && c.xml.is_none()));
+        assert_eq!(t.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Item", "Qty"], "column names stay");
+        assert!(t.totals_row, "the totals row stays");
+        assert_eq!(t.style, "TableStyleMedium9", "the table style stays");
+        assert_eq!(t.filter.len(), 1, "filter criteria stay");
+    }
+    assert_eq!(v(&s, "B2"), Value::Number(2.0), "the data stays");
+
+    // Undo restores the binding in one step; unlinking again then saving writes a plain table.
+    s.execute("edit.undo", json!({})).unwrap();
+    {
+        let d = s.doc().unwrap();
+        let t = &d.wb.active().unwrap().tables[0];
+        assert!(t.is_external());
+        assert_eq!(t.table_type.as_deref(), Some("xml"), "one undo restores tableType");
+        assert_eq!(t.connection_id, Some(7), "one undo restores the connection id");
+        assert_eq!(t.columns[0].unique_name.as_deref(), Some("ItemID"), "one undo restores the column's uniqueName");
+        assert!(t.columns[0].xml.is_some(), "one undo restores the column's xmlColumnPr");
+    }
+    s.execute("table.unlink", json!({"table": "Data"})).unwrap();
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "d.xlsx", "base64": r["base64"].as_str().unwrap()})).unwrap();
+    let d = s.doc().unwrap();
+    let t = &d.wb.active().unwrap().tables[0];
+    assert!(!t.is_external());
+    assert_eq!(t.filter.len(), 1);
+    assert_eq!(t.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Item", "Qty"], "column names survive the save");
+    assert!(t.totals_row, "the totals row survives the save");
+    assert_eq!(t.style, "TableStyleMedium9", "the table style survives the save");
+
+    // A plain table has nothing to unlink.
+    s.execute("insert.table", json!({"range": "D1:D2", "header": true, "name": "Plain"})).unwrap();
+    let e = s.execute("table.unlink", json!({"table": "Plain"})).unwrap_err();
+    assert!(e.to_string().contains("no external data"), "{e}");
+}
+
+/// A file can carry `uniqueName` on its columns without `tableType`, `connectionId` or
+/// `xmlColumnPr`; the reader keeps it, so the table is external and unlink has to clear it.
+#[test]
+fn table_unlink_clears_a_lone_unique_name() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Qty"], ["x", 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B2", "header": true, "name": "Data"})).unwrap();
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().tables[0].columns[0].unique_name = Some("ItemID".into());
+    }
+    assert!(s.doc().unwrap().wb.active().unwrap().tables[0].is_external());
+
+    // The binding survives the file: the writer emits the lone `uniqueName` and the reader keeps it.
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "u.xlsx", "base64": r["base64"].as_str().unwrap()})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().tables[0].is_external());
+
+    s.execute("table.unlink", json!({"table": "Data"})).unwrap();
+    {
+        let d = s.doc().unwrap();
+        let t = &d.wb.active().unwrap().tables[0];
+        assert!(!t.is_external());
+        assert!(t.columns.iter().all(|c| c.unique_name.is_none() && c.xml.is_none()));
+        assert_eq!(t.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Item", "Qty"]);
+    }
+    assert_eq!(v(&s, "B2"), Value::Number(2.0), "the data stays");
+
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    // The reader drops a standalone `connectionId`, so check the written part itself: a writer
+    // regression that leaves any external metadata in must fail here, not only in the round-trip.
+    let bytes = crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("xl/tables/table1.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains("name=\"Data\"") && xml.contains("ref=\"A1:B2\""), "the table itself is still written: {xml}");
+    assert!(!xml.contains("tableType="), "no tableType is written: {xml}");
+    assert!(!xml.contains("connectionId="), "no connectionId is written: {xml}");
+    assert!(!xml.contains("<xmlColumnPr"), "no xmlColumnPr is written: {xml}");
+    assert!(!xml.contains("uniqueName="), "no uniqueName is written: {xml}");
+
+    s.execute("file.open", json!({"name": "u2.xlsx", "base64": r["base64"].as_str().unwrap()})).unwrap();
+    let d = s.doc().unwrap();
+    let t = &d.wb.active().unwrap().tables[0];
+    assert!(!t.is_external(), "the saved table is plain");
+    assert!(t.columns.iter().all(|c| c.unique_name.is_none()), "no uniqueName is written");
+}
+
+/// A query-table-backed table keeps its definition in a separate `queryTable` part, held as kept
+/// sheet content rather than in the table part the writer rewrites. Unlinking the table drops that
+/// part and its relationship in the same undo step, so a saved file keeps no binding; while another
+/// external table remains on the sheet, the kept parts stay because nothing links a part to one
+/// table.
+#[test]
+fn table_unlink_drops_the_kept_query_table() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Qty"], ["x", 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B2", "header": true, "name": "Data"})).unwrap();
+    let query_part = || {
+        gridcraft_model::PreservedPart {
+        name: "xl/queryTables/queryTable1.xml".into(),
+        content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.queryTable+xml".into(),
+        data: std::sync::Arc::from(
+            &br#"<?xml version="1.0"?><queryTable xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="ExternalData_1" connectionId="1"/>"#[..],
+        ),
+        rels: Vec::new(),
+    }
+    };
+    let query_rel = gridcraft_model::PreservedRel {
+        id: "rId1".into(),
+        rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/queryTable".into(),
+        target: "xl/queryTables/queryTable1.xml".into(),
+        external: false,
+    };
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.tables[0].table_type = Some("queryTable".into());
+        sh.tables[0].connection_id = Some(1);
+        sh.preserved =
+            Some(std::sync::Arc::new(gridcraft_model::Preserved { rels: vec![query_rel.clone()], parts: vec![query_part()], ..Default::default() }));
+    }
+
+    // While a second external table remains, the kept parts stay: a part cannot be tied to one of
+    // two tables.
+    s.execute("range.setValues", json!({"range": "D1:D2", "values": [["Other"], [1]]})).unwrap();
+    s.execute("insert.table", json!({"range": "D1:D2", "header": true, "name": "Other"})).unwrap();
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().tables[1].table_type = Some("queryTable".into());
+    }
+    s.execute("table.unlink", json!({"table": "Data"})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().preserved.is_some(), "another query table is still bound");
+
+    s.execute("table.unlink", json!({"table": "Other"})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().preserved.is_none(), "no external table is left");
+
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let bytes = crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let names: Vec<String> = (0..zip.len()).filter_map(|i| zip.by_index(i).ok().map(|f| f.name().to_string())).collect();
+    assert!(!names.iter().any(|n| n == "xl/queryTables/queryTable1.xml"), "the saved package keeps no query table: {names:?}");
+
+    // Each unlink is one undo step: the second one brings back the other table's binding and the
+    // kept part, the first one brings back its own binding.
+    s.execute("edit.undo", json!({})).unwrap();
+    {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        assert!(sh.tables[1].is_external() && !sh.tables[0].is_external(), "one undo restores the second table");
+        let p = sh.preserved.as_deref().unwrap();
+        assert_eq!((p.rels.len(), p.parts.len()), (1, 1), "one undo restores the kept query table");
+    }
+    s.execute("edit.undo", json!({})).unwrap();
+    let d = s.doc().unwrap();
+    assert!(d.wb.active().unwrap().tables.iter().all(|t| t.is_external()), "the other undo restores the first table");
+}
+
+#[test]
 fn structured_refs_to_columns_with_edge_spaces() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Qty "], ["a", 2], ["b", 3]]})).unwrap();
@@ -6393,6 +6580,28 @@ fn clearing_links_and_notes_keeps_allow_edit_ranges() {
     s.execute("edit.clearComments", json!({"range": "C5"})).unwrap();
     let sh = s.doc().unwrap().wb.active().unwrap().clone();
     assert!(sh.hyperlinks.is_empty() && sh.comments.is_empty());
+}
+
+/// `tableType="worksheet"` declares an ordinary table, so it is not external data: Unlink stays
+/// disabled and refuses, where any other type (an XML map's `xml`) keeps the table external.
+#[test]
+fn a_worksheet_table_type_is_not_external() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Qty"], ["x", 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B2", "header": true, "name": "Data"})).unwrap();
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().tables[0].table_type = Some("worksheet".into());
+    }
+    assert!(!s.doc().unwrap().wb.active().unwrap().tables[0].is_external(), "a worksheet table is plain");
+    let e = s.execute("table.unlink", json!({"table": "Data"})).unwrap_err();
+    assert!(e.to_string().contains("no external data"), "{e}");
+
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().tables[0].table_type = Some("xml".into());
+    }
+    assert!(s.doc().unwrap().wb.active().unwrap().tables[0].is_external(), "xml still counts");
 }
 
 #[test]

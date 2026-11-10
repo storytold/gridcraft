@@ -93,15 +93,25 @@ pub struct Table {
     /// SUBTOTAL distinguishes.
     #[serde(default)]
     pub filter: Vec<(u32, FilterCriterion)>,
-    /// `tableType` when it isn't a plain worksheet table: `xml` for a table bound to an XML map.
+    /// `tableType` when it isn't a plain worksheet table: `xml` for a table bound to an XML map,
+    /// `queryTable` for one backed by a query table.
     #[serde(default)]
     pub table_type: Option<String>,
-    /// The connection (`xl/connections.xml`) an XML table is bound through.
+    /// The connection (`xl/connections.xml`) an external table is bound through.
     #[serde(default)]
     pub connection_id: Option<u32>,
 }
 
 impl Table {
+    /// Whether the table is bound to data outside the sheet: an XML map, a query table or their
+    /// connection. A column's `uniqueName` is part of that binding too, and a file can carry it
+    /// without `tableType`, `connectionId` or `xmlColumnPr`, so it counts. `tableType="worksheet"`
+    /// is what an ordinary table may declare in the file, so that type alone marks nothing.
+    pub fn is_external(&self) -> bool {
+        self.table_type.as_deref().is_some_and(|ty| !ty.eq_ignore_ascii_case("worksheet"))
+            || self.connection_id.is_some()
+            || self.columns.iter().any(|c| c.xml.is_some() || c.unique_name.is_some())
+    }
     pub fn data_range(&self) -> Option<RangeRef> {
         let r0 = self.range.start.row + self.header_row as u32;
         let r1 = self.range.end.row.checked_sub(self.totals_row as u32)?;

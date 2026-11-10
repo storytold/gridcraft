@@ -4,7 +4,7 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 281 / 296 commands implemented (94.9%).**
+**Overall: 282 / 297 commands implemented (94.9%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
@@ -19,7 +19,7 @@ Each entry is an Excel ribbon or menu command (feature names only). It counts as
 | View | 21 | 21 | 100% |
 | Automate | 4 | 4 | 100% |
 | Developer | 4 | 4 | 100% |
-| Table Design | 13 | 13 | 100% |
+| Table Design | 14 | 14 | 100% |
 | Chart Design | 8 | 8 | 100% |
 | Format | 3 | 3 | 100% |
 | PivotTable Analyze | 13 | 13 | 100% |
@@ -344,12 +344,13 @@ Implemented:
 - `insert.slider` Scroll Bar (Form Control) (Controls)
 - `control.format` Properties (Controls)
 
-## Table Design (13 / 13, 100%)
+## Table Design (14 / 14, 100%)
 
 Implemented:
 
 - `table.rename` Table Name (Properties)
 - `table.resize` Resize Table (Properties)
+- `table.unlink` Unlink (External Table Data)
 - `table.summarizePivot` Summarize with PivotTable (Tools)
 - `table.removeDuplicates` Remove Duplicates (Tools)
 - `table.convertToRange` Convert to Range (Tools)

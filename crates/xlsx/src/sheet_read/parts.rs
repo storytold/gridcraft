@@ -149,9 +149,10 @@ pub fn read_table(cx: &mut Ctx<'_>, x: &El) -> Option<Table> {
         })
         .unwrap_or_default();
     let si = x.child("tableStyleInfo");
-    // Only XML tables are kept as such: a query table's definition hangs off the table part, which
-    // is rewritten, so it would lose it.
-    let xml_table = x.attr("tableType") == Some("xml");
+    // `tableType="worksheet"` declares an ordinary table; every other type (`xml`, `queryTable`)
+    // says the table is bound to data outside the sheet. The `queryTable` part a query-table
+    // table points at is a sheet relationship, which the package keeps, so the binding round-trips.
+    let table_type = x.attr("tableType").filter(|ty| !ty.eq_ignore_ascii_case("worksheet")).map(str::to_string);
     Some(Table {
         id: x.attr_u32("id").unwrap_or(0),
         name,
@@ -166,8 +167,8 @@ pub fn read_table(cx: &mut Ctx<'_>, x: &El) -> Option<Table> {
         last_col: si.is_some_and(|s| s.flag("showLastColumn", false)),
         filter_button: x.child("autoFilter").is_some(),
         filter: x.child("autoFilter").and_then(|e| read_autofilter(cx, e)).map(|af| af.criteria).unwrap_or_default(),
-        table_type: xml_table.then(|| "xml".to_string()),
-        connection_id: x.attr_u32("connectionId").filter(|_| xml_table),
+        table_type,
+        connection_id: x.attr_u32("connectionId"),
     })
 }
 

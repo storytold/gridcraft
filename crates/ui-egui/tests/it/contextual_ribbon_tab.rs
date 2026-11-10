@@ -120,3 +120,45 @@ fn a_second_window_does_not_reset_the_first_windows_table_design_tab() {
     assert_eq!(d.selection.active.a1(), "A2", "the first window still selects a cell in the table");
     assert!(d.wb.active().unwrap().table_at(d.selection.active).is_some(), "the table is still there");
 }
+
+/// The External Table Data group, drawn in Excel's position: a plain table has every control
+/// disabled; a table that carries external metadata enables Unlink, and clicking it drops the
+/// binding while the table and its data stay.
+#[test]
+fn table_design_draws_the_external_table_data_group() {
+    use egui_kittest::kittest::{NodeT as _, Queryable as _};
+
+    let mut h = harness(session_with_table());
+    h.state_mut().ui.ribbon_tab = "Table Design".into();
+    h.run_steps(2);
+    let disabled = |h: &Harness, label: &str| h.get_by_label(label).accesskit_node().is_disabled();
+    for label in ["Refresh", "Properties", "Open in Browser", "Unlink"] {
+        assert!(disabled(&h, label), "{label} is disabled for a table with no external data");
+    }
+
+    // Bind the table to an XML map, as a file would carry it.
+    {
+        let wb = std::sync::Arc::make_mut(&mut h.state_mut().session.doc_mut().unwrap().wb);
+        let t = &mut wb.sheet_mut(0).unwrap().tables[0];
+        t.table_type = Some("xml".into());
+        t.columns[0].unique_name = Some("NameID".into());
+    }
+    h.run_steps(2);
+    assert!(!disabled(&h, "Unlink"), "Unlink enables for a table with external data");
+    assert!(disabled(&h, "Refresh"), "Refresh still waits for the connection model");
+    assert!(disabled(&h, "Properties"), "Properties still waits for the connection model");
+    assert!(disabled(&h, "Open in Browser"), "Open in Browser still waits for a server URL");
+
+    h.get_by_label("Unlink").click();
+    h.run_steps(2);
+    {
+        let d = h.state().session.doc().unwrap();
+        let t = &d.wb.active().unwrap().tables[0];
+        assert_eq!(t.table_type, None, "the binding is gone");
+        assert!(t.columns.iter().all(|c| c.unique_name.is_none() && c.xml.is_none()));
+        assert_eq!(t.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Name", "Qty"], "the columns stay");
+    }
+    let b2 = h.state_mut().session.execute("cell.get", json!({"cell": "B2"})).unwrap();
+    assert_eq!(b2["value"].as_f64(), Some(1.0), "the data stays");
+    assert!(disabled(&h, "Unlink"), "with nothing left to unlink, Unlink is disabled again");
+}

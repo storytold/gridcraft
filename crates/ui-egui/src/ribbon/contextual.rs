@@ -1,13 +1,25 @@
 use super::controls::{act, anchor_keytip, control_keytip, keytip, menu_items, sep};
 use super::galleries::{paint_table_swatch, table_gallery};
-use super::{Color32, Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, icon_button, json, keytip_table, vec2};
+use super::{Color32, Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, icon_button, json, keytip_table, small_button, vec2};
 
-/// Draws the Table Design tab: rename, resize, remove duplicates, convert to range, slicer, table options and the style strip.
+/// Draws the Table Design tab: rename, resize, remove duplicates, convert to range, slicer, external
+/// table data, table options and the style strip.
 pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
-    let Some((tname, header, totals, banded, banded_c, first, last, filter, style)) = app.session.active().and_then(|d| {
+    let Some((tname, header, totals, banded, banded_c, first, last, filter, style, external)) = app.session.active().and_then(|d| {
         let sh = d.wb.active()?;
         let t = sh.table_at(d.selection.active)?;
-        Some((t.name.clone(), t.header_row, t.totals_row, t.banded_rows, t.banded_cols, t.first_col, t.last_col, t.filter_button, t.style.clone()))
+        Some((
+            t.name.clone(),
+            t.header_row,
+            t.totals_row,
+            t.banded_rows,
+            t.banded_cols,
+            t.first_col,
+            t.last_col,
+            t.filter_button,
+            t.style.clone(),
+            t.is_external(),
+        ))
     }) else {
         return;
     };
@@ -25,6 +37,8 @@ pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("tableResize", json!({}));
     }
+    sep(ui);
+    external_table_data(app, ui, &tname, external);
     sep(ui);
     let __k = big_button(ui, Icon::Duplicates, "Remove\nDuplicates", "Remove Duplicates", false);
     control_keytip(app, ui, &__k, "data.removeDuplicates");
@@ -105,6 +119,31 @@ fn table_style_strip(app: &mut SheetApp, ui: &mut Ui, tname: &str, current: &str
         let more = icon_button(ui, Icon::Chevron, t.text_dim, "More Table Styles", vec2(18.0, 40.0));
         anchor_keytip(app, ui, &more, &["table.style"]);
         egui::Popup::menu(&more).show(|ui| table_gallery(app, ui, "table.style"));
+    });
+}
+
+/// External Table Data, in Excel's position and order. A plain table has no connection, so every
+/// control is disabled, as in Excel. Unlink is real for a table that carries external metadata
+/// (an XML-map table); refresh, properties and Open in Browser wait for the connection model.
+fn external_table_data(app: &mut SheetApp, ui: &mut Ui, tname: &str, external: bool) {
+    let refresh =
+        ui.add_enabled_ui(false, |ui| big_button(ui, Icon::Refresh, "Refresh", "Refresh needs a supported external data connection", false)).inner;
+    let _ = refresh.on_disabled_hover_text("Refresh needs a supported external data connection");
+    ui.vertical(|ui| {
+        let props = ui
+            .add_enabled_ui(false, |ui| small_button(ui, Icon::Format, "Properties", "External data properties need a supported connection", false))
+            .inner;
+        let _ = props.on_disabled_hover_text("External data properties need a supported connection");
+        let open = ui.add_enabled_ui(false, |ui| small_button(ui, Icon::Link, "Open in Browser", "No server URL for this table", false)).inner;
+        let _ = open.on_disabled_hover_text("No server URL for this table");
+        let mut unlink =
+            ui.add_enabled_ui(external, |ui| small_button(ui, Icon::Unlink, "Unlink", "Unlink the table from its external data", false)).inner;
+        if !external {
+            unlink = unlink.on_disabled_hover_text("The table has no external data connection");
+        }
+        if unlink.clicked() {
+            act(app, "table.unlink", json!({"table": tname}));
+        }
     });
 }
 

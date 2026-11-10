@@ -57,6 +57,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("table.lastColumn", "Last Column", ["Table", "Table Style Options"], None, "{table?, on?}", has_doc, |s, p| table_flag(s, p, "lastCol")),
         cmd!("table.style", "Table Styles", ["Table", "Table Styles"], None, "{table?, style}", has_doc, table_style),
         cmd!("table.rename", "Table Name", ["Table", "Properties"], None, "{table?, name}", has_doc, table_rename),
+        cmd!("table.unlink", "Unlink", ["Table Design", "External Table Data"], None, "{table?}", has_doc, table_unlink),
         cmd!("table.convertToRange", "Convert to Range", ["Table", "Tools"], None, "{table?}", has_doc, table_convert),
         cmd!(
             "table.totalFunction",
@@ -578,6 +579,49 @@ fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
         cx.structural = true;
         Ok(Json::Null)
     })
+}
+
+/// Unlink: drop the table's external binding and keep its data as a plain table. The XLSX writer
+/// stops emitting `tableType`, `connectionId`, `uniqueName` and `xmlColumnPr`; the data, styles,
+/// totals, filters and column names stay.
+fn table_unlink(s: &mut Session, p: &Json) -> Result<Json> {
+    let (si, ti) = find_table(s, p)?;
+    edit(s, |cx| {
+        let sh = cx.sheet_mut(si)?;
+        let Some(t) = sh.tables.get_mut(ti) else { return Ok(Json::Null) };
+        if !t.is_external() {
+            return Err(EngineError::Disabled("table.unlink".into(), "the table has no external data connection".into()));
+        }
+        t.table_type = None;
+        t.connection_id = None;
+        for c in &mut t.columns {
+            c.xml = None;
+            c.unique_name = None;
+        }
+        // A query-table-backed table also leaves a kept `queryTable` part behind: its definition
+        // hangs off a sheet relationship, not the table part the writer rewrites. With the table
+        // plain that part would still name the connection, so drop it once no table on the sheet is
+        // external any more.
+        if sh.tables.iter().all(|t| !t.is_external()) {
+            drop_kept_query_tables(sh);
+        }
+        Ok(Json::Null)
+    })
+}
+
+/// Drops a sheet's kept query tables: their relationships and the parts those point at. They are
+/// kept because their definition does not belong to the table part GridCraft rewrites, so nothing
+/// else removes them when their table is unlinked.
+fn drop_kept_query_tables(sh: &mut Sheet) {
+    let Some(p) = sh.preserved.as_deref() else { return };
+    let bound: Vec<&str> = p.rels.iter().filter(|r| r.rel_type.ends_with("/queryTable")).map(|r| r.target.as_str()).collect();
+    if bound.is_empty() {
+        return;
+    }
+    let mut kept = p.clone();
+    kept.rels.retain(|r| !r.rel_type.ends_with("/queryTable"));
+    kept.parts.retain(|part| !bound.contains(&part.name.as_str()));
+    sh.preserved = (!kept.is_empty()).then(|| std::sync::Arc::new(kept));
 }
 
 fn table_convert(s: &mut Session, p: &Json) -> Result<Json> {
