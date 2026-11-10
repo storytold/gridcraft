@@ -5,7 +5,6 @@
 //! (`10:30`, `10:30:15 PM`) and date-times. Locale: en-US.
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::date::{DateSystem, MONTHS, serial_from_ymd, time_fraction};
 use crate::value::{CellError, Value};
@@ -42,37 +41,74 @@ pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
     Parsed { value: Value::text(s), format: None }
 }
 
-/// The system's regional settings write decimals with a comma (see [`coerce_number_text_in`]). Set
-/// once by the desktop app; off everywhere else, so files and commands calculate the same anywhere.
-static SYSTEM_DECIMAL_COMMA: AtomicBool = AtomicBool::new(false);
+/// How the system's regional settings write a number in text: its decimal and group separators
+/// and its currency symbol (see [`coerce_number_text_in`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NumberText {
+    pub decimal: char,
+    pub group: char,
+    pub currency: &'static str,
+}
+
+impl NumberText {
+    /// A decimal point: text reads as it always has.
+    pub const POINT: NumberText = NumberText { decimal: '.', group: ',', currency: "$" };
+    /// Italian regional settings, as measured in Excel.
+    pub const ITALIAN: NumberText = NumberText { decimal: ',', group: '.', currency: "\u{20ac}" };
+
+    /// A region's separators and currency, from `Region`.
+    pub fn of_region(r: &crate::region::Region) -> NumberText {
+        NumberText { decimal: r.decimal, group: r.group, currency: r.currency }
+    }
+
+    /// Whether `c` separates thousands here: the group character, or one written like it (any
+    /// space for a space, either apostrophe for an apostrophe), as people paste them.
+    fn is_group(&self, c: char) -> bool {
+        c == self.group
+            || (crate::region::is_space_like(self.group) && crate::region::is_space_like(c))
+            || (crate::region::is_apostrophe_like(self.group) && crate::region::is_apostrophe_like(c))
+    }
+}
+
+/// The system's [`NumberText`]. Set once by the desktop app; a decimal point everywhere else, so
+/// files and commands calculate the same anywhere.
+static SYSTEM_NUMBER_TEXT: std::sync::RwLock<NumberText> = std::sync::RwLock::new(NumberText::POINT);
 
 thread_local! {
-    /// [`with_decimal_comma`] on this thread, in place of the system's setting.
-    static DECIMAL_COMMA: Cell<Option<bool>> = const { Cell::new(None) };
+    /// [`with_number_text`] on this thread, in place of the system's setting.
+    static NUMBER_TEXT: Cell<Option<NumberText>> = const { Cell::new(None) };
 }
 
-/// Sets whether text in formulas reads as numbers with a decimal comma.
-pub fn set_system_decimal_comma(on: bool) {
-    SYSTEM_DECIMAL_COMMA.store(on, Ordering::Relaxed);
+/// Sets how text in formulas reads as numbers.
+pub fn set_system_number_text(n: NumberText) {
+    if let Ok(mut w) = SYSTEM_NUMBER_TEXT.write() {
+        *w = n;
+    }
 }
 
-/// Runs `f` with a decimal comma on or off on this thread, whatever the system's setting.
-pub fn with_decimal_comma<R>(on: bool, f: impl FnOnce() -> R) -> R {
-    let before = DECIMAL_COMMA.replace(Some(on));
+/// Runs `f` with `n` on this thread, whatever the system's setting.
+pub fn with_number_text<R>(n: NumberText, f: impl FnOnce() -> R) -> R {
+    let before = NUMBER_TEXT.replace(Some(n));
     let result = f();
-    DECIMAL_COMMA.set(before);
+    NUMBER_TEXT.set(before);
     result
 }
 
-fn decimal_comma() -> bool {
-    DECIMAL_COMMA.get().unwrap_or_else(|| SYSTEM_DECIMAL_COMMA.load(Ordering::Relaxed))
+/// [`with_number_text`] with Italian settings (`on`) or a decimal point.
+pub fn with_decimal_comma<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    with_number_text(if on { NumberText::ITALIAN } else { NumberText::POINT }, f)
+}
+
+fn number_text() -> NumberText {
+    NUMBER_TEXT.get().unwrap_or_else(|| SYSTEM_NUMBER_TEXT.read().map_or(NumberText::POINT, |n| *n))
 }
 
 /// Text as a formula reads it as a number (arithmetic, VALUE, criteria), which follows the regional
 /// settings as in Excel. [`parse_number_text_in`] is the same without them, for text that isn't
 /// the person's own formula result (commands, normalized text).
 pub fn coerce_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
-    if decimal_comma() { parse_decimal_comma_text(s.trim(), sys) } else { parse_number_text_in(s, sys) }
+    let n = number_text();
+    if n.decimal == ',' { parse_decimal_comma_text(s.trim(), sys, &n) } else { parse_number_text_in(s, sys) }
 }
 
 /// [`coerce_number_text_in`] in the 1900 date system.
@@ -80,19 +116,28 @@ pub fn coerce_number_text(s: &str) -> Option<f64> {
     coerce_number_text_in(s, DateSystem::D1900)
 }
 
-/// Numeric text with a decimal comma and `.` between thousands, as observed in Excel with Italian
-/// regional settings: `1,5`, `,5`, `1,`, `1.000`, `1.000,5`, `1,5e3`, `(1.000,5)`, `1,5%`, `€ 1,5`.
-/// Groups after the first need at least three digits (`1.0000` is 10000, `1.00` is no number, nor
-/// is `1.5`), only one comma counts, and `$` isn't this region's currency. Dates and times read as
-/// they do without it.
-fn parse_decimal_comma_text(t: &str, sys: DateSystem) -> Option<f64> {
+/// Numeric text with a decimal comma, as observed in Excel with Italian regional settings (`.`
+/// between thousands, `€`): `1,5`, `,5`, `1,`, `1.000`, `1.000,5`, `1,5e3`, `(1.000,5)`, `1,5%`,
+/// `€ 1,5`. Groups after the first need at least three digits (`1.0000` is 10000, `1.00` is no
+/// number, nor is `1.5`), only one comma counts, and `$` isn't the region's currency unless it is.
+/// Other regions' group separators and currencies come from their settings. Dates and times read
+/// as they do without it.
+fn parse_decimal_comma_text(t: &str, sys: DateSystem, n: &NumberText) -> Option<f64> {
     if t.contains(['/', ':']) {
         return parse_numeric(t, sys).map(|(n, _)| n);
     }
+    let cur = n.currency;
+    let t = if cur.is_empty() { t } else { t.strip_prefix(cur).map_or_else(|| t.strip_suffix(cur).unwrap_or(t), |rest| rest).trim() };
     if t.contains('$') {
         return None;
     }
-    let t = t.strip_prefix('€').map_or_else(|| t.strip_suffix('€').unwrap_or(t), |rest| rest).trim();
+    // A point where the region doesn't group with one is no number (it's no decimal either).
+    if !n.is_group('.') && t.contains('.') {
+        return None;
+    }
+    // One group character, whatever form it was typed in: `.` here stands for any of them.
+    let canon: String = t.chars().map(|c| if c != ',' && n.is_group(c) { '.' } else { c }).collect();
+    let t = canon.trim();
     let is_core = |c: char| c.is_ascii_digit() || matches!(c, '.' | ',');
     let start = t.find(is_core)?;
     let (head, rest) = t.split_at(start);
@@ -799,6 +844,27 @@ mod decimal_comma_tests {
             assert_eq!(coerce_number_text("1,0000"), None);
             assert_eq!(coerce_number_text("$3"), Some(3.0));
         });
+    }
+
+    /// Other decimal-comma regions group and write currency as their settings say (here CLDR's,
+    /// through `Region`; not measured in Excel): a space in French, `R$` in Brazilian Portuguese.
+    #[test]
+    fn other_regions_use_their_own_groups_and_currency() {
+        let region = |tag: &str| NumberText::of_region(crate::region::find(tag).unwrap());
+        with_number_text(region("fr-FR"), || {
+            assert_eq!(coerce_number_text("1\u{a0}000,5"), Some(1000.5));
+            assert_eq!(coerce_number_text("1 000,5"), Some(1000.5), "a typed space for the no-break one");
+            assert_eq!(coerce_number_text("1 000,5 \u{20ac}"), Some(1000.5));
+            assert_eq!(coerce_number_text("1.000"), None, "a point isn't a French group");
+            assert_eq!(coerce_number_text("1,5"), Some(1.5));
+        });
+        with_number_text(region("pt-BR"), || {
+            assert_eq!(coerce_number_text("R$ 1.000,50"), Some(1000.5));
+            assert_eq!(coerce_number_text("$ 1,5"), None, "a bare dollar isn't the real");
+            assert_eq!(coerce_number_text("1.000,5"), Some(1000.5));
+        });
+        // A decimal-point region reads as before.
+        with_number_text(region("en-GB"), || assert_eq!(coerce_number_text("1,000.5"), Some(1000.5)));
     }
 
     /// Commands and normalized text don't follow the setting.

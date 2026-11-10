@@ -7,6 +7,7 @@
 //! CJK fonts stay system-provided: [`crate::theme`] appends available CJK faces to every family so
 //! Japanese, Chinese and Korean labels and workbook text can render without bundling font files.
 
+use gridcraft_engine::core::parse::NumberText;
 use serde::{Deserialize, Serialize};
 
 mod cs;
@@ -55,26 +56,28 @@ pub enum Language {
     Ro,
 }
 
-/// Whether the system writes decimals with a comma. Windows says so itself, in the regional format
-/// settings, which can differ from the display language and can be changed by hand. Elsewhere, and
-/// if that can't be read, this goes by the language tag.
-pub fn system_uses_decimal_comma() -> bool {
+/// How the system writes numbers in text: decimal and group separators and currency. Windows says
+/// so itself, in the regional format settings, which can differ from the display language and can
+/// be changed by hand. Elsewhere, and if that can't be read, this goes by the language tag.
+pub fn system_number_text() -> NumberText {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        decimal_comma_from(windows_decimal_separator().as_deref(), sys_locale::get_locale().as_deref())
+        number_text_from(windows_number_format(), sys_locale::get_locale().as_deref())
     }
     #[cfg(target_arch = "wasm32")]
     {
-        false
+        NumberText::POINT
     }
 }
 
-/// The decimal separator in the Windows regional format settings.
+/// The Windows regional format settings: decimal separator, then group separator and currency.
 #[cfg(not(target_arch = "wasm32"))]
-fn windows_decimal_separator() -> Option<String> {
+fn windows_number_format() -> Option<(String, Option<String>, Option<String>)> {
     #[cfg(windows)]
     {
-        windows_registry::CURRENT_USER.open(r"Control Panel\International").and_then(|key| key.get_string("sDecimal")).ok()
+        let key = windows_registry::CURRENT_USER.open(r"Control Panel\International").ok()?;
+        let decimal = key.get_string("sDecimal").ok()?;
+        Some((decimal, key.get_string("sThousand").ok(), key.get_string("sCurrency").ok()))
     }
     #[cfg(not(windows))]
     {
@@ -82,13 +85,32 @@ fn windows_decimal_separator() -> Option<String> {
     }
 }
 
-/// The separator decides when there is one, otherwise the language tag.
+/// The Windows settings decide when there are some; otherwise the tag's `Region` where it covers
+/// the language, else the tag table (a comma, `.` between thousands and `€`, as in Italian).
 #[cfg(not(target_arch = "wasm32"))]
-fn decimal_comma_from(separator: Option<&str>, tag: Option<&str>) -> bool {
-    match separator {
-        Some(separator) => separator == ",",
-        None => tag.is_some_and(tag_uses_decimal_comma),
+fn number_text_from(windows: Option<(String, Option<String>, Option<String>)>, tag: Option<&str>) -> NumberText {
+    if let Some((decimal, group, currency)) = windows {
+        let Some(decimal) = decimal.chars().next() else { return NumberText::POINT };
+        let group = group.and_then(|g| g.chars().next()).unwrap_or(if decimal == ',' { '.' } else { ',' });
+        // Read once, at startup: the symbol lives as long as the process.
+        let currency: &'static str = currency.map_or("", |c| Box::leak(c.into_boxed_str()));
+        return NumberText { decimal, group, currency };
     }
+    let Some(tag) = tag else { return NumberText::POINT };
+    if let Some(region) = covering_region(tag) {
+        return NumberText::of_region(region);
+    }
+    if tag_uses_decimal_comma(tag) { NumberText::ITALIAN } else { NumberText::POINT }
+}
+
+/// The `Region` for a tag when one has its language (`Region::lookup` otherwise falls back to
+/// en-US, which would mislead for a language it doesn't know).
+#[cfg(not(target_arch = "wasm32"))]
+fn covering_region(tag: &str) -> Option<&'static gridcraft_engine::core::region::Region> {
+    let tag = tag.split('.').next().unwrap_or(tag).replace('_', "-");
+    let language = tag.split('-').next().unwrap_or("").to_ascii_lowercase();
+    let region = gridcraft_engine::core::region::lookup(&tag);
+    region.tag.split('-').next().is_some_and(|l| l.eq_ignore_ascii_case(&language)).then_some(region)
 }
 
 /// By region where it decides, otherwise by language.
@@ -604,7 +626,26 @@ mod tests {
 
 #[cfg(test)]
 mod decimal_comma_region_tests {
-    use super::{decimal_comma_from, tag_uses_decimal_comma};
+    use super::{NumberText, number_text_from, tag_uses_decimal_comma};
+
+    fn windows(decimal: &str, group: &str, currency: &str) -> Option<(String, Option<String>, Option<String>)> {
+        Some((decimal.into(), Some(group.into()), Some(currency.into())))
+    }
+
+    /// Windows's own settings, then the tag's region, then the table.
+    #[test]
+    fn the_system_number_format_is_found() {
+        assert_eq!(number_text_from(windows(",", ".", "\u{20ac}"), Some("en-US")), NumberText::ITALIAN);
+        assert_eq!(number_text_from(windows(".", ",", "$"), Some("it-IT")), NumberText::POINT);
+        let fr = number_text_from(None, Some("fr_FR.UTF-8"));
+        assert_eq!((fr.decimal, fr.group), (',', '\u{a0}'));
+        assert_eq!(number_text_from(None, Some("pt-BR")).currency, "R$");
+        assert_eq!(number_text_from(None, Some("de-CH")).decimal, '.');
+        // A language Region doesn't cover goes by the table.
+        assert_eq!(number_text_from(None, Some("pl-PL")), NumberText::ITALIAN);
+        assert_eq!(number_text_from(None, Some("en-US")), NumberText::POINT);
+        assert_eq!(number_text_from(None, None), NumberText::POINT);
+    }
 
     #[test]
     fn regions_and_languages_decide_the_separator() {
@@ -614,15 +655,5 @@ mod decimal_comma_region_tests {
         for tag in ["en-US", "en-GB", "it-CH", "de-CH", "es-MX", "es-US", "es-419", "ja-JP", "zh-CN", "", "en"] {
             assert!(!tag_uses_decimal_comma(tag), "{tag}");
         }
-    }
-
-    /// The regional format wins over the display language, both ways.
-    #[test]
-    fn the_regional_separator_decides_before_the_language() {
-        assert!(decimal_comma_from(Some(","), Some("en-US")));
-        assert!(!decimal_comma_from(Some("."), Some("it-IT")));
-        assert!(decimal_comma_from(None, Some("it-IT")));
-        assert!(!decimal_comma_from(None, Some("en-US")));
-        assert!(!decimal_comma_from(None, None));
     }
 }
