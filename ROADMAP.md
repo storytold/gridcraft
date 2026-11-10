@@ -266,7 +266,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-10 | Document the Keychain-profile notarization option in the macOS section and keep its progress entry in the dated table. |
+| 2026-11-10 | trivial | Document the Keychain-profile notarization option in the macOS section and keep its progress entry in the dated table. |
 | 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |
 | 2026-11-05 | minor | Reconcile upstream form-control progress with the CJK baseline update |
 | 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |
