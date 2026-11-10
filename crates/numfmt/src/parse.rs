@@ -465,6 +465,7 @@ struct RawParts<'a> {
     system: &'a mut Option<System>,
 }
 
+/// Bundles the section fields a `[...]` tag can set, so [`bracket`] takes one argument.
 fn raw_parts<'a>(
     toks: &'a mut Vec<Tok>,
     color: &'a mut Option<FormatColor>,

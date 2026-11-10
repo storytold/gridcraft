@@ -220,6 +220,8 @@ fn fill_int(toks: &[Tok], idxs: &[usize], digits: &str, thousands: bool, force_z
     }
 }
 
+/// `digits` with the region's group separator where its grouping puts one, or as they are
+/// when the format has no thousands separator.
 fn with_commas(digits: &str, thousands: bool, region: &Region) -> String {
     if !thousands {
         return digits.to_string();
