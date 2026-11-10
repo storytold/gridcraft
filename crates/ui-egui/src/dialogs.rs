@@ -24,6 +24,7 @@ mod format_cells;
 mod insert_function;
 mod names;
 mod paste;
+mod power_pivot;
 mod ref_edit;
 mod show;
 mod spelling;
@@ -71,6 +72,8 @@ pub struct Dialog {
     /// used once): like Excel, Column Width opens ready to type, its value selected.
     focus_first_field: bool,
     picture_inbox: Option<crate::Inbox>,
+    /// Browser data-model picker results (name, bytes); the dialog that opened the picker owns it.
+    model_inbox: Option<crate::Inbox>,
     picture_target: Option<(u64, usize)>,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
     back: Option<Box<Dialog>>,
@@ -237,6 +240,7 @@ impl Dialog {
             show_password: false,
             focus_first_field: true,
             picture_inbox: None,
+            model_inbox: None,
             picture_target: None,
             back: None,
             link: None,
@@ -262,6 +266,7 @@ impl Dialog {
             show_password: false,
             focus_first_field: false,
             picture_inbox: None,
+            model_inbox: None,
             picture_target: None,
             back: None,
             link: None,
@@ -1106,6 +1111,7 @@ impl Dialog {
                 dialog.picture_target = app.view_key();
                 dialog
             }
+            "powerPivot" => power_pivot::open(app, &params),
             "pickList" => Dialog::custom("pickList", "Pick From List", json!({})),
             "assignAction" => return crate::control_ui::open_assign(app, &params),
             "formatControl" => return crate::control_ui::open_format(app, &params),
