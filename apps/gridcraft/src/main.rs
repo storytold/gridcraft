@@ -154,6 +154,7 @@ fn read_clipboard<T>(
     read(clipboard.as_mut()?).ok()
 }
 
+/// What the UI asks of the platform: the clipboard, file panels, links and printers.
 fn services() -> Services {
     // Keep the owner alive: X11/Wayland serve clipboard data from this handle.
     let clipboard: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
