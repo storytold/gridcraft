@@ -128,7 +128,8 @@ fn table_borders_are_independent_and_multilevel_headers_are_kept() {
             })
             .unwrap();
         assert!(texts(&p).contains(&"2026"));
-        let lines = p.iter().filter(|p| matches!(p, Prim::Line { pts, .. } if pts.iter().all(|p| p[1] > year_y - 9.0))).count();
+        // Below the top of the year row: its text is 9 pt, 12 px.
+        let lines = p.iter().filter(|p| matches!(p, Prim::Line { pts, .. } if pts.iter().all(|p| p[1] > year_y - 12.0))).count();
         assert_eq!(lines, want, "{h} {v} {outline}");
         assert_sane(&p, 900.0, 600.0);
     }
