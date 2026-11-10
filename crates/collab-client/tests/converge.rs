@@ -352,34 +352,42 @@ fn value_in(peer: &Peer, sheet: &str, a1: &str) -> Value {
 }
 
 /// A structural undo is one operation with the sheets as they were: rows move back and a deleted
-/// Lets both connections deliver what the server sent, like `settle`, and keeps the events.
+/// Lets both connections deliver what the server sent, up to `version`, and keeps the events.
 ///
-/// The quiet window is wider than in `settle`: a chunked image is many large frames, and a
-/// momentary gap between two parts is not the end of the operation.
-async fn settle_events(a: &mut Peer, b: &mut Peer) -> (Vec<Event>, Vec<Event>) {
+/// Unlike `settle`, this waits for a version instead of a quiet window and never drops a frame:
+/// a caller that asserts on the events of one operation must not lose them to an earlier wait,
+/// and a large operation is many frames whose arrival may be spread over more than a quiet
+/// window (`an_eight_megabyte_sheet_image_travels_in_parts_and_converges` failed exactly that
+/// way: `settle` had already consumed the author's applied frames, so the collection saw none).
+/// The quiet round after the version catches the frames of the same operation that trail behind
+/// the last part, so `applied` counts every operation once.
+async fn settle_events(a: &mut Peer, b: &mut Peer, version: u64) -> (Vec<Event>, Vec<Event>) {
     let mut from_a = Vec::new();
     let mut from_b = Vec::new();
-    for _ in 0..600 {
+    let mut quiet = false;
+    for _ in 0..1200 {
         let mut events_a = a.synced.poll(&mut a.session);
         let mut events_b = b.synced.poll(&mut b.session);
         let busy = !events_a.is_empty() || !events_b.is_empty();
         from_a.append(&mut events_a);
         from_b.append(&mut events_b);
         if busy {
+            quiet = false;
             tokio::time::sleep(Duration::from_millis(5)).await;
             continue;
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        let mut events_a = a.synced.poll(&mut a.session);
-        let mut events_b = b.synced.poll(&mut b.session);
-        let quiet = events_a.is_empty() && events_b.is_empty();
-        from_a.append(&mut events_a);
-        from_b.append(&mut events_b);
-        if quiet {
+        let at_version = a.synced.state().version >= version && b.synced.state().version >= version;
+        if at_version && quiet {
             return (from_a, from_b);
         }
+        if at_version {
+            quiet = true;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        } else {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
     }
-    panic!("the replicas did not settle");
+    panic!("the replicas did not reach version {version}: a={} b={}", a.synced.state().version, b.synced.state().version);
 }
 
 /// The applied frames of the collected events, in order.
@@ -479,8 +487,7 @@ async fn an_eight_megabyte_sheet_image_travels_in_parts_and_converges() {
     for row in 1..=12 {
         ann.synced.execute(&mut ann.session, "cell.set", json!({ "cell": format!("A{row}"), "input": big.clone() })).unwrap();
     }
-    settle(&mut ann, &mut bob).await;
-    let (ann_setup, bob_setup) = settle_events(&mut ann, &mut bob).await;
+    let (ann_setup, bob_setup) = settle_events(&mut ann, &mut bob, 12).await;
     let rejected: Vec<String> = ann_setup
         .iter()
         .chain(bob_setup.iter())
@@ -498,11 +505,11 @@ async fn an_eight_megabyte_sheet_image_travels_in_parts_and_converges() {
 
     // A sheet insert is structural: its undo carries Sheet1 whole, in parts.
     ann.synced.execute(&mut ann.session, "home.insertSheet", json!({ "name": "Extra" })).unwrap();
-    settle(&mut ann, &mut bob).await;
+    settle_events(&mut ann, &mut bob, 13).await;
     assert_eq!(names(&bob), ["Sheet1", "Extra"]);
 
     ann.synced.undo().unwrap();
-    let (ann_events, bob_events) = settle_events(&mut ann, &mut bob).await;
+    let (ann_events, bob_events) = settle_events(&mut ann, &mut bob, 14).await;
     for events in [&ann_events, &bob_events] {
         let applied = applied(events);
         assert_eq!(applied.len(), 1, "the parts arrive as one operation, not as document changes");
@@ -525,7 +532,7 @@ async fn an_eight_megabyte_sheet_image_travels_in_parts_and_converges() {
     }
 
     ann.synced.redo().unwrap();
-    let (ann_events, bob_events) = settle_events(&mut ann, &mut bob).await;
+    let (ann_events, bob_events) = settle_events(&mut ann, &mut bob, 15).await;
     for events in [&ann_events, &bob_events] {
         let applied = applied(events);
         assert_eq!(applied.len(), 1);
