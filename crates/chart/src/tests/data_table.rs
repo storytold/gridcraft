@@ -178,3 +178,21 @@ fn long_category_headers_wrap_in_the_table() {
     assert!(name_y > header_bottom, "the series row is below the headers: {name_y} vs {header_bottom}");
     assert_sane(&p, 900.0, 600.0);
 }
+
+/// A table whose wrapped headers would take too much height keeps its rows, headers on one line.
+#[test]
+fn a_table_too_short_for_wrapped_headers_keeps_one_line() {
+    let mut c = chart(ChartKind::Line);
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.data_table = Some(ChartDataTable { horizontal_border: true, vertical_border: true, outline: true, show_keys: false });
+    let mut d = sample(c.kind);
+    d.series.truncate(3);
+    d.categories = (1..=6).map(|i| format!("Permanent damage from an accident at school, points {i}")).collect();
+    for s in &mut d.series {
+        s.values.truncate(6);
+    }
+    let p = render(&c, &d, 900.0, 220.0, &ApproxMeasure);
+    assert!(texts(&p).iter().any(|t| *t == d.series[2].name), "the table is drawn: {:?}", texts(&p));
+    assert!(!texts(&p).contains(&"Data table needs more space"));
+}

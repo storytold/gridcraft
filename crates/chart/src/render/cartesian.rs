@@ -317,8 +317,11 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     let outer: Vec<Vec<String>> =
         data.category_levels.iter().map(|l| (0..ncat_slots).map(|j| l.get(j).cloned().unwrap_or_default()).collect()).collect();
     // The value axis's labels take the plot's left edge when wider than the table's names.
-    let value_labels = y1.labels().iter().map(|(_, t)| ctx.tw(t, LABEL_SIZE)).fold(0.0f32, f32::max) + 6.0;
-    let (area, table) = super::table::reserve(ctx, chart, data, area, ncat_slots, value_labels);
+    let widest = |a: &ValAxis| a.labels().iter().map(|(_, t)| ctx.tw(t, LABEL_SIZE)).fold(0.0f32, f32::max) + 6.0;
+    // The plot's margins as the frame lays them out: the value labels on its left, a secondary
+    // axis's on its right.
+    let margins = (widest(&y1), y2.as_ref().map_or(4.0, |a| widest(a).min(area.w * 0.3)));
+    let (area, table) = super::table::reserve(ctx, chart, data, area, ncat_slots, margins);
     let category_axis = super::table::category_axis(&table, &labels, &outer);
     let plot = frame(ctx, area, category_axis, &y1, y2.as_ref(), horizontal, chart.gridlines);
     if !plot.ok() {

@@ -32,8 +32,8 @@ pub(super) fn category_axis<'a>(layout: &Option<Layout>, labels: &'a [String], o
 
 /// Reserve at most half the available height. A table that cannot fit is explicitly labelled
 /// instead of dropping rows or allocating a series × point-sized matrix.
-/// `value_labels` is the width the value axis's labels take beside the plot.
-pub(super) fn reserve(ctx: &mut Ctx, chart: &Chart, data: &ChartData, mut area: Bx, columns: usize, value_labels: f32) -> (Bx, Option<Layout>) {
+/// `margins` are the widths the axes' labels take on the plot's left and right.
+pub(super) fn reserve(ctx: &mut Ctx, chart: &Chart, data: &ChartData, mut area: Bx, columns: usize, margins: (f32, f32)) -> (Bx, Option<Layout>) {
     if chart.data_table.is_none() || !chart.supports_data_table() {
         return (area, None);
     }
@@ -44,14 +44,19 @@ pub(super) fn reserve(ctx: &mut Ctx, chart: &Chart, data: &ChartData, mut area: 
     let stub = (names + key_width + 10.0).clamp(24.0, (area.w * 0.3).max(24.0));
     // The plot takes the width beside the stub or the value labels, whichever is wider, as the
     // frame lays it out, so a column is this wide.
-    let left = value_labels.min(area.w * 0.4).max(stub);
-    let column = (area.w - left - 4.0) / columns.max(1) as f32;
-    let cat_lines = if columns == 0 || columns > 128 {
+    let left = margins.0.min(area.w * 0.4).max(stub);
+    let column = (area.w - left - margins.1) / columns.max(1) as f32;
+    let mut cat_lines = if columns == 0 || columns > 128 {
         1
     } else {
         wrap_labels(ctx, &headers_of(data, columns), LABEL_SIZE, column - 4.0, MAX_HEADER_LINES)
             .map_or(1, |w| w.iter().map(Vec::len).max().unwrap_or(1))
     };
+    // Wrapped headers that would push the table past its share of the height go back to one line
+    // (cut short) rather than lose the whole table.
+    if row_height * (headers + cat_lines - 1 + data.series.len()) as f32 > area.h * 0.5 {
+        cat_lines = 1;
+    }
     let rows = headers + cat_lines - 1 + data.series.len();
     let height = row_height * rows as f32;
     if columns == 0 || columns > 128 || data.series.len() > 32 || height > area.h * 0.5 || (area.w * 0.6) / (columns as f32) < 18.0 {
