@@ -413,6 +413,10 @@ pub(crate) fn round_direction(value: f64, digits: i32, up: bool) -> f64 {
     if !scaled.is_finite() {
         return value;
     }
+    // Excel rounds the 15-significant-digit decimal the user typed, not the binary double:
+    // 1.1 * 100 is 110.00000000000001 and 4.35 * 100 is 434.99999999999994, so drop
+    // binary noise the same way `round_to` does before applying `ceil`/`trunc`.
+    let scaled: f64 = format!("{scaled:.14e}").parse().unwrap_or(scaled);
     let rounded = if up { scaled.abs().ceil().copysign(scaled) } else { scaled.trunc() };
     rounded / factor
 }
@@ -711,6 +715,16 @@ mod tests {
         assert_eq!(round_to(10.0, 0), 10.0);
         // Binary noise below 15 significant digits is dropped, as Excel drops it.
         assert_eq!(round_to(0.1 + 0.2, 15), 0.3);
+    }
+
+    #[test]
+    fn round_direction_snaps_binary_noise_before_ceil_and_trunc() {
+        // 1.1 * 100 is 110.00000000000001 and 4.35 * 100 is 434.99999999999994, so
+        // scaling then ceiling/truncating moves a unit that is not there (CodeRabbit, #3412).
+        assert_eq!(round_direction(1.1, 2, true), 1.1);
+        assert_eq!(round_direction(4.35, 2, false), 4.35);
+        assert_eq!(round_direction(-2.9, 0, false), -2.0);
+        assert_eq!(round_direction(-2.1, 0, true), -3.0);
     }
 
     #[test]

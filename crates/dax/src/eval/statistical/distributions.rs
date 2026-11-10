@@ -226,7 +226,7 @@ fn chisq_inv(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resul
     let values = eval_all(ev, args, ctx)?;
     let a = make_args("CHISQ.INV", &values);
     let probability = finite_number(&a, 0)?;
-    let freedom = finite_number(&a, 1)?.round();
+    let freedom = finite_number(&a, 1)?.trunc();
     if !(1.0..=1e10).contains(&freedom) {
         return Err(domain("CHISQ.INV", "Deg_freedom must be between 1 and 1E10"));
     }
@@ -247,7 +247,7 @@ fn chisq_inv_rt(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Re
     let values = eval_all(ev, args, ctx)?;
     let a = make_args("CHISQ.INV.RT", &values);
     let probability = finite_number(&a, 0)?;
-    let freedom = finite_number(&a, 1)?.round();
+    let freedom = finite_number(&a, 1)?.trunc();
     if !(1.0..=1e10).contains(&freedom) {
         return Err(domain("CHISQ.INV.RT", "Deg_freedom must be between 1 and 1E10"));
     }

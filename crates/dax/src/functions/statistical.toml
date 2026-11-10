@@ -119,7 +119,7 @@ min = 2
 max = 2
 returns = "decimal"
 flags = "standard"
-description = "Inverse of the left-tailed chi-squared cumulative distribution: returns x such that CHISQ.DIST ( x, Deg_freedom, TRUE ) equals Probability. Probability must be at least 0 and less than 1; a non-integer Deg_freedom is rounded."
+description = "Inverse of the left-tailed chi-squared cumulative distribution: returns x such that CHISQ.DIST ( x, Deg_freedom, TRUE ) equals Probability. Probability must be at least 0 and less than 1; a non-integer Deg_freedom is truncated."
 examples = ["CHISQ.INV ( 0.95, 10 )"]
 [[function.params]]
 name = "Probability"
@@ -137,7 +137,7 @@ min = 2
 max = 2
 returns = "decimal"
 flags = "standard"
-description = "Inverse of the right-tailed chi-squared probability: returns x such that CHISQ.DIST.RT ( x, Deg_freedom ) equals Probability. Probability must be greater than 0 and at most 1; a non-integer Deg_freedom is rounded and the iterative search reports an error if it does not converge."
+description = "Inverse of the right-tailed chi-squared probability: returns x such that CHISQ.DIST.RT ( x, Deg_freedom ) equals Probability. Probability must be greater than 0 and at most 1; a non-integer Deg_freedom is truncated and the iterative search reports an error if it does not converge."
 examples = ["CHISQ.INV.RT ( 0.05, 10 )"]
 [[function.params]]
 name = "Probability"

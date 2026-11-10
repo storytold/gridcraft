@@ -127,7 +127,7 @@ fn chi_squared_distribution_and_inverse() {
     close(number("CHISQ.INV.RT(0.01, 3)"), 11.344_866_730_144_368);
     close(number("CHISQ.INV.RT(1, 10)"), 0.0);
 
-    // The distribution truncates degrees of freedom; the inverse rounds them.
+    // Degrees of freedom truncate everywhere, so 10.4 and 10.9 agree with 10.
     close(number("CHISQ.DIST(2.5, 10.9, TRUE)"), 0.009_124_279_218_395_273);
     close(number("CHISQ.INV(0.95, 10.4)"), 18.307_038_053_275_146);
 }
