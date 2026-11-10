@@ -58,6 +58,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Область\nформатування",
         "Format" => "Формат",
         "Insert" => "Вставити",
+        "Header Menu|Insert" => "Вставити",
         "Insert Cells…" => "Вставити комірки…",
         "Delete" => "Видалити",
         "Delete Cells…" => "Видалити комірки…",
@@ -111,6 +112,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sparklines" => "Спарклайни",
         "Checkbox" => "Прапорець",
         "Insert checkboxes in the selected cells" => "Вставити прапорці у виділені комірки",
+        "Button" => "Кнопка",
+        "Slider" => "Повзунок",
+        "Spin Button" => "Лічильник",
+        "Draw a button that runs a macro or a command" => "Намалювати кнопку, яка запускає макрос або команду",
+        "Draw a slider that sets a whole number in a linked cell" => "Намалювати повзунок, який задає ціле число у зв’язаній комірці",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Намалювати лічильник, який змінює ціле число у зв’язаній комірці з кроком"
+        }
+        "Edit Text" => "Редагувати текст",
+        "Assign Action…" => "Призначити дію…",
+        "Format Control…" => "Формат елемента керування…",
         "Header & Footer" => "Верхній і нижній колонтитули",
         "Draw with ink" => "Малювання від руки",
         "Eraser" => "Гумка",
@@ -152,6 +164,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Перевірка помилок",
         "Trace Error" => "Джерело помилки",
         "Circular References" => "Циклічні посилання",
+        "Python Mode" => "Режим Python",
         "Evaluate Formula" => "Обчислити формулу",
         "Watch Window" => "Окно контрольних значень",
         "Calculation\nOptions" => "Параметри\nобчислень",
@@ -241,6 +254,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Легенда: знизу",
         "Legend: Top" => "Легенда: згори",
         "Legend: Right" => "Легенда: праворуч",
+        "First slice angle" => "Кут першого сегмента",
+        "Doughnut hole size" => "Розмір отвору пончика",
         "Gridlines: None" => "Лінії сітки: немає",
         "Gridlines: Show" => "Лінії сітки: показати",
         "Chart\nTitle" => "Назва\nдіаграми",
@@ -991,6 +1006,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Запис",
         "New Macro" => "Новий макрос",
         "Show" => "Показати",
+        "Collapse dialog" => "Згорнути діалогове вікно",
+        "Expand dialog" => "Розгорнути діалогове вікно",
         _ => return None,
     })
 }

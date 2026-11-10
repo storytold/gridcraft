@@ -116,6 +116,8 @@ pub enum OpenAction {
     EditText(u32),
     /// The Format Chart pane.
     FormatChart(u32),
+    /// A form control's editor: a button's text, else Format Control.
+    EditControl(u32),
     /// The equation editor.
     EditEquation(u32),
     /// Nothing beyond selecting it.
@@ -127,6 +129,7 @@ pub fn open_action(sh: &Sheet, o: ObjRef) -> OpenAction {
         ObjKind::Chart => OpenAction::FormatChart(o.id),
         ObjKind::Equation => OpenAction::EditEquation(o.id),
         ObjKind::Shape if sh.shapes.iter().any(|s| s.id == o.id && s.kind == ShapeKind::TextBox) => OpenAction::EditText(o.id),
+        ObjKind::Control => OpenAction::EditControl(o.id),
         ObjKind::Shape | ObjKind::Image | ObjKind::Slicer => OpenAction::Select,
     }
 }
@@ -142,6 +145,7 @@ impl SheetApp {
                 self.begin_text_box_edit(id);
             }
             OpenAction::FormatChart(_) => self.grid.pane = Some("formatChart".into()),
+            OpenAction::EditControl(id) => crate::control_ui::edit(self, id),
             OpenAction::EditEquation(id) => self.open_dialog("equation", json!({"id": id})),
             OpenAction::Select => {}
         }

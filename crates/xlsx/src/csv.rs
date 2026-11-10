@@ -523,7 +523,7 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
                     },
                     None => StyleId::DEFAULT,
                 };
-                Cell { value: p.value, formula: None, style }
+                Cell { value: p.value, formula: None, style, py: None }
             } else {
                 Cell::value(Value::Text(Arc::from(f)))
             };

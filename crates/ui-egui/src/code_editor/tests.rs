@@ -337,6 +337,41 @@ fn tab_and_enter_under_modifiers_never_reach_the_field() {
 }
 
 #[test]
+fn a_stop_key_ends_the_pass_in_input_order() {
+    let stop = |ev: &egui::Event| matches!(ev, egui::Event::Key { key: Key::Enter, pressed: true, modifiers, .. } if modifiers.command);
+    // The typing before it is applied; the keys after it are dropped, other input stays.
+    let mut events = vec![
+        egui::Event::Text("a".into()),
+        key(Key::Enter, Modifiers::COMMAND),
+        egui::Event::Text("b".into()),
+        egui::Event::PointerMoved(egui::Pos2::ZERO),
+        key(Key::Tab, Modifiers::NONE),
+    ];
+    let (mut s, mut sel) = (String::new(), (0, 0));
+    let out = apply_in_order_until(&mut events, &mut s, &mut sel, Lang::Python, &stop);
+    assert_eq!(s, "a");
+    assert_eq!(out.stop, Some(key(Key::Enter, Modifiers::COMMAND)));
+    assert_eq!(events, vec![egui::Event::PointerMoved(egui::Pos2::ZERO)]);
+    assert!(out.held.is_empty());
+    // After a key the field acts on, it waits for the next pass with the editor's keys
+    // before it, so the edit it ends includes them.
+    let mut events = vec![key(Key::A, Modifiers::COMMAND), key(Key::Tab, Modifiers::NONE), key(Key::Enter, Modifiers::COMMAND)];
+    let out = apply_in_order_until(&mut events, &mut s, &mut sel, Lang::Python, &stop);
+    assert_eq!(out.stop, None);
+    assert_eq!(events, vec![key(Key::A, Modifiers::COMMAND)]);
+    assert_eq!(out.held, vec![key(Key::Tab, Modifiers::NONE), key(Key::Enter, Modifiers::COMMAND)]);
+    // Next pass: the Tab, then the stop.
+    let mut events = out.held;
+    let out = apply_in_order_until(&mut events, &mut s, &mut sel, Lang::Python, &stop);
+    assert_eq!(s, "a    ");
+    assert_eq!(out.stop, Some(key(Key::Enter, Modifiers::COMMAND)));
+    // Without a stop the editor behaves as before: the caller's key is the field's.
+    let mut events = vec![key(Key::Enter, Modifiers::COMMAND)];
+    let out = apply_in_order(&mut events, &mut s, &mut sel, Lang::Python);
+    assert_eq!((out.stop, events.len()), (None, 1));
+}
+
+#[test]
 fn events_after_a_held_key_wait_with_it_and_pointer_events_do_not() {
     let mut events = vec![
         key(Key::X, Modifiers::NONE),
@@ -423,4 +458,25 @@ fn a_repeat_pass_of_the_frame_counts_as_the_next_pass() {
     h.input_mut().events.extend([key(Key::A, Modifiers::COMMAND), key(Key::Tab, Modifiers::NONE)]);
     h.run_steps(1);
     assert_eq!(h.state().0, "    a\n    b");
+}
+
+/// Whether a frame drew text with an underline.
+fn draws_underline(mark: Option<std::ops::Range<usize>>) -> bool {
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut text = String::from("x^{2");
+        code_editor_marked(ui, egui::Id::unique("marked"), &mut text, Lang::Latex, 3, mark.clone());
+    });
+    out.textures_delta.clear();
+    out.shapes.iter().any(|s| match &s.shape {
+        egui::Shape::Text(t) => t.galley.job.sections.iter().any(|sec| sec.format.underline.width > 0.0),
+        _ => false,
+    })
+}
+
+#[test]
+fn the_marked_editor_underlines_its_mark() {
+    // The equation editor marks an error's position; the code field draws it.
+    assert!(draws_underline(Some(3..4)));
+    assert!(!draws_underline(None));
 }

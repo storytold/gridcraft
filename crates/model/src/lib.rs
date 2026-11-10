@@ -11,6 +11,7 @@ pub mod features;
 pub mod macros;
 pub mod password;
 pub mod preserved;
+pub mod python;
 pub mod sheet;
 pub mod store;
 pub mod style;
@@ -21,11 +22,12 @@ pub use features::*;
 pub use macros::*;
 pub use password::PasswordHash;
 pub use preserved::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml};
-pub use sheet::{DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, LineIndex, Sheet, SheetViewMode, Visibility, points_to_chars};
+pub use python::{PyCode, PyOutput};
+pub use sheet::{DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, LineIndex, Sheet, SheetUid, SheetViewMode, Visibility, points_to_chars};
 pub use store::CellStore;
 pub use style::{
-    Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, Style, StyleId, StyleTable, Theme, Underline,
-    VAlign, VertAlign,
+    Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, ReadingOrder, Style, StyleId, StyleTable, Theme,
+    Underline, VAlign, VertAlign,
 };
 pub use workbook::{
     CalcMode, CalcSettings, DefinedName, DocProps, EQUATION_BUDGET_MESSAGE, MAX_EQUATION_LAYOUT_BYTES, PhoneticProps, PhoneticRun, PhoneticString,

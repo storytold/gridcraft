@@ -10,6 +10,9 @@
 //! (charts, pictures, comments, conditional formats, validation, macros) is skipped with a
 //! warning.
 //! Encrypted workbooks and pre-BIFF8 versions are refused.
+//!
+//! Every formula in the file is a legacy (pre-dynamic-array) one, so it is read with Excel's
+//! implicit `@` (see `array_formula.rs`), like an `.xlsx` formula saved without `cm`.
 
 mod formula;
 mod ftab;
@@ -24,7 +27,7 @@ use gridcraft_model::{CalcMode, CalcSettings, Cell, DefinedName, Formula, LineIn
 
 use crate::cfb::Compound;
 use crate::tables::{col_width_to_px, pt_to_px};
-use crate::{IoError, ReadReport};
+use crate::{FunctionInfo, IoError, ReadReport};
 use formula::{Links, Mode, SupBook, Unsupported, Xti, cell_error, decode};
 use records::{Cursor, Record, Records};
 
@@ -141,13 +144,20 @@ struct Globals {
     precision_as_displayed: bool,
 }
 
-/// Reads an Excel 97-2003 workbook. Inspect the report's warnings for what was skipped.
+/// Reads an Excel 97-2003 workbook, with the default [`FunctionInfo`]. Inspect the report's
+/// warnings for what was skipped.
 pub fn read_xls(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
-    read_xls_with(bytes, Budget::default())
+    read_xls_budgeted(bytes, Budget::default(), FunctionInfo::default())
 }
 
-/// [`read_xls`] with an explicit resource budget.
-pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workbook, ReadReport), IoError> {
+/// [`read_xls`] with the function library's facts, which decide where the legacy formulas get
+/// Excel's implicit `@`.
+pub fn read_xls_with(bytes: &[u8], functions: FunctionInfo) -> Result<(Workbook, ReadReport), IoError> {
+    read_xls_budgeted(bytes, Budget::default(), functions)
+}
+
+/// [`read_xls_with`] with an explicit resource budget.
+pub(crate) fn read_xls_budgeted(bytes: &[u8], mut budget: Budget, functions: FunctionInfo) -> Result<(Workbook, ReadReport), IoError> {
     let cf = Compound::open(bytes).map_err(invalid)?;
     let stream = match cf.root_stream("Workbook").map_err(invalid)? {
         Some(s) => s,
@@ -201,6 +211,10 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     }
     wb.calc.precision_as_displayed = g.precision_as_displayed;
     defined_names(&g, &model_index, &mut wb, &mut report);
+    // Every .xls formula is a legacy (pre-dynamic-array) one: read with Excel's implicit `@`, like
+    // an .xlsx formula without `cm`. Ctrl+Shift+Enter arrays are read as they are.
+    let legacy = wb.sheets.iter().enumerate().map(|(si, s)| (si, legacy_cells(s))).collect();
+    crate::array_formula::apply_legacy(&mut wb, legacy, functions);
     wb.set_active_sheet(wb.sheets.iter().position(|s| s.visibility == Visibility::Visible).unwrap_or(0));
     // The overview comes first.
     report.warnings.insert(
@@ -208,6 +222,11 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
         "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, merged cells, column widths, row heights and defined names were read. Charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
     );
     Ok((wb, report))
+}
+
+/// The cells holding a formula that is not a Ctrl+Shift+Enter array.
+fn legacy_cells(sheet: &Sheet) -> Vec<CellRef> {
+    sheet.cells.iter().filter(|(_, c)| c.formula.as_ref().is_some_and(|f| f.array.is_none())).map(|(at, _)| at).collect()
 }
 
 fn bof(rec: &Record<'_>) -> Result<(u16, u16), IoError> {
@@ -449,7 +468,7 @@ impl SheetState<'_> {
             return Ok(Some(pos));
         }
         budget.cell()?;
-        self.sheet.cells.set(pos, Cell { value, formula: None, style });
+        self.sheet.cells.set(pos, Cell { value, formula: None, style, py: None });
         Ok(Some(pos))
     }
 
@@ -463,11 +482,13 @@ impl SheetState<'_> {
                     self.unsupported("syntax GridCraft can't parse yet");
                     return;
                 }
-                f.array = array.filter(|r| !r.is_single());
+                // A one-cell Ctrl+Shift+Enter array keeps its range, as when an .xlsx is read:
+                // it evaluates as an array, not with implicit intersection.
+                f.array = array;
                 if let Some(cell) = self.sheet.cells.get_mut(pos) {
                     cell.formula = Some(Arc::new(f));
                 } else {
-                    self.sheet.cells.set(pos, Cell { value: Value::Empty, formula: Some(Arc::new(f)), style: StyleId::DEFAULT });
+                    self.sheet.cells.set(pos, Cell { value: Value::Empty, formula: Some(Arc::new(f)), style: StyleId::DEFAULT, py: None });
                 }
             }
             Err(Unsupported(why)) => self.unsupported(why),
@@ -526,7 +547,7 @@ fn blank_array_followers(st: &mut SheetState<'_>, pending: &[Pending]) {
         let filled = st.sheet.cell(p.anchor).and_then(|c| c.formula.as_ref()).and_then(|f| f.array).is_some_and(|r| r.contains(p.pos));
         if p.pos != p.anchor && filled {
             let style = st.sheet.style_id(p.pos);
-            st.sheet.cells.set(p.pos, Cell { value: Value::Empty, formula: None, style });
+            st.sheet.cells.set(p.pos, Cell { value: Value::Empty, formula: None, style, py: None });
         }
     }
 }
@@ -672,7 +693,7 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
                 if let Some(cell) = st.sheet.cells.get_mut(pos) {
                     cell.value = Value::from(s);
                 } else {
-                    st.sheet.cells.set(pos, Cell { value: Value::from(s), formula: None, style });
+                    st.sheet.cells.set(pos, Cell { value: Value::from(s), formula: None, style, py: None });
                 }
             }
         }
@@ -827,7 +848,7 @@ fn formula_cell(c: &mut Cursor<'_, '_>, st: &mut SheetState<'_>, budget: &mut Bu
     let Some(pos) = st.pos(r, col) else { return Ok(()) };
     budget.cell()?;
     let style = st.style(x);
-    st.sheet.cells.set(pos, Cell { value, formula: None, style });
+    st.sheet.cells.set(pos, Cell { value, formula: None, style, py: None });
     st.last_formula = Some(pos);
     if string_result {
         st.pending_string = Some((pos, style));
