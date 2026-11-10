@@ -852,17 +852,18 @@ impl TableStorage {
         let wanted: BTreeSet<ScalarKey> = values.iter().cloned().collect();
         let mut rows = Vec::new();
         if let Some((dictionary, nulls)) = storage.data().string_parts() {
-            let wanted_text: BTreeSet<&str> = wanted
+            // `ScalarKey` compares text case-insensitively, so the dictionary filter must too.
+            let wanted_text: BTreeSet<String> = wanted
                 .iter()
                 .filter_map(|key| match key {
-                    ScalarKey::String(text) => Some(text.as_str()),
+                    ScalarKey::String(text) => Some(text.to_lowercase()),
                     _ => None,
                 })
                 .collect();
             let blank_wanted = wanted.contains(&ScalarKey::Blank);
             let mut allowed = vec![false; dictionary.len()];
             for (code, text) in dictionary.iter().enumerate() {
-                if wanted_text.contains(text.as_str())
+                if wanted_text.contains(&text.to_lowercase())
                     && let Some(slot) = allowed.get_mut(code)
                 {
                     *slot = true;

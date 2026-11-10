@@ -267,7 +267,7 @@ fn package_has_every_part_excel_needs() {
 
     // The workbook points its <pivotCaches> at the cache, and the sheet at its PivotTable.
     let wb = text(&parts, "xl/workbook.xml");
-    let caches_at = wb.find("<pivotCaches>").expect("no <pivotCaches>");
+    let caches_at = wb.find("<pivotCaches").expect("no <pivotCaches>");
     assert!(caches_at > wb.find("<calcPr").expect("no <calcPr>"), "pivotCaches must follow calcPr");
     assert!(caches_at < wb.find("<extLst>").expect("no <extLst>"));
     assert_eq!(wb.matches("<pivotCaches").count(), 1, "the caches must not nest: {wb}");

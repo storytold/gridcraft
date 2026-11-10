@@ -432,6 +432,9 @@ fn userelationship_selects_the_matching_relationship_by_column() {
     // CROSSFILTER accepts both documented spellings and leaves the active relationship in place.
     assert_eq!(evaluate("CALCULATE([Total], CROSSFILTER(Sales[OrderDate], Date[Date], OneWay))"), Scalar::Decimal(30.0));
     assert_eq!(evaluate("CALCULATE([Total], CROSSFILTER(Sales[OrderDate], Date[Date], BOTH))"), Scalar::Decimal(30.0));
+    // The two directions documented for a relationship's cross-filter behaviour bind too.
+    assert_eq!(evaluate("CALCULATE([Total], CROSSFILTER(Sales[OrderDate], Date[Date], ONEWAY_LEFTFILTERSRIGHT))"), Scalar::Decimal(30.0));
+    assert_eq!(evaluate("CALCULATE([Total], CROSSFILTER(Sales[OrderDate], Date[Date], ONEWAY_RIGHTFILTERSLEFT))"), Scalar::Decimal(30.0));
 }
 
 #[test]

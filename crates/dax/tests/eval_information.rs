@@ -324,6 +324,30 @@ fn cross_filtered_follows_relationship_propagation() {
 }
 
 #[test]
+fn cross_filtered_follows_several_relationships() {
+    // Snowflake: Categories -> Product -> Sales. The evaluator propagates a Categories filter to
+    // Sales, so ISCROSSFILTERED(Sales) must walk the same graph (CodeRabbit, #3412).
+    let mut model = model();
+    model.tables.push(ModelTable {
+        name: "Categories".into(),
+        columns: vec![ModelColumn { name: "Category".into(), data_type: Some("String".into()) }],
+        rows: vec![vec![Scalar::String("Audio".into())], vec![Scalar::String("Computers".into())]],
+    });
+    model.relationships.push(Relationship {
+        from_table: "Product".into(),
+        from_column: "Category".into(),
+        to_table: "Categories".into(),
+        to_column: "Category".into(),
+        bidirectional: false,
+        inactive: false,
+    });
+    model.parse_formulas().expect("model parses");
+    let filters = filter(&model, "Categories", "Category", &[Scalar::String("Audio".into())]);
+    assert_eq!(evaluate_with_model(&model, "ISCROSSFILTERED(Sales)", filters.clone()).expect("sales"), Scalar::Boolean(true));
+    assert_eq!(evaluate_with_model(&model, "ISCROSSFILTERED(Product)", filters).expect("product"), Scalar::Boolean(true));
+}
+
+#[test]
 fn scope_and_subtotal_predicates() {
     assert!(!boolean("ISINSCOPE(Product[Color])"));
     assert_eq!(number("SUMX(Product, IF(ISINSCOPE(Product[Color]), 1, 0))"), 4.0);

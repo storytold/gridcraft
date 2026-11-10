@@ -461,6 +461,27 @@ fn summarize_columns_rollup_multiple_levels_and_dimensions() {
 }
 
 #[test]
+fn rollup_subtotals_group_the_details_once_per_depth() {
+    // 60 customers x 60 products: 3,600 detail groups, 60 customer subtotals and one grand total.
+    // The subtotal pass must bucket the details instead of scanning them once per prefix
+    // (CodeRabbit, #3412).
+    let rows: Vec<Vec<Scalar>> = (0..60)
+        .flat_map(|customer| (0..60).map(move |product| vec![text(&format!("C{customer}")), text(&format!("P{product}")), money(1.0)]))
+        .collect();
+    let mut model = DataModel {
+        tables: vec![table("Sales", vec![column("Customer", "String"), column("Product", "String"), column("Amount", "Double")], rows)],
+        relationships: Vec::new(),
+        measures: Vec::new(),
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expr = parse_expression("SUMMARIZE(Sales, ROLLUP(Sales[Customer], Sales[Product]), \"Amount\", SUM(Sales[Amount]))").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+    let table = evaluator.evaluate_table(&bound).expect("summarize");
+    assert_eq!(table.rows.len(), 60 + 60 * 60 + 1, "customer subtotals, details and the grand total");
+}
+
+#[test]
 fn summarize_columns_rollupgroup_contributes_its_columns() {
     let table = eval_table("SUMMARIZECOLUMNS(ROLLUPGROUP(Sales[Region], Sales[Product]), \"Amount\", SUM(Sales[Amount]))").expect("rollupgroup");
     assert_columns(&table, &["Region", "Product", "Amount"]);

@@ -121,7 +121,8 @@ pub fn linked_families() -> impl Iterator<Item = &'static str> {
 pub struct FilterContext {
     pub filters: BTreeMap<(usize, usize), BTreeSet<ScalarKey>>,
     /// Relationship behaviour set by `USERELATIONSHIP`/`CROSSFILTER` inside CALCULATE:
-    /// relationship index -> `(active, bidirectional)`.
+    /// relationship index -> `(forward, backward)`, the two directions a filter may propagate.
+    /// The default is `(true, bidirectional)`; `CROSSFILTER` can also make it one-way back.
     pub relationships: BTreeMap<usize, (bool, bool)>,
 }
 
@@ -539,13 +540,10 @@ impl<'a> Evaluator<'a> {
         let mut rows = rows.unwrap_or_else(|| (0..table_storage.row_count()).collect());
 
         for (index, relationship) in storage.relationships().iter().enumerate() {
-            let (active, bidirectional) = filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
-            if !active {
-                continue;
-            }
-            let (other, self_column, other_column) = if relationship.from_table == table {
+            let (forward, backward) = filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
+            let (other, self_column, other_column) = if forward && relationship.from_table == table {
                 (relationship.to_table, relationship.from_column, relationship.to_column)
-            } else if bidirectional && relationship.to_table == table {
+            } else if backward && relationship.to_table == table {
                 (relationship.from_table, relationship.to_column, relationship.from_column)
             } else {
                 continue;
@@ -616,13 +614,10 @@ impl<'a> Evaluator<'a> {
             let (Some(from), Some(to)) = (self.model.table_index(&relationship.from_table), self.model.table_index(&relationship.to_table)) else {
                 continue;
             };
-            let (active, bidirectional) = filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
-            if !active {
-                continue;
-            }
-            let (other, self_column, other_column) = if from == table {
+            let (forward, backward) = filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
+            let (other, self_column, other_column) = if forward && from == table {
                 (to, &relationship.from_column, &relationship.to_column)
-            } else if bidirectional && to == table {
+            } else if backward && to == table {
                 (from, &relationship.to_column, &relationship.from_column)
             } else {
                 continue;
@@ -658,16 +653,13 @@ impl<'a> Evaluator<'a> {
             return true;
         }
         for (index, relationship) in self.model.relationships.iter().enumerate() {
-            let (active, bidirectional) = filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
-            if !active {
-                continue;
-            }
+            let (forward, backward) = filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
             let (Some(from), Some(to)) = (self.model.table_index(&relationship.from_table), self.model.table_index(&relationship.to_table)) else {
                 continue;
             };
-            let next = if from == table {
+            let next = if forward && from == table {
                 Some(to)
-            } else if bidirectional && to == table {
+            } else if backward && to == table {
                 Some(from)
             } else {
                 None
@@ -1581,7 +1573,7 @@ impl<'a> Evaluator<'a> {
                 let same_pair = (same(&other.from_table, &relationship.from_table) && same(&other.to_table, &relationship.to_table))
                     || (same(&other.from_table, &relationship.to_table) && same(&other.to_table, &relationship.from_table));
                 if same_pair {
-                    filters.relationships.insert(other_index, (other_index == index, other.bidirectional));
+                    filters.relationships.insert(other_index, (other_index == index, other_index == index && other.bidirectional));
                 }
             }
             return Ok(());
@@ -1590,11 +1582,18 @@ impl<'a> Evaluator<'a> {
             Some(BoundExpr::Keyword(word)) | Some(BoundExpr::Literal(Literal::String(word))) => word.to_ascii_uppercase(),
             _ => return Err(EvalError::new("CROSSFILTER needs ONE, BOTH or NONE")),
         };
+        // `(forward, backward)`: which side of the relationship may pass a filter. The
+        // `ONEWAY_*` spellings name that side explicitly; `ONEWAY` is the default many-to-one.
         let state = match direction.as_str() {
-            "ONE" | "ONEWAY" => (true, false),
+            "ONE" | "ONEWAY" | "ONEWAY_LEFTFILTERSRIGHT" => (true, false),
+            "ONEWAY_RIGHTFILTERSLEFT" => (false, true),
             "BOTH" | "TWOWAY" => (true, true),
             "NONE" => (false, false),
-            _ => return Err(EvalError::new("CROSSFILTER direction must be ONE, ONEWAY, BOTH, TWOWAY or NONE")),
+            _ => {
+                return Err(EvalError::new(
+                    "CROSSFILTER direction must be ONE, ONEWAY, ONEWAY_LEFTFILTERSRIGHT, ONEWAY_RIGHTFILTERSLEFT, BOTH, TWOWAY or NONE",
+                ));
+            }
         };
         filters.relationships.insert(index, state);
         Ok(())

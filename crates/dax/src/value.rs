@@ -200,8 +200,12 @@ impl Scalar {
     }
 }
 
-/// A comparable/hashable key used for filter context values.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+/// A comparable key used for filter context values.
+///
+/// Text compares case-insensitively, as DAX does: `"East"` and `"east"` are one key, so grouping
+/// and filter maps do not split them. The original spelling is kept for output, and the first
+/// spelling stored wins when equal keys collide.
+#[derive(Clone, Debug)]
 pub enum ScalarKey {
     Blank,
     Boolean(bool),
@@ -210,6 +214,59 @@ pub enum ScalarKey {
     Decimal(u64),
     DateTime(u64),
     String(String),
+}
+
+impl PartialEq for ScalarKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for ScalarKey {}
+
+impl PartialOrd for ScalarKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ScalarKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // The variant order is the derived one, so numeric keys keep sorting before text.
+        fn rank(key: &ScalarKey) -> u8 {
+            match key {
+                ScalarKey::Blank => 0,
+                ScalarKey::Boolean(_) => 1,
+                ScalarKey::Integer(_) => 2,
+                ScalarKey::Currency(_) => 3,
+                ScalarKey::Decimal(_) => 4,
+                ScalarKey::DateTime(_) => 5,
+                ScalarKey::String(_) => 6,
+            }
+        }
+        match (self, other) {
+            (ScalarKey::String(left), ScalarKey::String(right)) => compare_text(left, right),
+            (ScalarKey::Blank, ScalarKey::Blank) => Ordering::Equal,
+            (ScalarKey::Boolean(left), ScalarKey::Boolean(right)) => left.cmp(right),
+            (ScalarKey::Integer(left), ScalarKey::Integer(right)) => left.cmp(right),
+            (ScalarKey::Currency(left), ScalarKey::Currency(right)) => left.cmp(right),
+            (ScalarKey::Decimal(left), ScalarKey::Decimal(right)) => left.cmp(right),
+            (ScalarKey::DateTime(left), ScalarKey::DateTime(right)) => left.cmp(right),
+            _ => rank(self).cmp(&rank(other)),
+        }
+    }
+}
+
+/// Case-insensitive text order, matching how the engine compares text: ASCII folding first,
+/// Unicode lowercasing only when the strings differ by more than ASCII case.
+fn compare_text(left: &str, right: &str) -> Ordering {
+    if left == right {
+        return Ordering::Equal;
+    }
+    if left.is_ascii() && right.is_ascii() {
+        return left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase());
+    }
+    left.to_lowercase().cmp(&right.to_lowercase())
 }
 
 impl From<&Scalar> for ScalarKey {

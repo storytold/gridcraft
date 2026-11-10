@@ -206,7 +206,8 @@ fn filters_by_value_set_including_blanks_and_duplicates() {
         Ok(vec![0, 2, 3, 5])
     );
     assert_eq!(sales.filter_rows(region, &[ScalarKey::String("West".into())]), Ok(vec![1]));
-    assert_eq!(sales.filter_rows(region, &[ScalarKey::String("east".into())]), Ok(vec![]));
+    // DAX compares text case-insensitively, so a differently-cased key selects the stored value.
+    assert_eq!(sales.filter_rows(region, &[ScalarKey::String("east".into())]), Ok(vec![0, 2, 5]));
     assert_eq!(sales.filter_rows(region, &[]), Ok(vec![]));
 
     let product_key = column_index(sales, "ProductKey");

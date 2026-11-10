@@ -318,28 +318,33 @@ fn is_cross_filtered(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
     if filtered.contains(&target) {
         return Ok(Scalar::Boolean(true));
     }
-    // Mirror the model's filter propagation: a filter on the `to` table restricts the `from`
-    // table, and a filter on the `from` table restricts the `to` table only when the
-    // relationship is bidirectional. `from` is therefore cross-filtered by its related `to`
-    // table, and vice versa.
-    for relationship in &ev.model().relationships {
-        if relationship.inactive {
-            continue;
-        }
-        let from = ev.model().table_index(&relationship.from_table);
-        let to = ev.model().table_index(&relationship.to_table);
-        let related = if from == Some(target) {
-            to
-        } else if to == Some(target) && relationship.bidirectional {
-            from
-        } else {
-            None
-        };
-        if related.is_some_and(|other| filtered.contains(&other)) {
-            return Ok(Scalar::Boolean(true));
+    // Mirror the model's filter propagation, including several hops: a filter on the `to` table
+    // reaches the `from` table, and a filter on the `from` table reaches the `to` table when the
+    // relationship allows that direction. `CROSSFILTER` overrides and inactive relationships are
+    // honoured, so the walk sees the same graph the evaluator does.
+    let mut reached = filtered.clone();
+    let mut pending: Vec<usize> = filtered.iter().copied().collect();
+    while let Some(source) = pending.pop() {
+        for (index, relationship) in ev.model().relationships.iter().enumerate() {
+            let (forward, backward) = ctx.filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
+            let (Some(from), Some(to)) = (ev.model().table_index(&relationship.from_table), ev.model().table_index(&relationship.to_table)) else {
+                continue;
+            };
+            let next = if forward && to == source {
+                Some(from)
+            } else if backward && from == source {
+                Some(to)
+            } else {
+                None
+            };
+            if let Some(next) = next
+                && reached.insert(next)
+            {
+                pending.push(next);
+            }
         }
     }
-    Ok(Scalar::Boolean(false))
+    Ok(Scalar::Boolean(reached.contains(&target)))
 }
 
 fn is_empty(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {

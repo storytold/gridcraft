@@ -453,14 +453,17 @@ fn subtotal_rows(details: &[(Vec<Scalar>, Vec<Vec<Scalar>>)], layout: &GroupLayo
     let mut seen: BTreeSet<(Vec<ScalarKey>, Vec<bool>)> = BTreeSet::new();
     for depth in 1..=count {
         let rolled: BTreeSet<usize> = layout.levels[count - depth..].iter().flat_map(|(start, len)| *start..start + len).collect();
-        let mut prefixes: BTreeSet<Vec<ScalarKey>> = BTreeSet::new();
-        for (values, _) in details {
+        // Group the details by their kept-prefix once per depth, collecting each subtotal's source
+        // rows as it goes: a per-prefix scan of `details` would be prefixes × details per depth.
+        let mut buckets: BTreeMap<Vec<ScalarKey>, SubtotalBucket> = BTreeMap::new();
+        for (values, group_rows) in details {
             let prefix: Vec<ScalarKey> =
                 values.iter().enumerate().filter(|(index, _)| !rolled.contains(index)).map(|(_, value)| ScalarKey::from(value)).collect();
-            if !prefixes.insert(prefix) {
-                continue;
-            }
-            let mut subtotal = values.clone();
+            let bucket = buckets.entry(prefix).or_insert_with(|| (values.clone(), Vec::new()));
+            bucket.1.extend(group_rows.iter().cloned());
+        }
+        for (_, (values, covered)) in buckets {
+            let mut subtotal = values;
             let mut active = vec![true; layout.columns.len()];
             for index in &rolled {
                 if let Some(value) = subtotal.get_mut(*index) {
@@ -472,18 +475,15 @@ fn subtotal_rows(details: &[(Vec<Scalar>, Vec<Vec<Scalar>>)], layout: &GroupLayo
             }
             let key = (subtotal.iter().map(ScalarKey::from).collect::<Vec<_>>(), active.clone());
             if seen.insert(key) {
-                // A subtotal covers the union of its groups' source rows.
-                let covered: Vec<Vec<Scalar>> = details
-                    .iter()
-                    .filter(|(values, _)| active.iter().enumerate().all(|(index, on)| !on || values.get(index) == subtotal.get(index)))
-                    .flat_map(|(_, rows)| rows.iter().cloned())
-                    .collect();
                 rows.push((subtotal, active, covered));
             }
         }
     }
     rows
 }
+
+/// A subtotal bucket: one detail's group values and every source row the subtotal covers.
+type SubtotalBucket = (Vec<Scalar>, Vec<Vec<Scalar>>);
 
 /// One summarised row: its group values, which columns stay active, and the table-argument rows
 /// the group covers (a rollup subtotal covers the union of its groups).
