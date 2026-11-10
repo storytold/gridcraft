@@ -123,7 +123,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Spin Button" => "Léptetőgomb",
         "Draw a button that runs a macro or a command" => "Gomb rajzolása, amely makrót vagy parancsot futtat",
         "Draw a slider that sets a whole number in a linked cell" => "Csúszka rajzolása, amely egész számot állít be egy hozzákapcsolt cellában",
-        "Draw a spin button that steps a whole number in a linked cell" => "Léptetőgomb rajzolása, amely egész számot léptet egy hozzákapcsolt cellában",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Léptetőgomb rajzolása, amely egész számot léptet egy hozzákapcsolt cellában"
+        }
         "Edit Text" => "Szöveg szerkesztése",
         "Assign Action…" => "Művelet hozzárendelése…",
         "Format Control…" => "Vezérlőelem formázása…",
@@ -429,9 +431,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Rögzítés",
         "New Macro" => "Új makró",
         "Show" => "Megjelenítés",
-        "Sheet structure is locked: sheets can't be added, moved, renamed or deleted." => "A munkalapszerkezet zárolva van: munkalapok nem adhatók hozzá, nem helyezhetők át, nem nevezhetők át és nem törölhetők.",
-        "Lock the sheet structure so sheets can't be added, moved, renamed or deleted." => "A munkalapszerkezet zárolása, hogy munkalapok ne legyenek hozzáadhatók, áthelyezhetők, átnevezhetők vagy törölhetők.",
-        "A CSV file, web page or PDF is a copy: the workbook keeps its own file." => "A CSV-fájl, weblap vagy PDF egy másolat: a munkafüzet megtartja saját fájlját.",
+        "Sheet structure is locked: sheets can't be added, moved, renamed or deleted." => {
+            "A munkalapszerkezet zárolva van: munkalapok nem adhatók hozzá, nem helyezhetők át, nem nevezhetők át és nem törölhetők."
+        }
+        "Lock the sheet structure so sheets can't be added, moved, renamed or deleted." => {
+            "A munkalapszerkezet zárolása, hogy munkalapok ne legyenek hozzáadhatók, áthelyezhetők, átnevezhetők vagy törölhetők."
+        }
+        "A CSV file, web page or PDF is a copy: the workbook keeps its own file." => {
+            "A CSV-fájl, weblap vagy PDF egy másolat: a munkafüzet megtartja saját fájlját."
+        }
         "Glide the selection outline to the cell you move to instead of jumping there" => "A kijelölés körvonalának átcsúsztatása a célcellára ugrás helyett",
 
         // Dialogs / messages / Backstage strings outside the shared CORE set.
