@@ -254,23 +254,20 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
+    use crate::pen_icon;
+
     let tool = app.session.draw_tool.clone();
+    let brush = app.session.draw_brush.clone();
+    let color = app.session.draw_color.clone();
+    let width = app.session.draw_width;
+    let effect = app.session.draw_effect.clone();
+
+    // One Select tool: `draw.lasso` selects ink the way Select Objects does and the grid has no
+    // freehand-loop selection, so a second "Lasso Select" button would be the same button twice.
     let __k = big_button(ui, Icon::Shapes, "Select\nObjects", "Select and move ink and shapes", false);
     control_keytip(app, ui, &__k, "draw.lasso");
     if __k.clicked() {
         act(app, "draw.lasso", json!({}));
-    }
-    sep(ui);
-    for (label, color) in [("Pen\nBlue", "#1F5FC9"), ("Pen\nBlack", "#000000"), ("Pen\nRed", "#D13B2F"), ("Highlighter", "#F2E33A")] {
-        let on = tool == "pen" && app.session.draw_color.eq_ignore_ascii_case(color);
-        let r = big_button(ui, Icon::Pen, label, "Draw with ink", false);
-        if on {
-            ui.painter().rect_stroke(r.rect, 5.0, Stroke::new(2.0, Tokens::get(ui.ctx()).accent), StrokeKind::Inside);
-        }
-        if r.clicked() {
-            let width = if label == "Highlighter" { 12.0 } else { 2.0 };
-            act(app, "draw.pen", json!({"on": !on, "color": color, "width": width}));
-        }
     }
     let er = big_button(ui, Icon::Eraser, "Eraser", "Erase ink strokes", false);
     if tool == "eraser" {
@@ -280,9 +277,190 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
         act(app, "draw.eraser", json!({}));
     }
     sep(ui);
+
+    // Excel's default pens and the person's own, each tile painted in its own colour and shape.
+    app.session.ensure_draw_pens();
+    let tr = crate::i18n::current(ui.ctx());
+    for pen in app.session.draw_pens.clone() {
+        let selected = tool == "pen"
+            && brush == pen.tool
+            && color.eq_ignore_ascii_case(&pen.color)
+            && effect == pen.effect.as_deref().unwrap_or_default()
+            && (width - pen.width).abs() < 0.01;
+        // A custom pen has no Excel name; naming it after its brush alone gave every custom Pen the
+        // same accessible name, so its gallery id tells them apart.
+        let label = match gridcraft_engine::cmd::draw::pen_label(&pen) {
+            Some(name) => name.to_string(),
+            None => format!("{} {}", pen_icon::tool_label(&pen.tool), pen.id),
+        };
+        let label = label.as_str();
+        let (main, arrow) = pen_icon::pen_tile(
+            ui,
+            pen_icon::PenTile {
+                id: pen.id,
+                tool: &pen.tool,
+                color: hex_color(&pen.color),
+                effect: pen.effect.as_deref(),
+                tip: tr.tr(label),
+                selected,
+            },
+        );
+        if main.clicked() {
+            act(app, "draw.pen", json!({"on": true, "pen": pen.id}));
+        }
+        egui::Popup::menu(&arrow).show(|ui| pen_dropdown(app, ui, &pen));
+    }
+    let add = big_button(ui, Icon::Plus, "Add", "Add a pen to the gallery", true);
+    egui::Popup::menu(&add).show(|ui| {
+        for t in pen_icon::TOOLS {
+            if ui.button(tr.tr(pen_icon::tool_label(t))).clicked() {
+                act(app, "draw.addPen", json!({"brush": t}));
+                ui.close();
+            }
+        }
+    });
+    sep(ui);
     let __k = big_button(ui, Icon::Shapes, "Ink to\nShape", "Convert the last ink stroke to a shape", false);
     control_keytip(app, ui, &__k, "draw.inkToShape");
     if __k.clicked() {
         act(app, "draw.inkToShape", json!({}));
     }
+}
+
+/// A pen dropdown's colour for a `#RRGGBB` string.
+fn hex_color(hex: &str) -> egui::Color32 {
+    gridcraft_engine::model::Color::from_hex(hex)
+        .and_then(|c| c.resolve(&gridcraft_engine::model::Theme::default()))
+        .map(crate::theme::color32)
+        .unwrap_or(egui::Color32::GRAY)
+}
+
+/// The sixteen solid colours Excel offers for a pen.
+const PEN_SOLIDS: [&str; 16] = [
+    "#000000", "#FFFFFF", "#A5A5A5", "#D9D9D9", "#C00000", "#FF0000", "#FFC000", "#FFFF00", "#92D050", "#00B050", "#00B0F0", "#0070C0", "#002060",
+    "#7030A0", "#E36C0A", "#7F6000",
+];
+
+/// The body of a pen's dropdown: thickness steps for the brush, the solid colours, the eight
+/// textures, More Colors… and, for a pen from the gallery, Delete Tool. A change applies to the
+/// pen being drawn with at once, so the tile's preview follows.
+fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::draw::DrawPen) {
+    use crate::pen_icon;
+    let (tool, color, width, effect, id) = (pen.tool.as_str(), pen.color.as_str(), pen.width, pen.effect.as_deref(), pen.id);
+    let deletable = id >= gridcraft_engine::cmd::draw::DEFAULT_PEN_COUNT;
+    let tr = crate::i18n::current(ui.ctx());
+    let parsed = gridcraft_engine::cmd::draw::parse_tool(tool).unwrap_or_default();
+    let steps = gridcraft_engine::cmd::draw::widths_mm(parsed);
+    let t = Tokens::get(ui.ctx());
+    // The thickness slider: Excel's steps for the brush. Its own label names it for a screen
+    // reader, and the value shown is the pen's real width when it is between steps.
+    let mut idx = steps.iter().enumerate().min_by(|a, b| (a.1 - width).abs().total_cmp(&(b.1 - width).abs())).map_or(0, |(i, _)| i);
+    let slider = egui::Slider::new(&mut idx, 0..=steps.len().saturating_sub(1)).text(tr.tr("Thickness")).custom_formatter(move |v, _| {
+        let step = steps.get(v as usize).copied().unwrap_or(width);
+        let mm = if (step - width).abs() > 0.01 { width } else { step };
+        format!("{mm} mm")
+    });
+    if ui.add(slider).changed()
+        && let Some(mm) = steps.get(idx).copied()
+    {
+        apply_pen_change(app, id, tool, color, mm, effect);
+    }
+    ui.add_space(2.0);
+    ui.label(egui::RichText::new(tr.tr("Colors")).small());
+    for row in PEN_SOLIDS.chunks(8) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            for hex in row {
+                let (r, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+                let c = hex_color(hex);
+                ui.painter().rect_filled(r, 2.0, c);
+                let on = hex.eq_ignore_ascii_case(color);
+                let edge = if on || resp.has_focus() {
+                    t.accent
+                } else if resp.hovered() {
+                    t.text_dim
+                } else {
+                    egui::Color32::from_gray(160)
+                };
+                ui.painter().rect_stroke(r, 2.0, Stroke::new(if on { 2.0 } else { 1.0 }, edge), StrokeKind::Inside);
+                if resp.has_focus() {
+                    ui.painter().rect_stroke(r.expand(1.0), 2.5, Stroke::new(1.0, t.accent), StrokeKind::Outside);
+                }
+                let name = format!("{} {hex}", tr.tr("Pen colour"));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &name));
+                if resp.on_hover_text(*hex).clicked() {
+                    // A solid colour choice replaces the texture: keeping the effect would make
+                    // `stroke_color` paint the texture's base colour instead of the chosen one.
+                    apply_pen_change(app, id, tool, hex, width, None);
+                    ui.close();
+                }
+            }
+        });
+    }
+    ui.add_space(2.0);
+    ui.label(egui::RichText::new(tr.tr("Textures")).small());
+    for row in pen_icon::EFFECTS.chunks(4) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            for name in row {
+                let (r, resp) = ui.allocate_exact_size(vec2(34.0, 24.0), Sense::click());
+                pen_icon::paint_effect_swatch(ui.painter(), r, name);
+                let on = effect == Some(*name);
+                if on || resp.has_focus() {
+                    ui.painter().rect_stroke(r.expand(1.0), 2.0, Stroke::new(2.0, t.accent), StrokeKind::Outside);
+                } else if resp.hovered() {
+                    ui.painter().rect_stroke(r.expand(1.0), 2.0, Stroke::new(1.0, t.text_dim), StrokeKind::Outside);
+                }
+                let label = tr.tr(pen_icon::effect_label(name));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
+                if resp.on_hover_text(label).clicked() {
+                    // The engine resets the colour when only the effect changes, so carry the
+                    // texture's base colour from the model's single table.
+                    let base = gridcraft_engine::model::InkEffect::from_name(name).map(|e| e.base_hex()).unwrap_or("#1F5FC9");
+                    apply_pen_change(app, id, tool, base, width, Some(name));
+                    ui.close();
+                }
+            }
+        });
+    }
+    if ui.button(tr.tr("Solid")).clicked() {
+        apply_pen_change(app, id, tool, color, width, None);
+        ui.close();
+    }
+    // More Colors…: a submenu, so opening the picker does not close the pen dropdown; the picker
+    // applies as it moves. Its stored HSVA is keyed by the pen's current colour, so a swatch or
+    // texture chosen since it was last open cannot leave a stale value behind.
+    ui.menu_button(tr.tr("More Colors…"), |ui| {
+        let hv_id = ui.scope_id().with(("draw_pen_more_colors", id));
+        let cur = hex_color(color);
+        let current = [cur.r(), cur.g(), cur.b()];
+        let stored: Option<egui::ecolor::Hsva> = ui.data_mut(|d| d.get_temp(hv_id));
+        // Keep the stored hue while it still renders as the pen's colour, so moving the picker
+        // does not reset it, and a swatch or texture chosen since cannot leave a stale value.
+        let close = |h: &egui::ecolor::Hsva| {
+            let [r, g, b] = h.to_srgb();
+            r.abs_diff(current[0]) <= 1 && g.abs_diff(current[1]) <= 1 && b.abs_diff(current[2]) <= 1
+        };
+        let mut hsva = stored.filter(close).unwrap_or_else(|| egui::ecolor::Hsva::from_srgb(current));
+        let before = hsva;
+        egui::color_picker::color_picker_hsva_2d(ui, &mut hsva, egui::color_picker::Alpha::Opaque);
+        if hsva != before {
+            ui.data_mut(|d| d.insert_temp(hv_id, hsva));
+            let [r, g, b] = hsva.to_srgb();
+            let hex = format!("#{r:02X}{g:02X}{b:02X}");
+            // Same as the swatches: a picked colour is solid, not textured.
+            apply_pen_change(app, id, tool, &hex, width, None);
+        }
+    });
+    if deletable && ui.button(tr.tr("Delete Tool")).clicked() {
+        act(app, "draw.deletePen", json!({"id": id}));
+        ui.close();
+    }
+}
+
+/// Applies a dropdown choice to the gallery pen and makes it the pen in hand: the dropdown was
+/// opened from that pen's own tile, so the tile it changed is the one it draws with.
+fn apply_pen_change(app: &mut SheetApp, id: u32, tool: &str, color: &str, width: f32, effect: Option<&str>) {
+    act(app, "draw.updatePen", json!({"id": id, "brush": tool, "color": color, "width": width, "effect": effect.unwrap_or("")}));
+    act(app, "draw.pen", json!({"on": true, "pen": id}));
 }

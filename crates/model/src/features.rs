@@ -673,6 +673,230 @@ pub enum ShapeKind {
     Equation,
 }
 
+/// A brush kind of the Draw tab (Excel's Add menu).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InkTool {
+    #[default]
+    Pen,
+    Pencil,
+    Highlighter,
+    FountainPen,
+    BrushPen,
+}
+
+/// A pen texture (Excel's eight effects). The stroke's `line` colour is the texture's base colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InkEffect {
+    Rainbow,
+    Galaxy,
+    Lava,
+    Ocean,
+    RoseGold,
+    Gold,
+    Silver,
+    Bronze,
+}
+
+impl InkEffect {
+    /// The eight textures, in Excel's palette order.
+    pub const ALL: [InkEffect; 8] = [
+        InkEffect::Rainbow,
+        InkEffect::Galaxy,
+        InkEffect::Lava,
+        InkEffect::Ocean,
+        InkEffect::RoseGold,
+        InkEffect::Gold,
+        InkEffect::Silver,
+        InkEffect::Bronze,
+    ];
+
+    /// The canonical JSON name (`InkStyle`'s `camelCase` spelling), for the Draw tab and commands.
+    pub fn name(self) -> &'static str {
+        match self {
+            InkEffect::Rainbow => "rainbow",
+            InkEffect::Galaxy => "galaxy",
+            InkEffect::Lava => "lava",
+            InkEffect::Ocean => "ocean",
+            InkEffect::RoseGold => "roseGold",
+            InkEffect::Gold => "gold",
+            InkEffect::Silver => "silver",
+            InkEffect::Bronze => "bronze",
+        }
+    }
+
+    /// The `inkEffects` name Excel writes in InkML: its own lowercase spelling, without the camel
+    /// hump (`rosegold`).
+    pub fn inkml_name(self) -> &'static str {
+        match self {
+            InkEffect::RoseGold => "rosegold",
+            other => other.name(),
+        }
+    }
+
+    /// Parses a texture name, case and `_`/`-`/space-insensitively (both `roseGold` and Excel's
+    /// `rosegold` are accepted); `None` for `"none"`, `"solid"` or anything unknown.
+    pub fn from_name(s: &str) -> Option<InkEffect> {
+        match s.trim().to_ascii_lowercase().replace(['_', '-', ' '], "").as_str() {
+            "rainbow" => Some(InkEffect::Rainbow),
+            "galaxy" => Some(InkEffect::Galaxy),
+            "lava" => Some(InkEffect::Lava),
+            "ocean" => Some(InkEffect::Ocean),
+            "rosegold" => Some(InkEffect::RoseGold),
+            "gold" => Some(InkEffect::Gold),
+            "silver" => Some(InkEffect::Silver),
+            "bronze" => Some(InkEffect::Bronze),
+            _ => None,
+        }
+    }
+
+    /// The base colour Excel stores for the texture's stroke.
+    pub fn base_hex(self) -> &'static str {
+        match self {
+            InkEffect::Rainbow => "#E83A6B",
+            InkEffect::Galaxy => "#5B3EA8",
+            InkEffect::Lava => "#D94F1E",
+            InkEffect::Ocean => "#1B7FB5",
+            InkEffect::RoseGold => "#C98A7A",
+            InkEffect::Gold => "#C99A2E",
+            InkEffect::Silver => "#9AA3AD",
+            InkEffect::Bronze => "#9A673A",
+        }
+    }
+
+    /// [`InkEffect::base_hex`] as a model colour.
+    pub fn base_color(self) -> Color {
+        Color::from_hex(self.base_hex()).unwrap_or_default()
+    }
+}
+
+/// A stroke's brush: the Draw-tab kind, its size, texture and the per-point data the file keeps.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InkStyle {
+    pub tool: InkTool,
+    /// Stroke width in cm (InkML `width`).
+    pub width_cm: f32,
+    /// Stroke height in cm (InkML `height`): the brush's thickness across the stroke; a Pencil is
+    /// six times and a Highlighter twice its width.
+    pub height_cm: f32,
+    /// A pen texture; `None` is a solid stroke.
+    pub effect: Option<InkEffect>,
+    /// Texture phase (InkML `anchorX`/`anchorY`), in the texture's own units.
+    pub anchor: [f32; 2],
+    /// Texture scale (InkML `scaleFactor`).
+    pub scale: f32,
+    /// Pressure per point (`0..=32767`); empty when the device did not record any.
+    pub pressure: Vec<u16>,
+    /// Draw order, for Ink Replay.
+    pub order: u32,
+    /// The stroke's stable `a16:creationId` GUID (braces included), assigned when the stroke is
+    /// created and never changed: moving or recolouring it keeps the key. Excel preserves the
+    /// GUID across saves, so a map keyed by it survives an Excel round trip.
+    pub key: Option<String>,
+}
+
+impl Default for InkStyle {
+    fn default() -> Self {
+        InkStyle {
+            tool: InkTool::default(),
+            width_cm: 0.05,
+            height_cm: 0.05,
+            effect: None,
+            anchor: [0.0, 0.0],
+            scale: 1.0,
+            pressure: Vec::new(),
+            order: 0,
+            key: None,
+        }
+    }
+}
+
+/// The canonical form of an `a16:creationId` value: `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`
+/// with hexadecimal digits (case-insensitive), in lowercase. `None` for anything else, so a key
+/// read from a file or restored from JSON can never be written back as invalid ST_Guid.
+pub fn ink_guid(value: &str) -> Option<String> {
+    let v = value.trim();
+    let b = v.as_bytes();
+    if b.len() != 38 || b.first() != Some(&b'{') || b.last() != Some(&b'}') {
+        return None;
+    }
+    let dashed = [9, 14, 19, 24];
+    for (i, byte) in b.iter().enumerate() {
+        if i == 0 || i == 37 {
+            continue;
+        }
+        if dashed.contains(&i) {
+            if *byte != b'-' {
+                return None;
+            }
+        } else if !byte.is_ascii_hexdigit() {
+            return None;
+        }
+    }
+    Some(v.to_ascii_lowercase())
+}
+
+/// A stroke's stable key: `existing` in its canonical lowercase form when it is an ST_Guid, else
+/// a fresh deterministic one (a SHA-256 of a process-wide counter, so tests and repeated runs
+/// agree and no clock is read).
+///
+/// The GUID is spelled out here rather than taken from a UUID crate because the key must be
+/// reproducible: a save with no edit has to produce the same bytes, and a wasm build has no random
+/// source to seed a v4 from. The key is only unique within one process, though — see
+/// [`ink_creation_id_free`] before assigning one to a new stroke.
+pub fn ink_creation_id(existing: Option<&str>) -> String {
+    if let Some(guid) = existing.and_then(ink_guid) {
+        return guid;
+    }
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let mut h = sha2::Sha256::new();
+    use sha2::Digest as _;
+    h.update(b"gridcraft-ink-key");
+    h.update(n.to_le_bytes());
+    let d = h.finalize();
+    let b = |i: usize| d.get(i).copied().unwrap_or(0);
+    format!(
+        "{{{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-4{:01x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
+        b(0),
+        b(1),
+        b(2),
+        b(3),
+        b(4),
+        b(5),
+        b(6) & 0x0f,
+        b(7),
+        (b(8) & 0x3f) | 0x80,
+        b(9),
+        b(10),
+        b(11),
+        b(12),
+        b(13),
+        b(14),
+        b(15)
+    )
+}
+
+/// A fresh key for a new stroke: the first one [`ink_creation_id`] mints that `taken` does not
+/// already hold.
+///
+/// The counter behind [`ink_creation_id`] starts at zero in every process, so a reopened workbook
+/// carries keys from the earlier process whose first fresh key is the same GUID again. Handing that
+/// key to a second stroke would put two `a16:creationId`s in one file and quietly break the map the
+/// key exists for. `taken` answers from the workbook's own strokes, a finite set, so the loop only
+/// moves the counter forward and ends.
+pub fn ink_creation_id_free(mut taken: impl FnMut(&str) -> bool) -> String {
+    loop {
+        let key = ink_creation_id(None);
+        if !taken(&key) {
+            return key;
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
     pub id: u32,
@@ -687,6 +911,10 @@ pub struct Shape {
     /// An equation's layout, rebuilt from `text` and never saved.
     #[serde(skip)]
     pub math: EquationCache,
+    /// A native Office ink stroke's brush; `None` for the legacy DrawingML polyline an older
+    /// GridCraft wrote (and for every non-ink shape).
+    #[serde(default)]
+    pub ink: Option<InkStyle>,
 }
 
 /// The laid-out form of an equation's LaTeX source. It is derived data: rebuilt by
@@ -1155,6 +1383,89 @@ mod tests {
         let legacy: Chart = serde_json::from_value(json).expect("deserialize legacy chart");
         assert_eq!(legacy.hole_size, 50, "documents saved before hole_size existed keep the old 50% hole");
         assert_eq!(chart.hole_size, 75, "new charts keep Excel's 75% default");
+    }
+
+    #[test]
+    fn ink_style_round_trips_through_json_and_older_shapes_default_to_none() {
+        let key = "{11111111-2222-4333-8444-555555555555}";
+        let shape = Shape {
+            id: 3,
+            kind: ShapeKind::Ink,
+            anchor: Anchor::default(),
+            fill: Color::Rgb(2 << 16),
+            line: Color::Rgb(0xA12BCD),
+            text: "0,0;40,20".into(),
+            format: ShapeFormat::default(),
+            math: EquationCache::default(),
+            ink: Some(InkStyle {
+                tool: InkTool::BrushPen,
+                width_cm: 0.35,
+                height_cm: 0.35,
+                effect: Some(InkEffect::Galaxy),
+                anchor: [-1_303.866_2, -1016.0],
+                scale: 0.5,
+                pressure: vec![0, 32_767],
+                order: 7,
+                key: Some(key.into()),
+            }),
+        };
+        let json = serde_json::to_string(&shape).expect("serialize ink");
+        let back: Shape = serde_json::from_str(&json).expect("deserialize ink");
+        assert_eq!(back, shape);
+        assert_eq!(back.ink.as_ref().and_then(|i| i.key.as_deref()), Some(key));
+
+        let mut legacy = serde_json::to_value(&shape).expect("serialize ink");
+        legacy.as_object_mut().expect("object").remove("ink");
+        let old: Shape = serde_json::from_value(legacy).expect("older shape");
+        assert!(old.ink.is_none(), "a shape saved before InkStyle keeps opening");
+
+        // With no serialized fields at all, InkStyle takes its usable defaults.
+        let bare: InkStyle = serde_json::from_str("{}").expect("bare ink style");
+        assert_eq!((bare.tool, bare.effect, bare.key), (InkTool::Pen, None, None));
+        assert_eq!(bare.scale, 1.0);
+        assert!(bare.width_cm > 0.0);
+    }
+
+    #[test]
+    fn ink_creation_id_keeps_a_valid_key_and_mints_unique_ones() {
+        let valid = "{11111111-2222-4333-8444-555555555555}";
+        assert_eq!(ink_creation_id(Some(valid)), valid);
+        let a = ink_creation_id(None);
+        let b = ink_creation_id(None);
+        assert_ne!(a, b);
+        for k in [a, b] {
+            assert!(k.starts_with('{') && k.ends_with('}'), "{k}");
+            assert_eq!(ink_guid(&k).as_deref(), Some(k.as_str()), "{k} is an ST_Guid");
+        }
+        // Anything that is not an ST_Guid is replaced rather than trusted...
+        for bad in ["{x}", "not a guid", &"x".repeat(200), "{11111111-2222-4333-8444-55555555555}", "{11111111-2222-4333-8444-5555555555555}"] {
+            assert_ne!(ink_creation_id(Some(bad)), bad);
+        }
+        // ...and a valid GUID in another case takes its canonical lowercase form, so one identity
+        // never becomes two.
+        let upper = "{ABCDEF01-2345-6789-ABCD-EF0123456789}";
+        assert_eq!(ink_guid(upper).as_deref(), Some("{abcdef01-2345-6789-abcd-ef0123456789}"));
+        assert_eq!(ink_creation_id(Some(upper)), "{abcdef01-2345-6789-abcd-ef0123456789}");
+        assert_eq!(ink_guid(" {abcdef01-2345-6789-abcd-ef0123456789} ").as_deref(), Some("{abcdef01-2345-6789-abcd-ef0123456789}"));
+    }
+
+    #[test]
+    fn a_new_key_is_minted_past_the_keys_the_workbook_already_holds() {
+        // A reopened workbook holds keys minted by an earlier process, whose counter started at
+        // zero: the first keys this process mints are very likely among them. Refusing the first
+        // three stands in for that workbook and pins the retry.
+        let mut held: Vec<String> = Vec::new();
+        let key = ink_creation_id_free(|k| {
+            let refuse = held.len() < 3;
+            if refuse {
+                held.push(k.to_string());
+            }
+            refuse
+        });
+        assert_eq!(held.len(), 3, "the mint retried past the keys the workbook holds");
+        assert!(!held.iter().any(|h| h == &key), "a held key was handed out again: {key}");
+        // A key nothing holds is used straight away.
+        assert!(!held.iter().any(|h| h == &ink_creation_id_free(|_| false)));
     }
 }
 

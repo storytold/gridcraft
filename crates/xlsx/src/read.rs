@@ -43,6 +43,12 @@ pub struct Ctx<'a> {
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
     /// The code of the workbook's Python cells, from its Python part.
     pub python: crate::python_part::ScriptsIn,
+    /// The `a16:creationId` keys ink strokes already hold in this read, across every sheet: two
+    /// ink parts that reuse a GUID must not import as two strokes with the same key.
+    pub ink_keys: std::collections::HashSet<String>,
+    /// The InkML parts `[Content_Types].xml` declares, read once per workbook: a package with
+    /// many drawings would otherwise re-read and re-parse the part for every one of them.
+    pub ink_parts: Option<std::collections::HashSet<String>>,
 }
 
 impl Ctx<'_> {
@@ -261,6 +267,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         shared_formula_bytes: 0,
         known_function,
         python: Default::default(),
+        ink_keys: Default::default(),
+        ink_parts: None,
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());

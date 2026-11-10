@@ -3067,6 +3067,37 @@ fn every_command_survives_empty_params() {
 }
 
 #[test]
+fn the_pen_gallery_refuses_more_than_its_limit() {
+    // The `draw.pens` spec says the gallery holds at most 1024 entries; `draw.addPen` enforces it.
+    let mut s = s();
+    s.ensure_draw_pens();
+    let template = s.draw_pens[0].clone();
+    while s.draw_pens.len() < crate::cmd::draw::MAX_DRAW_PENS {
+        let id = s.next_draw_pen_id();
+        s.draw_pens.push(crate::cmd::draw::DrawPen { id, ..template.clone() });
+    }
+    let error = s.execute("draw.addPen", json!({"brush": "pen"})).unwrap_err().to_string();
+    assert!(error.contains("at most 1024"), "{error}");
+}
+
+#[test]
+fn a_solid_colour_drops_the_pen_texture() {
+    let mut s = s();
+    s.execute("draw.pen", json!({"brush": "pen", "effect": "galaxy"})).expect("textured pen");
+    assert!(!s.draw_effect.is_empty());
+    s.execute("draw.pen", json!({"color": "#FF0000"})).expect("solid colour");
+    assert_eq!(s.draw_effect, "", "a solid colour replaces the texture");
+    assert_eq!(s.draw_color, "#FF0000");
+
+    let added = s.execute("draw.addPen", json!({"brush": "pen", "color": "#00FF00", "effect": "lava"})).expect("add pen");
+    let id = u32::try_from(added["pen"].as_u64().expect("pen id")).expect("id fits");
+    s.execute("draw.updatePen", json!({"id": id, "color": "#0000FF"})).expect("recolour");
+    let pen = s.draw_pens.iter().find(|pen| pen.id == id).expect("gallery pen");
+    assert_eq!(pen.effect, None, "the gallery entry loses the texture it replaced");
+    assert_eq!(pen.color, "#0000FF");
+}
+
+#[test]
 fn non_object_params_do_not_panic_in_wrapper_commands() {
     // Issue #516.
     for cmd in ["pageLayout.themeColors", "pageLayout.background", "home.drawBorder"] {
@@ -3522,10 +3553,313 @@ fn ink_strokes_and_ink_to_shape() {
     assert_eq!(sh.shapes[0].kind, gridcraft_model::ShapeKind::Ink);
     let r = s.execute("draw.inkToShape", json!({})).unwrap();
     assert_eq!(r["kind"], "Rectangle");
+    // The converted shape is no longer ink: its brush is cleared, so a save cannot write it back as
+    // a native InkML stroke.
+    let converted = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    assert!(converted.ink.is_none(), "ink cleared on conversion");
+    assert!(converted.text.is_empty(), "the trace text is cleared too");
     // An open stroke becomes a line.
     s.execute("draw.stroke", json!({"points": [[0.0, 0.0], [50.0, 10.0], [120.0, 30.0]]})).unwrap();
     assert_eq!(s.execute("draw.inkToShape", json!({})).unwrap()["kind"], "Line");
     assert!(s.execute("draw.stroke", json!({"points": [[1.0, 1.0]]})).is_err());
+}
+
+#[test]
+fn ink_brushes_store_their_tool_width_and_colour() {
+    use gridcraft_model::{Color, InkTool};
+    let cases = [
+        ("pen", 0.5f32, 0.05f32, 0.05f32),
+        ("pencil", 0.5, 0.05, 0.30),
+        ("highlighter", 4.0, 0.40, 0.80),
+        ("fountainPen", 2.5, 0.25, 0.25),
+        ("brushPen", 1.0, 0.10, 0.10),
+    ];
+    for (brush, mm, width_cm, height_cm) in cases {
+        let mut s = s();
+        s.execute("draw.stroke", json!({"points": [[10, 10], [60, 40]], "brush": brush, "width": mm, "color": "#A12BCD"})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+        let ink = sh.ink.clone().expect("a brush stroke has an InkStyle");
+        assert_eq!(ink.tool, crate::cmd::draw::parse_tool(brush).unwrap_or_default(), "{brush}");
+        assert!((ink.width_cm - width_cm).abs() < 1e-4, "{brush}: width {}", ink.width_cm);
+        assert!((ink.height_cm - height_cm).abs() < 1e-4, "{brush}: height {}", ink.height_cm);
+        assert_eq!(sh.line, Color::from_hex("#A12BCD").unwrap(), "{brush}");
+        assert_eq!(ink.effect, None);
+        assert_eq!(ink.pressure.len(), 0);
+        // The legacy width encoding still answers from the brush.
+        assert!((crate::cmd::draw::ink_width(&sh) - crate::cmd::draw::cm_to_px(width_cm)).abs() < 0.01);
+        if brush == "pencil" {
+            assert!((crate::cmd::draw::ink_height(&sh) - 6.0 * crate::cmd::draw::cm_to_px(width_cm)).abs() < 0.05);
+        }
+    }
+    // The tool's own steps are Excel's.
+    assert_eq!(crate::cmd::draw::widths_mm(InkTool::Pen), &[0.25, 0.35, 0.5, 1.0, 2.0, 3.5]);
+    assert_eq!(crate::cmd::draw::widths_mm(InkTool::Highlighter), &[2.0, 4.0, 6.0, 8.0, 10.0]);
+    // Every step is distinct: two stops both labelled "10 mm" made the slider's last position a
+    // dead one, and each brush's list must stay strictly increasing.
+    for tool in [InkTool::Pen, InkTool::Highlighter] {
+        let steps = crate::cmd::draw::widths_mm(tool);
+        assert!(steps.windows(2).all(|w| w[1] > w[0]), "{tool:?}: {steps:?}");
+    }
+
+    // A stroke is one undo step: undo empties the sheet of it in one go.
+    let mut undo = s();
+    let before = undo.doc().unwrap().undo.len();
+    undo.execute("draw.stroke", json!({"points": [[0, 0], [20, 20], [40, 0]], "brush": "fountainPen"})).unwrap();
+    assert_eq!(undo.doc().unwrap().undo.len(), before + 1);
+    undo.execute("edit.undo", json!({})).unwrap();
+    assert!(undo.doc().unwrap().wb.active().unwrap().shapes.is_empty());
+}
+
+#[test]
+fn ink_any_colour_effect_and_pressure_are_stored() {
+    use gridcraft_model::{InkEffect, InkTool};
+    let mut s = s();
+    // Any #RRGGBB, not only the four built-in pens.
+    s.execute("draw.stroke", json!({"points": [[5, 5], [50, 20]], "color": "#00C8FF"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    assert_eq!(sh.line, gridcraft_model::Color::from_hex("#00C8FF").unwrap());
+    assert_eq!(sh.ink.as_ref().map(|i| i.tool), Some(InkTool::Pen));
+
+    // A texture stores its effect, Excel's anchor/scale and the texture's base colour.
+    s.execute(
+        "draw.stroke",
+        json!({"points": [[100, 100], [180, 140]], "brush": "brushPen", "effect": "lava", "width": 1.0, "pressure": [0, 32767]}),
+    )
+    .unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[1].clone();
+    let ink = sh.ink.clone().unwrap();
+    assert_eq!(ink.tool, InkTool::BrushPen);
+    assert_eq!(ink.effect, Some(InkEffect::Lava));
+    assert_eq!(sh.line, gridcraft_model::Color::from_hex("#D94F1E").unwrap(), "a texture's base colour");
+    assert_eq!(ink.anchor, [-100.0, -100.0]);
+    assert!((ink.scale - 0.5).abs() < 1e-6);
+    assert_eq!(ink.pressure, vec![0, 32767]);
+    assert_eq!(ink.order, 1, "draw order follows the strokes");
+    // A solid stroke has scale 1 and no effect.
+    assert_eq!(sh.ink.as_ref().map(|i| i.scale), Some(0.5));
+    let first = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    assert_eq!(first.ink.as_ref().and_then(|i| i.effect), None);
+    assert_eq!(first.ink.as_ref().map(|i| i.scale), Some(1.0));
+
+    // Pressure keeps its position: out-of-range entries clamp, and a short vector stays short
+    // (the painter falls back wholesale rather than mixing recorded and invented values).
+    s.execute("draw.stroke", json!({"points": [[300, 10], [340, 20], [380, 30]], "pressure": [-5, 40000, 100]})).unwrap();
+    let clamped = s.doc().unwrap().wb.active().unwrap().shapes.last().cloned().unwrap();
+    assert_eq!(clamped.ink.as_ref().map(|i| i.pressure.clone()), Some(vec![0, 32767, 100]));
+    s.execute("draw.stroke", json!({"points": [[400, 10], [440, 20], [480, 30]], "pressure": [10, 20]})).unwrap();
+    let short = s.doc().unwrap().wb.active().unwrap().shapes.last().cloned().unwrap();
+    assert_eq!(short.ink.as_ref().map(|i| i.pressure.clone()), Some(vec![10, 20]));
+    // A stroke with no colour uses the pen in hand's colour, not pen blue.
+    s.execute("draw.pen", json!({"color": "#0A7B3E"})).unwrap();
+    s.execute("draw.stroke", json!({"points": [[500, 10], [540, 20]]})).unwrap();
+    let inherited = s.doc().unwrap().wb.active().unwrap().shapes.last().cloned().unwrap();
+    assert_eq!(inherited.line, gridcraft_model::Color::from_hex("#0A7B3E").unwrap());
+}
+
+#[test]
+fn ink_custom_pens_add_select_change_and_delete() {
+    let mut s = s();
+    // A default pen can be recoloured in place, but not deleted.
+    s.execute("draw.updatePen", json!({"id": 2, "color": "#112233"})).unwrap();
+    assert_eq!(s.draw_pens.iter().find(|p| p.id == 2).map(|p| p.color.as_str()), Some("#112233"));
+    assert!(s.execute("draw.deletePen", json!({"id": 2})).is_err(), "a default pen cannot be deleted");
+    let added = s.execute("draw.addPen", json!({"kind": "fountainPen", "color": "#0A7B3E", "width": 1.0, "effect": "gold"})).unwrap();
+    let id = added["pen"].as_u64().expect("an id");
+    assert_eq!(added["brush"], "fountainPen");
+    // Excel's six default pens come first; the new pen follows them.
+    assert_eq!(s.draw_pens.iter().filter(|p| p.id >= crate::cmd::draw::DEFAULT_PEN_COUNT).count(), 1);
+    assert_eq!(id, crate::cmd::draw::DEFAULT_PEN_COUNT as u64);
+    assert_eq!(s.draw_tool, "pen", "a new pen comes into hand");
+    assert_eq!(s.draw_color, "#0A7B3E");
+    assert_eq!(s.draw_effect, "gold");
+    // Another pen and selection by id.
+    let second = s.execute("draw.addPen", json!({"brush": "pencil"})).unwrap();
+    let second_id = second["pen"].as_u64().unwrap();
+    assert_ne!(id, second_id);
+    s.execute("draw.pen", json!({"color": "#D13B2F"})).unwrap();
+    s.execute("draw.pen", json!({"pen": id})).unwrap();
+    assert_eq!(s.draw_brush, "fountainPen");
+    assert_eq!(s.draw_color, "#0A7B3E");
+    assert_eq!(s.draw_effect, "gold");
+    // Change in place, and the pen in hand follows.
+    let changed = s.execute("draw.updatePen", json!({"id": id, "color": "#123456", "width": 2.0, "effect": "none"})).unwrap();
+    assert_eq!(changed["color"], "#123456");
+    assert_eq!(s.draw_color, "#123456");
+    assert_eq!(s.draw_effect, "");
+    assert!((s.draw_width - 2.0).abs() < 1e-6);
+    // Deleting the pen in hand puts the default back.
+    let del = s.execute("draw.deletePen", json!({"id": id})).unwrap();
+    assert_eq!(del["removed"], true);
+    assert!(s.draw_pens.iter().all(|p| p.id != id as u32));
+    assert_eq!(s.draw_brush, "pen");
+    assert_eq!(s.draw_color, "#1F5FC9");
+    assert!(s.execute("draw.pen", json!({"pen": id})).is_err(), "a deleted pen cannot be selected");
+}
+
+#[test]
+fn ink_commands_are_safe_with_hostile_params() {
+    let mut s = s();
+    // Bad types and values are refused, never a panic and never silently ignored. A wrong-typed
+    // width or pressure is an error now, as an invalid brush or colour already was.
+    assert!(s.execute("draw.pen", json!({"color": "not a colour"})).is_err());
+    assert!(s.execute("draw.pen", json!({"effect": "neon"})).is_err());
+    assert!(s.execute("draw.pen", json!({"brush": "laser"})).is_err());
+    assert!(s.execute("draw.pen", json!({"pen": 999})).is_err());
+    assert!(s.execute("draw.pen", json!({"width": "wide"})).is_err(), "a wrong-typed width is not ignored");
+    assert!(s.execute("draw.pen", json!({"width": null})).is_ok(), "a missing width keeps the pen's");
+    assert!(s.execute("draw.stroke", json!({"points": "nope"})).is_err());
+    assert!(s.execute("draw.stroke", json!({"points": [[1, 1]]})).is_err());
+    assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [10, 10]], "width": -4})).is_ok());
+    let clamped = s.doc().unwrap().wb.active().unwrap().shapes.last().cloned().unwrap();
+    assert!((clamped.ink.as_ref().map(|i| i.width_cm).unwrap_or(0.0) - 0.005).abs() < 1e-5, "a negative width clamps to the thinnest brush");
+    assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [10, 10]], "width": "wide"})).is_err());
+    assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [10, 10]], "effect": "sparkle"})).is_err());
+    assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [10, 10]], "pressure": "lots"})).is_err());
+    assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [10, 10]], "pressure": [1, "lots"]})).is_err());
+    assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [10, 10]], "pressure": [1, 2, 3]})).is_err());
+    assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [10, 10]], "color": "not a colour"})).is_err());
+    // A point past the InkML reader's sheet bound is refused, not stored as infinity.
+    assert!(s.execute("draw.stroke", json!({"points": [[0, 0], [1.0e9, 10]]})).is_err());
+    assert!(s.execute("draw.stroke", json!({"points": [[0, 0], ["x", 10]]})).is_err());
+    assert!(s.execute("draw.addPen", json!({"brush": "laser"})).is_err());
+    assert!(s.execute("draw.addPen", json!({"color": "#12"})).is_err());
+    assert!(s.execute("draw.deletePen", json!({})).is_err());
+    assert!(s.execute("draw.deletePen", json!({"id": 42})).is_err(), "an unknown id is the same error updatePen gives");
+    assert!(s.execute("draw.updatePen", json!({"id": 42})).is_err());
+}
+
+#[test]
+fn ink_a_rejected_pen_call_leaves_the_session_alone() {
+    // The session used to switch tool and brush before validating, so a rejected `draw.pen` still
+    // changed the pen being drawn with.
+    let mut s = s();
+    s.execute("draw.pen", json!({"brush": "highlighter", "color": "#123456", "width": 4.0})).unwrap();
+    let before = (s.draw_tool.clone(), s.draw_brush.clone(), s.draw_color.clone(), s.draw_width, s.draw_effect.clone());
+    assert!(s.execute("draw.pen", json!({"brush": "pencil", "color": "nope"})).is_err());
+    assert!(s.execute("draw.pen", json!({"brush": "pencil", "width": "wide"})).is_err());
+    assert!(s.execute("draw.pen", json!({"brush": "laser"})).is_err());
+    assert!(s.execute("draw.pen", json!({"pen": 999})).is_err());
+    assert!(s.execute("draw.pen", json!({"brush": "pencil", "effect": "neon"})).is_err());
+    assert_eq!((s.draw_tool.clone(), s.draw_brush.clone(), s.draw_color.clone(), s.draw_width, s.draw_effect.clone()), before);
+}
+
+#[test]
+fn ink_pen_ids_are_never_reused() {
+    // The id used to be `max + 1`, so deleting the newest pen and adding another reused its id.
+    let mut s = s();
+    let a = s.execute("draw.addPen", json!({"brush": "pencil"})).unwrap()["pen"].as_u64().unwrap();
+    s.execute("draw.deletePen", json!({"id": a})).unwrap();
+    let b = s.execute("draw.addPen", json!({"brush": "pencil"})).unwrap()["pen"].as_u64().unwrap();
+    assert_ne!(b, a, "a deleted pen's id stays retired");
+    assert!(b > a);
+}
+
+#[test]
+fn ink_pens_lists_the_gallery_in_the_pen_shape() {
+    let mut s = s();
+    let added = s.execute("draw.addPen", json!({"brush": "fountainPen", "color": "#0A7B3E", "width": 1.0, "effect": "gold"})).unwrap();
+    let listed = s.execute("draw.pens", json!({})).unwrap();
+    let pens = listed["pens"].as_array().expect("a pen list");
+    assert_eq!(pens.len(), crate::cmd::draw::DEFAULT_PEN_COUNT as usize + 1);
+    assert_eq!(pens.first(), Some(&json!({"pen": 0, "brush": "pen", "color": "#5B3EA8", "width": 0.5, "effect": "galaxy"})));
+    assert_eq!(pens.last(), Some(&added), "the list uses the same object addPen returns");
+    for pen in pens {
+        for key in ["pen", "brush", "color", "width", "effect"] {
+            assert!(pen.get(key).is_some(), "every pen has {key}: {pen}");
+        }
+    }
+}
+
+#[test]
+fn ink_names_accept_aliases_and_the_default_pens_are_excel_s() {
+    use gridcraft_model::{InkEffect, InkTool};
+    // Every alias the parser documents, whatever its case, underscores, dashes or spaces.
+    for (name, tool) in [
+        ("pen", InkTool::Pen),
+        ("Pencil", InkTool::Pencil),
+        ("HIGH_LIGHTER", InkTool::Highlighter),
+        ("fountain", InkTool::FountainPen),
+        ("fountain-pen", InkTool::FountainPen),
+        ("brush pen", InkTool::BrushPen),
+        ("brush", InkTool::BrushPen),
+    ] {
+        assert_eq!(crate::cmd::draw::parse_tool(name), Some(tool), "{name}");
+    }
+    for bad in ["", "laser", "fountainpens"] {
+        assert_eq!(crate::cmd::draw::parse_tool(bad), None, "{bad}");
+    }
+    // All eight textures, the two spellings of rose gold, and the none spellings.
+    for effect in InkEffect::ALL {
+        assert_eq!(crate::cmd::draw::parse_effect(effect.name()), Some(effect));
+        assert_eq!(crate::cmd::draw::parse_effect(effect.inkml_name()), Some(effect));
+    }
+    for none in ["", "none", "SOLID"] {
+        assert_eq!(crate::cmd::draw::parse_effect(none), None, "{none:?}");
+    }
+    assert_eq!(crate::cmd::draw::parse_effect("rose_gold"), Some(InkEffect::RoseGold));
+    // The six default pens: Galaxy, red, Pencil, Highlighter, Fountain Pen, Brush Pen.
+    let pens = crate::cmd::draw::default_pens();
+    let summary: Vec<(&str, &str, f32, Option<&str>)> =
+        pens.iter().map(|p| (p.tool.as_str(), p.color.as_str(), p.width, p.effect.as_deref())).collect();
+    assert_eq!(
+        summary,
+        vec![
+            ("pen", "#5B3EA8", 0.5, Some("galaxy")),
+            ("pen", "#D13B2F", 0.5, None),
+            ("pencil", "#767676", 0.5, None),
+            ("highlighter", "#F2E33A", 4.0, None),
+            ("fountainPen", "#1F3864", 0.5, None),
+            ("brushPen", "#2E7D4F", 0.5, None),
+        ]
+    );
+    assert_eq!(pens.iter().map(|p| p.id).collect::<Vec<_>>(), (0..6).collect::<Vec<_>>());
+}
+
+#[test]
+fn ink_every_tool_and_effect_survives_xlsx() {
+    use gridcraft_model::{InkEffect, InkTool};
+    let mut s = s();
+    let tools = [InkTool::Pen, InkTool::Pencil, InkTool::Highlighter, InkTool::FountainPen, InkTool::BrushPen];
+    let effects = [
+        None,
+        Some(InkEffect::Rainbow),
+        Some(InkEffect::Galaxy),
+        Some(InkEffect::Lava),
+        Some(InkEffect::Ocean),
+        Some(InkEffect::RoseGold),
+        Some(InkEffect::Gold),
+        Some(InkEffect::Silver),
+        Some(InkEffect::Bronze),
+    ];
+    let mut expected = Vec::new();
+    let mut row = 0;
+    for tool in tools {
+        for effect in effects {
+            let y = 10.0 + row as f64 * 24.0;
+            let mut params = json!({
+                "points": [[10.0, y], [80.0, y + 6.0]],
+                "brush": crate::cmd::draw::tool_name(tool),
+                "width": 0.5,
+                "color": "#204060",
+            });
+            if let Some(e) = effect {
+                params["effect"] = json!(crate::cmd::draw::effect_name(e));
+            }
+            s.execute("draw.stroke", params).unwrap();
+            expected.push((tool, effect));
+            row += 1;
+        }
+    }
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let mut reopened = Session::new();
+    reopened.execute("file.open", json!({"name": "brushes.xlsx", "base64": saved["base64"]})).unwrap();
+    let shapes = reopened.doc().unwrap().wb.active().unwrap().shapes.clone();
+    assert_eq!(shapes.len(), expected.len());
+    for (sh, (tool, effect)) in shapes.iter().zip(expected) {
+        let ink = sh.ink.as_ref().unwrap_or_else(|| panic!("{tool:?}/{effect:?} lost its InkStyle"));
+        assert_eq!(ink.tool, tool, "{tool:?}/{effect:?}");
+        assert_eq!(ink.effect, effect, "{tool:?}/{effect:?}");
+    }
 }
 
 #[test]

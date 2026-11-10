@@ -505,10 +505,21 @@ pub struct Session {
     pub macro_debug: Option<macros::debug::Debugger>,
     /// Where the macro recorder started (beside `recorder`, its buffer).
     pub macro_recording: Option<macros::recorder::RecordingStart>,
-    /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour and width.
+    /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour, brush kind, thickness in
+    /// millimetres and texture, and the person's own pens in the Drawing Tools gallery.
     pub draw_tool: String,
     pub draw_color: String,
     pub draw_width: f32,
+    /// The brush kind's [`InkTool`](gridcraft_model::InkTool) JSON name (`pen` by default).
+    pub draw_brush: String,
+    /// The textured pen's [`InkEffect`](gridcraft_model::InkEffect) JSON name, empty for a solid
+    /// stroke.
+    pub draw_effect: String,
+    /// Pens the person added with Draw ▸ Add Pen. A view setting, not saved in the file.
+    pub draw_pens: Vec<crate::cmd::draw::DrawPen>,
+    /// The next gallery pen id to hand out. It only ever grows, so deleting the newest pen and
+    /// adding another never reuses an id (a macro or a front end may still hold the old one).
+    pub draw_pen_next: u32,
     /// Review › Show Comments: the Comments pane is open.
     pub comments_pane: bool,
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
@@ -537,6 +548,25 @@ impl Session {
     pub fn new() -> Session {
         Session::default()
     }
+
+    /// Fills the Draw tab's gallery with Excel's default pens the first time it is shown or a draw
+    /// command changes it (they are view state, never saved in the workbook).
+    pub fn ensure_draw_pens(&mut self) {
+        if self.draw_pens.is_empty() {
+            self.draw_pens = cmd::draw::default_pens();
+            self.draw_pen_next = cmd::draw::DEFAULT_PEN_COUNT;
+        }
+    }
+
+    /// The next gallery pen id: one past the highest id this session has ever handed out, so an
+    /// id is never reused after its pen is deleted.
+    pub fn next_draw_pen_id(&mut self) -> u32 {
+        let highest = self.draw_pens.iter().map(|p| p.id).max().unwrap_or(0).saturating_add(1);
+        let id = self.draw_pen_next.max(highest).max(cmd::draw::DEFAULT_PEN_COUNT);
+        self.draw_pen_next = id.saturating_add(1);
+        id
+    }
+
     pub fn documents(&self) -> &[DocState] {
         &self.docs
     }

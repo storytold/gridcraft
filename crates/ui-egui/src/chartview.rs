@@ -10,6 +10,80 @@ use crate::SheetApp;
 use crate::grid::Geo;
 use crate::theme::{self, Tokens};
 
+/// A stroke's parsed screen points, and the hash of the text they were parsed from.
+type CachedPoints = (u64, std::rc::Rc<Vec<[f32; 2]>>);
+
+thread_local! {
+    /// Parsed ink points per shape id, with the hash of the text they came from. `paint_objects`
+    /// runs every frame; splitting `Shape::text` and allocating a `Vec` per stroke per frame was
+    /// pure waste, and the cache is small and cleared past a cap.
+    static INK_POINTS: std::cell::RefCell<std::collections::HashMap<u32, CachedPoints>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// How many strokes the parsed-point cache holds before it is dropped wholesale.
+const INK_POINTS_CACHE: usize = 4096;
+
+fn text_hash(text: &str) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    h.finish()
+}
+
+/// A stroke's parsed points, reused across frames until its text changes.
+fn cached_ink_points(sp: &gridcraft_engine::model::Shape) -> std::rc::Rc<Vec<[f32; 2]>> {
+    let hash = text_hash(&sp.text);
+    if let Some(hit) = INK_POINTS.with(|c| c.borrow().get(&sp.id).filter(|(h, _)| *h == hash).map(|(_, p)| p.clone())) {
+        return hit;
+    }
+    let pts = std::rc::Rc::new(gridcraft_engine::cmd::draw::ink_points(sp));
+    INK_POINTS.with(|c| {
+        let mut cache = c.borrow_mut();
+        if cache.len() >= INK_POINTS_CACHE {
+            cache.clear();
+        }
+        cache.insert(sp.id, (hash, pts.clone()));
+    });
+    pts
+}
+
+/// The indices of the points a screen keeps: the first and last always, the rest only when they
+/// are at least a pixel from the previous kept point.
+fn decimate_indices(pts: &[Pos2]) -> Vec<usize> {
+    if pts.len() <= 2 {
+        return (0..pts.len()).collect();
+    }
+    let mut kept = Vec::with_capacity(pts.len());
+    kept.push(0);
+    let mut last = pts[0];
+    for (index, p) in pts.iter().enumerate().take(pts.len() - 1).skip(1) {
+        if last.distance(*p) >= 1.0 {
+            kept.push(index);
+            last = *p;
+        }
+    }
+    kept.push(pts.len() - 1);
+    kept
+}
+
+/// Points closer than a screen pixel are dropped (the first and last kept): a long stroke would
+/// otherwise emit one segment per stored point every frame, thousands of them.
+fn decimate(pts: Vec<Pos2>) -> Vec<Pos2> {
+    decimate_indices(&pts).into_iter().map(|index| pts[index]).collect()
+}
+
+/// Decimates a stroke's points while keeping its pressure aligned: a complete array loses exactly
+/// the entries of the dropped points, and a short array stays short so the painter keeps its
+/// fallback taper (CodeRabbit, #3599).
+fn decimate_with_pressure(pts: &[Pos2], pressure: &[u16]) -> (Vec<Pos2>, Vec<u16>) {
+    let kept = decimate_indices(pts);
+    let points: Vec<Pos2> = kept.iter().map(|&index| pts[index]).collect();
+    let pressure =
+        if pressure.len() == pts.len() { kept.iter().filter_map(|&index| pressure.get(index).copied()).collect() } else { pressure.to_vec() };
+    (points, pressure)
+}
+
 fn rgba(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
 }
@@ -316,13 +390,29 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                 p.add(PathShape::convex_polygon(vec![pos2(r.center().x, r.top()), r.right_bottom(), r.left_bottom()], fill, Stroke::new(1.0, line)));
             }
             ShapeKind::Ink => {
-                let pt = gridcraft_engine::cmd::draw::ink_width(sp);
-                let w = pt * geo.z;
-                let pts: Vec<Pos2> =
-                    gridcraft_engine::cmd::draw::ink_points(sp).iter().map(|q| pos2(r.left() + q[0] * geo.z, r.top() + q[1] * geo.z)).collect();
-                if pts.len() >= 2 {
-                    let col = ink_color(line, pt);
-                    p.add(PathShape::line(pts, PathStroke::new(w, col)));
+                let raw = cached_ink_points(sp);
+                let mut pts: Vec<Pos2> = raw.iter().map(|q| pos2(r.left() + q[0] * geo.z, r.top() + q[1] * geo.z)).collect();
+                // A one-point trace (an InkML dot) is still ink: paint it as a dab, not nothing.
+                if pts.len() == 1 {
+                    let w = if sp.ink.is_some() { gridcraft_engine::cmd::draw::ink_height(sp) } else { gridcraft_engine::cmd::draw::ink_width(sp) };
+                    p.circle_filled(pts[0], (w * geo.z).max(1.0) / 2.0, line);
+                } else if pts.len() >= 2 {
+                    let (kept, pressure) = match &sp.ink {
+                        Some(ink) => {
+                            let (kept, pressure) = decimate_with_pressure(&pts, &ink.pressure);
+                            (kept, pressure)
+                        }
+                        None => (decimate(pts), Vec::new()),
+                    };
+                    pts = kept;
+                    if let Some(ink) = &sp.ink {
+                        paint_ink(p, &pts, &pressure, sp, ink, line, geo.z);
+                    } else {
+                        let pt = gridcraft_engine::cmd::draw::ink_width(sp);
+                        let w = pt * geo.z;
+                        let col = ink_color(line, pt);
+                        p.add(PathShape::line(pts, PathStroke::new(w, col)));
+                    }
                 }
                 label = false;
             }
@@ -582,11 +672,203 @@ pub(crate) fn ink_color(line: Color32, width_pt: f32) -> Color32 {
     if width_pt > 8.0 { line.gamma_multiply(0.45) } else { line }
 }
 
+/// Paints an [`InkStyle`] stroke: a wide translucent band for a Highlighter, a slightly
+/// translucent flat line for a Pencil and a pressure-tapered stroke for the Fountain and Brush
+/// pens (recorded pressure when it covers every point, a smooth taper otherwise). A textured pen
+/// carries its effect's bands along the stroke, phased by the stroke's anchor, so it reads as
+/// textured and is stable from frame to frame.
+fn paint_ink(
+    p: &Painter,
+    pts: &[Pos2],
+    pressure: &[u16],
+    sp: &gridcraft_engine::model::Shape,
+    ink: &gridcraft_engine::model::InkStyle,
+    line: Color32,
+    z: f32,
+) {
+    use gridcraft_engine::model::InkTool;
+    let width = gridcraft_engine::cmd::draw::ink_width(sp) * z;
+    let tall = gridcraft_engine::cmd::draw::ink_height(sp) * z;
+    let translucent = |c: Color32, a: u8| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a);
+    if let Some(effect) = ink.effect {
+        match ink.tool {
+            InkTool::Highlighter => {
+                // One translucent pass: the bands carry the highlighter's opacity themselves, so no
+                // second translucent band underneath (that would darken the ink and double-cover cells).
+                paint_ink_texture(p, pts, tall, effect, ink.anchor, z, Some(115));
+            }
+            InkTool::FountainPen | InkTool::BrushPen => {
+                // Same per-segment widths as an untapered tapered stroke; only the colour is textured.
+                paint_tapered_texture(p, pts, width, pressure, effect, ink.anchor, z);
+            }
+            InkTool::Pencil => {
+                for pair in pts.windows(2) {
+                    p.line_segment([pair[0], pair[1]], Stroke::new((width * 0.8).max(1.0), translucent(line, 215)));
+                }
+                paint_ink_texture(p, pts, width * 0.8, effect, ink.anchor, z, None);
+            }
+            InkTool::Pen => {
+                paint_ink_texture(p, pts, width, effect, ink.anchor, z, None);
+            }
+        }
+        return;
+    }
+    match ink.tool {
+        InkTool::Highlighter => {
+            p.add(PathShape::line(pts.to_vec(), PathStroke::new(tall.max(2.0), translucent(line, 115))));
+        }
+        InkTool::Pencil => {
+            // Flat and a touch translucent, like graphite.
+            for pair in pts.windows(2) {
+                p.line_segment([pair[0], pair[1]], Stroke::new((width * 0.8).max(1.0), translucent(line, 215)));
+            }
+        }
+        InkTool::FountainPen | InkTool::BrushPen => paint_tapered(p, pts, width, pressure, line),
+        InkTool::Pen => {
+            p.add(PathShape::line(pts.to_vec(), PathStroke::new(width.max(1.0), line)));
+        }
+    }
+}
+
+/// The pen the live preview draws with: the Draw tab's brush, colour, thickness and texture.
+pub(crate) struct PreviewPen<'a> {
+    pub brush: &'a str,
+    pub color: &'a str,
+    pub width_mm: f32,
+    pub effect: &'a str,
+}
+
+/// Paints the stroke being drawn exactly as [`paint_ink`] will paint it once committed: the same
+/// brush, width, texture, taper and translucency, so the live preview cannot drift from the ink
+/// (#1786: it used to be a solid full-width line whatever the pen or effect).
+pub(crate) fn paint_ink_preview(p: &Painter, pts: &[Pos2], pen: &PreviewPen<'_>, theme: &gridcraft_engine::model::Theme, z: f32) {
+    use gridcraft_engine::model::{InkEffect, InkStyle, InkTool};
+    let (brush, color, width_mm, effect) = (pen.brush, pen.color, pen.width_mm, pen.effect);
+    if pts.len() < 2 {
+        return;
+    }
+    let tool = gridcraft_engine::cmd::draw::parse_tool(brush).unwrap_or(InkTool::Pen);
+    let (width_cm, height_cm) = gridcraft_engine::cmd::draw::ink_size_cm(tool, width_mm);
+    let line = gridcraft_engine::model::Color::from_hex(color)
+        .and_then(|c| c.resolve(theme))
+        .map(theme::color32)
+        .unwrap_or(Color32::from_rgb(0x1F, 0x5F, 0xC9));
+    let shade = gridcraft_engine::model::Shape {
+        id: 0,
+        kind: ShapeKind::Ink,
+        anchor: Anchor::default(),
+        fill: gridcraft_engine::model::Color::Auto,
+        line: gridcraft_engine::model::Color::Auto,
+        text: String::new(),
+        format: Default::default(),
+        math: Default::default(),
+        ink: Some(InkStyle { tool, width_cm, height_cm, effect: InkEffect::from_name(effect), ..InkStyle::default() }),
+    };
+    let Some(ink) = shade.ink.as_ref() else { return };
+    let (points, pressure) = decimate_with_pressure(pts, &ink.pressure);
+    paint_ink(p, &points, &pressure, &shade, ink, line, z);
+}
+
+/// A point's width factor from the stroke's pressure: the recorded value when the vector covers
+/// every point, else a smooth swell along the stroke (mixing recorded values with the fallback
+/// would leave a width jump where they end).
+fn pressure_factor(pressure: &[u16], n: usize, i: usize) -> f32 {
+    if pressure.len() != n {
+        let t = if n > 1 { i as f32 / (n - 1) as f32 } else { 0.0 };
+        return 0.35 + 0.65 * (std::f32::consts::PI * t).sin();
+    }
+    pressure.get(i).map_or(1.0, |v| (*v as f32 / 32767.0).clamp(0.05, 1.0))
+}
+
+/// A pressure-tapered line: each point's pressure sets the segment's width, and a stroke without
+/// recorded pressure gets a smooth swell instead.
+fn paint_tapered(p: &Painter, pts: &[Pos2], width: f32, pressure: &[u16], color: Color32) {
+    let n = pts.len();
+    if n < 2 {
+        return;
+    }
+    for (i, pair) in pts.windows(2).enumerate() {
+        let w = width * (pressure_factor(pressure, n, i) + pressure_factor(pressure, n, i + 1)) / 2.0;
+        p.line_segment([pair[0], pair[1]], Stroke::new(w.max(1.0), color));
+    }
+}
+
+/// The period of a texture's bands along a stroke `width` points across.
+fn band_period(width: f32) -> f32 {
+    (width.max(2.0) * 1.7).max(3.0)
+}
+
+/// The band a texture shows at `travelled` along the stroke.
+fn band_at(bands: &[Color32], period: f32, travelled: f32) -> Color32 {
+    let idx = ((travelled / period).rem_euclid(bands.len() as f32)) as usize;
+    bands.get(idx).copied().unwrap_or(Color32::GRAY)
+}
+
+/// Lays an effect's palette along the stroke in bands: a deterministic texture whose phase comes
+/// from the stroke's InkML anchor (so it is a property of the ink, not of the frame).
+/// `alpha` tints each band translucent (a textured highlighter); `None` paints opaque bands.
+fn paint_ink_texture(p: &Painter, pts: &[Pos2], width: f32, effect: gridcraft_engine::model::InkEffect, anchor: [f32; 2], z: f32, alpha: Option<u8>) {
+    let bands = crate::pen_icon::effect_colors(effect.name());
+    if bands.is_empty() || pts.len() < 2 {
+        return;
+    }
+    let period = band_period(width);
+    let mut travelled = (anchor[0] + anchor[1]) * 0.05 * z;
+    for pair in pts.windows(2) {
+        let band = band_at(bands, period, travelled);
+        let band = match alpha {
+            Some(a) => Color32::from_rgba_unmultiplied(band.r(), band.g(), band.b(), a),
+            None => band,
+        };
+        p.line_segment([pair[0], pair[1]], Stroke::new(width.max(1.0), band));
+        travelled += (pair[1] - pair[0]).length();
+    }
+}
+
+/// A textured Fountain or Brush Pen: the same per-segment widths `paint_tapered` uses, with the
+/// effect's bands as the colour instead of the pen colour.
+fn paint_tapered_texture(
+    p: &Painter,
+    pts: &[Pos2],
+    width: f32,
+    pressure: &[u16],
+    effect: gridcraft_engine::model::InkEffect,
+    anchor: [f32; 2],
+    z: f32,
+) {
+    let bands = crate::pen_icon::effect_colors(effect.name());
+    if bands.is_empty() || pts.len() < 2 {
+        return;
+    }
+    let period = band_period(width);
+    let n = pts.len();
+    let mut travelled = (anchor[0] + anchor[1]) * 0.05 * z;
+    for (i, pair) in pts.windows(2).enumerate() {
+        let band = band_at(bands, period, travelled);
+        let w = width * (pressure_factor(pressure, n, i) + pressure_factor(pressure, n, i + 1)) / 2.0;
+        p.line_segment([pair[0], pair[1]], Stroke::new(w.max(1.0), band));
+        travelled += (pair[1] - pair[0]).length();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use gridcraft_chart::Measure;
 
     use super::*;
+
+    /// A decimated stroke keeps its pressure aligned with the points it kept, and a short array
+    /// stays short so the painter still tapers the whole stroke (CodeRabbit, #3599).
+    #[test]
+    fn decimating_a_stroke_keeps_its_pressure_aligned() {
+        let pts = [egui::pos2(0.0, 0.0), egui::pos2(0.2, 0.0), egui::pos2(5.0, 0.0)];
+        let pressure = [100u16, 20_000, 30_000];
+        let (kept, kept_pressure) = decimate_with_pressure(&pts, &pressure);
+        assert_eq!(kept, vec![egui::pos2(0.0, 0.0), egui::pos2(5.0, 0.0)]);
+        assert_eq!(kept_pressure, vec![100, 30_000], "each kept point keeps its own pressure");
+        let (_, short) = decimate_with_pressure(&pts, &pressure[..2]);
+        assert_eq!(short.len(), 2, "a short array is not padded");
+    }
 
     /// The production measure is not monotone for labels with a line break: egui lays the text out
     /// line by line, so ending a prefix with `\n…` can be narrower than the shorter `iii…`. The
@@ -606,5 +888,29 @@ mod tests {
             out.textures_delta.clear();
         }
         assert!(checked);
+    }
+
+    /// `draw.stroke` truncates a long pressure array to the points but never pads a short one, and a
+    /// reopened workbook can carry one too. Painting the recorded prefix and tapering the rest
+    /// jumps the width where they meet, so a partial array has to paint like no array at all.
+    #[test]
+    fn a_partial_pressure_array_tapers_the_whole_stroke() {
+        let ctx = egui::Context::default();
+        let pts = [pos2(0.0, 0.0), pos2(10.0, 0.0), pos2(20.0, 0.0), pos2(30.0, 0.0)];
+        let widths = |pressure: &[u16]| -> Vec<f32> {
+            let mut out = ctx.run_ui(Default::default(), |ui| paint_tapered(ui.painter(), &pts, 10.0, pressure, Color32::WHITE));
+            out.textures_delta.clear();
+            out.shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::LineSegment { stroke, .. } => Some(stroke.width),
+                    _ => None,
+                })
+                .collect()
+        };
+        let tapered = widths(&[]);
+        assert_eq!(tapered.len(), 3, "one segment per point pair");
+        assert_eq!(widths(&[32767, 32767]), tapered, "a short array tapers like none");
+        assert_eq!(widths(&[32767; 4]), vec![10.0; 3], "a full array sets every point's width");
     }
 }

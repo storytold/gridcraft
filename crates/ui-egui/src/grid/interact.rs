@@ -242,14 +242,26 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                         ))
                     })
                     .collect();
-                // The line under the pointer is the ink the stroke will commit (#1786).
+                // The line under the pointer is the ink the stroke will commit (#1786): painted by
+                // the same code as committed ink, so brush, texture and taper match.
                 let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
-                let (color, width) = pen_ink(&app.session.draw_color, app.session.draw_width, &theme);
-                input.ui.painter().add(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(width * geo.z, color)));
+                crate::chartview::paint_ink_preview(
+                    input.ui.painter(),
+                    &pts,
+                    &crate::chartview::PreviewPen {
+                        brush: &app.session.draw_brush,
+                        color: &app.session.draw_color,
+                        width_mm: app.session.draw_width,
+                        effect: &app.session.draw_effect,
+                    },
+                    &theme,
+                    geo.z,
+                );
             }
             if resp.drag_stopped() && app.grid.ink.len() >= 2 {
                 let pts: Vec<[f32; 2]> = std::mem::take(&mut app.grid.ink);
-                let _ = app.run("draw.stroke", json!({"points": pts}));
+                // A rejected stroke (too many points, outside the sheet) must not vanish silently.
+                app.run_or_alert("draw.stroke", json!({"points": pts}));
             }
             return true;
         }
@@ -264,17 +276,6 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
         }
     }
     false
-}
-
-/// The colour and width (points) of the ink a pen stroke commits, as `draw.stroke` stores it (the
-/// pen's colour, pen blue by default; its width, 2 pt by default, kept to 0.5–40 pt and stored
-/// whole) and as Ink shapes paint it (a highlighter, over 8 pt, is translucent).
-pub(crate) fn pen_ink(color: &str, width: f32, theme: &gridcraft_engine::model::Theme) -> (Color32, f32) {
-    let pen_blue = gridcraft_engine::model::Color::rgb(0x1F, 0x5F, 0xC9);
-    let line = gridcraft_engine::model::Color::from_hex(color).unwrap_or(pen_blue);
-    let width = if width <= 0.0 { 2.0 } else { width }.clamp(0.5, 40.0).round().max(1.0);
-    let color = line.resolve(theme).map(crate::theme::color32).unwrap_or(Color32::from_rgb(0x1F, 0x5F, 0xC9));
-    (crate::chartview::ink_color(color, width), width)
 }
 
 fn handle_header_autofit(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
@@ -1159,21 +1160,4 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
     ed.point_cell = Some(to);
     ed.point_anchor = Some((sheet, anchor));
     app.grid.ensure_visible = true;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_pen_preview_is_the_ink_the_stroke_commits() {
-        // #1786: the preview was always blue at 2 pt, whatever the pen.
-        let theme = gridcraft_engine::model::Theme::default();
-        assert_eq!(pen_ink("#C00000", 3.0, &theme), (Color32::from_rgb(0xC0, 0, 0), 3.0));
-        assert_eq!(pen_ink("", 0.0, &theme), (Color32::from_rgb(0x1F, 0x5F, 0xC9), 2.0), "no pen chosen yet: pen blue, 2 pt");
-        assert_eq!(pen_ink("not a colour", 0.2, &theme), (Color32::from_rgb(0x1F, 0x5F, 0xC9), 1.0));
-        // A highlighter is wide and translucent, as the committed ink is painted.
-        let (c, w) = pen_ink("#FFFF00", 12.0, &theme);
-        assert_eq!((c, w), (Color32::from_rgb(0xFF, 0xFF, 0).gamma_multiply(0.45), 12.0));
-    }
 }

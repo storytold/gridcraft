@@ -2514,3 +2514,31 @@ fn a_step_that_deletes_a_form_control_after_a_partial_footprint_is_caught() {
     s.execute("macro.run", json!({"name": "Drop", "inputs": "A1", "overwrite": true})).unwrap();
     assert!(s.doc().unwrap().wb.active().unwrap().controls.is_empty());
 }
+
+#[test]
+fn a_dry_run_puts_the_pen_gallery_and_the_pen_in_hand_back() {
+    // The Draw tab's tool, brush, colour, width, texture, gallery and next id are session state a
+    // dry run can change; none of it may leak out of `macro.check`.
+    let mut s = s();
+    s.execute("draw.pen", json!({"brush": "highlighter", "color": "#123456", "width": 4.0, "effect": "ocean"})).unwrap();
+    let (pens, next) = (s.draw_pens.clone(), s.draw_pen_next);
+    let before = (s.draw_tool.clone(), s.draw_brush.clone(), s.draw_color.clone(), s.draw_width, s.draw_effect.clone());
+    put(
+        &mut s,
+        json!({"name": "Pens", "steps": [
+            {"command": "draw.addPen", "params": {"brush": "pencil", "color": "#00FF00"}},
+            {"command": "draw.pen", "params": {"pen": 1}},
+            {"command": "draw.updatePen", "params": {"id": 2, "color": "#0000FF"}}
+        ]}),
+    );
+    s.execute("macro.check", json!({"name": "Pens"})).unwrap();
+    assert_eq!(s.draw_pens, pens, "the gallery is put back");
+    assert_eq!(s.draw_pen_next, next, "a dry run does not consume pen ids");
+    assert_eq!((s.draw_tool.clone(), s.draw_brush.clone(), s.draw_color.clone(), s.draw_width, s.draw_effect.clone()), before);
+    // And the real run does change them: one more pen, the Red pen in hand, the Pencil recoloured.
+    s.execute("macro.run", json!({"name": "Pens"})).unwrap();
+    assert_eq!(s.draw_pens.len(), pens.len() + 1);
+    assert_eq!(s.draw_brush, "pen");
+    assert_eq!(s.draw_pens[1].color, "#D13B2F", "step 2 selected the Red pen");
+    assert_eq!(s.draw_pens[2].color, "#0000FF", "step 3 recoloured the Pencil");
+}

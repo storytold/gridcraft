@@ -17,6 +17,15 @@ use crate::tables::EMU_PER_PX;
 use crate::xml::{El, esc, esc_attr};
 
 mod ink;
+mod inkml;
+
+pub(crate) use inkml::{CT as CT_INKML, Parts as InkParts};
+pub use inkml::{MAX_SAVE_INK_PIXELS, creation_id};
+
+/// The InkML part and fallback picture for a native ink stroke (see [`inkml`]).
+pub(crate) fn ink_parts(shape: &Shape, theme: &Theme, budget: &mut u64) -> Option<InkParts> {
+    inkml::parts(shape, theme, budget)
+}
 
 // ---------------------------------------------------------------- reading
 
@@ -126,33 +135,56 @@ fn mime_for(name: &str) -> &'static str {
     }
 }
 
+/// Reads a sheet's drawing part into the sheet: pictures, charts, shapes, equations and native ink.
 pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(), IoError> {
     let Some(x) = cx.optional_xml(part)? else { return Ok(()) };
     let rels = cx.pkg.rels(part)?;
+    // Ink parts are only trusted when `[Content_Types].xml` declares them as InkML; the
+    // declarations are read the first time a drawing actually carries a `contentPart`.
+    let mut ink_parts: Option<std::collections::HashSet<String>> = None;
     for (n, a) in x.children.iter().enumerate() {
         let Some(anchor) = read_anchor(a, sheet) else { continue };
         let n = n + 1;
-        // Objects in markup-compatibility blocks: the first choice (chartex frames, or Office Math
-        // that converts to LaTeX), else the fallback.
-        let objs: Vec<&El> = a
-            .children
-            .iter()
-            .flat_map(|o| match o.name.as_str() {
-                "AlternateContent" => o
-                    .child("Choice")
-                    .filter(|c| {
-                        // Office Math is taken only when the box holds one equation that
-                        // converts: otherwise the fallback (a picture or text from the writer)
-                        // keeps everything visible.
-                        c.child("graphicFrame").is_some()
-                            || c.child("sp").and_then(|sp| sp.child("txBody")).and_then(crate::omml::equation_source).is_some()
-                    })
-                    .or_else(|| o.child("Fallback"))
-                    .map(|c| c.children.iter().collect())
-                    .unwrap_or_default(),
-                _ => vec![o],
-            })
-            .collect();
+        // A native ink stroke is an `xdr:contentPart` in the choice; its fallback picture is read
+        // only when the ink part itself cannot be used, so it never turns into a second object.
+        let mut content_part: Option<&El> = None;
+        let mut objs: Vec<&El> = Vec::new();
+        for o in &a.children {
+            if o.name != "AlternateContent" {
+                objs.push(o);
+                continue;
+            }
+            let choice = o.child("Choice");
+            if let Some(cp) = choice.and_then(|c| c.child("contentPart")) {
+                content_part = Some(cp);
+                continue;
+            }
+            // The first choice (chartex frames, or Office Math that converts to LaTeX), else the
+            // fallback: Office Math is taken only when the box holds one equation that converts,
+            // otherwise the fallback keeps everything visible.
+            let takes_choice = choice.is_some_and(|c| {
+                c.child("graphicFrame").is_some() || c.child("sp").and_then(|sp| sp.child("txBody")).and_then(crate::omml::equation_source).is_some()
+            });
+            if let Some(c) = if takes_choice { choice } else { o.child("Fallback") } {
+                objs.extend(c.children.iter());
+            }
+        }
+        if let Some(cp) = content_part {
+            let declared = ink_parts.get_or_insert_with(|| inkml::declared_parts(cx));
+            let strokes = inkml::read(cx, &rels, cp, sheet, anchor, declared);
+            if !strokes.is_empty() {
+                for s in strokes {
+                    let id = cx.next_object_id();
+                    sheet.shapes.push(Shape { id, ..s });
+                }
+                continue;
+            }
+            cx.warn(format!("an ink part could not be read, so its fallback was used ({part}, object {n})"));
+            objs.clear();
+            if let Some(fb) = a.children.iter().find(|o| o.name == "AlternateContent").and_then(|o| o.child("Fallback")) {
+                objs.extend(fb.children.iter());
+            }
+        }
         for obj in objs {
             match obj.name.as_str() {
                 "pic" => {
@@ -258,6 +290,7 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
             text,
             format: Default::default(),
             math: Default::default(),
+            ink: None,
         });
     }
     let fill = sp.child("solidFill").and_then(dml_color).unwrap_or_default();
@@ -265,7 +298,7 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     let text = obj.child("txBody").map(body_text).unwrap_or_default();
     let mut format = read_text_format(obj.child("txBody"));
     format.no_line = ln.is_some_and(|l| l.child("noFill").is_some());
-    Some(Shape { id: 0, kind, anchor, fill, line, text, format, math: Default::default() })
+    Some(Shape { id: 0, kind, anchor, fill, line, text, format, math: Default::default(), ink: None })
 }
 
 /// A shape's text formatting: vertical anchor (`a:bodyPr anchor`), the first paragraph's
@@ -383,6 +416,21 @@ fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
     }
 }
 
+/// A native ink stroke: the `xdr:contentPart` choice (an InkML part) plus the picture fallback
+/// Excel requires. The anchor's `from`/`to` and `xdr14:xfrm` describe the same box.
+fn write_ink(s: &mut String, sh: &Shape, id: usize, sheet: &Sheet, refs: &InkRefs) {
+    let name = id.saturating_sub(1);
+    let _ = write!(
+        s,
+        "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><mc:Choice xmlns:xdr14=\"http://schemas.microsoft.com/office/excel/2010/spreadsheetDrawing\" xmlns:aink=\"http://schemas.microsoft.com/office/drawing/2016/ink\" Requires=\"xdr14 aink\"><xdr:contentPart xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:id=\"{}\"><xdr14:nvContentPartPr><xdr14:cNvPr id=\"{id}\" name=\"Ink {name}\"><a:extLst><a:ext uri=\"{{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}}\"><a16:creationId xmlns:a16=\"http://schemas.microsoft.com/office/drawing/2014/main\" id=\"{}\"/></a:ext></a:extLst></xdr14:cNvPr><xdr14:cNvContentPartPr/></xdr14:nvContentPartPr><xdr14:nvPr macro=\"\"/>{}</xdr:contentPart></mc:Choice><mc:Fallback><xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{id}\" name=\"Ink {name}\"/><xdr:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed=\"{}\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic></mc:Fallback></mc:AlternateContent>",
+        refs.content,
+        esc_attr(&refs.creation_id),
+        inkml::xfrm_xml(sh, sheet),
+        refs.image,
+        xfrm(&sh.anchor, "a:xfrm")
+    );
+}
+
 /// The paragraphs of an equation's plain text, one per line of `text`, each a run with `rpr` as
 /// its properties: the fallback body, and the body of an equation outside the Office Math subset.
 fn plain_paragraphs(text: &str, rpr: &str) -> String {
@@ -444,11 +492,22 @@ pub fn srgb(c: &Color, theme: &Theme) -> Option<String> {
     Some(format!("<a:srgbClr val=\"{r:02X}{g:02X}{b:02X}\"/>"))
 }
 
+/// Relationship ids and the creation id of a native ink stroke's parts.
+pub struct InkRefs {
+    /// The InkML part (`customXml` relationship).
+    pub content: String,
+    /// The fallback picture (`image` relationship).
+    pub image: String,
+    pub creation_id: String,
+}
+
 /// One drawing object to write.
 pub enum Obj<'a> {
     Image(&'a Image, String),
     Chart(&'a gridcraft_model::Chart, String),
     Shape(&'a Shape),
+    /// A native ink stroke whose InkML and PNG parts are already written.
+    Ink(&'a Shape, InkRefs),
 }
 
 /// The drawing part for a sheet's objects (relationship ids already assigned).
@@ -502,6 +561,12 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                 close_tag = close;
                 s.push_str(&open);
                 write_equation(&mut s, sh, id, theme);
+            }
+            Obj::Ink(sh, refs) => {
+                let (open, close) = anchor_open(sheet, &sh.anchor);
+                close_tag = close;
+                s.push_str(&open);
+                write_ink(&mut s, sh, id, sheet, refs);
             }
             Obj::Shape(sh) => {
                 let (open, close) = anchor_open(sheet, &sh.anchor);

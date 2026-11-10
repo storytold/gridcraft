@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-08 · **Change:** minor (§17: Excel's compact ink traces decode and its brush decides the tool, not the pressure channel; earlier: native Office InkML ink in xlsx; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -153,8 +153,14 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   conversion; cloud storage requested (#86). **Estimate:** 35–55 h (co-authoring scope needs the owner).
 
 ### 17. Insert objects (F)
-- Ink strokes now survive XLSX save/reopen as editable polylines. Inserted icons still lose their
-  identity/artwork on save (#551); native Office InkML import is not implemented.
+- Ink strokes are native Office InkML in xlsx: a drawing `xdr:contentPart` with a PNG fallback,
+  read back as editable ink with brush, effect, pressure and draw order (legacy DrawingML
+  polylines still read, but they stay polylines: they carry no `InkStyle`, so reopening and saving
+  an older workbook does not upgrade its ink to InkML). A part with several `<trace>`s, or a
+  `<traceGroup>`, reads as one stroke per trace. Excel drops GridCraft's own draw-order and
+  pen-subtype properties on save, so after an Excel round trip Ink Replay falls back to document
+  order, which can differ from the recorded order. Inserted icons still lose their identity/artwork
+  on save (#551).
 - SmartArt, WordArt, signature line, objects, 3-D models, screenshot; 8 shape kinds vs ~170;
   pictures in cells (#61, PR #105). Equations exist (LaTeX source with a live preview, Office Math in xlsx); there is
   no structured (WYSIWYG) equation editing and no ink equations. **Estimate:** 25–40 h.
@@ -170,8 +176,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 20. Multiple windows; pen pressure (H)
 - Desktop windows done: a native window per workbook window, New Window on the same workbook,
-  Switch Windows, Arrange All. Left: Arrange All across monitors, one window on the web, no
-  pressure or tilt in ink. **Estimate:** 5–8 h.
+  Switch Windows, Arrange All. Left: Arrange All across monitors, one window on the web; ink
+  accepts a per-point pressure array that the fountain and brush pens paint with, but the pointer
+  capture does not send device pressure or tilt yet. **Estimate:** 5–8 h.
   [hardware-parity.md](hardware-parity.md)
 
 ### 21. Automation and add-ins (F)
@@ -193,15 +200,17 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | minor | §17: Excel's compact ink traces decode, its brush decides the tool (the pressure channel says nothing), `*` keeps the difference order, a damaged InkML part no longer stops the workbook opening, a multi-trace part reads as one stroke per trace, and a copied sheet's ink is rekeyed; legacy DrawingML ink is not upgraded on save and Excel drops the draw-order property |
+| 2026-11-07 | minor | §17: native Office InkML ink in xlsx (`xdr:contentPart` + InkML part + PNG fallback); brush kind, effect, pressure and draw order round-trip |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |
+| 2026-10-26 | minor | Arabic shared bidi display/editing and persisted cell reading direction; other script and PDF work remain separate |
+| 2026-10-26 | minor | §5: Arabic text renders in cells and the interface: a system Arabic face (Tahoma, Arial or Segoe UI on Windows, Geeza Pro on macOS, Noto Sans or Naskh Arabic on Linux) joins the script fallbacks, fontconfig's Arabic choice, when it has Arabic letters, leads the Arabic fallbacks and draws Arabic wherever the UI or cell font has none, such as the default cell fonts (part of #229; a UI font with Arabic of its own, such as DejaVu Sans in the Flatpak, still draws interface Arabic, left for a follow-up), and craft-fonts' Noto Sans Arabic is a required face allowed on the web. Workbook fonts without Arabic keep every script fallback. Shaping and bidirectional layout remain separate work |
 | 2026-11-01 | minor | §13: the Analysis ToolPak has all 19 of Excel's tools (two-factor Anova with and without replication, z-Test, Fourier Analysis, Random Number Generation, Sampling); its chart output remains. The stale "`data.solver`, `data.analysisToolPak` missing" and "no Forecast Start" sentences removed |
 | 2026-11-01 | minor | §4: chart data tables implemented for column, bar, line, area and compatible combo charts, with legend keys and border settings, live source values, XLSX round-trip and print/PDF; other chart gaps remain. |
 | 2026-10-31 | minor | §13: Solver Options (Max Evaluations, Integer Optimality and the Evolutionary options), saved with the model |
 | 2026-10-31 | minor | §13: Solver Load/Save Model (`data.solverSaveModel`, `data.solverLoadModel`) and Reset All (`data.solverReset`), with buttons in the Solver Parameters dialog |
-| 2026-10-26 | minor | Arabic shared bidi display/editing and persisted cell reading direction; other script and PDF work remain separate |
-| 2026-10-26 | minor | §5: Arabic text renders in cells and the interface: a system Arabic face (Tahoma, Arial or Segoe UI on Windows, Geeza Pro on macOS, Noto Sans or Naskh Arabic on Linux) joins the script fallbacks, fontconfig's Arabic choice, when it has Arabic letters, leads the Arabic fallbacks and draws Arabic wherever the UI or cell font has none, such as the default cell fonts (part of #229; a UI font with Arabic of its own, such as DejaVu Sans in the Flatpak, still draws interface Arabic, left for a follow-up), and craft-fonts' Noto Sans Arabic is a required face allowed on the web. Workbook fonts without Arabic keep every script fallback. Shaping and bidirectional layout remain separate work |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |

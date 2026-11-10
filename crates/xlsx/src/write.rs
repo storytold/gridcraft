@@ -118,6 +118,8 @@ pub struct Out {
     /// References of chartex parts, defined as hidden `_xlchart.v1.N` names.
     pub chart_names: Vec<String>,
     pub drawings: u32,
+    /// InkML parts written (`xl/ink/inkN.xml`).
+    pub inks: u32,
     pub tables: u32,
     pub comments: u32,
     /// VML drawings written, the last VML shape-id block used, and control properties parts.
@@ -134,6 +136,9 @@ pub struct Out {
     pub kept: crate::passthrough::KeptOut,
     /// The code of the Python cells written so far, in order: script `i` of the Python part.
     pub python_scripts: Vec<String>,
+    /// Pixel work left for ink fallback pictures (`crate::drawing::MAX_SAVE_INK_PIXELS`), shared
+    /// by every sheet of the save.
+    pub ink_pixel_budget: u64,
 }
 
 impl Out {
@@ -257,6 +262,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         book_name: book_name.filter(|n| !n.is_empty() && !n.contains(['[', ']'])).unwrap_or(DEFAULT_BOOK_NAME).to_string(),
         chart_names: vec![],
         drawings: 0,
+        inks: 0,
         tables: 0,
         comments: 0,
         vmls: 0,
@@ -269,6 +275,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         cell_pictures: Default::default(),
         kept: Default::default(),
         python_scripts: vec![],
+        ink_pixel_budget: crate::drawing::MAX_SAVE_INK_PIXELS,
     };
     out.kept.reserve_vml_blocks(wb);
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml");
