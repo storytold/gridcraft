@@ -481,6 +481,16 @@ impl Fill {
         self.gradient.is_some()
     }
 
+    /// The colour a colour filter compares and a colour sort orders by: a gradient's first stop,
+    /// a solid or pattern fill's foreground, and `Auto` for no fill. `normalize` sets `fg` to
+    /// `Auto` on a gradient, so reading `fg` alone would make every gradient match nothing.
+    pub fn color(&self) -> Color {
+        match &self.gradient {
+            Some(g) => g.stops.first().map_or(Color::Auto, |s| s.color),
+            None => self.fg,
+        }
+    }
+
     /// The colour a swatch or non-gradient fallback (HTML export) should show: the first stop for
     /// a gradient, the foreground for a pattern/solid, and `None` for no fill. An automatic stop
     /// previews as the black `resolved_stops` renders it, so a swatch never disagrees with the grid.
@@ -820,6 +830,10 @@ mod tests {
             vec![GradientStop { position: 0.0, color: Color::Rgb(0xFF0000) }, GradientStop { position: 1.0, color: Color::Rgb(0x0000FF) }],
         );
         assert_eq!(preview.preview_color(&th), Some([255, 0, 0]));
+        // A colour filter and a colour sort go by the same first stop, unresolved.
+        assert_eq!(preview.color(), Color::Rgb(0xFF0000));
+        assert_eq!(Fill::solid(Color::Rgb(0x00FF00)).color(), Color::Rgb(0x00FF00));
+        assert_eq!(Fill::default().color(), Color::Auto);
         assert_eq!(Fill::solid(Color::Rgb(0x00FF00)).preview_color(&th), Some([0, 255, 0]));
         assert_eq!(Fill::default().preview_color(&th), None);
         // An automatic first stop previews as the black the renderer draws, not as no fill.
