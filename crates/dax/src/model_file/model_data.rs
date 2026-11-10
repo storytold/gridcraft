@@ -25,7 +25,7 @@ pub struct ModelData {
 }
 
 /// One table (cube dimension) and its columns.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModelTableData {
     /// Display name: the cube `<Dimension><Name>`, not the internal dimension ID.
     pub name: String,
@@ -41,6 +41,13 @@ fn default_visible() -> bool {
     true
 }
 
+impl Default for ModelTableData {
+    /// The same defaults serde uses: a table is visible unless the document hides it.
+    fn default() -> Self {
+        ModelTableData { name: String::new(), visible: true, columns: Vec::new() }
+    }
+}
+
 /// One stored column and its rows.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModelColumnData {
@@ -52,6 +59,20 @@ pub struct ModelColumnData {
     /// One entry per row. `Scalar::Blank` is the explicit null representation.
     #[serde(default)]
     pub values: Vec<Scalar>,
+}
+
+impl Default for ModelRelationship {
+    /// The same defaults serde uses: a relationship is active unless the document deactivates it.
+    fn default() -> Self {
+        ModelRelationship {
+            foreign_table: String::new(),
+            foreign_column: String::new(),
+            primary_table: String::new(),
+            primary_column: String::new(),
+            active: true,
+            multiplicity: RelationshipMultiplicity::default(),
+        }
+    }
 }
 
 /// Relationship cardinality as recorded by the dimension metadata.
@@ -69,7 +90,7 @@ pub enum RelationshipMultiplicity {
 }
 
 /// One relationship: the many (foreign) end points at the one (primary) end.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelRelationship {
     pub foreign_table: String,
     pub foreign_column: String,

@@ -173,7 +173,7 @@ fn confidence_intervals_exponential_and_poisson() {
     close(number("EXPON.DIST(0, 10, TRUE)"), 0.0);
 
     close(number("POISSON.DIST(2, 5, TRUE)"), 0.124_652_019_483_081_08);
-    close(number("POISSON.DIST(2, 5, FALSE)"), 0.084_224_337_488_568_32);
+    close(number("POISSON.DIST(2, 5, FALSE)"), 0.084_224_337_488_568_32_f64);
     close(number("POISSON.DIST(0, 0, TRUE)"), 1.0);
     close(number("POISSON.DIST(2.9, 5, TRUE)"), 0.124_652_019_483_081_08);
 }
