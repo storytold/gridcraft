@@ -60,15 +60,28 @@ fn start_id() -> egui::Id {
 
 /// Starts a tab's groups at the cursor. Called by the ribbon before the active tab draws its
 /// groups.
+///
+/// Group tracking is per frame and single-shot: `begin_groups` resets the spans and the start x,
+/// each tab's `sep`/`group_end` calls append one span apiece, and `paint_group_labels` consumes
+/// the spans and clears `start_id`. The three calls MUST run in that order inside `show()` on
+/// every frame that draws a tab; `sep`/`group_end` MUST NOT be called anywhere else, since an
+/// out-of-order call writes `start_id` and leaves stale state until the next `begin_groups`.
 pub(super) fn begin_groups(ui: &Ui) {
+    let already = ui.ctx().data(|d| d.get_temp::<Vec<GroupSpan>>(spans_id()).is_some());
+    debug_assert!(!already, "begin_groups ran twice without paint_group_labels consuming the spans");
     ui.ctx().data_mut(|d| {
         d.insert_temp(spans_id(), Vec::<GroupSpan>::new());
         d.insert_temp(start_id(), ui.cursor().min.x);
     });
 }
 
-/// Records that the group named `label` ends at `right` and the next one starts there.
+/// Records that the group named `label` ends at `right` and the next one starts there. Only valid
+/// between `begin_groups` and `paint_group_labels` while a tab draws inside `show()` (see the
+/// invariant on `begin_groups`): with no spans entry the span is dropped and `start_id` still
+/// advances, so an out-of-order call leaves stale state until the next `begin_groups`.
 fn end_group(ui: &Ui, label: &str, right: f32, separator: bool) {
+    let tracking = ui.ctx().data(|d| d.get_temp::<Vec<GroupSpan>>(spans_id()).is_some());
+    debug_assert!(tracking, "sep/group_end called outside show(): begin_groups did not start group tracking");
     let left = ui.ctx().data(|d| d.get_temp::<f32>(start_id())).unwrap_or(right);
     let label = crate::i18n::current(ui.ctx()).tr(label).to_owned();
     ui.ctx().data_mut(|d| {
@@ -83,12 +96,16 @@ fn end_group(ui: &Ui, label: &str, right: f32, separator: bool) {
 /// The separator after a group, named with that group's Excel label. The gap is laid out here;
 /// the line itself is painted with the labels, so it can run through the label band (a painter
 /// inside the scroll area is clipped to the buttons' height).
+///
+/// Only valid while a tab draws between `begin_groups` and `paint_group_labels` in `show()`.
 pub(crate) fn sep(ui: &mut Ui, label: &str) {
     let (r, _) = ui.allocate_exact_size(vec2(13.0, 72.0), Sense::hover());
     end_group(ui, label, r.center().x, true);
 }
 
 /// Ends the last group of a tab, after which no separator is drawn.
+///
+/// Only valid while a tab draws between `begin_groups` and `paint_group_labels` in `show()`.
 pub(crate) fn group_end(ui: &mut Ui, label: &str) {
     end_group(ui, label, ui.cursor().min.x, false);
 }

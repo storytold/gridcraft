@@ -45,7 +45,8 @@ fn every_tab_names_its_groups_in_the_label_band() {
         let h = app_at(1440.0, tab);
         let o = RibbonOverflow::get(&h.ctx);
         let labels = RibbonLabels::get(&h.ctx);
-        assert!(!labels.labels.is_empty(), "{tab}: the tab names its groups");
+        let names: Vec<&str> = labels.labels.iter().map(|g| g.label.as_str()).collect();
+        assert_eq!(names, expected_groups(tab), "{tab}: a group label is missing or misnamed");
         assert!((labels.band.height() - RIBBON_LABEL_H).abs() < 0.5, "{tab}: the band is {} px tall", labels.band.height());
         assert!(o.content_height <= o.visible_height + 0.5, "{tab}: {} px of buttons in {} px", o.content_height, o.visible_height);
         assert!(o.visible_height + RIBBON_LABEL_H <= 94.5, "{tab}: buttons and band fit the card's inner box");
@@ -58,10 +59,22 @@ fn every_tab_names_its_groups_in_the_label_band() {
             right = g.rect.right();
         }
     }
-    // Home carries Excel's group names, in Excel's order.
-    let h = app_at(1440.0, "Home");
-    let names: Vec<String> = RibbonLabels::get(&h.ctx).labels.into_iter().map(|g| g.label).collect();
-    assert_eq!(names, ["Clipboard", "Font", "Alignment", "Number", "Styles", "Cells", "Editing"]);
+}
+
+/// Excel's group names for each standard tab, in the order `sep`/`group_end` record them.
+fn expected_groups(tab: &str) -> &'static [&'static str] {
+    match tab {
+        "Home" => &["Clipboard", "Font", "Alignment", "Number", "Styles", "Cells", "Editing"],
+        "Insert" => &["Tables", "Illustrations", "Charts", "Filters", "Sparklines", "Form Controls", "Cell Controls", "Links", "Text", "Symbols"],
+        "Draw" => &["Tools", "Pens", "Convert"],
+        "Page Layout" => &["Themes", "Page Setup", "Sheet Options"],
+        "Formulas" => &["Function Library", "Defined Names", "Formula Auditing", "Calculation"],
+        "Data" => &["Get & Transform Data", "Sort & Filter", "Data Tools", "Forecast", "Outline", "Analysis"],
+        "Review" => &["Proofing", "Comments", "Protect"],
+        "View" => &["Workbook Views", "Show", "Zoom", "Window", "Interface"],
+        "Automate" => &["Macros", "Tools"],
+        _ => unreachable!("{tab} is not a standard tab"),
+    }
 }
 
 #[test]
