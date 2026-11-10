@@ -424,10 +424,11 @@ pub fn canonical_code(code: &str, region: &Region) -> String {
     remap_separators(code, region.decimal, '.', region.group, ',')
 }
 
-/// `code` with `from_decimal`/`from_group` written as `to_decimal`/`to_group`. A separator counts
-/// only between two digit placeholders (`0`, `#`, `?`), which is where a number format uses one,
-/// so the `.` of `dd.mm.yyyy` and of `hh:mm:ss.000` stays a date separator. Quoted text, `[...]`
-/// tags and `\` escapes are copied untouched because theirs belong to the text, not to the format.
+/// `code` with `from_decimal`/`from_group` written as `to_decimal`/`to_group`. A decimal counts
+/// only between two digit placeholders (`0`, `#`, `?`) and a grouping separator also right after
+/// them, where it scales the value, so the `.` of `dd.mm.yyyy` and of `hh:mm:ss.000` stays a date
+/// separator. Quoted text, `[...]` tags and `\` escapes are copied untouched because theirs belong
+/// to the text, not to the format.
 fn remap_separators(code: &str, from_decimal: char, to_decimal: char, from_group: char, to_group: char) -> String {
     if from_decimal == to_decimal && from_group == to_group {
         return code.to_string();
@@ -439,6 +440,8 @@ fn remap_separators(code: &str, from_decimal: char, to_decimal: char, from_group
     let mut escaped = false;
     // The last character copied outside quoted text, a `[...]` tag or an escape.
     let mut prev: Option<char> = None;
+    // The previous character is a digit placeholder or a grouping separator already converted.
+    let mut scaling = false;
     for (i, &c) in chars.iter().enumerate() {
         let next = chars.get(i + 1).copied();
         match c {
@@ -446,38 +449,55 @@ fn remap_separators(code: &str, from_decimal: char, to_decimal: char, from_group
                 escaped = false;
                 out.push(c);
                 prev = None;
+                scaling = false;
             }
             '\\' if !quoted && !bracketed => {
                 escaped = true;
                 out.push(c);
                 prev = None;
+                scaling = false;
             }
             '"' if !bracketed => {
                 quoted = !quoted;
                 out.push(c);
                 prev = None;
+                scaling = false;
             }
             '[' if !quoted => {
                 bracketed = true;
                 out.push(c);
                 prev = None;
+                scaling = false;
             }
             ']' if !quoted => {
                 bracketed = false;
                 out.push(c);
                 prev = None;
+                scaling = false;
             }
             _ if quoted || bracketed => {
                 out.push(c);
                 prev = None;
+                scaling = false;
             }
             _ if (c == from_decimal || c == from_group) && prev.is_some_and(is_digit_placeholder) && next.is_some_and(is_digit_placeholder) => {
                 out.push(if c == from_decimal { to_decimal } else { to_group });
                 prev = Some(c);
+                scaling = false;
+            }
+            // A grouping separator right after the digits scales the value by 1,000 and a run of
+            // them stacks (`0.0,` divides by 1,000, `0.0,,` by 1,000,000). The parser reads those
+            // trailing commas without a digit after them, so a code typed with the region's
+            // separator converts them too instead of leaving a separator the region never shows.
+            _ if c == from_group && (prev.is_some_and(is_digit_placeholder) || scaling) => {
+                out.push(to_group);
+                prev = Some(c);
+                scaling = true;
             }
             _ => {
                 out.push(c);
                 prev = Some(c);
+                scaling = false;
             }
         }
     }
