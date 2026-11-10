@@ -44,6 +44,12 @@ fn the_separators_come_from_the_region_and_a_typed_code_is_read_with_them() {
     let typed_fr = NumberFormat::parse_in("#\u{a0}##0,00", fr);
     assert_eq!(typed_fr.code(), "#,##0.00");
     assert_eq!(format_value_in(&n, &typed_fr, S, fr).text, "334\u{a0}106,29");
+    // A separator is one only between digit placeholders, so a date keeps its own dots and a
+    // subsecond keeps the one before its digits.
+    assert_eq!(canonical_code("dd.mm.yyyy", it), "dd.mm.yyyy");
+    assert_eq!(regional_code("dd.mm.yyyy", it), "dd.mm.yyyy");
+    assert_eq!(regional_code("hh:mm:ss.000", it), "hh:mm:ss.000");
+    assert_eq!(canonical_code("dd/mm/yyyy", fr), "dd/mm/yyyy");
 }
 
 #[test]
