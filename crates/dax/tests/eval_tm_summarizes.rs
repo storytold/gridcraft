@@ -352,6 +352,82 @@ fn summarize_columns_rollup_adds_subtotal_rows_with_flags() {
 }
 
 #[test]
+fn rollup_grand_total_filter_applies_only_to_the_grand_total() {
+    // `grandtotalFilter` restricts the grand-total selection; the detail rows keep every region.
+    let table = eval_table(
+        "SUMMARIZECOLUMNS(ROLLUPADDISSUBTOTAL(Sales[Region] = \"East\", Sales[Region], \"RegionTotal\"), \
+         \"Amount\", SUM(Sales[Amount]))",
+    )
+    .expect("grand total filter");
+    assert_columns(&table, &["Region", "RegionTotal", "Amount"]);
+    assert_eq!(
+        table.rows,
+        vec![
+            vec![text("East"), Scalar::Boolean(false), money(45.0)],
+            vec![text("North"), Scalar::Boolean(false), money(50.0)],
+            vec![text("West"), Scalar::Boolean(false), money(20.0)],
+            vec![Scalar::Blank, Scalar::Boolean(false), money(7.0)],
+            vec![Scalar::Blank, Scalar::Boolean(true), money(45.0)],
+        ],
+        "only the East row feeds the grand total"
+    );
+}
+
+#[test]
+fn rollup_level_filter_applies_only_to_that_level() {
+    // The filter after Region's name restricts the per-region subtotal rows to East; the detail
+    // rows and the grand total are unfiltered.
+    let table = eval_table(
+        "SUMMARIZECOLUMNS(ROLLUPADDISSUBTOTAL(Sales[Region], \"RegionTotal\", Sales[Region] = \"East\", \
+         Sales[Product], \"ProductTotal\"), \"Amount\", SUM(Sales[Amount]))",
+    )
+    .expect("region level filter");
+    assert_columns(&table, &["Region", "Product", "RegionTotal", "ProductTotal", "Amount"]);
+    assert_eq!(
+        table.rows.iter().filter(|row| row[2] == Scalar::Boolean(false) && row[3] == Scalar::Boolean(true)).count(),
+        1,
+        "only the East region subtotal survives its own level filter"
+    );
+    assert!(table.rows.iter().any(|row| {
+        row[0] == text("East")
+            && row[1] == Scalar::Blank
+            && row[2] == Scalar::Boolean(false)
+            && row[3] == Scalar::Boolean(true)
+            && row[4] == money(45.0)
+    }));
+    assert!(
+        table.rows.iter().any(|row| {
+            row[0] == Scalar::Blank
+                && row[1] == Scalar::Blank
+                && row[2] == Scalar::Boolean(true)
+                && row[3] == Scalar::Boolean(true)
+                && row[4] == money(122.0)
+        }),
+        "the grand total still sees every region"
+    );
+    assert!(table.rows.iter().any(|row| row[0] == text("East") && row[1] == text("Gadget") && row[4] == money(30.0)), "details are unfiltered");
+
+    // The filter after the last level's name restricts the detail rows instead: only Widget
+    // details remain, while every region still gets its subtotal.
+    let detail = eval_table(
+        "SUMMARIZECOLUMNS(ROLLUPADDISSUBTOTAL(Sales[Region], \"RegionTotal\", Sales[Product], \"ProductTotal\", \
+         Sales[Product] = \"Widget\"), \"Amount\", SUM(Sales[Amount]))",
+    )
+    .expect("product level filter");
+    assert!(detail.rows.iter().any(|row| row[1] == text("Widget") && row[4] == money(15.0)));
+    assert!(detail.rows.iter().any(|row| row[1] == text("Widget") && row[4] == money(20.0)));
+    assert!(
+        !detail.rows.iter().any(|row| row[3] == Scalar::Boolean(false) && row[1] != text("Widget")),
+        "detail rows outside the product filter are gone"
+    );
+    assert_eq!(
+        detail.rows.iter().filter(|row| row[2] == Scalar::Boolean(false) && row[3] == Scalar::Boolean(true)).count(),
+        4,
+        "every region keeps its subtotal"
+    );
+}
+
+#[test]
 fn summarize_columns_rollup_multiple_levels_and_dimensions() {
     // The catalog's variadic overload only accepts more than one (column, name) pair when a
     // leading table filter is present, so the no-op grand-total filter is spelled out here.

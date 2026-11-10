@@ -81,17 +81,21 @@ struct SummarizeArgs<'a> {
     expressions: Vec<(String, &'a BoundExpr)>,
 }
 
-/// A `SUMMARIZECOLUMNS` rollup: its levels and the subtotal indicator column of each level.
-struct RollupDimension {
+/// A `SUMMARIZECOLUMNS` rollup: its levels, the subtotal indicator column of each level, and the
+/// filters scoped to one level of it.
+struct RollupDimension<'a> {
     /// Column indices (into the global group column list) per level.
     levels: Vec<Vec<usize>>,
     /// Subtotal indicator name per level, in argument order.
     flags: Vec<(usize, String)>,
+    /// `ROLLUPADDISSUBTOTAL` filters: `usize::MAX` is the grand-total filter, a level index is that
+    /// level's `groupLevelFilter`. Each applies only to the selection it names.
+    filters: Vec<(&'a BoundExpr, usize)>,
 }
 
 struct SummarizeColumnsArgs<'a> {
     columns: Vec<ColumnRef>,
-    dimensions: Vec<RollupDimension>,
+    dimensions: Vec<RollupDimension<'a>>,
     /// Filters with a `non_visual` marker: NONVISUAL filters restrict the grouping only.
     filters: Vec<(&'a BoundExpr, bool)>,
     /// Added expression columns with an `IGNORE` marker.
@@ -735,7 +739,7 @@ fn parse_summarize_columns<'a>(ev: &Evaluator<'_>, args: &'a [BoundExpr]) -> Res
         if let BoundExpr::Call { spec, args: inner } = arg {
             match spec.name {
                 "ROLLUPADDISSUBTOTAL" => {
-                    dimensions.push(parse_rollup_dimension(ev, inner, &mut columns, &mut filters)?);
+                    dimensions.push(parse_rollup_dimension(ev, inner, &mut columns)?);
                     index += 1;
                     continue;
                 }
@@ -783,13 +787,8 @@ fn parse_summarize_columns<'a>(ev: &Evaluator<'_>, args: &'a [BoundExpr]) -> Res
     Ok(SummarizeColumnsArgs { columns, dimensions, filters, expressions })
 }
 
-fn parse_rollup_dimension<'a>(
-    ev: &Evaluator<'_>,
-    args: &'a [BoundExpr],
-    columns: &mut Vec<ColumnRef>,
-    filters: &mut Vec<(&'a BoundExpr, bool)>,
-) -> Result<RollupDimension, EvalError> {
-    let mut dimension = RollupDimension { levels: Vec::new(), flags: Vec::new() };
+fn parse_rollup_dimension<'a>(ev: &Evaluator<'_>, args: &'a [BoundExpr], columns: &mut Vec<ColumnRef>) -> Result<RollupDimension<'a>, EvalError> {
+    let mut dimension = RollupDimension { levels: Vec::new(), flags: Vec::new(), filters: Vec::new() };
     let mut index = 0usize;
     while index < args.len() {
         let members = match &args[index] {
@@ -800,10 +799,11 @@ fn parse_rollup_dimension<'a>(
                 }
                 inner.iter().map(|column| resolve_column(ev, column)).collect::<Result<Vec<_>, _>>()?
             }
-            // The grand-total filter before the pairs and the per-level filters between them both
-            // restrict the grouping; they are applied to the whole grouping (see module notes).
+            // A leading filter is the grand-total one; one met between levels belongs to the level
+            // just closed. Each is kept with its level instead of restricting the whole grouping.
             other => {
-                filters.push((other, false));
+                let level = dimension.levels.len().checked_sub(1).unwrap_or(usize::MAX);
+                dimension.filters.push((other, level));
                 index += 1;
                 continue;
             }
@@ -830,7 +830,7 @@ fn parse_rollup_dimension<'a>(
                 _ => true,
             };
             if is_filter {
-                filters.push((next, false));
+                dimension.filters.push((next, level));
                 index += 1;
             }
         }
@@ -966,14 +966,17 @@ fn summarize_columns(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
     if parsed.columns.is_empty() {
         return Err(EvalError::new("SUMMARIZECOLUMNS needs at least one group-by column"));
     }
-    let mut group_filters = ev.transitioned_filters(ctx);
-    let mut measure_filters = group_filters.clone();
+    let mut base_group_filters = ev.transitioned_filters(ctx);
+    let mut base_measure_filters = base_group_filters.clone();
     for (expr, non_visual) in &parsed.filters {
-        apply_filter_arg(ev, expr, &mut group_filters, ctx)?;
+        apply_filter_arg(ev, expr, &mut base_group_filters, ctx)?;
         if !*non_visual {
-            apply_filter_arg(ev, expr, &mut measure_filters, ctx)?;
+            apply_filter_arg(ev, expr, &mut base_measure_filters, ctx)?;
         }
     }
+    // A `ROLLUPADDISSUBTOTAL` filter belongs to the grand total or to one level, so the filter
+    // context — and the rows the auto-exist rule sees — differ per selection.
+    let level_filters = parsed.dimensions.iter().any(|dimension| !dimension.filters.is_empty());
     let mut columns: Vec<TableColumn> = parsed.columns.iter().map(|column| TableColumn { name: column.name.clone() }).collect();
     for dimension in &parsed.dimensions {
         for (_, name) in &dimension.flags {
@@ -1002,16 +1005,38 @@ fn summarize_columns(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
     } else {
         None
     };
-    let auto_exist_rows = single_table.and_then(|table| {
-        let width = ev.model().tables.get(table).map_or(0, |model_table| model_table.columns.len());
-        let rows = ev.table(table, &measure_filters).rows;
-        // The row-scan filter treats a missing trailing cell as matching every filter, which a
-        // projection key cannot express; such (ragged) models keep the per-combination check.
-        rows.iter().all(|row| row.len() >= width).then_some(rows)
-    });
+    let materialize = |filters: &FilterContext| {
+        single_table.and_then(|table| {
+            let width = ev.model().tables.get(table).map_or(0, |model_table| model_table.columns.len());
+            let rows = ev.table(table, filters).rows;
+            // The row-scan filter treats a missing trailing cell as matching every filter, which a
+            // projection key cannot express; such (ragged) models keep the per-combination check.
+            rows.iter().all(|row| row.len() >= width).then_some(rows)
+        })
+    };
+    let auto_exist_rows = materialize(&base_measure_filters);
 
     let mut rows: Vec<Vec<Scalar>> = Vec::new();
     for selection in rollup_selections(&parsed.dimensions)? {
+        let mut group_filters = base_group_filters.clone();
+        let mut measure_filters = base_measure_filters.clone();
+        if level_filters {
+            for (dimension, depth) in parsed.dimensions.iter().zip(&selection) {
+                let levels = dimension.levels.len();
+                for (expr, level) in &dimension.filters {
+                    // `depth` counts the levels kept: 0 is full detail, `levels` is every level
+                    // rolled up. A filter named after a level applies to that level's subtotal —
+                    // the selection where the following levels are rolled up — and the grand-total
+                    // filter only to the last selection.
+                    let applies = if *level == usize::MAX { *depth == levels } else { *depth == levels - *level - 1 };
+                    if applies {
+                        apply_filter_arg(ev, expr, &mut group_filters, ctx)?;
+                        apply_filter_arg(ev, expr, &mut measure_filters, ctx)?;
+                    }
+                }
+            }
+        }
+        let auto_exist_rows = if level_filters { materialize(&measure_filters) } else { auto_exist_rows.clone() };
         let rolled = rolled_columns(&parsed.dimensions, &selection);
         let mut domains: Vec<Vec<Option<Scalar>>> = Vec::with_capacity(parsed.columns.len());
         let mut combinations = 1usize;
