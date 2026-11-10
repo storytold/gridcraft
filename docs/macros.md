@@ -182,8 +182,9 @@ columns shows the part of the sheet in use, as the run goes over it), the parame
 that just ran, the steps the run has executed (the dry runs not counted), and what the run has
 changed in its workbook: `changed` lists at most 500 entries (cell ranges, and sheets added,
 deleted or renamed) and `changedCells` counts the changed cells on the sheets it had at the start. `shifted` names the rule that made
-room at the start, and `wroteFiles` the files the run wrote or removed (a model removal included),
-which stay when the run is rolled back; `message` says which were written and what is gone. A run
+room at the start, and `wroteFiles` the file steps the run reached, which rolling back the
+workbook can't undo: written files remain and removed files are not restored, so `message` says
+what was written and what is gone. A model step that failed partway may have done either. A run
 that ends (its last step, a
 Stop step, or a failed step, which rolls it back) or is stopped answers with `state` `finished`,
 `stopped` or `failed`.

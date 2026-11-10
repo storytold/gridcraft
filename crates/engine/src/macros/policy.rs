@@ -57,10 +57,16 @@ const EXPORTS: &[&str] = &["file.exportPdf", "file.exportCsv", "file.exportHtml"
 const MODEL_FILES: &[(&str, &str)] =
     &[("ink.modelImport", "copies the handwriting model's files"), ("ink.modelRemove", "deletes the handwriting model's files")];
 
+/// Whether `id` is one of the handwriting-model commands, which touch the model's files whatever
+/// their parameters say.
+pub fn is_model_file(id: &str) -> bool {
+    MODEL_FILES.iter().any(|(m, _)| *m == id)
+}
+
 /// Whether command `id` with `params` leaves a file behind: an export or print given a `path`, or
 /// a handwriting-model command, which copies or deletes the model's files whatever its parameters.
 pub fn writes_file(id: &str, params: &Json) -> bool {
-    MODEL_FILES.iter().any(|(m, _)| *m == id) || (EXPORTS.contains(&id) && params.get("path").is_some_and(|p| !p.is_null()))
+    is_model_file(id) || (EXPORTS.contains(&id) && params.get("path").is_some_and(|p| !p.is_null()))
 }
 
 /// The policy for running command `id` with `params` as a macro step in a document with `trust`.

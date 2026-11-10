@@ -1297,6 +1297,13 @@ fn a_failure_after_the_model_removal_says_what_is_gone() {
     assert!(err.contains("what step 1 (ink.modelRemove) removed is gone"), "{err}");
     assert!(!err.contains("Nothing was changed"), "{err}");
     assert!(!dir.exists(), "the folder the step deleted stays deleted: {err}");
+
+    // A model import that fails partway may have copied some files before it was stopped.
+    let steps = json!([{"command": "ink.modelImport", "params": {"path": "nowhere"}}]);
+    put(&mut s, json!({"name": "Copy", "output": {"onConflict": "overwrite"}, "steps": steps, "permissions": ["ink.modelImport"]}));
+    let err = s.execute("macro.run", json!({"name": "Copy", "approve": true})).unwrap_err().to_string();
+    assert!(err.contains("step 1 (ink.modelImport) failed and may have changed the model's files"), "{err}");
+    assert!(!err.contains("Nothing was changed"), "{err}");
     let _ = std::fs::remove_dir_all(&root);
 }
 

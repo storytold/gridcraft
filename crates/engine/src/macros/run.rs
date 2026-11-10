@@ -27,7 +27,7 @@ use gridcraft_model::{Cell, CompareOp, InputKind, MAX_MACRO_REF, Macro, OnConfli
 use serde::Serialize;
 use serde_json::{Value as Json, json};
 
-use super::policy::{Policy, macro_policy, previewable, writes_file};
+use super::policy::{Policy, is_model_file, macro_policy, previewable, writes_file};
 use super::resolve::{self, Env, Place, ResolveError};
 use crate::{EngineError, Result, Selection, Session, Trust, UiRequest};
 
@@ -47,13 +47,23 @@ const MAX_LISTED_RANGES: usize = 500;
 /// An input bound to a range: name, where, whether its first row is a header.
 pub type Bound = (String, Place, bool);
 
-/// A file step the run carried out: rolling the workbook back leaves what it did on disk.
+/// What a file step did to the file system.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileEffect {
+    /// It wrote files (`file.exportCsv`, `ink.modelImport`).
+    Wrote,
+    /// It removed files (`ink.modelRemove`).
+    Removed,
+    /// It failed partway: some of its files may have been written or deleted.
+    Partial,
+}
+
+/// A file step the run reached: rolling the workbook back leaves what it did on disk.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileStep {
     /// The step's path and command: `step 1 (file.exportCsv)`.
     pub step: String,
-    /// The step removed files (`ink.modelRemove`) rather than writing them.
-    pub removed: bool,
+    pub effect: FileEffect,
 }
 
 // The JSON keeps the plain step labels it always had (`wroteFiles`).
@@ -120,9 +130,13 @@ pub fn rolled_back(wrote_files: &[FileStep]) -> String {
     if wrote_files.is_empty() {
         return "Nothing was changed.".into();
     }
-    let (mut wrote, mut removed) = (Vec::new(), Vec::new());
+    let (mut wrote, mut removed, mut partial) = (Vec::new(), Vec::new(), Vec::new());
     for f in wrote_files {
-        if f.removed { removed.push(f.step.clone()) } else { wrote.push(f.step.clone()) }
+        match f.effect {
+            FileEffect::Wrote => wrote.push(f.step.clone()),
+            FileEffect::Removed => removed.push(f.step.clone()),
+            FileEffect::Partial => partial.push(f.step.clone()),
+        }
     }
     let mut parts = Vec::new();
     match wrote.as_slice() {
@@ -134,6 +148,11 @@ pub fn rolled_back(wrote_files: &[FileStep]) -> String {
         [] => {}
         [one] => parts.push(format!("what {one} removed is gone")),
         many => parts.push(format!("what {} removed is gone", join_and(many))),
+    }
+    match partial.as_slice() {
+        [] => {}
+        [one] => parts.push(format!("{one} failed and may have changed the model's files")),
+        many => parts.push(format!("{} failed and may have changed the model's files", join_and(many))),
     }
     format!("The workbook was put back; {}.", parts.join(", and "))
 }
@@ -888,9 +907,20 @@ impl Machine {
                 m @ UiRequest::Message(_) => s.ui_requests.push(m),
             }
         }
+        let model = is_model_file(id);
+        if model {
+            // A model step that fails partway may have copied or deleted some of the files, so it
+            // is recorded whether or not it succeeded.
+            let effect = match (r.is_ok(), id) {
+                (true, "ink.modelRemove") => FileEffect::Removed,
+                (true, _) => FileEffect::Wrote,
+                (false, _) => FileEffect::Partial,
+            };
+            self.wrote_files.push(FileStep { step: format!("step {path} ({id})"), effect });
+        }
         r.map_err(|e| fail(e.to_string()))?;
-        if writes {
-            self.wrote_files.push(FileStep { step: format!("step {path} ({id})"), removed: id == "ink.modelRemove" });
+        if writes && !model {
+            self.wrote_files.push(FileStep { step: format!("step {path} ({id})"), effect: FileEffect::Wrote });
         }
         if let Some(b) = blocked {
             return Err(fail(b));
