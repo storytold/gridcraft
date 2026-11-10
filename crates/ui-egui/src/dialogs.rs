@@ -689,6 +689,27 @@ impl Dialog {
             }
             "equation" => return crate::equation::open_editor(app, &params),
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),
+            // Data › What-If Analysis › Data Table. The table is the selection (input values down
+            // the first column and/or across the top row); OK runs `data.dataTable`.
+            "dataTable" => {
+                let mut d = Dialog::form(
+                    "dataTable",
+                    "Data Table",
+                    "data.dataTable",
+                    vec![
+                        Ref { key: "range", label: "Table range:" },
+                        Ref { key: "rowInput", label: "Row input cell:" },
+                        Ref { key: "columnInput", label: "Column input cell:" },
+                    ],
+                    json!({"range": sel, "rowInput": "", "columnInput": ""}),
+                );
+                for key in ["range", "rowInput", "columnInput"] {
+                    if let Some(value) = params.get(key).filter(|v| v.as_str().is_some_and(|s| !s.is_empty())) {
+                        d.set_value(key, value.clone());
+                    }
+                }
+                d
+            }
             "forecastSheet" => Dialog::form(
                 "forecastSheet",
                 "Create Forecast Worksheet",
@@ -1152,6 +1173,40 @@ mod tests {
         assert_eq!(build_params(&dialog)["range"], "B2:C5");
         dialog.set_value("range", json!("D2:E6"));
         assert_eq!(build_params(&dialog)["range"], "D2:E6");
+    }
+
+    #[test]
+    fn data_table_menu_opens_the_dialog_instead_of_a_missing_range_error() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        session.execute("selection.set", json!({"range": "D1:E4"})).unwrap();
+        let mut app = SheetApp::new(session, Default::default());
+        // What the ribbon item, the key tips and command search send.
+        app.run_or_alert("data.dataTable", json!({}));
+        assert!(app.message.is_none(), "unexpected alert: {:?}", app.message);
+        let d = app.dialog.as_ref().expect("Data Table dialog");
+        assert_eq!(d.name, "dataTable");
+        assert_eq!(d.values["range"], "D1:E4");
+        assert!(d.fields.iter().any(|f| matches!(f, Field::Ref { key: "columnInput", .. })));
+        assert!(d.fields.iter().any(|f| matches!(f, Field::Ref { key: "rowInput", .. })));
+    }
+
+    #[test]
+    fn data_table_dialog_ok_fills_a_one_variable_table() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        // B1 input, B2 = 10 * B1; table D1:E4 with inputs down D2:D4 and =B2 in E1.
+        session.execute("range.setValues", json!({"range": "B1:B2", "values": [[1], ["=B1*10"]]})).unwrap();
+        session.execute("range.setValues", json!({"range": "D1:E4", "values": [["", "=B2"], [1, ""], [2, ""], [3, ""]]})).unwrap();
+        session.execute("selection.set", json!({"range": "D1:E4"})).unwrap();
+        let mut app = SheetApp::new(session, Default::default());
+        let mut d = Dialog::open(&mut app, "dataTable", json!({})).unwrap();
+        d.set_value("columnInput", json!("B1"));
+        app.run(d.command.unwrap(), build_params(&d)).unwrap();
+        let doc = app.session.active().unwrap();
+        let sh = doc.wb.active().unwrap();
+        let got: Vec<String> = (1..=3).map(|r| format!("{:?}", sh.value(CellRef::new(r, 4)))).collect();
+        assert!(got[0].contains("10") && got[1].contains("20") && got[2].contains("30"), "{got:?}");
     }
 
     #[test]

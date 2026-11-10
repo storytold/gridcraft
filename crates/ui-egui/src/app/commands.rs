@@ -118,6 +118,11 @@ impl SheetApp {
         if id == "insert.recommendedCharts" && params.get("type").is_none() {
             return self.open_dialog("recommendedCharts", json!({}));
         }
+        // Data Table with no range (ribbon What-If menu, key tips, command search) asks for the
+        // table range and input cells, as Excel does; programmatic callers of `run` pass them.
+        if id == "data.dataTable" && params.get("range").and_then(Json::as_str).is_none_or(str::is_empty) {
+            return self.open_dialog("dataTable", params);
+        }
         // Switch Windows with no window named (key tip, command search) opens the View tab's
         // list to choose from; programmatic callers of `run` get the list back.
         if id == "view.switchWindows" && ["window", "doc"].iter().all(|k| params.get(*k).is_none_or(Json::is_null)) {
