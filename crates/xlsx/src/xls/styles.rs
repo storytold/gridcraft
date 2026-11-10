@@ -339,6 +339,7 @@ fn xf_style(xf: &Xf, fonts: &[Font], formats: &HashMap<u16, String>, table: &[u3
         },
         indent: a2 & 0x0F,
         shrink: a2 & 0x10 != 0,
+        reading_order: None,
     };
     let b1 = word32(4);
     let b2 = word32(8);

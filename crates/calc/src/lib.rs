@@ -7,6 +7,7 @@ pub mod eval;
 mod pivotdata;
 mod precision;
 pub mod recalc;
+mod spill_index;
 mod trimrange;
 
 pub use eval::{Area, SPECIAL_FUNCTIONS, is_known_function};
