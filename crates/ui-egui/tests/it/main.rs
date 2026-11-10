@@ -19,6 +19,7 @@ mod chart_data_table;
 mod chart_resize;
 mod chart_source_layering;
 mod clipboard;
+mod collab_dispatch;
 mod comments_pane;
 mod commit_after_pointing;
 mod committed_text_fields;

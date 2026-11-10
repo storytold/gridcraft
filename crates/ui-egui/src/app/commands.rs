@@ -16,6 +16,20 @@ impl SheetApp {
         r
     }
 
+    /// Runs a command the sheet UI issues by itself — a committed cell edit, a form control's
+    /// new value — through the collaboration layer when the session is shared, and through the
+    /// engine otherwise.
+    ///
+    /// These paths used to call `Session::run` straight: in a live session the edit stayed on
+    /// this replica and never reached the room, while the server and every other replica kept
+    /// the old cell.
+    pub(crate) fn run_shared(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        if let Some(r) = self.collab.as_mut().and_then(|collab| collab.execute(&mut self.session, id, params.clone())) {
+            return r;
+        }
+        self.session.run(id, params)
+    }
+
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
