@@ -937,9 +937,12 @@ mod tests {
             }
         }
         assert!(labels.len() >= 10, "found only {labels:?}");
+        // Every language, so one added later fails here until it has these labels too. A catalog
+        // entry, not a text that differs from English: Czech "Data" is "Data".
         for label in &labels {
-            let english = label.rsplit_once('|').map_or(label.as_str(), |(_, label)| label);
-            assert_ne!(Language::Ja.tr(label), english, "no translation for {label:?}");
+            for lang in Language::ALL.into_iter().filter(|&l| l != Language::En) {
+                assert!(lang.translated(label).is_some(), "no {lang:?} translation for {label:?}");
+            }
         }
     }
 }

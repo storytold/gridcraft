@@ -66,7 +66,14 @@ pub(super) fn selection_move(s: &mut Session, p: &Json) -> Result<Json> {
     // Extension moves the far corner, not the active cell.
     let from = if extend { sel.moving_end() } else { sel.active };
     // Skip hidden rows/columns and step over merged areas.
-    let mut to = if jmp {
+    let mut to = if jmp && extend && (dr == 0) != (dc == 0) {
+        // Excel: Ctrl+Shift+arrow searches the active cell's column (or row) from the moving
+        // edge, so a header row selected with Ctrl+Shift+Right extends down to the end of the
+        // active column's data.
+        let probe = if dr != 0 { CellRef::new(from.row, sel.active.col) } else { CellRef::new(sel.active.row, from.col) };
+        let edge = jump(sheet, probe, dr.signum(), dc.signum());
+        if dr != 0 { CellRef::new(edge.row, from.col) } else { CellRef::new(from.row, edge.col) }
+    } else if jmp {
         jump(sheet, from, dr.signum(), dc.signum())
     } else {
         let mut t = from.offset_clamped(dr, dc);
