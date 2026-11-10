@@ -595,14 +595,16 @@ pub(crate) fn merge_style_json(mut base: Json, patch: &Json) -> Json {
         && let Some(fill) = p.get("fill")
     {
         // The fill still replaces the old fill, but a partial fill patch starts from the fill the
-        // cell already has — patching `fg` alone must keep a solid or pattern fill's pattern and
-        // background — and from the default fill when that one is a gradient, so a pattern patch
-        // clears the gradient instead of merging into it. An omitted `bg` then defaults to the
-        // automatic value Excel itself writes (a solid fill is patternType="solid" with fgColor
-        // and bgColor indexed="64"), so the documented "all keys optional" contract holds.
-        let cur = b.get("fill");
-        let start = match cur {
-            Some(cur) if cur.get("gradient").is_none_or(Json::is_null) => cur.clone(),
+        // cell already has: patching `fg` alone keeps a solid or pattern fill's pattern and
+        // background, and keeps a gradient. Switching fill types starts from the default fill
+        // instead — a gradient can't take a pattern, and a pattern can't take a gradient — so an
+        // omitted `bg` then defaults to the automatic value Excel itself writes (a solid fill is
+        // patternType="solid" with fgColor and bgColor indexed="64"), holding the documented "all
+        // keys optional" contract.
+        let types = fill.as_object().is_some_and(|f| f.contains_key("pattern") || f.contains_key("gradient"));
+        let gradient = b.get("fill").is_some_and(|cur| cur.get("gradient").is_some_and(|g| !g.is_null()));
+        let start = match b.get("fill") {
+            Some(cur) if !(types && gradient) => cur.clone(),
             _ => serde_json::to_value(Fill::default()).unwrap_or(Json::Null),
         };
         let fill = match fill {
@@ -966,6 +968,13 @@ mod tests {
         let fill: Fill = serde_json::from_value(got["style"]["fill"].clone()).unwrap();
         assert!(fill.gradient.is_some());
         assert_eq!(fill.pattern, PatternType::None);
+
+        // A patch that names no fill type keeps the gradient: `fg` is automatic on a gradient, so
+        // it must not flatten the cell into an invisible fill.
+        s.execute("home.formatCells", json!({"range": "A2", "style": {"fill": {"fg": {"Rgb": 65280}}}})).unwrap();
+        let got = s.execute("cell.get", json!({"cell": "A2"})).unwrap();
+        let fill: Fill = serde_json::from_value(got["style"]["fill"].clone()).unwrap();
+        assert!(fill.gradient.is_some(), "an fg-only patch keeps the gradient");
 
         // A partial solid still replaces (clears) an existing gradient.
         s.execute("home.formatCells", json!({"range": "A2", "style": {"fill": {"pattern": "Solid", "fg": {"Rgb": 65280}}}})).unwrap();
