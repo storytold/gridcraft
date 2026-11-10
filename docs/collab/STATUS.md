@@ -1,23 +1,28 @@
 # Real-time collaboration: status and acceptance evidence
 
 - Date: 2026-11-10
-- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), code head `a2251b0e` (code
-  and tests). `0b7d6aff` is the pushed head of PR #3613 and of
-  `fork/feature/realtime-collaboration` — a docs commit on top of `6a9b143c`. **Local** commits sit
-  on top of it, not pushed: `ae4311ee` (this page), `34e54b81`
-  (`collab-client`: the eight-megabyte converge test collects the frames it asserts on, §17),
-  `46783412` (the page that records the red gate), and the review-fix slice of §18 — eight commits
-  from `d91f838a` (a sort is structural) to `3e04a7eb` (server snapshots and temporary files) plus
-  `a2251b0e` (their rustfmt pass). The revision of this page that you are reading is one further
-  **local docs commit on top of `a2251b0e`, not pushed** — the tip of the branch, the `docs(collab)`
-  commit that `git log -1` names (a commit cannot spell its own hash; the bus record
-  `status/gridcraft` quotes it)
-- Base: `origin/main` = `2c58c769` (rebased 2026-11-08)
-- PR: <https://github.com/storytold/gridcraft/pull/3613> (draft)
+- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), code and PR head `2a245f91`:
+  the PR head, the `fork/feature/realtime-collaboration` head and the pushed tip are that commit,
+  and the tree was clean at it. 57 commits on `origin/main` (`2c58c769`), 84 files, +16130/−34.
+  The push of 2026-11-10T17:19Z published what §16–§18 wrote down as local — `ae4311ee`,
+  `34e54b81`, `46783412`, the nine review-fix commits `d91f838a`…`a2251b0e` and the docs commit
+  that preceded this one; §19 records that push and the state of the runs on it. This revision of
+  the page is then one further **local docs commit on top of `2a245f91`, not pushed** (it changes
+  only this file); the code of the branch is still `2a245f91`, and pushing that commit is the
+  human step named in §19. A commit cannot spell its own hash: the bus record `status/gridcraft`
+  quotes it.
+- Base: `origin/main` = `2c58c769` (rebased 2026-11-08; also the PR's `baseRefOid`)
+- PR: <https://github.com/storytold/gridcraft/pull/3613> — open, **not a draft** since
+  2026-11-10T14:56:54Z, `mergeable = MERGEABLE`
+- Gate on this head: none yet. The four workflows created on `2a245f91` (`CI`, `House rules`,
+  `Nix`, `SonarCloud`, 2026-11-10T17:19:42Z) all sit in `action_required` with no job started,
+  and CodeRabbit is `in_progress`; the evidence in this page is the host runs of §17 and §18.6,
+  not a CI pass.
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
 - Session handoff (project-level, outside this repository):
-  `docs/collab/STATUS.md` in the cabinet project directory; this page is the
-  in-repo evidence record visible to a GitHub reviewer.
+  `docs/collab/STATUS.md` in the cabinet project directory. This page is the canonical record and
+  the evidence a GitHub reviewer can open on the branch; the project handoff keeps only session
+  state and points here (§19).
 
 ## 1. Rebase onto current `main`
 
@@ -756,9 +761,10 @@ No CI file is touched, nothing is pushed to `storytold/*`; the commit stays on
 ## 16. Two-client host run against a cabinet-like page (2026-11-10)
 
 **Code head `6a9b143c`** on `feature/realtime-collaboration` carries the two host-bridge fixes
-this run found. The docs commit that recorded the run is `0b7d6aff`, the pushed head of PR #3613
-and of `fork/feature/realtime-collaboration`. The text below is a later **local** docs commit on
-top of `0b7d6aff`, not pushed; it changed only this file, so the code of the branch is still
+this run found. The docs commit that recorded the run is `0b7d6aff`, which was the pushed head of
+PR #3613 and of `fork/feature/realtime-collaboration` at the time (superseded by the push of
+2026-11-10T17:19Z, §19). The text below was written as a **local** docs commit on top of
+`0b7d6aff`, not pushed then; it changed only this file, so the code of the branch was still
 `6a9b143c`.
 
 The browser half of §2 and §6.6, run the way `INTEGRATION.md` §6 describes it: a page frames two
@@ -820,13 +826,13 @@ in `Drop`; the run above has no page error (only a 404 for the page's missing fa
 `cargo clippy -p gridcraft-collab-web -p gridcraft-web -p gridcraft-ui-egui --all-targets --
 -D warnings` clean. The wasm32 `clippy -D warnings` still stops on the pre-existing `dead_code`
 warning in `crates/ui-egui/src/backstage.rs` (`Modified`), untouched by this slice and present
-before it. The branch is pushed: `0b7d6aff` is the head of PR #3613 and of
-`fork/feature/realtime-collaboration`, and the PR records that push as its last update,
-2026-11-09T23:25:26Z. The workflows created on that head (`CI`, `House rules`, `Nix`,
-`SonarCloud`, 2026-11-09T23:25:33Z) did not run — they sit in `action_required` with no job
-started — so this head carries the gates above as run on the build host, not as a CI pass. The
-local docs commit that carries this text is not pushed and changes nothing outside
-`docs/collab/STATUS.md`.
+before it. The branch was pushed at that point: `0b7d6aff` was the head of PR #3613 and of
+`fork/feature/realtime-collaboration`, and the PR records that push as an update on
+2026-11-09T23:25:26Z (it was superseded on 2026-11-10T17:19Z, §19). The workflows created on that
+head (`CI`, `House rules`, `Nix`, `SonarCloud`, 2026-11-09T23:25:33Z) did not run — they sit in
+`action_required` with no job started — so that head carries the gates above as run on the build
+host, not as a CI pass. The local docs commit that carried this text was not pushed then and
+changed nothing outside `docs/collab/STATUS.md`.
 
 **What remains for a person.**
 
@@ -888,16 +894,18 @@ cargo fmt --all -- --check                                               clean, 
 cargo clippy --workspace --all-targets -j 4 -- -D warnings               clean, EXIT 0
 ```
 
-Before the fix the same host failed the single test 5 of 40 runs. The fix is a **local** commit on
-top of `ae4311ee`: PR #3613 and `0b7d6aff` are unchanged, nothing is pushed.
+Before the fix the same host failed the single test 5 of 40 runs. The fix was a **local** commit on
+top of `ae4311ee` when it was written (the PR head was `0b7d6aff` then); the push of
+2026-11-10T17:19Z published it in `2a245f91` (§19).
 
 ## 18. CodeRabbit's fourteen Major findings on `46783412` (2026-11-10)
 
-Review `5844270617` landed at 15:17Z on the PR head `46783412`: fourteen comments, all Major.
+Review `5844270617` landed at 15:17Z on the then PR head `46783412`: fourteen comments, all Major.
 Every one was checked against the code before anything changed. All fourteen were still valid, so
 all fourteen are fixed — each by a commit on top of `46783412` on
-`feature/realtime-collaboration`. The commits are local: nothing is pushed, `main` is untouched,
-no CI file is changed.
+`feature/realtime-collaboration`. The commits were local when this section was written; `main` is
+untouched and no CI file is changed. The push of 2026-11-10T17:19Z published them in `2a245f91`
+(§19).
 
 | # | Finding | What the code did | Commit |
 |---|---|---|---|
@@ -1010,8 +1018,9 @@ Test: `the_allowlist_separates_structural_from_merge_and_denies_code` gains the 
 ### 18.6 Gates (remote host `agents`, 2026-11-10)
 
 Every crate the fourteen fixes touch was tested on the build host, on **`a2251b0e`** — the code head
-after the formatting pass; the commit on top of it changes only this page. No CI run has covered
-these commits (nothing is pushed), so this host run is the evidence for them:
+after the formatting pass; the commit on top of it changes only this page. No CI run covered these
+commits when the run was made (they were local then; the push of 2026-11-10T17:19Z put them on the
+PR head `2a245f91`, whose runs have not started, §19), so this host run is the evidence for them:
 
 ```text
 cargo test -p gridcraft-collab                                48 passed, 0 failed, EXIT 0
@@ -1046,11 +1055,40 @@ test binary of its own — its adapter change is exercised through `collab_web`'
 
 No finding was rejected: each one named a real path in the code and each is fixed above. All
 fourteen GitHub review threads were answered on 2026-11-10 (one reply per comment id, quoting the
-fix and its test). The PR head did not move: it is still `46783412`, the replies say plainly that
-the commit hashes are local until the branch is pushed, and a reply on a line of an older commit
-still shows the discussion resolved by the commit named in its text.
+fix and its test). When the replies were written the PR head was still `46783412` and the replies
+said plainly that the commit hashes were local until the branch was pushed; a reply on a line of an
+older commit still shows the discussion resolved by the commit named in its text.
 
-What is left for a person: push `feature/realtime-collaboration` (nine commits on top of
-`46783412` — the review fixes and their formatting pass, none touching `.github/` or `main` — and
-this page on top of them). The PR then moves from `46783412` to the tip, and its CI runs on the
-fixed head; until then the gates in §18.6 are the host run, not a CI pass.
+The branch was pushed afterwards (§19): the PR head moved from `46783412` to `2a245f91`, which
+carries the nine review-fix commits and this page. The gate on that head has not started — the four
+workflows sit in `action_required` — so the gates in §18.6 remain the evidence, not a CI pass.
+
+## 19. The push of 2026-11-10T17:19Z and the state of the runs on `2a245f91`
+
+What §16–§18 recorded as local is published. The PR head and `fork/feature/realtime-collaboration`
+are one commit, `2a245f91abab4aeaca1ec6296d3654c93a2d4da2`, and the tree was clean at it. The
+branch is 57 commits on `origin/main` (`2c58c769`), 84 files, +16130/−34, and the PR's
+`baseRefOid` is the same `2c58c769`.
+
+- **PR state.** Open, `isDraft = false` (ready for review at 2026-11-10T14:56:54Z),
+  `mergeable = MERGEABLE`, last update 17:19:57Z. Nothing in `.github/` is touched by the branch;
+  `main` is unchanged.
+- **Workflows on the head.** `CI`, `House rules`, `Nix` and `SonarCloud` were created at
+  17:19:42Z and all four are `completed / action_required`: the fork's pull request runs wait for
+  a maintainer to approve them, so no job has started and no check has a conclusion.
+- **CodeRabbit.** The review on the new head was still `in_progress` when this page was written
+  (started 17:19:59Z). Its previous review — 14 Major findings on `46783412` — is answered and
+  fixed above (§18); the PR carries 30 review comments in total.
+- **What that means for acceptance.** There is **no CI gate on `2a245f91`**: green here is the
+  host evidence of §17 and §18.6 plus the earlier CI run on `0b7d6aff` (`42720341961`, red on the
+  converge test that `34e54b81` fixed). A maintainer's approval of the four runs is a manual step,
+  as is the CodeRabbit review of the new head; `mergeStateStatus = UNSTABLE` because no check on
+  the head has a conclusion, not because a test failed.
+- **For a person.** Push this docs commit (it changes only this page), approve the four workflows
+  on the fork PR (or push the branch to a branch inside `storytold/gridcraft`, if the maintainer
+  prefers that), wait for CodeRabbit's new review and triage it, and only then ask for the merge.
+- **Where the record lives.** This page is the canonical record of the work: model, protocol,
+  slices, gates and reviews, and a GitHub reviewer can open it on the branch. The project-level
+  handoff in the cabinet directory (`docs/collab/STATUS.md`, outside this repository) was reduced to
+  a pointer plus session state (run instructions, what is left, the bus log, the host environment)
+  on 2026-11-10T17:36Z, so the two pages no longer diverge.
