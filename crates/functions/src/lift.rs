@@ -3,7 +3,7 @@
 
 use gridcraft_core::{Array, CellError, Value};
 
-use crate::util::{MAX_CELLS, num};
+use crate::util::MAX_CELLS;
 use crate::{Arg, Ctx, FnSpec};
 
 /// Value-parameter masks (see [`FnSpec::value_args`]), observed in Excel 365: a reference to more
@@ -102,13 +102,9 @@ fn call_cost(spec: &FnSpec, cell_args: &[Arg]) -> usize {
     if !PERIOD_LOOPS.contains(&spec.name) {
         return 0;
     }
-    // The function's own coercion (text like "10000000" counts), so no loop goes uncharged.
-    let period = |i: usize| num(cell_args, i).ok().filter(|n| n.is_finite()).map(f64::trunc);
-    match (period(3), period(4)) {
-        // The function itself refuses spans past 1e7 periods; anything larger costs the cap.
-        (Some(start), Some(end)) if end >= start => ((end - start) + 1.0).min(1e8) as usize,
-        _ => 0,
-    }
+    // The function's own validation and coercion (text like "10000000" counts), so a call it
+    // refuses before its loop costs nothing and no loop goes uncharged.
+    crate::financial::cumulative_args(cell_args).map_or(0, |(.., start, end, _)| (end - start + 1.0) as usize)
 }
 
 pub(crate) fn call_lifted(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
@@ -302,6 +298,20 @@ mod tests {
         let out = ev("CUMIPMT", args(2, 12.0));
         assert_eq!(rows_of(&out).len(), 2);
         assert!(matches!(rows_of(&out).first().and_then(|r| r.first()), Some(Value::Number(x)) if *x < 0.0));
+    }
+
+    /// A call the function refuses before its loop (here: end period past the period count) is
+    /// not charged, so rejected elements can't push a valid one over the budget.
+    #[test]
+    fn lifted_period_loops_do_not_charge_rejected_calls() {
+        use gridcraft_core::Array;
+        let mut ends = vec![nv(1e7 + 1.0); 60];
+        ends.push(nv(12.0));
+        let ends = av(Array::new(ends.len(), 1, ends).unwrap_or_else(|| panic!("shape")).into());
+        let out = ev("CUMIPMT", vec![n(0.01), n(1e7), n(1000.0), n(1.0), ends, n(0.0)]);
+        let rows = rows_of(&out);
+        assert_eq!(rows.len(), 61);
+        assert!(matches!(rows.last().and_then(|r| r.first()), Some(Value::Number(x)) if *x < 0.0));
     }
 
     /// Security: an array-producing function lifted over a computed array builds each element's
