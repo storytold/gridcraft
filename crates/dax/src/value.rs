@@ -24,6 +24,9 @@ pub enum Scalar {
     /// Currency is an integer scaled by 10,000.
     #[serde(with = "currency_serde")]
     Currency(i64),
+    /// A decimal. DAX numbers are finite, so a non-finite value fails to serialize instead of
+    /// becoming JSON `null` (which would read back as BLANK).
+    #[serde(with = "decimal_serde")]
     Decimal(f64),
     /// DateTime is an OLE Automation serial: whole days since 1899-12-30 plus a time fraction.
     #[serde(with = "datetime_serde")]
@@ -49,6 +52,23 @@ mod currency_serde {
     }
 }
 
+mod decimal_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    /// Non-finite values have no JSON representation that survives a round trip: `serde_json`
+    /// writes them as `null`, which reads back as BLANK. Serialization is refused instead.
+    pub fn serialize<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+        if !value.is_finite() {
+            return Err(serde::ser::Error::custom(format!("a DAX number must be finite, not {value}")));
+        }
+        serializer.serialize_f64(*value)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+        f64::deserialize(deserializer)
+    }
+}
+
 mod datetime_serde {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -59,6 +79,9 @@ mod datetime_serde {
     }
 
     pub fn serialize<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+        if !value.is_finite() {
+            return Err(serde::ser::Error::custom(format!("a DAX date serial must be finite, not {value}")));
+        }
         Tagged { value: *value }.serialize(serializer)
     }
 
@@ -339,5 +362,40 @@ impl EvalError {
 
     pub fn not_implemented(name: &str) -> Self {
         EvalError::new(format!("DAX function `{name}` is not implemented by this evaluator"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_finite_decimals_and_dates_are_refused_by_serialization() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for scalar in [Scalar::Decimal(value), Scalar::DateTime(value)] {
+                assert!(
+                    serde_json::to_value(&scalar).is_err(),
+                    "{scalar:?} must not serialize: JSON has no non-finite number"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn finite_values_round_trip_through_json() {
+        for scalar in [
+            Scalar::Decimal(1.5),
+            Scalar::DateTime(45_292.5),
+            Scalar::Currency(12_345),
+            Scalar::Integer(7),
+            Scalar::Boolean(true),
+            Scalar::Blank,
+            Scalar::String("text".into()),
+        ] {
+            let json = serde_json::to_value(&scalar).expect("finite value serializes");
+            let back: Scalar = serde_json::from_value(json.clone()).expect("round trip");
+            assert_eq!(back, scalar, "round trip through {json}");
+        }
+        assert_eq!(serde_json::to_value(Scalar::Decimal(1.5)).expect("serializes"), serde_json::json!(1.5));
     }
 }
