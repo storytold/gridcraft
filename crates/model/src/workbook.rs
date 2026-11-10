@@ -275,6 +275,11 @@ pub struct Workbook {
     /// to be listed read-only. Not in JSON.
     #[serde(skip)]
     pub excel_queries: Vec<crate::query::ExcelQuery>,
+    /// The region whose formats this workbook is typed and shown in (Options › Region). A runtime
+    /// setting of the application, not of the file: it is not saved, and the engine session sets
+    /// it on every document it holds. en-US until then.
+    #[serde(skip, default = "gridcraft_core::region::default_region")]
+    pub region: &'static gridcraft_core::Region,
     /// The file this workbook reports as its own, which is what `CELL("filename")` returns.
     /// `None` = no file yet, which Excel reports as an empty string until the workbook has been
     /// saved once. Deliberately separate from `source_dir`: that one names the folder relative
@@ -374,6 +379,7 @@ impl Workbook {
             source_dir: None,
             queries: vec![],
             excel_queries: vec![],
+            region: gridcraft_core::region::default_region(),
             source_path: None,
         }
     }
