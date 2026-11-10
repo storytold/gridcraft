@@ -31,20 +31,41 @@ fn is_volatile(e: &Expr, volatile_names: &HashSet<String>) -> bool {
 }
 
 /// Upper-cased defined names whose formula is volatile, directly or through other names.
+///
+/// Volatility flows backwards along name references: each name is parsed and walked once, and a
+/// worklist carries volatility from a name to the names that use it. Rescanning every name until
+/// nothing changes was quadratic: a file listing its names so that each pass marked only one more
+/// did one full pass per name.
 pub(super) fn volatile_names(wb: &Workbook) -> HashSet<String> {
-    let parsed: Vec<(String, Option<Expr>)> =
-        wb.names.iter().map(|n| (n.name.to_ascii_uppercase(), gridcraft_engine::formula::parse(&n.formula).ok())).collect();
     let mut set = HashSet::new();
-    // Each round adds at least one name or stops, so `len + 1` rounds reach the fixed point.
-    for _ in 0..=parsed.len() {
-        let before = set.len();
-        for (name, e) in &parsed {
-            if !set.contains(name) && e.as_ref().is_some_and(|e| is_volatile(e, &set)) {
-                set.insert(name.clone());
+    // Upper-cased name -> the names whose formulas refer to it.
+    let mut users: HashMap<String, Vec<String>> = HashMap::new();
+    let mut queue = Vec::new();
+    let none = HashSet::new();
+    for n in &wb.names {
+        let name = n.name.to_ascii_uppercase();
+        let Ok(e) = gridcraft_engine::formula::parse(&n.formula) else { continue };
+        if is_volatile(&e, &none) {
+            if set.insert(name.clone()) {
+                queue.push(name.clone());
             }
+            continue;
         }
-        if set.len() == before {
-            break;
+        let mut used = BTreeSet::new();
+        e.walk(&mut |x| {
+            if let Expr::Name(r) = x {
+                used.insert(r.to_ascii_uppercase());
+            }
+        });
+        for r in used {
+            users.entry(r).or_default().push(name.clone());
+        }
+    }
+    while let Some(v) = queue.pop() {
+        for user in users.remove(&v).unwrap_or_default() {
+            if set.insert(user.clone()) {
+                queue.push(user);
+            }
         }
     }
     set
