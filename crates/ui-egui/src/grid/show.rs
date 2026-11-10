@@ -199,7 +199,6 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             &mut cf,
         )
     };
-    app.grid.cf = cf_sheet.map(|s| (s, cf));
     // Objects above cells. A hidden object can't stay selected: Delete or the Format pane would act
     // on something the user can't see.
     if crate::chartview::objects_hidden(&wb) {
@@ -237,6 +236,8 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         crate::paper_view::paint_rulers(app, &painter, rect, &geo, &t);
     }
     show_grid_interactions(app, ui, &resp, &geo, sh, &wb, &mut cf);
+    // Keep the cache for the next frame; the interactions above still need it this frame.
+    app.grid.cf = cf_sheet.map(|s| (s, cf));
     let track_x = vertical_scroll_track(available, rect, rtl);
     // The track starts below the column headings and frozen rows; the bar's column beside them
     // takes its colour too instead of showing a light square in dark mode.
