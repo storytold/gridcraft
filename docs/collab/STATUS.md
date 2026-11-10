@@ -1,23 +1,21 @@
 # Real-time collaboration: status and acceptance evidence
 
 - Date: 2026-11-10
-- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`), code and PR head `2a245f91`:
-  the PR head, the `fork/feature/realtime-collaboration` head and the pushed tip are that commit,
-  and the tree was clean at it. 57 commits on `origin/main` (`2c58c769`), 84 files, +16130/−34.
-  The push of 2026-11-10T17:19Z published what §16–§18 wrote down as local — `ae4311ee`,
-  `34e54b81`, `46783412`, the nine review-fix commits `d91f838a`…`a2251b0e` and the docs commit
-  that preceded this one; §19 records that push and the state of the runs on it. This revision of
-  the page is then one further **local docs commit on top of `2a245f91`, not pushed** (it changes
-  only this file); the code of the branch is still `2a245f91`, and pushing that commit is the
-  human step named in §19. A commit cannot spell its own hash: the bus record `status/gridcraft`
-  quotes it.
+- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`). The PR head is
+  `2a245f91`; the slice that closes the fifteen Major findings of the 17:44Z review is
+  `f51237ea` and this page is one docs commit on top of it — both **local, not pushed** when
+  this revision was written, because pushing this branch is the human step §19 names. The branch is then 60 commits on `origin/main` (`2c58c769`), 84 files, +16813/−34.
+  A commit cannot spell its own hash: the bus record `status/gridcraft` quotes it. §19 records
+  the push of 2026-11-10T17:19Z, which published `ae4311ee`, `34e54b81`, `46783412` and the nine
+  review-fix commits `d91f838a`…`a2251b0e`.
 - Base: `origin/main` = `2c58c769` (rebased 2026-11-08; also the PR's `baseRefOid`)
 - PR: <https://github.com/storytold/gridcraft/pull/3613> — open, **not a draft** since
   2026-11-10T14:56:54Z, `mergeable = MERGEABLE`
 - Gate on this head: none yet. The four workflows created on `2a245f91` (`CI`, `House rules`,
-  `Nix`, `SonarCloud`, 2026-11-10T17:19:42Z) all sit in `action_required` with no job started,
-  and CodeRabbit is `in_progress`; the evidence in this page is the host runs of §17 and §18.6,
-  not a CI pass.
+  `Nix`, `SonarCloud`, 2026-11-10T17:19:42Z) all sit in `action_required` with no job started;
+  the workflows created by the push of `f51237ea` have not started either, and CodeRabbit's review
+  on it has not landed. The evidence in this page is the host runs of §17, §18.6 and §20.2, not a
+  CI pass.
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
 - Session handoff (project-level, outside this repository):
   `docs/collab/STATUS.md` in the cabinet project directory. This page is the canonical record and
@@ -1092,3 +1090,131 @@ branch is 57 commits on `origin/main` (`2c58c769`), 84 files, +16130/−34, and 
   handoff in the cabinet directory (`docs/collab/STATUS.md`, outside this repository) was reduced to
   a pointer plus session state (run instructions, what is left, the bus log, the host environment)
   on 2026-11-10T17:36Z, so the two pages no longer diverge.
+
+## 20. CodeRabbit's fifteen Major findings on `2a245f91` (2026-11-10)
+
+Review `5846575558` landed at 17:44Z on the PR head `2a245f91`: fifteen inline comments, all Major —
+eleven labelled quick win, four heavy lift. Every one was checked against the code before anything
+changed, and all fifteen were still valid. All fifteen are fixed by `f51237ea` on
+`feature/realtime-collaboration`; none was rejected, and no finding needed an answer that argues it
+away. `main` is untouched and `.github/` is not in the diff.
+
+| # | Finding | Quick win / heavy | What was wrong | Where it is fixed |
+|---|---|---|---|---|
+| 1 | `store.rs:224` | quick win | `read_journal` ignored a torn last line but left the bytes: the next append joined them into one malformed line that is no longer last, and the restart after it refused the whole journal | `Store::read_journal_repairing` rewrites the journal with the entries that parse; `load_stored` calls it before the session appends |
+| 2 | `store.rs:243` | quick win | one unreadable `meta.json` made `sessions()` fail, so `App::restore` logged "store scan failed" and restored nothing | the scan logs the directory and moves on |
+| 3 | `store.rs:285` | **heavy** | each file was atomic but the snapshot was not: a crash between `base.xlsx` and `seen.json`/`meta.json` left a base a restart would replay onto a second time | `base.<V>.xlsx`, `keys.<V>.json`, `seen.<V>.json` carry their version, `meta.json` is written last as the commit point, readers take the version from it, older files are pruned after it lands |
+| 4 | `ws.rs:202` | quick win | the journal tail was read under the document lock, the lock was released, and the connection was re-registered under it again: an operation applied in between went to the peers and the journal only, while `resynced` told the client a head it never received | `catch_up` reads the tail and inserts the connection in one critical section; a tail trimmed past the client's version falls back to the workbook |
+| 5 | `web.rs:247` | **heavy** | a repeated `gridcraft:session` built a new client, so operations the room never confirmed could not be resent | `HostSession::same_room` (same session, URL and role) keeps the client and its queue and applies only a new JWT through `renew_token` |
+| 6 | `web.rs:245` | quick win | a failed dial cleared `host_session_id` while the previous session stayed live, so Save posted the local replica as `gridcraft:save` and the bridge marked a stale copy saved | a failed dial keeps the session and its id; only the message says the new room was not opened |
+| 7 | `collab_ui.rs:36` | **heavy** | a replica joining a room opened from the cabinet's bytes at version 0 was sent nothing — the journal held nothing to replay — so it kept its own workbook while both sides claimed version 0 | `Doc::seeded` records that the room's document came from outside; the transport sends it to a version-0 join |
+| 8 | `synced.rs:390` | **heavy** | the rollback of a refused preview with a later preview on top asked for a resync from the current version, and the tail cannot contain an operation that never happened, so the preview stayed | `ClientMessage::Snapshot` asks for the authoritative workbook; the replication path is `resync(from = head + 1)`, which already sends one |
+| 9 | `ops.rs:32` | quick win | `data.subtotal` writes total rows and `data.removeDuplicates` compacts rows upwards, both classified as merge edits | both are structural (`STRUCTURAL_IDS`) |
+| 10 | `engine/src/lib.rs:1243` | quick win | `restore_cells` rebuilt the whole graph and recalculated the workbook, so one cell undo carried every formula in the book into the delta, the journal line and every peer | it calls `calc.cells_changed` with the restored keys, as a command's commit does |
+| 11 | `rfc.md:75` | quick win | the documented allowlist named `format.*` and used `format.bold` as its example, and `format.*` is not allowed — that example is refused `forbidden` | the allowlist, the structural list and the denylist are the ones in `ops.rs`; the example is `home.bold` |
+| 12 | `rfc.md:151` | quick win | the message table and the `applied` example described flat fields, while the wire nests the operation under `op` and the answer under `applied`, and `result.delta` is an array | table and examples match the serialized types |
+| 13 | `rfc.md:156` | quick win | the table listed `commit`/`commit-result` as WebSocket messages; there are none, such a frame is refused as invalid | the commit is the cabinet's HTTP endpoint, the notification is `committed` |
+| 14 | `rfc.md:293` | quick win | `expectedVersion` was documented as the cabinet's file version; the HTTP query checks the room's document version, and the callback sends the previous cabinet etag under the same name | the two values are distinguished |
+| 15 | `server.md:28` | quick win | nothing said that the callback URL must be `http://` (an `https://` one stops the start) or that the token and the workbook travel without TLS | the run book states the restriction and the protection the channel needs |
+
+### 20.1 The four heavy lifts
+
+**Snapshot commit point (#3).** The write order was base, keys, seen, meta, each file replaced
+atomically. A crash after the base left a new workbook with the old `seen.json`: the restart
+replayed the journal onto a document that already contained it, and the dedup window could not
+catch the ids because it was still at the old version. The three files now carry the version they
+describe and `meta.json` is written last; `load_stored` reads the files `meta.base_version` names,
+so a half-written snapshot is invisible. Pruning runs after the metadata is on disk and only
+removes the versions it no longer names. The volume from an older build (plain `base.xlsx`) is read
+through the fallback until the first snapshot of this build replaces it.
+
+Test: `the_meta_file_is_the_commit_point_of_a_snapshot` writes version 5, simulates the crash by
+writing only a version-7 base, and checks that the restart still reads version 5 and that the next
+complete snapshot prunes it.
+
+**Torn journal tail (#1).** The reader's tolerance was not enough: the bytes stayed, so the append
+after them produced one malformed line with an empty remainder after it, which the reader refuses
+because the broken line is no longer last. The repair is a rewrite of the same file from the
+entries that parse, done on the load path before the room takes new appends.
+Test: `a_torn_journal_tail_is_dropped_before_the_next_append`.
+
+**A repeated session (#5).** The decision is a comparison of the room a window already dialed with
+the one the cabinet just sent: session, socket URL and role. When they match, the client is kept and
+only the JWT is replaced (`renew_token`, which re-dials with the same window id and resends what the
+room has not answered); a different room is a new session. `HostSession::same_room` is the tested
+part (`a_repeated_session_names_the_same_room_only_for_the_same_session_url_and_role`); the shell
+uses it before it would build a new client, so the pending queue cannot be dropped by construction.
+
+**A version-0 join of a room that has a document (#7).** The room knows something the joining
+replica does not: whether its document came from outside. `Doc::seeded` is set when the session was
+created from `initialBytes`, when it continued a stored one, and when it was restored from the
+volume; it stays false for a room a participant opened as an empty workbook. A join at version 0
+into a seeded room takes the ordinary catch-up with `from = 0`, which now answers with the workbook
+when the journal has nothing to send. An unseeded room sends nothing, as before, so the first
+participant's document still seeds it.
+
+Tests: `a_join_of_a_session_opened_from_bytes_receives_the_workbook` and
+`a_join_of_a_room_that_started_empty_gets_no_workbook` in
+`apps/gridcraft-collab-server/tests/ws.rs`;
+`a_structural_undo_restores_the_package_state_after_a_restart` in `persistence.rs` now consumes the
+workbook before its first operation.
+
+**A refused preview the tail cannot repair (#8).** `ClientMessage::Snapshot` is a new client
+message: the transport answers it with the base workbook at the head and then `resynced`, through
+the same path it takes when a client is outside `[base, head]`. The client uses it exactly where a
+preview has to be shed and the operation that has to go may never have reached the journal — a
+refusal with a later preview on top. A plain catch-up still uses `Resync`.
+Tests: `a_refused_earlier_preview_does_not_undo_the_later_one` (now asserts the snapshot request)
+and `the_workbook_a_client_asked_for_replaces_the_refused_preview` in
+`crates/collab-client/tests/rollback.rs`; `a_client_can_ask_for_the_whole_workbook` on a socket.
+
+### 20.2 Gates (remote host `agents`, 2026-11-10, on `f51237ea`)
+
+Every crate the fifteen fixes touch was built and tested on the build host. No CI run covers the
+commit yet: the four workflows on the PR head wait for a maintainer's approval (§19), so this host
+run is the evidence for this slice.
+
+```text
+cargo test -p gridcraft-collab                                49 passed, 0 failed, EXIT 0
+cargo test -p gridcraft-collab-client --all-targets           1 lib + 13 converge + 4 document
+                                                              + 5 parts + 3 rollback, 0 failed, EXIT 0
+cargo test -p gridcraft-collab-server --all-targets           39 unit + 5 acceptance + 6 callback
+                                                              + 2 logging + 9 persistence + 11 socket,
+                                                              0 failed, EXIT 0
+cargo test -p gridcraft-collab-web                            9 passed, 0 failed, EXIT 0
+cargo test -p gridcraft-ui-egui --test it collab_dispatch     2 passed, 1182 filtered out, EXIT 0
+cargo test -p gridcraft-engine --lib                          898 passed, 1 failed, EXIT 101
+cargo check -p gridcraft-web --target wasm32-unknown-unknown  ok, EXIT 0
+cargo check -p gridcraft --features collab                    ok, EXIT 0
+cargo fmt --all -- --check                                    clean, EXIT 0
+cargo clippy -p gridcraft-collab -p gridcraft-collab-client
+  -p gridcraft-collab-web -p gridcraft-collab-server
+  -p gridcraft-engine -p gridcraft-ui-egui --all-targets
+  -j 8 -- -D warnings                                         clean, EXIT 0
+cargo clippy -p gridcraft-web -p gridcraft-collab-web
+  --target wasm32-unknown-unknown --no-deps -- -D warnings    clean, EXIT 0
+cargo clippy -p gridcraft --features collab --no-deps
+  -j 8 -- -D warnings                                         clean, EXIT 0
+```
+
+The one engine failure is the host-environment test §10 and §15 already record:
+`io::tests::save_keeps_the_destination_access_restrictions` (permission bits under the build host's
+temporary directory are `664`). The engine code it measures is not touched here; the other 898
+tests pass, including every restore path this slice changes. The `--workspace` run was not
+repeated: the crates above are the ones the diff changes.
+
+### 20.3 Answering the review
+
+All fifteen GitHub review threads were answered on 2026-11-10T18:46Z — one reply per comment id,
+quoting the change and its test, and each reply says the commit is local until the branch is pushed
+(the same honest wording §18.7 used). Where a finding asked for a mechanism the protocol did not
+have — the authoritative workbook on demand — the reply names it: `ClientMessage::Snapshot`, its
+server path and the three tests; where a fix is a lock scope rather than a behaviour the reply says
+so and names the suites that cover the paths around it instead of claiming a test that cannot be
+written deterministically. `rfc.md` and `server.md` were corrected in the same commit, so
+the documents a client is built from now describe the wire that exists.
+
+`f51237ea` is local, and this section is one docs commit on top of it that changes only this page.
+Pushing the branch (which moves the PR head to that docs commit) and approving the four workflows on
+it are the two human steps; until then the gate on the new commit is the host run of §20.2, not a CI
+pass.
