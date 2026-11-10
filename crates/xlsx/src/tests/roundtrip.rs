@@ -1065,12 +1065,16 @@ fn legacy_and_dynamic_formulas_keep_their_kind() {
     let (xml, _) = sheet1_xml(&bytes);
     assert!(xml.contains("<c r=\"B2\"><f>TANH(A1:A3)+A1:A3</f>"), "{xml}");
     assert!(xml.contains("<c r=\"B3\"><f>SUM(A1:A3)</f>"), "{xml}");
-    // Uncalculated, the spill range is not known yet; the formula stays dynamic.
-    assert!(xml.contains("<c r=\"C2\" cm=\"1\"><f t=\"array\" ref=\"C2\">TANH(A1:A3)</f>"), "{xml}");
+    // Cached open retains the file's declared range even before calculation; cm still marks
+    // this as dynamic, while D2 below remains a legacy array.
+    assert!(xml.contains("<c r=\"C2\" cm=\"1\"><f t=\"array\" ref=\"C2:C4\">TANH(A1:A3)</f>"), "{xml}");
     assert!(xml.contains("<c r=\"D2\"><f t=\"array\" ref=\"D2:D4\">TANH(A1:A3)</f>"), "{xml}");
     let (back, _) = read_xlsx(&bytes).unwrap();
     for a in ["B2", "B3", "C2", "D2"] {
         assert_eq!(text(&back, a), text(&wb, a), "{a}");
+    }
+    for book in [&wb, &back] {
+        assert_eq!(book.sheet(0).unwrap().spill_ranges.get(&at("C2")), Some(&rr("C2:C4")));
     }
 }
 
