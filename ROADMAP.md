@@ -133,10 +133,9 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 ## Progress log
 
-- 2026-11-02: macOS packaging accepts APPLE_KEYCHAIN_PROFILE for notarization; a named notarytool Keychain profile takes precedence over the existing three-variable authentication.
-
 | Date | What landed |
 |---|---|
+| 2026-11-02 | macOS packaging accepts APPLE_KEYCHAIN_PROFILE for notarization; a named notarytool Keychain profile takes precedence over the existing three-variable authentication. |
 | 2026-11-02 | Equations: Insert › Equation (a split button with a gallery of examples) and an editor with quick-insert buttons, the error underlined at its position and a live preview; `insert.equation` and `equation.edit`; LaTeX laid out by RaTeX inside the new `gridcraft-math` crate, capped and panic-guarded, and cached on the shape so that painting never runs the layout engine; xlsx writes Office Math with a plain-text fallback and the source in `descr`, and reads Office Math back into LaTeX; PDF prints equations with the standard Symbol font and `[?]` for anything else |
 | 2026-11-02 | Solver writes a Sensitivity report: Simplex LP shadow prices, reduced costs and allowable ranges from the final tableau; GRG Nonlinear reduced gradients and Lagrange multipliers from difference gradients, at a Karush-Kuhn-Tucker point only; Solver Results offers it where it applies (no score change) |
 | 2026-11-02 | Floating objects: charts, pictures, shapes and slicers share one selection with a frame of eight resize handles (each moves only its own edges, also on right-to-left sheets); Delete or Backspace deletes the selected object and Escape drops the selection; slicers follow row and column edits and sorts like the other objects; chart series follow cut-moves and sheet renames and deletes; a copied sheet gives its objects fresh ids; `ui.inspect` reports `selectedObject` and `ui.object.select` selects any object (#190, #213) |

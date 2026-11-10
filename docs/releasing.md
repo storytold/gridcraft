@@ -115,6 +115,13 @@ packaging/macos/package.sh --arch aarch64     # quicker, host-only
 open dist/release/gridcraft-*-macos-*.dmg
 ```
 
+### macOS notarization authentication
+
+Set `APPLE_KEYCHAIN_PROFILE` to an existing `notarytool` Keychain profile to authenticate
+notarization without supplying account credentials to the script. The profile takes precedence
+over `APPLE_ID`, `APPLE_PASSWORD` and `APPLE_TEAM_ID`, and is used for both submissions and
+rejection logs. Ad-hoc signing still skips notarization.
+
 ### Windows
 
 `packaging/windows/package.ps1 -Arch x64|x86|arm64` builds with `-C target-feature=+crt-static`
@@ -294,7 +301,6 @@ manually; manual runs from other branches are dry runs as described above. `pack
 also runs on `main` and PRs.
 - Locally: `cargo xtask ci` (fmt, clippy, tests, assets, layers, wasm, parity check).
 
-macOS packaging accepts APPLE_KEYCHAIN_PROFILE for notarization; a named notarytool Keychain profile takes precedence over the existing three-variable authentication.
 
 ## Revision history
 
