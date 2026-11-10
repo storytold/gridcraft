@@ -102,6 +102,8 @@ real_name = "Helen Kwok"
 real_name = "Robert Lee"
 sync_github_name = true
 
+[people.alosslessdev]
+real_name = "Francisco Herrera"
 [people.dylanmtaylor]
 sync_github_name = true
 

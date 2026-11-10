@@ -336,6 +336,55 @@ mod tests {
     }
 
     #[test]
+    fn fill_tab_labels_are_in_every_catalog() {
+        // Source-driven: every literal label in `fill_tab` must exist in every non-English
+        // language, so a new control cannot ship as English-only.
+        let src = include_str!("dialogs/format_cells.rs");
+        let start = src.find("fn fill_tab(").expect("fill_tab");
+        let body = &src[start..];
+        let end = body.find("\n/// Draws the six-tab Format Cells editor").expect("end marker after fill_tab");
+        let body = &body[..end];
+        let mut keys: Vec<&str> = body
+            .match_indices("lang.tr(\"")
+            .filter_map(|(i, _)| {
+                let rest = &body[i + "lang.tr(\"".len()..];
+                rest.find('"').map(|j| &rest[..j])
+            })
+            .collect();
+        // The four preset buttons pass their label through a variable.
+        keys.extend(["Vertical", "Diagonal up", "Horizontal", "Diagonal down"]);
+        keys.sort_unstable();
+        keys.dedup();
+        assert!(keys.contains(&"Gradient") && keys.contains(&"Add Stop"));
+        type Translate = fn(&str) -> Option<&'static str>;
+        let catalogs: [(&str, Translate); 18] = [
+            ("Spanish", es::translate),
+            ("Greek", el::translate),
+            ("Simplified Chinese", zh::translate),
+            ("Korean", ko::translate),
+            ("Russian", ru::translate),
+            ("Portuguese", pt::translate),
+            ("German", de::translate),
+            ("Czech", cs::translate),
+            ("French", fr::translate),
+            ("Serbian", sr::translate),
+            ("Japanese", ja::translate),
+            ("Turkish", tr::translate),
+            ("Polish", pl::translate),
+            ("Italian", it::translate),
+            ("Ukrainian", uk::translate),
+            ("Vietnamese", vi::translate),
+            ("Dutch", nl::translate),
+            ("Romanian", ro::translate),
+        ];
+        for (language, translate) in catalogs {
+            for key in &keys {
+                assert!(translate(key).is_some(), "missing {language}: {key}");
+            }
+        }
+    }
+
+    #[test]
     fn untranslated_text_falls_back_to_english() {
         let label = |key: &'static str| key.rsplit_once('|').map_or(key, |(_, label)| label);
         for (english, _) in ja::CORE {

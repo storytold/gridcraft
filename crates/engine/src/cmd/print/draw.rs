@@ -1,6 +1,8 @@
 use super::layout::{DENSE_BLOCK, SheetLayout};
 use super::objects::draw_cell_picture;
 use super::text::{TextPlacement, draw_text};
+use gridcraft_model::{GradientFill, GradientKind, GradientStop, Theme};
+
 use super::{
     BorderLine, BorderStyle, Borders, CellRef, Color, Font, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, Underline, Value,
     Workbook, split_sheet,
@@ -22,6 +24,7 @@ fn blend(fg: [u8; 4]) -> Rgb {
 pub(super) struct Look {
     pub(super) style: Style,
     fill: Option<Rgb>,
+    gradient: Option<GradientFill>,
     pub(super) cf: Option<crate::cf::CfLook>,
 }
 
@@ -32,8 +35,8 @@ fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<c
     };
     let cfl = cf.as_mut().and_then(|cache| cache.look(wb, si, c));
     if let Some(st) = cfl.as_ref().and_then(|l| l.style.as_ref()) {
-        if st.fill.pattern != PatternType::None {
-            style.fill = st.fill;
+        if st.fill.is_set() {
+            style.fill = st.fill.clone();
         }
         if st.font.color != Color::Auto {
             style.font.color = st.font.color;
@@ -59,19 +62,25 @@ fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<c
             }
         }
     }
-    let mut fill = match style.fill.pattern {
-        PatternType::None => None,
-        PatternType::Solid => rgb_of(style.fill.fg, wb),
-        _ => {
-            let fg = rgb_of(style.fill.fg, wb).unwrap_or([0, 0, 0]);
-            let bg = rgb_of(style.fill.bg, wb).unwrap_or([255, 255, 255]);
-            Some([0, 1, 2].map(|i| ((fg[i] as u16 + bg[i] as u16 * 3) / 4) as u8))
+    let mut gradient = style.fill.gradient.clone();
+    let mut fill = if gradient.is_some() {
+        None
+    } else {
+        match style.fill.pattern {
+            PatternType::None => None,
+            PatternType::Solid => rgb_of(style.fill.fg, wb),
+            _ => {
+                let fg = rgb_of(style.fill.fg, wb).unwrap_or([0, 0, 0]);
+                let bg = rgb_of(style.fill.bg, wb).unwrap_or([255, 255, 255]);
+                Some([0, 1, 2].map(|i| ((fg[i] as u16 + bg[i] as u16 * 3) / 4) as u8))
+            }
         }
     };
     if let Some(rgb) = cfl.as_ref().and_then(|l| l.scale_fill) {
+        gradient = None;
         fill = Some(rgb);
     }
-    Look { style, fill, cf: cfl }
+    Look { style, fill, gradient, cf: cfl }
 }
 
 /// PDF measurement for chart layout.
@@ -228,6 +237,86 @@ fn draw_border(pg: &mut Page, b: &BorderLine, wb: &Workbook, start: Point, end: 
     pg.stroke_line_dashed(Point::new(x0, y0), Point::new(x1, y1), lw, color, &border_dash(b.style, k));
 }
 
+/// Tiles across one axis of a gradient cell: one per 8 pt, at least 2 and at most 16, as the grid
+/// renderer sizes its mesh. A fixed 16×16 forced every cell, however small, to pay 256 solid fills;
+/// scaling them bounds the page even when a whole large range is gradient-filled.
+fn gradient_tiles(len: f32) -> usize {
+    ((len / 8.0).ceil() as usize).clamp(2, 16)
+}
+
+/// Paints a gradient as a small grid of solid rectangles. PDF has real shading objects, but the
+/// writer's page model is deliberately simple, so the cell is tessellated at the grid renderer's
+/// resolution: a bounded number of tiles per axis, from the cell's size.
+fn fill_gradient(pg: &mut Page, x: f32, y: f32, w: f32, h: f32, g: &GradientFill, theme: &Theme) {
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return;
+    }
+    // Resolve theme colours once per cell, not once per tile (`sample` would allocate per tile).
+    let stops = g.resolved_stops(theme);
+    let along = gradient_axis(g);
+    let knots = |axis: GradientAxis| if along == Some(axis) { g.stops.as_slice() } else { &[] };
+    let us = gradient_axis_samples(gradient_tiles(w), knots(GradientAxis::Horizontal));
+    let vs = gradient_axis_samples(gradient_tiles(h), knots(GradientAxis::Vertical));
+    for (iy, &v) in vs.iter().enumerate() {
+        let (y0, y1) = gradient_band(&vs, iy);
+        for (ix, &u) in us.iter().enumerate() {
+            let (x0, x1) = gradient_band(&us, ix);
+            if let Some(rgb) = g.sample_resolved(&stops, u, v) {
+                // A hair of overlap hides seams between the rectangles.
+                pg.fill_rect(x + x0 as f32 * w, y + y0 as f32 * h, (x1 - x0) as f32 * w + 0.05, (y1 - y0) as f32 * h + 0.05, rgb);
+            }
+        }
+    }
+}
+
+/// The axis of the cell that a linear gradient's stop positions measure distance along. A path
+/// gradient's stops run outwards from the focus rectangle, not along one axis.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GradientAxis {
+    Horizontal,
+    Vertical,
+}
+
+fn gradient_axis(g: &GradientFill) -> Option<GradientAxis> {
+    let GradientKind::Linear { degree } = g.kind else { return None };
+    let angle = degree.to_radians();
+    let (dx, dy) = (angle.cos().abs(), angle.sin().abs());
+    // A diagonal gradient moves along both axes: neither one carries the stops alone.
+    if dx > dy * (1.0 + 1e-9) {
+        Some(GradientAxis::Horizontal)
+    } else if dy > dx * (1.0 + 1e-9) {
+        Some(GradientAxis::Vertical)
+    } else {
+        None
+    }
+}
+
+/// Positions along one axis (0..1) to sample the gradient at: the tile centres, plus every stop
+/// strictly inside the cell that no centre already sits near. A white → black → white gradient
+/// sampled only at 1/4 and 3/4 is one flat grey; the middle stop gets its own band instead. Stops
+/// at 0 or 1 need none, and a stop within half a tile of a centre is already sampled faithfully,
+/// which bounds the samples at twice the tile count.
+fn gradient_axis_samples(tiles: usize, knots: &[GradientStop]) -> Vec<f64> {
+    let band = 1.0 / tiles as f64;
+    let mut samples: Vec<f64> = (0..tiles).map(|i| (i as f64 + 0.5) * band).collect();
+    for stop in knots {
+        let knot = stop.position;
+        if knot > 0.0 && knot < 1.0 && samples.iter().all(|s| (s - knot).abs() >= band * 0.5) {
+            samples.push(knot);
+        }
+    }
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    samples
+}
+
+/// The stretch of one axis a sample stands for: half way to each neighbour, so the tile centres
+/// reproduce the uniform grid exactly and a stop keeps the band around it.
+fn gradient_band(samples: &[f64], i: usize) -> (f64, f64) {
+    let lo = if i == 0 { 0.0 } else { (samples[i - 1] + samples[i]) / 2.0 };
+    let hi = if i + 1 == samples.len() { 1.0 } else { (samples[i] + samples[i + 1]) / 2.0 };
+    (lo, hi)
+}
+
 /// Draws the cells of a block: fills, gridlines, data bars, borders and text.
 pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::cf::CfCache>) {
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
@@ -276,6 +365,7 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
         .map(|c| (*c, cell_look(b.wb, b.si, sh, *c, cf)))
         .filter(|(c, l)| {
             l.fill.is_some()
+                || l.gradient.is_some()
                 || l.cf.is_some()
                 || merges.iter().any(|m| m.start == *c)
                 || !sh.value(*c).is_empty()
@@ -301,7 +391,9 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
         if w <= 0.0 || h <= 0.0 {
             continue;
         }
-        if let Some(f) = l.fill {
+        if let Some(g) = &l.gradient {
+            fill_gradient(pg, x, y, w, h, g, &b.wb.theme);
+        } else if let Some(f) = l.fill {
             pg.fill_rect(x, y, w, h, f);
         } else if merged && gridlines {
             pg.fill_rect(x, y, w, h, [255, 255, 255]);

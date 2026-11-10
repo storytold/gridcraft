@@ -90,7 +90,7 @@ pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
             }
         } else if let Some(c) = fc.child("colorFilter") {
             let Some(dxf) = c.attr_u32("dxfId").and_then(|i| cx.dxfs.get(i as usize)) else { continue };
-            if c.flag("cellColor", true) { FilterCriterion::FillColor(dxf.fill.fg) } else { FilterCriterion::FontColor(dxf.font.color) }
+            if c.flag("cellColor", true) { FilterCriterion::FillColor(dxf.fill.color()) } else { FilterCriterion::FontColor(dxf.font.color) }
         } else if let Some(i) = fc.child("iconFilter") {
             let Some(set) = i.attr("iconSet") else { continue };
             FilterCriterion::Icon { set: set.to_string(), id: i.attr_u32("iconId") }

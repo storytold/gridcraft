@@ -1201,6 +1201,40 @@ fn filter_top10_two_criteria_on_one_column() {
     assert_eq!(hidden, vec![1, 2, 5]);
 }
 
+/// A colour filter and a colour sort read a gradient's first stop: `normalize` sets a gradient's
+/// `fg` to automatic, so reading `fg` alone hides every gradient from a filter and gives a colour
+/// sort nothing to order by.
+#[test]
+fn colour_filter_and_sort_read_a_gradients_first_stop() {
+    use gridcraft_model::{Color, FilterCriterion};
+    let red_to_blue = json!({"fill": {"gradient": {
+        "kind": {"Linear": {"degree": 90.0}},
+        "stops": [{"position": 0.0, "color": {"Rgb": 16711680}}, {"position": 1.0, "color": {"Rgb": 255}}]
+    }}});
+    let mut filtered = s();
+    let mut sorted = s();
+    // The filter keeps the two gradient rows and hides the plain one.
+    filtered.execute("range.setValues", json!({"range": "A1", "values": [["N"], ["plain"], ["red"], ["red"]]})).unwrap();
+    filtered.execute("home.formatCells", json!({"range": "A3", "style": red_to_blue.clone()})).unwrap();
+    filtered.execute("home.formatCells", json!({"range": "A4", "style": red_to_blue.clone()})).unwrap();
+    filtered.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    filtered.execute("data.filter", json!({})).unwrap();
+    let sh = std::sync::Arc::make_mut(&mut filtered.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    if let Some(af) = sh.autofilter.as_mut() {
+        af.criteria = vec![(0, FilterCriterion::FillColor(Color::Rgb(0xFF0000)))];
+    }
+    filtered.execute("data.reapply", json!({})).unwrap();
+    let hidden: Vec<u32> = filtered.active().unwrap().wb.sheet(0).unwrap().rows.iter().filter(|(_, r)| r.hidden).map(|(k, _)| *k).collect();
+    assert_eq!(hidden, vec![1], "the gradient rows match the first stop; the plain row is hidden");
+
+    // A colour sort orders the gradient above the unfilled cell, by the same first stop.
+    sorted.execute("range.setValues", json!({"range": "A1", "values": [["N"], ["plain"], ["red"]]})).unwrap();
+    sorted.execute("home.formatCells", json!({"range": "A3", "style": red_to_blue})).unwrap();
+    sorted.execute("data.sort", json!({"range": "A1:A3", "header": true, "keys": [{"column": "A", "by": "cellColor"}]})).unwrap();
+    assert_eq!(v(&sorted, "A2"), Value::from("red"), "the gradient sorts before the unfilled cell");
+    assert_eq!(v(&sorted, "A3"), Value::from("plain"));
+}
+
 /// Turning the filter on with only the header row selected filters the data below it (#201).
 #[test]
 fn filter_on_a_selected_header_row_covers_the_data_below() {
@@ -4469,7 +4503,7 @@ fn conditional_format_styles_take_hex_colours_and_quoted_values() {
         json!({"range": "A1", "rule": {"type": "expression", "formula": "=TRUE", "style": {"fill": {"fg": "C6EFCE"}}}}),
     )
     .unwrap();
-    assert_eq!(style(&rule(&s, 0)).fill, Fill { pattern: PatternType::Solid, fg: Color::Rgb(0xC6EFCE), bg: Color::Auto });
+    assert_eq!(style(&rule(&s, 0)).fill, Fill { pattern: PatternType::Solid, fg: Color::Rgb(0xC6EFCE), bg: Color::Auto, gradient: None });
     let internal = json!({"fill": {"pattern": "Solid", "fg": {"Rgb": 16773836}}, "borders": {"left": {"style": "Thin", "color": "#C00000"}}});
     s.execute("home.conditionalFormat", json!({"range": "A1", "rule": {"type": "expression", "formula": "=TRUE", "style": internal}})).unwrap();
     let st = style(&rule(&s, 0));

@@ -8,6 +8,7 @@ use super::{
 pub(super) struct Look {
     pub(super) style: Style,
     pub(super) fill: Option<Color32>,
+    pub(super) gradient: Option<gridcraft_engine::model::GradientFill>,
     pub(super) text_color: Color32,
 }
 
@@ -37,8 +38,8 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
     if let Some(l) = &cfl
         && let Some(st) = &l.style
     {
-        if st.fill.pattern != PatternType::None {
-            style.fill = st.fill;
+        if st.fill.is_set() {
+            style.fill = st.fill.clone();
         }
         if st.font.color != Color::Auto {
             style.font.color = st.font.color;
@@ -73,27 +74,35 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
             }
         }
     }
-    let mut fill = match style.fill.pattern {
-        PatternType::None => None,
-        PatternType::Solid => style.fill.fg.resolve(&wb.theme).map(theme::color32),
-        _ => {
-            // Patterns: approximate with a blend of foreground and background.
-            let fg = style.fill.fg.resolve(&wb.theme).unwrap_or([0, 0, 0]);
-            let bg = style.fill.bg.resolve(&wb.theme).unwrap_or([255, 255, 255]);
-            Some(Color32::from_rgb(
-                ((fg[0] as u16 + bg[0] as u16 * 3) / 4) as u8,
-                ((fg[1] as u16 + bg[1] as u16 * 3) / 4) as u8,
-                ((fg[2] as u16 + bg[2] as u16 * 3) / 4) as u8,
-            ))
+    // Move the gradient out of the copied style: `Look` owns it, so the style must not keep a
+    // second deep copy of every stop.
+    let mut gradient = style.fill.gradient.take();
+    let mut fill = if gradient.is_some() {
+        None
+    } else {
+        match style.fill.pattern {
+            PatternType::None => None,
+            PatternType::Solid => style.fill.fg.resolve(&wb.theme).map(theme::color32),
+            _ => {
+                // Patterns: approximate with a blend of foreground and background.
+                let fg = style.fill.fg.resolve(&wb.theme).unwrap_or([0, 0, 0]);
+                let bg = style.fill.bg.resolve(&wb.theme).unwrap_or([255, 255, 255]);
+                Some(Color32::from_rgb(
+                    ((fg[0] as u16 + bg[0] as u16 * 3) / 4) as u8,
+                    ((fg[1] as u16 + bg[1] as u16 * 3) / 4) as u8,
+                    ((fg[2] as u16 + bg[2] as u16 * 3) / 4) as u8,
+                ))
+            }
         }
     };
     if let Some(l) = &cfl
         && let Some(rgb) = l.scale_fill
     {
+        gradient = None;
         fill = Some(theme::color32(rgb));
     }
     let text_color = col32(style.font.color, wb, Color32::BLACK);
-    (Look { style, fill, text_color }, cfl)
+    (Look { style, fill, gradient, text_color }, cfl)
 }
 
 /// Text for a value with General narrowing to the available width.

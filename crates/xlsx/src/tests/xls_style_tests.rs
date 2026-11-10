@@ -242,7 +242,7 @@ fn reads_fallback_styles(wb: &Workbook) {
     let normal = wb.styles.get(StyleId::DEFAULT);
     let s = style_at(wb, "A2");
     assert_eq!(s.font, normal.font, "font index 4 falls back to the default font");
-    assert_eq!(s.fill, Fill { pattern: PatternType::Gray125, fg: Color::Rgb(0xFF0000), bg: Color::Rgb(0xFFFF00) });
+    assert_eq!(s.fill, Fill { pattern: PatternType::Gray125, fg: Color::Rgb(0xFF0000), bg: Color::Rgb(0xFFFF00), gradient: None });
     assert_eq!((s.align.h, s.align.v, s.align.rotation), (HAlign::Distributed, VAlign::Distributed, 255));
 
     let s = style_at(wb, "A3");

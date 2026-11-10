@@ -366,7 +366,7 @@ fn xf_style(xf: &Xf, fonts: &[Font], formats: &HashMap<u16, String>, table: &[u3
     s.fill = match pattern(fls) {
         PatternType::None => Fill::default(),
         PatternType::Solid => Fill::solid(fg),
-        p => Fill { pattern: p, fg, bg },
+        p => Fill { pattern: p, fg, bg, gradient: None },
     };
     s
 }

@@ -597,6 +597,19 @@ pub(crate) fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
+/// WCAG 2 relative luminance of an opaque sRGB colour: 0 is black, 1 is white.
+fn relative_luminance([r, g, b]: [u8; 3]) -> f32 {
+    fn linear(v: u8) -> f32 {
+        let v = v as f32 / 255.0;
+        if v <= 0.039_28 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    }
+    0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+}
+
+/// Below this luminance white text contrasts more than the browser's black (WCAG 4.5:1 against
+/// white), so an automatic cell text colour on such a background is printed white.
+const DARK_BACKGROUND_LUMINANCE: f32 = 0.179;
+
 fn html_cell_css(wb: &Workbook, sh: &Sheet, c: CellRef, dir: CellDir) -> String {
     let st = wb.styles.get(sh.style_id(c));
     let mut css = String::new();
@@ -609,10 +622,14 @@ fn html_cell_css(wb: &Workbook, sh: &Sheet, c: CellRef, dir: CellDir) -> String 
     if let Some(h) = st.font.color.hex(&wb.theme) {
         let _ = write!(css, "color:{h};");
     }
-    if st.fill.pattern != gridcraft_model::PatternType::None
-        && let Some(h) = st.fill.fg.hex(&wb.theme)
-    {
-        let _ = write!(css, "background:{h};");
+    if let Some([r, g, b]) = st.fill.preview_color(&wb.theme) {
+        let _ = write!(css, "background:#{r:02X}{g:02X}{b:02X};");
+        // A gradient's first stop resolves to black for an automatic stop, and an explicit or
+        // theme colour can be black too, while automatic text has no colour of its own: print it
+        // in white instead of the browser's black on black. Explicit text colours win.
+        if st.fill.gradient.is_some() && st.font.color.hex(&wb.theme).is_none() && relative_luminance([r, g, b]) < DARK_BACKGROUND_LUMINANCE {
+            css.push_str("color:#FFFFFF;");
+        }
     }
     let v = sh.value(c);
     let align = match st.align.h {

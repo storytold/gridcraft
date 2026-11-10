@@ -761,3 +761,98 @@ fn sylk_survives_huge_relative_offsets_and_width_floods() {
     let (wb, _) = open_bytes("widths.slk", &flood).unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::Number(1.0));
 }
+
+#[test]
+fn html_and_clipboard_use_the_first_gradient_stop() {
+    use gridcraft_model::{Color, Fill, GradientKind, GradientStop, StyleId};
+    let mut wb = Workbook::new();
+    let id = wb.styles.derive(StyleId::DEFAULT, |s| {
+        s.fill = Fill::gradient(
+            GradientKind::Linear { degree: 0.0 },
+            vec![GradientStop { position: 0.0, color: Color::Rgb(0xFF0000) }, GradientStop { position: 1.0, color: Color::Rgb(0xFFFF00) }],
+        );
+    });
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::text("x"));
+    sh.set_style(CellRef::new(0, 0), id);
+
+    let html = to_html(&wb, 0).unwrap();
+    assert!(html.contains("background:#FF0000;"), "{html}");
+    let clip = range_html(&wb, 0, RangeRef::parse("A1").unwrap(), "x").unwrap();
+    assert!(clip.contains("background:#FF0000;"), "{clip}");
+}
+
+#[test]
+fn html_and_clipboard_make_text_white_on_an_automatic_gradient() {
+    use gridcraft_model::{Color, Fill, GradientKind, GradientStop, StyleId};
+    let mut wb = Workbook::new();
+    let id = wb.styles.derive(StyleId::DEFAULT, |s| {
+        s.fill = Fill::gradient(
+            GradientKind::Linear { degree: 0.0 },
+            vec![GradientStop { position: 0.0, color: Color::Auto }, GradientStop { position: 1.0, color: Color::Rgb(0xFFFFFF) }],
+        );
+    });
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::text("x"));
+    sh.set_style(CellRef::new(0, 0), id);
+
+    // The automatic stop previews as black, and automatic text would be black on black.
+    let html = to_html(&wb, 0).unwrap();
+    assert!(html.contains("background:#000000;color:#FFFFFF;"), "{html}");
+    let clip = range_html(&wb, 0, RangeRef::parse("A1").unwrap(), "x").unwrap();
+    assert!(clip.contains("background:#000000;color:#FFFFFF;"), "{clip}");
+}
+
+#[test]
+fn html_and_clipboard_make_text_white_on_every_dark_gradient_stop() {
+    use gridcraft_model::{Color, Fill, GradientKind, GradientStop, StyleId};
+    // Black can come from an explicit stop or from a theme slot that resolves to black.
+    for first in [Color::Rgb(0x000000), Color::Theme(1, 0)] {
+        let mut wb = Workbook::new();
+        let id = wb.styles.derive(StyleId::DEFAULT, |s| {
+            s.fill = Fill::gradient(
+                GradientKind::Linear { degree: 0.0 },
+                vec![GradientStop { position: 0.0, color: first }, GradientStop { position: 1.0, color: Color::Rgb(0xFFFFFF) }],
+            );
+        });
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::text("x"));
+        sh.set_style(CellRef::new(0, 0), id);
+
+        let html = to_html(&wb, 0).unwrap();
+        assert!(html.contains("background:#000000;color:#FFFFFF;"), "{first:?}: {html}");
+        let clip = range_html(&wb, 0, RangeRef::parse("A1").unwrap(), "x").unwrap();
+        assert!(clip.contains("background:#000000;color:#FFFFFF;"), "{first:?}: {clip}");
+    }
+}
+
+#[test]
+fn html_leaves_automatic_text_alone_on_a_light_gradient_and_keeps_explicit_text_colours() {
+    use gridcraft_model::{Color, Fill, GradientKind, GradientStop, StyleId};
+    let mut wb = Workbook::new();
+    let light = wb.styles.derive(StyleId::DEFAULT, |s| {
+        s.fill = Fill::gradient(
+            GradientKind::Linear { degree: 0.0 },
+            vec![GradientStop { position: 0.0, color: Color::Rgb(0xFFFF00) }, GradientStop { position: 1.0, color: Color::Rgb(0xFFFFFF) }],
+        );
+    });
+    let explicit = wb.styles.derive(StyleId::DEFAULT, |s| {
+        s.fill = Fill::gradient(
+            GradientKind::Linear { degree: 0.0 },
+            vec![GradientStop { position: 0.0, color: Color::Rgb(0x000000) }, GradientStop { position: 1.0, color: Color::Rgb(0xFFFFFF) }],
+        );
+        s.font.color = Color::Rgb(0xFF0000);
+    });
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::text("x"));
+    sh.set_style(CellRef::new(0, 0), light);
+    sh.set_value(CellRef::new(1, 0), gridcraft_core::Value::text("y"));
+    sh.set_style(CellRef::new(1, 0), explicit);
+
+    let html = to_html(&wb, 0).unwrap();
+    // Light background, automatic text: the browser's dark default is already readable.
+    assert!(html.contains("background:#FFFF00;text-align:left;"), "{html}");
+    // An explicit font colour wins over the contrast fallback.
+    assert!(html.contains("color:#FF0000;background:#000000;text-align:left;"), "{html}");
+    assert!(!html.contains("color:#FFFFFF"), "{html}");
+}

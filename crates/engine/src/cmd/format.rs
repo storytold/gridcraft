@@ -85,7 +85,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Format Cells…",
             ["Home", "Cells", "Format"],
             Some("Cmd+1"),
-            "{range?, style: {font?, fill?, borders?, align?: {reading_order?: Context|LeftToRight|RightToLeft|null, ...}, numFmt?, protection?}} (partial Style JSON merged in; null clears reading_order)",
+            "{range?, style: {font?, fill?: {pattern?, fg?, bg?, gradient?: {kind: {Linear|Path}, stops: [{position, color}]}}, borders?, align?: {reading_order?: Context|LeftToRight|RightToLeft|null, ...}, numFmt?, protection?}} (partial Style JSON merged in; a fill that names pattern or gradient replaces the old fill)",
             has_doc,
             format_cells
         ),
@@ -545,11 +545,11 @@ fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {
     };
     // Validate by merging into the active style once.
     let base = serde_json::to_value(active_style(s)?).map_err(|e| EngineError::Other(e.to_string()))?;
-    let merged = merge_json(base, &patch);
-    let _: Style = serde_json::from_value(merged).map_err(|e| bad("home.formatCells", e.to_string()))?;
+    let merged = merge_style_json(base, &patch);
+    let _: Style = parse_style(merged)?;
     apply_style(s, p, |st| {
         if let Ok(cur) = serde_json::to_value(&*st)
-            && let Ok(new) = serde_json::from_value::<Style>(merge_json(cur, &patch))
+            && let Ok(new) = parse_style(merge_style_json(cur, &patch))
         {
             *st = new;
         }
@@ -580,6 +580,40 @@ fn snake_case_keys(v: &Json) -> Json {
         ),
         other => other.clone(),
     }
+}
+
+fn parse_style(v: Json) -> Result<Style> {
+    let mut st: Style = serde_json::from_value(v).map_err(|e| bad("home.formatCells", e.to_string()))?;
+    st.fill.normalize();
+    Ok(st)
+}
+
+/// Deep-merges `patch` into `base` (objects merge, everything else replaces). The fill is
+/// replaced as a whole: a solid fill must be able to clear an older gradient.
+pub(crate) fn merge_style_json(mut base: Json, patch: &Json) -> Json {
+    if let (Json::Object(b), Json::Object(p)) = (&mut base, patch)
+        && let Some(fill) = p.get("fill")
+    {
+        // The fill still replaces the old fill, but a partial fill patch starts from the fill the
+        // cell already has: patching `fg` alone keeps a solid or pattern fill's pattern and
+        // background, and keeps a gradient. Switching fill types starts from the default fill
+        // instead — a gradient can't take a pattern, and a pattern can't take a gradient — so an
+        // omitted `bg` then defaults to the automatic value Excel itself writes (a solid fill is
+        // patternType="solid" with fgColor and bgColor indexed="64"), holding the documented "all
+        // keys optional" contract.
+        let types = fill.as_object().is_some_and(|f| f.contains_key("pattern") || f.contains_key("gradient"));
+        let gradient = b.get("fill").is_some_and(|cur| cur.get("gradient").is_some_and(|g| !g.is_null()));
+        let start = match b.get("fill") {
+            Some(cur) if !(types && gradient) => cur.clone(),
+            _ => serde_json::to_value(Fill::default()).unwrap_or(Json::Null),
+        };
+        let fill = match fill {
+            Json::Object(_) => merge_json(start, fill),
+            other => other.clone(),
+        };
+        b.insert("fill".into(), fill);
+    }
+    merge_json(base, patch)
 }
 
 /// Deep-merges `patch` into `base` (objects merge, everything else replaces).
@@ -920,5 +954,79 @@ mod tests {
     fn width_units() {
         assert_eq!(chars_to_points(8.43), 64.0);
         assert!((points_to_chars(64.0) - 8.43).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_solid_fill_patch_clears_an_existing_gradient() {
+        use gridcraft_model::{Color, Fill, GradientKind, GradientStop, PatternType};
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let gradient = Fill::gradient(
+            GradientKind::Linear { degree: 90.0 },
+            vec![GradientStop { position: 0.0, color: Color::Rgb(0xFF0000) }, GradientStop { position: 1.0, color: Color::Rgb(0x0000FF) }],
+        );
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"fill": gradient}})).unwrap();
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"fill": Fill::solid(Color::Rgb(0x00FF00))}})).unwrap();
+        let got = s.execute("cell.get", json!({"cell": "A1"})).unwrap();
+        let fill: Fill = serde_json::from_value(got["style"]["fill"].clone()).unwrap();
+        assert_eq!(fill.pattern, PatternType::Solid);
+        assert!(fill.gradient.is_none());
+    }
+
+    #[test]
+    fn partial_fill_patches_default_omitted_fields() {
+        use gridcraft_model::{Color, Fill, PatternType};
+        let mut s = crate::Session::new();
+        s.new_workbook();
+
+        // Solid with pattern + fg, but no bg (the natural Format Cells payload).
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"fill": {"pattern": "Solid", "fg": {"Rgb": 16711680}}}})).unwrap();
+        let got = s.execute("cell.get", json!({"cell": "A1"})).unwrap();
+        let fill: Fill = serde_json::from_value(got["style"]["fill"].clone()).unwrap();
+        assert_eq!(fill.pattern, PatternType::Solid);
+        assert_eq!(fill.fg, Color::Rgb(0xFF0000));
+        assert_eq!(fill.bg, Color::Auto);
+
+        // A partial patch keeps what it doesn't name: `fg` alone must not clear a fill's pattern
+        // or its background (it used to start from the default fill and hide the cell).
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"fill": {"bg": {"Rgb": 16777215}}}})).unwrap();
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"fill": {"fg": {"Rgb": 65280}}}})).unwrap();
+        let got = s.execute("cell.get", json!({"cell": "A1"})).unwrap();
+        let fill: Fill = serde_json::from_value(got["style"]["fill"].clone()).unwrap();
+        assert_eq!((fill.pattern, fill.fg, fill.bg), (PatternType::Solid, Color::Rgb(0x00FF00), Color::Rgb(0xFFFFFF)));
+        s.execute(
+            "home.formatCells",
+            json!({"range": "A3", "style": {"fill": {"pattern": "LightGrid", "fg": {"Rgb": 16711680}, "bg": {"Rgb": 16777215}}}}),
+        )
+        .unwrap();
+        s.execute("home.formatCells", json!({"range": "A3", "style": {"fill": {"fg": {"Rgb": 255}}}})).unwrap();
+        let got = s.execute("cell.get", json!({"cell": "A3"})).unwrap();
+        let fill: Fill = serde_json::from_value(got["style"]["fill"].clone()).unwrap();
+        assert_eq!((fill.pattern, fill.fg, fill.bg), (PatternType::LightGrid, Color::Rgb(0x0000FF), Color::Rgb(0xFFFFFF)));
+
+        // A gradient with only `gradient`; pattern/fg/bg come from the default fill.
+        let gradient = json!({"fill": {"gradient": {
+            "kind": {"Linear": {"degree": 90.0}},
+            "stops": [{"position": 0.0, "color": {"Rgb": 16711680}}, {"position": 1.0, "color": {"Rgb": 255}}]
+        }}});
+        s.execute("home.formatCells", json!({"range": "A2", "style": gradient})).unwrap();
+        let got = s.execute("cell.get", json!({"cell": "A2"})).unwrap();
+        let fill: Fill = serde_json::from_value(got["style"]["fill"].clone()).unwrap();
+        assert!(fill.gradient.is_some());
+        assert_eq!(fill.pattern, PatternType::None);
+
+        // A patch that names no fill type keeps the gradient: `fg` is automatic on a gradient, so
+        // it must not flatten the cell into an invisible fill.
+        s.execute("home.formatCells", json!({"range": "A2", "style": {"fill": {"fg": {"Rgb": 65280}}}})).unwrap();
+        let got = s.execute("cell.get", json!({"cell": "A2"})).unwrap();
+        let fill: Fill = serde_json::from_value(got["style"]["fill"].clone()).unwrap();
+        assert!(fill.gradient.is_some(), "an fg-only patch keeps the gradient");
+
+        // A partial solid still replaces (clears) an existing gradient.
+        s.execute("home.formatCells", json!({"range": "A2", "style": {"fill": {"pattern": "Solid", "fg": {"Rgb": 65280}}}})).unwrap();
+        let got = s.execute("cell.get", json!({"cell": "A2"})).unwrap();
+        let fill: Fill = serde_json::from_value(got["style"]["fill"].clone()).unwrap();
+        assert_eq!(fill.pattern, PatternType::Solid);
+        assert!(fill.gradient.is_none());
     }
 }

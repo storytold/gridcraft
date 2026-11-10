@@ -246,7 +246,7 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
                     }
                     _ => false,
                 },
-                FilterCriterion::FillColor(col) => wb.styles.get(sh.style_id(c)).fill.fg == *col,
+                FilterCriterion::FillColor(col) => wb.styles.get(sh.style_id(c)).fill.color() == *col,
                 FilterCriterion::FontColor(col) => wb.styles.get(sh.style_id(c)).font.color == *col,
                 // Icons are not evaluated here: the row keeps its current visibility.
                 FilterCriterion::Icon { .. } => !sh.is_row_hidden(row),

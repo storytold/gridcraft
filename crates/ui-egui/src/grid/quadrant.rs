@@ -195,7 +195,9 @@ fn paint_backgrounds(q: &mut QuadrantPaint<'_>, cells: &[CellRef], merges: &[Ran
             None => (geo.cell_rect(sh, c), c),
         };
         let (lk, cfl) = look(wb, si, sh, anchor, cf);
-        if let Some(f) = lk.fill {
+        if let Some(g) = &lk.gradient {
+            crate::gradient::paint_rect(p, rect, g, &wb.theme, geo.rtl);
+        } else if let Some(f) = lk.fill {
             p.rect_filled(rect.expand(0.0), 0.0, f);
         } else if in_merge(c).is_some() {
             p.rect_filled(rect.shrink(0.5), 0.0, Color32::WHITE);
@@ -314,7 +316,7 @@ fn should_expand_text(filter_space: f32, overflows: bool, across_end: u32, col: 
 ///
 /// Handles text layout, wrapping, alignment, overflow into neighbouring cells,
 /// and clipping, while preserving cell decoration and merged-cell constraints.
-fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLook>), merges: &[RangeRef]) {
+fn paint_cell(q: &mut QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLook>), merges: &[RangeRef]) {
     let (cell, rect, lk, cfl) = painted;
     let c = *cell;
     let p = q.painter;
@@ -459,13 +461,18 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     if should_expand_text(filter_space, overflows, across_end, c.col, in_merge(c).is_some()) {
         let mut right = rect.right();
         let mut left = rect.left();
+        // The columns the expansion actually reaches: mapping the clip's pixels back through
+        // `col_at` jumps across a freeze line, where a scrolled column is laid out elsewhere.
+        let (mut lo_col, mut hi_col) = (c.col, c.col);
         if across_end > c.col {
             right = geo.x_end(sh, across_end);
+            hi_col = across_end;
         }
         if matches!(halign, HAlign::Left | HAlign::Center | HAlign::Justify) {
             let mut cc = c.col + 1;
             while right - rect.left() < w + 2.0 * pad && cc < MAX_COLS && empty_ok(CellRef::new(c.row, cc)) && cc <= c1 + 20 {
                 right = geo.x_end(sh, cc);
+                hi_col = cc;
                 cc += 1;
             }
         }
@@ -474,11 +481,15 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
             while rect.right() - left < w + 2.0 * pad && cc > 0 && empty_ok(CellRef::new(c.row, cc - 1)) && cc + 20 > c0 {
                 cc -= 1;
                 left = geo.x(sh, cc);
+                lo_col = cc;
             }
         }
         clip = Rect::from_min_max(pos2(left, rect.top()), pos2(right, rect.bottom()));
-        // Paint over the gridlines the text passes through.
-        if lk.fill.is_none() {
+        // Paint over the gridlines the text passes through, unless a gradient lies under the text:
+        // `grid_bg` would erase a neighbouring cell's gradient. Conditional formats live in the
+        // effective look, not the stored style, so ask `look`.
+        let gradient_under = (lo_col..=hi_col).any(|col| col != c.col && look(wb, si, sh, CellRef::new(c.row, col), &mut *q.cf).0.gradient.is_some());
+        if lk.fill.is_none() && lk.gradient.is_none() && !gradient_under {
             let inner = Rect::from_min_max(pos2(clip.left() + 1.0, clip.top() + 0.5), pos2(clip.right() - 1.0, clip.bottom() - 1.0));
             let extra_l = Rect::from_min_max(inner.min, pos2(rect.left() + 1.0, inner.bottom()));
             let extra_r = Rect::from_min_max(pos2(rect.right() - 1.0, inner.top()), inner.max);
