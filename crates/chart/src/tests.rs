@@ -1843,9 +1843,11 @@ fn text_takes_the_charts_own_styles() {
         value_axis: ChartTextStyle::default(),
     };
     let styled = texts(&c);
-    assert_eq!(find(&styled, "Quarterly Sales").map(|(_, s, b)| (s, b)), Some((18.0, true)));
-    assert_eq!(find(&styled, "North").map(|(_, s, b)| (s, b)), Some((10.5, true)));
-    assert_eq!(find(&styled, "$12,000").map(|(_, s, b)| (s, b)), Some((8.0, true)));
+    // The file's sizes are points, drawn in the chart's pixels.
+    let px = |pt: f32| pt * 96.0 / 72.0;
+    assert_eq!(find(&styled, "Quarterly Sales").map(|(_, s, b)| (s, b)), Some((px(18.0), true)));
+    assert_eq!(find(&styled, "North").map(|(_, s, b)| (s, b)), Some((px(10.5), true)));
+    assert_eq!(find(&styled, "$12,000").map(|(_, s, b)| (s, b)), Some((px(8.0), true)));
     // Categories in capitals when the file asks for them.
     let mut lower = sample(ChartKind::ColumnClustered);
     lower.categories = (1..=6).map(|i| format!("wk {i}")).collect();
@@ -1856,7 +1858,7 @@ fn text_takes_the_charts_own_styles() {
             _ => None,
         })
         .collect();
-    assert_eq!(find(&caps, "WK 1").map(|(_, s, b)| (s, b)), Some((8.0, false)), "{caps:?}");
+    assert_eq!(find(&caps, "WK 1").map(|(_, s, b)| (s, b)), Some((px(8.0), false)), "{caps:?}");
     assert!(find(&caps, "wk 1").is_none());
 }
 

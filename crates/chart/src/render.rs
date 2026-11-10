@@ -74,8 +74,11 @@ struct Look {
 }
 
 impl Look {
+    /// `style`'s look, its size from points to the chart's pixels; `size` (already in pixels) where
+    /// it sets none.
     fn of(style: ChartTextStyle, size: f32) -> Look {
-        Look { size: style.size.unwrap_or(size), bold: style.bold.unwrap_or(false), caps: style.caps, color: None }
+        const PX_PER_PT: f32 = 96.0 / 72.0;
+        Look { size: style.size.map_or(size, |s| s * PX_PER_PT), bold: style.bold.unwrap_or(false), caps: style.caps, color: None }
     }
     fn colored(self, color: Option<Rgba>) -> Look {
         Look { color, ..self }
