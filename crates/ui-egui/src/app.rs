@@ -386,6 +386,21 @@ mod lifecycle_tests {
     }
 
     #[test]
+    /// A startup file that cannot open reports why, as Open does, and leaves the queue empty.
+    fn a_missing_startup_file_reports_why() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        let path = std::env::temp_dir().join(format!("gridcraft-missing-{}.xlsx", std::process::id()));
+        app.open_on_first_frame(vec![path.to_string_lossy().into_owned()]);
+        for _ in 0..2 {
+            let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+        }
+        assert!(app.startup_files.is_empty());
+        assert!(app.message.is_some(), "the error is shown");
+        assert!(app.session.active().is_some(), "the new workbook stays open");
+    }
+
+    #[test]
     /// A font-gated early-returning pass does not lose the queued step; the hook offers it again and a later real pass applies it.
     fn a_font_gated_pass_offers_the_synthetic_step_again() {
         let ctx = egui::Context::default();

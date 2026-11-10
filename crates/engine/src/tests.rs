@@ -6162,14 +6162,64 @@ fn rows_of_wrapped_text_fit_with_the_front_ends_measure_on_open() {
         wb.sheets[0].row_height(0)
     };
     let one_line = wb.sheets[0].default_row_height;
-    // The estimate folds this text onto two lines.
-    assert!(height(None) > one_line + 1.0);
-    // A front end whose font fits it on one line keeps the row one line tall.
     let narrow: crate::TextWidth = std::sync::Arc::new(|text: &str, _: &gridcraft_model::Font, _| text.chars().count() as f32 * 4.0);
+    // Two lines exactly: the same cell broken by hand, with a measure that never folds.
+    let two_lines = {
+        let mut wb = wb.clone();
+        let sheet = std::sync::Arc::make_mut(&mut wb.sheets[0]);
+        let a1 = CellRef::parse("A1").unwrap();
+        let mut cell = sheet.cells.get(a1).unwrap().clone();
+        cell.value = Value::Text("Check whether it was chosen\non purpose".into());
+        sheet.set_cell(a1, cell);
+        let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+        let (wb, _) = crate::io::open_bytes_measured("book.xlsx", &bytes, None, false, Some(&narrow)).unwrap();
+        wb.sheets[0].row_height(0)
+    };
+    assert!(two_lines > one_line + 1.0);
+    // The estimate folds this text onto two lines.
+    assert_eq!(height(None), two_lines);
+    // A front end whose font fits it on one line keeps the row one line tall.
     assert_eq!(height(Some(&narrow)), one_line);
     // And one whose font is wider folds it as the estimate does.
-    let wide: crate::TextWidth = std::sync::Arc::new(|text: &str, _: &gridcraft_model::Font, _| text.chars().count() as f32 * 9.0);
-    assert!(height(Some(&wide)) > one_line + 1.0);
+    let wide: crate::TextWidth = std::sync::Arc::new(|text: &str, _: &gridcraft_model::Font, _| text.chars().count() as f32 * 6.0);
+    assert_eq!(height(Some(&wide)), two_lines);
+    // The measure is asked with the cell's own font: a bold cell measured wider folds.
+    let bold_wide: crate::TextWidth =
+        std::sync::Arc::new(|text: &str, f: &gridcraft_model::Font, _| text.chars().count() as f32 * if f.bold { 6.0 } else { 4.0 });
+    assert_eq!(height(Some(&bold_wide)), one_line);
+    s.execute("home.bold", json!({"range": "A1", "on": true})).unwrap();
+    let mut bold = (*s.doc().unwrap().wb).clone();
+    std::sync::Arc::make_mut(&mut bold.sheets[0]).rows.clear();
+    let bytes = gridcraft_xlsx::write_xlsx(&bold).unwrap();
+    let (bold, _) = crate::io::open_bytes_measured("book.xlsx", &bytes, None, false, Some(&bold_wide)).unwrap();
+    assert_eq!(bold.sheets[0].row_height(0), two_lines, "the bold cell folds");
+}
+
+/// `file.open` fits rows with the session's measure when the front end installed one, else with
+/// the estimate.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn file_open_fits_rows_with_the_sessions_measure() {
+    let mut s = s();
+    s.execute("home.columnWidth", json!({"range": "A1", "chars": 45})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Check whether it was chosen on purpose or should be on, and keep it so."})).unwrap();
+    s.execute("home.wrapText", json!({"range": "A1", "on": true})).unwrap();
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).rows.clear();
+    let one_line = wb.sheets[0].default_row_height;
+    let path = std::env::temp_dir().join(format!("gridcraft-fit-open-{}-{}.xlsx", std::process::id(), unique_nonce()));
+    std::fs::write(&path, gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+    let opened = |measure: Option<crate::TextWidth>| {
+        let mut s = Session::new();
+        s.text_width = measure;
+        s.execute("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+        s.doc().unwrap().wb.sheets[0].row_height(0)
+    };
+    let estimate = opened(None);
+    let narrow = opened(Some(std::sync::Arc::new(|text: &str, _: &gridcraft_model::Font, _| text.chars().count() as f32 * 4.0)));
+    let _ = std::fs::remove_file(&path);
+    assert!(estimate > one_line + 1.0, "the estimate folds the text");
+    assert_eq!(narrow, one_line, "the session's measure fits it on one line");
 }
 
 /// A per-test unique suffix for temp dir names.

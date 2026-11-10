@@ -810,3 +810,26 @@ impl Ctx<'_> {
         self.changed.push((sheet, c));
     }
 }
+
+#[cfg(test)]
+mod wrapped_line_count_tests {
+    use super::wrapped_line_count;
+
+    /// Ten points a character, spaces included.
+    fn ten(s: &str) -> f32 {
+        s.chars().count() as f32 * 10.0
+    }
+
+    #[test]
+    fn counts_the_lines_a_measured_line_folds_onto() {
+        // Fits whole, also when empty.
+        assert_eq!(wrapped_line_count("abc def", 70.0, &ten), 1.0);
+        assert_eq!(wrapped_line_count("", 70.0, &ten), 1.0);
+        // Breaks between words.
+        assert_eq!(wrapped_line_count("abc def", 60.0, &ten), 2.0);
+        assert_eq!(wrapped_line_count("abc def ghi", 30.0, &ten), 3.0);
+        // A word wider than the column fills the line, then breaks across lines.
+        assert_eq!(wrapped_line_count("abcdefgh", 30.0, &ten), 3.0);
+        assert_eq!(wrapped_line_count("ab abcdefgh", 30.0, &ten), 4.0);
+    }
+}
