@@ -80,8 +80,10 @@ The same layout and the same order serve every Craft app's models.
 
 When the files are present the recognizer loads on a worker thread (hashing 251 MB and parsing
 two ONNX graphs takes about a second) and the tool becomes available. When they are missing,
-incomplete or refused, the tool stays disabled and says so, and every command returns a
-structured error naming the folder to fill.
+incomplete or refused, the tool stays disabled and says so, and the commands that refuse to
+recognise — `draw.actionPen {on:true}` and `draw.actionPenInk` — return a structured error naming
+the folder to fill. `ink.status` answers with the status data instead, and turning the tool off
+(`draw.actionPen {on:false}`) succeeds.
 
 ## Commands
 
@@ -185,6 +187,12 @@ GRIDCRAFT_TROCR_LINES=<data dir> \
 from the validation parquet with, in outline:
 
 ```python
+import io
+
+import numpy
+import PIL.Image
+import pyarrow.parquet
+
 rows = pyarrow.parquet.read_table("validation.parquet").to_pylist()[:40]
 inputs = []
 for r in rows:

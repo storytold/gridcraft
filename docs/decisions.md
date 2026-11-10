@@ -30,7 +30,9 @@ the manifest and the measurements.
   makes no network calls at all. Discovery order: `$GRIDCRAFT_MODELS`, the app's settings folder
   (`models/`), `models/` beside the executable, then `models/` in the source tree.
 - **Absent means disabled, never a crash.** Incomplete or mismatched files make `ink.status` say
-  so and every Action Pen command return a structured error naming the directory to fill. Model
+  so and the commands that turn the tool on or recognise a stroke (`draw.actionPen {on:true}`,
+  `draw.actionPenInk`) return a structured error naming the directory to fill; `ink.status` answers
+  with status data and turning the tool off succeeds. Model
   files are untrusted input: relative paths in the manifest are refused if they can escape the
   model directory, sizes are checked before parsing, and `ink.modelImport` copies through a
   `.part` file so a failed check leaves no half-written model behind.

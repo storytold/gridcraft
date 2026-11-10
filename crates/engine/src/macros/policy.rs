@@ -54,14 +54,13 @@ const EXPORTS: &[&str] = &["file.exportPdf", "file.exportCsv", "file.exportHtml"
 /// Commands that add or delete the handwriting model's files, with what they do. They touch the
 /// file system whatever their parameters say, so a dry run stops before them and a macro has to
 /// declare them: `ink.modelRemove` deletes a folder the rollback can't put back.
-const MODEL_FILES: &[(&str, &str)] = &[
-    ("ink.modelImport", "copies the handwriting model's files"),
-    ("ink.modelRemove", "deletes the handwriting model's files"),
-];
+const MODEL_FILES: &[(&str, &str)] =
+    &[("ink.modelImport", "copies the handwriting model's files"), ("ink.modelRemove", "deletes the handwriting model's files")];
 
-/// Whether command `id` with `params` writes a file (an export or print given a `path`).
+/// Whether command `id` with `params` leaves a file behind: an export or print given a `path`, or
+/// a handwriting-model command, which copies or deletes the model's files whatever its parameters.
 pub fn writes_file(id: &str, params: &Json) -> bool {
-    EXPORTS.contains(&id) && params.get("path").is_some_and(|p| !p.is_null())
+    MODEL_FILES.iter().any(|(m, _)| *m == id) || (EXPORTS.contains(&id) && params.get("path").is_some_and(|p| !p.is_null()))
 }
 
 /// The policy for running command `id` with `params` as a macro step in a document with `trust`.

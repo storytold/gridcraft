@@ -1276,6 +1276,30 @@ fn the_model_commands_are_file_steps_the_check_stops_before() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The model commands leave files behind too: `ink.modelRemove` deletes the model's folder, which
+/// the workbook rollback can't put back, so a failure after it says what is gone instead of
+/// "Nothing was changed." (#3556).
+#[test]
+fn a_failure_after_the_model_removal_says_what_is_gone() {
+    let mut s = s();
+    let root = std::env::temp_dir().join(format!("gc-macro-ink-gone-{}-{}", std::process::id(), 8));
+    let dir = root.join("trocr-small-handwritten");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("encoder.onnx"), b"model").unwrap();
+    s.models_dir = Some(root.display().to_string());
+
+    let steps = json!([
+        {"command": "ink.modelRemove", "params": {}},
+        {"command": "cell.set", "params": {"cell": "A1", "input": "=1/"}}
+    ]);
+    put(&mut s, json!({"name": "Gone", "output": {"onConflict": "overwrite"}, "steps": steps, "permissions": ["ink.modelRemove"]}));
+    let err = s.execute("macro.run", json!({"name": "Gone", "approve": true})).unwrap_err().to_string();
+    assert!(err.contains("what step 1 (ink.modelRemove) removed is gone"), "{err}");
+    assert!(!err.contains("Nothing was changed"), "{err}");
+    assert!(!dir.exists(), "the folder the step deleted stays deleted: {err}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn macros_from_a_file_ask_before_running() {
     let mut s = s();

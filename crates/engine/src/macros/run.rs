@@ -47,6 +47,22 @@ const MAX_LISTED_RANGES: usize = 500;
 /// An input bound to a range: name, where, whether its first row is a header.
 pub type Bound = (String, Place, bool);
 
+/// A file step the run carried out: rolling the workbook back leaves what it did on disk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileStep {
+    /// The step's path and command: `step 1 (file.exportCsv)`.
+    pub step: String,
+    /// The step removed files (`ink.modelRemove`) rather than writing them.
+    pub removed: bool,
+}
+
+// The JSON keeps the plain step labels it always had (`wroteFiles`).
+impl Serialize for FileStep {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.step)
+    }
+}
+
 /// Where and why a step failed.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct StepError {
@@ -61,10 +77,10 @@ pub struct StepError {
     /// The step would write over data and the conflict rule is ask: overwriting answers it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub confirm: bool,
-    /// Files the run wrote before the step failed ("step 1 (file.exportCsv)"): rolling back the
-    /// workbook leaves them written.
+    /// Files the run wrote or removed before the step failed ("step 1 (file.exportCsv)"): rolling
+    /// back the workbook doesn't take them back.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub wrote_files: Vec<String>,
+    pub wrote_files: Vec<FileStep>,
 }
 
 impl StepError {
@@ -98,13 +114,28 @@ impl StepError {
     }
 }
 
-/// What a run that rolled back leaves: "Nothing was changed.", or the files it wrote before.
-pub fn rolled_back(wrote_files: &[String]) -> String {
-    match wrote_files {
-        [] => "Nothing was changed.".into(),
-        [one] => format!("The workbook was put back; the file {one} wrote stays."),
-        many => format!("The workbook was put back; the files {} wrote stay.", join_and(many)),
+/// What a run that rolled back leaves: "Nothing was changed.", or the files it wrote and removed
+/// before it stopped.
+pub fn rolled_back(wrote_files: &[FileStep]) -> String {
+    if wrote_files.is_empty() {
+        return "Nothing was changed.".into();
     }
+    let (mut wrote, mut removed) = (Vec::new(), Vec::new());
+    for f in wrote_files {
+        if f.removed { removed.push(f.step.clone()) } else { wrote.push(f.step.clone()) }
+    }
+    let mut parts = Vec::new();
+    match wrote.as_slice() {
+        [] => {}
+        [one] => parts.push(format!("the file {one} wrote stays")),
+        many => parts.push(format!("the files {} wrote stay", join_and(many))),
+    }
+    match removed.as_slice() {
+        [] => {}
+        [one] => parts.push(format!("what {one} removed is gone")),
+        many => parts.push(format!("what {} removed is gone", join_and(many))),
+    }
+    format!("The workbook was put back; {}.", parts.join(", and "))
 }
 
 /// The size of `v` as JSON text, near enough to bound how much a run passes to its commands.
@@ -464,8 +495,9 @@ pub struct Machine {
     pub partial: Option<(String, String)>,
     /// The last step's resolved parameters (for the debugger).
     pub last_params: Option<Json>,
-    /// Files the run wrote ("step 1 (file.exportCsv)"): rolling the run back doesn't take them back.
-    pub wrote_files: Vec<String>,
+    /// Files the run wrote or removed ("step 1 (file.exportCsv)"): rolling the run back doesn't take
+    /// them back.
+    pub wrote_files: Vec<FileStep>,
     /// Repeat and If bodies by the path of their frame: a body is copied the first time its step
     /// runs, not on every pass.
     bodies: HashMap<String, Arc<Vec<Step>>>,
@@ -858,7 +890,7 @@ impl Machine {
         }
         r.map_err(|e| fail(e.to_string()))?;
         if writes {
-            self.wrote_files.push(format!("step {path} ({id})"));
+            self.wrote_files.push(FileStep { step: format!("step {path} ({id})"), removed: id == "ink.modelRemove" });
         }
         if let Some(b) = blocked {
             return Err(fail(b));

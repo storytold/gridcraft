@@ -14,7 +14,7 @@ use std::sync::Arc;
 use gridcraft_model::Workbook;
 use serde_json::{Value as Json, json};
 
-use super::run::{Machine, StepError, rolled_back};
+use super::run::{FileStep, Machine, StepError, rolled_back};
 use crate::{EngineError, GroupToken, Result, Selection, Session};
 
 /// The most breakpoints one call sets.
@@ -165,7 +165,7 @@ pub(crate) fn drop_if_ended(s: &mut Session) -> Option<String> {
 
 /// After Stop Action rolled back the undo groups of the workbook with uid `doc`: ends the
 /// debugger if its run was there. Returns the macro's name and the files the run wrote, which stay.
-pub(crate) fn end_stopped(s: &mut Session, doc: u64) -> Option<(String, Vec<String>)> {
+pub(crate) fn end_stopped(s: &mut Session, doc: u64) -> Option<(String, Vec<FileStep>)> {
     if !s.macro_debug.as_ref().is_some_and(|d| d.doc == doc && !d.stepping()) {
         return None;
     }
@@ -415,7 +415,7 @@ fn advance(s: &mut Session, mode: Mode) -> Result<Json> {
 
 /// What every answer about the run's end or its state adds: the data shift at the start and the
 /// files the run wrote (they stay, whatever happens to the workbook).
-fn add_notes(out: &mut Json, d: &Debugger, wrote_files: &[String]) {
+fn add_notes(out: &mut Json, d: &Debugger, wrote_files: &[FileStep]) {
     if let Some(rule) = d.shifted {
         out["shifted"] = json!(rule);
     }
