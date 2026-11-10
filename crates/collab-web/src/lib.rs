@@ -371,7 +371,11 @@ impl CollabTrait for Collab {
     }
 
     fn execute(&mut self, session: &mut Session, id: &str, params: serde_json::Value) -> Option<Result<serde_json::Value, String>> {
-        classify(id)?;
+        // Undo and redo bypass the gate: they are operations of the room, not commands, and the
+        // engine's local history would undo a preview on this replica only.
+        if !matches!(id, "edit.undo" | "edit.redo") {
+            classify(id)?;
+        }
         Some(self.sync.execute(session, id, params).map_err(|error| error.to_string()))
     }
 
@@ -563,6 +567,23 @@ mod tests {
         let mut session = replica();
         assert!(collab.read_only());
         assert!(collab.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": 1 })).is_some_and(|result| result.is_err()));
+    }
+
+    /// `edit.undo` and `edit.redo` are operations of the room, not commands: the command gate used
+    /// to hand them to the engine's local history, which undid a preview on this replica only and
+    /// left every other replica and the room with the edit. They now reach the session, whose own
+    /// answer ("there is nothing to undo") is what the caller sees.
+    #[test]
+    fn undo_and_redo_reach_the_session_not_the_local_history() {
+        let mut collab = Collab::offline("s1", "ann", Role::Editor, "ann-1");
+        let mut session = replica();
+        session.run("cell.set", json!({ "cell": "A1", "input": 1 })).expect("a local edit");
+        for id in ["edit.undo", "edit.redo"] {
+            let result = collab.execute(&mut session, id, json!({}));
+            assert!(result.is_some(), "`{id}` reached the session instead of staying local");
+            assert!(result.is_some_and(|r| r.is_err()), "`{id}` answered by the room, which holds no step yet");
+        }
+        assert_eq!(value(&session, "A1"), Value::Number(1.0), "the local history is untouched");
     }
 
     /// Two windows of one person (RFC §13.6): the host bridge gets a row per window, so the

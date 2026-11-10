@@ -117,8 +117,13 @@ impl Adapter {
 impl Collab for Adapter {
     fn execute(&mut self, session: &mut Session, id: &str, params: Json) -> Option<Result<Json, String>> {
         // Commands outside the allowlist (files, view, printing, code) stay local, and so does the
-        // UI command surface; only what travels in a session is taken over.
-        classify(id)?;
+        // UI command surface; only what travels in a session is taken over. Undo and redo are the
+        // exception inside the allowlist: they are not sent as commands — the room turns them into
+        // an operation of its own — and the engine's local history knows nothing about the other
+        // replicas, so handing them to it would undo a preview here only.
+        if !matches!(id, "edit.undo" | "edit.redo") {
+            classify(id)?;
+        }
         Some(self.synced.execute(session, id, params).map_err(|e| e.to_string()))
     }
 
