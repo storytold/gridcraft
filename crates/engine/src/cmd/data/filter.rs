@@ -368,7 +368,8 @@ fn column_filter_values(wb: &Workbook, sheet: usize, col: u32, eligible_only: bo
         let t = if blank { "(Blanks)".to_string() } else { crate::display::cell_text(wb, sh, c) };
         let on = selected.is_none_or(|(i, (off, crit))| matcher.criterion_matches(row, i, *off, crit));
         let key = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
-        seen.entry((key, t)).or_insert(on);
+        // One choice can represent rows with different colors; keep any matching row checked.
+        *seen.entry((key, t)).or_insert(false) |= on;
     }
     let mut values: Vec<_> = seen.into_iter().collect();
     values.sort_by(|((a, ta), _), ((b, tb), _)| {

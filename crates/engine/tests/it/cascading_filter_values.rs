@@ -234,6 +234,45 @@ fn choices_match_color_criteria_and_do_not_infer_icon_matches_from_hidden_rows()
 }
 
 #[test]
+fn duplicate_color_choices_keep_any_eligible_match() {
+    for font in [false, true] {
+        for matching_cell in ["B2", "B3"] {
+            let mut s = Session::new();
+            s.new_workbook();
+            s.execute(
+                "range.setValues",
+                json!({"range": "A1", "values": [["Company", "Color"], ["East", "Same"], ["East", "Same"], ["West", "Same"]]}),
+            )
+            .unwrap();
+            let command = if font { "home.fontColor" } else { "home.fillColor" };
+            s.execute(command, json!({"range": "B4", "color": "#FF0000"})).unwrap();
+            s.execute("data.filter", json!({"range": "A1:B4"})).unwrap();
+            let color = if font { FilterCriterion::FontColor(Color::Rgb(0xFF0000)) } else { FilterCriterion::FillColor(Color::Rgb(0xFF0000)) };
+            let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+            sh.autofilter.as_mut().unwrap().criteria = vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false }), (1, color)];
+            s.execute("data.reapply", json!({})).unwrap();
+            assert_eq!(
+                filter_values(&s.doc().unwrap().wb, 0, 1),
+                vec![("Same".into(), false)],
+                "an excluded red row cannot check an eligible choice"
+            );
+
+            s.execute(command, json!({"range": matching_cell, "color": "#FF0000"})).unwrap();
+            s.execute("data.reapply", json!({})).unwrap();
+            let choices = filter_values(&s.doc().unwrap().wb, 0, 1);
+            assert_eq!(choices, vec![("Same".into(), true)], "either eligible duplicate can supply the color match");
+            let selected = filter_selection(&s.doc().unwrap().wb, 0, 1, &choices);
+            assert_eq!(selected, vec![("Same".into(), true)]);
+            let values: Vec<_> = selected.into_iter().filter_map(|(value, on)| on.then_some(value)).collect();
+            s.execute("data.filterBy", json!({"column": "B", "values": values})).unwrap();
+            let sh = s.doc().unwrap().wb.active().unwrap();
+            assert!(!sh.is_row_hidden(CellRef::parse(matching_cell).unwrap().row), "unchanged Apply keeps the previously matching row");
+            assert!(sh.is_row_hidden(3), "the other column still excludes West");
+        }
+    }
+}
+
+#[test]
 fn querying_a_table_backed_sheet_filter_is_read_only_and_preserves_xlsx_criteria() {
     for table in [false, true] {
         let mut s = Session::new();

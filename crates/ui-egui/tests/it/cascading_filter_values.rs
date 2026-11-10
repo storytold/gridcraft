@@ -4,6 +4,7 @@ use egui::{Event, Key, Modifiers, PointerButton};
 use egui_kittest::kittest::{NodeT, Queryable};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
+use gridcraft_engine::model::{ObjKind, ObjRef};
 use gridcraft_ui_egui::grid;
 use serde_json::json;
 
@@ -132,6 +133,61 @@ fn switching_filter_columns_keeps_another_windows_pending_choices() {
         h.render().unwrap().save(path).unwrap();
     }
     assert!(h.state().session.active().unwrap().wb.active().unwrap().autofilter.as_ref().unwrap().criteria.is_empty(), "no filter was applied");
+}
+
+#[test]
+fn a_form_button_window_switch_keeps_the_incoming_filter_edits() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session
+        .execute("range.setValues", json!({"range": "A1", "values": [["Company", "Job"], ["East", "Alpha"], ["East", "Beta"], ["West", "Other"]]}))
+        .unwrap();
+    session.execute("data.filter", json!({"range": "A1:B4"})).unwrap();
+    let button = session.execute("insert.button", json!({"at": "E12", "text": "Other window"})).unwrap()["control"].as_u64().unwrap() as u32;
+    let image = std::env::var("GRIDCRAFT_FILTER_BUTTON_WINDOW_SNAPSHOT").ok();
+    let builder = common::builder().with_os(egui::os::OperatingSystem::Windows).with_size(egui::vec2(1200.0, 800.0));
+    let builder = if image.is_some() { builder.wgpu() } else { builder };
+    let mut h = common::harness_with(builder, common::app(session), 4);
+    let first = h.state().session.active_window().unwrap();
+    click_filter(&mut h, "A1");
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    h.run_steps(3);
+    let second = h.state().session.active_window().unwrap();
+    h.state_mut().run("control.assign", json!({"id": button, "command": "view.switchWindows", "params": {"window": second}})).unwrap();
+    click_filter(&mut h, "B1");
+    h.input_mut().events.push(Event::Text("Bet".into()));
+    h.run_steps(2);
+    h.get_by_label("Beta").click();
+    h.run_steps(2);
+    let checks = h.state().grid.filter_checks.clone();
+    assert_eq!(h.state().grid.filter_search, "Bet");
+    assert_eq!(h.get_by_label("Beta").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    if let Some(path) = &image {
+        h.render().unwrap().save(std::path::Path::new(path).with_extension("before.png")).unwrap();
+    }
+
+    h.state_mut().enter_window(first);
+    h.run_steps(2);
+    assert_eq!(h.state().grid.filter_menu.map(|(col, _, _)| col), Some(0));
+    let app = h.state();
+    let sh = app.session.doc().unwrap().wb.active().unwrap();
+    let geo = grid::Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
+    let at = gridcraft_ui_egui::chartview::object_rect(&geo, sh, ObjRef::new(ObjKind::Control, button)).unwrap().center();
+    for pressed in [true, false] {
+        h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+        h.input_mut().events.push(Event::PointerMoved(at));
+        h.input_mut().events.push(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.step();
+    }
+    h.run_steps(3);
+    assert_eq!(h.state().session.active_window(), Some(second), "the real button action switches windows during grid interaction");
+    assert_eq!(h.state().grid.filter_menu.map(|(col, _, _)| col), Some(1));
+    assert_eq!(h.state().grid.filter_search, "Bet", "the outgoing popup must not clear the incoming search");
+    assert_eq!(h.state().grid.filter_checks, checks, "the incoming window keeps its unsaved checkbox edits");
+    assert_eq!(h.get_by_label("Beta").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    if let Some(path) = image {
+        h.render().unwrap().save(path).unwrap();
+    }
 }
 
 #[test]
