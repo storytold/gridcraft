@@ -691,13 +691,9 @@ pub fn aggregation() -> &'static [FunctionSpec] {
         LazyLock::new(|| catalog::load(FunctionCategory::Aggregation, include_str!("functions/aggregation.toml")));
 
     // As in the per-category tables: checked-in data is validated by
-    // `catalog::load`; corruption is a programmer error, not runtime input.
-    #[allow(clippy::panic)]
-    let ready = match &*TABLE {
-        Ok(functions) => functions,
-        Err(error) => panic!("invalid catalog table aggregation.toml: {error}"),
-    };
-    ready
+    // `catalog::load`; corruption is recorded for the fidelity test and served
+    // as an empty table, never a panic (CodeRabbit, #3412).
+    catalog::shared(&TABLE)
 }
 
 pub mod date_time;

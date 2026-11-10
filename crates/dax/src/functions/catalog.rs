@@ -17,9 +17,11 @@
 //! - `description`, `examples`
 //!
 //! A malformed table is a developer error, not user input: every failure mode
-//! returns [`CatalogError`] with the file's row and field attached, and the
-//! per-category [`Table::get`] panics once, at first use, instead of serving a
-//! half-loaded catalog.
+//! returns [`CatalogError`] with the file's row and field attached. The accessors
+//! share a loaded table through [`shared`]: on corrupt checked-in data it records
+//! the error for [`failures`] and serves an empty slice, so a typo fails loudly in
+//! `cargo test` instead of panicking the first `lookup()` (the crate denies
+//! `clippy::panic`, and binding must never crash the host).
 
 use super::{BlankPolicy, FunctionCategory, FunctionFlags, FunctionSpec, Overload, ParamKind, Parameter, ReturnType};
 
@@ -248,4 +250,34 @@ fn build(category: FunctionCategory, file: CatalogFile) -> Result<Vec<FunctionSp
 pub fn load(category: FunctionCategory, text: &str) -> Result<Vec<FunctionSpec>, CatalogError> {
     let file: CatalogFile = toml::from_str(text).map_err(|error| fail(None, format!("TOML does not parse: {error}")))?;
     build(category, file)
+}
+
+/// The table served when a category file fails to load: empty, so callers keep
+/// working (and the fidelity test reports the recorded error instead).
+static EMPTY: [FunctionSpec; 0] = [];
+
+/// One entry per category table that failed to load, for the fidelity test.
+static FAILURES: std::sync::Mutex<Vec<CatalogError>> = std::sync::Mutex::new(Vec::new());
+
+/// Shares a lazily loaded category table with its accessor: the table on success,
+/// an empty slice with the error recorded in [`failures`] on corrupt checked-in
+/// data. Never panics, so binding a typo'd catalog degrades to "unknown function"
+/// instead of crashing the host (CodeRabbit, #3412).
+pub fn shared(table: &'static Result<Vec<FunctionSpec>, CatalogError>) -> &'static [FunctionSpec] {
+    match table {
+        Ok(functions) => functions,
+        Err(error) => {
+            if let Ok(mut failures) = FAILURES.lock()
+                && !failures.contains(error)
+            {
+                failures.push(error.clone());
+            }
+            &EMPTY
+        }
+    }
+}
+
+/// Every category-table load error recorded by [`shared`] so far.
+pub fn failures() -> Vec<CatalogError> {
+    FAILURES.lock().map(|failures| failures.clone()).unwrap_or_default()
 }

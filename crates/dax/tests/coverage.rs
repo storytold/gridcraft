@@ -23,6 +23,18 @@ fn all_families_linked() -> bool {
     gridcraft_dax::eval::linked_families().count() == gridcraft_dax::eval::ALL_FAMILIES.len()
 }
 
+/// Names the evaluator families this build does not link, so a partial build's CI log shows
+/// which audits are inactive and why (CodeRabbit, #3412). Parse and bind checks still run;
+/// only the "no stub" assertion is gated.
+fn report_missing_families(test: &str) {
+    if all_families_linked() {
+        return;
+    }
+    let linked: Vec<&str> = gridcraft_dax::eval::linked_families().collect();
+    let missing: Vec<&&str> = gridcraft_dax::eval::ALL_FAMILIES.iter().filter(|family| !linked.contains(family)).collect();
+    eprintln!("{test}: partial build — {missing:?} not linked, stub/context audits inactive");
+}
+
 fn model() -> DataModel {
     let mut model = DataModel {
         tables: vec![
@@ -95,6 +107,7 @@ fn documented_arities(name: &str) -> Vec<usize> {
 
 #[test]
 fn every_catalogued_function_has_an_evaluator_path() {
+    report_missing_families("every_catalogued_function_has_an_evaluator_path");
     let model = model();
     let binder = Binder::new(&model);
     let evaluator = Evaluator::new(&model).expect("evaluator");

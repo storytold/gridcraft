@@ -13,7 +13,7 @@
 use std::sync::LazyLock;
 
 use super::FunctionCategory;
-use super::catalog::{CatalogError, load};
+use super::catalog::{self, CatalogError, load};
 
 static TABLE: LazyLock<Result<Vec<super::FunctionSpec>, CatalogError>> =
     LazyLock::new(|| load(FunctionCategory::TimeIntelligence, include_str!("time_intelligence.toml")));
@@ -22,12 +22,7 @@ static TABLE: LazyLock<Result<Vec<super::FunctionSpec>, CatalogError>> =
 /// `time_intelligence.toml`; see [`crate::functions::catalog`] for the schema.
 pub fn functions() -> &'static [super::FunctionSpec] {
     // The TOML tables are validated by `catalog::load` and pinned by the
-    // field-by-field fidelity test; a failure here means the checked-in data
-    // is corrupt, which is a programmer error, not a recoverable runtime one.
-    #[allow(clippy::panic)]
-    let ready = match &*TABLE {
-        Ok(functions) => functions,
-        Err(error) => panic!("invalid catalog table time_intelligence.toml: {error}"),
-    };
-    ready
+    // field-by-field fidelity test; corrupt checked-in data is recorded for
+    // that test and served as an empty table, never a panic (CodeRabbit, #3412).
+    catalog::shared(&TABLE)
 }

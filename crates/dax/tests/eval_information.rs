@@ -504,6 +504,27 @@ fn text_similarity_scores_matches() {
 }
 
 #[test]
+fn text_similarity_falls_back_to_the_current_row_over_budget() {
+    // A column whose text dwarfs the work budget cannot score against the whole
+    // column per row (quadratic); the call stays bounded by falling back to the
+    // current row's own value, which still matches itself (CodeRabbit, #3412).
+    let mut wide = model();
+    let product = wide.tables.iter_mut().find(|table| table.name == "Product").expect("Product");
+    for row in &mut product.rows {
+        row[1] = Scalar::String("lorem ipsum dolor sit amet ".repeat(100_000));
+    }
+    let evaluator = Evaluator::new(&wide).expect("evaluator");
+    let binder = Binder::new(&wide);
+    let source = "MAXX(Product, TEXTSIMILARITY(Product[Name], \"lorem\"))";
+    let bound = binder.bind_expression(&parse_expression(source).expect("parses")).expect("binds");
+    match evaluator.evaluate(&bound) {
+        Ok(Scalar::Decimal(score)) => assert!(score.is_finite(), "over-budget score {score}"),
+        Ok(other) => panic!("over-budget TEXTSIMILARITY returned {other:?}"),
+        Err(error) => panic!("over-budget TEXTSIMILARITY failed: {error}"),
+    }
+}
+
+#[test]
 fn contains_row_needs_one_value_per_column() {
     // `Sales` has four columns: a short value list is an error, not a leading-prefix match.
     assert!(eval("CONTAINSROW(Sales, \"East\")").is_err());

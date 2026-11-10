@@ -7,6 +7,21 @@ use gridcraft_dax::parse_expression;
 use gridcraft_dax::types::{DataType, InferredType, infer_type};
 
 #[test]
+fn every_catalog_table_loads_without_error() {
+    // Touching the catalog runs every category loader; corrupt checked-in data is
+    // served as an empty table and recorded instead of panicking, so a failure
+    // here names the broken table (CodeRabbit, #3412).
+    let _ = catalog();
+    let failures = gridcraft_dax::functions::catalog::failures();
+    assert!(
+        failures.is_empty(),
+        "{} catalog tables failed to load:\n{}",
+        failures.len(),
+        failures.iter().map(|error| error.to_string()).collect::<Vec<_>>().join("\n")
+    );
+}
+
+#[test]
 fn every_category_has_functions_and_names_are_unique() {
     for category in FunctionCategory::ALL {
         let count = catalog().iter().filter(|spec| spec.category == category).count();

@@ -736,19 +736,35 @@ fn text_similarity(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) ->
     let within = ev.eval(argument, ctx)?.to_dax_text();
     let search = ev.eval(args.get(1).ok_or_else(|| EvalError::new("TEXTSIMILARITY needs a search text"))?, ctx)?.to_dax_text();
     let mode = match_mode(ev, args, ctx, 2)?;
-    let corpus = column_corpus(ev, argument);
-    // A model column can be large; when scoring every value against the query would exceed the
-    // text work budget, fall back to the current row's own value so the call stays bounded.
-    let work = corpus.iter().map(|value| value.chars().count()).sum::<usize>().saturating_mul(search.chars().count().max(1));
-    let corpus = if corpus.is_empty() || work > MAX_TEXT_WORK { vec![within.clone()] } else { corpus };
+    // A model column can be large, and the usual shape calls this once per row
+    // (`MAXX(Product, TEXTSIMILARITY(...))`), so the budget is enforced while the
+    // corpus is built: once the accumulated text would exceed it, the build stops
+    // and the call falls back to the current row's own value. Per-call work stays
+    // bounded instead of quadratic in the column size (CodeRabbit, #3412).
+    let budget = MAX_TEXT_WORK / search.chars().count().max(1);
+    let corpus = column_corpus(ev, argument, budget);
+    let corpus = if corpus.is_empty() { vec![within.clone()] } else { corpus };
     Ok(Scalar::Decimal(similarity_score(&corpus, &within, &search, mode)))
 }
 
 /// The indexed corpus: every value of the model column, independent of the filter context.
-fn column_corpus(ev: &Evaluator<'_>, expr: &BoundExpr) -> Vec<String> {
+/// Stops early once more than `budget` characters are collected and reports an empty corpus,
+/// so an over-budget column costs at most one budget of conversions instead of the whole
+/// column before the caller falls back to the current row.
+fn column_corpus(ev: &Evaluator<'_>, expr: &BoundExpr, budget: usize) -> Vec<String> {
     let Ok((table, column)) = column_ref(ev, expr) else { return Vec::new() };
     let Some(model_table) = ev.model().tables.get(table) else { return Vec::new() };
-    model_table.rows.iter().filter_map(|row| row.get(column)).map(Scalar::to_dax_text).collect()
+    let mut corpus = Vec::new();
+    let mut chars = 0usize;
+    for row in &model_table.rows {
+        let Some(value) = row.get(column).map(Scalar::to_dax_text) else { continue };
+        chars = chars.saturating_add(value.chars().count());
+        if chars > budget {
+            return Vec::new();
+        }
+        corpus.push(value);
+    }
+    corpus
 }
 
 /// BM25 relevance over the column's values (k1 = 1.2, b = 0.75). The score is an opaque ranking

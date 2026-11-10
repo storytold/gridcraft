@@ -30,6 +30,18 @@ fn all_families_linked() -> bool {
     gridcraft_dax::eval::linked_families().count() == gridcraft_dax::eval::ALL_FAMILIES.len()
 }
 
+/// Names the evaluator families this build does not link, so a partial build's CI log shows
+/// which audits are inactive and why (CodeRabbit, #3412). The value guard and context checks
+/// still run wherever their families are linked; only the global gates are exempt.
+fn report_missing_families(test: &str) {
+    if all_families_linked() {
+        return;
+    }
+    let linked: Vec<&str> = gridcraft_dax::eval::linked_families().collect();
+    let missing: Vec<&&str> = gridcraft_dax::eval::ALL_FAMILIES.iter().filter(|family| !linked.contains(family)).collect();
+    eprintln!("{test}: partial build — {missing:?} not linked, stub/value/context gates inactive");
+}
+
 fn model() -> DataModel {
     let mut model = DataModel {
         tables: vec![
@@ -191,6 +203,7 @@ fn catalog_shape_is_consistent() {
 
 #[test]
 fn no_catalogued_function_reaches_a_stub() {
+    report_missing_families("no_catalogued_function_reaches_a_stub");
     let model = model();
     let binder = Binder::new(&model);
     let evaluator = Evaluator::new(&model).expect("evaluator");
