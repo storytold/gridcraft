@@ -1,6 +1,7 @@
-//! Home ▸ Font Size is a box you type a size into, with the standard sizes behind its arrow (#932).
+//! Home ▸ Font Size is a box you type a size into, with the standard sizes behind its arrow (#932),
+//! and the size sits in the middle of that box (#3155).
 
-use egui::{Event, Key, Modifiers, accesskit::Role};
+use egui::{Event, Key, Modifiers, Rect, Shape, accesskit::Role};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
@@ -123,4 +124,32 @@ fn the_arrow_opens_the_plain_list_of_sizes() {
     key(&mut h, Key::Enter);
     h.run_steps(3);
     assert_eq!(size(&h, "A1"), 12.0, "Down from 11 then Enter picks 12");
+}
+
+/// The on-screen box of the painted text `text` that overlaps `within`. The grid's row headers
+/// paint "11" too, so the size has to be looked for inside its own box.
+fn painted_text(h: &Harness, text: &str, within: Rect) -> Rect {
+    h.output()
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            Shape::Text(t) if t.galley.job.text == text => {
+                let rect = t.galley.rect.translate(t.pos.to_vec2());
+                within.intersects(rect).then_some(rect)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{text:?} is painted inside {within:?}"))
+}
+
+#[test]
+/// A text edit aligns its text to the top of its rect unless told otherwise, which left the size
+/// 4 pt above the Font name's baseline.
+fn the_size_is_vertically_centered_in_its_box() {
+    let h = harness();
+    let field = h.get_by_role_and_label(Role::TextInput, "Font Size").rect();
+    let value = painted_text(&h, "11", field);
+    let name = painted_text(&h, "Calibri", Rect::EVERYTHING);
+    assert!((value.center().y - field.center().y).abs() <= 1.0, "the size is centered in its box: {value:?} in {field:?}");
+    assert!((value.center().y - name.center().y).abs() <= 1.0, "the size is on the Font name's baseline: {value:?} against {name:?}");
 }

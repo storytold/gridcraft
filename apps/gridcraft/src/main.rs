@@ -64,6 +64,9 @@ impl eframe::App for App {
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
         save_prefs(&self.0);
+        // A ready update installs once the process has exited. The macOS exit below skips
+        // dropping the app, so the helper is started here.
+        self.0.start_pending_update();
         // macOS (#117): end the process here, before eframe tears the window down. AccessKit's
         // macOS adapter subclasses the window's content view and restores its class on teardown;
         // AppKit's Touch Bar support observes that view (KVO), so in the next display cycle
@@ -154,7 +157,7 @@ fn read_clipboard<T>(
 fn services() -> Services {
     // Keep the owner alive: X11/Wayland serve clipboard data from this handle.
     let clipboard: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
-    let (html_clipboard, text_clipboard) = (clipboard.clone(), clipboard.clone());
+    let (html_clipboard, text_clipboard, image_clipboard) = (clipboard.clone(), clipboard.clone(), clipboard.clone());
     Services {
         copy_html: Some(Box::new(move |html, text| {
             let mut clipboard = clipboard.borrow_mut();
@@ -165,9 +168,13 @@ fn services() -> Services {
         })),
         paste_html: Some(Box::new(move || read_clipboard(&html_clipboard, |clipboard| clipboard.get().html()))),
         paste_text: Some(Box::new(move || read_clipboard(&text_clipboard, |clipboard| clipboard.get_text()))),
+        paste_image: Some(Box::new(move || {
+            let image = read_clipboard(&image_clipboard, |clipboard| clipboard.get_image())?;
+            image::RgbaImage::from_raw(u32::try_from(image.width).ok()?, u32::try_from(image.height).ok()?, image.bytes.into_owned())
+        })),
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "json"])
+                .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "slk", "json"])
                 .add_filter("Excel Workbook", &["xlsx", "xlsm"])
                 .add_filter("Excel 97-2003 Workbook (import)", &["xls"])
                 .add_filter("Excel Binary Workbook (data import)", &["xlsb"])
