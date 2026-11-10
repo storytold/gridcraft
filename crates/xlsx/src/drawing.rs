@@ -139,8 +139,9 @@ fn mime_for(name: &str) -> &'static str {
 pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(), IoError> {
     let Some(x) = cx.optional_xml(part)? else { return Ok(()) };
     let rels = cx.pkg.rels(part)?;
-    // Ink parts are only trusted when `[Content_Types].xml` declares them as InkML.
-    let ink_parts = inkml::declared_parts(cx).unwrap_or_default();
+    // Ink parts are only trusted when `[Content_Types].xml` declares them as InkML; the
+    // declarations are read the first time a drawing actually carries a `contentPart`.
+    let mut ink_parts: Option<std::collections::HashSet<String>> = None;
     for (n, a) in x.children.iter().enumerate() {
         let Some(anchor) = read_anchor(a, sheet) else { continue };
         let n = n + 1;
@@ -169,7 +170,8 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
             }
         }
         if let Some(cp) = content_part {
-            let strokes = inkml::read(cx, &rels, cp, sheet, anchor, &ink_parts);
+            let declared = ink_parts.get_or_insert_with(|| inkml::declared_parts(cx));
+            let strokes = inkml::read(cx, &rels, cp, sheet, anchor, declared);
             if !strokes.is_empty() {
                 for s in strokes {
                     let id = cx.next_object_id();

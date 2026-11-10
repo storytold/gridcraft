@@ -13,6 +13,9 @@ pub const HIGHLIGHTER_WIDTHS_MM: [f32; 5] = [2.0, 4.0, 6.0, 8.0, 10.0];
 /// The most points one stroke may carry (the same limit the InkML reader enforces).
 pub const MAX_INK_POINTS: usize = 20_000;
 
+/// The most pens the Drawing Tools gallery may hold.
+pub const MAX_DRAW_PENS: usize = 1024;
+
 /// The sheet-coordinate bound a stroke point may not pass (the InkML reader's `MAX_SHEET`).
 pub const MAX_STROKE_COORD: f64 = 1e7;
 
@@ -336,6 +339,9 @@ fn add_pen(s: &mut Session, p: &Json) -> Result<Json> {
         None => effect.map(effect_base).unwrap_or("#1F5FC9").to_string(),
     };
     let width = width_mm("draw.addPen", p)?.unwrap_or(*widths_mm(tool).first().unwrap_or(&0.5));
+    if s.draw_pens.len() >= MAX_DRAW_PENS {
+        return Err(bad("draw.addPen", format!("the gallery holds at most {MAX_DRAW_PENS} pens")));
+    }
     let id = s.next_draw_pen_id();
     let pen = DrawPen { id, tool: tool_name(tool).to_string(), color, width, effect: effect.map(|e| effect_name(e).to_string()) };
     s.draw_pens.push(pen.clone());

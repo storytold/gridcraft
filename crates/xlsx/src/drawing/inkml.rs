@@ -61,7 +61,17 @@ const MAX_PRESSURE: i64 = 32_767;
 /// The parts declared as `application/inkml+xml` in `[Content_Types].xml`, normalized.
 ///
 /// A contentPart is only trusted when its part carries that type; anything else is not ink.
-pub(super) fn declared_parts(cx: &mut Ctx<'_>) -> Option<HashSet<String>> {
+pub(super) fn declared_parts(cx: &mut Ctx<'_>) -> HashSet<String> {
+    if let Some(parts) = &cx.ink_parts {
+        return parts.clone();
+    }
+    let parts = read_declared_parts(cx).unwrap_or_default();
+    cx.ink_parts = Some(parts.clone());
+    parts
+}
+
+/// Reads `[Content_Types].xml` for the InkML declarations, `None` when it cannot be read.
+fn read_declared_parts(cx: &mut Ctx<'_>) -> Option<HashSet<String>> {
     let bytes = match cx.pkg.read_limited("[Content_Types].xml", 16 * 1024 * 1024) {
         Ok(Some(b)) => b,
         _ => return None,
@@ -705,6 +715,13 @@ fn fallback_png(shape: &Shape, ink: &InkStyle, points: &[[i64; 2]], color: [u8; 
             dabs += 1;
             let t = i as f64 / steps as f64;
             dab.blit(&mut rgba, pw, ph, a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, color);
+        }
+    }
+    if ink.tool == InkTool::Highlighter {
+        // The committed stroke paints a highlighter at 115/255 opacity; the fallback must not turn
+        // it into an opaque block that hides the cells beneath.
+        for pixel in rgba.chunks_mut(4) {
+            pixel[3] = ((u16::from(pixel[3]) * 115 + 127) / 255) as u8;
         }
     }
     // Charge the work actually spent, and keep the estimate as the ceiling for the next stroke.

@@ -48,21 +48,40 @@ fn cached_ink_points(sp: &gridcraft_engine::model::Shape) -> std::rc::Rc<Vec<[f3
     pts
 }
 
+/// The indices of the points a screen keeps: the first and last always, the rest only when they
+/// are at least a pixel from the previous kept point.
+fn decimate_indices(pts: &[Pos2]) -> Vec<usize> {
+    if pts.len() <= 2 {
+        return (0..pts.len()).collect();
+    }
+    let mut kept = Vec::with_capacity(pts.len());
+    kept.push(0);
+    let mut last = pts[0];
+    for (index, p) in pts.iter().enumerate().take(pts.len() - 1).skip(1) {
+        if last.distance(*p) >= 1.0 {
+            kept.push(index);
+            last = *p;
+        }
+    }
+    kept.push(pts.len() - 1);
+    kept
+}
+
 /// Points closer than a screen pixel are dropped (the first and last kept): a long stroke would
 /// otherwise emit one segment per stored point every frame, thousands of them.
 fn decimate(pts: Vec<Pos2>) -> Vec<Pos2> {
-    if pts.len() <= 2 {
-        return pts;
-    }
-    let mut out = Vec::with_capacity(pts.len());
-    out.push(pts[0]);
-    for p in &pts[1..pts.len() - 1] {
-        if out.last().is_none_or(|last| last.distance(*p) >= 1.0) {
-            out.push(*p);
-        }
-    }
-    out.push(pts[pts.len() - 1]);
-    out
+    decimate_indices(&pts).into_iter().map(|index| pts[index]).collect()
+}
+
+/// Decimates a stroke's points while keeping its pressure aligned: a complete array loses exactly
+/// the entries of the dropped points, and a short array stays short so the painter keeps its
+/// fallback taper (CodeRabbit, #3599).
+fn decimate_with_pressure(pts: &[Pos2], pressure: &[u16]) -> (Vec<Pos2>, Vec<u16>) {
+    let kept = decimate_indices(pts);
+    let points: Vec<Pos2> = kept.iter().map(|&index| pts[index]).collect();
+    let pressure =
+        if pressure.len() == pts.len() { kept.iter().filter_map(|&index| pressure.get(index).copied()).collect() } else { pressure.to_vec() };
+    (points, pressure)
 }
 
 fn rgba(c: [u8; 4]) -> Color32 {
@@ -378,9 +397,16 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                     let w = if sp.ink.is_some() { gridcraft_engine::cmd::draw::ink_height(sp) } else { gridcraft_engine::cmd::draw::ink_width(sp) };
                     p.circle_filled(pts[0], (w * geo.z).max(1.0) / 2.0, line);
                 } else if pts.len() >= 2 {
-                    pts = decimate(pts);
+                    let (kept, pressure) = match &sp.ink {
+                        Some(ink) => {
+                            let (kept, pressure) = decimate_with_pressure(&pts, &ink.pressure);
+                            (kept, pressure)
+                        }
+                        None => (decimate(pts), Vec::new()),
+                    };
+                    pts = kept;
                     if let Some(ink) = &sp.ink {
-                        paint_ink(p, &pts, sp, ink, line, geo.z);
+                        paint_ink(p, &pts, &pressure, sp, ink, line, geo.z);
                     } else {
                         let pt = gridcraft_engine::cmd::draw::ink_width(sp);
                         let w = pt * geo.z;
@@ -651,7 +677,15 @@ pub(crate) fn ink_color(line: Color32, width_pt: f32) -> Color32 {
 /// pens (recorded pressure when it covers every point, a smooth taper otherwise). A textured pen
 /// carries its effect's bands along the stroke, phased by the stroke's anchor, so it reads as
 /// textured and is stable from frame to frame.
-fn paint_ink(p: &Painter, pts: &[Pos2], sp: &gridcraft_engine::model::Shape, ink: &gridcraft_engine::model::InkStyle, line: Color32, z: f32) {
+fn paint_ink(
+    p: &Painter,
+    pts: &[Pos2],
+    pressure: &[u16],
+    sp: &gridcraft_engine::model::Shape,
+    ink: &gridcraft_engine::model::InkStyle,
+    line: Color32,
+    z: f32,
+) {
     use gridcraft_engine::model::InkTool;
     let width = gridcraft_engine::cmd::draw::ink_width(sp) * z;
     let tall = gridcraft_engine::cmd::draw::ink_height(sp) * z;
@@ -665,7 +699,7 @@ fn paint_ink(p: &Painter, pts: &[Pos2], sp: &gridcraft_engine::model::Shape, ink
             }
             InkTool::FountainPen | InkTool::BrushPen => {
                 // Same per-segment widths as an untapered tapered stroke; only the colour is textured.
-                paint_tapered_texture(p, pts, width, &ink.pressure, effect, ink.anchor, z);
+                paint_tapered_texture(p, pts, width, pressure, effect, ink.anchor, z);
             }
             InkTool::Pencil => {
                 for pair in pts.windows(2) {
@@ -689,7 +723,7 @@ fn paint_ink(p: &Painter, pts: &[Pos2], sp: &gridcraft_engine::model::Shape, ink
                 p.line_segment([pair[0], pair[1]], Stroke::new((width * 0.8).max(1.0), translucent(line, 215)));
             }
         }
-        InkTool::FountainPen | InkTool::BrushPen => paint_tapered(p, pts, width, &ink.pressure, line),
+        InkTool::FountainPen | InkTool::BrushPen => paint_tapered(p, pts, width, pressure, line),
         InkTool::Pen => {
             p.add(PathShape::line(pts.to_vec(), PathStroke::new(width.max(1.0), line)));
         }
@@ -731,7 +765,8 @@ pub(crate) fn paint_ink_preview(p: &Painter, pts: &[Pos2], pen: &PreviewPen<'_>,
         ink: Some(InkStyle { tool, width_cm, height_cm, effect: InkEffect::from_name(effect), ..InkStyle::default() }),
     };
     let Some(ink) = shade.ink.as_ref() else { return };
-    paint_ink(p, &decimate(pts.to_vec()), &shade, ink, line, z);
+    let (points, pressure) = decimate_with_pressure(pts, &ink.pressure);
+    paint_ink(p, &points, &pressure, &shade, ink, line, z);
 }
 
 /// A point's width factor from the stroke's pressure: the recorded value when the vector covers
@@ -821,6 +856,19 @@ mod tests {
     use gridcraft_chart::Measure;
 
     use super::*;
+
+    /// A decimated stroke keeps its pressure aligned with the points it kept, and a short array
+    /// stays short so the painter still tapers the whole stroke (CodeRabbit, #3599).
+    #[test]
+    fn decimating_a_stroke_keeps_its_pressure_aligned() {
+        let pts = [egui::pos2(0.0, 0.0), egui::pos2(0.2, 0.0), egui::pos2(5.0, 0.0)];
+        let pressure = [100u16, 20_000, 30_000];
+        let (kept, kept_pressure) = decimate_with_pressure(&pts, &pressure);
+        assert_eq!(kept, vec![egui::pos2(0.0, 0.0), egui::pos2(5.0, 0.0)]);
+        assert_eq!(kept_pressure, vec![100, 30_000], "each kept point keeps its own pressure");
+        let (_, short) = decimate_with_pressure(&pts, &pressure[..2]);
+        assert_eq!(short.len(), 2, "a short array is not padded");
+    }
 
     /// The production measure is not monotone for labels with a line break: egui lays the text out
     /// line by line, so ending a prefix with `\n…` can be narrower than the shorter `iii…`. The

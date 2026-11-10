@@ -3067,6 +3067,20 @@ fn every_command_survives_empty_params() {
 }
 
 #[test]
+fn the_pen_gallery_refuses_more_than_its_limit() {
+    // The `draw.pens` spec says the gallery holds at most 1024 entries; `draw.addPen` enforces it.
+    let mut s = s();
+    s.ensure_draw_pens();
+    let template = s.draw_pens[0].clone();
+    while s.draw_pens.len() < crate::cmd::draw::MAX_DRAW_PENS {
+        let id = s.next_draw_pen_id();
+        s.draw_pens.push(crate::cmd::draw::DrawPen { id, ..template.clone() });
+    }
+    let error = s.execute("draw.addPen", json!({"brush": "pen"})).unwrap_err().to_string();
+    assert!(error.contains("at most 1024"), "{error}");
+}
+
+#[test]
 fn non_object_params_do_not_panic_in_wrapper_commands() {
     // Issue #516.
     for cmd in ["pageLayout.themeColors", "pageLayout.background", "home.drawBorder"] {
