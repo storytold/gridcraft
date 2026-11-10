@@ -242,6 +242,11 @@ fn an_interval_keyword_is_not_shadowed_by_a_variable() {
     let bound = bind(&model, "VAR YEAR = 1 RETURN DATEDIFF ( Sales[Amount], Sales[Amount], YEAR )");
     let debug = format!("{bound:?}");
     assert!(debug.contains("Keyword(\"YEAR\")"), "{debug}");
+    // `DATEADD`'s interval is catalogued as text, but it is the same documented enumeration: a
+    // variable holding another interval must not replace it.
+    let bound = bind(&model, "VAR MONTH = \"DAY\" RETURN DATEADD ( Sales[Amount], 1, MONTH )");
+    let debug = format!("{bound:?}");
+    assert!(debug.contains("Keyword(\"MONTH\")"), "{debug}");
     // A variable still wins where the parameter is documented as text: RANKX's Ties argument.
     let bound = bind(&model, "VAR DENSE = 1 RETURN RANKX ( Sales, Sales[Amount], 42, DENSE )");
     assert!(format!("{bound:?}").contains("Variable"), "{bound:?}");

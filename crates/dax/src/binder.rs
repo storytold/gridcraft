@@ -319,7 +319,14 @@ impl<'a> Binder<'a> {
             // `DATEDIFF(a, b, YEAR)` into a variable reference.
             .filter(|keyword| {
                 let named = self.model.table_index(keyword).is_some() || self.model.measure_index(keyword).is_some();
-                let variable = matches!(expected, Some(ParamKind::Text)) && vars.iter().any(|var| var.eq_ignore_ascii_case(keyword));
+                // `DATEADD`'s interval is catalogued as `Text` but is a documented enumeration, so
+                // a variable named `MONTH` must not turn `DATEADD(d, 1, MONTH)` into a variable
+                // reference (whose value could even be a different interval).
+                let dateadd_interval = spec.name == "DATEADD"
+                    && index == 2
+                    && ["DAY", "MONTH", "QUARTER", "YEAR"].iter().any(|interval| keyword.eq_ignore_ascii_case(interval));
+                let variable =
+                    matches!(expected, Some(ParamKind::Text)) && !dateadd_interval && vars.iter().any(|var| var.eq_ignore_ascii_case(keyword));
                 !named && !variable
             });
             if let Some(keyword) = keyword {

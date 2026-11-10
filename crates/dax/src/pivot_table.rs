@@ -92,7 +92,7 @@ use crate::eval::{Evaluator, FilterContext, StorageStats};
 use crate::model::DataModel;
 use crate::pivot::{PivotError, PivotField, pivot_fields};
 use crate::storage::ModelStorage;
-use crate::value::{Scalar, ScalarKey, TableColumn, TableValue};
+use crate::value::{Scalar, ScalarKey, TableColumn, TableValue, join_key};
 
 /// The default [`PivotTable::max_cells`] budget.
 pub const DEFAULT_MAX_CELLS: usize = 1_000_000;
@@ -1009,13 +1009,12 @@ fn column_field_value(storage: &ModelStorage, table: usize, row: usize, field: &
     let mut current_row = row;
     for hop in &field.hops {
         let key = storage.value(current_table, hop.from_column, current_row).unwrap_or(Scalar::Blank);
-        let key = ScalarKey::from(&key);
         // A BLANK key never joins, even when the related table has its own BLANK key row: DAX
         // treats it as an orphan, and `model_field_value` groups it as one too.
-        if key == ScalarKey::Blank {
+        if key.is_blank() {
             return Scalar::Blank;
         }
-        let Some(next) = storage.relationships().get(hop.relationship).and_then(|relationship| relationship.rows_to(&key).first().copied()) else {
+        let Some(next) = storage.relationships().get(hop.relationship).and_then(|relationship| relationship.rows_to_value(&key).first().copied()) else {
             return Scalar::Blank;
         };
         current_table = hop.to_table;
@@ -1032,7 +1031,7 @@ fn column_field_value(storage: &ModelStorage, table: usize, row: usize, field: &
 fn model_field_value(model: &DataModel, lookups: &HopKeyLookups, row: &[Scalar], field: &BoundField) -> Scalar {
     let mut current = row;
     for hop in &field.hops {
-        let key = ScalarKey::from(&current.get(hop.from_column).cloned().unwrap_or(Scalar::Blank));
+        let key = join_key(&current.get(hop.from_column).cloned().unwrap_or(Scalar::Blank));
         // A BLANK key is an orphan here too — a relationship never joins one, even when the
         // related table has a BLANK key row of its own — so both paths group the row the same way.
         if key == ScalarKey::Blank {
@@ -1068,7 +1067,7 @@ fn hop_key_lookups<'a>(model: &DataModel, fields: impl IntoIterator<Item = &'a B
             if let Some(table) = model.tables.get(hop.to_table) {
                 for (row_id, row) in table.rows.iter().enumerate() {
                     if let Some(value) = row.get(hop.to_column) {
-                        index.entry(ScalarKey::from(value)).or_insert(row_id);
+                        index.entry(join_key(value)).or_insert(row_id);
                     }
                 }
             }

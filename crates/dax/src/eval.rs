@@ -62,7 +62,7 @@ use crate::ast::{BinaryOp, Literal, UnaryOp};
 use crate::binder::{BindError, Binder, BoundExpr};
 use crate::model::DataModel;
 use crate::storage::{ColumnKind, ModelStorage, StorageError, TableStorage};
-use crate::value::{EvalError, Scalar, ScalarKey, TableColumn, TableValue, distinct_key, folded_key};
+use crate::value::{EvalError, Scalar, ScalarKey, TableColumn, TableValue, distinct_key, folded_key, join_key};
 
 use support::*;
 
@@ -599,11 +599,11 @@ impl<'a> Evaluator<'a> {
             let other_rows = self.filtered_row_ids_inner(other, filters, visited)?;
             self.bump(|counters| &counters.relationship_lookups);
             let keys: BTreeSet<ScalarKey> =
-                other_rows.iter().filter_map(|row| storage.value(other, other_column, *row)).map(|value| ScalarKey::from(&value)).collect();
+                other_rows.iter().filter_map(|row| storage.value(other, other_column, *row)).map(|value| join_key(&value)).collect();
             let mut retained = Vec::with_capacity(rows.len());
             for row in rows {
                 let Some(value) = storage.value(table, self_column, row) else { continue };
-                let key = ScalarKey::from(&value);
+                let key = join_key(&value);
                 // A BLANK foreign key never joins a one-side row, whatever the related table
                 // holds: it is an orphan, exactly as `column_field_value` reads it.
                 if key == ScalarKey::Blank {
@@ -703,10 +703,10 @@ impl<'a> Evaluator<'a> {
                 continue;
             };
             let keys: BTreeSet<ScalarKey> =
-                self.table_inner(other, filters, visited).rows.iter().filter_map(|row| row.get(other_col)).map(ScalarKey::from).collect();
+                self.table_inner(other, filters, visited).rows.iter().filter_map(|row| row.get(other_col)).map(join_key).collect();
             rows.retain(|row| {
                 let Some(value) = row.get(self_col) else { return false };
-                let key = ScalarKey::from(value);
+                let key = join_key(value);
                 // A BLANK foreign key never joins, so it is never in the related key set.
                 key != ScalarKey::Blank && keys.contains(&key)
             });
@@ -1755,10 +1755,9 @@ impl<'a> Evaluator<'a> {
             if is_nan_key(key) {
                 return None;
             }
-            let key = ScalarKey::from(key);
             self.bump(|counters| &counters.relationship_lookups);
             let rows = self.filtered_row_ids(table, filters)?;
-            let found = relationship.rows_to(&key).iter().copied().find(|row| rows.binary_search(row).is_ok());
+            let found = relationship.rows_to_value(key).iter().copied().find(|row| rows.binary_search(row).is_ok());
             // A matching relationship whose key is absent from the filtered rows falls through to
             // the next candidate relationship, like the key-column scan does.
             if let Some(matched) = found
@@ -1794,9 +1793,8 @@ impl<'a> Evaluator<'a> {
             if is_nan_key(key) {
                 return None;
             }
-            let key = ScalarKey::from(key);
             self.bump(|counters| &counters.relationship_lookups);
-            let candidates = if forward { relationship.rows_to(&key) } else { relationship.rows_from(&key) };
+            let candidates = if forward { relationship.rows_to_value(key) } else { relationship.rows_from_value(key) };
             let rows = self.filtered_row_ids(lineage, filters)?;
             let columns = table_storage.columns().len();
             let matched: Vec<Vec<Scalar>> = candidates

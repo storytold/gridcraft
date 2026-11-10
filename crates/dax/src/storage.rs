@@ -92,7 +92,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::DataModel;
-use crate::value::{Scalar, ScalarKey, distinct_key, folded_key};
+use crate::value::{Scalar, ScalarKey, distinct_key, folded_key, join_key};
 
 /// A bitset used for column blank/null bitmaps.
 ///
@@ -1390,6 +1390,10 @@ pub struct RelationshipIndex {
     pub from_rows: BTreeMap<ScalarKey, Vec<usize>>,
     /// Key value to row ids in the `to` table.
     pub to_rows: BTreeMap<ScalarKey, Vec<usize>>,
+    /// Numeric keys folded to the one key [`Scalar::strict_eq`] compares with, so an `Integer`
+    /// fact key can reach a `Decimal` dimension key and the other way round.
+    from_joined: BTreeMap<ScalarKey, Vec<usize>>,
+    to_joined: BTreeMap<ScalarKey, Vec<usize>>,
 }
 
 impl RelationshipIndex {
@@ -1404,6 +1408,33 @@ impl RelationshipIndex {
     /// Row ids in the `to` table whose key equals `key`; empty when there is no match.
     pub fn rows_to(&self, key: &ScalarKey) -> &[usize] {
         match self.to_rows.get(key) {
+            Some(rows) => rows.as_slice(),
+            None => &[],
+        }
+    }
+
+    /// Row ids in the `from` table whose key joins `value`, across numeric variants.
+    ///
+    /// [`Scalar::strict_eq`] joins `Integer(1)` with `Decimal(1.0)`, so a lookup folds the probe
+    /// and the stored keys to the same key before comparing.
+    pub fn rows_from_value(&self, value: &Scalar) -> &[usize] {
+        if !value.is_numeric() {
+            return self.rows_from(&ScalarKey::from(value));
+        }
+        let key = join_key(value);
+        match self.from_joined.get(&key).or_else(|| self.from_rows.get(&key)) {
+            Some(rows) => rows.as_slice(),
+            None => &[],
+        }
+    }
+
+    /// Row ids in the `to` table whose key joins `value`, across numeric variants.
+    pub fn rows_to_value(&self, value: &Scalar) -> &[usize] {
+        if !value.is_numeric() {
+            return self.rows_to(&ScalarKey::from(value));
+        }
+        let key = join_key(value);
+        match self.to_joined.get(&key).or_else(|| self.to_rows.get(&key)) {
             Some(rows) => rows.as_slice(),
             None => &[],
         }
@@ -1481,6 +1512,8 @@ impl ModelStorage {
                 inactive: relationship.inactive,
                 from_rows: build_key_index(from_storage, from_column),
                 to_rows: build_key_index(to_storage, to_column),
+                from_joined: build_joined_index(from_storage, from_column),
+                to_joined: build_joined_index(to_storage, to_column),
             });
         }
 
@@ -1629,6 +1662,22 @@ fn build_key_index(table: &TableStorage, column: usize) -> BTreeMap<ScalarKey, V
     for row in 0..table.row_count() {
         if let Some(value) = table.value(column, row) {
             index.entry(ScalarKey::from(&value)).or_default().push(row);
+        }
+    }
+    index
+}
+
+/// The numeric keys of one column, folded to the key [`Scalar::strict_eq`] compares with.
+///
+/// Only numeric values are indexed here: text, boolean and blank keys are their own join key, so
+/// the exact [`build_key_index`] map already answers them.
+fn build_joined_index(table: &TableStorage, column: usize) -> BTreeMap<ScalarKey, Vec<usize>> {
+    let mut index: BTreeMap<ScalarKey, Vec<usize>> = BTreeMap::new();
+    for row in 0..table.row_count() {
+        if let Some(value) = table.value(column, row)
+            && value.is_numeric()
+        {
+            index.entry(join_key(&value)).or_default().push(row);
         }
     }
     index

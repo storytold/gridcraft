@@ -52,7 +52,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{DataModel, ModelTable, Relationship};
 use crate::storage::{ModelStorage, RelationshipIndex, TableStorage};
-use crate::value::{Scalar, ScalarKey};
+use crate::value::{Scalar, ScalarKey, join_key};
 
 /// The most row ids one finding lists. The uncapped count is kept in [`IntegrityFinding::total`].
 pub const MAX_REPORTED_ROWS: usize = 20;
@@ -569,10 +569,35 @@ fn column_name_of(storage: &ModelStorage, table: usize, column: usize) -> String
 }
 
 /// Runs every per-relationship check and returns its summary plus its findings.
+/// One occurrence map per joined key, so numeric variants `Scalar::strict_eq` calls equal are
+/// counted together (an `Integer(1)` fact key and a `Decimal(1.0)` dimension key are one key).
+/// Reporting still walks the exact maps, so a finding names the key the model stores.
+fn joined_occurrences(keys: &BTreeMap<ScalarKey, Occurrence>) -> BTreeMap<ScalarKey, Occurrence> {
+    let mut out: BTreeMap<ScalarKey, Occurrence> = BTreeMap::new();
+    for (key, occurrence) in keys {
+        let entry = out.entry(join_key(&key.to_scalar())).or_default();
+        for row in &occurrence.rows {
+            entry.push(*row);
+        }
+        if occurrence.total > occurrence.rows.len() {
+            entry.total = entry.total.saturating_add(occurrence.total - occurrence.rows.len());
+        }
+    }
+    for occurrence in out.values_mut() {
+        occurrence.rows.sort_unstable();
+        occurrence.rows.dedup();
+    }
+    out
+}
+
 fn check_relationship(facts: &RelationshipFacts) -> (RelationshipCheck, Vec<IntegrityFinding>) {
     let mut findings: Vec<IntegrityFinding> = Vec::new();
-    let from_unique = facts.from_keys.iter().filter(|(key, _)| !is_blank(key)).all(|(_, occurrence)| occurrence.total <= 1);
-    let to_unique = facts.to_keys.iter().filter(|(key, _)| !is_blank(key)).all(|(_, occurrence)| occurrence.total <= 1);
+    // Duplicate, cardinality and orphan decisions compare joined keys, exactly as the evaluator's
+    // relationship lookups do; the findings below still report the exact stored key.
+    let from_joined = joined_occurrences(&facts.from_keys);
+    let to_joined = joined_occurrences(&facts.to_keys);
+    let from_unique = from_joined.iter().filter(|(key, _)| !is_blank(key)).all(|(_, occurrence)| occurrence.total <= 1);
+    let to_unique = to_joined.iter().filter(|(key, _)| !is_blank(key)).all(|(_, occurrence)| occurrence.total <= 1);
     let actual = match (from_unique, to_unique) {
         (true, true) => Cardinality::OneToOne,
         (false, true) => Cardinality::OneToMany,
@@ -580,14 +605,14 @@ fn check_relationship(facts: &RelationshipFacts) -> (RelationshipCheck, Vec<Inte
         (false, false) => Cardinality::ManyToMany,
     };
 
-    let from_keys = facts.from_keys.iter().filter(|(key, _)| !is_blank(key)).count();
-    let to_keys = facts.to_keys.iter().filter(|(key, _)| !is_blank(key)).count();
+    let from_keys = from_joined.iter().filter(|(key, _)| !is_blank(key)).count();
+    let to_keys = to_joined.iter().filter(|(key, _)| !is_blank(key)).count();
 
     let mut orphan_keys = 0usize;
     let mut orphan_rows = 0usize;
     let mut reported = 0usize;
     for (key, occurrence) in &facts.from_keys {
-        if is_blank(key) || facts.to_keys.contains_key(key) {
+        if is_blank(key) || to_joined.contains_key(&join_key(&key.to_scalar())) {
             continue;
         }
         orphan_keys += 1;
@@ -622,7 +647,7 @@ fn check_relationship(facts: &RelationshipFacts) -> (RelationshipCheck, Vec<Inte
     let mut duplicate_to_keys = 0usize;
     let mut reported = 0usize;
     for (key, occurrence) in &facts.to_keys {
-        if is_blank(key) || occurrence.total <= 1 {
+        if is_blank(key) || to_joined.get(&join_key(&key.to_scalar())).is_none_or(|joined| joined.total <= 1) {
             continue;
         }
         duplicate_to_keys += 1;

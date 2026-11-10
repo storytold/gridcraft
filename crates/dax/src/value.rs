@@ -248,6 +248,19 @@ impl From<&Scalar> for ScalarKey {
     }
 }
 
+/// The key a relationship join compares with.
+///
+/// [`Scalar::strict_eq`] joins `Integer(1)` with `Decimal(1.0)` and `Currency(10_000)`, so the
+/// keys an index or a filter set stores must fold those variants together too. Values an `f64`
+/// cannot hold exactly ([`exact_number`] is `None`) keep their variant key, so two distinct large
+/// integers never collapse.
+pub(crate) fn join_key(value: &Scalar) -> ScalarKey {
+    match exact_number(value) {
+        Some(number) => ScalarKey::Decimal(order_bits(number)),
+        None => ScalarKey::from(value),
+    }
+}
+
 /// The same key with text folded to lower case: the rule filter keys and the values they are
 /// compared with share, so a filter set from `VALUES` matches every spelling of the value.
 pub(crate) fn folded_key(key: &ScalarKey) -> ScalarKey {
