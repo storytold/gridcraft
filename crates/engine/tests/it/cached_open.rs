@@ -159,7 +159,7 @@ fn cached_open_respects_manual_calculation_after_open() {
 
 /// The stale-result notice stays visible when an XLSX also produces many import warnings.
 #[test]
-fn cached_open_shows_cache_notice_before_import_warning_overflow() {
+fn cached_open_keeps_its_notice_out_of_the_import_warning_box() {
     let params = fixture();
     let bytes = gridcraft_engine::io::base64_decode(params["base64"].as_str().unwrap()).unwrap();
     let mut source = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
@@ -195,8 +195,8 @@ fn cached_open_shows_cache_notice_before_import_warning_overflow() {
         })
         .collect::<Vec<_>>();
     assert_eq!(messages.len(), 1);
-    assert!(messages[0].contains("Saved formula results were kept and may be out of date"));
-    assert!(messages[0].contains("2 additional import warnings."));
+    assert!(!messages[0].contains(gridcraft_engine::io::CACHED_RESULTS_NOTICE));
+    assert!(messages[0].contains("1 additional import warnings."));
 }
 
 /// Filename-dependent caches are retained by default; an explicit full recalculation refreshes them.
@@ -438,4 +438,13 @@ fn cached_open_keeps_followers_of_missing_failed_array_anchors() {
             }
         }
     }
+}
+
+/// The kept-results notice belongs in the info bar; opening a workbook does not stop on a message box.
+#[test]
+fn cached_open_notice_is_not_a_message_box() {
+    let mut s = Session::new();
+    let opened = s.execute("file.open", fixture()).unwrap();
+    assert_eq!(opened["warnings"][0], gridcraft_engine::io::CACHED_RESULTS_NOTICE);
+    assert!(!s.take_ui_requests().iter().any(|r| matches!(r, gridcraft_engine::UiRequest::Message(_))));
 }

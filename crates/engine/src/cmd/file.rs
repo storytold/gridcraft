@@ -94,7 +94,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
             .iter()
             .any(|sheet| !sheet.spill.is_empty() || sheet.cells.iter().any(|(_, cell)| cell.formula.is_some() && !cell.value.is_empty()))
     {
-        warnings.insert(0, "Saved formula results were kept and may be out of date. Missing results were calculated. Editing formulas or their inputs, structural edits and Calculate Now recalculate with GridCraft's supported functions; unsupported results can become errors.".into());
+        warnings.insert(0, crate::io::CACHED_RESULTS_NOTICE.into());
     }
     let mut doc = if recalculate {
         DocState::new(wb, path, title, crate::Trust::FromFile)
@@ -105,8 +105,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
     let i = s.add_document(doc);
-    // The decrypted-workbook notice is for the info bar, not a message box.
-    let shown: Vec<&str> = warnings.iter().map(String::as_str).filter(|w| *w != crate::io::DECRYPTED_NOTICE).collect();
+    let shown: Vec<&str> = warnings.iter().map(String::as_str).filter(|w| !crate::io::INFO_BAR_NOTICES.contains(w)).collect();
     if !shown.is_empty() {
         let mut message = shown.iter().take(5).copied().collect::<Vec<_>>().join("\n\n");
         if shown.len() > 5 {
