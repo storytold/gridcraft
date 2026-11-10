@@ -100,11 +100,12 @@ fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> R<Vec<usize>
         tests = tests.saturating_add(conds.len().max(1));
         rows.push((r, conds));
     }
+    // An empty criteria row matches every record without testing a condition, so nothing is charged.
+    let all_match = rows.is_empty() || rows.iter().any(|(_, conds)| conds.is_empty());
     // Computed criteria (a formula evaluated per record) count like any other test.
-    if db.rows.saturating_sub(1).saturating_mul(tests) > SELECTION_WORK_BUDGET {
+    if !all_match && db.rows.saturating_sub(1).saturating_mul(tests) > SELECTION_WORK_BUDGET {
         return Err(CellError::Num);
     }
-    let all_match = rows.is_empty();
     Ok((1..db.rows)
         .filter(|&rec| {
             all_match
@@ -382,7 +383,10 @@ mod tests {
         let wide = column("Tree", 5_001, tv("=Plum"));
         is_err(ev("DCOUNTA", vec![rf(db.clone()), t("Tree"), rf(wide)]), CellError::Num);
         let narrow = column("Tree", 2, tv("=Apple"));
-        close(ev("DCOUNTA", vec![rf(db), t("Tree"), rf(narrow)]), 100_000.0);
+        close(ev("DCOUNTA", vec![rf(db.clone()), t("Tree"), rf(narrow)]), 100_000.0);
+        // Empty criteria rows test no condition: the first one matches every record, so they cost nothing.
+        let empty_rows = column("Tree", 5_001, Value::Empty);
+        close(ev("DCOUNTA", vec![rf(db), t("Tree"), rf(empty_rows)]), 100_000.0);
     }
 
     #[test]

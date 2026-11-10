@@ -171,7 +171,7 @@ fn sort(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let a = if by_col { a.transpose() } else { a };
     let idx = if has(args, 1) { int_list(&arg(args, 1)?.value)? } else { vec![1] };
     let ord = if has(args, 2) { int_list(&arg(args, 2)?.value)? } else { vec![1] };
-    if idx.is_empty() || idx.iter().any(|&i| i < 1 || i as usize > a.cols) || ord.iter().any(|&o| o != 1 && o != -1) {
+    if idx.is_empty() || idx.iter().any(|&i| i < 1 || i > a.cols as i64) || ord.iter().any(|&o| o != 1 && o != -1) {
         return Err(CellError::Value);
     }
     if ord.len() > 1 && ord.len() != idx.len() {
