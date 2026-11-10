@@ -260,7 +260,8 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
             }
             if resp.drag_stopped() && app.grid.ink.len() >= 2 {
                 let pts: Vec<[f32; 2]> = std::mem::take(&mut app.grid.ink);
-                let _ = app.run("draw.stroke", json!({"points": pts}));
+                // A rejected stroke (too many points, outside the sheet) must not vanish silently.
+                app.run_or_alert("draw.stroke", json!({"points": pts}));
             }
             return true;
         }

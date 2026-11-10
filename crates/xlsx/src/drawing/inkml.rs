@@ -159,6 +159,10 @@ fn read_traces(
     let part_key = creation_id_of(content_part);
     let mut total = 0usize;
     let mut shapes = Vec::new();
+    // Stage this part's keys: a trace that fails later hands the part to its fallback picture, and
+    // keys reserved for a part that never imported would force the next real part with that GUID
+    // to mint a new identity (CodeRabbit, #3599).
+    let mut part_keys: HashSet<String> = HashSet::new();
     for (i, trace) in traces(&root)?.into_iter().enumerate() {
         let (points, pressure) = decode(trace, definitions)?;
         total = total.checked_add(points.len())?;
@@ -168,9 +172,9 @@ fn read_traces(
         let mut image = style.clone();
         let key = match (i, part_key.as_deref()) {
             (0, Some(first)) if !cx.ink_keys.contains(first) => first.to_string(),
-            _ => gridcraft_model::ink_creation_id_free(|k| cx.ink_keys.contains(k)),
+            _ => gridcraft_model::ink_creation_id_free(|k| cx.ink_keys.contains(k) || part_keys.contains(k)),
         };
-        cx.ink_keys.insert(key.clone());
+        part_keys.insert(key.clone());
         image.key = Some(key);
         image.pressure = pressure;
         // The part carries one brush; successive strokes keep their drawing order.
@@ -189,6 +193,7 @@ fn read_traces(
             ink: Some(image),
         });
     }
+    cx.ink_keys.extend(part_keys);
     Some(shapes)
 }
 

@@ -3081,6 +3081,23 @@ fn the_pen_gallery_refuses_more_than_its_limit() {
 }
 
 #[test]
+fn a_solid_colour_drops_the_pen_texture() {
+    let mut s = s();
+    s.execute("draw.pen", json!({"brush": "pen", "effect": "galaxy"})).expect("textured pen");
+    assert!(!s.draw_effect.is_empty());
+    s.execute("draw.pen", json!({"color": "#FF0000"})).expect("solid colour");
+    assert_eq!(s.draw_effect, "", "a solid colour replaces the texture");
+    assert_eq!(s.draw_color, "#FF0000");
+
+    let added = s.execute("draw.addPen", json!({"brush": "pen", "color": "#00FF00", "effect": "lava"})).expect("add pen");
+    let id = u32::try_from(added["pen"].as_u64().expect("pen id")).expect("id fits");
+    s.execute("draw.updatePen", json!({"id": id, "color": "#0000FF"})).expect("recolour");
+    let pen = s.draw_pens.iter().find(|pen| pen.id == id).expect("gallery pen");
+    assert_eq!(pen.effect, None, "the gallery entry loses the texture it replaced");
+    assert_eq!(pen.color, "#0000FF");
+}
+
+#[test]
 fn non_object_params_do_not_panic_in_wrapper_commands() {
     // Issue #516.
     for cmd in ["pageLayout.themeColors", "pageLayout.background", "home.drawBorder"] {

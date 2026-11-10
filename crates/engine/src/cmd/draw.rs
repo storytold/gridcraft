@@ -290,6 +290,11 @@ fn pen(s: &mut Session, p: &Json) -> Result<Json> {
     };
     if let Some(c) = &color_param {
         color = c.clone();
+        // A solid colour replaces the texture unless the call also names one; otherwise the
+        // response would promise red while every stroke stayed the texture's base colour.
+        if str_param(p, "effect").is_none() {
+            effect.clear();
+        }
     }
     match width_mm("draw.pen", p)? {
         Some(w) => width = w,
@@ -371,6 +376,10 @@ fn update_pen(s: &mut Session, p: &Json) -> Result<Json> {
     };
     if let Some(c) = &color_param {
         pen.color = c.clone();
+        // Same rule as `draw.pen`: a solid colour drops the texture it replaced.
+        if str_param(p, "effect").is_none() {
+            pen.effect = None;
+        }
     }
     if let Some(w) = width_mm("draw.updatePen", p)? {
         pen.width = w;

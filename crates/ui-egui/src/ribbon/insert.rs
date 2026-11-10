@@ -431,12 +431,17 @@ fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::dr
     // applies as it moves. Its stored HSVA is keyed by the pen's current colour, so a swatch or
     // texture chosen since it was last open cannot leave a stale value behind.
     ui.menu_button(tr.tr("More Colors…"), |ui| {
-        let hv_id = ui.scope_id().with(("draw_pen_more_colors", color.to_ascii_lowercase()));
-        let start = {
-            let [r, g, b] = [hex_color(color).r(), hex_color(color).g(), hex_color(color).b()];
-            egui::ecolor::Hsva::from_srgb([r, g, b])
+        let hv_id = ui.scope_id().with(("draw_pen_more_colors", id));
+        let cur = hex_color(color);
+        let current = [cur.r(), cur.g(), cur.b()];
+        let stored: Option<egui::ecolor::Hsva> = ui.data_mut(|d| d.get_temp(hv_id));
+        // Keep the stored hue while it still renders as the pen's colour, so moving the picker
+        // does not reset it, and a swatch or texture chosen since cannot leave a stale value.
+        let close = |h: &egui::ecolor::Hsva| {
+            let [r, g, b] = h.to_srgb();
+            r.abs_diff(current[0]) <= 1 && g.abs_diff(current[1]) <= 1 && b.abs_diff(current[2]) <= 1
         };
-        let mut hsva = ui.data_mut(|d| d.get_temp(hv_id)).unwrap_or(start);
+        let mut hsva = stored.filter(close).unwrap_or_else(|| egui::ecolor::Hsva::from_srgb(current));
         let before = hsva;
         egui::color_picker::color_picker_hsva_2d(ui, &mut hsva, egui::color_picker::Alpha::Opaque);
         if hsva != before {
