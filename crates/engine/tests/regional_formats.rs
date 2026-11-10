@@ -375,6 +375,7 @@ fn invalid_interactive_snapshots_leave_values_unchanged() {
     s.execute("cell.set", json!({"cell":"A1","input":"7"})).unwrap();
     for locale in [
         json!(null),
+        json!({"decimal":",","group":".","shortDate":"dd.mm.yyyy","percentPrefix":"yes"}),
         json!({"decimal":",","group":",","shortDate":"dd.mm.yyyy"}),
         json!({"decimal":"..","group":",","shortDate":"dd.mm.yyyy"}),
         json!({"decimal":",","group":".","shortDate":"d".repeat(256)}),
@@ -597,4 +598,31 @@ fn regional_clipboard_captures_general_before_inferred_formatting() {
     assert_eq!(wb.styles.get(sh.style_id(CellRef::new(1, 0))).num_fmt.as_str(), "0.0%");
     assert_eq!(wb.styles.get(sh.style_id(CellRef::new(1, 1))).num_fmt.as_str(), "yyyy-mm-dd");
     assert_eq!(cell_text_in(wb, sh, CellRef::new(1, 1), &ro), "2026-03-04");
+}
+
+/// Exercise the actual UI command snapshot, percentage inference and unchanged regional entry.
+#[test]
+fn interactive_turkish_leading_percent_survives_the_command_boundary() {
+    for (tag, input, expected) in [
+        ("tr-TR", "%15", Value::Number(0.15)),
+        ("tr-TR", "%15,5", Value::Number(0.155)),
+        ("ro-RO", "15,5%", Value::Number(0.155)),
+        ("en-US", "15.5%", Value::Number(0.155)),
+        ("ro-RO", "%15", Value::text("%15")),
+        ("en-US", "%15", Value::text("%15")),
+        ("tr-TR", "1.5", Value::text("1.5")),
+        ("tr-TR", "₺46,00", Value::text("₺46,00")),
+    ] {
+        let mut s = Session::new();
+        s.new_workbook();
+        let loc = Locale::from_tag(tag);
+        s.run_interactive("cell.set", json!({"cell":"A1","input":input}), &loc).unwrap();
+        let wb = &s.active().unwrap().wb;
+        let sh = wb.sheet(0).unwrap();
+        let at = CellRef::parse("A1").unwrap();
+        assert_eq!(sh.value(at), expected, "{tag}: {input}");
+        if matches!(expected, Value::Number(_)) {
+            assert!(gridcraft_engine::numfmt::NumberFormat::parse(wb.styles.get(sh.style_id(at)).num_fmt.as_str()).is_percent());
+        }
+    }
 }

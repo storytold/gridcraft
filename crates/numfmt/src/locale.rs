@@ -7,6 +7,8 @@ use std::borrow::Cow;
 pub struct Locale {
     pub decimal: char,
     pub group: char,
+    /// Interactive percentages may place the percent sign before the number.
+    pub percent_prefix: bool,
     /// Excel-format equivalent of the system's numeric short date.
     pub short_date: Cow<'static, str>,
 }
@@ -19,7 +21,7 @@ impl Default for Locale {
 }
 
 impl Locale {
-    pub const EN_US: Self = Self { decimal: '.', group: ',', short_date: Cow::Borrowed("m/d/yyyy") };
+    pub const EN_US: Self = Self { decimal: '.', group: ',', percent_prefix: false, short_date: Cow::Borrowed("m/d/yyyy") };
 
     /// Region overrides (`@rg=…` / `u-rg-…`) take precedence over the language's region.
     pub fn from_tag(tag: &str) -> Self {
@@ -58,7 +60,7 @@ impl Locale {
             }
             _ => return Self::EN_US,
         };
-        Self { decimal, group, short_date: Cow::Borrowed(date) }
+        Self { decimal, group, percent_prefix: region == "TR", short_date: Cow::Borrowed(date) }
     }
 
     /// Apply the system's ICU numeric short-date pattern. Unsupported patterns keep the region

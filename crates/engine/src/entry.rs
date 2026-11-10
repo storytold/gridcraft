@@ -17,8 +17,11 @@ pub(crate) fn locale_from_params_named(params: &serde_json::Value, name: &str) -
 
 /// Read numeric-region data from a command or a matching clipboard table.
 pub(crate) fn parse_locale_snapshot(value: &serde_json::Value, name: &str) -> crate::Result<Locale> {
-    let invalid =
-        || crate::EngineError::Other(format!("{name} requires distinct decimal/group separators and a numeric shortDate (up to 255 characters)."));
+    let invalid = || {
+        crate::EngineError::Other(format!(
+            "{name} requires distinct decimal/group separators, a numeric shortDate (up to 255 characters), and an optional boolean percentPrefix."
+        ))
+    };
     let character = |key| {
         let mut chars = value.get(key).and_then(serde_json::Value::as_str)?.chars();
         let c = chars.next()?;
@@ -43,12 +46,16 @@ pub(crate) fn parse_locale_snapshot(value: &serde_json::Value, name: &str) -> cr
     {
         return Err(invalid());
     }
-    Ok(Locale { decimal, group, short_date: std::borrow::Cow::Owned(date.to_string()) })
+    let percent_prefix = match value.get("percentPrefix") {
+        None => false,
+        Some(value) => value.as_bool().ok_or_else(invalid)?,
+    };
+    Ok(Locale { decimal, group, percent_prefix, short_date: std::borrow::Cow::Owned(date.to_string()) })
 }
 
 /// Capture numeric conventions independently of later host preference changes.
 pub(crate) fn locale_snapshot(locale: &Locale) -> serde_json::Value {
-    serde_json::json!({"decimal":locale.decimal.to_string(),"group":locale.group.to_string(),"shortDate":locale.short_date})
+    serde_json::json!({"decimal":locale.decimal.to_string(),"group":locale.group.to_string(),"shortDate":locale.short_date,"percentPrefix":locale.percent_prefix})
 }
 
 /// Canonical input for one destination, keeping Text cells and formulas untouched.

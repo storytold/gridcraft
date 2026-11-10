@@ -14,7 +14,7 @@ impl Locale {
         if let Some(date) = numeric_date(text.trim(), date_code, sys) {
             return date;
         }
-        let mapped: String = text
+        let mut mapped: String = text
             .chars()
             .map(|c| {
                 if c == self.decimal {
@@ -27,12 +27,18 @@ impl Locale {
                 }
             })
             .collect();
+        if self.percent_prefix
+            && let Some(number) = mapped.trim().strip_prefix('%')
+        {
+            // Let the invariant parser validate the number and assign its percentage format.
+            mapped = format!("{}%", number.trim_start());
+        }
         if matches!(parse_input(&mapped, sys).value, Value::Number(_) | Value::Bool(_) | Value::Error(_) | Value::Empty) {
             return mapped;
         }
         let original = parse_input(text, sys);
         // Named dates/times keep the existing English parser's behavior. This boundary does not
-        // introduce another month-name or currency catalog alongside the pending shared Region API.
+        // add a month-name or currency parser.
         if text.chars().any(|c| c.is_ascii_alphabetic()) && original.format.is_some() {
             return text.to_string();
         }
@@ -111,5 +117,28 @@ mod tests {
         assert_eq!(parse_input(&ch.canonical_input("1’234.56", sys, "dd.mm.yyyy"), sys).value, Value::Number(1234.56));
         let fr = Locale::from_tag("fr-FR");
         assert_eq!(parse_input(&fr.canonical_input("1\u{a0}234,56", sys, "dd/mm/yyyy"), sys).value, Value::Number(1234.56));
+    }
+
+    #[test]
+    fn leading_percent_is_regional_and_keeps_existing_entry_conventions() {
+        let sys = DateSystem::D1900;
+        for (tag, input, expected) in [
+            ("tr-TR", "%15", Value::Number(0.15)),
+            ("tr-TR", "%15,5", Value::Number(0.155)),
+            ("tr-TR", "15%", Value::Number(0.15)),
+            ("tr-TR", "1.5", Value::text("1.5")),
+            ("tr-TR", "₺46,00", Value::text("₺46,00")),
+            ("ro-RO", "%15", Value::text("%15")),
+            ("ro-RO", "15,5%", Value::Number(0.155)),
+            ("en-US", "%15", Value::text("%15")),
+            ("en-US", "15.5%", Value::Number(0.155)),
+        ] {
+            let loc = Locale::from_tag(tag);
+            let parsed = parse_input(&loc.canonical_input(input, sys, "General"), sys);
+            assert_eq!(parsed.value, expected, "{tag}: {input}");
+            if input.contains('%') && matches!(expected, Value::Number(_)) {
+                assert!(NumberFormat::parse(parsed.format.unwrap()).is_percent());
+            }
+        }
     }
 }

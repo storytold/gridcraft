@@ -343,7 +343,11 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
             if r.count() > 2_000_000 {
                 return Err(bad("range.fill", "range too large"));
             }
+            let skip = cx.wb.sheet(sheet).map(|sh| super::filtered_rows(sh, *r)).unwrap_or_default();
             for at in r.iter() {
+                if skip.contains(&at.row) {
+                    continue;
+                }
                 let style = cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
                 let base = match by_style.get(&style) {
                     Some(c) => c.clone(),
