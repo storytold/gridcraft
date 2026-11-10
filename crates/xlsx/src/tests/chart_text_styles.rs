@@ -32,7 +32,7 @@ fn each_part_takes_its_own_text_style() {
     // Parts other than the title take Excel's black where the file gives no colour.
     let black = Some(Color::Rgb(0));
     let style = |size: f32, bold: Option<bool>, caps: bool, color| ChartTextStyle { size: Some(size), bold, caps, color };
-    assert_eq!(c.text.title, style(18.0, Some(true), false, None), "the run's over the paragraph's defaults");
+    assert_eq!(c.text.title, style(18.0, Some(true), false, black), "the run's over the paragraph's defaults");
     assert_eq!(c.text.legend, style(10.5, Some(true), false, black));
     assert_eq!(c.text.data_labels, style(9.0, Some(true), false, black));
     assert_eq!(c.text.category_axis, style(8.0, Some(false), true, black));
@@ -47,7 +47,7 @@ fn a_titles_run_paragraph_and_txpr_each_give_what_they_set() {
         tx_pr("sz=\"1200\" b=\"0\" cap=\"all\"")
     );
     let c = chart(&title, "", "", "", "");
-    assert_eq!(c.text.title, ChartTextStyle { size: Some(16.0), bold: Some(true), caps: true, color: None });
+    assert_eq!(c.text.title, ChartTextStyle { size: Some(16.0), bold: Some(true), caps: true, color: Some(Color::Rgb(0)) });
 }
 
 /// Measured in Excel on a synthetic chart without `txPr`, for every style: legend, labels and
@@ -112,4 +112,38 @@ fn text_is_written_with_its_style() {
     assert_eq!(back.value_axis, ChartTextStyle { size: Some(12.0), bold: Some(true), caps: true, color: Some(Color::Rgb(0xFF0000)) });
     let grey = ChartTextStyle { size: Some(9.0), bold: Some(false), caps: false, color: Some(Color::Rgb(0x595959)) };
     assert_eq!((back.legend, back.category_axis), (grey, grey));
+}
+
+/// Measured in Excel on a synthetic chart: a title the file doesn't format is 18 pt and black,
+/// bold when its paragraph has defaults (`a:pPr/a:defRPr`, as Excel and GridCraft write it) and
+/// regular when it has none.
+#[test]
+fn an_unformatted_title_takes_excels_defaults() {
+    let title = |p: &str| format!("<c:title><c:tx><c:rich><a:bodyPr {A}/><a:p {A}>{p}<a:r><a:t>Sales</a:t></a:r></a:p></c:rich></c:tx></c:title>");
+    let c = chart(&title("<a:pPr><a:defRPr/></a:pPr>"), "", "", "", "");
+    assert_eq!(c.text.title, ChartTextStyle { size: Some(18.0), bold: Some(true), caps: false, color: Some(Color::Rgb(0)) });
+    let c = chart(&title(""), "", "", "", "");
+    assert_eq!(c.text.title, ChartTextStyle { size: Some(18.0), bold: None, caps: false, color: Some(Color::Rgb(0)) });
+}
+
+/// A title is written with its style in the paragraph's defaults, GridCraft's 14 pt dark grey,
+/// regular, where the chart sets none; read back the same.
+#[test]
+fn a_title_is_written_with_its_style() {
+    let mut c = chart("", "", "", "", "");
+    c.title = Some("Sales".into());
+    c.text = Default::default();
+    c.series[0].values = "Sheet1!$A$1:$A$1".into();
+    let mut wb = gridcraft_model::Workbook::new();
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).charts.push(c);
+    let bytes = crate::write_xlsx(&wb).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("xl/charts/chart1.xml").unwrap(), &mut xml).unwrap();
+    assert!(
+        xml.contains(r#"<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1400" b="0"><a:solidFill><a:srgbClr val="595959"/></a:solidFill></a:defRPr></a:pPr><a:r><a:t>Sales</a:t></a:r></a:p>"#),
+        "{xml}"
+    );
+    let back = crate::read_xlsx(&bytes).unwrap().0.sheets[0].charts[0].text.title;
+    assert_eq!(back, ChartTextStyle { size: Some(14.0), bold: Some(false), caps: false, color: Some(Color::Rgb(0x595959)) });
 }

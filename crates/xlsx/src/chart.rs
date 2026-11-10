@@ -253,20 +253,58 @@ fn excel_text_defaults(mut t: ChartTextStyle, style: u32) -> ChartTextStyle {
     t
 }
 
+/// Excel's chart title where the file doesn't format it (measured on a synthetic chart): 18 pt,
+/// bold and black for an automatic title or rich text with paragraph defaults (`a:pPr/a:defRPr`),
+/// as Excel and GridCraft write it; rich text with no paragraph properties at all is not bold.
+/// Styles 41-48 draw it white on a black chart, not filled by GridCraft yet: colour left as is.
+fn excel_title_defaults(title: Option<&El>, mut t: ChartTextStyle, style: u32) -> ChartTextStyle {
+    let Some(title) = title else { return t };
+    let bare_rich = title.path(&["tx", "rich", "p"]).is_some_and(|p| p.child("pPr").is_none());
+    t.size = t.size.or(Some(18.0));
+    if !bare_rich {
+        t.bold = t.bold.or(Some(true));
+    }
+    if !(41..=48).contains(&style) {
+        t.color = t.color.or(Some(Color::Rgb(0)));
+    }
+    t
+}
+
+/// GridCraft's own chart title, written out so Excel shows the same: 14 pt, regular, dark grey.
+const TITLE_SIZE: f32 = 14.0;
+
 /// GridCraft's own chart text, written out so Excel shows the same: 9 pt in dark grey (#595959).
 const TEXT_SIZE: f32 = 9.0;
 const TEXT_COLOR: u32 = 0x595959;
 
 /// A part's `c:txPr`: its size, weight, capitals and colour, GridCraft's where it has none.
 fn txpr_xml(t: ChartTextStyle, wb: &Workbook) -> String {
-    let size = t.size.filter(|s| s.is_finite()).unwrap_or(TEXT_SIZE).clamp(1.0, 400.0);
+    let r = def_rpr(t, TEXT_SIZE, wb);
+    format!("<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr>{r}</a:pPr><a:endParaRPr lang=\"en-US\"/></a:p></c:txPr>")
+}
+
+/// An `a:defRPr` with a part's size, weight, capitals and colour, GridCraft's where it has none.
+fn def_rpr(t: ChartTextStyle, default_size: f32, wb: &Workbook) -> String {
+    let size = t.size.filter(|s| s.is_finite()).unwrap_or(default_size).clamp(1.0, 400.0);
     let color = t.color.and_then(|c| srgb(&c, &wb.theme)).unwrap_or_else(|| format!("<a:srgbClr val=\"{TEXT_COLOR:06X}\"/>"));
     let mut r = format!("<a:defRPr sz=\"{}\" b=\"{}\"", (size * 100.0).round() as u32, u8::from(t.bold.unwrap_or(false)));
     if t.caps {
         r.push_str(" cap=\"all\"");
     }
     let _ = write!(r, "><a:solidFill>{color}</a:solidFill></a:defRPr>");
-    format!("<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr>{r}</a:pPr><a:endParaRPr lang=\"en-US\"/></a:p></c:txPr>")
+    r
+}
+
+/// The chart's title with its style in each paragraph's defaults, GridCraft's 14 pt dark grey
+/// where it has none, so Excel draws it as GridCraft does.
+fn chart_title_xml(t: &str, style: ChartTextStyle, wb: &Workbook) -> String {
+    let r = def_rpr(style, TITLE_SIZE, wb);
+    let mut s = String::from("<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/>");
+    for line in t.split('\n') {
+        let _ = write!(s, "<a:p><a:pPr>{r}</a:pPr><a:r><a:t>{}</a:t></a:r></a:p>", esc(line));
+    }
+    s.push_str("</c:rich></c:tx><c:overlay val=\"0\"/></c:title>");
+    s
 }
 
 fn rich_title(t: &El) -> Option<String> {
@@ -337,7 +375,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         groups.iter().find_map(|(g, _)| g.kids("ser").find_map(|s| s.child("dLbls"))).or_else(|| groups.iter().find_map(|(g, _)| g.child("dLbls")));
     let style = root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2);
     let text = ChartTextStyles {
-        title: text_style(chart.child("title"), root),
+        title: excel_title_defaults(chart.child("title"), text_style(chart.child("title"), root), style),
         legend: excel_text_defaults(text_style(chart.child("legend"), root), style),
         data_labels: excel_text_defaults(text_style(labels, root), style),
         category_axis: excel_text_defaults(text_style(x_ax, root), style),
@@ -857,7 +895,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     s.push_str("<c:chart>");
     match &ch.title {
         Some(t) if !t.is_empty() => {
-            s.push_str(&title_xml(t));
+            s.push_str(&chart_title_xml(t, ch.text.title, wb));
             s.push_str("<c:autoTitleDeleted val=\"0\"/>");
         }
         _ => s.push_str("<c:autoTitleDeleted val=\"1\"/>"),
