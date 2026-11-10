@@ -344,7 +344,9 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     if cfl.as_ref().is_some_and(|l| l.hide_value) || v.is_empty() {
         return;
     }
-    // Align and clip header text inside the content area, away from the dropdown.
+    // Align and clip header text inside the content area, away from the dropdown. Wrapped text
+    // is the exception (below).
+    let full_rect = *rect;
     let filter_space = sh.filter_button_space(c) * z;
     let text_rect = Rect::from_min_max(rect.min, pos2((rect.right() - filter_space).max(rect.left()), rect.bottom()));
     let rect = &text_rect;
@@ -379,6 +381,9 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let rotated = st.align.rotation != 0 && st.align.rotation != 255;
     // Rotated text wraps along its own direction (below), not across the column width.
     if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
+        // Excel wraps a header across the whole column, under its filter dropdown (checked in
+        // Excel: a wrapped header exactly as wide as its text stays one line with the dropdown).
+        let rect = &full_rect;
         let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
         let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w);
         job.direction = direction;
