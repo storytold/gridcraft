@@ -1,6 +1,6 @@
 //! The chart data table uses the same primitives as the plot, including in print/PDF output.
 
-use super::frame::{Bx, CatAxis, level_groups};
+use super::frame::{Bx, CatAxis, level_groups, wrap_labels};
 use super::legend::{Swatch, cat_label, draw_swatch, plot_kind};
 use super::{AXIS, Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, TEXT, VAlign};
 
@@ -10,6 +10,17 @@ pub(super) struct Layout {
     headers: usize,
     stub: f32,
     columns: usize,
+    /// Rows the category headers take: long names wrap, as in Excel.
+    cat_lines: usize,
+}
+
+/// Most lines a category header wraps to in a data table (Excel's real tables go to five).
+const MAX_HEADER_LINES: usize = 5;
+
+/// The category headers' text.
+fn headers_of(data: &ChartData, columns: usize) -> Vec<String> {
+    let n = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0));
+    (0..columns).map(|j| if j < n { cat_label(data, j) } else { String::new() }).collect()
 }
 
 pub(super) fn category_axis<'a>(layout: &Option<Layout>, labels: &'a [String], outer: &'a [Vec<String>]) -> CatAxis<'a> {
@@ -26,12 +37,20 @@ pub(super) fn reserve(ctx: &mut Ctx, chart: &Chart, data: &ChartData, mut area: 
         return (area, None);
     }
     let headers = data.category_levels.len() + 1;
-    let rows = headers + data.series.len();
     let row_height = LABEL_SIZE * 1.4 + 4.0;
-    let height = row_height * rows as f32;
     let key_width = if chart.data_table.as_ref().is_some_and(|t| t.show_keys) { 22.0 } else { 0.0 };
     let names = data.series.iter().take(32).map(|s| ctx.tw(&s.name, LABEL_SIZE)).fold(0.0f32, f32::max);
     let stub = (names + key_width + 10.0).clamp(24.0, (area.w * 0.3).max(24.0));
+    // The plot takes the width beside the stub, so a column is about this wide.
+    let column = (area.w - stub - 4.0) / columns.max(1) as f32;
+    let cat_lines = if columns == 0 || columns > 128 {
+        1
+    } else {
+        wrap_labels(ctx, &headers_of(data, columns), LABEL_SIZE, column - 4.0, MAX_HEADER_LINES)
+            .map_or(1, |w| w.iter().map(Vec::len).max().unwrap_or(1))
+    };
+    let rows = headers + cat_lines - 1 + data.series.len();
+    let height = row_height * rows as f32;
     if columns == 0 || columns > 128 || data.series.len() > 32 || height > area.h * 0.5 || (area.w * 0.6) / (columns as f32) < 18.0 {
         let message = ctx.fit("Data table needs more space", LABEL_SIZE, area.w);
         ctx.text(area.cx(), area.bottom(), &message, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
@@ -39,7 +58,7 @@ pub(super) fn reserve(ctx: &mut Ctx, chart: &Chart, data: &ChartData, mut area: 
         return (area, None);
     }
     area.h -= height;
-    (area, Some(Layout { top: area.bottom(), row_height, headers, stub, columns }))
+    (area, Some(Layout { top: area.bottom(), row_height, headers, stub, columns, cat_lines }))
 }
 
 pub(super) fn draw(ctx: &mut Ctx, chart: &Chart, data: &ChartData, plot: Bx, layout: Option<&Layout>) {
@@ -47,7 +66,9 @@ pub(super) fn draw(ctx: &mut Ctx, chart: &Chart, data: &ChartData, plot: Bx, lay
     let Some(settings) = &chart.data_table else { return };
     let x0 = plot.x - layout.stub;
     let top = layout.top;
-    let rows = layout.headers + data.series.len();
+    // The category headers take `cat_lines` rows; every row after them moves down.
+    let extra = layout.cat_lines - 1;
+    let rows = layout.headers + extra + data.series.len();
     let bottom = top + layout.row_height * rows as f32;
     let cw = plot.w / layout.columns as f32;
     // Outermost category level first, then the individual categories.
@@ -59,15 +80,25 @@ pub(super) fn draw(ctx: &mut Ctx, chart: &Chart, data: &ChartData, plot: Bx, lay
             ctx.text(x, top + (i as f32 + 0.5) * layout.row_height, &text, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Middle));
         }
     }
-    let header_y = top + (layout.headers as f32 - 0.5) * layout.row_height;
-    let n = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0));
-    for j in 0..layout.columns {
-        let text = if j < n { cat_label(data, j) } else { String::new() };
-        let text = ctx.fit(&text, LABEL_SIZE, cw - 4.0);
-        ctx.text(plot.x + (j as f32 + 0.5) * cw, header_y, &text, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Middle));
+    let first_header = top + (layout.headers - 1) as f32 * layout.row_height;
+    let labels = headers_of(data, layout.columns);
+    let wrapped = if layout.cat_lines > 1 { wrap_labels(ctx, &labels, LABEL_SIZE, cw - 4.0, layout.cat_lines) } else { None };
+    for (j, text) in labels.iter().enumerate() {
+        let lines = match &wrapped {
+            Some(w) => w[j].clone(),
+            None => vec![ctx.fit(text, LABEL_SIZE, cw - 4.0)],
+        };
+        // Centred in the header block, whatever number of lines this one has.
+        let block = layout.cat_lines as f32 * layout.row_height;
+        let start = first_header + (block - lines.len() as f32 * layout.row_height) / 2.0;
+        for (r, line) in lines.iter().enumerate() {
+            let line = ctx.fit(line, LABEL_SIZE, cw - 4.0);
+            let y = start + (r as f32 + 0.5) * layout.row_height;
+            ctx.text(plot.x + (j as f32 + 0.5) * cw, y, &line, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Middle));
+        }
     }
     for (i, series) in data.series.iter().enumerate() {
-        let y = top + (layout.headers as f32 + i as f32 + 0.5) * layout.row_height;
+        let y = top + ((layout.headers + extra) as f32 + i as f32 + 0.5) * layout.row_height;
         let name_x = if settings.show_keys { x0 + 25.0 } else { x0 + 4.0 };
         if settings.show_keys {
             let swatch = match plot_kind(chart, series, i) {
@@ -87,7 +118,9 @@ pub(super) fn draw(ctx: &mut Ctx, chart: &Chart, data: &ChartData, plot: Bx, lay
         }
     }
     if settings.horizontal_border {
-        for row in 1..rows {
+        // No line inside the category headers' block.
+        let inside = |row: usize| row >= layout.headers && row < layout.headers + extra;
+        for row in (1..rows).filter(|r| !inside(*r)) {
             ctx.hline(x0, plot.right(), top + row as f32 * layout.row_height, AXIS, 0.75);
         }
     }

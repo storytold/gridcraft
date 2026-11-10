@@ -148,3 +148,33 @@ fn dense_and_tiny_tables_are_bounded_and_explicit() {
         assert_sane(&render(&c, &d, w, h, &ApproxMeasure), w, h);
     }
 }
+
+/// Long category names in a data table's header wrap, as in Excel (a real table's go to five
+/// lines), instead of being cut short; the series rows start below them.
+#[test]
+fn long_category_headers_wrap_in_the_table() {
+    let mut c = chart(ChartKind::Line);
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.data_table = Some(ChartDataTable { horizontal_border: true, vertical_border: true, outline: true, show_keys: false });
+    let mut d = sample(c.kind);
+    d.series.truncate(1);
+    d.categories = (1..=6).map(|i| format!("Permanent damage from an accident at school, points {i}")).collect();
+    for s in &mut d.series {
+        s.values.truncate(6);
+    }
+    let p = render(&c, &d, 900.0, 600.0, &ApproxMeasure);
+    let all: Vec<(String, f32)> = p
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Text { text, y, .. } => Some((text.clone(), *y)),
+            _ => None,
+        })
+        .collect();
+    assert!(!all.iter().any(|(t, _)| t.contains('\u{2026}')), "nothing cut short: {all:?}");
+    assert!(all.iter().any(|(t, _)| t.contains("points")), "the end of the names is there: {all:?}");
+    let header_bottom = all.iter().filter(|(t, _)| t.contains("points")).map(|(_, y)| *y).fold(f32::MIN, f32::max);
+    let name_y = all.iter().find(|(t, _)| *t == d.series[0].name).map(|(_, y)| *y).unwrap();
+    assert!(name_y > header_bottom, "the series row is below the headers: {name_y} vs {header_bottom}");
+    assert_sane(&p, 900.0, 600.0);
+}
