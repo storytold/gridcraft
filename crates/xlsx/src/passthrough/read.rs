@@ -53,8 +53,6 @@ pub struct KeptReader {
     overrides: HashMap<String, String>,
     budget: usize,
     parts_left: usize,
-    /// Whether the workbook's model database (`xl/model/item.data`) was dropped by the budget.
-    model_dropped: bool,
     /// The model database when it was dropped because it is larger than
     /// [`crate::passthrough::MAX_KEPT_PART`], which makes saving refuse rather than lose it.
     dropped_model: Option<DroppedPart>,
@@ -69,7 +67,6 @@ impl KeptReader {
             overrides: HashMap::new(),
             budget: kept_total(),
             parts_left: MAX_KEPT_PARTS,
-            model_dropped: false,
             dropped_model: None,
         };
         if let Ok(root) = raw_rels(cx, "")
@@ -94,21 +91,6 @@ impl KeptReader {
             None => k.on = false,
         }
         k
-    }
-
-    /// Whether unmodelled content is kept at all: false for Strict Open XML packages and for
-    /// packages whose content types can't be read, where nothing can be written back faithfully.
-    pub fn keeps(&self) -> bool {
-        self.on
-    }
-
-    /// Whether the workbook's model database survived the keep budget.
-    ///
-    /// `xl/model/item.data` can exceed [`crate::passthrough::MAX_KEPT_PART`]; when it is dropped the
-    /// model-backed PivotTables must not be kept either, or the saved package would hold pivots
-    /// whose model is gone.
-    pub fn keeps_model_data(&self) -> bool {
-        !self.model_dropped
     }
 
     /// The model database the size limit made the reader drop, if any.
@@ -241,7 +223,6 @@ impl KeptReader {
             if let Err(why) = self.keep(cx, &mut p, std::slice::from_ref(r), &mut seen) {
                 cx.warn(format!("{} part {} was dropped: {why}", kind(&r.rel_type), r.target));
                 if kind(&r.rel_type) == "powerPivotData" {
-                    self.model_dropped = true;
                     // The model exists but is too large to keep: remember it, so the writer refuses
                     // instead of writing the package without its data model.
                     if let Some(size) = cx.pkg.part_size(&r.target).filter(|size| *size > MAX_KEPT_PART) {
