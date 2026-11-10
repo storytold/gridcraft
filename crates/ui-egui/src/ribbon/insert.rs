@@ -208,7 +208,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "insert.textBox", json!({}));
     }
-    let wa = big_button(ui, Icon::WordArt, "Word\nArt", "Insert WordArt", true);
+    let wa = big_button(ui, Icon::WordArt, "Decorative Text", "Decorative Text", true);
     anchor_keytip(app, ui, &wa, &["insert.wordArt"]);
     // Menu invocation shows the style gallery; the command itself never opens a dialog.
     egui::Popup::menu(&wa).show(|ui| crate::wordart::gallery(app, ui));
