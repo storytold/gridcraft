@@ -673,6 +673,43 @@ mod tests {
         }
     }
 
+    /// The browser transport shares the state machine, so it shares the reconnect cursor rule: a
+    /// `welcome` reports the room's head, not this replica's position, and taking it here would
+    /// make the next `hello` claim operations the catch-up never delivered
+    /// (CodeRabbit 5848894080, `client.rs:121`).
+    #[test]
+    fn a_welcome_does_not_move_the_reconnect_cursor() {
+        let mut collab = Collab::offline("s1", "ann", Role::Editor, "w1");
+        let mut session = replica();
+        let applied = Applied {
+            op_id: "w1-0".into(),
+            version: 1,
+            epoch: 0,
+            actor: "ann".into(),
+            result: Outcome { command: None, delta: None },
+            sheets: None,
+            images: None,
+            book: None,
+            more: false,
+            image_part: None,
+        };
+        assert!(collab.on_text(&wire(&ServerMessage::Applied { applied }), &mut session));
+        assert_eq!(collab.state().version, 1, "the applied operation moves the cursor");
+
+        let welcome = wire(&ServerMessage::Welcome {
+            session_id: "s1".into(),
+            actor_id: "ann".into(),
+            role: Role::Editor,
+            version: 9,
+            epoch: 0,
+            sheets: vec![SheetName { key: "1".into(), name: "Sheet1".into() }],
+            participants: Vec::new(),
+            lease: None,
+        });
+        assert!(collab.on_text(&welcome, &mut session));
+        assert_eq!(collab.state().version, 1, "the head the welcome reports is not this replica's position");
+    }
+
     /// Two windows of one person (RFC §13.6): the host bridge gets a row per window, so the
     /// cabinet's list shows both, and this window paints the *other* window of its own actor.
     #[test]

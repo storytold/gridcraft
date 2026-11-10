@@ -135,7 +135,10 @@ impl SessionLink {
                 self.state.session_id = session_id;
                 self.state.actor = actor_id;
                 self.state.role = Some(role);
-                self.state.version = self.state.version.max(version);
+                // `version` is the room's head, delivered before the catch-up: taking it here
+                // would make the next `hello` claim operations this replica never received if the
+                // socket drops first (CodeRabbit 5848894080, `client.rs:121`). Only `applied`,
+                // `snapshot` and `resynced` move the cursor.
                 self.state.epoch = epoch;
                 self.state.sheets = sheets;
                 self.state.participants = participants;

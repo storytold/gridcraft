@@ -4,10 +4,12 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`). The PR head is
   `8208607f`: the slice that closed the fifteen Major findings of the 17:44Z review (`f51237ea`)
   plus the §20 page, both published by the push of 2026-11-10T20:1xZ. The slice that closes the
-  six findings of the 20:32Z review is `8e76f729`, and this page is one docs commit on top of it —
-  both **local, not pushed** when this revision was written, because pushing this branch is the
-  human step §19 names. The branch is then 62 commits on the base `2c58c769`, 84 files,
-  +17178/−34. A commit cannot spell its own hash: the bus record `status/gridcraft` quotes it.
+  six findings of the 20:32Z review is four commits: `8e76f729` (server and client code, tests,
+  and the `rfc.md`/`server.md`/`client.md` corrections), `437f19ee` (§21), `942e0007` (two numbers
+  in it) and the commit this page sits in (the same reconnect rule in the browser transport, with
+  its test). All **local, not pushed** when this revision was written, because pushing this
+  branch is the human step §19 names. The branch is then 64 commits on the base `2c58c769`, 84 files,
+  +17223/−34. A commit cannot spell its own hash: the bus record `status/gridcraft` quotes it.
   §19 records the push of 2026-11-10T17:19Z, which published `ae4311ee`, `34e54b81`, `46783412`
   and the nine review-fix commits `d91f838a`…`a2251b0e`; §21 records the push of 20:1xZ, which
   published `f51237ea` and `8208607f`.
@@ -1301,7 +1303,10 @@ server saw a replica at the head, sent neither tail nor snapshot, and the docume
 The cursor now starts at `cfg.last_version` (what the replica holds) and only `applied`, `snapshot`
 and `resynced` move it; a `welcome` sets the epoch, sheets and participants but not the cursor.
 Test: `a_welcome_does_not_move_the_reconnect_cursor` in `client.rs` (a welcome at version 9 leaves
-a replica at 3 where it stands and takes epoch 4).
+a replica at 3 where it stands and takes epoch 4). The browser transport had the same hole —
+`crates/collab-web/src/link.rs` took `state.version.max(welcome.version)` — so it gets the same rule
+and its own `a_welcome_does_not_move_the_reconnect_cursor` in `collab-web`, which applies one
+operation and then feeds a welcome at version 9: the cursor stays at 1.
 
 **The workflow wording on this page (`STATUS.md:16`, Minor).** The line said the workflows of
 `f51237ea` existed but had not started, while two other places said the commit was not pushed. It
@@ -1319,7 +1324,7 @@ cargo test -p gridcraft-collab-client --all-targets   2 lib + 13 converge + 4 do
 cargo test -p gridcraft-collab-server --all-targets   40 unit + 5 acceptance + 6 callback
                                               + 2 logging + 9 persistence + 12 socket,
                                               0 failed, EXIT 0
-cargo test -p gridcraft-collab-web            9 passed, 0 failed, EXIT 0
+cargo test -p gridcraft-collab-web            10 passed, 0 failed, EXIT 0
 cargo fmt --all -- --check                    clean, EXIT 0
 cargo clippy -p gridcraft-collab -p gridcraft-collab-client
   -p gridcraft-collab-server -p gridcraft-collab-web
@@ -1332,7 +1337,7 @@ cargo check -p gridcraft-collab-web -p gridcraft-web
 `io::tests::save_keeps_the_destination_access_restrictions` (`mode 664`, the build host's
 temporary directory) — the host-environment failure §10, §15 and §20.2 already record, in a file
 this slice does not touch; the other 898 engine tests pass. Counts over the four collaboration
-packages: 160 passed, 0 failed; before this slice 156 — the four new tests are this slice's. No CI
+packages: 161 passed, 0 failed; before this slice 156 — the five new tests are this slice's. No CI
 run covers `8e76f729` yet: the workflows on `8208607f` sit in `action_required` until a maintainer
 approves them, and the new head is not on the PR at all until the push.
 
