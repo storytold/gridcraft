@@ -265,12 +265,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Slider" => "Csúszka",
         "Spin Button" => "Léptető",
         "Draw a button that runs a macro or a command" => "Makrót vagy parancsot futtató gomb rajzolása",
-        "Draw a slider that sets a whole number in a linked cell" => {
-            "Egész értéket beállító csúszka rajzolása egy hivatkozott cellában"
-        }
-        "Draw a spin button that steps a whole number in a linked cell" => {
-            "Egész értéket léptető vezérlő rajzolása egy hivatkozott cellában"
-        }
+        "Draw a slider that sets a whole number in a linked cell" => "Egész értéket beállító csúszka rajzolása egy hivatkozott cellában",
+        "Draw a spin button that steps a whole number in a linked cell" => "Egész értéket léptető vezérlő rajzolása egy hivatkozott cellában",
         "Edit Text" => "Szöveg szerkesztése",
         "Assign Action…" => "Művelet hozzárendelése…",
         "Format Control…" => "Vezérlő formázása…",
@@ -343,9 +339,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "A CSV file, web page or PDF is a copy: the workbook keeps its own file." => {
             "A CSV-fájl, weboldal vagy PDF egy másolat: a munkafüzet megőrzi a saját fájlját."
         }
-        "Save the workbook under another name or in another folder." => {
-            "A munkafüzet mentése másik néven vagy más mappába."
-        }
+        "Save the workbook under another name or in another folder." => "A munkafüzet mentése másik néven vagy más mappába.",
         "Print Active Sheets" => "Aktív munkalapok nyomtatása",
         "Print Entire Workbook" => "Teljes munkafüzet nyomtatása",
         "Fit Sheet on One Page" => "Munkalap illesztése egy oldalra",
