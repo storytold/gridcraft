@@ -45,22 +45,36 @@ fn fallback_faces_are_appended_to_every_family() {
 }
 
 #[test]
-/// Every font family ends with exactly the permitted craft faces in manifest order.
-fn craft_fonts_are_the_last_fallback_in_every_family() {
-    // Ordering: app/bundled text faces, Hack, system script fallbacks, bundled emoji/icon faces,
-    // permitted craft faces. A craft face must never displace a system face that covers a glyph.
+/// Craft text faces sit before egui's bundled emoji/icon faces and craft symbol faces after them,
+/// each in manifest order; every craft face appears exactly once.
+fn craft_faces_flank_the_bundled_emoji_in_manifest_order() {
+    // Ordering: app/bundled text faces, Hack, system script fallbacks, craft text faces, bundled
+    // emoji/icon faces, craft symbol faces. A craft text face must never displace a system face
+    // that covers a glyph, and must come before the icon font for full-width forms it also maps.
     let fonts = font_definitions_for_language(Language::En);
-    let expected: Vec<String> = craft_font_faces().into_iter().map(|(key, _)| key).collect();
-    if expected.is_empty() {
+    let craft = craft_font_faces();
+    if craft.is_empty() {
         return; // optional input absent
     }
+    let text_keys: Vec<&str> =
+        craft.iter().filter(|(_, font)| font.scripts.iter().any(|script| *script != "Zsym")).map(|(key, _)| key.as_str()).collect();
+    let symbol_keys: Vec<&str> =
+        craft.iter().filter(|(_, font)| font.scripts.iter().all(|script| *script == "Zsym")).map(|(key, _)| key.as_str()).collect();
     for (family, chain) in &fonts.families {
-        let first = chain.iter().position(|k| k.starts_with("craft-")).unwrap_or(chain.len());
+        let keys: Vec<&str> = chain.iter().map(|key| base_key(key)).collect();
+        let emoji_at =
+            keys.iter().position(|key| is_bundled_emoji(key)).unwrap_or_else(|| panic!("{family:?} has no bundled emoji/icon face: {keys:?}"));
+        let text_at = emoji_at.checked_sub(text_keys.len()).unwrap_or_else(|| panic!("{family:?} has no room for the craft text faces: {keys:?}"));
         assert_eq!(
-            chain[first..].iter().map(|k| base_key(k)).collect::<Vec<_>>(),
-            expected.iter().map(String::as_str).collect::<Vec<_>>(),
-            "{family:?} must end with exactly the permitted craft faces in manifest order"
+            &keys[text_at..emoji_at],
+            text_keys.as_slice(),
+            "{family:?} must put the craft text faces before the bundled emoji, in manifest order"
         );
+        let emoji_end = keys.iter().rposition(|key| is_bundled_emoji(key)).map_or(emoji_at + 1, |at| at + 1);
+        assert_eq!(&keys[emoji_end..], symbol_keys.as_slice(), "{family:?} must end with the craft symbol faces, in manifest order");
+        for (key, _) in &craft {
+            assert_eq!(keys.iter().filter(|k| **k == key.as_str()).count(), 1, "{family:?} must carry {key} exactly once: {keys:?}");
+        }
     }
 }
 

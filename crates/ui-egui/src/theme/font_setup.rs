@@ -519,9 +519,10 @@ pub(super) fn font_definitions_impl(
     for (family, faces) in installed {
         bound.extend(crate::fonts::bind_faces(&mut fonts, &family, &faces));
     }
-    // The optional craft-fonts faces go at the very end of every family: a system or bundled face
-    // that has the script keeps its glyph shapes, while the permitted OFL faces cover scripts and
-    // symbols the host image lacks (Japanese, Korean, Thai, Arabic, Georgian and the UI symbols).
+    // The optional craft-fonts text faces go before egui's bundled emoji/icon faces: a full-width
+    // form the icon font also carries (U+FF11 `１`) belongs to the script face that draws its
+    // neighbours. They stay after a system or bundled face that has the script, so that face keeps
+    // its glyph shapes. The craft symbol faces stay last, behind the bundled emoji.
     // Chinese comes from the native-only OFL LXGW face when embedded; a system Han face still
     // leads, and the barred Noto CJK collection never enters.
     append_craft_faces(&mut fonts);
@@ -619,14 +620,25 @@ fn bind_cell_fallback(fonts: &mut FontDefinitions, fallback: &[String]) {
     }
 }
 
-/// Appends the permitted craft-fonts faces to every family, preserving the leading system or
-/// bundled face's glyph shapes.
+/// Inserts the permitted craft-fonts faces into every family, preserving the leading system or
+/// bundled face's glyph shapes. Text faces go before egui's bundled emoji/icon faces, because a
+/// full-width form the icon font also maps (U+FF11 `１`) must come from the script face that draws
+/// its neighbours; symbol faces stay after them, so emoji fallback is unchanged.
 fn append_craft_faces(fonts: &mut FontDefinitions) {
     let craft = add_craft_fonts(fonts);
     if craft.is_empty() {
         return;
     }
+    let craft_text: Vec<String> =
+        craft_font_faces().into_iter().filter(|(_, font)| font.scripts.iter().any(|script| *script != "Zsym")).map(|(key, _)| key).collect();
     for chain in fonts.families.values_mut() {
+        let mut at = chain.iter().position(|k| is_bundled_emoji(k)).unwrap_or(chain.len());
+        for key in &craft_text {
+            if !chain.contains(key) {
+                chain.insert(at, key.clone());
+                at += 1;
+            }
+        }
         for key in &craft {
             if !chain.contains(key) {
                 chain.push(key.clone());

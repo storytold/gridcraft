@@ -11,6 +11,10 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
         resp.request_focus();
     }
     let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
+    // The IME may cancel a composition when the grid loses focus without sending Commit or an
+    // empty Preedit. Resolve the preview here so its uncommitted preedit is not left as a draft
+    // that a later Enter could commit over the cell.
+    resolve_ime_preview(app, ctx, resp);
     // A composition that opened the cell editor as a preview still belongs to the grid: show each
     // preedit in the editor without taking focus, which would interrupt the composition.
     if app.editor.as_ref().is_some_and(|ed| ed.ime_preview)
@@ -257,6 +261,25 @@ fn start_ime_edit(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response
         ed.caret = ed.text.chars().count();
     }
     true
+}
+
+/// Ends a composition preview when the grid has lost the keyboard. The platform may cancel a
+/// composition on a focus change without sending a clearing event, so the uncommitted preedit must
+/// not stay as a draft a later Enter could commit over the cell. Text the IME already committed is
+/// kept as an ordinary open draft, without pulling focus back from the widget the user moved to.
+fn resolve_ime_preview(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response) {
+    if ctx.memory(|m| m.has_focus(resp.id)) {
+        return;
+    }
+    let Some(committed) = app.editor.as_ref().filter(|ed| ed.ime_preview).map(|ed| ed.ime_committed.clone()) else { return };
+    if committed.is_empty() {
+        app.cancel_edit();
+        return;
+    }
+    if let Some(ed) = app.editor.as_mut() {
+        ed.finish_ime_preview(committed);
+        ed.request_focus = false;
+    }
 }
 
 /// This frame's input events, without those the focused form control took.

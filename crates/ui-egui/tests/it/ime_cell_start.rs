@@ -83,6 +83,32 @@ fn escape_cancels_a_preview_without_an_ime_clearing_event() {
 }
 
 #[test]
+fn leaving_the_grid_discards_an_uncommitted_preview() {
+    let mut h = harness();
+    ime(&mut h, ImeEvent::Preedit { text: "ni".into(), active_range_chars: None });
+    assert!(h.state().editor.as_ref().is_some_and(|ed| ed.ime_preview));
+    h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("gridcraft.name_box")));
+    h.run_steps(4);
+    assert!(h.state().editor.is_none(), "the uncommitted preedit must not stay as a draft");
+}
+
+#[test]
+fn leaving_the_grid_keeps_text_the_ime_committed() {
+    let mut h = harness();
+    // A commit followed by a new preedit in one batch: "a" is committed, "b" is still composing.
+    h.input_mut().events.push(Event::Ime(ImeEvent::Commit("a".into())));
+    h.input_mut().events.push(Event::Ime(ImeEvent::Preedit { text: "b".into(), active_range_chars: None }));
+    h.run_steps(4);
+    assert_eq!(h.state().editor.as_ref().map(|ed| (ed.text.as_str(), ed.ime_preview)), Some(("ab", true)));
+    h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("gridcraft.name_box")));
+    h.run_steps(4);
+    let ed = h.state().editor.as_ref().expect("the committed text stays as an open draft");
+    assert_eq!(ed.text, "a", "only the uncommitted preedit is discarded");
+    assert!(!ed.ime_preview);
+    assert!(!editor_focused(&h), "the open draft must not pull focus back from the Name Box");
+}
+
+#[test]
 fn a_commit_on_a_selected_cell_starts_an_edit_with_its_text() {
     let mut h = harness();
     ime(&mut h, ImeEvent::Commit("abc".into()));
