@@ -1971,6 +1971,8 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
             Scalar::Currency(value) => Ok(value.checked_abs().map(Scalar::Currency).unwrap_or(Scalar::Decimal(-(*value as f64) / 10_000.0))),
             _ => Ok(Scalar::Decimal(number(0)?.abs())),
         },
+        "ROUND" => Ok(Scalar::Decimal(round_to(number(0)?, number(1)? as i32))),
+        "ROUNDUP" => Ok(Scalar::Decimal(round_direction(number(0)?, number(1)? as i32, true))),
         // `INT` rounds toward negative infinity, keeping Currency as Currency and
         // everything else as Integer (CodeRabbit, #3412).
         "INT" => match arg(0)? {
