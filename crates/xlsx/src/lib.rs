@@ -52,7 +52,7 @@ pub use csv::{MAX_CSV_BYTES, decode_text, read_csv, read_csv_with_report, write_
 pub use ods::read_ods;
 pub use package::MAX_PART;
 pub use passthrough::rebase_links;
-pub use xls::read_xls;
+pub use xls::{read_xls, read_xls_with};
 pub use xlsb::read_xlsb;
 
 /// Errors from reading or writing files.
