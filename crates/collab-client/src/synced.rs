@@ -310,8 +310,16 @@ impl Synced {
                         self.notice = Some(rejected.message.clone().unwrap_or_else(|| format!("{:?}", rejected.code)));
                     }
                     if let Some(index) = self.pending.iter().position(|pending| pending.op_id == rejected.op_id) {
+                        // A later preview sits on top of this one in the engine's history, so the
+                        // engine's undo would take back that edit and leave this one in the
+                        // document. Undo is only the rollback of the last preview; otherwise this
+                        // replica cannot rebuild the document and asks for the server's copy.
+                        let later_preview = self.pending[index.saturating_add(1)..].iter().any(|pending| pending.previewed);
                         let pending = self.pending.remove(index);
-                        if pending.previewed {
+                        if pending.previewed && later_preview {
+                            self.notice = Some("an earlier edit was refused; reloading the document from the session".into());
+                            self.link.send_message(ClientMessage::Resync { from: self.link.state().version });
+                        } else if pending.previewed {
                             let _ = session.execute("edit.undo", json!({}));
                         }
                         if rejected.retryable && rejected.code == RejectCode::Stale {
