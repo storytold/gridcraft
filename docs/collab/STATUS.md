@@ -2,20 +2,25 @@
 
 - Date: 2026-11-10
 - Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`). The PR head is
-  `2a245f91`; the slice that closes the fifteen Major findings of the 17:44Z review is
-  `f51237ea` and this page is one docs commit on top of it — both **local, not pushed** when
-  this revision was written, because pushing this branch is the human step §19 names. The branch is then 60 commits on `origin/main` (`2c58c769`), 84 files, +16813/−34.
-  A commit cannot spell its own hash: the bus record `status/gridcraft` quotes it. §19 records
-  the push of 2026-11-10T17:19Z, which published `ae4311ee`, `34e54b81`, `46783412` and the nine
-  review-fix commits `d91f838a`…`a2251b0e`.
-- Base: `origin/main` = `2c58c769` (rebased 2026-11-08; also the PR's `baseRefOid`)
+  `8208607f`: the slice that closed the fifteen Major findings of the 17:44Z review (`f51237ea`)
+  plus the §20 page, both published by the push of 2026-11-10T20:1xZ. The slice that closes the
+  six findings of the 20:32Z review is `8e76f729`, and this page is one docs commit on top of it —
+  both **local, not pushed** when this revision was written, because pushing this branch is the
+  human step §19 names. The branch is then 62 commits on the base `2c58c769`, 84 files,
+  +17178/−34. A commit cannot spell its own hash: the bus record `status/gridcraft` quotes it.
+  §19 records the push of 2026-11-10T17:19Z, which published `ae4311ee`, `34e54b81`, `46783412`
+  and the nine review-fix commits `d91f838a`…`a2251b0e`; §21 records the push of 20:1xZ, which
+  published `f51237ea` and `8208607f`.
+- Base: `origin/main` = `2c58c769` at the time of the rebase (the PR's `baseRefOid`; upstream has
+  moved since)
 - PR: <https://github.com/storytold/gridcraft/pull/3613> — open, **not a draft** since
-  2026-11-10T14:56:54Z, `mergeable = MERGEABLE`
+  2026-11-10T14:56:54Z, `mergeable = MERGEABLE`, head `8208607f`, last update 20:32:23Z
 - Gate on this head: none yet. The four workflows created on `2a245f91` (`CI`, `House rules`,
-  `Nix`, `SonarCloud`, 2026-11-10T17:19:42Z) all sit in `action_required` with no job started.
-  The push of `f51237ea` is still the human step §19 names, so its workflows will be created only
-  when that push happens; CodeRabbit's review on it has not landed either. The evidence in this
-  page is the host runs of §17, §18.6 and §20.2, not a CI pass.
+  `Nix`, `SonarCloud`, 2026-11-10T17:19:42Z) all sit in `action_required` with no job started;
+  the workflows of the 20:1xZ push (`8208607f`) have not started either. CodeRabbit did review
+  that head: review `5848894080` at 20:32:17Z, six inline threads and one finding outside the
+  diff, all seven closed by §21. The evidence in this page is the host runs of §17, §18.6, §20.2
+  and §21.2, not a CI pass.
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
 - Session handoff (project-level, outside this repository):
   `docs/collab/STATUS.md` in the cabinet project directory. This page is the canonical record and
@@ -1214,7 +1219,130 @@ so and names the suites that cover the paths around it instead of claiming a tes
 written deterministically. `rfc.md` and `server.md` were corrected in the same commit, so
 the documents a client is built from now describe the wire that exists.
 
-`f51237ea` is local, and this section is one docs commit on top of it that changes only this page.
-Pushing the branch (which moves the PR head to that docs commit) and approving the four workflows on
-it are the two human steps; until then the gate on the new commit is the host run of §20.2, not a CI
-pass.
+`f51237ea` was local when this section was written, and this section was one docs commit on top of
+it that changes only this page. Both were published by the push of 20:1xZ (§21); approving the
+workflows on the new head is still the human step, so the gate on it is the host run of §20.2, not
+a CI pass.
+
+## 21. CodeRabbit's six findings on `8208607f` (2026-11-10T20:32Z)
+
+The push the human step named landed at 2026-11-10T20:1xZ: the fork and PR #3613 moved to
+`8208607f` (the code slice `f51237ea` plus the §20 page on top), `mergeable = MERGEABLE`, not a
+draft. CodeRabbit then reviewed the head its own way: review `5848894080` at 20:32:17Z, six
+inline threads and one finding outside the diff (7 in total: five Major inline, one Major on
+`client.rs`, one Minor on this page). Every one was checked against the code at `8208607f` before
+anything changed; all seven held. This section records what closed each of them and the runs that
+show it.
+
+The slice that closes them is `8e76f729` (code and the `rfc.md`/`server.md`/`client.md`
+corrections) and this page is one docs commit on top of it. Both are **local** when this is
+written: pushing the branch is the same human step §19 and §20.3 name, and the fork stays at
+`8208607f` until it runs. A commit cannot spell its own hash; the bus record `status/gridcraft`
+quotes the docs commit.
+
+### 21.1 What was wrong, and what changed
+
+**A version-zero joiner of a seeded room with edits (`ws.rs:179`, Major).** The first fix on
+`2a245f91` sent the workbook only when the journal was empty (`from == 0 && head == 0 && seeded`).
+One operation later the journal is not empty, so a replica that holds a different document still
+got the tail — the edits replayed onto its own workbook, and both sides then claimed the room's
+version. A version-zero joiner of a seeded room now takes the workbook whatever the head is: the
+journal only describes what changed *after* the seed, and a replica without the seed cannot apply
+it to anything. Test:
+`a_version_zero_join_of_a_seeded_room_with_edits_receives_the_workbook` in
+`apps/gridcraft-collab-server/tests/ws.rs` (fails on the old condition: the joiner received
+`applied` and `resynced`, not a `snapshot`).
+
+**An empty tail below the head (`ws.rs:237-243`, Major).** `resync` caught a tail that *started*
+above `sent + 1`, but not a tail a snapshot had trimmed to nothing between `unregister` and
+`catch_up`. Then `journal_after(sent)` is empty, the connection is registered and told
+`resynced { version: head }` with versions it never received — and no version gap to notice. The
+tail and the head are now read under the same lock, and an empty tail below the head is a
+`CatchUp::Trimmed` that asks for the base; `u64::MAX` (a client asking for the workbook outright)
+is above any head, so `reject_resync` still registers. The decision is a pure function,
+`missed(tail_empty, head, sent)`, tested by
+`an_empty_tail_below_the_head_is_a_trimmed_journal` in `ws.rs`. The race itself cannot be driven
+from a socket test without a hook between the two calls; the state it decides on can.
+
+**A preview made while the requested workbook was in transit (`synced.rs:381-385`, Major).** The
+replica asks for `ClientMessage::Snapshot` during normal editing (a refused preview under a later
+one, §20.1 #8). The socket is handled in order, so the server runs that request before a preview
+the user makes while it travels, and the workbook does not contain that preview. On arrival,
+`Event::Snapshot` replaced the document and *cleared* `pending`; the `applied` for the preview then
+saw only the operation-id prefix, took itself for a live preview and patched values — a formula or
+a style stayed a constant on that replica while every other replica and the room held the formula.
+The snapshot no longer clears the queue: it marks every entry `previewed = false`, and
+`apply_here` treats an operation as this replica's own only when its pending entry is still
+previewed. An operation the transport never queued here keeps the old behaviour (nothing was
+previewed). Test: `a_preview_made_while_the_workbook_was_in_transit_is_replayed` in
+`crates/collab-client/tests/rollback.rs` — the preview is a formula, the delta carries only its
+value, and the assertion is on the formula after the answer.
+
+**The serialized cell value in the RFC (`rfc.md:103`, Major).** The example sent
+`"value":45`; `delta_for` serializes `Value` as `#[serde(tag = "t", content = "v")]`, so a number
+is `{"t":"Number","v":45.0}`. A client built from the example reads `f64` and fails on every
+authoritative delta. The example now shows the real shape, the mapping for text, bool, error and
+empty is written next to it, and the paragraph says that unset `Applied` fields are omitted rather
+than sent as `null` (`skip_serializing_if`) — the same block also spelled the delta's object lists
+`objectsDeleted`, which the wire does not.
+
+**The exception to "a delta or a command is present" (`rfc.md:109-110`, Major).** `Room::reverse_sheets`
+answers a structural undo/redo with `Outcome { command: None, delta: None }` and the restored state
+in `images` and `book`; the RFC stated the invariant unconditionally, so a client enforcing it would
+reject a valid answer and diverge. The rule now carries the exception, says what such an `applied`
+holds (`images`, `book`, `sheets`) and that the client must replace the sheets from the images, not
+treat the frame as an error; the "delta is mandatory" paragraph names the same exception.
+
+**The reconnect cursor (`client.rs:121-130`, Major, outside the diff).** `State::version` was
+initialised from `welcome.version` — the room's head, delivered *before* any catch-up frame — and
+the reconnect `hello` sends `state.version` as `lastVersion`. A socket that dropped after welcome
+but before the catch-up therefore advertised a version whose operations this replica never got; the
+server saw a replica at the head, sent neither tail nor snapshot, and the document stayed behind.
+The cursor now starts at `cfg.last_version` (what the replica holds) and only `applied`, `snapshot`
+and `resynced` move it; a `welcome` sets the epoch, sheets and participants but not the cursor.
+Test: `a_welcome_does_not_move_the_reconnect_cursor` in `client.rs` (a welcome at version 9 leaves
+a replica at 3 where it stands and takes epoch 4).
+
+**The workflow wording on this page (`STATUS.md:16`, Minor).** The line said the workflows of
+`f51237ea` existed but had not started, while two other places said the commit was not pushed. It
+now says the workflows are created by the push, which was still the human step when §20 was
+written; the push itself is recorded at the top of §21.
+
+### 21.2 Gates (remote host `agents`, 2026-11-10, on `8e76f729`)
+
+```text
+cargo xtask ci                                fmt ok, clippy ok, i18n-report ok,
+                                              test FAIL: the one host-environment engine test
+cargo test -p gridcraft-collab                49 passed, 0 failed, EXIT 0
+cargo test -p gridcraft-collab-client --all-targets   2 lib + 13 converge + 4 document
+                                              + 5 parts + 4 rollback, 0 failed, EXIT 0
+cargo test -p gridcraft-collab-server --all-targets   40 unit + 5 acceptance + 6 callback
+                                              + 2 logging + 9 persistence + 12 socket,
+                                              0 failed, EXIT 0
+cargo test -p gridcraft-collab-web            9 passed, 0 failed, EXIT 0
+cargo fmt --all -- --check                    clean, EXIT 0
+cargo clippy -p gridcraft-collab -p gridcraft-collab-client
+  -p gridcraft-collab-server -p gridcraft-collab-web
+  -p gridcraft-web --all-targets -j 8 -- -D warnings    clean, EXIT 0
+cargo check -p gridcraft-collab-web -p gridcraft-web
+  --target wasm32-unknown-unknown             ok, EXIT 0
+```
+
+`cargo xtask ci` stopped at `cargo test --workspace --lib --bins --tests` on
+`io::tests::save_keeps_the_destination_access_restrictions` (`mode 664`, the build host's
+temporary directory) — the host-environment failure §10, §15 and §20.2 already record, in a file
+this slice does not touch; the other 898 engine tests pass. Counts over the four collaboration
+packages: 160 passed, 0 failed, before this slice 158 (the two new tests and the two new unit
+tests are this slice's). No CI run covers `8e76f729` yet: the workflows on `8208607f` sit in
+`action_required` until a maintainer approves them, and the new head is not on the PR at all until
+the push.
+
+### 21.3 Answering the review
+
+All six threads were answered on 2026-11-10T21:5xZ, one reply per comment id, each naming the
+commit and the test or the exact paragraph, and each saying the commit is local until the branch
+is pushed — the wording §18.7 and §20.3 used, because it is still true. The finding outside the
+diff (`client.rs`) has no thread of its own; its reply is the one on the `synced.rs` thread, which
+lists the four code fixes with their tests. Where a finding could not be reproduced by a socket
+test (the trimmed-journal race) the reply says so and names the pure decision the test covers
+instead of claiming a test that cannot be written deterministically.
