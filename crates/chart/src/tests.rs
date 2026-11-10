@@ -1718,7 +1718,9 @@ fn series_lines_take_their_width() {
         // 5 pt is 6.67 px, the chart's unit.
         assert!(widths(kind, Some(5.0)).iter().all(|w| (*w - 5.0 * 96.0 / 72.0).abs() < 1e-4), "{kind:?}");
         // A hairline stays visible; a line wider than the plot is bounded.
-        assert!(widths(kind, Some(0.0)).iter().all(|w| *w == 0.25), "{kind:?}");
-        assert!(widths(kind, Some(1584.0)).iter().all(|w| *w == 20.0), "{kind:?}");
+        let px = 96.0 / 72.0;
+        assert!(widths(kind, Some(0.0)).iter().all(|w| (*w - 0.25 * px).abs() < 1e-4), "{kind:?}");
+        assert!(widths(kind, Some(18.0)).iter().all(|w| (*w - 18.0 * px).abs() < 1e-4), "{kind:?}: 18 pt is kept");
+        assert!(widths(kind, Some(1584.0)).iter().all(|w| (*w - 20.0 * px).abs() < 1e-4), "{kind:?}");
     }
 }
