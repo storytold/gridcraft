@@ -87,14 +87,14 @@ pub fn in_category(id: &str) -> impl Iterator<Item = &'static FnEntry> + '_ {
 
 /// The name a function shows under in the interface language.
 fn display_name<'a>(app: &SheetApp, name: &'a str) -> &'a str {
-    let locale = app.ui.language.formula_locale();
+    let locale = app.ui.language.formula_locale(app.ui.decimal_separator);
     app.session.active().map(|d| crate::formula_locale::completion_name(name, locale, &d.wb, d.wb.active_sheet())).unwrap_or(name)
 }
 
 /// One menu row per function, with its description on hover; a click starts the formula.
 fn function_items<'a>(app: &mut SheetApp, ui: &mut Ui, names: impl Iterator<Item = &'a str>) {
     let language = app.ui.language;
-    let locale = language.formula_locale();
+    let locale = language.formula_locale(app.ui.decimal_separator);
     ui.set_max_height(420.0);
     egui::ScrollArea::vertical().max_height(380.0).show(ui, |ui| {
         for n in names {

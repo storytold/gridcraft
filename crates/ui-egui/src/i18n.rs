@@ -12,11 +12,13 @@ use serde::{Deserialize, Serialize};
 mod cs;
 mod de;
 mod es;
+mod es_functions;
 mod fr;
 mod ko;
 mod pt;
 mod ru;
 mod sr;
+mod tr;
 mod zh;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,10 +37,11 @@ pub enum Language {
     Cs,
     Fr,
     Sr,
+    Tr,
 }
 
 impl Language {
-    pub const ALL: [Self; 11] = [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr];
+    pub const ALL: [Self; 12] = [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr, Self::Tr];
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
@@ -54,6 +57,7 @@ impl Language {
             Self::Cs => "Čeština",
             Self::Fr => "Français",
             Self::Sr => "Srpski",
+            Self::Tr => "Türkçe",
         }
     }
 
@@ -71,6 +75,7 @@ impl Language {
             Self::Cs => "cs",
             Self::Fr => "fr",
             Self::Sr => "sr",
+            Self::Tr => "tr",
         }
     }
 
@@ -91,6 +96,38 @@ impl Language {
             "cs" => Some(Self::Cs),
             "fr" => Some(Self::Fr),
             "sr" => Some(Self::Sr),
+            "tr" => Some(Self::Tr),
+            _ => None,
+        }
+    }
+
+    /// Returns a human-readable list of all supported language codes, joined by `sep`.
+    pub fn code_list(sep: &str) -> String {
+        Self::ALL.iter().map(|l| l.code()).collect::<Vec<_>>().join(sep)
+    }
+
+    /// Returns the languages shown in the language picker (all supported languages).
+    pub fn for_picker() -> &'static [Language] {
+        &Self::ALL
+    }
+
+    /// Translates an error message; falls back to the original message if no translation exists.
+    pub fn tr_error(self, text: &str) -> &str {
+        self.tr(text)
+    }
+
+    /// Translates a function description; returns `None` to fall back to English.
+    pub fn function_description(self, english: &str) -> Option<&'static str> {
+        match self {
+            Self::Es => es_functions::DESCRIPTIONS.iter().find(|(en, _)| *en == english).map(|(_, es)| *es),
+            _ => None,
+        }
+    }
+
+    /// Translates a function argument name (without brackets or index); returns `None` to fall back to English.
+    pub fn function_argument(self, english: &str) -> Option<&'static str> {
+        match self {
+            Self::Es => es_functions::ARGUMENTS.iter().find(|(en, _)| *en == english).map(|(_, es)| *es),
             _ => None,
         }
     }
@@ -134,6 +171,7 @@ impl Language {
             Self::Cs => cs::translate(text),
             Self::Fr => fr::translate(text),
             Self::Sr => sr::translate(text),
+            Self::Tr => tr::translate(text),
         };
         translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
