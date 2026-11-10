@@ -133,9 +133,10 @@ pub(crate) fn fixed(a: f64, decimals: usize) -> (String, String) {
     fixed_from_digits(&d, e, decimals)
 }
 
-/// General format squeezed into `max_chars` characters. Excel shows fewer decimals, then
-/// scientific notation, then "####" when a column is narrow; `None` means the caller paints "####".
-pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
+/// General format squeezed into `max_chars` characters, writing the decimal point `decimal`.
+/// Excel shows fewer decimals, then scientific notation, then "####" when a column is narrow;
+/// `None` means the caller paints "####".
+pub fn format_general_fit_in(n: f64, max_chars: usize, decimal: char) -> Option<String> {
     // The widest fixed rendering of a double is about 330 characters; a larger request only
     // pads zero decimals the trim below throws away.
     let max_chars = max_chars.min(1024);
@@ -161,7 +162,7 @@ pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
             let mut s = String::from(sign);
             s.push_str(if i.is_empty() { "0" } else { &i });
             if !f.is_empty() {
-                s.push('.');
+                s.push(decimal);
                 s.push_str(f);
             }
             if s.chars().count() <= max_chars {
@@ -184,7 +185,7 @@ pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
         let mut s = String::from(sign);
         s.push_str(if mi.is_empty() { "0" } else { &mi });
         if !mf.is_empty() {
-            s.push('.');
+            s.push(decimal);
             s.push_str(mf);
         }
         s.push_str(&format!("E{}{:02}", if e < 0 { '-' } else { '+' }, e.unsigned_abs()));
@@ -193,6 +194,11 @@ pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
         }
     }
     None
+}
+
+/// General format squeezed into `max_chars` characters with the en-US decimal point.
+pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
+    format_general_fit_in(n, max_chars, '.')
 }
 
 #[cfg(test)]
