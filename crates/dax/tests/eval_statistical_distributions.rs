@@ -179,6 +179,19 @@ fn confidence_intervals_exponential_and_poisson() {
 }
 
 #[test]
+fn a_large_t_degrees_of_freedom_is_not_silently_partial() {
+    // `beta_cf` needs about sqrt(dof) steps: an enormous degree of freedom must report a domain
+    // error rather than a partial continued fraction (CodeRabbit, #3412).
+    let value = eval("T.DIST(1, 1E12, TRUE)");
+    match value {
+        Err(error) => assert!(error.contains("non-finite"), "{error}"),
+        // With a huge degree of freedom the t distribution is the standard normal: Phi(1).
+        Ok(Scalar::Decimal(value)) => assert!((value - 0.841_344_746_068_543).abs() < 1e-3, "got {value}"),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
 fn a_large_chi_square_degrees_of_freedom_stays_near_one_half() {
     // The series and continued fraction both iterate to a bounded estimate; a large shape must not
     // silently return the naive sum when the loop ends without converging (CodeRabbit, #3412).

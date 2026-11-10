@@ -125,7 +125,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number])],
         ReturnType::Integer,
         standard(false),
-        "Number of combinations with repetition of Number_chosen items drawn from Number items. Non-integer arguments are truncated (the remarks document rounding), both must be non-negative, and Number must be at least Number_chosen.",
+        "Number of combinations with repetition of Number_chosen items drawn from Number items. Non-integer arguments are truncated to integers, both must be non-negative, and Number must be at least Number_chosen.",
         &["COMBINA ( 8, 3 )"],
     ),
     spec(

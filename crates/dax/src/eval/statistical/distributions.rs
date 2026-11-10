@@ -1003,7 +1003,10 @@ fn beta_cf(a: f64, b: f64, x: f64) -> f64 {
     }
     d = 1.0 / d;
     let mut h = d;
-    for m in 1..10_000 {
+    let mut converged = false;
+    // The continued fraction needs about `sqrt(max(a, b))` steps, so a huge degree of freedom is
+    // the case that can exhaust the cap; report it rather than a partial value (CodeRabbit).
+    for m in 1..100_000 {
         let step = m as f64;
         let doubled = 2.0 * step;
         let first = step * (b - step) * x / ((a_minus + doubled) * (a + doubled));
@@ -1030,10 +1033,11 @@ fn beta_cf(a: f64, b: f64, x: f64) -> f64 {
         let delta = d * c;
         h *= delta;
         if (delta - 1.0).abs() < 1e-17 {
+            converged = true;
             break;
         }
     }
-    h
+    if converged { h } else { f64::NAN }
 }
 
 /// Standard normal density.
