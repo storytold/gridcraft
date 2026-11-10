@@ -207,7 +207,7 @@ fn fallback_covers_its_script() {
     // face or the optional craft-fonts input provides one; the printed skip is a recorded
     // gate, and a present face that is not wired in fails.
     type Case = (&'static str, Vec<(String, u32)>, &'static str);
-    let cases: [Case; 11] = [
+    let cases: [Case; 12] = [
         ("sys-cjk-han-ja", cjk_han_japanese(), "カテゴリ"),
         // Chinese uses a system Han face or the native-only permitted LXGW craft face; the
         // barred Noto CJK collection never supplies it.
