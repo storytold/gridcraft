@@ -179,6 +179,14 @@ fn confidence_intervals_exponential_and_poisson() {
 }
 
 #[test]
+fn a_large_chi_square_degrees_of_freedom_stays_near_one_half() {
+    // The series and continued fraction both iterate to a bounded estimate; a large shape must not
+    // silently return the naive sum when the loop ends without converging (CodeRabbit, #3412).
+    let value = number("CHISQ.DIST(1E10, 1E10, TRUE)");
+    assert!((value - 0.5).abs() < 1e-3, "expected about 0.5, got {value}");
+}
+
+#[test]
 fn linest_single_predictor() {
     let table = eval_table("LINEST(Sales[Amount], Sales[Quantity])").expect("LINEST evaluates");
     assert_eq!(table.rows.len(), 1);

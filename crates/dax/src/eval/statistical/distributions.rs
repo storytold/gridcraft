@@ -887,13 +887,21 @@ fn gamma_series(a: f64, x: f64) -> f64 {
     let mut ap = a;
     let mut sum = 1.0 / a;
     let mut delta = sum;
-    for _ in 0..10_000 {
+    let mut converged = false;
+    // A series with shape `a` needs about `sqrt(a)` terms, so a huge shape (1e10) needs far more
+    // than the old 10,000 cap before the normal-approximation region is reached.
+    for _ in 0..1_000_000 {
         ap += 1.0;
         delta *= x / ap;
         sum += delta;
         if delta.abs() < sum.abs() * 1e-17 {
+            converged = true;
             break;
         }
+    }
+    // Callers map a non-finite result to a domain error; a silent sum would be wrong instead.
+    if !converged {
+        return f64::NAN;
     }
     sum * (-x + a * x.ln() - ln_gamma(a)).exp()
 }
@@ -904,6 +912,7 @@ fn gamma_cf(a: f64, x: f64) -> f64 {
     let mut c = 1.0 / tiny;
     let mut d = 1.0 / b;
     let mut h = d;
+    let mut converged = false;
     for i in 1..10_000 {
         let index = i as f64;
         let an = -index * (index - a);
@@ -920,8 +929,12 @@ fn gamma_cf(a: f64, x: f64) -> f64 {
         let delta = d * c;
         h *= delta;
         if (delta - 1.0).abs() < 1e-17 {
+            converged = true;
             break;
         }
+    }
+    if !converged {
+        return f64::NAN;
     }
     (-x + a * x.ln() - ln_gamma(a)).exp() * h
 }
