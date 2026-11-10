@@ -272,7 +272,7 @@ async fn session_once(
                 let Some(Ok(frame)) = incoming else { return Outcome::Reconnect("the socket closed".into()) };
                 let Some(text) = text(frame) else { continue };
                 let Ok(message) = serde_json::from_str::<ServerMessage>(&text) else { continue };
-                match handle(message, shared, events, &mut snapshot) {
+                match handle(message, shared, events, &mut snapshot, pending) {
                     Handled::Continue => {}
                     Handled::Closed => return Outcome::Closed,
                 }
@@ -304,7 +304,17 @@ struct Snapshot {
     chunks: Vec<Option<Vec<u8>>>,
 }
 
-fn handle(message: ServerMessage, shared: &Arc<Mutex<State>>, events: &mpsc::UnboundedSender<Event>, snapshot: &mut Option<Snapshot>) -> Handled {
+/// Handles one server frame. `pending` is the resend queue: an operation the server answered —
+/// with `applied` or `rejected` — leaves it here, so a reconnect does not send an old operation
+/// again. An operation outside the dedup window that came back that way would be applied a second
+/// time against the current document.
+fn handle(
+    message: ServerMessage,
+    shared: &Arc<Mutex<State>>,
+    events: &mpsc::UnboundedSender<Event>,
+    snapshot: &mut Option<Snapshot>,
+    pending: &mut Vec<ClientOp>,
+) -> Handled {
     match message {
         ServerMessage::Welcome { session_id, actor_id, role, version, epoch, sheets, participants, .. } => {
             if let Ok(mut state) = shared.lock() {
@@ -320,12 +330,14 @@ fn handle(message: ServerMessage, shared: &Arc<Mutex<State>>, events: &mpsc::Unb
             let _ = events.send(Event::Reconnected { version });
         }
         ServerMessage::Applied { applied } => {
+            pending.retain(|op| op.op_id != applied.op_id);
             if let Ok(mut state) = shared.lock() {
                 crate::link::note_applied(&mut state, &applied);
             }
             let _ = events.send(Event::Applied(applied));
         }
         ServerMessage::Rejected { rejected } => {
+            pending.retain(|op| op.op_id != rejected.op_id);
             let _ = events.send(Event::Rejected(rejected));
         }
         ServerMessage::Presence { participants } => {
@@ -400,5 +412,59 @@ fn text(frame: Message) -> Option<String> {
     match frame {
         Message::Text(text) => Some(text.to_string()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gridcraft_collab::{Applied, Kind, Outcome, Payload, RejectCode, Rejected, Target};
+
+    fn op(op_id: &str) -> ClientOp {
+        ClientOp {
+            op_id: op_id.into(),
+            doc: "s1".into(),
+            base_version: 0,
+            epoch: 0,
+            kind: Kind::Command,
+            target: Target { sheet: "1".into(), a1: Some("A1".into()) },
+            payload: Payload { cmd: "cell.set".into(), params: serde_json::json!({}) },
+            preview: None,
+        }
+    }
+
+    fn applied(op_id: &str) -> Applied {
+        Applied {
+            op_id: op_id.into(),
+            version: 1,
+            epoch: 0,
+            actor: "ann".into(),
+            result: Outcome { command: None, delta: None },
+            sheets: None,
+            images: None,
+            book: None,
+            more: false,
+            image_part: None,
+        }
+    }
+
+    fn rejected(op_id: &str) -> Rejected {
+        Rejected { op_id: op_id.into(), code: RejectCode::Invalid, retryable: false, hint: None, message: None }
+    }
+
+    /// An operation the server answered must not be resent after a reconnect: outside the dedup
+    /// window it would be applied a second time, against whatever the document holds by then.
+    #[test]
+    fn an_answered_operation_leaves_the_resend_queue() {
+        let shared = Arc::new(Mutex::new(State::default()));
+        let (events, _receiver) = mpsc::unbounded_channel();
+        let mut snapshot = None;
+        let mut pending = vec![op("ann-0"), op("ann-1")];
+
+        handle(ServerMessage::Applied { applied: applied("ann-0") }, &shared, &events, &mut snapshot, &mut pending);
+        assert_eq!(pending.iter().map(|op| op.op_id.as_str()).collect::<Vec<_>>(), ["ann-1"]);
+
+        handle(ServerMessage::Rejected { rejected: rejected("ann-1") }, &shared, &events, &mut snapshot, &mut pending);
+        assert!(pending.is_empty(), "a refused operation is answered too");
     }
 }
