@@ -1006,6 +1006,33 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Pokaż",
         "Collapse dialog" => "Zwiń okno dialogowe",
         "Expand dialog" => "Rozwiń okno dialogowe",
+        "Options|Data" => "Dane",
+        "Automatic data conversion" => "Automatyczna konwersja danych",
+        "Enable all default data conversions below when entering, pasting, or opening text files" => {
+            "Włącz wszystkie poniższe domyślne konwersje danych podczas wprowadzania, wklejania lub otwierania plików tekstowych"
+        }
+        "Remove leading zeros and convert to a number" => "Usuń zera wiodące i konwertuj na liczbę",
+        "Off: 0123 stays text, leading zeros included." => "Wyłączone: 0123 pozostaje tekstem razem z zerami wiodącymi.",
+        "Keep first 15 digits of long numbers and display in scientific notation" => {
+            "Zachowaj pierwsze 15 cyfr długich liczb i wyświetlaj je w notacji naukowej"
+        }
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text." => {
+            "Wyłączone: żadna liczba nie jest skracana ani zamieniana na notację naukową. To, czego format Ogólne nie może wyświetlić tak, jak zostało wpisane, pozostaje tekstem."
+        }
+        "Keep numbers with more than" => "Zachowaj liczby mające więcej niż",
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost." => {
+            "11 (domyślnie): konwertowane są tylko liczby, które format Ogólne wyświetla dokładnie tak, jak zostały wpisane, więc 12-cyfrowe kody i kody kreskowe pozostają tekstem. Wartości od 12 do 15 pozwalają na wyświetlanie w notacji naukowej, np. 1.24412E+11, liczb o co najwyżej tylu cyfrach; żadna cyfra nigdy nie jest tracona."
+        }
+        "digits as text" => "cyfr jako tekst",
+        "Convert digits surrounding the letter \"E\" to a number in scientific notation" => {
+            "Konwertuj cyfry otaczające literę „E” na liczbę w notacji naukowej"
+        }
+        "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Wyłączone: 1244121406E6 pozostaje tekstem zamiast stać się 1.24412E+15.",
+        "Convert continuous letters and numbers to a date" => "Konwertuj ciągłe litery i cyfry na datę",
+        "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft nigdy nie wykonuje tej konwersji: 12JAN2026 pozostaje tekstem.",
+        "Data conversion settings apply to every workbook; they are not saved in the file." => {
+            "Ustawienia konwersji danych dotyczą wszystkich skoroszytów; nie są zapisywane w pliku."
+        }
         _ => return None,
     })
 }

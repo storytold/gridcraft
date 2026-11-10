@@ -448,6 +448,35 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Hiện",
         "Collapse dialog" => "Thu gọn hộp thoại",
         "Expand dialog" => "Mở rộng hộp thoại",
+        "Options|Data" => "Dữ liệu",
+        "Automatic data conversion" => "Chuyển đổi dữ liệu tự động",
+        "Enable all default data conversions below when entering, pasting, or opening text files" => {
+            "Bật tất cả các chuyển đổi dữ liệu mặc định bên dưới khi nhập, dán hoặc mở tệp văn bản"
+        }
+        "Remove leading zeros and convert to a number" => "Loại bỏ các số 0 ở đầu và chuyển đổi thành số",
+        "Off: 0123 stays text, leading zeros included." => "Tắt: 0123 vẫn là văn bản, giữ nguyên các số 0 ở đầu.",
+        "Keep first 15 digits of long numbers and display in scientific notation" => {
+            "Giữ 15 chữ số đầu tiên của số dài và hiển thị dưới dạng ký hiệu khoa học"
+        }
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text." => {
+            "Tắt: không số nào bị cắt bớt hoặc chuyển sang ký hiệu khoa học. Những gì định dạng Chung không thể hiển thị đúng như đã viết sẽ vẫn là văn bản."
+        }
+        "Keep numbers with more than" => "Giữ các số có nhiều hơn",
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost." => {
+            "11 (mặc định): chỉ những số mà định dạng Chung hiển thị chính xác như đã viết mới được chuyển đổi, nên mã và mã vạch 12 chữ số vẫn là văn bản. Từ 12 đến 15 cho phép hiển thị khoa học, như 1.24412E+11, cho các số có tối đa chừng đó chữ số; không chữ số nào bị mất."
+        }
+        "digits as text" => "chữ số dưới dạng văn bản",
+        "Convert digits surrounding the letter \"E\" to a number in scientific notation" => {
+            "Chuyển đổi các chữ số quanh chữ cái “E” thành số dưới dạng ký hiệu khoa học"
+        }
+        "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Tắt: 1244121406E6 vẫn là văn bản thay vì trở thành 1.24412E+15.",
+        "Convert continuous letters and numbers to a date" => "Chuyển đổi chữ cái và số liên tiếp thành ngày",
+        "GridCraft never makes this conversion: 12JAN2026 stays text." => {
+            "GridCraft không bao giờ thực hiện chuyển đổi này: 12JAN2026 vẫn là văn bản."
+        }
+        "Data conversion settings apply to every workbook; they are not saved in the file." => {
+            "Cài đặt chuyển đổi dữ liệu áp dụng cho mọi sổ làm việc; chúng không được lưu trong tệp."
+        }
         _ => return None,
     })
 }

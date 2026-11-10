@@ -198,7 +198,7 @@ impl Language {
     }
 
     /// The catalog's own translation of `text`, or `None` when it falls back to English.
-    fn translated(self, text: &str) -> Option<&'static str> {
+    pub(crate) fn translated(self, text: &str) -> Option<&'static str> {
         match self {
             Self::En => None,
             Self::Es => es::translate(text),
