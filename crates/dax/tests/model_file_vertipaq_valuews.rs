@@ -107,13 +107,17 @@ fn changing_a_value_to_another_existing_value_round_trips() {
     let rows: Vec<usize> = target.values.iter().enumerate().filter(|(_, value)| numeric(value).is_some()).map(|(row, _)| row).collect();
     assert!(rows.len() >= 2, "value-encoded column needs two numeric rows");
     let source = target.values[rows[0]].clone();
-    let destination = target.values[rows[1]].clone();
-    assert_ne!(numeric(&source), numeric(&destination));
-    target.values[rows[1]] = source.clone();
+    // A fixture may repeat the first value in the next numeric row, so take the first row whose
+    // value really differs instead of assuming the first two do.
+    let Some(destination_row) = rows[1..].iter().copied().find(|row| numeric(&target.values[*row]) != numeric(&source)) else {
+        // The column stores one distinct numeric value: there is no second value to point at.
+        return;
+    };
+    target.values[destination_row] = source.clone();
 
     let written = write_model(&base, &model).expect("write");
     let back = read_model(&written).expect("read back");
-    assert_eq!(column(&back, &table_name, &column_name).values[rows[1]], source);
+    assert_eq!(column(&back, &table_name, &column_name).values[destination_row], source);
     assert_only_column_changed(&model, &back, &table_name, &column_name);
 
     // The hierarchy itself did not change ids, so Excel's hash index must still be valid byte for

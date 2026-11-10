@@ -731,19 +731,42 @@ fn text_similarity(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) ->
     let within = ev.eval(argument, ctx)?.to_text();
     let search = ev.eval(args.get(1).ok_or_else(|| EvalError::new("TEXTSIMILARITY needs a search text"))?, ctx)?.to_text();
     let mode = match_mode(ev, args, ctx, 2)?;
-    let corpus = column_corpus(ev, argument);
-    // A model column can be large; when scoring every value against the query would exceed the
-    // text work budget, fall back to the current row's own value so the call stays bounded.
-    let work = corpus.iter().map(|value| value.chars().count()).sum::<usize>().saturating_mul(search.chars().count().max(1));
-    let corpus = if corpus.is_empty() || work > MAX_TEXT_WORK { vec![within.clone()] } else { corpus };
+    // A model column can be large. The corpus is collected only while its characters fit the text
+    // work budget for this query; past it — or for an empty column — the current row's own value
+    // is the corpus, so `MAXX(Table, TEXTSIMILARITY(...))` stays linear in the column instead of
+    // copying the whole column once per row.
+    let budget = MAX_TEXT_WORK / search.chars().count().max(1);
+    let corpus = match column_corpus(ev, argument, budget) {
+        Some(corpus) if !corpus.is_empty() => corpus,
+        _ => vec![within.clone()],
+    };
     Ok(Scalar::Decimal(similarity_score(&corpus, &within, &search, mode)))
 }
 
 /// The indexed corpus: every value of the model column, independent of the filter context.
-fn column_corpus(ev: &Evaluator<'_>, expr: &BoundExpr) -> Vec<String> {
-    let Ok((table, column)) = column_ref(ev, expr) else { return Vec::new() };
-    let Some(model_table) = ev.model().tables.get(table) else { return Vec::new() };
-    model_table.rows.iter().filter_map(|row| row.get(column)).map(|value| value.to_text()).collect()
+///
+/// `None` says the column's text exceeds `budget` characters, so the caller uses the current row
+/// instead. Collecting stops at the first value that would cross the budget, which keeps the
+/// allocation bounded by the query's own work limit.
+fn column_corpus(ev: &Evaluator<'_>, expr: &BoundExpr, budget: usize) -> Option<Vec<String>> {
+    let (table, column) = column_ref(ev, expr).ok()?;
+    let model_table = ev.model().tables.get(table)?;
+    collect_corpus(model_table.rows.iter().filter_map(|row| row.get(column)), budget)
+}
+
+fn collect_corpus<'a>(values: impl Iterator<Item = &'a Scalar>, budget: usize) -> Option<Vec<String>> {
+    let mut corpus = Vec::new();
+    let mut left = budget;
+    for value in values {
+        let text = value.to_text();
+        let chars = text.chars().count();
+        if chars > left {
+            return None;
+        }
+        left -= chars;
+        corpus.push(text);
+    }
+    Some(corpus)
 }
 
 /// BM25 relevance over the column's values (k1 = 1.2, b = 0.75). The score is an opaque ranking
@@ -792,5 +815,27 @@ fn host_principal() -> String {
     match (std::env::var("USERDOMAIN"), user.as_str()) {
         (Ok(domain), user) if !domain.is_empty() && !user.is_empty() => format!("{domain}\\{user}"),
         (_, user) => user.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_column_past_the_budget_is_not_copied() {
+        let values = [Scalar::String("red".into()), Scalar::String("green".into()), Scalar::String("blue".into())];
+        // 3 + 5 + 4 characters fit exactly in 12.
+        let corpus = collect_corpus(values.iter(), 12).expect("the column fits the budget");
+        assert_eq!(corpus, vec!["red".to_string(), "green".to_string(), "blue".to_string()]);
+        // One character less and the last value crosses it: the caller falls back rather than
+        // building the rest of the column.
+        assert_eq!(collect_corpus(values.iter(), 11), None);
+        assert_eq!(collect_corpus(values.iter(), 0), None);
+    }
+
+    #[test]
+    fn an_empty_column_collects_nothing() {
+        assert_eq!(collect_corpus(std::iter::empty(), 10), Some(Vec::new()));
     }
 }
