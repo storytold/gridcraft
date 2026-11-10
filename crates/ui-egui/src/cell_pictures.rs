@@ -32,6 +32,8 @@ struct Entry {
 }
 
 impl Cache {
+    /// The picture's texture for this frame, decoded once and kept while it is drawn; it is decoded
+    /// again when the Dark pictures setting changes, so the cache never shows the other variant.
     fn texture(&mut self, ctx: &egui::Context, picture: &Arc<CellPicture>) -> Option<TextureHandle> {
         let frame = ctx.cumulative_frame_nr();
         let key = Arc::as_ptr(picture) as usize;
@@ -165,6 +167,7 @@ mod tests {
         Ok(Arc::new(CellPicture { data: bytes.into_inner(), mime: "image/png".into(), alt: "Test picture".into() }))
     }
 
+    /// Pictures fit their cell keeping the aspect ratio, and the decoded-content cache stays bounded.
     #[test]
     fn aspect_fit_and_bounded_content_cache() -> Result<(), Box<dyn std::error::Error>> {
         let cell = Rect::from_min_size(pos2(10.0, 20.0), vec2(100.0, 100.0));

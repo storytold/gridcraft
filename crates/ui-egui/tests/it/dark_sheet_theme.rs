@@ -6,6 +6,7 @@ use gridcraft_engine::Session;
 use gridcraft_ui_egui::{SheetApp, UiState, control};
 use serde_json::{Value, json};
 
+/// An app with an empty workbook, run for a few frames.
 fn harness() -> egui_kittest::Harness<'static, SheetApp> {
     let mut h = crate::common::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
@@ -18,6 +19,8 @@ fn harness() -> egui_kittest::Harness<'static, SheetApp> {
     h
 }
 
+/// Runs a command through the control channel, as an agent would, checks that it succeeded and
+/// lets the app paint; returns the response.
 fn execute(h: &mut egui_kittest::Harness<'static, SheetApp>, command: &str, params: Value) -> Value {
     let ctx = h.ctx.clone();
     let control::Outcome::Done(response) = control::handle(h.state_mut(), &ctx, "engine.execute", &json!({"command": command, "params": params}))
@@ -65,6 +68,7 @@ fn a_theme_switch_repaints_the_interface_at_once_and_the_sheet_follows_only_its_
     assert_eq!(sheet_and_chrome(&mut h).unwrap().0, [255; 3]);
 }
 
+/// Display theme and Dark sheet are saved together and both come back after a restart.
 #[test]
 fn both_settings_are_saved_together_and_restored() {
     let mut h = harness();
@@ -83,6 +87,7 @@ fn both_settings_are_saved_together_and_restored() {
     }
 }
 
+/// A screenshot taken right after a switch shows the new appearance, not the old frame.
 #[test]
 fn a_screenshot_request_after_a_switch_shows_the_new_appearance() {
     let mut h = harness();

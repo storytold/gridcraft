@@ -419,6 +419,8 @@ struct PanesInput<'a> {
     tokens: &'a Tokens,
 }
 
+/// Paints the frozen and scrolled panes (cells, borders, selection), each clipped to its own
+/// quadrant, and returns the quadrants painted.
 fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
     let PanesInput { app, painter, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel, outline, tokens: t } = input;
     // Quadrants: (rows, cols, clip).
@@ -812,6 +814,8 @@ pub(crate) fn paint_overlays(input: OverlayInput<'_>) {
     let _ = (wb, si);
 }
 
+/// Paints the page outlines and page numbers of Page Break Preview, recomputing the pages only
+/// when the workbook or the active sheet changed.
 fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
     let Some(d) = app.session.active() else { return };
     let key = (d.uid, d.revision, d.wb.active_sheet());

@@ -155,6 +155,7 @@ fn lenient_interface_scale<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u16
 }
 
 impl Default for UiState {
+    /// The first-run interface: light theme, Home tab, every dark display setting off.
     fn default() -> Self {
         UiState {
             dark: false,

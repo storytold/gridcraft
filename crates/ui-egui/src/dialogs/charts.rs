@@ -57,6 +57,8 @@ fn chart_icon(t: &str) -> Icon {
     }
 }
 
+/// The Insert Chart dialog: Recommended Charts and All Charts tabs, the chart previews (drawn
+/// dark when Dark charts is on) and OK / Cancel.
 pub(super) fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     ui.horizontal(|ui| {
         for tab in ["Recommended Charts", "All Charts"] {

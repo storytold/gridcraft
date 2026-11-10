@@ -27,6 +27,8 @@ pub(super) fn table_gallery(app: &mut SheetApp, ui: &mut Ui, cmd: &str) {
     }
 }
 
+/// Paints a small preview of a table style: the authored colours, mapped and guarded for the
+/// dark sheet like the cells they preview.
 pub(super) fn paint_table_swatch(ui: &Ui, r: Rect, wb: &gridcraft_engine::model::Workbook, style: &str) {
     let lk = gridcraft_engine::tables::look(style);
     let t = Tokens::get(ui.ctx());
@@ -68,6 +70,8 @@ pub(super) fn paint_table_swatch(ui: &Ui, r: Rect, wb: &gridcraft_engine::model:
     p.rect_stroke(r, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
 }
 
+/// The Cell Styles gallery: each built-in style as a button showing its fill, font and border,
+/// drawn as it will look on the current sheet; a click applies it to the selection.
 pub(super) fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.set_width(520.0);

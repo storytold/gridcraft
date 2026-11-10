@@ -181,6 +181,7 @@ mod tests {
         bytes.into_inner()
     }
 
+    /// The cache key of a light picture with this document, id and data.
     fn key(doc: u64, id: u32, data: &[u8]) -> Key {
         Key { doc, id, len: data.len(), dark: false }
     }
@@ -191,6 +192,7 @@ mod tests {
         out.textures_delta.clear(); // nothing consumes the uploads in a headless test
     }
 
+    /// A picture is decoded at about the size it is drawn, not at its full source size.
     #[test]
     fn pictures_are_decoded_at_about_the_size_drawn() {
         let ctx = egui::Context::default();

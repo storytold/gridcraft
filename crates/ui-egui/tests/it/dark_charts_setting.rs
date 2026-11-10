@@ -9,6 +9,7 @@ use gridcraft_ui_egui::theme;
 use gridcraft_ui_egui::{SheetApp, UiState};
 use serde_json::json;
 
+/// An app with an empty workbook, run for a few frames.
 fn harness() -> egui_kittest::Harness<'static, SheetApp> {
     let mut h = crate::common::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
@@ -54,6 +55,7 @@ fn it_is_independent_of_the_dark_sheet_and_the_display_theme_and_not_a_document_
     assert_eq!(h.state().session.active().map(|d| d.is_dirty()), dirty);
 }
 
+/// `view.darkPictures` toggles on its own, leaves the other settings alone and is saved.
 #[test]
 fn dark_pictures_command_toggles_is_independent_and_persists() {
     assert!(!UiState::default().dark_pictures);

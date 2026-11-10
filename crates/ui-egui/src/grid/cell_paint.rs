@@ -31,6 +31,7 @@ impl Look {
     }
 }
 
+/// A workbook colour resolved against the theme, or `default` when it does not resolve.
 pub(super) fn col32(c: Color, wb: &Workbook, default: Color32) -> Color32 {
     c.resolve(&wb.theme).map(theme::color32).unwrap_or(default)
 }

@@ -180,6 +180,7 @@ const fn tint(r: u8, g: u8, b: u8, a: u8) -> Color32 {
     Color32::from_rgba_unmultiplied_const(r, g, b, a)
 }
 
+/// A colour from a `0xRRGGBB` literal.
 const fn rgb(hex: u32) -> Color32 {
     Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
@@ -514,6 +515,7 @@ impl Tokens {
         }
     }
 
+    /// The tokens for this context: its interface theme and its Dark sheet setting.
     pub fn get(ctx: &egui::Context) -> Tokens {
         Tokens::palette(ctx.global_style().visuals.dark_mode, dark_sheet(ctx))
     }
@@ -822,6 +824,7 @@ mod contrast_tests {
         ]
     }
 
+    /// Every text and background token pair meets WCAG 2 contrast in each theme on both sheets.
     #[test]
     fn token_pairs_meet_wcag_contrast_in_every_theme_and_sheet() {
         let mut failures = Vec::new();
@@ -844,6 +847,7 @@ mod contrast_tests {
         assert!((contrast(rgb(0x767676), Color32::WHITE) - 4.54).abs() < 0.01);
     }
 
+    /// Sheet tokens change with the Dark sheet setting only; the interface theme leaves them alone.
     #[test]
     fn sheet_tokens_follow_the_sheet_not_the_theme() {
         let sheet_fields = |t: &Tokens| {
@@ -880,6 +884,7 @@ mod contrast_tests {
         }
     }
 
+    /// With the setting off, every sheet token keeps the colour it had before the dark sheet existed.
     #[test]
     fn the_light_sheet_keeps_the_colours_it_had_before_the_dark_sheet() {
         // With the dark sheet off nothing on the sheet changes, under either Display theme: the
@@ -928,6 +933,7 @@ mod contrast_tests {
         }
     }
 
+    /// The dark sheet tokens are the values of the design note (docs/dark-sheet.md).
     #[test]
     fn the_dark_sheet_is_the_design_note() {
         let d = Tokens::palette(false, true);
@@ -940,6 +946,7 @@ mod contrast_tests {
         assert_eq!(d.on_sheet_over(Color32::BLACK, Color32::WHITE, INK_TEXT_MIN), Color32::WHITE);
     }
 
+    /// The dark gridline contrasts with its sheet at least as much as the light one does.
     #[test]
     fn dark_sheet_gridline_is_at_least_as_visible_as_the_light_one() {
         let light = contrast(SheetColors::LIGHT.gridline, SheetColors::LIGHT.grid_bg);
@@ -956,6 +963,7 @@ mod contrast_tests {
         assert_eq!(image.pixels[1], ink(Color32::from_rgba_unmultiplied(0, 0, 0, 128)));
     }
 
+    /// Dark pictures is off in a fresh context and on only after it is set.
     #[test]
     fn dark_pictures_flag_is_off_until_set() {
         let ctx = egui::Context::default();
@@ -978,6 +986,7 @@ mod contrast_tests {
         assert_eq!(Tokens::get(&ctx).grid_bg, Color32::WHITE);
     }
 
+    /// `ink` inverts HSL lightness, keeps the hue and lifts black to the sheet grey #333333.
     #[test]
     fn ink_inverts_lightness_and_lifts_to_the_sheet_grey() {
         // The design note's examples.
@@ -999,6 +1008,7 @@ mod contrast_tests {
         assert_eq!(ink(Color32::from_rgba_unmultiplied(0, 0, 0, 128)).a(), 128, "alpha kept");
     }
 
+    /// The contrast guard makes mapped text legible but never asks for more contrast than authored.
     #[test]
     fn the_guard_restores_legibility_without_beating_the_author() {
         let white = Color32::WHITE;
@@ -1025,6 +1035,7 @@ mod contrast_tests {
         assert_eq!(ink_guarded(rgb(0x0000FF), white, INK_LINE_MIN), line);
     }
 
+    /// Text authored on white is guarded against the dark grey actually painted, not white.
     #[test]
     fn ink_authored_on_white_is_held_against_the_dark_surface_actually_painted() {
         // Chart text, border-preview lines and cell text on an unfilled cell are authored on white
@@ -1040,6 +1051,7 @@ mod contrast_tests {
         }
     }
 
+    /// Over a grid of colour pairs, guarded text contrasts at least as authored or at the minimum.
     #[test]
     fn every_guarded_pair_reads_at_least_as_well_as_authored_or_at_the_minimum() {
         let colours: Vec<Color32> = (0..=255u8)

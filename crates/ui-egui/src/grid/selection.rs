@@ -90,6 +90,8 @@ pub(crate) struct SelectionPaintInput<'a> {
     pub(crate) cols: (u32, u32),
 }
 
+/// Paints the selection of one pane: the fill of every area except the active cell, the active
+/// cell's frame, the outline (a formula's reference outlines while editing one) and the fill handle.
 pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
     let SelectionPaintInput { painter: p, geo, sheet: sh, selection: sel, outline, tokens: t, app, rows, cols } = input;
     // Fill all areas except the active cell.

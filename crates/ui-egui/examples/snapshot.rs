@@ -11,6 +11,9 @@ use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
 
+/// Renders the app offscreen and writes a PNG: reads the options (sample or input workbook, size,
+/// scale, ribbon tab, theme and dark display settings, dialogs, commands), runs the commands, then
+/// paints and saves the frame.
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut sample = None;

@@ -176,6 +176,8 @@ fn visible_cells(q: &QuadrantPaint<'_>) -> Vec<CellRef> {
     cells
 }
 
+/// Paints the fills of the quadrant's cells (a merged area once, at its first visible cell) and
+/// returns each painted cell's rectangle and look for the text and border passes.
 fn paint_backgrounds(q: &mut QuadrantPaint<'_>, cells: &[CellRef], merges: &[RangeRef]) -> Vec<(CellRef, Rect, Look, Option<CfLook>)> {
     let p = q.painter;
     let geo = q.geo;
@@ -205,6 +207,8 @@ fn paint_backgrounds(q: &mut QuadrantPaint<'_>, cells: &[CellRef], merges: &[Ran
     looks
 }
 
+/// The nearest non-empty cell left and right of the quadrant in each shown row, whose text may
+/// overflow into it, with their looks; only cells in the same frozen or scrolled pane.
 fn outside_text_cells(q: &mut QuadrantPaint<'_>, merges: &[RangeRef]) -> Vec<(CellRef, Rect, Look, Option<CfLook>)> {
     let geo = q.geo;
     let wb = q.workbook;
@@ -243,6 +247,8 @@ fn paint_cells(
     }
 }
 
+/// Paints what replaces or accompanies a cell's text: an in-cell picture, a data bar, a
+/// conditional-format icon or a checkbox. Returns true when the cell shows no text.
 fn paint_cell_decorations(q: &QuadrantPaint<'_>, c: CellRef, rect: Rect, lk: &Look, cfl: Option<&CfLook>) -> bool {
     let v = q.sheet.value(c);
     let p = q.painter;
@@ -558,6 +564,8 @@ fn paint_text_decorations(p: &Painter, decoration: TextDecoration) {
     }
 }
 
+/// Paints the cell borders and diagonals of the quadrant, merged areas as one box, with the
+/// border colours as painted on the current sheet.
 fn paint_borders(q: &mut QuadrantPaint<'_>, looks: &[(CellRef, Rect, Look, Option<CfLook>)], merges: &[RangeRef]) {
     let p = q.painter;
     let geo = q.geo;

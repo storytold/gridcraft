@@ -6,6 +6,7 @@ use gridcraft_ui_egui::theme::{self, Tokens};
 use gridcraft_ui_egui::{SheetApp, UiState};
 use serde_json::json;
 
+/// An app with an empty workbook, run for a few frames.
 fn harness() -> egui_kittest::Harness<'static, SheetApp> {
     let mut h = crate::common::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
@@ -108,6 +109,7 @@ fn cell_pixels(h: &mut egui_kittest::Harness<'static, SheetApp>, a1: &str) -> Op
     Some((y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).map(|(x, y)| image.get_pixel(x, y)).map(|p| [p[0], p[1], p[2]]).collect())
 }
 
+/// On the dark sheet the painted pixels show light automatic text and fills mapped by the rule.
 #[test]
 fn cell_text_and_fills_follow_the_colour_rule_on_the_dark_sheet() {
     let mut h = harness();

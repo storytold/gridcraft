@@ -268,6 +268,9 @@ pub(crate) fn objects_hidden(wb: &Workbook) -> bool {
     wb.show_objects == gridcraft_engine::model::ShowObjects::None
 }
 
+/// Paints the sheet's floating objects (the selected chart's source outlines, then shapes, pictures,
+/// charts and slicers) and returns each one's painted shapes and rectangle. Nothing is painted when
+/// objects are hidden; charts and pictures follow their own dark settings.
 pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) -> Vec<PaintedObject> {
     let mut painted = Vec::new();
     if objects_hidden(wb) {
