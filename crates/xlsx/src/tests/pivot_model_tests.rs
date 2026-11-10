@@ -794,6 +794,11 @@ fn connection_names_are_resolved_from_the_kept_connections_part() {
 
 /// A package with a workbook-level data-model database and its `powerPivotData` relationship.
 fn with_model_part() -> Vec<u8> {
+    with_model_part_data(b"the model database")
+}
+
+/// [`with_model_part`] holding `data` as the database.
+fn with_model_part_data(data: &[u8]) -> Vec<u8> {
     let rel = r#"<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/powerPivotData" Target="model/item.data"/>"#;
     let ct = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="data" ContentType="application/vnd.openxmlformats-officedocument.model+data"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#;
     let wb = r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
@@ -807,7 +812,7 @@ fn with_model_part() -> Vec<u8> {
         ("xl/workbook.xml", wb.as_bytes()),
         ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
         ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
-        ("xl/model/item.data", b"the model database"),
+        ("xl/model/item.data", data),
     ])
 }
 
@@ -815,6 +820,7 @@ fn with_model_part() -> Vec<u8> {
 fn the_model_database_survives_a_read_and_save() {
     let bytes = with_model_part();
     let (wb, _) = read_xlsx(&bytes).unwrap();
+    assert!(wb.dropped_model.is_none(), "a model within the limit is kept, not recorded as dropped");
     let out = write_xlsx(&wb).unwrap();
     let parts = entries(&out);
     assert_eq!(parts.get("xl/model/item.data").map(Vec::as_slice), Some(&b"the model database"[..]), "parts {:?}", parts.keys().collect::<Vec<_>>());
@@ -822,6 +828,52 @@ fn the_model_database_survives_a_read_and_save() {
     assert!(ct.contains("Extension=\"data\""), "{ct}");
     let rels = text(&parts, "xl/_rels/workbook.xml.rels");
     assert!(rels.contains("relationships/powerPivotData"), "{rels}");
+}
+
+#[test]
+fn an_oversized_model_part_refuses_to_save() {
+    use crate::passthrough::MAX_KEPT_PART;
+    let big = vec![0u8; MAX_KEPT_PART as usize + 1];
+    let bytes = with_model_part_data(&big);
+    drop(big);
+    // Reading still succeeds: parsing the model above the limit is not worth its cost.
+    let (wb, report) = read_xlsx(&bytes).expect("an oversized model still opens");
+    assert!(
+        report.warnings.iter().any(|w| w.contains("powerPivotData") && w.contains("xl/model/item.data") && w.contains("dropped")),
+        "the drop is reported: {:?}",
+        report.warnings
+    );
+    let dropped = wb.dropped_model.as_ref().expect("the dropped model is recorded on the workbook");
+    assert_eq!(dropped.name, "xl/model/item.data");
+    assert_eq!(dropped.size, MAX_KEPT_PART + 1);
+    assert_eq!(dropped.limit, MAX_KEPT_PART);
+    assert!(wb.preserved.as_deref().is_none_or(|p| !p.parts.iter().any(|q| q.name == "xl/model/item.data")), "the model part is not kept");
+
+    // Saving refuses instead of writing a package that silently lost the model.
+    let error = write_xlsx(&wb).expect_err("saving must lose nothing");
+    match &error {
+        IoError::DroppedPart { part, size, limit } => {
+            assert_eq!(part, "xl/model/item.data");
+            assert_eq!(*size, MAX_KEPT_PART + 1);
+            assert_eq!(*limit, MAX_KEPT_PART);
+        }
+        other => panic!("expected DroppedPart, got {other:?}"),
+    }
+    let message = error.to_string();
+    for needle in ["xl/model/item.data", "67108865", "67108864", "raise the limit", "without the model"] {
+        assert!(message.contains(needle), "{needle} missing from: {message}");
+    }
+}
+
+#[test]
+fn a_workbook_without_a_model_saves_as_before() {
+    let mut wb = workbook();
+    wb.sheet_mut(0).expect("Sheet1").cells.set(CellRef::new(0, 0), Cell::value(Value::number(1.0)));
+    assert!(wb.dropped_model.is_none(), "a workbook that never had a model records nothing");
+    let parts = entries(&write_xlsx(&wb).expect("no model means no refusal"));
+    assert!(!parts.contains_key("xl/model/item.data"), "parts {:?}", parts.keys().collect::<Vec<_>>());
+    let (back, _) = read_xlsx(&entries_to_bytes(&parts)).expect("the package reads back");
+    assert_eq!(back.sheet(0).map(|sheet| sheet.value(CellRef::new(0, 0))), Some(Value::number(1.0)));
 }
 
 #[test]

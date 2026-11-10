@@ -251,6 +251,11 @@ fn workbook_view_attrs(wb: &Workbook) -> String {
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
 pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
+    // Fail closed: the reader dropped the data model because the part is above the keep limit, so
+    // this package can't be written back without losing the model. Refuse before writing anything.
+    if let Some(model) = wb.dropped_model.as_ref() {
+        return Err(IoError::DroppedPart { part: model.name.clone(), size: model.size, limit: model.limit });
+    }
     if wb.sheets.is_empty() {
         return Err(IoError::Format("a workbook needs at least one sheet".into()));
     }

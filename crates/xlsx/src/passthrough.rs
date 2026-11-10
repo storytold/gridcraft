@@ -30,7 +30,7 @@ use std::fmt::Write as _;
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-use gridcraft_model::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml, Sheet, Visibility, Workbook};
+use gridcraft_model::{DroppedPart, Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml, Sheet, Visibility, Workbook};
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::QName;
@@ -55,6 +55,11 @@ pub use write::{KeptOut, SheetIds, WorkbookKept, workbook_elements, write_packag
 /// Most bytes kept for one workbook.
 pub const MAX_KEPT_TOTAL: usize = 256 * 1024 * 1024;
 /// Largest single kept part.
+///
+/// The data model (`xl/model/item.data`) is exempt in neither direction: a model above this limit
+/// is not read (parsing it would cost more than it is worth), and the workbook then cannot be
+/// saved as XLSX until the caller accepts losing it, because the writer refuses
+/// ([`crate::IoError::DroppedPart`]) rather than drop it silently.
 pub const MAX_KEPT_PART: u64 = 64 * 1024 * 1024;
 /// Most parts kept for one workbook.
 const MAX_KEPT_PARTS: usize = 4096;

@@ -449,6 +449,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         }
     }
     wb.preserved = kept.workbook(&mut cx, &wb_part, &wb_xml, &file_to_model);
+    // A model part too large to keep makes saving refuse: losing it silently is never acceptable.
+    wb.dropped_model = kept.dropped_model();
     if let Some(w) = cx.python.warning() {
         cx.warn(w);
     }
