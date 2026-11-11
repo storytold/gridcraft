@@ -538,11 +538,13 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {
-    let Some(patch) = p.get("style").map(snake_case_keys) else {
+    let Some(style) = p.get("style") else {
         // Menu invocation without params: the UI opens the dialog.
         s.ui_requests.push(crate::UiRequest::Dialog("formatCells".into(), json!({})));
         return ok();
     };
+    let region = s.doc()?.wb.region;
+    let patch = canonical_num_fmt(snake_case_keys(style), region);
     // Validate by merging into the active style once.
     let base = serde_json::to_value(active_style(s)?).map_err(|e| EngineError::Other(e.to_string()))?;
     let merged = merge_json(base, &patch);
@@ -733,8 +735,18 @@ fn number_format(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn set_fmt(s: &mut Session, p: &Json, code: &str) -> Result<Json> {
-    let nf = NumFmt::new(code);
+    let region = s.doc()?.wb.region;
+    let nf = NumFmt::new(&gridcraft_numfmt::canonical_code(code, region));
     apply_style(s, p, |st| st.num_fmt = nf.clone())
+}
+
+/// The style patch with a `num_fmt` typed with the region's separators stored in its canonical
+/// en-US spelling, so `#.##0,00` in `pt-BR` is saved as `#,##0.00`.
+fn canonical_num_fmt(mut patch: Json, region: &gridcraft_core::Region) -> Json {
+    if let Some(Json::String(code)) = patch.get_mut("num_fmt") {
+        *code = gridcraft_numfmt::canonical_code(code, region);
+    }
+    patch
 }
 
 /// Adds or removes one decimal place in the number format (Increase/Decrease Decimal).

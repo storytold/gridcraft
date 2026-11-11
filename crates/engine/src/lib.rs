@@ -472,6 +472,10 @@ pub struct Session {
     pub clipboard: Option<Clipboard>,
     pub prefs: Prefs,
     pub mode: Mode,
+    /// The region new documents are opened in, and that the active document reads typed input
+    /// and writes displayed numbers in: the system's regional settings unless a command, the
+    /// CLI or a front end sets another.
+    region: Option<&'static gridcraft_core::Region>,
     /// Commands run so far, without their passwords ([`cmd::journal_params`]).
     pub journal: Vec<(String, Json)>,
     /// Serialized size of each journal entry, measured once when it is pushed, and their sum.
@@ -537,6 +541,17 @@ impl Session {
     pub fn new() -> Session {
         Session::default()
     }
+    /// The region typed input is read in and displayed values are written in.
+    pub fn region(&self) -> &'static gridcraft_core::Region {
+        self.region.unwrap_or_else(gridcraft_core::region::default_region)
+    }
+    /// Sets the region, applies it to the active document, and opens the next documents in it.
+    pub fn set_region(&mut self, region: &'static gridcraft_core::Region) {
+        self.region = Some(region);
+        if let Some(d) = self.docs.get_mut(self.active) {
+            Arc::make_mut(&mut d.wb).region = region;
+        }
+    }
     pub fn documents(&self) -> &[DocState] {
         &self.docs
     }
@@ -582,7 +597,12 @@ impl Session {
         cmd::locked_cell_error(sh, at, &d.unlocked_ranges)
     }
     /// Opens a workbook in a new window, which becomes the active one.
-    pub fn add_document(&mut self, d: DocState) -> usize {
+    pub fn add_document(&mut self, mut d: DocState) -> usize {
+        // Only when the regimes differ: `make_mut` clones a workbook another window still
+        // shares, and a new window must keep sharing the same `Arc` as the one it came from.
+        if d.wb.region.tag != self.region().tag {
+            Arc::make_mut(&mut d.wb).region = self.region();
+        }
         let uid = d.uid;
         self.docs.push(d);
         let w = self.push_window(uid);

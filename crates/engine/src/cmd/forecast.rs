@@ -198,6 +198,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
     }
     let sys = d.wb.date_system;
+    let region = d.wb.region;
     let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
     // A text first cell is the header.
     let header = tcells.first().is_some_and(|c| sh.value(*c).is_text()) || vcells.first().is_some_and(|c| sh.value(*c).is_text());
@@ -226,7 +227,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let time_param = |key: &str| -> Result<Option<f64>> {
         match p.get(key) {
             Some(Json::Number(n)) => Ok(n.as_f64()),
-            Some(Json::String(t)) if !t.trim().is_empty() => match gridcraft_core::parse::parse_input(t.trim(), sys).value {
+            Some(Json::String(t)) if !t.trim().is_empty() => match gridcraft_core::parse::parse_input_in(t.trim(), sys, region).value {
                 Value::Number(x) => Ok(Some(x)),
                 _ => Err(bad(CMD, format!("`{key}` is not a number or a date: `{t}`"))),
             },

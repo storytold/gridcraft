@@ -64,7 +64,8 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         }
         return Ok(Some(cell));
     }
-    let mut parsed = gridcraft_core::parse::parse_input(input, wb.date_system);
+    let region = wb.region;
+    let mut parsed = gridcraft_core::parse::parse_input_in(input, wb.date_system, region);
     // Like Excel's automatic percent entry: a bare number of 1 or more typed into a cell already
     // formatted as a percentage is a percent (3 -> 3%); smaller numbers are taken as fractions.
     if parsed.format.is_none()

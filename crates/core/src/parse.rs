@@ -2,9 +2,11 @@
 //!
 //! Recognises numbers with thousands separators, percentages, currency, scientific notation,
 //! fractions (`1 1/2`), dates (`3/4/2026`, `2026-03-04`, `4-Mar-2026`, `Mar 4, 2026`), times
-//! (`10:30`, `10:30:15 PM`) and date-times. Locale: en-US.
+//! (`10:30`, `10:30:15 PM`) and date-times. The default region is English (United States);
+//! [`parse_input_in`] reads the decimal and thousands separators of any [`Region`].
 
 use crate::date::{DateSystem, MONTHS, serial_from_ymd, time_fraction};
+use crate::region::{EN_US, Region};
 use crate::value::{CellError, Value};
 
 /// A parsed entry: its value and the number format Excel would apply automatically.
@@ -15,8 +17,14 @@ pub struct Parsed {
 }
 
 /// Interprets typed cell input (not formulas). Text that isn't a number, date, boolean or error
-/// stays text. A leading apostrophe forces text.
+/// stays text. A leading apostrophe forces text. Numbers are read with en-US separators.
 pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
+    parse_input_in(s, sys, &EN_US)
+}
+
+/// Like [`parse_input`], reading numbers with the decimal and thousands separators of `region`
+/// (`1.769,41` is a number in `pt-BR`). Dates and fractions keep their en-US spelling.
+pub fn parse_input_in(s: &str, sys: DateSystem, region: &Region) -> Parsed {
     if s.is_empty() {
         return Parsed { value: Value::Empty, format: None };
     }
@@ -33,7 +41,7 @@ pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
     if let Some(e) = CellError::parse(t) {
         return Parsed { value: Value::Error(e), format: None };
     }
-    if let Some((n, f)) = parse_numeric(t, sys) {
+    if let Some((n, f)) = parse_numeric(t, sys, region) {
         return Parsed { value: Value::number(n), format: f };
     }
     Parsed { value: Value::text(s), format: None }
@@ -46,40 +54,45 @@ pub fn parse_number_text(s: &str) -> Option<f64> {
 
 /// Like [`parse_number_text`], with date text read in the given workbook date system.
 pub fn parse_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
-    parse_numeric(s.trim(), sys).map(|(n, _)| n)
+    parse_numeric(s.trim(), sys, &EN_US).map(|(n, _)| n)
 }
 
 /// Text that Excel's "Number Stored as Text" check flags: it would be a number if typed (signs,
 /// thousands separators, currency, percent, exponent, a parenthesised negative). Dates, times and
 /// fractions kept as text are not flagged, as in Excel.
 pub fn number_stored_as_text(s: &str) -> Option<f64> {
+    number_stored_as_text_in(s, &EN_US)
+}
+
+/// Like [`number_stored_as_text`], with numbers read in the given region.
+pub fn number_stored_as_text_in(s: &str, region: &Region) -> Option<f64> {
     let t = s.trim();
     // The same parentheses typed entry reads, accounting forms included: `$(5)`, `(5)%`.
     match parenthesized(t) {
         Some(inner) if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) => None,
-        Some(inner) => parse_plain(&inner).map(|(n, _)| -n),
-        None => parse_plain(t).map(|(n, _)| n),
+        Some(inner) => parse_plain(&inner, region).map(|(n, _)| -n),
+        None => parse_plain(t, region).map(|(n, _)| n),
     }
 }
 
-fn parse_numeric(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
+fn parse_numeric(t: &str, sys: DateSystem, region: &Region) -> Option<(f64, Option<&'static str>)> {
     // Parenthesised negatives: (100) = -100, and the accounting forms `$(100)` and `(5)%`.
     if let Some(inner) = parenthesized(t) {
         // Excel reads no sign and no nested parentheses inside: `(-5)`, `($-5)`, `((5))`.
         if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) {
             return None;
         }
-        let r = parse_plain(&inner).or_else(|| parse_fraction(&inner).map(|n| (n, Some("# ?/?"))));
+        let r = parse_plain(&inner, region).or_else(|| parse_fraction(&inner).map(|n| (n, Some("# ?/?"))));
         return r.map(|(n, f)| (-n, f));
     }
-    parse_unparenthesised(t, sys)
+    parse_unparenthesised(t, sys, region)
 }
 
-fn parse_unparenthesised(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
+fn parse_unparenthesised(t: &str, sys: DateSystem, region: &Region) -> Option<(f64, Option<&'static str>)> {
     if t.is_empty() {
         return None;
     }
-    if let Some(r) = parse_plain(t) {
+    if let Some(r) = parse_plain(t, region) {
         return Some(r);
     }
     if let Some(r) = parse_fraction(t) {
@@ -107,8 +120,28 @@ fn parenthesized(t: &str) -> Option<String> {
     Some(format!("{currency}{}{percent}", body.trim()))
 }
 
-/// Signs, currency, thousands separators, percent, exponent.
-fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
+/// The number text with the region's decimal point as `.` and its grouping characters as `,`, so
+/// the en-US rules below read any region. Text already using en-US separators is left untouched.
+fn canonical_separators<'a>(s: &'a str, region: &Region) -> std::borrow::Cow<'a, str> {
+    if region.decimal == '.' && region.group == ',' {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c == region.decimal {
+            out.push('.');
+        } else if region.is_group(c) {
+            out.push(',');
+        } else {
+            out.push(c);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// Signs, currency, thousands separators, percent, exponent. The separators are `region`'s:
+/// `1.769,41` reads in `pt-BR` and `1,769.41` in `en-US`, and the format returned is canonical.
+fn parse_plain(t: &str, region: &Region) -> Option<(f64, Option<&'static str>)> {
     let mut s = t;
     let mut neg = false;
     let mut currency = false;
@@ -135,6 +168,8 @@ fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
     if s.is_empty() || currency && percent {
         return None;
     }
+    let s = canonical_separators(s, region);
+    let s = s.as_ref();
     let has_sep = s.contains(',');
     let digits: String = if has_sep {
         // Thousands separators must be in groups of three before the decimal point.

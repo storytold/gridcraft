@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{Sheet, Workbook};
-use gridcraft_numfmt::{Formatted, NumberFormat, format_value};
+use gridcraft_numfmt::{Formatted, NumberFormat, format_value_in};
 
 /// Parsed number formats are cached by code.
 fn parsed(code: &str) -> NumberFormat {
@@ -28,16 +28,33 @@ pub fn number_format(code: &str) -> NumberFormat {
     parsed(code)
 }
 
-/// Formats a value with a format code.
+/// Formats a value with a format code, writing separators as the workbook's region does.
 pub fn format(v: &Value, code: &str, wb: &Workbook) -> Formatted {
-    format_value(v, &parsed(code), wb.date_system)
+    format_value_in(v, &parsed(code), wb.date_system, wb.region)
+}
+
+/// Formats a value with a format code written the way `wb`'s region writes it (`#.##0,00` in
+/// `pt-BR`), as the Format Cells field holds it while it is being edited.
+pub fn format_regional(v: &Value, code: &str, wb: &Workbook) -> Formatted {
+    format_value_in(v, &NumberFormat::parse_in(code, wb.region), wb.date_system, wb.region)
+}
+
+/// The format code as `region` writes it (`#.##0,00` in `pt-BR`), for editing.
+pub fn regional_code(code: &str, region: &gridcraft_core::Region) -> String {
+    gridcraft_numfmt::regional_code(code, region)
+}
+
+/// The canonical en-US spelling of a format code typed with `region`'s separators, which is what
+/// a workbook stores and what [`NumberFormat::parse`] reads.
+pub fn canonical_code(code: &str, region: &gridcraft_core::Region) -> String {
+    gridcraft_numfmt::canonical_code(code, region)
 }
 
 /// Whether typing `t` back into a General cell would not give the text `t` again (it would parse
 /// as a number, boolean, error, date or formula, or lose a leading apostrophe). Such text is shown
 /// for editing with a leading `'`, as Excel does for text carrying a quote prefix, so that
 /// committing the editor unchanged keeps the cell as text.
-fn text_needs_quote_prefix(t: &str, sys: gridcraft_core::date::DateSystem) -> bool {
+fn text_needs_quote_prefix(t: &str, sys: gridcraft_core::date::DateSystem, region: &gridcraft_core::Region) -> bool {
     if t.is_empty() {
         return false;
     }
@@ -49,7 +66,7 @@ fn text_needs_quote_prefix(t: &str, sys: gridcraft_core::date::DateSystem) -> bo
     if matches!(first, Some('+' | '-')) && second.is_some_and(|c| c.is_ascii_alphabetic() || c == '(') {
         return true;
     }
-    !matches!(gridcraft_core::parse::parse_input(t, sys).value, Value::Text(ref x) if x.as_ref() == t)
+    !matches!(gridcraft_core::parse::parse_input_in(t, sys, region).value, Value::Text(ref x) if x.as_ref() == t)
 }
 
 /// What the cell editor and the formula bar start from. Same as `Cell::input_text`, except that a
@@ -63,7 +80,7 @@ pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     if let Value::Text(t) = &cell.value
         && cell.formula.is_none()
         && wb.styles.get(cell.style).num_fmt.as_str() != "@"
-        && text_needs_quote_prefix(t, wb.date_system)
+        && text_needs_quote_prefix(t, wb.date_system, wb.region)
     {
         return format!("'{raw}");
     }
@@ -72,7 +89,8 @@ pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     if cell.formula.is_some() || !parsed(code).is_date() {
         return raw;
     }
-    let reads_back = |s: &str| matches!(gridcraft_core::parse::parse_input(s, wb.date_system).value, Value::Number(m) if (m - n).abs() < 1e-9);
+    let reads_back =
+        |s: &str| matches!(gridcraft_core::parse::parse_input_in(s, wb.date_system, wb.region).value, Value::Number(m) if (m - n).abs() < 1e-9);
     let shown = format(&cell.value, code, wb).text;
     if reads_back(&shown) {
         return shown;
