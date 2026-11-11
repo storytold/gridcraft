@@ -40,7 +40,17 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     }
                 }
                 cols[1].label(egui::RichText::new(lang.tr("Sample")).strong());
-                let preview = app.session.active().map(|doc| gridcraft_engine::display::format(&sample, &code, &doc.wb).text).unwrap_or_default();
+                let preview = app
+                    .session
+                    .active()
+                    .map(|doc| {
+                        if changed {
+                            gridcraft_engine::display::format_in(&sample, &code, &doc.wb, &app.session.display_locale).text
+                        } else {
+                            gridcraft_engine::display::format_num_fmt_in(&sample, &st.num_fmt, &doc.wb, &app.session.display_locale).text
+                        }
+                    })
+                    .unwrap_or_default();
                 cols[1].label(egui::RichText::new(preview).font(theme::ui_font(15.0)));
                 cols[1].add_space(8.0);
                 let label = cols[1].label(lang.tr("Type (custom format code):"));

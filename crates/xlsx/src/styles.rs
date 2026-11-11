@@ -291,6 +291,17 @@ fn read_protection(p: &El) -> Protection {
     Protection { locked: p.flag("locked", true), hidden: p.flag("hidden", false) }
 }
 
+/// A declaration below 164 still names a built-in format, even when numFmts supplies its code.
+/// Share this rule with DXFs so short dates retain regional identity and their built-in IDs.
+fn declared_num_fmt(id: Option<u32>, code: &str) -> NumFmt {
+    match id {
+        Some(14) if code.eq_ignore_ascii_case("mm-dd-yy") || code.eq_ignore_ascii_case("m/d/yyyy") => NumFmt::new("m/d/yyyy"),
+        Some(22) if code.eq_ignore_ascii_case("m/d/yy h:mm") || code.eq_ignore_ascii_case("m/d/yyyy h:mm") => NumFmt::new("m/d/yyyy h:mm"),
+        Some(id) if id < 164 => NumFmt::new(code),
+        _ => NumFmt::custom(code),
+    }
+}
+
 /// A number format by id. Custom formats are built once and shared (`NumFmt` is an `Arc`), so
 /// many cell formats naming one long code don't each copy it.
 fn num_fmt_code(id: u32, custom: &HashMap<u32, NumFmt>) -> NumFmt {
@@ -365,7 +376,8 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
             d.kids("dxf").filter_map(|x| x.child("numFmt")).filter(|n| n.attr("formatCode").is_none()).filter_map(|n| n.attr_u32("numFmtId")),
         );
     }
-    let shared_fmts: HashMap<u32, NumFmt> = fmts.iter().filter(|(id, _)| used.contains(id)).map(|(&id, code)| (id, NumFmt::custom(code))).collect();
+    let shared_fmts: HashMap<u32, NumFmt> =
+        fmts.iter().filter(|(id, _)| used.contains(id)).map(|(&id, code)| (id, declared_num_fmt(Some(id), code))).collect();
     // The scheme link only means something on a font in the body face; elsewhere it stays as a new font has it.
     let body_font = |e: &El| {
         let mut f = read_font(e, &palette);
@@ -421,12 +433,7 @@ fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, NumFmt>) -> Style {
     }
     if let Some(n) = x.child("numFmt") {
         if let Some(code) = n.attr("formatCode") {
-            s.num_fmt = match n.attr_u32("numFmtId") {
-                Some(14) if code.eq_ignore_ascii_case("mm-dd-yy") || code.eq_ignore_ascii_case("m/d/yyyy") => NumFmt::new("m/d/yyyy"),
-                Some(22) if code.eq_ignore_ascii_case("m/d/yy h:mm") || code.eq_ignore_ascii_case("m/d/yyyy h:mm") => NumFmt::new("m/d/yyyy h:mm"),
-                Some(id) if id < 164 => NumFmt::new(code),
-                _ => NumFmt::custom(code),
-            };
+            s.num_fmt = declared_num_fmt(n.attr_u32("numFmtId"), code);
         } else if let Some(id) = n.attr_u32("numFmtId") {
             s.num_fmt = num_fmt_code(id, fmts);
         }
