@@ -131,13 +131,12 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
             continue;
         }
         let (x, y, _, _) = place(r);
-        let prims = pics.charts.entry((si, chi)).or_insert_with(|| {
+        // As for pictures, each page gets its own copy of the drawing commands.
+        let prims = pics.chart((si, chi), || {
             let data = gridcraft_chart::resolve(wb, si, ch);
             gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure)
         });
-        // As for pictures, each page gets its own copy of the drawing commands.
-        if pics.chart_prims.saturating_add(prims.len()) <= super::MAX_CHART_PRIMS {
-            pics.chart_prims += prims.len();
+        if let Some(prims) = prims {
             draw_prims(pg, prims, Xf { ox: x, oy: y, k: b.k });
         }
     }

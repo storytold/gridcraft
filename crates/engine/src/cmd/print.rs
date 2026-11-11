@@ -39,18 +39,61 @@ type DecodedPicture = (Vec<u8>, u32, u32);
 struct PicCache {
     /// Decoded pictures (bytes, width, height) keyed by (sheet, picture); `None` = undecodable.
     decoded: std::collections::HashMap<(usize, usize), Option<DecodedPicture>>,
-    /// Laid-out charts keyed by (sheet, chart), rendered once however many pages they touch.
-    charts: std::collections::HashMap<(usize, usize), Vec<gridcraft_chart::Prim>>,
-    /// Bytes of picture pixels embedded so far, and chart primitives emitted so far. Each page an
+    /// Laid-out charts (with their [`chart_cost`]) keyed by (sheet, chart), rendered once however
+    /// many pages they touch. Only charts that can still be drawn are kept.
+    charts: std::collections::HashMap<(usize, usize), (Vec<gridcraft_chart::Prim>, usize)>,
+    /// Charts too big for what was left of the budget: never drawn, so not rendered again.
+    rejected_charts: std::collections::HashSet<(usize, usize)>,
+    /// Bytes of picture pixels embedded so far, and chart cost units emitted so far. Each page an
     /// object touches gets its own copy in the PDF, so a workbook-controlled anchor over thousands
     /// of pages would multiply them without bound.
     image_bytes: usize,
     chart_prims: usize,
 }
 
+impl PicCache {
+    /// The chart's primitives for one more page, or `None` once they no longer fit
+    /// [`MAX_CHART_PRIMS`]. `render` runs at most once per chart; a chart that doesn't fit is
+    /// dropped at once and remembered, so its vectors are never retained.
+    fn chart(&mut self, key: (usize, usize), render: impl FnOnce() -> Vec<gridcraft_chart::Prim>) -> Option<&[gridcraft_chart::Prim]> {
+        if self.rejected_charts.contains(&key) {
+            return None;
+        }
+        let (prims, cost) = match self.charts.remove(&key) {
+            Some(cached) => cached,
+            None => {
+                let prims = render();
+                let cost = chart_cost(&prims);
+                (prims, cost)
+            }
+        };
+        if self.chart_prims.saturating_add(cost) > MAX_CHART_PRIMS {
+            self.rejected_charts.insert(key);
+            return None;
+        }
+        self.chart_prims += cost;
+        Some(&self.charts.entry(key).or_insert((prims, cost)).0)
+    }
+}
+
+/// What a chart's drawing costs in the PDF: one unit per primitive plus one per path point (a
+/// smoothed line holds thousands of points, each written out) and per point of a wedge's outline.
+fn chart_cost(prims: &[gridcraft_chart::Prim]) -> usize {
+    use gridcraft_chart::Prim;
+    prims
+        .iter()
+        .map(|p| match p {
+            Prim::Line { pts, .. } | Prim::Polygon { pts, .. } => pts.len().saturating_add(1),
+            // At most 400 steps along each of the outer and inner arcs (see `draw_prims`).
+            Prim::Wedge { .. } => 803,
+            _ => 1,
+        })
+        .fold(0, usize::saturating_add)
+}
+
 /// Most picture pixel bytes (RGBA, before PDF packing) one render embeds across all pages.
 const MAX_EMBEDDED_IMAGE_BYTES: usize = 512 * 1024 * 1024;
-/// Most chart primitives one render draws across all pages.
+/// Most chart cost units (primitives and path points, see [`chart_cost`]) one render draws across all pages.
 const MAX_CHART_PRIMS: usize = 4_000_000;
 
 #[cfg(test)]
