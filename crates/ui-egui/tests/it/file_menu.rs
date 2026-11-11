@@ -742,18 +742,22 @@ fn export_previews_the_pages_create_pdf_writes() {
     h.run_steps(3);
     h.get_by_label(&format!("Page 2 of {one}"));
 
-    // Activating another sheet changes what Create PDF exports, though not the revision.
+    // Activating another sheet changes what Create PDF exports, though not the revision, and
+    // its preview starts at its first page.
     h.state_mut().run("sheet.activate", serde_json::json!({"sheet": "Two"})).unwrap();
     h.run_steps(3);
-    h.get_by_label_contains(&format!(" of {two}"));
+    h.get_by_label(&format!("Page 1 of {two}"));
 
-    // An edit lays the pages out again.
+    // An edit lays the pages out again and keeps the page being looked at.
     h.state_mut().run("sheet.activate", serde_json::json!({"sheet": "Sheet1"})).unwrap();
+    h.run_steps(3);
+    h.get_by_label("▶").click();
+    h.run_steps(3);
     h.state_mut().run("range.setValues", serde_json::json!({"range": "A121", "values": column(200)})).unwrap();
     h.run_steps(3);
     let grown = preview_pages(&mut h, "active");
     assert!(grown > one);
-    h.get_by_label_contains(&format!(" of {grown}"));
+    h.get_by_label(&format!("Page 2 of {grown}"));
 
     click(&mut h, "Create PDF");
     assert!(asked.lock().unwrap().first().is_some_and(|s| s.ends_with(".pdf")));
