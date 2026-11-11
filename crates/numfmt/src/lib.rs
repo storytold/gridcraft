@@ -8,7 +8,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-mod builtin;
 mod calendar;
 mod decimal;
 mod parse;
@@ -20,7 +19,6 @@ use std::sync::{Arc, LazyLock, Mutex};
 use gridcraft_core::region::EN_US;
 use gridcraft_core::{CellError, DateSystem, Region, Value};
 
-pub use builtin::{builtin_format, builtin_id};
 pub use decimal::format_general_fit;
 
 use parse::{DatePart, SecKind, Section, System, Tok};
@@ -368,11 +366,11 @@ impl NumberFormat {
                     let code = if system == System::LongDate { region.long_date } else { region.long_time };
                     let own = region_code(code);
                     match own.inner.sections.first() {
-                        Some(s) if s.kind == SecKind::Date => render::render_date(&s.toks, sec.calendar, n.abs(), sys, region),
-                        _ => render::render_date(&sec.toks, sec.calendar, n.abs(), sys, region),
+                        Some(s) if s.kind == SecKind::Date => render::render_date(s, sec.calendar, n.abs(), sys, region),
+                        _ => render::render_date(sec, sec.calendar, n.abs(), sys, region),
                     }
                 } else {
-                    render::render_date(&sec.toks, sec.calendar, n.abs(), sys, region)
+                    render::render_date(sec, sec.calendar, n.abs(), sys, region)
                 }
             }
             SecKind::Number => Some(render::render_number(sec, n.abs(), region)),
