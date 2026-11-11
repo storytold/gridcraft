@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
-use gridcraft_formula::Expr;
 use gridcraft_model::{Cell, Formula, Sheet, Visibility, Workbook};
 use quick_xml::NsReader;
 use quick_xml::XmlVersion;
@@ -57,6 +56,9 @@ struct Budget {
 impl Budget {
     /// Charges a kept formula's text if it fits [`MAX_FORMULA_TEXT`]; a formula that doesn't is
     /// left as its saved result.
+    fn formula_text_fits(&self, len: usize) -> bool {
+        self.formula_text.saturating_add(len) <= MAX_FORMULA_TEXT
+    }
     fn try_formula_text(&mut self, len: usize) -> bool {
         let total = self.formula_text.saturating_add(len);
         let fits = total <= MAX_FORMULA_TEXT;
@@ -699,12 +701,20 @@ struct Formulas<'a> {
     legacy: Vec<CellRef>,
     /// Why formulas were kept as their values, each reason once.
     unsupported: Vec<&'static str>,
-    /// The current sheet's shared formulas by first cell: its expression and text length, or
-    /// `None` when the import keeps it as values (so its other cells keep theirs).
-    shared: HashMap<CellRef, Option<(Arc<Expr>, usize)>>,
+    /// The current sheet's shared formulas by first cell, or `None` when the import keeps one as
+    /// values (so its other cells keep theirs).
+    shared: HashMap<CellRef, Option<Arc<SharedFormula>>>,
     /// The current sheet's array formulas by first cell: the range whose other cells the formula
     /// fills, or `None` when it keeps its values (or covers one cell).
     arrays: HashMap<CellRef, Option<RangeRef>>,
+}
+
+/// A `BrtShrFmla`: the cells it may cover, its tokens, and its first cell's text length.
+struct SharedFormula {
+    range: RangeRef,
+    rgce: Vec<u8>,
+    rgcb: Vec<u8>,
+    len: usize,
 }
 
 /// A formula cell whose tokens are only `PtgExp`: part of a shared or array formula.
@@ -762,6 +772,11 @@ impl Formulas<'_> {
                 return None;
             }
         };
+        // The parser's limit is Excel's: a shared formula's copy can be longer than its first cell.
+        if text.len() > gridcraft_formula::MAX_FORMULA_LEN && text.chars().count() > gridcraft_formula::MAX_FORMULA_LEN {
+            self.unsupported("formulas longer than 8,192 characters");
+            return None;
+        }
         let f = Formula::new(&text);
         if f.expr.is_none() {
             self.unsupported("syntax GridCraft can't parse yet");
@@ -777,16 +792,24 @@ impl Formulas<'_> {
     /// Another cell of the shared or array formula starting at `first`.
     fn follower(&mut self, at: CellRef, first: CellRef, budget: &mut Budget) -> Follower {
         if let Some(shared) = self.shared.get(&first) {
-            let Some((expr, len)) = shared else { return Follower::Value };
-            // Each copy costs about its first cell's text. Charged before the copy is made, so a
-            // long formula shared by a million cells stops costing once the allowance is spent.
-            let (expr, len) = (expr.clone(), *len);
-            if !budget.try_formula_text(len) {
+            let Some(sh) = shared.clone() else { return Follower::Value };
+            if !sh.range.contains(at) {
+                self.unsupported("malformed shared or array formula references");
+                return Follower::Value;
+            }
+            // Each copy is decoded from the shared tokens at its own cell, as [MS-XLSB] defines
+            // it (relative offsets wrap around the grid), and checked like any formula: its
+            // text may be longer than the first cell's. That length estimates its cost, and a
+            // copy that can't fit isn't decoded at all, so a long formula shared by a million
+            // cells stops costing once the allowance is spent.
+            if !budget.formula_text_fits(sh.len) {
                 self.unsupported("more formula text than the import allows");
                 return Follower::Value;
             }
-            let (dr, dc) = (i64::from(at.row) - i64::from(first.row), i64::from(at.col) - i64::from(first.col));
-            return Follower::Formula(Formula::from_expr(gridcraft_formula::adjust::shift_relative((*expr).clone(), dr, dc)));
+            return match self.formula(&sh.rgce, &sh.rgcb, Mode::Shared(at), false, budget) {
+                Some(f) => Follower::Formula(f),
+                None => Follower::Value,
+            };
         }
         match self.arrays.get(&first) {
             Some(Some(range)) if range.contains(at) => Follower::Filled,
@@ -815,10 +838,17 @@ impl Formulas<'_> {
             let rgce = b.take(cce as usize)?.to_vec();
             let cb = b.u32()?;
             let rgcb = b.take(cb as usize)?.to_vec();
-            if r0 > r1 || c0 > c1 || r1 >= MAX_ROWS || c1 >= MAX_COLS || CellRef::new(r0, c0) != first {
+            if r0 > r1 || c0 > c1 || r1 >= MAX_ROWS || c1 >= MAX_COLS {
                 return Err(invalid("invalid formula range"));
             }
-            Ok((RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1)), rgce, rgcb))
+            let range = RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1));
+            // An array formula's first cell is its range's top-left one. A shared formula's is the
+            // first cell that uses it, which need not be: the top-left cell may not share it.
+            let start_ok = if id == 427 { range.contains(first) } else { range.start == first };
+            if !start_ok {
+                return Err(invalid("invalid formula range"));
+            }
+            Ok((range, rgce, rgcb))
         };
         let mut b = Bytes::new(payload);
         let Ok((range, rgce, rgcb)) = read(&mut b).and_then(|r| b.finish().map(|()| r)) else {
@@ -829,7 +859,8 @@ impl Formulas<'_> {
         };
         if id == 427 {
             let f = self.formula(&rgce, &rgcb, Mode::Shared(first), false, budget);
-            self.shared.insert(first, f.as_ref().and_then(|f| f.expr.clone().map(|e| (e, f.text.len()))));
+            let shared = f.as_ref().map(|f| Arc::new(SharedFormula { range, rgce, rgcb, len: f.text.len() }));
+            self.shared.insert(first, shared);
             if f.is_some() {
                 self.legacy.push(first);
             }

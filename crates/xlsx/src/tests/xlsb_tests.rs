@@ -674,3 +674,45 @@ fn xlsb_unreadable_shared_formulas_keep_their_values() {
         assert!(report.warnings.iter().any(|w| w.starts_with("Some formulas")));
     }
 }
+
+#[test]
+fn xlsb_shared_formulas_wrap_and_may_start_inside_their_range() {
+    // `=` the cell to the left (column offset -1, written 16383), shared over A1:B2 from B1: A1
+    // isn't part of it. In column A the offset wraps around the grid, as [MS-XLSB] defines it.
+    let left = ref_n(0, 16383 | REL);
+    let data = [
+        row(0),
+        cell(5, 0, &1.0f64.to_le_bytes()),
+        part(1, (0, 1)),
+        range_formula(427, (0, 0, 1, 1), &left),
+        row(1),
+        part(0, (0, 1)),
+        part(1, (0, 1)),
+    ]
+    .concat();
+    let (wb, report) = read_xlsb(&file(&worksheet(&data, &[]))).unwrap();
+    let text = |a: &str| wb.sheets[0].cell(CellRef::parse(a).unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone());
+    assert_eq!((text("B1").as_deref(), text("A2").as_deref(), text("B2").as_deref()), (Some("A1"), Some("XFD2"), Some("A2")));
+    assert!(!report.warnings.iter().any(|w| w.starts_with("Some formulas")), "{:?}", report.warnings);
+}
+
+#[test]
+fn xlsb_shared_formula_copies_longer_than_the_parser_allows_keep_their_values() {
+    // SUM of nine SUMs of 255 references to the cell on the left: about 6,900 characters at B9,
+    // but over 18,000 at B999999, where each `A9` is `A999999`.
+    let mut rgce = vec![];
+    for _ in 0..9 {
+        for _ in 0..255 {
+            rgce.extend(ref_n(0, 16383 | REL));
+        }
+        rgce.extend([0x22, 255, 4, 0]);
+    }
+    rgce.extend([0x22, 9, 4, 0]);
+    let data = [row(8), part(1, (8, 1)), range_formula(427, (8, 1, 999_998, 1), &rgce), row(999_998), part(1, (8, 1))].concat();
+    let (wb, report) = read_xlsb(&file(&worksheet(&data, &[]))).unwrap();
+    let cell = |a: &str| wb.sheets[0].cell(CellRef::parse(a).unwrap()).unwrap();
+    assert!(cell("B9").formula.as_ref().is_some_and(|f| f.text.len() < 8192));
+    assert!(cell("B999999").formula.is_none());
+    assert_eq!(cell("B999999").value, Value::Number(0.0));
+    assert!(report.warnings.iter().any(|w| w.contains("longer than 8,192")), "{:?}", report.warnings);
+}
