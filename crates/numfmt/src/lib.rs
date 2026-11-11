@@ -3,7 +3,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-mod builtin;
 mod calendar;
 mod decimal;
 mod parse;
@@ -13,7 +12,6 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellError, DateSystem, Value};
 
-pub use builtin::{builtin_format, builtin_id};
 pub use decimal::format_general_fit;
 
 use parse::{DatePart, SecKind, Section, Tok};
