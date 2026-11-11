@@ -134,6 +134,7 @@ fn sanitize_vals(v: &[Option<f64>]) -> Vec<Option<f64>> {
 
 pub(crate) fn sanitize(d: &ChartData) -> ChartData {
     ChartData {
+        border: d.border,
         palette: d.palette.iter().take(MAX_POINTS).copied().collect(),
         categories: d.categories.iter().take(MAX_POINTS).cloned().collect(),
         category_levels: d.category_levels.iter().take(3).map(|l| l.iter().take(MAX_POINTS).cloned().collect()).collect(),
@@ -207,6 +208,27 @@ pub(crate) fn sanitized(d: &ChartData) -> Cow<'_, ChartData> {
     if needs_sanitizing(d) { Cow::Owned(apply_budget(sanitize(d))) } else { Cow::Borrowed(d) }
 }
 
+/// Excel's automatic chart-area border, measured in Excel for a chart whose file sets none: a
+/// 75% tint of black in the default styles, 0.75 pt wide.
+const AUTO_BORDER: Rgba = [0x89, 0x89, 0x89, 0xFF];
+const AUTO_BORDER_PT: f32 = 0.75;
+/// A border's width is bounded in points, as a series line's is: a hairline (`w="0"`) stays
+/// visible and a file can't make the frame swallow the chart.
+const MIN_BORDER_PT: f32 = 0.25;
+const MAX_BORDER_PT: f32 = 20.0;
+
+/// The chart area's outline: colour and width in chart units (pixels at 100%), or none.
+fn border_stroke(b: crate::Border) -> Option<(Rgba, f32)> {
+    let (color, pt) = match b {
+        crate::Border::None => return None,
+        crate::Border::Auto => (AUTO_BORDER, AUTO_BORDER_PT),
+        crate::Border::Line { color, width } => {
+            (color.unwrap_or(AUTO_BORDER), width.filter(|w| w.is_finite()).map_or(AUTO_BORDER_PT, |w| w.clamp(MIN_BORDER_PT, MAX_BORDER_PT)))
+        }
+    };
+    Some((color, pt * 96.0 / 72.0))
+}
+
 /// Lays out and draws a chart into a `w`×`h` box at the origin. Empty for a degenerate box.
 pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) -> Vec<Prim> {
     if !(w.is_finite() && h.is_finite()) || w < 1.0 || h < 1.0 || w > 1e7 || h > 1e7 {
@@ -214,7 +236,7 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
     }
     let data = sanitized(data);
     let mut ctx = Ctx { out: Vec::new(), m };
-    ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
+    ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: border_stroke(data.border), radius: 0.0 });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
     let mut area = Bx { x: pad, y: pad, w: w - 2.0 * pad, h: h - 2.0 * pad };
     if let Some(t) = chart_title(chart, &data) {
