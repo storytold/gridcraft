@@ -17,8 +17,13 @@ impl SheetApp {
 
     pub fn view_mut(&mut self) -> Option<&mut SheetView> {
         let k = self.scroll_key()?;
-        let saved = self.saved_view();
-        Some(self.views.entry(k).or_insert(saved))
+        // Only for a sheet this window hasn't scrolled yet: the saved position walks every sized
+        // or hidden row above it, and the grid asks for its view every frame.
+        if !self.views.contains_key(&k) {
+            let saved = self.saved_view();
+            self.views.insert(k, saved);
+        }
+        self.views.get_mut(&k)
     }
 
     /// The view a sheet opens with: scrolled to the file's saved first visible cell (`topLeftCell`).
