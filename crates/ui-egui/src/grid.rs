@@ -22,6 +22,8 @@ type PagesCache = ((u64, u64, usize), Vec<(RangeRef, u32)>);
 /// Cached Show Details cells, keyed by (doc uid, revision, sheet, pivot).
 type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>);
 
+mod active_row;
+pub use active_row::active_row_band;
 mod cell_paint;
 mod cursor;
 mod editor;
@@ -101,6 +103,10 @@ pub enum Drag {
     Select,
     Rows(u32),
     Cols(u32),
+    /// Point mode over the row headers: the formula's reference runs from this row to the pointer.
+    PointRows(u32),
+    /// Point mode over the column headers: the formula's reference runs from this column to the pointer.
+    PointCols(u32),
     /// Reordering one contiguous whole-column selection by its header.
     MoveCols {
         source: RangeRef,
@@ -229,6 +235,14 @@ impl Trace {
 
 #[derive(Default)]
 pub struct GridState {
+    /// The active sheet's line positions and outlines, kept with a weak reference to the sheet
+    /// they were built from: while it still upgrades to the very sheet shown, the sheet hasn't
+    /// changed (every change goes through `Arc::make_mut`, which moves or copies a sheet that
+    /// has a weak reference to it), so they still hold.
+    pub(crate) lines: Option<(std::sync::Weak<Sheet>, geo::SheetLines)>,
+    /// The conditional formatting statistics (minimum, maximum, percentiles, duplicates) of the
+    /// active sheet's rules, kept the same way: they are read from that sheet's cells alone.
+    pub(crate) cf: Option<(std::sync::Weak<Sheet>, CfCache)>,
     pub drag: Drag,
     pub ensure_visible: bool,
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
@@ -291,6 +305,14 @@ pub struct GridState {
     pub hf_start: bool,
     /// The grid geometry of the last frame (hit-testing for agents and tests).
     pub geo: Option<Geo>,
+    /// A form control being worked with the pointer.
+    pub control: Option<crate::form_controls::Gesture>,
+    /// The form control that takes the arrow keys (the one last worked).
+    pub focused_control: Option<u32>,
+    /// Insert › Controls: the kind a click or drag on the grid places, and where the drag began
+    /// (logical position).
+    pub placing: Option<gridcraft_engine::model::ControlKind>,
+    pub place_start: Option<Pos2>,
     /// The horizontal scrollbar's track in the sheet tab bar (hit-testing for tests).
     pub hscroll: Option<Rect>,
     /// The handle between the sheet tabs and the horizontal scrollbar (hit-testing for tests).
