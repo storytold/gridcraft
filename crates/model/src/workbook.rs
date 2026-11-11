@@ -383,13 +383,12 @@ impl Workbook {
             rewrite_with(&mut n.formula, &|e| f(host, e), gridcraft_formula::parse_name);
         }
         for (si, shared) in self.sheets.iter_mut().enumerate() {
-            // Worked out on the shared sheet, and on copies of its (small) lists of rules and
-            // objects, so a sheet nothing changes on stays shared with undo snapshots.
+            // Worked out on the shared sheet; a list is copied only when something in it
+            // changes, and a sheet nothing changes on stays shared with undo snapshots.
             let sh: &Sheet = shared;
             let host = RefHost { sheet: Some(si), name: &sh.name };
             let f = |e: Expr| f(host, e);
-            let mut changed = false;
-            let mut rewrite = |t: &mut String| changed |= rewrite_text(t, &f);
+            let changes = |t: &str| rewrite_with(&mut t.to_string(), &f, gridcraft_formula::parse);
             let cells: Vec<(gridcraft_core::CellRef, Formula)> = sh
                 .cells
                 .iter()
@@ -399,29 +398,65 @@ impl Workbook {
                     (new.text != old.text).then(|| (c, Formula { array: old.array, dynamic: old.dynamic, ..new }))
                 })
                 .collect();
-            let mut cond_formats = sh.cond_formats.clone();
-            cond_formats.iter_mut().flat_map(|cf| cf.rule.formulas_mut()).for_each(&mut rewrite);
-            let mut validations = sh.validations.clone();
-            validations.iter_mut().flat_map(|v| v.formulas_mut()).for_each(&mut rewrite);
-            let mut charts = sh.charts.clone();
-            for ch in &mut charts {
-                for se in &mut ch.series {
-                    rewrite(&mut se.values);
-                    [&mut se.categories, &mut se.name, &mut se.bubble_sizes].into_iter().flatten().for_each(&mut rewrite);
-                }
-                if let Some(src) = &mut ch.source {
-                    rewrite(src);
-                }
-                // A source block that no longer exists is dropped.
-                if ch.source.as_deref().is_some_and(|s| s.contains("#REF!")) {
-                    ch.source = None;
-                }
-            }
-            let mut sparklines = sh.sparklines.clone();
-            sparklines.iter_mut().for_each(|sp| rewrite(&mut sp.source));
-            let mut pivots = sh.pivots.clone();
-            pivots.iter_mut().for_each(|pt| rewrite(&mut pt.source));
-            if !changed && cells.is_empty() {
+            let cond_formats = sh.cond_formats.iter().any(|cf| cf.rule.formulas().into_iter().any(|t| changes(t))).then(|| {
+                let mut v = sh.cond_formats.clone();
+                v.iter_mut().flat_map(|cf| cf.rule.formulas_mut()).for_each(|t| {
+                    rewrite_text(t, &f);
+                });
+                v
+            });
+            let validations = sh.validations.iter().any(|dv| dv.formulas().into_iter().any(|t| changes(t))).then(|| {
+                let mut v = sh.validations.clone();
+                v.iter_mut().flat_map(|dv| dv.formulas_mut()).for_each(|t| {
+                    rewrite_text(t, &f);
+                });
+                v
+            });
+            // A chart's source block that no longer exists is dropped.
+            let dead = |src: Option<&str>| src.is_some_and(|s| s.contains("#REF!"));
+            let charts =
+                sh.charts
+                    .iter()
+                    .any(|ch| {
+                        dead(ch.source.as_deref())
+                            || ch.source.as_deref().is_some_and(changes)
+                            || ch.series.iter().any(|se| {
+                                changes(&se.values) || [&se.categories, &se.name, &se.bubble_sizes].into_iter().flatten().any(|t| changes(t))
+                            })
+                    })
+                    .then(|| {
+                        let mut v = sh.charts.clone();
+                        for ch in &mut v {
+                            for se in &mut ch.series {
+                                rewrite_text(&mut se.values, &f);
+                                for t in [&mut se.categories, &mut se.name, &mut se.bubble_sizes].into_iter().flatten() {
+                                    rewrite_text(t, &f);
+                                }
+                            }
+                            if let Some(src) = &mut ch.source {
+                                rewrite_text(src, &f);
+                            }
+                            if dead(ch.source.as_deref()) {
+                                ch.source = None;
+                            }
+                        }
+                        v
+                    });
+            let sparklines = sh.sparklines.iter().any(|sp| changes(&sp.source)).then(|| {
+                let mut v = sh.sparklines.clone();
+                v.iter_mut().for_each(|sp| {
+                    rewrite_text(&mut sp.source, &f);
+                });
+                v
+            });
+            let pivots = sh.pivots.iter().any(|pt| changes(&pt.source)).then(|| {
+                let mut v = sh.pivots.clone();
+                v.iter_mut().for_each(|pt| {
+                    rewrite_text(&mut pt.source, &f);
+                });
+                v
+            });
+            if cells.is_empty() && cond_formats.is_none() && validations.is_none() && charts.is_none() && sparklines.is_none() && pivots.is_none() {
                 continue;
             }
             let sh = Arc::make_mut(shared);
@@ -430,11 +465,21 @@ impl Workbook {
                     cell.formula = Some(Arc::new(formula));
                 }
             }
-            sh.cond_formats = cond_formats;
-            sh.validations = validations;
-            sh.charts = charts;
-            sh.sparklines = sparklines;
-            sh.pivots = pivots;
+            if let Some(v) = cond_formats {
+                sh.cond_formats = v;
+            }
+            if let Some(v) = validations {
+                sh.validations = v;
+            }
+            if let Some(v) = charts {
+                sh.charts = v;
+            }
+            if let Some(v) = sparklines {
+                sh.sparklines = v;
+            }
+            if let Some(v) = pivots {
+                sh.pivots = v;
+            }
         }
     }
 
@@ -701,7 +746,12 @@ mod tests {
         wb.sheets.push(Arc::new(other));
         let mut third = Sheet::new("Third");
         third.set_cell(gridcraft_core::CellRef::new(0, 0), crate::Cell::formula(Formula::new("A1+1")));
+        // A rule that doesn't name the sheet leaves its sheet shared; one that does is rewritten.
+        third.validations.push(crate::Validation { f1: "=A1>0".into(), ..Default::default() });
         wb.sheets.push(Arc::new(third));
+        let mut fourth = Sheet::new("Fourth");
+        fourth.validations.push(crate::Validation { f1: "=Sheet1!A1>0".into(), ..Default::default() });
+        wb.sheets.push(Arc::new(fourth));
         let snapshot = wb.clone();
         wb.rewrite_references(&|_, e| gridcraft_formula::adjust::rename_sheet(e, "Sheet1", "Data"));
         let shared = |i: usize| -> Result<bool, Box<dyn std::error::Error>> {
@@ -709,7 +759,9 @@ mod tests {
         };
         assert!(shared(0)?, "nothing on Sheet1 names it");
         assert!(!shared(1)?, "Other's formula names Sheet1");
-        assert!(shared(2)?, "Third's formula is unqualified");
+        assert!(shared(2)?, "Third's formula and rule are unqualified");
+        assert!(!shared(3)?, "Fourth's rule names Sheet1");
+        assert_eq!(wb.sheets.get(3).and_then(|s| s.validations.first()).map(|v| v.f1.as_str()), Some("=Data!A1>0"));
         let f = wb.sheets.get(1).and_then(|s| s.cell(gridcraft_core::CellRef::new(0, 0))).and_then(|c| c.formula.clone()).ok_or("formula")?;
         assert_eq!(f.text, "Data!A1+1");
         Ok(())

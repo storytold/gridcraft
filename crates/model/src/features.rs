@@ -242,6 +242,25 @@ impl CfRule {
         }
     }
 
+    /// [`CfRule::formulas_mut`], read only.
+    pub fn formulas(&self) -> Vec<&String> {
+        let kinds: Vec<&CfValueKind> = match self {
+            CfRule::CellIs { a, b, .. } => return std::iter::once(a).chain(b.as_ref()).collect(),
+            CfRule::Expression { formula, .. } => return vec![formula],
+            CfRule::ColorScale { stops } => stops.iter().map(|(k, _)| k).collect(),
+            CfRule::DataBar { min, max, .. } => vec![min, max],
+            CfRule::IconSet { thresholds, .. } => thresholds.iter().collect(),
+            _ => Vec::new(),
+        };
+        kinds
+            .into_iter()
+            .filter_map(|k| match k {
+                CfValueKind::Formula(t) => Some(t),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// All the rule's formulas, thresholds included: what an edit that moves references
     /// rewrites.
     pub fn formulas_mut(&mut self) -> Vec<&mut String> {
@@ -267,6 +286,11 @@ impl Validation {
     /// The validation's formulas (for its range's top-left cell).
     pub fn formulas_mut(&mut self) -> Vec<&mut String> {
         std::iter::once(&mut self.f1).chain(self.f2.as_mut()).collect()
+    }
+
+    /// [`Validation::formulas_mut`], read only.
+    pub fn formulas(&self) -> Vec<&String> {
+        std::iter::once(&self.f1).chain(self.f2.as_ref()).collect()
     }
 }
 

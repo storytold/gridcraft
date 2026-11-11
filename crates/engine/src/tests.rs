@@ -5865,10 +5865,12 @@ fn rules_rehost_from_the_top_left_of_all_their_ranges() {
     let mut s = setup();
     s.execute("home.deleteRows", json!({"rows": "1:5"})).unwrap();
     assert_eq!(texts(&s), (vec!["C5>0@C5:C7".to_string()], vec!["E5>0@E5:E7".to_string()]));
-    // Deleting the cells of the first area, shifting up.
-    let mut s = setup();
-    s.execute("home.deleteCells", json!({"range": "A1:A5", "shift": "left"})).unwrap();
-    assert_eq!(texts(&s), (vec!["C10>0@C10:C12".to_string()], vec!["E10>0@E10:E12".to_string()]));
+    // Deleting the cells of the first area, shifting up or left: the second area stays put.
+    for shift in ["up", "left"] {
+        let mut s = setup();
+        s.execute("home.deleteCells", json!({"range": "A1:A5", "shift": shift})).unwrap();
+        assert_eq!(texts(&s), (vec!["C10>0@C10:C12".to_string()], vec!["E10>0@E10:E12".to_string()]), "shift {shift}");
+    }
 }
 
 /// A cut is pasted as it is: a transposed or tiled paste of it is refused and changes nothing,
