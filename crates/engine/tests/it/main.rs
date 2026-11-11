@@ -32,6 +32,7 @@ mod stored_list_shape;
 mod structural_edit_rewrite;
 mod table_resize_overlap;
 mod table_total_row_last_row;
+mod three_d_sheet_move;
 mod trace_error;
 mod workbook_author;
 mod wrap_row_height;

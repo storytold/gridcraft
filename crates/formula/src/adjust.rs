@@ -301,6 +301,47 @@ pub fn rename_sheet(e: Expr, old: &str, new: &str) -> Expr {
     })
 }
 
+/// A 3-D span whose end sheet `name` is moved past its other end shrinks to the neighbouring sheet
+/// that stays inside it, as in Excel: moving `Jan` after `Mar` turns `Jan:Mar` into `Feb:Mar`. A
+/// span that loses its far end this way and has only the other end left becomes a plain
+/// reference. `order` lists the sheet names before the move in tab order and `to` is the index
+/// the sheet takes. A move that keeps the two ends in order leaves the span as it is: it covers
+/// whatever sits between them. `None` when the formula has no such span.
+pub fn move_sheet_ends(e: &Expr, name: &str, order: &[String], to: usize) -> Option<Expr> {
+    let ends_at = |r: &Reference| matches!(&r.sheet, SheetSel::Span(a, b) if a.eq_ignore_ascii_case(name) || b.eq_ignore_ascii_case(name));
+    if !e.references().iter().any(|r| ends_at(r)) {
+        return None;
+    }
+    let from = order.iter().position(|o| o.eq_ignore_ascii_case(name))?;
+    // The tab order after the move.
+    let mut after: Vec<&String> = order.iter().collect();
+    let moved = after.remove(from);
+    after.insert(to.min(after.len()), moved);
+    let pos = |list: &[&String], n: &str| list.iter().position(|o| o.eq_ignore_ascii_case(n));
+    let before: Vec<&String> = order.iter().collect();
+    let changed = e.clone().map(&mut |x| match x {
+        Expr::Ref(mut r) if ends_at(&r) => {
+            if let SheetSel::Span(a, b) = &r.sheet
+                && let (Some(ia), Some(ib), Some(ja), Some(jb)) = (pos(&before, a), pos(&before, b), pos(&after, a), pos(&after, b))
+                && ia != ib
+                && (ia < ib) != (ja < jb)
+            {
+                // The moved end goes one sheet towards the other end; the span keeps its direction.
+                let moved_is_a = a.eq_ignore_ascii_case(name);
+                let (im, io) = if moved_is_a { (ia, ib) } else { (ib, ia) };
+                if let Some(inward) = order.get(if im < io { im + 1 } else { im.saturating_sub(1) }) {
+                    let other = if moved_is_a { b } else { a };
+                    let (na, nb) = if moved_is_a { (inward, other) } else { (other, inward) };
+                    r.sheet = if na.eq_ignore_ascii_case(nb) { SheetSel::Named(na.clone()) } else { SheetSel::Span(na.clone(), nb.clone()) };
+                }
+            }
+            Expr::Ref(r)
+        }
+        other => other,
+    });
+    (changed != *e).then_some(changed)
+}
+
 /// References to a deleted sheet become `#REF!`. `order` lists the sheet names (before the deletion) in tab order:
 /// a 3-D span that loses an end sheet shrinks to the neighbouring surviving sheet, as in Excel.
 pub fn delete_sheet(e: Expr, name: &str, order: &[String]) -> Expr {
