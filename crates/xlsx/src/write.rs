@@ -141,6 +141,11 @@ impl Out {
         if let Some(ct) = content_type {
             self.overrides.push((format!("/{name}"), ct.to_string()));
         }
+        // Every `xl/media/image*.ext` part is indexed as it is added, preserved ones included, so a
+        // later identical picture finds it instead of writing a second copy.
+        if let Some((ext, file)) = name.strip_prefix("xl/media/").filter(|f| f.starts_with("image")).and_then(|f| Some((f.rsplit_once('.')?.1, f))) {
+            self.media.entry((ext.to_string(), sha2::Sha256::digest(&data).into())).or_insert_with(|| file.to_string());
+        }
         self.parts.push((name.to_string(), data));
     }
     /// The `xl/media` file name (`imageN.ext`) holding `data`. A picture used on several sheets,
@@ -152,8 +157,7 @@ impl Out {
         }
         self.images += 1;
         let file = format!("image{}.{ext}", self.images);
-        self.part(&format!("xl/media/{file}"), None, data.to_vec());
-        self.media.insert(key, file.clone());
+        self.part(&format!("xl/media/{file}"), None, data.to_vec()); // indexes it in `media`
         file
     }
     pub fn default_type(&mut self, ext: &str, ct: &str) {
