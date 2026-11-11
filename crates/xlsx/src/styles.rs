@@ -28,6 +28,8 @@ pub struct StylesIn {
     pub num_fmts: HashMap<u32, String>,
 }
 
+/// Reads a color definition from an XML element, resolving auto, rgb, theme,
+/// or indexed colors against the supplied palette according to ECMA-376 specifications.
 pub fn read_color(e: &El, palette: &[u32]) -> Color {
     if e.flag("auto", false) {
         return Color::Auto;
@@ -800,7 +802,18 @@ mod tests {
 
     #[test]
     fn test_indexed_system_colors() {
-        let palette = crate::tables::INDEXED;
+        // Explicit test palette with sentinel values at 64 and 65 to prove special-casing
+        let mut palette = vec![0x000000; 66];
+        palette[1] = 0x123456;
+        palette[63] = 0xABCDEF;
+        palette[64] = 0x111111; // Sentinel: indexed 64 should map to Auto, not this RGB
+        palette[65] = 0x222222; // Sentinel: indexed 65 should map to 0xFFFFFF, not this RGB
+
+        let el_1 = crate::xml::parse(b"<color indexed=\"1\"/>").unwrap();
+        assert_eq!(read_color(&el_1, &palette), Color::Rgb(0x123456));
+
+        let el_63 = crate::xml::parse(b"<color indexed=\"63\"/>").unwrap();
+        assert_eq!(read_color(&el_63, &palette), Color::Rgb(0xABCDEF));
 
         let el_64 = crate::xml::parse(b"<color indexed=\"64\"/>").unwrap();
         assert_eq!(read_color(&el_64, &palette), Color::Auto);
@@ -808,7 +821,10 @@ mod tests {
         let el_65 = crate::xml::parse(b"<color indexed=\"65\"/>").unwrap();
         assert_eq!(read_color(&el_65, &palette), Color::Rgb(0xFFFFFF));
 
-        let el_1 = crate::xml::parse(b"<color indexed=\"1\"/>").unwrap();
-        assert_eq!(read_color(&el_1, &palette), Color::Rgb(0xFFFFFF));
+        let el_66 = crate::xml::parse(b"<color indexed=\"66\"/>").unwrap();
+        assert_eq!(read_color(&el_66, &palette), Color::Auto);
+
+        let el_oob = crate::xml::parse(b"<color indexed=\"999\"/>").unwrap();
+        assert_eq!(read_color(&el_oob, &palette), Color::Auto);
     }
 }
