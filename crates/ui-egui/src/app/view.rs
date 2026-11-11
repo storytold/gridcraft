@@ -15,6 +15,7 @@ impl SheetApp {
         self.scroll_key().and_then(|k| self.views.get(&k).copied()).unwrap_or_else(|| self.saved_view())
     }
 
+    /// The active sheet's scroll position in this window, starting from the saved one the first time.
     pub fn view_mut(&mut self) -> Option<&mut SheetView> {
         let k = self.scroll_key()?;
         // Only for a sheet this window hasn't scrolled yet: the saved position walks every sized
