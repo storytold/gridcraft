@@ -14,6 +14,9 @@ pub const DEFAULT_SPIN_COUNT: u32 = 100_000;
 /// Largest spin count accepted when verifying (the documented maximum); a file asking for more
 /// would only make verification hang.
 pub const MAX_SPIN_COUNT: u32 = 10_000_000;
+/// Largest decoded hash or salt accepted from a file (a SHA-512 hash is 64 bytes, Excel's salts
+/// 16); anything longer is damaged, and decoding it would only allocate.
+const MAX_STORED_BYTES: usize = 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PasswordHash {
@@ -91,7 +94,9 @@ impl PasswordHash {
                 if *spin_count > MAX_SPIN_COUNT {
                     return Err(format!("the password uses a spin count of {spin_count}, more than the {MAX_SPIN_COUNT} allowed"));
                 }
-                let (Some(want), Some(salt)) = (crate::b64::decode(hash), crate::b64::decode(salt)) else {
+                let (Some(want), Some(salt)) =
+                    (crate::b64::decode_limited(hash, MAX_STORED_BYTES), crate::b64::decode_limited(salt, MAX_STORED_BYTES))
+                else {
                     return Err("the stored password hash is damaged".into());
                 };
                 let got = match algorithm.to_ascii_uppercase().replace('_', "-").as_str() {
@@ -186,6 +191,8 @@ mod tests {
         assert!(!other("SHA-256", 2).verify("s3cret")?);
         let broken = PasswordHash::Iterated { algorithm: "SHA-512".into(), hash: "!!".into(), salt: salt.clone(), spin_count: 1 };
         assert!(broken.verify("s3cret").is_err());
+        let huge_salt = PasswordHash::Iterated { algorithm: "SHA-512".into(), hash, salt: "A".repeat(4 * MAX_STORED_BYTES), spin_count: 1 };
+        assert!(huge_salt.verify("s3cret").is_err());
         Ok(())
     }
 
