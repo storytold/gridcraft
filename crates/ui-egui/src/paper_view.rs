@@ -55,8 +55,9 @@ pub struct HfEdit {
     /// Pictures chosen with Header & Footer › Picture, per section, written with the text when
     /// the edit is committed (#1257).
     pending: [Option<PendingPicture>; 3],
-    /// The browser picture picker's answer, while it is open.
-    picture_inbox: Option<crate::Inbox>,
+    /// The browser picture picker's answer, while it is open, with the section and caret it was
+    /// opened for: the picture goes there, even if another section is being edited when it comes.
+    picture_inbox: Option<(crate::Inbox, usize, usize)>,
 }
 
 /// A picture chosen for a header or footer section, not written yet.
@@ -441,7 +442,9 @@ pub fn start_editing(app: &mut SheetApp) {
 fn set_option(app: &mut SheetApp, key: &str, on: bool) {
     let Some(e) = app.grid.hf_edit.as_ref() else { return };
     let (sheet, page, zone) = (e.sheet, e.page, HfZone { footer: e.footer, section: e.section });
-    commit(app);
+    if !commit(app) {
+        return;
+    }
     app.run_or_alert("pageLayout.headerFooter", json!({"sheet": sheet, key: on}));
     let Some(sh) = app.session.active().and_then(|d| d.wb.sheet(sheet)).cloned() else { return };
     begin(app, sheet, &sh, page, zone);
@@ -468,8 +471,9 @@ pub fn begin(app: &mut SheetApp, sheet: usize, sh: &Sheet, page: (usize, usize),
         e.request_focus = true;
         return;
     }
-    if app.grid.hf_edit.is_some() {
-        commit(app);
+    // A picture that couldn't be written keeps the edit going: it isn't replaced by this one.
+    if app.grid.hf_edit.is_some() && !commit(app) {
+        return;
     }
     // A cell being edited is entered first, as when clicking another cell.
     if app.editor.is_some() && !app.commit_edit(0, 0, false, false) {
@@ -502,53 +506,74 @@ pub fn begin(app: &mut SheetApp, sheet: usize, sh: &Sheet, page: (usize, usize),
     app.ui.ribbon_collapsed = false;
 }
 
-/// Ends editing and writes the header or footer when it changed (one undo step).
-pub fn commit(app: &mut SheetApp) {
-    let Some(e) = app.grid.hf_edit.take() else { return };
-    if app.ui.ribbon_tab == TAB {
+/// Ends editing and writes the header or footer when it changed (one undo step). Returns
+/// `false` when writing a picture failed: the edit then goes on, with what was written taken as
+/// written, and without the picture that failed (its message says why), so the text and the
+/// other pictures aren't lost.
+pub fn commit(app: &mut SheetApp) -> bool {
+    let Some(mut e) = app.grid.hf_edit.take() else { return true };
+    let on_tab = app.ui.ribbon_tab == TAB;
+    if on_tab {
         app.ui.ribbon_tab = e.prev_tab.clone();
     }
     // Pictures chosen for sections that still show their field.
-    let pictures: Vec<(usize, &PendingPicture)> = e
-        .pending
-        .iter()
-        .enumerate()
-        .filter_map(|(k, p)| Some((k, p.as_ref()?)))
-        .filter(|(k, _)| e.texts.get(*k).is_some_and(|t| t.contains(PICTURE_FIELD)))
-        .collect();
+    let pictures: Vec<usize> =
+        (0..3).filter(|k| e.pending.get(*k).is_some_and(Option::is_some) && e.texts.get(*k).is_some_and(|t| t.contains(PICTURE_FIELD))).collect();
     if e.texts == e.original && pictures.is_empty() {
-        return;
+        return true;
     }
     let spec = print::join_header_footer(&e.texts.clone().map(|s| print::fields_to_codes(&s)));
-    let Some(((first, src), rest)) = pictures.split_first() else {
+    if pictures.is_empty() {
         let key = hf_key(e.kind, e.footer);
         app.run_or_alert("pageLayout.headerFooter", json!({"sheet": e.sheet, key: spec}));
-        return;
-    };
+        return true;
+    }
     // The text and the first picture are one undo step; another section's picture, chosen in
     // the same edit, is one more each.
-    let params = |k: usize, src: &PendingPicture| {
-        let mut p = json!({
-            "sheet": e.sheet,
-            "page": e.kind.id(),
-            "part": if e.footer { "footer" } else { "header" },
-            "section": section_name(k),
-        });
-        match src {
-            PendingPicture::Path(path) => p["path"] = json!(path),
-            PendingPicture::Bytes { name, data } => {
-                p["base64"] = json!(gridcraft_engine::io::base64_encode(data));
-                p["title"] = json!(std::path::Path::new(name).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or(""));
-            }
+    for (n, &k) in pictures.iter().enumerate() {
+        let Some(src) = e.pending.get(k).cloned().flatten() else { continue };
+        let mut params = picture_params(&e, k, &src);
+        if n == 0 {
+            params["spec"] = json!(spec);
         }
-        p
-    };
-    let mut first_params = params(*first, src);
-    first_params["spec"] = json!(spec);
-    app.run_or_alert("pageLayout.headerFooterPicture", first_params);
-    for (k, src) in rest {
-        app.run_or_alert("pageLayout.headerFooterPicture", params(*k, src));
+        if let Err(msg) = app.run("pageLayout.headerFooterPicture", params) {
+            app.message = Some(("GridCraft".into(), msg));
+            if n > 0 {
+                e.original = e.texts.clone();
+            }
+            for done in &pictures[..=n] {
+                if let Some(slot) = e.pending.get_mut(*done) {
+                    *slot = None;
+                }
+            }
+            if on_tab {
+                app.ui.ribbon_tab = TAB.to_string();
+            }
+            e.request_focus = true;
+            app.grid.hf_edit = Some(e);
+            return false;
+        }
     }
+    true
+}
+
+/// The `pageLayout.headerFooterPicture` parameters that write picture `src` in section `k` of
+/// the header or footer `e` edits.
+fn picture_params(e: &HfEdit, k: usize, src: &PendingPicture) -> serde_json::Value {
+    let mut p = json!({
+        "sheet": e.sheet,
+        "page": e.kind.id(),
+        "part": if e.footer { "footer" } else { "header" },
+        "section": section_name(k),
+    });
+    match src {
+        PendingPicture::Path(path) => p["path"] = json!(path),
+        PendingPicture::Bytes { name, data } => {
+            p["base64"] = json!(gridcraft_engine::io::base64_encode(data));
+            p["title"] = json!(std::path::Path::new(name).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or(""));
+        }
+    }
+    p
 }
 
 /// Header & Footer › Picture: chooses a picture for the section being edited. It shows as
@@ -561,7 +586,7 @@ pub fn pick_picture(app: &mut SheetApp) {
         let inbox = crate::Inbox::default();
         start(inbox.clone());
         if let Some(e) = app.grid.hf_edit.as_mut() {
-            e.picture_inbox = Some(inbox);
+            e.picture_inbox = Some((inbox, e.section, e.caret));
         }
         return;
     }
@@ -584,14 +609,49 @@ fn choose_picture(e: &mut HfEdit, picture: PendingPicture) {
     }
 }
 
-/// Whether the section being edited has a picture in the workbook (Format Picture applies).
-pub fn editing_has_picture(app: &SheetApp) -> bool {
-    let Some(e) = app.grid.hf_edit.as_ref() else { return false };
-    app.session.active().and_then(|d| d.wb.sheet(e.sheet)).is_some_and(|sh| sh.print.hf_pictures.iter().any(|q| q.is_at(e.kind, e.footer, e.section)))
+/// Takes `picture`, chosen for `section` with the caret at `caret`, whichever section is being
+/// edited now; the section being edited keeps its caret.
+fn choose_picture_in(e: &mut HfEdit, section: usize, caret: usize, picture: PendingPicture) {
+    let (now, now_caret) = (e.section, e.caret);
+    e.section = section;
+    e.caret = caret.min(e.texts.get(section).map_or(0, |t| t.chars().count()));
+    choose_picture(e, picture);
+    if section != now {
+        e.section = now;
+        e.caret = now_caret;
+        e.set_caret = Some(now_caret);
+    }
 }
 
-/// Header & Footer › Format Picture: the size of the section's picture.
+/// Whether the section being edited has a picture (Format Picture applies): in the workbook, or
+/// chosen in this edit.
+pub fn editing_has_picture(app: &SheetApp) -> bool {
+    let Some(e) = app.grid.hf_edit.as_ref() else { return false };
+    has_pending_picture(e)
+        || app
+            .session
+            .active()
+            .and_then(|d| d.wb.sheet(e.sheet))
+            .is_some_and(|sh| sh.print.hf_pictures.iter().any(|q| q.is_at(e.kind, e.footer, e.section)))
+}
+
+/// Whether a picture chosen in this edit waits for the section being edited.
+fn has_pending_picture(e: &HfEdit) -> bool {
+    e.pending.get(e.section).is_some_and(Option::is_some) && e.texts.get(e.section).is_some_and(|t| t.contains(PICTURE_FIELD))
+}
+
+/// Header & Footer › Format Picture: the size of the section's picture. A picture chosen in this
+/// edit is written first (editing goes on), so the dialog sizes it and not the one it replaces.
 pub fn format_picture(app: &mut SheetApp) {
+    let Some(e) = app.grid.hf_edit.as_ref() else { return };
+    if has_pending_picture(e) {
+        let (sheet, page, zone) = (e.sheet, e.page, HfZone { footer: e.footer, section: e.section });
+        if !commit(app) {
+            return;
+        }
+        let Some(sh) = app.session.active().and_then(|d| d.wb.sheet(sheet)).cloned() else { return };
+        begin(app, sheet, &sh, page, zone);
+    }
     let Some(e) = app.grid.hf_edit.as_ref() else { return };
     let params = json!({
         "sheet": e.sheet,
@@ -635,7 +695,9 @@ pub fn go_to(app: &mut SheetApp, footer: bool) {
         return;
     }
     let (sheet, page, section) = (e.sheet, e.page, e.section);
-    commit(app);
+    if !commit(app) {
+        return;
+    }
     let Some(sh) = app.session.active().and_then(|d| d.wb.sheet(sheet)).cloned() else { return };
     begin(app, sheet, &sh, page, HfZone { footer, section });
 }
@@ -644,13 +706,16 @@ pub fn go_to(app: &mut SheetApp, footer: bool) {
 fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
     let Some(mut e) = app.grid.hf_edit.take() else { return };
     // A picture the browser's picker brought (Header & Footer › Picture).
-    let arrived = e.picture_inbox.as_ref().and_then(|inbox| inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop());
-    if let Some((name, data)) = arrived {
+    let arrived = e
+        .picture_inbox
+        .as_ref()
+        .and_then(|(inbox, section, caret)| inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop().map(|got| (got, *section, *caret)));
+    if let Some(((name, data), section, caret)) = arrived {
         e.picture_inbox = None;
         if data.len() > 16 * 1024 * 1024 {
             app.message = Some(("GridCraft".into(), "Choose a picture no larger than 16 MB.".into()));
         } else {
-            choose_picture(&mut e, PendingPicture::Bytes { name, data });
+            choose_picture_in(&mut e, section, caret, PendingPicture::Bytes { name, data });
         }
     }
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {

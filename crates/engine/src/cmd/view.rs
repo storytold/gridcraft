@@ -630,7 +630,11 @@ fn header_footer_picture(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let pr = &mut cx.sheet_mut(si)?.print;
         if let Some(spec) = &spec {
-            *pr.hf_mut(page, footer) = spec.chars().take(MAX_HEADER_FOOTER).collect();
+            // Cut to fit, the text could lose a `&G`: refused, as for the picture's own `&G`.
+            if spec.chars().count() > MAX_HEADER_FOOTER {
+                return Err(bad(CMD, format!("a header or footer holds at most {MAX_HEADER_FOOTER} characters; shorten it to add the picture")));
+            }
+            pr.hf_mut(page, footer).clone_from(spec);
         }
         let mut parts = super::print::split_header_footer(pr.hf(page, footer));
         let at = usize::from(idx);

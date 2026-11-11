@@ -590,6 +590,68 @@ fn a_picture_chosen_then_cancelled_or_erased_is_not_saved() {
     assert_eq!(h.state().grid.hf_edit.as_ref().unwrap().texts[1], "Other");
 }
 
+/// A picture that can't be written (here a file that isn't one) keeps the edit going with its
+/// text, says why, and isn't tried again; nothing is written.
+#[test]
+fn a_picture_that_fails_keeps_the_edit_and_its_text() {
+    let mut h = picture_fixture("&CTitle", &[]);
+    h.run_steps(2);
+    let path = std::env::temp_dir().join(format!("gridcraft-hf-{}-broken.png", std::process::id()));
+    std::fs::write(&path, b"not a picture").unwrap();
+    edit_header_with_picker(&mut h, Some(path.to_string_lossy().into_owned()));
+    gridcraft_ui_egui::paper_view::pick_picture(h.state_mut());
+    h.state_mut().grid.hf_edit.as_mut().unwrap().texts[1] = "New title&[Picture]".into();
+    assert!(!gridcraft_ui_egui::paper_view::commit(h.state_mut()), "writing the picture failed");
+    let e = h.state().grid.hf_edit.as_ref().expect("the edit goes on");
+    assert_eq!(e.texts[1], "New title&[Picture]", "with its text");
+    assert!(h.state().message.is_some(), "and says why");
+    assert_eq!((hf(&h).header.as_str(), hf(&h).hf_pictures.len()), ("&CTitle", 0), "nothing was written");
+    // The failed picture isn't tried again: the next commit writes the text.
+    h.state_mut().message = None;
+    assert!(gridcraft_ui_egui::paper_view::commit(h.state_mut()));
+    assert_eq!(hf(&h).header, "&CNew title&G");
+    let _ = std::fs::remove_file(path);
+}
+
+/// The browser's picker answers after the user moved to another section: the picture goes to the
+/// section it was chosen for.
+#[test]
+fn a_picture_from_the_browser_goes_to_the_section_it_was_chosen_for() {
+    let mut h = picture_fixture("&CTitle", &[]);
+    h.run_steps(2);
+    let requests: std::sync::Arc<std::sync::Mutex<Vec<gridcraft_ui_egui::Inbox>>> = Default::default();
+    let send = requests.clone();
+    edit_header_with_picker(&mut h, None);
+    h.state_mut().services.pick_picture = None;
+    h.state_mut().services.pick_picture_async = Some(Box::new(move |inbox| send.lock().unwrap().push(inbox)));
+    gridcraft_ui_egui::paper_view::pick_picture(h.state_mut());
+    // Now editing the left section.
+    let sh = h.state().session.doc().unwrap().wb.sheet(0).unwrap().clone();
+    gridcraft_ui_egui::paper_view::begin(h.state_mut(), 0, &sh, (0, 0), gridcraft_engine::paper::HfZone { footer: false, section: 0 });
+    requests.lock().unwrap().pop().unwrap().lock().unwrap().push(("logo.png".into(), png(40, 20)));
+    h.run_steps(3);
+    let e = h.state().grid.hf_edit.as_ref().unwrap();
+    assert_eq!((e.texts[0].as_str(), e.texts[1].as_str()), ("", "Title&[Picture]"));
+    assert_eq!(e.section, 0, "the left section is still the one being edited");
+}
+
+/// Format Picture on a picture chosen in this edit writes it first and sizes it, not the picture
+/// it replaces.
+#[test]
+fn format_picture_sizes_the_picture_chosen_in_this_edit() {
+    let mut h = picture_fixture("&C&G", &[("CH", "width:120pt;height:40pt", png(30, 10))]);
+    h.run_steps(2);
+    edit_header_with_picker(&mut h, Some(picture_file("new")));
+    gridcraft_ui_egui::paper_view::pick_picture(h.state_mut());
+    assert!(gridcraft_ui_egui::paper_view::editing_has_picture(h.state()));
+    gridcraft_ui_egui::paper_view::format_picture(h.state_mut());
+    let q = hf(&h).hf_pictures[0].clone();
+    assert!(q.title.ends_with("new"), "the new picture was written: {}", q.title);
+    let d = h.state().dialog.as_ref().expect("Format Picture opens");
+    assert_eq!((d.values["width"].as_f64(), d.values["height"].as_f64()), (Some(f64::from(q.width)), Some(f64::from(q.height))));
+    assert!(h.state().grid.hf_edit.is_some(), "editing goes on");
+}
+
 /// Format Picture opens on the section's picture size and OK resizes it; a section without a
 /// picture has nothing to format.
 #[test]

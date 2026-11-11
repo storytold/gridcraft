@@ -1645,6 +1645,10 @@ fn header_picture_input_is_checked() {
     let e = run(&mut s, json!({"section": "left", "base64": b64_png(5, 5)})).unwrap_err().to_string();
     assert!(e.contains("255 characters"), "{e}");
     assert_eq!((print_of(&s).header, print_of(&s).hf_pictures.len()), (before.header.clone(), 0));
+    // So is a text given with the picture (the Header & Footer tab's edit) that is too long.
+    let e = run(&mut s, json!({"section": "left", "base64": b64_png(5, 5), "spec": format!("&L&G{}", "x".repeat(260))})).unwrap_err().to_string();
+    assert!(e.contains("255 characters"), "{e}");
+    assert_eq!((print_of(&s).header, print_of(&s).hf_pictures.len()), (before.header, 0));
     s.execute("pageLayout.headerFooter", json!({"header": ""})).unwrap();
     // Sizes printing would leave out are refused: 5,000 × 4,000 is 20 million pixels.
     let e = run(&mut s, json!({"base64": crate::io::base64_encode(&png_claiming(5000, 4000))})).unwrap_err().to_string();
