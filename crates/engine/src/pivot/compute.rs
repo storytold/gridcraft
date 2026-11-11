@@ -348,6 +348,8 @@ fn ratio(a: Value, b: Option<Value>) -> Value {
 type ShowKey = (Vec<u32>, Vec<u32>, usize);
 /// Cumulative values by top-level item, and the total of all of them.
 type RunningTotals = (HashMap<u32, f64>, f64);
+/// Top-level items by (rest of a row path, column path).
+type ItemsByRest = HashMap<(Vec<u32>, Vec<u32>), Vec<u32>>;
 
 #[derive(Default)]
 struct ShowCache {
@@ -355,6 +357,10 @@ struct ShowCache {
     ranks: std::cell::RefCell<HashMap<ShowKey, Vec<f64>>>,
     /// Running totals by top-level item, with the total of all of them, by (rest of path, column, value).
     running: std::cell::RefCell<HashMap<ShowKey, RunningTotals>>,
+    /// The top-level items that have a row path ending in `rest` (with column path `col`), in
+    /// top-level order, by (`rest`, `col`): built once from the report's cells, so a running total
+    /// visits the items that can hold a number, not every top-level item per distinct `rest`.
+    items_by_rest: std::cell::RefCell<Option<ItemsByRest>>,
 }
 
 fn running_total(raw: Value, lookup: &ValueLookup<'_>, context: &ShowContext<'_>) -> Value {
@@ -362,11 +368,27 @@ fn running_total(raw: Value, lookup: &ValueLookup<'_>, context: &ShowContext<'_>
     if !matches!(raw, Value::Number(_)) {
         return raw;
     }
+    let mut index = context.cache.items_by_rest.borrow_mut();
+    let items_by_rest = index.get_or_insert_with(|| {
+        let position: HashMap<u32, usize> = context.level0.iter().enumerate().rev().map(|(at, item)| (*item, at)).collect();
+        let mut map = ItemsByRest::new();
+        for (row, col) in lookup.aggs.keys() {
+            if let Some((item, rest)) = row.split_first()
+                && position.contains_key(item)
+            {
+                map.entry((rest.to_vec(), col.clone())).or_default().push(*item);
+            }
+        }
+        for items in map.values_mut() {
+            items.sort_by_key(|item| position.get(item).copied().unwrap_or(usize::MAX));
+        }
+        map
+    });
     let mut cache = context.cache.running.borrow_mut();
     let (by_item, all) = cache.entry((rest.to_vec(), context.col_path.to_vec(), context.value_index)).or_insert_with(|| {
         let mut total = 0.0;
         let mut by_item = HashMap::new();
-        for item in context.level0 {
+        for item in items_by_rest.get(&(rest.to_vec(), context.col_path.to_vec())).into_iter().flatten() {
             let mut path = Vec::with_capacity(rest.len() + 1);
             path.push(*item);
             path.extend_from_slice(rest);
