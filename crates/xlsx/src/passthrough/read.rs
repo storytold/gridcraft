@@ -286,7 +286,15 @@ impl KeptReader {
     /// Sheet-level content of the sheet part `part`. `controls` says which form controls the
     /// sheet reader modelled (their VML shapes are left out of the kept content) and whether the
     /// VML drawing holds others that only it lists.
-    pub fn sheet(&mut self, cx: &mut Ctx<'_>, part: &str, name: &str, controls: &crate::controls::ReadControls) -> Option<Arc<Preserved>> {
+    /// `bytes` is the sheet part when the sheet reader kept it, so it isn't read a second time.
+    pub fn sheet(
+        &mut self,
+        cx: &mut Ctx<'_>,
+        part: &str,
+        bytes: Option<&[u8]>,
+        name: &str,
+        controls: &crate::controls::ReadControls,
+    ) -> Option<Arc<Preserved>> {
         if !self.on {
             return None;
         }
@@ -308,7 +316,7 @@ impl KeptReader {
         let vml_drawings = rels.iter().filter(|r| is_kind(r, &["vmlDrawing"])).count();
         let notes = rels.iter().filter(|r| is_kind(r, &["comments"])).count();
         if rels.iter().any(|r| is_kind(r, SHEET_ELEMENT_KINDS)) || vml_drawings > notes || controls.vml_only_unmodelled {
-            self.sheet_elements(cx, part, name, &rels, &mut p, &mut seen, controls);
+            self.sheet_elements(cx, part, bytes, name, &rels, &mut p, &mut seen, controls);
         }
         (!p.is_empty()).then(|| Arc::new(p))
     }
@@ -318,6 +326,7 @@ impl KeptReader {
         &mut self,
         cx: &mut Ctx<'_>,
         part: &str,
+        bytes: Option<&[u8]>,
         name: &str,
         rels: &[PreservedRel],
         p: &mut Preserved,
@@ -325,9 +334,12 @@ impl KeptReader {
         controls: &crate::controls::ReadControls,
     ) {
         let read_controls = &controls.modelled;
-        let scan = match cx.pkg.read(part) {
-            Ok(Some(bytes)) => scan_sheet(&bytes),
-            _ => None,
+        let scan = match bytes {
+            Some(bytes) => scan_sheet(bytes),
+            None => match cx.pkg.read(part) {
+                Ok(Some(bytes)) => scan_sheet(&bytes),
+                _ => None,
+            },
         };
         let Some(scan) = scan else {
             cx.warn(format!("sheet \"{name}\": controls and embedded objects could not be read and were dropped"));

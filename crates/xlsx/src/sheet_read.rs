@@ -185,8 +185,9 @@ fn read_sheet_format(e: &El, sheet: &mut Sheet) {
 }
 
 /// Reads the sheet part `part`, with the VML shape numbers of the form controls read into the
-/// model (pass-through keeps the other controls).
-pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, crate::controls::ReadControls), IoError> {
+/// model (pass-through keeps the other controls), and the part's bytes when pass-through may scan
+/// them ([`crate::passthrough::may_scan_sheet`]); otherwise they are freed as soon as the rows are read.
+pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, crate::controls::ReadControls, Option<Vec<u8>>), IoError> {
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
     let rels = cx.pkg.rels(part)?;
     let mut sheet = Sheet::new(name);
@@ -206,7 +207,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
         cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
     }
     settle_python_spills_past_budget(&st, &mut sheet);
-    drop(bytes);
+    let bytes = crate::passthrough::may_scan_sheet(&rels).then_some(bytes);
 
     let mut fit_to_page = false;
     let mut link_budget = LinkBudget::default();
@@ -362,7 +363,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
             }
         }
     }
-    Ok((sheet, read_controls))
+    Ok((sheet, read_controls, bytes))
 }
 
 /// Buttons, scroll bars and spin buttons: the `<controls>` list (also inside

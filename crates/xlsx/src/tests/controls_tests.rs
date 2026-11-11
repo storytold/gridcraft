@@ -29,7 +29,7 @@ fn note(author: &str, text: &str) -> Comment {
     }
 }
 
-fn book() -> Workbook {
+pub(super) fn book() -> Workbook {
     let mut wb = Workbook::default();
     wb.sheets.clear();
     let mut sh = Sheet::new("Data");
