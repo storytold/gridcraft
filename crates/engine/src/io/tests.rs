@@ -820,3 +820,74 @@ fn reading_a_fifo_is_refused_without_blocking() {
     assert!(err.contains("only regular files"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Merges far from what is copied or exported, in a hostile number, are indexed once instead of
+/// being scanned for every cell; a merge running past the table is clipped to it.
+#[test]
+fn html_merge_lookups_and_spans_stay_bounded() {
+    let mut wb = book_with_picture("A1", (0, 0));
+    let sh = wb.sheet_mut(0).unwrap();
+    for i in 0..200_000u32 {
+        sh.merges.push(RangeRef::new(CellRef::new(500_000 + i * 2, 5), CellRef::new(500_000 + i * 2, 6)));
+    }
+    sh.merges.push(RangeRef::new(CellRef::new(0, 0), CellRef::new(gridcraft_core::MAX_ROWS - 1, 1)));
+    sh.set_value(CellRef::new(2, 1), gridcraft_core::Value::Number(2.0));
+    let html = copied(&wb, "A1:C50");
+    assert!(html.contains("rowspan=\"50\" colspan=\"2\""), "{html}");
+    let page = to_html(&wb, 0).unwrap();
+    // The table is A1:B3 (the used range): the whole-height merge spans its three rows only.
+    assert!(page.contains("rowspan=\"3\" colspan=\"2\""), "{page}");
+    // Merges stacked over one another past a few per cell are refused, not walked.
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(2, 1)); 100];
+    assert!(to_html(&wb, 0).is_err());
+    assert!(range_html(&wb, 0, RangeRef::parse("A1:B3").unwrap(), "").is_none());
+}
+
+/// Thousands of pictures over thousands of custom rows: each is placed through a row index.
+#[test]
+fn html_export_places_many_pictures_over_many_custom_rows() {
+    let mut wb = book_with_picture("A1", (0, 0));
+    let sh = wb.sheet_mut(0).unwrap();
+    for row in 0..50_000 {
+        sh.rows.insert(row, gridcraft_model::LineInfo { size: Some(30.0), ..Default::default() });
+    }
+    let image = sh.images[0].clone();
+    for i in 0..5_000u32 {
+        let mut im = image.clone();
+        im.anchor.cell = CellRef::new(40_000 + i, 0);
+        sh.images.push(im);
+    }
+    let page = to_html(&wb, 0).unwrap();
+    assert!(page.contains(&format!("top:{}px", 30 * 44_999)), "last picture placed by the index");
+}
+
+/// One long text shown by many cells: the page fails at its byte limit instead of growing on.
+#[test]
+fn html_export_refuses_a_page_past_its_byte_limit() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    let text = gridcraft_core::Value::text("x".repeat(32_000));
+    for row in 0..10_000 {
+        sh.set_value(CellRef::new(row, 0), text.clone());
+    }
+    let err = to_html(&wb, 0).unwrap_err();
+    assert!(err.to_string().contains("MiB"), "{err}");
+}
+
+#[test]
+fn escaping_stops_at_the_room_left() {
+    assert_eq!(esc_within("a&b<c>\"d", 100).as_deref(), Some(esc("a&b<c>\"d").as_str()));
+    assert_eq!(esc_within("&&&", 14), None, "three `&amp;` are 15 bytes");
+    assert_eq!(esc_within("&&&", 15).as_deref(), Some("&amp;&amp;&amp;"));
+}
+
+#[test]
+fn the_merge_index_holds_a_bounded_number_of_cells() {
+    let mut sh = Sheet::new("S");
+    let rect = RangeRef::new(CellRef::new(0, 0), CellRef::new(1_100_000, 0));
+    sh.merges.push(RangeRef::new(CellRef::new(0, 0), CellRef::new(999_999, 0)));
+    assert_eq!(merge_index(&sh, rect).map(|m| m.len()), Some(1_000_000));
+    sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(1_000_000, 0))];
+    assert!(merge_index(&sh, rect).is_none());
+}
