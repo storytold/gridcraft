@@ -1404,7 +1404,17 @@ fn circle_invalid_data_warns_when_its_scan_was_cut_short() {
     h.state_mut().run("data.validation", json!({"range": "A1:A200000", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
     h.state_mut().run("data.circleInvalid", json!({})).unwrap();
     let n = h.state().notice.clone().expect("a notice was shown");
-    assert!(n.text.contains("100,000"), "{}", n.text);
+    assert!(n.text.contains("100,000 cell visits"), "{}", n.text);
+    // An open-time warning keeps its action when the scan note joins it.
+    h.state_mut().notice = Some(gridcraft_ui_egui::Notice {
+        text: "Macros.".into(),
+        kind: gridcraft_ui_egui::NoticeKind::Info,
+        action: Some(("More".into(), "macros".into())),
+    });
+    h.state_mut().run("data.circleInvalid", json!({})).unwrap();
+    let n = h.state().notice.clone().unwrap();
+    assert!(n.text.starts_with("Macros. ") && n.text.contains("cell visits"), "{}", n.text);
+    assert_eq!(n.action.as_ref().map(|a| a.1.as_str()), Some("macros"));
     assert_eq!(n.kind, gridcraft_ui_egui::NoticeKind::Warning);
 }
 

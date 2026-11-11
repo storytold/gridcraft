@@ -101,8 +101,15 @@ impl SheetApp {
             && let Ok(r) = &r
             && r.get("truncated").and_then(Json::as_bool) == Some(true)
         {
-            self.notice =
-                Some(Notice { text: "Only the first 100,000 cells were checked for invalid data.".into(), kind: NoticeKind::Warning, action: None });
+            let scan = "The scan stopped after 100,000 cell visits; some validated cells were not checked for invalid data.";
+            // An open-time warning that is still shown keeps its text and action; the scan note joins it.
+            match self.notice.as_mut() {
+                Some(n) => {
+                    n.text = format!("{} {scan}", n.text);
+                    n.kind = NoticeKind::Warning;
+                }
+                None => self.notice = Some(Notice { text: scan.into(), kind: NoticeKind::Warning, action: None }),
+            }
         }
         r
     }
