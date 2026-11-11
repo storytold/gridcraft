@@ -1,28 +1,29 @@
 # Real-time collaboration: status and acceptance evidence
 
-- Date: 2026-11-10
-- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`). The PR head is
-  `8208607f`: the slice that closed the fifteen Major findings of the 17:44Z review (`f51237ea`)
-  plus the §20 page, both published by the push of 2026-11-10T20:1xZ. The slice that closes the
-  six findings of the 20:32Z review is four commits: `8e76f729` (server and client code, tests,
-  and the `rfc.md`/`server.md`/`client.md` corrections), `437f19ee` (§21), `942e0007` (two numbers
-  in it) and the commit this page sits in (the same reconnect rule in the browser transport, with
-  its test). All **local, not pushed** when this revision was written, because pushing this
-  branch is the human step §19 names. The branch is then 64 commits on the base `2c58c769`, 84 files,
-  +17223/−34. A commit cannot spell its own hash: the bus record `status/gridcraft` quotes it.
+- Date: 2026-11-11
+- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`). **Delivered**: the fork's
+  `refs/heads/feature/realtime-collaboration` and the PR's `headRefOid` are both `adc4dcd1`, the
+  four commits `8e76f729` (server and client code, tests, and the `rfc.md`/`server.md`/`client.md`
+  corrections), `437f19ee` (§21), `942e0007` (two numbers in it) and `adc4dcd1` (the same reconnect
+  rule in the browser transport, with its test), published by the push of 2026-11-10T23:24Z. The
+  branch is 64 commits on the base `2c58c769`, 84 files, +17223/−34. The next slice, `00b146df`
+  (§22: the two findings of the 23:35Z review), is **local**: pushing it is the human step §19
+  names, and the bus record `status/gridcraft` quotes the hash a commit cannot spell for itself.
   §19 records the push of 2026-11-10T17:19Z, which published `ae4311ee`, `34e54b81`, `46783412`
   and the nine review-fix commits `d91f838a`…`a2251b0e`; §21 records the push of 20:1xZ, which
   published `f51237ea` and `8208607f`.
-- Base: `origin/main` = `2c58c769` at the time of the rebase (the PR's `baseRefOid`; upstream has
-  moved since)
+- Base: `origin/main` = `2c58c769` at the time of the rebase (the PR's `baseRefOid`); `origin/main`
+  has moved **24 commits** since — its tip at this writing is `6a08240e`. The PR stays mergeable
+  against the recorded base; rebasing is a separate step.
 - PR: <https://github.com/storytold/gridcraft/pull/3613> — open, **not a draft** since
-  2026-11-10T14:56:54Z, `mergeable = MERGEABLE`, head `8208607f`, last update 20:32:23Z
-- Gate on this head: none yet. The four workflows created on `2a245f91` (`CI`, `House rules`,
-  `Nix`, `SonarCloud`, 2026-11-10T17:19:42Z) all sit in `action_required` with no job started;
-  the workflows of the 20:1xZ push (`8208607f`) have not started either. CodeRabbit did review
-  that head: review `5848894080` at 20:32:17Z, six inline threads and one finding outside the
-  diff, all seven closed by §21. The evidence in this page is the host runs of §17, §18.6, §20.2
-  and §21.2, not a CI pass.
+  2026-11-10T14:56:54Z, `mergeable = MERGEABLE`, head `adc4dcd1`, last update 2026-11-10T23:35:33Z
+- Gate on `adc4dcd1`: no CI run. The four workflows the 23:24Z push created (`CI`, `House rules`,
+  `Nix`, `SonarCloud`) all ended `action_required` with no job started — the repository needs a
+  maintainer to approve a run from a fork. The evidence is the host run §21.3: `fmt` clean,
+  `clippy -D warnings` on the five packages, and tests of the four collaboration packages plus
+  `gridcraft-web` — 172 passed, 0 failed. CodeRabbit reviewed the head twice: review `5848894080`
+  at 20:32Z (six threads and one finding outside the diff, closed by §21.4) and review
+  `5851190259` at 23:35Z (one thread and one finding outside the diff, closed by §22).
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
 - Session handoff (project-level, outside this repository):
   `docs/collab/STATUS.md` in the cabinet project directory. This page is the canonical record and
@@ -1341,7 +1342,32 @@ packages: 161 passed, 0 failed; before this slice 156 — the five new tests are
 run covers `8e76f729` yet: the workflows on `8208607f` sit in `action_required` until a maintainer
 approves them, and the new head is not on the PR at all until the push.
 
-### 21.3 Answering the review
+### 21.3 Gates (remote host `agents`, 2026-11-10, on the delivered head `adc4dcd1`)
+
+```text
+cargo fmt --all -- --check                    clean, EXIT 0
+cargo clippy -p gridcraft-collab -p gridcraft-collab-client
+  -p gridcraft-collab-server -p gridcraft-collab-web
+  -p gridcraft-web --all-targets -j 4 -- -D warnings    clean, EXIT 0
+cargo test -p gridcraft-collab                49 passed, 0 failed, EXIT 0
+cargo test -p gridcraft-collab-client --all-targets   2 lib + 13 converge + 4 document
+                                              + 5 parts + 4 rollback, 0 failed, EXIT 0
+cargo test -p gridcraft-collab-server --all-targets   40 unit + 5 acceptance + 6 callback
+                                              + 2 logging + 9 persistence + 12 socket,
+                                              0 failed, EXIT 0
+cargo test -p gridcraft-collab-web            10 passed, 0 failed, EXIT 0
+cargo test -p gridcraft-web                   11 passed, 0 failed, EXIT 0
+```
+
+172 passed, 0 failed over the five packages. The run started at 23:41Z from a clean tree — `HEAD`
+was `adc4dcd1`, `git status` empty — after the 23:24Z push, so it covers exactly the head the pull
+request shows. Nothing here is `cargo xtask ci`: the workspace-wide run still stops on the
+host-environment test of §10, §15 and §20.2 (`io::tests::save_keeps_the_destination_access_restrictions`,
+`mode 664` in the build host's temporary directory), which none of these five packages contains, so
+the gate is reported per package. No CI run exists for this head: the four workflows the push
+created sit in `action_required` until a maintainer approves them.
+
+### 21.4 Answering the review
 
 All six threads were answered on 2026-11-10T20:4xZ, one reply per comment id, each naming the
 commit and the test or the exact paragraph, and each saying the commit is local until the branch
@@ -1351,3 +1377,82 @@ finding outside the diff (`client.rs`) has no thread of its own; its reply is th
 `synced.rs` thread, which lists the four code fixes with their tests. Where a finding could not be reproduced by a socket
 test (the trimmed-journal race) the reply says so and names the pure decision the test covers
 instead of claiming a test that cannot be written deterministically.
+
+The push of 23:24Z published those four commits, so the answers that said "local" describe the
+state at 20:4xZ; the code they name is now on the PR head. The review of 23:35Z on `adc4dcd1`
+raised two new findings (one thread, one outside the diff); both are triaged in §22.
+
+## 22. CodeRabbit's two findings on `adc4dcd1` (2026-11-10T23:35Z)
+
+Review `5851190259` at 23:35:29Z, the first one on the delivered head: one inline thread
+(`crates/collab-client/src/synced.rs:565`) and one Major finding outside the diff
+(`crates/collab-web/src/link.rs:169-186`). Both were checked against the code, both were real, and
+`00b146df` fixes them. That commit is local until the branch is pushed again — the human step §19
+names — and the bus record `status/gridcraft` quotes it.
+
+### 22.1 An answer the document already covers was replayed
+
+The room deduplicates by op id and answers a resent operation with its original `applied`
+(`crates/collab/src/room.rs`, the `seen` window), and the handshake `resync` writes the snapshot
+straight to the socket while frames can still be queued for the connection's outbox
+(`apps/gridcraft-collab-server/src/ws.rs`, `resync` and the `select!` loop): an `applied` whose
+version is at or below the snapshot's can land after it. `Synced` applied every `Event::Applied`,
+so the command ran a second time on the new document — an inserted row inserted twice, a
+`cell.set` writing a value the snapshot had already superseded.
+
+`Synced` now keeps `document_version`: the version of the document this replica holds, seeded from
+the link's state (what `last_version` and the catch-up left it at) and moved by `applied`,
+`snapshot` and `resynced`. An `applied` at or below it changes nothing in the document; the ack
+still leaves the resend queue, the step still enters this person's undo stack (the document does
+hold it, and a duplicate is not recorded twice), and the caller is not handed an
+`Event::Applied`, so a status line does not move backwards. Test:
+`an_answer_at_or_below_the_snapshot_changes_nothing` in `crates/collab-client/tests/document.rs` —
+a snapshot at version 4 with `A1 = 99`, the deduplicated answer at version 3 with `A1 = 7` (no
+change, no event), then an operation at version 5 (lands). The fixture of
+`the_actor_and_the_window_come_from_the_server` gave two operations the same version 1, which no
+server does; the second is version 2 now.
+
+### 22.2 A snapshot buffer outlived its connection
+
+`crates/collab-web/src/link.rs` kept `self.snapshot` across a dropped socket, a new `welcome` and
+a chunk of another snapshot: `get_or_insert_with` reused the old buffer, so its `version`, `epoch`
+and chunk count applied to the new chunks — stale bytes could assemble and `open_bytes` fail
+without a notice, or the buffer could never complete. `total` came from the wire and sized
+`vec![None; total as usize]` with no bound.
+
+Both transports now share `Snapshot` and `snapshot_chunk` in `gridcraft-collab-client::link`: a
+chunk that carries another version, epoch or chunk count starts a fresh buffer, `total` is refused
+at zero and above `MAX_SNAPSHOT_CHUNKS = 1024` (RFC §4.1 caps a document at 512 MB and the server
+sends 768 KiB per chunk, 683 full chunks), and the browser link drops the buffer when the socket
+closes and on a `welcome`. The native client had a buffer per connection already; it now gets the
+same reset rule. Tests: `a_snapshot_buffer_does_not_mix_two_catch_ups` in `crates/collab-web` (half
+a snapshot, a new welcome, the other half — no completion; a whole snapshot completes and moves the
+cursor; a `total` of `u32::MAX` buffers nothing), and `chunks_of_two_snapshots_are_not_woven_together`
+and `a_total_off_the_wire_is_bounded` in `link.rs`.
+
+### 22.3 Gates (remote host `agents`, 2026-11-11, on `00b146df`)
+
+```text
+cargo fmt --all -- --check                    clean, EXIT 0
+cargo clippy -p gridcraft-collab -p gridcraft-collab-client
+  -p gridcraft-collab-server -p gridcraft-collab-web
+  -p gridcraft-web --all-targets -j 4 -- -D warnings    clean, EXIT 0
+cargo test -p gridcraft-collab                49 passed, 0 failed, EXIT 0
+cargo test -p gridcraft-collab-client --all-targets   4 lib + 13 converge + 5 document
+                                              + 5 parts + 4 rollback, 0 failed, EXIT 0
+cargo test -p gridcraft-collab-server --all-targets   40 unit + 5 acceptance + 6 callback
+                                              + 2 logging + 9 persistence + 12 socket,
+                                              0 failed, EXIT 0
+cargo test -p gridcraft-collab-web            11 passed, 0 failed, EXIT 0
+cargo test -p gridcraft-web                   11 passed, 0 failed, EXIT 0
+```
+
+176 passed, 0 failed: the 172 of §21.3 plus the four tests this slice adds. The run started at
+00:05Z from a clean tree at `00b146df`.
+
+### 22.4 Answering the review
+
+The inline thread was answered on 2026-11-11T00:12Z (comment `4532196988`), naming `00b146df`, the
+two tests per finding and the corrected fixture, and saying the commit is local until the branch is
+pushed. The finding outside the diff has no thread of its own; its reply is the one on the
+`synced.rs` thread, which covers both halves and links them to the same rule.
