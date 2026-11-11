@@ -38,7 +38,8 @@ sync_github_name = false
 
 [people.vangel76]
 real_name = "Valentin Klein"
-sync_github_name = true
+display_name = "vangel76"
+sync_github_name = false
 
 [people.MacJedi42]
 sync_github_name = true
@@ -113,4 +114,7 @@ sync_github_name = true
 sync_github_name = true
 
 [people.maxm11]
+sync_github_name = true
+
+[people.RockerHX]
 sync_github_name = true
