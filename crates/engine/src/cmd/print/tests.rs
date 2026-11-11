@@ -1003,3 +1003,21 @@ fn excluded_active_sheet_is_not_the_empty_fallback_but_prints_an_explicit_range(
     let lays = super::layout::layouts(&wb, &ranged);
     assert_eq!(lays.iter().map(|l| (l.sheet, l.area)).collect::<Vec<_>>(), vec![(0, gridcraft_core::RangeRef::parse("A1:B2").unwrap())]);
 }
+
+/// When every visible sheet is excluded they all print, with or without a range for the active one.
+#[test]
+fn every_sheet_excluded_prints_them_all_also_with_a_range() {
+    use gridcraft_core::Value;
+    let mut wb = gridcraft_model::Workbook::new();
+    wb.sheets.clear();
+    for name in ["One", "Two"] {
+        let mut sh = gridcraft_model::Sheet::new(name);
+        sh.set_value(CellRef::new(0, 0), Value::Text(name.into()));
+        sh.print.excluded = true;
+        wb.sheets.push(std::sync::Arc::new(sh));
+    }
+    let sheets_of = |opts: &super::layout::PrintOptions| super::layout::layouts(&wb, opts).iter().map(|l| l.sheet).collect::<Vec<_>>();
+    assert_eq!(sheets_of(&super::layout::PrintOptions { all_sheets: true, ..Default::default() }), vec![0, 1]);
+    let ranged = super::layout::PrintOptions { all_sheets: true, range: gridcraft_core::RangeRef::parse("A1:B2"), ..Default::default() };
+    assert_eq!(sheets_of(&ranged), vec![0, 1]);
+}
