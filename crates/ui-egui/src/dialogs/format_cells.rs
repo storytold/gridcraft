@@ -44,7 +44,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     .map(|doc| {
                         let format = gridcraft_engine::display::number_format(&code);
                         crate::formula_locale::localized_constant(&sample, lang.formula_locale()).map(str::to_owned).unwrap_or_else(|| {
-                            gridcraft_engine::numfmt::format_value_with_locale(&sample, &format, doc.wb.date_system, lang.number_locale()).text
+                            gridcraft_engine::numfmt::format_value_with_region(&sample, &format, doc.wb.date_system, doc.wb.region).text
                         })
                     })
                     .unwrap_or_default();

@@ -517,11 +517,11 @@ pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
     let fmt = |v: f64| {
         let code = d.wb.styles.get(sh.style_id(d.selection.active)).num_fmt.as_str().to_string();
         let code = if code == "General" { "#,##0.##########".to_string() } else { code };
-        let locale = app.ui.language.number_locale();
+        let region = d.wb.region;
         let format = gridcraft_engine::display::number_format(&code);
-        gridcraft_engine::numfmt::format_value_with_locale(&gridcraft_engine::core::Value::Number(v), &format, d.wb.date_system, locale)
+        gridcraft_engine::numfmt::format_value_with_region(&gridcraft_engine::core::Value::Number(v), &format, d.wb.date_system, region)
             .text
-            .trim_end_matches(locale.decimal())
+            .trim_end_matches(region.decimal)
             .to_string()
     };
     let mut parts = Vec::new();

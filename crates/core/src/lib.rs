@@ -3,9 +3,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-mod locale;
-pub use locale::Locale;
-
 pub mod addr;
 pub mod color;
 pub mod date;

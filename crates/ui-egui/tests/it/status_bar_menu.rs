@@ -80,14 +80,16 @@ fn selection_statistics_use_the_interface_language() {
     }
 }
 
-/// Status-bar statistics share the grid's regional separators, including an absent fractional part.
+/// Status-bar statistics follow the workbook region, not the interface language.
 #[test]
-fn selection_statistics_format_values_with_the_interface_number_locale() {
+fn selection_statistics_format_values_with_the_workbook_region() {
     use gridcraft_ui_egui::i18n::Language;
     let mut h = harness();
+    let doc = h.state_mut().session.active_mut().unwrap();
+    std::sync::Arc::make_mut(&mut doc.wb).region = gridcraft_engine::core::region::lookup("de-DE");
     h.state_mut().run("range.setValues", json!({"range":"A1", "values":[[1000.25],[1001.25]]})).unwrap();
     h.state_mut().run("selection.set", json!({"range":"A1:A2"})).unwrap();
-    for (language, code, expected) in [(Language::De, "General", "2.001,5"), (Language::En, "General", "2,001.5"), (Language::De, "0.00", "2001,50")]
+    for (language, code, expected) in [(Language::De, "General", "2.001,5"), (Language::En, "General", "2.001,5"), (Language::De, "0.00", "2001,50")]
     {
         h.state_mut().run("app.language.set", json!({"language":language.code()})).unwrap();
         h.state_mut().run("home.numberFormat", json!({"range":"A1", "code":code})).unwrap();

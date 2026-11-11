@@ -98,7 +98,7 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
 
 /// Per-view formatting conventions and the available text space.
 pub(super) struct TextOptions {
-    pub locale: gridcraft_engine::core::Locale,
+    pub region: &'static gridcraft_engine::core::Region,
     pub width_px: f32,
     pub char_w: f32,
 }
@@ -129,13 +129,13 @@ pub(super) fn display_text(
         && let Value::Number(n) = v
     {
         let max_chars = ((options.width_px - 4.0) / options.char_w).floor().max(1.0) as usize;
-        return match gridcraft_engine::numfmt::format_general_fit_with_locale(*n, max_chars.min(11), options.locale) {
+        return match gridcraft_engine::numfmt::format_general_fit_with_region(*n, max_chars.min(11), options.region) {
             Some(t) => (t, None, true, None),
             None => ("#".repeat(max_chars.max(1)), None, true, None),
         };
     }
     let fmt = gridcraft_engine::display::number_format(code);
-    let f = gridcraft_engine::numfmt::format_value_with_locale(v, &fmt, wb.date_system, options.locale);
+    let f = gridcraft_engine::numfmt::format_value_with_region(v, &fmt, wb.date_system, options.region);
     (f.text, f.color.map(numfmt_color), f.numeric, f.fill)
 }
 

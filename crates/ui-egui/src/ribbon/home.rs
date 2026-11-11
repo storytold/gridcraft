@@ -696,7 +696,7 @@ fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
                 .active()
                 .map(|d| {
                     let format = gridcraft_engine::display::number_format(code);
-                    gridcraft_engine::numfmt::format_value_with_locale(&sample, &format, d.wb.date_system, lang.number_locale()).text
+                    gridcraft_engine::numfmt::format_value_with_region(&sample, &format, d.wb.date_system, d.wb.region).text
                 })
                 .unwrap_or_default();
             (*n, format!("{:<12}   {preview}", lang.tr(n)))

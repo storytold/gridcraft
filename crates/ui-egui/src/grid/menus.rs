@@ -141,7 +141,7 @@ fn filter_value_label(entry: &FilterValue, language: crate::i18n::Language, wb: 
             |sh| {
                 let style = wb.styles.get(sh.style_id(entry.source));
                 let format = gridcraft_engine::display::number_format(style.num_fmt.as_str());
-                gridcraft_engine::numfmt::format_value_with_locale(&entry.value, &format, wb.date_system, language.number_locale()).text
+                gridcraft_engine::numfmt::format_value_with_region(&entry.value, &format, wb.date_system, wb.region).text
             },
         )
     } else {

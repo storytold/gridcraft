@@ -94,14 +94,6 @@ impl Language {
             _ => &crate::format_locale::EN,
         }
     }
-    /// Regional number/date output for UI samples and painted cells; engine output stays invariant.
-    pub(crate) const fn number_locale(self) -> gridcraft_engine::core::Locale {
-        match self {
-            Self::De => gridcraft_engine::core::Locale::De,
-            _ => gridcraft_engine::core::Locale::En,
-        }
-    }
-
     pub const ALL: [Self; 24] = [
         Self::En,
         Self::Es,

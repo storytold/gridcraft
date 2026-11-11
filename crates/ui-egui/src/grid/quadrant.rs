@@ -366,7 +366,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let char_w = p.layout_no_wrap("0".to_string(), font.clone(), Color32::PLACEHOLDER).size().x.max(1.0);
     let avail_w = rect.right() - text_left;
     let language = crate::i18n::current(p.ctx());
-    let options = super::cell_paint::TextOptions { locale: language.number_locale(), width_px: avail_w / z.max(0.1) * z, char_w };
+    let options = super::cell_paint::TextOptions { region: wb.region, width_px: avail_w / z.max(0.1) * z, char_w };
     let (text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, options);
     let text = localized_cell_text(text, wb, si, sh, c, &v, language);
     if text.is_empty() {

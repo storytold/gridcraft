@@ -6,7 +6,7 @@
 
 use std::fmt::Write as _;
 
-use gridcraft_core::Locale;
+use gridcraft_core::region::{EN_US, Region};
 
 /// Most decimals we ever compute; placeholders beyond this are padded with zeros.
 pub(crate) const MAX_DECIMALS: usize = 400;
@@ -221,7 +221,7 @@ pub(crate) fn fixed(a: f64, decimals: usize) -> (String, String) {
 
 /// General format squeezed into `max_chars` characters. Excel shows fewer decimals, then
 /// scientific notation, then "####" when a column is narrow; `None` means the caller paints "####".
-pub fn format_general_fit(n: f64, max_chars: usize, loc: Locale) -> Option<String> {
+pub fn format_general_fit_with_region(n: f64, max_chars: usize, region: &Region) -> Option<String> {
     // The widest fixed rendering of a double is about 330 characters; a larger request only
     // pads zero decimals the trim below throws away.
     let max_chars = max_chars.min(1024);
@@ -251,7 +251,7 @@ pub fn format_general_fit(n: f64, max_chars: usize, loc: Locale) -> Option<Strin
             s.push_str(sign);
             s.push_str(if i.is_empty() { "0" } else { &i });
             if !ft.is_empty() {
-                s.push(loc.decimal());
+                s.push(region.decimal);
                 s.push_str(ft);
             }
             if s.chars().count() <= max_chars {
@@ -275,7 +275,7 @@ pub fn format_general_fit(n: f64, max_chars: usize, loc: Locale) -> Option<Strin
         s.push_str(sign);
         s.push_str(if i.is_empty() { "0" } else { &i });
         if !ft.is_empty() {
-            s.push(loc.decimal());
+            s.push(region.decimal);
             s.push_str(ft);
         }
         let _ = write!(s, "E{}{:02}", if e < 0 { '-' } else { '+' }, e.unsigned_abs());
@@ -286,12 +286,16 @@ pub fn format_general_fit(n: f64, max_chars: usize, loc: Locale) -> Option<Strin
     None
 }
 
+pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
+    format_general_fit_with_region(n, max_chars, &EN_US)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
-        super::format_general_fit(n, max_chars, Locale::En)
+        super::format_general_fit(n, max_chars)
     }
 
     #[test]
@@ -338,9 +342,10 @@ mod tests {
 
     #[test]
     fn general_fit_uses_the_locale_decimal_separator() {
-        assert_eq!(super::format_general_fit(1234.5, 11, Locale::De).as_deref(), Some("1234,5"));
-        assert_eq!(super::format_general_fit(1.5, usize::MAX, Locale::De).as_deref(), Some("1,5"));
-        assert_eq!(super::format_general_fit(123456.789012, 11, Locale::De).as_deref(), Some("123456,789"));
-        assert_eq!(super::format_general_fit(123456789012.0, 11, Locale::De).as_deref(), Some("1,23457E+11"));
+        let german = gridcraft_core::region::lookup("de-DE");
+        assert_eq!(super::format_general_fit_with_region(1234.5, 11, german).as_deref(), Some("1234,5"));
+        assert_eq!(super::format_general_fit_with_region(1.5, usize::MAX, german).as_deref(), Some("1,5"));
+        assert_eq!(super::format_general_fit_with_region(123456.789012, 11, german).as_deref(), Some("123456,789"));
+        assert_eq!(super::format_general_fit_with_region(123456789012.0, 11, german).as_deref(), Some("1,23457E+11"));
     }
 }

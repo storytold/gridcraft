@@ -9,6 +9,11 @@ fn harness() -> egui_kittest::Harness<'static, SheetApp> {
     h
 }
 
+fn use_german_region(h: &mut egui_kittest::Harness<'static, SheetApp>) {
+    let doc = h.state_mut().session.active_mut().unwrap();
+    std::sync::Arc::make_mut(&mut doc.wb).region = gridcraft_engine::core::region::lookup("de-DE");
+}
+
 /// Language-dependent generated names are real document names, unique and stable on a language switch.
 #[test]
 fn generated_names_are_localized_and_existing_names_stay_unchanged() {
@@ -281,15 +286,16 @@ fn press(h: &mut egui_kittest::Harness<'static, SheetApp>, key: egui::Key, modif
     }
 }
 
-/// Grid rendering and the Format Cells sample switch locale together without rewriting stored formats.
+/// Grid rendering follows the workbook region while interface language changes independently.
 #[test]
 fn german_number_samples_match_the_grid_and_keep_canonical_output() {
     let mut h = harness();
+    use_german_region(&mut h);
     h.state_mut().run("range.setValues", json!({"range":"A1", "values":[[1234.5],[46096],[1.5]]})).unwrap();
     h.state_mut().run("home.numberFormat", json!({"range":"A1", "code":"0.00"})).unwrap();
     h.state_mut().run("home.numberFormat", json!({"range":"A2", "code":"mmm"})).unwrap();
     h.state_mut().run("selection.set", json!({"range":"A1"})).unwrap();
-    for (language, number, month, general) in [("en", "1234.50", "Mar", "1.5"), ("de", "1234,50", "Mrz", "1,5"), ("en", "1234.50", "Mar", "1.5")] {
+    for (language, number, month, general) in [("en", "1234,50", "Mär", "1,5"), ("de", "1234,50", "Mär", "1,5"), ("en", "1234,50", "Mär", "1,5")] {
         h.state_mut().run("app.language.set", json!({"language":language})).unwrap();
         h.run_steps(3);
         let texts: Vec<&str> = h
@@ -380,9 +386,10 @@ fn numeric_filter_search_uses_regional_display_and_canonical_values() {
         ("General", 1.5, "1,5", "1.5"),
         ("0.00", 1.5, "1,50", "1.50"),
         ("0.00\" v1.0\"", 1.5, "1,50 v1.0", "1.50 v1.0"),
-        ("mmm", 46096.0, "Mrz", "Mar"),
+        ("mmm", 46096.0, "Mär", "Mar"),
     ] {
         let mut h = harness();
+        use_german_region(&mut h);
         h.state_mut().run("app.language.set", json!({"language":"de"})).unwrap();
         h.state_mut().run("range.setValues", json!({"range":"A1", "values":[["Header"],[value],[2.5]]})).unwrap();
         h.state_mut().run("home.numberFormat", json!({"range":"A2", "code":code})).unwrap();

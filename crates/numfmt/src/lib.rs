@@ -12,13 +12,14 @@ mod render;
 
 use std::sync::Arc;
 
-use gridcraft_core::{CellError, DateSystem, Locale, Value};
+use gridcraft_core::region::{EN_US, Region};
+use gridcraft_core::{CellError, DateSystem, Value};
 
-pub use decimal::format_general_fit as format_general_fit_with_locale;
+pub use decimal::format_general_fit_with_region;
 
 /// Fits an invariant General number into the available character width.
 pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
-    format_general_fit_with_locale(n, max_chars, Locale::En)
+    decimal::format_general_fit(n, max_chars)
 }
 
 use parse::{DatePart, SecKind, Section, Tok};
@@ -300,9 +301,9 @@ impl NumberFormat {
     }
 
     /// Formats a number. The flag is true when the value cannot be shown (date out of range).
-    fn format_number(&self, n: f64, sys: DateSystem, loc: Locale) -> (Formatted, bool) {
+    fn format_number(&self, n: f64, sys: DateSystem, region: &Region) -> (Formatted, bool) {
         let general = |n: f64| Formatted {
-            text: format_general_fit_with_locale(n, GENERAL_WIDTH, loc).unwrap_or_else(|| OVERFLOW.into()),
+            text: format_general_fit_with_region(n, GENERAL_WIDTH, region).unwrap_or_else(|| OVERFLOW.into()),
             color: None,
             fill: None,
             numeric: true,
@@ -313,19 +314,19 @@ impl NumberFormat {
         let Some((sec, drop_sign)) = self.select(n) else { return (general(n), false) };
         let minus = n < 0.0 && !drop_sign;
         let out: Option<Out> = match sec.kind {
-            SecKind::Text => Some(render::render_text(sec, &format_general_fit_with_locale(n, GENERAL_WIDTH, loc).unwrap_or_default())),
+            SecKind::Text => Some(render::render_text(sec, &format_general_fit_with_region(n, GENERAL_WIDTH, region).unwrap_or_default())),
             SecKind::General => {
                 let width = if minus { GENERAL_WIDTH - 1 } else { GENERAL_WIDTH };
-                Some(render::render_general(sec, n.abs(), width, loc))
+                Some(render::render_general(sec, n.abs(), width, region))
             }
             SecKind::Date => {
                 if minus {
                     None
                 } else {
-                    render::render_date(sec, n.abs(), sys, loc)
+                    render::render_date(sec, n.abs(), sys, region)
                 }
             }
-            SecKind::Number => Some(render::render_number(sec, n.abs(), loc)),
+            SecKind::Number => Some(render::render_number(sec, n.abs(), region)),
         };
         let Some(mut out) = out else {
             return (Formatted { text: OVERFLOW.into(), color: sec.color, fill: None, numeric: true }, true);
@@ -412,21 +413,21 @@ impl NumberFormat {
 
 /// Formats a cell value for display.
 pub fn format_value(v: &Value, fmt: &NumberFormat, sys: DateSystem) -> Formatted {
-    format_value_with_locale(v, fmt, sys, Locale::En)
+    format_value_with_region(v, fmt, sys, &EN_US)
 }
 
-/// Formats a cell value using the supplied display locale. Format codes themselves remain invariant.
-pub fn format_value_with_locale(v: &Value, fmt: &NumberFormat, sys: DateSystem, loc: Locale) -> Formatted {
+/// Formats a cell value using the workbook's regional conventions. Format codes remain invariant.
+pub fn format_value_with_region(v: &Value, fmt: &NumberFormat, sys: DateSystem, region: &Region) -> Formatted {
     match v {
         Value::Empty => Formatted::default(),
         Value::Number(n) if !n.is_finite() => Formatted { text: CellError::Num.as_str().into(), ..Formatted::default() },
-        Value::Number(n) => fmt.format_number(*n, sys, loc).0,
+        Value::Number(n) => fmt.format_number(*n, sys, region).0,
         Value::Text(t) => fmt.format_text(t),
         Value::Bool(b) => Formatted { text: if *b { "TRUE" } else { "FALSE" }.into(), ..Formatted::default() },
         Value::Error(e) => Formatted { text: e.as_str().into(), ..Formatted::default() },
         Value::Array(a) => match a.data.first() {
             Some(Value::Array(_)) | None => Formatted::default(),
-            Some(first) => format_value_with_locale(first, fmt, sys, loc),
+            Some(first) => format_value_with_region(first, fmt, sys, region),
         },
     }
 }
@@ -537,7 +538,7 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys, Locale::En);
+    let (f, overflow) = fmt.format_number(n, sys, &EN_US);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 
