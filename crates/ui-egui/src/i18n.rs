@@ -185,8 +185,13 @@ impl Language {
         }
     }
 
-    pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
-        if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
+    pub fn formula_locale(self, decimal_separator: crate::DecimalSeparator) -> gridcraft_engine::formula::FormulaLocale {
+        match (self, decimal_separator) {
+            (Self::Es, crate::DecimalSeparator::Comma) => gridcraft_engine::formula::FormulaLocale::Es,
+            (Self::Es, crate::DecimalSeparator::Dot) => gridcraft_engine::formula::FormulaLocale::En,
+            (_, crate::DecimalSeparator::Comma) => gridcraft_engine::formula::FormulaLocale::Es,
+            _ => gridcraft_engine::formula::FormulaLocale::En,
+        }
     }
 
     /// Translates an interface label; untranslated labels fall back to English.
@@ -298,6 +303,21 @@ pub fn current(ctx: &egui::Context) -> Language {
 /// Sets the language for the current frame; call once per frame before anything is drawn.
 pub fn set_current(ctx: &egui::Context, language: Language) {
     ctx.data_mut(|d| d.insert_temp(lang_key(), language));
+}
+
+/// egui context-data key holding the decimal separator of the frame being drawn.
+fn decimal_separator_key() -> egui::Id {
+    egui::Id::unique("gridcraft.decimal_separator")
+}
+
+/// The decimal separator the current frame is using. Defaults to `DecimalSeparator::Dot`.
+pub fn current_decimal_separator(ctx: &egui::Context) -> crate::DecimalSeparator {
+    ctx.data(|d| d.get_temp(decimal_separator_key())).unwrap_or_default()
+}
+
+/// Sets the decimal separator for the current frame; call once per frame before anything is drawn.
+pub fn set_current_decimal_separator(ctx: &egui::Context, sep: crate::DecimalSeparator) {
+    ctx.data_mut(|d| d.insert_temp(decimal_separator_key(), sep));
 }
 
 /// `name` lowercased with the Latin accents that occur in language names folded away, so a
