@@ -819,9 +819,25 @@ fn a_fifo_without_a_writer_does_not_block_the_open() {
     if O_NONBLOCK.is_none() {
         return;
     }
-    let dir = std::env::temp_dir().join(format!("gridcraft-fifo-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    /// Removes the folder when the test ends, however it ends.
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    // Created exclusively (a fresh name per try), so no other process shares it.
+    let dir = (0..100)
+        .map(|n| {
+            std::env::temp_dir().join(format!(
+                "gridcraft-fifo-{}-{n}-{}",
+                std::process::id(),
+                std::time::UNIX_EPOCH.elapsed().map_or(0, |t| t.as_nanos())
+            ))
+        })
+        .find(|d| std::fs::create_dir(d).is_ok())
+        .expect("a fresh temporary folder");
+    let _cleanup = Cleanup(dir.clone());
     let fifo = dir.join("pipe");
     if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()) {
         return; // no mkfifo here
@@ -834,5 +850,4 @@ fn a_fifo_without_a_writer_does_not_block_the_open() {
     let opened = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the open blocked");
     assert!(!opened.unwrap());
     assert!(read_file(&fifo.to_string_lossy()).is_err());
-    let _ = std::fs::remove_dir_all(&dir);
 }

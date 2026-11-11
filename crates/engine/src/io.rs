@@ -967,7 +967,13 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
     if !std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
         return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
     }
-    let f = open_nonblocking(std::path::Path::new(path)).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let f = match open_nonblocking(std::path::Path::new(path)) {
+        Ok(f) => f,
+        // A conflicting lease (Samba, NFS) makes a non-blocking open of a regular file wait to be retried; the
+        // path was just checked to be a regular file, so open it the plain way, as before.
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?,
+        Err(e) => return Err(EngineError::Other(format!("{path}: {e}"))),
+    };
     // A symlink to an endless device reports length 0 but streams forever, so metadata
     // alone never bounds the read: require a real file and cap the bytes actually taken.
     if !f.metadata().map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
