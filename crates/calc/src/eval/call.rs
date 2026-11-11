@@ -52,13 +52,16 @@ impl<'h> Evaluator<'h> {
             "ISFORMULA" | "FORMULATEXT" => {
                 let Some(Ev::R(a)) = args.first().map(|a| self.eval(a)) else { return err(CellError::NA) };
                 let Some(a) = a.first() else { return err(CellError::NA) };
-                let f = self.host.workbook().sheet(a.sheet).and_then(|s| s.cell(a.range.start)).and_then(|c| c.formula.clone());
+                let wb = self.host.workbook();
+                let f = wb.sheet(a.sheet).and_then(|s| s.cell(a.range.start)).and_then(|c| c.formula.clone());
+                // A formula formatted Hidden on a protected sheet stays hidden from FORMULATEXT too.
+                let hidden = wb.sheet(a.sheet).is_some_and(|s| s.is_protected() && wb.styles.get(s.style_id(a.range.start)).protection.hidden);
                 if name == "ISFORMULA" {
                     Ev::V(Value::Bool(f.is_some()))
                 } else {
                     match f {
-                        Some(f) => Ev::V(Value::text(format!("={}", f.text))),
-                        None => err(CellError::NA),
+                        Some(f) if !hidden => Ev::V(Value::text(format!("={}", f.text))),
+                        _ => err(CellError::NA),
                     }
                 }
             }
