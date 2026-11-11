@@ -1607,6 +1607,28 @@ fn recalc_missing_is_repeatable_and_restores_incremental_editing() {
     assert_eq!((t.num("B1"), t.num("C1")), (6.0, 7.0));
 }
 
+/// Cached unknown calls keep explicit argument edges after the missing-only graph is rebuilt.
+#[test]
+fn recalc_missing_keeps_unresolved_argument_dependencies_after_rebuild() {
+    let mut t = T::new();
+    let sheet = t.wb.sheet_mut(0).unwrap();
+    sheet.cells.set(c("A1"), Cell::value(Value::Number(2.0)));
+    let mut cached = Cell::formula(Formula::new("=UNSUPPORTED_UDF(A1)"));
+    cached.value = Value::Number(17.0);
+    sheet.cells.set(c("B1"), cached);
+    sheet.cells.set(c("C1"), Cell::formula(Formula::new("=B1+1")));
+    t.calc.recalc_missing(&mut t.wb);
+    assert_eq!((t.num("B1"), t.num("C1")), (17.0, 18.0));
+    t.calc.recalc_missing(&mut t.wb);
+    assert_eq!((t.num("B1"), t.num("C1")), (17.0, 18.0));
+    assert_eq!(t.calc.last_recalc_cells, 0);
+    t.set("A2", "7");
+    assert_eq!((t.num("B1"), t.num("C1")), (17.0, 18.0), "unrelated edits preserve the saved result");
+    t.set("A1", "3");
+    assert_eq!(t.get("B1"), Value::Error(CellError::Name));
+    assert_eq!(t.get("C1"), Value::Error(CellError::Name));
+}
+
 /// Dynamic dependency cycles remain detected after rebuilding the cached workbook graph.
 #[test]
 fn recalc_missing_retains_detected_dynamic_cycles_after_rebuilding() {

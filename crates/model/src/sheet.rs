@@ -714,6 +714,20 @@ mod tests {
         assert!(sheet.spill_ranges.is_empty());
     }
 
+    /// The diagnostic must locate the bad entry, not just the first saved range.
+    #[test]
+    fn json_cached_spill_error_identifies_the_invalid_anchor() {
+        let mut sheet = Sheet::new("S");
+        let valid = CellRef::new(0, 0);
+        let invalid = CellRef::parse("F9").unwrap();
+        sheet.spill_ranges.insert(valid, RangeRef::cell(valid));
+        sheet.spill_ranges.insert(invalid, RangeRef { start: invalid, end: CellRef::new(gridcraft_core::MAX_ROWS, invalid.col) });
+        let json = serde_json::to_vec(&sheet).unwrap();
+        let error = serde_json::from_slice::<Sheet>(&json).unwrap_err().to_string();
+        assert!(error.contains("invalid cached spill range"), "{error}");
+        assert!(error.contains("`F9`"), "the invalid anchor must be named: {error}");
+    }
+
     #[test]
     fn json_rejects_invalid_cached_spill_bounds() {
         let anchor = CellRef::new(1, 1);
