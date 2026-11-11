@@ -1,0 +1,507 @@
+# Text functions — declarative catalog data, one row per function.
+# Loaded by the shared `catalog` module; see its docs for the schema.
+
+[[function]]
+name = "COMBINEVALUES"
+min = 3
+max = 0
+max_open = true
+returns = "string"
+flags = "standard-excel"
+description = "Concatenates two or more scalar values with a delimiter and returns one text value. The function is designed for calculated columns that stand in for multi-column relationships in DirectQuery models: the engine can translate the call into an optimized join predicate, assuming without validating that different input combinations produce different output strings. Choose a delimiter that cannot occur ambiguously in the values, and remember that the delimiter itself is not escaped."
+examples = ["COMBINEVALUES ( \" | \", Customer[Customer Name], Customer[Customer Code] )", "COMBINEVALUES ( \"-\", \"GridCraft\", \"2024\", \"Q1\" )"]
+[[function.params]]
+name = "Delimiter"
+kind = "Text"
+[[function.params]]
+name = "Expression1"
+kind = "Any"
+[[function.params]]
+name = "Expression2"
+kind = "Any"
+[[function.signature]]
+kinds = ["Text", "Any", "Any"]
+variadic = true
+
+[[function]]
+name = "CONCATENATE"
+min = 2
+max = 2
+returns = "string"
+flags = "standard-excel"
+description = "Joins two text values into one text value without inserting a separator. The `&` operator performs the same concatenation and accepts any number of operands, so CONCATENATE is only convenient for two. Non-text arguments are converted to text using the model's locale rather than the caller's culture."
+examples = ["CONCATENATE ( \"GridCraft\", \" 2024\" )", "CONCATENATE ( Customer[Customer Name], Customer[Customer Code] )"]
+[[function.params]]
+name = "Text1"
+kind = "Text"
+[[function.params]]
+name = "Text2"
+kind = "Text"
+[[function.signature]]
+kinds = ["Text", "Text"]
+variadic = false
+
+[[function]]
+name = "CONCATENATEX"
+min = 2
+max = 0
+max_open = true
+returns = "string"
+flags = "iterator-excel"
+description = "Iterates a table, evaluates the expression for every row and concatenates the results into a single text value using an optional delimiter. An order-by expression and an optional order (0/FALSE/DESC or 1/TRUE/ASC, ascending by default) sort the values; without them the row order is unspecified and does not reflect the source table's physical order. Ordering follows the model collation, while the delimiter is inserted verbatim."
+examples = ["CONCATENATEX ( Sales, Sales[Product], \", \" )", "CONCATENATEX ( Sales, Sales[Product], \", \", Sales[Amount] )", "CONCATENATEX ( Sales, Sales[Product], \", \", Sales[Amount], TRUE )"]
+[[function.params]]
+name = "Table"
+kind = "Table"
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.signature]]
+kinds = ["Table", "Expression"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Expression", "Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Expression", "Text", "Expression"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Expression", "Text", "Expression", "Logical"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Expression", "Text", "Expression"]
+variadic = true
+
+[[function]]
+name = "EXACT"
+min = 2
+max = 2
+returns = "boolean"
+flags = "standard-excel"
+description = "Compares two text values and returns TRUE when they are exactly the same, including case. The ordinary `=` comparison is case-insensitive, so EXACT is the way to force a case-sensitive and accent-sensitive test. BLANK and an empty string compare equal here."
+examples = ["EXACT ( \"GridCraft\", \"gridcraft\" )", "EXACT ( Sales[Code], \"A-100\" )"]
+[[function.params]]
+name = "Text1"
+kind = "Text"
+[[function.params]]
+name = "Text2"
+kind = "Text"
+[[function.signature]]
+kinds = ["Text", "Text"]
+variadic = false
+
+[[function]]
+name = "FIND"
+min = 2
+max = 4
+returns = "integer"
+flags = "standard-excel"
+description = "Returns the 1-based position of FindText inside WithinText, beginning the search at StartPosition (default 1). The comparison is case-sensitive and accent-sensitive, and wildcards are not interpreted; use SEARCH for case-insensitive or wildcard matching. If the text is absent the function returns NotFoundValue when it is supplied, otherwise it raises an error."
+examples = ["FIND ( \"Red\", \"GridCraft Cell S100 Red\" )", "FIND ( \"Red\", \"GridCraft Cell S100 Red\", 1, BLANK () )"]
+[[function.params]]
+name = "FindText"
+kind = "Text"
+[[function.params]]
+name = "WithinText"
+kind = "Text"
+[[function.params]]
+name = "StartPosition"
+kind = "Number"
+optional = true
+[[function.params]]
+name = "NotFoundValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Text", "Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Text", "Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Text", "Number", "Any"]
+variadic = false
+
+[[function]]
+name = "FIXED"
+min = 1
+max = 3
+returns = "string"
+flags = "dq"
+description = "Rounds a number to the requested number of decimals and returns it as text, grouping the integer part with commas unless NoCommas is TRUE. Decimals defaults to 2, and a negative value rounds to the left of the decimal separator. The decimal and grouping separators come from the model locale, not from the caller's culture."
+examples = ["FIXED ( 384518.16, 2, FALSE )", "FIXED ( 4392768.29, 0, TRUE )", "FIXED ( 6741548.73, -2 )"]
+[[function.params]]
+name = "Number"
+kind = "Number"
+[[function.params]]
+name = "Decimals"
+kind = "Number"
+optional = true
+[[function.params]]
+name = "NoCommas"
+kind = "Boolean"
+optional = true
+[[function.signature]]
+kinds = ["Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Number", "Boolean"]
+variadic = false
+
+[[function]]
+name = "FORMAT"
+min = 2
+max = 3
+returns = "string"
+flags = "dq"
+description = "Formats a value as text using a Visual Basic (OLE Automation) format string or one of the predefined numeric and date/time format names; unknown strings are treated as a custom format or literal. The result is always text, and BLANK produces an empty string. Month and weekday names and separators follow the model locale, which the optional LocaleName overrides where the host supports that argument."
+examples = ["FORMAT ( 0.742, \"Percent\" )", "FORMAT ( DATE ( 2019, 3, 28 ), \"yyyy-mm-dd\" )", "FORMAT ( 1234.567, \"$#,0.00\", \"en-US\" )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.params]]
+name = "Format"
+kind = "Text"
+[[function.params]]
+name = "LocaleName"
+kind = "Text"
+optional = true
+[[function.signature]]
+kinds = ["Any", "Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Any", "Text", "Text"]
+variadic = false
+
+[[function]]
+name = "LEFT"
+min = 1
+max = 2
+returns = "string"
+flags = "standard-excel"
+description = "Returns the first NumberOfCharacters characters of a text value; the count defaults to 1. It is intended for fixed-position extraction. Characters are counted as Unicode code points, and no case or locale conversion is applied to the result."
+examples = ["LEFT ( \"DAX is so cool!\", 3 )", "LEFT ( Customer[Customer Name] )"]
+[[function.params]]
+name = "Text"
+kind = "Text"
+[[function.params]]
+name = "NumberOfCharacters"
+kind = "Number"
+optional = true
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Number"]
+variadic = false
+
+[[function]]
+name = "LEN"
+min = 1
+max = 1
+returns = "integer"
+flags = "standard-excel"
+description = "Character count of a text value, spaces included. Characters are Unicode code points, so a character outside the Basic Multilingual Plane counts as one."
+examples = ["LEN ( \"DAX is so cool!\" )", "LEN ( Customer[Customer Name] )"]
+[[function.params]]
+name = "Text"
+kind = "Text"
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+
+[[function]]
+name = "LOWER"
+min = 1
+max = 1
+returns = "string"
+flags = "standard-excel"
+description = "Converts every letter in a text value to lowercase and returns the result. Case mapping follows Unicode rules and is locale-sensitive for some scripts, such as the Turkish dotted and dotless I, while digits and symbols are left unchanged."
+examples = ["LOWER ( \"DAX is SO cool!\" )", "LOWER ( Customer[CountryRegion] )"]
+[[function.params]]
+name = "Text"
+kind = "Text"
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+
+[[function]]
+name = "MID"
+min = 3
+max = 3
+returns = "string"
+flags = "standard-excel"
+description = "Returns NumberOfCharacters characters from a text value starting at the 1-based StartPosition. If the requested length extends past the end of the text only the remaining characters are returned. Positions and lengths are counted in Unicode code points, and no case conversion is applied."
+examples = ["MID ( \"DAX is so cool!\", 11, 4 )", "MID ( \"123-45-6789\", 8, 3 )"]
+[[function.params]]
+name = "Text"
+kind = "Text"
+[[function.params]]
+name = "StartPosition"
+kind = "Number"
+[[function.params]]
+name = "NumberOfCharacters"
+kind = "Number"
+[[function.signature]]
+kinds = ["Text", "Number", "Number"]
+variadic = false
+
+[[function]]
+name = "REPLACE"
+min = 4
+max = 4
+returns = "string"
+flags = "dq"
+description = "Replaces a fixed run of characters: NumberOfCharacters characters starting at the 1-based StartPosition are replaced by NewText, whose length need not match the removed text. Because the position is explicit there is no searching, so case and locale do not affect the match; positions are counted in Unicode code points."
+examples = ["REPLACE ( \"DAX is so cool!\", 11, 4, \"fantastic\" )", "REPLACE ( \"123-45-6789\", 1, 3, \"XXX\" )"]
+[[function.params]]
+name = "OldText"
+kind = "Text"
+[[function.params]]
+name = "StartPosition"
+kind = "Number"
+[[function.params]]
+name = "NumberOfCharacters"
+kind = "Number"
+[[function.params]]
+name = "NewText"
+kind = "Text"
+[[function.signature]]
+kinds = ["Text", "Number", "Number", "Text"]
+variadic = false
+
+[[function]]
+name = "REPT"
+min = 2
+max = 2
+returns = "string"
+flags = "standard-excel"
+description = "Repeats a text value NumberOfTimes times and returns the concatenation. A count of zero returns an empty string, a fractional count is truncated to an integer, and the result may not exceed 32,767 characters or the function raises an error. The text is repeated verbatim, without case or locale conversion."
+examples = ["REPT ( \"?\", 3 )", "REPT ( \"0\", 5 )"]
+[[function.params]]
+name = "Text"
+kind = "Text"
+[[function.params]]
+name = "NumberOfTimes"
+kind = "Number"
+[[function.signature]]
+kinds = ["Text", "Number"]
+variadic = false
+
+[[function]]
+name = "RIGHT"
+min = 1
+max = 2
+returns = "string"
+flags = "standard-excel"
+description = "Returns the last NumberOfCharacters characters of a text value; the count defaults to 1. It is intended for fixed-position extraction from the end of the text. Counting is by Unicode code point, and no case conversion is applied."
+examples = ["RIGHT ( \"DAX is so cool!\", 5 )", "RIGHT ( Customer[Customer Code], 4 )"]
+[[function.params]]
+name = "Text"
+kind = "Text"
+[[function.params]]
+name = "NumberOfCharacters"
+kind = "Number"
+optional = true
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Number"]
+variadic = false
+
+[[function]]
+name = "SEARCH"
+min = 2
+max = 4
+returns = "integer"
+flags = "standard-excel"
+description = "Returns the 1-based position of FindText inside WithinText, starting at StartPosition (default 1). Unlike FIND the comparison ignores case but remains accent-sensitive, and the search text treats `?` and `*` as wildcards with `~` as the escape character. If the text is absent the function returns NotFoundValue when supplied, otherwise it raises an error."
+examples = ["SEARCH ( \"red\", \"GridCraft Cell S100 Red\" )", "SEARCH ( \"cell*s100\", \"GridCraft Cell S100 Blue\", 1, BLANK () )"]
+[[function.params]]
+name = "FindText"
+kind = "Text"
+[[function.params]]
+name = "WithinText"
+kind = "Text"
+[[function.params]]
+name = "StartPosition"
+kind = "Number"
+optional = true
+[[function.params]]
+name = "NotFoundValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = ["Text", "Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Text", "Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Text", "Number", "Any"]
+variadic = false
+
+[[function]]
+name = "SUBSTITUTE"
+min = 3
+max = 4
+returns = "string"
+flags = "standard-excel"
+description = "Replaces occurrences of OldText with NewText in a text value. With no InstanceNumber every occurrence is replaced; otherwise only that occurrence is. Matching is case-sensitive and accent-sensitive, so a difference in case leaves the text untouched, and the search text is a literal substring rather than a pattern."
+examples = ["SUBSTITUTE ( \"GridCraft Cell S100 Red\", \"Cell\", \"Tablet\" )", "SUBSTITUTE ( \"GridCraft Cell S100 Red\", \"S\", \"X\", 1 )"]
+[[function.params]]
+name = "Text"
+kind = "Text"
+[[function.params]]
+name = "OldText"
+kind = "Text"
+[[function.params]]
+name = "NewText"
+kind = "Text"
+[[function.params]]
+name = "InstanceNumber"
+kind = "Number"
+optional = true
+[[function.signature]]
+kinds = ["Text", "Text", "Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Text", "Text", "Number"]
+variadic = false
+
+[[function]]
+name = "TOCSV"
+min = 1
+max = 4
+returns = "string"
+flags = "engine"
+description = "Serializes a table's records as comma-separated text. MaxRows limits how many rows are converted (default 10, negative for all), Delimiter is a non-empty constant field separator (default a comma), and IncludeHeaders controls the header row (default TRUE). Row order is unspecified and line endings are fixed; quotation marks are doubled, and a value containing a quote or the delimiter is enclosed in quotes. Not available in Excel, and not supported in DirectQuery calculated columns."
+examples = ["TOCSV ( Customer )", "TOCSV ( Customer, 3, \",\", FALSE )"]
+[[function.params]]
+name = "Table"
+kind = "Table"
+[[function.params]]
+name = "MaxRows"
+kind = "Number"
+optional = true
+[[function.params]]
+name = "Delimiter"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "IncludeHeaders"
+kind = "Boolean"
+optional = true
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Number", "Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Number", "Text", "Boolean"]
+variadic = false
+
+[[function]]
+name = "TOJSON"
+min = 1
+max = 2
+returns = "string"
+flags = "engine"
+description = "Serializes a table's records as a JSON document with header, rowCount and data members. MaxRows limits how many rows are converted (default 10, negative for all), while values keep their native types inside the JSON text. Row order is unspecified. Not available in Excel, and not supported in DirectQuery calculated columns."
+examples = ["TOJSON ( Customer )", "TOJSON ( Customer, 3 )"]
+[[function.params]]
+name = "Table"
+kind = "Table"
+[[function.params]]
+name = "MaxRows"
+kind = "Number"
+optional = true
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Number"]
+variadic = false
+
+[[function]]
+name = "TRIM"
+min = 1
+max = 1
+returns = "string"
+flags = "standard-excel"
+description = "Removes leading and trailing spaces and collapses runs of spaces between words to a single space. Only the 7-bit ASCII space (character 32) is removed: the non-breaking space (character 160), tabs and other whitespace survive, which matters for text copied from web pages."
+examples = ["TRIM ( \"  DAX is          awesome !!!    \" )", "TRIM ( Customer[Customer Name] )"]
+[[function.params]]
+name = "Text"
+kind = "Text"
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+
+[[function]]
+name = "UNICHAR"
+min = 1
+max = 1
+returns = "string"
+flags = "standard-excel"
+description = "Returns the Unicode character for a numeric code point. A supplementary character is one code point value. Code point 0 and values outside the allowable Unicode range raise an error."
+examples = ["UNICHAR ( 9473 )", "UNICHAR ( 65 )"]
+[[function.params]]
+name = "Number"
+kind = "Number"
+[[function.signature]]
+kinds = ["Number"]
+variadic = false
+
+[[function]]
+name = "UNICODE"
+min = 1
+max = 1
+returns = "integer"
+flags = "standard-excel"
+description = "Returns the numeric Unicode value of the first character of a text value; an empty string raises an error. The engine counts Unicode code points, so a character outside the Basic Multilingual Plane is returned as one value. Use UNICHAR for the inverse conversion."
+examples = ["UNICODE ( \"A\" )", "UNICODE ( Customer[CountryRegion] )"]
+[[function.params]]
+name = "Text"
+kind = "Text"
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+
+[[function]]
+name = "UPPER"
+min = 1
+max = 1
+returns = "string"
+flags = "standard-excel"
+description = "Converts every letter in a text value to uppercase and returns the result. Case mapping follows Unicode rules and is locale-sensitive for some scripts, such as the Turkish dotted and dotless I, while digits and symbols are left unchanged."
+examples = ["UPPER ( \"dax is so cool!\" )", "UPPER ( Customer[CountryRegion] )"]
+[[function.params]]
+name = "Text"
+kind = "Text"
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+
+[[function]]
+name = "VALUE"
+min = 1
+max = 1
+returns = "decimal"
+flags = "standard-excel"
+description = "Converts text that represents a number, date or time into its numeric value. Parsing accepts the constant, number and date/time formats the engine recognizes and follows the model locale for separators and date order; text that cannot be parsed raises an error. Because the engine also coerces text implicitly, VALUE mainly makes the conversion explicit, and it should be protected with IF when the column may contain invalid text."
+examples = ["VALUE ( \"123.45678\" )", "VALUE ( \"2020-10-23\" )", "VALUE ( Sales[TextAmount] )"]
+[[function.params]]
+name = "Text"
+kind = "Text"
+[[function.signature]]
+kinds = ["Text"]
+variadic = false

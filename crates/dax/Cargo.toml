@@ -1,0 +1,26 @@
+[package]
+name = "gridcraft-dax"
+# A first release of this crate, not the workspace release line: nothing depends on a published
+# version of it yet, and 0.1.0 says what it is — new.
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "GridCraft DAX language: lexer, Pratt parser, syntax tree and canonical printer"
+
+[lints]
+workspace = true
+
+[dependencies]
+quick-xml = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+# Calendar arithmetic (date serials, month lengths, leap years) goes through chrono on every
+# target, as AGENTS.md requires. The web build has no clock and uses the fixed fallback in
+# `eval/support.rs`, but the date types it needs build for wasm too (`gridcraft-core` does the
+# same with the same workspace dependency).
+chrono = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

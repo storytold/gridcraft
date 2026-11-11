@@ -161,8 +161,11 @@ impl Out {
         self.part(&format!("xl/media/{file}"), None, data.to_vec());
         file
     }
-    pub fn default_type(&mut self, ext: &str, ct: &str) {
-        self.defaults.entry(ext.to_string()).or_insert_with(|| ct.to_string());
+    /// Declares `ct` as the content type a `.ext` part gets by default. Returns whether the
+    /// default for `ext` is that type: the first registration wins, so a part whose own type
+    /// differs must still carry an `Override`.
+    pub fn default_type(&mut self, ext: &str, ct: &str) -> bool {
+        self.defaults.entry(ext.to_string()).or_insert_with(|| ct.to_string()).eq_ignore_ascii_case(ct)
     }
 }
 
@@ -185,6 +188,67 @@ pub fn abs_range(r: &RangeRef) -> String {
         return format!("${}${}", c(r.start.col), r.start.row + 1);
     }
     format!("${}${}:${}${}", c(r.start.col), r.start.row + 1, c(r.end.col), r.end.row + 1)
+}
+
+/// The `<pivotCache>` children of a `<pivotCaches>` element, and the namespace declarations its
+/// wrapper carries so prefixed children stay valid once the children move into our wrapper.
+///
+/// The kept element may be prefixed (`<x:pivotCaches>`), so it is matched by local name. Other
+/// attributes are dropped: the workbook root declares the prefixes it writes itself.
+fn pivot_caches_parts(xml: &str) -> (String, &str) {
+    let Some((start, prefix)) = find_pivot_caches(xml) else { return (String::new(), "") };
+    let Some(open_end) = xml[start..].find('>').map(|offset| start + offset) else { return (String::new(), "") };
+    let tag = &xml[start..=open_end];
+    let namespaces = namespace_attributes(tag);
+    let body = open_end + 1;
+    if tag.ends_with("/>") {
+        return (namespaces, "");
+    }
+    let close = format!("</{prefix}pivotCaches>");
+    let Some(end) = xml.rfind(&close).filter(|end| *end >= body) else { return (namespaces, "") };
+    (namespaces, xml.get(body..end).unwrap_or(""))
+}
+
+/// The byte offset of a `<pivotCaches` start tag and its prefix (`""` when unprefixed).
+fn find_pivot_caches(xml: &str) -> Option<(usize, String)> {
+    let mut from = 0;
+    while let Some(offset) = xml.get(from..)?.find("pivotCaches") {
+        let at = from + offset;
+        let open = xml.get(..at)?.rfind('<')?;
+        let name = xml.get(open + 1..at)?;
+        let prefix = name.strip_suffix(':').unwrap_or("");
+        let bare = prefix.is_empty() && name.is_empty();
+        let qualified = name.ends_with(':')
+            && prefix.chars().next().is_some_and(|first| first.is_ascii_alphabetic())
+            && prefix.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+        if bare || qualified {
+            return Some((open, if bare { String::new() } else { format!("{prefix}:") }));
+        }
+        from = at + "pivotCaches".len();
+    }
+    None
+}
+
+/// The `xmlns`/`xmlns:*` declarations of a start tag, in their original spelling.
+fn namespace_attributes(tag: &str) -> String {
+    let Some(body) = tag.strip_prefix('<').and_then(|rest| rest.strip_suffix('>')) else { return String::new() };
+    let body = body.trim_end_matches('/');
+    let Some(space) = body.find(char::is_whitespace) else { return String::new() };
+    let mut kept = String::new();
+    let mut rest = body[space..].trim_start();
+    while !rest.is_empty() {
+        let Some(eq) = rest.find('=') else { break };
+        let name = rest[..eq].trim();
+        let after = &rest[eq + 1..];
+        let Some(quote) = after.chars().next().filter(|q| matches!(q, '"' | '\'')) else { break };
+        let Some(length) = after[1..].find(quote) else { break };
+        let value = &after[1..1 + length];
+        if name.starts_with("xmlns") {
+            kept.push_str(&format!(" {name}=\"{value}\""));
+        }
+        rest = after[1 + length + 1..].trim_start();
+    }
+    kept
 }
 
 /// Refuses sheet names XLSX cannot hold. The reader repairs such names (cuts, strips, renames
@@ -349,7 +413,7 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
         w.push_str(" fullCalcOnLoad=\"1\"");
     }
     w.push_str("/>");
-    w.push_str(&pivots.workbook_xml(&mut wb_rels));
+    w.push_str(&pivot_caches_element(&pivots, &kept, wb, &mut wb_rels));
     let exts = crate::passthrough::workbook_elements(wb, "ext");
     if !exts.is_empty() {
         let _ = write!(w, "<extLst>{exts}</extLst>");
@@ -481,6 +545,42 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
     zip.finish()
 }
 
+/// The workbook's `<pivotCaches>` element, or an empty string when the workbook has no caches.
+///
+/// It holds the caches of the range PivotTables GridCraft models and those of the data-model
+/// PivotTables kept as pass-through content; one element holds both, so the children of each are
+/// written inside a single wrapper.
+fn pivot_caches_element(pivots: &crate::pivot::PivotWriter, kept: &crate::passthrough::WorkbookKept, wb: &Workbook, wb_rels: &mut Rels) -> String {
+    let mut caches = String::new();
+    let mut namespaces = String::new();
+    for xml in [pivots.workbook_xml(wb_rels), kept.element(wb, "pivotCaches")] {
+        let (declarations, children) = pivot_caches_parts(&xml);
+        namespaces.push_str(&declarations);
+        caches.push_str(children);
+    }
+    if caches.is_empty() { String::new() } else { format!("<pivotCaches{namespaces}>{caches}</pivotCaches>") }
+}
+
+/// One past the highest `cacheId` the workbook's kept `<pivotCaches>` element uses.
+fn next_kept_cache_id(kept: &crate::passthrough::WorkbookKept, wb: &Workbook) -> u32 {
+    scan_next_cache_id(&kept.element(wb, "pivotCaches"))
+}
+
+/// Scans raw preserved XML for `cacheId` values. The input file's quoting is
+/// preserved verbatim, so both `cacheId="5"` and `cacheId='5'` occur.
+fn scan_next_cache_id(xml: &str) -> u32 {
+    let mut next = 1;
+    for (index, _) in xml.match_indices("cacheId=") {
+        let rest = xml.get(index + "cacheId=".len()..).unwrap_or_default();
+        let Some(rest) = rest.strip_prefix('"').or_else(|| rest.strip_prefix('\'')) else { continue };
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(id) = digits.parse::<u32>() {
+            next = next.max(id.saturating_add(1));
+        }
+    }
+    next
+}
+
 fn write_sheets(
     wb: &Workbook,
     out: &mut Out,
@@ -489,7 +589,9 @@ fn write_sheets(
 ) -> (String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter) {
     // Kept content first: the chart sheets among the worksheets need their relationship ids.
     let kept = crate::passthrough::write_workbook(wb, wb_rels, out);
-    let mut pivots = crate::pivot::PivotWriter::default();
+    // Kept data-model caches and the range PivotTables written below share the workbook's
+    // `<pivotCaches>` element, so the generated ids start above the kept ones.
+    let mut pivots = crate::pivot::PivotWriter::new(next_kept_cache_id(&kept, wb));
     let mut sheets_xml = String::new();
     let any_visible = wb.sheets.iter().any(|s| s.visibility == Visibility::Visible);
     let mut ids = crate::passthrough::SheetIds::new(wb, &kept);
@@ -584,7 +686,46 @@ fn write_defined_names(wb: &Workbook, kept: &crate::passthrough::WorkbookKept, c
 
 /// Cell metadata declaring dynamic-array formulas (MS-XLSX `XLDAPR`).
 const METADATA: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<metadata xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:xda=\"http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray\"><metadataTypes count=\"1\"><metadataType name=\"XLDAPR\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\" cellMeta=\"1\"/></metadataTypes><futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext uri=\"{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/></ext></extLst></bk></futureMetadata><cellMetadata count=\"1\"><bk><rc t=\"1\" v=\"0\"/></bk></cellMetadata></metadata>";
+
 /// Writes a workbook with a caller-supplied file name and the default function facts.
 pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
     write_xlsx_named_with(wb, kind, book_name, FunctionInfo::default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pivot_caches_parts, scan_next_cache_id};
+
+    #[test]
+    fn a_kept_pivot_caches_element_is_found_under_any_prefix() {
+        // A kept wrapper may be prefixed; its children still have to reach the written element,
+        // and the prefix they use has to stay declared (CodeRabbit, #3412).
+        let prefixed = "<x:pivotCaches xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\
+                        <x:pivotCache cacheId=\"7\" r:id=\"rId9\"/></x:pivotCaches>";
+        let (namespaces, children) = pivot_caches_parts(prefixed);
+        assert!(children.contains("cacheId=\"7\""), "the kept cache is kept: {children}");
+        assert!(namespaces.contains("xmlns:x="), "the wrapper's declarations come along: {namespaces}");
+
+        let plain = "<pivotCaches><pivotCache cacheId=\"2\" r:id=\"rId3\"/></pivotCaches>";
+        let (namespaces, children) = pivot_caches_parts(plain);
+        assert!(children.contains("cacheId=\"2\""));
+        assert!(namespaces.is_empty());
+
+        // A self-closing kept wrapper has no children, and anything without the element yields none.
+        assert_eq!(pivot_caches_parts("<x:pivotCaches xmlns:x=\"urn:x\"/>").1, "");
+        assert_eq!(pivot_caches_parts("<workbook/>").1, "");
+    }
+
+    #[test]
+    fn single_quoted_cache_ids_still_reserve_the_next_id() {
+        // Preserved XML keeps the input file's quoting, so `cacheId='5'` must
+        // reserve 6 just like `cacheId="5"` does (CodeRabbit, #3412).
+        for xml in [
+            "<pivotCaches><pivotCache cacheId='5' r:id='rId9'/></pivotCaches>",
+            "<pivotCaches><pivotCache cacheId=\"5\" r:id=\"rId9\"/></pivotCaches>",
+        ] {
+            assert_eq!(scan_next_cache_id(xml), 6, "next id after a kept cacheId 5 in {xml}");
+        }
+        assert_eq!(scan_next_cache_id("<pivotCaches/>"), 1);
+    }
 }

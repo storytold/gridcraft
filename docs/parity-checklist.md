@@ -4,7 +4,7 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 281 / 296 commands implemented (94.9%).**
+**Overall: 306 / 321 commands implemented (95.3%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
@@ -14,7 +14,7 @@ Each entry is an Excel ribbon or menu command (feature names only). It counts as
 | Draw | 4 | 4 | 100% |
 | Page Layout | 23 | 23 | 100% |
 | Formulas | 23 | 23 | 100% |
-| Data | 23 | 28 | 82% |
+| Data | 48 | 53 | 91% |
 | Review | 15 | 18 | 83% |
 | View | 21 | 21 | 100% |
 | Automate | 4 | 4 | 100% |
@@ -238,7 +238,7 @@ Implemented:
 - `formulas.calculateNow` Calculate Now (Calculation)
 - `formulas.calculateSheet` Calculate Sheet (Calculation)
 
-## Data (23 / 28, 82%)
+## Data (48 / 53, 91%)
 
 Implemented:
 
@@ -265,6 +265,31 @@ Implemented:
 - `data.hideDetail` Hide Detail (Outline)
 - `data.solver` Solver (Analysis)
 - `data.analysisToolPak` Data Analysis (Analysis)
+- `dataModel.load` Load Data Model (Data Model)
+- `dataModel.status` Data Model (Data Model)
+- `dataModel.evaluate` Evaluate DAX (Data Model)
+- `dataModel.pivot` Data Model Pivot (Data Model)
+- `dataModel.addMeasure` Add Measure (Data Model)
+- `dataModel.updateMeasure` Update Measure (Data Model)
+- `dataModel.deleteMeasure` Delete Measure (Data Model)
+- `dataModel.addRelationship` Create Relationship (Data Model)
+- `dataModel.deleteRelationship` Delete Relationship (Data Model)
+- `dataModel.view` Data View Rows (Data Model)
+- `dataModel.find` Find in Data Model (Data Model)
+- `dataModel.sortTable` Sort Data View (Data Model)
+- `dataModel.clearSort` Clear Data View Sort (Data Model)
+- `dataModel.setFilter` Filter Data View (Data Model)
+- `dataModel.clearFilters` Clear Data View Filters (Data Model)
+- `dataModel.sortByColumn` Sort by Column (Data Model)
+- `dataModel.setShowHidden` Show Hidden Columns (Data Model)
+- `dataModel.setShowImplicitMeasures` Show Implicit Measures (Data Model)
+- `dataModel.setFormat` Format Measure (Data Model)
+- `dataModel.setColumnHidden` Hide Column (Data Model)
+- `dataModel.setColumnType` Data Type (Data Model)
+- `dataModel.setSummarizeBy` Summarize By (Data Model)
+- `dataModel.markDateTable` Mark as Date Table (Data Model)
+- `dataModel.unmarkDateTable` Unmark Date Table (Data Model)
+- `dataModel.validate` Validate Data Model (Data Model)
 
 Missing:
 

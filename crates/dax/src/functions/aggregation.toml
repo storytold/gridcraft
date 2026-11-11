@@ -1,0 +1,405 @@
+# Aggregation functions — declarative catalog data, one row per function.
+# Loaded by the shared `catalog` module; see its docs for the schema.
+
+[[function]]
+name = "APPROXIMATEDISTINCTCOUNT"
+min = 1
+max = 1
+returns = "integer"
+flags = "engine"
+blank = "blank"
+description = "Approximates the number of distinct values in a column. DirectQuery models push the aggregation to the source; Import models use HyperLogLog with a small error rate. The argument must be a column reference."
+examples = ["APPROXIMATEDISTINCTCOUNT ( Sales[ProductKey] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "AVERAGE"
+min = 1
+max = 1
+returns = "numeric"
+flags = "standard"
+sugar = "AVERAGEX"
+description = "Arithmetic mean of a numeric column, ignoring blanks and including zero. Syntax sugar for AVERAGEX. dax.guide returns BLANK when no value qualifies, while Microsoft Learn documents 0 when rows exist; the catalog keeps the conflict explicit."
+examples = ["AVERAGE ( Sales[Amount] )", "AVERAGE ( Sales[Quantity] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "AVERAGEA"
+min = 1
+max = 1
+returns = "numeric"
+flags = "discouraged"
+description = "Averages a column, counting TRUE as 1, FALSE as 0 and any text as 0. Internally evaluated with AVERAGEX but not pure sugar because of those coercions; dax.guide marks it not recommended. Sources disagree on the empty/all-blank result."
+examples = ["AVERAGEA ( Customer[LargeFamily] )", "AVERAGEA ( Sales[Flag] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "AVERAGEX"
+min = 2
+max = 2
+returns = "numeric"
+flags = "standard-iterator"
+blank = "blank"
+description = "Evaluates the expression once per row of the table and returns the mean of the non-blank results, including zeros. The expression runs in row context, so a measure reference triggers context transition."
+examples = ["AVERAGEX ( Sales, Sales[Quantity] * Sales[Net Price] )", "AVERAGEX ( Customer, [Sales Amount] )"]
+[[function.params]]
+name = "Table"
+kind = "Table"
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.signature]]
+kinds = ["Table", "Expression"]
+variadic = false
+
+[[function]]
+name = "COUNT"
+min = 1
+max = 1
+returns = "integer"
+flags = "standard"
+sugar = "COUNTX"
+blank = "blank"
+description = "Counts non-blank numbers, dates and strings in a column; empty strings count and booleans do not. Syntax sugar for COUNTX."
+examples = ["COUNT ( Customer[Customer Name] )", "COUNT ( Sales[Text] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "COUNTA"
+min = 1
+max = 1
+returns = "integer"
+flags = "standard"
+sugar = "COUNTAX"
+blank = "blank"
+description = "Counts non-blank values in a column, including booleans (as values, not as 1/0). Syntax sugar for COUNTAX."
+examples = ["COUNTA ( Customer[Customer Name] )", "COUNTA ( Sales[Flag] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "COUNTAX"
+min = 2
+max = 2
+returns = "integer"
+flags = "standard-iterator"
+blank = "blank"
+description = "Evaluates the expression per row and counts non-blank results, including booleans."
+examples = ["COUNTAX ( Customer, Customer[LargeFamily] )"]
+[[function.params]]
+name = "Table"
+kind = "Table"
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.signature]]
+kinds = ["Table", "Expression"]
+variadic = false
+
+[[function]]
+name = "COUNTBLANK"
+min = 1
+max = 1
+returns = "integer"
+flags = "standard"
+description = "Counts blanks in a column of any type; the empty string counts as blank and zero does not. dax.guide says the function never returns 0, while Microsoft Learn documents 0 when rows exist but no value is blank."
+examples = ["COUNTBLANK ( Customer[Customer Name] )", "COUNTBLANK ( Sales[Text] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "COUNTROWS"
+min = 0
+max = 1
+returns = "integer"
+flags = "standard"
+blank = "blank"
+description = "Counts the rows of a table expression. With no argument it counts the home table of the measure or calculated column. Excel's embedded engine accepts the one-argument form only."
+examples = ["COUNTROWS ( Sales )", "COUNTROWS ( DISTINCT ( Sales[Region] ) )", "COUNTROWS ( )"]
+[[function.params]]
+name = "Table"
+kind = "Table"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+
+[[function]]
+name = "COUNTX"
+min = 2
+max = 2
+returns = "integer"
+flags = "standard-iterator"
+blank = "blank"
+description = "Evaluates the expression per row and counts non-blank results of type number, date or string; booleans are not counted (use COUNTAX)."
+examples = ["COUNTX ( Customer, DIVIDE ( Customer[Total Children], Customer[Cars Owned] ) )", "COUNTX ( Sales, Sales[Quantity] )"]
+[[function.params]]
+name = "Table"
+kind = "Table"
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.signature]]
+kinds = ["Table", "Expression"]
+variadic = false
+
+[[function]]
+name = "DISTINCTCOUNT"
+min = 1
+max = 1
+returns = "integer"
+flags = "standard"
+blank = "blank"
+description = "Counts distinct values in a column of any type. BLANK is one distinct value; totals are not additive. Equivalent to COUNTROWS ( DISTINCT ( table[column] ) )."
+examples = ["DISTINCTCOUNT ( Store[Area Manager] )", "DISTINCTCOUNT ( Sales[Region] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "DISTINCTCOUNTNOBLANK"
+min = 1
+max = 1
+returns = "integer"
+flags = "engine"
+sugar = "DISTINCTCOUNT"
+description = "Counts distinct values in a column, excluding BLANK. Syntax sugar for DISTINCTCOUNT with an ISBLANK filter. Not available to Excel's embedded engine."
+examples = ["DISTINCTCOUNTNOBLANK ( Store[Area Manager] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "MAX"
+min = 1
+max = 2
+returns = "any"
+flags = "standard"
+sugar = "MAXX"
+description = "With one argument, the largest non-blank value of a column (internally MAXX); text compares alphabetically and logical values are unsupported. With two arguments, the larger scalar, where BLANK is significant per dax.guide but treated as zero by Microsoft Learn."
+examples = ["MAX ( Sales[Net Price] )", "MAX ( 10000, [Sales Amount] )", "MAX ( 3, 5 )"]
+[[function.params]]
+name = "ColumnNameOrScalar1"
+kind = "Any"
+[[function.params]]
+name = "Scalar2"
+kind = "Scalar"
+optional = true
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+[[function.signature]]
+kinds = ["Scalar", "Scalar"]
+variadic = false
+
+[[function]]
+name = "MAXA"
+min = 1
+max = 1
+returns = "any"
+flags = "standard"
+description = "Largest value of a column, counting TRUE as 1 and FALSE as 0 instead of ignoring logical values. Internally MAXX. Sources disagree on the empty result; text is not rankable."
+examples = ["MAXA ( Customer[LargeFamily] )", "MAXA ( Sales[Flag] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "MAXX"
+min = 2
+max = 3
+returns = "any"
+flags = "standard-iterator"
+description = "Evaluates the expression per row and returns the largest value, skipping blanks and ignoring logical values. Mixed-type expressions consider numbers only unless Variant is TRUE, which compares per ORDER BY DESC."
+examples = ["MAXX ( Customer, 1 * Customer[LargeFamily] )", "MAXX ( Sales, Sales[Amount], TRUE )"]
+[[function.params]]
+name = "Table"
+kind = "Table"
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.params]]
+name = "Variant"
+kind = "Logical"
+optional = true
+[[function.signature]]
+kinds = ["Table", "Expression"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Expression", "Logical"]
+variadic = false
+
+[[function]]
+name = "MIN"
+min = 1
+max = 2
+returns = "any"
+flags = "standard"
+sugar = "MINX"
+description = "With one argument, the smallest non-blank value of a column (internally MINX); text compares alphabetically and logical values are unsupported. With two arguments, the smaller scalar, where BLANK is significant per dax.guide but treated as zero by Microsoft Learn."
+examples = ["MIN ( Sales[Net Price] )", "MIN ( 5000000, [Sales Amount] )", "MIN ( 3, 5 )"]
+[[function.params]]
+name = "ColumnNameOrScalar1"
+kind = "Any"
+[[function.params]]
+name = "Scalar2"
+kind = "Scalar"
+optional = true
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+[[function.signature]]
+kinds = ["Scalar", "Scalar"]
+variadic = false
+
+[[function]]
+name = "MINA"
+min = 1
+max = 1
+returns = "any"
+flags = "standard"
+description = "Smallest value of a column, counting TRUE as 1 and FALSE as 0 instead of ignoring logical values. Internally MINX. Sources disagree on the empty result."
+examples = ["MINA ( Customer[LargeFamily] )", "MINA ( Sales[Flag] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "MINX"
+min = 2
+max = 3
+returns = "any"
+flags = "standard-iterator"
+description = "Evaluates the expression per row and returns the smallest value, skipping blanks and ignoring logical values. Mixed-type expressions consider numbers only unless Variant is TRUE, which compares per ORDER BY ASC."
+examples = ["MINX ( Customer, 1 * Customer[NoCars] )", "MINX ( Sales, Sales[Amount], FALSE )"]
+[[function.params]]
+name = "Table"
+kind = "Table"
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.params]]
+name = "Variant"
+kind = "Logical"
+optional = true
+[[function.signature]]
+kinds = ["Table", "Expression"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Expression", "Logical"]
+variadic = false
+
+[[function]]
+name = "PRODUCT"
+min = 1
+max = 1
+returns = "decimal"
+flags = "standard"
+sugar = "PRODUCTX"
+blank = "blank"
+description = "Multiplies the numbers in a column, ignoring blanks, logical values and text. Syntax sugar for PRODUCTX."
+examples = ["PRODUCT ( Sales[Quantity] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "PRODUCTX"
+min = 2
+max = 2
+returns = "decimal"
+flags = "standard-iterator"
+blank = "blank"
+description = "Evaluates the expression per row and multiplies the non-blank numeric results; blanks, logical values and text are ignored, unlike the `*` operator."
+examples = ["PRODUCTX ( Rates, 1 + Rates[InflationRate] )", "PRODUCTX ( Sales, Sales[Quantity] )"]
+[[function.params]]
+name = "Table"
+kind = "Table"
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.signature]]
+kinds = ["Table", "Expression"]
+variadic = false
+
+[[function]]
+name = "SUM"
+min = 1
+max = 1
+returns = "numeric"
+flags = "standard"
+sugar = "SUMX"
+blank = "blank"
+description = "Adds the numbers in a column, ignoring blanks, logical values and text. Syntax sugar for SUMX. dax.guide says the result type follows the column, while Microsoft Learn documents a decimal number."
+examples = ["SUM ( Sales[Amount] )", "SUM ( Sales[Quantity] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "SUMX"
+min = 2
+max = 2
+returns = "numeric"
+flags = "standard-iterator"
+blank = "blank"
+description = "Evaluates the expression once per row of the table and sums the numeric results; blanks, logical values and text are ignored. The expression runs in row context."
+examples = ["SUMX ( Sales, Sales[Quantity] * Sales[Net Price] )", "SUMX ( FILTER ( InternetSales, InternetSales[SalesTerritoryID] = 5 ), [Freight] )"]
+[[function.params]]
+name = "Table"
+kind = "Table"
+[[function.params]]
+name = "Expression"
+kind = "Expression"
+[[function.signature]]
+kinds = ["Table", "Expression"]
+variadic = false

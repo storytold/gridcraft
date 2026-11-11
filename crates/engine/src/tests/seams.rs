@@ -605,6 +605,20 @@ fn a_grouped_action_that_panics_is_rolled_back_before_the_panic_goes_on() {
 }
 
 #[test]
+fn a_panic_inside_edit_dax_view_keeps_the_stored_view() {
+    // `edit_dax_view` used to `take` the view before running its closure, so a panic
+    // left the default in place; editing a clone keeps the stored view (CodeRabbit, #3412).
+    let mut s = s();
+    s.edit_dax_view(|view| view.show_hidden = true);
+    assert!(s.dax_view.show_hidden);
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        s.edit_dax_view(|_| panic!("inside the view edit"));
+    }));
+    assert!(caught.is_err(), "the panic goes on to the caller");
+    assert!(s.dax_view.show_hidden, "the stored view is unchanged, not reset");
+}
+
+#[test]
 fn a_group_ended_by_a_command_that_then_panics_keeps_its_step() {
     // The command takes a token the test left for it, ends or rolls back that group, and panics.
     // The group's token went with the command, so the group stays ended; its step runs from the
@@ -641,6 +655,63 @@ fn a_group_ended_by_a_command_that_then_panics_keeps_its_step() {
         s.execute("edit.redo", json!({})).unwrap();
         assert_eq!(v(&s, "A2").display(), "inside too", "{cmd}");
     }
+}
+
+#[test]
+fn a_command_that_panics_reverts_the_data_model_edits_of_the_groups_it_opened() {
+    // A nested `group_begin` records `dataModel.*` edits on the inner group. A panic used to drop
+    // that group without reverting them, so a later rollback of the outer group could not take
+    // them back (CodeRabbit, #3412).
+    crate::cmd::register_undoable_test_command("test.groupModelThenPanic", |s, _| {
+        let _token = s.group_begin("Inner")?;
+        s.execute("dataModel.addMeasure", json!({"name": "Doomed", "formula": "1", "table": "Sales"}))?;
+        panic!("after a model edit");
+    });
+    let mut s = s();
+    let mut model = gridcraft_dax::DataModel::default();
+    model.tables.push(gridcraft_dax::model::ModelTable {
+        name: "Sales".into(),
+        columns: vec![gridcraft_dax::model::ModelColumn { name: "Region".into(), data_type: None }],
+        rows: Vec::new(),
+    });
+    model.parse_formulas().expect("model parses");
+    s.dax_model = Some(model);
+    let outer = s.group_begin("Outer").unwrap();
+    let err = s.execute("test.groupModelThenPanic", json!({})).unwrap_err().to_string();
+    assert!(err.contains("after a model edit"), "{err}");
+    assert!(
+        s.dax_model.as_ref().unwrap().measure_index("Doomed").is_none(),
+        "the panicking command's data-model edit is reverted, not left in the model"
+    );
+    // The outer group's rollback then finds a model the dropped group no longer haunts.
+    s.group_rollback(outer).expect("rollback");
+    assert!(s.dax_model.as_ref().unwrap().measure_index("Doomed").is_none());
+}
+
+#[test]
+fn a_group_that_outlives_its_document_still_takes_back_later_model_edits() {
+    // A `grouped` closure that closes its document and then edits the model used to leave
+    // that edit unrecorded: with no active document `record_dax` returned early, so the
+    // closure's rollback could not take it back (CodeRabbit, #3412).
+    let mut s = s();
+    let mut model = gridcraft_dax::DataModel::default();
+    model.tables.push(gridcraft_dax::model::ModelTable {
+        name: "Sales".into(),
+        columns: vec![gridcraft_dax::model::ModelColumn { name: "Region".into(), data_type: None }],
+        rows: Vec::new(),
+    });
+    model.parse_formulas().expect("model parses");
+    s.dax_model = Some(model);
+    let result: crate::Result<()> = s.grouped("Close Then Edit", |s| {
+        s.close_document(0);
+        s.execute("dataModel.addMeasure", json!({"name": "Doomed", "formula": "1", "table": "Sales"}))?;
+        Err(crate::EngineError::Other("step 2 failed".into()))
+    });
+    assert!(result.unwrap_err().to_string().contains("step 2 failed"));
+    assert!(
+        s.dax_model.as_ref().unwrap().measure_index("Doomed").is_none(),
+        "the edit after the close is rolled back with the group, not left in the model"
+    );
 }
 
 #[test]

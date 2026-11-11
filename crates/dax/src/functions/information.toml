@@ -1,0 +1,2559 @@
+# Information functions — declarative catalog data, one row per function.
+# Loaded by the shared `catalog` module; see its docs for the schema.
+
+[[function]]
+name = "COLUMNSTATISTICS"
+min = 0
+max = 0
+returns = "table"
+flags = "visual"
+description = "Returns one row per column visible in the model, with the table name, column name, minimum, maximum, cardinality and maximum string length. The statistics respect the security roles of the connected user."
+examples = ["COLUMNSTATISTICS ()"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "CONTAINS"
+min = 3
+max = 0
+max_open = true
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when at least one row of the table has all the supplied column/value pairs. Each pair is a column reference followed by the value to match, using strict equality (BLANK does not match 0)."
+examples = ["CONTAINS ( Product, Product[Color], \"Red\" )", "CONTAINS ( Sales, Sales[ProductKey], 1, Sales[Quantity], 2 )"]
+[[function.params]]
+name = "Table"
+kind = "Table"
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Table", "Column", "Any"]
+variadic = true
+
+[[function]]
+name = "CONTAINSROW"
+min = 2
+max = 0
+max_open = true
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the table has a row whose values equal every supplied value, in column order. The IN operator executes this function; comparisons are strict, so BLANK does not match 0."
+examples = ["CONTAINSROW ( { \"Red\", \"Blue\" }, Product[Color] )", "CONTAINSROW ( Sales, Sales[ProductKey], 1 )"]
+[[function.params]]
+name = "Table"
+kind = "Table"
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Table", "Any"]
+variadic = true
+
+[[function]]
+name = "CONTAINSSTRING"
+min = 2
+max = 2
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when WithinText contains FindText. The comparison is case-insensitive and accent-sensitive; `?` and `*` are wildcards and `~?` / `~*` match them literally."
+examples = ["CONTAINSSTRING ( Product[Product Name], \"red\" )", "CONTAINSSTRING ( \"Hello\", \"ell\" )"]
+[[function.params]]
+name = "WithinText"
+kind = "Text"
+[[function.params]]
+name = "FindText"
+kind = "Text"
+[[function.signature]]
+kinds = ["Text", "Text"]
+variadic = false
+
+[[function]]
+name = "CONTAINSSTRINGEXACT"
+min = 2
+max = 2
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when WithinText contains FindText using a case-sensitive and accent-sensitive comparison. Wildcards are not interpreted."
+examples = ["CONTAINSSTRINGEXACT ( Product[Product Name], \"Red\" )", "CONTAINSSTRINGEXACT ( \"Hello\", \"Hell\" )"]
+[[function.params]]
+name = "WithinText"
+kind = "Text"
+[[function.params]]
+name = "FindText"
+kind = "Text"
+[[function.signature]]
+kinds = ["Text", "Text"]
+variadic = false
+
+[[function]]
+name = "CUSTOMDATA"
+min = 0
+max = 0
+returns = "string"
+flags = "volatile-standard"
+description = "Returns the CustomData connection-string property supplied by the client, or BLANK when the connection did not define it. It does not inspect the data model or the filter context."
+examples = ["CUSTOMDATA ()"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "EVALUATEANDLOG"
+min = 1
+max = 3
+returns = "variant"
+flags = "visual"
+description = "Returns the first argument unchanged and writes its value to the DAX Evaluation Log trace event. The optional Label annotates the event; MaxRows caps the rows captured for a table expression and defaults to 10."
+examples = ["EVALUATEANDLOG ( 1 )", "EVALUATEANDLOG ( [Sales Amount] )", "EVALUATEANDLOG ( Sales, \"Sales rows\", 5 )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.params]]
+name = "Label"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "MaxRows"
+kind = "Number"
+optional = true
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Any", "Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Any", "Text", "Number"]
+variadic = false
+
+[[function]]
+name = "HASONEFILTER"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the column has exactly one distinct value resulting from direct filters on that column. Unlike HASONEVALUE it ignores filters propagated from related tables."
+examples = ["HASONEFILTER ( Product[Color] )", "HASONEFILTER ( Sales[Quantity] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "HASONEVALUE"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the filter context leaves exactly one distinct value in the column, regardless of whether the filter is direct or propagated through a relationship."
+examples = ["HASONEVALUE ( Product[Category] )", "HASONEVALUE ( Sales[Quantity] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "INFO.VIEW.COLUMNS"
+min = 0
+max = 0
+returns = "table"
+flags = "visual"
+description = "Table of every column in the model, decoded so a query can use it without joins to other DMV rowsets. Unlike the plain INFO functions it is allowed in measures, calculated columns and calculated tables."
+examples = ["INFO.VIEW.COLUMNS ()"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "INFO.VIEW.MEASURES"
+min = 0
+max = 0
+returns = "table"
+flags = "visual"
+description = "Table of every measure in the model, decoded so a query can use it without joins to other DMV rowsets. Unlike the plain INFO functions it is allowed in measures, calculated columns and calculated tables."
+examples = ["INFO.VIEW.MEASURES ()"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "INFO.VIEW.RELATIONSHIPS"
+min = 0
+max = 0
+returns = "table"
+flags = "visual"
+description = "Table of every relationship in the model, decoded so a query can use it without joins to other DMV rowsets. Unlike the plain INFO functions it is allowed in measures, calculated columns and calculated tables."
+examples = ["INFO.VIEW.RELATIONSHIPS ()"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "INFO.VIEW.TABLES"
+min = 0
+max = 0
+returns = "table"
+flags = "visual"
+description = "Table of every table in the model, decoded so a query can use it without joins to other DMV rowsets. Unlike the plain INFO functions it is allowed in measures, calculated columns and calculated tables."
+examples = ["INFO.VIEW.TABLES ()"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "ISAFTER"
+min = 2
+max = 0
+max_open = true
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the Value1/Value2 groups compare strictly after the corresponding values in the ascending/descending order given by each optional Order flag. The comparison uses the existing evaluation context; ISAFTER is not an iterator."
+examples = ["ISAFTER ( Sales[Year], 2008 )", "ISAFTER ( Sales[Year], 2008, 1 )"]
+[[function.params]]
+name = "Value1"
+kind = "Any"
+[[function.params]]
+name = "Value2"
+kind = "Any"
+[[function.params]]
+name = "Order"
+kind = "Logical"
+optional = true
+[[function.signature]]
+kinds = ["Any", "Any"]
+variadic = true
+
+[[function]]
+name = "ISBLANK"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the value is BLANK. Zero and the empty string are not blank; the predicate is equivalent to the strict comparison `value == BLANK ()`."
+examples = ["ISBLANK ( Sales[Amount] )", "ISBLANK ( BLANK () )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+
+[[function]]
+name = "ISBOOLEAN"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "TRUE for a Boolean value. Alias of ISLOGICAL."
+examples = ["ISBOOLEAN ( TRUE )", "ISBOOLEAN ( Sales[Amount] )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+
+[[function]]
+name = "ISCROSSFILTERED"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the table or column is cross-filtered, meaning a filter is applied to that table, to one of its columns, or to a column of a related table."
+examples = ["ISCROSSFILTERED ( Product )", "ISCROSSFILTERED ( Product[Category] )"]
+[[function.params]]
+name = "TableNameOrColumnName"
+kind = "Reference"
+[[function.signature]]
+kinds = ["Reference"]
+variadic = false
+
+[[function]]
+name = "ISDATETIME"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the value has the Date/time type."
+examples = ["ISDATETIME ( DATE ( 2008, 1, 1 ) )", "ISDATETIME ( Sales[Order Date] )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+
+[[function]]
+name = "ISDECIMAL"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "TRUE for a fixed-precision decimal (Currency) value. Alias of ISCURRENCY."
+examples = ["ISDECIMAL ( 1.5 )", "ISDECIMAL ( Sales[Net Price] )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+
+[[function]]
+name = "ISDOUBLE"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "TRUE for a floating-point decimal value."
+examples = ["ISDOUBLE ( 1.5 )", "ISDOUBLE ( Sales[Amount] )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+
+[[function]]
+name = "ISEMPTY"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the table expression has no rows in the current evaluation context, including tables whose only row would be blank."
+examples = ["ISEMPTY ( Sales )", "ISEMPTY ( FILTER ( Sales, FALSE ) )"]
+[[function.params]]
+name = "Table"
+kind = "Table"
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+
+[[function]]
+name = "ISERROR"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when evaluating the value produces an error. It inspects the value, so the error is caught rather than propagated."
+examples = ["ISERROR ( 1 / 0 )", "ISERROR ( Sales[Amount] )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+
+[[function]]
+name = "ISEVEN"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the number is even, FALSE when it is odd. Truncation applies to non-integers, matching the mathematical sign of the truncated value."
+examples = ["ISEVEN ( 4 )", "ISEVEN ( Sales[Quantity] )"]
+[[function.params]]
+name = "Number"
+kind = "Number"
+[[function.signature]]
+kinds = ["Number"]
+variadic = false
+
+[[function]]
+name = "ISFILTERED"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "TRUE when the column carries direct filters in the current context; filters propagated from a related table do not count, so use ISCROSSFILTERED for those."
+examples = ["ISFILTERED ( Product[Color] )", "ISFILTERED ( Sales[Quantity] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "ISINSCOPE"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the column is the level currently in scope in a hierarchy of levels, for example the group-by column of the current SUMMARIZECOLUMNS row."
+examples = ["ISINSCOPE ( Product[Category] )", "ISINSCOPE ( Product[Subcategory] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "ISINT64"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the value is a 64-bit integer. This is the alias of ISINTEGER."
+examples = ["ISINT64 ( 1 )", "ISINT64 ( Sales[Quantity] )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+
+[[function]]
+name = "ISLOGICAL"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "TRUE for a logical value (TRUE or FALSE). Alias of ISBOOLEAN."
+examples = ["ISLOGICAL ( FALSE )", "ISLOGICAL ( Sales[Amount] )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+
+[[function]]
+name = "ISNONTEXT"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the value is not text. A blank cell is not text, so ISNONTEXT also returns TRUE for BLANK."
+examples = ["ISNONTEXT ( 1 )", "ISNONTEXT ( Product[Color] )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+
+[[function]]
+name = "ISNUMBER"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the value is a number. Text that looks numeric is not a number; use VALUE to convert it first."
+examples = ["ISNUMBER ( 1 )", "ISNUMBER ( Sales[Amount] )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+
+[[function]]
+name = "ISNUMERIC"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "TRUE for an integer or decimal number, including Currency and floating-point values."
+examples = ["ISNUMERIC ( 1.5 )", "ISNUMERIC ( Sales[Net Price] )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+
+[[function]]
+name = "ISODD"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the number is odd, FALSE when it is even. Non-integer values are truncated before the parity test."
+examples = ["ISODD ( 3 )", "ISODD ( Sales[Quantity] )"]
+[[function.params]]
+name = "Number"
+kind = "Number"
+[[function.signature]]
+kinds = ["Number"]
+variadic = false
+
+[[function]]
+name = "ISONORAFTER"
+min = 2
+max = 0
+max_open = true
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the Value1/Value2 groups compare on or after the corresponding values in the order given by each optional Order flag, emulating a START AT clause. It is not an iterator."
+examples = ["ISONORAFTER ( Sales[Year], 2008 )", "ISONORAFTER ( Sales[Year], 2008, 1 )"]
+[[function.params]]
+name = "Value1"
+kind = "Any"
+[[function.params]]
+name = "Value2"
+kind = "Any"
+[[function.params]]
+name = "Order"
+kind = "Logical"
+optional = true
+[[function.signature]]
+kinds = ["Any", "Any"]
+variadic = true
+
+[[function]]
+name = "ISSELECTEDMEASURE"
+min = 1
+max = 0
+max_open = true
+returns = "boolean"
+flags = "engine"
+description = "Returns TRUE when the measure currently evaluated in a calculation item is one of the listed measures. A query measure redefined in the DAX query is not recognised."
+examples = ["ISSELECTEDMEASURE ( [Sales Amount] )", "ISSELECTEDMEASURE ( [Sales Amount], [Sales Quantity] )"]
+[[function.params]]
+name = "Measure"
+kind = "Reference"
+[[function.signature]]
+kinds = ["Reference"]
+variadic = true
+
+[[function]]
+name = "ISSTRING"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the value is a string. This is the alias of ISTEXT; a blank value is not text."
+examples = ["ISSTRING ( \"text\" )", "ISSTRING ( Product[Color] )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+
+[[function]]
+name = "ISSUBTOTAL"
+min = 1
+max = 1
+returns = "boolean"
+flags = "discouraged"
+description = "Returns TRUE when the current SUMMARIZE row is the subtotal for the column, FALSE for a detail row. It only makes sense inside SUMMARIZE with ROLLUP; SUMMARIZECOLUMNS with ROLLUPADDISSUBTOTAL supersedes it."
+examples = ["ISSUBTOTAL ( Product[Brand] )", "ISSUBTOTAL ( Product[Category] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "ISTEXT"
+min = 1
+max = 1
+returns = "boolean"
+flags = "excel"
+description = "Returns TRUE when the value is text. This is the alias of ISSTRING; a blank value is not text."
+examples = ["ISTEXT ( \"text\" )", "ISTEXT ( Product[Color] )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+
+[[function]]
+name = "NAMEOF"
+min = 1
+max = 3
+returns = "string"
+flags = "volatile-engine"
+description = "Text name of a table, column, measure or calendar. Component selects TABLE, COLUMN, MEASURE, CALENDAR, FULL, SELF or PARENT; Escaped selects ESCAPED, UNESCAPED or MINIMALLYESCAPED. Variables and dynamic expressions are not accepted."
+examples = ["NAMEOF ( Sales[Amount] )", "NAMEOF ( [Sales Amount] )"]
+[[function.params]]
+name = "Value"
+kind = "Reference"
+[[function.params]]
+name = "Component"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "Escaped"
+kind = "Text"
+optional = true
+[[function.signature]]
+kinds = ["Reference"]
+variadic = false
+[[function.signature]]
+kinds = ["Reference", "Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Reference", "Text", "Text"]
+variadic = false
+
+[[function]]
+name = "SELECTEDMEASURE"
+min = 0
+max = 0
+returns = "any"
+flags = "engine"
+description = "Returns a reference to the measure currently evaluated in a calculation item. During application each call is replaced by the selected measure, which also triggers context transition."
+examples = ["SELECTEDMEASURE ()"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "SELECTEDMEASUREFORMATSTRING"
+min = 0
+max = 0
+returns = "string"
+flags = "engine"
+description = "Format string of the measure under evaluation in the current calculation item."
+examples = ["SELECTEDMEASUREFORMATSTRING ()"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "SELECTEDMEASURENAME"
+min = 0
+max = 0
+returns = "string"
+flags = "engine"
+description = "Name of the measure under evaluation in the current calculation item, including one redefined in the DAX query."
+examples = ["SELECTEDMEASURENAME ()"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "TABLEOF"
+min = 1
+max = 1
+returns = "table"
+flags = "engine"
+description = "Resolves a column, measure or calendar reference to the table that owns it."
+examples = ["TABLEOF ( Sales[Amount] )", "TABLEOF ( Product[Color] )"]
+[[function.params]]
+name = "Reference"
+kind = "Reference"
+[[function.signature]]
+kinds = ["Reference"]
+variadic = false
+
+[[function]]
+name = "TEXTCONTAINS"
+min = 2
+max = 3
+returns = "boolean"
+flags = "visual"
+description = "TRUE when the column text matches SearchText under full-text query semantics. MatchMode is TEXTMATCHING (the default), FUZZYMATCHING or PHRASEMATCHING."
+examples = ["TEXTCONTAINS ( Product[Product Name], \"red\" )", "TEXTCONTAINS ( Product[Product Name], \"red\", \"FUZZYMATCHING\" )"]
+[[function.params]]
+name = "WithinTextColumn"
+kind = "Column"
+[[function.params]]
+name = "SearchText"
+kind = "Text"
+[[function.params]]
+name = "MatchMode"
+kind = "Text"
+optional = true
+[[function.signature]]
+kinds = ["Column", "Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Text", "Text"]
+variadic = false
+
+[[function]]
+name = "TEXTSIMILARITY"
+min = 2
+max = 3
+returns = "decimal"
+flags = "visual"
+description = "Returns the BM25 relevance score of the text in the column against the search text; a higher score is a stronger match and 0 means no match. MatchMode is TEXTMATCHING (the default), FUZZYMATCHING or PHRASEMATCHING. Scores are comparable only within the same search context."
+examples = ["TEXTSIMILARITY ( Product[Product Name], \"red\" )", "TEXTSIMILARITY ( Product[Product Name], \"red\", \"FUZZYMATCHING\" )"]
+[[function.params]]
+name = "WithinTextColumn"
+kind = "Column"
+[[function.params]]
+name = "SearchText"
+kind = "Text"
+[[function.params]]
+name = "MatchMode"
+kind = "Text"
+optional = true
+[[function.signature]]
+kinds = ["Column", "Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Text", "Text"]
+variadic = false
+
+[[function]]
+name = "USERCULTURE"
+min = 0
+max = 0
+returns = "string"
+flags = "volatile-engine"
+description = "Returns the culture code of the current user, such as \"en-US\", derived from the operating system or browser settings."
+examples = ["USERCULTURE ()"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "USERNAME"
+min = 0
+max = 0
+returns = "string"
+flags = "volatile-standard"
+description = "The connection identity in domain\\user form, as supplied when the connection was opened."
+examples = ["USERNAME ()"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "USEROBJECTID"
+min = 0
+max = 0
+returns = "string"
+flags = "volatile-visual"
+description = "Returns the current user's object ID from Azure AD, or the security identifier (SID) when the model runs on-premises."
+examples = ["USEROBJECTID ()"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "USERPRINCIPALNAME"
+min = 0
+max = 0
+returns = "string"
+flags = "volatile-visual"
+description = "Returns the user principal name of the current user, typically the email address in user@domain form."
+examples = ["USERPRINCIPALNAME ()"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "INFO.ALTERNATEOFDEFINITIONS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_ALTERNATE_OF_DEFINITIONS data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.ALTERNATEOFDEFINITIONS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.ANNOTATIONS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per annotation in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.ANNOTATIONS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.ATTRIBUTEHIERARCHIES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_ATTRIBUTE_HIERARCHIES schema rowset as a table; optional restriction name/value pairs filter its rows."
+examples = ["INFO.ATTRIBUTEHIERARCHIES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.ATTRIBUTEHIERARCHYSTORAGES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_ATTRIBUTE_HIERARCHY_STORAGES data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.ATTRIBUTEHIERARCHYSTORAGES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.CALCDEPENDENCY"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Reports which objects a DAX query depends on, so tools can inspect the dependency graph without parsing formulas."
+examples = ["INFO.CALCDEPENDENCY ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.CALCULATIONGROUPS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_CALCULATIONGROUPS data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.CALCULATIONGROUPS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.CALCULATIONITEMS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_CALCULATIONITEMS data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.CALCULATIONITEMS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.CALENDARCOLUMNGROUPS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_CALENDAR_COLUMN_GROUPS schema rowset as a table; optional restriction name/value pairs filter its rows."
+examples = ["INFO.CALENDARCOLUMNGROUPS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.CALENDARCOLUMNREFERENCES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_CALENDAR_COLUMN_REFERENCES schema rowset as a table; optional restriction name/value pairs filter its rows."
+examples = ["INFO.CALENDARCOLUMNREFERENCES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.CALENDARS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_CALENDARS schema rowset as a table; optional restriction name/value pairs filter its rows."
+examples = ["INFO.CALENDARS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.CATALOGS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the DBSCHEMA_CATALOGS schema rowset as a table; optional restriction name/value pairs filter its rows."
+examples = ["INFO.CATALOGS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.CHANGEDPROPERTIES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_CHANGED_PROPERTIES schema rowset as a table; optional restriction name/value pairs filter its rows."
+examples = ["INFO.CHANGEDPROPERTIES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.COLUMNPARTITIONSTORAGES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_COLUMN_PARTITION_STORAGES data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.COLUMNPARTITIONSTORAGES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.COLUMNPERMISSIONS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per column permission in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.COLUMNPERMISSIONS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.COLUMNS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per column in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.COLUMNS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.COLUMNSTORAGES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per column storage in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.COLUMNSTORAGES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.CSDLMETADATA"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Provides the model metadata serialized as CSDL XML text, so a tool can read the conceptual schema without a client library."
+examples = ["INFO.CSDLMETADATA ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.CULTURES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per culture in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.CULTURES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.DATACOVERAGEDEFINITIONS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_DATACOVERAGEDEFINITIONS data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.DATACOVERAGEDEFINITIONS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.DATASOURCES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_DATASOURCES schema rowset as a table; optional restriction name/value pairs filter its rows."
+examples = ["INFO.DATASOURCES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.DELTATABLEMETADATASTORAGES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_DELTA_TABLE_METADATA_STORAGES data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.DELTATABLEMETADATASTORAGES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.DEPENDENCIES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Returns the dependency records of a DAX query, describing what the query reads from the model."
+examples = ["INFO.DEPENDENCIES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.DETAILROWSDEFINITIONS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per detail-rows definition in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.DETAILROWSDEFINITIONS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.DICTIONARYSTORAGES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_DICTIONARY_STORAGES data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.DICTIONARYSTORAGES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.EXCLUDEDARTIFACTS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_EXCLUDED_ARTIFACTS schema rowset as a table; optional restriction name/value pairs filter its rows."
+examples = ["INFO.EXCLUDEDARTIFACTS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.EXPRESSIONS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per expression in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.EXPRESSIONS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.EXTENDEDPROPERTIES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per extended property in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.EXTENDEDPROPERTIES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.FORMATSTRINGDEFINITIONS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_FORMAT_STRING_DEFINITIONS data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.FORMATSTRINGDEFINITIONS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.FUNCTIONS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Lists the DAX functions the engine makes available, one row per function. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.FUNCTIONS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.GENERALSEGMENTMAPSEGMENTMETADATASTORAGES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_GENERAL_SEGMENT_MAP_SEGMENT_METADATA_STORAGES data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.GENERALSEGMENTMAPSEGMENTMETADATASTORAGES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.GROUPBYCOLUMNS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_GROUP_BY_COLUMNS data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.GROUPBYCOLUMNS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.HIERARCHIES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_HIERARCHIES schema rowset as a table; optional restriction name/value pairs filter its rows."
+examples = ["INFO.HIERARCHIES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.HIERARCHYSTORAGES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_HIERARCHY_STORAGES data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.HIERARCHYSTORAGES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.KPIS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per KPI in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.KPIS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.LEVELS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per level in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.LEVELS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.LINGUISTICMETADATA"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_LINGUISTIC_METADATA schema rowset as a table; optional restriction name/value pairs filter its rows."
+examples = ["INFO.LINGUISTICMETADATA ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.MEASURES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per measure in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.MEASURES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.MODEL"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_MODEL schema rowset as a table; optional restriction name/value pairs filter its rows."
+examples = ["INFO.MODEL ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.OBJECTTRANSLATIONS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per object translation in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.OBJECTTRANSLATIONS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.PARQUETFILESTORAGES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_PARQUET_FILE_STORAGES data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.PARQUETFILESTORAGES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.PARTITIONS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_PARTITIONS schema rowset as a table; optional restriction name/value pairs filter its rows."
+examples = ["INFO.PARTITIONS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.PARTITIONSTORAGES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per partition storage in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.PARTITIONSTORAGES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.PERSPECTIVECOLUMNS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per perspective column in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.PERSPECTIVECOLUMNS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.PERSPECTIVEHIERARCHIES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per perspective hierarchy in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.PERSPECTIVEHIERARCHIES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.PERSPECTIVEMEASURES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per perspective measure in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.PERSPECTIVEMEASURES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.PERSPECTIVES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per perspective in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.PERSPECTIVES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.PERSPECTIVETABLES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per perspective table in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.PERSPECTIVETABLES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.PROPERTIES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the DISCOVER_PROPERTIES schema rowset as a table; optional restriction name/value pairs filter its rows."
+examples = ["INFO.PROPERTIES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.QUERYGROUPS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_QUERY_GROUPS data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.QUERYGROUPS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.REFRESHPOLICIES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_REFRESH_POLICIES data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.REFRESHPOLICIES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.RELATEDCOLUMNDETAILS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_RELATED_COLUMN_DETAILS data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.RELATEDCOLUMNDETAILS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.RELATIONSHIPINDEXSTORAGES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_RELATIONSHIP_INDEX_STORAGES data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.RELATIONSHIPINDEXSTORAGES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.RELATIONSHIPS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_RELATIONSHIPS schema rowset as a table; optional restriction name/value pairs filter its rows."
+examples = ["INFO.RELATIONSHIPS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.RELATIONSHIPSTORAGES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_RELATIONSHIP_STORAGES data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.RELATIONSHIPSTORAGES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.ROLEMEMBERSHIPS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per role membership in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.ROLEMEMBERSHIPS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.ROLES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per role in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.ROLES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.SEGMENTMAPSTORAGES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per segment map storage in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.SEGMENTMAPSTORAGES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.SEGMENTSTORAGES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_SEGMENT_STORAGES data management view as a table; the optional restriction name/value pairs filter its rows."
+examples = ["INFO.SEGMENTSTORAGES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.STORAGEFILES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per storage file in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.STORAGEFILES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.STORAGEFOLDERS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per storage folder in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.STORAGEFOLDERS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.STORAGETABLECOLUMNS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Reports storage statistics for each column of the in-memory tables, so a tool can see how the model is packed."
+examples = ["INFO.STORAGETABLECOLUMNS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.STORAGETABLECOLUMNSEGMENTS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Describes the column segments that hold data for the in-memory tables, one row per segment."
+examples = ["INFO.STORAGETABLECOLUMNSEGMENTS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.TABLEPERMISSIONS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per table permission in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.TABLEPERMISSIONS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.TABLES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per table in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.TABLES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.TABLESTORAGES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per table storage in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.TABLESTORAGES ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.USERDEFINEDFUNCTIONS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Exposes the TMSCHEMA_FUNCTIONS schema rowset as a table; optional restriction name/value pairs filter its rows."
+examples = ["INFO.USERDEFINEDFUNCTIONS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "INFO.VARIATIONS"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "One row per variation in the model, with the columns of the matching schema rowset. Optional restriction name/value pairs filter the rows."
+examples = ["INFO.VARIATIONS ()"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true

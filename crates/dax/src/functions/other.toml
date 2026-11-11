@@ -1,0 +1,397 @@
+# Other functions — declarative catalog data, one row per function.
+# Loaded by the shared `catalog` module; see its docs for the schema.
+
+[[function]]
+name = "BITLSHIFT"
+min = 2
+max = 2
+returns = "integer"
+flags = "excel"
+description = "Shifts the first argument's integer left by ShiftAmount bits; a negative amount shifts right. Two's-complement semantics, so the result can overflow or underflow."
+examples = ["BITLSHIFT ( 4, 2 )", "BITLSHIFT ( Sales[Quantity], 1 )"]
+[[function.params]]
+name = "Number"
+kind = "Number"
+[[function.params]]
+name = "ShiftAmount"
+kind = "Number"
+[[function.signature]]
+kinds = ["Number", "Number"]
+variadic = false
+
+[[function]]
+name = "BITRSHIFT"
+min = 2
+max = 2
+returns = "integer"
+flags = "excel"
+description = "Shifts the first argument's integer right by ShiftAmount bits; a negative amount shifts left. Two's-complement semantics, so the result can overflow or underflow."
+examples = ["BITRSHIFT ( 8, 2 )", "BITRSHIFT ( Sales[Quantity], 1 )"]
+[[function.params]]
+name = "Number"
+kind = "Number"
+[[function.params]]
+name = "ShiftAmount"
+kind = "Number"
+[[function.signature]]
+kinds = ["Number", "Number"]
+variadic = false
+
+[[function]]
+name = "BLANK"
+min = 0
+max = 0
+returns = "blank"
+flags = "excel"
+description = "Returns the BLANK value. BLANK has no data type and is converted automatically when compared with other values; use the `==` operator or ISBLANK to test for it."
+examples = ["BLANK ()"]
+[[function.signature]]
+kinds = []
+variadic = false
+
+[[function]]
+name = "EARLIER"
+min = 1
+max = 2
+returns = "any"
+flags = "discouraged"
+description = "Returns the value of a column in an outer row context, `Number` evaluation passes back (default 1). Fails when no outer row context exists. dax.guide marks it not recommended: a variable captured before the inner row context is easier to read and maintain."
+examples = ["EARLIER ( Customer[Yearly Income] )", "EARLIER ( Customer[Yearly Income], 1 )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.params]]
+name = "Number"
+kind = "Number"
+optional = true
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+[[function.signature]]
+kinds = ["Column", "Number"]
+variadic = false
+
+[[function]]
+name = "EARLIEST"
+min = 1
+max = 1
+returns = "any"
+flags = "discouraged"
+description = "Returns the value of a column in the outermost row context, equivalent to EARLIER with the largest possible scan count. dax.guide marks it not recommended in favour of storing the value in a variable."
+examples = ["EARLIEST ( Customer[Yearly Income] )"]
+[[function.params]]
+name = "ColumnName"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "ERROR"
+min = 1
+max = 1
+returns = "variant"
+flags = "excel"
+description = "Stops evaluation and raises a user-specified error with the supplied message. It can be used anywhere a scalar is expected, but has no data type of its own, so wrap it in CONVERT to give the surrounding expression a concrete type."
+examples = ["ERROR ( \"Missing inflation rate\" )"]
+[[function.params]]
+name = "ErrorText"
+kind = "Text"
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+
+[[function]]
+name = "EXTERNALMEASURE"
+min = 1
+max = 3
+returns = "any"
+flags = "engine"
+description = "Invokes a measure defined in a remote model. The optional type name (BOOLEAN/LOGICAL, CURRENCY/DECIMAL, DATETIME, DOUBLE, INTEGER/INT64, STRING/TEXT, VARIANT) declares the remote result type and the optional data source names the external model. Power BI generates these calls for composite models."
+examples = ["EXTERNALMEASURE ( \"Remote Sales\", \"DOUBLE\", \"RemoteModel\" )"]
+[[function.params]]
+name = "MeasureName"
+kind = "Text"
+[[function.params]]
+name = "Type"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "Datasource"
+kind = "Text"
+optional = true
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Text", "Text"]
+variadic = false
+
+[[function]]
+name = "HASH"
+min = 1
+max = 0
+max_open = true
+returns = "integer"
+flags = "visual"
+description = "Fingerprints a variable number of input expressions with a hash and returns an integer. The function appears in the engine metadata but is not documented by Microsoft, so its exact hash algorithm and stability across versions are unspecified."
+examples = ["HASH ( Sales[Amount] )", "HASH ( Sales[OrderNumber], Sales[LineNumber] )"]
+[[function.params]]
+name = "Expression"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = true
+
+[[function]]
+name = "INFO.STORAGETABLES"
+min = 0
+max = 0
+max_open = true
+returns = "table"
+flags = "visual"
+description = "Returns statistics about the in-memory storage tables of the model, with one row per table and columns such as DATABASE_NAME, TABLE_ID, TABLE_PARTITIONS_COUNT and ROWS_COUNT. It corresponds to the DISCOVER_STORAGE_TABLES dynamic management view, accepts optional restriction name/value pairs, and, like every INFO function, cannot be used in calculated tables or calculated columns."
+examples = ["INFO.STORAGETABLES ()", "INFO.STORAGETABLES ( \"DATABASE_NAME\", \"Sales\" )"]
+[[function.params]]
+name = "RestrictionName"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "RestrictionValue"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Any"]
+variadic = true
+
+[[function]]
+name = "ISATLEVEL"
+min = 1
+max = 1
+returns = "boolean"
+flags = "visual"
+description = "TRUE when the given column appears at the current level of the visual calculation data grid. Use it to apply different formatting or logic per hierarchy level."
+examples = ["ISATLEVEL ( 'Date'[Year] )", "ISATLEVEL ( Product[Category] )"]
+[[function.params]]
+name = "Column"
+kind = "Column"
+[[function.signature]]
+kinds = ["Column"]
+variadic = false
+
+[[function]]
+name = "ISCURRENCY"
+min = 1
+max = 1
+returns = "boolean"
+flags = "engine"
+description = "TRUE for a fixed-precision decimal (Currency) value. Alias of ISDECIMAL."
+examples = ["ISCURRENCY ( Sales[Amount] )", "ISCURRENCY ( 1.5 )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+
+[[function]]
+name = "ISINTEGER"
+min = 1
+max = 1
+returns = "boolean"
+flags = "engine"
+description = "TRUE for an integer Value. Alias of ISINT64."
+examples = ["ISINTEGER ( Sales[Quantity] )", "ISINTEGER ( 2.5 )"]
+[[function.params]]
+name = "Value"
+kind = "Any"
+[[function.signature]]
+kinds = ["Any"]
+variadic = false
+
+[[function]]
+name = "KEYWORDMATCH"
+min = 2
+max = 2
+returns = "boolean"
+flags = "standard-excel"
+description = "Returns TRUE when the match expression matches the supplied text. dax.guide lists it as deprecated: it was never released and only appeared in some Excel versions."
+examples = ["KEYWORDMATCH ( \"bike\", \"Mountain Bike\" )"]
+[[function.params]]
+name = "MatchExpression"
+kind = "Text"
+[[function.params]]
+name = "Text"
+kind = "Text"
+[[function.signature]]
+kinds = ["Text", "Text"]
+variadic = false
+
+[[function]]
+name = "RANK"
+min = 0
+max = 7
+returns = "integer"
+flags = "engine"
+description = "Returns the rank of the current row inside its partition, ordered by an ORDERBY clause. The optional Ties argument selects DENSE or SKIP (SKIP is the default), Blanks controls where blank ordering values sort, PARTITIONBY splits the table, MATCHBY identifies the current row and Reset restarts the numbering. Relation defaults to ALLSELECTED of the ordering and partitioning columns, and either Relation or ORDERBY must be supplied."
+examples = ["RANK ( DENSE, Sales, ORDERBY ( Sales[Amount] ) )", "RANK ( SKIP, Sales, ORDERBY ( Sales[Amount], DESC ) )"]
+[[function.params]]
+name = "Ties"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "Relation"
+kind = "Table"
+optional = true
+[[function.params]]
+name = "OrderBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Blanks"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "PartitionBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "MatchBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Reset"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Table"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Table", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Table", "Any", "Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Table", "Any", "Text", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Table", "Any", "Text", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Text", "Table", "Any", "Text", "Any", "Any", "Any"]
+variadic = false
+
+[[function]]
+name = "ROWNUMBER"
+min = 0
+max = 6
+returns = "integer"
+flags = "engine"
+description = "Returns the unique row number of the current row inside its partition, ordered by an ORDERBY clause. Unlike RANK, ties receive different numbers. The optional Blanks, PARTITIONBY, MATCHBY and Reset arguments behave as they do for RANK; either Relation or ORDERBY must be supplied."
+examples = ["ROWNUMBER ( Sales, ORDERBY ( Sales[Amount] ) )", "ROWNUMBER ( Sales, ORDERBY ( Sales[OrderDate] ), LAST )"]
+[[function.params]]
+name = "Relation"
+kind = "Table"
+optional = true
+[[function.params]]
+name = "OrderBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Blanks"
+kind = "Text"
+optional = true
+[[function.params]]
+name = "PartitionBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "MatchBy"
+kind = "Any"
+optional = true
+[[function.params]]
+name = "Reset"
+kind = "Any"
+optional = true
+[[function.signature]]
+kinds = []
+variadic = false
+[[function.signature]]
+kinds = ["Table"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Any", "Text"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Any", "Text", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Any", "Text", "Any", "Any"]
+variadic = false
+[[function.signature]]
+kinds = ["Table", "Any", "Text", "Any", "Any", "Any"]
+variadic = false
+
+[[function]]
+name = "SAMPLECARTESIANPOINTSBYCOVER"
+min = 4
+max = 7
+returns = "table"
+flags = "visual"
+description = "Returns a sample of at most `Size` rows from a table, chosen by plotting each row as a point on the X and Y coordinates and then dropping overlapping points. The optional Radius column controls point size, MaxMinRatio limits the ratio between the largest and smallest drawn points, and MaxBlankRatio limits the ratio between the largest point and those with a blank radius. The function is used by the engine's scatter chart sampling and is not documented by Microsoft."
+examples = ["SAMPLECARTESIANPOINTSBYCOVER ( 1000, Sales, Sales[Longitude], Sales[Latitude] )", "SAMPLECARTESIANPOINTSBYCOVER ( 1000, Sales, Sales[X], Sales[Y], Sales[Radius], 4, 0.1 )"]
+[[function.params]]
+name = "Size"
+kind = "Number"
+[[function.params]]
+name = "Table"
+kind = "Table"
+[[function.params]]
+name = "XAxis"
+kind = "Column"
+[[function.params]]
+name = "YAxis"
+kind = "Column"
+[[function.params]]
+name = "Radius"
+kind = "Column"
+optional = true
+[[function.params]]
+name = "MaxMinRatio"
+kind = "Number"
+optional = true
+[[function.params]]
+name = "MaxBlankRatio"
+kind = "Number"
+optional = true
+[[function.signature]]
+kinds = ["Number", "Table", "Column", "Column"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Table", "Column", "Column", "Column"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Table", "Column", "Column", "Column", "Number"]
+variadic = false
+[[function.signature]]
+kinds = ["Number", "Table", "Column", "Column", "Column", "Number", "Number"]
+variadic = false
