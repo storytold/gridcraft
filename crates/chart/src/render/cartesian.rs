@@ -422,7 +422,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 }
                 _ => {
                     let pts: Vec<Option<[f32; 2]>> = row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j), vpos(t, &sc)])).collect();
-                    draw_runs(ctx, &pts, s.color, series_line_width(s, 2.25), s.smooth.then_some(plot));
+                    draw_runs(ctx, &pts, s.color, series_line_width(s, chart), s.smooth.then_some(plot));
                     let k = kinds.get(i).copied().unwrap_or(ChartKind::Line);
                     if k == ChartKind::LineMarkers && cw >= 3.0 {
                         draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
@@ -530,7 +530,7 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         } else {
             let lines = chart.kind == ChartKind::ScatterLines || s.kind == ChartKind::ScatterLines;
             if lines {
-                draw_runs(ctx, &px, s.color, series_line_width(s, 2.0), s.smooth.then_some(plot));
+                draw_runs(ctx, &px, s.color, series_line_width(s, chart), s.smooth.then_some(plot));
             }
             if !lines || px.len() <= 500 {
                 draw_markers(ctx, px.iter().flatten().copied(), 3.5, s.color);

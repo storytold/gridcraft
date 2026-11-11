@@ -498,7 +498,7 @@ pub(super) fn radar(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         if let Some(p) = pts.first().copied() {
             pts.push(p);
         }
-        ctx.line(pts, s.color, super::lines::series_line_width(s, 2.0));
+        ctx.line(pts, s.color, super::lines::series_line_width(s, chart));
     }
 }
 

@@ -1694,16 +1694,16 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
 }
 
 /// A series line is drawn with the width the file gives it, in points, bounded; without one, with
-/// the kind's default.
+/// the chart style's default, as Excel measures it.
 #[test]
 fn series_lines_take_their_width() {
     let color = [0x00, 0xB0, 0xF0, 0xFF];
-    let widths = |kind: ChartKind, line_width: Option<f32>| -> Vec<f32> {
+    let styled = |kind: ChartKind, line_width: Option<f32>, style: u32| -> Vec<f32> {
         let mut s = series("S", &[1.0, 3.0, 2.0, 4.0], color, kind);
         s.line_width = line_width;
         let data = ChartData { series: vec![s], ..ChartData::default() };
         // Without a legend: its key keeps its own width.
-        let c = Chart { legend: LegendPos::None, ..chart(kind) };
+        let c = Chart { legend: LegendPos::None, style, ..chart(kind) };
         render(&c, &data, 640.0, 400.0, &ApproxMeasure)
             .iter()
             .filter_map(|p| match p {
@@ -1712,16 +1712,25 @@ fn series_lines_take_their_width() {
             })
             .collect()
     };
-    for (kind, default) in [(ChartKind::Line, 2.25), (ChartKind::ScatterLines, 2.0), (ChartKind::Radar, 2.0)] {
+    let widths = |kind: ChartKind, line_width: Option<f32>| styled(kind, line_width, 2);
+    let px = 96.0 / 72.0;
+    for kind in [ChartKind::Line, ChartKind::ScatterLines, ChartKind::Radar] {
         assert!(!widths(kind, None).is_empty(), "{kind:?} draws its line");
-        assert!(widths(kind, None).iter().all(|w| *w == default), "{kind:?}: {:?}", widths(kind, None));
+        // Excel's widths by style: 1.5 pt in styles 1-8, 2.5 in 9-24 and 33-48, 3.5 in 25-32.
+        for (style, pt) in
+            [(0, 1.5), (1, 1.5), (2, 1.5), (8, 1.5), (9, 2.5), (24, 2.5), (25, 3.5), (26, 3.5), (32, 3.5), (33, 2.5), (42, 2.5), (48, 2.5), (49, 1.5)]
+        {
+            let w = styled(kind, None, style);
+            assert!(!w.is_empty() && w.iter().all(|w| (*w - pt * px).abs() < 1e-4), "{kind:?} style {style}: {w:?}");
+        }
+        // The file's own width wins over the style's.
+        assert!(styled(kind, Some(5.0), 26).iter().all(|w| (*w - 5.0 * px).abs() < 1e-4), "{kind:?}");
         for width in [5.0, 0.0, 18.0, 1584.0] {
             assert!(!widths(kind, Some(width)).is_empty(), "{kind:?}: {width} pt draws its line");
         }
         // 5 pt is 6.67 px, the chart's unit.
         assert!(widths(kind, Some(5.0)).iter().all(|w| (*w - 5.0 * 96.0 / 72.0).abs() < 1e-4), "{kind:?}");
         // A hairline stays visible; a line wider than the plot is bounded.
-        let px = 96.0 / 72.0;
         assert!(widths(kind, Some(0.0)).iter().all(|w| (*w - 0.25 * px).abs() < 1e-4), "{kind:?}");
         assert!(widths(kind, Some(18.0)).iter().all(|w| (*w - 18.0 * px).abs() < 1e-4), "{kind:?}: 18 pt is kept");
         assert!(widths(kind, Some(1584.0)).iter().all(|w| (*w - 20.0 * px).abs() < 1e-4), "{kind:?}");

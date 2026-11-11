@@ -141,10 +141,25 @@ const MIN_SERIES_LINE_PT: f32 = 0.25;
 /// Widest series line drawn, in points: Excel takes up to 1584 pt, which would cover the plot.
 const MAX_SERIES_LINE_PT: f32 = 20.0;
 
-/// The width a series line is drawn with: the file's, bounded in points and then converted to
-/// chart units, else `default`.
-pub(super) fn series_line_width(s: &crate::SeriesData, default: f32) -> f32 {
-    s.line_width.filter(|w| w.is_finite()).map_or(default, |w| w.clamp(MIN_SERIES_LINE_PT, MAX_SERIES_LINE_PT) * PX_PER_PT)
+/// The width in points Excel gives a series line the file leaves unset, by chart style (`c:style`,
+/// 1–48), measured in Excel for line, scatter and radar charts: 1.5 pt in the first row of styles,
+/// 3.5 in the fourth, 2.5 in the rest. A style outside 1–48 reads as Excel's default, style 2.
+pub(super) fn default_series_line_pt(style: u32) -> f32 {
+    match style {
+        9..=24 | 33..=48 => 2.5,
+        25..=32 => 3.5,
+        _ => 1.5,
+    }
+}
+
+/// The width a series line is drawn with: the file's, bounded in points, else the chart style's
+/// default (`default_series_line_pt`), converted to chart units.
+pub(super) fn series_line_width(s: &crate::SeriesData, chart: &gridcraft_model::Chart) -> f32 {
+    let pt = s
+        .line_width
+        .filter(|w| w.is_finite())
+        .map_or_else(|| default_series_line_pt(chart.style), |w| w.clamp(MIN_SERIES_LINE_PT, MAX_SERIES_LINE_PT));
+    pt * PX_PER_PT
 }
 
 /// Draws a polyline split at gaps (`None`), decimated when long. With `smooth` (the plot box),
