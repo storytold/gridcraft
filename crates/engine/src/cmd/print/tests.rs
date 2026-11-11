@@ -80,8 +80,8 @@ fn pdf_export_rotates_a_shape_outline_and_its_text() {
     let red_path = |page: &str| {
         let start = page.find("1 0 0 rg").expect("red rectangle fill");
         let tail = &page[start..];
-        let end = tail.find(" f").expect("filled rectangle path") + 2;
-        &tail[..end]
+        let end = tail.find(" B").expect("filled and stroked rectangle path") + 2;
+        tail[..end].to_string()
     };
     assert_ne!(red_path(&upright), red_path(&turned), "the rectangle's printed outline is rotated");
     assert!(turned.contains("0 -1 1 0") && turned.contains("(TURNED) Tj"), "shape text uses the rotation matrix: {turned}");
