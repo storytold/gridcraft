@@ -1190,3 +1190,59 @@ fn equations_print_with_the_symbol_font() {
     // A glyph no standard font has is a [?] box.
     assert!(contains(&pdf, "(?) Tj"));
 }
+
+#[test]
+fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
+    use gridcraft_chart::Prim;
+    let line = |n: usize| Prim::Line { pts: vec![[0.0, 0.0]; n], color: [0, 0, 0, 255], width: 1.0, dash: false };
+    // A smoothed line is its points, not one unit.
+    assert_eq!(chart_cost(&[line(4000), Prim::Circle { cx: 0.0, cy: 0.0, r: 1.0, fill: None, stroke: None }]), 4002);
+    // Room for exactly two copies of a 1,000-point chart.
+    let mut pics = PicCache { chart_prims: MAX_CHART_PRIMS - 2002, ..Default::default() };
+    let mut renders = 0;
+    for expect in [true, true, false, false] {
+        let got = pics.chart((0, 0), || {
+            renders += 1;
+            vec![line(1000)]
+        });
+        assert_eq!(got.is_some(), expect);
+    }
+    assert_eq!(renders, 1, "a rejected chart is not rendered again");
+    assert!(pics.charts.is_empty(), "and its primitives are not kept");
+    // A chart too big for what is left is dropped without being cached at all.
+    let mut pics = PicCache { chart_prims: MAX_CHART_PRIMS - 10, ..Default::default() };
+    assert!(pics.chart((0, 1), || vec![line(1000)]).is_none());
+    assert!(pics.charts.is_empty() && pics.rejected_charts.contains(&(0, 1)));
+}
+
+#[test]
+fn cached_chart_layout_uses_export_font_widths_on_every_page() {
+    let mut session = s();
+    session.execute("range.setValues", json!({"range": "A1:B3", "values": [["A", "A"], ["A", 1], ["A", 2]]})).unwrap();
+    session.execute("insert.chart", json!({"range": "A1:B3", "type": "column", "at": "A1"})).unwrap();
+    let mut wb = (*session.doc().unwrap().wb).clone();
+    let sh = wb.sheet_mut(0).unwrap();
+    let chart = sh.charts.first_mut().unwrap();
+    chart.title = Some("A".repeat(40));
+    chart.anchor.width = 320.0;
+    chart.anchor.height = 1500.0;
+    sh.print.print_area = Some(RangeRef::parse("A1:E100").unwrap());
+    let layout = layout::layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
+    assert!(layout.pages.len() >= 2);
+    let chars: Vec<char> = (' '..='~').chain(['…', '−']).collect();
+    let export = |advance| {
+        let face = std::sync::Arc::new(UnicodeFont::parse(gridcraft_pdf::test_support::tiny_ttf(&chars, advance, 0)).unwrap());
+        let fonts = TextFonts::custom(face, None, None, None);
+        let (doc, _) = render_document(&wb, std::slice::from_ref(&layout), "Book", "", fonts);
+        assert_eq!(doc.missing_glyph(), None);
+        doc.finish()
+    };
+    // A is the first character emitted in the regular face, so its document-local CID is 1.
+    // The narrow face fits the whole title; the wide face must shorten it with an ellipsis.
+    let full_title = format!("<{}> Tj", "0001".repeat(40));
+    let narrow = export(200);
+    let count = String::from_utf8_lossy(&narrow).matches(&full_title).count();
+    assert!(count >= 2, "each page touched by the chart reuses the title fitted with the narrow face");
+    assert!(!contains(&export(1000), &full_title), "a later export must lay the chart out with its own wider face");
+    assert_eq!(String::from_utf8_lossy(&export(200)).matches(&full_title).count(), count);
+}

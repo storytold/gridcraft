@@ -88,9 +88,14 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         let (x, y, w, h) = place(r);
         // About 150 dpi is plenty for print.
         let (mw, mh) = (((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32);
-        let decoded = pics.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));
+        let decoded = pics.decoded.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));
         if let Some((px, pw, ph)) = decoded.as_ref() {
-            pg.image_rgba(Rect::new(x, y, w, h), px, [*pw, *ph]);
+            // Every page the picture touches embeds its own copy: past the budget it is left out.
+            let bytes = px.len();
+            if pics.image_bytes.saturating_add(bytes) <= super::MAX_EMBEDDED_IMAGE_BYTES {
+                pics.image_bytes += bytes;
+                pg.image_rgba(Rect::new(x, y, w, h), px, [*pw, *ph]);
+            }
         }
     }
     for shp in &sh.shapes {
@@ -120,15 +125,20 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         }
         draw_shape(pg, wb, shp, b, (x, y, w, h));
     }
-    for ch in &sh.charts {
+    for (chi, ch) in sh.charts.iter().enumerate() {
         let r = anchor_rect(sh, &ch.anchor);
         if !visible(r) {
             continue;
         }
         let (x, y, _, _) = place(r);
-        let data = gridcraft_chart::resolve(wb, si, ch);
-        let prims = gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure(pg.text_fonts()));
-        draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
+        // As for pictures, each page gets its own copy of the drawing commands.
+        let prims = pics.chart((si, chi), || {
+            let data = gridcraft_chart::resolve(wb, si, ch);
+            gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure(pg.text_fonts()))
+        });
+        if let Some(prims) = prims {
+            draw_prims(pg, prims, Xf { ox: x, oy: y, k: b.k });
+        }
     }
     pg.restore();
 }
