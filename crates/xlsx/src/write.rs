@@ -252,6 +252,56 @@ fn workbook_view_attrs(wb: &Workbook) -> String {
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
 pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
+    write_within(wb, kind, book_name, functions, ReadLimits::READER)
+}
+
+/// The most a part and a whole package may unpack to for the reader to open them.
+#[derive(Clone, Copy)]
+pub(crate) struct ReadLimits {
+    pub part: u64,
+    pub total: u64,
+}
+
+impl ReadLimits {
+    /// What `read_xlsx` accepts (`package.rs`).
+    pub const READER: ReadLimits = ReadLimits { part: crate::package::MAX_PART, total: crate::package::MAX_TOTAL };
+}
+
+/// Refuses a package the reader would refuse to open: one part over `limits.part`, or all of them
+/// together over `limits.total`. Without this, Save writes a file GridCraft can't reopen, e.g.
+/// text full of `&`, which escapes to five bytes a character in `sharedStrings.xml` (#3817).
+/// Counting every part is the reader's worst case: it reads at most these.
+fn check_reopenable<'a>(parts: impl IntoIterator<Item = (&'a str, usize)>, limits: ReadLimits) -> Result<(), IoError> {
+    let mb = |n: u64| n >> 20;
+    let mut total = 0u64;
+    for (name, len) in parts {
+        let len = len as u64;
+        if len > limits.part {
+            return Err(IoError::TooLarge(format!(
+                "{name} would unpack to {} MB, over the {} MB GridCraft can open in one part, so the workbook was not saved",
+                mb(len),
+                mb(limits.part)
+            )));
+        }
+        total = total.saturating_add(len);
+    }
+    if total > limits.total {
+        return Err(IoError::TooLarge(format!(
+            "the workbook would unpack to {} MB, over the {} MB GridCraft can open in one file, so it was not saved",
+            mb(total),
+            mb(limits.total)
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn write_within(
+    wb: &Workbook,
+    kind: XlsxKind,
+    book_name: Option<&str>,
+    functions: FunctionInfo,
+    limits: ReadLimits,
+) -> Result<Vec<u8>, IoError> {
     if wb.sheets.is_empty() {
         return Err(IoError::Format("a workbook needs at least one sheet".into()));
     }
@@ -471,6 +521,7 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
         let _ = write!(ct, "<Override PartName=\"{}\" ContentType=\"{}\"/>", esc_attr(part), esc_attr(t));
     }
     ct.push_str("</Types>");
+    check_reopenable(std::iter::once(("[Content_Types].xml", ct.len())).chain(out.parts.iter().map(|(n, d)| (n.as_str(), d.len()))), limits)?;
     let mut zip = ZipOut::new();
     zip.add("[Content_Types].xml", ct.as_bytes())?;
     // Excel's order: rels, workbook rels, workbook, the rest, document properties last. libmagic (PHP
