@@ -2,31 +2,35 @@
 
 - Date: 2026-11-11
 - Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`). **Delivered**: the fork's
-  `refs/heads/feature/realtime-collaboration` and the PR's `headRefOid` are both `bb5b3acf`, so
-  the fork branch *is* the PR's head. The branch is 66 commits on the base `2c58c769`, 84 files,
-  +17521/−34. `00b146df` (§22: the two findings of the 23:35Z review) is **in** it, and so is
-  `bb5b3acf`, the page update that followed; both were published by the push of
-  2026-11-11T01:24Z, whose four workflow runs are stamped 01:24:30Z. §19 records the push of
-  2026-11-10T17:19Z, which published `ae4311ee`, `34e54b81`, `46783412` and the nine review-fix
-  commits `d91f838a`…`a2251b0e`; §21 records the push of 20:1xZ, which published `f51237ea` and
-  `8208607f`. The only commits above the delivered head are local, unpushed slices: `7b42c82a`
-  (§23: the code and the two tests of the 01:36Z finding) and the commit that carries this page.
+  `refs/heads/feature/realtime-collaboration`, the PR's `headRefOid` and this checkout's HEAD are
+  all `915d994e`, so the fork branch *is* the PR's head. The branch is 68 commits on the base
+  `2c58c769`, 84 files, +17770/−34. The push of 2026-11-11T07:26:44Z — the check suites it created
+  carry that stamp — published `7b42c82a` (§23: the code and the two tests of the 01:36Z finding)
+  and `915d994e`, the page that records them; §19 records the push of 2026-11-10T17:19Z, which
+  published `ae4311ee`, `34e54b81`, `46783412` and the nine review-fix commits
+  `d91f838a`…`a2251b0e`; §21 records the push of 20:1xZ, which published `f51237ea` and
+  `8208607f`, and the 01:24Z one, which published `00b146df` and `bb5b3acf`. **Nothing that push
+  delivered is local**: `git rev-list --count fork/feature/realtime-collaboration...HEAD` was `0 0`
+  then. The two commits above `915d994e` — §24's code and this page — are local until the next
+  push.
 - Base: `origin/main` = `2c58c769` at the time of the rebase (the PR's `baseRefOid`); `origin/main`
   has moved **24 commits** since — its tip at this writing is `6a08240e`. The PR stays mergeable
   against the recorded base; rebasing is a separate step.
 - PR: <https://github.com/storytold/gridcraft/pull/3613> — open, **not a draft** since
-  2026-11-10T14:56:54Z, `mergeable = MERGEABLE`, head `bb5b3acf`, last update 2026-11-11T01:36:39Z
-- Gate on `bb5b3acf`: no CI run. The four workflows the 01:24Z push created (`CI`, `House rules`,
-  `Nix`, `SonarCloud`) all ended `action_required` with no job started — the repository needs a
-  maintainer to approve a run from a fork. `bb5b3acf` itself changes only `docs/collab/STATUS.md`
-  (`git diff --stat 00b146df..bb5b3acf`), so its code is `00b146df`'s, gated on the host in §22.3:
-  `fmt` clean, `clippy -D warnings` on the five packages, and tests of the four collaboration
-  packages plus `gridcraft-web` — 176 passed, 0 failed. CodeRabbit is green on the head: its check
-  run completed `success`. It reviewed the head three times: review `5848894080` at 20:32Z (six
-  threads and one finding outside the diff, closed by §21.4), review `5851190259` at 23:35Z (one
-  thread and one finding outside the diff, closed by §22), and review `5852406613` at 01:36Z on
-  `bb5b3acf` — one thread, comment `4532845977` at `synced.rs:398`, closed by §23, and one finding
-  outside the diff that §23.2 confirms and leaves to its own slice.
+  2026-11-10T14:56:54Z, `mergeable = MERGEABLE`, `mergeStateStatus = UNSTABLE`, head `915d994e`,
+  last update 2026-11-11T07:38:33Z (the review §24 records), `reviewDecision` empty.
+- Gate on `915d994e`: no CI run. The four workflows the 07:26:44Z push created (`CI`, `House
+  rules`, `Nix`, `SonarCloud`) all ended `action_required` with no job started — the repository
+  needs a maintainer to approve a run from a fork. `915d994e` itself changes only
+  `docs/collab/STATUS.md` (`git diff --stat 7b42c82a..915d994e`), so its code is `7b42c82a`'s,
+  gated on the host in §23.4, and the code of `00b146df` under it was gated in §22.3: `fmt` clean,
+  `clippy -D warnings` on the five packages, and 176 passed, 0 failed. CodeRabbit is green on the
+  head: its check run completed `success`. It reviewed four heads: `5848894080` at 20:32Z (six
+  threads and one finding outside the diff, closed by §21.4), `5851190259` at 23:35Z (one thread
+  and one finding outside the diff, closed by §22), `5852406613` at 01:36Z on `bb5b3acf` (one
+  thread, comment `4532845977` at `synced.rs:398`, closed by §23, and one finding outside the diff
+  that §23.2 confirms and leaves to its own slice), and `5855372513` at 07:38Z on `915d994e` (two
+  Major threads on the §23 code, both valid, closed by §24).
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
 - Session handoff (project-level, outside this repository):
   `docs/collab/STATUS.md` in the cabinet project directory. This page is the canonical record and
@@ -1554,9 +1558,101 @@ is `document_version()`. Their 176-test run on `00b146df` stands; the head `bb5b
 
 ### 23.5 Answering the review
 
-Nothing was pushed: the fork still points at `bb5b3acf`, so the inline thread has no commit to
-name yet. The reply on comment `4532845977` will be posted with the push that carries this commit,
-and it will say what it says here: the install is all-or-nothing now (`7b42c82a`), both failure
-paths are tested, and the finding outside the diff is confirmed but belongs to its own slice
-(§23.2). The bus record `status/gridcraft` quotes the hash of the page commit, which a commit
-cannot spell for itself. No CI file is touched: `git diff --name-only -- .github` is empty.
+The push of 2026-11-11T07:26:44Z carried `7b42c82a` and this page into the fork, so the reply on
+comment `4532845977` can name the commit instead of promising one. It will say what it says here:
+the install is all-or-nothing now (`7b42c82a`), both failure paths are tested, and the finding
+outside the diff is confirmed but belongs to its own slice (§23.2). The bus record
+`status/gridcraft` quotes the hash of the page commit, which a commit cannot spell for itself. No
+CI file is touched: `git diff --name-only -- .github` is empty.
+
+## 24. CodeRabbit's two findings on `915d994e` (2026-11-11T07:38Z)
+
+Review `5855372513` is the first review that read §23's fix. It is also the first one that read a
+commit which had already been pushed. Both findings are Major, both point at the slice §23 added,
+and both are confirmed in the code; there is nothing to reject. The fix is one commit, and it stays
+local until the next push (§24.5).
+
+| # | Where | Severity | Verdict | What was done |
+|---|---|---|---|---|
+| 1 | `crates/collab-client/src/synced.rs:193` (comment `4535207012`) | Major, quick win | valid | `apply` refuses to touch any document when the session's workbook is no longer open, and reports it instead of writing the room's operation into whichever workbook is in front (§24.1) |
+| 2 | `crates/collab-client/src/synced.rs:216` (comment `4535207024`) | Major, heavy lift | valid | a replica that still holds a refused preview asks for workbooks only, never for a journal tail, and stops after `SNAPSHOT_ATTEMPTS` (§24.2) |
+
+The review's pre-merge note about docstring coverage (a percentage, not a location) needs no code
+change: the functions this slice touches and adds carry doc comments, and the repository has no
+docstring threshold of its own to satisfy.
+
+### 24.1 An operation belongs to the session's workbook, and only to it
+
+`apply` called `apply_here` whatever `enter_shared` answered. `enter_shared` returns `None` when
+`doc_uid`'s document is not in the session any more — the user closed the shared workbook while
+another one stayed open, which is exactly the case the `document.rs` tests describe — and the
+operation then ran on the active document, a file the room never saw. The §23 recovery path made it
+reachable on purpose: the first retry asks for another workbook, the second asks for a tail from
+the version the document holds, and the server answers that tail with `Applied` events. The
+`document.rs` test for the closed workbook left no other workbook open, so it could not see this.
+
+`apply` now returns whether it wrote anything. `enter_shared` answering `None` sets a notice — the
+session's document is closed, reopen the session to continue — leaves every document as it was, and
+leaves `document_version` alone; the `Event::Applied` arm counts such an event as not written, so
+the caller is not told that a change happened, while the ack still leaves the resend queue and the
+step still counts as this author's (`note_own`). The test
+`an_operation_for_a_closed_document_is_not_written_into_another_workbook` asserts the other
+workbook is untouched, the version is not claimed and no `Applied` reaches the caller; it fails on
+the previous code with `left: Number(7.0), right: Empty`.
+
+### 24.2 A tail is not a way back from a refused preview
+
+`Event::Rejected` sets a notice and asks for the workbook when the refused preview sits under a
+later one in this replica's history (`a_refused_earlier_preview_does_not_undo_the_later_one`). The
+reason is that the refused edit never reached the journal: no tail can take it back, and only the
+authoritative workbook can. The §23 recovery, however, only knew two failures — a workbook that did
+not install, twice — and its second answer was always `Resync { from: document_version }`. A
+replica that had asked for the workbook *because* of a refused preview therefore fell back to the
+tail after two failed installs; replaying that tail left the refused preview in the document while
+each `Applied` in it moved `document_version` on, so the replica ended up claiming the room's
+version with content the room never had — the §23 failure mode, one level up. `Resynced` was
+already guarded by `snapshot_failures`; `applied` is not, and must not be.
+
+`Synced` gained `authoritative_only`, set where the refused-preview answer is chosen and cleared by
+a workbook that installs. While it is set, `snapshot_failed` answers every failure below the bound
+with the whole workbook again, and the bound itself stops the requests: three failed workbooks end
+with "reopen the session to reload it". A tail is only a way back when the document is the room's
+document minus a tail; this replica's document is not, and saying so is cheaper than pretending.
+The test `a_refused_preview_is_repaired_by_a_workbook_not_a_journal_tail` asserts two consecutive
+failures bring a second and a third `Snapshot`, never a `Resync`, and that a third failure stops
+instead of looping; on the previous code the second answer is `[Snapshot, Snapshot, Resync { from:
+0 }]`.
+
+### 24.3 What this changes about §23
+
+§23.3's ladder (workbook, then tail, then stop) stands for the failure it was built for: a workbook
+that could not be installed while the document's content is otherwise trustworthy. §24.2 narrows it
+to that case. §23.4's counts stay valid for `7b42c82a`; the numbers below are the ones the new
+commit was gated with.
+
+### 24.4 Gates (remote host `agents`, 2026-11-11, on this slice)
+
+```text
+cargo fmt --all -- --check                                  clean, EXIT 0
+cargo clippy -p gridcraft-collab-client --all-targets
+  -j 8 -- -D warnings                                       clean, EXIT 0
+cargo test -p gridcraft-collab-client --all-targets        4 lib + 13 converge + 8 document
+                                                           + 5 parts + 5 rollback,
+                                                           35 passed, 0 failed, EXIT 0
+cargo test -p gridcraft-collab-web -p gridcraft-web        11 + 11 passed, 0 failed, EXIT 0
+cargo +1.95.0 check -p gridcraft-collab-web -p gridcraft-web
+  --target wasm32-unknown-unknown                           ok, EXIT 0
+```
+
+Both new tests were run against the pre-fix `synced.rs` first: they fail there (24.1, 24.2), and
+pass with the fix. `gridcraft-collab` and `gridcraft-collab-server` are untouched — the change is
+inside `crates/collab-client/src/synced.rs` and its two test files, and the public surface gained
+nothing; their §22.3 run stands.
+
+### 24.5 Answering the review
+
+This commit is local: the fork still points at `915d994e` until the human push of §19. The code
+commit is `2a5f3e00`; this page follows it. Both threads
+(`4535207012`, `4535207024`) are answered with the commit hash once it is published; the answer says
+what §24.1 and §24.2 say, and names the two tests. No CI file is touched: `git diff --name-only --
+.github` is empty, and the two findings came from a review that already ran on a pushed head.
