@@ -972,43 +972,14 @@ pub fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
-const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
 pub fn base64_encode(data: &[u8]) -> String {
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b = [chunk.first().copied().unwrap_or(0), chunk.get(1).copied().unwrap_or(0), chunk.get(2).copied().unwrap_or(0)];
-        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(B64[((n >> (18 - 6 * i)) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
+    gridcraft_model::b64::encode(data)
 }
 
+/// Base64, or a `data:` URL's base64 payload.
 pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
     let s = s.split_once(',').filter(|(h, _)| h.starts_with("data:")).map(|(_, b)| b).unwrap_or(s);
-    let mut out = Vec::with_capacity(s.len() / 4 * 3);
-    let mut buf = 0u32;
-    let mut bits = 0;
-    for c in s.bytes() {
-        if c == b'=' || c.is_ascii_whitespace() {
-            continue;
-        }
-        let v = B64.iter().position(|&x| x == c)? as u32;
-        buf = (buf << 6) | v;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((buf >> bits) as u8);
-            buf &= (1 << bits) - 1;
-        }
-    }
-    Some(out)
+    gridcraft_model::b64::decode(s)
 }
 
 /// Pixel size of a PNG or JPEG from its header.

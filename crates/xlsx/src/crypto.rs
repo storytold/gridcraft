@@ -512,26 +512,7 @@ fn agile(xml: &[u8], package: &[u8], password: &str) -> Result<Vec<u8>, DecryptE
 
 /// Standard base64 (whitespace ignored), as Agile's XML uses for every binary value.
 fn base64(s: &str) -> Result<Vec<u8>, DecryptError> {
-    let mut out = Vec::with_capacity(s.len() / 4 * 3);
-    let (mut buf, mut bits) = (0u32, 0u32);
-    for c in s.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=') {
-        let v = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return Err(malformed("invalid base64")),
-        };
-        buf = (buf << 6) | u32::from(v);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((buf >> bits) as u8);
-            buf &= (1 << bits) - 1;
-        }
-    }
-    Ok(out)
+    gridcraft_model::b64::decode(s).ok_or_else(|| malformed("invalid base64"))
 }
 
 #[cfg(test)]
