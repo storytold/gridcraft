@@ -1296,3 +1296,23 @@ fn rejected_text_x_values_are_not_charged_to_the_point_budget() {
     assert_eq!(d.series.len(), 40);
     assert!(d.series.iter().all(|s| s.values.len() == 100 && s.x.is_none()));
 }
+
+#[test]
+fn scatter_values_are_kept_with_their_x_values_when_the_budget_runs_out() {
+    // Y and X are charged as a pair: a series that gets values also gets X values, so it still draws.
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    for col in 0..2 {
+        s.set_value(CellRef::new(0, col), Value::Number(1.0));
+        s.set_value(CellRef::new(59_999, col), Value::Number(2.0));
+    }
+    let mut c = chart(ChartKind::Scatter);
+    c.series = (0..40)
+        .map(|_| Series { values: "Sheet1!$A$1:$A$60000".into(), categories: Some("Sheet1!$B$1:$B$60000".into()), ..Default::default() })
+        .collect();
+    let d = resolve(&wb, 0, &c);
+    let total: usize = d.series.iter().map(|s| s.values.len() + s.x.as_ref().map_or(0, Vec::len)).sum();
+    assert!(total <= crate::resolve::MAX_CHART_POINTS);
+    assert!(d.series.iter().any(|s| s.values.len() < 60_000 && !s.values.is_empty()));
+    assert!(d.series.iter().all(|s| s.values.is_empty() || s.x.as_ref().is_some_and(|x| x.len() == s.values.len())));
+}

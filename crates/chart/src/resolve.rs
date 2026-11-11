@@ -246,7 +246,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     // One point budget for the whole chart, not one per series.
     let mut budget = MAX_CHART_POINTS;
     for (i, s) in chart.series.iter().take(MAX_SERIES).enumerate() {
-        let values = nums(wb, sheet, &s.values, &mut budget);
+        let mut values: Vec<Option<f64>> = eval_list_capped(wb, sheet, &s.values, budget).iter().map(to_num).collect();
         let name = s.name.as_deref().map(|n| series_name(wb, sheet, n)).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Series{}", i + 1));
         let color =
             s.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or_else(|| series_color(&wb.theme, i));
@@ -255,16 +255,23 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             // X values with text in them (labels) are ignored: the points are numbered 1..n.
             (Some(f), true) => {
                 let xs = eval_list_capped(wb, sheet, f, budget);
-                // Only X values that are kept are charged to the budget.
                 if xs.iter().any(Value::is_text) {
                     None
                 } else {
-                    budget -= xs.len().min(budget);
-                    Some(xs.iter().map(to_num).collect())
+                    let mut xs: Vec<Option<f64>> = xs.iter().map(to_num).collect();
+                    // Y and X are kept as a pair: when both do not fit, each gets half, so a
+                    // series is never left with values and no X (which draws nothing).
+                    if values.len() + xs.len() > budget {
+                        values.truncate(budget / 2);
+                        xs.truncate(budget / 2);
+                    }
+                    budget -= xs.len();
+                    Some(xs)
                 }
             }
             _ => None,
         };
+        budget -= values.len();
         if categories.is_none()
             && let Some(f) = &s.categories
         {
