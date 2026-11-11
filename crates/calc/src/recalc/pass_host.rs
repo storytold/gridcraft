@@ -1,5 +1,5 @@
 use super::graph::{HashMap, HashSet, Key};
-use super::{Evaluator, Host, Workbook, stack_position};
+use super::{Evaluator, Host, WebFetch, Workbook, stack_position};
 use crate::spill_index::{Cover, SpillIndex};
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
@@ -70,6 +70,9 @@ pub(super) struct PassHost<'a> {
     pub(super) tainted: HashSet<Key>,
     /// Whether the formula being evaluated has read a previous value.
     taint: bool,
+    /// WEBSERVICE's fetcher and the responses already fetched in this pass (each URL once).
+    pub(super) web: Option<WebFetch>,
+    web_cache: Vec<(String, Result<String, CellError>)>,
     /// "Set precision as displayed" is on: results are rounded to their cells' formats before
     /// they are stored or read by other formulas.
     precision: Option<crate::DisplayedPrecision>,
@@ -118,6 +121,8 @@ impl<'a> PassHost<'a> {
             members: HashSet::default(),
             tainted: HashSet::default(),
             taint: false,
+            web: None,
+            web_cache: Vec::new(),
             precision: wb.calc.precision_as_displayed.then(crate::DisplayedPrecision::new),
             stack_top: 0,
             out_of_stack: false,
@@ -545,9 +550,33 @@ fn fit_to_range(v: Value, range: RangeRef) -> Value {
     Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
 }
 
+/// Most distinct URLs WEBSERVICE fetches in one pass.
+const MAX_WEB_CALLS: usize = 1_000;
+/// Failed fetches after which a pass stops asking the network (an unreachable host would
+/// otherwise cost a full timeout per URL).
+const MAX_WEB_FAILURES: usize = 5;
+/// Longest text WEBSERVICE returns (a cell's limit).
+const MAX_WEB_TEXT: usize = 32_767;
+
 impl Host for PassHost<'_> {
     fn workbook(&self) -> &Workbook {
         self.wb
+    }
+    fn web_service(&mut self, url: &str) -> Result<String, CellError> {
+        if let Some((_, r)) = self.web_cache.iter().find(|(u, _)| u == url) {
+            return r.clone();
+        }
+        let Some(web) = self.web.clone() else { return Err(CellError::Value) };
+        let failures = self.web_cache.iter().filter(|(_, r)| r.is_err()).count();
+        if self.web_cache.len() >= MAX_WEB_CALLS || failures >= MAX_WEB_FAILURES {
+            return Err(CellError::Value);
+        }
+        let r = match (web.0)(url) {
+            Ok(text) if text.chars().count() <= MAX_WEB_TEXT => Ok(text),
+            _ => Err(CellError::Value),
+        };
+        self.web_cache.push((url.to_string(), r.clone()));
+        r
     }
     fn stack_top(&self) -> Option<usize> {
         (self.depth > 1).then_some(self.stack_top)

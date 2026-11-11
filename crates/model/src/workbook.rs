@@ -268,6 +268,13 @@ pub struct Workbook {
     /// `preserved` are relative to. Saving into another folder rewrites them from there. Not in JSON.
     #[serde(skip)]
     pub source_dir: Option<std::path::PathBuf>,
+    /// Get & Transform queries (Data › Queries & Connections), in the order they were created.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queries: Vec<crate::query::Query>,
+    /// Power Query queries authored in Excel, read from its `DataMashup` part (kept in `preserved`)
+    /// to be listed read-only. Not in JSON.
+    #[serde(skip)]
+    pub excel_queries: Vec<crate::query::ExcelQuery>,
     /// The region whose formats this workbook is typed and shown in (Options › Region). A runtime
     /// setting of the application, not of the file: it is not saved, and the engine session sets
     /// it on every document it holds. en-US until then.
@@ -370,6 +377,8 @@ impl Workbook {
             macros_unread: Arc::default(),
             preserved: None,
             source_dir: None,
+            queries: vec![],
+            excel_queries: vec![],
             region: gridcraft_core::region::default_region(),
             source_path: None,
         }

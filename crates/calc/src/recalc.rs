@@ -38,6 +38,20 @@ pub use graph::{FxHasher, Graph, Key};
 use graph::{HashMap, HashSet, Node, Taken};
 use pass_host::{PassHost, spills_as_before};
 
+/// The WEBSERVICE fetcher a host injects: GETs a URL and returns its text, or why it couldn't.
+/// Without one, WEBSERVICE gives `#VALUE!` (the browser, a blocked workbook, tests).
+#[derive(Clone)]
+pub struct WebFetch(pub WebFetchFn);
+
+/// Fetches a URL's text for WEBSERVICE.
+pub type WebFetchFn = std::sync::Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
+
+impl std::fmt::Debug for WebFetch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WebFetch")
+    }
+}
+
 /// Calculation state kept beside a workbook.
 #[derive(Clone, Debug)]
 pub struct Calc {
@@ -48,6 +62,8 @@ pub struct Calc {
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
+    /// WEBSERVICE's fetcher, when the workbook may reach the web.
+    pub web: Option<WebFetch>,
     /// The cells whose value is `#SPILL!`, kept so that finding the formulas an emptied cell or a
     /// freed spill area may unblock doesn't walk every formula or window of cells. Filled in
     /// `rebuild`, kept up to date by `cells_changed` and by the write-back of a run; an entry is
@@ -102,6 +118,7 @@ impl Default for Calc {
             circular: vec![],
             last_recalc_cells: 0,
             spill_errors: SpillErrors::default(),
+            web: None,
         }
     }
 }
@@ -494,6 +511,7 @@ impl Calc {
             let (results, spills, cycles) = {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
                 host.iterate = wb.calc.iterative;
+                host.web = self.web.clone();
                 for k in &dirty {
                     host.calculate(*k);
                 }

@@ -1351,15 +1351,18 @@ fn scripts_leave_file_access_working_after_they_run() {
 }
 
 #[test]
-fn get_data_refuses_json_with_too_many_fields_or_rows_before_building_rows() {
+fn get_data_keeps_json_within_a_sheet() {
     let mut s = s();
-    let wide = format!("[{}]", (0..=gridcraft_core::MAX_COLS).map(|i| format!("{{\"k{i}\":1}}")).collect::<Vec<_>>().join(","));
-    let err = s.execute("data.fromTextCsv", json!({"text": wide})).unwrap_err().to_string();
-    assert!(err.contains("more fields"), "{err}");
-    // MAX_ROWS objects plus the header row are one too many.
-    let tall = format!("[{}]", vec!["{}"; gridcraft_core::MAX_ROWS as usize].join(","));
-    let err = s.execute("data.fromTextCsv", json!({"text": tall})).unwrap_err().to_string();
-    assert!(err.contains("more rows"), "{err}");
+    // A record with one field more than a sheet has columns: the extra field is left out, as
+    // Power Query's load leaves out what doesn't fit.
+    let wide = format!("[{{{}}}]", (0..=gridcraft_core::MAX_COLS).map(|i| format!("\"k{i}\":1")).collect::<Vec<_>>().join(","));
+    let out = s.execute("data.getData", json!({"text": wide})).unwrap();
+    assert_eq!(out["cols"].as_u64(), Some(u64::from(gridcraft_core::MAX_COLS)), "{out}");
+    // As many records as a sheet has rows: they are cut to fit under the header row.
+    let tall = format!("[{}]", vec!["{\"a\":1}"; gridcraft_core::MAX_ROWS as usize].join(","));
+    let out = s.execute("data.getData", json!({"text": tall, "name": "Tall"})).unwrap();
+    let rows = out["rows"].as_u64().unwrap_or(0);
+    assert!(rows > 1_000_000 && rows < u64::from(gridcraft_core::MAX_ROWS), "{out}");
 }
 
 #[test]

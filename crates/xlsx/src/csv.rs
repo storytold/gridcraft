@@ -249,6 +249,24 @@ pub(crate) fn parse_records(text: &str, delim: char, quote: char, mut on_record:
     }
 }
 
+/// The records of delimited text as raw fields (no value parsing), at most `max_records` of
+/// them with at most `max_fields` fields each: what Get & Transform reads before it detects
+/// types. `delimiter` `None` detects comma, semicolon or tab like [`read_csv`].
+pub fn csv_records(text: &str, delimiter: Option<char>, max_records: usize, max_fields: usize) -> Vec<Vec<String>> {
+    let quote = '"';
+    let delim = delimiter.filter(|d| *d != quote).unwrap_or_else(|| sniff_delimiter(text, quote) as char);
+    let mut out = Vec::new();
+    parse_records(text, delim, quote, |mut rec| {
+        if out.len() >= max_records {
+            return false;
+        }
+        rec.truncate(max_fields);
+        out.push(rec);
+        true
+    });
+    out
+}
+
 /// How many rows and bytes of a text file are read to decide each column's date order.
 const DATE_SAMPLE_ROWS: usize = 200;
 const DATE_SAMPLE_BYTES: usize = 1 << 20;
