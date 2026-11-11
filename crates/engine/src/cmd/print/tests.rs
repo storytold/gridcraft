@@ -1357,6 +1357,21 @@ fn the_same_picture_on_several_sheets_is_one_image_object() {
     assert_eq!(text.matches(" cm /Sh1 Do").count(), 2, "drawn on both sheets' pages");
 }
 
+/// The same picture in two sections, read from two parts (bytes equal, not shared), is decoded
+/// once, for the larger of its two printed sizes.
+#[test]
+fn equal_picture_bytes_in_two_sections_are_one_image_object() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "one"})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&L&G&R&G"})).unwrap();
+    let logo = png(400, 200);
+    keep_hf_pictures(&mut s, &[("LH", "width:40pt;height:20pt", logo.clone()), ("RH", "width:80pt;height:40pt", logo)]);
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(text.matches("/Subtype /Image").count(), 1, "decoded and written once for both sections");
+    assert_eq!(text.matches(" cm /Sh").count(), 2, "drawn in both sections");
+}
+
 /// A picture over the budget at one size is still tried at a smaller size, while an unreadable one
 /// is tried only once.
 #[test]

@@ -41,7 +41,9 @@ pub struct HfPicture {
 /// section wins). Empty when the sheet has none or they can't be read.
 pub fn header_footer_pictures(kept: &Preserved) -> Vec<HfPicture> {
     let Some(vml) = hf_drawing(kept) else { return vec![] };
-    let Ok(text) = std::str::from_utf8(&vml.data) else { return vec![] };
+    // Read from a UTF-8 copy (a drawing may be UTF-16); the kept bytes are saved unchanged.
+    let utf8 = crate::xml::to_utf8(&vml.data);
+    let Ok(text) = std::str::from_utf8(&utf8) else { return vec![] };
     let mut out: Vec<HfPicture> = vec![];
     for (a, b) in shape_spans(text) {
         if out.len() >= MAX_PICTURES {

@@ -856,6 +856,11 @@ const NOTE_VML: &str = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o=
 /// #1257: a letterhead in the header and a picture in the footer (`&G`), drawn from a VML part
 /// that `<legacyDrawingHF>` names, next to a note whose VML drawing GridCraft rewrites.
 fn header_picture_package() -> Vec<u8> {
+    header_picture_package_with(HF_VML.as_bytes())
+}
+
+/// [`header_picture_package`] with `hf_vml` as the header/footer drawing's bytes.
+fn header_picture_package_with(hf_vml: &[u8]) -> Vec<u8> {
     let types = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/comments1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/></Types>"#;
     let workbook = format!(
         r#"<?xml version="1.0"?><workbook xmlns="{NS_MAIN}" xmlns:r="{NS_R}"><sheets><sheet name="Invoice" sheetId="1" r:id="rId1"/></sheets></workbook>"#
@@ -880,7 +885,7 @@ fn header_picture_package() -> Vec<u8> {
         ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels.as_bytes()),
         ("xl/comments1.xml", COMMENTS.as_bytes()),
         ("xl/drawings/vmlDrawing1.vml", NOTE_VML.as_bytes()),
-        ("xl/drawings/vmlDrawing2.vml", HF_VML.as_bytes()),
+        ("xl/drawings/vmlDrawing2.vml", hf_vml),
         ("xl/drawings/_rels/vmlDrawing2.vml.rels", hf_rels.as_bytes()),
         ("xl/media/image1.png", LOGO),
         ("xl/media/image2.png", SIGNATURE),
@@ -934,6 +939,17 @@ fn header_and_footer_pictures_are_read_for_printing() {
             ]
         );
     }
+}
+
+/// A header/footer drawing saved as UTF-16 gives the same pictures, and is kept byte for byte.
+#[test]
+fn utf16_header_and_footer_pictures_are_read_for_printing() {
+    let utf16: Vec<u8> = [0xFF, 0xFE].into_iter().chain(HF_VML.encode_utf16().flat_map(u16::to_le_bytes)).collect();
+    let (wb, _) = read_xlsx(&header_picture_package_with(&utf16)).unwrap();
+    let kept = wb.sheet(0).unwrap().preserved.clone().expect("the header drawing is kept");
+    let got: Vec<_> = crate::header_footer_pictures(&kept).into_iter().map(|p| (p.footer, p.section, p.data.to_vec())).collect();
+    assert_eq!(got, [(false, 0, LOGO.to_vec()), (true, 1, SIGNATURE.to_vec())]);
+    assert!(kept.parts.iter().any(|p| p.data[..] == utf16[..]), "the drawing's own bytes are kept");
 }
 
 /// The shape blocks a VML drawing claims (`<o:idmap data>`) and the blocks of its shape ids

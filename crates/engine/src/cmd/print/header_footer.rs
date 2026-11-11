@@ -377,9 +377,13 @@ pub(super) fn hf_images(
     let px = |pt: f32| ((pt * scale.max(0.01) / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32;
     let mut out = Vec::with_capacity(pictures.len());
     for p in &pictures {
-        let users = pictures.iter().filter(|q| std::sync::Arc::ptr_eq(&q.data, &p.data));
+        // Equal bytes are one image, as the cache counts them, even from separate parts: decoded
+        // once, for the largest size any of them prints at.
+        let users = pictures.iter().filter(|q| std::sync::Arc::ptr_eq(&q.data, &p.data) || q.data[..] == p.data[..]);
         let size = users.fold((1, 1), |(w, h), q| (w.max(px(q.width)), h.max(px(q.height))));
-        if let Some(id) = cache.image(doc, &p.data, size) {
+        // When that largest size doesn't fit the budget left, this picture's own size may.
+        let own = (px(p.width), px(p.height));
+        if let Some(id) = cache.image(doc, &p.data, size).or_else(|| if own == size { None } else { cache.image(doc, &p.data, own) }) {
             out.push(HfImage { page: p.page, footer: p.footer, section: p.section, width: p.width, height: p.height, id });
         }
     }
