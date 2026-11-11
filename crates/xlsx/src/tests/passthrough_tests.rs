@@ -1048,15 +1048,16 @@ fn notes_and_header_pictures_use_different_shape_blocks() {
     assert!(notes_ids.iter().all(|b| notes_map.contains(b)), "note ids outside their drawing's blocks");
 }
 
-/// A header drawing saved as UTF-16 reserves its shape blocks too: the notes drawing written next
-/// to it doesn't reuse them.
+/// A header drawing read from UTF-16 is written back with its pictures, and the notes drawing
+/// written next to it doesn't reuse its shape blocks.
 #[test]
 fn notes_take_shape_blocks_a_utf16_header_drawing_doesnt_use() {
     let (wb, _) = read_xlsx(&header_picture_package_with(&utf16(HF_VML))).unwrap();
     let u = Unpacked::new(&write_xlsx(&wb).unwrap());
     let sheet = sheet_part(&u, "Invoice");
     let sx = u.text(&sheet);
-    let (hf_map, hf_ids) = vml_blocks(HF_VML);
+    let (hf_map, hf_ids) = vml_blocks(&u.text(&u.target(&sheet, &attr_of(&sx, "legacyDrawingHF", "r:id")).1));
+    assert_eq!(hf_ids.len(), 2, "both pictures written");
     let (notes_map, notes_ids) = vml_blocks(&u.text(&u.target(&sheet, &attr_of(&sx, "legacyDrawing", "r:id")).1));
     assert!(!notes_ids.is_empty());
     for b in notes_map.iter().chain(&notes_ids) {

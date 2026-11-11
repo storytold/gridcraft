@@ -1638,10 +1638,35 @@ fn header_picture_input_is_checked() {
     let mut huge = png(5, 5);
     huge.resize(17 * 1024 * 1024, 0);
     assert!(run(&mut s, json!({"base64": crate::io::base64_encode(&huge)})).is_err(), "over 16 MB");
+    // Sizes printing would leave out are refused: 5,000 × 4,000 is 20 million pixels.
+    let e = run(&mut s, json!({"base64": crate::io::base64_encode(&png_claiming(5000, 4000))})).unwrap_err().to_string();
+    assert!(e.contains("16 million pixels"), "{e}");
+    assert!(run(&mut s, json!({"base64": crate::io::base64_encode(&png_claiming(9000, 10))})).is_err(), "over 8192 px on a side");
     // Hostile sizes are clamped.
     let r = run(&mut s, json!({"base64": b64_png(5, 5), "width": 1e30, "height": -4})).unwrap();
     assert_eq!(r["width"].as_f64(), Some(1584.0));
     assert!(print_of(&s).hf_pictures.iter().all(|p| p.width.is_finite() && p.height.is_finite() && p.height > 0.0));
+}
+
+/// A 1 × 1 PNG whose header says `w` × `h` (its size is read from the header).
+fn png_claiming(w: u32, h: u32) -> Vec<u8> {
+    let mut data = png(1, 1);
+    data[16..20].copy_from_slice(&w.to_be_bytes());
+    data[20..24].copy_from_slice(&h.to_be_bytes());
+    data
+}
+
+/// GIF and BMP pictures, which this build can't decode to print, are refused with what it takes.
+#[test]
+fn gif_and_bmp_header_pictures_are_refused() {
+    let mut s = s();
+    let gif = b"GIF89a\x1e\x00\x0a\x00\x80\x00\x00".to_vec();
+    let bmp = [b"BM".as_slice(), &[0; 12], &40u32.to_le_bytes(), &30i32.to_le_bytes(), &10i32.to_le_bytes()].concat();
+    for data in [gif, bmp] {
+        let e = s.execute("pageLayout.headerFooterPicture", json!({"base64": crate::io::base64_encode(&data)})).unwrap_err().to_string();
+        assert!(e.contains("PNG or JPEG"), "{e}");
+    }
+    assert!(print_of(&s).hf_pictures.is_empty());
 }
 
 /// A picture inserted here survives saving as XLSX and reading it back.

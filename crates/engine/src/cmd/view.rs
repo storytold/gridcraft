@@ -157,7 +157,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Picture",
             ["Header & Footer", "Header & Footer Elements"],
             None,
-            "{sheet?, page?: odd|even|first, part?: header|footer, section?: left|center|right, path? | base64?, width?: pt, height?: pt, title?} puts a picture (PNG, JPEG, GIF or BMP, at most 16 MB) in that section, replacing the one there, and adds `&G` to the section's text if it has none; without a size it keeps its proportions and fits the margin. {…, remove: true} takes the section's picture and its `&G` away → {page, part, section, width, height, header, footer}",
+            "{sheet?, page?: odd|even|first, part?: header|footer, section?: left|center|right, path? | base64?, width?: pt, height?: pt, title?} puts a picture (PNG or JPEG, at most 16 MB, 8192 pixels on a side and 16 million pixels) in that section, replacing the one there, and adds `&G` to the section's text if it has none; without a size it keeps its proportions and fits the margin. {…, remove: true} takes the section's picture and its `&G` away → {page, part, section, width, height, header, footer}",
             has_doc,
             header_footer_picture
         ),
@@ -543,13 +543,12 @@ fn without_g(raw: &str) -> String {
 /// Largest header/footer picture accepted, in bytes.
 const MAX_HF_PICTURE_BYTES: usize = 16 * 1024 * 1024;
 
-/// The media type of a picture GridCraft can put in a header or footer, from its bytes.
+/// The media type of a picture GridCraft can put in a header or footer, from its bytes: the
+/// formats it can read the size of and print (GIF and BMP aren't decoded in this build).
 fn hf_picture_mime(data: &[u8]) -> Option<&'static str> {
     match image::guess_format(data).ok()? {
         image::ImageFormat::Png => Some("image/png"),
         image::ImageFormat::Jpeg => Some("image/jpeg"),
-        image::ImageFormat::Gif => Some("image/gif"),
-        image::ImageFormat::Bmp => Some("image/bmp"),
         _ => None,
     }
 }
@@ -596,8 +595,17 @@ fn header_footer_picture(s: &mut Session, p: &Json) -> Result<Json> {
         if data.len() > MAX_HF_PICTURE_BYTES {
             return Err(bad(CMD, "pictures larger than 16 MB aren't supported in headers and footers"));
         }
-        let mime = hf_picture_mime(&data).ok_or_else(|| bad(CMD, "the picture must be a PNG, JPEG, GIF or BMP image"))?;
+        let mime = hf_picture_mime(&data).ok_or_else(|| bad(CMD, "the picture must be a PNG or JPEG image"))?;
         let (pw, ph) = crate::io::image_size(&data).filter(|(w, h)| *w > 0 && *h > 0).ok_or_else(|| bad(CMD, "the picture's size can't be read"))?;
+        // Printing would leave a larger picture out: refuse it here instead of storing it.
+        if !super::print::hf_printable_size(pw, ph) {
+            return Err(bad(
+                CMD,
+                format!(
+                    "the picture is {pw} × {ph} pixels; headers and footers print pictures up to 8192 pixels on a side and 16 million pixels: make it smaller"
+                ),
+            ));
+        }
         let title = str_param(p, "title")
             .map(str::to_string)
             .or_else(|| str_param(p, "path").and_then(|x| std::path::Path::new(x).file_stem()).map(|n| n.to_string_lossy().into_owned()))

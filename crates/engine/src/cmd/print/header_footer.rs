@@ -421,7 +421,7 @@ pub(super) fn decode_limited(data: &[u8], max_w: u32, max_h: u32, budget: usize)
         return Err(Outcome::Unreadable);
     }
     let (iw, ih) = crate::io::image_size(data).ok_or(Outcome::Unreadable)?;
-    if iw == 0 || ih == 0 || iw > HF_MAX_SIDE_PX || ih > HF_MAX_SIDE_PX || u64::from(iw) * u64::from(ih) > 16_000_000 {
+    if !hf_printable_size(iw, ih) {
         return Err(Outcome::Unreadable);
     }
     let (max_w, max_h) = (max_w.max(1), max_h.max(1));
@@ -441,6 +441,12 @@ pub(super) fn decode_limited(data: &[u8], max_w: u32, max_h: u32, budget: usize)
     let rgba = img.to_rgba8();
     let (w, h) = (rgba.width(), rgba.height());
     Ok((rgba.into_raw(), w, h))
+}
+
+/// Whether a `w` × `h` header/footer picture is within what printing decodes: at most
+/// `HF_MAX_SIDE_PX` on a side and 16 million pixels.
+pub fn hf_printable_size(w: u32, h: u32) -> bool {
+    w > 0 && h > 0 && w <= HF_MAX_SIDE_PX && h <= HF_MAX_SIDE_PX && u64::from(w) * u64::from(h) <= 16_000_000
 }
 
 /// The size `image`'s `thumbnail` gives an `iw` × `ih` image shrunk to fit `max_w` × `max_h`:
