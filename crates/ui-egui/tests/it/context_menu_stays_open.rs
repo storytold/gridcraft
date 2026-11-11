@@ -100,3 +100,36 @@ fn a_quick_right_click_between_pixels_keeps_the_menu_open_on_retina() {
     h.run_steps(4);
     assert!(h.state().grid.context_menu.is_some(), "the menu stays open");
 }
+
+#[test]
+fn a_linked_cell_offers_to_edit_open_and_remove_its_link() {
+    // #2120: the menu only offered "Link…", and its dialog was titled Insert Hyperlink.
+    use egui_kittest::kittest::Queryable as _;
+    let mut h = harness();
+    h.state_mut().session.execute("insert.link", serde_json::json!({"cell": "B2", "target": "#Sheet1!D9", "text": "Go"})).unwrap();
+    h.run_steps(2);
+    quick_right_click(&mut h, "B2");
+    assert!(h.query_by_label("Edit Hyperlink…").is_some() && h.query_by_label("Open Hyperlink").is_some(), "linked cell menu");
+    assert!(h.query_by_label("Link…").is_none());
+    // Open Hyperlink follows it (an internal reference selects its cell).
+    h.get_by_label("Open Hyperlink").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.active().unwrap().selection.active, CellRef::parse("D9").unwrap());
+    // Edit Hyperlink opens the link's own dialog.
+    quick_right_click(&mut h, "B2");
+    h.get_by_label("Edit Hyperlink…").click();
+    h.run_steps(4);
+    let d = h.state().dialog.as_ref().expect("the link dialog");
+    assert_eq!(d.title, "Edit Hyperlink");
+    assert_eq!(d.values.get("target").and_then(|v| v.as_str()), Some("#Sheet1!D9"));
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+    // Remove Hyperlink takes the link away; a cell without one offers Link… again.
+    quick_right_click(&mut h, "B2");
+    h.get_by_label("Remove Hyperlink").click();
+    h.run_steps(4);
+    let sh = h.state().session.active().unwrap().wb.active().unwrap().clone();
+    assert!(!sh.hyperlinks.contains_key(&CellRef::parse("B2").unwrap()));
+    quick_right_click(&mut h, "B2");
+    assert!(h.query_by_label("Link…").is_some() && h.query_by_label("Edit Hyperlink…").is_none());
+}
