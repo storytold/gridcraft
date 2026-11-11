@@ -16,6 +16,9 @@
 //!   otherwise download: Save and Save As (an .xlsx workbook) and Export as PDF. The host stores
 //!   it and reports failures itself. GridCraft doesn't tell the host which saves make a file the
 //!   document, so `saveAs` is always `false`.
+//! - `gridcraft:host` (from the host): `{ version, autosave? }`. `autosave: true` says the host
+//!   stores each `gridcraft:save` in place (the same file again), so AutoSave works: the app
+//!   sends ordinary `save` messages shortly after changes to a workbook that has an .xlsx name.
 //! - `gridcraft:dirty` whenever unsaved changes appear or go away, `gridcraft:failed` when the
 //!   app couldn't start.
 //!
@@ -61,7 +64,9 @@ impl Bridge {
     /// Send saved and exported files to the host instead of downloading them, and hear files
     /// from it.
     pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
-        self.listen(inbox, ctx);
+        let host_autosave = Rc::new(std::cell::Cell::new(false));
+        services.host_autosave = Some(host_autosave.clone());
+        self.listen(inbox, ctx, host_autosave);
         let bridge = self.clone();
         services.download = Some(Box::new(move |name: &str, bytes: &[u8]| {
             if let Err(e) = bridge.post_save(name, bytes) {
@@ -109,11 +114,15 @@ impl Bridge {
         Ok(())
     }
 
-    fn listen(&self, inbox: Inbox, ctx: egui::Context) {
-        self.host.listen(move |message| {
-            if let Message::Open { name, data } = message {
-                deliver_open(&inbox, &ctx, &name, &data);
+    fn listen(&self, inbox: Inbox, ctx: egui::Context, host_autosave: Rc<std::cell::Cell<bool>>) {
+        self.host.listen(move |message| match message {
+            Message::Open { name, data } => deliver_open(&inbox, &ctx, &name, &data),
+            // The page stores every save in place: AutoSave may hand it writes (`host_autosave`).
+            Message::Host { autosave, .. } => {
+                host_autosave.set(autosave);
+                ctx.request_repaint();
             }
+            _ => {}
         });
     }
 }

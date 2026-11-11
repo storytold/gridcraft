@@ -37,6 +37,10 @@ pub struct Services {
     pub paste_image: Option<Box<dyn FnMut() -> Option<image::RgbaImage>>>,
     /// Web: deliver a file to the user (name, bytes).
     pub download: Option<Download>,
+    /// Web, framed by a page that keeps the files: set once the page says (`host` message) it
+    /// stores every save in place (the same file again). Then AutoSave works in the browser: it
+    /// hands each change to the page through `download`, as a Save does.
+    pub host_autosave: Option<std::rc::Rc<std::cell::Cell<bool>>>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.
     pub open_async: Option<Box<dyn Fn()>>,
     /// Files delivered asynchronously (name, bytes), opened on the next frame.
