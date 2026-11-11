@@ -106,6 +106,15 @@ fn spill_operator() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Files spell `@x` as `_xlfn.SINGLE(x)`; an operation inside keeps its parentheses.
+#[test]
+fn single_is_the_implicit_intersection_operator() {
+    assert_eq!(rt("_xlfn.SINGLE(A1:A3)*2"), "@A1:A3*2");
+    assert_eq!(rt("_xlfn.SINGLE(A1:A3*2)"), "@(A1:A3*2)");
+    assert_eq!(rt("_xlfn.SINGLE(-A1:A3)"), "@(-A1:A3)");
+    assert_eq!(rt("SQRT(_xlfn.SINGLE(Data[Qty]))"), "SQRT(@Data[Qty])");
+}
+
 #[test]
 fn delete_sheet_shrinks_3d_span() -> Result<(), Box<dyn std::error::Error>> {
     let order: Vec<String> = ["Sheet1", "Sheet2", "Sheet3", "Results"].iter().map(|s| s.to_string()).collect();
@@ -584,4 +593,20 @@ fn column_starting_with_at_round_trips() {
         let text = format!("={}", printer::struct_ref(&s));
         assert_eq!(parse(&text).ok(), Some(Expr::Struct(s)), "printed as {text}");
     }
+}
+
+#[test]
+fn wrappers_stacked_across_levels_are_bounded_as_a_whole() {
+    // Each level adds 40 percents inside the parser's per-level bound, so no level is too deep alone.
+    let stacked = |levels: usize| {
+        let mut f = "1".to_string();
+        for _ in 0..levels {
+            f = format!("({f}){}", "%".repeat(40));
+        }
+        f
+    };
+    assert!(parse(&stacked(5)).is_ok());
+    assert!(parse(&stacked(7)).is_err(), "7 x 41 wrappers on one path");
+    assert!(parse(&format!("{}1{}", "(".repeat(200), ")".repeat(200))).is_ok());
+    assert!(parse(&format!("={}", vec!["A1%"; 100].join("+"))).is_ok(), "siblings are not stacked");
 }
