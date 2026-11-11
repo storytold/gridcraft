@@ -39,6 +39,7 @@ pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command, register_te
 pub use gridcraft_calc as calc;
 pub use gridcraft_core as core;
 pub use gridcraft_formula as formula;
+pub use gridcraft_math as math;
 pub use gridcraft_model as model;
 pub use gridcraft_numfmt as numfmt;
 pub use selection::Selection;
@@ -304,7 +305,9 @@ impl DocState {
         calc.rebuild(&wb);
         Self::with_calc(wb, calc, path, title, trust)
     }
-    fn with_calc(wb: Workbook, calc: Calc, path: Option<String>, title: String, trust: Trust) -> DocState {
+    fn with_calc(mut wb: Workbook, calc: Calc, path: Option<String>, title: String, trust: Trust) -> DocState {
+        // Equations arrive without a layout (files never store one); painting reads only the cache.
+        wb.refresh_equations();
         let scripts_trusted = !cmd::extra::has_scripts(&wb);
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
@@ -511,6 +514,9 @@ pub struct Session {
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,
+    /// Whether `link.open` may open web and e-mail addresses without the user's confirmation
+    /// (#2181). Host code sets it; no command does.
+    pub link_policy: links::LinkPolicy,
     /// Open undo groups, innermost last.
     groups: Vec<OpenGroup>,
     next_group: u64,
@@ -792,7 +798,7 @@ impl Session {
                 // A toggle (Bold) is recorded with the state it set, as Excel records
                 // `Bold = True`: playing it back sets that state rather than flipping it again.
                 let params = match &result {
-                    Ok(r) if params.is_object() => record::with_toggle_state(cmd::journal_params(&params), r),
+                    Ok(r) if params.is_object() => record::with_toggle_state(id, cmd::journal_params(&params), r),
                     _ => cmd::journal_params(&params),
                 };
                 let kept = rec.push(record::RecordedStep { doc, sheet, sheet_name, selection, id: id.to_string(), params });

@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_formula::adjust::Edit;
-use gridcraft_model::{Cell, CompareOp, InputKind, Macro, OnConflict, RepeatOf, Sheet, Step, StepKind, Workbook};
+use gridcraft_model::{Cell, CompareOp, InputKind, MAX_MACRO_REF, Macro, OnConflict, RepeatOf, Sheet, Step, StepKind, Workbook};
 use serde::Serialize;
 use serde_json::{Value as Json, json};
 
@@ -335,7 +335,7 @@ fn check_input(wb: &Workbook, input: &gridcraft_model::NamedInput, place: Place)
                 gridcraft_model::ColType::Number => v.is_number(),
                 gridcraft_model::ColType::Text => v.is_text(),
                 gridcraft_model::ColType::Bool => matches!(v, Value::Bool(_)),
-                gridcraft_model::ColType::Date => v.is_number() && crate::display::number_format(&date()).is_date(),
+                gridcraft_model::ColType::Date => v.is_number() && crate::display::parsed(&date()).is_date(),
             };
             if !ok {
                 wrong.push((c, holds(&v, ty)));
@@ -539,7 +539,8 @@ impl Guard {
             }
             objects += deleted(&ss.charts, &ps.charts, &sa.charts, |o| o.id)
                 + deleted(&ss.images, &ps.images, &sa.images, |o| o.id)
-                + deleted(&ss.shapes, &ps.shapes, &sa.shapes, |o| o.id);
+                + deleted(&ss.shapes, &ps.shapes, &sa.shapes, |o| o.id)
+                + deleted(&ss.controls, &ps.controls, &sa.controls, |o| o.id);
         }
         if objects > 0 {
             parts.push(format!("{objects} object{}", if objects == 1 { "" } else { "s" }));
@@ -1237,26 +1238,39 @@ pub(crate) fn pair_sheets(before: &Workbook, after: &Workbook) -> (Vec<(usize, O
     (pairs, spare.collect())
 }
 
-/// Only a formula's cached value changed (a recalculation, not a write).
+/// Only a formula's (or a Python cell's) cached value changed (a recalculation, not a write): a
+/// Python cell whose spill a step blocked shows #SPILL! with its code untouched.
 fn recalculated_only(b: Option<&Cell>, a: Option<&Cell>) -> bool {
     match (b, a) {
         (Some(b), Some(a)) => match (&b.formula, &a.formula) {
             (Some(x), Some(y)) => x.text == y.text && x.array == y.array && b.style == a.style,
+            (None, None) => match (&b.py, &a.py) {
+                (Some(x), Some(y)) => x.code == y.code && x.object == y.object && b.style == a.style,
+                _ => false,
+            },
             _ => false,
         },
         _ => false,
     }
 }
 
+/// Python code is content, as a formula is, whatever the cell shows.
 fn has_content(c: &Cell) -> bool {
-    c.formula.is_some() || !(c.value.is_empty() || c.value.as_text() == Some(""))
+    c.formula.is_some() || c.py.is_some() || !(c.value.is_empty() || c.value.as_text() == Some(""))
 }
 
+/// Whether a write changed what the person entered: the formula, the Python code and its return
+/// type, or the value. A Python cell replaced by its own cached value, or by other code that
+/// shows the same `#BLOCKED!`, has changed.
 fn content_differs(b: Option<&Cell>, a: Option<&Cell>) -> bool {
     match (b, a) {
         (Some(b), Some(a)) => match (&b.formula, &a.formula) {
             (Some(x), Some(y)) => x.text != y.text,
-            (None, None) => b.value != a.value,
+            (None, None) => match (&b.py, &a.py) {
+                (Some(x), Some(y)) => x.code != y.code || x.object != y.object,
+                (None, None) => b.value != a.value,
+                _ => true,
+            },
             _ => true,
         },
         (Some(b), None) => has_content(b),
@@ -1272,7 +1286,12 @@ fn objects(b: &Sheet, a: &Sheet) -> (usize, usize, usize) {
         let changed = b.iter().filter(|x| a.iter().any(|y| id(y) == id(x) && y != *x)).count();
         (added, changed, removed)
     }
-    let parts = [count(&b.charts, &a.charts, |o| o.id), count(&b.images, &a.images, |o| o.id), count(&b.shapes, &a.shapes, |o| o.id)];
+    let parts = [
+        count(&b.charts, &a.charts, |o| o.id),
+        count(&b.images, &a.images, |o| o.id),
+        count(&b.shapes, &a.shapes, |o| o.id),
+        count(&b.controls, &a.controls, |o| o.id),
+    ];
     parts.iter().fold((0, 0, 0), |t, p| (t.0 + p.0, t.1 + p.1, t.2 + p.2))
 }
 
@@ -1380,6 +1399,7 @@ pub fn begin(s: &mut Session, name: &str, p: &Json) -> Result<Begun> {
     check_params(p, &m)?;
     let asks = gate(&m, trust)?;
     approve(s, &m, doc, &asks, p.get("approve").and_then(Json::as_bool).unwrap_or(false))?;
+    let m = with_output(m, p);
     let prepared = prepare(s, &m, p.get("inputs"))?;
     let rule = conflict_rule(p, &m)?;
     let time_limit_ms = time_limit(p);
@@ -1480,9 +1500,21 @@ pub fn run(s: &mut Session, name: &str, p: &Json) -> Result<Json> {
     })
 }
 
+/// `m` with the run's `output` (a form button that sends the output elsewhere) in place of its own
+/// output anchor, after the policy and the approval, which go by the macro as it is stored. The
+/// anchor is resolved and checked by [`prepare`] like the macro's own, and the footprint, the
+/// conflict rule and the per-step guard all work on the cells it names.
+fn with_output(mut m: Macro, p: &Json) -> Macro {
+    if let Some(o) = p.get("output").and_then(Json::as_str).map(str::trim).filter(|o| !o.is_empty()) {
+        m.output.anchor = Some(o.to_string());
+    }
+    m
+}
+
 /// Refuses run parameters that would otherwise be ignored: an input the macro doesn't have, an
-/// input given as something other than reference text, and `onConflict`, `overwrite`, `approve`
-/// or `timeLimit` of the wrong kind (`null` counts as not given).
+/// input given as something other than reference text, `onConflict`, `overwrite`, `approve` or
+/// `timeLimit` of the wrong kind, and an `output` that isn't reference text of at most
+/// `MAX_MACRO_REF` characters (`null` counts as not given).
 pub fn check_params(p: &Json, m: &Macro) -> Result<()> {
     let refuse = |msg: String| Err(EngineError::Other(format!("Macro '{}': {msg}", m.name)));
     let names = || m.inputs.iter().map(|i| i.name.clone()).collect::<Vec<_>>().join(", ");
@@ -1513,6 +1545,12 @@ pub fn check_params(p: &Json, m: &Macro) -> Result<()> {
     for k in ["overwrite", "approve"] {
         if given(k).is_some_and(|v| !v.is_boolean()) {
             return refuse(format!("`{k}` must be true or false."));
+        }
+    }
+    if let Some(o) = given("output") {
+        let ok = o.as_str().map(str::trim).is_some_and(|t| !t.is_empty() && t.chars().count() <= MAX_MACRO_REF && !t.chars().any(char::is_control));
+        if !ok {
+            return refuse(format!("`output` must be reference text of at most {MAX_MACRO_REF} characters, such as \"F2\" or \"Sheet2!F2\"."));
         }
     }
     if given("timeLimit").is_some_and(|v| !v.as_f64().is_some_and(|t| t > 0.0)) {
@@ -1591,7 +1629,7 @@ pub fn check(s: &mut Session, name: &str, p: &Json) -> Result<Json> {
         // Nothing from an unapproved macro runs, not even in a dry run.
         out["needsApproval"] = json!(asks);
     }
-    let prepared = match prepare(s, &m, p.get("inputs")) {
+    let prepared = match prepare(s, &with_output(m, p), p.get("inputs")) {
         Ok(pr) => pr,
         Err(e) => return refused(out, e.to_string()),
     };

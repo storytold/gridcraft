@@ -11,6 +11,13 @@ use crate::cell::Formula;
 use crate::sheet::Sheet;
 use crate::style::{StyleTable, Theme};
 
+/// Most equation source, in bytes, one [`Workbook::refresh_equations`] lays out: about 2,500
+/// typical equations, or a few seconds of the slowest 4 KB sources.
+pub const MAX_EQUATION_LAYOUT_BYTES: usize = 128 * 1024;
+
+/// Why an equation past [`MAX_EQUATION_LAYOUT_BYTES`] has no layout.
+pub const EQUATION_BUDGET_MESSAGE: &str = "This workbook has more equations than are laid out at once; edit this equation to lay it out.";
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CalcMode {
     #[default]
@@ -88,6 +95,10 @@ pub struct CalcSettings {
     pub max_change: f64,
     /// Use precision as displayed.
     pub precision_as_displayed: bool,
+    /// R1C1 reference style (`<calcPr refMode="R1C1"/>`): kept with the file and written back;
+    /// GridCraft itself shows and takes A1 references.
+    #[serde(default)]
+    pub r1c1: bool,
 }
 
 impl Default for CalcSettings {
@@ -98,6 +109,7 @@ impl Default for CalcSettings {
             max_iterations: Self::DEFAULT_ITERATIONS,
             max_change: Self::DEFAULT_CHANGE,
             precision_as_displayed: false,
+            r1c1: false,
         }
     }
 }
@@ -193,6 +205,12 @@ pub struct Workbook {
     pub calc: CalcSettings,
     #[serde(default, skip_serializing_if = "is_all")]
     pub show_objects: ShowObjects,
+    /// Trust Center › Privacy Options › "Remove personal information from file properties on save"
+    /// (`<workbookPr filterPrivacy="1"/>`): kept with the file, and while it is on the author and
+    /// company are left out of the XLSX files GridCraft writes, as Excel leaves them empty. Other
+    /// formats aren't filtered: the workbook's own serialization still holds them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remove_personal_info: bool,
     /// Read and set with [`Workbook::active_sheet`] and [`Workbook::set_active_sheet`].
     pub active_sheet: ActiveSheet,
     /// The workbook window's display settings (`<workbookView>`), kept across an open + save.
@@ -250,6 +268,11 @@ pub struct Workbook {
     /// `preserved` are relative to. Saving into another folder rewrites them from there. Not in JSON.
     #[serde(skip)]
     pub source_dir: Option<std::path::PathBuf>,
+    /// The region whose formats this workbook is typed and shown in (Options › Region). A runtime
+    /// setting of the application, not of the file: it is not saved, and the engine session sets
+    /// it on every document it holds. en-US until then.
+    #[serde(skip, default = "gridcraft_core::region::default_region")]
+    pub region: &'static gridcraft_core::Region,
     /// The file this workbook reports as its own, which is what `CELL("filename")` returns.
     /// `None` = no file yet, which Excel reports as an empty string until the workbook has been
     /// saved once. Deliberately separate from `source_dir`: that one names the folder relative
@@ -331,6 +354,7 @@ impl Workbook {
             date_system: DateSystem::D1900,
             calc: CalcSettings::default(),
             show_objects: ShowObjects::All,
+            remove_personal_info: false,
             active_sheet: ActiveSheet::default(),
             view: WorkbookView::default(),
             props: DocProps::default(),
@@ -346,6 +370,7 @@ impl Workbook {
             macros_unread: Arc::default(),
             preserved: None,
             source_dir: None,
+            region: gridcraft_core::region::default_region(),
             source_path: None,
         }
     }
@@ -463,7 +488,31 @@ impl Workbook {
         }
         None
     }
-    /// A free id for a new chart, picture, shape, table or slicer: one more than the largest in
+    /// Rebuilds the cached layout of every equation whose source changed (or was never laid
+    /// out, as after loading a file). One call lays out at most [`MAX_EQUATION_LAYOUT_BYTES`] of
+    /// source: one equation can take a tenth of a second to lay out, so a file with thousands of
+    /// them would otherwise hold the app for minutes. Equations past the budget get an error
+    /// instead (they show their source; editing one lays it out).
+    pub fn refresh_equations(&mut self) {
+        let stale = |s: &crate::Shape| s.kind == crate::ShapeKind::Equation && s.math.get(&s.text).is_none();
+        let mut budget = MAX_EQUATION_LAYOUT_BYTES;
+        // Only sheets with a stale equation are copied (sheets are shared with undo snapshots).
+        for sh in self.sheets.iter_mut().filter(|sh| sh.shapes.iter().any(stale)) {
+            for s in Arc::make_mut(sh).shapes.iter_mut().filter(|s| stale(s)) {
+                // A source over the length cap never gets here: the cache answers for it without
+                // a lookup. An empty source still costs a call.
+                let cost = s.text.len().max(1);
+                if cost > budget {
+                    s.math.refuse(&s.text, EQUATION_BUDGET_MESSAGE);
+                    continue;
+                }
+                budget -= cost;
+                s.math.refresh(&s.text);
+            }
+        }
+    }
+
+    /// A free id for a new chart, picture, shape, table, slicer or form control: one more than the largest in
     /// use, or, when that is `u32::MAX` (a file can carry any id), the lowest free one.
     pub fn next_object_id(&self) -> u32 {
         self.free_object_ids(1).first().copied().unwrap_or(u32::MAX)
@@ -484,6 +533,7 @@ impl Workbook {
                     .chain(s.shapes.iter().map(|o| o.id))
                     .chain(s.tables.iter().map(|o| o.id))
                     .chain(s.slicers.iter().map(|o| o.id))
+                    .chain(s.controls.iter().map(|o| o.id))
             })
             .collect();
         used.sort_unstable();
@@ -571,6 +621,10 @@ mod tests {
         }
         assert_eq!(wb.next_object_id(), 8);
         if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(crate::FormControl { id: 12, ..Default::default() });
+        }
+        assert_eq!(wb.next_object_id(), 13, "form controls take ids from the same sequence");
+        if let Some(sh) = wb.sheet_mut(0) {
             sh.images.push(image(u32::MAX));
         }
         // An id read from a file at the maximum: the lowest free id, not the maximum again.
@@ -586,6 +640,19 @@ mod tests {
             sh.images.push(image(u32::MAX - 1));
         }
         assert_eq!(wb.free_object_ids(3), vec![1, 2, u32::MAX], "the top first, then from 1");
+    }
+
+    /// A form control's id is in use like any object's: the free ids skip it, also when it is the
+    /// largest id a file could carry.
+    #[test]
+    fn free_object_ids_skip_a_form_controls_id() {
+        let mut wb = Workbook::new();
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(crate::FormControl { id: 3, ..Default::default() });
+            sh.controls.push(crate::FormControl { id: u32::MAX, ..Default::default() });
+        }
+        assert_eq!(wb.free_object_ids(4), vec![1, 2, 4, 5], "3 and the largest id are taken");
+        assert_eq!(wb.next_object_id(), 1);
     }
 
     /// A file can use the largest id and the one below it: nothing is free above them, so the free

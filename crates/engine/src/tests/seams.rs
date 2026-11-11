@@ -1135,3 +1135,29 @@ fn a_linked_paste_carries_the_files_trust_whatever_it_pastes() {
     assert!(sheet(&s).cell(b1).is_some_and(|c| c.formula.is_some()), "a linked paste of formats writes a formula");
     assert_eq!(trust(&s), Trust::FromFile);
 }
+
+#[test]
+fn a_sheet_keeps_its_identity_until_it_is_copied_or_read_from_a_file() {
+    let mut s = s();
+    let uids = |s: &Session| s.doc().unwrap().wb.sheets.iter().map(|sh| sh.uid.get()).collect::<Vec<_>>();
+    let first = uids(&s)[0];
+    // Renamed, moved, deleted and brought back by undo: the same sheet.
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    s.execute("sheet.rename", json!({"sheet": "Sheet1", "name": "Data"})).unwrap();
+    s.execute("sheet.move", json!({"sheet": "Data", "to": 1})).unwrap();
+    let data = s.doc().unwrap().wb.sheet_index("Data").unwrap();
+    assert_eq!(uids(&s)[data], first);
+    s.execute("home.deleteSheet", json!({"sheet": "Data"})).unwrap();
+    assert!(!uids(&s).contains(&first));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(uids(&s).contains(&first), "undo brings the same sheet back");
+    // A copy, or a new sheet of the same name, is another sheet.
+    s.execute("sheet.move", json!({"sheet": "Data", "to": 0, "copy": true})).unwrap();
+    let all = uids(&s);
+    assert_eq!(all.len(), 3);
+    assert_eq!(all.iter().collect::<std::collections::BTreeSet<_>>().len(), 3, "{all:?}");
+    // Read from a file: new sheets.
+    let bytes = crate::io::save_bytes(&s.doc().unwrap().wb, "book.xlsx").unwrap();
+    let (read, _) = crate::io::open_bytes("book.xlsx", &bytes).unwrap();
+    assert!(read.sheets.iter().all(|sh| !all.contains(&sh.uid.get())));
+}

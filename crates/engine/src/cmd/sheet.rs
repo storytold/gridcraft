@@ -217,10 +217,10 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
 
 /// Rewrites every formula reference (chart series included), sparkline source and PivotTable
 /// source for a structural edit on `target`.
-pub(super) fn rewrite(cx: &mut Ctx, target: &str, e: &Edit) {
+pub(super) fn rewrite(cx: &mut Ctx, target: &str, e: &Edit) -> Result<()> {
     cx.edits.push((target.to_string(), e.clone()));
     let wb = &mut cx.wb;
-    super::edit::rewrite_all_formulas(wb, target, e);
+    super::edit::rewrite_all_formulas(wb, target, e)?;
     for si in 0..wb.sheets.len() {
         let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
         let Some(sh) = wb.sheet_mut(si) else { continue };
@@ -246,6 +246,7 @@ pub(super) fn rewrite(cx: &mut Ctx, target: &str, e: &Edit) {
             }
         }
     }
+    Ok(())
 }
 
 /// Inserting or deleting cells moves the copied block away from the stored source range, so, like
@@ -303,7 +304,7 @@ fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
             // New lines take the format of the line before (Excel's "Format Same As Above").
             inherit_line_format(sh, axis, at, count);
         }
-        rewrite(cx, &name, &Edit::Insert { axis, at, count });
+        rewrite(cx, &name, &Edit::Insert { axis, at, count })?;
         cx.structural = true;
         Ok(Json::Null)
     })?;
@@ -368,7 +369,7 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
                 }
                 shift_sheet_features(sh, axis, at, count, false);
             }
-            rewrite(cx, &name, &Edit::Delete { axis, at, count });
+            rewrite(cx, &name, &Edit::Delete { axis, at, count })?;
         }
         cx.structural = true;
         Ok(Json::Null)
@@ -397,10 +398,10 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
     {
         return Err(EngineError::Other("To prevent possible loss of data, columns cannot be shifted off of the worksheet.".into()));
     }
-    // The checks must authorize the sheet this command modifies (`target_sheet`), not whatever
-    // sheet is active: both carry the command's own `sheet` parameter on.
-    check_lines_protection(s, &json!({"cols": RangeRef::cols(before, before).a1(), "sheet": p.get("sheet")}), Axis::Cols, before, count, true)?;
-    check_lines_protection(s, &json!({"cols": RangeRef::cols(from, end - 1).a1(), "sheet": p.get("sheet")}), Axis::Cols, from, count, false)?;
+    // The checks must authorize the sheet this command modifies, not whatever sheet is active:
+    // both get the index `target_sheet` resolved (from `sheet`, or a `Sheet!` range or cell).
+    check_lines_protection(s, &json!({"cols": RangeRef::cols(before, before).a1(), "sheet": sheet}), Axis::Cols, before, count, true)?;
+    check_lines_protection(s, &json!({"cols": RangeRef::cols(from, end - 1).a1(), "sheet": sheet}), Axis::Cols, from, count, false)?;
 
     let moved_from = if before <= from { from + count } else { from };
     if moved_from.checked_add(count).is_none_or(|end| end > MAX_COLS) {
@@ -420,7 +421,7 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
             sh.cells.shift_cols(before, count as i64);
             shift_sheet_features(sh, Axis::Cols, before, count, true);
         }
-        rewrite(cx, &name, &Edit::Insert { axis: Axis::Cols, at: before, count });
+        rewrite(cx, &name, &Edit::Insert { axis: Axis::Cols, at: before, count })?;
 
         let mut touched = Vec::new();
         {
@@ -458,14 +459,14 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
         for cell in touched {
             cx.touch(sheet, cell);
         }
-        rewrite(cx, &name, &Edit::Move { from: source, to_row: 0, to_col: destination });
+        rewrite(cx, &name, &Edit::Move { from: source, to_row: 0, to_col: destination })?;
 
         {
             let sh = cx.sheet_mut(sheet)?;
             sh.cells.shift_cols(delete_at + count, -(count as i64));
             shift_sheet_features(sh, Axis::Cols, delete_at, count, false);
         }
-        rewrite(cx, &name, &Edit::Delete { axis: Axis::Cols, at: delete_at, count });
+        rewrite(cx, &name, &Edit::Delete { axis: Axis::Cols, at: delete_at, count })?;
         *cx.sel = crate::Selection {
             active: CellRef::new(active_row, final_start),
             anchor: CellRef::new(active_row, final_start),
@@ -496,7 +497,7 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
         } else {
             RangeRef::new(CellRef::new(r.start.row.max(MAX_ROWS.saturating_sub(r.height())), r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col))
         };
-        if sh.cells.iter_range(doomed).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
+        if sh.cells.iter_range(doomed).any(|(_, x)| x.has_content()) {
             return Err(EngineError::Other("To prevent possible loss of data, GridCraft cannot shift nonblank cells off of the worksheet.".into()));
         }
     }
@@ -510,7 +511,7 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
         }
         shift_cell_features(sh, &e);
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
-        rewrite(cx, &name, &e);
+        rewrite(cx, &name, &e)?;
         cx.structural = true;
         Ok(Json::Null)
     })?;
@@ -545,7 +546,7 @@ fn delete_cells(s: &mut Session, p: &Json) -> Result<Json> {
             shift_cell_features(sh, &e);
         }
         // References into the deleted cells become #REF!; the rest move.
-        rewrite(cx, &name, &e);
+        rewrite(cx, &name, &e)?;
         cx.structural = true;
         Ok(Json::Null)
     })?;

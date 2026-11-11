@@ -3,6 +3,8 @@
 /// Returns the Dutch translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Diagram",
+        "Decorative Text" => "Decoratieve tekst",
         "Paste" => "Plakken",
         "Paste Values" => "Waarden plakken",
         "Paste Formulas" => "Formules plakken",
@@ -61,6 +63,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Opmaak-\nvenster",
         "Format" => "Opmaak",
         "Insert" => "Invoegen",
+        "Header Menu|Insert" => "Invoegen",
         "Insert Cells…" => "Cellen invoegen…",
         "Delete" => "Verwijderen",
         "Delete Cells…" => "Cellen verwijderen…",
@@ -109,9 +112,22 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Tekst naar\nkolommen",
         "Link" => "Link",
         "Symbol" => "Symbool",
+        "Equation" => "Vergelijking",
+        "Insert New Equation..." => "Nieuwe vergelijking invoegen",
         "Sparklines" => "Sparklines",
         "Checkbox" => "Checkbox",
         "Insert checkboxes in the selected cells" => "Checkboxes invoegen in de geselecteerde cellen",
+        "Button" => "Knop",
+        "Slider" => "Schuifregelaar",
+        "Spin Button" => "Kringveld",
+        "Draw a button that runs a macro or a command" => "Een knop tekenen die een macro of een opdracht uitvoert",
+        "Draw a slider that sets a whole number in a linked cell" => "Een schuifregelaar tekenen die een geheel getal in een gekoppelde cel instelt",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Een kringveld tekenen dat een geheel getal in een gekoppelde cel stapsgewijs wijzigt"
+        }
+        "Edit Text" => "Tekst bewerken",
+        "Assign Action…" => "Actie toewijzen…",
+        "Format Control…" => "Besturingselement opmaken…",
         "Header & Footer" => "Koptekst & voettekst",
         "Draw with ink" => "Tekenen met inkt",
         "Eraser" => "Gum",
@@ -153,6 +169,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Foutopsporing",
         "Trace Error" => "Fout traceren",
         "Circular References" => "Kringverwijzingen",
+        "Python Mode" => "Python-modus",
         "Evaluate Formula" => "Formule evalueren",
         "Watch Window" => "Bewakingsvenster",
         "Calculation\nOptions" => "Berekenings-\nopties",
@@ -250,6 +267,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legenda: onder",
         "Legend: Top" => "Legenda: boven",
         "Legend: Right" => "Legenda: rechts",
+        "First slice angle" => "Hoek eerste punt",
+        "Doughnut hole size" => "Grootte van het donutgat",
         "Gridlines: None" => "Rasterlijnen: geen",
         "Gridlines: Show" => "Rasterlijnen: weergeven",
         "Chart\nTitle" => "Grafiek-\ntitel",
@@ -537,6 +556,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Stoppen",
         "New Macro" => "Nieuwe macro",
         "Show" => "Weergeven",
+        "Collapse dialog" => "Dialoogvenster samenvouwen",
+        "Expand dialog" => "Dialoogvenster uitvouwen",
         _ => return None,
     })
 }

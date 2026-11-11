@@ -107,12 +107,12 @@ fn check_column_spills(sheet: &Sheet, column: RangeRef, ours: &[CellRef]) -> Res
     Ok(())
 }
 
-/// Refused, unless `overwrite`, when a cell of the model's column holds a value or a formula
-/// (a model saved there before included): Save Model then asks before it replaces data, as
-/// Excel does. The message carries [`OVERWRITE_ERROR`], which the dialog turns into its
+/// Refused, unless `overwrite`, when a cell of the model's column holds a value, a formula or
+/// Python code (a model saved there before included): Save Model then asks before it replaces
+/// data, as Excel does. The message carries [`OVERWRITE_ERROR`], which the dialog turns into its
 /// question.
 fn check_column_empty(sheet: &Sheet, column: RangeRef, overwrite: bool) -> Result<()> {
-    let taken = column.iter().find(|c| sheet.cell(*c).is_some_and(|x| !x.value.is_empty() || x.formula.is_some()));
+    let taken = column.iter().find(|c| sheet.cell(*c).is_some_and(Cell::has_content));
     match taken {
         Some(c) if !overwrite => Err(EngineError::Other(format!(
             "The range {} {OVERWRITE_ERROR} ({} isn't empty); pass overwrite: true to replace it.",
@@ -176,7 +176,7 @@ pub(super) fn save_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
         }
         for c in &stale {
             let style = sh.style_id(*c);
-            sh.set_cell(*c, Cell { value: Value::Empty, formula: None, style });
+            sh.set_cell(*c, Cell { value: Value::Empty, formula: None, style, py: None });
         }
         for c in cells.into_iter().chain(stale) {
             cx.touch(sheet, c);
