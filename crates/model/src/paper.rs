@@ -1,5 +1,5 @@
 //! Paper sizes by name: the names `PrintSettings::paper` holds, with their sizes. File formats
-//! (XLSX paper ids, ODF page sizes) and print layout all read this one table.
+//! (paper ids or page sizes) and print layout all read this one table.
 
 /// Paper names and sizes in points, width then height, as the paper is named: Ledger is
 /// Tabloid turned on its side. Each size has one name, so a size reads back as the name it was
@@ -74,11 +74,22 @@ pub fn size_pt(name: &str) -> Option<(f32, f32)> {
     PAPERS.iter().find(|(p, _, _)| *p == n).map(|(_, w, h)| (*w, *h))
 }
 
-/// The paper of a page `width` × `height` points, within 2 mm: as it stands, else turned.
+/// The paper of a page `width` × `height` points, within 2 mm on each side: the nearest one as it
+/// stands, else the nearest one turned. Some papers are less than 4 mm apart (Letter and Japanese
+/// Envelope Kaku #3), so the nearest wins, not the first in the table.
 pub fn for_size(width: f32, height: f32) -> Option<&'static str> {
-    let near = |a: f32, b: f32| (a - b).abs() < 5.67;
-    let find = |w: f32, h: f32| PAPERS.iter().find(|(_, pw, ph)| near(*pw, w) && near(*ph, h)).map(|(n, _, _)| *n);
-    find(width, height).or_else(|| find(height, width))
+    const TOLERANCE: f32 = 5.67; // 2 mm
+    let nearest = |w: f32, h: f32| {
+        PAPERS
+            .iter()
+            .filter_map(|(n, pw, ph)| {
+                let (dw, dh) = ((pw - w).abs(), (ph - h).abs());
+                (dw < TOLERANCE && dh < TOLERANCE).then_some((dw + dh, *n))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, n)| n)
+    };
+    nearest(width, height).or_else(|| nearest(height, width))
 }
 
 #[cfg(test)]
@@ -104,5 +115,19 @@ mod tests {
             assert_eq!(for_size(w, h), Some(name), "{name}");
         }
         assert_eq!(canonical("Envelope B5"), Some("B5 (ISO)"));
+    }
+
+    /// Letter (612×792) and Japanese Envelope Kaku #3 (612.28×785.2) are within 2 mm of some
+    /// of the same sizes: the nearer paper wins, whichever comes first in the table.
+    #[test]
+    fn for_size_picks_the_nearest_paper() {
+        assert_eq!(for_size(612.2, 788.0), Some("Japanese Envelope Kaku #3"));
+        assert_eq!(for_size(612.0, 790.0), Some("Letter"));
+        assert_eq!(for_size(788.0, 612.2), Some("Japanese Envelope Kaku #3"));
+        // A wide page that is a paper as it stands is not read as another paper turned.
+        assert_eq!(for_size(1224.0, 792.0), Some("Ledger"));
+        assert_eq!(for_size(1000.0, 10.0), None);
+        assert_eq!(for_size(f32::NAN, 792.0), None);
+        assert_eq!(for_size(f32::INFINITY, f32::INFINITY), None);
     }
 }

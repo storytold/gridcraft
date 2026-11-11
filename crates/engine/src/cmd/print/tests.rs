@@ -652,9 +652,23 @@ fn paper_size_commands_store_the_table_name() {
     assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, "B5");
     s.execute("pageLayout.pageSetup", json!({"paper": "11x17"})).unwrap();
     assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, "Tabloid");
-    // Statement and the envelopes Excel names now print on their own size.
-    s.execute("pageLayout.pageSetup", json!({"paper": "Envelope DL"})).unwrap();
-    assert_eq!(paper_size("Statement"), (396.0, 612.0));
+    // Statement and the envelopes XLSX names are accepted by both commands (Page Setup refused
+    // them before), stored under their table name and printed on their own size.
+    s.execute("range.setValues", json!({"range": "A1", "values": [["x"]]})).unwrap();
+    let close = |v: &Json, want: f64| (v.as_f64().unwrap() - want).abs() < 0.01;
+    for (cmd, given, stored, w, h) in [
+        ("pageLayout.pageSetup", "statement", "Statement", 396.0, 612.0),
+        ("pageLayout.pageSetup", "envelope #10", "Envelope #10", 297.0, 684.0),
+        ("pageLayout.pageSetup", "Envelope-DL", "Envelope DL", 311.81, 623.62),
+        ("pageLayout.size", "Statement", "Statement", 396.0, 612.0),
+        ("pageLayout.size", "envelope dl", "Envelope DL", 311.81, 623.62),
+    ] {
+        s.execute(cmd, json!({"paper": given})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, stored, "{cmd} {given}");
+        let pv = s.execute("file.printPreview", json!({})).unwrap();
+        let page = &pv["pageList"][0];
+        assert!(close(&page["width"], w) && close(&page["height"], h), "{cmd} {given}: {page}");
+    }
     // A new workbook still prints on Letter.
     assert_eq!(gridcraft_model::Workbook::new().sheets[0].print.paper, "Letter");
 }

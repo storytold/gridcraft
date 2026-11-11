@@ -12,9 +12,8 @@ pub enum Orientation {
 pub struct PrintSettings {
     pub orientation: Orientation,
     /// Paper size name (`Letter`, `A4`, `Legal`…; see [`crate::paper`]), or empty when the file
-    /// stated none: the printer's or locale's paper then, which an ODF file leaves to the
-    /// application. Print layout falls back to Letter and XLSX writes no `paperSize`. New sheets
-    /// default to Letter.
+    /// stated none: the printer's or locale's paper then. Print layout falls back to Letter and
+    /// XLSX writes no `paperSize`. New sheets default to Letter.
     pub paper: String,
     /// Margins in inches: left, right, top, bottom, header, footer.
     pub margins: [f32; 6],

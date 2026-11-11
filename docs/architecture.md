@@ -236,7 +236,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-11 | minor | Paper sizes: `model::paper` (`canonical`, `size_pt`, `for_size`) replaces the engine's `known_paper` and the XLSX alias list; an empty `PrintSettings::paper` means the file stated none |
+| 2026-11-11 | minor | Paper sizes: `model::paper` (`canonical`, `size_pt`, `for_size`) replaces the engine's `known_paper` and the XLSX alias list; an empty `PrintSettings::paper` means the file stated none; `for_size` picks the nearest paper; Statement, Envelope #10 and Envelope DL are accepted by Page Setup and Size |
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-02 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-11-01 | trivial | Equations: the layout cache answers for a source over the cap by its length alone, without hashing it |
