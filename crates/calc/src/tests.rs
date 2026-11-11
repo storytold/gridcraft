@@ -2777,7 +2777,7 @@ fn graph_built_from_text_only_formulas_matches_cached() {
 /// as its kept result, and returns the cell's key for `Calc::cells_changed`.
 fn plant_python(t: &mut T, at: &str, cached: Value, result: Value) -> (usize, CellRef) {
     use gridcraft_model::python::{PyCode, PyOutput};
-    let output = PyOutput { value: result, type_name: "list".into(), preview: String::new(), convertible: true };
+    let output = PyOutput { value: result, type_name: "list".into(), preview: String::new(), convertible: true, ..Default::default() };
     let py = PyCode { output: Some(output), ..PyCode::new("[5, 6]") };
     let cell = Cell { value: cached, formula: None, style: gridcraft_model::StyleId::default(), py: Some(std::sync::Arc::new(py)) };
     t.wb.sheet_mut(0).unwrap().cells.set(c(at), cell);
@@ -2831,4 +2831,32 @@ fn formulas_read_a_dirty_python_cell_after_it_is_laid_out() {
     t.set("B2", "");
     assert_eq!((t.num("B1"), t.num("B2")), (5.0, 6.0));
     assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (5.0, 100.0, 111.0));
+}
+
+#[test]
+fn a_busy_python_cell_says_so_and_keeps_its_spill() {
+    // Waiting for a new result, a Python cell shows #BUSY! through any recalculation; what its
+    // last result spilled stays in place, and so do the formulas that read it.
+    let set_busy = |t: &mut T, busy: bool| {
+        let cell = t.wb.sheet_mut(0).unwrap().cells.get_mut(c("B1")).unwrap();
+        std::sync::Arc::make_mut(cell.py.as_mut().unwrap()).busy = busy;
+    };
+    let mut t = T::new();
+    t.set("A1", "=SUM(B2)");
+    t.set("A2", "=B1");
+    let k = plant_python(&mut t, "B1", Value::Number(5.0), column(&[5.0, 6.0]));
+    t.calc.cells_changed(&mut t.wb, &[k]);
+    assert_eq!((t.num("B1"), t.num("B2"), t.num("A1")), (5.0, 6.0, 6.0));
+
+    set_busy(&mut t, true);
+    t.calc.cells_changed(&mut t.wb, &[k]);
+    assert_eq!(t.get("B1"), Value::Error(CellError::Busy));
+    assert_eq!(t.get("A2"), Value::Error(CellError::Busy), "a reader sees it");
+    assert_eq!((t.num("B2"), t.num("A1")), (6.0, 6.0), "the spill stays");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.get("B1"), t.num("B2")), (Value::Error(CellError::Busy), 6.0), "a full recalculation agrees");
+
+    set_busy(&mut t, false);
+    t.calc.cells_changed(&mut t.wb, &[k]);
+    assert_eq!((t.num("B1"), t.num("A2"), t.num("B2")), (5.0, 5.0, 6.0), "the kept result is back");
 }

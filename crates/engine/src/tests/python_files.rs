@@ -23,7 +23,7 @@ fn cache(s: &mut Session, cell: &str, value: Value, type_name: &str) {
     let sh = wb.sheet_mut(0).unwrap();
     let c = sh.cells.get_mut(CellRef::parse(cell).unwrap()).unwrap();
     let p = Arc::make_mut(c.py.as_mut().unwrap());
-    p.output = Some(PyOutput { value, type_name: type_name.into(), preview: String::new(), convertible: true });
+    p.output = Some(PyOutput { value, type_name: type_name.into(), preview: String::new(), convertible: true, ..Default::default() });
 }
 
 fn array(rows: usize, cols: usize, data: Vec<Value>) -> Value {
@@ -290,6 +290,54 @@ fn a_damaged_python_part_is_a_warning_and_the_workbook_opens_with_its_values() {
     let a1 = wb.sheet(0).unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().clone();
     assert_eq!(a1.py.as_ref().map(|p| p.code.as_str()), Some("5"));
     assert_eq!(warnings.iter().filter(|w| w.contains("Python part is damaged")).count(), 1, "{warnings:?}");
+}
+
+#[test]
+fn another_namespaces_element_beside_the_code_stays_through_two_saves() {
+    const THEIRS: &str = "<v:code xmlns:v=\"urn:vendor\">metadata</v:code>";
+    const BARE: &str = "<environmentDefinition id=\"{00000000-0000-0000-0000-000000000000}\"/>";
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\"><f>_xlfn._xlws.PY(0,0)</f><v>5</v></c></row></sheetData>";
+    let plain = excel_shaped(data, Some(&["5"]));
+    let edit = |name: &str, text: &str| {
+        if name != "xl/python/python1.xml" {
+            return text.to_string();
+        }
+        assert!(text.contains(BARE), "{text}");
+        let open = BARE.trim_end_matches("/>");
+        // Before the real code too, where taking the first `code` by its local name would read it.
+        text.replace(BARE, &format!("{open}><initialization>{THEIRS}<code>x = 1</code>{THEIRS}</initialization></environmentDefinition>"))
+    };
+    let mut bytes = with_parts(&plain, edit, &[]);
+    let mut s = s();
+    for round in 1..=2 {
+        open(&mut s, "theirs.xlsx", &bytes);
+        let env = s.doc().unwrap().wb.python_env.clone().unwrap();
+        assert_eq!(env.code, "x = 1", "round {round}");
+        assert_eq!(code(&s, "A1").unwrap().code, "5", "round {round}");
+        bytes = save(&mut s, "xlsx");
+        let python = part(&bytes, "xl/python.xml");
+        assert!(python.contains(&format!("<code>x = 1</code>{THEIRS}{THEIRS}</initialization>")), "round {round}: {python}");
+        assert!(python.contains("<pythonScript><code>5</code></pythonScript>"), "round {round}: {python}");
+    }
+}
+
+#[test]
+fn a_part_whose_scripts_hold_more_than_code_says_a_save_leaves_it_out() {
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\"><f>_xlfn._xlws.PY(0,0)</f><v>5</v></c></row></sheetData>";
+    let plain = excel_shaped(data, Some(&["5"]));
+    let edit = |name: &str, text: &str| {
+        if name == "xl/python/python1.xml" {
+            text.replace("<code>5</code>", "<code>5</code><v:code xmlns:v=\"urn:vendor\">metadata</v:code>")
+        } else {
+            text.to_string()
+        }
+    };
+    let (wb, warnings) = crate::io::open_bytes("theirs.xlsx", &with_parts(&plain, edit, &[])).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().py.as_ref().unwrap().code, "5");
+    assert_eq!(warnings.iter().filter(|w| w.contains("a save leaves out")).count(), 1, "{warnings:?}");
+    // A part with nothing of the kind says nothing.
+    let (_, warnings) = crate::io::open_bytes("plain.xlsx", &plain).unwrap();
+    assert!(!warnings.iter().any(|w| w.contains("a save leaves out")), "{warnings:?}");
 }
 
 #[test]
@@ -669,7 +717,7 @@ fn a_dropped_python_result_keeps_its_spill_as_values() {
     // and C1's well-formed result keeps its spill.
     let mut wb = Workbook::new();
     let sh = wb.sheet_mut(0).unwrap();
-    let out = |value: Value| Some(PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true });
+    let out = |value: Value| Some(PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true, ..Default::default() });
     let col = array(3, 1, vec![Value::Number(7.0), Value::Number(8.0), Value::Number(9.0)]);
     let bad = Value::Array(Arc::new(Array { rows: 3, cols: 1, data: vec![Value::Number(7.0)] }));
     for (at, code, value) in [("A1", "y".repeat(9_000), col.clone()), ("B1", "b".into(), bad), ("C1", "c".into(), col)] {

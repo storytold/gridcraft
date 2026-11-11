@@ -358,6 +358,8 @@ fn sample() -> Workbook {
         data: png.into(),
         mime: "image/png".into(),
         alt: "Logo \"x\"".into(),
+        python_source: None,
+        rendered: None,
     });
     s.shapes.push(Shape {
         math: Default::default(),
@@ -962,6 +964,23 @@ fn spill_and_calc_errors_are_cached_as_value_errors() {
         assert_eq!(cell.child("f").unwrap().text, text);
         assert_eq!(cell.child("v").unwrap().text, value);
     }
+}
+
+/// The Python errors aren't error codes of the file format either: they are cached as `#VALUE!`.
+#[test]
+fn python_errors_are_cached_as_value_errors() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    let errors = [CellError::Python, CellError::Busy, CellError::Timeout, CellError::Blocked, CellError::Connect];
+    for (row, e) in errors.iter().enumerate() {
+        s.cells.set(at(&format!("A{}", row + 1)), Cell { value: Value::Error(*e), ..Cell::formula(Formula::new("1/0")) });
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    for e in errors {
+        assert!(!xml.contains(e.as_str()), "{e} in {xml}");
+    }
+    assert_eq!(xml.matches("<v>#VALUE!</v>").count(), errors.len(), "{xml}");
 }
 
 /// `CT_IconSet` needs one `cfvo` per icon (at least two); a rule without stored thresholds
