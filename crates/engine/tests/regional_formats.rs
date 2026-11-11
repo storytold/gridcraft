@@ -427,7 +427,8 @@ fn regional_clipboard_html_keeps_numbers_percentages_and_calendar_dates() {
                 let mut source = Session::new();
                 source.new_workbook();
                 Arc::make_mut(&mut source.active_mut().unwrap().wb).date_system = source_system;
-                let serial = gridcraft_engine::core::parse::parse_input("2026-03-04", source_system).value.as_f64().unwrap();
+                // The short date hides this time fraction, so text-only fallback cannot pass.
+                let serial = gridcraft_engine::core::parse::parse_input("2026-03-04", source_system).value.as_f64().unwrap() + 0.625;
                 source.execute("range.setValues", json!({"range":"A1:C1","values":[[1.2345678901234,0.125,serial]]})).unwrap();
                 source.execute("home.formatCells", json!({"range":"B1","style":{"num_fmt":"0.00%"}})).unwrap();
                 source.execute("home.numberFormat", json!({"range":"C1","format":"Short Date"})).unwrap();
@@ -440,7 +441,7 @@ fn regional_clipboard_html_keeps_numbers_percentages_and_calendar_dates() {
                 let sh = dest.active().unwrap().wb.sheet(0).unwrap();
                 assert_eq!(sh.value(CellRef::new(0, 0)), Value::Number(1.2345678901234), "{source_locale} to {target_locale}");
                 assert_eq!(sh.value(CellRef::new(0, 1)), Value::Number(0.125));
-                let expected = gridcraft_engine::core::parse::parse_input("2026-03-04", target_system).value;
+                let expected = Value::Number(gridcraft_engine::core::parse::parse_input("2026-03-04", target_system).value.as_f64().unwrap() + 0.625);
                 assert_eq!(sh.value(CellRef::new(0, 2)), expected, "{source_locale} to {target_locale}, {source_system:?} to {target_system:?}");
             }
         }

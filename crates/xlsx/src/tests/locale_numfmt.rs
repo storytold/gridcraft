@@ -137,3 +137,46 @@ fn explicit_custom_standard_aliases_keep_their_code_and_custom_id() {
         assert_eq!(back, code);
     }
 }
+
+/// Declaring a built-in ID in numFmts must not turn it into a literal custom date.
+#[test]
+fn declared_short_dates_keep_builtin_and_custom_identity() {
+    for (id, code, canonical, builtin) in [
+        (14, "m/d/yyyy", "m/d/yyyy", true),
+        (14, "mm-dd-yy", "m/d/yyyy", true),
+        (14, "MM-DD-YY", "m/d/yyyy", true),
+        (22, "m/d/yyyy h:mm", "m/d/yyyy h:mm", true),
+        (22, "m/d/yy h:mm", "m/d/yyyy h:mm", true),
+        (22, "M/D/YY H:MM", "m/d/yyyy h:mm", true),
+        (164, "m/d/yyyy", "m/d/yyyy", false),
+        (165, "m/d/yyyy h:mm", "m/d/yyyy h:mm", false),
+    ] {
+        let styles = format!(
+            r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+            <numFmts count="1"><numFmt numFmtId="{id}" formatCode="{code}"/></numFmts>
+            <fonts count="1"><font><sz val="11"/><name val="Carlito"/></font></fonts>
+            <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+            <borders count="1"><border/></borders><cellXfs count="2"><xf/><xf numFmtId="{id}"/></cellXfs></styleSheet>"#
+        );
+        let rels =
+            r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+        let source =
+            super::minimal(r#"<sheetData><row r="1"><c r="A1" s="1"><v>45292.5</v></c></row></sheetData>"#, &[("xl/styles.xml", &styles)], rels, "");
+        let (mut wb, _) = read_xlsx(&source).unwrap();
+        for _ in 0..3 {
+            let sh = wb.sheet(0).unwrap();
+            let cell = sh.cell(CellRef::new(0, 0)).unwrap();
+            assert_eq!(cell.value, Value::Number(45292.5));
+            let fmt = &wb.styles.get(cell.style).num_fmt;
+            assert_eq!(fmt.as_str(), canonical, "id={id}, code={code}");
+            assert_eq!(fmt.is_literal_short_date(), !builtin, "id={id}, code={code}");
+            let out = write_xlsx(&wb).unwrap();
+            let xml = styles_xml(&out);
+            let root = crate::xml::parse(xml.as_bytes()).unwrap();
+            let ids: Vec<_> = root.child("cellXfs").unwrap().kids("xf").filter_map(|x| x.attr_u32("numFmtId")).filter(|&x| x != 0).collect();
+            assert!(!ids.is_empty());
+            assert!(ids.iter().all(|&written| if builtin { written == id } else { written >= 164 }), "id={id}, code={code}: {ids:?}");
+            wb = read_xlsx(&out).unwrap().0;
+        }
+    }
+}

@@ -298,3 +298,42 @@ fn regional_host_copy_and_cut_preserve_decimals_between_sessions() {
         );
     }
 }
+
+/// Inspect only the painted Sample area: the correctly formatted grid must not satisfy this check.
+fn dialog_number_sample(h: &Harness) -> String {
+    let heading = h.get_by_label("Sample").rect();
+    let following = h.get_by_label("Type (custom format code):").rect();
+    let area = egui::Rect::from_min_max(egui::pos2(heading.left() - 1.0, heading.bottom()), egui::pos2(following.right() + 1.0, following.top()));
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            Shape::Text(t) if area.contains(t.pos) => Some(t.galley.job.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn format_cells_number_samples_follow_the_display_region() {
+    for (tag, number, date) in [("ro-RO", "1.169,50", "01.01.2024"), ("tr-TR", "1.169,50", "1.01.2024"), ("en-US", "1,169.50", "1/1/2024")] {
+        for (cell, expected) in [("A1", number), ("A2", date)] {
+            let mut h = harness(Some(tag));
+            h.state_mut().session.execute("selection.set", json!({"cell":cell})).unwrap();
+            h.run_steps(2);
+            h.state_mut().open_dialog("formatCells", json!({}));
+            h.run_steps(3);
+            assert_eq!(dialog_number_sample(&h), expected, "{tag}, {cell}");
+        }
+    }
+}
+
+#[test]
+fn format_cells_sample_keeps_literal_identity_until_a_preset_is_chosen() {
+    let mut h = custom_date_dialog();
+    assert_eq!(dialog_number_sample(&h), "1/1/2024");
+    h.get_by_label("Short Date").click();
+    h.run_steps(3);
+    assert_eq!(dialog_number_sample(&h), "01.01.2024");
+}
