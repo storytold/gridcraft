@@ -810,3 +810,29 @@ fn reading_a_fifo_is_refused_without_blocking() {
     assert!(err.contains("only regular files"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Opening a FIFO nobody writes to returns at once (it is not a regular file), where a plain open
+/// blocks the calling thread for good.
+#[cfg(unix)]
+#[test]
+fn a_fifo_without_a_writer_does_not_block_the_open() {
+    if O_NONBLOCK.is_none() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("gridcraft-fifo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fifo = dir.join("pipe");
+    if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()) {
+        return; // no mkfifo here
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path = fifo.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(open_nonblocking(&path).and_then(|f| f.metadata()).map(|m| m.is_file()));
+    });
+    let opened = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the open blocked");
+    assert!(!opened.unwrap());
+    assert!(read_file(&fifo.to_string_lossy()).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
