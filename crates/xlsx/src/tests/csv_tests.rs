@@ -406,3 +406,18 @@ fn parser_stops_collecting_fields_at_max_cols() {
     });
     assert_eq!(lens, vec![MAX_COLS as usize]);
 }
+
+#[test]
+fn csv_used_range_limit_is_enforced_while_reading() {
+    let opts = |max| CsvOptions { max_used_cells: Some(max), ..Default::default() };
+    // 3 rows x 3 columns: exactly at the limit reads, one cell over is refused.
+    let dense = b"1,2,3\n4,5,6\n7,8,9\n";
+    assert!(read_csv(dense, &opts(9)).is_ok());
+    assert!(matches!(read_csv(dense, &opts(8)), Err(IoError::TooLarge(_))));
+    // The limit is on the used range: empty leading rows, columns and trailing lines are free.
+    assert!(read_csv(b"\n\n,,x,y\n,,z,w\n\n\n", &opts(4)).is_ok());
+    // A wide sparse row against a tall one: refused once the box passes the limit.
+    assert!(matches!(read_csv(b"a\nb\nc\n,,,,d\n", &opts(10)), Err(IoError::TooLarge(_))));
+    // No limit by default.
+    assert!(read_csv(dense, &CsvOptions::default()).is_ok());
+}
