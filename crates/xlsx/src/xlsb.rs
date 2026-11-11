@@ -87,7 +87,7 @@ impl Budget {
     fn record(&self) -> Result<(), IoError> {
         self.records.set(self.records.get().saturating_add(1));
         if self.records.get() > self.max_records {
-            return Err(IoError::TooLarge("XLSB workbook contains too many records".into()));
+            return Err(IoError::TooLarge(format!("XLSB workbook contains too many records (more than {})", self.max_records)));
         }
         Ok(())
     }

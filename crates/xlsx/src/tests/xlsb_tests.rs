@@ -396,7 +396,7 @@ fn xlsb_records_share_one_allowance_over_the_workbook() {
     assert!(read_xlsb(&file(&worksheet(&data, &[]))).is_ok());
     data.extend(filler.repeat(1));
     let err = read_xlsb(&file(&worksheet(&data, &[]))).unwrap_err();
-    assert!(matches!(err, IoError::TooLarge(_)) && err.to_string().contains("too many records"), "{err}");
+    assert!(matches!(err, IoError::TooLarge(_)) && err.to_string().contains("too many records (more than 40000000)"), "{err}");
 }
 
 #[test]
