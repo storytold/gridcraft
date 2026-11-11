@@ -3,6 +3,8 @@
 /// Returns the Serbian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Dijagram",
+        "Decorative Text" => "Ukrasni tekst",
         "Paste" => "Nalepi",
         "Paste Values" => "Nalepi vrednosti",
         "Paste Formulas" => "Nalepi formule",
@@ -63,6 +65,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Okno za\noblikovanje",
         "Format" => "Oblikovanje",
         "Insert" => "Umetni",
+        "Header Menu|Insert" => "Umetni",
         "Insert Cells…" => "Umetni ćelije…",
         "Delete" => "Obriši",
         "Delete Cells…" => "Obriši ćelije…",
@@ -116,6 +119,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sparklines" => "Mini grafikoni",
         "Checkbox" => "Polje za potvrdu",
         "Insert checkboxes in the selected cells" => "Umetni polja za potvrdu u izabrane ćelije",
+        "Button" => "Dugme",
+        "Slider" => "Klizač",
+        "Spin Button" => "Dugme za okretanje",
+        "Draw a button that runs a macro or a command" => "Nacrtaj dugme koje pokreće makro ili komandu",
+        "Draw a slider that sets a whole number in a linked cell" => "Nacrtaj klizač koji postavlja ceo broj u povezanoj ćeliji",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Nacrtaj dugme za okretanje koje menja ceo broj u povezanoj ćeliji po koracima"
+        }
+        "Edit Text" => "Uredi tekst",
+        "Assign Action…" => "Dodeli radnju…",
+        "Format Control…" => "Oblikuj kontrolu…",
         "Header & Footer" => "Zaglavlje i podnožje",
         "Draw with ink" => "Crtaj mastilom",
         "Eraser" => "Gumica",
@@ -252,6 +266,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legenda: Dole",
         "Legend: Top" => "Legenda: Gore",
         "Legend: Right" => "Legenda: Desno",
+        "First slice angle" => "Ugao prve kriške",
+        "Doughnut hole size" => "Veličina rupe prstena",
         "Gridlines: None" => "Linije mreže: Ništa",
         "Gridlines: Show" => "Linije mreže: Prikaži",
         "Chart\nTitle" => "Naslov\ngrafikona",
