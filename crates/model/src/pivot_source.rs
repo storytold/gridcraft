@@ -13,7 +13,7 @@ use crate::{PivotDateGroup, Workbook};
 const INVALID: &str = "The reference isn't valid.";
 
 /// Month names of grouped dates' items.
-pub const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /// The sheet and range (header row included) a source names: a table (without its totals row),
 /// a range (whole columns or rows cut to the sheet's used range; one without a sheet is on
@@ -121,37 +121,21 @@ pub fn date_group_item(sys: DateSystem, n: f64, group: PivotDateGroup) -> Option
     })
 }
 
-/// The labels a source column's items show: a grouped date's group, a number in the column's
-/// format, `(blank)` for an empty cell, else the value's text.
-pub struct ItemLabels {
-    fmt: NumberFormat,
-    group: PivotDateGroup,
-    sys: DateSystem,
-}
-
-impl ItemLabels {
-    /// The labels of column `col` of source `range` on `sheet`, under `group`.
-    pub fn new(wb: &Workbook, sheet: usize, range: RangeRef, col: u32, group: PivotDateGroup) -> ItemLabels {
-        ItemLabels { fmt: NumberFormat::parse(&column_format(wb, sheet, range, col)), group, sys: wb.date_system }
-    }
-
-    pub fn label(&self, v: &Value) -> String {
-        item_label(v, self.group, &self.fmt, self.sys)
-    }
-}
-
-/// The label an item shows (see [`ItemLabels`]), its column's format `fmt` parsed.
+/// The label an item shows: a grouped date's group, a number in its column's format `fmt` (a
+/// repeat fill left out, as the report has always shown items), `(blank)` for an empty cell, else
+/// the value's text. An array stands for its first element; an array nested in that is no value
+/// an item can hold, so it is `(blank)` (no recursion).
 pub fn item_label(v: &Value, group: PivotDateGroup, fmt: &NumberFormat, sys: DateSystem) -> String {
+    let v = &v.scalar();
     match v {
-        Value::Empty => "(blank)".into(),
+        Value::Empty | Value::Array(_) => "(blank)".into(),
         Value::Number(n) => match date_group_item(sys, *n, group) {
             Some((label, _)) => label,
-            None => format_value(v, fmt, sys).plain(),
+            None => format_value(v, fmt, sys).text,
         },
         Value::Text(t) => t.to_string(),
         Value::Bool(b) => (if *b { "TRUE" } else { "FALSE" }).into(),
         Value::Error(e) => e.as_str().into(),
-        Value::Array(_) => item_label(&v.scalar(), group, fmt, sys),
     }
 }
 
@@ -196,14 +180,22 @@ mod tests {
         let r = RangeRef::parse("A1:B2").unwrap();
         assert_eq!(column_format(&wb, 0, r, 1), "$0.00");
         assert_eq!(column_format(&wb, 0, RangeRef::parse("A1:B1").unwrap(), 1), "General");
-        let cost = ItemLabels::new(&wb, 0, r, 1, PivotDateGroup::None);
-        assert_eq!(cost.label(&Value::Number(3.5)), "$3.50");
-        assert_eq!(cost.label(&Value::Empty), "(blank)");
-        assert_eq!(cost.label(&Value::Bool(true)), "TRUE");
-        assert_eq!(cost.label(&Value::text("x")), "x");
+        let fmt = NumberFormat::parse(&column_format(&wb, 0, r, 1));
+        let sys = wb.date_system;
+        let cost = |v: &Value| item_label(v, PivotDateGroup::None, &fmt, sys);
+        assert_eq!(cost(&Value::Number(3.5)), "$3.50");
+        assert_eq!(cost(&Value::Empty), "(blank)");
+        assert_eq!(cost(&Value::Bool(true)), "TRUE");
+        assert_eq!(cost(&Value::text("x")), "x");
         // 46037 is 15 Jan 2026.
-        let when = ItemLabels::new(&wb, 0, r, 0, PivotDateGroup::Quarters);
-        assert_eq!(when.label(&Value::Number(46037.0)), "Qtr1");
+        let general = NumberFormat::parse("General");
+        assert_eq!(item_label(&Value::Number(46037.0), PivotDateGroup::Quarters, &general, sys), "Qtr1");
+        // A repeat fill is left out of a label, as the report has always shown it.
+        assert_eq!(item_label(&Value::Number(1234.0), PivotDateGroup::None, &NumberFormat::parse("$* #,##0"), sys), "$1,234");
+        // An array is its first element; an array inside that is no item value.
+        let one = |v: Value| Value::Array(std::sync::Arc::new(gridcraft_core::Array::scalar(v)));
+        assert_eq!(item_label(&one(Value::Number(5.0)), PivotDateGroup::None, &general, sys), "5");
+        assert_eq!(item_label(&one(one(Value::Number(5.0))), PivotDateGroup::None, &general, sys), "(blank)");
         assert_eq!(date_group_item(wb.date_system, 46037.0, PivotDateGroup::Months), Some(("Jan".into(), 1.0)));
         assert_eq!(date_group_item(wb.date_system, 46037.0, PivotDateGroup::Days), Some(("15-Jan".into(), 115.0)));
         assert_eq!(date_group_item(wb.date_system, 46037.0, PivotDateGroup::None), None);

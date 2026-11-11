@@ -1130,3 +1130,15 @@ fn headers_read_values_while_formulas_show() {
     let r = s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
     assert_eq!(r["fields"][0], "Region");
 }
+
+#[test]
+fn accounting_items_keep_their_labels_without_the_fill() {
+    let mut s = sales();
+    s.execute("home.numberFormat", json!({"range": "E2:E13", "code": "_($* #,##0_);_($* (#,##0);_($* \"-\"_);_(@_)"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Units"], "filters": ["Sales"]})).unwrap();
+    // The page item is labelled without a space where the fill is, and a selection stored by
+    // that label (as files and earlier versions hold it) still matches.
+    s.execute("pivot.filter", json!({"field": "Sales", "selected": [" $120 "]})).unwrap();
+    assert_eq!(text(&s, "B1"), " $120 ");
+    assert_eq!(grand_total(&s, 1), Value::Number(20.0));
+}

@@ -35,9 +35,10 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: 
         first,
         formatted,
     };
-    let v = &v.scalar();
-    // The label is the model's, which file writers list items by too.
+    // The label is the model's, which file writers list items by too. It takes the value as the
+    // cell holds it and reads an array's first element the same way as the match below.
     let label = gridcraft_model::pivot_source::item_label(v, group, &crate::display::number_format(fmt), wb.date_system);
+    let v = &v.scalar();
     match v {
         Value::Empty => ("b".into(), it(Value::text("(blank)"), label, 4, 0.0, false)),
         Value::Number(n) => match gridcraft_model::pivot_source::date_group_item(wb.date_system, *n, group) {
@@ -251,5 +252,28 @@ pub(super) fn collect_siblings(nodes: &[Node], prefix: &mut Vec<u32>, out: &mut 
         prefix.push(n.item);
         collect_siblings(&n.children, prefix, out);
         prefix.pop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use gridcraft_core::Array;
+
+    use super::*;
+
+    #[test]
+    fn array_items_agree_in_value_key_and_label() {
+        let wb = Workbook::new();
+        let one = |v: Value| Value::Array(Arc::new(Array::scalar(v)));
+        // An array is its first element.
+        let (key, item) = make_item(&wb, &one(Value::Number(5.0)), PivotDateGroup::None, "General", 0);
+        assert_eq!(key, format!("n{}", 5f64.to_bits()));
+        assert_eq!((item.label.as_str(), &item.value), ("5", &Value::Number(5.0)));
+        // An array inside that is no value an item can hold: blank throughout.
+        let (key, item) = make_item(&wb, &one(one(Value::Number(5.0))), PivotDateGroup::None, "General", 0);
+        assert_eq!(key, "b");
+        assert_eq!((item.label.as_str(), &item.value), ("(blank)", &Value::text("(blank)")));
     }
 }
