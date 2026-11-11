@@ -53,7 +53,7 @@ pub use ods::read_ods;
 pub use package::MAX_PART;
 pub use passthrough::rebase_links;
 pub use xls::{read_xls, read_xls_with};
-pub use xlsb::read_xlsb;
+pub use xlsb::{read_xlsb, read_xlsb_with};
 
 /// Errors from reading or writing files.
 #[derive(Debug, thiserror::Error)]
