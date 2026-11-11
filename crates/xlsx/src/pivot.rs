@@ -18,7 +18,8 @@ use gridcraft_core::date::datetime_from_serial;
 use gridcraft_core::{CellRef, DateSystem, RangeRef, Value, number_to_text};
 use gridcraft_formula::quote_sheet;
 use gridcraft_model::{
-    PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, Workbook,
+    PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotNumberGroup, PivotShowAs, PivotSort, PivotTable,
+    PivotValue, Workbook,
 };
 
 use crate::IoError;
@@ -118,22 +119,30 @@ fn func_caption(f: PivotFunc) -> &'static str {
     }
 }
 
+/// The `rangePr groupBy` value of a date grouping (`range` for none: number ranges).
 fn group_by_name(g: PivotDateGroup) -> &'static str {
     match g {
         PivotDateGroup::Years => "years",
         PivotDateGroup::Quarters => "quarters",
         PivotDateGroup::Months => "months",
         PivotDateGroup::Days => "days",
+        PivotDateGroup::Hours => "hours",
+        PivotDateGroup::Minutes => "minutes",
+        PivotDateGroup::Seconds => "seconds",
         PivotDateGroup::None => "range",
     }
 }
 
+/// The caption of an extra group field Excel adds for a coarser date level ("Years2" if taken).
 fn group_caption(g: PivotDateGroup) -> &'static str {
     match g {
         PivotDateGroup::Years => "Years",
         PivotDateGroup::Quarters => "Quarters",
         PivotDateGroup::Months => "Months",
         PivotDateGroup::Days => "Days",
+        PivotDateGroup::Hours => "Hours",
+        PivotDateGroup::Minutes => "Minutes",
+        PivotDateGroup::Seconds => "Seconds",
         PivotDateGroup::None => "Group",
     }
 }
@@ -142,6 +151,16 @@ fn group_caption(g: PivotDateGroup) -> &'static str {
 fn iso(sys: DateSystem, serial: f64) -> Option<String> {
     let d = datetime_from_serial(sys, serial)?;
     Some(format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}", d.year, d.month, d.day, d.hour, d.minute, d.second))
+}
+
+/// "12 AM", "1 AM" … "11 PM": the group items of hours, as Excel captions them (the engine's
+/// item labels must match them for hidden and collapsed items to round-trip).
+fn hour_caption(hour: u32) -> String {
+    let twelve = match hour % 12 {
+        0 => 12,
+        h => h,
+    };
+    format!("{twelve} {}", if hour % 24 < 12 { "AM" } else { "PM" })
 }
 
 /// `3/5/2024` for a date serial (group boundary captions).

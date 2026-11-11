@@ -1,8 +1,8 @@
 use super::create::pivot_json;
 use super::params::{area_param, func_param, position_param, show_as_param};
 use super::{
-    Json, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotShowAs, PivotTable, PivotValue, Result, Session, Workbook, bad,
-    bool_param, edit, find_pivot, json, ok, other, pv, str_param, u32_param,
+    Json, PivotCalcField, PivotField, PivotFilter, PivotFunc, PivotShowAs, PivotTable, PivotValue, Result, Session, Workbook, bad, bool_param, edit,
+    find_pivot, json, ok, other, pv, str_param, u32_param,
 };
 
 // ---------------------------------------------------------------- layout editing (pure)
@@ -229,6 +229,14 @@ pub(super) fn update(s: &mut Session, p: &Json, f: impl FnOnce(&mut PivotTable, 
     })
 }
 
+/// How a source field's items read in the report: the grouping of its first row or column field,
+/// else its values as they are (the field list shows samples the way the report labels them).
+fn grouping_of(pt: &PivotTable, field: &str) -> pv::Grouping {
+    pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(field)).map(pv::Grouping::of).unwrap_or_default()
+}
+
+/// `pivot.fields`: the PivotTable's layout and every source field (and calculated field) with its
+/// kind, samples as the report labels them, and the areas it is in.
 pub(super) fn fields(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, pi) = find_pivot(s, p)?;
     let d = s.doc()?;
@@ -258,7 +266,7 @@ pub(super) fn fields(s: &mut Session, p: &Json) -> Result<Json> {
                     "name": h,
                     "numeric": src.numeric.get(c).copied().unwrap_or(false),
                     "date": src.dates.get(c).copied().unwrap_or(false),
-                    "samples": pv::distinct_labels(&d.wb, src, c, PivotDateGroup::None, 5),
+                    "samples": pv::distinct_labels(&d.wb, src, c, grouping_of(pt, h), 5),
                     "areas": areas,
                 })
             })

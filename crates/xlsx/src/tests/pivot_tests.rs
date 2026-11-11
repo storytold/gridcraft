@@ -127,8 +127,20 @@ fn workbook() -> Workbook {
         source: "SalesTbl".into(),
         anchor: at("K4"),
         rows: vec![
-            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Years, sort: PivotSort::None, collapsed_items: vec!["2024".into()] },
-            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Months, sort: PivotSort::Asc, collapsed_items: vec![] },
+            PivotField {
+                source_col: "Date".into(),
+                date_group: PivotDateGroup::Years,
+                sort: PivotSort::None,
+                collapsed_items: vec!["2024".into()],
+                number_group: None,
+            },
+            PivotField {
+                source_col: "Date".into(),
+                date_group: PivotDateGroup::Months,
+                sort: PivotSort::Asc,
+                collapsed_items: vec![],
+                number_group: None,
+            },
         ],
         columns: vec![PivotField { sort: PivotSort::Desc, ..field("Product") }],
         values: vec![
@@ -500,7 +512,7 @@ fn with_pivot(table: &str, cache: Option<&str>) -> Vec<u8> {
     minimal("<sheetData/>", &extra, "", "")
 }
 
-const GOOD_CACHE: &str = r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:B3"/></cacheSource><cacheFields count="2"><cacheField name="K"><sharedItems><s v="x"/><n v="2"/><m/><b v="1"/><d v="2024-01-01T00:00:00"/></sharedItems></cacheField><cacheField name="V"><sharedItems/><fieldGroup base="0"><rangePr startNum="0" endNum="10" groupInterval="5"/><groupItems><s v="0-4"/></groupItems></fieldGroup></cacheField></cacheFields></pivotCacheDefinition>"#;
+const GOOD_CACHE: &str = r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:B3"/></cacheSource><cacheFields count="2"><cacheField name="K"><sharedItems><s v="x"/><n v="2"/><m/><b v="1"/><d v="2024-01-01T00:00:00"/></sharedItems></cacheField><cacheField name="V"><sharedItems/><fieldGroup base="0"><discretePr count="1"><x v="0"/></discretePr><groupItems><s v="G1"/></groupItems></fieldGroup></cacheField></cacheFields></pivotCacheDefinition>"#;
 
 #[test]
 fn hostile_pivot_parts_warn_not_panic() {
@@ -759,4 +771,77 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     let t = &one["xl/pivotTables/pivotTable1.xml"];
     assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
     assert!(!t.contains("hideValuesRow"), "{t}");
+}
+
+#[test]
+fn number_ranges_are_written_on_the_field_itself() {
+    let cols = [
+        ("Age", vec![Value::number(23.0), Value::number(41.0), Value::number(79.5)]),
+        ("Sales", vec![Value::number(10.0), Value::number(20.0), Value::number(5.0)]),
+    ];
+    let parts = small_pivot(&cols, |p| {
+        p.rows = vec![PivotField { number_group: PivotNumberGroup::new(20.0, 79.0, 10.0), ..field("Age") }];
+        p.values = vec![PivotValue { source_col: "Sales".into(), name: "Sum of Sales".into(), ..PivotValue::default() }];
+        p.filters = vec![PivotFilter { source_col: "Age".into(), selected: Some(vec!["40-49".into(), ">79".into()]) }];
+    });
+    let cache = &parts["xl/pivotCache/pivotCacheDefinition1.xml"];
+    assert!(
+        cache.contains(r#"<fieldGroup base="0"><rangePr autoStart="0" autoEnd="0" startNum="20" endNum="79" groupInterval="10"/><groupItems count="8"><s v="&lt;20"/><s v="20-29"/>"#),
+        "{cache}"
+    );
+    assert!(cache.contains(r#"<s v="70-79"/><s v="&gt;79"/></groupItems>"#), "{cache}");
+    assert!(!cache.contains("containsDate"), "the field holds numbers, not dates: {cache}");
+    let table = &parts["xl/pivotTables/pivotTable1.xml"];
+    // Items 0 (<20), 1 (20-29) … 7 (>79): only 40-49 and >79 are shown.
+    assert!(table.contains(r#"<item x="0" h="1"/><item x="1" h="1"/><item x="2" h="1"/><item x="3"/>"#), "{table}");
+}
+
+#[test]
+fn time_groups_are_written_with_excels_captions() {
+    let cols = [("When", vec![Value::number(0.25), Value::number(0.75)]), ("Sales", vec![Value::number(10.0), Value::number(20.0)])];
+    for (by, name, first, last) in [
+        (PivotDateGroup::Hours, "hours", "12 AM", "11 PM"),
+        (PivotDateGroup::Minutes, "minutes", ":00", ":59"),
+        (PivotDateGroup::Seconds, "seconds", ":00", ":59"),
+    ] {
+        let parts = small_pivot(&cols, |p| {
+            p.rows = vec![PivotField { date_group: by, ..field("When") }];
+            p.values = vec![PivotValue { source_col: "Sales".into(), name: "Sum of Sales".into(), ..PivotValue::default() }];
+        });
+        let cache = &parts["xl/pivotCache/pivotCacheDefinition1.xml"];
+        assert!(cache.contains(&format!("<rangePr groupBy=\"{name}\"")), "{cache}");
+        assert!(cache.contains(&format!("<s v=\"{first}\"/>")) && cache.contains(&format!("<s v=\"{last}\"/>")), "{cache}");
+    }
+}
+
+#[test]
+fn number_ranges_are_read_and_bad_ones_warned_about() {
+    let cache = |range: &str| {
+        format!(
+            r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:B3"/></cacheSource><cacheFields count="2"><cacheField name="K"><sharedItems containsNumber="1"/><fieldGroup base="0">{range}<groupItems><s v="&lt;0"/><s v="0-9"/><s v="&gt;9"/></groupItems></fieldGroup></cacheField><cacheField name="V"><sharedItems/></cacheField></cacheFields></pivotCacheDefinition>"#
+        )
+    };
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="C1:D4"/><pivotFields count="2"><pivotField axis="axisRow"><items><item x="0"/><item x="1" h="1"/><item x="2"/><item t="default"/></items></pivotField><pivotField dataField="1"/></pivotFields><rowFields><field x="0"/></rowFields><dataFields><dataField name="S" fld="1"/></dataFields></pivotTableDefinition>"#;
+    let read = |range: &str| {
+        let (wb, report) = read_xlsx(&with_pivot(table, Some(&cache(range)))).unwrap();
+        let pt = wb.sheet(0).unwrap().pivots[0].clone();
+        (pt, report.warnings)
+    };
+    let (pt, warnings) = read(r#"<rangePr autoStart="1" startNum="0" endNum="9" groupInterval="10"/>"#);
+    assert_eq!(pt.rows[0].number_group, PivotNumberGroup::new(0.0, 9.0, 10.0));
+    assert_eq!(pt.filters[0].selected, Some(vec!["<0".to_string(), ">9".to_string()]), "hidden items read by their range captions");
+    assert!(warnings.iter().all(|w| !w.contains("grouping")), "{warnings:?}");
+    for bad in [
+        r#"<rangePr startNum="0" endNum="9" groupInterval="0"/>"#,
+        r#"<rangePr startNum="9" endNum="0" groupInterval="1"/>"#,
+        r#"<rangePr startNum="x" endNum="9" groupInterval="1"/>"#,
+        r#"<rangePr startNum="0" groupInterval="1"/>"#,
+        r#"<rangePr startNum="0" endNum="1e300" groupInterval="1e-300"/>"#,
+    ] {
+        let (pt, warnings) = read(bad);
+        assert_eq!(pt.rows[0].number_group, None, "{bad}");
+        // #3395 review: the hidden item named a range the ungrouped field doesn't have.
+        assert!(pt.filters.is_empty(), "{bad}: {:?}", pt.filters);
+        assert!(warnings.iter().any(|w| w.contains("grouping")), "{bad}: {warnings:?}");
+    }
 }
