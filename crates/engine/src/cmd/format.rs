@@ -727,16 +727,24 @@ pub fn format_code_for(name: &str) -> &str {
 }
 
 fn number_format(s: &mut Session, p: &Json) -> Result<Json> {
-    let code = str_param(p, "code")
-        .map(str::to_string)
-        .or_else(|| str_param(p, "format").map(|f| format_code_for(f).to_string()))
-        .ok_or_else(|| bad("home.numberFormat", "missing `format` or `code`"))?;
+    let region = s.doc()?.wb.region;
+    // A `code` is typed with the region's separators (`#.##0,00` in pt-BR) and is stored once in
+    // its canonical en-US spelling. A ribbon `format` name already maps to a canonical code, and
+    // rewriting it here would turn `#,##0.00` into `#,##0,00` in pt-BR.
+    let code = match str_param(p, "code") {
+        Some(c) => gridcraft_numfmt::canonical_code(c, region),
+        None => {
+            str_param(p, "format").map(|f| format_code_for(f).to_string()).ok_or_else(|| bad("home.numberFormat", "missing `format` or `code`"))?
+        }
+    };
     set_fmt(s, p, &code)
 }
 
+/// Applies a number format code that is already canonical: every caller passes a built-in code or
+/// one that [`canonical_num_fmt`] converted. Canonicalizing here as well used to rewrite the
+/// canonical `#,##0.00` into `#,##0,00` in a region that writes a decimal comma.
 fn set_fmt(s: &mut Session, p: &Json, code: &str) -> Result<Json> {
-    let region = s.doc()?.wb.region;
-    let nf = NumFmt::new(&gridcraft_numfmt::canonical_code(code, region));
+    let nf = NumFmt::new(code);
     apply_style(s, p, |st| st.num_fmt = nf.clone())
 }
 

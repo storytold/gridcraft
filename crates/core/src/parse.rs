@@ -54,7 +54,13 @@ pub fn parse_number_text(s: &str) -> Option<f64> {
 
 /// Like [`parse_number_text`], with date text read in the given workbook date system.
 pub fn parse_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
-    parse_numeric(s.trim(), sys, &EN_US).map(|(n, _)| n)
+    parse_number_text_in_region(s, sys, &EN_US)
+}
+
+/// Like [`parse_number_text_in`], reading numbers with the decimal and thousands separators of
+/// `region`: `">1.200,00"` is 1200 in `pt-BR`, where [`parse_number_text_in`] finds no number.
+pub fn parse_number_text_in_region(s: &str, sys: DateSystem, region: &Region) -> Option<f64> {
+    parse_numeric(s.trim(), sys, region).map(|(n, _)| n)
 }
 
 /// Text that Excel's "Number Stored as Text" check flags: it would be a number if typed (signs,
