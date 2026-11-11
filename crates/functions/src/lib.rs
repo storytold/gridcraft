@@ -123,6 +123,11 @@ pub trait Ctx {
     fn web_service(&mut self, _url: &str) -> Result<String, gridcraft_core::CellError> {
         Err(gridcraft_core::CellError::Value)
     }
+    /// Whether the cell's work budget has run out: the database functions stop asking for computed
+    /// criteria then, as every one would fail at once.
+    fn exhausted(&self) -> bool {
+        false
+    }
     /// For GROUPBY/PIVOTBY: whether their function argument is a LAMBDA (its value is then not used).
     fn has_lambda(&self) -> bool {
         false
