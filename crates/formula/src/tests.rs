@@ -625,6 +625,20 @@ fn parse_tokens_refuses_hostile_tokens() -> Result<(), ParseError> {
     let half = "x".repeat(crate::MAX_FORMULA_LEN / 2 + 1);
     let toks = [Tok::Text(half.clone()), Tok::Op("&"), Tok::Text(half)].into_iter().map(|tok| Token { tok, start: 0, end: 0 }).collect();
     assert!(crate::parse_tokens(toks).is_err());
+    // A number the text lexer would refuse (not finite) is refused, not printed as `0`.
+    for n in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(one(Tok::Number(n)).is_err(), "{n}");
+    }
+    // An end token before the last is an error, not the end of what is read.
+    let toks = [Tok::Number(1.0), Tok::Eof, Tok::Op("+"), Tok::Number(2.0)].into_iter().map(|tok| Token { tok, start: 0, end: 0 }).collect();
+    assert!(crate::parse_tokens(toks).is_err());
+    // A sheet name is never empty.
+    let cell = RefKind::Cell(anchor(0, 0));
+    for sheet in [SheetSel::Named(String::new()), SheetSel::Span(String::new(), "S".into()), SheetSel::Span("S".into(), String::new())] {
+        assert!(one(Tok::Ref(Reference { sheet: sheet.clone(), kind: cell.clone() })).is_err(), "{sheet:?}");
+    }
+    let toks = [Tok::Sheet(String::new(), None), Tok::Word("A1".into())].into_iter().map(|tok| Token { tok, start: 0, end: 0 }).collect();
+    assert!(crate::parse_tokens(toks).is_err());
     Ok(())
 }
 

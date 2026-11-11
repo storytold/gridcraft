@@ -60,11 +60,11 @@ pub fn parse_closing_parens<T>(src: &str, parse: impl Fn(&str) -> Result<T, Pars
 /// them: a [`Tok::Space`] is the intersection operator. A [`Tok::Ref`] is a reference the
 /// tokenizer has already read; it must lie on the grid (rows and columns within Excel's limits)
 /// or the tokens are refused. Its ends are kept in the order given, as the text parser keeps
-/// `B2:A1`. The token list need not end with [`Tok::Eof`].
+/// `B2:A1`. The token list need not end with [`Tok::Eof`]; one anywhere else is an error.
 ///
 /// The tokens are bounded as text is: at most [`MAX_FORMULA_LEN`] tokens, and at most
 /// [`MAX_FORMULA_LEN`] characters of text, names, sheet names and structured-reference bodies
-/// in all.
+/// in all. A number must be finite, as the A1 tokenizer reads it, and a sheet name non-empty.
 ///
 /// Only this grammar's operators are read: OpenFormula's `~` union is not handled here, so a
 /// tokenizer for that syntax translates it itself.
@@ -78,11 +78,23 @@ pub fn parse_tokens(toks: Vec<Token>) -> Result<Expr, ParseError> {
         if chars > MAX_FORMULA_LEN {
             return Err(ParseError { msg: format!("formula is longer than {MAX_FORMULA_LEN} characters"), pos: t.start });
         }
-        if let Tok::Ref(r) = &t.tok
-            && !reference_on_grid(r)
-        {
-            return Err(ParseError { msg: "reference is outside the sheet".into(), pos: t.start });
+        let bad = match &t.tok {
+            Tok::Ref(r) if !reference_on_grid(r) => Some("reference is outside the sheet"),
+            Tok::Ref(Reference { sheet: SheetSel::Named(a), .. }) if a.is_empty() => Some("empty sheet name"),
+            Tok::Ref(Reference { sheet: SheetSel::Span(a, b), .. }) if a.is_empty() || b.is_empty() => Some("empty sheet name"),
+            Tok::Sheet(a, b) if a.is_empty() || b.as_deref().is_some_and(str::is_empty) => Some("empty sheet name"),
+            Tok::Number(n) if !n.is_finite() => Some("number too large"),
+            _ => None,
+        };
+        if let Some(msg) = bad {
+            return Err(ParseError { msg: msg.into(), pos: t.start });
         }
+    }
+    // The end token may only close the list: anything after it would be dropped unread.
+    if let Some(i) = toks.iter().position(|t| t.tok == Tok::Eof)
+        && i + 1 < toks.len()
+    {
+        return Err(ParseError { msg: "tokens after the end of the formula".into(), pos: toks.get(i + 1).map_or(0, |t| t.start) });
     }
     let mut p = Parser { toks, i: 0, depth: 0, input: false };
     let e = p.expr(0, false)?;
