@@ -39,7 +39,7 @@ type PicCache = std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, 
 use layout::bands;
 pub(crate) use layout::split_bands;
 pub use layout::{PrintOptions, SheetLayout, layout_sheet, layouts, paper_size, print_range};
-use layout::{known_paper, seg_size, segments};
+use layout::{seg_size, segments};
 use objects::draw_objects;
 #[cfg(test)]
 use text::{center_across_width, wrap_lines};
@@ -258,8 +258,9 @@ fn page_setup(s: &mut Session, p: &Json) -> Result<Json> {
     let paper = match str_param(p, "paper") {
         None => None,
         Some(name) => {
-            known_paper(name).ok_or_else(|| bad(CMD, format!("unknown paper size `{name}`")))?;
-            Some(name.trim().to_string())
+            // Stored under its table name, which every file format knows.
+            let paper = gridcraft_model::paper::canonical(name).ok_or_else(|| bad(CMD, format!("unknown paper size `{name}`")))?;
+            Some(paper.to_string())
         }
     };
     let margin_src = p.get("margins").filter(|m| m.is_object()).unwrap_or(p);

@@ -57,7 +57,8 @@ pub use gridcraft_core::color::INDEXED;
 
 /// Paper sizes (`pageSetup paperSize`) we name. ID 12/13 are the JIS B4/B5 that
 /// `pageLayout.pageSetup` calls `B4`/`B5`; 42 is ISO B4, and 43–88 are the Japanese postcards,
-/// envelopes and B6. The engine's `known_paper` uses the same names and sizes.
+/// envelopes and B6. Their sizes are in `gridcraft_model::paper`, under the same names. 34 is
+/// ECMA-376's "B5 envelope (176 mm by 250 mm)": the ISO B5 size, so it reads as `B5 (ISO)`.
 const PAPERS: [(u32, &str); 23] = [
     (1, "Letter"),
     (3, "Tabloid"),
@@ -72,7 +73,7 @@ const PAPERS: [(u32, &str); 23] = [
     (13, "B5"),
     (20, "Envelope #10"),
     (27, "Envelope DL"),
-    (34, "Envelope B5"),
+    (34, "B5 (ISO)"),
     (42, "B4 (ISO)"),
     (43, "Japanese Postcard"),
     (69, "Japanese Double Postcard"),
@@ -88,25 +89,10 @@ pub fn paper_name(id: u32) -> Option<&'static str> {
     PAPERS.iter().find(|(i, _)| *i == id).map(|(_, n)| *n)
 }
 
-/// The file ID for a paper name. Spelling is loose like `known_paper`'s — spaces, hyphens,
-/// underscores and parentheses don't matter, and the JIS/ISO and Japanese-envelope spellings the
-/// page-setup commands take are folded onto the name in [`PAPERS`].
+/// The file ID for a paper name, spelled any way [`gridcraft_model::paper::canonical`] takes.
 pub fn paper_id(name: &str) -> Option<u32> {
-    let norm = |s: &str| s.trim().to_ascii_lowercase().replace([' ', '-', '_', '(', ')'], "");
-    let normalized = norm(name);
-    let alias = match normalized.as_str() {
-        "b4jis" => "b4",
-        "b5jis" => "b5",
-        "b6jis" => "b6",
-        "postcard" => "japanesepostcard",
-        "doublepostcard" => "japanesedoublepostcard",
-        "chou#3" => "japaneseenvelope#3",
-        "chou#4" => "japaneseenvelope#4",
-        "kaku#2" => "japaneseenvelopekaku#2",
-        "kaku#3" => "japaneseenvelopekaku#3",
-        other => other,
-    };
-    PAPERS.iter().find(|(_, n)| norm(n) == alias).map(|(i, _)| *i)
+    let name = gridcraft_model::paper::canonical(name)?;
+    PAPERS.iter().find(|(_, n)| *n == name).map(|(i, _)| *i)
 }
 
 /// Functions introduced after Excel 2007 that files store with the `_xlfn.` prefix. Entries with

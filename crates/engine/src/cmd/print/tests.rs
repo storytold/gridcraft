@@ -631,6 +631,34 @@ fn page_setup_paper_sizes_reach_the_pdf_page() {
     assert!(s.execute("pageLayout.pageSetup", json!({"paper": "Napkin"})).is_err());
 }
 
+/// An empty paper name means the file stated none; it prints on Letter.
+#[test]
+fn an_unstated_paper_prints_on_letter() {
+    let mut wb = gridcraft_model::Workbook::new();
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).set_value(CellRef::new(0, 0), gridcraft_core::Value::Text("x".into()));
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).print.paper = String::new();
+    let layouts = super::layout::layouts(&wb, &super::layout::PrintOptions::default());
+    let l = &layouts[0];
+    assert_eq!((l.page_w, l.page_h), (612.0, 792.0));
+    assert_eq!(paper_size(""), (612.0, 792.0));
+}
+
+/// Both commands that set the paper store a known one under its table name, so every file
+/// format finds it.
+#[test]
+fn paper_size_commands_store_the_table_name() {
+    let mut s = s();
+    s.execute("pageLayout.size", json!({"paper": "b5-jis"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, "B5");
+    s.execute("pageLayout.pageSetup", json!({"paper": "11x17"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, "Tabloid");
+    // Statement and the envelopes Excel names now print on their own size.
+    s.execute("pageLayout.pageSetup", json!({"paper": "Envelope DL"})).unwrap();
+    assert_eq!(paper_size("Statement"), (396.0, 612.0));
+    // A new workbook still prints on Letter.
+    assert_eq!(gridcraft_model::Workbook::new().sheets[0].print.paper, "Letter");
+}
+
 #[test]
 fn hostile_settings_never_panic_and_cap_pages() {
     let mut s = s();
