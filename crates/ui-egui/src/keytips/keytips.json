@@ -1114,10 +1114,10 @@
   },
   {
    "seq": "NH1",
-   "kind": "dialog",
-   "target": "headerFooter",
+   "kind": "control",
+   "target": "pageLayout.headerFooter",
    "excel": "Header & Footer",
-   "note": ""
+   "note": "ribbon control: starts editing the page header"
   },
   {
    "seq": "NHF",
@@ -1132,6 +1132,13 @@
    "target": "insert.chart.hierarchy",
    "excel": "Hierarchy Chart",
    "note": "Hierarchy (kind TBD)"
+  },
+  {
+   "seq": "NHT",
+   "kind": "command",
+   "target": "insert.textBox",
+   "excel": "Text Box",
+   "note": "ribbon alias: the combined Text drop-down lists Text Box under NH too"
   },
   {
    "seq": "NI1",
@@ -1346,6 +1353,13 @@
    "target": "insert.textBox",
    "excel": "Text Box",
    "note": ""
+  },
+  {
+   "seq": "NZH",
+   "kind": "control",
+   "target": "pageLayout.headerFooter",
+   "excel": "Header & Footer",
+   "note": "ribbon alias: the combined Text drop-down lists Header & Footer under NZ too; starts editing the page header"
   },
   {
    "seq": "NZK",

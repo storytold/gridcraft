@@ -1,6 +1,7 @@
-use super::controls::{act, anchor_keytip, control_keytip, invoke, popup_command, sep};
+use super::controls::{act, anchor_keytip, control_keytip, invoke, keytip, keytip_group, popup_command, sep};
 use super::{
-    Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, big_split_button, icons, json, small_button, small_toggle_button, vec2,
+    Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, big_split_button, icons, json, keytip_table, pos2, small_button,
+    small_toggle_button, vec2,
 };
 
 /// Draws the Insert tab: PivotTable, Table, Pictures, Shapes, Icons, charts, slicer, sparklines, form controls (button, slider, spin button), checkbox, links, comments, text box, header/footer and symbols.
@@ -203,17 +204,47 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
         app.open_dialog("comment", json!({"threaded": true}));
     }
     sep(ui);
-    let __k = big_button(ui, Icon::TextBox, "Text\nBox", "Text Box", false);
-    control_keytip(app, ui, &__k, "insert.textBox");
-    if __k.clicked() {
+    // Excel folds Text Box and Header & Footer into one Text split button: the body inserts a text
+    // box, the arrow opens the drop-down.
+    let (text_body, text_arrow) = big_split_button(ui, Icon::TextBox, "Text", "Text Box");
+    let text_rect = text_body.rect.union(text_arrow.rect);
+    let prefix = app.keytips.prefix().unwrap_or_default().to_owned();
+    let mut badges = keytip_table::group_extension(&prefix, &["insert.textBox", "pageLayout.headerFooter"]);
+    // One key deeper, the control's own badge (e.g. NZ -> T, NH -> 1) sits beside the group badges.
+    if let Some(final_badge) =
+        keytip_table::control_badge(&prefix, "insert.textBox").or_else(|| keytip_table::item_letter(&prefix, "pageLayout.headerFooter"))
+    {
+        badges.push(final_badge);
+    }
+    keytip_group(app, ui, &badges, text_rect.center_bottom());
+    if text_body.clicked() {
         act(app, "insert.textBox", json!({}));
     }
-    let __k = big_button(ui, Icon::PageLayout, "Header &\nFooter", "Header & Footer", false);
-    control_keytip(app, ui, &__k, "dialog:headerFooter");
-    if __k.clicked() {
-        // As in Excel: Page Layout view, editing the header in place (the dialog is under Page Setup).
+    // NH1 is a control keytip: it starts editing the page header rather than opening the Page
+    // Setup dialog (which stays available from the Page Layout tab).
+    if invoke(app, "pageLayout.headerFooter") {
         crate::paper_view::start_editing(app);
     }
+    // Alt, I, Z (Text Box) and Alt, I, H (Header & Footer) open the menu with each item's letter,
+    // as Excel's does; a letter or Esc changes the prefix, which closes it again (`ribbon_keys`).
+    let keyed = keytip_table::opens_menu(&prefix, "insert.textBox") || keytip_table::opens_menu(&prefix, "pageLayout.headerFooter");
+    egui::Popup::menu(&text_arrow).open_memory(popup_command(keyed, text_arrow.clicked())).show(|ui| {
+        for (label, id) in [("Text Box", "insert.textBox"), ("Header & Footer", "pageLayout.headerFooter")] {
+            let response = ui.add(egui::Button::new(app.ui.language.tr(label)).frame_when_inactive(false).min_size(vec2(220.0, 22.0)));
+            if let Some(sequence) = keytip_table::item_letter(&prefix, id) {
+                keytip(app, ui, sequence, pos2(response.rect.right() - 10.0, response.rect.center().y));
+            }
+            if response.clicked() {
+                if id == "insert.textBox" {
+                    act(app, id, json!({}));
+                } else {
+                    // As in Excel: Page Layout view, editing the header in place (the dialog is under Page Setup).
+                    crate::paper_view::start_editing(app);
+                }
+                ui.close();
+            }
+        }
+    });
     // Symbols: Equation, then Symbol.
     sep(ui);
     let (eq, eq_menu) = big_split_button(ui, Icon::Equation, "Equation", "Insert an equation, or pick one from the gallery");

@@ -1178,7 +1178,8 @@ fn keytip_nfpf_() {
 fn keytip_nh1_() {
     let mut h = harness(blank());
     sequence(&mut h, "NH1", false);
-    assert!(h.state().dialog.is_some(), "NH1 must open the headerFooter dialog");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "NH1 must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
@@ -1194,6 +1195,13 @@ fn keytip_nhi_() {
     sequence(&mut h, "NHI", false);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "NHI must route to its control without an error box");
     assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
+fn keytip_nht_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "NHT", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "insert.textBox"), "NHT must journal insert.textBox");
 }
 
 #[test]
@@ -1428,6 +1436,14 @@ fn keytip_nx_() {
     let mut h = harness(blank());
     sequence(&mut h, "NX", false);
     assert!(h.state().session.journal.iter().any(|(id, _)| id == "insert.textBox"), "NX must journal insert.textBox");
+}
+
+#[test]
+fn keytip_nzh_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "NZH", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "NZH must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
@@ -3089,7 +3105,7 @@ fn keytip_q_() {
 
 #[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 413;
+    const EXPECTED: usize = 415;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 

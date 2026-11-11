@@ -25,17 +25,39 @@ pub(super) fn act(app: &mut SheetApp, id: &str, params: serde_json::Value) {
     app.run_or_alert(id, params);
 }
 
-/// Keytips are painted, not focusable widgets: the grid retains keyboard focus.
-pub(super) fn keytip(app: &SheetApp, ui: &Ui, sequence: &str, at: egui::Pos2) {
-    let Some(rest) = app
-        .keytips
+/// The part of a sequence still to type, or `None` when the badge is not armed.
+fn keytip_rest<'a>(app: &SheetApp, sequence: &'a str) -> Option<&'a str> {
+    app.keytips
         .prefix()
         .filter(|prefix| keytip_table::paints_badges(prefix))
         .and_then(|prefix| sequence.strip_prefix(prefix))
         .filter(|s| !s.is_empty())
-    else {
-        return;
-    };
+}
+
+/// Keytips are painted, not focusable widgets: the grid retains keyboard focus.
+pub(super) fn keytip(app: &SheetApp, ui: &Ui, sequence: &str, at: egui::Pos2) {
+    if let Some(rest) = keytip_rest(app, sequence) {
+        paint_keytip(ui, rest, at);
+    }
+}
+
+/// Paint several group badges side by side, centred on `at` but apart from each other, so
+/// alternatives (e.g. `NZ` and `NH`) stay readable.
+pub(super) fn keytip_group(app: &SheetApp, ui: &Ui, sequences: &[&str], at: egui::Pos2) {
+    let t = Tokens::get(ui.ctx());
+    let font = theme::ui_bold(10.5);
+    let rest: Vec<&str> = sequences.iter().filter_map(|sequence| keytip_rest(app, sequence)).collect();
+    let widths: Vec<f32> = rest.iter().map(|r| ui.painter().layout_no_wrap((*r).into(), font.clone(), t.text).size().x + 7.0).collect();
+    let gap = 4.0;
+    let total: f32 = widths.iter().sum::<f32>() + gap * widths.len().saturating_sub(1) as f32;
+    let mut x = at.x - total / 2.0;
+    for (rest, width) in rest.iter().zip(&widths) {
+        paint_keytip(ui, rest, pos2(x + width / 2.0, at.y));
+        x += width + gap;
+    }
+}
+
+fn paint_keytip(ui: &Ui, rest: &str, at: egui::Pos2) {
     let t = Tokens::get(ui.ctx());
     let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("ribbon_keytips"))).with_clip_rect(ui.clip_rect());
     let text = painter.layout_no_wrap(rest.into(), theme::ui_bold(10.5), t.text);
