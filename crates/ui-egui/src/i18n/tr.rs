@@ -448,6 +448,39 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Göster",
         "Collapse dialog" => "İletişim kutusunu daralt",
         "Expand dialog" => "İletişim kutusunu genişlet",
+        "Options|Data" => "Veri",
+        "Automatic data conversion" => "Otomatik veri dönüştürme",
+        "Enable all default data conversions below when entering, pasting, or opening text files" => {
+            "Metin dosyalarını girerken, yapıştırırken veya açarken aşağıdaki tüm varsayılan veri dönüştürmelerini etkinleştir"
+        }
+        "Remove leading zeros and convert to a number" => "Baştaki sıfırları kaldır ve sayıya dönüştür",
+        "Off: 0123 stays text, leading zeros included." => "Kapalı: 0123, baştaki sıfırlarla birlikte metin olarak kalır.",
+        "Keep first 15 digits of long numbers and display in scientific notation" => {
+            "Uzun sayıların ilk 15 basamağını koru ve bilimsel gösterimde görüntüle"
+        }
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text." => {
+            "Kapalı: hiçbir sayı kısaltılmaz veya bilimsel gösterime dönüştürülmez. Genel biçimin yazıldığı gibi gösteremediği değerler metin olarak kalır."
+        }
+        "Keep numbers with more than" => "Şundan uzun sayıları metin olarak koru:",
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost." => {
+            "11 (varsayılan): yalnızca Genel biçimin tam yazıldığı gibi gösterdiği sayılar dönüştürülür; böylece 12 basamaklı kodlar ve barkodlar metin olarak kalır. 12 ile 15 arası, o kadar basamağa kadar olan sayılar için 1.24412E+11 gibi bilimsel gösterime izin verir; hiçbir basamak kaybolmaz."
+        }
+        "digits as text" => "basamak",
+        "Convert digits surrounding the letter \"E\" to a number in scientific notation" => {
+            "“E” harfini çevreleyen basamakları bilimsel gösterimde bir sayıya dönüştür"
+        }
+        "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Kapalı: 1244121406E6, 1.24412E+15 olmak yerine metin olarak kalır.",
+        "Convert continuous letters and numbers to a date" => "Ardışık harf ve sayıları tarihe dönüştür",
+        "GridCraft never makes this conversion: 12JAN2026 stays text." => {
+            "GridCraft bu dönüştürmeyi hiçbir zaman yapmaz: 12JAN2026 metin olarak kalır."
+        }
+        "Data conversion settings apply to every workbook; they are not saved in the file." => {
+            "Veri dönüştürme ayarları tüm çalışma kitaplarına uygulanır; dosyaya kaydedilmez."
+        }
+        "Remove trailing zeros after the decimal separator" => "Ondalık ayırıcıdan sonraki sondaki sıfırları kaldır",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Kapalı: 720.0, 720.0 olarak; 3.10 da 3.10 olarak gösterilir ve kaydedilir (hücre 0.0 veya 0.00 sayı biçimini alır). Sayı olarak kalır. Bir Excel seçeneği değildir."
+        }
         _ => return None,
     })
 }
