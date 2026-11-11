@@ -874,8 +874,10 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
                 place(&im.anchor)
             );
         }
+        let mut svg_budget = crate::chart_svg::MAX_PAGE_SVG_BYTES;
         for ch in &sh.charts {
-            if let Some(svg) = crate::chart_svg::chart_svg(wb, sheet, ch, &place(&ch.anchor)) {
+            if let Some(svg) = crate::chart_svg::chart_svg(wb, sheet, ch, &place(&ch.anchor), svg_budget)? {
+                svg_budget -= svg.len();
                 out.push_str(&svg);
             }
         }
