@@ -701,6 +701,159 @@ fn a_web_page_table_opens_after_a_leading_comment_and_keeps_nonbreaking_spaces()
     assert_eq!(sh.value(CellRef::parse("B1").unwrap()), gridcraft_core::Value::text("a b"));
 }
 
+#[test]
+fn a_web_page_table_written_with_a_decimal_comma_reads_its_numbers() {
+    // A Brazilian broker's export: "1.330" is one thousand three hundred and thirty (it read as
+    // 1.33), and currency and percentages are numbers (they stayed text). Dates and codes are as before.
+    let page = "<html><head><meta charset=\"UTF-8\"></head><body><table>\
+        <thead><tr><th>Ativo</th><th>Data</th><th>Preço</th><th>Qtd</th><th>Resultado</th><th>%</th></tr></thead><tbody>\
+        <tr><td>GARE11</td><td>15/10/2026</td><td>R$ 9,05</td><td>1.330</td><td>-R$ 437,94</td><td>-3,64 %</td></tr>\
+        <tr><td>ICFH27</td><td>05/10/2026</td><td>-R$ 11.443,26</td><td>1</td><td>R$ 8.731,91</td><td>100,00 %</td></tr>\
+        <tr><td></td><td></td><td>Total:</td><td>2,5</td><td>R$ -1.234,00</td><td>0.69 %</td></tr>\
+        </tbody></table></body></html>";
+    let (wb, _) = open_bytes("tableExport.xls", page.as_bytes()).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    let v = |a: &str| sh.value(CellRef::parse(a).unwrap());
+    let fmt = |a: &str| wb.styles.get(sh.style_id(CellRef::parse(a).unwrap())).num_fmt.as_str().to_string();
+    let n = gridcraft_core::Value::number;
+    assert_eq!(v("A2"), gridcraft_core::Value::text("GARE11"));
+    assert_eq!(v("C2"), n(9.05));
+    assert_eq!(fmt("C2"), "\"R$\" #,##0.00");
+    assert_eq!(v("D2"), n(1330.0), "dot grouping, not a decimal point");
+    assert_eq!(fmt("D2"), "#,##0");
+    assert_eq!(v("E2"), n(-437.94));
+    let close = |a: &str, want: f64| matches!(v(a), gridcraft_core::Value::Number(x) if (x - want).abs() < 1e-12);
+    assert!(close("F2", -0.0364), "{:?}", v("F2"));
+    assert_eq!(fmt("F2"), "0.00%");
+    assert_eq!(v("C3"), n(-11443.26));
+    assert_eq!(v("D3"), n(1.0));
+    assert_eq!(v("D4"), n(2.5));
+    assert_eq!(v("E4"), n(-1234.0), "a sign after the symbol");
+    assert!(close("F4", 0.0069), "a stray decimal point still reads as one: {:?}", v("F4"));
+    // Day first: 15/10 is ten days after 05/10.
+    let (gridcraft_core::Value::Number(b2), gridcraft_core::Value::Number(b3)) = (v("B2"), v("B3")) else { panic!("dates") };
+    assert_eq!(b2 - b3, 10.0);
+    // Columns widen to what they show, so "R$ 11,443.26" isn't "#####"; empty ones keep the default.
+    let shown = crate::display::cell_text(&wb, sh, CellRef::parse("C3").unwrap());
+    let need = crate::cmd::format::approx_text_width(&shown, 11.0, false);
+    assert!(sh.col_width(2) >= need, "{} < {need} for {shown:?}", sh.col_width(2));
+    assert_eq!(sh.col_width(10), sh.col_width(11), "an empty column keeps the default width");
+    // Opened as text, every cell keeps what it shows.
+    let (wb, _) = open_bytes_with("tableExport.xls", page.as_bytes(), None, true).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("D2").unwrap()), gridcraft_core::Value::text("1.330"));
+}
+
+#[test]
+fn a_decimal_comma_page_reads_ambiguous_dates_day_first() {
+    // Every date is ambiguous: "03/11/2026" is 3 November on a page written "R$ 2.782,55" (it
+    // read as 11 March). A page written with a decimal point keeps the month-first reading.
+    let row = |amount: &str| format!("<tr><td>03/11/2026</td><td>{amount}</td></tr><tr><td>04/11/2026</td><td>{amount}</td></tr>");
+    let page = |amount: &str| format!("<table><tr><th>Data</th><th>Total</th></tr>{}</table>", row(amount));
+    let serial = |page: String| {
+        let (wb, warnings) = open_bytes("export.xls", page.as_bytes()).unwrap();
+        let gridcraft_core::Value::Number(n) = wb.sheet(0).unwrap().value(CellRef::parse("A2").unwrap()) else { panic!("not a date") };
+        (n, warnings)
+    };
+    let (comma, warnings) = serial(page("R$ 2.782,55"));
+    let (point, _) = serial(page("2782.55"));
+    // 3 November 2026 is 46329, 11 March 2026 is 46092.
+    assert_eq!((comma, point), (46329.0, 46092.0));
+    assert!(!warnings.iter().any(|w| w.contains("ambiguous")), "{warnings:?}");
+    // And shows as the page wrote it, day first; the decimal-point page keeps m/d/yyyy.
+    let shown = |page: String| {
+        let (wb, _) = open_bytes("export.xls", page.as_bytes()).unwrap();
+        crate::display::cell_text(&wb, wb.sheet(0).unwrap(), CellRef::parse("A2").unwrap())
+    };
+    assert_eq!(shown(page("R$ 2.782,55")), "03/11/2026");
+    assert_eq!(shown(page("2782.55")), "3/11/2026");
+}
+
+#[test]
+fn a_decimal_comma_page_keeps_month_first_columns_and_reads_late_dates_day_first() {
+    // A column with "12/31/2026" in it reads month first even on a decimal-comma page, and shows
+    // so: "03/11/2026" below it is 11 March, shown 3/11/2026 (it showed 11/03/2026).
+    let page = "<table><tr><th>Data</th><th>Total</th></tr>\
+        <tr><td>12/31/2026</td><td>R$ 1,50</td></tr><tr><td>03/11/2026</td><td>R$ 2,50</td></tr></table>";
+    let (wb, _) = open_bytes("export.xls", page.as_bytes()).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.value(CellRef::parse("A3").unwrap()), gridcraft_core::Value::number(46092.0));
+    assert_eq!(crate::display::cell_text(&wb, sh, CellRef::parse("A3").unwrap()), "3/11/2026");
+    // Dates that start past the rows the reader samples for date order still read day first.
+    let mut page = String::from("<table><tr><th>Data</th><th>Total</th></tr>");
+    for _ in 0..300 {
+        page.push_str("<tr><td>-</td><td>R$ 1,50</td></tr>");
+    }
+    page.push_str("<tr><td>03/11/2026</td><td>R$ 2,50</td></tr></table>");
+    let (wb, _) = open_bytes("export.xls", page.as_bytes()).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    let late = CellRef::parse("A302").unwrap();
+    assert_eq!(sh.value(late), gridcraft_core::Value::number(46329.0), "3 November, not 11 March");
+    assert_eq!(crate::display::cell_text(&wb, sh, late), "03/11/2026");
+}
+
+#[test]
+fn a_web_page_table_written_with_a_decimal_point_is_unchanged() {
+    // An en-US page keeps reading as typed input: "1,330" is grouping and "R$" is not a symbol
+    // the reader knows, so it stays text, as before.
+    let page = "<table><tr><td>1,330</td><td>2.5</td><td>R$ 9.05</td><td>Lot 12</td></tr></table>";
+    let (wb, _) = open_bytes("export.xls", page.as_bytes()).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    let v = |a: &str| sh.value(CellRef::parse(a).unwrap());
+    assert_eq!(v("A1"), gridcraft_core::Value::number(1330.0));
+    assert_eq!(v("B1"), gridcraft_core::Value::number(2.5));
+    assert_eq!(v("C1"), gridcraft_core::Value::text("R$ 9.05"));
+    assert_eq!(v("D1"), gridcraft_core::Value::text("Lot 12"));
+}
+
+#[test]
+fn decimal_comma_numbers_parse_strictly() {
+    for (text, want) in [
+        ("1.330", Some((1330.0, "#,##0"))),
+        ("1.234.567,8", Some((1234567.8, "#,##0.0"))),
+        ("4,50", Some((4.5, "0.00"))),
+        ("US$ 3,00", Some((3.0, "\"US$\" #,##0.00"))),
+        ("−12,5%", Some((-0.125, "0.0%"))),
+        ("200", None),
+        ("1.33", None),
+        ("12.3456", None),
+        ("1,2,3", None),
+        ("Lote 1,5", None),
+        ("R$ 5 %", None),
+        ("26/10/2026", None),
+        ("", None),
+    ] {
+        let got = super::decimal_comma_number(text);
+        assert_eq!(got.as_ref().map(|(n, f)| (*n, f.as_str())), want, "{text:?}");
+    }
+}
+
+#[test]
+fn decimal_comma_detection_counts_recorded_cells_and_only_well_formed_numbers() {
+    let read = |page: &str, at: &str| open_bytes("export.xls", page.as_bytes()).unwrap().0.sheet(0).unwrap().value(CellRef::parse(at).unwrap());
+    // The only "1,5" carries its number (x:num): it still shows the page's decimal comma, so
+    // "1.330" is 1330 (it read 1.33); the recorded number stays the cell's value.
+    let page = "<table><tr><td x:num=\"1.5\">1,5</td><td>1.330</td></tr></table>";
+    assert_eq!(read(page, "A1"), gridcraft_core::Value::number(1.5));
+    assert_eq!(read(page, "B1"), gridcraft_core::Value::number(1330.0));
+    // "1.23,45" is no number (its grouping is broken), so it doesn't make "1.234" read 1234.
+    let page = "<table><tr><td>1.23,45</td><td>1.234</td></tr></table>";
+    assert_eq!(read(page, "A1"), gridcraft_core::Value::text("1.23,45"));
+    assert_eq!(read(page, "B1"), gridcraft_core::Value::number(1.234));
+    for (digits, want) in [
+        ("1,5", Some(',')),
+        ("1.234,56", Some(',')),
+        ("1234,5", Some(',')),
+        ("0.69", Some('.')),
+        ("1,234.5", Some('.')),
+        ("1.330", None),
+        ("1.23,45", None),
+        ("12.34.5", None),
+        ("1,2,3", None),
+    ] {
+        assert_eq!(super::shown_decimal_separator(digits), want, "{digits:?}");
+    }
+}
+
 /// A small SYLK file written the way spreadsheets export one: a header, number formats, column
 /// widths, cells that carry on from the last row or column, formulas in R1C1 and a shared formula.
 const SYLK: &str = "ID;PTEST;N;E\r\nP;PGeneral\r\nP;P0.00\r\nP;Pyyyy\\-mm\\-dd\r\nF;W1 1 18\r\nF;W2 3 9\r\nB;Y5;X7\r\n\

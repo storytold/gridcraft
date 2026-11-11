@@ -299,8 +299,9 @@ struct NumericDate {
 }
 
 impl NumericDate {
-    /// The field under the column's rule: a date when that reading is valid, else text.
-    fn read(&self, field: &str, rule: DateRule) -> Parsed {
+    /// The field under the column's rule: a date when that reading is valid, else text. With
+    /// `day_first_format`, a date read day first shows day first.
+    fn read(&self, field: &str, rule: DateRule, day_first_format: bool) -> Parsed {
         let serial = match rule {
             DateRule::DayFirst => self.day_first,
             DateRule::MonthFirst | DateRule::Ambiguous => self.month_first,
@@ -309,7 +310,12 @@ impl NumericDate {
         match serial {
             Some(serial) => Parsed {
                 value: Value::number(serial + self.time.unwrap_or(0.0)),
-                format: Some(if self.time.is_some() { "m/d/yyyy h:mm" } else { "m/d/yyyy" }),
+                format: Some(match (rule == DateRule::DayFirst && day_first_format, self.time.is_some()) {
+                    (true, true) => "dd/mm/yyyy h:mm",
+                    (true, false) => "dd/mm/yyyy",
+                    (false, true) => "m/d/yyyy h:mm",
+                    (false, false) => "m/d/yyyy",
+                }),
             },
             None => Parsed { value: Value::text(field), format: None },
         }
@@ -466,9 +472,11 @@ fn date_warnings(columns: &[(DateRule, DateEvidence)], report: &mut ReadReport) 
 }
 
 /// Reads one field with the column's date rule; other values go through typed input.
-fn read_field(field: &str, sys: DateSystem, rule: DateRule) -> Parsed {
+fn read_field(field: &str, sys: DateSystem, rule: DateRule, day_first: bool) -> Parsed {
     match numeric_date(field, sys) {
-        Some(date) if rule != DateRule::NoDates => date.read(field, rule),
+        Some(date) if rule != DateRule::NoDates => date.read(field, rule, day_first),
+        // A date past the sample, in a source that writes dates day first, reads that way too.
+        Some(date) if day_first && date.day_first.is_some() => date.read(field, DateRule::DayFirst, true),
         _ => parse_input(field, sys),
     }
 }
@@ -486,7 +494,14 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     if delim == quote {
         return Err(IoError::Format("the delimiter and quote character must differ".into()));
     }
-    let date_columns = if opts.parse_values { infer_date_rules(&sample_records(&text, delim, quote), opts.date_system) } else { vec![] };
+    let mut date_columns = if opts.parse_values { infer_date_rules(&sample_records(&text, delim, quote), opts.date_system) } else { vec![] };
+    if opts.dates_day_first {
+        for (rule, _) in &mut date_columns {
+            if *rule == DateRule::Ambiguous {
+                *rule = DateRule::DayFirst;
+            }
+        }
+    }
     let mut report = ReadReport::default();
     date_warnings(&date_columns, &mut report);
     let mut wb = Workbook::new();
@@ -511,7 +526,7 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
             let pos = CellRef::new(row, col as u32);
             let cell = if opts.parse_values {
                 let rule = date_columns.get(col).map_or(DateRule::NoDates, |(rule, _)| *rule);
-                let p = read_field(&f, opts.date_system, rule);
+                let p = read_field(&f, opts.date_system, rule, opts.dates_day_first);
                 let style = match p.format {
                     Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
                         Some((_, id)) => *id,
