@@ -179,6 +179,28 @@ fn volatile_names_propagate() {
 }
 
 #[test]
+fn volatile_names_propagate_through_a_long_chain_in_one_walk() {
+    // Chain0 uses Chain1, Chain1 uses Chain2, ... and only the last is volatile: listed in this order, a rescan
+    // until nothing changes marked one name per pass (quadratic). Every name in the chain is
+    // volatile; a name off the chain is not.
+    const LEN: usize = 5_000;
+    let mut wb = book(&[("A1", "=1", n(1.0))]);
+    let name =
+        |name: String, formula: String| gridcraft_engine::model::DefinedName { name, scope: None, formula, comment: String::new(), hidden: false };
+    for i in 0..LEN {
+        let formula = if i + 1 == LEN { "NOW()".to_string() } else { format!("Chain{}+1", i + 1) };
+        wb.names.push(name(format!("Chain{i}"), formula));
+    }
+    wb.names.push(name("Plain".into(), "Chain0*0+Other".into()));
+    wb.names.push(name("Other".into(), "1".into()));
+    let set = volatile_names(&wb);
+    assert!((0..LEN).all(|i| set.contains(&format!("CHAIN{i}"))));
+    assert!(set.contains("PLAIN"));
+    assert!(!set.contains("OTHER"));
+    assert_eq!(set.len(), LEN + 1);
+}
+
+#[test]
 fn round_trip_of_a_simple_book_is_clean() {
     let mut wb = book(&[("A1", "2", n(2.0)), ("B1", "=A1*3", n(6.0)), ("A2", "x", Value::text("x"))]);
     wb.sheet_mut(0).unwrap().merges.push(gridcraft_engine::core::RangeRef::parse("C1:D2").unwrap());

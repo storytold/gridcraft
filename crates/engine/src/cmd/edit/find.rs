@@ -62,6 +62,8 @@ pub(super) fn find(s: &mut Session, p: &Json) -> Result<Json> {
     let by_cols = bool_param(p, "byColumns").unwrap_or(false);
     let all = bool_param(p, "all").unwrap_or(false);
     let workbook = str_param(p, "within") == Some("workbook");
+    // `selection`: only the selected cells of the active sheet, as Excel searches a selected range.
+    let in_selection = str_param(p, "within") == Some("selection");
     s.last_find = Some(p.clone());
     let d = s.doc()?;
     let sheets: Vec<usize> = if workbook { (0..d.wb.sheets.len()).collect() } else { vec![d.wb.active_sheet()] };
@@ -71,6 +73,7 @@ pub(super) fn find(s: &mut Session, p: &Json) -> Result<Json> {
         let mut cells: Vec<(CellRef, String)> = sh
             .cells
             .iter()
+            .filter(|(c, _)| !in_selection || d.selection.contains(*c))
             .filter_map(|(c, cell)| {
                 let text = if values || cell.formula.is_none() || crate::display::formula_hidden(&d.wb, sh, c) {
                     crate::display::cell_text(&d.wb, sh, c)
@@ -100,7 +103,12 @@ pub(super) fn find(s: &mut Session, p: &Json) -> Result<Json> {
     let Some((si, c, t)) = next else { return Err(EngineError::Other("not found".into())) };
     let dd = s.doc_mut()?;
     dd.wb_switch_sheet(si);
-    dd.selection = crate::Selection::at(c);
+    if in_selection {
+        // The range stays selected and the active cell moves through it, as in Excel.
+        dd.selection.active = c;
+    } else {
+        dd.selection = crate::Selection::at(c);
+    }
     Ok(json!({"cell": c.a1(), "sheet": si, "value": t, "count": hits.len()}))
 }
 
@@ -124,6 +132,7 @@ pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
     let whole = bool_param(p, "wholeCell").unwrap_or(false);
     let all = bool_param(p, "all").unwrap_or(true);
     let workbook = str_param(p, "within") == Some("workbook");
+    let selection = (str_param(p, "within") == Some("selection")).then(|| s.doc().map(|d| d.selection.clone())).transpose()?;
     let active = s.doc()?.selection.active;
     let mut skipped = 0usize;
     let n = edit(s, |cx| {
@@ -134,7 +143,7 @@ pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
             let cells: Vec<(CellRef, String)> =
                 cx.wb.sheet(si).map(|sh| sh.cells.iter().map(|(c, _)| (c, sh.input_text(c))).collect()).unwrap_or_default();
             for (c, text) in cells {
-                if !all && c != active {
+                if (!all && c != active) || selection.as_ref().is_some_and(|sel| !sel.contains(c)) {
                     continue;
                 }
                 if !matches(&text, &what, case, whole) {

@@ -115,6 +115,12 @@ pub trait Host {
     fn visit_range(&mut self, _sheet: usize, _range: RangeRef, _f: &mut dyn FnMut(&Value) -> bool) -> bool {
         false
     }
+    /// `(sum, count)` of the numbers in a block that holds nothing but constants (no formula,
+    /// error or spilled value), added row-major from `0.0` exactly as `visit_range` would hand
+    /// them over. `None`: the block isn't like that, or this host can't tell.
+    fn range_sum(&mut self, _sheet: usize, _range: RangeRef) -> Option<(f64, u64)> {
+        None
+    }
     /// While a formula is calculated on demand inside another one: `stack_position()` where the
     /// outermost one started, which the stack budget is counted from.
     fn stack_top(&self) -> Option<usize> {
@@ -325,6 +331,11 @@ impl<'h> Evaluator<'h> {
             Expr::Array(rows) => {
                 let h = rows.len();
                 let w = rows.first().map_or(0, Vec::len);
+                // A ragged literal is an error either way; one wide row and many empty ones must
+                // not reserve their rows-times-width product first.
+                if rows.iter().any(|row| row.len() != w) {
+                    return err(CellError::Value);
+                }
                 let mut data = Vec::with_capacity(h * w);
                 for row in rows {
                     for el in row {
@@ -359,9 +370,10 @@ impl<'h> Evaluator<'h> {
             return v.clone();
         }
         let wb = self.host.workbook();
-        // Sheet-qualified `Sheet1!Name`.
-        let (scope_sheet, bare) = match n.split_once('!') {
-            Some((s, b)) => match wb.sheet_index(&gridcraft_core::unquote_sheet(s)) {
+        // Sheet-qualified `Sheet1!Name`. The parser stores the sheet unquoted, so it is used as
+        // is (`' Sales '` keeps its spaces) and split at the last `!` (`'a!b'!Name`).
+        let (scope_sheet, bare) = match n.rsplit_once('!') {
+            Some((s, b)) => match wb.sheet_index(s) {
                 Some(i) => (i, b),
                 None => return err(CellError::Name),
             },
@@ -530,6 +542,11 @@ impl<'h> Evaluator<'h> {
         }
         if r.height() == 1 && r.start.col <= self.at.col && self.at.col <= r.end.col {
             return Some(CellRef::new(r.start.row, self.at.col));
+        }
+        // A 2-D range intersects on both the formula's row and column (observed in Excel, on
+        // another sheet too); one that includes the formula's own cell is a circular reference.
+        if r.start.row <= self.at.row && self.at.row <= r.end.row && r.start.col <= self.at.col && self.at.col <= r.end.col {
+            return Some(self.at);
         }
         None
     }
