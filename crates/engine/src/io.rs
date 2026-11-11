@@ -924,17 +924,50 @@ fn script_sandbox_check(path: &str) -> Result<()> {
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_READ_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
+/// `O_NONBLOCK` as the platform defines it (std offers no constant and the crate takes no libc
+/// dependency); `None` on a Unix not listed, where the pathname check alone applies.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const O_NONBLOCK: Option<i32> =
+    if cfg!(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly"))
+    {
+        Some(0x4)
+    } else if cfg!(all(
+        any(target_os = "linux", target_os = "android"),
+        any(target_arch = "mips", target_arch = "mips64", target_arch = "mips32r6", target_arch = "mips64r6")
+    )) {
+        Some(0x80)
+    } else if cfg!(all(any(target_os = "linux", target_os = "android"), any(target_arch = "sparc", target_arch = "sparc64"))) {
+        Some(0x4000)
+    } else if cfg!(any(target_os = "linux", target_os = "android")) {
+        Some(0o4000)
+    } else {
+        None
+    };
+
+/// Opens `path` for reading without blocking on a FIFO or device that has no writer.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_nonblocking(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    if let Some(flag) = O_NONBLOCK {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(flag);
+    }
+    opts.open(path)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
     use std::io::Read;
     script_sandbox_check(path)?;
-    // Checked before opening: opening a FIFO nobody writes to blocks the calling (GUI) thread.
-    // shortcut: a FIFO swapped in between this check and the open still blocks; close that with
-    // O_NONBLOCK when the crate takes a libc dependency.
+    // Checked before opening: opening a FIFO nobody writes to blocks the calling (GUI) thread. The
+    // open itself is non-blocking where the platform's flag is known, so a FIFO swapped in after
+    // this check cannot block it either; the opened handle is checked again below.
     if !std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
         return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
     }
-    let f = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let f = open_nonblocking(std::path::Path::new(path)).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     // A symlink to an endless device reports length 0 but streams forever, so metadata
     // alone never bounds the read: require a real file and cap the bytes actually taken.
     if !f.metadata().map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
