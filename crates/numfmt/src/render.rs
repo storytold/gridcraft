@@ -130,7 +130,7 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem, region: &Regio
         Calendar::Gregorian => {
             let month_index = usize::try_from(date.month.saturating_sub(1)).unwrap_or(usize::MAX);
             let weekday_index = usize::try_from(dt.weekday).unwrap_or(usize::MAX);
-            let has_day = sec.toks.iter().any(|t| matches!(t, Tok::Date(DatePart::Day(_))));
+            let has_day = sec.toks.iter().any(|t| matches!(t, Tok::Date(DatePart::Day(1 | 2))));
             let month_names = if has_day { region.months_genitive.as_ref().unwrap_or(&region.months) } else { &region.months };
             (
                 month_names.get(month_index).copied().unwrap_or("").into(),

@@ -909,6 +909,19 @@ fn explicit_region_renders_numbers_dates_and_currency_without_rewriting_codes() 
     assert_eq!(render(1234.56, r#"#,##0.00 "€""#), "1.234,56 €");
 }
 
+#[test]
+fn russian_month_case_depends_on_the_numeric_day() {
+    let region = gridcraft_core::region::lookup("ru-RU");
+    for (code, expected) in [
+        ("dddd, mmmm yyyy", "четверг, октябрь 2026"),
+        ("ddd, mmmm yyyy", "чт, октябрь 2026"),
+        ("d mmmm yyyy", "15 октября 2026"),
+        ("dddd, dd mmmm yyyy", "четверг, 15 октября 2026"),
+    ] {
+        assert_eq!(format_value_with_region(&Value::Number(46310.0), &NumberFormat::parse(code), S, region).text, expected);
+    }
+}
+
 /// Fractional seconds follow the output locale while format codes stay canonical.
 #[test]
 fn fractional_seconds_use_the_region_decimal_separator() {

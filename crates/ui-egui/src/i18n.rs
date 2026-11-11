@@ -630,6 +630,13 @@ mod tests {
         }
     }
 
+    #[test]
+    fn polish_icon_tooltips_cover_the_gallery() {
+        for (name, _) in crate::icons::LIBRARY {
+            assert!(Language::Pl.translation(&format!("Icon|{name}")).is_some(), "{name}");
+        }
+    }
+
     /// The screen-reader names for the formula-bar controls must be translated in every catalog
     /// (no silent English fallback) and stay single-line labels.
     #[test]

@@ -405,7 +405,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Right-tailed chi-squared probability.", "卡方分佈的右尾機率。"),
     (
         "Rounds a number and formats it as text with fixed decimals and optional thousands separators.",
-        "對數字取整並按固定小數位（可選千位分隔符）格式化為文字。",
+        "將數字捨入至指定的小數位數，並格式化為文字（可選千位分隔符）。",
     ),
     ("Rounds a number away from zero to a given number of digits.", "把數字遠離零舍入到指定小數位。"),
     ("Rounds a number down to a multiple of significance.", "把數字向下舍入到指定基數的倍數。"),

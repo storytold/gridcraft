@@ -128,6 +128,30 @@ fn changed_localized_text_fills_as_a_number() {
     }
 }
 
+#[test]
+fn insert_function_keeps_the_open_drafts_language() {
+    use egui_kittest::kittest::Queryable as _;
+    let mut application = app();
+    application.ui.language = Language::Ru;
+    application.begin_edit(Some("=1+".into()), false);
+    application.ui.language = Language::En;
+    application.open_dialog("insertFunction", json!({}));
+    let mut h = crate::common::harness_with(crate::common::builder(), application, 3);
+    h.state_mut().dialog.as_mut().unwrap().search = "СУММ".into();
+    h.run_steps(2);
+    h.get_by_label("СУММ (Math & Trig)").click();
+    h.run_steps(2);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    let application = h.state_mut();
+    let draft = application.editor.as_mut().unwrap();
+    assert_eq!(draft.text, "=1+СУММ(");
+    draft.insert_at_caret("2;3)");
+    assert!(application.commit_edit(0, 0, false, false));
+    assert_eq!(formula(application), "1+SUM(2,3)");
+    assert_eq!(application.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(6.0));
+}
+
 /// The current function-library dialog searches Russian aliases, their е/ё variants and English names.
 #[test]
 fn russian_insert_function_search_preserves_locale_matching() {
@@ -427,6 +451,16 @@ fn editing_a_hidden_udf_does_not_rebind_it_to_a_builtin() {
     app.editor.as_mut().unwrap().text = "=SUM(2;2)".into();
     assert!(app.commit_edit(0, 0, false, false));
     assert_eq!(formula(&app), "_xludf.SUM(2,2)");
+}
+
+#[test]
+fn turkish_complex_aliases_follow_excel_arithmetic() {
+    let mut app = app();
+    app.ui.language = Language::Tr;
+    for (input, value) in [("=SANTOPLA(5;2)", "3"), ("=SANÇIKAR(5;2)", "7")] {
+        assert!(enter(&mut app, input));
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::text(value));
+    }
 }
 
 #[test]

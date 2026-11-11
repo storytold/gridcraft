@@ -57,8 +57,8 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
         d.list_index = 0;
     }
     d.values.insert("category".into(), json!(category));
-    let locale = language.formula_locale();
-    // The names and descriptions searched are the ones shown, so in the interface language.
+    // An open formula keeps its input language, including the names offered for insertion.
+    let locale = app.editor.as_ref().filter(|e| e.is_formula()).map_or_else(|| language.formula_locale(), |e| e.locale);
     let q = locale.fold_alias(d.search.trim());
     let matches = |f: &lib::FnEntry| {
         q.is_empty()
@@ -113,17 +113,22 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
     ok_cancel(ui, confirm, &mut open);
     // The function counts as recently used once the formula is entered (the engine notes it).
     if *confirm && let Some(f) = hits.get(d.list_index) {
-        let n = app
-            .session
-            .active()
-            .map(|doc| crate::formula_locale::completion_name(&f.name, locale, &doc.wb, doc.wb.active_sheet()))
-            .unwrap_or(&f.name);
-        let cur = app.editor.as_ref().map(|e| e.text.clone());
-        let text = match cur {
-            Some(t) if t.starts_with('=') => format!("{t}{n}("),
-            _ => format!("={n}("),
-        };
-        app.begin_edit(Some(text), false);
+        if let Some(draft) = app.editor.as_mut().filter(|e| e.is_formula()) {
+            let owner = app.session.documents().iter().find(|doc| doc.uid == draft.doc);
+            if let Some((doc, sheet)) = owner.and_then(|doc| draft.sheet_in(&doc.wb).map(|sheet| (doc, sheet))) {
+                let name = crate::formula_locale::completion_name(&f.name, draft.locale, &doc.wb, sheet);
+                draft.caret = draft.text.chars().count();
+                draft.anchor = draft.caret;
+                draft.insert_at_caret(&format!("{name}("));
+            }
+        } else {
+            let name = app
+                .session
+                .active()
+                .map(|doc| crate::formula_locale::completion_name(&f.name, locale, &doc.wb, doc.wb.active_sheet()))
+                .unwrap_or(&f.name);
+            app.begin_edit(Some(format!("={name}(")), false);
+        }
     }
     if !open {
         *confirm = true;
