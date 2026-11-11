@@ -6,6 +6,7 @@ use std::fmt::Write as _;
 use gridcraft_core::RangeRef;
 use gridcraft_formula::quote_sheet;
 use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style, Visibility, Workbook, WorkbookView};
+use sha2::Digest as _;
 
 use crate::package::ZipOut;
 use crate::xml::{esc, esc_attr};
@@ -112,6 +113,9 @@ pub struct Out {
     pub dxfs: Vec<Style>,
     pub sst: Sst,
     pub images: u32,
+    /// Media parts written so far, by extension and SHA-256 of their bytes: a picture used again
+    /// is found here instead of being compared byte by byte with every earlier one.
+    media: HashMap<(String, [u8; 32]), String>,
     pub charts: u32,
     /// The workbook's file name, which a PivotChart's link to its PivotTable names in brackets.
     pub book_name: String,
@@ -134,6 +138,8 @@ pub struct Out {
     pub kept: crate::passthrough::KeptOut,
     /// Decides which formulas need dynamic-array metadata.
     pub functions: FunctionInfo,
+    /// Defined names analysed for implicit intersection, shared by every formula written.
+    pub(crate) names: crate::array_formula::NameCache,
     /// The code of the Python cells written so far, in order: script `i` of the Python part.
     pub python_scripts: Vec<String>,
 }
@@ -143,20 +149,25 @@ impl Out {
         if let Some(ct) = content_type {
             self.overrides.push((format!("/{name}"), ct.to_string()));
         }
+        // Every `xl/media/image*.ext` part is indexed as it is added, preserved ones included, so a
+        // later identical picture finds it instead of writing a second copy.
+        if let Some((ext, file)) = name.strip_prefix("xl/media/").filter(|f| f.starts_with("image")).and_then(|f| Some((f.rsplit_once('.')?.1, f))) {
+            self.media.entry((ext.to_string(), sha2::Sha256::digest(&data).into())).or_insert_with(|| file.to_string());
+        }
         self.parts.push((name.to_string(), data));
     }
     /// The `xl/media` file name (`imageN.ext`) holding `data`. A picture used on several sheets,
     /// or twice on one, is written once and every drawing points to that part, as in Excel.
     pub fn image_part(&mut self, ext: &str, data: &[u8]) -> String {
-        let existing = self.parts.iter().find(|(name, bytes)| {
-            name.strip_prefix("xl/media/image").is_some_and(|rest| rest.ends_with(&format!(".{ext}"))) && bytes.as_slice() == data
-        });
-        if let Some((name, _)) = existing {
-            return name.trim_start_matches("xl/media/").to_string();
+        let key = (ext.to_string(), sha2::Sha256::digest(data).into());
+        if let Some(file) = self.media.get(&key) {
+            return file.clone();
         }
         self.images += 1;
         let file = format!("image{}.{ext}", self.images);
-        self.part(&format!("xl/media/{file}"), None, data.to_vec());
+        // Not through `part`: that would hash the same bytes again to index them.
+        self.parts.push((format!("xl/media/{file}"), data.to_vec()));
+        self.media.insert(key, file.clone());
         file
     }
     pub fn default_type(&mut self, ext: &str, ct: &str) {
@@ -252,6 +263,7 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
         dxfs: vec![],
         sst: Sst::default(),
         images: 0,
+        media: HashMap::new(),
         charts: 0,
         book_name: book_name.filter(|n| !n.is_empty() && !n.contains(['[', ']'])).unwrap_or(DEFAULT_BOOK_NAME).to_string(),
         chart_names: vec![],
@@ -268,6 +280,7 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
         cell_pictures: Default::default(),
         kept: Default::default(),
         functions,
+        names: Default::default(),
         python_scripts: vec![],
     };
     out.kept.reserve_vml_blocks(wb);

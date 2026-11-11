@@ -89,16 +89,19 @@ pub use stat::{aggregate_values, aggregate_values_k};
 pub struct Arg {
     pub value: Value,
     pub from_ref: bool,
+    /// A written argument whose value came out blank (a lookup of an empty cell): given, not
+    /// omitted, although its value is `Value::Empty`.
+    pub blank_value: bool,
 }
 
 impl Arg {
     /// A literal (non-reference) argument.
     pub fn val(value: impl Into<Value>) -> Arg {
-        Arg { value: value.into(), from_ref: false }
+        Arg { value: value.into(), from_ref: false, blank_value: false }
     }
     /// An argument that came from a cell or range reference.
     pub fn reference(value: impl Into<Value>) -> Arg {
-        Arg { value: value.into(), from_ref: true }
+        Arg { value: value.into(), from_ref: true, blank_value: false }
     }
 }
 
@@ -114,6 +117,11 @@ pub trait Ctx {
     /// criteria didn't come from a reference.
     fn computed_criterion(&mut self, _row: usize, _col: usize, _db: &Array, _record: usize) -> Option<bool> {
         None
+    }
+    /// Whether the cell's work budget has run out: the database functions stop asking for computed
+    /// criteria then, as every one would fail at once.
+    fn exhausted(&self) -> bool {
+        false
     }
     /// For GROUPBY/PIVOTBY: whether their function argument is a LAMBDA (its value is then not used).
     fn has_lambda(&self) -> bool {
@@ -317,6 +325,12 @@ mod tests {
         assert_eq!(ev("REGEXREPLACE", vec![t("2026-10-22"), t("(\\d+)-(\\d+)-(\\d+)"), t("$3/$2/$1")]), Value::text("22/10/2026"));
         assert_eq!(ev("REGEXREPLACE", vec![t("abc"), t("x*"), t("-")]), Value::text("-a-b-c-"));
         assert_eq!(ev("REGEXREPLACE", vec![t("a1b2"), t("[0-9]"), t("#"), n(2.0)]), Value::text("a1b#"));
+        assert_eq!(ev("REGEXREPLACE", vec![t("a1b2"), t("[0-9]"), t("#"), n(-2.0)]), Value::text("a#b2"));
+        assert_eq!(ev("REGEXREPLACE", vec![t("a1b2"), t("[0-9]"), t("#"), n(-3.0)]), Value::text("a1b2"));
+        // 2^32 is no occurrence the text has (and on 32-bit targets it must not wrap to 0).
+        for occurrence in [4_294_967_296.0, -4_294_967_296.0] {
+            assert_eq!(ev("REGEXREPLACE", vec![t("a1b2"), t("[0-9]"), t("#"), n(occurrence)]), Value::text("a1b2"));
+        }
         // One match whose replacement repeats it 10,000 times: refused before it is built.
         assert_eq!(ev("REGEXREPLACE", vec![t(&many), t("^.*$"), t(&"$0".repeat(10_000))]), Value::Error(CellError::Value));
         assert_eq!(ev("REGEXREPLACE", vec![t(&many), t("^.*$"), t(&"$0".repeat(10_000)), n(1.0)]), Value::Error(CellError::Value));
