@@ -1,6 +1,7 @@
 //! BIFF8 parsed formulas ([MS-XLS] 2.2.2, 2.5.198): reverse-Polish `Ptg` tokens back to an
 //! expression tree. Anything outside the common token set is reported as unsupported, and the
-//! caller keeps the cell's cached value instead.
+//! caller keeps the cell's cached value instead. The XLSB decoder (`xlsb/formula.rs`) shares the
+//! function table, the operand-stack depth guards and the limits below.
 
 use std::sync::Arc;
 
@@ -10,13 +11,13 @@ use gridcraft_formula::{Anchor, BinOp, Expr, RefKind, Reference, SheetSel, UnOp}
 use super::ftab::FTAB;
 
 /// Formula token bytes decoded at most (Excel's limit is 1,800 per formula).
-const MAX_RGCE: usize = 16 * 1024;
+pub(crate) const MAX_RGCE: usize = 16 * 1024;
 /// Values in one array constant at most.
-const MAX_ARRAY: usize = 65_536;
+pub(crate) const MAX_ARRAY: usize = 65_536;
 
 /// Why a formula could not be turned back into text.
 #[derive(Debug, PartialEq)]
-pub(super) struct Unsupported(pub &'static str);
+pub(crate) struct Unsupported(pub &'static str);
 
 /// Where the formula lives: refs in cell formulas store coordinates; shared formulas store
 /// row/column offsets for relative parts; names store offsets for 3-D refs too.
@@ -57,11 +58,11 @@ pub(super) struct Links {
     pub xti: Vec<Xti>,
 }
 
-pub(super) fn function(iftab: u16) -> Option<(&'static str, i8)> {
+pub(crate) fn function(iftab: u16) -> Option<(&'static str, i8)> {
     FTAB.binary_search_by_key(&iftab, |(i, _, _)| *i).ok().and_then(|i| FTAB.get(i)).map(|(_, n, a)| (*n, *a))
 }
 
-fn error_code(code: u8) -> Option<CellError> {
+pub(crate) fn error_code(code: u8) -> Option<CellError> {
     Some(match code {
         0x00 => CellError::Null,
         0x07 => CellError::Div0,
@@ -187,16 +188,16 @@ fn function_name(name: &str) -> String {
 const MAX_DEPTH: usize = 256;
 
 /// Operand stack entries: an expression and its nesting depth.
-type Stack = Vec<(Expr, usize)>;
+pub(crate) type Stack = Vec<(Expr, usize)>;
 
 /// Pops an operand, recording its depth in `kids` (the deepest operand this token consumed).
-fn pop(stack: &mut Stack, kids: &mut usize) -> Result<Expr, Unsupported> {
+pub(crate) fn pop(stack: &mut Stack, kids: &mut usize) -> Result<Expr, Unsupported> {
     let (e, d) = stack.pop().ok_or(Unsupported("malformed formula (operand missing)"))?;
     *kids = (*kids).max(d);
     Ok(e)
 }
 
-fn pop_n(stack: &mut Stack, n: usize, kids: &mut usize) -> Result<Vec<Expr>, Unsupported> {
+pub(crate) fn pop_n(stack: &mut Stack, n: usize, kids: &mut usize) -> Result<Vec<Expr>, Unsupported> {
     let at = stack.len().checked_sub(n).ok_or(Unsupported("malformed formula (argument missing)"))?;
     let popped = stack.split_off(at);
     *kids = popped.iter().map(|(_, d)| *d).fold(*kids, usize::max);
@@ -204,7 +205,7 @@ fn pop_n(stack: &mut Stack, n: usize, kids: &mut usize) -> Result<Vec<Expr>, Uns
 }
 
 /// Pushes the result of a token one level above the operands it consumed.
-fn push(stack: &mut Stack, kids: usize, e: Expr) -> Result<(), Unsupported> {
+pub(crate) fn push(stack: &mut Stack, kids: usize, e: Expr) -> Result<(), Unsupported> {
     let depth = kids.saturating_add(1);
     if depth > MAX_DEPTH {
         return Err(Unsupported("formula nested too deeply"));
@@ -526,6 +527,25 @@ mod tests {
         assert!(text(&[0x03], &[]).is_err());
         assert!(text(&[0x21, 0xFF, 0x7F], &[]).is_err());
         assert!(text(&[0x60, 0, 0, 0, 0, 0, 0, 0], &[0xFF, 0xFF, 0xFF]).is_err());
+    }
+
+    #[test]
+    fn xlsb_function_numbers() {
+        // `function` binary-searches the table: sorted, each number once.
+        assert!(FTAB.windows(2).all(|w| w[0].0 < w[1].0));
+        // [MS-XLSB] 2.5.98.10 continues the table from 0x17C. Excel writes these by number in
+        // XLSB: PtgFunc for a fixed argument count, PtgFuncVar otherwise.
+        assert_eq!(function(0x17C), Some(("CUBEVALUE", -1)));
+        assert_eq!(function(449), Some(("EDATE", 2)));
+        assert_eq!(function(480), Some(("IFERROR", 2)));
+        assert_eq!(function(482), Some(("SUMIFS", -1)));
+        assert_eq!(function(0x1D4), None, "unassigned");
+        assert_eq!(function(0x1E5), None);
+        assert_eq!(text(&[0x1E, 1, 0, 0x1E, 2, 0, 0x41, 0xE0, 0x01], &[]).unwrap(), "IFERROR(1,2)");
+        let sumifs = [&[0x1Eu8, 1, 0][..], &[0x1E, 2, 0], &[0x17, 2, 0, b'>', b'0'], &[0x42, 3, 0xE2, 0x01]].concat();
+        assert_eq!(text(&sumifs, &[]).unwrap(), "SUMIFS(1,2,\">0\")");
+        let unknown: Vec<_> = FTAB.iter().filter(|(i, n, _)| *i >= 0x17C && gridcraft_functions::lookup(n).is_none()).map(|(_, n, _)| *n).collect();
+        assert!(unknown.is_empty(), "not gridcraft functions: {unknown:?}");
     }
 
     #[test]

@@ -14,7 +14,7 @@
 //! Every formula in the file is a legacy (pre-dynamic-array) one, so it is read with Excel's
 //! implicit `@` (see `array_formula.rs`), like an `.xlsx` formula saved without `cm`.
 
-mod formula;
+pub(crate) mod formula;
 mod ftab;
 mod records;
 mod styles;
