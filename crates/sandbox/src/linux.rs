@@ -31,6 +31,12 @@ const SYS_SETXATTRAT: libc::c_long = 463;
 const SYS_REMOVEXATTRAT: libc::c_long = 466;
 const SYS_OPEN_TREE_ATTR: libc::c_long = 467;
 const SYS_FILE_SETATTR: libc::c_long = 469;
+// `libc` names no kexec_file_load on riscv64 (0.2.190). It takes 294 from the kernel's generic
+// table there, as on aarch64, where `libc` names it.
+#[cfg(target_arch = "riscv64")]
+const SYS_KEXEC_FILE_LOAD: libc::c_long = 294;
+#[cfg(not(target_arch = "riscv64"))]
+const SYS_KEXEC_FILE_LOAD: libc::c_long = libc::SYS_kexec_file_load;
 
 pub fn support() -> Support {
     match arch() {
@@ -223,7 +229,7 @@ fn denied_calls() -> Vec<libc::c_long> {
         libc::SYS_finit_module,
         libc::SYS_delete_module,
         libc::SYS_kexec_load,
-        libc::SYS_kexec_file_load,
+        SYS_KEXEC_FILE_LOAD,
         libc::SYS_swapon,
         libc::SYS_swapoff,
         libc::SYS_reboot,
@@ -455,6 +461,9 @@ mod tests {
         #[cfg(target_arch = "x86_64")]
         assert_eq!(SYS_FCHMODAT2, libc::SYS_fchmodat2);
         assert_eq!((SYS_SETXATTRAT, SYS_REMOVEXATTRAT, SYS_OPEN_TREE_ATTR, SYS_FILE_SETATTR), (463, 466, 467, 469));
+        // The generic table's number, which riscv64 writes here, is the one `libc` gives aarch64.
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(libc::SYS_kexec_file_load, 294);
     }
 
     #[test]

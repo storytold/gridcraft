@@ -1281,9 +1281,18 @@ fn content_differs(b: Option<&Cell>, a: Option<&Cell>) -> bool {
 /// Objects added, changed and removed between two versions of a sheet.
 fn objects(b: &Sheet, a: &Sheet) -> (usize, usize, usize) {
     fn count<T: PartialEq>(b: &[T], a: &[T], id: impl Fn(&T) -> u32) -> (usize, usize, usize) {
-        let added = a.iter().filter(|x| !b.iter().any(|y| id(y) == id(x))).count();
-        let removed = b.iter().filter(|x| !a.iter().any(|y| id(y) == id(x))).count();
-        let changed = b.iter().filter(|x| a.iter().any(|y| id(y) == id(x) && y != *x)).count();
+        // Objects grouped by id, so each lookup is a map probe instead of a scan of the list.
+        fn group<'a, T>(v: &'a [T], id: &impl Fn(&T) -> u32) -> std::collections::HashMap<u32, Vec<&'a T>> {
+            let mut m: std::collections::HashMap<u32, Vec<&T>> = std::collections::HashMap::new();
+            for x in v {
+                m.entry(id(x)).or_default().push(x);
+            }
+            m
+        }
+        let (gb, ga) = (group(b, &id), group(a, &id));
+        let added = a.iter().filter(|x| !gb.contains_key(&id(x))).count();
+        let removed = b.iter().filter(|x| !ga.contains_key(&id(x))).count();
+        let changed = b.iter().filter(|x| ga.get(&id(x)).is_some_and(|ys| ys.iter().any(|y| *y != *x))).count();
         (added, changed, removed)
     }
     let parts = [
