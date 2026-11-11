@@ -52,6 +52,14 @@ impl<'a> Package<'a> {
         Ok(Package { zip, names, total: 0 })
     }
 
+    /// Every part's (normalized) name, sorted.
+    #[cfg(test)]
+    pub fn names(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.names.keys().cloned().collect();
+        v.sort();
+        v
+    }
+
     pub fn has(&self, part: &str) -> bool {
         self.names.contains_key(&normalize(part))
     }

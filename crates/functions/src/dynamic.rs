@@ -764,6 +764,13 @@ fn groupby(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let total = opt_count(args, 4)?.unwrap_or(1);
     let sort = opt_count(args, 5)?.unwrap_or(1);
     let filter = opt_arr(args, 6)?;
+    let relationship = opt_count(args, 7)?.unwrap_or(0);
+    // A total depth of N adds subtotals for the first N - 1 key columns, so it can't exceed the
+    // key columns, and a flat table (field_relationship 1) has no levels to subtotal.
+    let depth = total.unsigned_abs() as usize;
+    if depth > rf.cols.max(1) || (depth > 1 && relationship == 1) {
+        return Err(CellError::Value);
+    }
     let p = prepare(&[&rf], &vals, fh, filter.as_ref())?;
     let keys: Vec<Vec<Value>> = p.rows.iter().map(|&r| key_row(&rf, r)).collect();
     let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
@@ -795,13 +802,22 @@ fn groupby(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
         lines
             .sort_by(|a, b| cmp_keys(&[a.get(ci).cloned().unwrap_or(Value::Empty)], &[b.get(ci).cloned().unwrap_or(Value::Empty)], &[sort.signum()]));
     }
+    if depth > 1 {
+        let mut rows_of = |keys: &[Value]| groups.get(&row_key(keys)).cloned().unwrap_or_default();
+        // The header and total lines count too, so the whole result is checked before it is built.
+        let around = usize::from(p.show_headers) + usize::from(total != 0);
+        let width = rf.cols.saturating_add(vals.cols);
+        let fits = |n: usize| check_output_size(n.saturating_add(around), width);
+        lines = with_subtotals(lines, depth, rf.cols, total < 0, &fits, &mut rows_of, &mut agg_row)?;
+    }
     let mut out = Vec::new();
     if p.show_headers {
         let mut h = p.field_headers.clone();
         h.extend(p.value_headers.iter().cloned());
         out.push(h);
     }
-    let mut total_line = vec![Value::from("Total")];
+    // With subtotals Excel calls the last line "Grand Total".
+    let mut total_line = vec![Value::from(if depth > 1 { "Grand Total" } else { "Total" })];
     total_line.resize(rf.cols, Value::Empty);
     total_line.extend(agg_row(&p.rows));
     if total < 0 {
@@ -814,6 +830,84 @@ fn groupby(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
         }
     }
     from_rows(out, &Value::Empty)
+}
+
+/// GROUPBY's subtotals: `lines` (`key_cols` keys, then values) with the lines of each group of a
+/// key level kept together in the order the groups first appear, and for every key level above
+/// `depth` a line after the group (before it when `before`): the group's keys, blanks for the deeper
+/// keys, and the values aggregated over the group's source rows (`rows_of` maps a line's keys to them).
+///
+/// No recursion, so a deep total depth can't exhaust the stack: each line gets the id of its key
+/// prefix at every level (ids count up as prefixes first appear), a stable sort by those ids brings
+/// each group together, and one walk adds a subtotal where a group starts or ends. `fits` gets the
+/// line count as the groups are found, so an oversized result is refused before it is built.
+fn with_subtotals(
+    mut lines: Vec<Vec<Value>>,
+    depth: usize,
+    key_cols: usize,
+    before: bool,
+    fits: &dyn Fn(usize) -> R<()>,
+    rows_of: &mut dyn FnMut(&[Value]) -> Vec<usize>,
+    agg: &mut dyn FnMut(&[usize]) -> Vec<Value>,
+) -> R<Vec<Vec<Value>>> {
+    let levels = depth.saturating_sub(1);
+    if levels == 0 {
+        return Ok(lines);
+    }
+    let mut ids: HashMap<(usize, String), usize> = HashMap::new();
+    let mut paths: Vec<Vec<usize>> = Vec::with_capacity(lines.len());
+    for line in &lines {
+        let mut parent = usize::MAX;
+        let mut path = Vec::with_capacity(levels);
+        for level in 0..levels {
+            let next = ids.len();
+            parent = *ids.entry((parent, row_key(line.get(level..=level).unwrap_or_default()))).or_insert(next);
+            path.push(parent);
+        }
+        fits(lines.len().saturating_add(ids.len()))?;
+        paths.push(path);
+    }
+    let mut group_rows: Vec<Vec<usize>> = vec![Vec::new(); ids.len()];
+    for (line, path) in lines.iter().zip(&paths) {
+        let rows = rows_of(line.get(..key_cols).unwrap_or_default());
+        for &id in path {
+            if let Some(g) = group_rows.get_mut(id) {
+                g.extend_from_slice(&rows);
+            }
+        }
+    }
+    let mut subtotal = |keys: &[Value], level: usize, id: usize| -> Vec<Value> {
+        let mut line: Vec<Value> = keys.iter().take(level + 1).cloned().collect();
+        line.resize(key_cols, Value::Empty);
+        line.extend(agg(group_rows.get(id).map(Vec::as_slice).unwrap_or_default()));
+        line
+    };
+    let mut order: Vec<usize> = (0..lines.len()).collect();
+    order.sort_by(|&a, &b| paths.get(a).cmp(&paths.get(b)));
+    let mut out = Vec::with_capacity(lines.len().saturating_add(ids.len()));
+    let mut prev: Option<(Vec<Value>, &[usize])> = None;
+    for &i in &order {
+        let (Some(line), Some(path)) = (lines.get_mut(i).map(std::mem::take), paths.get(i)) else { continue };
+        // The first level at which this line leaves the previous line's groups.
+        let split = prev.as_ref().map_or(0, |(_, p)| p.iter().zip(path).take_while(|(a, b)| a == b).count());
+        if before {
+            for (level, &id) in path.iter().enumerate().skip(split) {
+                out.push(subtotal(&line, level, id));
+            }
+        } else if let Some((keys, p)) = &prev {
+            for (level, &id) in p.iter().enumerate().skip(split).rev() {
+                out.push(subtotal(keys, level, id));
+            }
+        }
+        prev = Some((line.get(..key_cols).unwrap_or_default().to_vec(), path));
+        out.push(line);
+    }
+    if !before && let Some((keys, p)) = &prev {
+        for (level, &id) in p.iter().enumerate().rev() {
+            out.push(subtotal(keys, level, id));
+        }
+    }
+    Ok(out)
 }
 
 /// Height and width of a PIVOTBY grid: `header_rows` (one per column field, plus the value-name row) and
@@ -1284,6 +1378,78 @@ mod tests {
         assert_eq!(rows_of(&r), vec![vec![tv("East"), nv(7.5)], vec![tv("North"), nv(1.0)], vec![tv("West"), nv(7.0)]]);
         is_err(ev("GROUPBY", vec![rf(region.clone()), rf(amt.clone()), t("BOGUS")]), CellError::Value);
         is_err(ev("GROUPBY", vec![rf(region), av(col(&[1.0])), t("SUM")]), CellError::Value);
+    }
+
+    #[test]
+    fn groupby_subtotals_past_the_size_limit_are_refused_before_they_are_built() {
+        // One row with 4000 key columns at depth 4000 asks for 3999 subtotal lines, each 4001 cells
+        // wide: 16 million cells, over the limit. It is #NUM! before any subtotal line exists (it
+        // used to build them all, nesting 4000 levels deep, and refuse them afterwards).
+        let keys = av(arr(vec![(0..4000).map(|i| nv(f64::from(i))).collect()]));
+        is_err(ev("GROUPBY", vec![keys, av(col(&[1.0])), t("SUM"), empty(), n(4000.0)]), CellError::Num);
+    }
+
+    #[test]
+    fn groupby_total_depth_adds_subtotals() {
+        // #1456 item 1, values as Excel 365 shows them.
+        let keys2 = || av(arr(vec![vec![tv("a"), tv("x")], vec![tv("a"), tv("y")], vec![tv("b"), tv("x")]]));
+        let vals3 = || av(col(&[1.0, 2.0, 3.0]));
+        let e = Value::Empty;
+        let r = ev("GROUPBY", vec![keys2(), vals3(), t("SUM"), empty(), n(2.0)]);
+        assert_eq!(
+            rows_of(&r),
+            vec![
+                vec![tv("a"), tv("x"), nv(1.0)],
+                vec![tv("a"), tv("y"), nv(2.0)],
+                vec![tv("a"), e.clone(), nv(3.0)],
+                vec![tv("b"), tv("x"), nv(3.0)],
+                vec![tv("b"), e.clone(), nv(3.0)],
+                vec![tv("Grand Total"), e.clone(), nv(6.0)],
+            ]
+        );
+        let r = ev("GROUPBY", vec![keys2(), vals3(), t("SUM"), empty(), n(-2.0)]);
+        assert_eq!(
+            rows_of(&r),
+            vec![
+                vec![tv("Grand Total"), e.clone(), nv(6.0)],
+                vec![tv("a"), e.clone(), nv(3.0)],
+                vec![tv("a"), tv("x"), nv(1.0)],
+                vec![tv("a"), tv("y"), nv(2.0)],
+                vec![tv("b"), e.clone(), nv(3.0)],
+                vec![tv("b"), tv("x"), nv(3.0)],
+            ]
+        );
+        let keys3 = || {
+            av(arr(vec![
+                vec![tv("a"), tv("x"), tv("p")],
+                vec![tv("a"), tv("x"), tv("q")],
+                vec![tv("a"), tv("y"), tv("p")],
+                vec![tv("b"), tv("x"), tv("p")],
+            ]))
+        };
+        let vals4 = || av(col(&[1.0, 2.0, 3.0, 4.0]));
+        let r = ev("GROUPBY", vec![keys3(), vals4(), t("SUM"), empty(), n(3.0)]);
+        let line = |k: [&str; 3], v: f64| k.iter().map(|s| if s.is_empty() { Value::Empty } else { tv(s) }).chain([nv(v)]).collect::<Vec<_>>();
+        assert_eq!(
+            rows_of(&r),
+            vec![
+                line(["a", "x", "p"], 1.0),
+                line(["a", "x", "q"], 2.0),
+                line(["a", "x", ""], 3.0),
+                line(["a", "y", "p"], 3.0),
+                line(["a", "y", ""], 3.0),
+                line(["a", "", ""], 6.0),
+                line(["b", "x", "p"], 4.0),
+                line(["b", "x", ""], 4.0),
+                line(["b", "", ""], 4.0),
+                line(["Grand Total", "", ""], 10.0),
+            ]
+        );
+        // Depth 1 keeps "Total"; a depth past the key columns, or subtotals of a flat table, are errors.
+        let r = ev("GROUPBY", vec![keys2(), vals3(), t("SUM"), empty(), n(1.0)]);
+        assert_eq!(rows_of(&r).last().unwrap(), &vec![tv("Total"), e, nv(6.0)]);
+        is_err(ev("GROUPBY", vec![av(arr(vec![vec![tv("a")], vec![tv("b")]])), av(col(&[1.0, 2.0])), t("SUM"), empty(), n(2.0)]), CellError::Value);
+        is_err(ev("GROUPBY", vec![keys2(), vals3(), t("SUM"), empty(), n(2.0), empty(), empty(), n(1.0)]), CellError::Value);
     }
 
     #[test]

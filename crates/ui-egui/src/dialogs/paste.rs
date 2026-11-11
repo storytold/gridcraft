@@ -5,6 +5,8 @@ use super::{Dialog, Field, Json, Key, SheetApp, Stroke, json, theme, vec2};
 /// come from the dialog's `fields`, so the letter shortcuts and the control channel see the same.
 pub(super) fn paste_special(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     let lang = app.ui.language;
+    // L, the Paste Link button's access key, pastes at once as the button does.
+    let link_now = d.values.remove(PASTE_LINK_NOW).is_some_and(|v| v == json!(true));
     let t = theme::Tokens::get(ui.ctx());
     type Choice = (&'static str, &'static str, Vec<(&'static str, &'static str)>);
     let choices: Vec<Choice> = d
@@ -56,7 +58,7 @@ pub(super) fn paste_special(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialo
     ui.separator();
     ui.horizontal(|ui| {
         // Excel's Paste Link pastes references to the copied cells straight away.
-        if ui.button(lang.tr("Paste Link")).on_hover_text(lang.tr("Paste formulas that refer to the copied cells")).clicked() {
+        if ui.button(lang.tr("Paste Link")).on_hover_text(lang.tr("Paste formulas that refer to the copied cells")).clicked() || link_now {
             d.values.insert("what".into(), json!("all"));
             d.values.insert("operation".into(), json!("none"));
             d.values.insert("link".into(), json!(true));
@@ -74,6 +76,45 @@ pub(super) fn paste_special(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialo
     });
 }
 
+/// Set by the Paste Link access key for the next frame of the dialog, which then pastes.
+const PASTE_LINK_NOW: &str = "pasteLinkNow";
+
+/// What one of Paste Special's access keys does: choose an option of a group, or flip a box.
+#[derive(Clone, Copy)]
+enum Mnemonic {
+    Set(&'static str, &'static str),
+    Toggle(&'static str),
+    /// The Paste Link button: pastes at once.
+    PasteLink,
+}
+
+/// Excel's access keys in Paste Special (#1482): the Paste choices, the operations, the two check
+/// boxes and the Paste Link button, each the letter Excel underlines.
+fn mnemonic_action(key: Key) -> Option<(char, Mnemonic)> {
+    use Mnemonic::{Set, Toggle};
+    Some(match key {
+        Key::A => ('a', Set("what", "all")),
+        Key::F => ('f', Set("what", "formulas")),
+        Key::V => ('v', Set("what", "values")),
+        Key::T => ('t', Set("what", "formats")),
+        Key::C => ('c', Set("what", "comments")),
+        Key::N => ('n', Set("what", "validation")),
+        Key::X => ('x', Set("what", "allExceptBorders")),
+        Key::W => ('w', Set("what", "columnWidths")),
+        Key::R => ('r', Set("what", "formulasAndNumberFormats")),
+        Key::U => ('u', Set("what", "valuesAndNumberFormats")),
+        Key::O => ('o', Set("operation", "none")),
+        Key::D => ('d', Set("operation", "add")),
+        Key::S => ('s', Set("operation", "subtract")),
+        Key::M => ('m', Set("operation", "multiply")),
+        Key::I => ('i', Set("operation", "divide")),
+        Key::B => ('b', Toggle("skipBlanks")),
+        Key::E => ('e', Toggle("transpose")),
+        Key::L => ('l', Mnemonic::PasteLink),
+        _ => return None,
+    })
+}
+
 /// Paste Special's legacy mnemonics select options; Enter still performs the paste.
 pub(super) fn paste_special_shortcuts(d: &mut Dialog, ctx: &egui::Context) {
     if ctx.text_edit_focused() {
@@ -88,14 +129,7 @@ pub(super) fn paste_special_shortcuts(d: &mut Dialog, ctx: &egui::Context) {
     });
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
     let allowed = |m: egui::Modifiers| !m.ctrl && !m.command && !m.mac_cmd && !(m.alt && (mac || right_alt));
-    let mnemonic = |key| match key {
-        Key::T => Some('t'),
-        Key::V => Some('v'),
-        Key::F => Some('f'),
-        Key::C => Some('c'),
-        Key::E => Some('e'),
-        _ => None,
-    };
+    let mnemonic = |key| mnemonic_action(key).map(|(letter, _)| letter);
     let mut text_to_consume = Vec::new();
     for event in ctx.input(|i| i.events.clone()) {
         let egui::Event::Key { key, pressed: true, repeat, modifiers, .. } = event else { continue };
@@ -107,17 +141,18 @@ pub(super) fn paste_special_shortcuts(d: &mut Dialog, ctx: &egui::Context) {
         if repeat {
             continue;
         }
-        if key == Key::E {
-            let transpose = d.values.get("transpose").and_then(Json::as_bool).unwrap_or(false);
-            d.values.insert("transpose".into(), json!(!transpose));
-        } else {
-            let what = match key {
-                Key::T => "formats",
-                Key::V => "values",
-                Key::F => "formulas",
-                _ => "comments",
-            };
-            d.values.insert("what".into(), json!(what));
+        match mnemonic_action(key).map(|(_, action)| action) {
+            Some(Mnemonic::Set(field, value)) => {
+                d.values.insert(field.into(), json!(value));
+            }
+            Some(Mnemonic::Toggle(field)) => {
+                let on = d.values.get(field).and_then(Json::as_bool).unwrap_or(false);
+                d.values.insert(field.into(), json!(!on));
+            }
+            Some(Mnemonic::PasteLink) => {
+                d.values.insert(PASTE_LINK_NOW.into(), json!(true));
+            }
+            None => {}
         }
     }
     // Browsers can deliver Text before or after Key. Act only on Key, then remove
