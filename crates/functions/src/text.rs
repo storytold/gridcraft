@@ -914,13 +914,25 @@ fn regexreplace(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         out.push_str(s.get(last..).unwrap_or_default());
         return check_len(out);
     }
-    let caps: Vec<regex::Captures> = re.captures_iter(&s).collect();
-    let k = occ.unsigned_abs() as usize;
-    let idx = if occ > 0 { k.checked_sub(1) } else { caps.len().checked_sub(k) };
-    let Some(cap) = idx.and_then(|i| caps.get(i)) else { return text_val(s) };
+    // An occurrence past what `usize` holds (32-bit targets) names no match: the text is returned as it was.
+    let Ok(k) = usize::try_from(occ.unsigned_abs()) else { return text_val(s) };
+    // Keeps only the wanted match's captures: the nth from the front, or a window of the last `k`.
+    let cap = if occ > 0 {
+        re.captures_iter(&s).nth(k - 1)
+    } else {
+        let mut last = std::collections::VecDeque::new();
+        for cap in re.captures_iter(&s) {
+            if last.len() == k {
+                last.pop_front();
+            }
+            last.push_back(cap);
+        }
+        if last.len() == k { last.pop_front() } else { None }
+    };
+    let Some(cap) = cap else { return text_val(s) };
     let Some(m) = cap.get(0) else { return text_val(s) };
     out.push_str(s.get(..m.start()).unwrap_or_default());
-    expand_capped(cap, &rep, &mut out, limit).ok_or(CellError::Value)?;
+    expand_capped(&cap, &rep, &mut out, limit).ok_or(CellError::Value)?;
     out.push_str(s.get(m.end()..).unwrap_or_default());
     check_len(out)
 }
