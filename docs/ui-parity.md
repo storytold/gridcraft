@@ -277,6 +277,45 @@ Key tips 3–5 · remaining shortcuts with their features 2–4 · context menus
 8–12 · Options dialog and ribbon/QAT customization 6–10 · accessibility 12–18 · selection and
 scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
+## Measured section rows
+
+Office 16.0.20527, 125% DPI, unmaximised window; widths are outer px. Each entry is the section's
+control-row count (1, 2 or 3; a 5 is a menu with nested rows) at the width where it changes.
+
+| Tab | Section | Rows by width |
+|---|---|---|
+| Home | Clipboard | 450: 1 → 1024: 3 |
+| Home | Font | 450: 1 → 1161: 3 → 1600: 2 |
+| Home | Alignment | 450: 1 → 1200: 3 → 1600: 2 |
+| Home | Number | 450: 1 → 1300: 3 → 1900: 2 |
+| Home | Styles | 450: 3 → 1900: 1 |
+| Home | Cells | 450: 1 → 1400: 3 → 1900: 1 |
+| Home | Editing | 450: 1 → 1400: 3 |
+| Insert | Illustrations | 450: 1 → 1900: 3 |
+| Insert | Filters | 450: 1 → 1600: 2 → 1900: 1 |
+| Insert | Symbols | 450: 1 → 1900: 2 |
+| Page Layout | Themes | 450: 1 → 950: 3 |
+| Page Layout | Page Setup | 450: 3 → 1161: 1 |
+| Page Layout | Scale to Fit | 450: 1 → 850: 2 |
+| Page Layout | Sheet Options | 450: 1 → 1024: 0 |
+| Page Layout | Arrange | 450: 1 → 1400: 3 → 1600: 1 |
+| Formulas | Function Library | 450: 1 → 1100: 5 → 1600: 1 |
+| Formulas | Defined Names | 450: 1 → 1600: 3 |
+| Formulas | Formula Auditing | 450: 1 → 1300: 3 |
+| Data | Data Types | 450: 1 → 950: 0 |
+| Data | Sort & Filter | 450: 1 → 1024: 5 |
+| Data | Data Tools | 450: 1 → 1300: 3 |
+| Data | Outline | 450: 1 → 1900: 3 |
+| Review | Proofing | 450: 1 → 1024: 3 → 1600: 1 |
+| Review | Comments | 450: 1 → 1100: 3 → 1600: 1 |
+| View | Sheet View | 450: 1 → 1161: 2 |
+| View | Workbook Views | 450: 1 → 1100: 3 |
+| View | Show | 450: 1 → 1600: 2 |
+| View | Window | 450: 1 → 1024: 3 |
+
+The planner keeps a section's natural rows while it fits and collapses it to one row below the
+measured narrow breakpoint; two-row states beyond the implemented sections are not modelled yet.
+
 ## Revision history
 
 | Date | Change | Summary |
