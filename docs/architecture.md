@@ -77,9 +77,10 @@ drawing its own:
   Alignment from 960, Number from 1040, Cells and Editing from 1120; Font and Alignment spread
   back into two rows at 1280 and Number at 1520; Styles and Cells become one row of three at
   1520; Insert › Symbols stacks at 1520, Insert › Filters stacks its Slicer over its Timeline
-  from 1280 and returns to one row at 1520, Page Layout › Scale to Fit has two rows of fields
-  from 680, and View › Sheet View two rows from 928 while View › Show takes its second row at
-  1280), and a narrower card
+  from 1280 and returns to one row at 1520, Page Layout › Page Setup stacks two by two below
+  928, Page Layout › Scale to Fit has two rows of fields from 680, Review › Proofing stacks
+  between 819 and 1280 and Comments between 880 and 1280, and View › Sheet View two rows from
+  928 while View › Show takes its second row at 1280), and a narrower card
   draws it as one compact row (icon, name and chevron) whose menu holds the natural body; tabs
   without breakpoints compact a group once its measured body no longer fits what is left of the
   card, with hysteresis at the boundary. The card scrolls a

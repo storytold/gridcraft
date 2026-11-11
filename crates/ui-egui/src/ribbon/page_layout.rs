@@ -1,10 +1,12 @@
 use super::controls::{RibbonSections, act, anchor_keytip, checkbox_on, control_keytip, group_end, invoke, keytip, menu_items, section, sep};
-use super::{Color32, Icon, Sense, SheetApp, Tokens, Ui, big_button, json, keytip_table, vec2};
+use super::{Color32, Icon, Sense, SheetApp, Tokens, Ui, big_button, json, keytip_table, small_button, vec2};
 
 pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
-    // Excel's measured Page Layout rows: Themes is one row until 760 client points, then three;
-    // Scale to Fit is one compact row below 680, then two rows of fields.
+    // Excel's measured Page Layout rows, in client points: Themes is one row until 760, then
+    // three; Page Setup stacks its six buttons two by two until 928, then one row; Scale to Fit
+    // is one compact row below 680, then two rows of fields.
     RibbonSections::breaks(ui, "Themes", &[(760.0, 3)]);
+    RibbonSections::breaks(ui, "Page Setup", &[(928.0, 1), (0.0, 3)]);
     RibbonSections::breaks(ui, "Scale to Fit", &[(680.0, 2)]);
     section(ui, app, "Themes", Icon::Theme, |app, ui| {
         let th = big_button(ui, Icon::Theme, "Themes", "Themes", true);
@@ -25,93 +27,30 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui, "Themes");
     section(ui, app, "Page Setup", Icon::PageLayout, |app, ui| {
-        let m = big_button(ui, Icon::Margins, "Margins", "Margins", true);
-        for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["pageLayout.margins", "dialog:pageSetup"]) {
-            keytip(app, ui, sequence, m.rect.center_bottom());
-        }
-        egui::Popup::menu(&m).show(|ui| {
-            menu_items(
-                app,
-                ui,
-                &[
-                    ("Normal", "pageLayout.margins", json!({"preset": "normal"})),
-                    ("Wide", "pageLayout.margins", json!({"preset": "wide"})),
-                    ("Narrow", "pageLayout.margins", json!({"preset": "narrow"})),
-                    ("Custom Margins…", "dialog:pageSetup", json!({})),
-                ],
-            );
-        });
-        let o = big_button(ui, Icon::Orient, "Page Layout|Orientation", "Page Layout|Orientation", true);
-        control_keytip(app, ui, &o, "pageLayout.orientation");
-        egui::Popup::menu(&o).show(|ui| {
-            menu_items(
-                app,
-                ui,
-                &[
-                    ("Portrait", "pageLayout.orientation", json!({"orientation": "portrait"})),
-                    ("Landscape", "pageLayout.orientation", json!({"orientation": "landscape"})),
-                ],
-            );
-        });
-        let s = big_button(ui, Icon::Paper, "Size", "Paper Size", true);
-        control_keytip(app, ui, &s, "pageLayout.size");
-        egui::Popup::menu(&s).show(|ui| {
-            // B4/B5/B6 are the JIS sizes Japanese Excel uses; the ISO ones stay selectable by name.
-            for p in [
-                "Letter",
-                "Legal",
-                "Tabloid",
-                "Executive",
-                "A3",
-                "A4",
-                "A5",
-                "A6",
-                "B4",
-                "B5",
-                "B6",
-                "Japanese Postcard",
-                "Japanese Double Postcard",
-                "Japanese Envelope #3",
-                "Japanese Envelope #4",
-                "Japanese Envelope Kaku #2",
-                "Japanese Envelope Kaku #3",
-                "B4 (ISO)",
-                "B5 (ISO)",
-                "B6 (ISO)",
-            ] {
-                if ui.button(p).clicked() {
-                    act(app, "pageLayout.size", json!({"paper": p}));
-                }
-            }
-        });
-        let pa = big_button(ui, Icon::PrintArea, "Print\nArea", "Print Area", true);
-        anchor_keytip(app, ui, &pa, &["pageLayout.printArea"]);
-        egui::Popup::menu(&pa).show(|ui| {
-            menu_items(
-                app,
-                ui,
-                &[("Set Print Area", "pageLayout.printArea", json!({})), ("Clear Print Area", "pageLayout.printArea", json!({"clear": true}))],
-            );
-        });
-        let br = big_button(ui, Icon::PageBreak, "Breaks", "Page Breaks", true);
-        for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["pageLayout.breaks"]) {
-            keytip(app, ui, sequence, br.rect.center_bottom());
-        }
-        egui::Popup::menu(&br).show(|ui| {
-            menu_items(
-                app,
-                ui,
-                &[
-                    ("Insert Page Break", "pageLayout.breaks", json!({"insert": true})),
-                    ("Remove Page Break", "pageLayout.breaks", json!({"remove": true})),
-                    ("Reset All Page Breaks", "pageLayout.breaks", json!({"reset": true})),
-                ],
-            );
-        });
-        let __k = big_button(ui, Icon::Sheet, "Print\nTitles", "Print Titles", false);
-        control_keytip(app, ui, &__k, "pageLayout.printTitles");
-        if __k.clicked() {
-            app.open_dialog("pageSetup", json!({"tab": "Sheet"}));
+        // Excel's three-row form below 928 client points: six small buttons, two per row, in the
+        // order Excel stacks them; one row of large buttons from 928.
+        if RibbonSections::level(ui, "Page Setup") == 3 {
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    page_setup_margins(app, ui, false);
+                    page_setup_orientation(app, ui, false);
+                });
+                ui.horizontal(|ui| {
+                    page_setup_size(app, ui, false);
+                    page_setup_print_area(app, ui, false);
+                });
+                ui.horizontal(|ui| {
+                    page_setup_breaks(app, ui, false);
+                    page_setup_print_titles(app, ui, false);
+                });
+            });
+        } else {
+            page_setup_margins(app, ui, true);
+            page_setup_orientation(app, ui, true);
+            page_setup_size(app, ui, true);
+            page_setup_print_area(app, ui, true);
+            page_setup_breaks(app, ui, true);
+            page_setup_print_titles(app, ui, true);
         }
     });
     sep(ui, "Page Setup");
@@ -217,4 +156,116 @@ fn fit_pages(app: &mut SheetApp, ui: &mut Ui, label: &str, pages: u16, other: u1
         }
     });
     combo.response.labelled_by(caption.id);
+}
+
+/// A Page Setup control, large on the wide one-row form and small in the stacked three-row form.
+fn page_setup_button(ui: &mut Ui, big: bool, icon: Icon, label: &str, tip: &str, dropdown: bool) -> egui::Response {
+    if big { big_button(ui, icon, label, tip, dropdown) } else { small_button(ui, icon, label, tip, dropdown) }
+}
+
+fn page_setup_margins(app: &mut SheetApp, ui: &mut Ui, big: bool) {
+    let m = page_setup_button(ui, big, Icon::Margins, "Margins", "Margins", true);
+    for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["pageLayout.margins", "dialog:pageSetup"]) {
+        keytip(app, ui, sequence, m.rect.center_bottom());
+    }
+    egui::Popup::menu(&m).show(|ui| {
+        menu_items(
+            app,
+            ui,
+            &[
+                ("Normal", "pageLayout.margins", json!({"preset": "normal"})),
+                ("Wide", "pageLayout.margins", json!({"preset": "wide"})),
+                ("Narrow", "pageLayout.margins", json!({"preset": "narrow"})),
+                ("Custom Margins…", "dialog:pageSetup", json!({})),
+            ],
+        );
+    });
+}
+
+fn page_setup_orientation(app: &mut SheetApp, ui: &mut Ui, big: bool) {
+    let o = page_setup_button(ui, big, Icon::Orient, "Page Layout|Orientation", "Page Layout|Orientation", true);
+    control_keytip(app, ui, &o, "pageLayout.orientation");
+    egui::Popup::menu(&o).show(|ui| {
+        menu_items(
+            app,
+            ui,
+            &[
+                ("Portrait", "pageLayout.orientation", json!({"orientation": "portrait"})),
+                ("Landscape", "pageLayout.orientation", json!({"orientation": "landscape"})),
+            ],
+        );
+    });
+}
+
+fn page_setup_size(app: &mut SheetApp, ui: &mut Ui, big: bool) {
+    let s = page_setup_button(ui, big, Icon::Paper, "Size", "Paper Size", true);
+    control_keytip(app, ui, &s, "pageLayout.size");
+    egui::Popup::menu(&s).show(|ui| {
+        // B4/B5/B6 are the JIS sizes Japanese Excel uses; the ISO ones stay selectable by name.
+        for p in [
+            "Letter",
+            "Legal",
+            "Tabloid",
+            "Executive",
+            "A3",
+            "A4",
+            "A5",
+            "A6",
+            "B4",
+            "B5",
+            "B6",
+            "Japanese Postcard",
+            "Japanese Double Postcard",
+            "Japanese Envelope #3",
+            "Japanese Envelope #4",
+            "Japanese Envelope Kaku #2",
+            "Japanese Envelope Kaku #3",
+            "B4 (ISO)",
+            "B5 (ISO)",
+            "B6 (ISO)",
+        ] {
+            if ui.button(p).clicked() {
+                act(app, "pageLayout.size", json!({"paper": p}));
+            }
+        }
+    });
+}
+
+fn page_setup_print_area(app: &mut SheetApp, ui: &mut Ui, big: bool) {
+    // Small buttons keep a single-line label; only the large form stacks its two words.
+    let pa = page_setup_button(ui, big, Icon::PrintArea, if big { "Print\nArea" } else { "Print Area" }, "Print Area", true);
+    anchor_keytip(app, ui, &pa, &["pageLayout.printArea"]);
+    egui::Popup::menu(&pa).show(|ui| {
+        menu_items(
+            app,
+            ui,
+            &[("Set Print Area", "pageLayout.printArea", json!({})), ("Clear Print Area", "pageLayout.printArea", json!({"clear": true}))],
+        );
+    });
+}
+
+fn page_setup_breaks(app: &mut SheetApp, ui: &mut Ui, big: bool) {
+    let br = page_setup_button(ui, big, Icon::PageBreak, "Breaks", "Page Breaks", true);
+    for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["pageLayout.breaks"]) {
+        keytip(app, ui, sequence, br.rect.center_bottom());
+    }
+    egui::Popup::menu(&br).show(|ui| {
+        menu_items(
+            app,
+            ui,
+            &[
+                ("Insert Page Break", "pageLayout.breaks", json!({"insert": true})),
+                ("Remove Page Break", "pageLayout.breaks", json!({"remove": true})),
+                ("Reset All Page Breaks", "pageLayout.breaks", json!({"reset": true})),
+            ],
+        );
+    });
+}
+
+fn page_setup_print_titles(app: &mut SheetApp, ui: &mut Ui, big: bool) {
+    let r = page_setup_button(ui, big, Icon::Sheet, if big { "Print\nTitles" } else { "Print Titles" }, "Print Titles", false);
+    control_keytip(app, ui, &r, "pageLayout.printTitles");
+    if r.clicked() {
+        app.open_dialog("pageSetup", json!({"tab": "Sheet"}));
+    }
 }

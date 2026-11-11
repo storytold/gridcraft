@@ -255,12 +255,22 @@ fn every_new_group_renders_the_measured_rows_at_its_transition_widths() {
         ("Insert", "Filters", 1520.0, 1),
         ("Insert", "Symbols", 1507.0, 1),
         ("Insert", "Symbols", 1520.0, 2),
+        ("Page Layout", "Page Setup", 915.0, 3),
+        ("Page Layout", "Page Setup", 928.0, 1),
         ("Page Layout", "Scale to Fit", 667.0, 0),
         ("Page Layout", "Scale to Fit", 680.0, 2),
         ("View", "Sheet View", 915.0, 1),
         ("View", "Sheet View", 928.0, 2),
         ("View", "Show", 1267.0, 1),
         ("View", "Show", 1280.0, 2),
+        ("Review", "Proofing", 806.0, 0),
+        ("Review", "Proofing", 819.0, 3),
+        ("Review", "Proofing", 1267.0, 3),
+        ("Review", "Proofing", 1280.0, 1),
+        ("Review", "Comments", 867.0, 0),
+        ("Review", "Comments", 880.0, 3),
+        ("Review", "Comments", 1267.0, 3),
+        ("Review", "Comments", 1280.0, 1),
         ("Home", "Styles", 1507.0, 3),
         ("Home", "Styles", 1520.0, 1),
         ("Home", "Cells", 1507.0, 3),
@@ -280,6 +290,84 @@ fn every_new_group_renders_the_measured_rows_at_its_transition_widths() {
                 o.visible_height
             );
         }
+    }
+}
+
+#[test]
+fn page_setup_stacks_two_by_two_below_928_and_keeps_one_row_from_it() {
+    let stacked = app_at_size(vec2(915.0, 768.0), "Page Layout");
+    let top = |label: &str| stacked.get_by_label(label).rect().top();
+    let (margins, orientation) = (top("Margins"), top("Orientation"));
+    let (size, area) = (top("Size"), top("Print Area"));
+    let (breaks, titles) = (top("Breaks"), top("Print Titles"));
+    assert!((margins - orientation).abs() < 0.5, "Margins and Orientation share the first row");
+    assert!(size > margins + 5.0 && (size - area).abs() < 0.5, "Size and Print Area are the second row");
+    assert!(breaks > size + 5.0 && (breaks - titles).abs() < 0.5, "Breaks and Print Titles are the third row");
+
+    let one_row = app_at_size(vec2(928.0, 768.0), "Page Layout");
+    let tops: Vec<f32> = ["Margins", "Orientation", "Size", "Print Area", "Breaks", "Print Titles"]
+        .into_iter()
+        .map(|label| one_row.get_by_label(label).rect().top())
+        .collect();
+    assert!(tops.windows(2).all(|w| (w[1] - w[0]).abs() < 0.5), "Page Setup is one row from 928 pt: {tops:?}");
+}
+
+#[test]
+fn proofing_stacks_three_rows_between_819_and_1280() {
+    let stacked = app_at_size(vec2(819.0, 768.0), "Review");
+    let tops: Vec<f32> =
+        ["Spelling", "Workbook Statistics", "Check Accessibility"].into_iter().map(|label| stacked.get_by_label(label).rect().top()).collect();
+    assert!(tops.windows(2).all(|w| w[1] > w[0] + 5.0), "Proofing stacks its three buttons at 819 pt: {tops:?}");
+
+    let wide = app_at_size(vec2(1280.0, 768.0), "Review");
+    let tops: Vec<f32> =
+        ["Spelling", "Workbook Statistics", "Check Accessibility"].into_iter().map(|label| wide.get_by_label(label).rect().top()).collect();
+    assert!(tops.windows(2).all(|w| (w[1] - w[0]).abs() < 0.5), "Proofing is one row from 1280 pt: {tops:?}");
+
+    let compact = app_at_size(vec2(806.0, 768.0), "Review");
+    assert!(compact.query_by_label("Proofing").is_some(), "Proofing is one compact row below 819 pt");
+    assert!(compact.query_by_label("Spelling").is_none());
+}
+
+#[test]
+fn comments_stack_three_rows_between_880_and_1280() {
+    let stacked = app_at_size(vec2(880.0, 768.0), "Review");
+    let top = |label: &str| stacked.get_by_label(label).rect().top();
+    let (new, delete) = (top("New Comment"), top("Delete"));
+    let (previous, next) = (top("Previous"), top("Next"));
+    let (show, notes) = (top("Show Comments"), top("Notes"));
+    assert!((new - delete).abs() < 0.5, "New Comment and Delete share the first row");
+    assert!(previous > new + 5.0 && (previous - next).abs() < 0.5, "Previous and Next are the second row");
+    assert!(show > previous + 5.0 && (show - notes).abs() < 0.5, "Show Comments and Notes are the third row");
+
+    let wide = app_at_size(vec2(1280.0, 768.0), "Review");
+    let top = |label: &str| wide.get_by_label(label).rect().top();
+    // One row of large buttons; Previous and Next keep their two-button column inside that row.
+    let row = [top("New Comment"), top("Delete"), top("Previous"), top("Show Comments"), top("Notes")];
+    assert!(row.windows(2).all(|w| (w[1] - w[0]).abs() < 1.0), "Comments is one row from 1280 pt: {row:?}");
+    assert!(top("Next") > top("Previous") + 5.0, "Previous and Next keep their column in the one-row form");
+
+    let compact = app_at_size(vec2(867.0, 768.0), "Review");
+    let level = RibbonSections::levels(&compact.ctx, "Review").into_iter().find(|(name, _)| name == "Comments").map(|(_, level)| level);
+    assert_eq!(level, Some(0), "Comments is one compact row below 880 pt");
+    assert!(compact.query_by_label("New Comment").is_none());
+}
+
+#[test]
+fn the_five_row_menu_states_are_nested_menu_artefacts_not_section_rows() {
+    // The measured "5" for Formulas › Function Library (1100 outer px) and Data › Sort & Filter
+    // (1024) counts the rows of their nested menus, not rows of the section: the section is one
+    // row of first-level controls, or its compact row when the card is narrow.
+    for (tab, group, width) in [("Formulas", "Function Library", 880.0), ("Data", "Sort & Filter", 819.0)] {
+        let h = app_at_size(vec2(width, 768.0), tab);
+        let level = RibbonSections::levels(&h.ctx, tab).into_iter().find(|(name, _)| name == group).map(|(_, level)| level);
+        assert!(matches!(level, Some(0 | 1)), "{tab} › {group} is one section row at {width} pt, not five (got {level:?})");
+    }
+    // A card with room draws their first-level controls as one row.
+    for (tab, group) in [("Formulas", "Function Library"), ("Data", "Sort & Filter")] {
+        let h = app_at_size(vec2(3000.0, 900.0), tab);
+        let level = RibbonSections::levels(&h.ctx, tab).into_iter().find(|(name, _)| name == group).map(|(_, level)| level);
+        assert_eq!(level, Some(1), "{tab} › {group} is one row of first-level controls");
     }
 }
 

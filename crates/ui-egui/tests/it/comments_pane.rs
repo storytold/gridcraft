@@ -1,6 +1,6 @@
 //! The Comments pane: one Show Comments button, and a pane that keeps its width (#710).
 
-use egui::{Event, Modifiers, PointerButton, Pos2, pos2, vec2};
+use egui::{Event, Modifiers, PointerButton, Pos2, accesskit::Role, pos2, vec2};
 use egui_kittest::kittest::Queryable;
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -77,29 +77,14 @@ fn the_pane_does_not_grow_on_its_own_and_keeps_a_manual_resize() {
 }
 
 /// How many separate ribbon buttons show `tip` when hovered, scanning the big-button row.
-fn buttons_with_tip(h: &mut Harness, tip: &str) -> usize {
-    h.ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
-    let (mut count, mut inside) = (0, false);
-    let mut x = 2.0;
-    while x < WIDTH {
-        h.input_mut().events.push(Event::PointerMoved(pos2(x, 120.0)));
-        h.run_steps(6);
-        let shown = h.query_all_by_value(tip).next().is_some();
-        if shown && !inside {
-            count += 1;
-        }
-        inside = shown;
-        x += 8.0;
-    }
-    count
-}
-
 #[test]
 fn review_has_a_single_show_comments_button() {
     let mut h = harness();
     h.state_mut().ui.ribbon_tab = "Review".into();
     h.run_steps(2);
-    // The scan has to find a known single button, or a count of one below would prove nothing.
-    assert_eq!(buttons_with_tip(&mut h, "New Comment"), 1);
-    assert_eq!(buttons_with_tip(&mut h, "Comments pane"), 1);
+    let buttons = |h: &Harness, label: &str| h.get_all_by_role_and_label(Role::Button, label).count();
+    // A known single button first, or a count of one below would prove nothing.
+    assert_eq!(buttons(&h, "New Comment"), 1);
+    // At 1200 client points Comments is stacked in three rows; Show Comments is still drawn once.
+    assert_eq!(buttons(&h, "Show Comments"), 1);
 }
