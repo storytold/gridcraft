@@ -6,7 +6,10 @@ use gridcraft_core::CellError;
 
 use crate::ast::TrimMode;
 
+/// A formula token. More kinds may be added (another syntax's tokenizer can need one), so a
+/// match outside this crate keeps a catch-all arm.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Tok {
     Number(f64),
     Text(String),

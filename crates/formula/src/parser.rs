@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use gridcraft_core::addr::{letters_to_col, parse_a1_prefix};
-use gridcraft_core::{CellError, MAX_ROWS};
+use gridcraft_core::{CellError, MAX_COLS, MAX_ROWS};
 
 use crate::ast::{Anchor, BinOp, Expr, RefKind, Reference, SheetSel, StructItem, StructRef, TrimMode, UnOp};
 use crate::lexer::{Tok, Token, tokenize_locale};
@@ -58,16 +58,63 @@ pub fn parse_closing_parens<T>(src: &str, parse: impl Fn(&str) -> Result<T, Pars
 /// Parses tokens another syntax's tokenizer produced (OpenFormula, say) with this grammar, so a
 /// caller with its own lexer builds the same [`Expr`]. Spaces are taken as the tokenizer gave
 /// them: a [`Tok::Space`] is the intersection operator. A [`Tok::Ref`] is a reference the
-/// tokenizer has already read. The token list need not end with [`Tok::Eof`].
+/// tokenizer has already read; it must lie on the grid (rows and columns within Excel's limits)
+/// or the tokens are refused. Its ends are kept in the order given, as the text parser keeps
+/// `B2:A1`. The token list need not end with [`Tok::Eof`].
+///
+/// The tokens are bounded as text is: at most [`MAX_FORMULA_LEN`] tokens, and at most
+/// [`MAX_FORMULA_LEN`] characters of text, names, sheet names and structured-reference bodies
+/// in all.
+///
+/// Only this grammar's operators are read: OpenFormula's `~` union is not handled here, so a
+/// tokenizer for that syntax translates it itself.
 pub fn parse_tokens(toks: Vec<Token>) -> Result<Expr, ParseError> {
     if toks.len() > MAX_FORMULA_LEN {
         return Err(ParseError { msg: format!("formula has more than {MAX_FORMULA_LEN} tokens"), pos: 0 });
+    }
+    let mut chars = 0usize;
+    for t in &toks {
+        chars = chars.saturating_add(token_chars(&t.tok));
+        if chars > MAX_FORMULA_LEN {
+            return Err(ParseError { msg: format!("formula is longer than {MAX_FORMULA_LEN} characters"), pos: t.start });
+        }
+        if let Tok::Ref(r) = &t.tok
+            && !reference_on_grid(r)
+        {
+            return Err(ParseError { msg: "reference is outside the sheet".into(), pos: t.start });
+        }
     }
     let mut p = Parser { toks, i: 0, depth: 0, input: false };
     let e = p.expr(0, false)?;
     match p.peek() {
         Tok::Eof => Ok(e),
         t => Err(p.err(format!("unexpected {}", describe(t)))),
+    }
+}
+
+/// The characters of text a token carries (its strings and sheet names).
+fn token_chars(t: &Tok) -> usize {
+    let sheet = |s: &SheetSel| match s {
+        SheetSel::Current => 0,
+        SheetSel::Named(n) => n.chars().count(),
+        SheetSel::Span(a, b) => a.chars().count().saturating_add(b.chars().count()),
+    };
+    match t {
+        Tok::Text(s) | Tok::Word(s) | Tok::Func(s) | Tok::Struct(s) => s.chars().count(),
+        Tok::Sheet(a, b) => a.chars().count().saturating_add(b.as_deref().map_or(0, |b| b.chars().count())),
+        Tok::Ref(r) => sheet(&r.sheet),
+        _ => 0,
+    }
+}
+
+/// Whether every row and column a reference names is on the grid.
+fn reference_on_grid(r: &Reference) -> bool {
+    let anchor = |a: &Anchor| a.row < MAX_ROWS && a.col < MAX_COLS;
+    match &r.kind {
+        RefKind::Cell(a) => anchor(a),
+        RefKind::Range(a, b) => anchor(a) && anchor(b),
+        RefKind::Rows(r0, _, r1, _) => *r0 < MAX_ROWS && *r1 < MAX_ROWS,
+        RefKind::Cols(c0, _, c1, _) => *c0 < MAX_COLS && *c1 < MAX_COLS,
     }
 }
 

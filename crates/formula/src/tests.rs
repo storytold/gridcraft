@@ -590,6 +590,44 @@ fn parse_tokens_reads_another_syntaxs_tokens() -> Result<(), ParseError> {
     Ok(())
 }
 
+/// Tokens from another tokenizer are as hostile as text: a reference off the grid and text
+/// longer than a formula may be are refused; ends of a range keep their order, as in text.
+#[test]
+fn parse_tokens_refuses_hostile_tokens() -> Result<(), ParseError> {
+    use crate::lexer::{Tok, Token};
+    use gridcraft_core::{MAX_COLS, MAX_ROWS};
+    let one = |tok| crate::parse_tokens(vec![Token { tok, start: 0, end: 0 }]);
+    let anchor = |row, col| Anchor { row, col, row_abs: false, col_abs: false };
+    let reference = |kind| Tok::Ref(Reference { sheet: SheetSel::Current, kind });
+    for kind in [
+        RefKind::Cell(anchor(MAX_ROWS, 0)),
+        RefKind::Cell(anchor(0, MAX_COLS)),
+        RefKind::Cell(anchor(u32::MAX, u32::MAX)),
+        RefKind::Range(anchor(0, 0), anchor(MAX_ROWS, 0)),
+        RefKind::Rows(0, false, MAX_ROWS, false),
+        RefKind::Cols(MAX_COLS, false, 0, false),
+    ] {
+        assert!(one(reference(kind.clone())).is_err(), "{kind:?}");
+    }
+    // The last row and column are on the grid; reversed ends stay as given, as `B2:A1` parses.
+    let last = one(reference(RefKind::Cell(anchor(MAX_ROWS - 1, MAX_COLS - 1))))?;
+    assert_eq!(print(&last), "XFD1048576");
+    assert_eq!(one(reference(RefKind::Range(anchor(1, 1), anchor(0, 0))))?, parse("B2:A1")?);
+    // Text, names and sheet names count against the formula length.
+    let long = "x".repeat(crate::MAX_FORMULA_LEN + 1);
+    assert!(one(Tok::Text(long.clone())).is_err());
+    assert!(one(Tok::Word(long.clone())).is_err());
+    let sheet = Tok::Ref(Reference { sheet: SheetSel::Named(long), kind: RefKind::Cell(anchor(0, 0)) });
+    assert!(one(sheet).is_err());
+    let fits = "x".repeat(crate::MAX_FORMULA_LEN);
+    assert_eq!(one(Tok::Text(fits.clone()))?, Expr::Text(fits.into()));
+    // Many tokens that each fit still add up past the limit.
+    let half = "x".repeat(crate::MAX_FORMULA_LEN / 2 + 1);
+    let toks = [Tok::Text(half.clone()), Tok::Op("&"), Tok::Text(half)].into_iter().map(|tok| Token { tok, start: 0, end: 0 }).collect();
+    assert!(crate::parse_tokens(toks).is_err());
+    Ok(())
+}
+
 /// A dialect changes only what it states; the rest prints as A1.
 #[test]
 fn print_with_a_dialect() -> Result<(), ParseError> {

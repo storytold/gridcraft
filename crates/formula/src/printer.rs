@@ -245,13 +245,16 @@ pub trait Dialect {
     fn function<'a>(&self, name: &'a str) -> Cow<'a, str> {
         Cow::Borrowed(name)
     }
+    /// A logical constant (`TRUE`, `FALSE`).
     fn boolean(&self, b: bool) -> &'static str {
         if b { "TRUE" } else { "FALSE" }
     }
-    /// The separators between arguments, between an inline array's columns, and between its rows.
+    /// The separators between a call's arguments, between an inline array's columns, and between
+    /// its rows (`,` `,` `;` in A1).
     fn separators(&self) -> (char, char, char) {
         (',', ',', ';')
     }
+    /// A binary operator's symbol (`+`, `&`, `:`, a space for the intersection, ...).
     fn operator(&self, op: BinOp) -> &'static str {
         op.symbol()
     }
