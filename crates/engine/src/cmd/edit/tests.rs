@@ -660,6 +660,30 @@ fn wildcard_replace_follows_match_case() {
 }
 
 #[test]
+fn wildcard_replace_refuses_text_that_would_grow_past_a_cell() {
+    // As with a literal pattern: past a cell's limit the command fails and changes nothing, and
+    // the new text stops at the limit instead of being built whole first.
+    let mut s = Session::new();
+    s.new_workbook();
+    let long = "ab".repeat(5_000);
+    s.execute("range.setValues", json!({"range": "A1", "values": [[long.clone()], ["abc"]]})).unwrap();
+    for case in [false, true] {
+        let err = s.execute("edit.replace", json!({"what": "a?", "with": "x".repeat(1_000), "matchCase": case})).expect_err("too long");
+        assert!(err.to_string().contains("too long"), "{err}");
+        assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["value"], json!(long));
+        assert_eq!(s.execute("cell.get", json!({"cell": "A2"})).unwrap()["value"], json!("abc"));
+    }
+    let err = s.execute("edit.replace", json!({"what": "?c", "with": "x".repeat(32_767)})).expect_err("32,768 characters");
+    assert!(err.to_string().contains("too long"), "{err}");
+    s.execute("edit.replace", json!({"what": "?c", "with": "x".repeat(100)})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell": "A2"})).unwrap()["value"], json!(format!("a{}", "x".repeat(100))));
+    use super::find::replace_wildcard_within;
+    assert_eq!(replace_wildcard_within("abab", "a?", "xy", false, 4), Some(Some("xyxy".into())));
+    assert_eq!(replace_wildcard_within("abab", "a?", "xy", false, 3), None);
+    assert_eq!(replace_wildcard_within("abab", "z?", "xy", false, 4), Some(None));
+}
+
+#[test]
 fn next_corner_of_selection_goes_clockwise_and_anchors_there() {
     // #1442, as Excel does it: B2 → D2 → D4 → B4 → B2, the area stays selected, and Shift+arrows
     // then move the corner opposite the new active cell.
