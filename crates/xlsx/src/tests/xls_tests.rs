@@ -761,3 +761,72 @@ fn xls_short_window2_is_ignored() {
         assert_eq!(v(&wb, 0, "A1"), Value::Number(7.0));
     }
 }
+
+/// Shared-formula followers each keep their own text, charged to the workbook's text allowance:
+/// with no allowance left they keep their cached values, and the import still succeeds.
+#[test]
+fn shared_formula_text_counts_against_the_text_allowance() {
+    let file = compound("Workbook", &sample(false));
+    // The smallest allowance that reads every string: nothing is left for expanded formulas.
+    let left = (0..1000).find(|n| crate::xls::read_xls_budgeted(&file, crate::xls::Budget::with_text_left(*n), Default::default()).is_ok()).unwrap();
+    let (wb, report) = crate::xls::read_xls_budgeted(&file, crate::xls::Budget::with_text_left(left), Default::default()).unwrap();
+    assert_eq!(ftext(&wb, "B6"), None);
+    assert_eq!(v(&wb, 0, "B6"), Value::Number(20.0));
+    assert!(report.warnings.iter().any(|w| w.contains("shared-formula text")), "{:?}", report.warnings);
+    // an array anchor after the cut-off still gets its formula
+    assert!(ftext(&wb, "C5").is_some());
+    // With room, the followers keep their formulas.
+    let (wb, _) = crate::xls::read_xls_budgeted(&file, crate::xls::Budget::default(), Default::default()).unwrap();
+    assert!(ftext(&wb, "B6").is_some());
+}
+
+/// Shared-formula text is optional: an early sheet's expanded formulas must not use the allowance
+/// a later sheet's inline strings need, or the whole import fails for text that fits.
+#[test]
+fn shared_formulas_do_not_starve_a_later_sheets_text() {
+    let shared = cat(&[&[0x4C], &u16s(&[0, 0xFFFF]), &ptg_int(10), &[0x05]]);
+    let boundsheet = |pos: u32, name: &str| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, name.len() as u8, 0], name.as_bytes()]));
+    let globals = |p: [u32; 2]| cat(&[&bof(0x0005), &boundsheet(p[0], "One"), &boundsheet(p[1], "Two"), &eof()]);
+    let one = cat(&[
+        &bof(0x0010),
+        &formula(4, 1, num(10.0), &exp(4, 1)),
+        &rec(0x04BC, &cat(&[&u16s(&[4, 5]), &[1, 1, 0, 2], &(shared.len() as u16).to_le_bytes(), &shared])),
+        &formula(5, 1, num(20.0), &exp(4, 1)),
+        &eof(),
+    ]);
+    let two = cat(&[&bof(0x0010), &rec(0x0204, &cat(&[&cell(0, 0, 0), &xlstr("abcdefgh")])), &eof()]);
+    let p1 = globals([0; 2]).len() as u32;
+    let file = compound("Workbook", &cat(&[&globals([p1, p1 + one.len() as u32]), &one, &two]));
+    // The smallest allowance that reads every string leaves nothing for expanded formulas.
+    let left = (0..1000).find(|n| crate::xls::read_xls_budgeted(&file, crate::xls::Budget::with_text_left(*n), Default::default()).is_ok()).unwrap();
+    let (wb, _) = crate::xls::read_xls_budgeted(&file, crate::xls::Budget::with_text_left(left), Default::default()).unwrap();
+    assert_eq!(v(&wb, 1, "A1"), Value::text("abcdefgh"));
+    assert_eq!(ftext(&wb, "B6"), None);
+    assert_eq!(v(&wb, 0, "B6"), Value::Number(20.0));
+    let (wb, _) = crate::xls::read_xls_budgeted(&file, crate::xls::Budget::default(), Default::default()).unwrap();
+    assert!(ftext(&wb, "B6").is_some());
+}
+
+/// Two readable worksheets with the same name are refused at import, as they were when each sheet
+/// was added to the workbook as it was read.
+#[test]
+fn xls_duplicate_sheet_names_are_refused() {
+    let boundsheet = |name: &str| rec(0x0085, &cat(&[&0u32.to_le_bytes(), &[0, 0, name.len() as u8, 0], name.as_bytes()]));
+    let sheet = cat(&[&bof(0x0010), &eof()]);
+    let globals = |a: &str, b: &str| cat(&[&bof(0x0005), &boundsheet(a), &boundsheet(b), &eof()]);
+    let file = |a: &str, b: &str| {
+        let p = globals(a, b).len() as u32;
+        let mut g = cat(&[
+            &bof(0x0005),
+            &rec(0x0085, &cat(&[&p.to_le_bytes(), &[0, 0, a.len() as u8, 0], a.as_bytes()])),
+            &rec(0x0085, &cat(&[&(p + sheet.len() as u32).to_le_bytes(), &[0, 0, b.len() as u8, 0], b.as_bytes()])),
+            &eof(),
+        ]);
+        g.extend(&sheet);
+        g.extend(&sheet);
+        compound("Workbook", &g)
+    };
+    let err = crate::xls::read_xls_budgeted(&file("One", "one"), crate::xls::Budget::default(), Default::default()).unwrap_err().to_string();
+    assert!(err.contains("already taken"), "{err}");
+    assert!(crate::xls::read_xls_budgeted(&file("One", "Two"), crate::xls::Budget::default(), Default::default()).is_ok());
+}
