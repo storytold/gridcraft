@@ -7,7 +7,7 @@ use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
 use gridcraft_model::{Chart, ChartBorder, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
 
-use crate::drawing::{dml_color, srgb};
+use crate::drawing::{dml_color, dml_color_tinted, dml_color_xml, srgb};
 use crate::xml::{El, esc, num};
 
 // ---------------------------------------------------------------- reading
@@ -294,7 +294,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
 /// The chart area's border from the chart space's `c:spPr`: no `a:ln` (or one filled otherwise
 /// than plainly) leaves Excel's automatic border; `a:noFill` none; a solid or unfilled `a:ln`
 /// a line of its colour (or the automatic one) and width.
-fn read_border(sp: Option<&El>) -> ChartBorder {
+pub(crate) fn read_border(sp: Option<&El>) -> ChartBorder {
     let Some(ln) = sp.and_then(|p| p.child("ln")) else { return ChartBorder::Auto };
     if ln.child("noFill").is_some() {
         return ChartBorder::None;
@@ -303,27 +303,32 @@ fn read_border(sp: Option<&El>) -> ChartBorder {
         return ChartBorder::Auto;
     }
     let width = ln.attr_f64("w").map(|w| (w / EMU_PER_PT) as f32).filter(|w| w.is_finite() && *w >= 0.0);
-    let color = ln.child("solidFill").and_then(dml_color);
+    let color = ln.child("solidFill").and_then(dml_color_tinted);
     if color.is_none() && width.is_none() { ChartBorder::Auto } else { ChartBorder::Line { color, width } }
 }
 
 /// The chart space's `c:spPr` for its border; empty for the automatic one.
 fn border_xml(b: &ChartBorder, wb: &Workbook) -> String {
+    border_ln(b, wb).map(|ln| format!("<c:spPr>{ln}</c:spPr>")).unwrap_or_default()
+}
+
+/// The border's `a:ln`; `None` for the automatic one, which writes none.
+pub(crate) fn border_ln(b: &ChartBorder, wb: &Workbook) -> Option<String> {
     match b {
-        ChartBorder::Auto => String::new(),
-        ChartBorder::None => "<c:spPr><a:ln><a:noFill/></a:ln></c:spPr>".into(),
+        ChartBorder::Auto => None,
+        ChartBorder::None => Some("<a:ln><a:noFill/></a:ln>".into()),
         ChartBorder::Line { color, width } => {
-            let mut x = String::from("<c:spPr><a:ln");
+            let mut x = String::from("<a:ln");
             if let Some(w) = width.filter(|w| w.is_finite()) {
                 // ST_LineWidth: 0..=20116800 EMU.
                 let _ = write!(x, " w=\"{}\"", (f64::from(w) * EMU_PER_PT).round().clamp(0.0, 20_116_800.0) as i64);
             }
             x.push('>');
-            if let Some(c) = color.as_ref().and_then(|c| srgb(c, &wb.theme)) {
+            if let Some(c) = color.as_ref().and_then(|c| dml_color_xml(c, &wb.theme)) {
                 let _ = write!(x, "<a:solidFill>{c}</a:solidFill>");
             }
-            x.push_str("</a:ln></c:spPr>");
-            x
+            x.push_str("</a:ln>");
+            Some(x)
         }
     }
 }

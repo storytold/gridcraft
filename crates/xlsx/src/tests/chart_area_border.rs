@@ -151,3 +151,67 @@ fn chart_area_borders_as_excel_writes_them() {
     // An empty line element sets nothing.
     assert_eq!(border(r#"<c:spPr><a:ln/></c:spPr>"#), ChartBorder::Auto);
 }
+
+/// A theme colour is written as `a:schemeClr` with its tint as `lumMod`/`lumOff`, so after
+/// reopening the border still follows the theme.
+#[test]
+fn chart_area_border_keeps_its_theme_colour() {
+    let lighter = ChartBorder::Line { color: Some(Color::Theme(1, 850)), width: Some(0.75) };
+    let darker = ChartBorder::Line { color: Some(Color::Theme(0, -250)), width: None };
+    let bytes = write_xlsx(&workbook(&[lighter.clone(), darker.clone()])).unwrap();
+    let parts = chart_parts(&bytes);
+    assert!(parts[0].1.contains(
+        r#"<a:ln w="9525"><a:solidFill><a:schemeClr val="tx1"><a:lumMod val="15000"/><a:lumOff val="85000"/></a:schemeClr></a:solidFill></a:ln>"#
+    ));
+    assert!(parts[1].1.contains(r#"<a:ln><a:solidFill><a:schemeClr val="bg1"><a:lumMod val="75000"/></a:schemeClr></a:solidFill></a:ln>"#));
+    let (mut back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheets[0].charts[0].border, lighter);
+    assert_eq!(back.sheets[0].charts[1].border, darker);
+    // A new text colour moves the border with it.
+    let theme_colour = Color::Theme(1, 850);
+    let before = theme_colour.resolve(&back.theme);
+    back.theme.colors[1] = 0x1F_4E_79;
+    assert_ne!(theme_colour.resolve(&back.theme), before);
+    assert_eq!(chart_parts(&write_xlsx(&back).unwrap())[0].1, parts[0].1);
+}
+
+/// The light grey line Excel writes on charts (text colour at 15%) reads as that tint, not as
+/// plain text colour.
+#[test]
+fn chart_area_border_reads_theme_tints() {
+    let bytes = write_xlsx(&workbook(&[ChartBorder::Auto])).unwrap();
+    let border = |sp_pr: &str| read_xlsx(&with_chart_space_sp_pr(&bytes, sp_pr)).unwrap().0.sheets[0].charts[0].border.clone();
+    assert_eq!(
+        border(
+            r#"<c:spPr><a:ln w="9525" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="tx1"><a:lumMod val="15000"/><a:lumOff val="85000"/></a:schemeClr></a:solidFill><a:round/></a:ln></c:spPr>"#
+        ),
+        ChartBorder::Line { color: Some(Color::Theme(1, 850)), width: Some(0.75) }
+    );
+    assert_eq!(
+        border(r#"<c:spPr><a:ln><a:solidFill><a:schemeClr val="accent1"><a:lumMod val="50000"/></a:schemeClr></a:solidFill></a:ln></c:spPr>"#),
+        ChartBorder::Line { color: Some(Color::Theme(4, -500)), width: None }
+    );
+}
+
+/// Waterfall, histogram and the other chartEx charts keep their border too. One that sets none
+/// is written with the light line GridCraft has always given them, and reads back as that line.
+#[test]
+fn chartex_chart_area_borders_round_trip() {
+    let set = [
+        ChartBorder::None,
+        ChartBorder::Line { color: Some(Color::Rgb(0xFF0000)), width: Some(3.0) },
+        ChartBorder::Line { color: Some(Color::Theme(1, 850)), width: Some(0.75) },
+    ];
+    let mut wb = workbook(&[set.as_slice(), &[ChartBorder::Auto]].concat());
+    for c in &mut Arc::make_mut(&mut wb.sheets[0]).charts {
+        c.kind = ChartKind::Waterfall;
+        c.legend = LegendPos::None;
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let read: Vec<ChartBorder> = back.sheets[0].charts.iter().map(|c| c.border.clone()).collect();
+    assert!(back.sheets[0].charts.iter().all(|c| c.kind == ChartKind::Waterfall));
+    assert_eq!(read[..3], set);
+    assert_eq!(read[3], ChartBorder::Line { color: Some(Color::Theme(1, 750)), width: Some(0.75) });
+    assert_eq!(chart_parts(&write_xlsx(&back).unwrap()), chart_parts(&bytes));
+}

@@ -444,6 +444,40 @@ pub fn srgb(c: &Color, theme: &Theme) -> Option<String> {
     Some(format!("<a:srgbClr val=\"{r:02X}{g:02X}{b:02X}\"/>"))
 }
 
+/// DrawingML's names for the theme colours, by `Color::Theme` index.
+const SCHEME_NAMES: [&str; 12] = ["bg1", "tx1", "bg2", "tx2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink"];
+
+/// Like [`dml_color`], but a theme colour keeps its `lumMod`/`lumOff` as its tint, since both
+/// work on HSL luminance: darker is `lumMod` alone (tint `lumMod - 1`), lighter is `lumMod` and
+/// `lumOff` adding up to 100% (tint `lumOff`). Other pairs take `lumOff` as the tint.
+pub fn dml_color_tinted(e: &El) -> Option<Color> {
+    let c = dml_color(e)?;
+    let (Color::Theme(i, _), Some(sc)) = (c, e.child("schemeClr")) else { return Some(c) };
+    let pct = |n: &str| sc.child(n).and_then(|m| m.attr_f64("val")).filter(|v| v.is_finite()).map(|v| v / 100_000.0);
+    let tint = match (pct("lumMod"), pct("lumOff")) {
+        (_, Some(off)) if off > 0.0 => off,
+        (Some(m), _) => m - 1.0,
+        _ => 0.0,
+    };
+    Some(Color::Theme(i, (tint.clamp(-1.0, 1.0) * 1000.0).round() as i16))
+}
+
+/// A colour as DrawingML: a theme colour as `a:schemeClr`, its tint as `lumMod`/`lumOff`, so it
+/// follows a later theme change; anything else as its RGB.
+pub fn dml_color_xml(c: &Color, theme: &Theme) -> Option<String> {
+    let Color::Theme(i, tint) = *c else { return srgb(c, theme) };
+    let Some(name) = SCHEME_NAMES.get(usize::from(i)) else { return srgb(c, theme) };
+    let t = f64::from(tint.clamp(-1000, 1000)) / 1000.0;
+    let val = |v: f64| (v * 100_000.0).round() as i64;
+    Some(if tint > 0 {
+        format!("<a:schemeClr val=\"{name}\"><a:lumMod val=\"{}\"/><a:lumOff val=\"{}\"/></a:schemeClr>", val(1.0 - t), val(t))
+    } else if tint < 0 {
+        format!("<a:schemeClr val=\"{name}\"><a:lumMod val=\"{}\"/></a:schemeClr>", val(1.0 + t))
+    } else {
+        format!("<a:schemeClr val=\"{name}\"/>")
+    })
+}
+
 /// One drawing object to write.
 pub enum Obj<'a> {
     Image(&'a Image, String),
