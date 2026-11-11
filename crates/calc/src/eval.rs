@@ -39,6 +39,15 @@ const MAX_DEPTH: usize = 400;
 /// every legitimate call; hostile work that grows past one dimension (a LAMBDA that recurses
 /// or nest `MAP` into `MAP`) then stops at the same bound instead of squaring.
 const LAMBDA_FUEL: u64 = MAX_CELLS;
+/// Work one cell's formula may do: one unit per expression evaluated, per cell read from a
+/// reference, per array value handed to a function, per pair of areas intersected and per
+/// character of a defined name's formula parsed where the name is used. Each limit
+/// above bounds one kind of step, but a compact formula could still repeat bounded steps
+/// exponentially often (defined names that each use the one before twice, a computed criterion
+/// whose database function reruns it, an aggregate over a large array inside every LAMBDA call).
+/// Past this the formula is `#CALC!`. It is far above what a formula that reads every cell of a
+/// full-size array a few times needs.
+const EVAL_WORK: u64 = 16 * MAX_CELLS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Area {
@@ -145,6 +154,16 @@ pub struct Evaluator<'h> {
     /// runs out of work after the same number of calls that a legitimately wide one could
     /// make, instead of an amount of work that squares with array nesting (#2382).
     fuel: u64,
+    /// Work this cell still has left (see [`EVAL_WORK`]), shared by every branch of the formula
+    /// and by the formulas it computes on the way (names, computed criteria).
+    work: u64,
+    /// A spend found too little work left. A spend that leaves exactly nothing is fine, so this
+    /// can't be told from `work` alone; a database function checks it after its computed
+    /// criteria ran, whose failures it can't otherwise see.
+    exhausted: bool,
+    /// Computed criteria being evaluated, outermost first: one that is reached again from inside
+    /// itself counts as not met instead of repeating its work at every level.
+    active_criteria: Vec<(usize, CellRef)>,
 }
 
 struct FnCtx<'a, 'h> {
@@ -178,6 +197,9 @@ impl Ctx for FnCtx<'_, '_> {
     fn computed_criterion(&mut self, row: usize, col: usize, db: &Array, record: usize) -> Option<bool> {
         let area = self.criteria?;
         let at = area.range.start.offset(row as i64, col as i64).filter(|c| area.range.contains(*c))?;
+        if self.ev.active_criteria.contains(&(area.sheet, at)) {
+            return Some(false);
+        }
         let expr = self.ev.host.workbook().sheet(area.sheet)?.cell(at)?.formula.as_ref()?.expr_arc()?;
         let shifted = gridcraft_formula::adjust::shift_relative((*expr).clone(), record as i64 - 1, 0);
         let env = (0..db.cols)
@@ -197,11 +219,23 @@ impl Ctx for FnCtx<'_, '_> {
             calls: self.ev.calls,
             stack_top: self.ev.stack_top,
             fuel: self.ev.fuel,
+            work: self.ev.work,
+            exhausted: false,
+            active_criteria: std::mem::take(&mut self.ev.active_criteria),
         };
+        ev.active_criteria.push((area.sheet, at));
         let v = matches!(ev.value(&shifted).scalar().to_bool(), Ok(true));
         // The child's spend counts against this cell's budget.
         self.ev.fuel = ev.fuel;
+        self.ev.work = ev.work;
+        self.ev.exhausted |= ev.exhausted;
+        let mut active = std::mem::take(&mut ev.active_criteria);
+        active.pop();
+        self.ev.active_criteria = active;
         Some(v)
+    }
+    fn exhausted(&self) -> bool {
+        self.ev.exhausted
     }
     fn has_lambda(&self) -> bool {
         self.lambda.is_some()
@@ -220,7 +254,42 @@ impl Ctx for FnCtx<'_, '_> {
 
 impl<'h> Evaluator<'h> {
     pub fn new(host: &'h mut dyn Host, sheet: usize, at: CellRef) -> Self {
-        Evaluator { host, sheet, at, env: Vec::new(), depth: 0, calls: 0, stack_top: 0, fuel: LAMBDA_FUEL }
+        Evaluator {
+            host,
+            sheet,
+            at,
+            env: Vec::new(),
+            depth: 0,
+            calls: 0,
+            stack_top: 0,
+            fuel: LAMBDA_FUEL,
+            work: EVAL_WORK,
+            exhausted: false,
+            active_criteria: Vec::new(),
+        }
+    }
+
+    /// Spends `units` of this cell's work; `false` (and nothing left) when there isn't enough.
+    pub(crate) fn spend(&mut self, units: u64) -> bool {
+        match self.work.checked_sub(units) {
+            Some(w) => {
+                self.work = w;
+                true
+            }
+            None => {
+                self.work = 0;
+                self.exhausted = true;
+                false
+            }
+        }
+    }
+
+    /// Charges the values of an array (one unit per value; one for anything else).
+    pub(crate) fn spend_on(&mut self, v: &Value) -> bool {
+        match v {
+            Value::Array(a) => self.spend(a.data.len() as u64),
+            _ => self.spend(1),
+        }
     }
 
     /// Evaluates to a value (references are dereferenced; multi-cell → array).
@@ -270,18 +339,27 @@ impl<'h> Evaluator<'h> {
         }
         // A reference keeps its size, so the array has its shape and its blanks count
         // (`=A1:A10`, `SUMPRODUCT(--(A1:A10=""))`).
+        let range = self.read_range(a);
+        let (h, w) = (range.height() as usize, range.width() as usize);
+        if (h as u64) * (w as u64) > MAX_CELLS {
+            return Value::Error(CellError::Num);
+        }
+        if !self.spend((h as u64) * (w as u64)) {
+            return Value::Error(CellError::Calc);
+        }
+        let data = self.host.range_values(a.sheet, range);
+        Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
+    }
+
+    /// The block that reading `a` gives: `a` itself, or when it is large (or runs to the sheet's
+    /// edge) the part inside the sheet's used range.
+    pub(crate) fn read_range(&mut self, a: &Area) -> RangeRef {
         let cells = u64::from(a.range.height()) * u64::from(a.range.width());
         // `A:A`, `1:1` and `A2:A1048576` run to the edge of the sheet: they stand for "the rest of
         // the column", not for a block of a chosen size.
         let to_edge = a.range.end.row == MAX_ROWS - 1 || a.range.end.col == MAX_COLS - 1;
         let full_size = cells <= FULL_SIZE_CELLS || (!to_edge && cells <= FULL_SIZE_BOUNDED_CELLS);
-        let range = if full_size { a.range } else { self.trim(a) };
-        let (h, w) = (range.height() as usize, range.width() as usize);
-        if (h as u64) * (w as u64) > MAX_CELLS {
-            return Value::Error(CellError::Num);
-        }
-        let data = self.host.range_values(a.sheet, range);
-        Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
+        if full_size { a.range } else { self.trim(a) }
     }
 
     /// Trims the bottom/right of an area to the sheet's used range (keeps the top-left so
@@ -313,6 +391,9 @@ impl<'h> Evaluator<'h> {
         if self.stack_top.abs_diff(here) > STACK_BUDGET {
             self.host.stack_exhausted();
             return err(CellError::Num);
+        }
+        if !self.spend(1) {
+            return err(CellError::Calc);
         }
         self.depth += 1;
         if self.depth > MAX_DEPTH {
@@ -386,6 +467,11 @@ impl<'h> Evaluator<'h> {
         if let Some(def) = wb.name(bare, scope_sheet) {
             let text = def.formula.clone();
             let scope = def.scope.unwrap_or(self.sheet);
+            // Each use parses and evaluates the definition again: names that each use the one
+            // before twice double the work per name, so it is charged.
+            if !self.spend(text.len() as u64) {
+                return err(CellError::Calc);
+            }
             return match gridcraft_formula::parse_name(&text) {
                 Ok(expr) => {
                     // Relative references in a name are relative to A1: used here, they move by
@@ -584,6 +670,10 @@ impl<'h> Evaluator<'h> {
                 let (x, y) = (self.eval(a), self.eval(b));
                 match (x, y) {
                     (Ev::R(mut xa), Ev::R(ya)) => {
+                        // A union reused through LET doubles at each step: its areas count.
+                        if !self.spend((xa.len() as u64).saturating_add(ya.len() as u64)) {
+                            return err(CellError::Calc);
+                        }
                         xa.extend(ya);
                         Ev::R(xa)
                     }
@@ -595,6 +685,11 @@ impl<'h> Evaluator<'h> {
                 let (x, y) = (self.eval(a), self.eval(b));
                 match (x, y) {
                     (Ev::R(xa), Ev::R(ya)) => {
+                        // Every pair is looked at, and each may be kept: charged before the loop,
+                        // so unions squared through LET can't build an enormous list.
+                        if !self.spend((xa.len() as u64).saturating_mul(ya.len() as u64)) {
+                            return err(CellError::Calc);
+                        }
                         let mut out = Vec::new();
                         for p in &xa {
                             for q in &ya {
@@ -687,6 +782,113 @@ mod fuel_tests {
         let mut ev = Evaluator::new(&mut host, 0, CellRef::new(0, 0));
         ev.fuel = fuel;
         ev.value(&gridcraft_formula::parser::parse(src).unwrap_or_else(|e| panic!("{e}")))
+    }
+
+    /// Evaluates `src` in `wb` with `work` units of work, and the work left.
+    fn eval_work(wb: Workbook, work: u64, src: &str) -> (Value, u64) {
+        let mut host = Empty { wb };
+        let mut ev = Evaluator::new(&mut host, 0, CellRef::new(0, 0));
+        ev.work = work;
+        let v = ev.value(&gridcraft_formula::parser::parse(src).unwrap_or_else(|e| panic!("{e}")));
+        (v, ev.work)
+    }
+
+    fn is_calc(v: &Value) -> bool {
+        matches!(v, Value::Error(CellError::Calc))
+    }
+
+    /// Serves the workbook's stored values, for database functions to read.
+    struct Stored {
+        wb: Workbook,
+    }
+    impl Host for Stored {
+        fn workbook(&self) -> &Workbook {
+            &self.wb
+        }
+        fn cell_value(&mut self, sheet: usize, c: CellRef) -> Value {
+            self.wb.sheet(sheet).and_then(|s| s.cell(c)).map_or(Value::Empty, |cell| cell.value.clone())
+        }
+        fn now_serial(&self) -> f64 {
+            0.0
+        }
+        fn random(&mut self) -> f64 {
+            0.0
+        }
+    }
+
+    /// A computed criterion that runs out of work counts as not met for its record, which the
+    /// database function can't see: it must answer #CALC!, not a count that leaves records out.
+    #[test]
+    fn a_computed_criterion_out_of_work_makes_the_database_function_calc() {
+        use gridcraft_model::{Cell, Formula};
+        let mut wb = Workbook::new();
+        let name = |name: String, formula: String| gridcraft_model::DefinedName { name, scope: None, formula, comment: String::new(), hidden: false };
+        wb.names.push(name("Step0".into(), "1".into()));
+        for i in 1..=60 {
+            wb.names.push(name(format!("Step{i}"), format!("Step{}+Step{}", i - 1, i - 1)));
+        }
+        let at = |s: &str| CellRef::parse(s).unwrap();
+        let sheet = wb.sheet_mut(0).unwrap();
+        for (r, (n, age)) in [("name", Value::text("age")), ("a", Value::number(1.0)), ("b", Value::number(2.0))].into_iter().enumerate() {
+            sheet.cells.set(at(&format!("A{}", r + 1)), Cell::value(Value::text(n)));
+            sheet.cells.set(at(&format!("B{}", r + 1)), Cell::value(age));
+        }
+        sheet.cells.set(at("D1"), Cell::value(Value::text("Formula")));
+        let host_wb = |criterion: &str| {
+            let mut wb = wb.clone();
+            // A criteria cell is read by its value first (a blank one matches everything): give it
+            // the value a recalculation would have stored.
+            let mut cell = Cell::formula(Formula::new(criterion));
+            cell.value = Value::Bool(true);
+            wb.sheet_mut(0).unwrap().cells.set(at("D2"), cell);
+            wb
+        };
+        let run = |criterion: &str| {
+            let mut host = Stored { wb: host_wb(criterion) };
+            let mut ev = Evaluator::new(&mut host, 0, CellRef::new(9, 9));
+            ev.work = 100_000;
+            ev.value(&gridcraft_formula::parser::parse("=DCOUNT(A1:B3,\"age\",D1:D2)").unwrap())
+        };
+        assert_eq!(run("=B2>0"), Value::number(2.0), "a cheap criterion counts every record");
+        assert!(is_calc(&run("=Step60>0")), "{:?}", run("=Step60>0"));
+    }
+
+    #[test]
+    fn names_that_double_at_each_step_run_out_of_work() {
+        // Step1 = Step0+Step0, Step2 = Step1+Step1, ...: Step60 would evaluate Step0 2^60 times.
+        let mut wb = Workbook::default();
+        let name = |name: String, formula: String| gridcraft_model::DefinedName { name, scope: None, formula, comment: String::new(), hidden: false };
+        wb.names.push(name("Step0".into(), "1".into()));
+        for i in 1..=60 {
+            wb.names.push(name(format!("Step{i}"), format!("Step{}+Step{}", i - 1, i - 1)));
+        }
+        let (v, _) = eval_work(wb.clone(), EVAL_WORK, "=Step5");
+        assert_eq!(v, Value::number(32.0));
+        let (v, left) = eval_work(wb, 100_000, "=Step60");
+        assert!(is_calc(&v), "{v:?}");
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn intersections_of_unions_are_charged_per_pair() {
+        let wb = Workbook::default();
+        // 4 x 4 pairs, 4 of which meet.
+        let src = "=AREAS((A1,B1,C1,D1) (A1,B1,C1,D1))";
+        let (v, _) = eval_work(wb.clone(), EVAL_WORK, src);
+        assert_eq!(v, Value::number(4.0));
+        let (v, _) = eval_work(wb, 20, src);
+        assert!(is_calc(&v), "{v:?}");
+    }
+
+    #[test]
+    fn an_aggregate_inside_every_lambda_call_spends_work() {
+        let wb = Workbook::default();
+        // 100 calls, each summing the 10,000 values of a captured array: about a million units.
+        let src = "=LET(big,SEQUENCE(10000),SUM(MAP(SEQUENCE(100),LAMBDA(x,SUM(big)))))";
+        let (v, _) = eval_work(wb.clone(), 2_000_000, src);
+        assert_eq!(v, Value::number(100.0 * 50_005_000.0));
+        let (v, _) = eval_work(wb, 200_000, src);
+        assert!(is_calc(&v), "{v:?}");
     }
 
     #[test]
