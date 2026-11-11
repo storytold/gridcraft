@@ -301,14 +301,25 @@ fn regional_host_copy_and_cut_preserve_decimals_between_sessions() {
 
 /// Inspect only the painted Sample area: the correctly formatted grid must not satisfy this check.
 fn dialog_number_sample(h: &Harness) -> String {
-    let heading = h.get_by_label("Sample").rect();
-    let following = h.get_by_label("Type (custom format code):").rect();
-    let area = egui::Rect::from_min_max(egui::pos2(heading.left() - 1.0, heading.bottom()), egui::pos2(following.right() + 1.0, following.top()));
+    let text_position = |label: &str| {
+        h.output()
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                Shape::Text(t) if t.galley.job.text == label => Some(t.pos),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing painted label: {label}"))
+    };
+    let heading = text_position("Sample");
+    let following = text_position("Type (custom format code):");
     h.output()
         .shapes
         .iter()
         .filter_map(|s| match &s.shape {
-            Shape::Text(t) if area.contains(t.pos) => Some(t.galley.job.text.as_str()),
+            Shape::Text(t) if t.pos.x >= heading.x - 1.0 && t.pos.y > heading.y + 1.0 && t.pos.y < following.y - 1.0 => {
+                Some(t.galley.job.text.as_str())
+            }
             _ => None,
         })
         .collect::<Vec<_>>()
