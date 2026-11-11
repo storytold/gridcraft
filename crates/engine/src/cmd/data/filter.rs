@@ -181,7 +181,7 @@ pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
     }
 }
 
-/// Statistics use the original range, regardless of the other active criteria.
+/// Statistics use the original range within the grid, regardless of the other active criteria.
 fn filter_stats(sh: &Sheet, af: &AutoFilter) -> HashMap<usize, (Option<f64>, f64)> {
     let r = af.range;
     // Precompute per-criterion top10 threshold and average once, not per row.
@@ -189,7 +189,10 @@ fn filter_stats(sh: &Sheet, af: &AutoFilter) -> HashMap<usize, (Option<f64>, f64
     for (i, (off, c)) in af.criteria.iter().enumerate() {
         if matches!(c, FilterCriterion::Top10 { .. } | FilterCriterion::AboveAverage(_)) {
             let Some(col) = r.start.col.checked_add(*off) else { continue };
-            let mut nums: Vec<f64> = (r.start.row + 1..=r.end.row).filter_map(|row| sh.value(CellRef::new(row, col)).as_f64()).collect();
+            // Keep main's imported-range bound after extracting statistics from apply_filter.
+            let mut nums: Vec<f64> = (r.start.row.saturating_add(1)..=r.end.row.min(gridcraft_core::MAX_ROWS - 1))
+                .filter_map(|row| sh.value(CellRef::new(row, col)).as_f64())
+                .collect();
             let avg = if nums.is_empty() { 0.0 } else { nums.iter().sum::<f64>() / nums.len() as f64 };
             let thr = match c {
                 FilterCriterion::Top10 { bottom, percent, count } => {
@@ -287,7 +290,8 @@ impl<'a> FilterMatcher<'a> {
 pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
     let Some(sh) = wb.sheet(sheet) else { return };
     let Some(af) = sh.autofilter.clone() else { return };
-    let r = af.range;
+    // An imported range can name rows past the grid; none of those exist to hide.
+    let r = RangeRef::new(af.range.start, CellRef::new(af.range.end.row.min(gridcraft_core::MAX_ROWS - 1), af.range.end.col));
     let matcher = FilterMatcher::new(wb, sh, &af);
     // Reapplying a retained icon filter preserves visibility until icons can be evaluated.
     let has_icon = af.criteria.iter().any(|(_, c)| matches!(c, FilterCriterion::Icon { .. }));
@@ -358,7 +362,10 @@ fn column_filter_values(wb: &Workbook, sheet: usize, col: u32, eligible_only: bo
     let selected = af.criteria.iter().enumerate().find(|(_, (o, _))| *o == off);
     let matcher = FilterMatcher::new(wb, sh, af);
     let mut seen = std::collections::BTreeMap::new();
-    for row in af.range.start.row.saturating_add(1)..=af.range.end.row.min(af.range.start.row.saturating_add(1_000_000)) {
+    // Imported end rows cannot add choices beyond the grid either.
+    for row in
+        af.range.start.row.saturating_add(1)..=af.range.end.row.min(af.range.start.row.saturating_add(1_000_000)).min(gridcraft_core::MAX_ROWS - 1)
+    {
         if eligible_only && !matcher.row_matches(row, Some(off)) {
             continue;
         }

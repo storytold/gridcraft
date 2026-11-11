@@ -325,6 +325,38 @@ fn choices_are_bounded_at_the_last_sheet_row_and_empty_for_missing_data() {
 }
 
 #[test]
+fn imported_filters_keep_choices_and_statistics_inside_the_grid() {
+    use gridcraft_engine::core::{MAX_ROWS, RangeRef};
+    use gridcraft_engine::model::AutoFilter;
+
+    for criterion in [FilterCriterion::Top10 { bottom: false, percent: false, count: 1 }, FilterCriterion::AboveAverage(true)] {
+        let mut s = Session::new();
+        s.new_workbook();
+        let range = RangeRef::new(CellRef::new(MAX_ROWS - 3, 0), CellRef::new(MAX_ROWS + 1, 0));
+        let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        // Model data loaded from a malformed workbook can extend beyond the grid.
+        for (row, value) in [(MAX_ROWS - 2, 1.0), (MAX_ROWS - 1, 9.0), (MAX_ROWS, 100.0)] {
+            sh.set_cell(CellRef::new(row, 0), Cell { value: Value::Number(value), ..Default::default() });
+        }
+        sh.autofilter = Some(AutoFilter { range, criteria: vec![(0, criterion)] });
+        let doc = s.doc().unwrap();
+        let before = doc.wb.clone();
+        let expected = vec![("1".into(), false), ("9".into(), true)];
+        assert_eq!(filter_values(&doc.wb, 0, 0), expected, "out-of-grid data must not affect the choices or thresholds");
+        assert_eq!(filter_selection(&doc.wb, 0, 0, &[]), expected);
+        assert!(Arc::ptr_eq(&before, &s.doc().unwrap().wb), "queries must not trim the stored workbook");
+
+        s.execute("data.reapply", json!({})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert!(sh.is_row_hidden(MAX_ROWS - 2));
+        assert!(!sh.is_row_hidden(MAX_ROWS - 1), "the valid maximum still matches Top 1 and Above Average");
+        assert!(sh.rows.keys().all(|row| *row < MAX_ROWS), "no hidden-row entries may be created beyond the grid");
+        assert_eq!(sh.autofilter.as_ref().unwrap().range, range, "the scan bound does not rewrite imported metadata");
+        assert_eq!(sh.value(CellRef::new(MAX_ROWS, 0)), Value::Number(100.0));
+    }
+}
+
+#[test]
 fn merging_hidden_choices_preserves_the_active_criterion() {
     for (criterion, checked) in [
         (json!({"values": ["7"], "blanks": true}), [false, true, false, false, true]),
