@@ -856,6 +856,8 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
             let height = c.u16()?;
             if flags & 0x0002 == 0 && height > 0 {
                 st.sheet.default_row_height = pt_to_px(f64::from(height) / 20.0);
+                // Saved as before: a default other than the standard one is pinned.
+                st.sheet.default_row_custom = (st.sheet.default_row_height - gridcraft_model::DEFAULT_ROW_HEIGHT).abs() > 0.01;
             }
         }
         0x023E => {

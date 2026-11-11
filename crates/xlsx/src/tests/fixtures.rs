@@ -836,6 +836,24 @@ fn custom_widths_equal_to_the_default_round_trip() {
     assert_eq!(cols, [(Some(4), Some(7), true)]);
 }
 
+/// `customHeight` on `sheetFormatPr` stops Excel fitting the rows that have no height: a save writes
+/// it where the file had it, even at 15 points, and nowhere else. 14.4 points is the default Excel
+/// writes for Aptos Narrow (#1609).
+#[test]
+fn the_default_row_height_keeps_its_custom_flag_on_save() {
+    let written = |format: &str| {
+        let (wb, _) = read_xlsx(&minimal(&format!("{format}<sheetData/>"), &[], "", "")).unwrap();
+        let bytes = crate::write_xlsx(&wb).unwrap();
+        let mut pkg = crate::package::Package::open(&bytes).unwrap();
+        let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+        let f = sheet.child("sheetFormatPr").unwrap();
+        (f.attr_f64("defaultRowHeight"), f.flag("customHeight", false))
+    };
+    assert_eq!(written(r#"<sheetFormatPr defaultRowHeight="14.4"/>"#), (Some(14.4), false));
+    assert_eq!(written(r#"<sheetFormatPr defaultRowHeight="30" customHeight="1"/>"#), (Some(30.0), true));
+    assert_eq!(written(r#"<sheetFormatPr defaultRowHeight="15" customHeight="1"/>"#), (Some(15.0), true));
+}
+
 #[test]
 fn every_skipped_drawing_object_is_reported() {
     let frame = |row: u32, rid: &str| {

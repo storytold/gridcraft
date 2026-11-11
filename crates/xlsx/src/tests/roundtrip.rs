@@ -118,6 +118,7 @@ fn sample() -> Workbook {
     s.rows.insert(9, LineInfo { hidden: true, outline: 2, collapsed: true, ..Default::default() });
     s.rows.insert(10, LineInfo { style: Some(bold), ..Default::default() });
     s.default_row_height = 24.0;
+    s.default_row_custom = true;
     s.default_col_width = 72.0;
     s.merges.push(rr("A20:C21"));
     s.freeze = Some((1, 2));
@@ -552,6 +553,7 @@ fn assert_sheet_cells_and_settings(wb: &Workbook, back: &Workbook, a: &Sheet, b:
     assert_eq!(b.cols, a.cols);
     assert_eq!(b.rows, a.rows);
     assert_eq!(b.default_row_height, a.default_row_height);
+    assert_eq!(b.default_row_custom, a.default_row_custom);
     assert_eq!(b.default_col_width, a.default_col_width);
     assert_eq!(b.merges, a.merges);
     assert_eq!(b.freeze, a.freeze);

@@ -171,6 +171,7 @@ fn read_sheet_format(e: &El, sheet: &mut Sheet) {
         let px = pt_to_px(h);
         if px > 0.0 {
             sheet.default_row_height = px;
+            sheet.default_row_custom = e.flag("customHeight", false);
         }
     }
     if let Some(w) = e.attr_f64("defaultColWidth") {

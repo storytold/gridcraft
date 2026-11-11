@@ -110,6 +110,11 @@ pub struct Sheet {
     /// Default column width and row height in pixels at 96 dpi (a file stores row heights in points).
     pub default_col_width: f32,
     pub default_row_height: f32,
+    /// The default row height was set by hand (`customHeight` on `sheetFormatPr`), like
+    /// [`LineInfo::custom`] for one row. Whatever sets `default_row_height` says whether it does: a
+    /// save writes the flag from this alone, and Excel stops fitting the rows that have no height.
+    #[serde(default)]
+    pub default_row_custom: bool,
     pub merges: Vec<RangeRef>,
     /// Frozen rows and columns (top/left).
     pub freeze: Option<(u32, u32)>,
@@ -199,6 +204,7 @@ impl Sheet {
             rows: BTreeMap::new(),
             default_col_width: DEFAULT_COL_WIDTH,
             default_row_height: DEFAULT_ROW_HEIGHT,
+            default_row_custom: false,
             merges: vec![],
             freeze: None,
             tab_color: None,
