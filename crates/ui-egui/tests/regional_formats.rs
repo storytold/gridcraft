@@ -299,27 +299,27 @@ fn regional_host_copy_and_cut_preserve_decimals_between_sessions() {
     }
 }
 
-/// Inspect only the painted Sample area: the correctly formatted grid must not satisfy this check.
+/// Read only the dialog's sample, between its heading and code-field label in paint order.
+/// Grid headers on a layer behind the dialog must not contribute to the assertion.
 fn dialog_number_sample(h: &Harness) -> String {
-    let text_position = |label: &str| {
+    let label_index = |label: &str, from: usize| {
         h.output()
             .shapes
             .iter()
-            .find_map(|s| match &s.shape {
-                Shape::Text(t) if t.galley.job.text == label => Some(t.pos),
+            .enumerate()
+            .skip(from)
+            .find_map(|(i, s)| match &s.shape {
+                Shape::Text(t) if t.galley.job.text == label => Some(i),
                 _ => None,
             })
             .unwrap_or_else(|| panic!("missing painted label: {label}"))
     };
-    let heading = text_position("Sample");
-    let following = text_position("Type (custom format code):");
-    h.output()
-        .shapes
+    let start = label_index("Sample", 0) + 1;
+    let end = label_index("Type (custom format code):", start);
+    h.output().shapes[start..end]
         .iter()
         .filter_map(|s| match &s.shape {
-            Shape::Text(t) if t.pos.x >= heading.x - 1.0 && t.pos.y > heading.y + 1.0 && t.pos.y < following.y - 1.0 => {
-                Some(t.galley.job.text.as_str())
-            }
+            Shape::Text(t) => Some(t.galley.job.text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
