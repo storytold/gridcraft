@@ -165,7 +165,9 @@ impl Out {
         }
         self.images += 1;
         let file = format!("image{}.{ext}", self.images);
-        self.part(&format!("xl/media/{file}"), None, data.to_vec()); // indexes it in `media`
+        // Not through `part`: that would hash the same bytes again to index them.
+        self.parts.push((format!("xl/media/{file}"), data.to_vec()));
+        self.media.insert(key, file.clone());
         file
     }
     pub fn default_type(&mut self, ext: &str, ct: &str) {
