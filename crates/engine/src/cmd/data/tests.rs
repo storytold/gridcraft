@@ -557,3 +557,124 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+#[test]
+fn ignore_blank_accepts_any_value_while_a_limit_cell_is_blank() {
+    // #3780: with Ignore blank, Excel counts a value as valid when a cell the minimum or maximum
+    // refers to is blank (`Validation.IgnoreBlank`). The blank limit used to be read as 0, so
+    // `<= $A$1` refused 99 and Circle Invalid Data circled it.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "B1", "input": "99"})).unwrap();
+    s.execute("data.validation", json!({"range": "B1", "type": "whole", "operator": "lessOrEqual", "formula1": "=$A$1", "ignoreBlank": true}))
+        .unwrap();
+    let ok = |s: &mut Session, input: &str| s.execute("data.validate", json!({"cell": "B1", "input": input})).unwrap()["ok"] == json!(true);
+    assert!(ok(&mut s, "99"));
+    assert_eq!(s.execute("data.circleInvalid", json!({})).unwrap()["invalid"], json!([]));
+    let b1 = CellRef::parse("B1").unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let (reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+    assert!(check_validation(&reopened, 0, b1, "99").is_none(), "refused after reopening");
+
+    // The controls from the report, which already matched Excel: a 0 is not blank, …
+    s.execute("cell.set", json!({"cell": "A1", "input": "0"})).unwrap();
+    assert!(!ok(&mut s, "99"));
+    assert_eq!(s.execute("data.circleInvalid", json!({})).unwrap()["invalid"], json!(["B1"]));
+    // … a limit of 10 lets 5 in and keeps 99 out, …
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    assert!(ok(&mut s, "5"));
+    assert!(!ok(&mut s, "99"));
+    // … and without Ignore blank the blank limit reads as 0.
+    s.execute("cell.set", json!({"cell": "A1", "input": ""})).unwrap();
+    assert!(ok(&mut s, "99"));
+    s.execute("data.validation", json!({"range": "B1", "type": "whole", "operator": "lessOrEqual", "formula1": "=$A$1", "ignoreBlank": false}))
+        .unwrap();
+    assert!(!ok(&mut s, "99"));
+    assert!(ok(&mut s, "-1"));
+}
+
+#[test]
+fn ignore_blank_covers_a_blank_maximum_and_text_length_limits() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let ok =
+        |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == json!(true);
+    // Between 1 and a blank A2.
+    s.execute("data.validation", json!({"range": "B1", "type": "decimal", "operator": "between", "formula1": "1", "formula2": "=$A$2"})).unwrap();
+    assert!(ok(&mut s, "B1", "500"));
+    s.execute("cell.set", json!({"cell": "A2", "input": "100"})).unwrap();
+    assert!(!ok(&mut s, "B1", "500"));
+    assert!(ok(&mut s, "B1", "50"));
+    // Outside `between`, formula2 is not part of the rule, so a blank cell there lifts nothing.
+    s.execute("data.validation", json!({"range": "B2", "type": "whole", "operator": "greater", "formula1": "5", "formula2": "=$A$3"})).unwrap();
+    assert!(!ok(&mut s, "B2", "1"));
+    // A relative limit is read from the cell being checked: C1 has no limit in D1, C2 has 3 in D2.
+    s.execute("cell.set", json!({"cell": "D2", "input": "3"})).unwrap();
+    s.execute("data.validation", json!({"range": "C1:C2", "type": "textLength", "operator": "lessOrEqual", "formula1": "=D1"})).unwrap();
+    assert!(ok(&mut s, "C1", "longer"));
+    assert!(!ok(&mut s, "C2", "longer"));
+    assert!(ok(&mut s, "C2", "abc"));
+}
+
+#[test]
+fn ignore_blank_lets_a_custom_rule_pass_when_a_cell_it_refers_to_is_blank() {
+    // #3780: the report reproduced the same difference with a custom `=B1<=$A$1`.
+    let mut s = Session::new();
+    s.new_workbook();
+    let ok =
+        |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == json!(true);
+    s.execute("data.validation", json!({"range": "B1", "type": "custom", "formula1": "=B1<=$A$1"})).unwrap();
+    assert!(ok(&mut s, "B1", "99"));
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    assert!(!ok(&mut s, "B1", "99"));
+    assert!(ok(&mut s, "B1", "5"));
+    s.execute("cell.set", json!({"cell": "A1", "input": ""})).unwrap();
+    s.execute("data.validation", json!({"range": "B1", "type": "custom", "formula1": "=B1<=$A$1", "ignoreBlank": false})).unwrap();
+    assert!(!ok(&mut s, "B1", "99"));
+
+    // The cell being checked holds the value being typed, so it is not blank: `=C1>10` on an empty
+    // C1 still refuses 5.
+    s.execute("data.validation", json!({"range": "C1", "type": "custom", "formula1": "=C1>10"})).unwrap();
+    assert!(!ok(&mut s, "C1", "5"));
+    assert!(ok(&mut s, "C1", "11"));
+
+    // Blank cells inside a range don't count: the usual no-duplicates rule keeps refusing a
+    // repeat although most of its range is empty.
+    s.execute("cell.set", json!({"cell": "D2", "input": "x"})).unwrap();
+    s.execute("data.validation", json!({"range": "D1:D5", "type": "custom", "formula1": "=COUNTIF($D$1:$D$5,D1)=1"})).unwrap();
+    assert!(!ok(&mut s, "D1", "x"));
+    assert!(ok(&mut s, "D1", "y"));
+}
+
+#[test]
+fn ignore_blank_is_not_lifted_by_a_missing_formula_or_the_end_of_a_range() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let ok =
+        |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == json!(true);
+    // A rule saved without a minimum refuses everything, as it did before; an empty formula is
+    // not a blank cell.
+    s.execute("data.validation", json!({"range": "A1", "type": "whole", "operator": "lessOrEqual"})).unwrap();
+    assert!(!ok(&mut s, "A1", "5"));
+    // A running no-duplicates rule over `$D$1:INDEX(…)`: the blank D1 is the end of a range, not a
+    // limit, so the repeat in D3 is still refused.
+    s.execute("cell.set", json!({"cell": "D2", "input": "x"})).unwrap();
+    s.execute("data.validation", json!({"range": "D1:D9", "type": "custom", "formula1": "=COUNTIF($D$1:INDEX($D:$D,ROW(D1)),D1)=1"})).unwrap();
+    assert!(!ok(&mut s, "D3", "x"));
+    assert!(ok(&mut s, "D3", "y"));
+}
+
+#[test]
+fn ignore_blank_lets_a_custom_rule_pass_when_its_table_cell_is_blank() {
+    // A structured reference to one cell counts like a cell reference: `[@Limit]` is blank in row 3.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["Qty", "Limit"], [null, 10], [null, null]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
+    s.execute("data.validation", json!({"range": "A2:A3", "type": "custom", "formula1": "=A2<=[@Limit]"})).unwrap();
+    let ok =
+        |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == json!(true);
+    assert!(!ok(&mut s, "A2", "99"));
+    assert!(ok(&mut s, "A2", "5"));
+    assert!(ok(&mut s, "A3", "99"));
+}
