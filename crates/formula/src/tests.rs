@@ -229,6 +229,10 @@ fn rename_sheet_updates_qualified_names() -> Result<(), Box<dyn std::error::Erro
     let e = rename_sheet(parse("Data!MyName")?, "Data", "It's");
     assert_eq!(e, Expr::Name("It's!MyName".into()));
     assert_eq!(print(&rename_sheet(e, "It's", "Totals")), "Totals!MyName");
+    // A sheet whose name holds a '!' splits at the last one: renaming "A" leaves "A!B"'s names alone.
+    let e = Expr::Name("A!B!MyName".into());
+    assert_eq!(rename_sheet(e.clone(), "A", "Z"), e);
+    assert_eq!(rename_sheet(e, "a!b", "Z"), Expr::Name("Z!MyName".into()));
     Ok(())
 }
 

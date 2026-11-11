@@ -553,28 +553,24 @@ fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(t) = cx.sheet_mut(si)?.tables.get_mut(ti) {
             t.name = name.clone();
         }
-        // Structured references follow the rename.
-        for i in 0..cx.wb.sheets.len() {
-            let keys: Vec<(CellRef, std::sync::Arc<Formula>)> =
-                cx.wb.sheets.get(i).map(|s| s.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect()).unwrap_or_default();
-            // A bare name that is also a defined name resolves to the defined name, so it is not the table.
-            let shadowed = cx.wb.name(&old, i).is_some();
-            let Some(sh) = cx.wb.sheet_mut(i) else { continue };
-            for (c, f) in keys {
-                let Some(e) = f.expr() else { continue };
-                let ne = e.map(&mut |x| match x {
-                    gridcraft_formula::Expr::Struct(mut st) if st.table.eq_ignore_ascii_case(&old) => {
-                        st.table = name.clone();
-                        gridcraft_formula::Expr::Struct(st)
-                    }
-                    gridcraft_formula::Expr::Name(n) if !shadowed && n.eq_ignore_ascii_case(&old) => gridcraft_formula::Expr::Name(name.clone()),
-                    o => o,
-                });
-                if let Some(cell) = sh.cells.get_mut(c) {
-                    cell.formula = Some(std::sync::Arc::new(Formula::from_expr(ne)));
+        // Every reference to the table follows the rename. A bare name that is also a defined
+        // name where it is held resolves to the defined name, so it is not the table.
+        let shadowed: Vec<bool> = (0..cx.wb.sheets.len()).map(|i| cx.wb.name(&old, i).is_some()).collect();
+        let sheet_of: std::collections::HashMap<String, usize> =
+            cx.wb.sheets.iter().enumerate().map(|(i, s)| (s.name.to_ascii_lowercase(), i)).collect();
+        let rename = |sheet: Option<usize>, e: gridcraft_formula::Expr| {
+            let shadow = sheet.is_some_and(|i| shadowed.get(i).copied().unwrap_or(false));
+            e.map(&mut |x| match x {
+                gridcraft_formula::Expr::Struct(mut st) if st.table.eq_ignore_ascii_case(&old) => {
+                    st.table = name.clone();
+                    gridcraft_formula::Expr::Struct(st)
                 }
-            }
-        }
+                gridcraft_formula::Expr::Name(n) if !shadow && n.eq_ignore_ascii_case(&old) => gridcraft_formula::Expr::Name(name.clone()),
+                o => o,
+            })
+        };
+        cx.wb.rewrite_references(&|host, e| rename(host.sheet, e));
+        crate::cmd::edit::rewrite_python_refs(&mut cx.wb, &|host, e| rename(sheet_of.get(&host.to_ascii_lowercase()).copied(), e))?;
         cx.structural = true;
         Ok(Json::Null)
     })
@@ -1742,26 +1738,15 @@ fn clear_cf(s: &mut Session, p: &Json) -> Result<Json> {
                 // The relative formulas are written for the top-left cell: when it goes, they're
                 // rewritten for the new one, so the areas left keep reading the same cells.
                 if let (Some(from), Some(to)) = (before, RangeRef::top_left(&cf.ranges)) {
-                    rebase_cf_formulas(&mut cf.rule, from, to);
+                    for f in cf.rule.relative_formulas_mut() {
+                        *f = crate::cmd::data::move_rule_formula(f, from, to);
+                    }
                 }
             }
             sh.cond_formats.retain(|c| !c.ranges.is_empty());
         }
         Ok(Json::Null)
     })
-}
-
-/// Moves the relative references of a rule's per-cell formulas written for `from` to `to`.
-fn rebase_cf_formulas(rule: &mut CfRule, from: CellRef, to: CellRef) {
-    let mv = |f: &str| crate::cmd::data::move_rule_formula(f, from, to);
-    match rule {
-        CfRule::CellIs { a, b, .. } => {
-            *a = mv(a);
-            *b = b.as_deref().map(mv);
-        }
-        CfRule::Expression { formula, .. } => *formula = mv(formula),
-        _ => {}
-    }
 }
 
 fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {

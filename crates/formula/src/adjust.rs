@@ -266,8 +266,9 @@ pub fn rename_sheet(e: Expr, old: &str, new: &str) -> Expr {
         }
         // Sheet-qualified defined name `Old!MyName` is stored as one string, with the bare sheet name as the parser
         // stores it (the printer adds the quotes).
-        Expr::Name(n) => match n.split_at_checked(old.len()) {
-            Some((head, rest)) if head.eq_ignore_ascii_case(old) && rest.starts_with('!') => Expr::Name(format!("{new}{rest}")),
+        // A sheet name may itself hold a '!', so the name splits at its last one.
+        Expr::Name(n) => match n.rsplit_once('!') {
+            Some((sheet, rest)) if sheet.eq_ignore_ascii_case(old) => Expr::Name(format!("{new}!{rest}")),
             _ => Expr::Name(n),
         },
         other => other,

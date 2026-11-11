@@ -5649,3 +5649,190 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
 }
+
+/// Renaming a sheet renames every reference to it: a PivotTable's source, a conditional
+/// format's formula and a validation's list follow it.
+#[test]
+fn sheet_rename_renames_every_reference() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["Region", "Sales"], ["East", 1], ["West", 2]]})).unwrap();
+    s.execute("insert.pivotTable", json!({"source": "Sheet1!$A$1:$B$3", "destination": "Sheet1!E3", "rows": ["Region"], "values": ["Sales"]}))
+        .unwrap();
+    s.execute("sheet.rename", json!({"name": "Data"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    assert_eq!(wb.sheets[0].pivots[0].source, "Data!$A$1:$B$3");
+    s.execute("pivot.refresh", json!({})).unwrap();
+}
+
+/// Every edit that moves references moves those in conditional formats and validation too:
+/// inserting rows, renaming a name, deleting a sheet; and deleting a sheet leaves arrays be.
+#[test]
+fn reference_edits_reach_conditional_formats_and_validation() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Lists"})).unwrap();
+    s.execute("range.setValues", json!({"range": "Lists!A1:A3", "values": [["a"], ["b"], ["c"]]})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 1})).ok();
+    let sheet1 = s.doc().unwrap().wb.sheet_index("Sheet1").unwrap();
+    s.execute("sheet.activate", json!({"sheet": sheet1})).ok();
+    s.execute("formulas.defineName", json!({"name": "Opts", "refersTo": "=Lists!$A$1:$A$3"})).unwrap();
+    s.execute("data.validation", json!({"range": "Sheet1!B1:B5", "type": "list", "formula1": "=Opts"})).unwrap();
+    s.execute("data.validation", json!({"range": "Sheet1!E1:E5", "type": "list", "formula1": "=Lists!$A$1:$A$3"})).unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "Sheet1!C1:C5", "rule": {"type": "expression", "formula": "=C1>$D$3"}, "style": {"fill": "#FFC7CE"}}),
+    )
+    .unwrap();
+    s.execute("cell.set", json!({"cell": "Sheet1!G2", "input": "=B2:B3*2", "array": true})).unwrap();
+    let sh = |s: &Session| s.doc().unwrap().wb.sheet(s.doc().unwrap().wb.sheet_index("Sheet1").unwrap()).cloned().unwrap();
+    // Inserting a row above moves the rule's references with its range.
+    s.execute("home.insertRows", json!({"rows": "1:1", "sheet": "Sheet1"})).unwrap();
+    let rule = match &sh(&s).cond_formats[0].rule {
+        gridcraft_model::CfRule::Expression { formula, .. } => formula.clone(),
+        _ => String::new(),
+    };
+    assert_eq!(rule.trim_start_matches('='), "C2>$D$4");
+    // Renaming a name renames it in validation lists.
+    s.execute("formulas.defineName", json!({"name": "Choices", "oldName": "Opts", "refersTo": "=Lists!$A$1:$A$3"})).unwrap();
+    assert!(sh(&s).validations.iter().any(|v| v.f1.trim_start_matches('=') == "Choices"));
+    // Deleting the sheet a list comes from makes it #REF!, and keeps the array formula.
+    let array_before = sh(&s).cells.iter().find_map(|(_, c)| c.formula.as_ref().and_then(|f| f.array));
+    assert!(array_before.is_some());
+    let lists = s.doc().unwrap().wb.sheet_index("Lists").unwrap();
+    s.execute("home.deleteSheet", json!({"sheet": lists})).unwrap();
+    assert!(sh(&s).validations.iter().any(|v| v.f1.contains("#REF!")), "{:?}", sh(&s).validations.iter().map(|v| v.f1.clone()).collect::<Vec<_>>());
+    assert_eq!(sh(&s).cells.iter().find_map(|(_, c)| c.formula.as_ref().and_then(|f| f.array)), array_before);
+}
+
+/// A copied sheet's chart plots the copy's data.
+#[test]
+fn a_copied_sheets_chart_plots_the_copy() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["x", "y"], ["a", 1], ["b", 2]]})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:B3", "type": "column"})).unwrap();
+    s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let copy = wb.sheets.iter().find(|sh| sh.name != "Sheet1").unwrap();
+    assert!(copy.charts[0].series[0].values.contains(&copy.name), "{}", copy.charts[0].series[0].values);
+}
+
+/// A rule's formulas follow its ranges: deleting its top-left row re-hosts them at the cell
+/// that takes its place, and a cut takes rules with their cells, moving their references once.
+#[test]
+fn rule_formulas_follow_their_ranges() {
+    let rule_text = |s: &Session| -> (Vec<String>, Vec<String>) {
+        let sh = s.doc().unwrap().wb.sheets[0].clone();
+        let cf = sh.cond_formats.iter().map(|c| match &c.rule {
+            gridcraft_model::CfRule::Expression { formula, .. } => {
+                format!("{}@{}", formula.trim_start_matches('='), c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(","))
+            }
+            _ => String::new(),
+        });
+        let dv = sh
+            .validations
+            .iter()
+            .map(|v| format!("{}@{}", v.f1.trim_start_matches('='), v.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(",")));
+        (cf.collect(), dv.collect())
+    };
+    let mut s = s();
+    s.execute("home.conditionalFormat", json!({"range": "A2:A5", "rule": {"type": "expression", "formula": "=B2>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("data.validation", json!({"range": "C2:C5", "type": "custom", "formula1": "=D2>0"})).unwrap();
+    s.execute("home.deleteRows", json!({"rows": "2:2"})).unwrap();
+    assert_eq!(rule_text(&s), (vec!["B2>0@A2:A4".to_string()], vec!["D2>0@C2:C4".to_string()]));
+    // Cut A2:A4 to F2: the rule goes with the cells, still testing the cells beside them.
+    s.execute("edit.cut", json!({"range": "A2:A4"})).unwrap();
+    s.execute("edit.paste", json!({"at": "F2"})).unwrap();
+    assert_eq!(rule_text(&s).0, vec!["B2>0@F2:F4".to_string()]);
+    // An overlapping cut moves a self-referring rule's reference once.
+    let mut s = super::tests::s();
+    s.execute("data.validation", json!({"range": "A1:A2", "type": "custom", "formula1": "=A1>0"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:A2"})).unwrap();
+    s.execute("edit.paste", json!({"at": "A2"})).unwrap();
+    assert_eq!(rule_text(&s).1, vec!["A2>0@A2:A3".to_string()]);
+}
+
+/// Renaming a table renames every reference to it (a PivotTable's source, a name, a rule) and
+/// leaves formulas that don't name it, legacy arrays included, as they are.
+#[test]
+fn table_rename_renames_every_reference() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["k", "v"], ["a", 1], ["b", 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3"})).unwrap();
+    let table = s.doc().unwrap().wb.sheets[0].tables[0].name.clone();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=A2:A3", "array": true})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Tot", "refersTo": format!("=SUM({table}[v])")})).unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "F1:F3", "rule": {"type": "expression", "formula": format!("=COUNT({table}[v])>0")}, "style": {"fill": "#FFC7CE"}}),
+    )
+    .unwrap();
+    s.execute("insert.pivotTable", json!({"source": table, "destination": "Sheet1!H3", "rows": ["k"], "values": ["v"]})).unwrap();
+    let array = s.doc().unwrap().wb.sheets[0].cell(CellRef::new(0, 3)).and_then(|c| c.formula.clone()).unwrap();
+    s.execute("table.rename", json!({"table": table, "name": "Data"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let sh = &wb.sheets[0];
+    assert_eq!(
+        sh.cell(CellRef::new(0, 3)).and_then(|c| c.formula.clone()).map(|f| (f.text.clone(), f.array, f.dynamic)),
+        Some((array.text.clone(), array.array, array.dynamic))
+    );
+    assert_eq!(wb.names.iter().find(|n| n.name == "Tot").map(|n| n.formula.clone()).as_deref(), Some("SUM(Data[v])"));
+    assert!(matches!(&sh.cond_formats[0].rule, gridcraft_model::CfRule::Expression { formula, .. } if formula.contains("Data[v]")));
+    assert_eq!(sh.pivots[0].source, "Data");
+    s.execute("data.refreshAll", json!({})).unwrap();
+}
+
+/// Rules moved whole keep their formulas; a range an edit leaves in place keeps them too;
+/// thresholds are read as written; a cut to another sheet names the source sheet's cells.
+#[test]
+fn rules_moved_whole_or_left_in_place_keep_their_formulas() {
+    let cf = |s: &Session, sheet: usize| -> Vec<String> {
+        s.doc().unwrap().wb.sheets[sheet]
+            .cond_formats
+            .iter()
+            .map(|c| match &c.rule {
+                gridcraft_model::CfRule::Expression { formula, .. } => {
+                    format!("{}@{}", formula.trim_start_matches('='), c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(","))
+                }
+                gridcraft_model::CfRule::DataBar { min: gridcraft_model::CfValueKind::Formula(f), .. } => format!("bar {f}"),
+                _ => String::new(),
+            })
+            .collect()
+    };
+    let rule = |s: &mut Session, range: &str, f: &str| {
+        s.execute("home.clearRules", json!({"whole": true})).ok();
+        s.execute("home.conditionalFormat", json!({"range": range, "rule": {"type": "expression", "formula": f}, "style": {"fill": "#FFC7CE"}}))
+            .unwrap();
+    };
+    let mut s = s();
+    rule(&mut s, "B1:B5", "=C1>0");
+    s.execute("sheet.moveColumns", json!({"cols": "B:B", "before": 4})).unwrap();
+    // The column moved whole: the rule tests the column that was beside it (C, now B), as a
+    // formula there would.
+    assert_eq!(cf(&s, 0), vec!["B1>0@D1:D5".to_string()]);
+    let mut s = super::tests::s();
+    rule(&mut s, "A1:C1", "=B1>0");
+    s.execute("home.deleteCells", json!({"range": "A1", "shift": "up"})).unwrap();
+    assert_eq!(cf(&s, 0), vec!["B1>0@A1:C1".to_string()]);
+    // A data bar's threshold formula is read as written: deleting the first row only moves it.
+    let mut s = super::tests::s();
+    s.execute("home.conditionalFormat", json!({"range": "A1:A10", "rule": {"type": "dataBar", "min": {"type": "formula", "value": "MIN(C1:C10)"}}}))
+        .unwrap();
+    assert_eq!(cf(&s, 0), vec!["bar MIN(C1:C10)".to_string()]);
+    s.execute("home.deleteRows", json!({"rows": "1:1"})).unwrap();
+    assert_eq!(cf(&s, 0), vec!["bar MIN(C1:C9)".to_string()]);
+    // A cut to another sheet: the rule still reads the source sheet's cells.
+    let mut s = super::tests::s();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    let one = s.doc().unwrap().wb.sheet_index("Sheet1").unwrap();
+    let two = s.doc().unwrap().wb.sheet_index("Two").unwrap();
+    s.execute("sheet.activate", json!({"sheet": one})).ok();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "Sheet1!A2:A4", "rule": {"type": "expression", "formula": "=B2>0"}, "style": {"fill": "#FFC7CE"}}),
+    )
+    .unwrap();
+    s.execute("edit.cut", json!({"range": "Sheet1!A2:A4"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": two})).unwrap();
+    s.execute("edit.paste", json!({"at": "F2"})).unwrap();
+    assert_eq!(cf(&s, two), vec!["Sheet1!B2>0@F2:F4".to_string()]);
+}

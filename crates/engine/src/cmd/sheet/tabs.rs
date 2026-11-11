@@ -1,4 +1,4 @@
-use super::{Arc, CellRef, Ctx, EngineError, Json, Result, Session, Sheet, Visibility, bad, bool_param, edit, json, ok, str_param, target_sheet};
+use super::{Arc, Ctx, EngineError, Json, Result, Session, Sheet, Visibility, bad, bool_param, edit, json, ok, str_param, target_sheet};
 
 pub(super) fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     if s.doc()?.wb.protected_structure {
@@ -50,35 +50,15 @@ pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc_mut()?;
     edit_doc(d, |cx| {
         cx.wb.sheets.remove(i);
-        for si in 0..cx.wb.sheets.len() {
-            let keys: Vec<(CellRef, Arc<gridcraft_model::Formula>)> =
-                cx.wb.sheets.get(si).map(|s| s.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect()).unwrap_or_default();
-            let Some(sh) = cx.wb.sheet_mut(si) else { continue };
-            for (c, f) in keys {
-                if let Some(e) = f.expr() {
-                    let ne = gridcraft_formula::adjust::delete_sheet(e, &name, &order);
-                    if let Some(cell) = sh.cells.get_mut(c) {
-                        cell.formula = Some(Arc::new(gridcraft_model::Formula::from_expr(ne)));
-                    }
-                }
-            }
-        }
-        crate::cmd::edit::rewrite_python_refs(&mut cx.wb, &|_, e| gridcraft_formula::adjust::delete_sheet(e, &name, &order))?;
-        // Chart series into the deleted sheet become #REF!, like formulas.
-        crate::cmd::edit::rewrite_cell_links(&mut cx.wb, |_, e| gridcraft_formula::adjust::delete_sheet(e, &name, &order));
         cx.wb.names.retain(|n| n.scope != Some(i));
+        // Every reference into the deleted sheet becomes #REF!.
+        cx.wb.rewrite_references(&|_, e| gridcraft_formula::adjust::delete_sheet(e, &name, &order));
+        crate::cmd::edit::rewrite_python_refs(&mut cx.wb, &|_, e| gridcraft_formula::adjust::delete_sheet(e, &name, &order))?;
         for n in cx.wb.names.iter_mut() {
             if let Some(sc) = n.scope.as_mut()
                 && *sc > i
             {
                 *sc -= 1;
-            }
-            // Names referring to the sheet become #REF!.
-            if let Ok(e) = gridcraft_formula::parse_name(&n.formula) {
-                let ne = gridcraft_formula::adjust::delete_sheet(e.clone(), &name, &order);
-                if ne != e {
-                    n.formula = gridcraft_formula::print(&ne);
-                }
             }
         }
         if cx.wb.active_sheet() >= cx.wb.sheets.len() || cx.wb.active_sheet() > i {
@@ -104,21 +84,10 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let old = cx.wb.sheet(i).map(|s| s.name.clone()).unwrap_or_default();
         cx.sheet_mut(i)?.name = name.clone();
+        // Every reference the workbook holds follows the sheet.
+        cx.wb.rewrite_references(&|_, e| gridcraft_formula::adjust::rename_sheet(e, &old, &name));
         for si in 0..cx.wb.sheets.len() {
-            let keys: Vec<(CellRef, Arc<gridcraft_model::Formula>)> =
-                cx.wb.sheets.get(si).map(|s| s.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect()).unwrap_or_default();
             let Some(sh) = cx.wb.sheet_mut(si) else { continue };
-            for (c, f) in keys {
-                if let Some(e) = f.expr() {
-                    let ne = gridcraft_formula::adjust::rename_sheet(e, &old, &name);
-                    let text = gridcraft_formula::print(&ne);
-                    if text != f.text
-                        && let Some(cell) = sh.cells.get_mut(c)
-                    {
-                        cell.formula = Some(Arc::new(gridcraft_model::Formula::from_expr(ne)));
-                    }
-                }
-            }
             for ch in sh.charts.iter_mut() {
                 // A PivotChart follows its PivotTable's sheet.
                 if let Some((sheet, pivot)) = ch.pivot.as_deref().and_then(crate::pivot::parse_chart_link)
@@ -126,12 +95,6 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 {
                     ch.pivot = Some(crate::pivot::chart_link(&name, &pivot));
                 }
-            }
-        }
-        crate::cmd::edit::rewrite_cell_links(&mut cx.wb, |_, e| gridcraft_formula::adjust::rename_sheet(e, &old, &name));
-        for n in cx.wb.names.iter_mut() {
-            if let Ok(e) = gridcraft_formula::parse_name(&n.formula) {
-                n.formula = gridcraft_formula::print(&gridcraft_formula::adjust::rename_sheet(e, &old, &name));
             }
         }
         crate::cmd::edit::rewrite_python_refs(&mut cx.wb, &|_, e| gridcraft_formula::adjust::rename_sheet(e, &old, &name))?;
@@ -165,6 +128,21 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 .find(|nm| cx.wb.sheet_index(nm).is_none())
                 .unwrap_or(base.clone());
             sh.name = name;
+            // A copied sheet's charts plot the copy's own data, as Excel's do (its formulas keep
+            // what they name).
+            let fix = |t: &str| match gridcraft_formula::parse(t.trim_start_matches('=')) {
+                Ok(e) => gridcraft_formula::print(&gridcraft_formula::adjust::rename_sheet(e, &base, &sh.name)),
+                Err(_) => t.to_string(),
+            };
+            for ch in &mut sh.charts {
+                for se in &mut ch.series {
+                    se.values = fix(&se.values);
+                    for t in [&mut se.categories, &mut se.name, &mut se.bubble_sizes].into_iter().flatten() {
+                        *t = fix(t);
+                    }
+                }
+                ch.source = ch.source.as_deref().map(fix);
+            }
             sh.tables.clear(); // table names must be unique
             sh.preserved = None; // kept file content (form controls, OLE objects…) stays with the original
             // Object ids are unique across the workbook (selection and the `{kind, id}` commands

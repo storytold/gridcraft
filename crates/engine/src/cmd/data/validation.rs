@@ -37,21 +37,69 @@ fn subtract_range(r: RangeRef, cut: &RangeRef) -> Vec<RangeRef> {
     out
 }
 
+/// A conditional format or validation: ranges, and formulas written for their top-left cell.
+pub(in super::super) trait Rule: Clone {
+    fn parts(&mut self) -> (&mut Vec<RangeRef>, Vec<&mut String>);
+}
+
+impl Rule for Validation {
+    fn parts(&mut self) -> (&mut Vec<RangeRef>, Vec<&mut String>) {
+        let Validation { ranges, f1, f2, .. } = self;
+        (ranges, std::iter::once(f1).chain(f2.as_mut()).collect())
+    }
+}
+
+impl Rule for gridcraft_model::CondFormat {
+    fn parts(&mut self) -> (&mut Vec<RangeRef>, Vec<&mut String>) {
+        (&mut self.ranges, self.rule.relative_formulas_mut())
+    }
+}
+
 /// Removes the cells of `cuts` from every validation, keeping the rest of each rule's ranges.
 /// When the rule's top-left cell goes, its relative formulas are rewritten for the new top-left
 /// cell, so the cells left keep checking the same cells.
 pub(in super::super) fn remove_validation_cells(validations: &mut Vec<Validation>, cuts: &[RangeRef]) {
-    for dv in validations.iter_mut() {
-        let before = RangeRef::top_left(&dv.ranges);
+    remove_rule_cells(validations, cuts);
+}
+
+/// [`remove_validation_cells`] for any kind of rule.
+pub(in super::super) fn remove_rule_cells<T: Rule>(rules: &mut Vec<T>, cuts: &[RangeRef]) {
+    for rule in rules.iter_mut() {
+        let (ranges, formulas) = rule.parts();
+        let before = RangeRef::top_left(ranges);
         for cut in cuts {
-            dv.ranges = dv.ranges.iter().flat_map(|r| subtract_range(*r, cut)).collect();
+            *ranges = ranges.iter().flat_map(|r| subtract_range(*r, cut)).collect();
         }
-        if let (Some(from), Some(to)) = (before, RangeRef::top_left(&dv.ranges)) {
-            dv.f1 = move_rule_formula(&dv.f1, from, to);
-            dv.f2 = dv.f2.take().map(|f| move_rule_formula(&f, from, to));
+        if let (Some(from), Some(to)) = (before, RangeRef::top_left(ranges)) {
+            for f in formulas {
+                *f = move_rule_formula(f, from, to);
+            }
         }
     }
-    validations.retain(|d| !d.ranges.is_empty());
+    rules.retain_mut(|r| !r.parts().0.is_empty());
+}
+
+/// The parts of `rules` inside `block`, moved to the block at `to`, as a cut takes them with
+/// its cells. Each part's formulas stay written for where its top-left cell was, as a cut
+/// cell's formula is copied: the reference rewrite for the move then shifts them.
+pub(in super::super) fn moved_rule_parts<T: Rule>(rules: &[T], block: RangeRef, to: CellRef) -> Vec<T> {
+    let dr = i64::from(to.row) - i64::from(block.start.row);
+    let dc = i64::from(to.col) - i64::from(block.start.col);
+    let mut out = Vec::new();
+    for rule in rules {
+        let mut part = rule.clone();
+        let (ranges, formulas) = part.parts();
+        let Some(first) = RangeRef::top_left(ranges) else { continue };
+        let inside: Vec<RangeRef> = ranges.iter().filter_map(|r| r.intersection(&block)).collect();
+        let Some(from) = RangeRef::top_left(&inside) else { continue };
+        let moved: Vec<RangeRef> = inside.iter().filter_map(|r| Some(RangeRef::new(r.start.offset(dr, dc)?, r.end.offset(dr, dc)?))).collect();
+        for f in formulas {
+            *f = move_rule_formula(f, first, from);
+        }
+        *ranges = moved;
+        out.push(part);
+    }
+    out
 }
 
 pub(super) fn validation(s: &mut Session, p: &Json) -> Result<Json> {

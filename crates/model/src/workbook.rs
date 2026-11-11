@@ -338,7 +338,95 @@ impl std::fmt::Debug for ActiveSheet {
     }
 }
 
+/// Where a reference is held, for [`Workbook::rewrite_references`].
+#[derive(Clone, Copy, Debug)]
+pub struct RefHost<'a> {
+    /// The sheet holding it, or a defined name's scope (`None`: the workbook).
+    pub sheet: Option<usize>,
+    /// The name unqualified references in it are on: its sheet's, or `"\u{0}"` for a defined
+    /// name (which has none).
+    pub name: &'a str,
+}
+
+/// Formula text with `f` applied to its references; text that isn't a formula, or that `f`
+/// doesn't change, stays as it is (a leading `=` is kept). Whether it changed.
+fn rewrite_with<E>(t: &mut String, f: &dyn Fn(Expr) -> Expr, parse: fn(&str) -> Result<Expr, E>) -> bool {
+    let body = t.trim_start_matches('=');
+    let Ok(e) = parse(body) else { return false };
+    let before = gridcraft_formula::print(&e);
+    let after = gridcraft_formula::print(&f(e));
+    if after == before {
+        return false;
+    }
+    *t = if t.starts_with('=') { format!("={after}") } else { after };
+    true
+}
+
+fn rewrite_text(t: &mut String, f: &dyn Fn(Expr) -> Expr) {
+    rewrite_with(t, f, gridcraft_formula::parse);
+}
+
 impl Workbook {
+    /// Rewrites every reference the workbook holds with `f`, given where each is held, in one
+    /// place: cell formulas (keeping their array and spill kind), defined names, conditional
+    /// formats and data validation (written for their range's top-left cell, so they move as
+    /// a cell formula there does), in-workbook links, chart series (a chart's source block
+    /// that no longer exists is dropped), sparklines and PivotTable sources. Every edit that
+    /// moves references (renaming and deleting sheets and names, inserting and deleting lines
+    /// and cells, cut-moves, the names a file reader settles on) goes through it, so no holder
+    /// of a reference is left out. A legacy array's own range is the caller's to move.
+    pub fn rewrite_references(&mut self, f: &dyn Fn(RefHost<'_>, Expr) -> Expr) {
+        for n in &mut self.names {
+            let host = RefHost { sheet: n.scope, name: "\u{0}" };
+            rewrite_with(&mut n.formula, &|e| f(host, e), gridcraft_formula::parse_name);
+        }
+        for (si, sh) in self.sheets.iter_mut().enumerate() {
+            let sh = Arc::make_mut(sh);
+            let name = sh.name.clone();
+            let host = RefHost { sheet: Some(si), name: &name };
+            let f = |e: Expr| f(host, e);
+            let formulas: Vec<_> = sh.cells.iter().filter_map(|(c, cell)| cell.formula.as_ref().map(|x| (c, x.clone()))).collect();
+            for (c, old) in formulas {
+                let Some(e) = old.expr() else { continue };
+                let new = Formula::from_expr(f(e));
+                if new.text != old.text
+                    && let Some(cell) = sh.cells.get_mut(c)
+                {
+                    cell.formula = Some(Arc::new(Formula { array: old.array, dynamic: old.dynamic, ..new }));
+                }
+            }
+            for t in sh.cond_formats.iter_mut().flat_map(|cf| cf.rule.formulas_mut()) {
+                rewrite_text(t, &f);
+            }
+            for t in sh.validations.iter_mut().flat_map(|v| v.formulas_mut()) {
+                rewrite_text(t, &f);
+            }
+            for l in sh.hyperlinks.values_mut().filter(|l| !l.external) {
+                rewrite_text(&mut l.target, &f);
+            }
+            for ch in &mut sh.charts {
+                for se in &mut ch.series {
+                    rewrite_text(&mut se.values, &f);
+                    for t in [&mut se.categories, &mut se.name, &mut se.bubble_sizes].into_iter().flatten() {
+                        rewrite_text(t, &f);
+                    }
+                }
+                if let Some(src) = &mut ch.source {
+                    rewrite_text(src, &f);
+                }
+                if ch.source.as_deref().is_some_and(|s| s.contains("#REF!")) {
+                    ch.source = None;
+                }
+            }
+            for sp in &mut sh.sparklines {
+                rewrite_text(&mut sp.source, &f);
+            }
+            for pt in &mut sh.pivots {
+                rewrite_text(&mut pt.source, &f);
+            }
+        }
+    }
+
     /// A new workbook with one sheet, "Sheet1".
     pub fn new() -> Workbook {
         Workbook {

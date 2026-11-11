@@ -230,6 +230,46 @@ pub enum CfRule {
     },
 }
 
+impl CfRule {
+    /// The formulas written for the rule's range's top-left cell (and read at each cell
+    /// relative to it): a cell-value rule's values and an expression. What moving the rule
+    /// re-hosts. Thresholds (colour scale, data bar, icon set) are read as written.
+    pub fn relative_formulas_mut(&mut self) -> Vec<&mut String> {
+        match self {
+            CfRule::CellIs { a, b, .. } => std::iter::once(a).chain(b.as_mut()).collect(),
+            CfRule::Expression { formula, .. } => vec![formula],
+            _ => Vec::new(),
+        }
+    }
+
+    /// All the rule's formulas, thresholds included: what an edit that moves references
+    /// rewrites.
+    pub fn formulas_mut(&mut self) -> Vec<&mut String> {
+        let kinds: Vec<&mut CfValueKind> = match self {
+            CfRule::CellIs { a, b, .. } => return std::iter::once(a).chain(b.as_mut()).collect(),
+            CfRule::Expression { formula, .. } => return vec![formula],
+            CfRule::ColorScale { stops } => stops.iter_mut().map(|(k, _)| k).collect(),
+            CfRule::DataBar { min, max, .. } => vec![min, max],
+            CfRule::IconSet { thresholds, .. } => thresholds.iter_mut().collect(),
+            _ => Vec::new(),
+        };
+        kinds
+            .into_iter()
+            .filter_map(|k| match k {
+                CfValueKind::Formula(t) => Some(t),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+impl Validation {
+    /// The validation's formulas (for its range's top-left cell).
+    pub fn formulas_mut(&mut self) -> Vec<&mut String> {
+        std::iter::once(&mut self.f1).chain(self.f2.as_mut()).collect()
+    }
+}
+
 /// Number of icons in an icon set (`3Arrows` → 3, `5Quarters` → 5), always 3 to 5.
 pub fn icon_count(set: &str) -> usize {
     set.chars().next().and_then(|c| c.to_digit(10)).unwrap_or(3).clamp(3, 5) as usize

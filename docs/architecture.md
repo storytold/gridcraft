@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-11 · **Change:** minor (one workbook-wide reference rewrite; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -12,6 +12,7 @@ including tests, 2026-10-10.
 
 | Layer | Crate | Lines | Job |
 |---|---|---|---|
+| 2026-11-11 | minor | Reference rewriting: `Workbook::rewrite_references` as the one walker for every reference-moving edit; rule formulas re-hosted by how their ranges moved and moved with a cut |
 | L0 | `core` | ~1.3k | Cell and range addresses (A1, R1C1, sheet-qualified; 1,048,576 × 16,384), `Value`, `CellError`, Excel coercion, 1900/1904 date serials, typed-input parsing |
 | L0 | `numfmt` | ~2.1k | Excel number-format codes (sections, conditions, colours, dates, elapsed time, fractions, scientific, fill), General, `TEXT()`; en-US only |
 | L1 | `formula` | ~1.7k | Tokenizer, parser, AST, printer (A1 and R1C1), reference adjustment for copy, fill and structural edits |
@@ -196,6 +197,26 @@ at its sheet again, so it is drawn, pointed from and committed there, and its po
 (held by sheet index) is let go when the sheet order changed. A draft is dropped then, with a
 message, when its sheet is gone, or when it holds Python code (in Python mode, or begun on a Python
 cell) that sheet protection now hides, as the Python editor window closes then.
+
+## Reference rewriting
+
+`Workbook::rewrite_references` is the one walker over every place a workbook holds a reference:
+cell formulas (keeping their legacy-array range and spill kind), defined names, conditional
+formats, data validation, in-workbook links, chart series and source blocks, sparklines and
+PivotTable sources. It hands the rewrite a `RefHost` (the holding sheet or a name's scope, and the
+sheet name unqualified references are on). Every edit that moves references goes through it:
+renaming and deleting sheets, renaming defined names and tables, inserting and deleting rows,
+columns and cells, and cut-and-paste (`engine::cmd::edit::rewrite_all_formulas`, plus Python
+`xl()` literals); a legacy array's own range is moved by the caller.
+
+Conditional-format and validation formulas are written for their range's top-left cell. When an
+edit cuts a range short so that its top-left cell goes, the rule's top-left-relative formulas
+(`CfRule::relative_formulas_mut`, `Validation::formulas_mut`) are first re-hosted at the cell that
+took its place (`rehost_rule`), then moved once by the walker, so deleting a rule's first row no
+longer turns it into `#REF!`. A range moved whole or left in place keeps its formulas, and
+colour-scale, data-bar and icon-set thresholds are read as written. A cut takes the rules on its
+cells with it (the engine's `Rule` trait, `remove_rule_cells`, `moved_rule_parts`), so their ranges and formulas
+move together, once; a cut to another sheet qualifies their references with the source sheet.
 
 ## Equations
 

@@ -1,7 +1,7 @@
 //! Formulas tab: AutoSum, Insert Function, names, auditing, calculation.
 
 use gridcraft_core::{CellError, CellRef, RangeRef, Value};
-use gridcraft_model::{CalcMode, Cell, DefinedName, Formula, Workbook};
+use gridcraft_model::{CalcMode, Cell, DefinedName, Workbook};
 use serde_json::{Value as Json, json};
 
 use super::{
@@ -407,7 +407,7 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some((old_name, old_scope)) = &old {
             cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(old_name) && n.scope == *old_scope));
             if !old_name.eq_ignore_ascii_case(&name) {
-                rename_name_in_formulas(&mut cx.wb, old_name, *old_scope, &name);
+                rename_name_in_formulas(&mut cx.wb, old_name, *old_scope, &name)?;
             }
         }
         cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(&name) && n.scope == scope));
@@ -420,7 +420,7 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
 /// Formulas that use a renamed name follow it: cell formulas and other names' definitions, on
 /// the sheets where `old` resolves to the renamed name (its own sheet for a sheet-scoped name;
 /// every sheet without a same-named sheet-level name for a workbook-level one).
-fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_scope: Option<usize>, new: &str) {
+fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_scope: Option<usize>, new: &str) -> Result<()> {
     let shadowed: Vec<usize> = wb.names.iter().filter(|n| n.name.eq_ignore_ascii_case(old)).filter_map(|n| n.scope).collect();
     let applies = |sheet: usize| match old_scope {
         Some(s) => s == sheet,
@@ -438,29 +438,14 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
         });
         hit.then_some(out)
     };
-    for i in 0..wb.sheets.len() {
-        if !applies(i) {
-            continue;
-        }
-        let Some(sh) = wb.sheet_mut(i) else { continue };
-        let formulas: Vec<(CellRef, std::sync::Arc<Formula>)> = sh.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect();
-        for (c, f) in formulas {
-            let Some(e) = f.expr().and_then(rename) else { continue };
-            let mut nf = Formula::from_expr(e);
-            nf.array = f.array;
-            nf.dynamic = f.dynamic;
-            if let Some(cell) = sh.cells.get_mut(c) {
-                cell.formula = Some(std::sync::Arc::new(nf));
-            }
-        }
-    }
-    for n in wb.names.iter_mut() {
-        if n.scope.is_none_or(applies)
-            && let Some(e) = gridcraft_formula::parse_name(&n.formula).ok().and_then(rename)
-        {
-            n.formula = gridcraft_formula::print(&e);
-        }
-    }
+    // Every reference held where the renamed name is the one meant: on its sheet (or, for a
+    // workbook name, every sheet without one of its own), and in workbook names.
+    wb.rewrite_references(&|host, e| if host.sheet.is_none_or(applies) { rename(e.clone()).unwrap_or(e) } else { e });
+    // Python cells' `xl("…")` references too.
+    let sheet_of: std::collections::HashMap<String, usize> = wb.sheets.iter().enumerate().map(|(i, s)| (s.name.to_ascii_lowercase(), i)).collect();
+    crate::cmd::edit::rewrite_python_refs(wb, &|host, e| {
+        if sheet_of.get(&host.to_ascii_lowercase()).copied().is_none_or(applies) { rename(e.clone()).unwrap_or(e) } else { e }
+    })
 }
 
 /// Refuses a name of the shape GridCraft keeps its own workbook data in ([`super::stash`]):
