@@ -2514,3 +2514,36 @@ fn a_step_that_deletes_a_form_control_after_a_partial_footprint_is_caught() {
     s.execute("macro.run", json!({"name": "Drop", "inputs": "A1", "overwrite": true})).unwrap();
     assert!(s.doc().unwrap().wb.active().unwrap().controls.is_empty());
 }
+
+#[test]
+fn a_script_cannot_paste_what_another_workbook_copied() {
+    let mut s = s();
+    let steps = json!([{"command": "edit.paste", "params": {"at": "B2"}}]);
+    s.execute("automate.newScript", json!({"name": "Paste", "commands": steps})).unwrap();
+    // A copy made in this workbook may be pasted by its script.
+    s.execute("cell.set", json!({"cell": "A1", "input": "mine"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("automate.runScript", json!({"name": "Paste"})).unwrap();
+    // A copy from another workbook is not read.
+    s.execute("file.new", json!({})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "secret"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.set_active(0);
+    let err = s.execute("automate.runScript", json!({"name": "Paste"})).unwrap_err().to_string();
+    assert!(err.contains("another workbook"), "{err}");
+}
+
+#[test]
+fn a_script_step_cannot_approve_a_macro_for_the_person() {
+    let mut s = s();
+    let mut wb = gridcraft_model::Workbook::new();
+    wb.macros.push(crate::macros::parse_macro(&json!({"name": "Theirs", "output": {"onConflict": "overwrite"}, "steps": [{"command": "cell.set", "params": {"cell": "A1", "input": "ran"}}]})).unwrap());
+    let bytes = serde_json::to_vec(&wb).unwrap();
+    s.execute("file.open", json!({"name": "theirs.json", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    let steps = json!([{"command": "macro.run", "params": {"name": "Theirs", "approve": true}}]);
+    s.execute("automate.newScript", json!({"name": "Run", "commands": steps})).unwrap();
+    let r = s.execute("automate.runScript", json!({"name": "Run", "trusted": true}));
+    assert!(matches!(r, Err(EngineError::Approve(_))), "{r:?}");
+    assert!(s.macro_approvals.is_empty(), "the step's flag approved nothing");
+    assert!(v(&s, "A1").is_empty());
+}

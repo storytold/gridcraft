@@ -6481,6 +6481,24 @@ fn clearing_links_and_notes_keeps_allow_edit_ranges() {
 }
 
 #[test]
+fn an_edit_range_grant_does_not_outlive_its_sheet_name() {
+    let mut s = s();
+    s.execute("review.allowEditRanges", json!({"action": "add", "title": "Kept", "range": "C5", "password": "example"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    s.execute("review.allowEditRanges", json!({"action": "unlock", "title": "Kept", "password": "example"})).unwrap();
+    assert!(!s.doc().unwrap().unlocked_ranges.is_empty());
+    // The sheet is renamed and another takes its name, with a range of the same title and password.
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    let old = s.doc().unwrap().wb.active().unwrap().name.clone();
+    s.execute("sheet.rename", json!({"name": "Renamed"})).unwrap();
+    assert!(s.doc().unwrap().unlocked_ranges.is_empty(), "the grant went with the old name");
+    s.execute("home.insertSheet", json!({"name": old})).unwrap();
+    s.execute("review.allowEditRanges", json!({"action": "add", "title": "Kept", "range": "C5", "password": "other"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    assert!(s.execute("cell.set", json!({"cell": "C5", "input": "1"})).is_err(), "the new sheet's range is locked");
+}
+
+#[test]
 fn formulatext_does_not_reveal_a_hidden_formula() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "=1+1"})).unwrap();

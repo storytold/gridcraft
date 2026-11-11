@@ -467,6 +467,9 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     if let Some(t0) = t0 {
         eprintln!("commit: + rows {:?}", since(t0));
     }
+    // A grant to edit a protected range belongs to the sheet and range it was given for: a sheet that
+    // was renamed, deleted or replaced by another of the same name no longer carries it.
+    d.unlocked_ranges.retain(|(sheet, title)| wb.sheets.iter().any(|sh| sh.name == *sheet && sh.edit_ranges.iter().any(|r| r.title == *title)));
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;
     Ok(r)
