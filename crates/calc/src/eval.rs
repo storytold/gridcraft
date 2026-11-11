@@ -18,7 +18,7 @@ mod lambda;
 mod reference_fns;
 mod special;
 
-use array::map_unary;
+use array::{binary_output_len, map_unary};
 pub use array::{binary_values, zip2};
 pub use format::r1c1_to_a1;
 pub use special::{SPECIAL_FUNCTIONS, is_known_function, precedents, resized_sum_range};
@@ -39,6 +39,10 @@ const MAX_DEPTH: usize = 400;
 /// every legitimate call; hostile work that grows past one dimension (a LAMBDA that recurses
 /// or nest `MAP` into `MAP`) then stops at the same bound instead of squaring.
 const LAMBDA_FUEL: u64 = MAX_CELLS;
+/// Array cells one formula may materialize in total (literals, range reads, elementwise results,
+/// and lambda-helper outputs). Each array is capped at `MAX_CELLS`, but a formula can build many of
+/// them (`A:A*B:B*C:C*…`), so the sum is capped too; past it the formula answers `#CALC!` (#2157).
+const CELL_BUDGET: u64 = 8 * MAX_CELLS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Area {
@@ -145,6 +149,8 @@ pub struct Evaluator<'h> {
     /// runs out of work after the same number of calls that a legitimately wide one could
     /// make, instead of an amount of work that squares with array nesting (#2382).
     fuel: u64,
+    /// Array cells this cell still may materialize ([`CELL_BUDGET`]).
+    cells: u64,
 }
 
 struct FnCtx<'a, 'h> {
@@ -171,7 +177,7 @@ impl Ctx for FnCtx<'_, '_> {
     /// outside both the database and the criteria cell's own precedents (say `=G2<H2` with column H
     /// outside the database) is read here but not tracked, so editing that cell doesn't recalculate
     /// the D-function until something else does.
-    fn computed_criterion(&mut self, row: usize, col: usize, db: &Array, record: usize) -> Option<bool> {
+    fn computed_criterion(&mut self, row: usize, col: usize, db: &Array, record: usize) -> Option<Result<bool, CellError>> {
         let area = self.criteria?;
         let at = area.range.start.offset(row as i64, col as i64).filter(|c| area.range.contains(*c))?;
         let expr = self.ev.host.workbook().sheet(area.sheet)?.cell(at)?.formula.as_ref()?.expr_arc()?;
@@ -193,11 +199,17 @@ impl Ctx for FnCtx<'_, '_> {
             calls: self.ev.calls,
             stack_top: self.ev.stack_top,
             fuel: self.ev.fuel,
+            cells: self.ev.cells,
         };
-        let v = matches!(ev.value(&shifted).scalar().to_bool(), Ok(true));
+        let v = ev.value(&shifted).scalar().to_bool();
         // The child's spend counts against this cell's budget.
         self.ev.fuel = ev.fuel;
-        Some(v)
+        self.ev.cells = ev.cells;
+        // Other errors just fail the criterion, as in Excel.
+        Some(match v {
+            Err(CellError::Calc) => Err(CellError::Calc),
+            v => Ok(matches!(v, Ok(true))),
+        })
     }
     fn has_lambda(&self) -> bool {
         self.lambda.is_some()
@@ -216,7 +228,7 @@ impl Ctx for FnCtx<'_, '_> {
 
 impl<'h> Evaluator<'h> {
     pub fn new(host: &'h mut dyn Host, sheet: usize, at: CellRef) -> Self {
-        Evaluator { host, sheet, at, env: Vec::new(), depth: 0, calls: 0, stack_top: 0, fuel: LAMBDA_FUEL }
+        Evaluator { host, sheet, at, env: Vec::new(), depth: 0, calls: 0, stack_top: 0, fuel: LAMBDA_FUEL, cells: CELL_BUDGET }
     }
 
     /// Evaluates to a value (references are dereferenced; multi-cell → array).
@@ -260,6 +272,17 @@ impl<'h> Evaluator<'h> {
         }
     }
 
+    /// Spends `n` cells of the budget; false when it is gone.
+    fn charge_cells(&mut self, n: u64) -> bool {
+        match self.cells.checked_sub(n) {
+            Some(left) => {
+                self.cells = left;
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn area_value(&mut self, a: &Area) -> Value {
         if a.range.is_single() {
             return self.host.cell_value(a.sheet, a.range.start);
@@ -275,6 +298,9 @@ impl<'h> Evaluator<'h> {
         let (h, w) = (range.height() as usize, range.width() as usize);
         if (h as u64) * (w as u64) > MAX_CELLS {
             return Value::Error(CellError::Num);
+        }
+        if !self.charge_cells((h as u64) * (w as u64)) {
+            return Value::Error(CellError::Calc);
         }
         let data = self.host.range_values(a.sheet, range);
         Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
@@ -336,7 +362,11 @@ impl<'h> Evaluator<'h> {
                 if rows.iter().any(|row| row.len() != w) {
                     return err(CellError::Value);
                 }
-                let mut data = Vec::with_capacity(h * w);
+                let Some(n) = h.checked_mul(w).filter(|&n| (n as u64) <= MAX_CELLS) else { return err(CellError::Num) };
+                if !self.charge_cells(n as u64) {
+                    return err(CellError::Calc);
+                }
+                let mut data = Vec::with_capacity(n);
                 for row in rows {
                     for el in row {
                         let v = self.value(el);
@@ -620,6 +650,13 @@ impl<'h> Evaluator<'h> {
                 let mut acc = self.value(left);
                 while let Some((o, r)) = rest.pop() {
                     let y = self.value(r);
+                    let array_result = matches!(&acc, Value::Array(_)) || matches!(&y, Value::Array(_));
+                    if array_result
+                        && let Some(n) = binary_output_len(&acc, &y)
+                        && !self.charge_cells(n as u64)
+                    {
+                        return err(CellError::Calc);
+                    }
                     acc = binary_values(o, &acc, &y, self.host.workbook().date_system);
                 }
                 Ev::V(acc)
@@ -681,6 +718,48 @@ mod fuel_tests {
         let mut ev = Evaluator::new(&mut host, 0, CellRef::new(0, 0));
         ev.fuel = fuel;
         ev.value(&gridcraft_formula::parser::parse(src).unwrap_or_else(|e| panic!("{e}")))
+    }
+
+    #[test]
+    fn array_cells_spend_a_per_formula_budget() {
+        let run = |cells: u64, src: &str| {
+            let mut host = Empty { wb: Workbook::default() };
+            let mut ev = Evaluator::new(&mut host, 0, CellRef::new(0, 0));
+            ev.cells = cells;
+            ev.value(&gridcraft_formula::parser::parse(src).unwrap_or_else(|e| panic!("{e}")))
+        };
+        // The literal and two products each materialize 4 cells.
+        let src = "=({1,2,3,4}*2)*3";
+        assert!(matches!(run(12, src), Value::Array(_)));
+        assert!(matches!(run(11, src), Value::Error(CellError::Calc)));
+    }
+
+    #[test]
+    fn lambda_helpers_charge_outputs_and_each_formula_gets_a_fresh_budget() {
+        let eval_with_cells = |host: &mut Empty, at, cells, src: &str| {
+            let expr = gridcraft_formula::parser::parse(src).unwrap_or_else(|e| panic!("{e}"));
+            let mut ev = Evaluator::new(host, 0, at);
+            ev.cells = cells;
+            ev.value(&expr)
+        };
+        let mut host = Empty { wb: Workbook::default() };
+
+        // The inner and outer MAP results, plus their two input literals, cost 12 cells total.
+        let nested = "=MAP({1,2},LAMBDA(x,INDEX(MAP({1,2},LAMBDA(y,x+y)),1)))";
+        assert!(matches!(eval_with_cells(&mut host, CellRef::new(0, 0), 12, nested), Value::Array(_)));
+        let just_under = eval_with_cells(&mut host, CellRef::new(0, 1), 11, nested);
+        assert!(matches!(&just_under, Value::Array(a) if a.data.get(1) == Some(&Value::Error(CellError::Calc))), "{just_under:?}");
+
+        // BYROW materializes its input literal and its two result cells.
+        let by_row = "=BYROW({1,2;3,4},LAMBDA(r,SUM(r)))";
+        assert!(matches!(eval_with_cells(&mut host, CellRef::new(0, 2), 6, by_row), Value::Array(_)));
+        assert!(matches!(eval_with_cells(&mut host, CellRef::new(0, 3), 5, by_row), Value::Error(CellError::Calc)));
+
+        // A new root evaluator starts with its own budget, as two filled-down formulas do.
+        let simple = "=({1,2}*2)*3";
+        for col in [4, 5] {
+            assert!(matches!(eval_with_cells(&mut host, CellRef::new(0, col), 6, simple), Value::Array(_)));
+        }
     }
 
     #[test]
