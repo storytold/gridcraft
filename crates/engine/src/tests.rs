@@ -19,6 +19,44 @@ fn v(s: &Session, a: &str) -> Value {
 }
 
 #[test]
+fn format_cells_reading_order_survives_undo_and_xlsx() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 123 ABC"})).unwrap();
+    s.execute("home.bold", json!({"range": "A1"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": "RightToLeft"}}})).unwrap();
+    let alignment = |s: &Session| {
+        let d = s.doc().unwrap();
+        let style = d.wb.styles.get(d.wb.active().unwrap().style_id(CellRef::new(0, 0)));
+        assert!(style.font.bold);
+        serde_json::to_value(style.align).unwrap()
+    };
+    assert_eq!(alignment(&s)["reading_order"], "RightToLeft");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(alignment(&s)["reading_order"].is_null());
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(alignment(&s)["reading_order"], "RightToLeft");
+    for order in [json!("invalid"), json!(2)] {
+        assert!(s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": order}}})).is_err());
+        assert_eq!(alignment(&s)["reading_order"], "RightToLeft");
+    }
+    let wb = &s.doc().unwrap().wb;
+    let (reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(wb).unwrap()).unwrap();
+    let cell = CellRef::new(0, 0);
+    assert_eq!(reopened.styles.get(reopened.active().unwrap().style_id(cell)), wb.styles.get(wb.active().unwrap().style_id(cell)));
+    assert_eq!(reopened.active().unwrap().value(cell), Value::text("مرحبا 123 ABC"));
+    for order in ["LeftToRight", "Context"] {
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": order}}})).unwrap();
+        assert_eq!(alignment(&s)["reading_order"], order);
+    }
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": null}}})).unwrap();
+    assert!(alignment(&s)["reading_order"].is_null());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(alignment(&s)["reading_order"], "Context");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(alignment(&s)["reading_order"].is_null());
+}
+
+#[test]
 fn entering_empty_cells_preserves_whole_sheet_formatting() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "existing"})).unwrap();
@@ -1313,6 +1351,18 @@ fn scripts_leave_file_access_working_after_they_run() {
 }
 
 #[test]
+fn get_data_refuses_json_with_too_many_fields_or_rows_before_building_rows() {
+    let mut s = s();
+    let wide = format!("[{}]", (0..=gridcraft_core::MAX_COLS).map(|i| format!("{{\"k{i}\":1}}")).collect::<Vec<_>>().join(","));
+    let err = s.execute("data.fromTextCsv", json!({"text": wide})).unwrap_err().to_string();
+    assert!(err.contains("more fields"), "{err}");
+    // MAX_ROWS objects plus the header row are one too many.
+    let tall = format!("[{}]", vec!["{}"; gridcraft_core::MAX_ROWS as usize].join(","));
+    let err = s.execute("data.fromTextCsv", json!({"text": tall})).unwrap_err().to_string();
+    assert!(err.contains("more rows"), "{err}");
+}
+
+#[test]
 fn scripts_cannot_reach_outside_the_workbook_even_when_trusted() {
     let dir = std::env::temp_dir().join(format!("gridcraft-script-deny-{}", std::process::id()));
     let leak = dir.join("leak.xlsx");
@@ -1457,6 +1507,28 @@ fn case_sensitive_sort_puts_lowercase_first() {
     s.execute("data.sort", json!({"range": "A1:A6", "header": false, "matchCase": true, "keys": [{"column": "A"}]})).unwrap();
     let col: Vec<Value> = (1..=6).map(|r| v(&s, &format!("A{r}"))).collect();
     assert_eq!(col, ["a", "A", "aB", "Ab", "b", "B"].map(Value::from));
+}
+
+#[test]
+fn data_sort_orders_vowelled_arabic_by_letters() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["بيت"], ["بَاب"], ["تمر"], ["\u{200F}بحر"]]})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A4", "header": false, "keys": [{"column": "A"}]})).unwrap();
+    let col: Vec<Value> = (1..=4).map(|r| v(&s, &format!("A{r}"))).collect();
+    assert_eq!(col, ["بَاب", "\u{200F}بحر", "بيت", "تمر"].map(Value::from));
+}
+
+#[test]
+fn data_sort_orders_marks_and_digit_scripts_like_excel() {
+    // Excel 16.0 (build 20527, en-US) sorts this column, as text, into exactly this order.
+    let want = ["١٢", "۱۲", "ب\u{064E}1", "ب\u{064E}١", "بa", "\u{200F}باب", "ب\u{064B}اب", "ب\u{064E}اب", "ب\u{0652}اب", "ب\u{0651}اب"];
+    let mut s = s();
+    s.execute("home.numberFormat", json!({"range": "A1:A10", "code": "@"})).unwrap();
+    let input: Vec<Vec<&str>> = want.iter().rev().map(|t| vec![*t]).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": input})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A10", "header": false, "keys": [{"column": "A"}]})).unwrap();
+    let col: Vec<Value> = (1..=10).map(|r| v(&s, &format!("A{r}"))).collect();
+    assert_eq!(col, want.map(Value::from));
 }
 
 #[test]
@@ -3602,6 +3674,79 @@ fn xls_import_keeps_formulas_and_never_saves_back_to_xls() {
     assert_eq!(v(&s, "A2"), Value::Number(100.0));
     assert!(s.execute("file.saveBytes", json!({"format": "xls"})).is_err());
     assert!(s.execute("file.saveBytes", json!({"format": "xlsx"})).is_ok());
+}
+
+#[test]
+fn xls_formulas_calculate_with_legacy_implicit_intersection() {
+    // Data!A1 = 11, B1:G1 = 1, A2 = 5, A3 = 7. Report!B1:G1 are filled, so a formula in Report!A1
+    // that spilled would show #SPILL!. Every cached result is 0, so the values below are GridCraft's.
+    fn rec(id: u16, payload: &[u8]) -> Vec<u8> {
+        [&id.to_le_bytes()[..], &(payload.len() as u16).to_le_bytes(), payload].concat()
+    }
+    let u16s = |v: &[u16]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    let bof = |dt: u16| rec(0x0809, &[&0x0600u16.to_le_bytes()[..], &dt.to_le_bytes(), &[0; 12]].concat());
+    let number = |r: u16, c: u16, n: f64| rec(0x0203, &[&u16s(&[r, c, 0])[..], &n.to_le_bytes()].concat());
+    let formula = |r: u16, c: u16, rgce: &[u8]| {
+        rec(0x0006, &[&u16s(&[r, c, 0])[..], &0f64.to_le_bytes(), &[0; 6], &(rgce.len() as u16).to_le_bytes(), rgce].concat())
+    };
+    let area3d = |r0: u16, r1: u16, c0: u16, c1: u16| [&[0x3Bu8, 0, 0][..], &u16s(&[r0, r1, c0, c1])].concat();
+    let a2a3 = area3d(1, 2, 0, 0);
+    let mut data = bof(0x0010);
+    data.extend([number(0, 0, 11.0), number(1, 0, 5.0), number(2, 0, 7.0)].concat());
+    (1..7).for_each(|c| data.extend(number(0, c, 1.0)));
+    data.extend(rec(0x000A, &[]));
+    let mut report = bof(0x0010);
+    (1..7).for_each(|c| report.extend(number(0, c, 0.0)));
+    // A1 = Data!A1:G1; B2 = Data!$A$2:$A$3*10; C2 = SQRT(Data!$A$2:$A$3) (row 2: SQRT(5));
+    // H1 = {SUM(Data!$A$2:$A$3*2)}, a one-cell Ctrl+Shift+Enter array.
+    let cse = [&a2a3[..], &[0x1E, 2, 0, 0x05, 0x22, 1, 4, 0]].concat();
+    report.extend(formula(0, 0, &area3d(0, 0, 0xC000, 6 | 0xC000)));
+    report.extend(formula(1, 1, &[&a2a3[..], &[0x1E, 10, 0, 0x05]].concat()));
+    report.extend(formula(1, 2, &[&a2a3[..], &[0x21, 20, 0]].concat()));
+    report.extend(formula(0, 7, &[1, 0, 0, 7, 0]));
+    report.extend(rec(0x0221, &[&u16s(&[0, 0])[..], &[7, 7], &[0; 6], &(cse.len() as u16).to_le_bytes(), &cse].concat()));
+    report.extend(rec(0x000A, &[]));
+    let boundsheet = |pos: u32, name: &str| rec(0x0085, &[&pos.to_le_bytes()[..], &[0, 0, name.len() as u8, 0], name.as_bytes()].concat());
+    let globals = |p1: u32, p2: u32| {
+        [
+            bof(0x0005),
+            boundsheet(p1, "Data"),
+            boundsheet(p2, "Report"),
+            rec(0x01AE, &u16s(&[2, 0x0401])),
+            rec(0x0017, &u16s(&[1, 0, 0, 0])),
+            rec(0x000A, &[]),
+        ]
+        .concat()
+    };
+    let p1 = globals(0, 0).len() as u32;
+    let stream = [globals(p1, p1 + data.len() as u32), data, report].concat();
+    let bytes = gridcraft_xlsx::testing::compound_file(&[("Workbook", &stream)]);
+
+    let mut s = s();
+    s.execute("file.open", json!({"name": "legacy.xls", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    let report = |s: &Session, a1: &str| s.doc().unwrap().wb.sheets[1].value(CellRef::parse(a1).unwrap());
+    assert_eq!(report(&s, "A1"), Value::Number(11.0));
+    assert_eq!(report(&s, "B2"), Value::Number(50.0));
+    assert_eq!(report(&s, "C2"), Value::Number(5f64.sqrt()));
+    assert_eq!(report(&s, "H1"), Value::Number(24.0));
+    // Nothing spilled out of A1 or B2.
+    assert_eq!(report(&s, "B1"), Value::Number(0.0));
+    assert_eq!(report(&s, "B3"), Value::Empty);
+    // Saved as .xlsx, the formulas carry no dynamic-array metadata.
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let saved = crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+    let (wb, _) = gridcraft_xlsx::read_xlsx(&saved).unwrap();
+    let f = |a1: &str| wb.sheets[1].cell(CellRef::parse(a1).unwrap()).and_then(|c| c.formula.clone()).unwrap();
+    assert_eq!(f("A1").text, "@Data!A1:G1");
+    assert_eq!((f("H1").text.as_str(), f("H1").array), ("SUM(Data!$A$2:$A$3*2)", gridcraft_core::RangeRef::parse("H1")));
+    let mut sheet = String::new();
+    std::io::Read::read_to_string(
+        &mut zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap().by_name("xl/worksheets/sheet2.xml").unwrap(),
+        &mut sheet,
+    )
+    .unwrap();
+    assert!(!sheet.contains("cm=") && !sheet.contains("SINGLE"), "{sheet}");
 }
 
 #[test]
@@ -6336,6 +6481,23 @@ fn clearing_links_and_notes_keeps_allow_edit_ranges() {
 }
 
 #[test]
+fn formulatext_does_not_reveal_a_hidden_formula() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=1+1"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"protection": {"locked": false, "hidden": true}}})).unwrap();
+    s.execute("home.formatCells", json!({"range": "B1", "style": {"protection": {"locked": false}}})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=FORMULATEXT(A1)"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::from("=1+1"), "not protected yet");
+    s.execute("review.protectSheet", json!({})).unwrap();
+    // Without entering the formula again: protecting recalculates what reads the protection.
+    assert_eq!(v(&s, "B1"), Value::Error(gridcraft_core::CellError::NA));
+    s.execute("cell.set", json!({"cell": "B1", "input": "=FORMULATEXT(A1)"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Error(gridcraft_core::CellError::NA));
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::from("=1+1"), "unprotecting shows it again without re-entering");
+}
+
+#[test]
 fn protected_sheet_refuses_layout_commands_its_permissions_do_not_allow() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["h"], [1], [2]]})).unwrap();
@@ -6496,4 +6658,27 @@ fn restore_structural_refuses_an_image_it_cannot_apply() {
     assert_eq!(s.doc().unwrap().wb.as_ref(), before.as_ref(), "the document is untouched");
     assert_eq!(v(&s, "A1"), Value::Number(1.0));
     assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+}
+
+#[test]
+fn history_charges_a_changed_sheets_comment_text() {
+    let mut s = s();
+    s.execute("review.newNote", json!({"cell": "A1", "text": "n".repeat(30_000), "author": "Example"})).unwrap();
+    let older = (*s.doc().unwrap().wb).clone();
+    s.execute("cell.set", json!({"cell": "B2", "input": "x"})).unwrap();
+    let newer = (*s.doc().unwrap().wb).clone();
+    // The older snapshot owns the comment text now that the sheet changed under it.
+    assert!(crate::history_retained_bytes(&older, &newer) >= 30_000);
+}
+
+#[test]
+fn history_charges_the_storage_of_empty_comment_replies() {
+    let mut s = s();
+    s.execute("review.newComment", json!({"cell": "A1", "text": "c", "author": "Ann"})).unwrap();
+    for _ in 0..500 {
+        s.execute("review.replyComment", json!({"cell": "A1", "text": "", "author": ""})).unwrap();
+    }
+    let sheet = s.doc().unwrap().wb.sheet(0).unwrap().clone();
+    // 500 replies of no text are still 500 elements.
+    assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
 }
