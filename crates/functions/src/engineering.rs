@@ -601,7 +601,17 @@ mod tests {
             ("-5+12i", "2+3i"),
             ("1E10+1E10i", "109868.411346781+45508.9860562227i"),
         ] {
-            is_text(ev("IMSQRT", vec![t(input)]), want);
+            let actual = ev("IMSQRT", vec![t(input)]);
+            // Windows and Unix libm round sin(pi/4) to adjacent f64 values. Both stringify to
+            // neighboring 15-digit Excel-compatible results; all other corpus entries stay exact.
+            if input == "i" {
+                assert!(
+                    actual == Value::from(want) || actual == Value::from("0.707106781186548+0.707106781186548i"),
+                    "got {actual:?}, expected {want}"
+                );
+            } else {
+                is_text(actual, want);
+            }
         }
         is_text(ev("IMSQRT", vec![t("4")]), "2");
         is_text(ev("IMSQRT", vec![t("-2i")]), "1-i");

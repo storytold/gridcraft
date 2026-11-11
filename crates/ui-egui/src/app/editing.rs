@@ -58,6 +58,11 @@ impl SheetApp {
             self.session.mode = gridcraft_engine::Mode::Edit;
             return;
         }
+        // A hidden formula's source isn't loaded into an edit (a blank edit would also write over
+        // it on commit): no edit starts. Typing still replaces the cell.
+        if text.is_none() && gridcraft_engine::display::formula_hidden(&d.wb, sh, at) {
+            return;
+        }
         let locale = self.ui.language.formula_locale();
         let current = if sh.cell_pictures.contains_key(&at) {
             String::new()

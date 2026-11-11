@@ -252,6 +252,12 @@ fn ensure_startup_workbook(app: &mut SheetApp) {
 
 /// Starts the desktop application with persisted preferences, localized new-document names and native services.
 fn main() -> eframe::Result<()> {
+    // A confined launcher run (`gridcraft_sandbox::launch_command`) comes before everything else:
+    // it opens no window, writes no log, and becomes the program it confines.
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if let Some(code) = gridcraft_sandbox::handle_args(&raw) {
+        std::process::exit(code);
+    }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     // Commands catch their panics (`Session::execute`), but the default hook only prints to
