@@ -76,6 +76,10 @@ const CRITERIA: &[&str] = &["COUNTIF", "COUNTIFS", "SUMIF", "SUMIFS", "AVERAGEIF
 /// `end_period` (argument 4) on each call.
 const PERIOD_LOOPS: &[&str] = &["CUMIPMT", "CUMPRINC"];
 
+/// Budget units one period of a [`PERIOD_LOOPS`] call costs: each period computes a payment and a
+/// balance with powers, many times a scanned cell.
+const PERIOD_COST: usize = 16;
+
 /// The work every lifted call of `spec` repeats over its non-lifted arguments: the longest vector
 /// a [`SCANS`] lookup searches, or every cell a [`CRITERIA`] aggregate tests. 0 for other
 /// functions.
@@ -84,8 +88,12 @@ fn scan_len(spec: &FnSpec, args: &[Arg]) -> usize {
     if !scans && !CRITERIA.contains(&spec.name) {
         return 0;
     }
-    let lens = args.iter().enumerate().filter(|(i, _)| !spec.is_scalar_arg(*i)).filter_map(|(_, a)| match &a.value {
-        Value::Array(arr) => Some(if scans { arr.rows.max(arr.cols) } else { arr.data.len() }),
+    // SUMIF and AVERAGEIF read the optional third range only at the coordinates of the first.
+    let first = args.first().and_then(|a| if let Value::Array(arr) = &a.value { Some(arr.data.len()) } else { None });
+    let lens = args.iter().enumerate().filter(|(i, _)| !spec.is_scalar_arg(*i)).filter_map(|(i, a)| match &a.value {
+        Value::Array(arr) if scans => Some(arr.rows.max(arr.cols)),
+        Value::Array(arr) if i == 2 && matches!(spec.name, "SUMIF" | "AVERAGEIF") => Some(arr.data.len().min(first.unwrap_or(usize::MAX))),
+        Value::Array(arr) => Some(arr.data.len()),
         _ => None,
     });
     if scans { lens.max().unwrap_or(0) } else { lens.fold(0, usize::saturating_add) }
@@ -111,7 +119,7 @@ fn call_cost(spec: &FnSpec, cell_args: &[Arg]) -> usize {
     // The function's own validation and coercion (text like "10000000" counts), so a call it
     // refuses before its loop costs nothing and no loop goes uncharged.
     let periods = crate::financial::cumulative_args(cell_args).map_or(0, |(.., start, end, _)| (end - start + 1.0) as usize);
-    parse.saturating_add(periods)
+    parse.saturating_add(periods.saturating_mul(PERIOD_COST))
 }
 
 pub(crate) fn call_lifted(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
@@ -284,6 +292,10 @@ mod tests {
         is_err(ev("COUNTIFS", vec![tall(1_000_000), tall(501)]), CellError::Num);
         // Two ranges of 250,000 cells each count together.
         is_err(ev("SUMIFS", vec![tall(250_000), tall(250_000), tall(1001)]), CellError::Num);
+        // SUMIF reads its sum range only where the criteria range has cells: a one-cell range over a
+        // million-cell sum range is one cell of work per criterion.
+        let one = av(Array::filled(1, 1, nv(-1.0)).into());
+        assert_eq!(rows_of(&ev("SUMIF", vec![one, tall(501), tall(1_000_000)])).len(), 501);
         let counts = ev("COUNTIF", vec![av(col(&[1.0, 2.0, 2.0])), av(col(&[2.0, 1.0, 5.0]))]);
         assert_eq!(rows_of(&counts), vec![vec![nv(2.0)], vec![nv(1.0)], vec![nv(0.0)]]);
         for name in super::CRITERIA.iter().chain(super::PERIOD_LOOPS) {
@@ -301,6 +313,8 @@ mod tests {
         // 51 elements of 1e7 periods each is past 5e8.
         is_err(ev("CUMIPMT", args(51, 1e7)), CellError::Num);
         is_err(ev("CUMPRINC", args(51, 1e7)), CellError::Num);
+        // A period costs more than a scanned cell, so fewer elements are enough.
+        is_err(ev("CUMIPMT", args(49, 1e7)), CellError::Num);
         // Numeric text is coerced by the function, so its periods are charged the same.
         let text_ends = av(Array::filled(51, 1, Value::text("10000000")).into());
         is_err(ev("CUMIPMT", vec![n(0.01), n(1e7), n(1000.0), n(1.0), text_ends, n(0.0)]), CellError::Num);
