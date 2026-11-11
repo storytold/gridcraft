@@ -45,11 +45,18 @@ pub(crate) fn wildcard(text: &str, pat: &str) -> bool {
             (c, _) => at.entry(*c).or_default().push(i),
         }
     }
-    // A literal's bit mask is built when the text first reads it, and kept for the first
+    // A literal's bit mask is built when the text first reads it, and kept for at most
     // `MAX_CACHED_MASKS` literals: a long pattern of mostly distinct characters would otherwise
-    // allocate a mask of the pattern's width for each one up front. Past the cap the mask is
-    // rebuilt in `scratch` from the character's positions, which costs about one step of the scan.
+    // allocate a mask of the pattern's width for each one up front. When there are more literals
+    // than that, the ones kept are those at the most pattern positions (the dearest to rebuild);
+    // each of the rest has at most pattern length / `MAX_CACHED_MASKS` positions, so rebuilding
+    // its mask in `scratch` costs less than one step of the scan.
     const MAX_CACHED_MASKS: usize = 256;
+    let cacheable: Option<std::collections::HashSet<char>> = (at.len() > MAX_CACHED_MASKS).then(|| {
+        let mut by_count: Vec<(&char, usize)> = at.iter().map(|(c, v)| (c, v.len())).collect();
+        by_count.sort_unstable_by_key(|&(_, n)| std::cmp::Reverse(n));
+        by_count.into_iter().take(MAX_CACHED_MASKS).map(|(c, _)| *c).collect()
+    });
     let mut masks: std::collections::HashMap<char, Vec<u64>> = std::collections::HashMap::new();
     let mut scratch = vec![0u64; words];
     // A set bit i: the text read so far matches the first i pattern items. A `*` matches nothing
@@ -70,7 +77,7 @@ pub(crate) fn wildcard(text: &str, pat: &str) -> bool {
     for ch in text.chars() {
         let lit: Option<&[u64]> = match at.get(&ch) {
             None => None,
-            Some(positions) if masks.contains_key(&ch) || masks.len() < MAX_CACHED_MASKS => {
+            Some(positions) if cacheable.as_ref().is_none_or(|k| k.contains(&ch)) => {
                 let mask = masks.entry(ch).or_insert_with(|| {
                     let mut m = vec![0u64; words];
                     positions.iter().for_each(|&i| bit(&mut m, i));

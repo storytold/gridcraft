@@ -379,6 +379,18 @@ fn wildcard_with_many_distinct_literals_agrees_with_backtracking() {
 }
 
 #[test]
+fn wildcard_keeps_masks_of_frequent_literals_past_the_cache_limit() {
+    // 300 distinct characters come before the repeated `a`: past the cached masks, `a` (5,000 positions)
+    // still has to be read from a kept mask, or it is rebuilt for each of the 20,000 `a` in the text.
+    let rare: String = (0x4E00u32..0x4E00 + 300).filter_map(char::from_u32).collect();
+    let pat = format!("*{rare}{}b", "a".repeat(5_000));
+    let text = "a".repeat(20_000);
+    assert!(!wildcard(&text, &pat));
+    assert!(wildcard(&format!("{rare}{}b", "a".repeat(5_000)), &pat));
+    assert!(!wildcard(&format!("{rare}{}", "a".repeat(5_000)), &pat));
+}
+
+#[test]
 fn wildcard_on_long_repetitive_text_is_linear() {
     // The backtracking matcher compared about text × pattern characters here (10^8).
     let text = "a".repeat(20_000);
