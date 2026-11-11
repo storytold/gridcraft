@@ -87,16 +87,19 @@ pub use stat::{aggregate_values, aggregate_values_k};
 pub struct Arg {
     pub value: Value,
     pub from_ref: bool,
+    /// A written argument whose value came out blank (a lookup of an empty cell): given, not
+    /// omitted, although its value is `Value::Empty`.
+    pub blank_value: bool,
 }
 
 impl Arg {
     /// A literal (non-reference) argument.
     pub fn val(value: impl Into<Value>) -> Arg {
-        Arg { value: value.into(), from_ref: false }
+        Arg { value: value.into(), from_ref: false, blank_value: false }
     }
     /// An argument that came from a cell or range reference.
     pub fn reference(value: impl Into<Value>) -> Arg {
-        Arg { value: value.into(), from_ref: true }
+        Arg { value: value.into(), from_ref: true, blank_value: false }
     }
 }
 
