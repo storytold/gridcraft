@@ -261,16 +261,17 @@ pub(crate) fn sheet_names_in(formula: &str) -> Vec<String> {
 /// that exist under the same names (the chart is kept as it was, so a series on a deleted or
 /// renamed sheet would be left pointing at nothing), and no worksheet may have taken its name.
 ///
-/// `usable` caches, by relationship id, whether that chart sheet's graph refers only to sheets
-/// that exist (`false` when the relationship is missing): entries sharing one graph are analysed
-/// once, and only the verdict is kept, not the references it came from.
-fn chart_sheet_usable<'p>(wb: &Workbook, p: &'p Preserved, s: &'p PreservedSheet, usable: &mut HashMap<&'p str, bool>) -> bool {
+/// `usable` caches, by the normalized target of the chart sheet's relationship, whether its graph
+/// refers only to sheets that exist (`false` when the relationship is missing): entries sharing one
+/// graph, under the same or different relationship ids, are analysed once, and only the verdict is
+/// kept, not the references it came from.
+fn chart_sheet_usable(wb: &Workbook, p: &Preserved, s: &PreservedSheet, usable: &mut HashMap<String, bool>) -> bool {
     let same = |a: &str, b: &str| a.chars().take(31).collect::<String>().eq_ignore_ascii_case(&b.chars().take(31).collect::<String>());
     if wb.sheets.iter().any(|w| same(&w.name, &s.name)) {
         return false;
     }
-    *usable.entry(s.rel_id.as_str()).or_insert_with(|| {
-        let Some(root) = p.rels.iter().find(|r| r.id == s.rel_id) else { return false };
+    let Some(root) = p.rels.iter().find(|r| r.id == s.rel_id) else { return false };
+    *usable.entry(normalize(&root.target)).or_insert_with(|| {
         let parts = reachable(p, root);
         let mut formulas = vec![];
         for q in p.parts.iter().filter(|q| parts.contains(&normalize(&q.name)) && q.content_type.contains("chart")) {
