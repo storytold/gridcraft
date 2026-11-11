@@ -31,6 +31,47 @@ fn discovery_reports_omissions_only_after_the_file_limit() {
     assert!(discovery.failures[0].error.as_ref().unwrap().contains("file limit"));
 }
 
+/// A new directory under the temp dir: `create_dir` fails on a name somebody else made first.
+#[cfg(unix)]
+fn fresh_dir(tag: &str) -> PathBuf {
+    let mut n = 0u32;
+    loop {
+        let dir = std::env::temp_dir().join(format!("gridcraft-check-{tag}-{}-{n}", std::process::id()));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return dir,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => panic!("{e}"),
+        }
+    }
+}
+
+/// A directory named again by a deeper path, or by a link back to a parent, lists each workbook once.
+#[cfg(unix)]
+#[test]
+fn discovery_lists_each_workbook_once_whatever_path_reaches_it() {
+    let dir = fresh_dir("once");
+    let sub = dir.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(dir.join("a.xlsx"), b"x").unwrap();
+    std::fs::write(sub.join("b.xlsx"), b"x").unwrap();
+    std::os::unix::fs::symlink(&dir, sub.join("loop")).unwrap();
+    let names = |d: &Discovery| {
+        let mut v: Vec<String> = d.files.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        v.sort();
+        v
+    };
+    // The link back to the top is one directory, not another branch of the scan.
+    let found = collect_inputs(&[dir.to_string_lossy().into_owned()]);
+    assert_eq!(names(&found), ["a.xlsx", "b.xlsx"]);
+    // `sub` named after its parent is reached from a shallower depth: scanned again, nothing listed twice.
+    let found = collect_inputs(&[dir.to_string_lossy().into_owned(), sub.to_string_lossy().into_owned()]);
+    assert_eq!(names(&found), ["a.xlsx", "b.xlsx"]);
+    // Named first, the same `sub` is the shallowest path and the parent's scan skips it.
+    let found = collect_inputs(&[sub.to_string_lossy().into_owned(), dir.to_string_lossy().into_owned()]);
+    assert_eq!(names(&found), ["a.xlsx", "b.xlsx"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 fn at(a1: &str) -> CellRef {
     CellRef::parse(a1).unwrap()
 }
