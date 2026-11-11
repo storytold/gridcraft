@@ -145,6 +145,23 @@ pub fn run(_root: &Path, exact: bool) -> Result<(), String> {
 mod tests {
     use super::{Counts, MAX_SOURCE_BYTES, count_tests, read_source, walk};
 
+    /// A new, private directory: `create_dir` fails if the name exists (even as a link), so a
+    /// directory somebody else made in advance is never used.
+    fn private_dir(tag: &str) -> std::path::PathBuf {
+        for n in 0u32.. {
+            let dir = std::env::temp_dir().join(format!("xtask-stats-{tag}-{}-{n}", std::process::id()));
+            let mut b = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+            match b.create(&dir) {
+                Ok(()) => return dir,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => panic!("{e}"),
+            }
+        }
+        unreachable!()
+    }
+
     #[test]
     fn counts_attributes_and_proptest_blocks() {
         let src = "#[test]\nfn a() {}\n// #[test] commented\n    #[test]\nfn b() {}\nproptest! {\n}\n";
@@ -153,8 +170,7 @@ mod tests {
 
     #[test]
     fn a_source_past_the_size_limit_is_not_read() {
-        let dir = std::env::temp_dir().join(format!("xtask-stats-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = private_dir("size");
         let (small, big) = (dir.join("a.rs"), dir.join("b.rs"));
         std::fs::write(&small, "fn a() {}\n").unwrap();
         let file = std::fs::File::create(&big).unwrap();
@@ -168,9 +184,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn walk_counts_regular_sources_once_and_skips_links_and_big_files() {
-        let dir = std::env::temp_dir().join(format!("xtask-stats-walk-{}", std::process::id()));
+        let dir = private_dir("walk");
         let sub = dir.join("sub");
-        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::create_dir(&sub).unwrap();
         std::fs::write(dir.join("a.rs"), "#[test]\nfn a() {}\n").unwrap();
         std::fs::write(sub.join("b.rs"), "fn b() {}\n").unwrap();
         // A directory link back to the root is one identity, a file link is not a regular file,
