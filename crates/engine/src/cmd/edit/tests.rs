@@ -42,6 +42,28 @@ fn go_to_lists_the_named_ranges_of_every_sheet() {
     assert_eq!(list["names"], json!(["Areas", "Local", "Price", "Sheet1!Own", "type"]), "{list}");
 }
 
+/// Thousands of names that alias other names are listed with one lookup per alias, not a scan of
+/// every name for each; aliases resolve through the chain like a single name does.
+#[test]
+fn go_to_lists_many_aliases_and_follows_them() {
+    let mut s = go_to_workbook();
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    let alias = |name: String, formula: String| gridcraft_model::DefinedName { name, scope: None, formula, comment: String::new(), hidden: false };
+    wb.names.push(alias("Chain0".into(), "Areas".into()));
+    for i in 1..20_000 {
+        wb.names.push(alias(format!("Chain{i}"), format!("Chain{},price", i - 1)));
+    }
+    let list = s.execute("edit.goTo", json!({"list": true})).unwrap();
+    let names: Vec<&str> = list["names"].as_array().unwrap().iter().filter_map(|n| n.as_str()).collect();
+    // Chain0..Chain6 are within the name depth Go To follows; longer chains are not ranges.
+    for i in 0..7 {
+        assert!(names.contains(&format!("Chain{i}").as_str()), "Chain{i} in {names:?}");
+    }
+    assert!(!names.contains(&"Chain7"), "{names:?}");
+    let out = s.execute("edit.goTo", json!({"reference": "chain1"})).unwrap();
+    assert_eq!(out["selection"], "A1,C3:C4,B2:B5", "{out}");
+}
+
 #[test]
 fn go_to_a_name_scoped_to_another_sheet_goes_to_that_sheet() {
     let mut s = go_to_workbook();
@@ -302,6 +324,103 @@ fn wildcards() {
     assert!(wildcard("", "*"));
 }
 
+/// The backtracking matcher `wildcard` replaced, as the reference for its results.
+fn wildcard_backtracking(text: &str, pat: &str) -> bool {
+    let t: Vec<char> = text.chars().collect();
+    let mut p: Vec<(char, bool)> = Vec::new();
+    let mut it = pat.chars();
+    while let Some(c) = it.next() {
+        if c == '~' {
+            if let Some(n) = it.next() {
+                p.push((n, true));
+            }
+        } else {
+            p.push((c, false));
+        }
+    }
+    let (mut ti, mut pi) = (0usize, 0usize);
+    let (mut star, mut mark) = (None, 0usize);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == ('?', false) || (p[pi].0 == t[ti] && p[pi] != ('*', false))) {
+            ti += 1;
+            pi += 1;
+        } else if pi < p.len() && p[pi] == ('*', false) {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(sp) = star {
+            pi = sp + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == ('*', false) {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+#[test]
+fn wildcard_agrees_with_backtracking() {
+    // Every text up to 5 characters over a small alphabet against every pattern up to 4 items.
+    let alphabet = ['a', 'b', '*', '?', '~'];
+    let all = |n: usize, chars: &[char]| -> Vec<String> {
+        let mut out = vec![String::new()];
+        let mut level = vec![String::new()];
+        for _ in 0..n {
+            level = level.iter().flat_map(|s| chars.iter().map(move |c| format!("{s}{c}"))).collect();
+            out.extend(level.iter().cloned());
+        }
+        out
+    };
+    let texts = all(5, &['a', 'b', '*']);
+    for pat in all(4, &alphabet) {
+        for text in &texts {
+            assert_eq!(wildcard(text, &pat), wildcard_backtracking(text, &pat), "{text:?} ~ {pat:?}");
+        }
+    }
+    // Patterns longer than one 64-bit word.
+    let long = format!("*{}*b?", "a".repeat(70));
+    for text in [format!("x{}yb1", "a".repeat(70)), format!("{}b", "a".repeat(71)), "a".repeat(200)] {
+        assert_eq!(wildcard(&text, &long), wildcard_backtracking(&text, &long), "{text}");
+    }
+}
+
+#[test]
+fn wildcard_with_many_distinct_literals_agrees_with_backtracking() {
+    // 600 distinct characters in the pattern: more than the masks kept, so the rest are rebuilt.
+    let chars: Vec<char> = (0x4E00u32..0x4E00 + 600).filter_map(char::from_u32).collect();
+    let word: String = chars.iter().collect();
+    let pat = format!("*{word}?{}", chars[3]);
+    for text in [format!("x{word}yq{}", chars[3]), word.clone(), format!("{word}{word}"), chars.iter().rev().collect::<String>()] {
+        assert_eq!(wildcard(&text, &pat), wildcard_backtracking(&text, &pat), "{} chars", text.chars().count());
+    }
+    assert!(wildcard(&format!("{word}zz{}", chars[3]).replace("zz", "z"), &pat));
+}
+
+#[test]
+fn wildcard_keeps_masks_of_frequent_literals_past_the_cache_limit() {
+    // 300 distinct characters come before the repeated `a`: past the cached masks, `a` (5,000 positions)
+    // still has to be read from a kept mask, or it is rebuilt for each of the 20,000 `a` in the text.
+    let rare: String = (0x4E00u32..0x4E00 + 300).filter_map(char::from_u32).collect();
+    let pat = format!("*{rare}{}b", "a".repeat(5_000));
+    let text = "a".repeat(20_000);
+    assert!(!wildcard(&text, &pat));
+    assert!(wildcard(&format!("{rare}{}b", "a".repeat(5_000)), &pat));
+    assert!(!wildcard(&format!("{rare}{}", "a".repeat(5_000)), &pat));
+}
+
+#[test]
+fn wildcard_on_long_repetitive_text_is_linear() {
+    // The backtracking matcher compared about text × pattern characters here (10^8).
+    let text = "a".repeat(20_000);
+    let pat = format!("*{}b", "a".repeat(5_000));
+    assert!(!wildcard(&text, &pat));
+    assert!(wildcard(&format!("{text}b"), &pat));
+}
+
 #[test]
 fn tsv() {
     assert_eq!(parse_tsv("a\tb\n1\t2\n"), vec![vec!["a", "b"], vec!["1", "2"]]);
@@ -422,6 +541,50 @@ fn drag_and_drop_on_another_sheet_stays_on_that_sheet() {
     assert_eq!(wb.sheet(two).unwrap().value(CellRef::new(0, 0)), Value::text("Kiwi"));
     assert_eq!(wb.sheet(two).unwrap().value(CellRef::new(1, 0)), Value::text("Plum"));
     assert_eq!(wb.sheet(two).unwrap().value(CellRef::new(0, 1)), Value::Empty);
+}
+
+#[test]
+fn replace_refuses_text_that_would_grow_past_a_cell() {
+    // 10,000 matches × a 1,000-character replacement would make a 10 MB cell (and a few such
+    // cells gigabytes); the replacement is refused before that text is built.
+    let mut s = Session::new();
+    s.new_workbook();
+    let long = "a".repeat(10_000);
+    s.execute("range.setValues", json!({"range": "A1", "values": [[long.clone()], ["abc"]]})).unwrap();
+    for case in [false, true] {
+        let err = s.execute("edit.replace", json!({"what": "a", "with": "x".repeat(1_000), "matchCase": case})).expect_err("too long");
+        assert!(err.to_string().contains("too long"), "{err}");
+        assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["value"], json!(long));
+        assert_eq!(s.execute("cell.get", json!({"cell": "A2"})).unwrap()["value"], json!("abc"));
+    }
+    // A replacement that stays within a cell's limit still happens.
+    s.execute("edit.replace", json!({"what": "b", "with": "x".repeat(100)})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell": "A2"})).unwrap()["value"], json!(format!("a{}c", "x".repeat(100))));
+}
+
+#[test]
+fn replace_refuses_a_result_past_the_character_limit_though_it_fits_the_byte_limit() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["z"]]})).unwrap();
+    for whole in [false, true] {
+        let err = s.execute("edit.replace", json!({"what": "z", "with": "x".repeat(32_768), "wholeCell": whole})).expect_err("32,768 characters");
+        assert!(err.to_string().contains("too long"), "{err}");
+        assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["value"], json!("z"));
+    }
+    s.execute("edit.replace", json!({"what": "z", "with": "x".repeat(32_767)})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["value"], json!("x".repeat(32_767)));
+}
+
+#[test]
+fn bounded_replace_stops_at_its_limit() {
+    use super::find::{replace_ci_within, replace_cs_within};
+    assert_eq!(replace_cs_within("abab", "a", "xy", 6).as_deref(), Some("xybxyb"));
+    assert_eq!(replace_cs_within("abab", "a", "xy", 5), None);
+    assert_eq!(replace_ci_within("AbAb", "a", "xy", 6).as_deref(), Some("xybxyb"));
+    assert_eq!(replace_ci_within("AbAb", "a", "xy", 5), None);
+    assert_eq!(replace_cs_within("abc", "z", "", 3).as_deref(), Some("abc"));
+    assert_eq!(replace_cs_within("abc", "z", "", 2), None);
 }
 
 #[test]
