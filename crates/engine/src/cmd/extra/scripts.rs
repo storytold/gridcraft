@@ -89,6 +89,19 @@ pub(super) fn trust_scripts(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"trusted": trusted}))
 }
 
+/// Whether step `id` with `params` takes cells from the session clipboard: not `edit.paste` of explicit
+/// text that differs from it (that pastes the text, see `edit::clipboard::paste`).
+fn reads_clipboard(s: &Session, id: &str, params: &Json) -> bool {
+    if !CLIPBOARD_READERS.contains(&id) {
+        return false;
+    }
+    let trim = |t: &str| t.trim_end_matches(['\r', '\n']).to_string();
+    match (id, str_param(params, "text")) {
+        ("edit.paste", Some(text)) => s.clipboard.as_ref().is_some_and(|c| trim(&c.text) == trim(text)),
+        _ => true,
+    }
+}
+
 fn d_uid(s: &Session) -> Result<u64> {
     Ok(s.doc()?.uid)
 }
@@ -125,7 +138,7 @@ pub(super) fn run_script(s: &mut Session, p: &Json) -> Result<Json> {
         if id.starts_with("automate.") {
             continue;
         }
-        if CLIPBOARD_READERS.contains(&id) && s.clipboard.as_ref().is_some_and(|c| c.doc_uid != home) {
+        if reads_clipboard(s, id, &st["params"]) && s.clipboard.as_ref().is_some_and(|c| c.doc_uid != home) {
             return Err(bad("automate.runScript", format!("scripts can't run `{id}` on cells copied from another workbook")));
         }
         let before = s.ui_requests.len();

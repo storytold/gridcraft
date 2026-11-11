@@ -2531,6 +2531,10 @@ fn a_script_cannot_paste_what_another_workbook_copied() {
     s.set_active(0);
     let err = s.execute("automate.runScript", json!({"name": "Paste"})).unwrap_err().to_string();
     assert!(err.contains("another workbook"), "{err}");
+    // Explicit text that is not the clipboard's does not read it.
+    let own = json!([{"command": "edit.paste", "params": {"at": "C3", "text": "typed"}}]);
+    s.execute("automate.newScript", json!({"name": "Typed", "commands": own})).unwrap();
+    s.execute("automate.runScript", json!({"name": "Typed"})).unwrap();
 }
 
 #[test]

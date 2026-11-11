@@ -469,10 +469,15 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     // A grant to edit a protected range belongs to the sheet and range it was given for: a sheet that
     // was renamed, deleted or replaced by another of the same name no longer carries it.
-    d.unlocked_ranges.retain(|(sheet, title)| wb.sheets.iter().any(|sh| sh.name == *sheet && sh.edit_ranges.iter().any(|r| r.title == *title)));
+    purge_unlock_grants(&mut d.unlocked_ranges, &wb);
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;
     Ok(r)
+}
+
+/// Drops the grants to edit protected ranges whose sheet name or range title `wb` no longer has.
+pub(crate) fn purge_unlock_grants(grants: &mut Vec<(String, String)>, wb: &Workbook) {
+    grants.retain(|(sheet, title)| wb.sheets.iter().any(|sh| sh.name == *sheet && sh.edit_ranges.iter().any(|r| r.title == *title)));
 }
 
 /// "Set precision as displayed": a number typed, pasted or reformatted is stored as its format

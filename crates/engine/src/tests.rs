@@ -6499,6 +6499,16 @@ fn an_edit_range_grant_does_not_outlive_its_sheet_name() {
 }
 
 #[test]
+fn undo_drops_the_grant_of_a_range_it_removes() {
+    let mut s = s();
+    s.execute("review.allowEditRanges", json!({"action": "add", "title": "Kept", "range": "C5", "password": "example"})).unwrap();
+    s.execute("review.allowEditRanges", json!({"action": "unlock", "title": "Kept", "password": "example"})).unwrap();
+    assert!(!s.doc().unwrap().unlocked_ranges.is_empty());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.doc().unwrap().unlocked_ranges.is_empty(), "the range is gone, so is its grant");
+}
+
+#[test]
 fn formulatext_does_not_reveal_a_hidden_formula() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "=1+1"})).unwrap();
