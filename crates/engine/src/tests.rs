@@ -1351,6 +1351,18 @@ fn scripts_leave_file_access_working_after_they_run() {
 }
 
 #[test]
+fn get_data_refuses_json_with_too_many_fields_or_rows_before_building_rows() {
+    let mut s = s();
+    let wide = format!("[{}]", (0..=gridcraft_core::MAX_COLS).map(|i| format!("{{\"k{i}\":1}}")).collect::<Vec<_>>().join(","));
+    let err = s.execute("data.fromTextCsv", json!({"text": wide})).unwrap_err().to_string();
+    assert!(err.contains("more fields"), "{err}");
+    // MAX_ROWS objects plus the header row are one too many.
+    let tall = format!("[{}]", vec!["{}"; gridcraft_core::MAX_ROWS as usize].join(","));
+    let err = s.execute("data.fromTextCsv", json!({"text": tall})).unwrap_err().to_string();
+    assert!(err.contains("more rows"), "{err}");
+}
+
+#[test]
 fn scripts_cannot_reach_outside_the_workbook_even_when_trusted() {
     let dir = std::env::temp_dir().join(format!("gridcraft-script-deny-{}", std::process::id()));
     let leak = dir.join("leak.xlsx");
@@ -6469,6 +6481,23 @@ fn clearing_links_and_notes_keeps_allow_edit_ranges() {
 }
 
 #[test]
+fn formulatext_does_not_reveal_a_hidden_formula() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=1+1"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"protection": {"locked": false, "hidden": true}}})).unwrap();
+    s.execute("home.formatCells", json!({"range": "B1", "style": {"protection": {"locked": false}}})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=FORMULATEXT(A1)"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::from("=1+1"), "not protected yet");
+    s.execute("review.protectSheet", json!({})).unwrap();
+    // Without entering the formula again: protecting recalculates what reads the protection.
+    assert_eq!(v(&s, "B1"), Value::Error(gridcraft_core::CellError::NA));
+    s.execute("cell.set", json!({"cell": "B1", "input": "=FORMULATEXT(A1)"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Error(gridcraft_core::CellError::NA));
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::from("=1+1"), "unprotecting shows it again without re-entering");
+}
+
+#[test]
 fn protected_sheet_refuses_layout_commands_its_permissions_do_not_allow() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["h"], [1], [2]]})).unwrap();
@@ -6574,4 +6603,27 @@ fn open_content_kind_and_save_dialog_payloads_distinguish_xlsx_from_imports_and_
         s.execute("file.save", json!({})).unwrap();
         assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::Dialog("saveAs".into(), json!({"saveAs": true}))], "{name}");
     }
+}
+
+#[test]
+fn history_charges_a_changed_sheets_comment_text() {
+    let mut s = s();
+    s.execute("review.newNote", json!({"cell": "A1", "text": "n".repeat(30_000), "author": "Example"})).unwrap();
+    let older = (*s.doc().unwrap().wb).clone();
+    s.execute("cell.set", json!({"cell": "B2", "input": "x"})).unwrap();
+    let newer = (*s.doc().unwrap().wb).clone();
+    // The older snapshot owns the comment text now that the sheet changed under it.
+    assert!(crate::history_retained_bytes(&older, &newer) >= 30_000);
+}
+
+#[test]
+fn history_charges_the_storage_of_empty_comment_replies() {
+    let mut s = s();
+    s.execute("review.newComment", json!({"cell": "A1", "text": "c", "author": "Ann"})).unwrap();
+    for _ in 0..500 {
+        s.execute("review.replyComment", json!({"cell": "A1", "text": "", "author": ""})).unwrap();
+    }
+    let sheet = s.doc().unwrap().wb.sheet(0).unwrap().clone();
+    // 500 replies of no text are still 500 elements.
+    assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
 }
