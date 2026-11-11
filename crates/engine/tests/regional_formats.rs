@@ -627,3 +627,27 @@ fn interactive_turkish_leading_percent_survives_the_command_boundary() {
         }
     }
 }
+
+/// Conditional format sections determine typed date order; ambiguous dates stay text.
+#[test]
+fn interactive_conditional_dates_round_trip_the_selected_section() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let loc = Locale::from_tag("ro-RO");
+    for (cell, code, expected) in [
+        (
+            "A1",
+            "[<45000]mm/dd/yyyy;dd/mm/yyyy",
+            gridcraft_engine::core::parse::parse_input("2026-03-04", gridcraft_engine::core::DateSystem::D1900).value,
+        ),
+        ("A2", "[<46100]dd/mm/yyyy;mm/dd/yyyy", Value::text("04/03/2026")),
+    ] {
+        s.execute("home.formatCells", json!({"range":cell,"style":{"num_fmt":code}})).unwrap();
+        s.run_interactive("cell.set", json!({"cell":cell,"input":"04/03/2026"}), &loc).unwrap();
+        let wb = &s.active().unwrap().wb;
+        let sh = wb.sheet(0).unwrap();
+        let at = CellRef::parse(cell).unwrap();
+        assert_eq!(sh.value(at), expected, "{cell}");
+        assert_eq!(gridcraft_engine::display::cell_text_in(wb, sh, at, &loc), "04/03/2026");
+    }
+}

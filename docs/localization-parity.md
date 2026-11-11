@@ -157,7 +157,7 @@ names and regional Home Currency defaults are outside this change.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-11 | minor | Declared built-in XLSX short-date formats keep regional identity and built-in IDs; custom declarations remain literal. Format Cells samples follow the display region, and calendar clipboard controls retain hidden time fractions in both directions. |
+| 2026-11-11 | minor | Declared built-in XLSX short-date formats keep regional identity and built-in IDs; custom declarations remain literal. Format Cells samples follow the display region, and calendar clipboard controls retain hidden time fractions in both directions. Conditional date entry follows the section that displays each candidate; unresolved or ambiguous dates remain text. |
 | 2026-11-10 | minor | Keep shared custom number formats and accept percent-prefixed Turkish interactive input; explicit locale snapshots carry the percent-prefix convention without changing Romanian or en-US entry. |
 | 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |
 | 2026-11-10 | minor | Diagram and Decorative Text labels in all 18 non-English catalogs; Diagram never repeats the catalog's chart word (German `Schema`, Ukrainian `Схема`, Romanian `Schemă`), see [feature-names.md](feature-names.md) |

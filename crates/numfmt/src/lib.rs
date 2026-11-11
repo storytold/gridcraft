@@ -235,7 +235,23 @@ impl NumberFormat {
 
     /// Calendar field order from the parsed format; weekday labels and time minutes are excluded.
     pub(crate) fn calendar_order(&self) -> Option<[char; 3]> {
-        let section = self.num_sections().iter().find(|s| s.kind == SecKind::Date)?;
+        self.calendar_orders().next()
+    }
+
+    /// Candidate orders for numeric date entry; conditions are checked against each parsed value.
+    pub(crate) fn calendar_orders(&self) -> impl Iterator<Item = [char; 3]> + '_ {
+        self.num_sections().iter().filter_map(Self::section_calendar_order)
+    }
+
+    /// The same section selection used by display, including conditions and sign sections.
+    pub(crate) fn calendar_order_for(&self, value: f64) -> Option<[char; 3]> {
+        Self::section_calendar_order(self.select(value)?.0)
+    }
+
+    fn section_calendar_order(section: &Section) -> Option<[char; 3]> {
+        if section.kind != SecKind::Date {
+            return None;
+        }
         let mut order = Vec::new();
         for token in &section.toks {
             let part = match token {

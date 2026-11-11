@@ -12,7 +12,11 @@ impl Locale {
             return text.to_string();
         }
         if let Some(date) = numeric_date(text.trim(), date_code, sys) {
-            return date;
+            return match date {
+                NumericDate::Canonical(date) => date,
+                // Do not let the invariant fallback silently pick another date order.
+                NumericDate::Unresolved => format!("'{text}"),
+            };
         }
         let mut mapped: String = text
             .chars()
@@ -46,19 +50,26 @@ impl Locale {
     }
 }
 
-/// Reorder three numeric calendar fields, leaving ISO input independent of the region. Date
-/// validity and the 1900/1904 systems are checked by the existing core parser, not reimplemented.
-fn numeric_date(text: &str, code: &str, sys: DateSystem) -> Option<String> {
+enum NumericDate {
+    Canonical(String),
+    Unresolved,
+}
+
+/// Reorder numeric fields using the section that would display each candidate. ISO input is
+/// independent of the region. Date validity and calendar epochs remain the core parser's job.
+fn numeric_date(text: &str, code: &str, sys: DateSystem) -> Option<NumericDate> {
     let (date, time) = text.split_once([' ', 'T']).map_or((text, ""), |(d, t)| (d, t.trim()));
     let fields: Vec<_> = date.split(['.', '/', '-']).take(4).collect();
-    let [first, second, third] = fields.as_slice() else { return None };
+    let [first, _, _] = fields.as_slice() else { return None };
     if fields.iter().any(|p| p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit())) {
         return None;
     }
-    let canonical = if first.len() == 4 {
-        format!("{first}-{second}-{third}")
-    } else {
-        let order = NumberFormat::parse_cached(code).calendar_order()?;
+    let iso = first.len() == 4;
+    let format = NumberFormat::parse_cached(code);
+    let orders: Vec<_> = if iso { vec![['y', 'm', 'd']] } else { format.calendar_orders().collect() };
+    let mut accepted: Option<(String, f64)> = None;
+    let mut parsed_date = false;
+    for order in orders {
         let mut day = "";
         let mut month = "";
         let mut year = "";
@@ -70,14 +81,26 @@ fn numeric_date(text: &str, code: &str, sys: DateSystem) -> Option<String> {
                 _ => return None,
             }
         }
-        if day.len() > 2 || month.len() > 2 || !matches!(year.len(), 2 | 4) {
-            return None;
+        if !iso && (day.len() > 2 || month.len() > 2 || !matches!(year.len(), 2 | 4)) {
+            continue;
         }
-        format!("{month}/{day}/{year}")
-    };
-    let canonical = if time.is_empty() { canonical } else { format!("{canonical} {time}") };
-    let parsed = parse_input(&canonical, sys);
-    (matches!(parsed.value, Value::Number(_)) && parsed.format.is_some()).then_some(canonical)
+        let canonical = if iso { format!("{year}-{month}-{day}") } else { format!("{month}/{day}/{year}") };
+        let canonical = if time.is_empty() { canonical } else { format!("{canonical} {time}") };
+        let parsed = parse_input(&canonical, sys);
+        let Value::Number(value) = parsed.value else { continue };
+        if parsed.format.is_none() {
+            continue;
+        }
+        parsed_date = true;
+        if !iso && format.calendar_order_for(value) != Some(order) {
+            continue;
+        }
+        if accepted.as_ref().is_some_and(|(_, previous)| *previous != value) {
+            return Some(NumericDate::Unresolved);
+        }
+        accepted = Some((canonical, value));
+    }
+    accepted.map(|(date, _)| NumericDate::Canonical(date)).or_else(|| parsed_date.then_some(NumericDate::Unresolved))
 }
 
 #[cfg(test)]
@@ -139,6 +162,26 @@ mod tests {
             if input.contains('%') && matches!(expected, Value::Number(_)) {
                 assert!(NumberFormat::parse(parsed.format.unwrap()).is_percent());
             }
+        }
+    }
+    #[test]
+    fn conditional_date_entry_uses_the_selected_section_and_rejects_ambiguity() {
+        let ro = Locale::from_tag("ro-RO");
+        for sys in [DateSystem::D1900, DateSystem::D1904] {
+            let Value::Number(january) = parse_input("2026-01-01", sys).value else { panic!("date fixture") };
+            let Value::Number(march) = parse_input("2026-03-20", sys).value else { panic!("date fixture") };
+            let selected = format!("[<{january}]mm/dd/yyyy;dd/mm/yyyy");
+            for (input, expected) in [("04/03/2026", "2026-03-04"), ("04/03/2026 15:00", "2026-03-04 15:00")] {
+                assert_eq!(parse_input(&ro.canonical_input(input, sys, &selected), sys).value, parse_input(expected, sys).value);
+            }
+            for code in [format!("[<{march}]dd/mm/yyyy;mm/dd/yyyy"), format!("[<{march}]mm/dd/yyyy;dd/mm/yyyy")] {
+                for input in ["04/03/2026", "04/03/2026 15:00", " 04/03/2026 "] {
+                    assert_eq!(parse_input(&ro.canonical_input(input, sys, &code), sys).value, Value::text(input));
+                }
+                assert_eq!(parse_input(&ro.canonical_input("2026-03-04", sys, &code), sys).value, parse_input("2026-03-04", sys).value);
+            }
+            let same_order = format!("[<{march}]dd/mm/yyyy;dd/mm/yyyy");
+            assert_eq!(parse_input(&ro.canonical_input("04/03/2026", sys, &same_order), sys).value, parse_input("2026-03-04", sys).value);
         }
     }
 }
