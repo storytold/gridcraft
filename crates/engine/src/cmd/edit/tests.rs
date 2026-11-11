@@ -454,6 +454,84 @@ fn paste_special_operations_keep_text_errors_and_formulas() {
 }
 
 #[test]
+fn paste_special_operation_combines_a_copied_formula_with_the_destination_formula() {
+    // #3744: the copied formula replaced the destination's formula instead of joining it.
+    for what in ["all", "formulas"] {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A2", "values": [[5, "=A2+1", 8, "=A2*2"]]})).unwrap();
+        s.execute("edit.copy", json!({"range": "B2"})).unwrap();
+        s.execute("selection.set", json!({"range": "D2"})).unwrap();
+        s.execute("edit.pasteSpecial", json!({"what": what, "operation": "multiply"})).unwrap();
+        let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+        assert_eq!(get(&mut s, "D2")["formula"], "=(A2*2)*(C2+1)", "{what}");
+        assert_eq!(get(&mut s, "D2")["value"], json!(90.0), "{what}");
+        s.execute("cell.set", json!({"cell": "A2", "input": "7"})).unwrap();
+        assert_eq!(get(&mut s, "D2")["value"], json!(126.0), "{what}");
+    }
+}
+
+#[test]
+fn paste_special_operation_refuses_a_joined_formula_past_the_length_limit() {
+    // Joining the destination formula with the pasted one would pass Excel's 8,192 characters.
+    let mut s = Session::new();
+    s.new_workbook();
+    let long = format!("=A1{}", "+1".repeat(4_094));
+    s.execute("range.setValues", json!({"range": "A1", "values": [[2, "=A1+1", long]]})).unwrap();
+    s.execute("edit.copy", json!({"range": "B1"})).unwrap();
+    s.execute("selection.set", json!({"range": "C1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "formulas", "operation": "add"})).is_err());
+    assert_eq!(s.execute("cell.get", json!({"cell": "C1"})).unwrap()["formula"], json!(long));
+}
+
+#[test]
+fn paste_special_operations_apply_with_formulas_and_number_formats() {
+    // #3764: Formulas and Number Formats ignored the operation and replaced the destination.
+    for (op, dest, want) in [("add", 10, 13.0), ("subtract", 10, 7.0), ("multiply", 10, 30.0), ("divide", 12, 4.0)] {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[3, null, dest]]})).unwrap();
+        s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+        s.execute("selection.set", json!({"range": "C1"})).unwrap();
+        s.execute("edit.pasteSpecial", json!({"what": "formulasAndNumberFormats", "operation": op})).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "C1"})).unwrap()["value"], json!(want), "{op}");
+    }
+}
+
+#[test]
+fn paste_special_operations_read_numbers_stored_as_text_and_skip_other_text() {
+    // #3765: copied text replaced the destination. Numbers stored as text take part as numbers;
+    // other text leaves the destination as it was.
+    for what in ["values", "all"] {
+        for (op, dest, want) in [("add", 10, 13.0), ("subtract", 10, 7.0), ("multiply", 10, 30.0), ("divide", 12, 4.0)] {
+            let mut s = Session::new();
+            s.new_workbook();
+            s.execute("range.setValues", json!({"range": "A1", "values": [["'3", null, dest]]})).unwrap();
+            s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+            s.execute("selection.set", json!({"range": "C1"})).unwrap();
+            s.execute("edit.pasteSpecial", json!({"what": what, "operation": op})).unwrap();
+            assert_eq!(s.execute("cell.get", json!({"cell": "C1"})).unwrap()["value"], json!(want), "{what} {op}");
+        }
+    }
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["label", "'3", 10, "=A3*2"]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "A3", "values": [[4]]})).unwrap();
+    let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("selection.set", json!({"range": "C1:D1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "values", "operation": "multiply"})).unwrap();
+    assert_eq!(get(&mut s, "C1")["value"], json!(10.0));
+    assert_eq!(get(&mut s, "D1")["formula"], "=A3*2");
+    // A number stored as text joins a destination formula as a number.
+    s.execute("edit.copy", json!({"range": "B1"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "values", "operation": "multiply"})).unwrap();
+    assert_eq!(get(&mut s, "D1")["formula"], "=(A3*2)*3");
+    assert_eq!(get(&mut s, "D1")["value"], json!(24.0));
+}
+
+#[test]
 fn cut_paste_that_overflows_the_grid_moves_nothing() {
     // #997: the source was emptied first and the cells that fell off the grid were skipped.
     let mut s = Session::new();
