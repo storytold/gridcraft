@@ -102,9 +102,13 @@ fn call_cost(spec: &FnSpec, cell_args: &[Arg]) -> usize {
     if !PERIOD_LOOPS.contains(&spec.name) {
         return 0;
     }
+    // Coercing numeric text reads all of it, even in a call the function then refuses, so each
+    // character is charged as well.
+    let parse: usize = cell_args.iter().map(|a| if let Value::Text(t) = &a.value { t.len() } else { 0 }).sum();
     // The function's own validation and coercion (text like "10000000" counts), so a call it
     // refuses before its loop costs nothing and no loop goes uncharged.
-    crate::financial::cumulative_args(cell_args).map_or(0, |(.., start, end, _)| (end - start + 1.0) as usize)
+    let periods = crate::financial::cumulative_args(cell_args).map_or(0, |(.., start, end, _)| (end - start + 1.0) as usize);
+    parse.saturating_add(periods)
 }
 
 pub(crate) fn call_lifted(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
@@ -298,6 +302,20 @@ mod tests {
         let out = ev("CUMIPMT", args(2, 12.0));
         assert_eq!(rows_of(&out).len(), 2);
         assert!(matches!(rows_of(&out).first().and_then(|r| r.first()), Some(Value::Number(x)) if *x < 0.0));
+    }
+
+    /// Security: numeric text is parsed once per lifted element even when the call is refused; the
+    /// characters read are charged, so a long text repeated down a column can't cost gigabytes of parsing.
+    #[test]
+    fn lifted_period_loops_charge_the_text_they_parse() {
+        use gridcraft_core::Array;
+        // 20,000 elements x 32,000 characters is past 5e8 though no call reaches its loop (rate is negative).
+        let long = Value::text(format!("{}5", "0".repeat(32_000)));
+        let ends = av(Array::filled(20_000, 1, long).into());
+        is_err(ev("CUMIPMT", vec![n(-0.01), n(10.0), n(1000.0), n(1.0), ends, n(0.0)]), CellError::Num);
+        // A short text period costs next to nothing.
+        let ends = av(Array::filled(3, 1, Value::text("12")).into());
+        assert_eq!(rows_of(&ev("CUMIPMT", vec![n(0.01), n(20.0), n(1000.0), n(1.0), ends, n(0.0)])).len(), 3);
     }
 
     /// A call the function refuses before its loop (here: end period past the period count) is
