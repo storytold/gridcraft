@@ -6549,3 +6549,16 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
 }
+
+#[test]
+fn circle_invalid_says_when_its_scan_allowance_ended_early() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[-1]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "A200000", "values": [[-1]]})).unwrap();
+    s.execute("data.validation", json!({"range": "A1:A5", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    let out = s.execute("data.circleInvalid", json!({})).unwrap();
+    assert_eq!((out["invalid"].as_array().map(Vec::len), out["truncated"].as_bool()), (Some(1), Some(false)), "{out}");
+    s.execute("data.validation", json!({"range": "A1:A200000", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    let out = s.execute("data.circleInvalid", json!({})).unwrap();
+    assert_eq!(out["truncated"].as_bool(), Some(true), "{out}");
+}

@@ -210,9 +210,19 @@ pub(super) fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
                     _ => runs.push((c, c)),
                 }
             }
+            // Every run is a pass over all the stored rows: many runs (alternating columns) are one
+            // pass over their whole span instead, the unselected columns skipped.
+            if runs.len() > 4
+                && let (Some(&(first, _)), Some(&(_, last))) = (runs.first(), runs.last())
+            {
+                runs = vec![(first, last)];
+            }
             for (first, last) in runs {
                 let span = RangeRef::new(CellRef::new(u.start.row, first), CellRef::new(u.end.row, last));
                 for (cell, _) in sh.cells.iter_range(span) {
+                    if !cols.contains(&cell.col) {
+                        continue;
+                    }
                     if sh.merge_at(cell).is_some_and(|m| !m.is_single()) {
                         continue;
                     }

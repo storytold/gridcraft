@@ -339,10 +339,13 @@ pub(super) fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
     let mut bad_cells = Vec::new();
     // One scan allowance for the whole command: duplicate or overlapping ranges don't multiply it.
     let mut budget = 100_000usize;
+    // Cells were left unchecked because the allowance ran out: said in the result.
+    let mut truncated = false;
     for dv in &sh.validations {
         for r in &dv.ranges {
             let r = sh.used_range().and_then(|u| r.intersection(&u));
             let Some(r) = r else { continue };
+            truncated |= r.count() > budget as u64;
             for c in r.iter().take(budget) {
                 budget -= 1;
                 let text = sh.input_text(c);
@@ -352,5 +355,5 @@ pub(super) fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
             }
         }
     }
-    Ok(json!({"invalid": bad_cells}))
+    Ok(json!({"invalid": bad_cells, "truncated": truncated}))
 }
