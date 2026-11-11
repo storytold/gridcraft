@@ -366,6 +366,10 @@ pub struct Ctx<'a> {
     pub wb: Workbook,
     pub changed: Vec<Key>,
     pub structural: bool,
+    /// Recalculate every formula without the other effects of `structural` (table headers are not
+    /// resynchronized, array formulas are still checked): for edits that change only what a
+    /// function reads, like sheet protection.
+    pub recalc_all: bool,
     pub sel: &'a mut Selection,
     /// Rows whose automatic height should be recomputed (sheet, row).
     pub fit_rows: Vec<(usize, u32)>,
@@ -400,13 +404,14 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         wb: (*d.wb).clone(),
         changed: Vec::new(),
         structural: false,
+        recalc_all: false,
         sel: &mut sel,
         fit_rows: Vec::new(),
         protection_checked: false,
         edits: Vec::new(),
     };
     let r = f(&mut ctx)?;
-    let Ctx { mut wb, mut changed, structural, mut fit_rows, protection_checked, edits, .. } = ctx;
+    let Ctx { mut wb, mut changed, structural, recalc_all, mut fit_rows, protection_checked, edits, .. } = ctx;
     // Equations whose source changed (or that arrived without a layout, as from a paste) are
     // laid out here, so painting only ever reads the cache.
     wb.refresh_equations();
@@ -437,6 +442,8 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     if structural {
         d.calc.recalc_after_structural_edit(&mut wb);
+    } else if recalc_all {
+        d.calc.recalc_all(&mut wb);
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }

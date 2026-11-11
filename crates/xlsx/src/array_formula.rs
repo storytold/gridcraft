@@ -88,11 +88,11 @@ pub(crate) enum Export {
     Dynamic,
 }
 
-pub(crate) fn export(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions: FunctionInfo) -> Export {
+pub(crate) fn export(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions: FunctionInfo, names: &mut NameCache) -> Export {
     let Some(expr) = formula.expr_arc() else { return Export::Unchanged };
     let mut explicit = false;
     expr.walk(&mut |e| explicit |= matches!(e, Expr::Unary(UnOp::At, _)));
-    let mut legacy = Legacy::new(wb, at, functions);
+    let mut legacy = Legacy::new(wb, at, functions, names);
     if !explicit {
         legacy.formula(expr.as_ref().clone(), sheet);
         return if !legacy.certain {
@@ -119,7 +119,7 @@ pub(crate) fn export(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula
             candidates.insert(0, unwrap_at(x.as_ref().clone()));
         }
         for text in candidates {
-            let read = self::legacy(wb, sheet, at, &Formula::from_expr(text.clone()), functions);
+            let read = self::legacy(wb, sheet, at, &Formula::from_expr(text.clone()), functions, names);
             if read.map_or(text == *expr, |f| f.expr_arc().is_some_and(|e| *e == *expr)) {
                 return reads_back(text).map_or(Export::Dynamic, Export::Legacy);
             }
@@ -140,12 +140,14 @@ fn remove_at(e: Expr) -> Expr {
 /// Rewrites the legacy cell formulas at `cells` (model sheet index, positions) to their
 /// dynamic-array reading, with `@` where Excel intersects. Runs once names and tables are loaded.
 pub(crate) fn apply_legacy(wb: &mut Workbook, cells: Vec<(usize, Vec<CellRef>)>, functions: FunctionInfo) {
+    // Defined names do not change during the pass: each is analysed once for all the cells.
+    let mut names = NameCache::default();
     for (si, positions) in cells {
         let Some(sheet) = wb.sheet(si) else { continue };
         let mut changed = Vec::new();
         for at in positions {
             let Some(formula) = sheet.cell(at).and_then(|c| c.formula.as_deref()) else { continue };
-            if let Some(f) = legacy(wb, si, at, formula, functions) {
+            if let Some(f) = legacy(wb, si, at, formula, functions, &mut names) {
                 changed.push((at, f));
             }
         }
@@ -162,12 +164,12 @@ pub(crate) fn apply_legacy(wb: &mut Workbook, cells: Vec<(usize, Vec<CellRef>)>,
 }
 
 /// The dynamic-array reading of a legacy formula, when it differs.
-fn legacy(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions: FunctionInfo) -> Option<Formula> {
+fn legacy(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions: FunctionInfo, names: &mut NameCache) -> Option<Formula> {
     if formula.array.is_some() {
         return None;
     }
     let expr = formula.expr_arc()?;
-    let mut legacy = Legacy::new(wb, at, functions);
+    let mut legacy = Legacy::new(wb, at, functions, names);
     let out = legacy.formula(expr.as_ref().clone(), sheet);
     if legacy.certain && legacy.complete {
         if legacy.inserted == 0 {
@@ -228,8 +230,56 @@ fn atomic(e: &Expr) -> bool {
 /// (see [`Legacy::binary`]).
 const MAX_DEPTH: usize = 256;
 
+/// What the analysis of one defined name leaves for a later formula that refers to it.
+#[derive(Clone)]
+struct NameInfo {
+    kind: Kind,
+    /// The definition reached a one-cell reference written as a range.
+    one_cell_range: bool,
+    /// The analysis covered only established legacy semantics.
+    certain: bool,
+    /// Nodes of the per-formula budget the analysis used.
+    cost: usize,
+    /// Nesting below the reference that the analysis reached.
+    depth: usize,
+    /// Every name the analysis read, with its result (itself last): a hit records them all, as a
+    /// fresh analysis does, so a later reference to one of them in the formula costs nothing.
+    closure: Vec<(NameKey, Kind, bool)>,
+}
+
+/// A defined name as [`Legacy::names`] keys it: upper-case name, scope, collapsed.
+type NameKey = (String, usize, bool);
+
+/// Defined names analysed so far, shared by the formulas of one pass (reading a workbook, or
+/// writing one) so that a name is parsed and analysed once, not once per formula that refers
+/// to it. Keyed like [`Legacy::names`]. Only analyses that finished within their limits, did not
+/// depend on the formula's own position and did not reuse a name the formula had already read
+/// (or meet a cycle) are kept. A hit charges the budget and nesting the analysis used and records
+/// every name it read, and is taken only when the formula can afford it, so a formula reads the
+/// same with the cache as without it.
+#[derive(Default)]
+pub(crate) struct NameCache {
+    map: HashMap<NameKey, NameInfo>,
+    /// How many names were analysed (not found in the cache).
+    pub(crate) analyses: usize,
+}
+
+/// Names kept at most: the cache is bounded even when a workbook defines a great many.
+const MAX_CACHED_NAMES: usize = 65_536;
+
 struct Legacy<'a> {
     wb: &'a Workbook,
+    /// Name analyses shared with the other formulas of this pass.
+    shared: &'a mut NameCache,
+    /// The analysis read a structured reference without a table name, which depends on `at`.
+    position_dependent: bool,
+    /// The analysis reused a name this formula had already read, or met a cycle: its result
+    /// leaves out what that name cost.
+    reused: bool,
+    /// The names read so far in this formula, in order, with their results.
+    read: Vec<(NameKey, Kind, bool)>,
+    /// The deepest nesting reached.
+    deepest: usize,
     at: CellRef,
     functions: FunctionInfo,
     remaining: usize,
@@ -262,9 +312,14 @@ struct Legacy<'a> {
 }
 
 impl<'a> Legacy<'a> {
-    fn new(wb: &'a Workbook, at: CellRef, functions: FunctionInfo) -> Self {
+    fn new(wb: &'a Workbook, at: CellRef, functions: FunctionInfo, shared: &'a mut NameCache) -> Self {
         Legacy {
             wb,
+            shared,
+            position_dependent: false,
+            reused: false,
+            read: Vec::new(),
+            deepest: 0,
             at,
             functions,
             remaining: 16384,
@@ -364,6 +419,7 @@ impl<'a> Legacy<'a> {
     fn expr(&mut self, e: Expr, sheet: usize, ctx: Ctx, depth: usize) -> (Expr, Kind) {
         // Names can be cyclic or nest deeply; their kinds are remembered, so repeated names
         // cost one analysis each.
+        self.deepest = self.deepest.max(depth);
         if depth >= MAX_DEPTH || self.remaining == 0 {
             self.complete = false;
             return (e, Kind::Array);
@@ -407,6 +463,7 @@ impl<'a> Legacy<'a> {
             }
             Expr::Struct(r) => {
                 let table = if r.table.is_empty() {
+                    self.position_dependent = true;
                     self.wb.sheet(sheet).and_then(|s| s.table_at(self.at))
                 } else {
                     self.wb.table(&r.table).and_then(|(si, ti)| self.wb.sheet(si).and_then(|s| s.tables.get(ti)))
@@ -459,25 +516,73 @@ impl<'a> Legacy<'a> {
             let key = (bare.to_ascii_uppercase(), scope, self.collapsed);
             match self.names.get(&key) {
                 Some(Some((kind, one_cell_range))) => {
+                    self.reused = true;
                     self.one_cell_range |= *one_cell_range;
                     return *kind;
                 }
                 Some(None) => {
                     // A name defined in terms of itself has no legacy value to keep.
                     self.certain = false;
+                    self.reused = true;
                     return Kind::Array;
                 }
                 None => {}
             }
+            let reached = depth.saturating_add(1);
+            // Taken only when the formula can afford it and has read none of the names it read:
+            // otherwise the fresh analysis below differs (cut short, or reusing those names).
+            let hit = self.shared.map.get(&key).filter(|i| {
+                reached + i.depth < MAX_DEPTH && i.cost <= self.remaining && i.closure.iter().all(|(k, _, _)| !self.names.contains_key(k))
+            });
+            if let Some(info) = hit {
+                // Charged and recorded as the analysis was: the formula reads as a fresh one does.
+                self.deepest = self.deepest.max(reached + info.depth);
+                self.certain &= info.certain;
+                self.one_cell_range |= info.one_cell_range;
+                self.remaining -= info.cost;
+                for (k, kind, one_cell_range) in &info.closure {
+                    self.names.insert(k.clone(), Some((*kind, *one_cell_range)));
+                }
+                self.read.extend(info.closure.iter().cloned());
+                return info.kind;
+            }
             let Ok(expr) = gridcraft_formula::parse_name(def.formula.trim_start_matches('=')) else { return Kind::Array };
+            self.shared.analyses += 1;
             self.names.insert(key.clone(), None);
             // A name's own formula does not see the formula's LET variables.
             let locals = std::mem::take(&mut self.locals);
             let seen = std::mem::replace(&mut self.one_cell_range, false);
+            let before = self.remaining;
+            let first_read = self.read.len();
+            let outer = (
+                std::mem::replace(&mut self.certain, true),
+                std::mem::replace(&mut self.complete, true),
+                std::mem::replace(&mut self.position_dependent, false),
+                std::mem::replace(&mut self.reused, false),
+                std::mem::replace(&mut self.deepest, 0),
+            );
             let kind = self.kind_of(expr, def.scope.unwrap_or(scope), depth + 1);
             let one_cell_range = std::mem::replace(&mut self.one_cell_range, seen);
+            self.read.push((key.clone(), kind, one_cell_range));
+            let cacheable = self.complete && !self.position_dependent && !self.reused;
+            let info = cacheable.then(|| NameInfo {
+                kind,
+                one_cell_range,
+                certain: self.certain,
+                cost: before.saturating_sub(self.remaining),
+                depth: self.deepest.saturating_sub(depth + 1),
+                closure: self.read[first_read..].to_vec(),
+            });
+            self.certain &= outer.0;
+            self.complete &= outer.1;
+            self.position_dependent |= outer.2;
+            self.reused |= outer.3;
+            self.deepest = self.deepest.max(outer.4);
             self.one_cell_range |= one_cell_range;
             self.locals = locals;
+            if let Some(info) = info.filter(|_| self.shared.map.len() < MAX_CACHED_NAMES) {
+                self.shared.map.insert(key.clone(), info);
+            }
             self.names.insert(key, Some((kind, one_cell_range)));
             return kind;
         }

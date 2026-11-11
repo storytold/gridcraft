@@ -1905,6 +1905,54 @@ fn trim_references() {
 }
 
 #[test]
+fn lookup_of_an_empty_cell_stays_blank() {
+    // #374: B1 (the value for key "k") is empty.
+    let mut t = T::new();
+    t.set("A1", "k");
+    t.set("A2", "j");
+    t.set("B2", "v");
+    for (at, f, want) in [
+        ("D2", "=\"x\"&VLOOKUP(\"k\",A1:B2,2,0)&\"y\"", Value::from("xy")),
+        ("D3", "=CONCATENATE(\"x\",VLOOKUP(\"k\",A1:B2,2,0),\"y\")", Value::from("xy")),
+        ("D4", "=ISBLANK(XLOOKUP(\"k\",A1:A2,B1:B2))", Value::Bool(true)),
+        ("D5", "=\"x\"&XLOOKUP(\"k\",A1:A2,B1:B2)&\"y\"", Value::from("xy")),
+        // A bare lookup still shows 0, like a reference to an empty cell.
+        ("D8", "=VLOOKUP(\"k\",A1:B2,2,0)", Value::Number(0.0)),
+        // Arithmetic still reads the blank as 0.
+        ("D9", "=VLOOKUP(\"k\",A1:B2,2,0)+1", Value::Number(1.0)),
+        // A blank lookup given as an argument is still given, not omitted.
+        ("D10", "=FILTER(1,FALSE,VLOOKUP(\"k\",A1:B2,2,FALSE))", Value::Number(0.0)),
+        ("D11", "=XLOOKUP(\"z\",A1:A2,B1:B2,VLOOKUP(\"k\",A1:B2,2,0))", Value::Number(0.0)),
+        // The same holds per element when the call is lifted over an array of blank lookups.
+        ("D12", "=CEILING.MATH(6.7,VLOOKUP(\"k\",A1:B2,2,0))", Value::Number(0.0)),
+        ("D13", "=SUM(CEILING.MATH(6.7,VLOOKUP({\"k\",\"k\"},A1:B2,2,0)))", Value::Number(0.0)),
+        ("D14", "=FLOOR.MATH(6.7,VLOOKUP(\"k\",A1:B2,2,0))", Value::Number(0.0)),
+        ("D15", "=SUM(FLOOR.MATH(6.7,VLOOKUP({\"k\",\"k\"},A1:B2,2,0)))", Value::Number(0.0)),
+    ] {
+        t.set(at, f);
+        assert_eq!(t.get(at), want, "{f}");
+    }
+}
+
+#[test]
+fn blank_lookup_values_match_excel_windows_observation() {
+    // Excel 365 Windows 2609, build 16.0.20430.20032, black-box check 2026-10-13:
+    // A1="k", B1 and A2 genuinely empty.
+    // All three value lookups preserve blankness inside ISBLANK/concatenation.
+    let mut t = T::new();
+    t.set("A1", "k");
+    for (at, f, want) in [
+        ("D1", "=ISBLANK(VLOOKUP(\"k\",A1:B1,2,FALSE))", Value::Bool(true)),
+        ("D2", "=ISBLANK(HLOOKUP(\"k\",A1:A2,2,FALSE))", Value::Bool(true)),
+        ("D3", "=ISBLANK(LOOKUP(\"k\",A1:A1,B1:B1))", Value::Bool(true)),
+        ("D4", "=\"x\"&HLOOKUP(\"k\",A1:A2,2,FALSE)&\"y\"", Value::from("xy")),
+    ] {
+        t.set(at, f);
+        assert_eq!(t.get(at), want, "{f}");
+    }
+}
+
+#[test]
 fn cell_width_is_the_column_width_dialog_value_rounded() {
     // #735: Excel 365 values. Widths in px as `home.columnWidth {"chars"}` sets them
     // (chars * 7 + 5): 10.71 -> 80, 12 -> 89, 10.57 -> 79, 2.86 -> 25; B keeps the default 8.43 (64).
@@ -2001,8 +2049,8 @@ fn offset_extreme_arguments_return_ref() {
 }
 
 /// `@` intersects a reference with the formula's row (a column range) or column (a row range);
-/// a 2D range or one the formula does not line up with gives #VALUE!. An array gives its
-/// top-left value. Legacy formulas read from files use it where Excel intersects implicitly.
+/// a 2D range both (circular when it includes the formula's cell); a range the formula does not
+/// line up with gives #VALUE!. An array gives its top-left value. Legacy formulas read from files use it where Excel intersects implicitly.
 #[test]
 fn implicit_intersection_operator() {
     let mut t = T::new();
@@ -2019,9 +2067,22 @@ fn implicit_intersection_operator() {
     t.set("D3", "=SUM(@A1:A3)");
     assert_eq!(t.num("B2"), 2f64.tanh());
     assert_eq!(t.num("B7"), 5f64.tanh());
-    for at in ["B3", "B9", "E9"] {
+    for at in ["B9", "E9"] {
         assert_eq!(t.get(at), Value::Error(CellError::Value), "{at}");
     }
+    // A 2D range that includes the formula's own cell is a circular reference (Excel shows 0).
+    assert_eq!(t.get("B3"), Value::Error(CellError::Circ));
+    // From another sheet a 2D range intersects on both row and column; outside it is #VALUE!.
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Other")));
+    for (at, input) in [("B2", "=@Sheet1!A1:C3"), ("C1", "=@Sheet1!A1:C3"), ("B9", "=@Sheet1!A1:C3"), ("E2", "=@Sheet1!A1:C3")] {
+        t.wb.sheet_mut(1).unwrap().cells.set(c(at), Cell::formula(Formula::new(input)));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    let other = |at: &str| t.wb.sheet(1).unwrap().value(c(at));
+    assert_eq!(other("B2"), Value::Number(2f64.tanh())); // Sheet1!B2
+    assert_eq!(other("C1"), Value::Number(0.0));
+    assert_eq!(other("B9"), Value::Error(CellError::Value));
+    assert_eq!(other("E2"), Value::Error(CellError::Value));
     assert_eq!(t.num("D1"), 7.0);
     assert_eq!(t.num("D2"), 2.0);
     assert_eq!(t.num("D3"), 3.0);
