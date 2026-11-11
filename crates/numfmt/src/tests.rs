@@ -936,6 +936,23 @@ fn indian_grouping_displays_three_then_two() {
     assert_eq!(fin("en-GB", "#,##0", 1234567.0), "1,234,567");
 }
 
+/// What Brazilian workbooks hit, value → stored code → what Excel shows in pt-BR (the table
+/// posted on #3709). `[$R$-416]` is the currency tag Excel writes on a Brazilian machine: the tag
+/// stays as it is and the number after it takes the region's separators.
+#[test]
+fn pt_br_shows_brazilian_workbook_formats() {
+    assert_eq!(fin("pt-BR", "#,##0.00", 1234.56), "1.234,56");
+    assert_eq!(fin("pt-BR", "#,##0.000", 1234567.891), "1.234.567,891");
+    assert_eq!(fin("pt-BR", "General", 0.5), "0,5");
+    assert_eq!(fin("pt-BR", "0.00%", 0.125), "12,50%");
+    assert_eq!(fin("pt-BR", "\"R$\" #,##0.00", 1234.56), "R$ 1.234,56");
+    assert_eq!(fin("pt-BR", "\"R$\" #,##0.00", -50.0), "-R$ 50,00");
+    assert_eq!(fin("pt-BR", "[$R$-416] #,##0.00", 1234.56), "R$ 1.234,56");
+    // Built-in formats 14 and 22 are the region's short date and short date with time.
+    assert_eq!(fin("pt-BR", "m/d/yyyy", 46290.0), "25/09/2026");
+    assert_eq!(fin("pt-BR", "m/d/yyyy h:mm", 46290.75), "25/09/2026 18:00");
+}
+
 #[test]
 fn general_uses_the_regional_decimal() {
     assert_eq!(fin("de-DE", "General", 1.5), "1,5");
