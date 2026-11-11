@@ -2908,7 +2908,8 @@ fn samples_build() {
     }
 }
 
-/// Original minimal BIFF12 records, built in source rather than a vendor workbook fixture.
+/// Original minimal BIFF12 records, built in source rather than a vendor workbook fixture:
+/// A1 = `C1*2` with its cached result 42, B1 = "Original data", C1 = 21.
 fn xlsb_fixture() -> Vec<u8> {
     use std::io::{Cursor, Write};
     fn wide(s: &str) -> Vec<u8> {
@@ -2946,14 +2947,19 @@ fn xlsb_fixture() -> Vec<u8> {
     let mut numeric = vec![0; 8]; // A1, default style
     numeric.extend(42.0f64.to_le_bytes());
     numeric.extend([0; 2]); // Formula flags
-    numeric.extend(3u32.to_le_bytes());
-    numeric.extend([0x1e, 42, 0]); // PtgInt(42)
+    numeric.extend(11u32.to_le_bytes());
+    numeric.extend([0x44, 0, 0, 0, 0, 2, 0xC0]); // PtgRef C1 (relative)
+    numeric.extend([0x1e, 2, 0, 0x05]); // PtgInt(2), PtgMul
     numeric.extend(0u32.to_le_bytes());
     record(&mut sheet, 9, &numeric); // FmlaNum
     let mut text = 1u32.to_le_bytes().to_vec(); // B1
     text.extend(0u32.to_le_bytes());
     text.extend(wide("Original data"));
     record(&mut sheet, 6, &text);
+    let mut input = 2u32.to_le_bytes().to_vec(); // C1
+    input.extend(0u32.to_le_bytes());
+    input.extend(21.0f64.to_le_bytes());
+    record(&mut sheet, 5, &input); // Real
     record(&mut sheet, 146, &[]);
     record(&mut sheet, 130, &[]);
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -3541,7 +3547,7 @@ fn ink_strokes_and_ink_to_shape() {
 }
 
 #[test]
-fn xlsb_import_keeps_cached_values_and_reports_limits() {
+fn xlsb_import_reads_formulas_and_reports_limits() {
     let bytes = xlsb_fixture();
     assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Xlsb);
     for name in ["source.xlsb", "source.xlsx"] {
@@ -3553,12 +3559,15 @@ fn xlsb_import_keeps_cached_values_and_reports_limits() {
         assert!(s.doc().unwrap().display_title().ends_with(".xlsx"));
         assert_eq!(v(&s, "A1"), Value::Number(42.0));
         assert_eq!(v(&s, "B1"), Value::from("Original data"));
-        assert!(s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().formula.is_none());
-        s.execute("cell.set", json!({"cell": "B1", "input": "Changed"})).unwrap();
-        assert_eq!(v(&s, "A1"), Value::Number(42.0)); // Imported formula caches are constants.
+        let formula = |s: &Session| s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().formula.clone();
+        assert_eq!(formula(&s).map(|f| f.text.clone()).as_deref(), Some("C1*2"));
+        // The formula recalculates when its input changes.
+        s.execute("cell.set", json!({"cell": "C1", "input": "5"})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Number(10.0));
         let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
         s.execute("file.open", json!({"name": "imported.xlsx", "base64": saved["base64"]})).unwrap();
-        assert_eq!(v(&s, "A1"), Value::Number(42.0));
+        assert_eq!(v(&s, "A1"), Value::Number(10.0));
+        assert_eq!(formula(&s).map(|f| f.text.clone()).as_deref(), Some("C1*2"));
     }
 }
 

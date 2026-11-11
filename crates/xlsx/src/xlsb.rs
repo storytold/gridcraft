@@ -1,18 +1,23 @@
-//! Data-only XLSB import, implemented from Microsoft's public MS-XLSB specification:
+//! XLSB import, implemented from Microsoft's public MS-XLSB specification:
 //! <https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xlsb/acc8aa92-1f02-4167-99f5-84f9f676b95a>.
-//! Formula caches become constants. Styles, macros and other workbook features are not run or imported.
+//! Worksheet values and cell formulas are read (`formula.rs`). A formula the import can't
+//! represent yet (shared, array, using defined names…) keeps its saved result as a constant.
+//! Styles, macros and other workbook features are not run or imported.
+
+mod formula;
 
 use std::sync::Arc;
 
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
-use gridcraft_model::{Cell, Sheet, Visibility, Workbook};
+use gridcraft_model::{Cell, Formula, Sheet, Visibility, Workbook};
 use quick_xml::NsReader;
 use quick_xml::XmlVersion;
 use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;
 
 use crate::package::{Package, Rel, normalize, resolve, split_dir};
-use crate::{IoError, ReadReport};
+use crate::{FunctionInfo, IoError, ReadReport};
+use formula::{Book, Links, Name, Xti};
 
 const MAIN: &str = "application/vnd.ms-excel.main";
 const BINARY_MAIN: &str = "application/vnd.ms-excel.sheet.binary.macroEnabled.main";
@@ -29,6 +34,13 @@ const MAX_CELLS: usize = 1_000_000;
 const MAX_STRINGS: usize = 1_000_000;
 const MAX_SHEETS: usize = 1024;
 const MAX_RECORDS: usize = 5_000_000;
+/// Formula text kept over the whole workbook at most. A cell formula may hold 16 KB of tokens,
+/// and the parsed tree of each is kept: without a total, a million cells of long formulas would
+/// cost tens of gigabytes. Past it, formulas keep their saved results (the file still opens).
+const MAX_FORMULA_TEXT: usize = 128 * 1024 * 1024;
+/// Defined names (including Excel's hidden ones for newer functions) read at most; beyond it,
+/// formulas keep their saved results.
+const MAX_NAMES: usize = 65_536;
 
 fn invalid(msg: impl Into<String>) -> IoError {
     IoError::Format(format!("XLSB: {}", msg.into()))
@@ -38,8 +50,19 @@ fn invalid(msg: impl Into<String>) -> IoError {
 struct Budget {
     cells: usize,
     text: usize,
+    formula_text: usize,
 }
 impl Budget {
+    /// Charges a kept formula's text if it fits [`MAX_FORMULA_TEXT`]; a formula that doesn't is
+    /// left as its saved result.
+    fn try_formula_text(&mut self, len: usize) -> bool {
+        let total = self.formula_text.saturating_add(len);
+        let fits = total <= MAX_FORMULA_TEXT;
+        if fits {
+            self.formula_text = total;
+        }
+        fits
+    }
     fn text(&mut self, len: usize) -> Result<(), IoError> {
         self.text = self.text.saturating_add(len);
         if self.text > MAX_TEXT {
@@ -56,9 +79,16 @@ impl Budget {
     }
 }
 
-/// Imports worksheet scalar values and saved formula results. Number formats are omitted;
-/// dates remain serial numbers with the workbook's original date system. Inspect warnings.
+/// Imports worksheet scalar values, cell formulas and saved formula results, with the default
+/// [`FunctionInfo`]. Number formats are omitted; dates remain serial numbers with the workbook's
+/// original date system. Inspect warnings.
 pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
+    read_xlsb_with(bytes, FunctionInfo::default())
+}
+
+/// [`read_xlsb`] with the function library's facts, which decide where the formulas (all legacy
+/// ones here) get Excel's implicit `@`.
+pub fn read_xlsb_with(bytes: &[u8], functions: FunctionInfo) -> Result<(Workbook, ReadReport), IoError> {
     let mut package = Package::open(bytes)?;
     let types = content_types(&mut package)?;
     let roots = relationships(&mut package, "")?;
@@ -75,9 +105,22 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     let mut wb = Workbook::new();
     wb.sheets.clear();
     let mut report = ReadReport::default();
-    report.warn("XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported.");
-    let sheets = workbook(&book, &mut wb, &mut report)?;
+    report.warn("XLSB import: values and cell formulas were read. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported.");
+    let (sheets, links) = workbook(&book, &mut wb, &mut report)?;
     let rels = relationships(&mut package, &root.target)?;
+    // Formulas name sheets by their place in the workbook's list, skipped sheets included.
+    let links = links.map(|mut links| {
+        links.sheets = sheets
+            .iter()
+            .map(|info| {
+                let rel = info.rel.as_ref().and_then(|id| rels.iter().find(|r| &r.id == id));
+                rel.filter(|r| !r.external && r.kind == "worksheet").map(|_| info.name.clone())
+            })
+            .collect();
+        links
+    });
+    let mut formulas = Formulas { links: links.as_ref(), legacy: vec![], unsupported: vec![] };
+    let mut legacy = vec![];
     let mut budget = Budget::default();
     let sst_rels: Vec<_> = rels.iter().filter(|r| r.kind == "sharedStrings").collect();
     if sst_rels.len() > 1 {
@@ -113,13 +156,23 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         }
         check_type(&types, &rel.target, WORKSHEET)?;
         wb.check_sheet_name(&info.name, None).map_err(invalid)?;
-        let mut sheet = worksheet(&required(&mut package, &rel.target)?, &info.name, &strings, &mut budget, &mut report)?;
+        let mut sheet = worksheet(&required(&mut package, &rel.target)?, &info.name, &strings, &mut budget, &mut formulas, &mut report)?;
         sheet.visibility = info.visibility;
+        legacy.push((wb.sheets.len(), std::mem::take(&mut formulas.legacy)));
         wb.sheets.push(Arc::new(sheet));
+    }
+    for why in &formulas.unsupported {
+        report.warn(format!("Some formulas use {why}; their saved results were kept as values."));
+    }
+    if links.is_none() {
+        report.warn("The workbook's list of sheet links or names could not be read; formulas were kept as their saved results.");
     }
     if wb.sheets.is_empty() {
         return Err(invalid("no supported worksheets"));
     }
+    // Every formula read here is a legacy (pre-dynamic-array) one: read with Excel's implicit `@`,
+    // like an .xlsx formula without `cm`. Dynamic-array formulas aren't read yet.
+    crate::array_formula::apply_legacy(&mut wb, legacy, functions);
     wb.set_active_sheet(wb.sheets.iter().position(|s| s.visibility == Visibility::Visible).unwrap_or(0));
     Ok((wb, report))
 }
@@ -269,6 +322,9 @@ impl<'a> Bytes<'a> {
     fn u32(&mut self) -> Result<u32, IoError> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().map_err(|_| invalid("truncated u32"))?))
     }
+    fn i32(&mut self) -> Result<i32, IoError> {
+        Ok(i32::from_le_bytes(self.take(4)?.try_into().map_err(|_| invalid("truncated i32"))?))
+    }
     fn f64(&mut self) -> Result<f64, IoError> {
         let n = f64::from_le_bytes(self.take(8)?.try_into().map_err(|_| invalid("truncated number"))?);
         if !n.is_finite() {
@@ -390,12 +446,15 @@ struct SheetInfo {
     rel: Option<String>,
     visibility: Visibility,
 }
-fn workbook(bytes: &[u8], wb: &mut Workbook, report: &mut ReadReport) -> Result<Vec<SheetInfo>, IoError> {
+/// The sheet list, and the tables formulas refer to: `None` when those can't be read, so that a
+/// file that opened with values only still does.
+fn workbook(bytes: &[u8], wb: &mut Workbook, report: &mut ReadReport) -> Result<(Vec<SheetInfo>, Option<Links>), IoError> {
     let mut records = Records::new(bytes);
     records.first(131, report)?;
     let mut sheets = vec![];
     let mut bundle = false;
     let mut bundle_seen = false;
+    let mut links = Some(Links::default());
     while let Some((id, payload)) = records.next(report)? {
         let mut b = Bytes::new(payload);
         match id {
@@ -404,7 +463,14 @@ fn workbook(bytes: &[u8], wb: &mut Workbook, report: &mut ReadReport) -> Result<
                     return Err(invalid("incomplete worksheet list"));
                 }
                 records.end(payload, report)?;
-                return Ok(sheets);
+                return Ok((sheets, links));
+            }
+            39 | 355 | 357 | 358 | 362 | 667 => {
+                if let Some(l) = links.as_mut()
+                    && link_record(id, payload, l).is_err()
+                {
+                    links = None;
+                }
             }
             143 => {
                 if bundle_seen {
@@ -453,6 +519,48 @@ fn workbook(bytes: &[u8], wb: &mut Workbook, report: &mut ReadReport) -> Result<
         }
     }
     Err(invalid("missing workbook end record"))
+}
+
+/// A supporting link (`BrtSupSelf`, `BrtSupSame`, `BrtSupAddin`, `BrtSupBookSrc`), the sheet links
+/// (`BrtExternSheet`) or a defined name (`BrtName`), added to `links`.
+fn link_record(id: u16, payload: &[u8], links: &mut Links) -> Result<(), IoError> {
+    let mut b = Bytes::new(payload);
+    match id {
+        357 | 358 | 667 => {
+            b.finish()?;
+            links.books.push(match id {
+                357 => Book::This,
+                358 => Book::Same,
+                _ => Book::Addin,
+            });
+        }
+        355 => links.books.push(Book::External),
+        362 => {
+            // [MS-XLSB] 2.4.672: cXti "MUST be less than 65536" (PtgRef3d's ixti is 16 bits).
+            let count = b.u32()?;
+            if count >= 65_536 || !links.xti.is_empty() {
+                return Err(invalid("invalid sheet link list"));
+            }
+            for _ in 0..count {
+                let book = b.u32()?;
+                let (first, last) = (b.i32()?, b.i32()?);
+                links.xti.push(Xti { book, first, last });
+            }
+            b.finish()?;
+        }
+        _ => {
+            // BrtName ([MS-XLSB] 2.4.718): flags, chKey, itab, then the name; the formula and the
+            // rest aren't needed to call a function or tell a name from one.
+            if links.names.len() >= MAX_NAMES {
+                return Err(invalid("too many defined names"));
+            }
+            let flags = b.u32()?;
+            b.take(5)?;
+            let text = b.text(255)?;
+            links.names.push(Name { text, future: flags & (1 << 17) != 0 });
+        }
+    }
+    Ok(())
 }
 
 fn rich_string(b: &mut Bytes<'_>) -> Result<String, IoError> {
@@ -540,16 +648,18 @@ fn boolean(b: &mut Bytes<'_>) -> Result<bool, IoError> {
         _ => Err(invalid("invalid boolean value")),
     }
 }
-fn cached_formula(b: &mut Bytes<'_>) -> Result<(), IoError> {
+/// The `grbitFlags` and `CellParsedFormula` after a formula cell's value: its tokens (`rgce`)
+/// and their extra data (`rgcb`). The flags' only bit, `fAlwaysCalc`, is the engine's to know.
+fn cell_formula<'a>(b: &mut Bytes<'a>) -> Result<(&'a [u8], &'a [u8]), IoError> {
     b.take(2)?;
     let cce = b.u32()?;
     if !(1..=16384).contains(&cce) {
         return Err(invalid("invalid formula token length"));
     }
-    b.take(cce as usize)?;
+    let rgce = b.take(cce as usize)?;
     let extra = b.u32()?;
-    b.take(extra as usize)?;
-    Ok(())
+    let rgcb = b.take(extra as usize)?;
+    Ok((rgce, rgcb))
 }
 fn value(id: u16, b: &mut Bytes<'_>, strings: &[Arc<str>], budget: &mut Budget) -> Result<Value, IoError> {
     let value = match id {
@@ -574,13 +684,62 @@ fn value(id: u16, b: &mut Bytes<'_>, strings: &[Arc<str>], budget: &mut Budget) 
         7 => Value::Text(strings.get(b.u32()? as usize).cloned().ok_or_else(|| invalid("shared-string index is out of bounds"))?),
         _ => return Err(invalid("unsupported cell record")),
     };
-    if (8..=11).contains(&id) {
-        cached_formula(b)?;
-    }
     Ok(value)
 }
 
-fn worksheet(bytes: &[u8], name: &str, strings: &[Arc<str>], budget: &mut Budget, report: &mut ReadReport) -> Result<Sheet, IoError> {
+/// What reading formulas needs while the sheets are read, and what it finds.
+struct Formulas<'a> {
+    /// `None` when the workbook's links or names couldn't be read: every formula keeps its value.
+    links: Option<&'a Links>,
+    /// The current sheet's formula cells, all legacy (pre-dynamic-array) ones.
+    legacy: Vec<CellRef>,
+    /// Why formulas were kept as their values, each reason once.
+    unsupported: Vec<&'static str>,
+}
+
+impl Formulas<'_> {
+    fn unsupported(&mut self, why: &'static str) {
+        if !self.unsupported.contains(&why) {
+            self.unsupported.push(why);
+        }
+    }
+
+    /// The formula a cell keeps, or `None` (with the reason recorded) for one that keeps its
+    /// saved result. Printed in the file's spelling, then read as `.xlsx` formula text is.
+    fn formula(&mut self, rgce: &[u8], rgcb: &[u8], dynamic: bool, budget: &mut Budget) -> Option<Formula> {
+        let links = self.links?;
+        if dynamic {
+            self.unsupported("dynamic arrays");
+            return None;
+        }
+        let text = match formula::decode(rgce, rgcb, links) {
+            Ok(e) => crate::fmla::from_file(&gridcraft_formula::print(&e)),
+            Err(crate::xls::formula::Unsupported(why)) => {
+                self.unsupported(why);
+                return None;
+            }
+        };
+        let f = Formula::new(&text);
+        if f.expr.is_none() {
+            self.unsupported("syntax GridCraft can't parse yet");
+            return None;
+        }
+        if !budget.try_formula_text(f.text.len()) {
+            self.unsupported("more formula text than the import allows");
+            return None;
+        }
+        Some(f)
+    }
+}
+
+fn worksheet(
+    bytes: &[u8],
+    name: &str,
+    strings: &[Arc<str>],
+    budget: &mut Budget,
+    formulas: &mut Formulas<'_>,
+    report: &mut ReadReport,
+) -> Result<Sheet, IoError> {
     let mut records = Records::new(bytes);
     records.first(129, report)?;
     let mut sheet = Sheet::new(name);
@@ -588,9 +747,17 @@ fn worksheet(bytes: &[u8], name: &str, strings: &[Arc<str>], budget: &mut Budget
     let mut data_seen = false;
     let mut row = None;
     let mut col = None;
+    // BrtCellMeta applies to the cell record that follows it: a dynamic-array formula.
+    let mut meta = false;
     while let Some((id, payload)) = records.next(report)? {
         let mut b = Bytes::new(payload);
+        let dynamic = std::mem::take(&mut meta);
         match id {
+            49 => {
+                b.u32()?;
+                b.finish()?;
+                meta = true;
+            }
             130 => {
                 if data || !data_seen {
                     return Err(invalid("incomplete worksheet data"));
@@ -642,10 +809,21 @@ fn worksheet(bytes: &[u8], name: &str, strings: &[Arc<str>], budget: &mut Budget
                 }
                 b.u32()?; // Style index and phonetic flag; formatting is not imported.
                 let value = value(id, &mut b, strings, budget)?;
-                b.finish()?;
-                if !value.is_empty() {
+                let formula = if (8..=11).contains(&id) {
+                    let (rgce, rgcb) = cell_formula(&mut b)?;
+                    b.finish()?;
+                    formulas.formula(rgce, rgcb, dynamic, budget)
+                } else {
+                    b.finish()?;
+                    None
+                };
+                let at = CellRef::new(r, c);
+                if formula.is_some() {
+                    formulas.legacy.push(at);
+                }
+                if !value.is_empty() || formula.is_some() {
                     budget.cell()?;
-                    sheet.cells.set(CellRef::new(r, c), Cell::value(value));
+                    sheet.cells.set(at, Cell { formula: formula.map(Arc::new), ..Cell::value(value) });
                 }
                 col = Some(c);
             }
@@ -671,4 +849,20 @@ fn worksheet(bytes: &[u8], name: &str, strings: &[Arc<str>], budget: &mut Budget
         }
     }
     Err(invalid("missing worksheet end record"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formula_text_past_the_allowance_keeps_the_saved_result() {
+        let links = Links::default();
+        let mut formulas = Formulas { links: Some(&links), legacy: vec![], unsupported: vec![] };
+        let mut budget = Budget { formula_text: MAX_FORMULA_TEXT - 1, ..Budget::default() };
+        // `=1` takes the last byte; the next formula doesn't fit and keeps its value.
+        assert!(formulas.formula(&[0x1E, 1, 0], &[], false, &mut budget).is_some());
+        assert!(formulas.formula(&[0x1E, 1, 0], &[], false, &mut budget).is_none());
+        assert_eq!(formulas.unsupported, ["more formula text than the import allows"]);
+    }
 }

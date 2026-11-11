@@ -60,7 +60,7 @@ fn cell(id: u16, col: u32, value: &[u8]) -> Vec<u8> {
     if (8..=11).contains(&id) {
         data.extend([0; 2]); // Formula flags.
         data.extend(3u32.to_le_bytes());
-        data.extend([0x1e, 1, 0]); // Original PtgInt(1); ignored because we import the cache.
+        data.extend([0x1e, 1, 0]); // PtgInt(1): the formula `=1`, with the cache as its value.
         data.extend(0u32.to_le_bytes());
     }
     record(id, &data)
@@ -172,11 +172,14 @@ fn xlsb_scalar_caches_rk_unicode_visibility_and_epochs_survive_xlsx_save() {
         assert_eq!(wb.sheets[1].visibility, Visibility::Hidden);
         assert_eq!(wb.sheets[0].cells.len(), 14);
         assert_eq!(wb.sheets[0].merges, vec![RangeRef::new(CellRef::new(5, 0), CellRef::new(6, 1))]);
-        assert!(report.warnings.iter().any(|w| w.contains("will not recalculate") && w.contains("may display as numbers")));
+        assert!(report.warnings.iter().any(|w| w.contains("cell formulas were read") && w.contains("may display as numbers")));
         for (col, expected) in expected.iter().enumerate() {
             assert_eq!(&wb.sheets[0].value(CellRef::new(2, col as u32)), expected);
         }
-        assert!(wb.sheets[0].cells.iter().all(|(_, c)| c.formula.is_none()));
+        // The formula records (8 to 11) keep their formula, `=1`, with the cached result as value.
+        for (at, c) in wb.sheets[0].cells.iter() {
+            assert_eq!(c.formula.as_ref().map(|f| f.text.as_str()), (10..=13).contains(&at.col).then_some("1"), "{at:?}");
+        }
         let (roundtrip, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
         assert_eq!(roundtrip.date_system, wb.date_system);
         for (col, expected) in expected.iter().enumerate() {
@@ -323,4 +326,201 @@ fn xlsb_phonetic_runs_use_documented_size_and_tolerate_padding() {
         assert_eq!(wb.sheets[0].value(CellRef::new(0, 0)), text("ruby"));
     }
     assert!(read_xlsb(&file(&worksheet(&[row(0), cell(62, 0, &phonetic(2, 12))].concat(), &[]))).is_err());
+}
+
+/// A formula cell (`BrtFmlaNum`, cached 0) with its own tokens and extra data.
+fn formula_cell(col: u32, rgce: &[u8], rgcb: &[u8]) -> Vec<u8> {
+    let mut data = col.to_le_bytes().to_vec();
+    data.extend([0; 4]);
+    data.extend(0f64.to_le_bytes());
+    data.extend([0; 2]);
+    data.extend((rgce.len() as u32).to_le_bytes());
+    data.extend(rgce);
+    data.extend((rgcb.len() as u32).to_le_bytes());
+    data.extend(rgcb);
+    record(9, &data)
+}
+fn name(flags: u32, text: &str) -> Vec<u8> {
+    let mut data = flags.to_le_bytes().to_vec();
+    data.push(0);
+    data.extend(u32::MAX.to_le_bytes()); // Workbook scope.
+    data.extend(wide(text));
+    data.extend([2, 0, 0, 0, 0x1c, 0x1d, 0, 0, 0, 0]); // Formula `#NAME?`, no extra data.
+    data.extend(u32::MAX.to_le_bytes()); // No comment.
+    record(39, &data)
+}
+/// `book(false)` with a supporting-link block and defined names, as Excel writes them: this
+/// workbook, then another; sheet links Data, Hidden, Data:Hidden, a deleted sheet and the other
+/// workbook; hidden names for CONCAT, LET and a LET parameter, then the user name Rate.
+fn book_with_links(extern_sheet: &[u8]) -> Vec<u8> {
+    let plain = book(false);
+    let end = record(132, &[]);
+    let mut out = plain[..plain.len() - end.len()].to_vec();
+    out.extend(record(353, &[]));
+    out.extend(record(357, &[]));
+    out.extend(record(355, &wide("rId9")));
+    out.extend(record(362, extern_sheet));
+    out.extend(record(354, &[]));
+    const FUTURE: u32 = 0x0002_000b;
+    out.extend(name(FUTURE, "_xlfn.CONCAT"));
+    out.extend(name(FUTURE, "_xlfn.LET"));
+    out.extend(name(0x0002_0019, "_xlpm.x"));
+    out.extend(name(0, "Rate"));
+    out.extend(end);
+    out
+}
+fn xti() -> Vec<u8> {
+    let mut out = 5u32.to_le_bytes().to_vec();
+    for (book, first, last) in [(0u32, 0i32, 0i32), (0, 1, 1), (0, 0, 1), (0, -1, -1), (1, 0, 0)] {
+        out.extend(book.to_le_bytes());
+        out.extend(first.to_le_bytes());
+        out.extend(last.to_le_bytes());
+    }
+    out
+}
+fn loc(row: u32, col: u16) -> Vec<u8> {
+    [&row.to_le_bytes()[..], &col.to_le_bytes()].concat()
+}
+/// Relative row and column flags of a `ColRelShort`.
+const REL: u16 = 0xC000;
+
+#[test]
+fn xlsb_cell_formulas_are_read_in_their_xlsx_spelling() {
+    let ref3d = |ixti: u16, row: u32, col: u16| [&[0x5Au8][..], &ixti.to_le_bytes(), &loc(row, col)].concat();
+    let cells: Vec<(u32, Vec<u8>, Vec<u8>)> = vec![
+        (1, [&[0x44u8][..], &loc(0, REL), &[0x1E, 2, 0, 0x05]].concat(), vec![]),
+        (2, [&[0x25u8][..], &0u32.to_le_bytes(), &1u32.to_le_bytes(), &0u16.to_le_bytes(), &REL.to_le_bytes(), &[0x19, 0x10, 0, 0]].concat(), vec![]),
+        (3, ref3d(1, 1, 1 | REL), vec![]),
+        (
+            4,
+            [
+                &[0x3Bu8][..],
+                &2u16.to_le_bytes(),
+                &0u32.to_le_bytes(),
+                &0xFFFFFu32.to_le_bytes(),
+                &REL.to_le_bytes(),
+                &REL.to_le_bytes(),
+                &[0x19, 0x10, 0, 0],
+            ]
+            .concat(),
+            vec![],
+        ),
+        (5, [&[0x23u8, 1, 0, 0, 0][..], &[0x17, 1, 0, b'a', 0], &[0x17, 1, 0, b'b', 0], &[0x42, 3, 0xFF, 0]].concat(), vec![]),
+        (6, vec![0x1E, 1, 0, 0x1E, 0, 0, 0x06, 0x1E, 2, 0, 0x41, 0xE0, 0x01], vec![]),
+        (
+            7,
+            [&[0x60u8][..], &[0xAB; 14]].concat(),
+            [&2u32.to_le_bytes()[..], &2u32.to_le_bytes(), &[0], &1f64.to_le_bytes(), &[1, 1, 0, b'x', 0], &[2, 1], &[4, 0x2A, 0, 0, 0]].concat(),
+        ),
+        (
+            8,
+            [&[0x23u8, 2, 0, 0, 0][..], &[0x23, 3, 0, 0, 0, 0x1E, 1, 0], &[0x23, 3, 0, 0, 0, 0x1E, 1, 0, 0x03], &[0x42, 4, 0xFF, 0]].concat(),
+            vec![],
+        ),
+        (9, ref3d(3, 0, 0), vec![]),
+        (10, [&[0x25u8][..], &0u32.to_le_bytes(), &1u32.to_le_bytes(), &REL.to_le_bytes(), &REL.to_le_bytes(), &[0x41, 20, 0]].concat(), vec![]),
+        // Kept as their saved results:
+        (11, vec![0x43, 4, 0, 0, 0, 0x1E, 2, 0, 0x05], vec![]),
+        (12, ref3d(4, 0, REL), vec![]),
+        (13, vec![0x01, 0, 0, 0, 0], vec![0, 0, 0, 0]),
+    ];
+    let mut data = row(0);
+    data.extend(cell(5, 0, &3.0f64.to_le_bytes()));
+    for (col, rgce, rgcb) in &cells {
+        data.extend(formula_cell(*col, rgce, rgcb));
+    }
+    data.extend(record(49, &1u32.to_le_bytes())); // BrtCellMeta: the next formula is a dynamic array.
+    data.extend(formula_cell(14, &[0x1E, 1, 0], &[]));
+    data.extend(formula_cell(15, &[0x18, 0x19, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0], &[])); // A table reference.
+    let bytes = package(&book_with_links(&xti()), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
+    let (wb, report) = read_xlsb(&bytes).unwrap();
+    let sheet = &wb.sheets[0];
+    let got: Vec<_> = (1..=15).map(|c| sheet.cell(CellRef::new(0, c)).and_then(|x| x.formula.as_ref()).map(|f| f.text.clone())).collect();
+    let want = [
+        "A1*2",
+        "SUM($A$1:A2)",
+        "Hidden!B2",
+        "SUM(Data:Hidden!A:A)",
+        // Hidden `_xlfn.` / `_xlpm.` names end up spelled as the .xlsx reader leaves them.
+        "CONCAT(\"a\",\"b\")",
+        "IFERROR(1/0,2)",
+        // Legacy formulas get Excel's implicit `@`, as from .xlsx without `cm`.
+        "@{1,\"x\";TRUE,#N/A}",
+        "LET(x,1,x+1)",
+        "#REF!",
+        "SQRT(@A1:A2)",
+    ];
+    let mut want: Vec<_> = want.iter().map(|w| Some(w.to_string())).collect();
+    want.resize(15, None);
+    assert_eq!(got, want);
+    // Every formula cell keeps its saved result as its value until it recalculates.
+    assert!((1..=15).all(|c| sheet.value(CellRef::new(0, c)) == Value::Number(0.0)));
+    for why in ["defined names", "other workbooks", "the shared or array formula form", "dynamic arrays", "structured table references"] {
+        assert!(report.warnings.iter().any(|w| w.starts_with("Some formulas use") && w.contains(why)), "{why}: {:?}", report.warnings);
+    }
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("A1*2"));
+}
+
+#[test]
+fn xlsb_unreadable_links_keep_every_formula_as_its_value() {
+    // A sheet-link count past the spec's limit, and a truncated list: the file opens as it did
+    // before formulas were read, with values only.
+    let mut truncated = xti();
+    truncated.truncate(20);
+    for extern_sheet in [70_000u32.to_le_bytes().to_vec(), truncated] {
+        let data = [row(0), formula_cell(0, &[0x1E, 1, 0], &[])].concat();
+        let bytes = package(&book_with_links(&extern_sheet), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
+        let (wb, report) = read_xlsb(&bytes).unwrap();
+        let cell = wb.sheets[0].cell(CellRef::new(0, 0)).unwrap();
+        assert!(cell.formula.is_none());
+        assert_eq!(cell.value, Value::Number(0.0));
+        assert!(report.warnings.iter().any(|w| w.contains("could not be read")));
+    }
+}
+
+#[test]
+fn xlsb_hostile_formula_tokens_keep_the_saved_result() {
+    let mut deep = vec![0x1E, 1, 0];
+    deep.resize(16384, 0x15); // Thousands of parentheses: refused by the shared depth guard.
+    let empty_array = [&[0x60u8][..], &[0; 14]].concat();
+    let bad: Vec<(Vec<u8>, Vec<u8>)> = vec![
+        (vec![0x1E, 1], vec![]),                                             // Truncated PtgInt.
+        (vec![0x17, 1, 0, 0x00, 0xD8], vec![]),                              // Unpaired surrogate.
+        (vec![0x17, 0, 1], vec![]),                                          // Text constant over 255.
+        ([&[0x24u8][..], &loc(1_048_576, 0)].concat(), vec![]),              // Row past the grid.
+        (empty_array.clone(), vec![0; 8]),                                   // Empty array constant.
+        (empty_array, vec![0xFF; 8]),                                        // Huge one.
+        (vec![0x1E, 1, 0, 0x1E, 2, 0], vec![]),                              // Unused operand.
+        (vec![0x21, 0xD4, 0x01], vec![]),                                    // Unassigned function number.
+        (vec![0x2C, 0, 0, 0, 0, 0, 0], vec![]),                              // PtgRefN outside a shared formula.
+        (vec![0x23, 0xFF, 0xFF, 0xFF, 0xFF], vec![]),                        // Name index past the list.
+        ([&[0x5Au8][..], &9u16.to_le_bytes(), &loc(0, 0)].concat(), vec![]), // Missing sheet link.
+        (deep, vec![]),
+    ];
+    for (rgce, rgcb) in bad {
+        let data = [row(0), formula_cell(0, &rgce, &rgcb)].concat();
+        let (wb, _) = read_xlsb(&package(&book_with_links(&xti()), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES)).unwrap();
+        let cell = wb.sheets[0].cell(CellRef::new(0, 0)).unwrap();
+        assert!(cell.formula.is_none(), "{rgce:?}");
+        assert_eq!(cell.value, Value::Number(0.0));
+    }
+}
+
+#[test]
+fn xlsb_python_formulas_need_their_code_in_the_cell() {
+    // `PY("code", 0)` carries its code and stays a formula the engine turns into a Python cell;
+    // `PY(0, 0)` names a script elsewhere in the package and keeps its saved result.
+    let mut book = book_with_links(&xti());
+    let end = record(132, &[]);
+    book.truncate(book.len() - end.len());
+    book.extend(name(0x0002_000b, "_xlfn._xlws.PY"));
+    book.extend(end);
+    let py = |arg: &[u8]| [&[0x23u8, 5, 0, 0, 0][..], arg, &[0x1E, 0, 0, 0x42, 3, 0xFF, 0]].concat();
+    let data = [row(0), formula_cell(0, &py(&[0x17, 1, 0, b'1', 0]), &[]), formula_cell(1, &py(&[0x1E, 0, 0]), &[])].concat();
+    let (wb, report) = read_xlsb(&package(&book, &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES)).unwrap();
+    let formula = |c| wb.sheets[0].cell(CellRef::new(0, c)).and_then(|x| x.formula.as_ref()).map(|f| f.text.clone());
+    assert_eq!(gridcraft_model::PyCode::from_formula(&formula(0).unwrap()).map(|p| p.code), Some("1".into()));
+    assert_eq!(formula(1), None);
+    assert!(report.warnings.iter().any(|w| w.contains("Python code stored outside")));
 }
