@@ -1372,6 +1372,22 @@ fn equal_picture_bytes_in_two_sections_are_one_image_object() {
     assert_eq!(text.matches(" cm /Sh").count(), 2, "drawn in both sections");
 }
 
+/// The same square picture in a wide box and a tall one is decoded once, at the small square both
+/// need, not at the large square their widest and tallest sides would make.
+#[test]
+fn equal_pictures_in_a_wide_and_a_tall_box_are_decoded_at_the_size_they_need() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "one"})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&L&G&R&G"})).unwrap();
+    let square = png(400, 400);
+    keep_hf_pictures(&mut s, &[("LH", "width:1000pt;height:30pt", square.clone()), ("RH", "width:30pt;height:1000pt", square)]);
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(text.matches("/Subtype /Image").count(), 1, "one image object");
+    // 30 pt at 150 dpi is 63 px.
+    assert!(text.contains("/Subtype /Image /Width 63 /Height 63 "), "decoded for 63 × 63: {}", &text[text.find("/Subtype /Image").unwrap()..][..80]);
+}
+
 /// A picture over the budget at one size is still tried at a smaller size, while an unreadable one
 /// is tried only once.
 #[test]

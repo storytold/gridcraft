@@ -376,13 +376,32 @@ pub(super) fn hf_images(
     // About 150 dpi at the printed size is plenty.
     let px = |pt: f32| ((pt * scale.max(0.01) / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32;
     let mut out = Vec::with_capacity(pictures.len());
+    // The pixels a picture needs: its box, shrunk to the image's proportions (an image is never
+    // enlarged, so one smaller than its box needs its own size).
+    let need = |width: f32, height: f32, data: &[u8]| {
+        let fit = (px(width), px(height));
+        match crate::io::image_size(data) {
+            Some(src) if src.0 > 0 && src.1 > 0 => {
+                if src.0 <= fit.0 && src.1 <= fit.1 {
+                    src
+                } else {
+                    thumbnail_size(src, fit)
+                }
+            }
+            _ => fit,
+        }
+    };
     for p in &pictures {
         // Equal bytes are one image, as the cache counts them, even from separate parts: decoded
-        // once, for the largest size any of them prints at.
+        // once, for the largest size any of them needs (a wide box and a tall one for the same
+        // square image need two small squares, not one large one).
         let users = pictures.iter().filter(|q| std::sync::Arc::ptr_eq(&q.data, &p.data) || q.data[..] == p.data[..]);
-        let size = users.fold((1, 1), |(w, h), q| (w.max(px(q.width)), h.max(px(q.height))));
+        let size = users.fold((1, 1), |(w, h), q| {
+            let (qw, qh) = need(q.width, q.height, &q.data);
+            (w.max(qw), h.max(qh))
+        });
         // When that largest size doesn't fit the budget left, this picture's own size may.
-        let own = (px(p.width), px(p.height));
+        let own = need(p.width, p.height, &p.data);
         if let Some(id) = cache.image(doc, &p.data, size).or_else(|| if own == size { None } else { cache.image(doc, &p.data, own) }) {
             out.push(HfImage { page: p.page, footer: p.footer, section: p.section, width: p.width, height: p.height, id });
         }

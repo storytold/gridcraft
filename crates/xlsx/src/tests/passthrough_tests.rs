@@ -941,10 +941,15 @@ fn header_and_footer_pictures_are_read_for_printing() {
     }
 }
 
+/// `text` as UTF-16 (little-endian, with its byte order mark).
+fn utf16(text: &str) -> Vec<u8> {
+    [0xFF, 0xFE].into_iter().chain(text.encode_utf16().flat_map(u16::to_le_bytes)).collect()
+}
+
 /// A header/footer drawing saved as UTF-16 gives the same pictures, and is kept byte for byte.
 #[test]
 fn utf16_header_and_footer_pictures_are_read_for_printing() {
-    let utf16: Vec<u8> = [0xFF, 0xFE].into_iter().chain(HF_VML.encode_utf16().flat_map(u16::to_le_bytes)).collect();
+    let utf16 = utf16(HF_VML);
     let (wb, _) = read_xlsx(&header_picture_package_with(&utf16)).unwrap();
     let kept = wb.sheet(0).unwrap().preserved.clone().expect("the header drawing is kept");
     let got: Vec<_> = crate::header_footer_pictures(&kept).into_iter().map(|p| (p.footer, p.section, p.data.to_vec())).collect();
@@ -979,6 +984,22 @@ fn notes_take_shape_blocks_the_header_pictures_dont_use() {
         assert!(!hf_map.contains(b) && !hf_ids.contains(b), "notes reuse shape block {b}: {notes_map:?} {notes_ids:?}");
     }
     assert!(notes_ids.iter().all(|b| notes_map.contains(b)), "note ids outside their drawing's blocks");
+}
+
+/// A header drawing saved as UTF-16 reserves its shape blocks too: the notes drawing written next
+/// to it doesn't reuse them.
+#[test]
+fn notes_take_shape_blocks_a_utf16_header_drawing_doesnt_use() {
+    let (wb, _) = read_xlsx(&header_picture_package_with(&utf16(HF_VML))).unwrap();
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    let sheet = sheet_part(&u, "Invoice");
+    let sx = u.text(&sheet);
+    let (hf_map, hf_ids) = vml_blocks(HF_VML);
+    let (notes_map, notes_ids) = vml_blocks(&u.text(&u.target(&sheet, &attr_of(&sx, "legacyDrawing", "r:id")).1));
+    assert!(!notes_ids.is_empty());
+    for b in notes_map.iter().chain(&notes_ids) {
+        assert!(!hf_map.contains(b) && !hf_ids.contains(b), "notes reuse shape block {b}: {notes_map:?} {notes_ids:?}");
+    }
 }
 
 #[test]
