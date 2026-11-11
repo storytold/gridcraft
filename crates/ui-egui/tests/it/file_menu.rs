@@ -219,6 +219,47 @@ fn translated_options_headings_show_no_context_prefix() {
     }
 }
 
+/// Options › General has the interface size beside the theme and language, and choosing a size
+/// there sets the same preference as the View tab.
+#[test]
+fn options_sets_the_interface_size() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("file.options", serde_json::json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(page(&h), Some("options"));
+    let size = |h: &egui_kittest::Harness<'static, SheetApp>| {
+        h.query_all_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.label().as_deref() == Some("Interface size")).next().map(|n| n.value())
+    };
+    assert_eq!(size(&h), Some(Some("Auto".to_string())), "Options shows the interface size");
+    h.query_all_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.label().as_deref() == Some("Interface size")).next().unwrap().click();
+    h.run_steps(2);
+    h.get_by_label("150%").click();
+    h.run_steps(3);
+    assert_eq!(h.state().ui.interface_scale, 150);
+    assert_eq!(page(&h), Some("options"), "the page stays open");
+}
+
+/// The Options page in Italian: the workbook's display options and the iteration limits are
+/// translated, with Excel's Italian wording.
+#[test]
+fn italian_options_are_translated() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("app.language.set", serde_json::json!({"language": Language::It.code()})).unwrap();
+    h.state_mut().run("file.options", serde_json::json!({})).unwrap();
+    h.run_steps(3);
+    for text in [
+        "Opzioni di visualizzazione per la cartella di lavoro",
+        "Mostra barra di scorrimento orizzontale",
+        "Mostra schede dei fogli",
+        "Dimensione dell'interfaccia",
+    ] {
+        assert!(h.query_all_by_label(text).next().is_some(), "no {text}");
+    }
+    for text in ["Display options for this workbook", "Show sheet tabs", "Interface size"] {
+        assert!(h.query_all_by_label(text).next().is_none(), "{text} is still in English");
+    }
+}
+
 #[test]
 fn file_account_shows_the_version_and_opens_about() {
     let mut h = harness(Services::default());

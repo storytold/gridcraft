@@ -130,6 +130,8 @@ pub struct UiState {
 
 pub const INTERFACE_SCALE_MIN: u16 = 75;
 pub const INTERFACE_SCALE_MAX: u16 = 200;
+/// The interface sizes offered in the View tab and in File › Options, Auto (100) first.
+pub const INTERFACE_SCALE_CHOICES: [u16; 8] = [100, 75, 90, 110, 125, 150, 175, 200];
 
 /// A requested interface size, rounded and clamped to the supported range; `None` when it isn't
 /// a finite number.

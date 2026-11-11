@@ -135,7 +135,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
             .width(120.0)
             .selected_text(egui::RichText::new(text(current)).font(theme::ui_font(12.5)))
             .show_ui(ui, |ui| {
-                for v in [100, 75, 90, 110, 125, 150, 175, 200] {
+                for v in crate::INTERFACE_SCALE_CHOICES {
                     if ui.selectable_label(v == current, text(v)).clicked() {
                         act(app, "view.interfaceScale", json!({"percent": v}));
                     }
