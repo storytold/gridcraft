@@ -1,7 +1,7 @@
 use super::create::pivot_json;
-use super::params::{area_param, func_param, position_param, show_as_param};
+use super::params::{BASE_ITEM_NEXT, BASE_ITEM_PREVIOUS, area_param, func_param, position_param, show_as_param};
 use super::{
-    Json, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotShowAs, PivotTable, PivotValue, Result, Session, Workbook, bad,
+    Json, PivotBaseItem, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotTable, PivotValue, Result, Session, Workbook, bad,
     bool_param, edit, find_pivot, json, ok, other, pv, str_param, u32_param,
 };
 
@@ -116,6 +116,8 @@ pub(super) struct AreaPlacement<'a> {
     pub position: Option<usize>,
 }
 
+/// Places a field in an area (an axis field leaves the other axis first; a value field gets a
+/// unique caption); refuses what Excel refuses, such as a calculated field outside Values.
 pub(super) fn add_to_area(pt: &mut PivotTable, src: &pv::Source, placement: AreaPlacement<'_>) -> Result<()> {
     let AreaPlacement { cmd, field, area, func, name, position } = placement;
     let is_calc = src.col(field).is_none() && calc_field(pt, field).is_some();
@@ -131,7 +133,7 @@ pub(super) fn add_to_area(pt: &mut PivotTable, src: &pv::Source, placement: Area
             let existing = take_from_axes(pt, &field).unwrap_or_else(|| PivotField { source_col: field.clone(), ..Default::default() });
             // A report filter that selects nothing in particular goes away; a selection stays
             // as the field's hidden items.
-            pt.filters.retain(|f| !(f.source_col.eq_ignore_ascii_case(&field) && f.selected.is_none()));
+            pt.filters.retain(|f| !(f.source_col.eq_ignore_ascii_case(&field) && f.is_inactive()));
             insert_axis_field(pt, area == "rows", existing, position);
         }
         "values" => {
@@ -150,7 +152,7 @@ pub(super) fn add_to_area(pt: &mut PivotTable, src: &pv::Source, placement: Area
                 _ => auto_name(f, &field),
             };
             let nm = unique_value_name(pt, &base, None);
-            let v = PivotValue { source_col: field, func: f, name: nm, show_as: PivotShowAs::Normal, number_format: None };
+            let v = PivotValue { source_col: field, func: f, name: nm, ..PivotValue::default() };
             let at = position.unwrap_or(pt.values.len()).min(pt.values.len());
             pt.values.insert(at, v);
         }
@@ -158,8 +160,9 @@ pub(super) fn add_to_area(pt: &mut PivotTable, src: &pv::Source, placement: Area
             take_from_axes(pt, &field);
             let existing = pt.filters.iter().position(|f| f.source_col.eq_ignore_ascii_case(&field));
             let entry = match existing {
-                Some(i) => pt.filters.remove(i),
-                None => PivotFilter { source_col: field, selected: None },
+                // A report filter selects items; a value filter belongs to a row or column field.
+                Some(i) => PivotFilter { value: None, ..pt.filters.remove(i) },
+                None => PivotFilter { source_col: field, ..PivotFilter::default() },
             };
             let at = position.unwrap_or(pt.filters.len()).min(pt.filters.len());
             pt.filters.insert(at, entry);
@@ -203,6 +206,36 @@ fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str) -> 
     }
 }
 
+/// Drops references to fields that left the report: a value field's base field that is no longer
+/// in Rows or Columns (the default base field applies, and a base item named after it goes too),
+/// an axis field's sort by a value field no longer in Values (it sorts by label again), and a
+/// value filter whose value field or row/column field is gone.
+pub(super) fn forget_stale_references(pt: &mut PivotTable) {
+    let axes: Vec<String> = pt.rows.iter().chain(pt.columns.iter()).map(|f| f.source_col.to_ascii_lowercase()).collect();
+    for value in &mut pt.values {
+        if value.base_field.as_ref().is_some_and(|name| !axes.contains(&name.to_ascii_lowercase())) {
+            value.base_field = None;
+            if matches!(value.base_item, PivotBaseItem::Named(_)) {
+                value.base_item = PivotBaseItem::Previous;
+            }
+        }
+    }
+    let values: Vec<String> = pt.values.iter().map(|v| v.name.to_ascii_lowercase()).collect();
+    for field in pt.rows.iter_mut().chain(pt.columns.iter_mut()) {
+        if field.sort_by.as_ref().is_some_and(|name| !values.contains(&name.to_ascii_lowercase())) {
+            field.sort_by = None;
+        }
+    }
+    // A value filter measures by a value field of the report, on a row or column field.
+    for filter in &mut pt.filters {
+        let measured = filter.value.as_ref().is_some_and(|vf| values.contains(&vf.by.to_ascii_lowercase()));
+        if !measured || !axes.contains(&filter.source_col.to_ascii_lowercase()) {
+            filter.value = None;
+        }
+    }
+    pt.filters.retain(|f| !(f.is_inactive() && axes.contains(&f.source_col.to_ascii_lowercase())));
+}
+
 // ---------------------------------------------------------------- shared update
 
 /// Applies `f` to the targeted pivot and re-renders it, as one undo step.
@@ -214,6 +247,7 @@ pub(super) fn update(s: &mut Session, p: &Json, f: impl FnOnce(&mut PivotTable, 
         let src = pv::read_source(&cx.wb, &pt.source, si).map_err(other)?;
         let mut new = pt.clone();
         let mut out = f(&mut new, &src, &cx.wb)?;
+        forget_stale_references(&mut new);
         if let Some(slot) = cx.sheet_mut(si)?.pivots.get_mut(pi) {
             *slot = new;
         }
@@ -404,6 +438,8 @@ pub(super) fn remove_field(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// `pivot.moveField`: reorders a field within its area, or moves it to another (keeping an axis
+/// field's sort, grouping and filters when it goes between Rows and Columns), and moves Σ Values.
 pub(super) fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.moveField";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
@@ -462,7 +498,7 @@ pub(super) fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
             if let (Some(k), Some(slot)) = (kept, list.iter_mut().find(|f| f.source_col.eq_ignore_ascii_case(&src_field))) {
                 *slot = k;
             }
-            if let Some(h) = hidden.filter(|h| h.selected.is_some())
+            if let Some(h) = hidden.filter(|h| !h.is_inactive())
                 && !pt.filters.iter().any(|f| f.source_col.eq_ignore_ascii_case(&src_field))
             {
                 pt.filters.push(h);
@@ -472,6 +508,61 @@ pub(super) fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// An optional text parameter that `null` clears: `None` when absent, `Some(None)` for `null`.
+fn optional_text(cmd: &str, p: &Json, key: &str) -> Result<Option<Option<String>>> {
+    match p.get(key) {
+        None => Ok(None),
+        Some(Json::Null) => Ok(Some(None)),
+        Some(Json::String(text)) => Ok(Some(Some(text.clone()))),
+        Some(_) => Err(bad(cmd, format!("`{key}` is a name or null"))),
+    }
+}
+
+/// The canonical name of the row or column field `name`.
+fn axis_field_name(cmd: &str, pt: &PivotTable, name: &str) -> Result<String> {
+    pt.rows
+        .iter()
+        .chain(pt.columns.iter())
+        .find(|f| f.source_col.eq_ignore_ascii_case(name.trim()))
+        .map(|f| f.source_col.clone())
+        .ok_or_else(|| bad(cmd, format!("`{name}` isn't a row or column field of the PivotTable")))
+}
+
+/// A `baseItem` parameter: "(previous)", "(next)", or the label of an item of the base field
+/// (`base_field`, else the first row field, else the first column field, as the report uses).
+/// A label comes back with the field it belongs to, so the caller can pin that field: a later
+/// layout change must not move the label onto another field.
+fn base_item_param(
+    cmd: &str,
+    pt: &PivotTable,
+    src: &pv::Source,
+    wb: &Workbook,
+    base_field: Option<&str>,
+    text: &str,
+) -> Result<(PivotBaseItem, Option<String>)> {
+    let text = text.trim();
+    if text.eq_ignore_ascii_case(BASE_ITEM_PREVIOUS) {
+        return Ok((PivotBaseItem::Previous, None));
+    }
+    if text.eq_ignore_ascii_case(BASE_ITEM_NEXT) {
+        return Ok((PivotBaseItem::Next, None));
+    }
+    let axes = || pt.rows.iter().chain(pt.columns.iter()).filter(|f| src.col(&f.source_col).is_some());
+    let field = match base_field {
+        Some(name) => axes().find(|f| f.source_col.eq_ignore_ascii_case(name)),
+        None => axes().next(),
+    }
+    .ok_or_else(|| bad(cmd, "the PivotTable has no row or column field to take the base item from"))?;
+    let column = src.col(&field.source_col).ok_or_else(|| bad(cmd, format!("no field `{}` in the source data", field.source_col)))?;
+    pv::distinct_labels(wb, src, column, field.date_group, usize::MAX)
+        .into_iter()
+        .find(|label| label.eq_ignore_ascii_case(text))
+        .map(|label| (PivotBaseItem::Named(label), Some(field.source_col.clone())))
+        .ok_or_else(|| bad(cmd, format!("`{text}` isn't an item of `{}`", field.source_col)))
+}
+
+/// `pivot.valueSettings`: a value field's function, caption, Show Values As mode with its base
+/// field and item, and number format.
 pub(super) fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.valueSettings";
     let field = str_param(p, "field").map(str::to_string);
@@ -486,7 +577,9 @@ pub(super) fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let name = str_param(p, "name").map(str::to_string);
     let fmt = p.get("numberFormat").cloned();
-    update(s, p, |pt, src, _| {
+    let base_field = optional_text(C, p, "baseField")?;
+    let base_item = optional_text(C, p, "baseItem")?;
+    update(s, p, |pt, src, wb| {
         let i = match (index, &field) {
             (Some(i), _) => i,
             (None, Some(f)) => pt
@@ -533,6 +626,24 @@ pub(super) fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(sa) = show {
             v.show_as = sa;
         }
+        if let Some(field) = &base_field {
+            let field = field.as_deref().map(|name| axis_field_name(C, pt, name)).transpose()?;
+            if field.as_deref().map(str::to_ascii_lowercase) != v.base_field.as_deref().map(str::to_ascii_lowercase) {
+                // A named base item belongs to the old base field.
+                v.base_item = PivotBaseItem::Previous;
+            }
+            v.base_field = field;
+        }
+        if let Some(item) = &base_item {
+            let (item, field) = match item {
+                None => (PivotBaseItem::Previous, None),
+                Some(text) => base_item_param(C, pt, src, wb, v.base_field.as_deref(), text)?,
+            };
+            if field.is_some() {
+                v.base_field = field;
+            }
+            v.base_item = item;
+        }
         match &fmt {
             Some(Json::String(f)) if !f.is_empty() && f.len() <= 255 => v.number_format = Some(f.clone()),
             Some(Json::Null) => v.number_format = None,
@@ -541,6 +652,17 @@ pub(super) fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
             None => {}
         }
         let name = v.name.clone();
+        // Sorts and value filters by this value field follow a new caption.
+        for field in pt.rows.iter_mut().chain(pt.columns.iter_mut()) {
+            if field.sort_by.as_ref().is_some_and(|by| by.eq_ignore_ascii_case(&cur.name)) {
+                field.sort_by = Some(name.clone());
+            }
+        }
+        for vf in pt.filters.iter_mut().filter_map(|f| f.value.as_mut()) {
+            if vf.by.eq_ignore_ascii_case(&cur.name) {
+                vf.by = name.clone();
+            }
+        }
         if let Some(slot) = pt.values.get_mut(i) {
             *slot = v;
         }

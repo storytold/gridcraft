@@ -18,7 +18,8 @@ use gridcraft_core::date::datetime_from_serial;
 use gridcraft_core::{CellRef, DateSystem, RangeRef, Value, number_to_text};
 use gridcraft_formula::quote_sheet;
 use gridcraft_model::{
-    PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, Workbook,
+    PivotBaseItem, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotTopOf,
+    PivotValue, PivotValueFilter, PivotValueRule, Workbook,
 };
 
 use crate::IoError;
@@ -117,6 +118,135 @@ fn func_caption(f: PivotFunc) -> &'static str {
         PivotFunc::VarP => "Varp",
     }
 }
+
+/// How a show-values-as mode is saved: the `showDataAs` attribute (ECMA-376 `ST_ShowDataAs`)
+/// and, for the modes Excel 2010 added, the `x14:dataField pivotShowAs` extension.
+fn show_as_xml(mode: PivotShowAs) -> (Option<&'static str>, Option<&'static str>) {
+    match mode {
+        PivotShowAs::Normal => (None, None),
+        PivotShowAs::PercentOfGrandTotal => (Some("percentOfTotal"), None),
+        PivotShowAs::PercentOfColumnTotal => (Some("percentOfCol"), None),
+        PivotShowAs::PercentOfRowTotal => (Some("percentOfRow"), None),
+        PivotShowAs::PercentOf => (Some("percent"), None),
+        PivotShowAs::DifferenceFrom => (Some("difference"), None),
+        PivotShowAs::PercentDifferenceFrom => (Some("percentDiff"), None),
+        PivotShowAs::RunningTotal => (Some("runTotal"), None),
+        PivotShowAs::Index => (Some("index"), None),
+        PivotShowAs::PercentOfParentRowTotal => (None, Some("percentOfParentRow")),
+        PivotShowAs::PercentRunningTotal => (None, Some("percentOfRunningTotal")),
+        PivotShowAs::Rank => (None, Some("rankDescending")),
+        PivotShowAs::RankAscending => (None, Some("rankAscending")),
+    }
+}
+
+/// The mode saved as `showDataAs` and the `pivotShowAs` extension (which wins); `Err` names a
+/// mode we don't model.
+fn show_as_from_xml<'a>(show_data_as: Option<&'a str>, extension: Option<&'a str>) -> Result<PivotShowAs, &'a str> {
+    if let Some(ext) = extension {
+        return match ext {
+            "percentOfParentRow" => Ok(PivotShowAs::PercentOfParentRowTotal),
+            "percentOfRunningTotal" => Ok(PivotShowAs::PercentRunningTotal),
+            "rankDescending" => Ok(PivotShowAs::Rank),
+            "rankAscending" => Ok(PivotShowAs::RankAscending),
+            other => Err(other),
+        };
+    }
+    match show_data_as {
+        None | Some("normal") => Ok(PivotShowAs::Normal),
+        Some("percentOfTotal") => Ok(PivotShowAs::PercentOfGrandTotal),
+        Some("percentOfCol") => Ok(PivotShowAs::PercentOfColumnTotal),
+        Some("percentOfRow") => Ok(PivotShowAs::PercentOfRowTotal),
+        Some("percent") => Ok(PivotShowAs::PercentOf),
+        Some("difference") => Ok(PivotShowAs::DifferenceFrom),
+        Some("percentDiff") => Ok(PivotShowAs::PercentDifferenceFrom),
+        Some("runTotal") => Ok(PivotShowAs::RunningTotal),
+        Some("index") => Ok(PivotShowAs::Index),
+        Some(other) => Err(other),
+    }
+}
+
+/// How a value filter is saved: the `<filter type>` and its `<filterColumn>` content (`top10`
+/// for Top/Bottom, `customFilters` for comparisons).
+fn value_filter_xml(rule: PivotValueRule) -> (&'static str, String) {
+    let n = crate::xml::num;
+    let top10 = |count: f64, of: PivotTopOf, top: bool| {
+        let percent = if of == PivotTopOf::Percent { " percent=\"1\"" } else { "" };
+        let bottom = if top { "" } else { " top=\"0\"" };
+        format!("<top10{bottom}{percent} val=\"{0}\" filterVal=\"{0}\"/>", n(count))
+    };
+    let custom = |op: &str, v: f64| format!("<customFilters><customFilter operator=\"{op}\" val=\"{}\"/></customFilters>", n(v));
+    let kind = |of: PivotTopOf| match of {
+        PivotTopOf::Items => "count",
+        PivotTopOf::Percent => "percent",
+        PivotTopOf::Sum => "sum",
+    };
+    match rule {
+        PivotValueRule::Top { count, of } => (kind(of), top10(count, of, true)),
+        PivotValueRule::Bottom { count, of } => (kind(of), top10(count, of, false)),
+        PivotValueRule::Equal(v) => ("valueEqual", custom("equal", v)),
+        PivotValueRule::NotEqual(v) => ("valueNotEqual", custom("notEqual", v)),
+        PivotValueRule::Greater(v) => ("valueGreaterThan", custom("greaterThan", v)),
+        PivotValueRule::GreaterOrEqual(v) => ("valueGreaterThanOrEqual", custom("greaterThanOrEqual", v)),
+        PivotValueRule::Less(v) => ("valueLessThan", custom("lessThan", v)),
+        PivotValueRule::LessOrEqual(v) => ("valueLessThanOrEqual", custom("lessThanOrEqual", v)),
+        PivotValueRule::Between(a, b) => (
+            "valueBetween",
+            format!(
+                "<customFilters and=\"1\"><customFilter operator=\"greaterThanOrEqual\" val=\"{}\"/><customFilter operator=\"lessThanOrEqual\" val=\"{}\"/></customFilters>",
+                n(a.min(b)),
+                n(a.max(b))
+            ),
+        ),
+        PivotValueRule::NotBetween(a, b) => (
+            "valueNotBetween",
+            format!(
+                "<customFilters><customFilter operator=\"lessThan\" val=\"{}\"/><customFilter operator=\"greaterThan\" val=\"{}\"/></customFilters>",
+                n(a.min(b)),
+                n(a.max(b))
+            ),
+        ),
+    }
+}
+
+/// The value filter a `<filter>` saves; `None` for other kinds (label and date filters) or
+/// unreadable thresholds.
+fn value_filter_from_xml(filter: &El) -> Option<PivotValueRule> {
+    let column = filter.path(&["autoFilter", "filterColumn"]);
+    let num = |v: Option<&str>| v.and_then(|t| t.trim().parse::<f64>().ok()).filter(|n| n.is_finite());
+    let top10 = column.and_then(|c| c.child("top10"));
+    let top = || {
+        let t = top10?;
+        let count = num(t.attr("val")).or_else(|| num(filter.attr("stringValue1")))?;
+        Some((count, t.flag("top", true)))
+    };
+    let customs: Vec<f64> = column
+        .and_then(|c| c.child("customFilters"))
+        .map(|cf| cf.kids("customFilter").filter_map(|f| num(f.attr("val"))).collect())
+        .unwrap_or_default();
+    let first = customs.first().copied().or_else(|| num(filter.attr("stringValue1")));
+    let second = customs.get(1).copied().or_else(|| num(filter.attr("stringValue2")));
+    let ranked =
+        |of: PivotTopOf| top().map(|(count, is_top)| if is_top { PivotValueRule::Top { count, of } } else { PivotValueRule::Bottom { count, of } });
+    match filter.attr("type")? {
+        "count" => ranked(PivotTopOf::Items),
+        "percent" => ranked(PivotTopOf::Percent),
+        "sum" => ranked(PivotTopOf::Sum),
+        "valueEqual" => first.map(PivotValueRule::Equal),
+        "valueNotEqual" => first.map(PivotValueRule::NotEqual),
+        "valueGreaterThan" => first.map(PivotValueRule::Greater),
+        "valueGreaterThanOrEqual" => first.map(PivotValueRule::GreaterOrEqual),
+        "valueLessThan" => first.map(PivotValueRule::Less),
+        "valueLessThanOrEqual" => first.map(PivotValueRule::LessOrEqual),
+        "valueBetween" => Some(PivotValueRule::Between(first?, second?)),
+        "valueNotBetween" => Some(PivotValueRule::NotBetween(first?, second?)),
+        _ => None,
+    }
+}
+
+/// `baseItem` values that stand for the item before and after the cell's own (MS-OI29500 for
+/// §18.10.1.22); any other value is an index into the base field's items.
+const BASE_ITEM_PREVIOUS: u32 = 1_048_828;
+const BASE_ITEM_NEXT: u32 = 1_048_829;
 
 fn group_by_name(g: PivotDateGroup) -> &'static str {
     match g {
