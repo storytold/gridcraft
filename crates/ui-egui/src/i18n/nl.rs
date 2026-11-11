@@ -558,6 +558,28 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Weergeven",
         "Collapse dialog" => "Dialoogvenster samenvouwen",
         "Expand dialog" => "Dialoogvenster uitvouwen",
+        "My list has headers" => "Mijn gegevens bevatten kopteksten",
+        "Sort by" => "Sorteren op",
+        "Then by" => "Vervolgens op",
+        "Cell Values" => "Celwaarden",
+        "Cell Color" => "Celkleur",
+        "A to Z" => "A tot Z",
+        "Z to A" => "Z tot A",
+        "Add Level" => "Niveau toevoegen",
+        "Delete Level" => "Niveau verwijderen",
+        "Copy Level" => "Niveau kopiëren",
+        "Move Up" => "Omhoog",
+        "Move Down" => "Omlaag",
+        "Order" => "Volgorde",
+        "Sort On" => "Sorteren op",
+        "Sort|Column" => "Kolom",
+        "Column {letters}" => "Kolom {letters}",
+        "Smallest to Largest" => "Van klein naar groot",
+        "Largest to Smallest" => "Van groot naar klein",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Sluit het dialoogvenster Sorteren voordat u van blad wisselt of bladen wijzigt."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Ga terug naar het oorspronkelijke blad om te sorteren, of annuleer.",
         _ => return None,
     })
 }

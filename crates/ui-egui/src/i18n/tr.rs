@@ -448,6 +448,28 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Göster",
         "Collapse dialog" => "İletişim kutusunu daralt",
         "Expand dialog" => "İletişim kutusunu genişlet",
+        "My list has headers" => "Verilerimde üst bilgi var",
+        "Sort by" => "Sıralama ölçütü",
+        "Then by" => "Sonra",
+        "Cell Values" => "Hücre Değerleri",
+        "Cell Color" => "Hücre Rengi",
+        "A to Z" => "A'dan Z'ye",
+        "Z to A" => "Z'den A'ya",
+        "Add Level" => "Düzey Ekle",
+        "Delete Level" => "Düzeyi Sil",
+        "Copy Level" => "Düzeyi Kopyala",
+        "Move Up" => "Yukarı Taşı",
+        "Move Down" => "Aşağı Taşı",
+        "Order" => "Sıra",
+        "Sort On" => "Sıralama Ölçütü",
+        "Sort|Column" => "Sütun",
+        "Column {letters}" => "Sütun {letters}",
+        "Smallest to Largest" => "En Küçükten En Büyüğe",
+        "Largest to Smallest" => "En Büyükten En Küçüğe",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Çalışma sayfaları arasında geçiş yapmadan veya sayfaları değiştirmeden önce Sırala iletişim kutusunu kapatın."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Sıralamak için özgün çalışma sayfasına dönün veya iptal edin.",
         _ => return None,
     })
 }

@@ -418,6 +418,45 @@ mod tests {
         }
     }
 
+    /// The Custom Sort dialog's own strings have a row in every catalog (no silent English
+    /// fallback), keep the `{letters}` placeholder, and read as plain English in English.
+    #[test]
+    fn custom_sort_strings_are_translated_in_every_catalog() {
+        let keys = [
+            "Sort by",
+            "Then by",
+            "My list has headers",
+            "Cell Values",
+            "Cell Color",
+            "Font Color",
+            "A to Z",
+            "Z to A",
+            "Add Level",
+            "Delete Level",
+            "Copy Level",
+            "Move Up",
+            "Move Down",
+            "Order",
+            "Sort On",
+            "Sort|Column",
+            "Column {letters}",
+            "Smallest to Largest",
+            "Largest to Smallest",
+            "Close the Sort dialog before switching or changing worksheets.",
+            "Return to the original worksheet to sort, or cancel.",
+        ];
+        for key in keys {
+            let english = key.rsplit_once('|').map_or(key, |(_, label)| label);
+            assert_eq!(Language::En.tr(key), english);
+            for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
+                let code = language.code();
+                let shown = language.translated(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
+                assert!(!shown.trim().is_empty() && !shown.contains('|'), "{code}: bad translation of {key:?}: {shown:?}");
+                assert_eq!(shown.contains("{letters}"), key.contains("{letters}"), "{code}: placeholder of {key:?}: {shown:?}");
+            }
+        }
+    }
+
     #[test]
     fn translations_never_show_the_context_prefix() {
         // `tr` returns a found translation as it is, so a catalog that keeps `context|` in its

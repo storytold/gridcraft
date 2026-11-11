@@ -55,7 +55,7 @@ fn add_level_picks_a_column_no_level_uses_yet() {
     let mut h = harness(sales());
     h.state_mut().open_dialog("sort", json!({}));
     h.run_steps(2);
-    // Level 1 seeded B; clicking "+ Add Level" must not default level 2 to B too (#1906 review).
+    // Level 1 seeded B; clicking "Add Level" must not default level 2 to B too (#1906 review).
     h.run_steps(6);
     h.get_by_label("Add Level").click();
     h.run_steps(6);
@@ -67,19 +67,48 @@ fn add_level_picks_a_column_no_level_uses_yet() {
     assert_ne!(cols[0], cols[1], "the second level defaults to a different column: {cols:?}");
 }
 
-/// Add Level stays inside the selected range.
+/// Add Level is not limited by the number of columns (Excel allows many levels): with every
+/// column in use it adds a level on the selected level's column, and never one outside the range.
 #[test]
-fn add_level_does_not_add_a_column_outside_the_selected_range() {
+fn add_level_keeps_adding_levels_when_every_column_is_used() {
     let mut s = sales();
     s.execute("selection.set", json!({"range": "A1:A4", "active": "A2"})).unwrap();
     let mut h = harness(s);
     h.state_mut().open_dialog("sort", json!({}));
     h.run_steps(2);
-    h.get_by_label("Add Level").click();
-    h.run_steps(4);
+    for _ in 0..2 {
+        h.get_by_label("Add Level").click();
+        h.run_steps(4);
+    }
     let levels = h.state().dialog.as_ref().unwrap().values["levels"].as_array().unwrap();
-    assert_eq!(levels.len(), 1, "no additional level should use a column outside A");
-    assert_eq!(levels[0]["column"], "A");
+    assert_eq!(levels.len(), 3, "Add Level stays available with one column");
+    assert!(levels.iter().all(|l| l["column"] == "A"), "no level uses a column outside A: {levels:?}");
+}
+
+/// In the interface languages whose scripts the bundled fonts cover (CJK and Vietnamese need the
+/// optional font repo), the toolbar (level buttons and the headers checkbox) stays on one row without
+/// overlapping: the window widens for a longer translation.
+#[test]
+fn toolbar_fits_without_overlap_in_every_language() {
+    use gridcraft_ui_egui::i18n::Language;
+    for language in Language::ALL.into_iter().filter(|l| !matches!(l, Language::Ja | Language::Ko | Language::Zh | Language::Vi)) {
+        let mut app = crate::common::app(sales());
+        app.ui.language = language;
+        let mut h = crate::support::app_harness(app, 4);
+        h.state_mut().open_dialog("sort", json!({}));
+        h.run_steps(6);
+        let rects: Vec<egui::Rect> = ["Add Level", "Delete Level", "Copy Level", "Move Up", "Move Down", "My list has headers"]
+            .iter()
+            .map(|key| h.get_by_label(language.tr(key)).rect())
+            .collect();
+        let code = language.code();
+        for (i, a) in rects.iter().enumerate() {
+            for b in &rects[i + 1..] {
+                assert!(!a.intersects(*b), "{code}: toolbar items overlap: {a:?} {b:?}");
+            }
+            assert!((a.center().y - rects[0].center().y).abs() < 12.0, "{code}: the toolbar wrapped: {rects:?}");
+        }
+    }
 }
 
 /// Escape restores every selected area and the active cell.
@@ -190,6 +219,66 @@ fn sort_refuses_to_run_on_another_worksheet_and_stays_open() {
     let doc = h.state().session.active().unwrap();
     let first = doc.wb.active().unwrap().value(gridcraft_engine::core::CellRef::new(1, 1)).as_f64();
     assert_eq!(first, Some(30.0), "the original worksheet was not sorted");
+}
+
+/// The dialog follows its worksheet by identity: moving the tab keeps Sort working on it.
+#[test]
+fn sort_still_runs_after_its_worksheet_moves_to_another_position() {
+    let mut s = sales();
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("selection.set", json!({"range": "B2"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("sort", json!({}));
+    h.run_steps(2);
+    h.state_mut().session.execute("sheet.move", json!({"sheet": 0, "to": 1})).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().session.active().unwrap().wb.active_sheet(), 1);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "the sort ran and the dialog closed");
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    let revenue: Vec<_> = (1..4).map(|r| sh.value(gridcraft_engine::core::CellRef::new(r, 1)).as_f64()).collect();
+    assert_eq!(revenue, [Some(10.0), Some(20.0), Some(30.0)], "the moved worksheet was sorted");
+}
+
+/// A different worksheet that takes the opening worksheet's position is not the opening worksheet.
+#[test]
+fn sort_refuses_a_different_worksheet_at_the_same_position() {
+    let mut s = sales();
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("sort", json!({}));
+    h.run_steps(2);
+    h.state_mut().session.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().session.active().unwrap().wb.active_sheet(), 0);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("sort"));
+    assert!(h.state().message.is_some(), "the refusal is explained");
+    assert!(!h.state().session.journal.iter().any(|(id, _)| id == "data.sort"), "nothing was sorted");
+}
+
+/// Cancelling while another worksheet is active still restores the opening worksheet's selection.
+#[test]
+fn sort_cancel_restores_the_selection_of_the_opening_worksheet() {
+    let mut s = sales();
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("selection.set", json!({"range": "B2"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("sort", json!({}));
+    h.run_steps(2);
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    h.run_steps(2);
+    let other = h.state().session.active().unwrap().selection.a1();
+    let done = gridcraft_ui_egui::control::handle(h.state_mut(), &egui::Context::default(), "ui.dialog.cancel", &json!({}));
+    assert!(matches!(done, gridcraft_ui_egui::control::Outcome::Done(_)));
+    assert_eq!(h.state().session.active().unwrap().selection.a1(), other, "the active worksheet's selection is left alone");
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    assert_eq!(h.state().session.active().unwrap().selection.a1(), "B2", "the opening worksheet got its selection back");
 }
 
 /// Control cancel and dialog replacement restore the selection.

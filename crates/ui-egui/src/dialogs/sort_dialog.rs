@@ -8,6 +8,7 @@ use gridcraft_engine::core::{CellRef, RangeRef, Value, col_to_letters};
 
 use super::show::ok_cancel;
 use super::{Dialog, Json, Sense, SheetApp, json, vec2};
+use crate::i18n::Language;
 use crate::icons::Icon;
 use crate::theme::Tokens;
 
@@ -21,14 +22,16 @@ const SHEET_COMMANDS: [&str; 8] =
 pub(super) struct State {
     /// The exact selection to restore when Sort closes, including ranges and the shift anchor.
     restore: Option<Selection>,
-    /// The workbook and worksheet Sort opened on: the only one it may sort or restore a selection on.
-    home: Option<(u64, usize)>,
+    /// The workbook and worksheet Sort opened on, by identity: the only one it may sort. A sheet's
+    /// position changes when sheets are inserted, deleted, moved or undone, its [`SheetUid`] does not.
+    home: Option<(u64, u64)>,
     choices: Option<ChoicesCache>,
 }
 
-/// The column choices for one sheet revision, range and header setting.
+/// The column choices for one sheet revision, range, header setting and language.
 #[derive(Clone, Debug)]
 struct ChoicesCache {
+    language: Language,
     doc_uid: Option<u64>,
     sheet_index: Option<usize>,
     revision: Option<u64>,
@@ -43,7 +46,7 @@ type Choice = (String, String, bool);
 /// Opens Custom Sort on the range and header guess of `data.sort`, seeding "Sort by" from the active column (#1906).
 pub(super) fn open(app: &mut SheetApp, params: &Json) -> Dialog {
     let restore = app.session.active().map(|doc| doc.selection.clone());
-    let home = app.view_key();
+    let home = sheet_key(app);
     let (range, header) = gridcraft_engine::cmd::data::sort_context(&app.session, params).map_or((None, true), |(r, h)| (Some(r), h));
     let active_col = app.session.active().map(|doc| doc.selection.active.col);
     let first = match (range, active_col) {
@@ -68,15 +71,31 @@ fn body_of(r: RangeRef) -> RangeRef {
     RangeRef::new(CellRef::new(r.start.row.saturating_add(1), r.start.col), r.end)
 }
 
-/// Puts back the selection from before Sort opened (once), on the worksheet it opened on.
-/// Runs whenever a dialog lets go of the grid.
+/// The active workbook and worksheet by identity (document uid, [`SheetUid`]).
+///
+/// [`SheetUid`]: gridcraft_engine::model::SheetUid
+fn sheet_key(app: &SheetApp) -> Option<(u64, u64)> {
+    let doc = app.session.active()?;
+    Some((doc.uid, doc.wb.active()?.uid.get()))
+}
+
+/// Puts back the selection from before Sort opened (once) on the worksheet it opened on: the
+/// selection shown while that sheet is active, else the one the sheet keeps for when it is shown
+/// again. Nothing is restored once that sheet is gone. Runs whenever a dialog lets go of the grid.
 pub(super) fn restore_selection(app: &mut SheetApp, d: &mut Dialog) {
-    if d.name == "sort"
-        && app.view_key() == d.sort.home
-        && let Some(selection) = d.sort.restore.take()
-        && let Some(doc) = app.session.active_mut()
-    {
+    let Some((doc_uid, sheet_uid)) = d.sort.home.filter(|_| d.name == "sort") else { return };
+    let Some(doc) = app.session.active_mut().filter(|doc| doc.uid == doc_uid) else { return };
+    let Some(index) = doc.wb.sheets.iter().position(|s| s.uid.get() == sheet_uid) else { return };
+    let Some(selection) = d.sort.restore.take() else { return };
+    if index == doc.wb.active_sheet() {
         doc.selection = selection;
+    } else {
+        if doc.sheet_selections.len() < doc.wb.sheets.len() {
+            doc.sheet_selections.resize(doc.wb.sheets.len(), Selection::default());
+        }
+        if let Some(slot) = doc.sheet_selections.get_mut(index) {
+            *slot = selection;
+        }
     }
 }
 
@@ -91,14 +110,41 @@ pub(crate) fn grid_sense(app: &SheetApp) -> Sense {
     if app.dialog.as_ref().is_some_and(|d| d.name == "sort") { Sense::hover() } else { Sense::click_and_drag() }
 }
 
-/// Sort moves and resizes, with a minimum size that fits its controls.
-pub(super) fn window<'a>(window: egui::Window<'a>, name: &str) -> egui::Window<'a> {
-    if name == "sort" { window.resizable(true).min_width(480.0).min_height(260.0).default_width(500.0).default_height(320.0) } else { window }
+/// Sort moves and resizes. Its minimum width fits the whole toolbar row (the level buttons and the
+/// headers checkbox) in the interface language, so a longer translation widens the window instead
+/// of overlapping or wrapping the row.
+pub(super) fn window<'a>(window: egui::Window<'a>, name: &str, ctx: &egui::Context, lang: Language) -> egui::Window<'a> {
+    if name != "sort" {
+        return window;
+    }
+    let width = toolbar_width(ctx, lang).max(480.0);
+    window.resizable(true).min_width(width).min_height(260.0).default_width(width.max(500.0)).default_height(320.0)
+}
+
+/// The width of the toolbar row of [`sort`] with its labels on one line, plus the window frame.
+fn toolbar_width(ctx: &egui::Context, lang: Language) -> f32 {
+    let style = ctx.global_style();
+    let painter = ctx.layer_painter(egui::LayerId::background());
+    let text = |font: egui::FontId, key: &str| painter.layout_no_wrap(lang.tr(key).to_string(), font, egui::Color32::PLACEHOLDER).size().x;
+    let button_font = crate::theme::ui_font(12.5);
+    // Mirrors `small_button_accent`: a 24px icon cell and the label plus 6px.
+    let buttons: f32 = ["Add Level", "Delete Level", "Copy Level"].iter().map(|key| 24.0 + text(button_font.clone(), key) + 6.0).sum();
+    let arrows = 2.0 * 24.0;
+    let spacing = &style.spacing;
+    let checkbox = spacing.icon_width + spacing.icon_spacing + text(egui::TextStyle::Body.resolve(&style), "My list has headers");
+    // Five buttons and the checkbox, with the gaps between them, and the window's inner margin.
+    (buttons + arrows + checkbox + 6.0 * spacing.item_spacing.x + 2.0 * style.spacing.window_margin.left as f32 + 16.0).ceil()
+}
+
+/// The label of a column that has no header text: `Column A`, in the interface language.
+fn headerless_label(lang: Language, letters: &str) -> String {
+    lang.tr("Column {letters}").replace("{letters}", letters)
 }
 
 /// The columns of `range` with their labels: header text, or `Column A`, `Column B`… without headers.
 fn column_choices(app: &SheetApp, range: Option<RangeRef>, header: bool) -> Vec<Choice> {
     let Some(r) = range else { return Vec::new() };
+    let lang = app.ui.language;
     let sh = app.session.active().and_then(|doc| doc.wb.active());
     let body_start = r.start.row.saturating_add(u32::from(header));
     let cols = r.end.col.saturating_sub(r.start.col).saturating_add(1).max(1) as usize;
@@ -111,7 +157,7 @@ fn column_choices(app: &SheetApp, range: Option<RangeRef>, header: bool) -> Vec<
                 (true, Some(sh)) => sh.value(CellRef::new(r.start.row, c)).display().trim().to_string(),
                 _ => String::new(),
             };
-            let label = if text.is_empty() { format!("Column {letters}") } else { text };
+            let label = if text.is_empty() { headerless_label(lang, &letters) } else { text };
             let numeric =
                 sh.is_some_and(|sh| values_are_numeric((body_start..=r.end.row).take(rows_per_col).map(|row| sh.value(CellRef::new(row, c)))));
             (letters, label, numeric)
@@ -119,12 +165,14 @@ fn column_choices(app: &SheetApp, range: Option<RangeRef>, header: bool) -> Vec<
         .collect()
 }
 
-/// The column choices, recomputed only when the sheet, range or header setting changed.
+/// The column choices, recomputed only when the sheet, range, header setting or language changed.
 fn cached_choices(app: &SheetApp, d: &mut Dialog, range: Option<RangeRef>, header: bool) -> Vec<Choice> {
+    let language = app.ui.language;
     let (doc_uid, sheet_index, revision) =
         app.session.active().map(|doc| (Some(doc.uid), Some(doc.wb.active_sheet()), Some(doc.revision))).unwrap_or_default();
     let range_key = range.map(|r| r.a1());
     if let Some(cache) = &d.sort.choices
+        && cache.language == language
         && cache.doc_uid == doc_uid
         && cache.sheet_index == sheet_index
         && cache.revision == revision
@@ -134,8 +182,21 @@ fn cached_choices(app: &SheetApp, d: &mut Dialog, range: Option<RangeRef>, heade
         return cache.choices.clone();
     }
     let choices = column_choices(app, range, header);
-    d.sort.choices = Some(ChoicesCache { doc_uid, sheet_index, revision, range: range_key, header, choices: choices.clone() });
+    d.sort.choices = Some(ChoicesCache { language, doc_uid, sheet_index, revision, range: range_key, header, choices: choices.clone() });
     choices
+}
+
+/// The column a new level starts on: the first column no level uses, and once every column is used
+/// the selected level's column (as Copy Level would give), so more levels can always be added.
+fn next_level_column(choices: &[Choice], levels: &[Json], selected: usize) -> Option<String> {
+    let used: Vec<&str> = levels.iter().filter_map(|l| l["column"].as_str()).collect();
+    choices
+        .iter()
+        .map(|(l, _, _)| l.as_str())
+        .find(|l| !used.contains(l))
+        .or_else(|| levels.get(selected).and_then(|l| l["column"].as_str()))
+        .or_else(|| choices.first().map(|(l, _, _)| l.as_str()))
+        .map(str::to_string)
 }
 
 /// Draws the sort-level editor: header toggle, level actions, the level rows and OK/Cancel; OK runs `data.sort`.
@@ -143,14 +204,14 @@ pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
     let mut header = d.values.get("header").and_then(Json::as_bool).unwrap_or(true);
     let was_header = header;
     let range = d.values.get("range").and_then(Json::as_str).and_then(RangeRef::parse);
+    let lang = app.ui.language;
     let choices = cached_choices(app, d, range, header);
     let mut levels: Vec<Json> = d.values.get("levels").and_then(Json::as_array).cloned().unwrap_or_default();
     let mut selected = d.list_index.min(levels.len().saturating_sub(1));
     let t = Tokens::get(ui.ctx());
     ui.horizontal_wrapped(|ui| {
-        // New levels must use an unused column in the selected sort range.
-        let used: Vec<&str> = levels.iter().filter_map(|l| l["column"].as_str()).collect();
-        let next_column = choices.iter().map(|(l, _, _)| l).find(|l| !used.contains(&l.as_str())).cloned();
+        // Levels are not limited by the columns, allow the same column twice (up to 64 levels).
+        let next_column = next_level_column(&choices, &levels, selected);
         if text_icon_button(ui, Icon::Plus, t.accent, "Add Level", levels.len() < 64 && next_column.is_some()).clicked()
             && let Some(next) = next_column
         {
@@ -176,7 +237,7 @@ pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
             selected += 1;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.checkbox(&mut header, "My list has headers");
+            ui.checkbox(&mut header, lang.tr("My list has headers"));
         });
     });
     d.values.insert("header".into(), json!(header));
@@ -189,7 +250,7 @@ pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
     ui.add_space(4.0);
     let table_height = (ui.available_height() - 48.0).max(60.0);
     egui::ScrollArea::vertical().max_height(table_height).min_scrolled_height(table_height).auto_shrink([false, false]).show(ui, |ui| {
-        levels_table(ui, &mut levels, &mut selected, &choices);
+        levels_table(ui, &mut levels, &mut selected, &choices, lang);
     });
     d.list_index = selected;
     d.values.insert("levels".into(), Json::Array(levels.clone()));
@@ -201,7 +262,7 @@ pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
             p["range"] = json!(r);
         }
         // The range has no sheet name, so it must not be read against another worksheet.
-        let failure = if app.view_key() != d.sort.home {
+        let failure = if sheet_key(app) != d.sort.home {
             Some("Return to the original worksheet to sort, or cancel.".to_string())
         } else {
             app.run("data.sort", p).err().map(|e| crate::clean_error(&e))
@@ -217,9 +278,14 @@ pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
 }
 
 /// The selectable level rows: "Sort by"/"Then by" with the column, sort-on and order pickers.
-fn levels_table(ui: &mut egui::Ui, levels: &mut [Json], selected: &mut usize, choices: &[Choice]) {
+fn levels_table(ui: &mut egui::Ui, levels: &mut [Json], selected: &mut usize, choices: &[Choice], lang: Language) {
     let gap = ui.spacing().item_spacing.x;
-    let label_w = 64.0;
+    // The row label column grows with the translated words, so a longer one is never wrapped or cut.
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let label_w = ["Sort by", "Then by"]
+        .iter()
+        .map(|key| ui.painter().layout_no_wrap(lang.tr(key).to_string(), font.clone(), egui::Color32::PLACEHOLDER).size().x.ceil() + 4.0)
+        .fold(64.0, f32::max);
     let row_h = 26.0;
     let rest = (ui.available_width() - 16.0 - label_w - 3.0 * gap).max(300.0);
     let w = rest / 3.0;
@@ -231,13 +297,13 @@ fn levels_table(ui: &mut egui::Ui, levels: &mut [Json], selected: &mut usize, ch
     };
     ui.horizontal(|ui| {
         cell(ui, label_w + gap + w, 18.0, &mut |ui| {
-            ui.strong("Column");
+            ui.strong(lang.tr("Sort|Column"));
         });
         cell(ui, w, 18.0, &mut |ui| {
-            ui.strong("Sort On");
+            ui.strong(lang.tr("Sort On"));
         });
         cell(ui, w, 18.0, &mut |ui| {
-            ui.strong("Order");
+            ui.strong(lang.tr("Order"));
         });
     });
     let accent = Tokens::get(ui.ctx()).accent;
@@ -254,45 +320,50 @@ fn levels_table(ui: &mut egui::Ui, levels: &mut [Json], selected: &mut usize, ch
         }
         ui.allocate_ui_with_layout(row_rect.size(), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             cell(ui, label_w, row_h, &mut |ui| {
-                ui.add(egui::Label::new(if i == 0 { "Sort by" } else { "Then by" }).selectable(false));
+                ui.add(egui::Label::new(lang.tr(if i == 0 { "Sort by" } else { "Then by" })).selectable(false));
             });
             let mut col = lv["column"].as_str().unwrap_or("A").to_string();
-            let shown = choices.iter().find(|(l, _, _)| *l == col).map(|(_, t, _)| t.clone()).unwrap_or_else(|| format!("Column {col}"));
+            // The closed box names the column as its open list does (#3446), whatever the case of the stored letter.
+            let shown = choices
+                .iter()
+                .find(|(l, _, _)| l.eq_ignore_ascii_case(&col))
+                .map_or_else(|| headerless_label(lang, &col.to_ascii_uppercase()), |(_, t, _)| t.clone());
             let r = craft_ui::ComboBox::from_id_salt(("col", i)).selected_text(shown).width(w).show_ui(ui, |ui| {
                 for (letters, label, _) in choices {
                     ui.selectable_value(&mut col, letters.clone(), label);
                 }
             });
-            r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Sort column"));
+            r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, lang.tr("Sort|Column")));
             if r.response.clicked() {
                 *selected = i;
             }
-            lv["column"] = json!(col);
+            lv["column"] = json!(col.to_ascii_uppercase());
             let mut by = lv["by"].as_str().unwrap_or("values").to_string();
-            let by_label = match by.as_str() {
+            let by_label = lang.tr(match by.as_str() {
                 "cellColor" => "Cell Color",
                 "fontColor" => "Font Color",
                 _ => "Cell Values",
-            };
-            let r = craft_ui::ComboBox::from_id_salt(("by", i)).selected_text(by_label).width(w).show_ui(ui, |ui| {
-                ui.selectable_value(&mut by, "values".into(), "Cell Values");
-                ui.selectable_value(&mut by, "cellColor".into(), "Cell Color");
-                ui.selectable_value(&mut by, "fontColor".into(), "Font Color");
             });
-            r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Sort on"));
+            let r = craft_ui::ComboBox::from_id_salt(("by", i)).selected_text(by_label).width(w).show_ui(ui, |ui| {
+                ui.selectable_value(&mut by, "values".into(), lang.tr("Cell Values"));
+                ui.selectable_value(&mut by, "cellColor".into(), lang.tr("Cell Color"));
+                ui.selectable_value(&mut by, "fontColor".into(), lang.tr("Font Color"));
+            });
+            r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, lang.tr("Sort On")));
             if r.response.clicked() {
                 *selected = i;
             }
             lv["by"] = json!(by);
             let numeric = choices.iter().find(|(l, _, _)| lv["column"].as_str() == Some(l.as_str())).is_some_and(|(_, _, n)| *n);
             let (asc_label, desc_label) = if numeric { ("Smallest to Largest", "Largest to Smallest") } else { ("A to Z", "Z to A") };
+            let (asc_label, desc_label) = (lang.tr(asc_label), lang.tr(desc_label));
             let mut desc = lv["order"].as_str() == Some("desc");
             let order_label = if desc { desc_label } else { asc_label };
             let r = craft_ui::ComboBox::from_id_salt(("order", i)).selected_text(order_label).width(w).show_ui(ui, |ui| {
                 ui.selectable_value(&mut desc, false, asc_label);
                 ui.selectable_value(&mut desc, true, desc_label);
             });
-            r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Sort order"));
+            r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, lang.tr("Order")));
             if r.response.clicked() {
                 *selected = i;
             }

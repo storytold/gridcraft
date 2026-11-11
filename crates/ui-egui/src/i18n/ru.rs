@@ -491,6 +491,28 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Показать",
         "Collapse dialog" => "Свернуть диалоговое окно",
         "Expand dialog" => "Развернуть диалоговое окно",
+        "My list has headers" => "Мои данные содержат заголовки",
+        "Sort by" => "Сортировать по",
+        "Then by" => "Затем по",
+        "Cell Values" => "Значения ячеек",
+        "Cell Color" => "Цвет ячейки",
+        "A to Z" => "От А до Я",
+        "Z to A" => "От Я до А",
+        "Add Level" => "Добавить уровень",
+        "Delete Level" => "Удалить уровень",
+        "Copy Level" => "Копировать уровень",
+        "Move Up" => "Вверх",
+        "Move Down" => "Вниз",
+        "Order" => "Порядок",
+        "Sort On" => "Сортировка",
+        "Sort|Column" => "Столбец",
+        "Column {letters}" => "Столбец {letters}",
+        "Smallest to Largest" => "От наименьшего к наибольшему",
+        "Largest to Smallest" => "От наибольшего к наименьшему",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Закройте диалоговое окно «Сортировка», прежде чем переключать или изменять листы."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Вернитесь на исходный лист, чтобы выполнить сортировку, или отмените действие.",
         _ => return None,
     })
 }

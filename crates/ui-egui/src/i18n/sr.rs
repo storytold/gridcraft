@@ -478,6 +478,28 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Prikaži",
         "Collapse dialog" => "Skupi dijalog",
         "Expand dialog" => "Proširi dijalog",
+        "My list has headers" => "Moji podaci imaju zaglavlja",
+        "Sort by" => "Sortiraj po",
+        "Then by" => "Zatim po",
+        "Cell Values" => "Vrednosti ćelija",
+        "Cell Color" => "Boja ćelije",
+        "A to Z" => "Od A do Z",
+        "Z to A" => "Od Z do A",
+        "Add Level" => "Dodaj nivo",
+        "Delete Level" => "Izbriši nivo",
+        "Copy Level" => "Kopiraj nivo",
+        "Move Up" => "Pomeri nagore",
+        "Move Down" => "Pomeri nadole",
+        "Order" => "Redosled",
+        "Sort On" => "Sortiraj po",
+        "Sort|Column" => "Kolona",
+        "Column {letters}" => "Kolona {letters}",
+        "Smallest to Largest" => "Od najmanjeg do najvećeg",
+        "Largest to Smallest" => "Od najvećeg do najmanjeg",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Zatvorite dijalog Sortiranje pre nego što promenite ili izmenite radne listove."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Vratite se na prvobitni radni list da biste sortirali, ili otkažite.",
         _ => return None,
     })
 }
