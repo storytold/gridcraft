@@ -256,9 +256,62 @@ fn middle_alignment_uses_the_cell_midpoint() {
 }
 
 #[test]
-fn cell_text_y_moves_monotonically_in_standard_and_tall_rows() {
-    let rect_std = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 24.0));
-    let gh = 18.5;
+fn galley_baseline_bounds_preserves_empty_edge_rows() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    for text in ["\nHello", "Hello\n", "\n\nHello\n\n", "\n\n"] {
+        let galley = ctx.fonts_mut(|fonts| fonts.layout(text.to_string(), egui::FontId::proportional(16.0), Color32::BLACK, 200.0));
+        assert_eq!(galley.rows.len(), text.matches('\n').count() + 1);
+        let (top, bottom) = super::cell_paint::galley_baseline_bounds(&galley);
+        let first = galley.rows.first().expect("layout has a first row");
+        let last = galley.rows.last().expect("layout has a last row");
+        if first.glyphs.is_empty() {
+            assert_eq!(top, first.rect().top(), "leading blank rows contribute to the top bound: {text:?}");
+        }
+        if last.glyphs.is_empty() {
+            assert_eq!(bottom, last.rect().bottom(), "trailing blank rows contribute to the bottom bound: {text:?}");
+        }
+    }
+}
+
+#[test]
+fn galley_baseline_bounds_ignores_centered_fallback_glyphs() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    for text in ["\u{e618}Hello", "Hello\n\u{e618}Hello", "\u{e618}Hello\nHello", "😀Hello", "Hello\n😀Hello", "😀Hello\nHello"] {
+        let galley = ctx.fonts_mut(|fonts| fonts.layout(text.to_string(), egui::FontId::monospace(16.0), Color32::BLACK, 200.0));
+        let fallback =
+            galley.rows.iter().flat_map(|row| &row.glyphs).find(|glyph| matches!(glyph.chr, '\u{e618}' | '😀')).expect("fallback is laid out");
+        assert_eq!(fallback.font_face_align, egui::epaint::text::FallbackAlign::Center);
+        assert_ne!(fallback.font_face_ascent, fallback.font_ascent, "test must exercise a fallback with different metrics");
+        let (top, bottom) = super::cell_paint::galley_baseline_bounds(&galley);
+        for (row, bound, lower) in [(galley.rows.first().unwrap(), top, false), (galley.rows.last().unwrap(), bottom, true)] {
+            let primary = row.glyphs.iter().find(|glyph| glyph.chr == 'H').expect("primary-font text is present");
+            let expected = row.pos.y + primary.pos.y - primary.font_ascent + if lower { primary.font_height } else { 0.0 };
+            assert_eq!(bound, expected, "a centered fallback must not shift the primary text: {text:?}");
+        }
+    }
+}
+
+#[test]
+fn galley_baseline_bounds_keeps_centered_only_rows() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    for text in ["\u{e618}", "\u{e618}\n\u{e618}", "😀", "😀\n😀"] {
+        let galley = ctx.fonts_mut(|fonts| fonts.layout(text.to_string(), egui::FontId::monospace(16.0), Color32::BLACK, 200.0));
+        let (top, bottom) = super::cell_paint::galley_baseline_bounds(&galley);
+        assert_eq!(top, galley.rows.first().unwrap().rect().top(), "centered-only rows keep their logical top");
+        assert_eq!(bottom, galley.rows.last().unwrap().rect().bottom(), "centered-only rows keep their logical bottom");
+    }
+}
+
+#[test]
+fn cell_text_y_moves_monotonically_when_the_text_fits() {
+    let rect_std = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 20.0));
+    let gh = 16.0;
     let z = 1.0;
 
     let y_top_std = cell_text_y(VAlign::Top, rect_std, gh, z);
@@ -291,10 +344,10 @@ fn wrapped_cell_text_y_positions_correctly_and_safeguards_overflow() {
     assert!(y_top < y_center);
     assert!(y_center < y_bottom);
 
-    // Overflow case: gh exceeds rect height; Top still starts inside the cell.
+    // Overflow keeps the same top inset as fitting text; the cell clips the excess.
     let gh_overflow = 60.0;
     let y_top_ovf = wrapped_cell_text_y(VAlign::Top, rect, gh_overflow, z);
-    assert!(y_top_ovf >= rect.top());
+    assert_eq!(y_top_ovf, y_top);
 }
 
 #[test]
@@ -306,9 +359,9 @@ fn wrapped_cell_text_y_keeps_vertical_alignment_when_text_is_taller_than_the_row
     let y_center = wrapped_cell_text_y(VAlign::Center, rect, gh, z);
     let y_bottom = wrapped_cell_text_y(VAlign::Bottom, rect, gh, z);
     // Taller text overflows upward for Bottom and both ways for Center (the cell clips it).
-    assert!((y_top - 1.5).abs() < 0.01, "Top starts at the top edge, got {y_top}");
-    assert!((y_center + gh / 2.0 - rect.center().y).abs() < 0.01, "Center is centred, got {y_center}");
-    assert!((y_bottom + gh - (rect.bottom() - 1.5)).abs() < 0.01, "Bottom ends at the bottom edge, got {y_bottom}");
+    assert!((y_top - 1.0 * z).abs() < 0.01, "Top leaves a pixel inside the cell, got {y_top}");
+    assert!((y_center + gh / 2.0 - rect.center().y).abs() < 0.01, "Center follows the shared insets, got {y_center}");
+    assert!((y_bottom + gh - (rect.bottom() - 1.0 * z)).abs() < 0.01, "Bottom keeps the single-line inset, got {y_bottom}");
 }
 
 /// The screen box of a galley of `size` drawn at `pos` turned by `angle` about `pos`, as egui
@@ -378,4 +431,87 @@ fn upward_text_with_middle_align_is_centred_in_a_merged_block() {
     let bb = rotated_box(rotated_text_pos(rect, size, angle, HAlign::Center, VAlign::Center, 2.5, 0.0), size, angle);
     assert!((bb.center().y - rect.center().y).abs() < 0.01, "{bb:?} not centred in {rect:?}");
     assert!((bb.center().x - rect.center().x).abs() < 0.01, "{bb:?} not centred in {rect:?}");
+}
+
+/// One grid frame of `app` in a headless context.
+fn grid_frame(app: &mut crate::SheetApp) {
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1200.0, 800.0));
+    let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| super::show(app, ui));
+    out.textures_delta.clear(); // nothing consumes the uploads in a headless test
+}
+
+/// The line positions, used range and conditional formatting statistics the grid keeps between
+/// frames are rebuilt after every change of the sheet, whichever way it is changed, and match
+/// what a fresh build gives.
+#[test]
+fn kept_sheet_geometry_and_cf_statistics_follow_every_change() {
+    use gridcraft_engine::cf::CfCache;
+    use gridcraft_engine::core::CellRef;
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    let mut app = crate::SheetApp::new(session, Default::default());
+    app.run("range.setValues", json!({"range": "A1:A3", "values": [[1], [2], [3]]})).unwrap();
+    app.run("home.conditionalFormat", json!({"range": "A:A", "rule": {"type": "colorScale", "colors": ["#FFFFFF", "#FF0000"]}})).unwrap();
+    let kept = |app: &crate::SheetApp| app.grid.lines.as_ref().map(|(_, l)| (Arc::clone(&l.ri), l.used)).unwrap();
+    // The kept statistics give the look a fresh cache gives.
+    let check_cf = |app: &mut crate::SheetApp| {
+        let wb = app.session.active().unwrap().wb.clone();
+        for row in 0..4 {
+            let c = CellRef::new(row, 0);
+            let kept = app.grid.cf.as_mut().map(|(_, cf)| cf.look(&wb, 0, c));
+            assert_eq!(kept, Some(CfCache::new().look(&wb, 0, c)), "A{}", row + 1);
+        }
+    };
+    grid_frame(&mut app);
+    let (ri, used) = kept(&app);
+    assert_eq!(used.map(|r| r.a1()).as_deref(), Some("A1:A3"));
+    check_cf(&mut app);
+    grid_frame(&mut app);
+    assert!(Arc::ptr_eq(&kept(&app).0, &ri), "an unchanged sheet keeps its line positions");
+
+    // A command: the new value moves the colour scale's maximum and the used range.
+    app.run("cell.set", json!({"cell": "A5", "input": "30"})).unwrap();
+    grid_frame(&mut app);
+    assert_eq!(kept(&app).1.map(|r| r.a1()).as_deref(), Some("A1:A5"));
+    check_cf(&mut app);
+    // Hiding a row moves the rows under it.
+    app.run("selection.set", json!({"range": "A2"})).unwrap();
+    app.run("home.hideRows", json!({})).unwrap();
+    grid_frame(&mut app);
+    let geo = app.grid.geo.clone().unwrap();
+    let sh = app.session.active().unwrap().wb.sheet(0).unwrap().clone();
+    assert_eq!(geo.y(&sh, 2), geo.y(&sh, 1), "row 2 is hidden");
+    assert!(!Arc::ptr_eq(&kept(&app).0, &ri));
+    // Undo brings the row back.
+    app.run("edit.undo", json!({})).unwrap();
+    grid_frame(&mut app);
+    let geo = app.grid.geo.clone().unwrap();
+    let sh = app.session.active().unwrap().wb.sheet(0).unwrap().clone();
+    assert!(geo.y(&sh, 2) > geo.y(&sh, 1), "row 2 is shown again");
+    let fresh = super::geo::SheetLines::of(&sh);
+    for row in [0, 1, 2, 3, 100, 1_048_575] {
+        assert_eq!(kept(&app).0.start(row), fresh.ri.start(row), "row {row}");
+    }
+    assert_eq!(kept(&app).1, fresh.used);
+
+    // A change with nothing else holding the sheet (no undo step, no saved copy): the grid's weak
+    // reference makes `Arc::make_mut` move the sheet to a new allocation, and the grid notices.
+    let ri = kept(&app).0;
+    {
+        let d = app.session.active_mut().unwrap();
+        d.undo.clear();
+        d.redo.clear();
+        d.saved = Arc::new(gridcraft_engine::model::Workbook::default());
+        let sheet = Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap();
+        sheet.rows.entry(0).or_default().hidden = true;
+        sheet.rows.entry(1).or_default().hidden = true;
+        sheet.set_value(CellRef::new(2, 0), gridcraft_engine::core::Value::Number(300.0));
+    }
+    grid_frame(&mut app);
+    let geo = app.grid.geo.clone().unwrap();
+    let sh = app.session.active().unwrap().wb.sheet(0).unwrap().clone();
+    assert_eq!(geo.y(&sh, 2), geo.y(&sh, 0), "rows 1 and 2 are hidden");
+    assert!(!Arc::ptr_eq(&kept(&app).0, &ri));
+    check_cf(&mut app);
 }

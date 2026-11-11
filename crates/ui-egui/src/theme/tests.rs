@@ -76,6 +76,7 @@ fn the_required_craft_faces_keep_their_exact_scripts() {
         ("NanumGothic", "Regular", ["Hang", "Kore"].as_slice()),
         ("Noto Sans Symbols", "Regular", ["Zsym"].as_slice()),
         ("Noto Sans Symbols 2", "Regular", ["Zsym"].as_slice()),
+        ("Noto Sans Arabic", "Regular", ["Arab"].as_slice()),
     ] {
         assert!(
             faces.iter().any(|(f, s, declared)| *f == family && *s == style && *declared == scripts),
@@ -121,11 +122,11 @@ fn language_reorders_only_the_han_faces() {
     let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
     assert_eq!(
         keys(HanOrder::Japanese),
-        ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+        ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-arabic", "sys-symbols", "sys-symbols-2"]
     );
     assert_eq!(
         keys(HanOrder::Chinese),
-        ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+        ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-arabic", "sys-symbols", "sys-symbols-2"]
     );
     assert_eq!(HanOrder::of(Language::Ja), HanOrder::Japanese);
     for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs, Language::Fr, Language::Tr] {
@@ -184,7 +185,7 @@ fn fallback_covers_its_script() {
     // face or the optional craft-fonts input provides one; the printed skip is a recorded
     // gate, and a present face that is not wired in fails.
     type Case = (&'static str, Vec<(String, u32)>, &'static str);
-    let cases: [Case; 10] = [
+    let cases: [Case; 11] = [
         ("sys-cjk-han-ja", cjk_han_japanese(), "カテゴリ"),
         // Chinese uses a system Han face or the native-only permitted LXGW craft face; the
         // barred Noto CJK collection never supplies it.
@@ -193,6 +194,7 @@ fn fallback_covers_its_script() {
         ("sys-thai", thai(), "ทดสอบ"),
         ("sys-lao", lao(), "ພາສາລາວ"),
         ("sys-hebrew", hebrew(), "עברית"),
+        ("sys-arabic", arabic(), "العربية١٢٣"),
         ("craft-noto-sans-arabic", Vec::new(), "مرحبا"),
         ("craft-noto-sans-georgian", Vec::new(), "ქართული"),
         ("ui", candidates(UI), "Русский"),
@@ -222,6 +224,138 @@ fn fallback_covers_its_script() {
 }
 
 #[test]
+/// A preferred Arabic file keeps the system Arabic faces from loading it again only once it is
+/// loaded: one that failed to load leaves them free to load it.
+fn an_unloaded_preferred_arabic_file_does_not_block_the_system_face() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-theme-preferred-arabic-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("Arabic.ttf");
+    std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT).expect("font fixture");
+    let path = path.to_string_lossy().into_owned();
+    let preferred = || Some((path.clone(), 0));
+    let faces = || vec![("sys-arabic", vec![(path.clone(), 0)])];
+
+    let mut fonts = FontDefinitions::default();
+    let loaded = preferred_file(&fonts, preferred());
+    assert!(loaded.is_empty(), "a preferred face that did not load reserves no file");
+    assert_eq!(load_faces(&mut fonts, faces(), loaded), ["sys-arabic"]);
+
+    let mut fonts = FontDefinitions::default();
+    fonts.font_data.insert(PREFERRED_ARABIC.into(), Arc::new(FontData::from_static(epaint_default_fonts::UBUNTU_LIGHT)));
+    let loaded = preferred_file(&fonts, preferred());
+    assert_eq!(loaded, std::slice::from_ref(&path));
+    assert!(load_faces(&mut fonts, faces(), loaded).is_empty(), "a loaded preferred file is not loaded a second time");
+    assert!(!fonts.font_data.contains_key("sys-arabic"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn with_installed_latin_font() -> std::io::Result<FontDefinitions> {
+    let dir = std::env::temp_dir().join(format!("gridcraft-theme-latin-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("Ubuntu-Light.ttf");
+    std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT)?;
+    let face = crate::fonts::Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into()], path, index: 0, weight: 300.0, italic: false };
+    let fonts = font_definitions_impl(Language::En, vec![("Ubuntu".into(), vec![face])], true);
+    std::fs::remove_dir_all(&dir)?;
+    Ok(fonts)
+}
+
+fn installed_latin_chains(fonts: &FontDefinitions) -> Vec<(FontFamily, Option<&Vec<String>>)> {
+    [(false, false), (true, false), (false, true), (true, true)]
+        .into_iter()
+        .map(|(bold, italic)| {
+            let family = FontFamily::Name(crate::fonts::role_key("Ubuntu", bold, italic).into());
+            let chain = fonts.families.get(&family);
+            (family, chain)
+        })
+        .collect()
+}
+
+fn chain_covers(fonts: &FontDefinitions, chain: &[String], ch: char) -> bool {
+    use skrifa::MetadataProvider;
+    chain
+        .iter()
+        .filter_map(|key| fonts.font_data.get(key))
+        .any(|data| skrifa::FontRef::from_index((*data.font).as_ref(), data.index).is_ok_and(|font| font.charmap().map(ch).is_some()))
+}
+
+#[test]
+/// A workbook font with no Arabic or Hangul still shows them through the system script faces.
+fn installed_latin_fonts_keep_system_script_fallbacks() {
+    let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let fonts = with_installed_latin_font().expect("Latin-only fixture");
+    let loaded: Vec<&str> =
+        fallback_faces(HanOrder::Chinese).into_iter().map(|(key, _)| key).filter(|key| fonts.font_data.contains_key(*key)).collect();
+    for (family, chain) in installed_latin_chains(&fonts) {
+        let chain = chain.expect("bound fixture family");
+        for key in &loaded {
+            assert!(chain.iter().any(|k| k == key), "{family:?} lost the {key} fallback");
+        }
+        if fonts.font_data.contains_key("sys-arabic") {
+            assert!(chain_covers(&fonts, chain, 'ع'), "{family:?} has no glyph for ع");
+        }
+    }
+}
+
+#[test]
+/// The craft Arabic face reaches workbook fonts and the pinned web set, without help from system faces.
+fn the_craft_arabic_face_reaches_every_chain() {
+    assert!(crate::craft_fonts_policy::web_allowed("Noto Sans Arabic", "Regular"));
+    if !craft_fonts_cover("العربية١٢٣") {
+        assert!(!craft_fonts_required(), "CRAFT_FONTS_REQUIRED=1 but no craft-fonts face covers Arabic");
+        return;
+    }
+    let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut fonts = with_installed_latin_font().expect("Latin-only fixture");
+    fonts.font_data.retain(|key, _| !key.starts_with("sys-"));
+    for (family, chain) in installed_latin_chains(&fonts) {
+        let chain = chain.expect("bound fixture family");
+        assert!("العربية١٢٣".chars().all(|ch| chain_covers(&fonts, chain, ch)), "{family:?} has no Arabic glyphs");
+    }
+    let pinned = pinned_font_definitions();
+    for (family, chain) in &pinned.families {
+        assert!("العربية".chars().all(|ch| chain_covers(&pinned, chain, ch)), "pinned {family:?} has no Arabic glyphs");
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+/// fontconfig's Arabic face, when it has Arabic letters, comes first among the Arabic fallbacks in every chain (#229). A
+/// UI or cell face with Arabic of its own sits ahead of every fallback and still draws Arabic first.
+fn the_fontconfig_arabic_choice_comes_first() {
+    assert_eq!(
+        parse_fc_match("/home/u/.local/share/fonts/Vazirmatn-Regular.ttf\n0\n"),
+        Some(("/home/u/.local/share/fonts/Vazirmatn-Regular.ttf".into(), 0))
+    );
+    assert_eq!(
+        parse_fc_match("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc\n2\n"),
+        Some(("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc".into(), 2))
+    );
+    assert_eq!(parse_fc_match("/usr/share/fonts/a.ttf"), Some(("/usr/share/fonts/a.ttf".into(), 0)));
+    assert_eq!(
+        parse_fc_match("/usr/share/fonts/vazirmatn/Vazirmatn[wght].ttf\n262145\n"),
+        Some(("/usr/share/fonts/vazirmatn/Vazirmatn[wght].ttf".into(), 1)),
+        "a named instance's bits are not part of the face index"
+    );
+    assert_eq!(parse_fc_match(""), None);
+    assert!(!covers_arabic(epaint_default_fonts::UBUNTU_LIGHT, 0), "a Latin-only face is not an Arabic choice");
+    if fontconfig_arabic().is_some() {
+        let fonts = font_definitions();
+        for (family, chain) in fonts.families.iter().filter(|(_, chain)| chain.iter().any(|key| key.starts_with("sys-"))) {
+            let preferred = chain.iter().position(|key| key == PREFERRED_ARABIC);
+            let other_arabic = chain.iter().position(|key| key == "sys-arabic" || key.starts_with("craft-"));
+            assert!(preferred.is_some(), "{family:?} lacks the preferred Arabic face");
+            assert!(other_arabic.is_none_or(|other| preferred < Some(other)), "{family:?} puts another Arabic face first");
+        }
+        if let (Some(preferred), Some(system)) = (fonts.font_data.get(PREFERRED_ARABIC), fonts.font_data.get("sys-arabic")) {
+            assert!((*preferred.font).as_ref() != (*system.font).as_ref(), "the system Arabic fallback is a different file from the preferred face");
+        }
+    }
+}
+
+#[test]
 fn chromeos_font_layout_is_probed() {
     // #1762: Crostini mounts the host's fonts under /usr/share/fonts/chromeos, one folder per
     // family set; a script whose list misses it renders as tofu with the font installed.
@@ -229,6 +363,7 @@ fn chromeos_font_layout_is_probed() {
     let cros = "/usr/share/fonts/chromeos";
     assert!(probes(thai(), &format!("{cros}/noto/NotoSansThai-Regular.ttf")));
     assert!(probes(hebrew(), &format!("{cros}/noto/NotoSansHebrew-Regular.ttf")));
+    assert!(probes(arabic(), &format!("{cros}/noto/NotoSansArabic-Regular.ttf")));
     assert!(probes(cjk_han_japanese(), &format!("{cros}/notocjk/NotoSansCJK-Regular.ttc")));
     assert!(probes(cjk_han_simplified(), &format!("{cros}/notocjk/NotoSansCJK-Regular.ttc")));
     assert!(probes(cjk_hangul(), &format!("{cros}/notocjk/NotoSansCJK-Regular.ttc")));
