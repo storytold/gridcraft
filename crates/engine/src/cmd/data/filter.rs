@@ -190,6 +190,8 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
 /// `r` → criterion) and shows the others: the sheet's autofilter, or a table's filter.
 pub(crate) fn apply_criteria(wb: &mut Workbook, sheet: usize, r: RangeRef, criteria: &[(u32, FilterCriterion)]) {
     let Some(sh) = wb.sheet(sheet) else { return };
+    // An imported range can name rows past the grid; none of those exist to hide.
+    let r = RangeRef::new(r.start, CellRef::new(r.end.row.min(gridcraft_core::MAX_ROWS - 1), r.end.col));
     let af = gridcraft_model::AutoFilter { range: r, criteria: criteria.to_vec() };
     let mut hide = Vec::new();
     // Precompute per-criterion top10 threshold and average once, not per row.
