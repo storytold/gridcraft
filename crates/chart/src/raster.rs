@@ -17,6 +17,11 @@ const MAX_SCAN_WORK: u64 = 1 << 28;
 /// renderers cap and decimate their paths far below this; it only bounds direct callers.
 const MAX_FILL_POINTS: usize = 1 << 22;
 
+/// Most points one stroked polyline may have: more is skipped before any segment path is built
+/// (each segment becomes its own quad). Charts hold at most 100,000 points per series and draw far
+/// fewer; it only bounds direct callers.
+const MAX_STROKE_POINTS: usize = 1 << 17;
+
 type Path = Vec<Vec<[f32; 2]>>;
 
 struct Canvas {
@@ -189,6 +194,9 @@ fn rounded_rect(x: f32, y: f32, w: f32, h: f32, r: f32) -> Vec<[f32; 2]> {
 
 /// Thick polyline → one quad per segment (each a separate path so overlaps don't cancel).
 fn stroke_paths(pts: &[[f32; 2]], width: f32, dash: bool, closed: bool) -> Vec<Path> {
+    if pts.len() > MAX_STROKE_POINTS {
+        return Vec::new();
+    }
     let width = width.clamp(1.0, 50.0);
     let mut segs: Vec<([f32; 2], [f32; 2])> = pts.windows(2).map(|w| (w[0], w[1])).collect();
     if closed && let (Some(a), Some(b)) = (pts.last(), pts.first()) {
@@ -332,6 +340,15 @@ mod tests {
         cv.buf = vec![0; 64];
         cv.fill(&square, [255; 4]);
         assert!(cv.buf.iter().all(|&b| b == 0));
+    }
+
+    /// Security: a polyline over the point cap builds no segment paths at all, solid or dashed.
+    #[test]
+    fn oversized_polylines_build_no_segment_paths() {
+        let line = |n: usize| -> Vec<[f32; 2]> { (0..n).map(|i| [i as f32, (i % 2) as f32]).collect() };
+        assert!(stroke_paths(&line(MAX_STROKE_POINTS + 1), 1.0, false, false).is_empty());
+        assert!(stroke_paths(&line(MAX_STROKE_POINTS + 1), 1.0, true, false).is_empty());
+        assert_eq!(stroke_paths(&line(MAX_STROKE_POINTS), 1.0, false, false).len(), MAX_STROKE_POINTS - 1);
     }
 
     #[test]
