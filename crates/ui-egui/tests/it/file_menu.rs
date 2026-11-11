@@ -756,3 +756,31 @@ fn control_requests_route_to_a_window_and_list_windows() {
     let r = call(&mut h, "engine.execute", serde_json::json!({"command": "cell.get", "params": {"cell": "A1"}, "window": 999}));
     assert_eq!(r["ok"], false, "{r}");
 }
+
+/// In GridCraft's smallest window (640×420) at the largest interface size (200%), the Options
+/// page scrolls sideways: the interface size drop-down can be scrolled whole into view, where
+/// before it was cut off at the window's edge.
+#[test]
+fn options_scroll_sideways_in_a_small_window_at_a_large_size() {
+    let app = crate::common::prepare(SheetApp::new(crate::support::blank_session(), Services::default()));
+    let mut h = crate::common::harness_with(crate::common::builder().with_size(egui::vec2(320.0, 420.0)), app, 4);
+    h.state_mut().run("file.options", serde_json::json!({})).unwrap();
+    h.run_steps(3);
+    let size = |h: &egui_kittest::Harness<'static, SheetApp>| {
+        h.query_all_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.label().as_deref() == Some("Interface size")).next().unwrap().rect()
+    };
+    assert!(size(&h).right() > 320.0, "the drop-down starts past the edge: {:?}", size(&h));
+    // Scroll the page sideways, over its content (the navigation pane is 196 wide).
+    h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(260.0, 300.0)));
+    h.run_steps(2);
+    h.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(-1000.0, 0.0),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(30);
+    let r = size(&h);
+    assert!(r.left() >= 0.0 && r.right() <= 320.0, "the drop-down is in view: {r:?}");
+}
