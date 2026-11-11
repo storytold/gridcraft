@@ -34,6 +34,7 @@ struct Shared {
     text: String,
     /// As the file has it, which is what a literal `PY("…",0)` is read from.
     raw: String,
+    unwrapped: bool,
     /// Approximate bytes one dependent cell costs (its printed text plus its expression tree);
     /// what exceeds [`SHARED_FORMULA_FREE_COST`] is charged against [`MAX_SHARED_FORMULA_BYTES`].
     cost: u64,
@@ -653,6 +654,11 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     if py.is_some() {
         record_python_spill(st, sheet, pos);
     }
+    // A formula without dynamic-array metadata is a legacy formula, unless entered as a
+    // Ctrl+Shift+Enter array or unwrapped from Google Sheets' export (#2871).
+    if formula.as_ref().is_some_and(|f| !f.dynamic && f.array.is_none() && f.expr_arc().is_some()) {
+        cx.legacy_formulas.push(pos);
+    }
     let spilled_from = if formula.is_none() && py.is_none() { dynamic_range(st, pos) } else { None };
     let python_anchor = spilled_from.is_some_and(|r| sheet.cells.get(r.start).is_some_and(|a| a.py.is_some()));
     let value = match spilled_from {
@@ -686,16 +692,21 @@ fn formula_text<'a>(st: &'a RowState, f: &'a El) -> &'a str {
 }
 
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
-    // Keep the file's dynamic-array mark, so saving never turns the formula into a legacy one.
-    read_formula_text(cx, st, f, pos, dynamic).map(|fm| Formula { dynamic, ..fm })
+    // Keep the file's dynamic-array mark (and treat Google Sheets unwrapped formulas as dynamic),
+    // so saving never turns the formula into a legacy one.
+    let mut unwrapped = false;
+    let fm = read_formula_text(cx, st, f, pos, dynamic, &mut unwrapped)?;
+    let dynamic = dynamic || unwrapped;
+    Some(Formula { dynamic, ..fm })
 }
 
-fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
+fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool, unwrapped: &mut bool) -> Option<Formula> {
     let mut model = from_file(f.text.trim());
     if let Some(known) = cx.known_function
-        && let Some(unwrapped) = unwrap_google_sheets(&model, known)
+        && let Some(u) = unwrap_google_sheets(&model, known)
     {
-        model = unwrapped;
+        model = u;
+        *unwrapped = true;
     }
     let text = model.as_str();
     match f.attr("t").unwrap_or("normal") {
@@ -704,7 +715,7 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             if !text.is_empty() {
                 let expr = gridcraft_formula::parse(text).ok();
                 let cost = shared_cost(text, expr.as_ref());
-                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string(), raw: f.text.clone(), cost });
+                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string(), raw: f.text.clone(), unwrapped: *unwrapped, cost });
                 Some(Formula::new(text))
             } else {
                 let Some(sh) = st.shared.get(&si) else {
@@ -727,6 +738,7 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
                     cx.warn("shared formulas expand to too much data; kept the cached values of the remaining cells that share them");
                     return None;
                 }
+                *unwrapped |= sh.unwrapped;
                 Some(match &sh.expr {
                     Some(e) => {
                         let dr = pos.row as i64 - sh.anchor.row as i64;
