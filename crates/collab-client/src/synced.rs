@@ -118,6 +118,11 @@ pub struct Synced {
     /// [`document_version`](Self::document_version) onto it; a workbook that installs clears it
     /// (CodeRabbit 5852406613, `synced.rs:398`).
     snapshot_failures: u32,
+    /// Whether only a whole workbook can repair this replica. A refused preview that sat under a
+    /// later one never reached the journal, so a tail cannot take it back and its answers would
+    /// only move the document past content the room never had. Set when such a preview is
+    /// refused; a workbook that installs clears it (CodeRabbit 5855372513, `synced.rs:216`).
+    authoritative_only: bool,
 }
 
 impl Synced {
@@ -151,6 +156,7 @@ impl Synced {
             image_parts: None,
             document_version: held,
             snapshot_failures: 0,
+            authoritative_only: false,
         };
         synced.apply_sheets(&welcome.sheets);
         synced
@@ -201,12 +207,24 @@ impl Synced {
     /// from the version the document really holds, where a journal tail can still be replayed;
     /// past [`SNAPSHOT_ATTEMPTS`] the replica says so and waits for the session to be reopened
     /// (CodeRabbit 5852406613, `synced.rs:398`).
+    ///
+    /// A tail is only a way back when the document's content is the room's content minus a tail.
+    /// A replica that still holds a refused preview is not that: the edit never reached the
+    /// journal, so no tail can take it back, and the answers to that tail would advance the
+    /// document past a state the room never had. Such a replica asks for workbooks only, and
+    /// stops once they keep failing (CodeRabbit 5855372513, `synced.rs:216`).
     fn snapshot_failed(&mut self) {
         self.snapshot_failures = self.snapshot_failures.saturating_add(1);
+        if self.snapshot_failures >= SNAPSHOT_ATTEMPTS {
+            self.notice = Some("the session's document could not be loaded; reopen the session to reload it".into());
+            return;
+        }
+        if self.authoritative_only {
+            self.notice = Some("an earlier edit was refused; reloading the document from the session".into());
+            self.link.send_message(ClientMessage::Snapshot);
+            return;
+        }
         match self.snapshot_failures {
-            n if n >= SNAPSHOT_ATTEMPTS => {
-                self.notice = Some("the session's document could not be loaded; reopen the session to reload it".into());
-            }
             1 => {
                 self.notice = Some("the session's document could not be loaded; reloading it from the session".into());
                 self.link.send_message(ClientMessage::Snapshot);
@@ -417,13 +435,13 @@ impl Synced {
                     // still leaves the resend queue, and the step still counts as this person's
                     // undo step, because the document does hold it (CodeRabbit 5851190259).
                     let stale = applied.version <= self.document_version;
-                    if !stale {
-                        self.apply(session, applied);
+                    let written = !stale && self.apply(session, applied);
+                    if written {
                         self.document_version = applied.version;
                     }
                     self.pending.retain(|pending| pending.op_id != applied.op_id);
                     self.note_own(applied);
-                    if stale {
+                    if !written {
                         // The caller is not told a change happened: the document did not move.
                         continue;
                     }
@@ -442,8 +460,11 @@ impl Synced {
                         if pending.previewed && later_preview {
                             // The refused preview sits under a later one in this replica's history
                             // and never reached the journal, so no tail can take it back: only the
-                            // authoritative workbook can (RFC §4.6).
+                            // authoritative workbook can (RFC §4.6). Until one installs, this
+                            // replica must not accept a tail as the way back (CodeRabbit
+                            // 5855372513, `synced.rs:216`).
                             self.notice = Some("an earlier edit was refused; reloading the document from the session".into());
+                            self.authoritative_only = true;
                             self.link.send_message(ClientMessage::Snapshot);
                         } else if pending.previewed {
                             let _ = session.execute("edit.undo", json!({}));
@@ -466,6 +487,7 @@ impl Synced {
                             // answer at or below its version is already in it.
                             self.document_version = self.document_version.max(*version);
                             self.snapshot_failures = 0;
+                            self.authoritative_only = false;
                             let sheets = self.link.state().sheets;
                             self.apply_sheets(&sheets);
                             // The document the previews sat on is gone. An `applied` still in
@@ -640,11 +662,22 @@ impl Synced {
     }
 
     /// Applies one confirmed operation: the command first (structure, formulas, styles), then the
-    /// authoritative values of every cell the server listed.
-    fn apply(&mut self, session: &mut Session, applied: &Applied) {
-        let restore = self.enter_shared(session);
+    /// authoritative values of every cell the server listed. Returns whether the document was
+    /// touched.
+    ///
+    /// An operation belongs to the session's workbook, and only to it. When that workbook is no
+    /// longer open here — the user closed it, or a restore dropped it — there is nowhere to put
+    /// the operation: applying it to whichever workbook is in front would write the room's edits
+    /// into a file the room never saw. The replica says so and leaves every document and the
+    /// version alone (CodeRabbit 5855372513, `synced.rs:193`).
+    fn apply(&mut self, session: &mut Session, applied: &Applied) -> bool {
+        let Some(restore) = self.enter_shared(session) else {
+            self.notice = Some("the session's document is closed; reopen the session to continue".into());
+            return false;
+        };
         self.apply_here(session, applied);
-        self.leave_shared(session, restore);
+        self.leave_shared(session, Some(restore));
+        true
     }
 
     fn apply_here(&mut self, session: &mut Session, applied: &Applied) {

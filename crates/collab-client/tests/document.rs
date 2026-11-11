@@ -159,6 +159,28 @@ fn a_remote_operation_lands_in_the_shared_workbook() {
     assert_eq!(session.active_index(), 1, "the window the user was in stays in front");
 }
 
+/// An operation for a document that is no longer open here must not be written into another
+/// workbook: `enter_shared` has nowhere to go once the session's document was closed, and the
+/// answer belongs to a file that the other open workbook is not. The version stays too — the
+/// replica does not hold content it never wrote (CodeRabbit 5855372513, `synced.rs:193`).
+#[test]
+fn an_operation_for_a_closed_document_is_not_written_into_another_workbook() {
+    let (mut synced, sink, mut session) = replica();
+    synced.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": 1 })).expect("the shared workbook is bound");
+    session.new_workbook();
+    assert_eq!(session.documents().len(), 2);
+    session.close_document(0);
+    assert_eq!(session.documents().len(), 1, "only the unrelated workbook is still open");
+
+    sink.deliver(&applied_set("bob-1", 2, 7));
+    let events = synced.poll(&mut session);
+
+    assert_eq!(value(&session, 0, "A1"), Value::Empty, "the remaining workbook is not written through the session");
+    assert_eq!(synced.document_version(), 0, "no version is claimed for a document this replica does not hold");
+    assert!(synced.take_notice().is_some_and(|notice| notice.contains("closed")), "the user is told the session's document is gone");
+    assert!(!events.iter().any(|event| matches!(event, Event::Applied(_))), "the caller is not told a change happened");
+}
+
 #[test]
 fn a_command_less_undo_restores_the_formula_on_a_peer() {
     let (mut synced, sink, mut session) = replica();

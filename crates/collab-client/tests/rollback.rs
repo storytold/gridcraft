@@ -119,6 +119,44 @@ fn a_refused_earlier_preview_does_not_undo_the_later_one() {
     );
 }
 
+/// A preview the room refused under a later one can only be taken back by the workbook the room
+/// sends. When that workbook cannot be installed, the second answer must still be a workbook: a
+/// tail from the version the document holds cannot hold a refused edit, and its `applied` events
+/// would move the document onto content the room never had. Once the attempts run out the replica
+/// stops and asks for the session to be reopened (CodeRabbit 5855372513, `synced.rs:216`).
+#[test]
+fn a_refused_preview_is_repaired_by_a_workbook_not_a_journal_tail() {
+    let (mut synced, sink, mut session) = replica();
+    synced.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": 1 })).expect("preview A");
+    synced.execute(&mut session, "cell.set", json!({ "cell": "B1", "input": 2 })).expect("preview B");
+    sink.push(Event::Rejected(Rejected { op_id: "w1-0".into(), code: RejectCode::Invalid, retryable: false, hint: None, message: None }));
+    let _ = synced.poll(&mut session);
+    assert_eq!(snapshots(&sink), 1, "the replica asks for the authoritative workbook");
+
+    // The room's workbooks cannot be opened here, twice in a row.
+    for version in [3, 4] {
+        sink.push(Event::Snapshot { version, epoch: 0, bytes: b"PK\x03\x04 broken workbook".to_vec() });
+        let _ = synced.poll(&mut session);
+    }
+    assert_eq!(snapshots(&sink), 3, "the second way back is a workbook again: {:?}", sink.sent());
+    assert!(
+        !sink.sent().iter().any(|message| matches!(message, ClientMessage::Resync { .. })),
+        "no tail from a document that still holds the refused preview: {:?}",
+        sink.sent()
+    );
+    assert_eq!(synced.document_version(), 0, "nothing is claimed");
+
+    // A third failure stops the requests instead of pulling workbooks forever.
+    sink.push(Event::Snapshot { version: 5, epoch: 0, bytes: b"PK\x03\x04 broken workbook".to_vec() });
+    let _ = synced.poll(&mut session);
+    assert_eq!(snapshots(&sink), 3, "no endless stream of workbooks");
+    assert!(synced.take_notice().is_some_and(|notice| notice.contains("reopen")), "the user is told what to do");
+}
+
+fn snapshots(sink: &Sink) -> usize {
+    sink.sent().iter().filter(|message| matches!(message, ClientMessage::Snapshot)).count()
+}
+
 /// The workbook the client asked for replaces the document: the preview the room refused is gone,
 /// and what the room did keep is what this replica now shows.
 #[test]
