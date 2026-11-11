@@ -48,7 +48,7 @@ pub(super) fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
     } else if let Some(path) = str_param(p, "path") {
         crate::io::read_file(path)?
     } else {
-        s.ui_requests.push(crate::UiRequest::Dialog("open".into(), json!({})));
+        s.ui_requests.push(crate::UiRequest::Dialog("getData".into(), p.clone()));
         return ok();
     };
     let text = String::from_utf8_lossy(&bytes);

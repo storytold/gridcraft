@@ -6526,3 +6526,13 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
 }
+
+#[test]
+fn get_data_without_a_file_asks_for_one_with_the_import_options() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.fromTextCsv", json!({"delimiter": ";", "sheet": "Sales"})).unwrap();
+    let requests = s.take_ui_requests();
+    let [crate::UiRequest::Dialog(name, p)] = requests.as_slice() else { panic!("expected one dialog request") };
+    assert_eq!((name.as_str(), &p["delimiter"], &p["sheet"]), ("getData", &json!(";"), &json!("Sales")));
+}
