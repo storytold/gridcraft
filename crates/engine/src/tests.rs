@@ -6690,6 +6690,8 @@ fn repeated_multiline_literal_fills_derive_the_wrapping_style_once() {
         assert_eq!(sh.style_id(CellRef::parse(at).unwrap()), wrapping, "{at} shares the derived style");
         assert_eq!(sh.cell(CellRef::parse(at).unwrap()).map(|c| c.value.clone()), Some(Value::text("one\ntwo")));
     }
+}
+
 #[test]
 fn circle_invalid_says_when_its_scan_allowance_ended_early() {
     let mut s = s();
