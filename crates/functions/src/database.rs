@@ -109,14 +109,18 @@ fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> R<Vec<usize>
     Ok((1..db.rows)
         .filter(|&rec| {
             all_match
-                || rows.iter().any(|(r, conds)| {
-                    conds.iter().all(|(c, col, cr)| match col {
-                        Some(f) => cr.matches(db.get(rec, *f).unwrap_or(&Value::Empty)),
-                        // Under a label that names no field, only a formula (a computed
-                        // criterion) can hold.
-                        None => ctx.computed_criterion(*r, *c, db, rec).unwrap_or(false),
-                    })
-                })
+                // Out of work: a computed criterion would fail at once, so records are left out
+                // without scanning the criteria rows; the per-row check still stops mid-scan.
+                || (!ctx.exhausted()
+                    && rows.iter().any(|(r, conds)| {
+                        !ctx.exhausted()
+                            && conds.iter().all(|(c, col, cr)| !ctx.exhausted() && match col {
+                                Some(f) => cr.matches(db.get(rec, *f).unwrap_or(&Value::Empty)),
+                                // Under a label that names no field, only a formula (a computed
+                                // criterion) can hold.
+                                None => ctx.computed_criterion(*r, *c, db, rec).unwrap_or(false),
+                            })
+                    }))
         })
         .collect())
 }
@@ -366,6 +370,42 @@ mod tests {
         close(d("DCOUNT", empty()), 3.0);
         is_err(d("DSUM", t("Nope")), CellError::Value);
         is_err(d("DSUM", n(9.0)), CellError::Value);
+    }
+
+    /// Computed criteria are no longer asked for once the host is out of work.
+    #[test]
+    fn matching_stops_asking_computed_criteria_when_exhausted() {
+        struct Spent {
+            asked: usize,
+        }
+        impl crate::Ctx for Spent {
+            fn date_system(&self) -> gridcraft_core::DateSystem {
+                gridcraft_core::DateSystem::D1900
+            }
+            fn now_serial(&self) -> f64 {
+                0.0
+            }
+            fn random(&mut self) -> f64 {
+                0.0
+            }
+            fn computed_criterion(&mut self, _: usize, _: usize, _: &gridcraft_core::Array, _: usize) -> Option<bool> {
+                self.asked += 1;
+                Some(true)
+            }
+            fn exhausted(&self) -> bool {
+                self.asked > 0
+            }
+        }
+        let criteria = arr(vec![vec![tv("Formula")], vec![nv(1.0)]]);
+        let mut ctx = Spent { asked: 0 };
+        let spec = crate::lookup("DCOUNT").unwrap();
+        crate::call(spec, &[rf(db()), t("Age"), rf(criteria)], &mut ctx);
+        assert_eq!(ctx.asked, 1);
+        // Within one criteria row, the conditions after the one that spent the work are skipped too.
+        let criteria = arr(vec![vec![tv("Formula"), tv("Other")], vec![nv(1.0), nv(1.0)]]);
+        let mut ctx = Spent { asked: 0 };
+        crate::call(spec, &[rf(db()), t("Age"), rf(criteria)], &mut ctx);
+        assert_eq!(ctx.asked, 1);
     }
 
     /// Security: records times criteria conditions past the selection budget is `#NUM!` before
