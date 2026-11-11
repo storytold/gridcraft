@@ -386,8 +386,14 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         let showing_formula_source = sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some());
         if !showing_formula_source
             && crate::thai_layout::is_eligible(&text, st, &v, numeric).is_ok()
-            && let crate::thai_layout::ThaiLayoutResult::Ready(thai_cell) =
-                crate::thai_layout::layout_cell(p, &text, &font, color, thai_wrap_w, halign, z)
+            && let crate::thai_layout::ThaiLayoutResult::Ready(thai_cell) = crate::thai_layout::layout_cell_with_options(
+                p,
+                &text,
+                &font,
+                color,
+                thai_wrap_w,
+                crate::thai_layout::ThaiLayoutOptions { halign, direction, zoom: z },
+            )
         {
             crate::thai_layout::paint_thai_cell(
                 p,

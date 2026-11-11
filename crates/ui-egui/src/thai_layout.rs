@@ -15,6 +15,7 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use egui::epaint::text::TextDirection;
 use egui::{Color32, FontId, Painter, Rect, Vec2, pos2, vec2};
 use gridcraft_engine::core::Value;
 use gridcraft_engine::model::{HAlign, Style, VAlign};
@@ -531,6 +532,7 @@ struct CacheKey {
     font_gen: u64,
     zoom_pct: u16,
     halign: u8,
+    direction: TextDirection,
 }
 
 // Owned and borrowed keys use exactly the same fields and hashing order. The local
@@ -546,6 +548,7 @@ struct CacheKeyRef<'a> {
     font_gen: u64,
     zoom_pct: u16,
     halign: u8,
+    direction: TextDirection,
 }
 
 trait CacheKeyData {
@@ -564,6 +567,7 @@ impl CacheKeyData for CacheKey {
             font_gen: self.font_gen,
             zoom_pct: self.zoom_pct,
             halign: self.halign,
+            direction: self.direction,
         }
     }
 }
@@ -580,6 +584,7 @@ impl CacheKeyRef<'_> {
             font_gen: self.font_gen,
             zoom_pct: self.zoom_pct,
             halign: self.halign,
+            direction: self.direction,
         }
     }
 
@@ -945,8 +950,36 @@ fn aggregate_layout_size(lines: &[ThaiLayoutLine]) -> Vec2 {
     vec2(max_w, total_h)
 }
 
-/// Executes Thai layout for a cell, returning the ready layout or fallback reason.
+/// Builds one unwrapped line galley using the cell's explicit paragraph direction.
+fn layout_no_wrap_with_direction(p: &Painter, text: &str, font: &FontId, color: Color32, direction: TextDirection) -> Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple(text.to_owned(), font.clone(), color, f32::INFINITY);
+    job.direction = direction;
+    p.layout_job(job)
+}
+
+/// Cell-specific alignment inputs that affect Thai line layout and cache identity.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ThaiLayoutOptions {
+    /// Horizontal alignment used to place the wrapped lines.
+    pub(crate) halign: HAlign,
+    /// Resolved cell paragraph direction passed to measurement and line shaping.
+    pub(crate) direction: TextDirection,
+    /// Worksheet zoom scale used by the layout cache key.
+    pub(crate) zoom: f32,
+}
+
+/// Executes Thai layout using egui's automatic paragraph direction.
+///
+/// Grid rendering should use [`layout_cell_with_options`] to preserve the cell's explicit direction.
 pub fn layout_cell(p: &Painter, text: &str, font: &FontId, color: Color32, avail_width: f32, halign: HAlign, zoom: f32) -> ThaiLayoutResult {
+    layout_cell_with_options(p, text, font, color, avail_width, ThaiLayoutOptions { halign, direction: TextDirection::Auto, zoom })
+}
+
+/// Executes Thai layout in the cell's resolved reading direction, returning its layout or fallback reason.
+///
+/// The direction is used for candidate measurement and final line shaping and is part of the cache key.
+pub(crate) fn layout_cell_with_options(p: &Painter, text: &str, font: &FontId, color: Color32, avail_width: f32, options: ThaiLayoutOptions) -> ThaiLayoutResult {
+    let ThaiLayoutOptions { halign, direction, zoom } = options;
     if !avail_width.is_finite() || avail_width < 1.0 || !zoom.is_finite() || zoom <= 0.0 {
         return ThaiLayoutResult::LegacyFallback(FallbackReason::InvalidWidth);
     }
@@ -977,6 +1010,7 @@ pub fn layout_cell(p: &Painter, text: &str, font: &FontId, color: Color32, avail
                 HAlign::Right => 2,
                 _ => 0,
             },
+            direction,
         };
         // Lock order is Context data -> cache, never the reverse. Both locks are
         // released before any egui font measurement or galley construction.
@@ -1016,7 +1050,7 @@ pub fn layout_cell(p: &Painter, text: &str, font: &FontId, color: Color32, avail
             let mut lines = Vec::with_capacity(plan.lines.len());
             for line in plan.lines.iter() {
                 let paint_text = text.get(line.range.paint_range.clone()).unwrap_or("");
-                let galley = p.layout_no_wrap(paint_text.to_string(), font.clone(), color);
+                let galley = layout_no_wrap_with_direction(p, paint_text, font, color, direction);
                 lines.push(ThaiLayoutLine { range: line.range.clone(), galley });
             }
             let size = aggregate_layout_size(&lines);
@@ -1032,7 +1066,7 @@ pub fn layout_cell(p: &Painter, text: &str, font: &FontId, color: Color32, avail
             if !reserve_frame_measurement(p.ctx(), slice.len()) {
                 return Err(FallbackReason::FrameBudgetExhausted);
             }
-            let g = p.layout_no_wrap(slice.to_string(), font.clone(), color);
+            let g = layout_no_wrap_with_direction(p, slice, font, color, direction);
             Ok(g.size().x)
         },
         || record_segmentation(p.ctx()),
@@ -1057,7 +1091,7 @@ pub fn layout_cell(p: &Painter, text: &str, font: &FontId, color: Color32, avail
     let mut plan_lines = Vec::with_capacity(ranges.len());
     for r in ranges {
         let paint_text = text.get(r.paint_range.clone()).unwrap_or("");
-        let galley = p.layout_no_wrap(paint_text.to_string(), font.clone(), color);
+        let galley = layout_no_wrap_with_direction(p, paint_text, font, color, direction);
         plan_lines.push(CachedPlanLine { range: r.clone() });
         lines.push(ThaiLayoutLine { range: r, galley });
     }
@@ -1109,6 +1143,9 @@ pub fn paint_thai_cell(p: &Painter, layout: &ThaiCellLayout, paint: ThaiCellPain
     for line in &layout.lines {
         let line_w = line.galley.size().x;
         let line_h = line.galley.size().y;
+        if valign == VAlign::Top && cur_y + line_h > rect.bottom() + 0.01 {
+            break;
+        }
         let x = line_x(rect, content_left, halign, pad, indent, line_w);
         painter.galley(pos2(x, cur_y), line.galley.clone(), color);
         cur_y += line_h;
@@ -1206,7 +1243,14 @@ mod tests {
         let mut ranges = Vec::new();
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             begin_frame_budget(ui.ctx());
-            if let ThaiLayoutResult::Ready(layout) = layout_cell(ui.painter(), text, &font, Color32::WHITE, width, HAlign::Left, 1.0) {
+            if let ThaiLayoutResult::Ready(layout) = layout_cell_with_options(
+                ui.painter(),
+                text,
+                &font,
+                Color32::WHITE,
+                width,
+                ThaiLayoutOptions { halign: HAlign::Left, direction: TextDirection::Auto, zoom: 1.0 },
+            ) {
                 let mut total_h = 0.0f32;
                 let mut max_w = 0.0f32;
                 for line in &layout.lines {
@@ -1222,6 +1266,99 @@ mod tests {
         });
         output.textures_delta.clear();
         ranges
+    }
+
+    #[test]
+    fn explicit_direction_is_used_for_measurement_and_isolated_in_the_cache() {
+        let _cache_guard = CACHE_TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        set_test_cache_limits(MAX_CACHE_ENTRIES, MAX_CACHE_BYTES);
+        let ctx = egui::Context::default();
+        install_cache_test_fonts(&ctx, false);
+        let text = "ทดสอบ العربية اتجاه النص";
+        let font = FontId::new(15.0, FontFamily::Name(CACHE_TEST_FONT_FAMILY.into()));
+        let directions = [TextDirection::LeftToRight, TextDirection::RightToLeft, TextDirection::RightToLeft, TextDirection::LeftToRight];
+        let mut observed = Vec::new();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            begin_frame_budget(ui.ctx());
+            for direction in directions {
+                let ThaiLayoutResult::Ready(layout) =
+                    layout_cell_with_options(ui.painter(), text, &font, Color32::WHITE, 160.0, ThaiLayoutOptions { halign: HAlign::Left, direction, zoom: 1.0 })
+                else {
+                    panic!("mixed Thai and RTL text should produce a Thai layout");
+                };
+                assert!(!layout.lines.is_empty());
+                assert!(layout.lines.iter().all(|line| line.galley.job.direction == direction));
+                observed.push((direction, layout.lines.len()));
+            }
+        });
+        output.textures_delta.clear();
+
+        assert_eq!(observed[0], observed[3], "LTR warm layout should match its cold layout");
+        assert_eq!(observed[1], observed[2], "RTL warm layout should match its cold layout");
+        assert_eq!(cache_entry_count_for_text(text), 2, "reading direction is part of the cache identity");
+    }
+
+    #[test]
+    fn top_alignment_omits_an_incomplete_last_line() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let painter = ui.painter();
+            let font = FontId::proportional(15.0);
+            let mut lines = Vec::new();
+            for text in ["ภาษาไทยบรรทัดหนึ่ง", "ภาษาไทยบรรทัดสอง", "ภาษาไทยบรรทัดสาม"]
+            {
+                lines.push(ThaiLayoutLine {
+                    range: TextLineRange { source_range: 0..0, paint_range: 0..0, break_kind: None },
+                    galley: layout_no_wrap_with_direction(painter, text, &font, Color32::WHITE, TextDirection::LeftToRight),
+                });
+            }
+            let line_height = lines[0].galley.size().y;
+            let total_height = lines.iter().map(|line| line.galley.size().y).sum();
+            let layout = ThaiCellLayout { lines, size: vec2(100.0, total_height) };
+            let cell_height = 1.5 + line_height * 1.5;
+            let top_rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(100.0, cell_height));
+            let center_rect = Rect::from_min_size(pos2(130.0, 10.0), vec2(100.0, cell_height));
+            paint_thai_cell(
+                painter,
+                &layout,
+                ThaiCellPaint {
+                    rect: top_rect,
+                    text_left: top_rect.left(),
+                    halign: HAlign::Left,
+                    valign: VAlign::Top,
+                    pad: 0.0,
+                    indent: 0.0,
+                    z: 1.0,
+                    color: Color32::WHITE,
+                },
+            );
+            paint_thai_cell(
+                painter,
+                &layout,
+                ThaiCellPaint {
+                    rect: center_rect,
+                    text_left: center_rect.left(),
+                    halign: HAlign::Left,
+                    valign: VAlign::Center,
+                    pad: 0.0,
+                    indent: 0.0,
+                    z: 1.0,
+                    color: Color32::WHITE,
+                },
+            );
+        });
+        let observed = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.pos.x < 120.0 => Some(0),
+                egui::Shape::Text(_) => Some(1),
+                _ => None,
+            })
+            .fold((0, 0), |(top, center), area| if area == 0 { (top + 1, center) } else { (top, center + 1) });
+        output.textures_delta.clear();
+
+        assert_eq!(observed, (1, 3), "only Top alignment omits the incomplete final lines");
     }
 
     fn find_font_sensitive_width(text: &str) -> Option<(f32, Vec<TextLineRange>, Vec<TextLineRange>)> {
@@ -1263,13 +1400,33 @@ mod tests {
             previous_retry_requests.set(retry_repaint_request_count(ui.ctx()));
             begin_frame_budget(ui.ctx());
             for width in &widths[..scope_split] {
-                ready.push(matches!(layout_cell(ui.painter(), text, &font, Color32::WHITE, *width, HAlign::Left, 1.0), ThaiLayoutResult::Ready(_)));
+                ready.push(matches!(
+                    layout_cell_with_options(
+                        ui.painter(),
+                        text,
+                        &font,
+                        Color32::WHITE,
+                        *width,
+                        ThaiLayoutOptions { halign: HAlign::Left, direction: TextDirection::Auto, zoom: 1.0 }
+                    ),
+                    ThaiLayoutResult::Ready(_)
+                ));
             }
             let _ = finish_frame_budget(ui.ctx());
             // A second paint scope in this same egui pass shares the first scope's allowance.
             begin_frame_budget(ui.ctx());
             for width in &widths[scope_split..] {
-                ready.push(matches!(layout_cell(ui.painter(), text, &font, Color32::WHITE, *width, HAlign::Left, 1.0), ThaiLayoutResult::Ready(_)));
+                ready.push(matches!(
+                    layout_cell_with_options(
+                        ui.painter(),
+                        text,
+                        &font,
+                        Color32::WHITE,
+                        *width,
+                        ThaiLayoutOptions { halign: HAlign::Left, direction: TextDirection::Auto, zoom: 1.0 }
+                    ),
+                    ThaiLayoutResult::Ready(_)
+                ));
             }
             let _ = finish_frame_budget(ui.ctx());
             usage = frame_budget_usage(ui.ctx());
@@ -1301,6 +1458,7 @@ mod tests {
             font_gen: 1,
             zoom_pct: 100,
             halign: 0,
+            direction: TextDirection::Auto,
         }
     }
 
@@ -1654,7 +1812,14 @@ mod tests {
         let mut usage = FrameBudgetUsage::default();
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             begin_frame_budget(ui.ctx());
-            result = layout_cell(ui.painter(), "ไทย", &FontId::proportional(15.0), Color32::WHITE, 100.0, HAlign::Left, 1.0);
+            result = layout_cell_with_options(
+                ui.painter(),
+                "ไทย",
+                &FontId::proportional(15.0),
+                Color32::WHITE,
+                100.0,
+                ThaiLayoutOptions { halign: HAlign::Left, direction: TextDirection::Auto, zoom: 1.0 },
+            );
             usage = frame_budget_usage(ui.ctx());
         });
         output.textures_delta.clear();
@@ -1854,7 +2019,14 @@ mod tests {
             let mut usage = FrameBudgetUsage::default();
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 begin_frame_budget(ui.ctx());
-                result = layout_cell(ui.painter(), &text, &FontId::proportional(15.0), Color32::WHITE, 100.0, HAlign::Left, 1.0);
+                result = layout_cell_with_options(
+                    ui.painter(),
+                    &text,
+                    &FontId::proportional(15.0),
+                    Color32::WHITE,
+                    100.0,
+                    ThaiLayoutOptions { halign: HAlign::Left, direction: TextDirection::Auto, zoom: 1.0 },
+                );
                 usage = frame_budget_usage(ui.ctx());
             });
             output.textures_delta.clear();
@@ -2015,6 +2187,7 @@ mod tests {
             font_gen: 1,
             zoom_pct: 100,
             halign: 0,
+            direction: TextDirection::Auto,
         });
         let lines = vec![CachedPlanLine { range: TextLineRange { source_range: 0..0, paint_range: 0..0, break_kind: None } }; 16];
         let plan = CachedPlan { lines: lines.into(), key_hash: 0, fallback_reason: None, accounted_bytes: 0, last_used: 0 };
@@ -2034,6 +2207,7 @@ mod tests {
             font_gen: 1,
             zoom_pct: 100,
             halign: 0,
+            direction: TextDirection::Auto,
         });
         let oversized_plan = CachedPlan { lines: Arc::from([]), key_hash: 0, fallback_reason: None, accounted_bytes: 0, last_used: 0 };
         cache.insert(Arc::clone(&oversized_key), oversized_plan);
@@ -2062,6 +2236,7 @@ mod tests {
                 font_gen: 1,
                 zoom_pct: 100,
                 halign: 0,
+                direction: TextDirection::Auto,
             })
         };
         let key0 = key_for(0);
@@ -2102,6 +2277,7 @@ mod tests {
                 font_gen: 1,
                 zoom_pct: 100,
                 halign: 0,
+                direction: TextDirection::Auto,
             });
             cache.insert(key, CachedPlan { lines: Arc::from([]), key_hash: 0, fallback_reason: None, accounted_bytes: 0, last_used: 0 });
 
@@ -2155,6 +2331,7 @@ mod tests {
                 font_gen: 1,
                 zoom_pct: 100,
                 halign: 0,
+                direction: TextDirection::Auto,
             })
         };
         let least_recent = large_key_for(0);
@@ -2185,6 +2362,7 @@ mod tests {
                 font_gen: 1,
                 zoom_pct: 100,
                 halign: 0,
+                direction: TextDirection::Auto,
             });
             cache.insert(key, empty_plan());
             assert!(cache.entries.len() <= MAX_CACHE_ENTRIES);
@@ -2209,6 +2387,7 @@ mod tests {
                 font_gen: 1,
                 zoom_pct: 100,
                 halign: 0,
+                direction: TextDirection::Auto,
             });
             cache.insert(Arc::clone(&key), CachedPlan { lines: Arc::from([]), key_hash: 0, fallback_reason: None, accounted_bytes: 0, last_used: 0 });
         }

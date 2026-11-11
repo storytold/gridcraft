@@ -12,6 +12,7 @@ use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
 use gridcraft_ui_egui::{SheetApp, grid::Geo, thai_layout, theme};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
@@ -25,13 +26,17 @@ static SNAPSHOT_RENDER_LOCK: Mutex<()> = Mutex::new(());
 static SNAPSHOT_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 
 fn harness_with_session_config(session: Session, zoom: Option<u16>, pixels_per_point: f32, steps: usize) -> Harness {
+    harness_with_session_fonts(session, zoom, pixels_per_point, steps, thai_font::required_font_definitions())
+}
+
+/// Builds a Thai renderer harness with an explicit pinned font set.
+fn harness_with_session_fonts(session: Session, zoom: Option<u16>, pixels_per_point: f32, steps: usize, fonts: egui::FontDefinitions) -> Harness {
     let mut session = session;
     if let Some(percent) = zoom {
         session.execute("view.zoom", json!({"percent": percent})).unwrap();
     }
     let mut app = SheetApp::new(session, Default::default());
     app.use_prepared_fonts();
-    let fonts = thai_font::required_font_definitions();
     let setup_fonts = fonts.clone();
     let mut h = egui_kittest::Harness::builder()
         .with_context_setup(move |ctx| {
@@ -78,6 +83,7 @@ struct PaintedText {
     pos: Pos2,
     size: Vec2,
     clip: Rect,
+    direction: egui::epaint::text::TextDirection,
 }
 
 fn painted_text_shapes(h: &Harness) -> Vec<PaintedText> {
@@ -85,9 +91,13 @@ fn painted_text_shapes(h: &Harness) -> Vec<PaintedText> {
         .shapes
         .iter()
         .filter_map(|shape| match &shape.shape {
-            Shape::Text(text) => {
-                Some(PaintedText { text: text.galley.job.text.clone(), pos: text.pos, size: text.galley.size(), clip: shape.clip_rect })
-            }
+            Shape::Text(text) => Some(PaintedText {
+                text: text.galley.job.text.clone(),
+                pos: text.pos,
+                size: text.galley.size(),
+                clip: shape.clip_rect,
+                direction: text.galley.job.direction,
+            }),
             _ => None,
         })
         .collect()
@@ -142,6 +152,47 @@ fn test_thai_cell_wrapping_in_grid_renderer() {
 
     // In A2 with Wrap Text OFF: the entire unbroken text must be painted on one line
     assert!(texts.iter().any(|t| t == "วันนี้อากาศดีมาก"), "Unwrapped cell A2 must paint full string on one line; found: {:?}", texts);
+}
+
+#[test]
+fn thai_wrapped_grid_lines_preserve_explicit_rtl_direction() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell":"B2", "input":"วันนี้อากาศดีมาก مرحبا بالعالم"})).unwrap();
+    session
+        .execute("home.formatCells", json!({"range":"B2", "style":{"align":{"wrap":true, "h":"Left", "v":"Top", "reading_order":"RightToLeft"}}}))
+        .unwrap();
+    session.execute("home.columnWidth", json!({"cols":"B", "width":72})).unwrap();
+    session.execute("home.rowHeight", json!({"rows":"2", "height":100})).unwrap();
+
+    let fonts_root =
+        std::env::var_os("CRAFT_FONTS_DIR").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../craft-fonts"));
+    let arabic_path = fonts_root.join("fonts/noto-sans-arabic/NotoSansArabic.ttf");
+    let arabic_bytes = std::fs::read(&arabic_path).unwrap_or_else(|error| {
+        panic!("required pinned Noto Sans Arabic font could not be read at {}: {error}; set CRAFT_FONTS_DIR", arabic_path.display())
+    });
+    let arabic_sha256 = Sha256::digest(&arabic_bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    assert_eq!(arabic_sha256, "63111b5b2e074dd48cc67692e0a2726d86ee94c1c37fe8598257b7b4e87e869e", "Noto Sans Arabic fixture hash mismatch");
+    let mut fonts = thai_font::required_font_definitions();
+    let arabic_key = "NotoSansArabic".to_string();
+    fonts.font_data.insert(arabic_key.clone(), std::sync::Arc::new(egui::FontData::from_owned(arabic_bytes)));
+    for family in [egui::FontFamily::Name(theme::CELL.into()), egui::FontFamily::Name(theme::CELL_BOLD.into()), egui::FontFamily::Proportional] {
+        if let Some(chain) = fonts.families.get_mut(&family) {
+            chain.push(arabic_key.clone());
+        }
+    }
+    let mut harness = harness_with_session_fonts(session, None, 1.0, 0, fonts);
+    thai_layout::begin_frame_budget(&harness.ctx);
+    harness.step();
+    assert!(thai_layout::frame_budget_usage(&harness.ctx).segmentations > 0, "the renderer should use the Thai adapter");
+    harness.run_steps(2);
+
+    let lines: Vec<_> = painted_text_shapes(&harness).into_iter().filter(|shape| thai_layout::has_thai_chars(&shape.text)).collect();
+    assert!(lines.len() >= 2, "the mixed Thai/Arabic cell should wrap across multiple lines: {lines:?}");
+    assert!(
+        lines.iter().all(|line| line.direction == egui::epaint::text::TextDirection::RightToLeft),
+        "each Thai line must retain the cell's explicit RTL reading direction: {lines:?}"
+    );
 }
 
 #[test]
