@@ -384,6 +384,13 @@ fn text_fn() {
     assert_eq!(text_function(&Value::Number(1234.5), "$#,##0.00", S), Ok("$1,234.50".into()));
     assert_eq!(text_function(&Value::from("5"), "0.00", S), Ok("5.00".into()));
     assert_eq!(text_function(&Value::from("abc"), "0.00", S), Ok("abc".into()));
+    // Each `@` repeats the text: up to a cell's 32,767 characters, then #VALUE!.
+    let at = "@".repeat(255);
+    assert_eq!(text_function(&Value::from("x".repeat(128).as_str()), &at, S).map(|s| s.len()), Ok(128 * 255));
+    assert_eq!(text_function(&Value::from("x".repeat(32_000).as_str()), &at, S), Err(CellError::Value));
+    // The limit counts UTF-16 units: 16,384 emoji are 32,768 of them, one too many.
+    assert_eq!(text_function(&Value::from("\u{1F600}".repeat(16_383).as_str()), "@", S).map(|s| s.chars().count()), Ok(16_383));
+    assert_eq!(text_function(&Value::from("\u{1F600}".repeat(16_384).as_str()), "@", S), Err(CellError::Value));
     assert_eq!(text_function(&Value::Error(CellError::NA), "0", S), Err(CellError::NA));
     assert_eq!(text_function(&Value::Number(46302.0), "yyyy", S), Ok("2026".into()));
     assert_eq!(text_function(&Value::Number(0.5), "General", S), Ok("0.5".into()));
