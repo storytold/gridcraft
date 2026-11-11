@@ -3,30 +3,35 @@
 - Date: 2026-11-11
 - Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`). **Delivered**: the fork's
   `refs/heads/feature/realtime-collaboration`, the PR's `headRefOid` and this checkout's HEAD are
-  all `915d994e`, so the fork branch *is* the PR's head. The branch is 68 commits on the base
-  `2c58c769`, 84 files, +17770/−34. The push of 2026-11-11T07:26:44Z — the check suites it created
-  carry that stamp — published `7b42c82a` (§23: the code and the two tests of the 01:36Z finding)
-  and `915d994e`, the page that records them; §19 records the push of 2026-11-10T17:19Z, which
-  published `ae4311ee`, `34e54b81`, `46783412` and the nine review-fix commits
-  `d91f838a`…`a2251b0e`; §21 records the push of 20:1xZ, which published `f51237ea` and
-  `8208607f`, and the 01:24Z one, which published `00b146df` and `bb5b3acf`. **Nothing that push
-  delivered is local**: `git rev-list --count fork/feature/realtime-collaboration...HEAD` was `0 0`
-  then. The two commits above `915d994e` — §24's code and this page — are local until the next
-  push.
+  all `b9773627`, so the fork branch *is* the PR's head. The branch is 70 commits on the base
+  `2c58c769`, 84 files, +17959/−34. The push of 2026-11-11T11:28:40Z — the check suites it created
+  carry that stamp — published `2a5f3e00` (§24: the code and the two tests of the 07:38Z findings)
+  and `b9773627`, the page that records them. The push of 07:26:44Z published `7b42c82a` (§23:
+  the code and the two tests of the 01:36Z finding) and `915d994e`; §19 records the push of
+  2026-11-10T17:19Z, which published `ae4311ee`, `34e54b81`, `46783412` and the nine review-fix
+  commits `d91f838a`…`a2251b0e`; §21 records the push of 20:1xZ, which published `f51237ea` and
+  `8208607f`, and the 01:24Z one, which published `00b146df` and `bb5b3acf`. **Nothing is local**:
+  `git rev-list --count fork/feature/realtime-collaboration...HEAD` is `0 0`, and the two commits
+  above `915d994e` — §24's code and this page — are on the fork and in the PR.
 - Base: `origin/main` = `2c58c769` at the time of the rebase (the PR's `baseRefOid`); `origin/main`
   has moved **24 commits** since — its tip at this writing is `6a08240e`. The PR stays mergeable
   against the recorded base; rebasing is a separate step.
 - PR: <https://github.com/storytold/gridcraft/pull/3613> — open, **not a draft** since
-  2026-11-10T14:56:54Z, `mergeable = MERGEABLE`, `mergeStateStatus = UNSTABLE`, head `915d994e`,
-  last update 2026-11-11T07:38:33Z (the review §24 records), `reviewDecision` empty.
-- Gate on `915d994e`: no CI run. The four workflows the 07:26:44Z push created (`CI`, `House
-  rules`, `Nix`, `SonarCloud`) all ended `action_required` with no job started — the repository
-  needs a maintainer to approve a run from a fork. `915d994e` itself changes only
-  `docs/collab/STATUS.md` (`git diff --stat 7b42c82a..915d994e`), so its code is `7b42c82a`'s,
-  gated on the host in §23.4, and the code of `00b146df` under it was gated in §22.3: `fmt` clean,
-  `clippy -D warnings` on the five packages, and 176 passed, 0 failed. CodeRabbit is green on the
-  head: its check run completed `success`. It reviewed four heads: `5848894080` at 20:32Z (six
-  threads and one finding outside the diff, closed by §21.4), `5851190259` at 23:35Z (one thread
+  2026-11-10T14:56:54Z, `mergeable = MERGEABLE`, `mergeStateStatus = UNSTABLE`, head `b9773627`,
+  last update 2026-11-11T11:28:42Z (the push itself; the review §24 records is the one of
+  07:38:33Z on `915d994e`), `reviewDecision` empty.
+- Gate on `b9773627`: no CI run. The four workflows the 11:28:40Z push created (`CI`, `House
+  rules`, `Nix`, `SonarCloud`) all ended `completed / action_required` with no job started — the
+  repository needs a maintainer to approve a run from a fork. The head's rollup holds only
+  CodeRabbit, `completed / skipped` at 11:31:05Z: it did not review `b9773627`, so the review
+  record ends at `5855372513` on `915d994e` (§24). `b9773627` itself changes only
+  `docs/collab/STATUS.md` (`git diff --stat 2a5f3e00..b9773627`), so its code is `2a5f3e00`'s,
+  gated on the host in §24.4: `fmt` clean, `clippy -D warnings` on `gridcraft-collab-client`, 35
+  passed in that package, 11 + 11 in `gridcraft-collab-web`/`gridcraft-web`, and the wasm32 check
+  clean. Under it, `915d994e`'s code is `7b42c82a`'s, gated in §23.4, and the code of `00b146df`
+  was gated in §22.3: `fmt` clean, `clippy -D warnings` on the five packages, and 176 passed,
+  0 failed. CodeRabbit was green on the heads it did review. It reviewed four heads:
+  `5848894080` at 20:32Z (six threads and one finding outside the diff, closed by §21.4), `5851190259` at 23:35Z (one thread
   and one finding outside the diff, closed by §22), `5852406613` at 01:36Z on `bb5b3acf` (one
   thread, comment `4532845977` at `synced.rs:398`, closed by §23, and one finding outside the diff
   that §23.2 confirms and leaves to its own slice), and `5855372513` at 07:38Z on `915d994e` (two
@@ -1569,8 +1574,8 @@ CI file is touched: `git diff --name-only -- .github` is empty.
 
 Review `5855372513` is the first review that read §23's fix. It is also the first one that read a
 commit which had already been pushed. Both findings are Major, both point at the slice §23 added,
-and both are confirmed in the code; there is nothing to reject. The fix is one commit, and it stays
-local until the next push (§24.5).
+and both are confirmed in the code; there is nothing to reject. The fix is one commit, `2a5f3e00`,
+published by the push of 11:28:40Z together with this page (§24.5).
 
 | # | Where | Severity | Verdict | What was done |
 |---|---|---|---|---|
@@ -1651,8 +1656,9 @@ nothing; their §22.3 run stands.
 
 ### 24.5 Answering the review
 
-This commit is local: the fork still points at `915d994e` until the human push of §19. The code
-commit is `2a5f3e00`; this page follows it. Both threads
-(`4535207012`, `4535207024`) are answered with the commit hash once it is published; the answer says
-what §24.1 and §24.2 say, and names the two tests. No CI file is touched: `git diff --name-only --
-.github` is empty, and the two findings came from a review that already ran on a pushed head.
+The push of 2026-11-11T11:28:40Z published this slice: the code commit is `2a5f3e00` and this page
+is `b9773627`, the fork's head and the PR's `headRefOid`. Both threads (`4535207012`,
+`4535207024`) can be answered with that hash; the answer says what §24.1 and §24.2 say, and names
+the two tests. No CI file is touched: `git diff --name-only -- .github` is empty, and the two
+findings came from a review that already ran on a pushed head. The four workflows the push created
+sit in `action_required` with no job started, so §24.4's host run remains the gate, not a CI pass.
