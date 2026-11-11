@@ -359,6 +359,17 @@ pub struct Alignment {
     pub indent: u8,
     /// Degrees -90..=90, or 255 for vertical stacked text.
     pub rotation: i16,
+    /// Space between the cell's edges and its text, left, right, top, bottom, in hundredths
+    /// of a point; `None` where the file stated none (the application's own). An OpenDocument
+    /// cell's padding; Excel has none. Not drawn yet.
+    #[serde(default, skip_serializing_if = "Alignment::no_padding")]
+    pub padding: [Option<u16>; 4],
+}
+
+impl Alignment {
+    fn no_padding(p: &[Option<u16>; 4]) -> bool {
+        p.iter().all(Option::is_none)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -497,6 +508,28 @@ mod tests {
         assert_eq!(t.derive(bold, |s| s.font.bold = false), StyleId::DEFAULT);
         assert_eq!(t.len(), 2);
         assert!(!t.get(StyleId(999)).font.bold);
+    }
+
+    #[test]
+    fn padding_keeps_styles_apart_and_survives_json() -> Result<(), Box<dyn std::error::Error>> {
+        let mut t = StyleTable::default();
+        let padded = t.derive(StyleId::DEFAULT, |s| s.align.padding = [Some(10), None, Some(0), Some(65535)]);
+        let other = t.derive(StyleId::DEFAULT, |s| s.align.padding = [Some(10), None, Some(0), Some(1)]);
+        assert_ne!(padded, StyleId::DEFAULT);
+        assert_ne!(padded, other);
+        assert_eq!(t.derive(StyleId::DEFAULT, |s| s.align.padding = [Some(10), None, Some(0), Some(65535)]), padded);
+        assert_eq!(t.derive(padded, |s| s.align.padding = [None; 4]), StyleId::DEFAULT);
+
+        let style = t.get(padded).clone();
+        let json = serde_json::to_string(&style)?;
+        assert!(json.contains("padding"), "{json}");
+        assert_eq!(serde_json::from_str::<Style>(&json)?, style);
+
+        // No padding: nothing written, and JSON written before the field existed still reads.
+        let plain = serde_json::to_string(&Alignment::default())?;
+        assert!(!plain.contains("padding"), "{plain}");
+        assert_eq!(serde_json::from_str::<Alignment>(&plain)?, Alignment::default());
+        Ok(())
     }
 
     #[test]

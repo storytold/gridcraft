@@ -261,6 +261,7 @@ fn read_alignment(a: &El) -> Alignment {
         shrink: a.flag("shrinkToFit", false),
         indent: a.attr_u32("indent").unwrap_or(0).min(250) as u8,
         rotation: 0,
+        padding: [None; 4],
     };
     if let Some(r) = a.attr_i64("textRotation") {
         al.rotation = match r {
@@ -530,7 +531,9 @@ fn border_xml(b: &Borders) -> String {
 }
 
 fn alignment_xml(a: &Alignment) -> Option<String> {
-    if *a == Alignment::default() {
+    // SpreadsheetML has no cell padding: it is not written, and a style that differs from the
+    // default only by padding writes no `<alignment>`.
+    if (Alignment { padding: [None; 4], ..*a }) == Alignment::default() {
         return None;
     }
     let mut s = String::from("<alignment");
