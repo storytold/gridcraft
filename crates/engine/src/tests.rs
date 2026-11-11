@@ -1351,6 +1351,18 @@ fn scripts_leave_file_access_working_after_they_run() {
 }
 
 #[test]
+fn get_data_refuses_json_with_too_many_fields_or_rows_before_building_rows() {
+    let mut s = s();
+    let wide = format!("[{}]", (0..=gridcraft_core::MAX_COLS).map(|i| format!("{{\"k{i}\":1}}")).collect::<Vec<_>>().join(","));
+    let err = s.execute("data.fromTextCsv", json!({"text": wide})).unwrap_err().to_string();
+    assert!(err.contains("more fields"), "{err}");
+    // MAX_ROWS objects plus the header row are one too many.
+    let tall = format!("[{}]", vec!["{}"; gridcraft_core::MAX_ROWS as usize].join(","));
+    let err = s.execute("data.fromTextCsv", json!({"text": tall})).unwrap_err().to_string();
+    assert!(err.contains("more rows"), "{err}");
+}
+
+#[test]
 fn scripts_cannot_reach_outside_the_workbook_even_when_trusted() {
     let dir = std::env::temp_dir().join(format!("gridcraft-script-deny-{}", std::process::id()));
     let leak = dir.join("leak.xlsx");
@@ -6466,6 +6478,23 @@ fn clearing_links_and_notes_keeps_allow_edit_ranges() {
     s.execute("edit.clearComments", json!({"range": "C5"})).unwrap();
     let sh = s.doc().unwrap().wb.active().unwrap().clone();
     assert!(sh.hyperlinks.is_empty() && sh.comments.is_empty());
+}
+
+#[test]
+fn formulatext_does_not_reveal_a_hidden_formula() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=1+1"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"protection": {"locked": false, "hidden": true}}})).unwrap();
+    s.execute("home.formatCells", json!({"range": "B1", "style": {"protection": {"locked": false}}})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=FORMULATEXT(A1)"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::from("=1+1"), "not protected yet");
+    s.execute("review.protectSheet", json!({})).unwrap();
+    // Without entering the formula again: protecting recalculates what reads the protection.
+    assert_eq!(v(&s, "B1"), Value::Error(gridcraft_core::CellError::NA));
+    s.execute("cell.set", json!({"cell": "B1", "input": "=FORMULATEXT(A1)"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Error(gridcraft_core::CellError::NA));
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::from("=1+1"), "unprotecting shows it again without re-entering");
 }
 
 #[test]
