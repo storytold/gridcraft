@@ -105,8 +105,10 @@ pub fn read_xlsb_with(bytes: &[u8], functions: FunctionInfo) -> Result<(Workbook
     let mut wb = Workbook::new();
     wb.sheets.clear();
     let mut report = ReadReport::default();
-    report.warn("XLSB import: values and cell formulas were read. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported.");
     let (sheets, links) = workbook(&book, &mut wb, &mut report)?;
+    // The overview comes first, and says whether formulas could be read at all.
+    let read = if links.is_some() { "values and cell formulas were read" } else { "values were read; formulas were kept as their saved results" };
+    report.warnings.insert(0, format!("XLSB import: {read}. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported."));
     let rels = relationships(&mut package, &root.target)?;
     // Formulas name sheets by their place in the workbook's list, skipped sheets included.
     let links = links.map(|mut links| {
@@ -818,7 +820,9 @@ fn worksheet(
                     None
                 };
                 let at = CellRef::new(r, c);
-                if formula.is_some() {
+                // A `PY("code", …)` formula becomes a Python cell (`adopt_python`), which would no
+                // longer recognize it with a legacy `@` in front.
+                if formula.as_ref().is_some_and(|f| gridcraft_model::PyCode::from_formula(&f.text).is_none()) {
                     formulas.legacy.push(at);
                 }
                 if !value.is_empty() || formula.is_some() {

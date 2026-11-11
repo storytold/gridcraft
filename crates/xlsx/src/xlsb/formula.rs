@@ -283,7 +283,7 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links) -> Result<Expr, Un
                     // `PY(index, …)` runs a script stored elsewhere in the package, which this
                     // import doesn't read. `PY("code", …)` carries its code and becomes a Python cell.
                     let py = name.rsplit('.').next().is_some_and(|n| n.eq_ignore_ascii_case("PY"));
-                    if py && !matches!(args.first(), Some(Expr::Text(_))) {
+                    if py && !args.first().is_some_and(literal_text) {
                         return Err(Unsupported("Python code stored outside the cell"));
                     }
                     push(&mut stack, kids, Expr::Call(name, args))?;
@@ -368,7 +368,63 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links) -> Result<Expr, Un
     if !stack.is_empty() {
         return Err(Unsupported("malformed formula (unused operands)"));
     }
-    Ok(e)
+    Ok(grouped(e, false))
+}
+
+/// Text written out in the formula: a string, or strings joined with `&` (how Python code
+/// longer than a string constant is written).
+fn literal_text(e: &Expr) -> bool {
+    match e {
+        Expr::Text(_) => true,
+        Expr::Binary(BinOp::Concat, a, b) => literal_text(a) && literal_text(b),
+        _ => false,
+    }
+}
+
+/// How tightly an expression binds when printed, as the formula parser reads it: binary
+/// operators by [`BinOp::precedence`], prefix `+`/`-` at 60 and `%` at 70 (`-2^2` is `(-2)^2`);
+/// anything else is one operand.
+fn binding(e: &Expr) -> u8 {
+    match e {
+        Expr::Binary(op, ..) => op.precedence(),
+        Expr::Unary(UnOp::Neg | UnOp::Plus, _) => 60,
+        Expr::Unary(UnOp::Percent, _) => 70,
+        _ => u8::MAX,
+    }
+}
+
+fn paren(e: Expr) -> Expr {
+    Expr::Paren(Box::new(e))
+}
+
+/// The tree with the parentheses its text needs to mean the same. Tokens are reverse Polish, so
+/// grouping lives in their order: Excel adds `PtgParen` wherever its text has parentheses, but
+/// `1 2 + 3 *` (another writer's, or a crafted file's) would print as `1+2*3`. Binary operators
+/// are left-associative; a union in a function's arguments needs parentheses of its own.
+/// Recursion follows the decoded tree, which `push` bounds at `MAX_DEPTH` levels.
+fn grouped(e: Expr, in_args: bool) -> Expr {
+    match e {
+        Expr::Binary(op, a, b) => {
+            let (a, b) = (grouped(*a, in_args), grouped(*b, in_args));
+            let a = if binding(&a) < op.precedence() { paren(a) } else { a };
+            let b = if binding(&b) <= op.precedence() { paren(b) } else { b };
+            let e = Expr::Binary(op, Box::new(a), Box::new(b));
+            if in_args && op == BinOp::Union { paren(e) } else { e }
+        }
+        Expr::Unary(op, x) => {
+            let x = grouped(*x, in_args);
+            let needs = match op {
+                // The parser reads `-1%` as `-(1%)`, Excel's tokens as `(-1)%`: the same value, so
+                // a sign under `%` keeps Excel's spelling.
+                UnOp::Neg | UnOp::Plus | UnOp::Percent => binding(&x) < 60,
+                _ => false,
+            };
+            Expr::Unary(op, Box::new(if needs { paren(x) } else { x }))
+        }
+        Expr::Paren(x) => paren(grouped(*x, false)),
+        Expr::Call(name, args) => Expr::Call(name, args.into_iter().map(|a| grouped(a, true)).collect()),
+        other => other,
+    }
 }
 
 /// PtgExtraArray ([MS-XLSB] 2.5.98.41): row and column counts, then `SerAr` values in row-major
