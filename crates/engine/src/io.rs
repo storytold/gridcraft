@@ -100,14 +100,18 @@ pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_
 /// line-height estimate can differ from Excel's, and shrinking files that already look
 /// right would be a visible regression. Custom-height rows are left alone entirely.
 fn fit_imported_rows(wb: &mut Workbook) {
+    // The whole pass shares one budget of merge comparisons: later sheets keep their heights once it is spent.
+    let mut left = crate::cmd::MERGE_FIT_WORK;
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheet(si) else { continue };
         let mut rows: Vec<u32> = sh.cells.iter().map(|(c, _)| c.row).collect();
         rows.sort_unstable();
         rows.dedup();
+        // One sweep over the sheet's merges for all of its rows, in ascending order.
+        let mut sweep = crate::cmd::MergeSweep::new(left);
         for row in rows {
             let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
-            crate::cmd::auto_row_height(wb, si, row);
+            crate::cmd::fit_row_height(wb, si, row, &mut sweep);
             let Some(before) = before else { continue };
             let after = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
             if after.is_none_or(|a| before > a + 0.5)
@@ -116,6 +120,7 @@ fn fit_imported_rows(wb: &mut Workbook) {
                 sh.rows.entry(row).or_default().size = Some(before);
             }
         }
+        left = sweep.left();
     }
 }
 
@@ -576,7 +581,7 @@ pub fn csv_values_bytes(wb: &Workbook) -> Result<Vec<u8>> {
     let Some(sh) = wb.sheet(wb.active_sheet()) else { return Ok(Vec::new()) };
     gridcraft_xlsx::write_csv(sh, wb.csv_delimiter.unwrap_or(b','), |c| match sh.value(c) {
         gridcraft_core::Value::Number(n) if n.is_finite() => {
-            let shape = crate::display::number_format(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).date_shape(n);
+            let shape = crate::display::parsed(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).date_shape(n);
             match shape.zip(gridcraft_core::date::datetime_from_serial(wb.date_system, n)) {
                 Some(((date, time), d)) => iso(&d, date, time),
                 None => n.to_string(),
@@ -869,8 +874,10 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
                 place(&im.anchor)
             );
         }
+        let mut svg_budget = crate::chart_svg::MAX_PAGE_SVG_BYTES;
         for ch in &sh.charts {
-            if let Some(svg) = crate::chart_svg::chart_svg(wb, sheet, ch, &place(&ch.anchor)) {
+            if let Some(svg) = crate::chart_svg::chart_svg(wb, sheet, ch, &place(&ch.anchor), svg_budget)? {
+                svg_budget -= svg.len();
                 out.push_str(&svg);
             }
         }
@@ -888,12 +895,12 @@ thread_local! {
 /// While one is alive, [`read_file`] and [`write_file`] on this thread refuse every path: a
 /// stored script's steps run inside one (#2178), so no command reaches the file system from a
 /// script whatever its parameters are called. Dropping it (also on unwind) lifts the refusal.
-pub(crate) struct ScriptSandbox(());
+pub struct ScriptSandbox(std::marker::PhantomData<*const ()>);
 
 impl ScriptSandbox {
-    pub(crate) fn enter() -> Self {
+    pub fn enter() -> Self {
         let _ = SCRIPT_SANDBOX.try_with(|c| c.set(c.get().saturating_add(1)));
-        ScriptSandbox(())
+        ScriptSandbox(std::marker::PhantomData)
     }
 }
 
@@ -921,6 +928,12 @@ const MAX_READ_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
     use std::io::Read;
     script_sandbox_check(path)?;
+    // Checked before opening: opening a FIFO nobody writes to blocks the calling (GUI) thread.
+    // shortcut: a FIFO swapped in between this check and the open still blocks; close that with
+    // O_NONBLOCK when the crate takes a libc dependency.
+    if !std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
+        return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
+    }
     let f = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     // A symlink to an endless device reports length 0 but streams forever, so metadata
     // alone never bounds the read: require a real file and cap the bytes actually taken.
@@ -952,18 +965,37 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     // link's target; and it inherits the destination's access restrictions, so saving a
     // private workbook doesn't widen who can read it.
     let tmp = format!("{path}.sctmp");
-    let prior = std::fs::metadata(path).ok().map(|m| m.permissions());
+    let prior_meta = std::fs::metadata(path).ok();
+    let prior = prior_meta.as_ref().map(std::fs::Metadata::permissions);
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
+    // Over an existing file the replacement starts owner-only, whatever the umask: its group is
+    // still the saving user's primary one until it is changed below, and a member of that group
+    // must not be able to open it (and keep the descriptor) before then.
     #[cfg(unix)]
-    if let Some(p) = &prior {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        opts.mode(p.mode());
+    if prior.is_some() {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
     }
     let mut f = opts.open(&tmp).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
     })?;
+    // The replacement belongs to the saving user's primary group: restore the old file's group and
+    // then its mode. When the group can't be restored its access is dropped rather than handed to a
+    // different group; failing to read that back is a failed save.
+    #[cfg(unix)]
+    if let Some(m) = &prior_meta {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let _ = std::os::unix::fs::fchown(&f, None, Some(m.gid()));
+        let group_kept = f.metadata().map(|now| now.gid() == m.gid()).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            EngineError::Other(format!("{path}: {e}"))
+        })?;
+        // Best effort: a file system that can't change modes keeps the owner-only one. Without the
+        // group, the old owner and other bits are kept and the group, setuid and setgid bits dropped.
+        let _ = f.set_permissions(std::fs::Permissions::from_mode(restored_mode(m.mode(), group_kept)));
+    }
     #[cfg(not(unix))]
     if let Some(p) = &prior {
         let _ = f.set_permissions(p.clone());
@@ -978,6 +1010,13 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
     })
+}
+
+/// The mode a saved file gets from the file it replaces (`old`): all of it when its group was
+/// restored; without the group, the owner and other bits only.
+#[cfg(unix)]
+fn restored_mode(old: u32, group_kept: bool) -> u32 {
+    if group_kept { old & 0o7777 } else { old & 0o707 }
 }
 
 #[cfg(target_arch = "wasm32")]
