@@ -111,6 +111,18 @@ fn click(h: &mut Harness, p: Pos2) {
     h.run_steps(2);
 }
 
+fn click_with(h: &mut Harness, p: Pos2, modifiers: Modifiers) {
+    h.run_steps(30);
+    for pressed in [true, false] {
+        h.input_mut().events.push(Event::ModifiersChanged(modifiers));
+        h.input_mut().events.push(Event::PointerMoved(p));
+        h.input_mut().events.push(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers });
+        h.step();
+    }
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+}
+
 fn double_click(h: &mut Harness, p: Pos2) {
     // Separate the gesture from earlier clicks (egui's triple-click window).
     h.run_steps(45);
@@ -137,6 +149,54 @@ fn key(h: &mut Harness, key: Key) {
 
 fn kept(h: &Harness) -> Value {
     h.state().session.doc().unwrap().wb.active().unwrap().value(at("R30"))
+}
+
+/// A form control over a slicer's value tile is the topmost object there, so a click that
+/// `form_controls::interact` leaves to the grid (Cmd+click selects the control; a click on a
+/// selected control moves it) takes the generic object path and never toggles the tile beneath.
+#[test]
+fn a_control_over_a_slicer_tile_keeps_the_generic_path_on_a_selecting_click() {
+    let (mut h, o) = fixture();
+    let slicer = rect(&h, o.slicer);
+    // A button exactly over the slicer's first value tile: the tile in screen units at the
+    // grid's scale, then the button's anchor in sheet units from the slicer's own.
+    let (z, anchor, n, columns) = {
+        let app = h.state();
+        let d = app.session.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        let sl = sh.slicers.iter().find(|s| s.id == o.slicer.id).unwrap();
+        let geo = Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
+        (geo.z, sl.anchor, gridcraft_engine::cmd::slicer::slicer_items(&d.wb, d.wb.active_sheet(), sl).len(), sl.columns)
+    };
+    let layout = chartview::slicer_layout(slicer, z, n, columns);
+    let tile = layout.tiles[0];
+    let params = json!({
+        "at": anchor.cell.a1(),
+        "dx": anchor.dx + (tile.left() - slicer.left()) / z,
+        "dy": anchor.dy + (tile.top() - slicer.top()) / z,
+        "width": tile.width() / z,
+        "height": tile.height() / z,
+        "text": "Over",
+    });
+    let button = ObjRef::new(ObjKind::Control, id(&h.state_mut().run("insert.button", params).unwrap(), "control"));
+    h.run_steps(2);
+    assert!(rect(&h, button).contains(tile.center()), "the button covers the tile: {:?} vs {tile:?}", rect(&h, button));
+    let filter =
+        |h: &Harness| h.state().session.doc().unwrap().wb.active().unwrap().slicers.iter().find(|s| s.id == o.slicer.id).unwrap().selected.clone();
+    assert_eq!(filter(&h), None);
+    // Cmd+click selects the control without working it, and the tile beneath stays as it was.
+    click_with(&mut h, tile.center(), Modifiers::COMMAND);
+    assert_eq!(h.state().selected_object, Some(button), "the control is selected");
+    assert_eq!(filter(&h), None, "the tile under the control was not toggled");
+    // A click on the selected control is for moving it, not for the tile beneath either.
+    click(&mut h, tile.center());
+    assert_eq!(h.state().selected_object, Some(button));
+    assert_eq!(filter(&h), None, "still no toggle");
+    // The tile itself, clear of the control, still toggles.
+    let free = layout.tiles[1].center();
+    h.state_mut().selected_object = None;
+    click(&mut h, free);
+    assert!(filter(&h).is_some(), "a click on an uncovered tile toggles it");
 }
 
 #[test]
