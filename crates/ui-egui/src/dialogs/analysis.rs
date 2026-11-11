@@ -461,7 +461,8 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
     });
     let goal = text(d, "goal");
     ui.horizontal(|ui| {
-        ui.label(crate::i18n::current(ui.ctx()).tr("To:"));
+        let language = crate::i18n::current(ui.ctx());
+        ui.label(language.translation("Solver|To:").unwrap_or_else(|| language.tr("To:")));
         for (g, label) in [("max", "Max"), ("min", "Min"), ("value", "Value Of:")] {
             if ui.radio(goal == g, crate::i18n::current(ui.ctx()).tr(label)).clicked() {
                 d.values.insert("goal".into(), json!(g));

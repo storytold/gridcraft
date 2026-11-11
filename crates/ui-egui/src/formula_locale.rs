@@ -14,12 +14,15 @@ pub(crate) fn canonical(
 ) -> Result<String, ParseError> {
     // The editor hid the `_xludf.` prefixes of this cell's formula; confirming it unchanged keeps
     // the user-defined calls instead of binding them to the built-ins of the same name.
-    if let Some(stored) = wb.sheet(sheet).and_then(|sh| sh.cell(cell)).filter(|c| c.formula.is_some()).map(|c| c.input_text())
-        && has_udf_prefix(&stored)
-        && text == display(&stored, locale, wb, sheet)
+    let stored = wb.sheet(sheet).and_then(|sh| sh.cell(cell)).filter(|c| c.formula.is_some()).map(|c| c.input_text());
+    if let Some(stored) = stored.as_deref()
+        && has_udf_prefix(stored)
+        && text == display(stored, locale, wb, sheet)
     {
-        return Ok(stored);
+        return Ok(stored.to_string());
     }
+    let restored = stored.as_deref().filter(|s| has_udf_prefix(s)).map(|s| restore_udf_calls(text, s, locale));
+    let text = restored.as_deref().unwrap_or(text);
     if locale == FormulaLocale::En || wb.sheet(sheet).is_some_and(|sh| wb.styles.get(sh.style_id(cell)).num_fmt.as_str() == "@") {
         return Ok(text.to_string());
     }
@@ -109,6 +112,60 @@ const UDF_PREFIX: &str = "_xludf.";
 
 fn has_udf_prefix(text: &str) -> bool {
     text.to_ascii_lowercase().contains(UDF_PREFIX)
+}
+
+/// Restores hidden UDF names in an edited draft by matching each call's occurrence among
+/// same-named calls. Token spans keep string literals and unrelated text untouched.
+fn restore_udf_calls(draft: &str, stored: &str, locale: FormulaLocale) -> String {
+    use formula::lexer::Tok;
+    use std::collections::HashMap;
+
+    let Some(stored_body) = stored.strip_prefix('=') else { return draft.to_string() };
+    let Some(draft_body) = draft.strip_prefix('=') else { return draft.to_string() };
+    let (Ok(stored_tokens), Ok(draft_tokens)) =
+        (formula::lexer::tokenize_locale(stored_body, FormulaLocale::En), formula::lexer::tokenize_locale(draft_body, locale))
+    else {
+        return draft.to_string();
+    };
+    let mut totals = HashMap::<String, usize>::new();
+    let mut targets = Vec::new();
+    for token in &stored_tokens {
+        if let Tok::Func(name) = &token.tok {
+            let raw = stored_body.get(token.start..token.end).unwrap_or("");
+            let udf_name = raw.strip_prefix(UDF_PREFIX).or_else(|| raw.strip_prefix("_XLUDF.")).and_then(|n| n.strip_suffix('('));
+            let key = if let Some(udf_name) = udf_name { locale.fold_alias(udf_name) } else { locale.fold_alias(locale.function_name(name)) };
+            let occurrence = totals.entry(key.clone()).or_default();
+            *occurrence += 1;
+            if let Some(udf_name) = udf_name {
+                targets.push((key, *occurrence, format!("{UDF_PREFIX}{udf_name}(")));
+            }
+        }
+    }
+    if targets.is_empty() {
+        return draft.to_string();
+    }
+    let mut occurrences = HashMap::<String, usize>::new();
+    let mut replacements = Vec::new();
+    for token in &draft_tokens {
+        if let Tok::Func(name) = &token.tok {
+            let key = locale.fold_alias(name);
+            let occurrence = occurrences.entry(key.clone()).or_default();
+            *occurrence += 1;
+            if let Some((_, _, replacement)) = targets.iter().find(|(target, ordinal, _)| target == &key && ordinal == occurrence) {
+                replacements.push((token.start, token.end, replacement.as_str()));
+            }
+        }
+    }
+    let mut out = String::with_capacity(draft.len() + replacements.len() * UDF_PREFIX.len());
+    out.push('=');
+    let mut from = 0;
+    for (start, end, replacement) in replacements {
+        out.push_str(draft_body.get(from..start).unwrap_or(""));
+        out.push_str(replacement);
+        from = end;
+    }
+    out.push_str(draft_body.get(from..).unwrap_or(""));
+    out
 }
 
 /// Excel shows a user-defined call such as `_xludf.EOMONTH()` as `=EOMONTH()`. Only function

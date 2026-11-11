@@ -8,6 +8,9 @@ pub(super) fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let name = match str_param(p, "name") {
         Some(n) => n.to_string(),
         None => {
+            if p.get("namePrefix").is_some_and(|value| !value.is_string()) {
+                return Err(bad("home.insertSheet", "`namePrefix` must be a string"));
+            }
             let prefix = str_param(p, "namePrefix").unwrap_or("Sheet");
             crate::cmd::check_generated_prefix("home.insertSheet", prefix, true)?;
             s.doc()?.wb.next_sheet_name_with_prefix(prefix)
@@ -298,4 +301,18 @@ pub(super) fn step_sheet(s: &mut Session, dir: isize) -> Result<Json> {
     }
     // No visible sheet in this direction: keep the current sheet and its selection.
     ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Session;
+    use serde_json::json;
+
+    #[test]
+    fn insert_sheet_rejects_a_non_string_name_prefix() {
+        let mut session = Session::default();
+        session.new_workbook();
+        assert!(session.execute("home.insertSheet", json!({"namePrefix": 42})).is_err());
+        assert!(session.execute("home.insertSheet", json!({})).is_ok());
+    }
 }

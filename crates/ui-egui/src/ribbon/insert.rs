@@ -39,7 +39,8 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             ("Arrow", "arrow"),
             ("Text Box", "textBox"),
         ] {
-            if ui.button(app.ui.language.tr(label)).clicked() {
+            let shown = if kind == "line" { app.ui.language.tr("Shape|Line") } else { app.ui.language.tr(label) };
+            if ui.button(shown).clicked() {
                 act(app, "insert.shape", json!({"kind": kind}));
             }
         }

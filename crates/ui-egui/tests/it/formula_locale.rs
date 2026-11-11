@@ -411,6 +411,25 @@ fn user_defined_prefix_is_hidden_while_editing_and_kept_on_commit() {
 }
 
 #[test]
+fn editing_a_hidden_udf_does_not_rebind_it_to_a_builtin() {
+    let mut app = app();
+    app.run("cell.set", json!({"cell":"A1","input":"=_xludf.SUM(1,2)"})).unwrap();
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1,2)");
+    app.editor.as_mut().unwrap().text = "=SUM(2,2)".into();
+    assert!(app.commit_edit(0, 0, false, false));
+    assert_eq!(formula(&app), "_xludf.SUM(2,2)");
+
+    app.run("app.language.set", json!({"language":"ru"})).unwrap();
+    app.run("cell.set", json!({"cell":"A1","input":"=_xludf.SUM(1,2)"})).unwrap();
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1;2)");
+    app.editor.as_mut().unwrap().text = "=SUM(2;2)".into();
+    assert!(app.commit_edit(0, 0, false, false));
+    assert_eq!(formula(&app), "_xludf.SUM(2,2)");
+}
+
+#[test]
 fn turkish_interface_localizes_formula_entry_and_display() {
     let mut app = app();
     app.run("app.language.set", json!({"code":"tr-TR"})).unwrap();

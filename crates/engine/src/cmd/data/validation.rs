@@ -254,7 +254,14 @@ pub fn check_literal_fill_validation(wb: &Workbook, sheet: usize, ranges: &[Rang
 }
 
 /// Applies the cell's validation rule to parsed input or explicit text.
-fn check_entry(wb: &Workbook, sheet: usize, at: CellRef, input: &str, literal: bool, scratch: &mut Option<Workbook>) -> Option<(Validation, String)> {
+fn check_entry(
+    wb: &Workbook,
+    sheet: usize,
+    at: CellRef,
+    input: &str,
+    literal: bool,
+    scratch: &mut Option<(Workbook, gridcraft_calc::Calc)>,
+) -> Option<(Validation, String)> {
     let sh = wb.sheet(sheet)?;
     let dv = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(at)))?;
     if dv.kind == ValidationKind::Any || !dv.show_error {
@@ -269,13 +276,20 @@ fn check_entry(wb: &Workbook, sheet: usize, at: CellRef, input: &str, literal: b
     let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
     let mut eval = |f: &str| {
         let formula = formula_at(f, first, at);
-        if sh.value(at) == v {
+        let replaces_code = sh.cell(at).is_some_and(|cell| cell.formula.is_some() || cell.py.is_some());
+        if sh.value(at) == v && !replaces_code {
             return gridcraft_calc::evaluate(wb, sheet, at, &formula);
         }
-        let entered = scratch.get_or_insert_with(|| wb.clone());
+        let (entered, calc) = scratch.get_or_insert_with(|| {
+            let entered = wb.clone();
+            let mut calc = gridcraft_calc::Calc::new();
+            calc.rebuild(&entered);
+            (entered, calc)
+        });
         if let Some(target) = entered.sheet_mut(sheet) {
             target.cells.set(at, Cell { value: v.clone(), style: sh.style_id(at), ..Default::default() });
         }
+        calc.cells_changed(entered, &[(sheet, at)]);
         let result = gridcraft_calc::evaluate(entered, sheet, at, &formula);
         if let Some(target) = entered.sheet_mut(sheet) {
             if let Some(original) = sh.cell(at) {
@@ -284,6 +298,7 @@ fn check_entry(wb: &Workbook, sheet: usize, at: CellRef, input: &str, literal: b
                 target.cells.remove(at);
             }
         }
+        calc.cells_changed(entered, &[(sheet, at)]);
         result
     };
     let mut num = |f: &str| eval(f).to_number().ok();

@@ -41,6 +41,11 @@ fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
             s.add_document(DocState::new(wb, None, title, crate::Trust::Local))
         }
         None => {
+            for key in ["bookPrefix", "sheetPrefix"] {
+                if p.get(key).is_some_and(|value| !value.is_string()) {
+                    return Err(bad("file.new", format!("`{key}` must be a string")));
+                }
+            }
             let book = str_param(p, "bookPrefix").unwrap_or("Book");
             let sheet = str_param(p, "sheetPrefix").unwrap_or("Sheet");
             super::check_generated_prefix("file.new", book, false)?;
@@ -275,4 +280,17 @@ fn close_window(s: &mut Session, p: &Json) -> Result<Json> {
     }
     s.close_window(id);
     Ok(json!({"closed": true, "document": true}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_workbook_rejects_non_string_prefixes() {
+        let mut session = Session::default();
+        assert!(new_workbook(&mut session, &json!({"bookPrefix": 42})).is_err());
+        assert!(new_workbook(&mut session, &json!({"sheetPrefix": false})).is_err());
+        assert!(new_workbook(&mut session, &json!({})).is_ok());
+    }
 }

@@ -280,7 +280,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
                 ("Show Legend Keys", "dataTableKeys", table.show_keys),
                 ("Horizontal Borders", "dataTableHorizontalBorder", table.horizontal_border),
                 ("Vertical Borders", "dataTableVerticalBorder", table.vertical_border),
-                ("Outline", "dataTableOutline", table.outline),
+                ("Data Table|Outline", "dataTableOutline", table.outline),
             ] {
                 if ui.checkbox(&mut value, app.ui.language.tr(label)).changed() {
                     app.run_or_alert("chart.set", json!({"chart": id, key: value}));
