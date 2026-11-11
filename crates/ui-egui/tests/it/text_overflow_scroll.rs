@@ -470,3 +470,30 @@ fn frozen_column_gridlines_stay_put_when_scrolled() {
     let expected = [a5.left(), a5.right(), b5.right()].map(|x| x.round() - 0.5);
     assert!(verticals.iter().all(|x| expected.iter().any(|e| (x - e).abs() <= 0.5)), "only A and B's edges: {verticals:?} vs {expected:?}");
 }
+
+/// The line gap above wrapped text moves the line down, so a top-aligned line in a row of the
+/// default height must still fit whole and be drawn: the gap is above the glyphs, with no
+/// leading below them for the partial-line check to trip on.
+#[test]
+fn wrapped_top_aligned_line_in_a_default_row_is_drawn() {
+    const TEXT: &str = "Fits";
+    let h = harness(|s| {
+        s.execute("cell.set", json!({"cell": "B3", "input": TEXT})).unwrap();
+        s.execute("home.wrapText", json!({"range": "B3", "on": true})).unwrap();
+        s.execute("home.formatCells", json!({"range": "B3", "style": {"align": {"v": "Top"}}})).unwrap();
+    });
+    let cell = cell_rect(&h, "B3");
+    let (text, clip) = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            Shape::Text(t) if t.galley.job.text == TEXT => Some((t.clone(), shape.clip_rect)),
+            _ => None,
+        })
+        .expect("the wrapped text is drawn");
+    assert_eq!(text.galley.rows.len(), 1);
+    let line = text.galley.rows[0].rect().translate(text.pos.to_vec2());
+    assert!(line.top() > cell.top() && line.bottom() <= cell.bottom() + 0.01, "the line fits the row: line={line:?}, cell={cell:?}");
+    assert!(clip.height() >= line.height() - 0.5, "the whole line is visible: clip={clip:?}, line={line:?}");
+}
