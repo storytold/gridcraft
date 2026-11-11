@@ -539,15 +539,23 @@ fn resolve_pending(
     shared_attaches
 }
 
-/// The other cells of a legacy array formula hold only cached results: dropped, as when an
-/// .xlsx is read, so that the formula fills its range on recalculation. If the formula itself
-/// couldn't be imported, they keep their values.
-fn blank_array_followers(st: &mut SheetState<'_>, pending: &[Pending]) {
+/// Move stored legacy-array followers into the sparse spill cache, as the XLSX reader does.
+/// Cached open needs both their values and the declared range before any formula is evaluated.
+/// An array whose formula could not be imported keeps its results as ordinary values.
+fn cache_array_followers(st: &mut SheetState<'_>, pending: &[Pending]) {
     for p in pending {
-        let filled = st.sheet.cell(p.anchor).and_then(|c| c.formula.as_ref()).and_then(|f| f.array).is_some_and(|r| r.contains(p.pos));
-        if p.pos != p.anchor && filled {
-            let style = st.sheet.style_id(p.pos);
-            st.sheet.cells.set(p.pos, Cell { value: Value::Empty, formula: None, style, py: None });
+        let range = st.sheet.cell(p.anchor).and_then(|c| c.formula.as_ref()).and_then(|f| f.array).filter(|r| r.contains(p.pos));
+        if let Some(range) = range {
+            // The anchor registers the range even if no follower has a stored result.
+            st.sheet.spill_ranges.insert(p.anchor, range);
+            if p.pos != p.anchor {
+                let value = st.sheet.value(p.pos);
+                if !value.is_empty() {
+                    st.sheet.spill.insert(p.pos, value);
+                }
+                let style = st.sheet.style_id(p.pos);
+                st.sheet.cells.set(p.pos, Cell { value: Value::Empty, formula: None, style, py: None });
+            }
         }
     }
 }
@@ -608,7 +616,7 @@ fn worksheet(
     let (arrays, shared) = (std::mem::take(&mut st.arrays), std::mem::take(&mut st.shared));
     let pending = std::mem::take(&mut st.pending);
     resolve_pending(&mut st, &arrays, &shared, &pending);
-    blank_array_followers(&mut st, &pending);
+    cache_array_followers(&mut st, &pending);
     if st.dropped > 0 {
         report.warn(format!("{} cells outside the grid were skipped.", st.dropped));
     }

@@ -99,11 +99,17 @@ pub struct Sheet {
     /// Static pictures are sparse rich content. Ordinary cells carry no picture pointer.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "picture_map")]
     pub cell_pictures: BTreeMap<CellRef, Arc<CellPicture>>,
-    /// Values spilled by dynamic-array formulas (maintained by calc), keyed by cell.
-    #[serde(skip)]
+    /// Cached spill values (maintained by calc), kept in native JSON so cached open does not
+    /// need to evaluate their anchors. Sparse caches stay sparse, including blank followers.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "crate::cellmap")]
     pub spill: BTreeMap<CellRef, Value>,
-    /// Anchor → spill range.
-    #[serde(skip)]
+    /// Anchor → spill range, including 1 × 1 arrays and arrays without import flags.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "crate::cellmap::serialize",
+        deserialize_with = "read_spill_ranges"
+    )]
     pub spill_ranges: BTreeMap<CellRef, RangeRef>,
     pub cols: BTreeMap<u32, LineInfo>,
     pub rows: BTreeMap<u32, LineInfo>,
@@ -173,6 +179,19 @@ pub struct Sheet {
 
 fn yes() -> bool {
     true
+}
+
+/// Saved ranges are sparse metadata, never a request to allocate all their cells. Reject an
+/// invalid extent before calculation or legacy-array edit checks can use file-provided bounds.
+/// An invalid entry rejects the sheet; silently dropping it could allow editing inside an array.
+fn read_spill_ranges<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BTreeMap<CellRef, RangeRef>, D::Error> {
+    let ranges: BTreeMap<CellRef, RangeRef> = crate::cellmap::deserialize(d)?;
+    for (anchor, range) in &ranges {
+        if range.start != *anchor || !range.end.is_valid() || range.end.row < anchor.row || range.end.col < anchor.col {
+            return Err(serde::de::Error::custom(format!("invalid cached spill range at `{}`", anchor.a1())));
+        }
+    }
+    Ok(ranges)
 }
 
 /// Default width of a column and height of a row (pixels at 96 dpi) for the default font.
@@ -683,6 +702,48 @@ fn line_at(pos: f64, default: f64, custom: &BTreeMap<u32, LineInfo>, max: u32) -
 mod tests {
     use super::*;
     use crate::cell::Formula;
+
+    #[test]
+    fn json_without_spill_fields_remains_readable() {
+        let mut json = serde_json::to_value(Sheet::new("S")).unwrap();
+        let object = json.as_object_mut().unwrap();
+        object.remove("spill");
+        object.remove("spill_ranges");
+        let sheet: Sheet = serde_json::from_value(json).unwrap();
+        assert!(sheet.spill.is_empty());
+        assert!(sheet.spill_ranges.is_empty());
+    }
+
+    /// The diagnostic must locate the bad entry, not just the first saved range.
+    #[test]
+    fn json_cached_spill_error_identifies_the_invalid_anchor() {
+        let mut sheet = Sheet::new("S");
+        let valid = CellRef::new(0, 0);
+        let invalid = CellRef::parse("F9").unwrap();
+        sheet.spill_ranges.insert(valid, RangeRef::cell(valid));
+        sheet.spill_ranges.insert(invalid, RangeRef { start: invalid, end: CellRef::new(gridcraft_core::MAX_ROWS, invalid.col) });
+        let json = serde_json::to_vec(&sheet).unwrap();
+        let error = serde_json::from_slice::<Sheet>(&json).unwrap_err().to_string();
+        assert!(error.contains("invalid cached spill range"), "{error}");
+        assert!(error.contains("`F9`"), "the invalid anchor must be named: {error}");
+    }
+
+    #[test]
+    fn json_rejects_invalid_cached_spill_bounds() {
+        let anchor = CellRef::new(1, 1);
+        for (key, range) in [
+            ("B2", RangeRef { start: anchor, end: CellRef::new(gridcraft_core::MAX_ROWS, 1) }),
+            ("B2", RangeRef { start: anchor, end: CellRef::new(1, gridcraft_core::MAX_COLS) }),
+            ("B2", RangeRef { start: anchor, end: CellRef::new(0, 1) }),
+            ("B2", RangeRef { start: anchor, end: CellRef::new(1, 0) }),
+            ("A1", RangeRef::cell(anchor)),
+            ("invalid", RangeRef::cell(anchor)),
+        ] {
+            let mut json = serde_json::to_value(Sheet::new("S")).unwrap();
+            json["spill_ranges"] = serde_json::json!({key: range});
+            assert!(serde_json::from_value::<Sheet>(json).is_err(), "{key}: {range:?}");
+        }
+    }
 
     /// `LineIndex::visible` lists exactly the lines a line-by-line size check shows, for hidden
     /// runs at the start, in the middle and up to the end of the axis, custom sizes (zero and

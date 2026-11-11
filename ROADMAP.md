@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-05 · **Change:** minor (CJK fallback text shares the Latin baseline; earlier: form controls: buttons, sliders and spin buttons; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-10 · **Change:** minor (CJK fallback text shares the Latin baseline; earlier: form controls: buttons, sliders and spin buttons; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -261,10 +261,25 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-06 | M0–M13 first pass: engine, 478 functions, XLSX/CSV, egui UI, charts, PivotTables with XLSX round-trip, PDF and printing, what-if, spelling, Draw, task panes, MCP, CLI, web build, release packaging |
 | 2026-10-05 | Repository created |
 
+## Compatibility hardening: imported values (#2770)
+
+Cache-preserving open, missing-result calculation, an explicit full-recalc opt-in and a
+stale-cache warning build on #2308. A missing function no longer makes its call implicitly volatile on every edit;
+argument edits and supported dynamic references continue to recalculate. Synthetic
+engine lifecycle regressions cover this scope. Sparse cached array followers survive export
+beyond a million positions, and declared legacy-array ranges protect uncached followers
+from partial content edits, including Clear Contents and Clear All. Whole-array
+selection unions remain clearable; filter-hidden rows are excluded from the footprint.
+Missing array anchors retain stored followers when evaluation fails or produces no
+placeable replacement array. Accepted multi-cell metadata survives saturation by single-cell
+array metadata. The freshness notice includes follower-only caches. Structural edits still
+perform a full recalc; readiness estimates and migration qualification are unchanged.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | Honour fullCalcOnLoad unless an explicit recalculation parameter overrides it; report the chosen policy in the info bar without a modal; keep the writer's missing-result flag and explicitly unflag cache-preserving fixtures. |
 | 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |
 | 2026-11-05 | minor | Reconcile upstream form-control progress with the CJK baseline update |
 | 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |
@@ -280,8 +295,15 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | minor | Progress log: Recently Used and Insert Function categories |
 | 2026-10-31 | minor | Progress log: Function Library |
 | 2026-10-31 | minor | Progress log: shared CJK/Latin baselines in cells, editors and window titles |
-| 2026-10-26 | minor | Progress log: Arabic bidi display and editing |
+| 2026-10-30 | trivial | Imported formula results update: 2026-10-30 · Cache-preserving open, missing-result calculation and explicit recalculation build on #2308 by @mrzv. Saved results can be stale; structural edits still perform full recalculation. Readiness estimates unchanged. |
+| 2026-10-30 | minor | Reject partial Clear Contents/Clear All selections inside legacy arrays using declared ranges, including missing cached followers; allow whole-array selection unions and respect filter-hidden rows. |
+| 2026-10-30 | minor | Preserve XLSX legacy/dynamic array follower caches in spill storage and retain bounded ranges, so cached open and save/reopen do not lose stored array results; explicit full recalculation remains supported. |
+| 2026-10-30 | minor | Keep stored array followers when a missing anchor cannot produce a replacement; retain accepted multi-cell range metadata after single-cell metadata saturation; include follower-only caches in the freshness notice. |
+| 2026-10-30 | minor | Export sparse array caches by stored entries without the million-cell cutoff; protect missing legacy-array followers using declared ranges, including when no follower cache exists. |
+| 2026-10-28 | trivial | Keep the stale formula-cache warning visible ahead of overflowing import warnings; a synthetic XLSX regression verifies the visible notice, retained warnings and overflow count |
+| 2026-10-28 | minor | Cache-preserving imported formula open and explicit recalculation, building on #2308; synthetic lifecycle coverage, remaining structural-recalc limitation (#2770). |
 | 2026-10-26 | minor | Progress log: Arabic font fallback |
+| 2026-10-26 | minor | Progress log: Arabic bidi display and editing |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-24 | minor | Macro interface on the Automate tab; progress log row |
 | 2026-10-24 | minor | Macro engine and `macro.*` commands; catalog 275 / 291 → 276 / 292 (View › Macros › Record Macro); progress log row |

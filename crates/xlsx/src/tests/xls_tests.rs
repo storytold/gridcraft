@@ -343,12 +343,13 @@ fn assert_formula_roundtrip(wb: &gridcraft_model::Workbook) {
     // Shared formula: relative offsets resolve per cell.
     assert_eq!(ftext(wb, "B5").as_deref(), Some("A5*10"));
     assert_eq!(ftext(wb, "B6").as_deref(), Some("A6*10"));
-    // Array formula: the anchor holds it; the other cell's cached result is dropped so that
-    // the formula fills the range on recalculation (as when an .xlsx is read, #156).
+    // The anchor keeps the legacy formula; followers stay in the sparse spill cache so a
+    // cache-preserving open can display them before any recalculation.
     let c5 = wb.sheets[0].cell(CellRef::parse("C5").unwrap()).unwrap().formula.clone().unwrap();
     assert_eq!((c5.text.as_str(), c5.array), ("A5:A6*2", Some(RangeRef::parse("C5:C6").unwrap())));
     assert_eq!(ftext(wb, "C6"), None);
-    assert_eq!(v(wb, 0, "C6"), Value::Empty);
+    assert_eq!(v(wb, 0, "C6"), Value::Number(4.0));
+    assert_eq!(wb.sheets[0].spill_ranges.get(&CellRef::parse("C5").unwrap()), Some(&RangeRef::parse("C5:C6").unwrap()));
 }
 
 fn assert_layout_roundtrip(wb: &gridcraft_model::Workbook) {
@@ -759,5 +760,46 @@ fn xls_short_window2_is_ignored() {
         let sh = &wb.sheets[0];
         assert_eq!((sh.right_to_left, sh.show_gridlines, sh.show_headings, sh.show_zeros), (false, true, true, true));
         assert_eq!(v(&wb, 0, "A1"), Value::Number(7.0));
+    }
+}
+
+/// Import moves only stored array followers into the cache and retains the declared range.
+#[test]
+fn legacy_array_follower_caches_stay_sparse_on_import_and_xlsx_save() {
+    let array = cat(&[&[0x65], &u16s(&[4, 5, 0xC000, 0xC000]), &ptg_int(2), &[0x05]]);
+    let array_record = rec(0x0221, &cat(&[&u16s(&[4, 5]), &[2, 2], &[0; 6], &(array.len() as u16).to_le_bytes(), &array]));
+    let follower = formula(5, 2, num(4.0), &exp(4, 2));
+    for (cached, expected) in [
+        (Some(num(4.0)), Value::Number(4.0)),
+        (Some(num(0.0)), Value::Number(0.0)),
+        (Some(special(1, 0)), Value::Bool(false)),
+        (Some(special(2, 0x07)), Value::Error(CellError::Div0)),
+        (Some(special(3, 0)), Value::from("")),
+        (None, Value::Empty),
+    ] {
+        let mut stream = sample(false);
+        let a = stream.windows(array_record.len()).position(|w| w == array_record).unwrap();
+        // Extend the declaration to C7, without adding a stored follower or changing offsets.
+        stream[a + 6..a + 8].copy_from_slice(&6u16.to_le_bytes());
+        let at = stream.windows(follower.len()).position(|w| w == follower).unwrap();
+        if let Some(value) = cached {
+            stream[at + 10..at + 18].copy_from_slice(&value);
+        } else {
+            // An unknown record of the same length leaves every BoundSheet offset intact.
+            stream[at..at + 2].copy_from_slice(&0xFFFFu16.to_le_bytes());
+        }
+        let (wb, _) = read_xls(&compound("Workbook", &stream)).unwrap();
+        let (roundtrip, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+        for book in [&wb, &roundtrip] {
+            let sheet = &book.sheets[0];
+            let range = RangeRef::parse("C5:C7").unwrap();
+            let c6 = CellRef::parse("C6").unwrap();
+            assert_eq!(sheet.spill_ranges.get(&range.start), Some(&range));
+            assert_eq!(sheet.value(range.start), Value::Number(2.0));
+            assert_eq!(sheet.value(c6), expected);
+            assert_eq!(sheet.spill.get(&c6), (!expected.is_empty()).then_some(&expected));
+            assert!(!sheet.spill.contains_key(&range.end), "a genuinely missing follower stays sparse");
+            assert!(sheet.cell(c6).is_none_or(|cell| cell.formula.is_none() && cell.value.is_empty()));
+        }
     }
 }
