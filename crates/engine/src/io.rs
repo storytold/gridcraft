@@ -87,10 +87,16 @@ pub fn open_bytes_measured(
     csv_as_text: bool,
     measure: Option<&crate::TextWidth>,
 ) -> Result<(Workbook, Vec<String>)> {
+    let (mut wb, warnings) = open_bytes_unfitted(name, bytes, password, csv_as_text)?;
+    fit_imported_rows(&mut wb, measure);
+    Ok((wb, warnings))
+}
+
+/// [`open_bytes_with`] without fitting the rows to their text: the caller fits them later with
+/// [`fit_imported_rows`], once it can measure the text with the workbook's own fonts.
+pub fn open_bytes_unfitted(name: &str, bytes: &[u8], password: Option<&str>, csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
     if gridcraft_xlsx::sniff(bytes) != gridcraft_xlsx::Format::Encrypted {
-        let (mut wb, warnings) = open_plain(name, bytes, csv_as_text)?;
-        fit_imported_rows(&mut wb, measure);
-        return Ok((wb, warnings));
+        return open_plain(name, bytes, csv_as_text);
     }
     // A scheme no password opens is said straight away, rather than after asking for one.
     let decrypt_error = |e: gridcraft_xlsx::DecryptError| EngineError::Other(decrypt_message(name, e));
@@ -102,8 +108,7 @@ pub fn open_bytes_measured(
     if gridcraft_xlsx::sniff(&plain) == gridcraft_xlsx::Format::Encrypted {
         return Err(EngineError::Other(format!("We can't open '{name}': the encrypted file is damaged (it holds another encrypted file).")));
     }
-    let (mut wb, mut warnings) = open_plain(name, &plain, csv_as_text)?;
-    fit_imported_rows(&mut wb, measure);
+    let (wb, mut warnings) = open_plain(name, &plain, csv_as_text)?;
     warnings.insert(0, DECRYPTED_NOTICE.into());
     Ok((wb, warnings))
 }
@@ -112,7 +117,7 @@ pub fn open_bytes_measured(
 /// height grow to fit their content. Rows the file made taller keep their height — our
 /// line-height estimate can differ from Excel's, and shrinking files that already look
 /// right would be a visible regression. Custom-height rows are left alone entirely.
-fn fit_imported_rows(wb: &mut Workbook, measure: Option<&crate::TextWidth>) {
+pub fn fit_imported_rows(wb: &mut Workbook, measure: Option<&crate::TextWidth>) {
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheet(si) else { continue };
         let mut rows: Vec<u32> = sh.cells.iter().map(|(c, _)| c.row).collect();

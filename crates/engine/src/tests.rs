@@ -6360,6 +6360,30 @@ fn file_open_fits_rows_with_the_sessions_measure() {
     let narrow = opened(Some(std::sync::Arc::new(|text: &str, _: &gridcraft_model::Font, _| text.chars().count() as f32 * 4.0)));
     assert!(estimate > one_line + 1.0, "the estimate folds the text");
     assert_eq!(narrow, one_line, "the session's measure fits it on one line");
+
+    // A front end that installs a workbook's fonts after it opens asks `file.open` to wait: the
+    // rows fit when it says the fonts are ready, with the measure it has then.
+    let mut s = Session::new();
+    s.text_width = Some(std::sync::Arc::new(|text: &str, _: &gridcraft_model::Font, _| text.chars().count() as f32 * 4.0));
+    s.defer_row_fit = true;
+    s.execute("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+    assert!(s.doc().unwrap().rows_unfit);
+    // The fonts arrive, and with them wider text: it folds now.
+    s.text_width = Some(std::sync::Arc::new(|text: &str, _: &gridcraft_model::Font, _| text.chars().count() as f32 * 6.0));
+    let revision = s.doc().unwrap().revision;
+    assert!(s.fit_deferred_rows());
+    let d = s.doc().unwrap();
+    assert!(d.wb.sheets[0].row_height(0) > one_line + 1.0, "fitted with the measure it has now");
+    assert!(!d.rows_unfit && d.revision > revision);
+    assert!(!d.is_dirty(), "fitting on open is no change to save");
+    assert!(d.undo.is_empty());
+    assert!(!s.fit_deferred_rows(), "once");
+    // Without a measure there is nothing to wait for: the rows fit on open, with the estimate.
+    let mut s = Session::new();
+    s.defer_row_fit = true;
+    s.execute("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+    assert!(!s.doc().unwrap().rows_unfit);
+    assert_eq!(s.doc().unwrap().wb.sheets[0].row_height(0), estimate);
 }
 
 /// A per-test unique suffix for temp dir names.

@@ -224,6 +224,8 @@ pub struct DocState {
     /// The references `edit.goTo` with `record: true` went to in this document, newest first,
     /// without names, each area written with its sheet (`Sheet1!B14:C22,Sheet1!F19:G30`).
     pub go_to_recent: Vec<String>,
+    /// Opened with [`Session::defer_row_fit`]: its rows wait for [`Session::fit_deferred_rows`].
+    pub rows_unfit: bool,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -330,6 +332,7 @@ impl DocState {
             touched: None,
             edits: None,
             go_to_recent: vec![],
+            rows_unfit: false,
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -531,9 +534,32 @@ pub struct Session {
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
+    /// `file.open` leaves the rows of wrapped text unfitted, for [`Session::fit_deferred_rows`]:
+    /// the desktop app installs a workbook's fonts only once it is open, and rows measured before
+    /// that come out with another font's widths. Only with a `text_width`; host code sets it.
+    pub defer_row_fit: bool,
 }
 
 impl Session {
+    /// Fits the rows of the workbooks opened with [`Session::defer_row_fit`], with
+    /// [`Session::text_width`], as opening would have. A workbook with no changes stays unchanged
+    /// for Save. Returns whether any workbook was fitted.
+    pub fn fit_deferred_rows(&mut self) -> bool {
+        let measure = self.text_width.clone();
+        let mut any = false;
+        for d in self.docs.iter_mut().filter(|d| d.rows_unfit) {
+            d.rows_unfit = false;
+            let clean = !d.is_dirty();
+            io::fit_imported_rows(Arc::make_mut(&mut d.wb), measure.as_ref());
+            if clean {
+                d.saved = d.wb.clone();
+            }
+            d.revision += 1;
+            any = true;
+        }
+        any
+    }
+
     pub fn new() -> Session {
         Session::default()
     }

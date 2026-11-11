@@ -123,6 +123,7 @@ impl SheetApp {
                 self.open_path(&path);
             }
         }
+        self.fit_rows_once_fonts_settle();
         if let Some(answer) = self.desktop_theme.take_change() {
             self.desktop_dark = Some(answer);
         }

@@ -29,7 +29,10 @@ fn book() -> TempBook {
     s.execute("home.wrapText", json!({"range": "A1:A3", "on": true})).unwrap();
     let mut wb = (*s.active().unwrap().wb).clone();
     std::sync::Arc::make_mut(&mut wb.sheets[0]).rows.clear();
-    let path = std::env::temp_dir().join(format!("gridcraft-rows-fit-{}.xlsx", std::process::id()));
+    // One file per test: the tests run side by side, and each removes its own.
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("gridcraft-rows-fit-{}-{n}.xlsx", std::process::id()));
     std::fs::write(&path, gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
     TempBook(path)
 }
@@ -58,6 +61,38 @@ fn a_startup_file_opens_on_the_first_frame_with_rows_fit_by_the_grids_fonts() {
     let measure = app.session.text_width.clone().expect("the grid's measure is installed");
     let bytes = std::fs::read(path).unwrap();
     let (expected, _) = gridcraft_engine::io::open_bytes_measured("book.xlsx", &bytes, None, false, Some(&measure)).unwrap();
+    for row in 0..3 {
+        assert_eq!(d.wb.sheets[0].row_height(row), expected.sheets[0].row_height(row), "row {}", row + 1);
+    }
+    assert!(!d.rows_unfit && !d.is_dirty(), "fitted once the fonts were ready, with nothing to save");
+}
+
+/// A workbook opened once the app is running fits its rows on a later frame, after its fonts are
+/// installed, and with the grid's measure.
+#[test]
+fn a_workbook_opened_later_fits_its_rows_once_its_fonts_are_ready() {
+    let book = book();
+    let path = &book.0;
+    let mut s = Session::new();
+    s.new_workbook();
+    let app = crate::common::app(s);
+    let mut h = crate::common::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(2);
+    h.state_mut().open_path(&path.to_string_lossy());
+    assert!(h.state().session.active().unwrap().rows_unfit, "the rows wait for the fonts");
+    h.run_steps(2);
+    let app = h.state();
+    let d = app.session.active().unwrap();
+    assert!(!d.rows_unfit && !d.is_dirty());
+    let measure = app.session.text_width.clone().expect("the grid's measure is installed");
+    let (expected, _) = gridcraft_engine::io::open_bytes_measured("book.xlsx", &std::fs::read(path).unwrap(), None, false, Some(&measure)).unwrap();
     for row in 0..3 {
         assert_eq!(d.wb.sheets[0].row_height(row), expected.sheets[0].row_height(row), "row {}", row + 1);
     }
