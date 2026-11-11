@@ -682,15 +682,16 @@ const CLIPBOARD_HTML_MAX_BYTES: usize = 4 * 1024 * 1024;
 const CLIPBOARD_HTML_MAX_CELLS: u64 = 10_000;
 
 /// An HTML fragment for the same range as `plain_text`, previously produced by
-/// `display::range_text`. Large copies keep plain text only; never return a partial table.
-pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &str) -> Option<String> {
+/// `display::range_text_in`. Large copies keep plain text only; never return a partial table.
+pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &str, locale: &gridcraft_numfmt::Locale) -> Option<String> {
     let r = crate::display::clipboard_range(r);
     if r.count() > CLIPBOARD_HTML_MAX_CELLS || plain_text.len() > CLIPBOARD_HTML_MAX_BYTES {
         return None;
     }
     let sh = wb.sheet(sheet)?;
     let mut out = ClipboardHtml(String::new());
-    write!(out, "<table{} style=\"border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt\">", table_dir(sh)).ok()?;
+    let region = base64_encode(crate::entry::locale_snapshot(locale).to_string().as_bytes());
+    write!(out, "<table{} data-gridcraft-region-v1=\"{region}\" style=\"border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt\">", table_dir(sh)).ok()?;
     for row in r.start.row..=r.end.row {
         if sh.is_row_hidden(row) {
             continue;
@@ -710,10 +711,32 @@ pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &
             };
             // Use the visible selected cell, even when the merge's original anchor
             // is outside the range or hidden. This matches the plain-text copy.
-            let text = crate::display::cell_text(wb, sh, c);
+            let text = crate::display::cell_text_in(wb, sh, c, locale);
             let dir = CellDir::of(sh, c, &text);
             let css = html_cell_css(wb, sh, c, dir);
-            write!(out, "<td style=\"border:1px solid #d4d4d4;padding:2px 4px;white-space:pre-wrap;{css}\"{}{span}>", dir.attr()).ok()?;
+            let mut number = String::new();
+            if let gridcraft_core::Value::Number(value) = sh.value(c)
+                && value.is_finite()
+            {
+                write!(number, " data-gridcraft-number-v1=\"{value}\"").ok()?;
+                let stored_format = &wb.styles.get(sh.style_id(c)).num_fmt;
+                let captured_format = if stored_format.as_str().chars().take(256).count() <= 255 {
+                    stored_format.clone()
+                } else {
+                    gridcraft_model::NumFmt::new("General")
+                };
+                let encoded_format = base64_encode(&serde_json::to_vec(&captured_format).ok()?);
+                write!(number, " data-gridcraft-format-v1=\"{encoded_format}\"").ok()?;
+                let format = crate::display::number_format(captured_format.as_str());
+                if format.date_shape(value).is_some_and(|(calendar, _)| calendar) {
+                    let epoch = match wb.date_system {
+                        gridcraft_core::DateSystem::D1900 => "1900",
+                        gridcraft_core::DateSystem::D1904 => "1904",
+                    };
+                    write!(number, " data-gridcraft-calendar-v1=\"{epoch}\"").ok()?;
+                }
+            }
+            write!(out, "<td style=\"border:1px solid #d4d4d4;padding:2px 4px;white-space:pre-wrap;{css}\"{}{span}{number}>", dir.attr()).ok()?;
             let mut chars = text.chars().peekable();
             while let Some(ch) = chars.next() {
                 match ch {

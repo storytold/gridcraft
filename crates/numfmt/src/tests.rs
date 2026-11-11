@@ -890,6 +890,68 @@ fn closed_brackets_still_hold_their_semicolons() {
     assert_eq!(f("\"[\"0;0", 5.0), "[5");
 }
 
+/// Regional separators and built-in dates preserve literal tokens and custom date order;
+/// the invariant formatter and unknown-region fallback retain en-US conventions.
+#[test]
+fn regional_display_formats() {
+    let f = |v: f64, code: &str, tag: &str| {
+        format_value_in(&Value::Number(v), &NumberFormat::parse(code), DateSystem::D1900, &Locale::from_tag(tag)).text
+    };
+    // Swiss German: apostrophe groups, point decimals, dd.mm.yyyy for the built-in short date.
+    assert_eq!(f(1169.0, "#,##0.00", "de-CH"), "1'169.00");
+    assert_eq!(f(45292.0, "m/d/yyyy", "de_CH.UTF-8"), "01.01.2024");
+    assert_eq!(f(45292.5, "m/d/yyyy h:mm", "de-CH"), "01.01.2024 12:00");
+    // Accounting format with a literal and a fill: only the number's separators change.
+    let acct = r#"_-* #,##0.00\ "CHF"_-;\-* #,##0.00\ "CHF"_-;_-* "-"??\ "CHF"_-;_-@_-"#;
+    assert_eq!(f(2509.0, acct, "de-CH").trim(), "2'509.00 CHF");
+    // Germany: comma decimals, point groups; a quoted "." stays a point.
+    assert_eq!(f(1234.5, "#,##0.00", "de-DE"), "1.234,50");
+    assert_eq!(f(1.5, r#"0.00" Fr."#, "de-DE"), "1,50 Fr.");
+    assert_eq!(f(0.5, "General", "de-DE"), "0,5");
+    // A number in a text section is shown as General is, regional decimal included; the
+    // section's own "." stays a point.
+    assert_eq!(f(1.5, r#"@" Nr.";0"#, "de-DE"), "1,5 Nr.");
+    assert_eq!(f(1234567.0, "0.00E+00", "de-DE"), "1,23E+06");
+    assert_eq!(f(1234.75, "#,##0 ?/?", "de-DE"), "1.234 3/4");
+    // France groups with a narrow no-break space.
+    assert_eq!(f(1234567.891, "#,##0.00", "fr-FR"), "1\u{202F}234\u{202F}567,89");
+    // A custom date code is shown as written; en-US and unknown regions are unchanged.
+    assert_eq!(f(45292.0, "dd/mm/yyyy", "de-CH"), "01/01/2024");
+    assert_eq!(f(45292.0, "m/d/yyyy", "en-US"), "1/1/2024");
+    assert_eq!(f(1234.5, "#,##0.00", "xx-YY"), "1,234.50");
+    assert_eq!(Locale::from_tag(""), Locale::EN_US);
+    // The region decides: English with Swiss formats, as macOS reports it.
+    assert_eq!(Locale::from_tag("en_CH"), Locale::from_tag("de-CH"));
+    assert_eq!(Locale::from_tag("en-CH").group, '\'');
+    assert_eq!(Locale::from_tag("de").decimal, ',');
+    assert_eq!(Locale::from_tag("en-AU"), Locale::EN_US);
+    assert_eq!(Locale::from_tag("zh-Hans-CN").short_date, "yyyy/m/d");
+    // format_value is en-US whatever the region.
+    assert_eq!(format_value(&Value::Number(1234.5), &NumberFormat::parse("#,##0.00"), DateSystem::D1900).text, "1,234.50");
+}
+
+/// Turkish region and language tags share CLDR separators and numeric date order in display and entry.
+#[test]
+fn turkish_tags_format_and_parse_with_the_same_numeric_conventions() {
+    for tag in ["tr-TR", "tr_TR.UTF-8", "tr", "tr-Latn-TR", "en-TR"] {
+        let loc = Locale::from_tag(tag);
+        assert_eq!(loc.decimal, ',');
+        assert_eq!(loc.group, '.');
+        assert_eq!(loc.short_date, "d.mm.yyyy");
+        assert_eq!(loc.clone().with_icu_short_date("d.MM.y"), loc);
+        let number = format_value_in(&Value::Number(1234.5), &NumberFormat::parse("#,##0.00"), S, &loc);
+        assert_eq!(number.text, "1.234,50");
+        let date = format_value_in(&Value::Number(45292.0), &NumberFormat::parse("m/d/yyyy"), S, &loc);
+        assert_eq!(date.text, "1.01.2024");
+        for sys in [DateSystem::D1900, DateSystem::D1904] {
+            let number = loc.canonical_input("1,234", sys, "General");
+            assert_eq!(gridcraft_core::parse::parse_input(&number, sys).value, Value::Number(1.234));
+            let date = loc.canonical_input("4.03.2026", sys, &loc.short_date);
+            assert_eq!(gridcraft_core::parse::parse_input(&date, sys).value, gridcraft_core::parse::parse_input("2026-03-04", sys).value);
+        }
+    }
+}
+
 const JAN_1_2001: f64 = 36892.0;
 
 #[test]
@@ -1239,4 +1301,17 @@ fn round_as_displayed_matches_excel() {
     assert_eq!(r("0%%%%%%%%%%%%%%%%%%%%%%%%", f64::MAX), f64::MAX);
     assert_eq!(r("0", f64::MAX), f64::MAX);
     assert_eq!(r("0.0E+0", f64::MIN_POSITIVE), 2.2e-308);
+}
+
+/// Shared precision layouts keep numeric rounding independent of regional display separators.
+#[test]
+fn regional_display_after_precision_rounding_uses_the_requested_separators() {
+    for (code, value, ro, swiss) in [("#,##0.00", 1234.5678, "1.234,57", "1'234.57"), ("#,##0 ?/?", 1234.75, "1.234 3/4", "1'234 3/4")] {
+        let format = NumberFormat::parse(code);
+        let rounded = format.round_as_displayed(value);
+        for (tag, expected) in [("ro-RO", ro), ("de-CH", swiss)] {
+            let shown = format_value_in(&Value::Number(rounded), &format, S, &Locale::from_tag(tag));
+            assert_eq!(shown.text, expected, "{tag}: {code}");
+        }
+    }
 }

@@ -160,7 +160,7 @@ impl CaptureGeometry {
         w.checked_mul(h)?.checked_mul(4)
     }
 
-    /// Checked bytes of the largest image [`validate_image`] accepts for this geometry: one
+    /// Checked bytes of the largest image `validate_image` accepts for this geometry: one
     /// physical pixel of rounding per axis. Reservations and the slot's per-image bound both use
     /// this, so the aggregate budget is strict for the bytes actually retained.
     pub fn retained_bytes(&self) -> Option<usize> {

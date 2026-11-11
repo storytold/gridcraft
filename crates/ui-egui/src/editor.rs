@@ -28,6 +28,8 @@ pub struct EditState {
     pub sheet_order: u64,
     /// Syntax of this edit, captured when it starts (prevents a language switch reinterpreting it).
     pub locale: gridcraft_engine::formula::FormulaLocale,
+    /// Numeric conventions captured with this draft, independently of its formula language.
+    pub number_locale: gridcraft_engine::numfmt::Locale,
     pub cell: CellRef,
     pub text: String,
     /// Started by typing (Enter mode: arrows commit) rather than F2 (Edit mode: arrows move the caret).
@@ -82,6 +84,7 @@ impl EditState {
             py_cell: false,
             sheet_order: 0,
             locale: Default::default(),
+            number_locale: Default::default(),
             cell,
             text,
             enter_mode,

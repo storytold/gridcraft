@@ -5,6 +5,8 @@
 
 mod calendar;
 mod decimal;
+mod entry;
+mod locale;
 mod parse;
 mod render;
 
@@ -13,6 +15,7 @@ use std::sync::Arc;
 use gridcraft_core::{CellError, DateSystem, Value};
 
 pub use decimal::format_general_fit;
+pub use locale::Locale;
 
 use parse::{DatePart, SecKind, Section, Tok};
 use render::Out;
@@ -200,6 +203,24 @@ impl NumberFormat {
         self.num_sections().iter().any(|s| s.kind == SecKind::Date)
     }
 
+    /// Whether an input snapshot has exactly one numeric year, month and day, without time or names.
+    pub fn has_numeric_calendar_order(&self) -> bool {
+        if self.calendar_order().is_none() {
+            return false;
+        }
+        let Some(section) = self.num_sections().iter().find(|s| s.kind == SecKind::Date) else { return false };
+        let mut count = 0;
+        for token in &section.toks {
+            if let Tok::Date(part) = token {
+                if !matches!(*part, DatePart::Year(_) | DatePart::Month(1 | 2) | DatePart::Day(1 | 2)) {
+                    return false;
+                }
+                count += 1;
+            }
+        }
+        count == 3
+    }
+
     /// For a date or time format, whether the section that formats `value` shows calendar parts (year, month,
     /// day) and whether it shows time parts, as `(date, time)`. `None` for any other format and for
     /// elapsed-time codes like `[h]:mm`, whose value is a duration, not a moment.
@@ -210,6 +231,40 @@ impl NumberFormat {
             return None;
         }
         Some((parts().any(DatePart::is_calendar), parts().any(|d| !d.is_calendar())))
+    }
+
+    /// Calendar field order from the parsed format; weekday labels and time minutes are excluded.
+    pub(crate) fn calendar_order(&self) -> Option<[char; 3]> {
+        self.calendar_orders().next()
+    }
+
+    /// Candidate orders for numeric date entry; conditions are checked against each parsed value.
+    pub(crate) fn calendar_orders(&self) -> impl Iterator<Item = [char; 3]> + '_ {
+        self.num_sections().iter().filter_map(Self::section_calendar_order)
+    }
+
+    /// The same section selection used by display, including conditions and sign sections.
+    pub(crate) fn calendar_order_for(&self, value: f64) -> Option<[char; 3]> {
+        Self::section_calendar_order(self.select(value)?.0)
+    }
+
+    fn section_calendar_order(section: &Section) -> Option<[char; 3]> {
+        if section.kind != SecKind::Date {
+            return None;
+        }
+        let mut order = Vec::new();
+        for token in &section.toks {
+            let part = match token {
+                Tok::Date(DatePart::Year(_)) => 'y',
+                Tok::Date(DatePart::Month(_)) => 'm',
+                Tok::Date(DatePart::Day(1 | 2)) => 'd',
+                _ => continue,
+            };
+            if !order.contains(&part) {
+                order.push(part);
+            }
+        }
+        order.try_into().ok()
     }
 
     pub fn is_percent(&self) -> bool {
@@ -294,8 +349,14 @@ impl NumberFormat {
 
     /// Formats a number. The flag is true when the value cannot be shown (date out of range).
     fn format_number(&self, n: f64, sys: DateSystem) -> (Formatted, bool) {
+        self.format_number_in(n, sys, &Locale::EN_US)
+    }
+
+    /// Select and render the numeric section using the region's separators and short date.
+    /// The returned flag reports date/format overflow rather than a stored-value change.
+    fn format_number_in(&self, n: f64, sys: DateSystem, loc: &Locale) -> (Formatted, bool) {
         let general = |n: f64| Formatted {
-            text: format_general_fit(n, GENERAL_WIDTH).unwrap_or_else(|| OVERFLOW.into()),
+            text: localize_general(format_general_fit(n, GENERAL_WIDTH).unwrap_or_else(|| OVERFLOW.into()), loc),
             color: None,
             fill: None,
             numeric: true,
@@ -306,10 +367,10 @@ impl NumberFormat {
         let Some((sec, drop_sign)) = self.select(n) else { return (general(n), false) };
         let minus = n < 0.0 && !drop_sign;
         let out: Option<Out> = match sec.kind {
-            SecKind::Text => Some(render::render_text(sec, &format_general_fit(n, GENERAL_WIDTH).unwrap_or_default())),
+            SecKind::Text => Some(render::render_text(sec, &localize_general(format_general_fit(n, GENERAL_WIDTH).unwrap_or_default(), loc))),
             SecKind::General => {
                 let width = if minus { GENERAL_WIDTH - 1 } else { GENERAL_WIDTH };
-                Some(render::render_general(sec, n.abs(), width))
+                Some(render::render_general(sec, n.abs(), width, loc))
             }
             SecKind::Date => {
                 if minus {
@@ -318,7 +379,7 @@ impl NumberFormat {
                     render::render_date(sec, n.abs(), sys)
                 }
             }
-            SecKind::Number => Some(render::render_number(sec, n.abs())),
+            SecKind::Number => Some(render::render_number(sec, n.abs(), loc)),
         };
         let Some(mut out) = out else {
             return (Formatted { text: OVERFLOW.into(), color: sec.color, fill: None, numeric: true }, true);
@@ -395,18 +456,37 @@ impl NumberFormat {
     }
 }
 
+/// A General number in a region's decimal separator (General never groups digits).
+pub fn localize_general(text: String, loc: &Locale) -> String {
+    if loc.decimal == '.' { text } else { text.replace('.', &loc.decimal.to_string()) }
+}
+
 /// Formats a cell value for display.
 pub fn format_value(v: &Value, fmt: &NumberFormat, sys: DateSystem) -> Formatted {
+    format_value_in(v, fmt, sys, &Locale::EN_US)
+}
+
+/// Formats a cell value for display in a region's conventions: its separators for a format's `.`
+/// and `,`, and its short date for the built-in short date format.
+pub fn format_value_in(v: &Value, fmt: &NumberFormat, sys: DateSystem, loc: &Locale) -> Formatted {
+    if let Some(code) = loc.display_code(fmt.code()) {
+        return format_literal_in(v, &NumberFormat::parse_cached(&code), sys, loc);
+    }
+    format_literal_in(v, fmt, sys, loc)
+}
+
+/// Regional numeric separators, retaining a custom date code exactly as written.
+pub fn format_literal_in(v: &Value, fmt: &NumberFormat, sys: DateSystem, loc: &Locale) -> Formatted {
     match v {
         Value::Empty => Formatted::default(),
         Value::Number(n) if !n.is_finite() => Formatted { text: CellError::Num.as_str().into(), ..Formatted::default() },
-        Value::Number(n) => fmt.format_number(*n, sys).0,
+        Value::Number(n) => fmt.format_number_in(*n, sys, loc).0,
         Value::Text(t) => fmt.format_text(t),
         Value::Bool(b) => Formatted { text: if *b { "TRUE" } else { "FALSE" }.into(), ..Formatted::default() },
         Value::Error(e) => Formatted { text: e.as_str().into(), ..Formatted::default() },
         Value::Array(a) => match a.data.first() {
             Some(Value::Array(_)) | None => Formatted::default(),
-            Some(first) => format_value(first, fmt, sys),
+            Some(first) => format_literal_in(first, fmt, sys, loc),
         },
     }
 }
@@ -517,3 +597,18 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod numeric_calendar_snapshot_tests {
+    use super::NumberFormat;
+
+    #[test]
+    fn snapshot_dates_require_complete_numeric_calendar_fields() {
+        for code in ["m/d/yyyy", "dd.mm.yyyy", "yyyy-mm-dd", "dd/mm/yy"] {
+            assert!(NumberFormat::parse(code).has_numeric_calendar_order(), "{code}");
+        }
+        for code in ["h:mm", "mm:ss", "[h]:mm", "dd/mm", "dd-mmm-yyyy", "dddd, mm/dd/yyyy", "yyyy-mm-dd h:mm", "yyyy-mm-dd-dd", "General"] {
+            assert!(!NumberFormat::parse(code).has_numeric_calendar_order(), "{code}");
+        }
+    }
+}

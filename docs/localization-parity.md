@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (Ukrainian Chart is Діаграма); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-11 · **Change:** minor (regional built-in format identity and Format Cells preview corrections; earlier: Ukrainian Chart is Діаграма); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -39,6 +39,21 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so the ribbon-only languages cover **~12%** and
   Japanese and Portuguese **~43%** (measured count / estimated total).
+- **Invariant formulas/commands; regional display and interactive numeric entry.** Function names,
+  the `,` argument separator, files, ordinary commands, CSV and `TEXT()` remain en-US. Explicit
+  front-end entry, F2/formula-bar text, Ctrl+Enter and external text paste use the numeric region;
+  draft validation uses the same canonical value that will be stored. The
+  grid shows numbers and dates in the system's region (`numfmt::Locale`, from the Region setting
+  on macOS, `LC_NUMERIC` / `LC_ALL` / `LANG` on Linux and the user locale on Windows, not the
+  interface language: CH/LI, DE/AT/LU/RO, FR, GB/IE/SG, IT/ES/BR, NL, JP, CN): its decimal and digit-group
+  separators for a format's `.` and `,`, and its short date for the built-in short date format
+  (`m/d/yyyy`, number format 14, and 22 with time). On macOS, supported numeric short-date
+  customizations come from Foundation, including the `dd.MM.y` case in #2869; region overrides
+  (`@rg=…` and `u-rg-…`) take precedence. Explicit custom XLSX short-date codes retain their
+  literal order, including a custom code identical to built-in 14/22. See
+  [regional-display.md](regional-display.md) for provenance, coverage and limits. Users ask for localized function names and
+  `;` separators (#45); German with localized numbers and formulas was PR #163 (closed).
+
 - **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
   separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
   localized function names and `;` separators (#45). German with localized numbers and formulas
@@ -129,17 +144,34 @@ language (none so far) and of localized function names.
    Thai), system font fallback for CJK, bidirectional runs, right-to-left sheet tabs and printing;
    embedded subset fonts in PDF.
 
+## Percent-prefixed interactive entry
+
+Turkish interactive entry accepts `%15` as 0.15 with a percentage format. The explicit
+numeric-region snapshot carries optional boolean `percentPrefix`; omission means false,
+so older snapshots and Romanian/en-US entry keep their behavior. The invariant CLI and
+file parsers are unchanged. Currency-prefixed `₺46,00` remains a follow-up, and ambiguous
+`1.5` remains text in Turkish. Custom-date separator substitution, localized Long Date
+names and regional Home Currency defaults are outside this change.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | minor | Declared built-in XLSX short-date formats keep regional identity and built-in IDs; custom declarations remain literal. Format Cells samples follow the display region, and calendar clipboard controls retain hidden time fractions in both directions. Conditional date entry follows the section that displays each candidate; unresolved or ambiguous dates remain text. |
+| 2026-11-10 | minor | Keep shared custom number formats and accept percent-prefixed Turkish interactive input; explicit locale snapshots carry the percent-prefix convention without changing Romanian or en-US entry. |
 | 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |
 | 2026-11-10 | minor | Diagram and Decorative Text labels in all 18 non-English catalogs; Diagram never repeats the catalog's chart word (German `Schema`, Ukrainian `Схема`, Romanian `Schemă`), see [feature-names.md](feature-names.md) |
+| 2026-10-31 | trivial | Document the regional-display functions and regression contracts touched by #2933; no executable Rust changes or readiness reassessment. |
 | 2026-10-31 | minor | System and embedded CJK text fallbacks share the Latin baseline in cells, editors and window titles; other scripts, symbols and emoji keep their alignment |
-| 2026-10-26 | minor | Shared bidi layout supports Arabic clusters, marks, visual cursor navigation and directional accessibility; cell Context/LTR/RTL is stored separately from sheet RTL and round-trips through XLSX |
-| 2026-10-26 | minor | Arabic text renders in cells and the interface: a system Arabic face (Tahoma, Arial or Segoe UI on Windows, Geeza Pro on macOS, Noto Sans or Naskh Arabic on Linux) joins the script fallbacks, fontconfig's Arabic choice, when it has Arabic letters, leads the Arabic fallbacks and draws Arabic wherever the UI or cell font has none, such as the default cell fonts (part of #229; a UI font with Arabic of its own, such as DejaVu Sans in the Flatpak, still draws interface Arabic, left for a follow-up), and craft-fonts' Noto Sans Arabic is a required face allowed on the web. Workbook fonts without Arabic keep every script fallback. Shaping and bidirectional layout remain separate work |
+| 2026-10-31 | minor | Read the Windows user format-locale name independently of UI language; add a synthetic language-switch regression and cross-check the Windows boundary. Native Windows locale integration remains unverified; no readiness reassessment. |
+| 2026-10-30 | minor | #2933 review: differential number formats preserve built-in IDs 14/22 and regional display; custom or missing IDs retain literal short-date aliases through repeated XLSX save/reopen |
+| 2026-10-30 | minor | #2933 follow-up: Format Cells only replaces a number format after a number-format edit; standard built-in DXF aliases normalize by ID while custom codes remain literal |
+| 2026-10-29 | minor | Adapt #2263 by @pick2510 to the modular grid and AutoFit; add Romanian separators, region overrides, macOS numeric short-date customizations (#2869), and retention of custom XLSX short-date aliases through save/reopen |
 | 2026-10-27 | minor | Number formats honour the `B1`/`B2` calendar prefixes: never shown; `B2` renders year, month, day and Arabic month and weekday names in the tabular Hijri calendar (1 Jan 2001 = 6 Shawwal 1421; leap years 2, 5, 7, 10, 13, 15, 18, 21, 24, 26 and 29 of the 30-year cycle, which is what Excel shows). Checked against Excel 16.0 (build 20527, en-US) on every serial and about 1,700 format/value pairs: a locale or currency tag before `B2` keeps the date Gregorian, a misplaced `B` and digit or a prefix before a number format is rejected, serial 60 has no Hijri date, serial 0 shows as serial 1, two-word month names use a no-break space. Not matched: Excel's weekday/month-name mix-ups in one `B2` section and its weekday-only quirks |
 | 2026-10-27 | minor | AutoFit column width, wrapped-row height and PivotTable column fit estimate Arabic letters at ~0.48 em (measured 0.36–0.53 em shaped, Noto Sans/Naskh Arabic and DejaVu Sans) instead of 1 em, Arabic-Indic digits as wide as ASCII digits, and give vowel marks and direction marks no width; vowelled Arabic no longer fits ~3.5× too wide |
+| 2026-10-26 | minor | Shared bidi layout supports Arabic clusters, marks, visual cursor navigation and directional accessibility; cell Context/LTR/RTL is stored separately from sheet RTL and round-trips through XLSX |
+| 2026-10-26 | minor | Arabic text renders in cells and the interface: a system Arabic face (Tahoma, Arial or Segoe UI on Windows, Geeza Pro on macOS, Noto Sans or Naskh Arabic on Linux) joins the script fallbacks, fontconfig's Arabic choice, when it has Arabic letters, leads the Arabic fallbacks and draws Arabic wherever the UI or cell font has none, such as the default cell fonts (part of #229; a UI font with Arabic of its own, such as DejaVu Sans in the Flatpak, still draws interface Arabic, left for a follow-up), and craft-fonts' Noto Sans Arabic is a required face allowed on the web. Workbook fonts without Arabic keep every script fallback. Shaping and bidirectional layout remain separate work |
+| 2026-10-24 | minor | The grid shows numbers and dates in the system's region: decimal and digit-group separators (de-CH `1'169.50`, de-DE `1.169,50`, fr-FR narrow no-break space) and the region's short date for the built-in short date format (de-CH `01.01.2024`). The region comes from macOS's Region setting, Linux's `LC_NUMERIC` (or `LC_ALL`, `LANG`) or Windows's user locale, not the interface language, so English (US) with the Region set to Switzerland gets Swiss formats. Input, the editor, files, commands, CSV and `TEXT()` stay en-US |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |
@@ -169,3 +201,6 @@ language (none so far) and of localized function names.
 | 2026-10-11 | minor | Czech (cs) ribbon table: 266 labels (~12%), menus only |
 | 2026-10-10 | minor | Re-measured after #31, #104, #82, #38 merged: ribbon translated into ja, zh, ko, pt-BR and ru (266–268 labels, ~12%), system-language default, CJK/Thai/Hebrew font fallback; ~10% ready, 100–165 h |
 | 2026-10-10 | major | Created: English only, no catalog, ~2,200 strings, script-support gaps, open language PRs |
+
+
+**#2933 interactive follow-up (2026-11-03):** Regional scalar entry and editor text share an explicit boundary; commands and imports remain invariant. Synthetic controls cover Romanian decimals/grouping, short dates, both date systems, mixed Text/numeric fills, validation, draft-region changes and XLSX saves. Full language-specific currency/month-name parsing and native Excel/Windows/Linux acceptance remain open.

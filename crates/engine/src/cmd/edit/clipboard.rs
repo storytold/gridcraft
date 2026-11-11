@@ -1,4 +1,3 @@
-use super::cell::input_to_cell;
 use super::paste_special::paste_special;
 use super::{
     Cell, CellRef, Clipboard, EngineError, Json, RangeRef, Result, Session, Value, bad, bool_param, cell_param_on, edit, json, ok, str_param,
@@ -53,10 +52,11 @@ fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
         }
         packed
     };
-    let text = crate::display::range_text(&wb, sheet, range);
+    let locale = crate::entry::locale_from_params_named(p, "clipboardLocale")?.unwrap_or(gridcraft_numfmt::Locale::EN_US);
+    let text = crate::display::range_text_in(&wb, sheet, range, &locale);
     // The HTML rendering is for the host clipboard (UI); it can reach 4 MB, so agents and
     // scripts get it only when they ask for it.
-    let html = if p.get("html").and_then(Json::as_bool) == Some(true) { crate::io::range_html(&wb, sheet, range, &text) } else { None };
+    let html = if p.get("html").and_then(Json::as_bool) == Some(true) { crate::io::range_html(&wb, sheet, range, &text, &locale) } else { None };
     let clip = Clipboard { wb, sheet, range, cut, doc_uid: d.uid, text: text.clone(), areas, selected, trust: d.trust };
     s.clipboard = Some(clip);
     let mut result = json!({"range": range.a1(), "text": text});
@@ -309,6 +309,7 @@ pub(super) fn range_move(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
+    let locale = crate::entry::locale_from_params(p)?;
     let sheet = target_sheet(s, p)?;
     let at = cell_param_on(s, p, "at", sheet)?.unwrap_or(s.doc()?.selection.current().start);
     let rows: Vec<Vec<String>> = parse_tsv(text);
@@ -316,14 +317,29 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
     let w = rows.iter().map(Vec::len).max().unwrap_or(0);
     // The HTML flavour, when the host passed it: the number behind each cell's shown text. Read
     // only as far as the text's own shape, so spans in the markup can't expand without bound.
-    let html = str_param(p, "html").map(|html| crate::clip_html::table_cells(html, h, w)).unwrap_or_default();
+    let html = str_param(p, "html").map(|html| crate::clip_html::table_with_region(html, h, w)).unwrap_or_default();
     edit(s, |cx| {
         for (ri, row) in rows.iter().enumerate() {
             for (ci, v) in row.iter().enumerate() {
                 let Some(c) = at.offset(ri as i64, ci as i64) else { continue };
-                let mut cell = input_to_cell(v, sheet, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
+                let html_cell = html.cells.get(ri).and_then(|r| r.get(ci));
+                let source_locale = html
+                    .locale
+                    .as_ref()
+                    .filter(|_| html_cell.is_some_and(|hc| crate::clip_html::normalized(&hc.text) == crate::clip_html::normalized(v)));
+                let destination_style = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
+                let destination_general = cx.wb.styles.get(destination_style).num_fmt.as_str() == "General";
+                let mut cell = super::cell::input_to_cell_in(v, sheet, c, &mut cx.wb, source_locale.or(locale.as_ref()))
+                    .unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
+                if cell.is_none()
+                    && source_locale.is_some()
+                    && html_cell.is_some_and(|hc| hc.copied_number.is_some())
+                    && cx.wb.styles.get(destination_style).num_fmt.as_str() != "@"
+                {
+                    cell = Some(Cell::styled(Value::Empty, destination_style));
+                }
                 if let Some(cl) = cell.as_mut() {
-                    numeric_from_html(cl, v, html.get(ri).and_then(|r| r.get(ci)), &mut cx.wb);
+                    numeric_from_html(cl, v, html_cell, source_locale, destination_general, &mut cx.wb);
                 }
                 let sh = cx.sheet_mut(sheet)?;
                 match cell {
@@ -344,17 +360,47 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
     Ok(json!({"rows": h, "cols": w}))
 }
 
+/// Matching GridCraft metadata preserves exact numeric values, rebasing calendar dates only.
 /// A pasted cell that came out as text ("Rp10,000.00" isn't en-US input) becomes the number the
 /// source recorded for it in its HTML, with a format that shows the same text when one can be
 /// inferred and the cell has none. The HTML cell must show the same text as the tab-separated
 /// field, so HTML that belongs to another copy (or a table laid out differently) changes nothing.
-fn numeric_from_html(cell: &mut Cell, field: &str, html: Option<&crate::clip_html::HtmlCell>, wb: &mut gridcraft_model::Workbook) {
+fn numeric_from_html(
+    cell: &mut Cell,
+    field: &str,
+    html: Option<&crate::clip_html::HtmlCell>,
+    source_locale: Option<&gridcraft_numfmt::Locale>,
+    destination_general: bool,
+    wb: &mut gridcraft_model::Workbook,
+) {
     let Some(hc) = html else { return };
-    let Some(n) = hc.num else { return };
-    if cell.formula.is_some() || !matches!(cell.value, Value::Text(_)) || wb.styles.get(cell.style).num_fmt.as_str() == "@" {
+    if cell.formula.is_some() || wb.styles.get(cell.style).num_fmt.as_str() == "@" {
         return;
     }
     if crate::clip_html::normalized(&hc.text) != crate::clip_html::normalized(field) {
+        return;
+    }
+    if let (Some(copied), Some(locale)) = (&hc.copied_number, source_locale)
+        && matches!(cell.value, Value::Number(_) | Value::Text(_) | Value::Empty)
+    {
+        if !copied.matches_text(field, locale, wb.date_system) {
+            return;
+        }
+        let n = match copied.calendar {
+            Some(source) if source != wb.date_system => {
+                let in_1900 = copied.value - gridcraft_core::date::serial_in_system(source, 0.0);
+                gridcraft_core::date::serial_in_system(wb.date_system, in_1900)
+            }
+            _ => copied.value,
+        };
+        cell.value = Value::number(n);
+        if destination_general {
+            cell.style = wb.styles.derive(cell.style, |style| style.num_fmt = copied.format.clone());
+        }
+        return;
+    }
+    let Some(n) = hc.num else { return };
+    if !matches!(cell.value, Value::Text(_)) {
         return;
     }
     cell.value = Value::number(n);

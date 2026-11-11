@@ -5,6 +5,19 @@ use super::{
 
 // ---------------------------------------------------------------- entry
 
+/// A front end's explicit input region applies per destination style, including mixed Text and
+/// numeric cells in Ctrl+Enter. Invariant command, import and formula paths keep `input_to_cell`.
+pub(crate) fn input_to_cell_in(
+    input: &str,
+    sheet: usize,
+    at: CellRef,
+    wb: &mut gridcraft_model::Workbook,
+    locale: Option<&gridcraft_numfmt::Locale>,
+) -> Result<Option<Cell>> {
+    let canonical = locale.map(|loc| crate::entry::canonical_input(wb, sheet, at, input, loc));
+    input_to_cell(canonical.as_deref().unwrap_or(input), sheet, at, wb)
+}
+
 /// Typing `=PY(` doesn't make a Python cell; this says what does.
 pub(crate) const PY_FORMULA: &str = "Python cells are made with the python.set command (the code as `code`), not by typing =PY(…).";
 
@@ -120,6 +133,7 @@ pub(crate) fn check_arg_counts(expr: &gridcraft_formula::Expr) -> Result<()> {
 }
 
 pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
+    let locale = crate::entry::locale_from_params(p)?;
     let sheet = target_sheet(s, p)?;
     let at = match cell_param_on(s, p, "cell", sheet)? {
         Some(c) => c,
@@ -147,7 +161,7 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             if !range.is_single() && cx.wb.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| t.range.intersects(&range))) {
                 return Err(EngineError::Other("Multi-cell array formulas aren't allowed in tables.".into()));
             }
-            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb)?.unwrap_or_default();
+            let mut cell = input_to_cell_in(&input, sheet, range.start, &mut cx.wb, locale.as_ref())?.unwrap_or_default();
             if let Some(f) = cell.formula.as_mut() {
                 std::sync::Arc::make_mut(f).array = Some(range);
             }
@@ -163,7 +177,7 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             cx.touch(sheet, range.start);
             return Ok(Json::Null);
         }
-        let cell = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+        let cell = input_to_cell_in(&input, sheet, at, &mut cx.wb, locale.as_ref())?;
         let sh = cx.sheet_mut(sheet)?;
         match cell {
             Some(c) => sh.set_cell(at, c),
@@ -315,6 +329,7 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
+    let locale = crate::entry::locale_from_params(p)?;
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
     let input = str_param(p, "input").unwrap_or("").to_string();
@@ -337,7 +352,7 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
                 let base = match by_style.get(&style) {
                     Some(c) => c.clone(),
                     None => {
-                        let c = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+                        let c = input_to_cell_in(&input, sheet, at, &mut cx.wb, locale.as_ref())?;
                         by_style.insert(style, c.clone());
                         c
                     }

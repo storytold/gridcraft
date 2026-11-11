@@ -13,9 +13,22 @@ fn book(rtl: bool, cells: &[(&str, gridcraft_core::Value, gridcraft_model::HAlig
     wb
 }
 
+/// Compare legacy rendering independently of the new, separately tested value metadata.
+fn visible_clipboard_markup(mut html: String) -> String {
+    for name in ["region", "number", "format", "calendar"] {
+        let prefix = format!(" data-gridcraft-{name}-v1=\"");
+        while let Some(start) = html.find(&prefix) {
+            let value = start + prefix.len();
+            let end = value + html[value..].find('"').unwrap() + 1;
+            html.replace_range(start..end, "");
+        }
+    }
+    html
+}
+
 fn copied(wb: &Workbook, range: &str) -> String {
     let r = RangeRef::parse(range).unwrap();
-    range_html(wb, 0, r, &crate::display::range_text(wb, 0, r)).unwrap()
+    range_html(wb, 0, r, &crate::display::range_text(wb, 0, r), &gridcraft_numfmt::Locale::EN_US).unwrap()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -197,14 +210,14 @@ fn html_export_marks_right_to_left_sheets() {
     assert!(html.contains("<body><table dir=\"rtl\">"), "{html}");
     assert!(html.contains("<td style=\"\" dir=\"auto\">Hello!</td>"), "Latin text keeps its own direction: {html}");
     assert!(html.contains("<td style=\"text-align:left;\" dir=\"ltr\">-5</td>"), "numbers mirror to the left and keep their sign in front: {html}");
-    let clip = copied(&wb, "A1:B1");
+    let clip = visible_clipboard_markup(copied(&wb, "A1:B1"));
     assert!(clip.starts_with("<table dir=\"rtl\" style="), "{clip}");
     assert_eq!(clip.matches("dir=\"auto\"").count(), 1, "{clip}");
     assert!(clip.contains("text-align:left;\" dir=\"ltr\">-5</td>"), "{clip}");
 
     let ltr = book(false, &[("A1", Value::text("Hello!"), HAlign::General)]);
     assert!(to_html(&ltr, 0).unwrap().contains("<body><table><tr>"));
-    assert!(copied(&ltr, "A1").starts_with("<table style="));
+    assert!(visible_clipboard_markup(copied(&ltr, "A1")).starts_with("<table style="));
 }
 
 #[test]
@@ -260,7 +273,7 @@ fn html_export_of_latin_ltr_sheet_is_unchanged() {
     );
     let cell = "border:1px solid #d4d4d4;padding:2px 4px;white-space:pre-wrap;";
     assert_eq!(
-        copied(&wb, "A1:B2"),
+        visible_clipboard_markup(copied(&wb, "A1:B2")),
         format!(
             "<table style=\"border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt\">\
                  <tr><td style=\"{cell}text-align:left;\">Name</td><td style=\"{cell}text-align:center;\">Qty</td></tr>\
