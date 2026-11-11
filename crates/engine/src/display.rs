@@ -8,8 +8,13 @@ use gridcraft_model::{Sheet, Workbook};
 use gridcraft_numfmt::{Formatted, NumberFormat, format_value};
 
 /// Parsed number formats are cached by code.
-fn parsed(code: &str) -> NumberFormat {
+pub(crate) fn parsed(code: &str) -> NumberFormat {
     static CACHE: std::sync::LazyLock<Mutex<HashMap<String, NumberFormat>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    // A code of more bytes than 4 × the character limit can't be within it: it shows as General
+    // without being hashed or scanned again for every cell that shares it.
+    if code.len() > 4 * gridcraft_numfmt::MAX_FORMAT_CODE_CHARS {
+        return NumberFormat::parse("General");
+    }
     let lock = || CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(f) = lock().get(code) {
         return f.clone();
@@ -24,7 +29,12 @@ fn parsed(code: &str) -> NumberFormat {
     f
 }
 
+/// The parsed format of `code`; one longer than the character limit is a General format that keeps
+/// the code it was made from. The engine itself formats through `parsed`, which doesn't copy it.
 pub fn number_format(code: &str) -> NumberFormat {
+    if code.len() > 4 * gridcraft_numfmt::MAX_FORMAT_CODE_CHARS {
+        return NumberFormat::parse(code);
+    }
     parsed(code)
 }
 
@@ -156,7 +166,9 @@ pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
             }
             first = false;
             let t = cell_text(wb, sh, CellRef::new(row, col));
-            if t.contains(['\t', '\n', '"']) {
+            // Like Excel, only text with a tab or line break is quoted (its quotes doubled);
+            // `say "hi"` is copied as it is (#2225).
+            if t.contains(['\t', '\n', '\r']) {
                 out.push('"');
                 out.push_str(&t.replace('"', "\"\""));
                 out.push('"');
@@ -225,4 +237,32 @@ pub fn stats(sheet: &Sheet, ranges: &[RangeRef]) -> Stats {
         s.max = 0.0;
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A format code far past Excel's 255 characters shows its values as General, for every cell
+    /// that shares it, without being hashed into the cache each time.
+    #[test]
+    fn an_overlong_code_formats_as_general() {
+        let wb = Workbook::new();
+        let code = format!("0.00{}", "\"x\"".repeat(400_000));
+        for _ in 0..1_000 {
+            assert_eq!(format(&Value::Number(1.5), &code, &wb).text, "1.5");
+        }
+        assert_eq!(format(&Value::Number(1.5), "0.00", &wb).text, "1.50");
+    }
+
+    /// The public `number_format` keeps the code of an overlong format; it is General, but not the
+    /// same format as a real `General`.
+    #[test]
+    fn number_format_keeps_an_overlong_code() {
+        let code = format!("0.00{}", "\"x\"".repeat(2_000));
+        let f = number_format(&code);
+        assert!(f.is_general());
+        assert_eq!(f.code(), code);
+        assert_ne!(f, number_format("General"));
+    }
 }
