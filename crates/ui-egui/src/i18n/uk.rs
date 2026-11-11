@@ -1010,6 +1010,39 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Показати",
         "Collapse dialog" => "Згорнути діалогове вікно",
         "Expand dialog" => "Розгорнути діалогове вікно",
+        "Options|Data" => "Дані",
+        "Automatic data conversion" => "Автоматичне перетворення даних",
+        "Enable all default data conversions below when entering, pasting, or opening text files" => {
+            "Увімкнути всі наведені нижче стандартні перетворення даних під час введення, вставлення або відкриття текстових файлів"
+        }
+        "Remove leading zeros and convert to a number" => "Видаляти початкові нулі й перетворювати на число",
+        "Off: 0123 stays text, leading zeros included." => "Вимкнено: 0123 лишається текстом разом із початковими нулями.",
+        "Keep first 15 digits of long numbers and display in scientific notation" => {
+            "Зберігати перші 15 цифр довгих чисел і відображати їх в експоненційному форматі"
+        }
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text." => {
+            "Вимкнено: жодне число не обрізається й не перетворюється на експоненційний формат. Те, чого формат «Загальний» не може показати так, як написано, лишається текстом."
+        }
+        "Keep numbers with more than" => "Зберігати числа, що мають понад",
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost." => {
+            "11 (за замовчуванням): перетворюються лише числа, які формат «Загальний» показує точно так, як їх написано, тож 12-значні коди й штрихкоди лишаються текстом. Значення від 12 до 15 дозволяють експоненційне відображення, наприклад 1.24412E+11, для чисел із не більше ніж такою кількістю цифр; жодна цифра не втрачається."
+        }
+        "digits as text" => "цифр, як текст",
+        "Convert digits surrounding the letter \"E\" to a number in scientific notation" => {
+            "Перетворювати цифри навколо літери «E» на число в експоненційному форматі"
+        }
+        "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Вимкнено: 1244121406E6 лишається текстом, а не стає 1.24412E+15.",
+        "Data conversion settings apply to every workbook; they are not saved in the file." => {
+            "Параметри перетворення даних застосовуються до всіх книг; вони не зберігаються у файлі."
+        }
+        "Remove trailing zeros after the decimal separator" => "Видаляти кінцеві нулі після десяткового роздільника",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Вимкнено: 720.0 відображається й зберігається як 720.0, а 3.10 — як 3.10 (клітинка отримує числовий формат 0.0 або 0.00). Значення лишається числом. Такого параметра в Excel немає."
+        }
+        "Convert text that looks like a date or time to a date" => "Перетворювати текст, схожий на дату або час, на дату",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Вимкнено: 2.6.70, 3/4/2026 і 10:30 лишаються текстом, як написано. Такого параметра в Excel немає; він також охоплює параметр Excel «Перетворювати послідовні літери й числа на дату» (12JAN2026 у GridCraft завжди текст)."
+        }
         _ => return None,
     })
 }

@@ -1012,6 +1012,41 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Εμφάνιση",
         "Collapse dialog" => "Σύμπτυξη παραθύρου διαλόγου",
         "Expand dialog" => "Ανάπτυξη παραθύρου διαλόγου",
+        "Options|Data" => "Δεδομένα",
+        "Automatic data conversion" => "Αυτόματη μετατροπή δεδομένων",
+        "Enable all default data conversions below when entering, pasting, or opening text files" => {
+            "Ενεργοποίηση όλων των παρακάτω προεπιλεγμένων μετατροπών δεδομένων κατά την πληκτρολόγηση, την επικόλληση ή το άνοιγμα αρχείων κειμένου"
+        }
+        "Remove leading zeros and convert to a number" => "Κατάργηση αρχικών μηδενικών και μετατροπή σε αριθμό",
+        "Off: 0123 stays text, leading zeros included." => "Απενεργοποιημένο: το 0123 παραμένει κείμενο, μαζί με τα αρχικά μηδενικά.",
+        "Keep first 15 digits of long numbers and display in scientific notation" => {
+            "Διατήρηση των πρώτων 15 ψηφίων μεγάλων αριθμών και εμφάνιση σε επιστημονική σημειογραφία"
+        }
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text." => {
+            "Απενεργοποιημένο: κανένας αριθμός δεν περικόπτεται ούτε μετατρέπεται σε επιστημονική σημειογραφία. Ό,τι δεν μπορεί να εμφανίσει η μορφή «Γενικά» όπως γράφτηκε παραμένει κείμενο."
+        }
+        "Keep numbers with more than" => "Διατήρηση αριθμών με περισσότερα από",
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost." => {
+            "11 (προεπιλογή): μετατρέπονται μόνο οι αριθμοί που η μορφή «Γενικά» εμφανίζει ακριβώς όπως γράφτηκαν, έτσι οι 12ψήφιοι κωδικοί και τα barcode παραμένουν κείμενο. Από 12 έως 15 επιτρέπεται η επιστημονική εμφάνιση, όπως 1.24412E+11, για αριθμούς με έως τόσα ψηφία· κανένα ψηφίο δεν χάνεται ποτέ."
+        }
+        "digits as text" => "ψηφία ως κείμενο",
+        "Convert digits surrounding the letter \"E\" to a number in scientific notation" => {
+            "Μετατροπή των ψηφίων γύρω από το γράμμα «E» σε αριθμό σε επιστημονική σημειογραφία"
+        }
+        "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => {
+            "Απενεργοποιημένο: το 1244121406E6 παραμένει κείμενο αντί να γίνει 1.24412E+15."
+        }
+        "Data conversion settings apply to every workbook; they are not saved in the file." => {
+            "Οι ρυθμίσεις μετατροπής δεδομένων ισχύουν για κάθε βιβλίο εργασίας· δεν αποθηκεύονται στο αρχείο."
+        }
+        "Remove trailing zeros after the decimal separator" => "Κατάργηση τελικών μηδενικών μετά το διαχωριστικό δεκαδικών",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Απενεργοποιημένο: το 720.0 εμφανίζεται και αποθηκεύεται ως 720.0 και το 3.10 ως 3.10 (το κελί παίρνει μορφή αριθμού 0.0 ή 0.00). Παραμένει αριθμός. Δεν είναι επιλογή του Excel."
+        }
+        "Convert text that looks like a date or time to a date" => "Μετατροπή κειμένου που μοιάζει με ημερομηνία ή ώρα σε ημερομηνία",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Απενεργοποιημένο: τα 2.6.70, 3/4/2026 και 10:30 παραμένουν κείμενο, όπως γράφτηκαν. Δεν είναι επιλογή του Excel· καλύπτει επίσης την επιλογή του Excel «Μετατροπή συνεχόμενων γραμμάτων και αριθμών σε ημερομηνία» (το 12JAN2026 είναι πάντα κείμενο στο GridCraft)."
+        }
         _ => return None,
     })
 }

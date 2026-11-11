@@ -468,8 +468,8 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
     let check = |wb: &Workbook| {
         for (cell, input) in accepted {
             let at = CellRef::parse(cell).unwrap();
-            assert!(check_validation(wb, 0, at, input).is_none(), "{cell} refuses {input}");
-            assert!(check_validation(wb, 0, at, "Pending").is_some(), "{cell} accepts Pending");
+            assert!(check_validation(wb, 0, at, input, &gridcraft_core::parse::DataConversion::default()).is_none(), "{cell} refuses {input}");
+            assert!(check_validation(wb, 0, at, "Pending", &gridcraft_core::parse::DataConversion::default()).is_some(), "{cell} accepts Pending");
         }
     };
     let wb = s.doc().unwrap().wb.clone();
@@ -505,7 +505,11 @@ fn a_relative_list_source_is_read_from_the_cell_being_checked() {
         let at = CellRef::parse(cell).unwrap();
         assert_eq!(list_items(&wb, 0, at, &dv), items, "{cell}");
         for v in ["a", "b", "c", "d", "e"] {
-            assert_eq!(check_validation(&wb, 0, at, v).is_none(), items.contains(&v), "{cell} with {v}");
+            assert_eq!(
+                check_validation(&wb, 0, at, v, &gridcraft_core::parse::DataConversion::default()).is_none(),
+                items.contains(&v),
+                "{cell} with {v}"
+            );
         }
     }
 }
@@ -522,10 +526,10 @@ fn a_list_source_that_takes_in_the_cell_does_not_list_the_value_being_typed() {
     for (cell, accepted, refused) in [("A2", &["x", "y"][..], &["new"][..]), ("A3", &["y"], &["x", "new"])] {
         let at = CellRef::parse(cell).unwrap();
         for v in accepted {
-            assert!(check_validation(wb, 0, at, v).is_none(), "{cell} refuses {v}");
+            assert!(check_validation(wb, 0, at, v, &gridcraft_core::parse::DataConversion::default()).is_none(), "{cell} refuses {v}");
         }
         for v in refused {
-            assert!(check_validation(wb, 0, at, v).is_some(), "{cell} accepts {v}");
+            assert!(check_validation(wb, 0, at, v, &gridcraft_core::parse::DataConversion::default()).is_some(), "{cell} accepts {v}");
         }
     }
 }
@@ -555,5 +559,7 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     }
     let sh = s.doc().unwrap().wb.active().unwrap().clone();
     assert_eq!(sh.validations.len(), 3);
-    assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
+    assert!(
+        check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0", &gridcraft_core::parse::DataConversion::default()).is_some()
+    );
 }

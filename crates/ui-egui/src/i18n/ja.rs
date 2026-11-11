@@ -451,6 +451,42 @@ pub(super) const CORE: &[(&str, &str)] = &[
 
 /// English label → Japanese for the dialog, message, Backstage and menu strings beyond [`CORE`].
 pub(super) const DIALOGS: &[(&str, &str)] = &[
+    // File › Options › Data (#506).
+    ("Options|Data", "データ"),
+    ("Automatic data conversion", "自動データ変換"),
+    (
+        "Enable all default data conversions below when entering, pasting, or opening text files",
+        "入力、貼り付け、テキスト ファイルを開くときに、以下の既定のデータ変換をすべて有効にする",
+    ),
+    ("Remove leading zeros and convert to a number", "先頭のゼロを削除して数値に変換する"),
+    ("Off: 0123 stays text, leading zeros included.", "オフ: 0123 は先頭のゼロを含めて文字列のままです。"),
+    ("Keep first 15 digits of long numbers and display in scientific notation", "長い数値の最初の 15 桁を保持し、指数表記で表示する"),
+    (
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text.",
+        "オフ: 数値が切り詰められたり指数表記に変換されたりすることはありません。標準の表示形式で入力どおりに表示できない値は文字列のままです。",
+    ),
+    ("Keep numbers with more than", "次の桁数を超える数値は文字列のままにする:"),
+    (
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost.",
+        "11 (既定): 標準の表示形式で入力どおりに表示される数値だけが変換されるため、12 桁のコードやバーコードは文字列のままです。12 から 15 にすると、その桁数までの数値を 1.24412E+11 のような指数表記で表示できます。桁が失われることはありません。",
+    ),
+    ("digits as text", "桁"),
+    ("Convert digits surrounding the letter \"E\" to a number in scientific notation", "文字「E」の前後の数字を指数表記の数値に変換する"),
+    ("Off: 1244121406E6 stays text instead of becoming 1.24412E+15.", "オフ: 1244121406E6 は 1.24412E+15 にならず、文字列のままです。"),
+    ("Remove trailing zeros after the decimal separator", "小数点記号の後の末尾のゼロを削除する"),
+    (
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option.",
+        "オフ: 720.0 は 720.0、3.10 は 3.10 のまま表示・保存されます (セルに 0.0 または 0.00 の表示形式が設定されます)。数値のままです。Excel にはないオプションです。",
+    ),
+    ("Convert text that looks like a date or time to a date", "日付や時刻のように見える文字列を日付に変換する"),
+    (
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft).",
+        "オフ: 2.6.70、3/4/2026、10:30 は入力どおり文字列のままです。Excel にはないオプションで、Excel の「連続する文字と数字を日付に変換する」も兼ねます (GridCraft では 12JAN2026 は常に文字列です)。",
+    ),
+    (
+        "Data conversion settings apply to every workbook; they are not saved in the file.",
+        "データ変換の設定はすべてのブックに適用され、ファイルには保存されません。",
+    ),
     ("OK", "OK"),
     ("Cancel", "キャンセル"),
     ("Don't Save", "保存しない"),

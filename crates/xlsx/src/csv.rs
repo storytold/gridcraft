@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use gridcraft_core::date::{days_in_month_in, serial_from_ymd};
-use gridcraft_core::parse::{Parsed, parse_input};
+use gridcraft_core::parse::{DataConversion, Parsed, parse_input, parse_input_with};
 use gridcraft_core::{CellRef, DateSystem, MAX_COLS, MAX_ROWS, Value, col_to_letters};
 use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
 
@@ -465,11 +465,12 @@ fn date_warnings(columns: &[(DateRule, DateEvidence)], report: &mut ReadReport) 
     }
 }
 
-/// Reads one field with the column's date rule; other values go through typed input.
-fn read_field(field: &str, sys: DateSystem, rule: DateRule) -> Parsed {
+/// Reads one field with the column's date rule; other values go through typed input under the
+/// Automatic Data Conversion options.
+fn read_field(field: &str, sys: DateSystem, rule: DateRule, conv: &DataConversion) -> Parsed {
     match numeric_date(field, sys) {
-        Some(date) if rule != DateRule::NoDates => date.read(field, rule),
-        _ => parse_input(field, sys),
+        Some(date) if rule != DateRule::NoDates && conv.convert_dates => date.read(field, rule),
+        _ => parse_input_with(field, sys, conv),
     }
 }
 
@@ -486,7 +487,12 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     if delim == quote {
         return Err(IoError::Format("the delimiter and quote character must differ".into()));
     }
-    let date_columns = if opts.parse_values { infer_date_rules(&sample_records(&text, delim, quote), opts.date_system) } else { vec![] };
+    // With date conversion off no field becomes a date, so there's no order to work out or warn about.
+    let date_columns = if opts.parse_values && opts.conversion.convert_dates {
+        infer_date_rules(&sample_records(&text, delim, quote), opts.date_system)
+    } else {
+        vec![]
+    };
     let mut report = ReadReport::default();
     date_warnings(&date_columns, &mut report);
     let mut wb = Workbook::new();
@@ -511,7 +517,7 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
             let pos = CellRef::new(row, col as u32);
             let cell = if opts.parse_values {
                 let rule = date_columns.get(col).map_or(DateRule::NoDates, |(rule, _)| *rule);
-                let p = read_field(&f, opts.date_system, rule);
+                let p = read_field(&f, opts.date_system, rule, &opts.conversion);
                 let style = match p.format {
                     Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
                         Some((_, id)) => *id,

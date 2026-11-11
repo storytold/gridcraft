@@ -475,6 +475,39 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Dunkel",
         "Sheet Options|View" => "Anzeige",
         "Print" => "Drucken",
+        "Options|Data" => "Daten",
+        "Automatic data conversion" => "Automatische Datenkonvertierung",
+        "Enable all default data conversions below when entering, pasting, or opening text files" => {
+            "Alle folgenden Standard-Datenkonvertierungen beim Eingeben, Einfügen oder Öffnen von Textdateien aktivieren"
+        }
+        "Remove leading zeros and convert to a number" => "Führende Nullen entfernen und in eine Zahl konvertieren",
+        "Off: 0123 stays text, leading zeros included." => "Aus: 0123 bleibt Text, samt führender Nullen.",
+        "Keep first 15 digits of long numbers and display in scientific notation" => {
+            "Die ersten 15 Ziffern langer Zahlen beibehalten und in wissenschaftlicher Schreibweise anzeigen"
+        }
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text." => {
+            "Aus: Keine Zahl wird gekürzt oder in wissenschaftliche Schreibweise umgewandelt. Was das Format „Standard“ nicht wie geschrieben anzeigen kann, bleibt Text."
+        }
+        "Keep numbers with more than" => "Zahlen mit mehr als",
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost." => {
+            "11 (Standard): Nur Zahlen, die das Format „Standard“ genau wie geschrieben anzeigt, werden konvertiert, daher bleiben 12-stellige Codes und Barcodes Text. 12 bis 15 erlaubt die wissenschaftliche Anzeige, etwa 1.24412E+11, für Zahlen mit bis zu so vielen Ziffern; keine Ziffer geht verloren."
+        }
+        "digits as text" => "Ziffern als Text beibehalten",
+        "Convert digits surrounding the letter \"E\" to a number in scientific notation" => {
+            "Ziffern um den Buchstaben „E“ in eine Zahl in wissenschaftlicher Schreibweise konvertieren"
+        }
+        "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Aus: 1244121406E6 bleibt Text, statt zu 1.24412E+15 zu werden.",
+        "Data conversion settings apply to every workbook; they are not saved in the file." => {
+            "Die Einstellungen zur Datenkonvertierung gelten für alle Arbeitsmappen; sie werden nicht in der Datei gespeichert."
+        }
+        "Remove trailing zeros after the decimal separator" => "Nachgestellte Nullen nach dem Dezimaltrennzeichen entfernen",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Aus: 720.0 wird als 720.0 angezeigt und gespeichert, 3.10 als 3.10 (die Zelle erhält das Zahlenformat 0.0 oder 0.00). Es bleibt eine Zahl. Keine Excel-Option."
+        }
+        "Convert text that looks like a date or time to a date" => "Text, der wie ein Datum oder eine Uhrzeit aussieht, in ein Datum konvertieren",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Aus: 2.6.70, 3/4/2026 und 10:30 bleiben Text, wie geschrieben. Keine Excel-Option; sie deckt auch Excels „Fortlaufende Buchstaben und Zahlen in ein Datum konvertieren“ ab (12JAN2026 ist in GridCraft immer Text)."
+        }
         "Print What" => "Was drucken",
         // grid.rs cell and row/column header context menus.
         "Cut" => "Ausschneiden",

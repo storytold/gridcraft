@@ -1179,8 +1179,24 @@ mod tests {
         app.run(d.command.unwrap(), build_params(&d)).unwrap();
         let doc = app.session.active().unwrap();
         let at = gridcraft_engine::core::CellRef::new(0, 0);
-        assert!(gridcraft_engine::cmd::data::check_validation(&doc.wb, 0, at, "6").is_none());
-        assert!(gridcraft_engine::cmd::data::check_validation(&doc.wb, 0, at, "4").is_some());
+        assert!(gridcraft_engine::cmd::data::check_validation(&doc.wb, 0, at, "6", &Default::default()).is_none());
+        assert!(gridcraft_engine::cmd::data::check_validation(&doc.wb, 0, at, "4", &Default::default()).is_some());
+    }
+
+    /// Typing checks the rule against what the cell will hold: with "Remove leading zeros" off,
+    /// `0123` stays text, so a whole-number rule stops it.
+    #[test]
+    fn typed_input_is_validated_under_the_conversion_options() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("data.validation", json!({"range": "A1", "type": "whole", "operator": "between", "formula1": "1", "formula2": "1000"})).unwrap();
+        app.run("app.dataConversion", json!({"removeLeadingZeros": false})).unwrap();
+        app.begin_edit(Some("0123".into()), false);
+        assert!(!app.commit_edit(0, 0, false, false), "0123 is kept as text, so the rule stops it");
+        assert!(app.message.is_some());
+        app.begin_edit(Some("123".into()), false);
+        assert!(app.commit_edit(0, 0, false, false));
     }
 
     /// #2181: a programmatic `link.open` opens nothing; the Open Hyperlink prompt has no command

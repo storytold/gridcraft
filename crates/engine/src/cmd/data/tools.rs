@@ -121,6 +121,7 @@ pub(super) fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
     let consecutive = bool_param(p, "treatConsecutive").unwrap_or(false);
     let quote = str_param(p, "textQualifier").and_then(|q| q.chars().next()).unwrap_or('"');
     let dest = cell_param_on(s, p, "destination", sheet)?.unwrap_or(r.start);
+    let conv = s.prefs.data_conversion;
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
         let mut out: Vec<(CellRef, String)> = Vec::new();
@@ -146,7 +147,7 @@ pub(super) fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         for (c, t) in out {
-            let cell = match crate::cmd::edit::input_to_cell(&t, sheet, c, &mut cx.wb) {
+            let cell = match crate::cmd::edit::input_to_cell(&t, sheet, c, &mut cx.wb, &conv) {
                 Ok(cell) => cell,
                 // `=PY(…)` doesn't make a Python cell (that takes python.set): the piece is kept
                 // as text rather than lost.

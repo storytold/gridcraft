@@ -124,6 +124,7 @@ pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
     let workbook = str_param(p, "within") == Some("workbook");
     let selection = (str_param(p, "within") == Some("selection")).then(|| s.doc().map(|d| d.selection.clone())).transpose()?;
     let active = s.doc()?.selection.active;
+    let conv = s.prefs.data_conversion;
     let mut skipped = 0usize;
     let n = edit(s, |cx| {
         let sheets: Vec<usize> = if workbook { (0..cx.wb.sheets.len()).collect() } else { vec![cx.wb.active_sheet()] };
@@ -169,7 +170,7 @@ pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
                     n += 1;
                     continue;
                 }
-                let cell = input_to_cell(&new, si, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(new.as_str()))));
+                let cell = input_to_cell(&new, si, c, &mut cx.wb, &conv).unwrap_or_else(|_| Some(Cell::value(Value::text(new.as_str()))));
                 let sh = cx.sheet_mut(si)?;
                 match cell {
                     Some(cell) => sh.set_cell(c, cell),

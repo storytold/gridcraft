@@ -459,6 +459,35 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Maximum Iterations must be a whole number from 1 to 32767." => "최대 반복 횟수는 1에서 32767 사이의 정수여야 합니다.",
         "Maximum Change must be a number of 0 or more." => "변화 한도는 0 이상의 숫자여야 합니다.",
         "Calculation settings are saved with the workbook." => "계산 설정은 통합 문서와 함께 저장됩니다.",
+        "Options|Data" => "데이터",
+        "Automatic data conversion" => "자동 데이터 변환",
+        "Enable all default data conversions below when entering, pasting, or opening text files" => {
+            "입력, 붙여넣기 또는 텍스트 파일을 열 때 아래의 모든 기본 데이터 변환 사용"
+        }
+        "Remove leading zeros and convert to a number" => "앞에 오는 0을 제거하고 숫자로 변환",
+        "Off: 0123 stays text, leading zeros included." => "끄기: 0123은 앞의 0을 포함해 텍스트로 유지됩니다.",
+        "Keep first 15 digits of long numbers and display in scientific notation" => "긴 숫자의 처음 15자리를 유지하고 지수 표기로 표시",
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text." => {
+            "끄기: 어떤 숫자도 잘리거나 지수 표기로 바뀌지 않습니다. 일반 서식으로 입력한 그대로 표시할 수 없는 값은 텍스트로 유지됩니다."
+        }
+        "Keep numbers with more than" => "다음 자릿수를 초과하는 숫자는 텍스트로 유지:",
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost." => {
+            "11(기본값): 일반 서식이 입력한 그대로 표시하는 숫자만 변환되므로 12자리 코드와 바코드는 텍스트로 유지됩니다. 12~15로 설정하면 해당 자릿수까지의 숫자를 1.24412E+11처럼 지수 표기로 표시할 수 있으며, 자릿수가 손실되지는 않습니다."
+        }
+        "digits as text" => "자리",
+        "Convert digits surrounding the letter \"E\" to a number in scientific notation" => "문자 'E' 앞뒤의 숫자를 지수 표기 숫자로 변환",
+        "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "끄기: 1244121406E6은 1.24412E+15가 되지 않고 텍스트로 유지됩니다.",
+        "Data conversion settings apply to every workbook; they are not saved in the file." => {
+            "데이터 변환 설정은 모든 통합 문서에 적용되며 파일에 저장되지 않습니다."
+        }
+        "Remove trailing zeros after the decimal separator" => "소수 구분 기호 뒤의 후행 0 제거",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "끄기: 720.0은 720.0으로, 3.10은 3.10으로 표시되고 저장됩니다(셀에 0.0 또는 0.00 숫자 서식이 지정됨). 숫자로 유지됩니다. Excel 옵션이 아닙니다."
+        }
+        "Convert text that looks like a date or time to a date" => "날짜나 시간처럼 보이는 텍스트를 날짜로 변환",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "끄기: 2.6.70, 3/4/2026, 10:30은 입력한 그대로 텍스트로 유지됩니다. Excel 옵션이 아니며, Excel의 '연속된 문자와 숫자를 날짜로 변환'도 포함합니다(GridCraft에서 12JAN2026은 항상 텍스트입니다)."
+        }
         "Insert Sheet" => "시트 삽입",
         "Rename" => "이름 바꾸기",
         "Move or Copy…" => "이동 또는 복사…",
