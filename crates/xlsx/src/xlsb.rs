@@ -24,33 +24,70 @@ const REL_TYPE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/re
 const STRICT_REL_TYPE: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships/";
 const MS_REL_TYPE: &str = "http://schemas.microsoft.com/office/2006/relationships/";
 const MAX_META: u64 = 1024 * 1024;
-const MAX_TEXT: usize = 64 * 1024 * 1024;
-const MAX_CELLS: usize = 1_000_000;
-const MAX_STRINGS: usize = 1_000_000;
+/// Decoded text (shared and inline strings) over the whole workbook, as for `.xls`. Text is
+/// kept, so this bounds the memory its strings take.
+const MAX_TEXT: usize = 256 * 1024 * 1024;
+/// Imported cells over the whole workbook, as for `.xls` (#2126). A stored cell costs about
+/// 100 bytes on a wide sheet and about 640 when each row holds one (a map per row), so this keeps
+/// the cells under about 2.5 GiB, the same worst case an `.xls` file reaches.
+const MAX_CELLS: usize = 4_000_000;
+/// Shared-string items, each kept with its own allocation: no more than there are cells to
+/// show them.
+const MAX_STRINGS: usize = MAX_CELLS;
 const MAX_SHEETS: usize = 1024;
-const MAX_RECORDS: usize = 5_000_000;
+/// Records read over the whole workbook, every part together, as for `.xls`. Records are
+/// skipped or decoded without being kept, so this bounds parse time, not memory: the 1 GiB a
+/// package may expand to holds over 500 million two-byte records. One allowance for all parts,
+/// so many sheets can't each get a fresh one. Excel writes four records per row besides the
+/// cells, and one per formatted empty cell (#2126), so a sheet needs many more than its cells.
+const MAX_RECORDS: usize = 40_000_000;
 
 fn invalid(msg: impl Into<String>) -> IoError {
     IoError::Format(format!("XLSB: {}", msg.into()))
 }
 
-#[derive(Default)]
-struct Budget {
-    cells: usize,
-    text: usize,
+/// What the workbook has used of its limits. Shared by every part's [`Records`] while cells and
+/// text are charged, hence the `Cell`s.
+pub(crate) struct Budget {
+    cells: std::cell::Cell<usize>,
+    text: std::cell::Cell<usize>,
+    records: std::cell::Cell<usize>,
+    max_records: usize,
+}
+impl Default for Budget {
+    fn default() -> Self {
+        Budget { cells: 0.into(), text: 0.into(), records: 0.into(), max_records: MAX_RECORDS }
+    }
 }
 impl Budget {
-    fn text(&mut self, len: usize) -> Result<(), IoError> {
-        self.text = self.text.saturating_add(len);
-        if self.text > MAX_TEXT {
-            return Err(IoError::TooLarge("XLSB decoded text exceeds 64 MiB".into()));
+    /// A budget with a smaller record allowance (tests).
+    #[cfg(test)]
+    pub(crate) fn with_max_records(max_records: usize) -> Self {
+        Budget { max_records, ..Budget::default() }
+    }
+    /// A budget with only `left` bytes of text allowance (tests).
+    #[cfg(test)]
+    pub(crate) fn with_text_left(left: usize) -> Self {
+        Budget { text: MAX_TEXT.saturating_sub(left).into(), ..Budget::default() }
+    }
+    fn text(&self, len: usize) -> Result<(), IoError> {
+        self.text.set(self.text.get().saturating_add(len));
+        if self.text.get() > MAX_TEXT {
+            return Err(IoError::TooLarge(format!("XLSB decoded text exceeds {} MiB", MAX_TEXT >> 20)));
         }
         Ok(())
     }
-    fn cell(&mut self) -> Result<(), IoError> {
-        self.cells += 1;
-        if self.cells > MAX_CELLS {
-            return Err(IoError::TooLarge("XLSB exceeds 1 million imported cells".into()));
+    fn cell(&self) -> Result<(), IoError> {
+        self.cells.set(self.cells.get().saturating_add(1));
+        if self.cells.get() > MAX_CELLS {
+            return Err(IoError::TooLarge(format!("XLSB exceeds {} million imported cells", MAX_CELLS / 1_000_000)));
+        }
+        Ok(())
+    }
+    fn record(&self) -> Result<(), IoError> {
+        self.records.set(self.records.get().saturating_add(1));
+        if self.records.get() > self.max_records {
+            return Err(IoError::TooLarge("XLSB workbook contains too many records".into()));
         }
         Ok(())
     }
@@ -59,6 +96,11 @@ impl Budget {
 /// Imports worksheet scalar values and saved formula results. Number formats are omitted;
 /// dates remain serial numbers with the workbook's original date system. Inspect warnings.
 pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
+    read_xlsb_budgeted(bytes, &Budget::default())
+}
+
+/// [`read_xlsb`] with an explicit resource budget.
+pub(crate) fn read_xlsb_budgeted(bytes: &[u8], budget: &Budget) -> Result<(Workbook, ReadReport), IoError> {
     let mut package = Package::open(bytes)?;
     let types = content_types(&mut package)?;
     let roots = relationships(&mut package, "")?;
@@ -76,9 +118,8 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     wb.sheets.clear();
     let mut report = ReadReport::default();
     report.warn("XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported.");
-    let sheets = workbook(&book, &mut wb, &mut report)?;
+    let sheets = workbook(&book, &mut wb, budget, &mut report)?;
     let rels = relationships(&mut package, &root.target)?;
-    let mut budget = Budget::default();
     let sst_rels: Vec<_> = rels.iter().filter(|r| r.kind == "sharedStrings").collect();
     if sst_rels.len() > 1 {
         return Err(invalid("multiple shared-string relationships"));
@@ -88,7 +129,7 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             return Err(invalid("external shared-string relationship"));
         }
         check_type(&types, &rel.target, STRINGS)?;
-        shared_strings(&required(&mut package, &rel.target)?, &mut budget, &mut report)?
+        shared_strings(&required(&mut package, &rel.target)?, budget, &mut report)?
     } else {
         vec![]
     };
@@ -113,7 +154,7 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         }
         check_type(&types, &rel.target, WORKSHEET)?;
         wb.check_sheet_name(&info.name, None).map_err(invalid)?;
-        let mut sheet = worksheet(&required(&mut package, &rel.target)?, &info.name, &strings, &mut budget, &mut report)?;
+        let mut sheet = worksheet(&required(&mut package, &rel.target)?, &info.name, &strings, budget, &mut report)?;
         sheet.visibility = info.visibility;
         wb.sheets.push(Arc::new(sheet));
     }
@@ -303,21 +344,18 @@ impl<'a> Bytes<'a> {
     }
 }
 
-struct Records<'a> {
+struct Records<'a, 'b> {
     bytes: Bytes<'a>,
-    count: usize,
+    budget: &'b Budget,
     blocks: Vec<u16>,
 }
-impl<'a> Records<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes: Bytes::new(bytes), count: 0, blocks: vec![] }
+impl<'a, 'b> Records<'a, 'b> {
+    fn new(bytes: &'a [u8], budget: &'b Budget) -> Self {
+        Self { bytes: Bytes::new(bytes), budget, blocks: vec![] }
     }
     fn next(&mut self, report: &mut ReadReport) -> Result<Option<(u16, &'a [u8])>, IoError> {
         while !self.bytes.rest.is_empty() {
-            self.count += 1;
-            if self.count > MAX_RECORDS {
-                return Err(IoError::TooLarge("XLSB part contains too many records".into()));
-            }
+            self.budget.record()?;
             let first = self.bytes.u8()?;
             let id = if first & 0x80 == 0 {
                 first as u16
@@ -390,8 +428,8 @@ struct SheetInfo {
     rel: Option<String>,
     visibility: Visibility,
 }
-fn workbook(bytes: &[u8], wb: &mut Workbook, report: &mut ReadReport) -> Result<Vec<SheetInfo>, IoError> {
-    let mut records = Records::new(bytes);
+fn workbook(bytes: &[u8], wb: &mut Workbook, budget: &Budget, report: &mut ReadReport) -> Result<Vec<SheetInfo>, IoError> {
+    let mut records = Records::new(bytes, budget);
     records.first(131, report)?;
     let mut sheets = vec![];
     let mut bundle = false;
@@ -482,8 +520,8 @@ fn rich_string(b: &mut Bytes<'_>) -> Result<String, IoError> {
     Ok(text)
 }
 
-fn shared_strings(bytes: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Result<Vec<Arc<str>>, IoError> {
-    let mut records = Records::new(bytes);
+fn shared_strings(bytes: &[u8], budget: &Budget, report: &mut ReadReport) -> Result<Vec<Arc<str>>, IoError> {
+    let mut records = Records::new(bytes, budget);
     let Some((159, payload)) = records.next(report)? else {
         return Err(invalid("missing shared-string begin record"));
     };
@@ -551,7 +589,7 @@ fn cached_formula(b: &mut Bytes<'_>) -> Result<(), IoError> {
     b.take(extra as usize)?;
     Ok(())
 }
-fn value(id: u16, b: &mut Bytes<'_>, strings: &[Arc<str>], budget: &mut Budget) -> Result<Value, IoError> {
+fn value(id: u16, b: &mut Bytes<'_>, strings: &[Arc<str>], budget: &Budget) -> Result<Value, IoError> {
     let value = match id {
         1 => Value::Empty,
         2 => {
@@ -580,8 +618,8 @@ fn value(id: u16, b: &mut Bytes<'_>, strings: &[Arc<str>], budget: &mut Budget) 
     Ok(value)
 }
 
-fn worksheet(bytes: &[u8], name: &str, strings: &[Arc<str>], budget: &mut Budget, report: &mut ReadReport) -> Result<Sheet, IoError> {
-    let mut records = Records::new(bytes);
+fn worksheet(bytes: &[u8], name: &str, strings: &[Arc<str>], budget: &Budget, report: &mut ReadReport) -> Result<Sheet, IoError> {
+    let mut records = Records::new(bytes, budget);
     records.first(129, report)?;
     let mut sheet = Sheet::new(name);
     let mut data = false;

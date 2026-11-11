@@ -3,7 +3,7 @@ use gridcraft_core::{CellError, CellRef, DateSystem, RangeRef, Value};
 use gridcraft_model::Visibility;
 
 use super::make_zip;
-use crate::{Format, read_xlsb, read_xlsx, sniff, write_xlsx};
+use crate::{Format, IoError, read_xlsb, read_xlsx, sniff, write_xlsx};
 
 const ROOT: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="book" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="records/book.bin"/></Relationships>"#;
 const RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="one" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/one.bin"/><Relationship Id="two" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/two.bin"/><Relationship Id="strings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="../text/strings.bin"/></Relationships>"#;
@@ -115,6 +115,35 @@ fn file(sheet: &[u8]) -> Vec<u8> {
 }
 fn text(s: &str) -> Value {
     Value::Text(s.into())
+}
+/// A row as Excel writes it: the row header, then `BrtRwDescent` (1024) in an alternate-content
+/// block. [MS-XLSB] 2.4.791: one per non-empty row whenever the workbook lists its fonts, which
+/// Excel always does. Four records per row besides the cells.
+fn excel_row(r: u32) -> Vec<u8> {
+    [row(r), record(37, &[1, 0, 0, 0, 0, 0]), record(1024, &[0, 0]), record(38, &[])].concat()
+}
+/// `n` TRUE cells, `width` to a row from A1, in rows as Excel writes them.
+fn bool_cells(n: u32, width: u32) -> Vec<u8> {
+    let mut data = vec![];
+    for i in 0..n {
+        if i % width == 0 {
+            data.extend(excel_row(i / width));
+        }
+        data.extend(cell(4, i % width, &[1]));
+    }
+    data
+}
+/// A workbook whose two worksheets are the given parts.
+fn two_sheets(one: &[u8], two: &[u8]) -> Vec<u8> {
+    make_zip(&[
+        ("[Content_Types].xml", TYPES.as_bytes()),
+        ("_rels/.rels", ROOT.as_bytes()),
+        ("records/book.bin", &book(false)),
+        ("records/_rels/book.bin.rels", RELS.as_bytes()),
+        ("data/one.bin", one),
+        ("data/two.bin", two),
+        ("text/strings.bin", &sst()),
+    ])
 }
 
 #[test]
@@ -302,7 +331,89 @@ fn xlsb_declared_counts_and_decoded_text_are_bounded() {
     for col in 0..2050 {
         data.extend(cell(6, col, &text));
     }
-    assert!(read_xlsb(&file(&worksheet(&data, &[]))).unwrap_err().to_string().contains("64 MiB"));
+    // Just over 64 MiB of text, the old allowance: 1.8M unique 40-character strings are more.
+    let (wb, _) = read_xlsb(&file(&worksheet(&data, &[]))).unwrap();
+    assert_eq!(wb.sheets[0].cells.len(), 2050);
+}
+
+#[test]
+fn xlsb_opens_more_than_a_million_cells() {
+    // #2126: a million cells over the workbook was a quarter of what `.xls` allows.
+    let (wb, _) = read_xlsb(&file(&worksheet(&bool_cells(1_000_001, 16), &[]))).unwrap();
+    assert_eq!(wb.sheets[0].cells.len(), 1_000_001);
+    assert_eq!(wb.sheets[0].value(CellRef::new(62_500, 0)), Value::Bool(true));
+}
+
+#[test]
+fn xlsb_full_height_column_opens() {
+    // 1,048,576 cells in Excel's rows are 5.2M records in one part.
+    let (wb, _) = read_xlsb(&file(&worksheet(&bool_cells(1_048_576, 1), &[]))).unwrap();
+    assert_eq!(wb.sheets[0].cells.len(), 1_048_576);
+    assert_eq!(wb.sheets[0].value(CellRef::new(1_048_575, 0)), Value::Bool(true));
+}
+
+#[test]
+fn xlsb_formatted_blank_cells_cost_records_not_cells() {
+    // Filling A1:Z200000 and typing 30 values: Excel writes a BrtCellBlank for every formatted
+    // empty cell, 6M records in all, which a 5M allowance per part refused.
+    let mut data = vec![];
+    for r in 0..200_000u32 {
+        data.extend(excel_row(r));
+        for c in 0..26 {
+            data.extend(if r < 10 && c < 3 { cell(4, c, &[1]) } else { cell(1, c, &[]) });
+        }
+    }
+    let (wb, _) = read_xlsb(&file(&worksheet(&data, &[]))).unwrap();
+    assert_eq!(wb.sheets[0].cells.len(), 30);
+}
+
+#[test]
+fn xlsb_cells_are_limited_to_four_million_over_the_workbook() {
+    // The `.xls` limit, counted across sheets: 2M + 2M opens, 2M + 2M + 1 does not.
+    let half = bool_cells(2_000_000, 40);
+    let mut over = half.clone();
+    over.extend(excel_row(50_000));
+    over.extend(cell(4, 0, &[1]));
+    let (wb, _) = read_xlsb(&two_sheets(&worksheet(&half, &[]), &worksheet(&half, &[]))).unwrap();
+    assert_eq!(wb.sheets.iter().map(|s| s.cells.len()).sum::<usize>(), 4_000_000);
+    let err = read_xlsb(&two_sheets(&worksheet(&half, &[]), &worksheet(&over, &[]))).unwrap_err();
+    assert!(matches!(err, IoError::TooLarge(_)), "{err}");
+    assert!(err.to_string().contains("4 million"), "{err}");
+}
+
+#[test]
+fn xlsb_records_share_one_allowance_over_the_workbook() {
+    use crate::xlsb::{Budget, read_xlsb_budgeted};
+    // About 1,400 records a sheet: over a 2,000 shared allowance, though each sheet alone fits.
+    let sheet = worksheet(&bool_cells(1000, 10), &[]);
+    let bytes = two_sheets(&sheet, &sheet);
+    assert!(matches!(read_xlsb_budgeted(&bytes, &Budget::with_max_records(2_000)), Err(IoError::TooLarge(_))));
+    assert!(read_xlsb_budgeted(&bytes, &Budget::with_max_records(4_000)).is_ok());
+    // The real allowance: exactly 40 million records, then one more. The other parts hold 20 (7 in
+    // the workbook, 3 shared-string records, 5 + 5 sheet framing records).
+    let filler = record(30, &[]); // Not a cell record: skipped inside the sheet data.
+    let mut data = filler.repeat(40_000_000 - 20);
+    assert!(read_xlsb(&file(&worksheet(&data, &[]))).is_ok());
+    data.extend(filler.repeat(1));
+    let err = read_xlsb(&file(&worksheet(&data, &[]))).unwrap_err();
+    assert!(matches!(err, IoError::TooLarge(_)) && err.to_string().contains("too many records"), "{err}");
+}
+
+#[test]
+fn xlsb_text_and_shared_strings_are_limited() {
+    use crate::xlsb::{Budget, read_xlsb_budgeted};
+    let bytes = file(&worksheet(&[row(0), cell(6, 0, &wide("eleven char"))].concat(), &[]));
+    // The shared string ("shared 🦀 café", 17 bytes) and the cell's 11 are charged.
+    assert!(read_xlsb_budgeted(&bytes, &Budget::with_text_left(28)).is_ok());
+    let err = read_xlsb_budgeted(&bytes, &Budget::with_text_left(27)).unwrap_err();
+    assert!(matches!(err, IoError::TooLarge(_)) && err.to_string().contains("256 MiB"), "{err}");
+    // A declared count over 4 million shared strings is refused before any item is read.
+    let sst_header = |unique: u32| [record(159, &[unique.to_le_bytes(), unique.to_le_bytes()].concat()), record(160, &[])].concat();
+    let over = read_xlsb(&package(&book(false), &worksheet(&[], &[]), &sst_header(4_000_001), ROOT, RELS, TYPES)).unwrap_err();
+    assert!(matches!(over, IoError::TooLarge(_)), "{over}");
+    // At the limit the count passes, and the missing items are what's wrong.
+    let at = read_xlsb(&package(&book(false), &worksheet(&[], &[]), &sst_header(4_000_000), ROOT, RELS, TYPES)).unwrap_err();
+    assert!(matches!(at, IoError::Format(_)), "{at}");
 }
 
 #[test]

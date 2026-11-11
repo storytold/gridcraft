@@ -11,6 +11,9 @@ Source formatting is omitted: dates, times, percentages and currencies initially
 their underlying numbers. The workbook's date system is retained. Charts, images, names,
 macros and other workbook features are not imported. GridCraft does not write XLSB files.
 
+A workbook with more than 4 million cells or 256 MiB of text in all is refused with a message,
+as an `.xls` file is.
+
 Save opens Save As and suggests a new `.xlsx` file. The source XLSB file is not used as the
 workbook's save destination; requests to save to `.xlsb` return an error.
 
