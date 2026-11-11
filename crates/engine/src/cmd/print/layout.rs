@@ -341,12 +341,17 @@ pub fn layouts(wb: &Workbook, opts: &PrintOptions) -> Vec<SheetLayout> {
     let mut pages = 0usize;
     let sheets: Vec<usize> = if opts.all_sheets {
         let visible: Vec<usize> = (0..wb.sheets.len()).filter(|i| wb.sheet(*i).is_some_and(|s| s.visibility == Visibility::Visible)).collect();
-        // Sheets left out of workbook printing are skipped, unless that would leave none.
-        let printed: Vec<usize> = visible.iter().copied().filter(|i| wb.sheet(*i).is_some_and(|s| !s.print.excluded)).collect();
+        // Sheets left out of workbook printing are skipped, unless that would leave none. A range
+        // given for the active sheet is asked for explicitly, so that sheet prints regardless.
+        let keep = |i: usize| (i == wb.active_sheet() && opts.range.is_some()) || wb.sheet(i).is_some_and(|s| !s.print.excluded);
+        let printed: Vec<usize> = visible.iter().copied().filter(|i| keep(*i)).collect();
         if printed.is_empty() { visible } else { printed }
     } else {
         vec![wb.active_sheet()]
     };
+    // When every sheet is empty, one blank page: the active sheet's if it would print, else the
+    // first sheet that would (never one left out of workbook printing).
+    let fallback = if sheets.contains(&wb.active_sheet()) { wb.active_sheet() } else { sheets.first().copied().unwrap_or(wb.active_sheet()) };
     for si in sheets {
         if pages >= MAX_PAGES {
             break;
@@ -362,7 +367,7 @@ pub fn layouts(wb: &Workbook, opts: &PrintOptions) -> Vec<SheetLayout> {
         }
     }
     if out.is_empty() && opts.all_sheets {
-        out.extend(layout_sheet(wb, wb.active_sheet(), opts, None));
+        out.extend(layout_sheet(wb, fallback, opts, None));
     }
     out
 }

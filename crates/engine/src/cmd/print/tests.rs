@@ -980,3 +980,26 @@ fn page_setup_excluded_leaves_the_sheet_out_of_workbook_export() {
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(pdf_of(&mut s, json!({"sheets": "all"})).1, 2);
 }
+
+/// Workbook printing never falls back to an excluded sheet when every other sheet is empty, and a
+/// range given for an excluded active sheet still prints.
+#[test]
+fn excluded_active_sheet_is_not_the_empty_fallback_but_prints_an_explicit_range() {
+    use gridcraft_core::Value;
+    let mut wb = gridcraft_model::Workbook::new();
+    wb.sheets.clear();
+    let mut one = gridcraft_model::Sheet::new("One");
+    one.set_value(CellRef::new(0, 0), Value::Text("One".into()));
+    one.print.excluded = true;
+    wb.sheets.push(std::sync::Arc::new(one));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Two")));
+    assert_eq!(wb.active_sheet(), 0);
+    let sheets_of = |opts: &super::layout::PrintOptions| super::layout::layouts(&wb, opts).iter().map(|l| l.sheet).collect::<Vec<_>>();
+    // One is excluded, Two is blank: Two's blank page, not One.
+    let all = super::layout::PrintOptions { all_sheets: true, ..Default::default() };
+    assert_eq!(sheets_of(&all), vec![1]);
+    // An explicit range for the (excluded) active sheet prints it.
+    let ranged = super::layout::PrintOptions { all_sheets: true, range: gridcraft_core::RangeRef::parse("A1:B2"), ..Default::default() };
+    let lays = super::layout::layouts(&wb, &ranged);
+    assert_eq!(lays.iter().map(|l| (l.sheet, l.area)).collect::<Vec<_>>(), vec![(0, gridcraft_core::RangeRef::parse("A1:B2").unwrap())]);
+}
