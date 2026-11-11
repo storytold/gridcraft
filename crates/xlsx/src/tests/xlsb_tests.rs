@@ -549,9 +549,16 @@ fn xlsb_python_formulas_need_their_code_in_the_cell() {
     let py = |arg: &[u8]| [&[0x23u8, 5, 0, 0, 0][..], arg, &[0x1E, 0, 0, 0x42, 3, 0xFF, 0]].concat();
     // Code longer than one string constant is written as constants joined with `&`.
     let joined = [&[0x17u8, 1, 0, b'1', 0][..], &[0x17, 2, 0, b'+', 0, b'1', 0], &[0x08]].concat();
-    let data =
-        [row(0), formula_cell(0, &py(&[0x17, 1, 0, b'1', 0]), &[]), formula_cell(1, &py(&[0x1E, 0, 0]), &[]), formula_cell(2, &py(&joined), &[])]
-            .concat();
+    // The same strings nested to the right, `"1"&("+"&"1")` by token order: still one flat chain.
+    let nested = [&[0x17u8, 1, 0, b'1', 0][..], &[0x17, 1, 0, b'+', 0], &[0x17, 1, 0, b'1', 0], &[0x08, 0x08]].concat();
+    let data = [
+        row(0),
+        formula_cell(0, &py(&[0x17, 1, 0, b'1', 0]), &[]),
+        formula_cell(1, &py(&[0x1E, 0, 0]), &[]),
+        formula_cell(2, &py(&joined), &[]),
+        formula_cell(3, &py(&nested), &[]),
+    ]
+    .concat();
     let bytes = package(&book, &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
     // The engine's facts, where PY is no built-in function: a legacy formula calling it would get
     // an implicit `@`, which the Python-cell reading wouldn't recognize. PY formulas don't.
@@ -561,6 +568,7 @@ fn xlsb_python_formulas_need_their_code_in_the_cell() {
         let code = |c| gridcraft_model::PyCode::from_formula(&formula(c).unwrap()).map(|p| p.code);
         assert_eq!(code(0), Some("1".into()), "{:?}", formula(0));
         assert_eq!(code(2), Some("1+1".into()), "{:?}", formula(2));
+        assert_eq!(code(3), Some("1+1".into()), "{:?}", formula(3));
         assert_eq!(formula(1), None);
         assert!(report.warnings.iter().any(|w| w.contains("Python code stored outside")));
     }

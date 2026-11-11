@@ -393,6 +393,17 @@ fn binding(e: &Expr) -> u8 {
     }
 }
 
+/// The strings of a [`literal_text`] chain, left to right.
+fn flatten_texts(e: Expr, out: &mut Vec<Expr>) {
+    match e {
+        Expr::Binary(BinOp::Concat, a, b) => {
+            flatten_texts(*a, out);
+            flatten_texts(*b, out);
+        }
+        text => out.push(text),
+    }
+}
+
 fn paren(e: Expr) -> Expr {
     Expr::Paren(Box::new(e))
 }
@@ -404,6 +415,15 @@ fn paren(e: Expr) -> Expr {
 /// Recursion follows the decoded tree, which `push` bounds at `MAX_DEPTH` levels.
 fn grouped(e: Expr, in_args: bool) -> Expr {
     match e {
+        // Strings joined with `&` are written as one flat chain, however their tokens nest: `&`
+        // is associative, and `PY("…"&"…")` is read as Python code only in that form.
+        e @ Expr::Binary(BinOp::Concat, ..) if literal_text(&e) => {
+            let mut texts = vec![];
+            flatten_texts(e, &mut texts);
+            let mut texts = texts.into_iter();
+            let first = texts.next().unwrap_or(Expr::Missing);
+            texts.fold(first, |a, b| Expr::Binary(BinOp::Concat, Box::new(a), Box::new(b)))
+        }
         Expr::Binary(op, a, b) => {
             let (a, b) = (grouped(*a, in_args), grouped(*b, in_args));
             let a = if binding(&a) < op.precedence() { paren(a) } else { a };
