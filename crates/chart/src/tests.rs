@@ -1673,6 +1673,23 @@ fn bars_far_from_zero_start_at_the_axis_minimum() {
                 assert!(*x >= -0.5 && *y >= -0.5 && x + w <= 640.5 && y + h <= 400.5, "{kind:?} {q:?}");
             }
         }
+        if kind == ChartKind::Area {
+            // The area's base is cut off at the axis minimum too, so it stays above the category
+            // labels. (`render` clamps every shape to the canvas, so a canvas check can't catch a
+            // base left at 0 below the plot.)
+            let label_y = p.iter().find_map(|q| match q {
+                Prim::Text { text, y, .. } if text == "A" => Some(*y),
+                _ => None,
+            });
+            let area_bottom = p
+                .iter()
+                .filter_map(|q| match q {
+                    Prim::Polygon { pts, fill, .. } if *fill == [10, 20, 30, 255] => pts.iter().map(|p| p[1]).reduce(f32::max),
+                    _ => None,
+                })
+                .reduce(f32::max);
+            assert!(matches!((area_bottom, label_y), (Some(b), Some(l)) if b < l), "{area_bottom:?} vs label {label_y:?}");
+        }
         if kind != ChartKind::Area {
             // Bars rise from one baseline (the axis minimum), and their lengths keep the order
             // of the values.
