@@ -612,8 +612,6 @@ fn multi_level_cat(f: &str, values: &str, wb: &Workbook, si: usize) -> Option<St
 fn series_xml(s: &Series, idx: usize, g: G, own: ChartKind, wb: &Workbook, si: usize) -> String {
     let g = match (g, group_for(own)) {
         (G::Line { stacked, .. }, G::Line { markers, .. }) => G::Line { stacked, markers },
-        // A markers-only scatter series drawn among lines keeps its markers.
-        (G::Line { stacked, .. }, G::Scatter { lines: false }) => G::Line { stacked, markers: true },
         (G::Scatter { .. }, mine @ G::Scatter { .. }) => mine,
         _ => g,
     };
@@ -881,7 +879,12 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         }
         // The groups on one pair of axes share its kind of axes; one that can't (a pie beside
         // columns, a scatter beside lines) is drawn in the nearest group that can.
-        let family = out.iter().map(|(g, _)| axes_of(*g)).find(|a| *a != Axes::None).unwrap_or(Axes::None);
+        // A combination chart is drawn on category axes (its series' kinds say how).
+        let family = if ch.kind == ChartKind::Combo {
+            Axes::Category
+        } else {
+            out.iter().map(|(g, _)| axes_of(*g)).find(|a| *a != Axes::None).unwrap_or(Axes::None)
+        };
         // A stock group holds 3 or 4 series (high-low-close, open-high-low-close); others are
         // lines.
         let out: Vec<(G, Vec<(usize, &Series)>)> = out

@@ -280,3 +280,21 @@ fn a_scatter_series_among_lines_keeps_its_markers() {
     let (xml, back) = round_trip(&chart_of(Combo, &[(Some(ColumnClustered), false), (Some(Scatter), false)]));
     assert_eq!(back.series_kind(1), LineMarkers, "{xml}");
 }
+
+/// A combination chart is drawn on category axes, whichever series comes first: a scatter or
+/// bubble series never turns the axes into value axes and the other series into scatter series.
+#[test]
+fn a_combo_stays_on_category_axes() {
+    use ChartKind::*;
+    for kinds in [
+        vec![(Some(Scatter), false), (Some(ColumnClustered), false)],
+        vec![(Some(ScatterLines), false), (Some(Line), false), (Some(ColumnStacked), false)],
+        vec![(Some(Bubble), false), (Some(Line), false)],
+        vec![(Some(Line), false), (Some(Scatter), true), (Some(ColumnClustered), true)],
+        vec![(Some(Radar), false), (Some(ColumnClustered), false)],
+    ] {
+        let xml = assert_round_trips(Combo, &kinds);
+        assert!(!xml.contains("<c:scatterChart>") && !xml.contains("<c:bubbleChart>"), "{kinds:?}: {xml}");
+        assert!(xml.contains("<c:catAx>"), "{kinds:?}: {xml}");
+    }
+}

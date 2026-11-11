@@ -594,8 +594,11 @@ fn combo_series_kind(own: Option<ChartKind>, i: usize) -> ChartKind {
         Some(ChartKind::BarClustered) => ChartKind::ColumnClustered,
         Some(ChartKind::BarStacked) => ChartKind::ColumnStacked,
         Some(ChartKind::BarStacked100) => ChartKind::ColumnStacked100,
-        // Its pies and doughnuts are drawn as columns: a combination chart has axes.
-        Some(ChartKind::Pie | ChartKind::Doughnut) => ChartKind::ColumnClustered,
+        // A combination chart is drawn on category axes: its pies, doughnuts and bubbles as
+        // columns, its scatter and radar series as lines (a markers-only scatter with markers).
+        Some(ChartKind::Pie | ChartKind::Doughnut | ChartKind::Bubble) => ChartKind::ColumnClustered,
+        Some(ChartKind::Scatter) => ChartKind::LineMarkers,
+        Some(ChartKind::ScatterLines | ChartKind::Radar) => ChartKind::Line,
         Some(k) if k != ChartKind::Combo => k,
         _ if i == 0 => ChartKind::ColumnClustered,
         _ => ChartKind::Line,
@@ -711,7 +714,7 @@ impl Chart {
                     | ChartKind::AreaStacked100
             )
         };
-        eligible(self.kind) || (self.kind == ChartKind::Combo && (0..self.series.len()).all(|i| eligible(self.series_kind(i))))
+        eligible(self.kind) || (self.kind == ChartKind::Combo && self.series_kinds().into_iter().all(eligible))
     }
 }
 
@@ -1052,6 +1055,10 @@ mod series_kind_tests {
         for (bar, column) in [(BarStacked, ColumnStacked), (BarStacked100, ColumnStacked100)] {
             assert_eq!(drawn(&chart(Combo, &[Some(bar), Some(Line)])), vec![column, Line]);
         }
+        // On a combo's category axes scatter and radar series are lines (a markers-only scatter
+        // keeps its markers) and bubbles are columns.
+        let c = chart(Combo, &[Some(Scatter), Some(ScatterLines), Some(Radar), Some(Bubble)]);
+        assert_eq!(drawn(&c), vec![LineMarkers, Line, Line, ColumnClustered]);
         // Out of range: the default for that position, never a panic.
         assert_eq!(c.series_kind(usize::MAX), Line);
     }
@@ -1083,6 +1090,19 @@ mod series_kind_tests {
         assert_eq!(c.series_kinds(), drawn(&c));
     }
 
+    /// A series' own markers or lines outside a combo are honoured wherever they come from: an
+    /// XLSX file's per-series markers, or a kind left in an older GridCraft JSON workbook by a
+    /// type change made before `drop_foreign_series_kinds` (not migrated: the two can't be told
+    /// apart).
+    #[test]
+    fn a_leftover_kind_in_the_same_family_is_drawn() {
+        use ChartKind::*;
+        let json = serde_json::to_value(chart(Line, &[None, Some(LineMarkers)])).unwrap();
+        let c: Chart = serde_json::from_value(json).unwrap();
+        assert_eq!(drawn(&c), vec![Line, LineMarkers]);
+        assert_eq!(drawn(&chart(ScatterLines, &[Some(Scatter)])), vec![Scatter]);
+    }
+
     #[test]
     fn a_change_of_type_drops_the_kinds_it_does_not_draw() {
         use ChartKind::*;
@@ -1098,7 +1118,9 @@ mod series_kind_tests {
     fn a_combo_supports_a_data_table_by_its_drawn_kinds() {
         use ChartKind::*;
         assert!(chart(Combo, &[None, None]).supports_data_table());
-        assert!(!chart(Combo, &[None, Some(Scatter)]).supports_data_table());
+        // Its scatter series are drawn as lines on its category axes; stock series have no table.
+        assert!(chart(Combo, &[None, Some(Scatter)]).supports_data_table());
+        assert!(!chart(Combo, &[None, Some(Stock)]).supports_data_table());
     }
 }
 
