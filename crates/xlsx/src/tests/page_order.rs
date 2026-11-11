@@ -61,3 +61,15 @@ fn down_then_over_writes_no_page_order() {
     wb.sheet_mut(0).unwrap().print.page_order = PageOrder::DownThenOver;
     assert!(!sheet_xml(&write_xlsx(&wb).unwrap()).contains("pageOrder"));
 }
+
+#[test]
+fn page_margins_are_written_as_their_decimals() {
+    // #1609 item 7: the f32 margins were widened to f64, so 0.3 came out as 0.30000001192092896.
+    let body = r#"<sheetData/><pageMargins left="0.3" right="0.25" top="1.1" bottom="0.75" header="0.3" footer="0.3"/>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let xml = sheet_xml(&write_xlsx(&wb).unwrap());
+    assert!(xml.contains(r#"<pageMargins left="0.3" right="0.25" top="1.1" bottom="0.75" header="0.3" footer="0.3"/>"#), "{xml}");
+    // The default sheet writes Excel's default margins exactly.
+    let xml = sheet_xml(&write_xlsx(&Workbook::new()).unwrap());
+    assert!(xml.contains(r#"<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>"#), "{xml}");
+}

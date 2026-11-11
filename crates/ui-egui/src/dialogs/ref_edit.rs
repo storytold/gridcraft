@@ -1,10 +1,12 @@
 //! Reference boxes (Excel's RefEdit): text fields that take a range by selection on the grid, with
 //! a button that collapses the dialog to the box while the person selects.
 
+use gridcraft_engine::DocState;
+use gridcraft_engine::core::split_areas;
 use gridcraft_engine::model::{Sheet, SheetUid, Workbook};
 
 use super::data::abs;
-use super::{Dialog, Icon, Json, SheetApp, json, theme, vec2};
+use super::{Dialog, Field, Icon, Json, SheetApp, json, theme, vec2};
 
 /// What a dialog's reference boxes are doing: which one grid selections fill, and whether the
 /// dialog is collapsed to one of them.
@@ -18,12 +20,17 @@ pub(super) struct RefBoxes {
     /// The sheet shown when `seen` was taken: changing sheets only refreshes `seen`, since the
     /// other sheet's own selection is not a pick.
     seen_sheet: String,
-    /// The dialog's own sheet, from the first pick until the dialog closes, and the selection to
-    /// put back when it runs its command or closes.
+    /// The dialog's own sheet, from the moment the dialog opens until it closes, and the
+    /// selection to put back when it runs its command or closes.
     home: Option<Home>,
     /// The target took a selection from the grid and takes the keyboard back once the pointer
     /// is released, so typing still edits the box.
     refocus: bool,
+    /// A press on the grid selected this frame ([`note_selecting_press`]): the target takes the
+    /// selection even when it is the one it last saw, since clicking the cell already selected
+    /// is a pick too. Cleared when a box starts picking and once the frame's boxes are drawn, so
+    /// only a press made while the box picks counts.
+    pressed: bool,
     /// The target box was drawn this frame. A box the dialog stops showing (another view of the
     /// dialog, a hidden area, a constraint operator that takes no value) is no longer picked
     /// into, so a selection made meanwhile does not land in it once it is shown again (see
@@ -43,9 +50,9 @@ pub(super) struct RefBoxes {
     other_field: bool,
 }
 
-/// Where picking began: the dialog's own sheet, kept for as long as the dialog is open (a failed
-/// OK leaves it open, and a later OK still needs to know whether that sheet is there), and the
-/// selection to put back once.
+/// The dialog's own sheet: the sheet shown when the dialog opened ([`record_home`]), kept for as
+/// long as the dialog is open (a failed OK leaves it open, and a later OK still needs to know
+/// whether that sheet is there), and the selection on it to put back once picking ends.
 #[derive(Clone, Debug)]
 struct Home {
     /// The sheet's identity while the app runs ([`SheetUid`]): fresh for every sheet added,
@@ -54,9 +61,50 @@ struct Home {
     /// copy of it is never taken for it, and an undo that brings it back makes it the dialog's
     /// again.
     uid: SheetUid,
-    /// The ranges and active cell from before picking began on the dialog's sheet, put back once
-    /// when the dialog runs its command or closes.
+    /// The ranges and active cell on the dialog's sheet from before picking began, taken when a
+    /// box starts picking (from the sheet's kept selection when another sheet is shown then), and
+    /// put back once when the dialog runs its command or closes.
     selection: Option<(String, String)>,
+}
+
+/// Whether the dialog has reference boxes: Goal Seek, Solver, Data Analysis, and any form with a
+/// [`Field::Ref`].
+fn has_reference_boxes(d: &Dialog) -> bool {
+    matches!(d.name.as_str(), "goalSeek" | "solver" | "analysisToolPak") || d.fields.iter().any(|f| matches!(f, Field::Ref { .. }))
+}
+
+/// Records the sheet shown as the dialog's own when a dialog with reference boxes opens, from the
+/// ribbon or the control channel alike. A sheet shown later, before any box picks, is not the
+/// dialog's: references without a sheet name still mean the sheet the dialog was opened on,
+/// whose defaults (the active cell, the selection) the boxes start with.
+pub(super) fn record_home(app: &SheetApp, d: &mut Dialog) {
+    if !has_reference_boxes(d) {
+        return;
+    }
+    if let Some(sheet) = app.session.active().and_then(|doc| doc.wb.active()) {
+        d.refs.home = Some(Home { uid: sheet.uid, selection: None });
+    }
+}
+
+/// The selection on the dialog's own sheet as (ranges, active cell): the one shown while that
+/// sheet is active, else the one the sheet keeps for when it is shown again. `None` once the
+/// sheet is deleted.
+fn home_selection(doc: &DocState, home: &Home) -> Option<(String, String)> {
+    let i = doc.wb.sheets.iter().position(|s| s.uid.get() == home.uid.get())?;
+    let sel = if i == doc.wb.active_sheet() { &doc.selection } else { doc.sheet_selections.get(i)? };
+    let ranges: Vec<String> = sel.ranges.iter().map(|r| r.a1()).collect();
+    Some((ranges.join(","), sel.active.a1()))
+}
+
+/// The grid's current area (the one being selected) as a reference for a dialog of `d`'s: with
+/// the sheet name when it is on another sheet than the dialog's own, as a reference box writes it.
+pub(super) fn current_area_ref(app: &SheetApp, d: &Dialog) -> String {
+    let Some(doc) = app.session.active() else { return String::new() };
+    let area = doc.selection.current().a1();
+    match (doc.wb.active(), d.refs.home.as_ref()) {
+        (Some(sh), Some(home)) if home.uid.get() != sh.uid.get() => format!("{}!{area}", gridcraft_engine::formula::quote_sheet(&sh.name)),
+        _ => area,
+    }
 }
 
 /// The dialog's own sheet in `wb`, or `None` once it was deleted.
@@ -64,8 +112,8 @@ fn home_sheet<'a>(wb: &'a Workbook, home: &Home) -> Option<&'a Sheet> {
     wb.sheets.iter().map(|s| &**s).find(|s| s.uid.get() == home.uid.get())
 }
 
-/// Whether the dialog's own sheet is protected, once its reference boxes have picked and while
-/// that sheet exists: the sheet [`end_pick`] shows again. `None` otherwise.
+/// Whether the dialog's own sheet is protected, for a dialog with reference boxes and while that
+/// sheet exists: the sheet [`end_pick`] shows again. `None` otherwise.
 pub(super) fn home_sheet_protected(app: &SheetApp, d: &Dialog) -> Option<bool> {
     let home = d.refs.home.as_ref()?;
     app.session.active().and_then(|doc| home_sheet(&doc.wb, home)).map(Sheet::is_protected)
@@ -75,8 +123,9 @@ pub(super) fn home_sheet_protected(app: &SheetApp, d: &Dialog) -> Option<bool> {
 pub(crate) const SHEET_DELETED: &str =
     "The sheet this dialog was opened on was deleted. Cancel, then open the dialog again on the sheet it should use.";
 
-/// Whether the sheet the dialog was opened on has been deleted while it picked: its references
-/// without a sheet name have nothing to refer to, so OK is refused with [`SHEET_DELETED`].
+/// Whether the sheet a dialog with reference boxes was opened on has been deleted while it was
+/// open: its references without a sheet name have nothing to refer to, so OK is refused with
+/// [`SHEET_DELETED`].
 pub(super) fn home_sheet_deleted(app: &SheetApp, d: &mut Dialog) -> bool {
     d.refs.home.as_ref().is_some_and(|h| app.session.active().is_none_or(|doc| home_sheet(&doc.wb, h).is_none()))
 }
@@ -216,6 +265,8 @@ pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool,
         d.refs.rect = rect;
     }
     d.refs.was_collapsed = collapsed;
+    // A press the boxes did not take this frame (none was picking) is not kept for a later one.
+    d.refs.pressed = false;
     d.refs.other_field = d.refs.collapsed.as_deref().is_some_and(|key| other_field_focused(ctx, key));
     // The box compares the grid selection with the one it last saw only while it is drawn: a
     // hidden box would take a selection made meanwhile when it comes back.
@@ -227,26 +278,33 @@ pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool,
     }
 }
 
-/// Makes the reference box `key` the one grid selections fill. The first pick remembers the
-/// sheet and selection, which are put back when the dialog runs its command or closes.
+/// Records a press on the grid that selects (see [`RefBoxes::pressed`]).
+pub(super) fn note_selecting_press(d: &mut Dialog) {
+    d.refs.pressed = true;
+}
+
+/// Whether a reference box is being picked into (see [`Dialog::ref_box_picks`]).
+pub(super) fn picks(d: &Dialog) -> bool {
+    d.refs.target.is_some()
+}
+
+/// Makes the reference box `key` the one grid selections fill. The first pick (and the first
+/// after an OK that failed) remembers the selection on the dialog's own sheet, which is put back
+/// when the dialog runs its command or closes. A dialog opened without [`record_home`] takes the
+/// sheet shown at its first pick as its own.
 pub(super) fn begin_pick(app: &SheetApp, d: &mut Dialog, key: &str) {
     if let Some(doc) = app.session.active()
         && let Some(sheet) = doc.wb.active()
     {
-        let ranges: Vec<String> = doc.selection.ranges.iter().map(|r| r.a1()).collect();
-        let selection = Some((ranges.join(","), doc.selection.active.a1()));
-        match d.refs.home.as_mut() {
-            None => d.refs.home = Some(Home { uid: sheet.uid, selection }),
-            // Picking again after a failed OK: the selection to put back is the one now on the
-            // dialog's sheet.
-            Some(home) if home.selection.is_none() && home.uid.get() == sheet.uid.get() => {
-                home.selection = selection;
-            }
-            Some(_) => {}
+        let home = d.refs.home.get_or_insert(Home { uid: sheet.uid, selection: None });
+        if home.selection.is_none() {
+            home.selection = home_selection(doc, home);
         }
     }
     d.refs.target = Some(key.to_string());
     d.refs.refocus = false;
+    // Focusing the box keeps its text: only a press after this one picks.
+    d.refs.pressed = false;
     d.refs.seen = selection_ref(app, d.refs.home.as_ref(), takes_several_areas(&d.name, key));
     d.refs.seen_sheet = active_sheet_name(app);
 }
@@ -305,14 +363,17 @@ pub(super) fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &
         } else if d.refs.target.as_deref() == Some(key) {
             let sel = selection_ref(app, d.refs.home.as_ref(), takes_several_areas(&d.name, key));
             let sheet = active_sheet_name(app);
-            if sheet != d.refs.seen_sheet {
+            let pressed = std::mem::take(&mut d.refs.pressed);
+            if sheet != d.refs.seen_sheet && !pressed {
                 // Another sheet was shown: its selection is where that sheet was left, not a pick.
                 d.refs.seen = sel;
                 d.refs.seen_sheet = sheet;
-            } else if sel != d.refs.seen {
-                // The person selected on the grid: the selection becomes the reference.
+            } else if pressed || sel != d.refs.seen {
+                // The person selected on the grid, even the cell already selected: the selection
+                // becomes the reference.
                 s = sel.clone();
                 d.refs.seen = sel;
+                d.refs.seen_sheet = sheet;
                 d.refs.refocus = true;
             }
             if d.refs.refocus && !ui.input(|i| i.pointer.any_down()) {
@@ -376,27 +437,6 @@ fn anchors(part: &str) -> Option<Anchors> {
     Some(Anchors { letters, digits, col_abs, row_abs })
 }
 
-/// The areas of a reference list, split at the commas between them. A comma inside a quoted
-/// sheet name (`'Sales, West'!A1`) is part of the name, and a doubled quote inside the quotes
-/// (`'O''Brien, Jr'!A1`) is an escaped quote, not the end of the name: a quote toggles the
-/// quoted state, so a doubled one toggles it twice.
-fn split_areas(reference: &str) -> Vec<&str> {
-    let mut areas = Vec::new();
-    let (mut start, mut quoted) = (0, false);
-    for (i, c) in reference.char_indices() {
-        match c {
-            '\'' => quoted = !quoted,
-            ',' if !quoted => {
-                areas.push(reference.get(start..i).unwrap_or_default());
-                start = i.saturating_add(1);
-            }
-            _ => {}
-        }
-    }
-    areas.push(reference.get(start..).unwrap_or_default());
-    areas
-}
-
 /// Excel's F4 in a reference box: `A1` → `$A$1` → `A$1` → `$A1` → `A1`, every part of every
 /// area moving together from the first part's anchors (`A1:B2,D4` → `$A$1:$B$2,$D$4`), sheet
 /// names kept; whole columns and rows have one anchor each (`A:A` → `$A:$A` → `A:A`). Text that
@@ -442,16 +482,7 @@ pub(crate) fn cycle_anchors(reference: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{cycle_anchors, split_areas};
-
-    #[test]
-    fn areas_split_only_at_commas_outside_quoted_sheet_names() {
-        assert_eq!(split_areas("B2:B4,D1"), ["B2:B4", "D1"]);
-        assert_eq!(split_areas("'Sales, West'!$A$1"), ["'Sales, West'!$A$1"]);
-        assert_eq!(split_areas("'O''Brien, Jr'!A1:B2,D4"), ["'O''Brien, Jr'!A1:B2", "D4"]);
-        assert_eq!(split_areas("'Q1, Q2'!A1,'Q3, Q4'!B2"), ["'Q1, Q2'!A1", "'Q3, Q4'!B2"]);
-        assert_eq!(split_areas(""), [""]);
-    }
+    use super::cycle_anchors;
 
     #[test]
     fn f4_keeps_a_comma_inside_a_quoted_sheet_name() {

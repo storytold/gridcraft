@@ -50,12 +50,7 @@ fn reject_multi_cell_refs(spec: &FnSpec, args: &[Arg]) -> Option<Vec<Arg>> {
     if !args.iter().enumerate().any(|(i, a)| multi(i, a)) {
         return None;
     }
-    Some(
-        args.iter()
-            .enumerate()
-            .map(|(i, a)| if multi(i, a) { Arg { value: Value::Error(CellError::Value), from_ref: false } } else { a.clone() })
-            .collect(),
-    )
+    Some(args.iter().enumerate().map(|(i, a)| if multi(i, a) { Arg::val(Value::Error(CellError::Value)) } else { a.clone() }).collect())
 }
 
 /// Lookups whose every call searches a lookup vector from its start, so a call lifted over `n`
@@ -103,8 +98,16 @@ fn call_cost(spec: &FnSpec, cell_args: &[Arg]) -> usize {
         return 0;
     }
     // Coercing numeric text reads all of it, even in a call the function then refuses, so each
-    // character is charged as well.
-    let parse: usize = cell_args.iter().map(|a| if let Value::Text(t) = &a.value { t.len() } else { 0 }).sum();
+    // character is charged as well: of the arguments it coerces in order, up to the first that fails.
+    let mut parse = 0usize;
+    for (i, a) in cell_args.iter().enumerate().take(6) {
+        if let Value::Text(t) = &a.value {
+            parse = parse.saturating_add(t.len());
+        }
+        if crate::util::num(cell_args, i).is_err() {
+            break;
+        }
+    }
     // The function's own validation and coercion (text like "10000000" counts), so a call it
     // refuses before its loop costs nothing and no loop goes uncharged.
     let periods = crate::financial::cumulative_args(cell_args).map_or(0, |(.., start, end, _)| (end - start + 1.0) as usize);
@@ -124,6 +127,8 @@ fn element_args(spec: &FnSpec, args: &[Arg], r: usize, c: usize, cell_args: &mut
         {
             let v = arr.get_broadcast(r, c);
             slot.value = if let Value::Array(inner) = &v { inner.data.first().cloned().unwrap_or(Value::Empty) } else { v };
+            // A blank element of a written array argument is given, as a scalar blank is.
+            slot.blank_value = !slot.from_ref && matches!(slot.value, Value::Empty);
         }
     }
 }
@@ -316,6 +321,17 @@ mod tests {
         // A short text period costs next to nothing.
         let ends = av(Array::filled(3, 1, Value::text("12")).into());
         assert_eq!(rows_of(&ev("CUMIPMT", vec![n(0.01), n(20.0), n(1000.0), n(1.0), ends, n(0.0)])).len(), 3);
+    }
+
+    /// Text after the first argument that fails to coerce is never read, so it is not charged: the
+    /// elements keep their own errors instead of one budget `#NUM!`.
+    #[test]
+    fn lifted_period_loops_charge_only_the_text_they_reach() {
+        use gridcraft_core::Array;
+        let rates = av(Array::filled(20_000, 1, Value::text("x")).into());
+        let long = Value::text(format!("{}5", "0".repeat(32_000)));
+        let out = ev("CUMIPMT", vec![rates, n(10.0), n(1000.0), n(1.0), av(long), n(0.0)]);
+        assert!(rows_of(&out).iter().all(|r| r.first() == Some(&Value::Error(CellError::Value))));
     }
 
     /// A call the function refuses before its loop (here: end period past the period count) is
