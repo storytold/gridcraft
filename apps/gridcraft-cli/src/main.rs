@@ -11,6 +11,7 @@
 //! gridcraft-cli functions [--json] [--search X] [--category C]
 //! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
 //! gridcraft-cli send <port> <method> [json]
+//! gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
 //! gridcraft-cli version | --version
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -30,6 +31,7 @@ macro_rules! outln {
 }
 
 mod check;
+mod sandbox_check;
 
 use gridcraft_engine::Session;
 use serde_json::{Value, json};
@@ -55,6 +57,8 @@ const USAGE: &str = "usage:
   gridcraft-cli functions [--json] [--search X] [--category C]
   gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
   gridcraft-cli send <port> <method> [json]
+  gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
+                     whether this system confines programs (no program: a confined self-test)
   gridcraft-cli version";
 
 /// stdout went away. A reader that stopped early (a closed pipe) ends the program quietly; any
@@ -68,6 +72,11 @@ fn stdout_failed(e: std::io::Error) -> ! {
 }
 
 fn main() -> ExitCode {
+    // A confined launcher run (and its probes) comes first, before anything else starts.
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if let Some(code) = gridcraft_sandbox::handle_args(&raw) {
+        return ExitCode::from(u8::try_from(code).unwrap_or(1));
+    }
     // Headless PDF export and printing set Greek, Cyrillic and other non-Latin text in a system
     // font, like the desktop app, ahead of the viewer-dependent CID fallback.
     gridcraft_engine::pdf::set_unicode_font_loader(gridcraft_engine::pdf::pdf_unicode_fonts);
@@ -88,6 +97,7 @@ fn main() -> ExitCode {
         Some("cat") => cat(rest),
         Some("run") => run(rest),
         Some("check") => return check::main(rest),
+        Some("sandbox-check") => return sandbox_check::main(rest),
         Some("commands") => commands(rest),
         Some("functions") => functions(rest),
         Some("mcp") => mcp(rest),
