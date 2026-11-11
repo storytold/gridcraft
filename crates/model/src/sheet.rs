@@ -183,13 +183,13 @@ fn yes() -> bool {
 
 /// Saved ranges are sparse metadata, never a request to allocate all their cells. Reject an
 /// invalid extent before calculation or legacy-array edit checks can use file-provided bounds.
+/// An invalid entry rejects the sheet; silently dropping it could allow editing inside an array.
 fn read_spill_ranges<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BTreeMap<CellRef, RangeRef>, D::Error> {
     let ranges: BTreeMap<CellRef, RangeRef> = crate::cellmap::deserialize(d)?;
-    if ranges
-        .iter()
-        .any(|(anchor, range)| range.start != *anchor || !range.end.is_valid() || range.end.row < anchor.row || range.end.col < anchor.col)
-    {
-        return Err(serde::de::Error::custom("invalid cached spill range"));
+    for (anchor, range) in &ranges {
+        if range.start != *anchor || !range.end.is_valid() || range.end.row < anchor.row || range.end.col < anchor.col {
+            return Err(serde::de::Error::custom(format!("invalid cached spill range at `{}`", anchor.a1())));
+        }
     }
     Ok(ranges)
 }
