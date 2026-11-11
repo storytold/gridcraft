@@ -1,6 +1,7 @@
 use super::{
-    CellRef, Ctx, DateSystem, El, HashMap, IoError, MAX_FIELDS, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout,
-    PivotShowAs, PivotSort, PivotTable, PivotValue, RangeRef, abs_range, func_caption, func_from, number_to_text, quote_sheet, same,
+    BASE_ITEM_NEXT, CellRef, Ctx, DateSystem, El, HashMap, IoError, MAX_FIELDS, PivotBaseItem, PivotCalcField, PivotDateGroup, PivotField,
+    PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, RangeRef, abs_range, func_caption, func_from,
+    number_to_text, quote_sheet, same, show_as_from_xml,
 };
 
 // ================================================================ reading
@@ -176,6 +177,16 @@ fn items_of(e: &El) -> Vec<&El> {
     e.child("items").map(|it| it.kids("item").filter(|i| i.attr("t").is_none_or(|t| t == "data")).collect()).unwrap_or_default()
 }
 
+/// The source column a cache field stands for (a date group field's base field), without the
+/// warnings of [`field_ref`].
+fn axis_source_name(cache: &CacheIn, i: usize) -> Option<String> {
+    let f = cache.fields.get(i)?;
+    match &f.group {
+        Some((Some(base), _, _)) if !f.database => cache.fields.get(*base).map(|b| b.name.clone()),
+        _ => Some(f.name.clone()),
+    }
+}
+
 /// (source column name, date grouping) of a cache field used on an axis.
 fn field_ref(cx: &mut Ctx<'_>, cache: &CacheIn, i: usize) -> Option<(String, PivotDateGroup)> {
     let f = cache.fields.get(i)?;
@@ -203,6 +214,8 @@ fn field_ref(cx: &mut Ctx<'_>, cache: &CacheIn, i: usize) -> Option<(String, Piv
     }
 }
 
+/// Reads one PivotTable definition into the model, against its cache; `None` (with a warning)
+/// when the table can't be used, such as one without a valid location.
 fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<PivotTable> {
     let mut pt = PivotTable { id, ..PivotTable::default() };
     if let Some(n) = x.attr("name").filter(|n| !n.trim().is_empty()) {
@@ -341,28 +354,39 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 .flat_map(|l| l.kids("ext"))
                 .filter_map(|e| e.child("dataField"))
                 .find_map(|e| e.attr("pivotShowAs").map(str::to_string));
-            let show_as = match (ext.as_deref(), d.attr("showDataAs")) {
-                (Some("rankDescending"), _) => PivotShowAs::Rank,
-                (Some(other), _) => {
-                    cx.warn(format!("PivotTable show-values-as {other} is not supported"));
-                    PivotShowAs::Normal
+            let show_as = show_as_from_xml(d.attr("showDataAs"), ext.as_deref()).unwrap_or_else(|other| {
+                cx.warn(format!("PivotTable show-values-as {other} is not supported"));
+                PivotShowAs::Normal
+            });
+            // The base field is one of the report's row or column fields (a date-grouped one is
+            // saved as its group field); with anything else the default base field applies, and
+            // an item index of the file's field means nothing.
+            let base = d
+                .attr_u32("baseField")
+                .map(|i| i as usize)
+                .filter(|_| show_as.uses_base_field())
+                .and_then(|i| Some((i, axis_source_name(cache, i)?)))
+                .filter(|(_, name)| pt.rows.iter().chain(pt.columns.iter()).any(|f| same(&f.source_col, name)));
+            let base_item = match (&base, d.attr_u32("baseItem")) {
+                _ if !show_as.uses_base_item() => PivotBaseItem::default(),
+                (_, Some(BASE_ITEM_NEXT)) => PivotBaseItem::Next,
+                (Some((i, _)), Some(k)) => {
+                    cache.fields.get(*i).and_then(|f| f.labels().get(k as usize)).cloned().map_or(PivotBaseItem::Previous, PivotBaseItem::Named)
                 }
-                (None, None | Some("normal")) => PivotShowAs::Normal,
-                (None, Some("percentOfTotal")) => PivotShowAs::PercentOfGrandTotal,
-                (None, Some("percentOfCol")) => PivotShowAs::PercentOfColumnTotal,
-                (None, Some("percentOfRow")) => PivotShowAs::PercentOfRowTotal,
-                (None, Some("runTotal")) => PivotShowAs::RunningTotal,
-                (None, Some(other)) => {
-                    cx.warn(format!("PivotTable show-values-as {other} is not supported"));
-                    PivotShowAs::Normal
-                }
+                _ => PivotBaseItem::Previous,
             };
+            // A file always names a base field; the default one (the first row field, else the
+            // first column field) reads back as unset, so the report keeps following its first field.
+            // A named base item keeps its field: the label belongs to that field, wherever it moves.
+            let default_base = pt.rows.first().or(pt.columns.first()).map(|f| f.source_col.as_str());
+            let named = matches!(base_item, PivotBaseItem::Named(_));
+            let base_field = base.map(|(_, name)| name).filter(|name| named || !default_base.is_some_and(|d| same(d, name)));
             let number_format = d
                 .attr_u32("numFmtId")
                 .filter(|id| *id != 0)
                 .and_then(|id| crate::tables::builtin_format(id).map(str::to_string).or_else(|| cx.num_fmts.get(&id).cloned()));
             let name = d.attr("name").map(str::to_string).unwrap_or_else(|| format!("{} of {}", func_caption(func), f.name));
-            pt.values.push(PivotValue { source_col: f.name.clone(), func, name, show_as, number_format });
+            pt.values.push(PivotValue { source_col: f.name.clone(), func, name, show_as, base_field, base_item, number_format });
         }
     }
 

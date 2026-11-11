@@ -138,14 +138,23 @@ fn workbook() -> Workbook {
                 name: "Share".into(),
                 show_as: PivotShowAs::PercentOfGrandTotal,
                 number_format: None,
+                ..PivotValue::default()
             },
-            PivotValue { source_col: "Sales".into(), func: PivotFunc::Max, name: "Rank".into(), show_as: PivotShowAs::Rank, number_format: None },
+            PivotValue {
+                source_col: "Sales".into(),
+                func: PivotFunc::Max,
+                name: "Rank".into(),
+                show_as: PivotShowAs::Rank,
+                number_format: None,
+                ..PivotValue::default()
+            },
             PivotValue {
                 source_col: "Sales".into(),
                 func: PivotFunc::Average,
                 name: "Running".into(),
                 show_as: PivotShowAs::RunningTotal,
                 number_format: None,
+                ..PivotValue::default()
             },
             PivotValue {
                 source_col: "Units".into(),
@@ -153,6 +162,7 @@ fn workbook() -> Workbook {
                 name: "Spread".into(),
                 show_as: PivotShowAs::PercentOfColumnTotal,
                 number_format: None,
+                ..PivotValue::default()
             },
             PivotValue {
                 source_col: "Units".into(),
@@ -160,6 +170,7 @@ fn workbook() -> Workbook {
                 name: "RowPct".into(),
                 show_as: PivotShowAs::PercentOfRowTotal,
                 number_format: None,
+                ..PivotValue::default()
             },
         ],
         filters: vec![
@@ -509,7 +520,7 @@ fn hostile_pivot_parts_warn_not_panic() {
         r#"<notAPivot/>"#,
         r#"<pivotTableDefinition name="P" cacheId="1"/>"#,
         r#"<pivotTableDefinition name="P" cacheId="1"><location ref="nonsense"/></pivotTableDefinition>"#,
-        r#"<pivotTableDefinition name="" cacheId="9"><location ref="$D$3:$F$9"/><pivotFields count="1"><pivotField axis="axisRow" sortType="descending"><items><item x="99" h="1" sd="0"/><item x="-4"/><item t="default"/></items></pivotField></pivotFields><rowFields><field x="0"/><field x="4294967295"/><field x="-2"/><field x="77"/></rowFields><colFields><field x="1"/></colFields><pageFields><pageField fld="0" item="9999"/><pageField fld="-1"/><pageField fld="55"/></pageFields><dataFields><dataField fld="1" subtotal="bogus" showDataAs="index" numFmtId="99999"/><dataField fld="12"/><dataField name="E" fld="0"><extLst><ext><dataField pivotShowAs="percentOfParent"/></ext></extLst></dataField></dataFields></pivotTableDefinition>"#,
+        r#"<pivotTableDefinition name="" cacheId="9"><location ref="$D$3:$F$9"/><pivotFields count="1"><pivotField axis="axisRow" sortType="descending"><items><item x="99" h="1" sd="0"/><item x="-4"/><item t="default"/></items></pivotField></pivotFields><rowFields><field x="0"/><field x="4294967295"/><field x="-2"/><field x="77"/></rowFields><colFields><field x="1"/></colFields><pageFields><pageField fld="0" item="9999"/><pageField fld="-1"/><pageField fld="55"/></pageFields><dataFields><dataField fld="1" subtotal="bogus" showDataAs="notAMode" numFmtId="99999"/><dataField fld="12"/><dataField name="E" fld="0"><extLst><ext><dataField pivotShowAs="percentOfParent"/></ext></extLst></dataField></dataFields></pivotTableDefinition>"#,
     ];
     let caches = [
         None,
@@ -540,7 +551,7 @@ fn hostile_pivot_parts_warn_not_panic() {
     assert!(pt.values.iter().any(|v| v.func == PivotFunc::Sum && v.source_col == "V"));
     assert!(report.warnings.iter().any(|w| w.contains("bogus")), "{:?}", report.warnings);
     assert!(report.warnings.iter().any(|w| w.contains("grouping")), "{:?}", report.warnings);
-    assert!(report.warnings.iter().any(|w| w.contains("index")), "{:?}", report.warnings);
+    assert!(report.warnings.iter().any(|w| w.contains("notAMode")), "{:?}", report.warnings);
 }
 
 #[test]
@@ -714,6 +725,11 @@ fn data_on_rows_with_one_value_field_reads_without_warning() {
 /// A one-sheet-of-data workbook with a pivot on "Report": `columns` are the source columns
 /// (header, values), `pt` the pivot built on `Data!A1:<last>`.
 fn small_pivot(columns: &[(&str, Vec<Value>)], pt: impl FnOnce(&mut PivotTable)) -> HashMap<String, String> {
+    unzip(&write_xlsx(&small_pivot_workbook(columns, pt)).unwrap()).into_iter().map(|(k, v)| (k, String::from_utf8_lossy(&v).into_owned())).collect()
+}
+
+/// The workbook [`small_pivot`] writes.
+fn small_pivot_workbook(columns: &[(&str, Vec<Value>)], pt: impl FnOnce(&mut PivotTable)) -> Workbook {
     let mut wb = Workbook::new();
     let data = wb.sheet_mut(0).unwrap();
     data.name = "Data".into();
@@ -733,7 +749,7 @@ fn small_pivot(columns: &[(&str, Vec<Value>)], pt: impl FnOnce(&mut PivotTable))
     let mut report = Sheet::new("Report");
     report.pivots = vec![table];
     wb.sheets.push(Arc::new(report));
-    unzip(&write_xlsx(&wb).unwrap()).into_iter().map(|(k, v)| (k, String::from_utf8_lossy(&v).into_owned())).collect()
+    wb
 }
 
 /// #1447: two value fields and no column field: Excel 365 adds a `Values` row unless told not to.
@@ -759,4 +775,126 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     let t = &one["xl/pivotTables/pivotTable1.xml"];
     assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
     assert!(!t.contains("hideValuesRow"), "{t}");
+}
+
+/// Every show-values-as mode with its base field and item: the value fields of one PivotTable.
+fn show_as_values() -> Vec<PivotValue> {
+    let value = |name: &str, show_as: PivotShowAs, base_field: Option<&str>, base_item: PivotBaseItem| PivotValue {
+        source_col: "Sales".into(),
+        name: name.into(),
+        show_as,
+        base_field: base_field.map(str::to_string),
+        base_item,
+        ..PivotValue::default()
+    };
+    vec![
+        value("Of", PivotShowAs::PercentOf, Some("Product"), PivotBaseItem::Named("B".into())),
+        value("Diff", PivotShowAs::DifferenceFrom, Some("Region"), PivotBaseItem::Next),
+        value("PctDiff", PivotShowAs::PercentDifferenceFrom, None, PivotBaseItem::Previous),
+        value("Run", PivotShowAs::RunningTotal, Some("Product"), PivotBaseItem::Previous),
+        value("PctRun", PivotShowAs::PercentRunningTotal, None, PivotBaseItem::Previous),
+        value("Asc", PivotShowAs::RankAscending, Some("Product"), PivotBaseItem::Previous),
+        value("Index", PivotShowAs::Index, None, PivotBaseItem::Previous),
+        value("Parent", PivotShowAs::PercentOfParentRowTotal, None, PivotBaseItem::Previous),
+        value("Stale", PivotShowAs::PercentOf, Some("Product"), PivotBaseItem::Named("Gone".into())),
+    ]
+}
+
+fn show_as_columns() -> [(&'static str, Vec<Value>); 3] {
+    [
+        ("Region", vec![Value::text("East"), Value::text("West"), Value::text("East")]),
+        ("Product", vec![Value::text("A"), Value::text("B"), Value::text("A")]),
+        ("Sales", vec![Value::number(10.0), Value::number(20.0), Value::number(5.0)]),
+    ]
+}
+
+#[test]
+fn show_values_as_modes_are_written_with_their_base() {
+    let parts = small_pivot(&show_as_columns(), |p| {
+        p.rows = vec![field("Region"), field("Product")];
+        p.values = show_as_values();
+    });
+    let t = &parts["xl/pivotTables/pivotTable1.xml"];
+    let data_field = |name: &str| -> String {
+        let start = t.find(&format!("<dataField name=\"{name}\"")).unwrap_or_else(|| panic!("no {name} in {t}"));
+        let end = t[start..].find("</dataField>").map_or_else(|| t[start..].find("/>").unwrap() + 2, |e| e + 12);
+        t[start..start + end].to_string()
+    };
+    // Region is cache field 0 and Product 1; Product's items are A, B.
+    assert!(data_field("Of").contains(" showDataAs=\"percent\" baseField=\"1\" baseItem=\"1\""), "{}", data_field("Of"));
+    assert!(data_field("Diff").contains(" showDataAs=\"difference\" baseField=\"0\" baseItem=\"1048829\""), "{}", data_field("Diff"));
+    assert!(data_field("PctDiff").contains(" showDataAs=\"percentDiff\" baseField=\"0\" baseItem=\"1048828\""), "{}", data_field("PctDiff"));
+    assert!(data_field("Run").contains(" showDataAs=\"runTotal\" baseField=\"1\" baseItem=\"0\""), "{}", data_field("Run"));
+    assert!(data_field("PctRun").contains("pivotShowAs=\"percentOfRunningTotal\""), "{}", data_field("PctRun"));
+    assert!(!data_field("PctRun").contains("showDataAs"), "{}", data_field("PctRun"));
+    assert!(data_field("Asc").contains(" baseField=\"1\"") && data_field("Asc").contains("pivotShowAs=\"rankAscending\""), "{}", data_field("Asc"));
+    assert!(data_field("Index").contains(" showDataAs=\"index\" baseField=\"0\" baseItem=\"0\""), "{}", data_field("Index"));
+    assert!(data_field("Parent").contains("pivotShowAs=\"percentOfParentRow\""), "{}", data_field("Parent"));
+    assert!(data_field("Stale").contains(" baseItem=\"1048828\""), "an unknown label is saved as (previous): {}", data_field("Stale"));
+}
+
+#[test]
+fn show_values_as_modes_round_trip_with_their_base() {
+    let wb = small_pivot_workbook(&show_as_columns(), |p| {
+        p.rows = vec![field("Region"), field("Product")];
+        p.values = show_as_values();
+    });
+    let (back, report) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.contains("show-values-as")), "{:?}", report.warnings);
+    let got = &back.sheets.iter().find_map(|sh| sh.pivots.first()).unwrap().values;
+    let mut want = show_as_values();
+    for v in &mut want {
+        // The first row field is the default base field: it reads back as unset, unless a named
+        // base item pins it.
+        let named = matches!(v.base_item, PivotBaseItem::Named(_)) && v.show_as.uses_base_item();
+        if (v.base_field.as_deref() == Some("Region") && !named) || !v.show_as.uses_base_field() {
+            v.base_field = None;
+        }
+        if v.base_item == PivotBaseItem::Named("Gone".into()) {
+            v.base_item = PivotBaseItem::Previous;
+        }
+    }
+    let strip = |vals: &[PivotValue]| vals.iter().map(|v| (v.name.clone(), v.show_as, v.base_field.clone(), v.base_item.clone())).collect::<Vec<_>>();
+    assert_eq!(strip(got), strip(&want));
+}
+
+#[test]
+fn base_fields_and_items_are_read_from_hand_written_tables() {
+    let table = |data_fields: &str| {
+        format!(
+            r#"<pivotTableDefinition name="P" cacheId="1"><location ref="C1:D4"/><pivotFields count="2"><pivotField axis="axisRow"><items><item x="0"/><item x="1"/><item t="default"/></items></pivotField><pivotField dataField="1"/></pivotFields><rowFields><field x="0"/></rowFields><dataFields>{data_fields}</dataFields></pivotTableDefinition>"#
+        )
+    };
+    let read = |data_field: &str| {
+        let (wb, report) = read_xlsx(&with_pivot(&table(data_field), Some(GOOD_CACHE))).unwrap();
+        let v = wb.sheet(0).unwrap().pivots[0].values[0].clone();
+        (v.show_as, v.base_field, v.base_item, report.warnings)
+    };
+    // K, the only row field, is the default base field, but a named base item keeps its field.
+    let k = Some("K".to_string());
+    let (mode, field, item, _) = read(r#"<dataField name="A" fld="1" showDataAs="difference" baseField="0" baseItem="0"/>"#);
+    assert_eq!((mode, field, item), (PivotShowAs::DifferenceFrom, k.clone(), PivotBaseItem::Named("x".into())));
+    let (_, field, item, _) = read(r#"<dataField name="A" fld="1" showDataAs="difference" baseField="0" baseItem="1048829"/>"#);
+    assert_eq!((field, item), (None, PivotBaseItem::Next), "with (next) the default field reads back as unset");
+    let (_, _, item, _) = read(r#"<dataField name="A" fld="1" showDataAs="percent" baseField="0" baseItem="1048829"/>"#);
+    assert_eq!(item, PivotBaseItem::Next);
+    let (_, _, item, _) = read(r#"<dataField name="A" fld="1" showDataAs="percentDiff" baseField="0" baseItem="1048828"/>"#);
+    assert_eq!(item, PivotBaseItem::Previous);
+    let (_, _, item, _) = read(r#"<dataField name="A" fld="1" showDataAs="percent" baseField="0" baseItem="99999"/>"#);
+    assert_eq!(item, PivotBaseItem::Previous, "an item index past the end");
+    let (_, field, _, _) = read(r#"<dataField name="A" fld="1" showDataAs="difference" baseField="77" baseItem="0"/>"#);
+    assert_eq!(field, None, "a field index past the end");
+    let (_, field, item, _) = read(r#"<dataField name="A" fld="1" showDataAs="difference" baseField="1" baseItem="0"/>"#);
+    assert_eq!((field, item), (None, PivotBaseItem::Previous), "a field that is not on an axis");
+    let (mode, field, _, _) = read(r#"<dataField name="A" fld="1" showDataAs="runTotal" baseField="0" baseItem="0"/>"#);
+    assert_eq!((mode, field), (PivotShowAs::RunningTotal, None));
+    let (mode, field, item, _) = read(r#"<dataField name="A" fld="1" showDataAs="percentOfTotal" baseField="0" baseItem="0"/>"#);
+    assert_eq!((mode, field, item), (PivotShowAs::PercentOfGrandTotal, None, PivotBaseItem::Previous), "no base for a mode without one");
+    let (mode, _, _, _) = read(
+        r#"<dataField name="A" fld="1" baseField="0" baseItem="0"><extLst><ext uri="{E15A36E0-9728-4e99-A89B-3F7291B0FE68}"><x14:dataField pivotShowAs="rankAscending"/></ext></extLst></dataField>"#,
+    );
+    assert_eq!(mode, PivotShowAs::RankAscending);
+    let (mode, _, _, warnings) = read(r#"<dataField name="A" fld="1" showDataAs="index"/>"#);
+    assert_eq!(mode, PivotShowAs::Index);
+    assert!(warnings.iter().all(|w| !w.contains("show-values-as")), "{warnings:?}");
 }
