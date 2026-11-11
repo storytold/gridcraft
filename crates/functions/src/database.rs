@@ -98,7 +98,7 @@ fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> Vec<usize> {
                 || (!ctx.exhausted()
                     && rows.iter().any(|(r, conds)| {
                         !ctx.exhausted()
-                            && conds.iter().all(|(c, col, cr)| match col {
+                            && conds.iter().all(|(c, col, cr)| !ctx.exhausted() && match col {
                                 Some(f) => cr.matches(db.get(rec, *f).unwrap_or(&Value::Empty)),
                                 // Under a label that names no field, only a formula (a computed
                                 // criterion) can hold.
@@ -383,6 +383,11 @@ mod tests {
         let criteria = arr(vec![vec![tv("Formula")], vec![nv(1.0)]]);
         let mut ctx = Spent { asked: 0 };
         let spec = crate::lookup("DCOUNT").unwrap();
+        crate::call(spec, &[rf(db()), t("Age"), rf(criteria)], &mut ctx);
+        assert_eq!(ctx.asked, 1);
+        // Within one criteria row, the conditions after the one that spent the work are skipped too.
+        let criteria = arr(vec![vec![tv("Formula"), tv("Other")], vec![nv(1.0), nv(1.0)]]);
+        let mut ctx = Spent { asked: 0 };
         crate::call(spec, &[rf(db()), t("Age"), rf(criteria)], &mut ctx);
         assert_eq!(ctx.asked, 1);
     }
