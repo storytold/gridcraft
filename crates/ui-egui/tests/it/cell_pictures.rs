@@ -70,6 +70,9 @@ fn picture_file_pickers_preserve_placement_and_isolate_canceled_results() {
     let mut h = harness(Services { pick_picture: Some(Box::new(move || Some(chosen.clone()))), ..Default::default() });
     h.state_mut().ui.ribbon_tab = "Insert".into();
     h.run_steps(6);
+    // Insert › Illustrations is one row at this width, its buttons in the group's menu.
+    h.get_by_label("Illustrations").click();
+    h.run_steps(2);
     h.get_by_label("Pictures").click();
     h.run_steps(6);
     h.get_by_label("Place in Cell").click();

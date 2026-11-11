@@ -142,12 +142,6 @@ struct SectionPlan {
     slot: u8,
     /// A frame has drawn the natural body, so its width is known.
     measured: bool,
-    /// A keytip opened a popup inside this group, so its natural body stays drawn while the popup
-    /// is on screen; compacting again would take the popup's anchor out of the card.
-    pinned: bool,
-    /// The frame a click (or Escape) asked to unpin, so the click is handled by the drawn body
-    /// before the group shrinks on the next frame.
-    unpin_at: Option<u64>,
 }
 
 /// The ribbon's per-tab section plan: each group's measured natural width, the level it was last
@@ -165,6 +159,15 @@ struct TabSections {
     /// breakpoints (Home).
     breaks: Vec<(String, Vec<(f32, u8)>)>,
     plans: Vec<SectionPlan>,
+    /// The natural level every group draws at while a keytip-opened popup is on screen. Keeping
+    /// the whole tab in its keytip layout keeps each control's id, and so the popup's anchor,
+    /// stable; changing some groups back to compact would shift every later control.
+    forced: Option<Vec<(String, u8)>>,
+    /// The frame a click or Escape asked to leave the forced layout, handled the frame after so
+    /// the click reaches the popup's own widgets.
+    forced_unpin_at: Option<u64>,
+    /// The forced layout's control took the keytip request (otherwise it goes back next frame).
+    forced_used: bool,
 }
 
 impl TabSections {
@@ -183,12 +186,18 @@ impl TabSections {
                 self.plans.len() - 1
             }
         };
+        // A keytip opened a popup: the tab keeps the layout it was drawn in, so the popup's anchor
+        // stays put frame to frame.
+        if let Some((_, level)) = self.forced.as_ref().and_then(|forced| forced.iter().find(|(name, _)| name == label)) {
+            let level = *level;
+            self.plans[i].level = level;
+            return level;
+        }
         let plan = &self.plans[i];
         let breaks = self.breaks.iter().find(|(l, _)| l == label).map(|(_, b)| b.as_slice());
         let mut slot = plan.slot;
-        let level = if plan.pinned || !plan.measured {
-            // The first frame draws every group in its widest natural form, to measure it; a group
-            // a keytip pinned keeps that body drawn.
+        let level = if !plan.measured {
+            // The first frame draws every group in its widest natural form, to measure it.
             slot = 0;
             widest_level(breaks)
         } else if let Some(b) = breaks {
@@ -206,6 +215,25 @@ impl TabSections {
         plan.level = level;
         plan.slot = slot;
         level
+    }
+
+    /// The natural level of every group planned so far: the form a keytip frame draws the tab in
+    /// when the request's group cannot be named. A compact group takes its narrowest natural
+    /// form, the one its menu holds.
+    fn natural_layout(&self) -> Vec<(String, u8)> {
+        self.plans.iter().map(|plan| (plan.label.clone(), self.natural_level(&plan.label))).collect()
+    }
+
+    /// The natural form a group takes when a keytip draws it: its planned natural level, or the
+    /// narrowest natural form when it is compact.
+    fn natural_level(&self, label: &str) -> u8 {
+        self.plans
+            .iter()
+            .find(|plan| plan.label == label)
+            .map(|plan| plan.level)
+            .filter(|level| *level != SECTION_COMPACT)
+            .or_else(|| self.breaks.iter().find(|(name, _)| name == label).and_then(|(_, breaks)| breaks.last().map(|(_, level)| *level)))
+            .unwrap_or(1)
     }
 
     /// Notes the width `label` took this frame and remembers the natural body's own width.
@@ -271,15 +299,15 @@ impl RibbonSections {
     /// Starts a frame's pass over `tab`'s groups: records the window's client width (for the
     /// measured breakpoints) and the card's content width, and resets the width spent so far, so
     /// each group plans from what is left to its right.
-    pub(super) fn begin(ui: &Ui, tab: &str, content: f32, client: f32) {
+    pub(super) fn begin(ui: &Ui, tab: &str, content: f32, client: f32, keytip_group: Option<&str>) {
         let id = TabSections::id(tab);
         let frame = ui.ctx().cumulative_frame_nr();
-        // A tab opened afresh starts compact again: a group held open by a keytip on an earlier
+        // A tab opened afresh starts compact again: a layout held open by a keytip on an earlier
         // visit has lost the popup that held it open.
         let previous = ui.ctx().data(|d| d.get_temp::<String>(last_sections_tab_id()));
         ui.ctx().data_mut(|d| d.insert_temp(last_sections_tab_id(), tab.to_owned()));
         let switched = previous.as_deref() != Some(tab);
-        // A click or Escape dismisses whatever a keytip opened; the group shrinks back the frame
+        // A click or Escape dismisses whatever a keytip opened; the tab settles back the frame
         // after, once the click has reached the popup's own widgets.
         let dismiss = ui.input(|i| i.pointer.any_pressed() || i.key_pressed(egui::Key::Escape));
         ui.ctx().data_mut(|d| {
@@ -288,15 +316,25 @@ impl RibbonSections {
             sections.content = content;
             sections.client = client;
             sections.used = 0.0;
-            for plan in &mut sections.plans {
-                if !plan.pinned {
-                    continue;
-                }
-                if switched || plan.unpin_at.is_some_and(|at| frame > at) {
-                    plan.pinned = false;
-                    plan.unpin_at = None;
+            if let Some(group) = keytip_group {
+                // Draw the target group in a natural form (and keep it until its popup closes):
+                // a control's id, and so its popup's anchor, must not move between frames. When
+                // the request cannot name the group, the whole tab takes its natural forms.
+                sections.forced = if sections.plans.iter().any(|plan| plan.label == group) {
+                    Some(vec![(group.to_owned(), sections.natural_level(group))])
+                } else {
+                    Some(sections.natural_layout())
+                };
+                sections.forced_used = false;
+                sections.forced_unpin_at = None;
+            } else if sections.forced.is_some() {
+                let stale = switched || !sections.forced_used || sections.forced_unpin_at.is_some_and(|at| frame > at);
+                if stale {
+                    sections.forced = None;
+                    sections.forced_unpin_at = None;
+                    sections.forced_used = false;
                 } else if dismiss {
-                    plan.unpin_at.get_or_insert(frame);
+                    sections.forced_unpin_at.get_or_insert(frame);
                 }
             }
         });
@@ -327,49 +365,70 @@ impl RibbonSections {
     /// whose menu holds the whole natural body. The following `sep`/`group_end` still names the
     /// group, so its label sits in the band either way.
     fn draw(ui: &mut Ui, app: &mut SheetApp, label: &str, icon: Icon, mut body: impl FnMut(&mut SheetApp, &mut Ui)) {
-        // A keytip request must reach its control: while one waits (one frame, dropped if no
-        // control takes it), every group draws its natural body so the owning control can take
-        // it. Each body still draws exactly once.
+        // A keytip request must reach its control: `begin` already put the whole tab in its
+        // natural layout for that frame, so the control that owns the request is drawn (each body
+        // still draws exactly once). The layout is held until the popup closes so its anchor, and
+        // so this body's control ids, stay put.
         let pending = app.ui.keytip_invoke;
-        let level = if pending.is_some() { Self::widest(ui, label) } else { Self::plan(ui, label) };
+        let level = Self::plan(ui, label);
         if level == SECTION_COMPACT {
             // Excel's compact group: its icon and name with a chevron, the whole group in its menu.
             let text = crate::i18n::current(ui.ctx()).tr(label).replace('\n', " ");
             let button = crate::widgets::small_button(ui, icon, &text, &text, true);
             let width = button.rect.width();
             Self::record(ui, label, level, width);
-            egui::Popup::menu(&button).show(|ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                    body(app, ui);
+            // The menu is an area, not a popup: it holds buttons that open popups of their own,
+            // and a popup nested in a popup would close its parent. Clicks inside reach those
+            // buttons; a click elsewhere (or Escape) closes it.
+            let open_id = button.id.with("section_open");
+            let mut open = ui.ctx().data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+            if button.clicked() {
+                open = !open;
+            }
+            if open {
+                let area = egui::Area::new(button.id.with("section_body"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(button.rect.left_bottom() + vec2(0.0, 4.0))
+                    .constrain(true);
+                let shown = area.show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                            body(app, ui);
+                        });
+                    })
                 });
-            });
+                let rect = shown.response.rect;
+                // A click that opened one of the body's menus keeps the group; any other click
+                // outside the group closes it, including the one that picked a menu item.
+                let any_click = ui.input(|i| i.pointer.any_click());
+                let menu_open = egui::Popup::is_any_open(ui.ctx());
+                let pos = ui.input(|i| i.pointer.interact_pos());
+                let pressed = any_click && !menu_open;
+                let outside = pos.is_some_and(|p| !rect.contains(p) && !button.rect.contains(p));
+                if pressed && outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    open = false;
+                }
+            }
+            ui.ctx().data_mut(|d| d.insert_temp(open_id, open));
         } else {
             let left = ui.cursor().min.x;
             body(app, ui);
             let width = ui.cursor().min.x - left;
             Self::record(ui, label, level, width);
-            // The keytip opened a popup inside this body; keep the body drawn so its anchor stays
-            // where the popup points until the user dismisses it.
+            // The forced layout's control took the request and opened its popup: keep the layout.
             if pending.is_some() && app.ui.keytip_invoke.is_none() {
-                Self::pin(ui, label);
+                Self::mark_forced_used(ui);
             }
         }
     }
 
-    fn widest(ui: &Ui, label: &str) -> u8 {
-        let mut level = 1;
+    /// Records that the forced layout's control took the keytip request, so the layout stays while
+    /// the popup it opened is on screen.
+    fn mark_forced_used(ui: &Ui) {
         with_tab_sections(ui, |sections| {
-            level = widest_level(sections.breaks.iter().find(|(l, _)| l == label).map(|(_, b)| b.as_slice()));
-        });
-        level
-    }
-
-    fn pin(ui: &Ui, label: &str) {
-        with_tab_sections(ui, |sections| {
-            if let Some(plan) = sections.plans.iter_mut().find(|p| p.label == label) {
-                plan.pinned = true;
-                plan.unpin_at = None;
+            if sections.forced.is_some() {
+                sections.forced_used = true;
             }
         });
     }

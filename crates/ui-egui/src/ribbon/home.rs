@@ -28,19 +28,18 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let st = active_style(app);
     // Excel's measured Home breakpoints, in client points, widest first: a section takes the
-    // first row whose width the window reaches. A group keeps its natural rows down to the width
-    // below, and shrinks to one row under it. Clipboard and Styles stay natural at every width;
-    // Font survives to the medium breakpoint, while Alignment and Number keep a two-row layout
-    // there. From 1280 points (Font, Alignment) and 1520 points (Number) Excel spreads the three
-    // rows back into its wide two-row form. Levels: 1 a group's single natural body, 2 two rows,
-    // 3 three rows.
-    RibbonSections::breaks(ui, "Clipboard", &[(0.0, 1)]);
-    RibbonSections::breaks(ui, "Font", &[(1280.0, 2), (921.0, 1)]);
-    RibbonSections::breaks(ui, "Alignment", &[(1280.0, 2), (1109.0, 3), (921.0, 2)]);
-    RibbonSections::breaks(ui, "Number", &[(1520.0, 2), (1109.0, 3), (921.0, 2)]);
-    RibbonSections::breaks(ui, "Styles", &[(0.0, 1)]);
-    RibbonSections::breaks(ui, "Cells", &[(1109.0, 1)]);
-    RibbonSections::breaks(ui, "Editing", &[(1109.0, 1)]);
+    // first row whose width the window reaches, and levels are the section's control rows
+    // (0 is the compact one-row dropdown). Clipboard keeps three rows from 819; Font from 929
+    // and Alignment from 960, both spreading back into two rows from 1280; Number takes three
+    // rows from 1040 and two from 1520; Cells and Editing keep three rows from 1120; Styles is
+    // three stacked rows until 1520, where it and Cells become one row of three buttons.
+    RibbonSections::breaks(ui, "Clipboard", &[(819.0, 3)]);
+    RibbonSections::breaks(ui, "Font", &[(1280.0, 2), (929.0, 3)]);
+    RibbonSections::breaks(ui, "Alignment", &[(1280.0, 2), (960.0, 3)]);
+    RibbonSections::breaks(ui, "Number", &[(1520.0, 2), (1040.0, 3)]);
+    RibbonSections::breaks(ui, "Styles", &[(1520.0, 1), (0.0, 3)]);
+    RibbonSections::breaks(ui, "Cells", &[(1520.0, 1), (1120.0, 3)]);
+    RibbonSections::breaks(ui, "Editing", &[(1120.0, 3)]);
     // Clipboard
     section(ui, app, "Clipboard", Icon::Paste, |app, ui| {
         let paste = big_button(ui, Icon::Paste, "Paste", "Paste", true);
@@ -259,8 +258,9 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     sep(ui, "Number");
     // Styles
     section(ui, app, "Styles", Icon::CellStyles, |app, ui| {
-        // Excel stacks the three style buttons, one per row, at every width.
-        ui.vertical(|ui| {
+        // Excel stacks the three style buttons until 1520 client points, then spreads them over
+        // one row.
+        let mut buttons = |ui: &mut Ui| {
             let cf = small_button(ui, Icon::CondFormat, "Conditional Formatting", "Conditional Formatting", true);
             anchor_keytip(app, ui, &cf, &["home.conditionalFormat", "home.manageRules", "home.clearRules"]);
             egui::Popup::menu(&cf).show(|ui| cf_menu(app, ui));
@@ -270,12 +270,18 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             let cs = small_button(ui, Icon::CellStyles, "Cell Styles", "Cell Styles", true);
             anchor_keytip(app, ui, &cs, &["home.newCellStyle"]);
             egui::Popup::menu(&cs).show(|ui| cell_style_gallery(app, ui));
-        });
+        };
+        if RibbonSections::level(ui, "Styles") == 1 {
+            ui.horizontal(|ui| buttons(ui));
+        } else {
+            ui.vertical(|ui| buttons(ui));
+        }
     });
     sep(ui, "Styles");
     // Cells
     section(ui, app, "Cells", Icon::Insert, |app, ui| {
-        ui.vertical(|ui| {
+        // Three stacked buttons, or one row of three past 1520 client points.
+        let mut buttons = |ui: &mut Ui| {
             let ins = small_button(ui, Icon::Insert, "Insert", "Insert", true);
             for sequence in keytip_table::group_extension(
                 app.keytips.prefix().unwrap_or_default(),
@@ -371,7 +377,12 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                     ],
                 );
             });
-        });
+        };
+        if RibbonSections::level(ui, "Cells") == 1 {
+            ui.horizontal(|ui| buttons(ui));
+        } else {
+            ui.vertical(|ui| buttons(ui));
+        }
     });
     sep(ui, "Cells");
     // Editing

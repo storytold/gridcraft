@@ -153,8 +153,11 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         controls::begin_groups(ui);
                         // The planner picks each group's layout from the card's content width,
                         // walking the tab's groups from left to right; Home's measured breakpoints
-                        // use the window's client width, as Excel's were measured.
-                        RibbonSections::begin(ui, app.ui.ribbon_tab.as_str(), content.width(), screen.width());
+                        // use the window's client width, as Excel's were measured. A keytip names
+                        // the group it targets, so only that group takes a natural form first.
+                        let keytip_group =
+                            app.ui.keytip_invoke.and_then(gridcraft_engine::find_command).and_then(|command| command.menu.get(1).copied());
+                        RibbonSections::begin(ui, app.ui.ribbon_tab.as_str(), content.width(), screen.width(), keytip_group);
                         match app.ui.ribbon_tab.as_str() {
                             "Home" => home(app, ui),
                             "Insert" => insert(app, ui),

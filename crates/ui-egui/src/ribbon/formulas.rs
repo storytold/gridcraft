@@ -1,4 +1,4 @@
-use super::controls::{act, anchor_keytip, control_keytip, group_end, invoke, keytip, menu_items, popup_command, section, sep};
+use super::controls::{RibbonSections, act, anchor_keytip, control_keytip, group_end, invoke, keytip, menu_items, popup_command, section, sep};
 use super::{Cat, Icon, SheetApp, Tokens, Ui, big_button, big_split_button, json, keytip_table, small_button, small_split_button};
 use crate::function_library;
 use crate::icons::FnGlyph;
@@ -75,6 +75,10 @@ fn library_button(app: &mut SheetApp, ui: &mut Ui, item: &LibraryItem) {
 /// The Formulas tab: Insert Function, AutoSum, the function-category menus (names in the formula
 /// language, descriptions in the interface language), defined names, auditing and calculation.
 pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
+    // Excel's measured Formulas rows: Defined Names is three rows from 1280 client points,
+    // Formula Auditing from 1040.
+    RibbonSections::breaks(ui, "Defined Names", &[(1280.0, 3)]);
+    RibbonSections::breaks(ui, "Formula Auditing", &[(1040.0, 3)]);
     section(ui, app, "Function Library", Icon::Function, |app, ui| {
         let __k = big_button(ui, Icon::Function, "Insert\nFunction", "Insert Function (⇧F3)", false);
         control_keytip(app, ui, &__k, "dialog:insertFunction");

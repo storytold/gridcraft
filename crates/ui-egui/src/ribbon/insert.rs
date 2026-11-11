@@ -1,10 +1,19 @@
-use super::controls::{act, anchor_keytip, control_keytip, group_end, invoke, popup_command, section, sep};
+use super::controls::{RibbonSections, act, anchor_keytip, control_keytip, group_end, invoke, popup_command, section, sep};
 use super::{
-    Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, big_split_button, icons, json, small_button, small_toggle_button, vec2,
+    Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, big_split_button, icons, json, small_button, small_split_button,
+    small_toggle_button, vec2,
 };
 
 /// Draws the Insert tab: PivotTable, Table, Pictures, Shapes, Icons, charts, slicer, sparklines, form controls (button, slider, spin button), checkbox, links, comments, text box, header/footer and symbols.
 pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
+    // Excel's measured Insert rows, in client points: Illustrations (Pictures, Shapes, Icons) is
+    // three tall buttons from 1520, before that one row; Filters stacks its slicer over its
+    // timeline between 1280 and 1520 and puts them side by side from 1520, the whole group
+    // compact below 1280; Symbols keeps one row until 1520, then stacks the equation button over
+    // the symbol gallery.
+    RibbonSections::breaks(ui, "Illustrations", &[(1520.0, 3)]);
+    RibbonSections::breaks(ui, "Filters", &[(1520.0, 1), (1280.0, 2)]);
+    RibbonSections::breaks(ui, "Symbols", &[(1520.0, 2), (0.0, 1)]);
     section(ui, app, "Tables", Icon::Table, |app, ui| {
         let __k = big_button(ui, Icon::PivotTable, "PivotTable", "PivotTable", false);
         control_keytip(app, ui, &__k, "insert.pivotTable");
@@ -160,8 +169,17 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui, "Charts");
     section(ui, app, "Filters", Icon::Filter, |app, ui| {
-        if big_button(ui, Icon::Filter, "Slicer", "Insert a slicer to filter a table", false).clicked() {
-            act(app, "insert.slicer", json!({}));
+        // Excel's Filters group: Slicer and Timeline, stacked until the card reaches 1520 client
+        // points, one row from there, and the whole group as one compact row below 1280.
+        if RibbonSections::level(ui, "Filters") == 2 {
+            // Excel shrinks the group's two buttons to small ones while they stack.
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| filters_slicer_small(app, ui));
+                ui.horizontal(filters_timeline_small);
+            });
+        } else {
+            filters_slicer(app, ui);
+            filters_timeline(ui);
         }
     });
     sep(ui, "Filters");
@@ -235,43 +253,111 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     // Symbols: Equation, then Symbol.
     sep(ui, "Text");
     section(ui, app, "Symbols", Icon::Symbol, |app, ui| {
-        let (eq, eq_menu) = big_split_button(ui, Icon::Equation, "Equation", "Insert an equation, or pick one from the gallery");
-        control_keytip(app, ui, &eq, "dialog:equation");
-        if eq.clicked() {
-            app.open_dialog("equation", json!({}));
-        }
-        egui::Popup::menu(&eq_menu).show(|ui| {
-            ui.set_width(300.0);
-            if ui.add(egui::Button::new(app.ui.language.tr("Insert New Equation...")).frame(false).min_size(vec2(290.0, 24.0))).clicked() {
-                app.open_dialog("equation", json!({}));
-                ui.close();
-            }
-            ui.separator();
-            if let Some(latex) = crate::equation::gallery(ui) {
-                act(app, "insert.equation", json!({"latex": latex}));
-                ui.close();
-            }
-        });
-        let sym = big_button(ui, Icon::Symbol, "Symbol", "Symbol", true);
-        control_keytip(app, ui, &sym, "insert.symbol");
-        // Opened by its key tip too (Alt+I, S): the gallery picks the symbol, nothing is inserted before.
-        let forced = invoke(app, "insert.symbol");
-        egui::Popup::menu(&sym).open_memory(popup_command(forced, sym.clicked())).show(|ui| {
-            ui.set_width(260.0);
-            ui.horizontal_wrapped(|ui| {
-                for ch in [
-                    "€", "£", "¥", "©", "®", "™", "±", "≠", "≤", "≥", "÷", "×", "∞", "µ", "α", "β", "π", "Σ", "Ω", "°", "•", "…", "→", "←", "↑", "↓",
-                    "✓", "★", "½", "¼",
-                ] {
-                    // No bundled face has ✓: the button paints a code-drawn check instead of a tofu box.
-                    if crate::widgets::glyph_button(ui, ch.chars().next().unwrap_or('?'), &format!("Insert {ch}")).clicked() {
-                        act(app, "insert.symbol", json!({"char": ch}));
-                    }
-                }
+        // One row of large buttons, or the equation button above the symbol gallery past 1520.
+        if RibbonSections::level(ui, "Symbols") == 2 {
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| equation_small(app, ui));
+                ui.horizontal(|ui| symbol_small(app, ui));
             });
-        });
+        } else {
+            equation_big(app, ui);
+            symbol_big(app, ui);
+        }
     });
     group_end(ui, "Symbols");
+}
+
+/// Insert › Filters, Slicer: a real slicer for the table under the selection (or the last one
+/// named), placed beside it.
+fn filters_slicer(app: &mut SheetApp, ui: &mut Ui) {
+    if big_button(ui, Icon::Filter, "Slicer", "Insert a slicer to filter a table", false).clicked() {
+        act(app, "insert.slicer", json!({}));
+    }
+}
+
+/// Insert › Filters, Slicer as one of the group's two stacked rows.
+fn filters_slicer_small(app: &mut SheetApp, ui: &mut Ui) {
+    let r = small_button(ui, Icon::Filter, "Slicer", "Insert a slicer to filter a table", false);
+    if r.clicked() {
+        act(app, "insert.slicer", json!({}));
+    }
+}
+
+/// Insert › Filters, Timeline as one of the group's two stacked rows.
+fn filters_timeline_small(ui: &mut Ui) {
+    ui.add_enabled_ui(false, |ui| {
+        small_button(ui, Icon::ChartLine, "Timeline", "Timeline: needs a PivotTable date field, which GridCraft doesn't build yet", false);
+    });
+}
+
+/// Insert › Filters, Timeline: Excel's second control of the group. A timeline filters a date
+/// field of a PivotTable, which GridCraft doesn't build yet (gap #8), so the button keeps Excel's
+/// measured rows while staying disabled rather than pretending to insert one.
+fn filters_timeline(ui: &mut Ui) {
+    ui.add_enabled_ui(false, |ui| {
+        big_button(ui, Icon::ChartLine, "Timeline", "Timeline: needs a PivotTable date field, which GridCraft doesn't build yet", false);
+    });
+}
+
+fn equation_big(app: &mut SheetApp, ui: &mut Ui) {
+    let (eq, eq_menu) = big_split_button(ui, Icon::Equation, "Equation", "Insert an equation, or pick one from the gallery");
+    control_keytip(app, ui, &eq, "dialog:equation");
+    if eq.clicked() {
+        app.open_dialog("equation", json!({}));
+    }
+    egui::Popup::menu(&eq_menu).show(|ui| equation_menu(app, ui));
+}
+
+fn symbol_big(app: &mut SheetApp, ui: &mut Ui) {
+    let sym = big_button(ui, Icon::Symbol, "Symbol", "Symbol", true);
+    control_keytip(app, ui, &sym, "insert.symbol");
+    // Opened by its key tip too (Alt+I, S): the gallery picks the symbol, nothing is inserted before.
+    let forced = invoke(app, "insert.symbol");
+    egui::Popup::menu(&sym).open_memory(popup_command(forced, sym.clicked())).show(|ui| symbol_menu(app, ui));
+}
+
+fn equation_small(app: &mut SheetApp, ui: &mut Ui) {
+    let (eq, eq_menu) = small_split_button(ui, Icon::Equation, "Equation", "Insert an equation, or pick one from the gallery");
+    control_keytip(app, ui, &eq, "dialog:equation");
+    if eq.clicked() {
+        app.open_dialog("equation", json!({}));
+    }
+    egui::Popup::menu(&eq_menu).show(|ui| equation_menu(app, ui));
+}
+
+fn symbol_small(app: &mut SheetApp, ui: &mut Ui) {
+    let sym = small_button(ui, Icon::Symbol, "Symbol", "Symbol", true);
+    control_keytip(app, ui, &sym, "insert.symbol");
+    let forced = invoke(app, "insert.symbol");
+    egui::Popup::menu(&sym).open_memory(popup_command(forced, sym.clicked())).show(|ui| symbol_menu(app, ui));
+}
+
+fn equation_menu(app: &mut SheetApp, ui: &mut Ui) {
+    ui.set_width(300.0);
+    if ui.add(egui::Button::new(app.ui.language.tr("Insert New Equation...")).frame(false).min_size(vec2(290.0, 24.0))).clicked() {
+        app.open_dialog("equation", json!({}));
+        ui.close();
+    }
+    ui.separator();
+    if let Some(latex) = crate::equation::gallery(ui) {
+        act(app, "insert.equation", json!({"latex": latex}));
+        ui.close();
+    }
+}
+
+fn symbol_menu(app: &mut SheetApp, ui: &mut Ui) {
+    ui.set_width(260.0);
+    ui.horizontal_wrapped(|ui| {
+        for ch in [
+            "€", "£", "¥", "©", "®", "™", "±", "≠", "≤", "≥", "÷", "×", "∞", "µ", "α", "β", "π", "Σ", "Ω", "°", "•", "…", "→", "←", "↑", "↓", "✓",
+            "★", "½", "¼",
+        ] {
+            // No bundled face has ✓: the button paints a code-drawn check instead of a tofu box.
+            if crate::widgets::glyph_button(ui, ch.chars().next().unwrap_or('?'), &format!("Insert {ch}")).clicked() {
+                act(app, "insert.symbol", json!({"char": ch}));
+            }
+        }
+    });
 }
 
 pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {

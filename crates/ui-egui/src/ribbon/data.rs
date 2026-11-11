@@ -1,7 +1,11 @@
-use super::controls::{act, control_keytip, group_end, keytip, menu_items, section, sep};
+use super::controls::{RibbonSections, act, control_keytip, group_end, keytip, menu_items, section, sep};
 use super::{Icon, SheetApp, Ui, big_button, json, keytip_table, small_button};
 
 pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
+    // Excel's measured Data rows: Data Tools is three rows from 1040 client points, Outline
+    // from 1520.
+    RibbonSections::breaks(ui, "Data Tools", &[(1040.0, 3)]);
+    RibbonSections::breaks(ui, "Outline", &[(1520.0, 3)]);
     section(ui, app, "Get & Transform Data", Icon::Folder, |app, ui| {
         let gd = big_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);
         control_keytip(app, ui, &gd, "data.getData");

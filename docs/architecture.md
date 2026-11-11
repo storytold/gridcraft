@@ -71,14 +71,18 @@ drawing its own:
   `ribbon::RIBBON_LABEL_H` (18 px) tall that names every group in the dim text token at 11 pt
   (the card is 106 px expanded). A tab's groups are delimited by `ribbon::sep`, which takes the
   Excel name of the group it closes and runs its line through the label band; `group_end` names
-  the last group without a separator. Home's groups carry Excel's measured width breakpoints
+  the last group without a separator. The measured sections carry Excel's width breakpoints
   (`ribbon::RibbonSections`, compared against the window's client width): a group with room
-  draws its natural body (Clipboard and Styles keep three rows at every width; Alignment and
-  Number drop to two rows between 921 and 1109 client points; from 1280 points Font and
-  Alignment spread back into their wide two-row form, and Number from 1520), and a narrower
-  card draws it as one compact row (icon, name and chevron) whose menu holds the natural body;
-  tabs without breakpoints compact a group once its measured body no longer fits what is left of
-  the card, with hysteresis at the boundary. The card scrolls a
+  draws its natural body (Home's Clipboard keeps three rows from 819 points, Font from 929,
+  Alignment from 960, Number from 1040, Cells and Editing from 1120; Font and Alignment spread
+  back into two rows at 1280 and Number at 1520; Styles and Cells become one row of three at
+  1520; Insert › Symbols stacks at 1520, Insert › Filters stacks its Slicer over its Timeline
+  from 1280 and returns to one row at 1520, Page Layout › Scale to Fit has two rows of fields
+  from 680, and View › Sheet View two rows from 928 while View › Show takes its second row at
+  1280), and a narrower card
+  draws it as one compact row (icon, name and chevron) whose menu holds the natural body; tabs
+  without breakpoints compact a group once its measured body no longer fits what is left of the
+  card, with hysteresis at the boundary. The card scrolls a
   tab wider than the window, with arrows at its edges (the labels scroll and clip with the
   groups); `ribbon::RibbonOverflow` records the groups' size each frame, `ribbon::RibbonLabels`
   the names painted and `ribbon::RibbonSections::levels` the layout planned per group, and a test

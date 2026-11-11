@@ -1,11 +1,31 @@
-use super::controls::{act, checkbox_on, control_keytip, group_end, invoke, keytip, menu_items, popup_command, section, sep};
-use super::{Icon, Rect, SheetApp, Tokens, Ui, big_button, json, keytip_table, pos2, theme, vec2};
+use super::controls::{RibbonSections, act, checkbox_on, control_keytip, group_end, invoke, keytip, menu_items, popup_command, section, sep};
+use super::{Icon, Rect, SheetApp, Tokens, Ui, big_button, json, keytip_table, pos2, small_button, theme, vec2};
 
 /// Draws the View tab: view modes, ruler/gridlines/formula-bar/headings toggles, zoom, freeze panes, theme, animations, interface size and language.
 pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let _ = t;
     let lang = app.ui.language;
+    // Excel's measured View rows, in client points: Sheet View is one row of its two buttons
+    // below 928, then two rows; Workbook Views is three tall buttons from 880 and Window from
+    // 819; Show is one row of four checkboxes until 1280, then two rows.
+    RibbonSections::breaks(ui, "Sheet View", &[(928.0, 2), (0.0, 1)]);
+    RibbonSections::breaks(ui, "Workbook Views", &[(880.0, 3)]);
+    RibbonSections::breaks(ui, "Show", &[(1280.0, 2), (0.0, 1)]);
+    RibbonSections::breaks(ui, "Window", &[(819.0, 3)]);
+    section(ui, app, "Sheet View", Icon::Sheet, |app, ui| {
+        // New Sheet View over Custom Views from 928 client points, side by side below it.
+        if RibbonSections::level(ui, "Sheet View") == 2 {
+            ui.vertical(|ui| {
+                new_sheet_view(app, ui);
+                custom_views(app, ui);
+            });
+        } else {
+            new_sheet_view(app, ui);
+            custom_views(app, ui);
+        }
+    });
+    sep(ui, "Sheet View");
     section(ui, app, "Workbook Views", Icon::Normal, |app, ui| {
         for (icon, label, cmd) in [
             (Icon::Normal, "Normal", "view.normal"),
@@ -21,41 +41,26 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui, "Workbook Views");
     section(ui, app, "Show", Icon::PageLayout, |app, ui| {
-        let s = app.session.active().and_then(|d| d.wb.active().map(|s| (s.show_gridlines, s.show_headings))).unwrap_or((true, true));
-        let lang = app.ui.language;
-        let page_layout =
-            app.session.active().and_then(|d| d.wb.active().map(|s| s.view == gridcraft_engine::model::SheetViewMode::PageLayout)).unwrap_or(false);
-        // Two columns of two, as in Excel's Show group: four stacked rows overflow the ribbon body.
-        ui.vertical(|ui| {
-            // Rulers exist only in Page Layout view.
-            let mut ruler = !app.session.hide_ruler;
-            let ruler_resp = ui.add_enabled(page_layout, egui::Checkbox::new(&mut ruler, lang.tr("Ruler")));
-            control_keytip(app, ui, &ruler_resp, "view.ruler");
-            if ruler_resp.changed() {
-                act(app, "view.ruler", json!({"on": ruler}));
-            }
-            let mut g = s.0;
-            let resp = ui.checkbox(&mut g, lang.tr("Gridlines"));
-            control_keytip(app, ui, &resp, "view.gridlines");
-            if resp.changed() {
-                act(app, "view.gridlines", json!({"on": g}));
-            }
-        });
-        ui.add_space(6.0);
-        ui.vertical(|ui| {
-            let mut fb = app.session.prefs.formula_bar;
-            let resp = ui.checkbox(&mut fb, lang.tr("Formula Bar"));
-            control_keytip(app, ui, &resp, "view.formulaBar");
-            if resp.changed() || invoke(app, "view.formulaBar") {
-                act(app, "view.formulaBar", json!({"on": checkbox_on(resp.changed(), fb)}));
-            }
-            let mut h = s.1;
-            let resp = ui.checkbox(&mut h, lang.tr("Headings"));
-            control_keytip(app, ui, &resp, "view.headings");
-            if resp.changed() {
-                act(app, "view.headings", json!({"on": h}));
-            }
-        });
+        if RibbonSections::level(ui, "Show") == 1 {
+            // One row of four checkboxes below 1280 client points.
+            ui.horizontal(|ui| {
+                show_ruler(app, ui);
+                show_gridlines(app, ui);
+                show_formula_bar(app, ui);
+                show_headings(app, ui);
+            });
+        } else {
+            // Two columns of two, as in Excel's Show group: four stacked rows overflow the ribbon body.
+            ui.vertical(|ui| {
+                show_ruler(app, ui);
+                show_gridlines(app, ui);
+            });
+            ui.add_space(6.0);
+            ui.vertical(|ui| {
+                show_formula_bar(app, ui);
+                show_headings(app, ui);
+            });
+        }
     });
     sep(ui, "Show");
     section(ui, app, "Zoom", Icon::Zoom, |app, ui| {
@@ -176,6 +181,49 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
     group_end(ui, "Interface");
 }
 
+/// View › Show, Ruler: only Page Layout view has rulers.
+fn show_ruler(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
+    let page_layout =
+        app.session.active().and_then(|d| d.wb.active().map(|s| s.view == gridcraft_engine::model::SheetViewMode::PageLayout)).unwrap_or(false);
+    let mut ruler = !app.session.hide_ruler;
+    let resp = ui.add_enabled(page_layout, egui::Checkbox::new(&mut ruler, lang.tr("Ruler")));
+    control_keytip(app, ui, &resp, "view.ruler");
+    if resp.changed() {
+        act(app, "view.ruler", json!({"on": ruler}));
+    }
+}
+
+fn show_gridlines(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
+    let mut g = app.session.active().and_then(|d| d.wb.active().map(|s| s.show_gridlines)).unwrap_or(true);
+    let resp = ui.checkbox(&mut g, lang.tr("Gridlines"));
+    control_keytip(app, ui, &resp, "view.gridlines");
+    if resp.changed() {
+        act(app, "view.gridlines", json!({"on": g}));
+    }
+}
+
+fn show_formula_bar(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
+    let mut fb = app.session.prefs.formula_bar;
+    let resp = ui.checkbox(&mut fb, lang.tr("Formula Bar"));
+    control_keytip(app, ui, &resp, "view.formulaBar");
+    if resp.changed() || invoke(app, "view.formulaBar") {
+        act(app, "view.formulaBar", json!({"on": checkbox_on(resp.changed(), fb)}));
+    }
+}
+
+fn show_headings(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
+    let mut h = app.session.active().and_then(|d| d.wb.active().map(|s| s.show_headings)).unwrap_or(true);
+    let resp = ui.checkbox(&mut h, lang.tr("Headings"));
+    control_keytip(app, ui, &resp, "view.headings");
+    if resp.changed() {
+        act(app, "view.headings", json!({"on": h}));
+    }
+}
+
 /// View › Switch Windows: the open workbooks, the active one checked and unsaved ones marked;
 /// choosing one brings it forward.
 fn switch_windows(app: &mut SheetApp, ui: &mut Ui) {
@@ -183,7 +231,10 @@ fn switch_windows(app: &mut SheetApp, ui: &mut Ui) {
     anchor.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Switch Windows"));
     control_keytip(app, ui, &anchor, "view.switchWindows");
     let forced = std::mem::take(&mut app.open_switch_windows) | invoke(app, "view.switchWindows");
-    egui::Popup::menu(&anchor).open_memory(popup_command(forced, anchor.clicked())).show(|ui| {
+    // A stable id: the View tab is drawn for the first time on the frame the command opens this
+    // list, and its groups settle into their compact/natural forms on later frames. Anchoring by
+    // response id would lose the open state when those controls move.
+    egui::Popup::menu(&anchor).id(egui::Id::unique("gridcraft.switch_windows")).open_memory(popup_command(forced, anchor.clicked())).show(|ui| {
         for w in app.open_windows() {
             let label = theme::available_text(ui, &format!("{}{}", if w.active { "✓ " } else { "    " }, w.label()));
             if ui.add(egui::Button::selectable(w.active, label).min_size(vec2(220.0, 22.0))).clicked() {
@@ -192,4 +243,42 @@ fn switch_windows(app: &mut SheetApp, ui: &mut Ui) {
             }
         }
     });
+}
+
+/// View › Sheet View, New Sheet View: asks for a name and saves the sheet, selection, zoom and
+/// freeze as a custom view (`view.customViews`).
+fn new_sheet_view(app: &mut SheetApp, ui: &mut Ui) {
+    if small_button(ui, Icon::Plus, "New Sheet View", "Save this sheet's selection, zoom and frozen panes as a view", false).clicked() {
+        app.open_dialog("newSheetView", json!({}));
+    }
+}
+
+/// View › Sheet View, Custom Views: the saved views, each one shown on a click, with a Delete
+/// beside it.
+fn custom_views(app: &mut SheetApp, ui: &mut Ui) {
+    let anchor = small_button(ui, Icon::Book, "Custom Views", "Show or delete a saved view", true);
+    control_keytip(app, ui, &anchor, "view.customViews");
+    egui::Popup::menu(&anchor).show(|ui| {
+        let views = saved_views(app);
+        if views.is_empty() {
+            ui.label("No saved views");
+            return;
+        }
+        for name in views {
+            ui.horizontal(|ui| {
+                if ui.button(&name).clicked() {
+                    act(app, "view.customViews", json!({"show": name}));
+                    ui.close();
+                }
+                if ui.small_button("Delete").clicked() {
+                    act(app, "view.customViews", json!({"delete": name}));
+                }
+            });
+        }
+    });
+}
+
+/// The views saved in the workbook (`view.customViews` with no parameters returns them by name).
+fn saved_views(app: &mut SheetApp) -> Vec<String> {
+    app.session.execute("view.customViews", json!({})).ok().and_then(|v| v.as_object().map(|o| o.keys().cloned().collect())).unwrap_or_default()
 }

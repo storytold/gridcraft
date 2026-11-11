@@ -7,6 +7,7 @@ use gridcraft_engine::Session;
 use gridcraft_ui_egui::icons::Icon;
 use gridcraft_ui_egui::ribbon::{RIBBON_LABEL_H, RibbonLabels, RibbonOverflow, RibbonSections, TABS};
 use gridcraft_ui_egui::{SheetApp, widgets};
+use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
@@ -52,110 +53,233 @@ fn home_levels(h: &Harness) -> Vec<(String, u8)> {
 
 #[test]
 fn home_adapts_its_group_rows_to_the_card_width_like_excel() {
-    // 819 pt (1024 px at 125%): Clipboard keeps its three rows, Styles its three stacked buttons,
-    // and every other group becomes the one-row dropdown Excel shows there.
-    let narrow = app_at_size(vec2(819.0, 614.0), "Home");
-    assert_eq!(
-        home_levels(&narrow),
-        [
-            ("Clipboard".to_string(), 1),
-            ("Font".to_string(), 0),
-            ("Alignment".to_string(), 0),
-            ("Number".to_string(), 0),
-            ("Styles".to_string(), 1),
-            ("Cells".to_string(), 0),
-            ("Editing".to_string(), 0),
-        ]
-    );
-    assert!(narrow.query_by_label("Font").is_some(), "Font is one compact row");
-    assert!(narrow.query_by_label("Editing").is_some(), "Editing is one compact row");
-    // Only the compact row is drawn: the natural body waits in its menu.
-    assert!(narrow.query_by_label("Border presets").is_none());
+    // Levels are the section's control rows (0 is the compact one-row dropdown): Clipboard 3,
+    // Font 3/2, Alignment 3/2, Number 3/2, Styles 3/1, Cells 3/1, Editing 3.
+    let expect = |width: f32, expected: [u8; 7]| {
+        let h = app_at_size(vec2(width, 768.0), "Home");
+        let names = ["Clipboard", "Font", "Alignment", "Number", "Styles", "Cells", "Editing"];
+        let want: Vec<(String, u8)> = names.into_iter().zip(expected).map(|(name, level)| (name.to_string(), level)).collect();
+        assert_eq!(home_levels(&h), want, "Home rows at {width} pt");
+    };
+    // 1024 outer px (819 pt): Clipboard keeps its three rows and Styles its three stacked buttons;
+    // every other group is the one-row dropdown Excel shows there.
+    expect(819.0, [3, 0, 0, 0, 3, 0, 0]);
+    // 1228 outer px (983 pt): Font and Alignment take their three rows, Number is still one.
+    expect(983.0, [3, 3, 3, 0, 3, 0, 0]);
+    // 1400 outer px (1120 pt) and 1535 px (1228 pt): the three-row tab, Cells and Editing too.
+    expect(1120.0, [3, 3, 3, 3, 3, 3, 3]);
+    expect(1228.0, [3, 3, 3, 3, 3, 3, 3]);
+    // 1600 outer px (1280 pt): Font and Alignment spread into their wide two-row forms.
+    expect(1280.0, [3, 2, 2, 3, 3, 3, 3]);
+    // 1900 outer px (1520 pt): Number does too, and Styles and Cells become one row of three.
+    expect(1520.0, [3, 2, 2, 2, 1, 1, 3]);
 
-    // 983 pt (1228 px at 125%): Font keeps its three rows, Alignment and Number drop to two, and
-    // Cells and Editing remain compact.
-    let medium = app_at_size(vec2(983.0, 614.0), "Home");
-    assert_eq!(
-        home_levels(&medium),
-        [
-            ("Clipboard".to_string(), 1),
-            ("Font".to_string(), 1),
-            ("Alignment".to_string(), 2),
-            ("Number".to_string(), 2),
-            ("Styles".to_string(), 1),
-            ("Cells".to_string(), 0),
-            ("Editing".to_string(), 0),
-        ]
-    );
-    assert!(medium.query_by_label("Font").is_none(), "Font is natural again");
-    assert!(medium.query_by_label("Cells").is_some(), "Cells is still one row");
-
-    // 1228 pt: the full Home tab, with Editing's two rows and the three-row groups.
-    let wide = app_at_size(vec2(1228.0, 768.0), "Home");
-    assert_eq!(
-        home_levels(&wide),
-        [
-            ("Clipboard".to_string(), 1),
-            ("Font".to_string(), 1),
-            ("Alignment".to_string(), 3),
-            ("Number".to_string(), 3),
-            ("Styles".to_string(), 1),
-            ("Cells".to_string(), 1),
-            ("Editing".to_string(), 1),
-        ]
-    );
-    for compact in ["Font", "Alignment", "Number", "Cells", "Editing"] {
-        assert!(wide.query_by_label(compact).is_none(), "{compact} is natural at 1228 pt");
+    let level = |width: f32, label: &str| {
+        let h = app_at_size(vec2(width, 768.0), "Home");
+        home_levels(&h).into_iter().find(|(name, _)| name == label).map(|(_, level)| level)
+    };
+    // Just below each measured breakpoint (13 pt, outside the hysteresis dead band) and at it.
+    for (width, label, expected) in [
+        (806.0, "Clipboard", 0),
+        (819.0, "Clipboard", 3),
+        (916.0, "Font", 0),
+        (929.0, "Font", 3),
+        (947.0, "Alignment", 0),
+        (960.0, "Alignment", 3),
+        (1027.0, "Number", 0),
+        (1040.0, "Number", 3),
+        (1107.0, "Cells", 0),
+        (1120.0, "Cells", 3),
+        (1107.0, "Editing", 0),
+        (1120.0, "Editing", 3),
+        (1267.0, "Font", 3),
+        (1280.0, "Font", 2),
+        (1267.0, "Alignment", 3),
+        (1280.0, "Alignment", 2),
+        (1507.0, "Number", 3),
+        (1520.0, "Number", 2),
+        (1507.0, "Styles", 3),
+        (1520.0, "Styles", 1),
+        (1507.0, "Cells", 3),
+        (1520.0, "Cells", 1),
+    ] {
+        assert_eq!(level(width, label), Some(expected), "Home › {label} at {width} pt");
     }
 
-    // 1400 outer px (1120 pt): the three-row forms still stand, and Cells and Editing are natural
-    // above their 1109 pt breakpoint.
-    let rowed = app_at_size(vec2(1120.0, 768.0), "Home");
-    assert_eq!(
-        home_levels(&rowed),
-        [
-            ("Clipboard".to_string(), 1),
-            ("Font".to_string(), 1),
-            ("Alignment".to_string(), 3),
-            ("Number".to_string(), 3),
-            ("Styles".to_string(), 1),
-            ("Cells".to_string(), 1),
-            ("Editing".to_string(), 1),
-        ]
-    );
+    // A compact group draws one row naming itself; its natural body waits in its menu.
+    let narrow = app_at_size(vec2(819.0, 614.0), "Home");
+    assert!(narrow.query_by_label("Font").is_some(), "Font is one compact row");
+    assert!(narrow.query_by_label("Editing").is_some(), "Editing is one compact row");
+    assert!(narrow.query_by_label("Border presets").is_none());
+}
 
-    // 1600 outer px (1280 pt): Excel spreads Font and Alignment back into their wide two-row
-    // forms; Number keeps its three rows until 1900.
-    let spread = app_at_size(vec2(1280.0, 768.0), "Home");
-    assert_eq!(
-        home_levels(&spread),
-        [
-            ("Clipboard".to_string(), 1),
-            ("Font".to_string(), 2),
-            ("Alignment".to_string(), 2),
-            ("Number".to_string(), 3),
-            ("Styles".to_string(), 1),
-            ("Cells".to_string(), 1),
-            ("Editing".to_string(), 1),
-        ]
-    );
+#[test]
+fn measured_section_rows_switch_at_their_widths() {
+    // Excel's measured 1↔3 transitions for the other tabs, in client points: the section is one
+    // compact row below the width and its natural rows from it, except Symbols and Show, which
+    // keep one row below and take a second one above.
+    for (tab, label, below, at, below_level, at_level) in [
+        ("Insert", "Illustrations", 1507.0, 1520.0, 0, 3),
+        ("Insert", "Filters", 1267.0, 1280.0, 0, 2),
+        ("Insert", "Filters", 1507.0, 1520.0, 2, 1),
+        ("Insert", "Symbols", 1507.0, 1520.0, 1, 2),
+        ("Page Layout", "Themes", 747.0, 760.0, 0, 3),
+        ("Page Layout", "Scale to Fit", 667.0, 680.0, 0, 2),
+        ("Formulas", "Defined Names", 1267.0, 1280.0, 0, 3),
+        ("Formulas", "Formula Auditing", 1027.0, 1040.0, 0, 3),
+        ("Data", "Data Tools", 1027.0, 1040.0, 0, 3),
+        ("Data", "Outline", 1507.0, 1520.0, 0, 3),
+        ("View", "Sheet View", 915.0, 928.0, 1, 2),
+        ("View", "Workbook Views", 867.0, 880.0, 0, 3),
+        ("View", "Show", 1267.0, 1280.0, 1, 2),
+        ("View", "Window", 806.0, 819.0, 0, 3),
+    ] {
+        for (width, expected) in [(below, below_level), (at, at_level)] {
+            let h = app_at_size(vec2(width, 768.0), tab);
+            let level = RibbonSections::levels(&h.ctx, tab).into_iter().find(|(name, _)| name == label).map(|(_, level)| level);
+            assert_eq!(level, Some(expected), "{tab} › {label} at {width} pt");
+        }
+    }
+}
 
-    // 1900 outer px (1520 pt): Number takes its wide two-row form too.
-    let widest = app_at_size(vec2(1520.0, 768.0), "Home");
-    assert_eq!(
-        home_levels(&widest),
-        [
-            ("Clipboard".to_string(), 1),
-            ("Font".to_string(), 2),
-            ("Alignment".to_string(), 2),
-            ("Number".to_string(), 2),
-            ("Styles".to_string(), 1),
-            ("Cells".to_string(), 1),
-            ("Editing".to_string(), 1),
-        ]
-    );
-    for natural in ["Font", "Alignment", "Number"] {
-        assert!(widest.query_by_label(natural).is_none(), "{natural} is natural at 1900 px");
+#[test]
+fn filters_stacks_its_slicer_over_its_timeline_between_1280_and_1520() {
+    // Excel's Filters group: two rows while the card is between 1280 and 1520 client points, one
+    // row from 1520, and the whole group compact below 1280.
+    let stacked = app_at_size(vec2(1280.0, 768.0), "Insert");
+    let slicer = stacked.get_by_label("Slicer").rect();
+    let timeline = stacked.get_by_label("Timeline").rect();
+    assert!(timeline.top() >= slicer.bottom() - 0.5, "Filters stacks Slicer over Timeline at 1280 pt");
+    assert!(timeline.center().y > slicer.center().y);
+
+    let side_by_side = app_at_size(vec2(1520.0, 768.0), "Insert");
+    let slicer = side_by_side.get_by_label("Slicer").rect();
+    let timeline = side_by_side.get_by_label("Timeline").rect();
+    assert!((timeline.center().y - slicer.center().y).abs() < 0.5, "Filters puts them on one row at 1520 pt");
+    assert!(timeline.left() >= slicer.right() - 0.5);
+
+    let compact = app_at_size(vec2(1267.0, 768.0), "Insert");
+    assert!(compact.query_by_label("Filters").is_some(), "Filters is one compact row below 1280 pt");
+    assert!(compact.query_by_label("Timeline").is_none(), "the compact row holds no controls until its menu opens");
+}
+
+#[test]
+fn symbols_stack_the_equation_over_the_symbol_gallery_from_1520() {
+    // Equation is a split button, so its main part is only the top half of its 72 px cell: the
+    // two buttons share a cell top while they sit on one row.
+    let one_row = app_at_size(vec2(1507.0, 768.0), "Insert");
+    let equation = one_row.get_by_label("Equation").rect();
+    let symbol = one_row.get_by_label("Symbol").rect();
+    assert!((symbol.top() - equation.top()).abs() < 0.5, "Symbols is one row below 1520 pt");
+    assert!(symbol.left() >= equation.right() - 0.5);
+
+    let stacked = app_at_size(vec2(1520.0, 768.0), "Insert");
+    let equation = stacked.get_by_label("Equation").rect();
+    let symbol = stacked.get_by_label("Symbol").rect();
+    assert!(symbol.top() > equation.top(), "Symbols stacks Equation over Symbol at 1520 pt");
+}
+
+#[test]
+fn scale_to_fit_has_two_rows_of_fields_from_680() {
+    let two_rows = app_at_size(vec2(680.0, 768.0), "Page Layout");
+    assert_eq!(RibbonSections::levels(&two_rows.ctx, "Page Layout").into_iter().find(|(name, _)| name == "Scale to Fit").map(|(_, l)| l), Some(2));
+    for label in ["Width:", "Height:", "Scale:"] {
+        assert!(two_rows.query_by_label(label).is_some(), "Scale to Fit shows {label} at 680 pt");
+    }
+    let width = two_rows.get_by_label("Width:").rect();
+    let scale = two_rows.get_by_label("Scale:").rect();
+    assert!(scale.center().y > width.center().y, "Width and Height sit above Scale at 680 pt");
+
+    let compact = app_at_size(vec2(667.0, 768.0), "Page Layout");
+    assert!(compact.query_by_label("Scale to Fit").is_some(), "Scale to Fit is one compact row below 680 pt");
+    assert!(compact.query_by_label("Width:").is_none());
+}
+
+#[test]
+fn sheet_view_is_one_row_below_928_and_two_from_it() {
+    let one_row = app_at_size(vec2(915.0, 768.0), "View");
+    let new = one_row.get_by_label("New Sheet View").rect();
+    let views = one_row.get_by_label("Custom Views").rect();
+    assert!((views.center().y - new.center().y).abs() < 0.5, "Sheet View is one row below 928 pt");
+    assert!(views.left() >= new.right() - 0.5);
+
+    let two_rows = app_at_size(vec2(928.0, 768.0), "View");
+    let new = two_rows.get_by_label("New Sheet View").rect();
+    let views = two_rows.get_by_label("Custom Views").rect();
+    assert!(views.center().y > new.center().y, "Sheet View stacks New over Custom Views at 928 pt");
+}
+
+#[test]
+fn styles_and_cells_spread_their_three_buttons_over_one_row_at_1520() {
+    let stacked = app_at_size(vec2(1507.0, 768.0), "Home");
+    for buttons in [["Conditional Formatting", "Format as Table", "Cell Styles"], ["Insert", "Delete", "Format"]] {
+        let ys: Vec<f32> = buttons.iter().map(|label| stacked.get_by_label(label).rect().center().y).collect();
+        assert!(ys.windows(2).all(|w| w[1] > w[0]), "Home's three buttons stack below 1520 pt ({buttons:?})");
+    }
+
+    let one_row = app_at_size(vec2(1520.0, 768.0), "Home");
+    for buttons in [["Conditional Formatting", "Format as Table", "Cell Styles"], ["Insert", "Delete", "Format"]] {
+        let rects: Vec<egui::Rect> = buttons.iter().map(|label| one_row.get_by_label(label).rect()).collect();
+        assert!(rects.windows(2).all(|w| (w[1].center().y - w[0].center().y).abs() < 0.5), "one row at 1520 pt ({buttons:?})");
+        assert!(rects.windows(2).all(|w| w[1].left() >= w[0].right() - 0.5), "side by side at 1520 pt ({buttons:?})");
+    }
+}
+
+#[test]
+fn sheet_view_saves_and_lists_a_view() {
+    // View › Sheet View › New opens Excel's name prompt; OK saves the view, and the group's
+    // Custom Views menu lists it.
+    let mut h = app_at_size(vec2(1440.0, 768.0), "View");
+    h.get_by_label("New Sheet View").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name().to_string()).as_deref(), Some("newSheetView"), "New Sheet View asks for a name");
+    h.get_by_label_contains("OK").click();
+    h.run_steps(3);
+    let views = h.state_mut().session.execute("view.customViews", json!({})).unwrap();
+    assert!(views.get("View1").is_some_and(|v| v.is_object()), "the view is saved as View1: {views}");
+
+    h.get_by_label("Custom Views").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("View1").is_some(), "the menu lists the saved view");
+}
+
+#[test]
+fn every_new_group_renders_the_measured_rows_at_its_transition_widths() {
+    // Renders each newly modelled group just below and at each of its transitions: the planner's
+    // level is Excel's measured row count there (0 is the compact row, 1 and 2 its natural rows),
+    // the group is named in the label band, and a tab that fits the card also fits its height.
+    for (tab, group, width, level) in [
+        ("Insert", "Filters", 1267.0, 0),
+        ("Insert", "Filters", 1280.0, 2),
+        ("Insert", "Filters", 1507.0, 2),
+        ("Insert", "Filters", 1520.0, 1),
+        ("Insert", "Symbols", 1507.0, 1),
+        ("Insert", "Symbols", 1520.0, 2),
+        ("Page Layout", "Scale to Fit", 667.0, 0),
+        ("Page Layout", "Scale to Fit", 680.0, 2),
+        ("View", "Sheet View", 915.0, 1),
+        ("View", "Sheet View", 928.0, 2),
+        ("View", "Show", 1267.0, 1),
+        ("View", "Show", 1280.0, 2),
+        ("Home", "Styles", 1507.0, 3),
+        ("Home", "Styles", 1520.0, 1),
+        ("Home", "Cells", 1507.0, 3),
+        ("Home", "Cells", 1520.0, 1),
+    ] {
+        let h = app_at_size(vec2(width, 768.0), tab);
+        let planned = RibbonSections::levels(&h.ctx, tab).into_iter().find(|(name, _)| name == group).map(|(_, level)| level);
+        assert_eq!(planned, Some(level), "{tab} › {group} at {width} pt");
+        let labels = RibbonLabels::get(&h.ctx);
+        assert!(labels.labels.iter().any(|l| l.label == group), "{tab} › {group} is named at {width} pt");
+        let o = RibbonOverflow::get(&h.ctx);
+        if !o.overflows() {
+            assert!(
+                o.content_height <= o.visible_height + 0.5,
+                "{tab} › {group}: {} px of groups in {} px at {width} pt",
+                o.content_height,
+                o.visible_height
+            );
+        }
     }
 }
 
@@ -211,11 +335,11 @@ fn expected_groups(tab: &str) -> &'static [&'static str] {
         "Home" => &["Clipboard", "Font", "Alignment", "Number", "Styles", "Cells", "Editing"],
         "Insert" => &["Tables", "Illustrations", "Charts", "Filters", "Sparklines", "Form Controls", "Cell Controls", "Links", "Text", "Symbols"],
         "Draw" => &["Tools", "Pens", "Convert"],
-        "Page Layout" => &["Themes", "Page Setup", "Sheet Options"],
+        "Page Layout" => &["Themes", "Page Setup", "Scale to Fit", "Sheet Options"],
         "Formulas" => &["Function Library", "Defined Names", "Formula Auditing", "Calculation"],
         "Data" => &["Get & Transform Data", "Sort & Filter", "Data Tools", "Forecast", "Outline", "Analysis"],
         "Review" => &["Proofing", "Comments", "Protect"],
-        "View" => &["Workbook Views", "Show", "Zoom", "Window", "Interface"],
+        "View" => &["Sheet View", "Workbook Views", "Show", "Zoom", "Window", "Interface"],
         "Automate" => &["Macros", "Tools"],
         _ => unreachable!("{tab} is not a standard tab"),
     }
