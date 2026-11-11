@@ -55,6 +55,22 @@ pub fn parse_closing_parens<T>(src: &str, parse: impl Fn(&str) -> Result<T, Pars
     Err(typed)
 }
 
+/// Parses tokens another syntax's tokenizer produced (OpenFormula, say) with this grammar, so a
+/// caller with its own lexer builds the same [`Expr`]. Spaces are taken as the tokenizer gave
+/// them: a [`Tok::Space`] is the intersection operator. A [`Tok::Ref`] is a reference the
+/// tokenizer has already read. The token list need not end with [`Tok::Eof`].
+pub fn parse_tokens(toks: Vec<Token>) -> Result<Expr, ParseError> {
+    if toks.len() > MAX_FORMULA_LEN {
+        return Err(ParseError { msg: format!("formula has more than {MAX_FORMULA_LEN} tokens"), pos: 0 });
+    }
+    let mut p = Parser { toks, i: 0, depth: 0, input: false };
+    let e = p.expr(0, false)?;
+    match p.peek() {
+        Tok::Eof => Ok(e),
+        t => Err(p.err(format!("unexpected {}", describe(t)))),
+    }
+}
+
 pub(crate) fn parse_syntax(src: &str, locale: crate::FormulaLocale) -> Result<Expr, ParseError> {
     parse_top(src, locale, false)
 }
@@ -283,6 +299,7 @@ impl Parser {
             Tok::Text(s) => Ok(Expr::Text(Arc::from(s))),
             Tok::Bool(b) => Ok(Expr::Bool(b)),
             Tok::Error(e) => Ok(Expr::Error(e)),
+            Tok::Ref(r) => Ok(Expr::Ref(r)),
             Tok::Op("-") => Ok(Expr::Unary(UnOp::Neg, Box::new(self.expr(60, allow_union)?))),
             Tok::Op("+") => Ok(Expr::Unary(UnOp::Plus, Box::new(self.expr(60, allow_union)?))),
             Tok::Op("@") => Ok(Expr::Unary(UnOp::At, Box::new(self.expr(95, allow_union)?))),

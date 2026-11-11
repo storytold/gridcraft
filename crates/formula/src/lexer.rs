@@ -31,6 +31,9 @@ pub enum Tok {
     Colon,
     /// Trim reference range operator `.:`, `:.` or `.:.`.
     Trim(TrimMode),
+    /// A reference another syntax's tokenizer has already read (OpenFormula's `[.A1:.B2]`). The
+    /// A1 tokenizer never produces it.
+    Ref(crate::ast::Reference),
     Space,
     Eof,
 }

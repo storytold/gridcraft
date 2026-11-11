@@ -567,3 +567,86 @@ fn column_starting_with_at_round_trips() {
         assert_eq!(parse(&text).ok(), Some(Expr::Struct(s)), "printed as {text}");
     }
 }
+
+/// Another syntax's tokens parse with this grammar: a reference its tokenizer already read, a
+/// space as the intersection, and the same errors as text.
+#[test]
+fn parse_tokens_reads_another_syntaxs_tokens() -> Result<(), ParseError> {
+    use crate::lexer::{Tok, Token};
+    let cell = |col| Reference { sheet: SheetSel::Current, kind: RefKind::Cell(Anchor { row: 0, col, row_abs: false, col_abs: false }) };
+    let toks = |ts: Vec<Tok>| ts.into_iter().map(|tok| Token { tok, start: 0, end: 0 }).collect::<Vec<_>>();
+    let e = crate::parse_tokens(toks(vec![Tok::Func("SUM".into()), Tok::Ref(cell(0)), Tok::Comma, Tok::Ref(cell(1)), Tok::RParen]))?;
+    assert_eq!(e, parse("SUM(A1,B1)")?);
+    assert_eq!(print(&e), "SUM(A1,B1)");
+    let e = crate::parse_tokens(toks(vec![Tok::Ref(cell(0)), Tok::Space, Tok::Ref(cell(1))]))?;
+    assert!(matches!(e, Expr::Binary(BinOp::Intersect, ..)));
+    // A trailing Eof is accepted; leftovers and an empty list are errors.
+    assert!(crate::parse_tokens(toks(vec![Tok::Number(1.0), Tok::Eof])).is_ok());
+    assert!(crate::parse_tokens(toks(vec![Tok::Number(1.0), Tok::Number(2.0)])).is_err());
+    assert!(crate::parse_tokens(Vec::new()).is_err());
+    // Hostile input: more tokens than a formula may have characters is refused up front.
+    let long = toks(std::iter::repeat_n(Tok::Number(1.0), crate::MAX_FORMULA_LEN + 1).collect());
+    assert!(crate::parse_tokens(long).is_err());
+    Ok(())
+}
+
+/// A dialect changes only what it states; the rest prints as A1.
+#[test]
+fn print_with_a_dialect() -> Result<(), ParseError> {
+    use std::borrow::Cow;
+    struct Test;
+    impl crate::Dialect for Test {
+        fn separators(&self) -> (char, char, char) {
+            (';', ';', '|')
+        }
+        fn boolean(&self, b: bool) -> &'static str {
+            if b { "TRUE()" } else { "FALSE()" }
+        }
+        fn function<'a>(&self, name: &'a str) -> Cow<'a, str> {
+            Cow::Owned(format!("X.{name}"))
+        }
+        fn operator(&self, op: BinOp) -> &'static str {
+            if op == BinOp::Concat { " CONCAT " } else { op.symbol() }
+        }
+        fn unary_call(&self, op: UnOp) -> Option<&'static str> {
+            (op == UnOp::Spill).then_some("ANCHOR")
+        }
+        fn reference(&self, s: &mut String, r: &Reference, sep: &str) {
+            s.push('[');
+            s.push_str(&printer::reference_a1(r).replace(':', sep));
+            s.push(']');
+        }
+    }
+    let e = parse("IF(A1,{1,2;3,4},TRUE)&SUM(B1:C2,D1#)")?;
+    assert_eq!(crate::print_with(&e, &Test), "X.IF([A1];{1;2|3;4};TRUE()) CONCAT X.SUM([B1:C2];ANCHOR([D1]))");
+    assert_eq!(print(&e), "IF(A1,{1,2;3,4},TRUE)&SUM(B1:C2,D1#)");
+    Ok(())
+}
+
+/// `print` and `print_r1c1` go through the default dialect: Excel's text is unchanged.
+#[test]
+fn default_dialect_prints_excel_text_unchanged() -> Result<(), ParseError> {
+    let at = gridcraft_core::CellRef::new(4, 2);
+    for (a1, r1c1) in [
+        ("SUM(A1:B2,$C$3)", "SUM(R[-4]C[-2]:R[-3]C[-1],R3C3)"),
+        ("IF(TRUE,\"a\"\"b\",FALSE)", "IF(TRUE,\"a\"\"b\",FALSE)"),
+        ("{1,2;3,4}", "{1,2;3,4}"),
+        ("-A1%+@B:B", "-R[-4]C[-2]%+@C[-1]"),
+        ("A1#", "R[-4]C[-2]#"),
+        ("'My Sheet'!A1&Total", "'My Sheet'!R[-4]C[-2]&Total"),
+        ("'My Sheet'!Total", "'My Sheet'!Total"),
+        ("Table1[[#Headers],[Col]]", "Table1[[#Headers],[Col]]"),
+        ("SUM(A1:.B3)+SUM(A.:.B)", "SUM(R[-4]C[-2]:.R[-2]C[-1])+SUM(C[-2].:.C[-1])"),
+        ("TRIMRANGE(A1,1,1)", "TRIMRANGE(R[-4]C[-2],1,1)"),
+        ("(A1 B1)*2^3>=1<>0", "(R[-4]C[-2] R[-4]C[-1])*2^3>=1<>0"),
+        ("LAMBDA(x,x+1)(2)", "LAMBDA(x,x+1)(2)"),
+        ("Sheet1:Sheet3!B2", "Sheet1:Sheet3!R[-3]C[-1]"),
+        ("#REF!+1", "#REF!+1"),
+        ("SUM(,1)", "SUM(,1)"),
+    ] {
+        let e = parse(a1)?;
+        assert_eq!(print(&e), a1);
+        assert_eq!(printer::print_r1c1(&e, at), r1c1, "{a1}");
+    }
+    Ok(())
+}
