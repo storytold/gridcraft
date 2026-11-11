@@ -103,6 +103,11 @@ impl Arg {
 /// Services a function may need from the host.
 pub trait Ctx {
     fn date_system(&self) -> DateSystem;
+    /// The region whose separators numeric text is read with: a criterion like `"1.200,00"` is a
+    /// number in `pt-BR`. Hosts that have no workbook region keep the en-US reading.
+    fn region(&self) -> &'static gridcraft_core::Region {
+        &gridcraft_core::region::EN_US
+    }
     /// Current local date-time serial.
     fn now_serial(&self) -> f64;
     /// Uniform in [0, 1).

@@ -335,6 +335,19 @@ impl DocState {
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved)
     }
+    /// Applies `region` to this workbook without making it dirty. The region belongs to the
+    /// window, not to the file, so a clean workbook stays clean (`saved` moves with it); and a
+    /// workbook another window shares is cloned only when the region really changes.
+    pub(crate) fn adopt_region(&mut self, region: &'static gridcraft_core::Region) {
+        if self.wb.region.tag == region.tag {
+            return;
+        }
+        let dirty = self.is_dirty();
+        Arc::make_mut(&mut self.wb).region = region;
+        if !dirty {
+            self.saved = self.wb.clone();
+        }
+    }
     pub fn sheet_index(&self) -> usize {
         self.wb.active_sheet()
     }
@@ -549,7 +562,7 @@ impl Session {
     pub fn set_region(&mut self, region: &'static gridcraft_core::Region) {
         self.region = Some(region);
         if let Some(d) = self.docs.get_mut(self.active) {
-            Arc::make_mut(&mut d.wb).region = region;
+            d.adopt_region(region);
         }
     }
     pub fn documents(&self) -> &[DocState] {
@@ -600,9 +613,7 @@ impl Session {
     pub fn add_document(&mut self, mut d: DocState) -> usize {
         // Only when the regimes differ: `make_mut` clones a workbook another window still
         // shares, and a new window must keep sharing the same `Arc` as the one it came from.
-        if d.wb.region.tag != self.region().tag {
-            Arc::make_mut(&mut d.wb).region = self.region();
-        }
+        d.adopt_region(self.region());
         let uid = d.uid;
         self.docs.push(d);
         let w = self.push_window(uid);

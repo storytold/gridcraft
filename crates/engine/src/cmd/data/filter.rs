@@ -82,18 +82,17 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad("data.filterBy", "column outside the filter range"));
     }
     let off = col - af.range.start.col;
+    // A criterion typed as a JSON number takes the separators the region reads (`1200.5` is
+    // written `1200,5` in pt-BR); a string is taken as the user wrote it.
+    let region = s.doc()?.wb.region;
+    let to_input = |v: &Json| crate::cmd::edit::json_to_input_in(v, region);
     let crit = if bool_param(p, "clear").unwrap_or(false) {
         None
     } else if let Some(vals) = p.get("values").and_then(Json::as_array) {
-        Some(FilterCriterion::Values {
-            values: vals.iter().map(crate::cmd::edit::json_to_input).collect(),
-            blanks: bool_param(p, "blanks").unwrap_or(false),
-        })
+        Some(FilterCriterion::Values { values: vals.iter().map(to_input).collect(), blanks: bool_param(p, "blanks").unwrap_or(false) })
     } else if let Some(c) = p.get("custom") {
-        let a =
-            (c.get("op").and_then(Json::as_str).unwrap_or("=").to_string(), c.get("value").map(crate::cmd::edit::json_to_input).unwrap_or_default());
-        let b =
-            c.get("op2").and_then(Json::as_str).map(|o| (o.to_string(), c.get("value2").map(crate::cmd::edit::json_to_input).unwrap_or_default()));
+        let a = (c.get("op").and_then(Json::as_str).unwrap_or("=").to_string(), c.get("value").map(to_input).unwrap_or_default());
+        let b = c.get("op2").and_then(Json::as_str).map(|o| (o.to_string(), c.get("value2").map(to_input).unwrap_or_default()));
         Some(FilterCriterion::Custom { a, b, and: c.get("and").and_then(Json::as_bool).unwrap_or(true) })
     } else if let Some(t) = p.get("top") {
         Some(FilterCriterion::Top10 {
@@ -121,8 +120,8 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 /// Does a value pass a custom comparison (`>`, `=*abc*`, `<>x`…)?
-fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
-    let num = gridcraft_core::parse::parse_number_text(crit);
+fn custom_ok(v: &Value, text: &str, op: &str, crit: &str, region: &gridcraft_core::Region) -> bool {
+    let num = gridcraft_core::parse::parse_number_text_in_region(crit, gridcraft_core::DateSystem::D1900, region);
     let cmp = match (v.as_f64(), num) {
         (Some(a), Some(b)) => a.partial_cmp(&b),
         // A numeric ordering comparison only matches numbers; blanks and text never do.
@@ -182,6 +181,7 @@ pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
 
 /// Hides rows of the autofilter range that fail any criterion.
 pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
+    let region = wb.region;
     let Some(sh) = wb.sheet(sheet) else { return };
     let Some(af) = sh.autofilter.clone() else { return };
     let r = af.range;
@@ -220,10 +220,10 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
                     }
                 }
                 FilterCriterion::Custom { a, b, and } => {
-                    let x = custom_ok(&v, &text, &a.0, &a.1);
+                    let x = custom_ok(&v, &text, &a.0, &a.1, region);
                     match b {
                         Some(b) => {
-                            let y = custom_ok(&v, &text, &b.0, &b.1);
+                            let y = custom_ok(&v, &text, &b.0, &b.1, region);
                             if *and { x && y } else { x || y }
                         }
                         None => x,

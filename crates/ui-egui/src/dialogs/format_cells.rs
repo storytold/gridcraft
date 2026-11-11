@@ -68,7 +68,9 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     }
                 }
             });
-            st.num_fmt = gridcraft_engine::model::NumFmt::new(&gridcraft_engine::display::canonical_code(&code, region));
+            // The engine stores the code it receives in its canonical spelling; the dialog sends
+            // what the user sees, in the region's separators.
+            st.num_fmt = gridcraft_engine::model::NumFmt::new(&code);
         }
         "Alignment" => {
             use gridcraft_engine::model::{HAlign, ReadingOrder, VAlign};

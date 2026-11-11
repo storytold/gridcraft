@@ -37,7 +37,7 @@ pub fn paint_chart(p: &Painter, rect: Rect, wb: &Workbook, sheet: usize, chart: 
     let origin = rect.center() - vec2(w * z, h * z) / 2.0;
     let data = gridcraft_chart::resolve(wb, sheet, chart);
     let m = EguiMeasure { painter: p, z };
-    let prims = gridcraft_chart::render(chart, &data, w, h, &m);
+    let prims = gridcraft_chart::render_in(chart, &data, w, h, &m, wb.region);
     paint_prims(&p.with_clip_rect(rect.intersect(p.clip_rect())), origin, &prims, z);
 }
 
@@ -376,7 +376,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         p.rect_filled(r, 0.0, Tokens::get(p.ctx()).grid_bg);
         let data = gridcraft_chart::resolve(wb, si, ch);
         let m = EguiMeasure { painter: p, z: geo.z };
-        let prims = gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m);
+        let prims = gridcraft_chart::render_in(ch, &data, ch.anchor.width, ch.anchor.height, &m, wb.region);
         paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
         done(start, r);
     }

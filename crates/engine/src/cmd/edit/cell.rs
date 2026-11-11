@@ -127,7 +127,12 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
         None => s.doc()?.selection.active,
     };
     // Both spellings take a string, number or boolean, as typed (#697).
-    let input = p.get("input").or_else(|| p.get("value")).map(json_to_input).ok_or_else(|| bad("cell.set", "missing `input` (or `value`)"))?;
+    let region = s.doc()?.wb.region;
+    let input = p
+        .get("input")
+        .or_else(|| p.get("value"))
+        .map(|v| json_to_input_in(v, region))
+        .ok_or_else(|| bad("cell.set", "missing `input` (or `value`)"))?;
     let array = bool_param(p, "array").unwrap_or(false);
     let d = s.doc()?;
     if let Some(sh) = d.wb.sheet(sheet)
@@ -193,6 +198,19 @@ pub(crate) fn json_to_input(v: &Json) -> String {
         Json::Number(n) => n.to_string(),
         Json::String(s) => s.clone(),
         other => other.to_string(),
+    }
+}
+
+/// The same text as [`json_to_input`], but written the way `region` reads a number: the dot that
+/// JSON gives a number is the decimal separator there, unless the region writes a comma.
+pub(crate) fn json_to_input_in(v: &Json, region: &gridcraft_core::Region) -> String {
+    let text = json_to_input(v);
+    if region.decimal == '.' {
+        return text;
+    }
+    match v {
+        Json::Number(_) => text.replace('.', &region.decimal.to_string()),
+        _ => text,
     }
 }
 

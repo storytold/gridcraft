@@ -127,7 +127,7 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         }
         let (x, y, _, _) = place(r);
         let data = gridcraft_chart::resolve(wb, si, ch);
-        let prims = gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure);
+        let prims = gridcraft_chart::render_in(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure, wb.region);
         draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
     }
     pg.restore();

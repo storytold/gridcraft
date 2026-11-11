@@ -20,7 +20,7 @@ mod paste_special;
 mod selection;
 
 use cell::{cell_set, range_fill, range_set_values};
-pub(crate) use cell::{check_arg_counts, input_to_cell, is_formula_input, json_to_input, parse_typed_formula};
+pub(crate) use cell::{check_arg_counts, input_to_cell, is_formula_input, json_to_input, json_to_input_in, parse_typed_formula};
 #[cfg(test)]
 pub(crate) use clipboard::parse_tsv;
 use clipboard::{clear_clipboard, copy, cut, paste, range_move};
@@ -209,6 +209,7 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
+    d.adopt_region(now.region);
     d.calc.rebuild(&d.wb);
     d.revision += 1;
     Ok(json!({"undone": label}))
@@ -230,6 +231,7 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         crate::push_history(&mut d.undo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
+    d.adopt_region(now.region);
     d.calc.rebuild(&d.wb);
     d.revision += 1;
     Ok(json!({"redone": label}))
