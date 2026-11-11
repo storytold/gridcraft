@@ -393,6 +393,14 @@ impl NumberFormat {
             None => Formatted { text: t.to_string(), color: None, fill: None, numeric: false },
         }
     }
+
+    /// [`Self::format_text`]'s text, or `None` once it passes `max_units` UTF-16 code units.
+    fn format_text_within(&self, t: &str, max_units: usize) -> Option<String> {
+        match self.inner.text_section.and_then(|i| self.inner.sections.get(i)) {
+            Some(sec) => render::render_text_within(sec, t, max_units).map(|out| out.text),
+            None => (t.encode_utf16().count() <= max_units).then(|| t.to_string()),
+        }
+    }
 }
 
 /// Formats a cell value for display.
@@ -486,6 +494,10 @@ impl NumberFormat {
 /// The `TEXT()` worksheet function: formats a value with a format code. Numeric text is
 /// converted to a number first; other text and booleans (as `TRUE`/`FALSE`) go through the text
 /// section, or are returned as is.
+/// Longest text a cell holds, in UTF-16 code units (Excel's 32,767 characters, which XLSB also
+/// stores that way), and so the longest `TEXT` result.
+const MAX_CELL_TEXT_CHARS: usize = 32_767;
+
 pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellError> {
     if code.is_empty() {
         return Ok(String::new());
@@ -504,7 +516,9 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
         Value::Bool(b) => return Ok(fmt.format_text(if b { "TRUE" } else { "FALSE" }).text),
         Value::Text(t) => match gridcraft_core::parse::parse_number_text(&t) {
             Some(n) => n,
-            None => return Ok(fmt.format_text(&t).text),
+            // Every `@` repeats the text: a result past a cell's limit is `#VALUE!`, so nested
+            // TEXT calls can't multiply it further.
+            None => return fmt.format_text_within(&t, MAX_CELL_TEXT_CHARS).ok_or(CellError::Value),
         },
         Value::Array(_) => return Err(CellError::Value),
     };
