@@ -219,8 +219,11 @@ pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
             if columns.is_empty() {
                 ui.add(egui::TextEdit::singleline(&mut col).desired_width(50.0)).labelled_by(label.id);
             } else {
+                // The closed box shows the same "B: Revenue" label as the list, not the bare letter (#3446).
+                let shown =
+                    columns.iter().find(|(letter, _)| letter.eq_ignore_ascii_case(&col)).map_or_else(|| col.clone(), |(_, label)| label.clone());
                 craft_ui::ComboBox::from_id_salt(("sort_col", i))
-                    .selected_text(col.clone())
+                    .selected_text(shown)
                     .show_ui(ui, |ui| {
                         for (letter, label) in &columns {
                             ui.selectable_value(&mut col, letter.clone(), label.as_str());
