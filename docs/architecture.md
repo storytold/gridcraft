@@ -71,10 +71,16 @@ drawing its own:
   `ribbon::RIBBON_LABEL_H` (18 px) tall that names every group in the dim text token at 11 pt
   (the card is 106 px expanded). A tab's groups are delimited by `ribbon::sep`, which takes the
   Excel name of the group it closes and runs its line through the label band; `group_end` names
-  the last group without a separator. The card scrolls a tab wider than the window, with arrows
-  at its edges (the labels scroll and clip with the groups); `ribbon::RibbonOverflow` records the
-  groups' size each frame, `ribbon::RibbonLabels` the names painted, and a test keeps every tab
-  within the card's three rows and checks a name per group.
+  the last group without a separator. Home's groups carry Excel's measured width breakpoints
+  (`ribbon::RibbonSections`): a group with room draws its natural body (Clipboard and Styles
+  keep three rows at every width; Alignment and Number drop to two rows between 921 and 1109
+  client points), and a narrower card draws it as one compact row (icon, name and chevron) whose
+  menu holds the natural body; tabs without breakpoints compact a group once its measured body
+  no longer fits what is left of the card, with hysteresis at the boundary. The card scrolls a
+  tab wider than the window, with arrows at its edges (the labels scroll and clip with the
+  groups); `ribbon::RibbonOverflow` records the groups' size each frame, `ribbon::RibbonLabels`
+  the names painted and `ribbon::RibbonSections::levels` the layout planned per group, and a test
+  keeps every tab within the card's three rows and checks a name per group.
 - **Function Library**: `function_library.rs` holds the function categories (engine id and
   label, in the Insert Function dialog's order), the function list built once from
   `cmd::formulas::function_list`, and the menus of Formulas › Function Library, including the

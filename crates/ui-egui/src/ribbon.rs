@@ -28,8 +28,8 @@ mod view;
 
 use automate::automate;
 use contextual::{chart_design, table_design};
-pub(crate) use controls::{ComboResult, editable_combo, group_end, sep};
-pub use controls::{GroupLabel, RIBBON_LABEL_H, RibbonLabels};
+pub(crate) use controls::{ComboResult, editable_combo, group_end, section, sep};
+pub use controls::{GroupLabel, RIBBON_LABEL_H, RibbonLabels, RibbonSections};
 use controls::{act, keytip};
 use data::data;
 use formulas::formulas;
@@ -151,6 +151,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         // Group boundaries start at the tab's left edge; each separator records
                         // the name of the group it closes, and the band is painted afterwards.
                         controls::begin_groups(ui);
+                        // The planner picks each group's layout from the card's content width,
+                        // walking the tab's groups from left to right.
+                        RibbonSections::begin(ui, app.ui.ribbon_tab.as_str(), content.width());
                         match app.ui.ribbon_tab.as_str() {
                             "Home" => home(app, ui),
                             "Insert" => insert(app, ui),

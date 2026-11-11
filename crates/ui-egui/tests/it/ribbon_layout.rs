@@ -5,7 +5,7 @@ use egui::vec2;
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::icons::Icon;
-use gridcraft_ui_egui::ribbon::{RIBBON_LABEL_H, RibbonLabels, RibbonOverflow, TABS};
+use gridcraft_ui_egui::ribbon::{RIBBON_LABEL_H, RibbonLabels, RibbonOverflow, RibbonSections, TABS};
 use gridcraft_ui_egui::{SheetApp, widgets};
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
@@ -24,6 +24,100 @@ fn app_at(width: f32, tab: &str) -> Harness {
     );
     h.run_steps(4);
     h
+}
+
+/// A harness at `size` logical points rendered at Excel's 125% desktop scale, so a case stated in
+/// client points can also be checked against the pixels Excel's measurements were taken at.
+fn app_at_size(size: egui::Vec2, tab: &str) -> Harness {
+    let mut session = Session::new();
+    session.new_workbook();
+    let mut app = crate::common::app(session);
+    app.ui.ribbon_tab = tab.into();
+    let mut h = crate::common::builder().with_size(size).with_pixels_per_point(1.25).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    h
+}
+
+/// The Home groups' planned levels, in Excel's order: 0 is one compact row, 1 a natural body,
+/// and 2/3 the narrower row counts of Alignment and Number.
+fn home_levels(h: &Harness) -> Vec<(String, u8)> {
+    RibbonSections::levels(&h.ctx, "Home")
+}
+
+#[test]
+fn home_adapts_its_group_rows_to_the_card_width_like_excel() {
+    // 819 pt (1024 px at 125%): Clipboard keeps its three rows, Styles its three stacked buttons,
+    // and every other group becomes the one-row dropdown Excel shows there.
+    let narrow = app_at_size(vec2(819.0, 614.0), "Home");
+    assert_eq!(
+        home_levels(&narrow),
+        [
+            ("Clipboard".to_string(), 1),
+            ("Font".to_string(), 0),
+            ("Alignment".to_string(), 0),
+            ("Number".to_string(), 0),
+            ("Styles".to_string(), 1),
+            ("Cells".to_string(), 0),
+            ("Editing".to_string(), 0),
+        ]
+    );
+    assert!(narrow.query_by_label("Font").is_some(), "Font is one compact row");
+    assert!(narrow.query_by_label("Editing").is_some(), "Editing is one compact row");
+    // Only the compact row is drawn: the natural body waits in its menu.
+    assert!(narrow.query_by_label("Border presets").is_none());
+
+    // 983 pt (1228 px at 125%): Font keeps its three rows, Alignment and Number drop to two, and
+    // Cells and Editing remain compact.
+    let medium = app_at_size(vec2(983.0, 614.0), "Home");
+    assert_eq!(
+        home_levels(&medium),
+        [
+            ("Clipboard".to_string(), 1),
+            ("Font".to_string(), 1),
+            ("Alignment".to_string(), 2),
+            ("Number".to_string(), 2),
+            ("Styles".to_string(), 1),
+            ("Cells".to_string(), 0),
+            ("Editing".to_string(), 0),
+        ]
+    );
+    assert!(medium.query_by_label("Font").is_none(), "Font is natural again");
+    assert!(medium.query_by_label("Cells").is_some(), "Cells is still one row");
+
+    // 1228 pt: the full Home tab, with Editing's two rows and the three-row groups.
+    let wide = app_at_size(vec2(1228.0, 768.0), "Home");
+    assert_eq!(
+        home_levels(&wide),
+        [
+            ("Clipboard".to_string(), 1),
+            ("Font".to_string(), 1),
+            ("Alignment".to_string(), 3),
+            ("Number".to_string(), 3),
+            ("Styles".to_string(), 1),
+            ("Cells".to_string(), 1),
+            ("Editing".to_string(), 1),
+        ]
+    );
+    for compact in ["Font", "Alignment", "Number", "Cells", "Editing"] {
+        assert!(wide.query_by_label(compact).is_none(), "{compact} is natural at 1228 pt");
+    }
+}
+
+#[test]
+fn a_compact_group_holds_its_whole_natural_body_in_its_menu() {
+    // At 819 pt the Font group is one row; opening it puts the font name, size and style controls
+    // of the natural body in the menu, one click away.
+    let mut h = app_at_size(vec2(819.0, 614.0), "Home");
+    h.get_by_label("Font").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Border presets").is_some(), "the natural Font body is in the menu");
+    assert!(h.query_by_label("Increase Font Size").is_some());
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use super::{Align2, Color32, Rect, Sense, SheetApp, Stroke, StrokeKind, Style, Tokens, Ui, keytip_table, pos2, theme, vec2};
+use super::{Align2, Color32, Icon, Rect, Sense, SheetApp, Stroke, StrokeKind, Style, Tokens, Ui, keytip_table, pos2, theme, vec2};
 
 /// The ribbon card's group-label band: Excel names every group under its buttons, in a band of
 /// this height below them.
@@ -107,6 +107,270 @@ pub(crate) fn sep(ui: &mut Ui, label: &str) {
 /// Only valid while a tab draws between `begin_groups` and `paint_group_labels` in `show()`.
 pub(crate) fn group_end(ui: &mut Ui, label: &str) {
     end_group(ui, label, ui.cursor().min.x, false);
+}
+
+/// A group's level when the card has no room for its natural body: one row whose menu holds the
+/// whole group, as Excel shrinks a group before letting the tab scroll.
+const SECTION_COMPACT: u8 = 0;
+
+/// Points of card width one group plus its separator takes, for the width budget the planner
+/// keeps as it walks a tab's groups from left to right.
+const SECTION_GAP: f32 = 15.0;
+
+/// Points either side of a group's width breakpoint where its level is kept, so dragging a window
+/// across a breakpoint does not make the group flicker between layouts.
+const SECTION_HYST: f32 = 12.0;
+
+fn current_sections_id() -> egui::Id {
+    egui::Id::unique("ribbon_sections_current")
+}
+
+fn last_sections_tab_id() -> egui::Id {
+    egui::Id::unique("ribbon_sections_last_tab")
+}
+
+/// What the planner remembers about one group of a tab.
+#[derive(Clone, Debug, Default)]
+struct SectionPlan {
+    label: String,
+    /// The widest natural body measured for this group, in points.
+    natural: f32,
+    /// The level the group was last planned at (`0` compact, `1..` its natural variants).
+    level: u8,
+    /// A frame has drawn the natural body, so its width is known.
+    measured: bool,
+    /// A keytip opened a popup inside this group, so its natural body stays drawn while the popup
+    /// is on screen; compacting again would take the popup's anchor out of the card.
+    pinned: bool,
+    /// The frame a click (or Escape) asked to unpin, so the click is handled by the drawn body
+    /// before the group shrinks on the next frame.
+    unpin_at: Option<u64>,
+}
+
+/// The ribbon's per-tab section plan: each group's measured natural width, the level it was last
+/// drawn at, and the card width it was planned against.
+#[derive(Clone, Debug, Default)]
+struct TabSections {
+    viewport: f32,
+    /// Card width already spent by the groups drawn before the one being planned.
+    used: f32,
+    /// The widths at which `label` switches level, for the groups that carry Excel's measured
+    /// breakpoints (Home).
+    breaks: Vec<(String, Vec<(f32, u8)>)>,
+    plans: Vec<SectionPlan>,
+}
+
+impl TabSections {
+    fn id(tab: &str) -> egui::Id {
+        egui::Id::unique(("ribbon_sections", tab))
+    }
+
+    /// The level `label` draws at this frame, remembering it for the next one's hysteresis. A group
+    /// without breakpoints is natural while its measured body fits what is left of the card, and
+    /// compact once it does not; one with breakpoints follows Excel's measured widths.
+    fn plan(&mut self, label: &str) -> u8 {
+        let i = match self.plans.iter().position(|p| p.label == label) {
+            Some(i) => i,
+            None => {
+                self.plans.push(SectionPlan { label: label.to_owned(), ..Default::default() });
+                self.plans.len() - 1
+            }
+        };
+        let plan = &self.plans[i];
+        let breaks = self.breaks.iter().find(|(l, _)| l == label).map(|(_, b)| b.as_slice());
+        let level = if plan.pinned {
+            widest_level(breaks)
+        } else if !plan.measured {
+            // The first frame draws every group natural, to measure it.
+            widest_level(breaks)
+        } else if let Some(b) = breaks {
+            break_level(b, self.viewport, plan.level)
+        } else {
+            let remaining = self.viewport - self.used;
+            let natural = plan.level != SECTION_COMPACT;
+            // A dead band either side of the fit keeps a group from flapping as its neighbours
+            // change width.
+            if natural { u8::from(remaining >= plan.natural - SECTION_HYST) } else { u8::from(remaining >= plan.natural + SECTION_HYST) }
+        };
+        self.plans[i].level = level;
+        level
+    }
+
+    /// Notes the width `label` took this frame and remembers the natural body's own width.
+    fn record(&mut self, label: &str, level: u8, width: f32) {
+        self.used += width + SECTION_GAP;
+        if level == SECTION_COMPACT {
+            return;
+        }
+        if let Some(plan) = self.plans.iter_mut().find(|p| p.label == label) {
+            plan.natural = plan.natural.max(width);
+            plan.measured = true;
+        }
+    }
+}
+
+/// The widest natural layout a group offers: the highest level of its breakpoints, or its single
+/// natural body.
+fn widest_level(breaks: Option<&[(f32, u8)]>) -> u8 {
+    breaks.map_or(1, |b| b.iter().map(|(_, level)| *level).max().unwrap_or(1))
+}
+
+/// The level a group with breakpoints draws at: the highest level whose width the card reaches,
+/// holding the previous level inside [`SECTION_HYST`] of the boundary it would cross.
+fn break_level(breaks: &[(f32, u8)], viewport: f32, previous: u8) -> u8 {
+    let raw = breaks.iter().filter(|(min, _)| viewport >= *min).map(|(_, level)| *level).max().unwrap_or(SECTION_COMPACT);
+    if raw == previous {
+        return raw;
+    }
+    if raw > previous {
+        let at = breaks.iter().filter(|(_, level)| *level == raw).map(|(min, _)| *min).fold(f32::INFINITY, f32::min);
+        if viewport >= at + SECTION_HYST { raw } else { previous }
+    } else {
+        let at = breaks.iter().filter(|(_, level)| *level == previous).map(|(min, _)| *min).fold(0.0, f32::max);
+        if viewport < at - SECTION_HYST { raw } else { previous }
+    }
+}
+
+/// Runs `f` on the plan of the tab the ribbon is drawing.
+fn with_tab_sections(ui: &Ui, f: impl FnOnce(&mut TabSections)) {
+    let ctx = ui.ctx();
+    let Some(id) = ctx.data(|d| d.get_temp::<egui::Id>(current_sections_id())) else { return };
+    ctx.data_mut(|d| f(d.get_temp_mut_or_default::<TabSections>(id)));
+}
+
+/// The ribbon's adaptive group layout: each tab remembers how wide its groups are naturally and
+/// picks, left to right, whether they draw natural or as one compact row.
+pub struct RibbonSections;
+
+impl RibbonSections {
+    /// Starts a frame's pass over `tab`'s groups: records the card's content width and resets the
+    /// width spent so far, so each group plans from what is left to its right.
+    pub(super) fn begin(ui: &Ui, tab: &str, viewport: f32) {
+        let id = TabSections::id(tab);
+        let frame = ui.ctx().cumulative_frame_nr();
+        // A tab opened afresh starts compact again: a group held open by a keytip on an earlier
+        // visit has lost the popup that held it open.
+        let previous = ui.ctx().data(|d| d.get_temp::<String>(last_sections_tab_id()));
+        ui.ctx().data_mut(|d| d.insert_temp(last_sections_tab_id(), tab.to_owned()));
+        let switched = previous.as_deref() != Some(tab);
+        // A click or Escape dismisses whatever a keytip opened; the group shrinks back the frame
+        // after, once the click has reached the popup's own widgets.
+        let dismiss = ui.input(|i| i.pointer.any_pressed() || i.key_pressed(egui::Key::Escape));
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(current_sections_id(), id);
+            let sections = d.get_temp_mut_or_default::<TabSections>(id);
+            sections.viewport = viewport;
+            sections.used = 0.0;
+            for plan in &mut sections.plans {
+                if !plan.pinned {
+                    continue;
+                }
+                if switched || plan.unpin_at.is_some_and(|at| frame > at) {
+                    plan.pinned = false;
+                    plan.unpin_at = None;
+                } else if dismiss {
+                    plan.unpin_at.get_or_insert(frame);
+                }
+            }
+        });
+    }
+
+    /// Registers the card widths (client points) at which `label` takes each level, as Home's
+    /// groups do with Excel's measured breakpoints.
+    pub(super) fn breaks(ui: &Ui, label: &str, levels: &[(f32, u8)]) {
+        with_tab_sections(ui, |sections| {
+            if let Some(slot) = sections.breaks.iter_mut().find(|(l, _)| l == label) {
+                slot.1 = levels.to_vec();
+            } else {
+                sections.breaks.push((label.to_owned(), levels.to_vec()));
+            }
+        });
+    }
+
+    /// The level a group's body draws at this frame (`0` compact, `1..` natural variants).
+    pub(super) fn level(ui: &Ui, label: &str) -> u8 {
+        let mut level = 1;
+        with_tab_sections(ui, |sections| {
+            level = sections.plans.iter().find(|p| p.label == label).map_or(1, |p| p.level);
+        });
+        level
+    }
+
+    /// Draws one group: `body` in place while the group is natural, or as a single compact row
+    /// whose menu holds the whole natural body. The following `sep`/`group_end` still names the
+    /// group, so its label sits in the band either way.
+    fn draw(ui: &mut Ui, app: &mut SheetApp, label: &str, icon: Icon, mut body: impl FnMut(&mut SheetApp, &mut Ui)) {
+        // A keytip request must reach its control: while one waits (one frame, dropped if no
+        // control takes it), every group draws its natural body so the owning control can take
+        // it. Each body still draws exactly once.
+        let pending = app.ui.keytip_invoke;
+        let level = if pending.is_some() { Self::widest(ui, label) } else { Self::plan(ui, label) };
+        if level == SECTION_COMPACT {
+            // Excel's compact group: its icon and name with a chevron, the whole group in its menu.
+            let text = crate::i18n::current(ui.ctx()).tr(label).replace('\n', " ");
+            let button = crate::widgets::small_button(ui, icon, &text, &text, true);
+            let width = button.rect.width();
+            Self::record(ui, label, level, width);
+            egui::Popup::menu(&button).show(|ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                    body(app, ui);
+                });
+            });
+        } else {
+            let left = ui.cursor().min.x;
+            body(app, ui);
+            let width = ui.cursor().min.x - left;
+            Self::record(ui, label, level, width);
+            // The keytip opened a popup inside this body; keep the body drawn so its anchor stays
+            // where the popup points until the user dismisses it.
+            if pending.is_some() && app.ui.keytip_invoke.is_none() {
+                Self::pin(ui, label);
+            }
+        }
+    }
+
+    fn widest(ui: &Ui, label: &str) -> u8 {
+        let mut level = 1;
+        with_tab_sections(ui, |sections| {
+            level = widest_level(sections.breaks.iter().find(|(l, _)| l == label).map(|(_, b)| b.as_slice()));
+        });
+        level
+    }
+
+    fn pin(ui: &Ui, label: &str) {
+        with_tab_sections(ui, |sections| {
+            if let Some(plan) = sections.plans.iter_mut().find(|p| p.label == label) {
+                plan.pinned = true;
+                plan.unpin_at = None;
+            }
+        });
+    }
+
+    fn plan(ui: &Ui, label: &str) -> u8 {
+        let mut level = 1;
+        with_tab_sections(ui, |sections| level = sections.plan(label));
+        level
+    }
+
+    fn record(ui: &Ui, label: &str, level: u8, width: f32) {
+        with_tab_sections(ui, |sections| sections.record(label, level, width));
+    }
+
+    /// The level each group of `tab` was last drawn at, in draw order (`0` compact, `1..` natural
+    /// variants). Empty for a tab that has not drawn.
+    pub fn levels(ctx: &egui::Context, tab: &str) -> Vec<(String, u8)> {
+        ctx.data(|d| d.get_temp::<TabSections>(TabSections::id(tab)))
+            .map(|sections| sections.plans.into_iter().map(|p| (p.label, p.level)).collect())
+            .unwrap_or_default()
+    }
+}
+
+/// Draws one group of a tab: its natural body in place when the planner has room for it, or one
+/// compact row whose menu holds the body. The `sep`/`group_end` that follows still names the
+/// group, so its label stays in the band either way.
+pub(crate) fn section(ui: &mut Ui, app: &mut SheetApp, label: &str, icon: Icon, body: impl FnMut(&mut SheetApp, &mut Ui)) {
+    RibbonSections::draw(ui, app, label, icon, body);
 }
 
 /// Paints the separators (from the buttons into the label band) and each group's name centred in
