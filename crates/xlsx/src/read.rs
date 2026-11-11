@@ -46,6 +46,10 @@ pub struct Ctx<'a> {
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
     /// The code of the workbook's Python cells, from its Python part.
     pub python: crate::python_part::ScriptsIn,
+    /// Drawing pictures already read, by normalized part name. The writer stores a picture used
+    /// in several places once, so it is read, charged to the package budget and kept in memory
+    /// once as well (#3817).
+    pub pictures: std::collections::HashMap<String, Arc<Vec<u8>>>,
 }
 
 impl Ctx<'_> {
@@ -267,6 +271,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         shared_formula_bytes: 0,
         known_function,
         python: Default::default(),
+        pictures: Default::default(),
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -340,13 +345,13 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         }
         let name = names.unique(&name, i);
         cx.legacy_formulas.clear();
-        let (mut sheet, read_controls) = match crate::sheet_read::read_sheet(&mut cx, &rel.target, &name) {
+        let (mut sheet, read_controls, sheet_bytes) = match crate::sheet_read::read_sheet(&mut cx, &rel.target, &name) {
             Ok(s) => s,
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
             Err(e) => {
                 cx.warn(format!("sheet \"{name}\" could not be read: {e}"));
                 cx.legacy_formulas.clear();
-                (Sheet::new(name.clone()), Default::default())
+                (Sheet::new(name.clone()), Default::default(), None)
             }
         };
         legacy_formulas.push((wb.sheets.len(), std::mem::take(&mut cx.legacy_formulas)));
@@ -355,7 +360,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
             Err(e) => cx.warn(format!("PivotTables on sheet \"{name}\" could not be read: {e}")),
         }
-        sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &read_controls);
+        sheet.preserved = kept.sheet(&mut cx, &rel.target, sheet_bytes.as_deref(), &name, &read_controls);
+        drop(sheet_bytes);
         sheet.file_id = se.attr_u32("sheetId").unwrap_or(0);
         sheet.visibility = match se.attr("state") {
             Some("hidden") => Visibility::Hidden,

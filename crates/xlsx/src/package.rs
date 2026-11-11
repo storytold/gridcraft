@@ -19,6 +19,19 @@ pub struct Package<'a> {
     /// Lower-case normalized part name → zip index.
     names: HashMap<String, usize>,
     total: u64,
+    /// The bytes of the parts several readers look up, read so far, by normalized name:
+    /// relationships (a sheet's: its cells, its PivotTables, pass-through), VML drawings (notes,
+    /// form controls, pass-through) and form-control properties (form controls, pass-through).
+    /// Each is decompressed and charged to `total` once. With the pictures and sheets read once
+    /// too (`Ctx::pictures`, `read_sheet`), the writer's check of what a package unpacks to
+    /// (`write.rs`, #3817) is what the reader charges.
+    shared: HashMap<String, Vec<u8>>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every part read on this thread, normalized, in order: tests check no part is read twice.
+    pub static READS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// A relationship.
@@ -31,6 +44,11 @@ pub struct Rel {
     /// Resolved part name (no leading `/`), or the raw target for external relationships.
     pub target: String,
     pub external: bool,
+}
+
+/// Whether a part is one several readers look up (see `Package::shared`).
+fn is_shared(name: &str) -> bool {
+    name.ends_with(".rels") || name.ends_with(".vml") || name.split('/').any(|dir| dir == "ctrlprops")
 }
 
 pub fn normalize(name: &str) -> String {
@@ -49,7 +67,7 @@ impl<'a> Package<'a> {
                 names.entry(normalize(n)).or_insert(i);
             }
         }
-        Ok(Package { zip, names, total: 0 })
+        Ok(Package { zip, names, total: 0, shared: HashMap::new() })
     }
 
     /// Every part's (normalized) name, sorted.
@@ -85,7 +103,14 @@ impl<'a> Package<'a> {
     /// Reads a small metadata part without allowing it to expand to the general part limit.
     pub fn read_limited(&mut self, part: &str, maximum: u64) -> Result<Option<Vec<u8>>, IoError> {
         let maximum = maximum.min(MAX_PART);
-        let Some(&idx) = self.names.get(&normalize(part)) else {
+        let key = normalize(part);
+        if let Some(bytes) = self.shared.get(&key) {
+            if bytes.len() as u64 > maximum {
+                return Err(IoError::TooLarge(format!("{part} expands to {} bytes", bytes.len())));
+            }
+            return Ok(Some(bytes.clone()));
+        }
+        let Some(&idx) = self.names.get(&key) else {
             return Ok(None);
         };
         let mut f = self.zip.by_index(idx).map_err(|e| IoError::Zip(format!("{part}: {e}")))?;
@@ -114,6 +139,11 @@ impl<'a> Package<'a> {
         }
         read?;
         self.total += out.len() as u64;
+        #[cfg(test)]
+        READS.with(|r| r.borrow_mut().push(key.clone()));
+        if is_shared(&key) {
+            self.shared.insert(key, out.clone());
+        }
         Ok(Some(out))
     }
 

@@ -29,7 +29,7 @@ fn field(name: &str) -> PivotField {
 
 /// Source data on "Data" (A1:F9, also table "SalesTbl" and defined name "SalesData"), three
 /// PivotTables on "Report" with a few hand-written report cells.
-fn workbook() -> Workbook {
+pub(super) fn workbook() -> Workbook {
     let mut wb = Workbook::new();
     let date_style = wb.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new("m/d/yyyy"));
     let data = wb.sheet_mut(0).unwrap();

@@ -5,7 +5,7 @@ use std::io::Read as _;
 use gridcraft_core::{CellRef, Value};
 use gridcraft_model::{Cell, Workbook};
 
-use crate::write::{ReadLimits, write_within};
+use crate::write::{ReadLimits, check_reopenable, write_within};
 use crate::{FunctionInfo, IoError, XlsxKind, read_xlsx, write_xlsx};
 
 /// Distinct strings made of `&`, which the writer escapes to `&amp;`.
@@ -77,4 +77,69 @@ fn a_package_over_the_reader_total_is_refused_and_one_at_it_saves() {
 fn the_check_uses_the_limits_the_reader_applies() {
     assert_eq!(ReadLimits::READER.part, crate::MAX_PART);
     assert_eq!(ReadLimits::READER.total, crate::package::MAX_TOTAL);
+}
+
+/// Parts read while opening `bytes`, each named once per read.
+fn reads(bytes: &[u8]) -> (Workbook, Vec<String>) {
+    crate::package::READS.with(|r| r.borrow_mut().clear());
+    let (wb, _) = read_xlsx(bytes).unwrap();
+    (wb, crate::package::READS.with(|r| std::mem::take(&mut *r.borrow_mut())))
+}
+
+fn read_twice(reads: &[String]) -> Vec<&String> {
+    let mut seen = std::collections::HashSet::new();
+    reads.iter().filter(|p| !seen.insert(*p)).collect()
+}
+
+/// The check counts each part once, so the reader may charge each part once: a picture the writer
+/// stores once for several drawings is read once, and they share its bytes.
+#[test]
+fn a_picture_on_several_sheets_is_read_once() {
+    use gridcraft_model::{Anchor, Image, Sheet};
+    let data = std::sync::Arc::new([b"\x89PNG\r\n\x1a\n".as_slice(), &[7; 4096]].concat());
+    let sheet = |name: &str| {
+        let mut s = Sheet::new(name);
+        for id in 1..=2 {
+            let anchor = Anchor { cell: CellRef::new(id, 1), width: 40.0, height: 30.0, ..Default::default() };
+            s.images.push(Image { id, anchor, data: data.clone(), mime: "image/png".into(), alt: String::new() });
+        }
+        std::sync::Arc::new(s)
+    };
+    let wb = Workbook { sheets: vec![sheet("One"), sheet("Two"), sheet("Three")], ..Default::default() };
+    let (back, reads) = reads(&write_xlsx(&wb).unwrap());
+    assert!(read_twice(&reads).is_empty(), "{:?}", read_twice(&reads));
+    let images: Vec<_> = back.sheets.iter().flat_map(|s| s.images.iter()).collect();
+    assert_eq!(images.len(), 6);
+    assert!(images.iter().all(|im| std::sync::Arc::ptr_eq(&im.data, &images[0].data) && *im.data == *data));
+}
+
+/// A sheet's relationships are looked up for its cells, its PivotTables and pass-through, and a
+/// sheet with controls or kept objects is scanned again by pass-through: each part is still read
+/// once, for every kind of workbook GridCraft saves.
+#[test]
+fn reopening_a_saved_workbook_reads_each_part_once() {
+    let kept = read_xlsx(&super::passthrough_tests::rich_package()).unwrap().0;
+    let books = [
+        ("pivots", super::pivot_tests::workbook()),
+        ("sample", super::roundtrip::sample()),
+        ("controls", super::controls_tests::book()),
+        ("kept content", kept),
+    ];
+    for (what, wb) in books {
+        let (_, reads) = reads(&write_xlsx(&wb).unwrap());
+        assert!(read_twice(&reads).is_empty(), "{what}: {:?}", read_twice(&reads));
+    }
+}
+
+/// A size one byte over a limit reads as more than it, not as the limit itself.
+#[test]
+fn sizes_in_the_message_round_up() {
+    let limits = ReadLimits::READER;
+    let over = (limits.part + 1) as usize;
+    let err = check_reopenable([("xl/sharedStrings.xml", over)], limits).unwrap_err().to_string();
+    assert!(err.contains("would unpack to 513 MB, over the 512 MB"), "{err}");
+    assert!(check_reopenable([("xl/sharedStrings.xml", limits.part as usize)], limits).is_ok());
+    let half = (limits.total / 2) as usize;
+    let err = check_reopenable([("a", half), ("b", half), ("c", 1)], limits).unwrap_err().to_string();
+    assert!(err.contains("would unpack to 1025 MB, over the 1024 MB"), "{err}");
 }

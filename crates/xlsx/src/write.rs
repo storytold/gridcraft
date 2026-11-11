@@ -270,9 +270,13 @@ impl ReadLimits {
 /// Refuses a package the reader would refuse to open: one part over `limits.part`, or all of them
 /// together over `limits.total`. Without this, Save writes a file GridCraft can't reopen, e.g.
 /// text full of `&`, which escapes to five bytes a character in `sharedStrings.xml` (#3817).
-/// Counting every part is the reader's worst case: it reads at most these.
-fn check_reopenable<'a>(parts: impl IntoIterator<Item = (&'a str, usize)>, limits: ReadLimits) -> Result<(), IoError> {
-    let mb = |n: u64| n >> 20;
+/// Each part is counted once, as the reader charges it: it reads a part at most once, sharing a
+/// picture used in several places (`Ctx::pictures`), a sheet's XML with pass-through
+/// (`read_sheet`) and the small parts several readers look up (`Package::shared`).
+/// `tests::save_limits::reopening_a_saved_workbook_reads_each_part_once` holds the reader to that.
+pub(crate) fn check_reopenable<'a>(parts: impl IntoIterator<Item = (&'a str, usize)>, limits: ReadLimits) -> Result<(), IoError> {
+    // Rounded up, so a size over the limit never reads as equal to it.
+    let mb = |n: u64| n.div_ceil(1 << 20);
     let mut total = 0u64;
     for (name, len) in parts {
         let len = len as u64;

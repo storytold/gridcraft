@@ -97,6 +97,12 @@ const WORKBOOK_ROOTS: &[&str] = &["customXml", "connections", "xmlMaps"];
 const SHEET_ROOTS: &[&str] = &["queryTable", "tableSingleCells"];
 /// Sheet relationship kinds that mean the sheet XML may hold elements worth keeping.
 const SHEET_ELEMENT_KINDS: &[&str] = &["oleObject", "ctrlProp", "control", "image", "package", "printerSettings"];
+
+/// Whether [`Kept::sheet`] may scan the XML of a sheet with these relationships: then the sheet
+/// reader keeps the sheet's bytes for it rather than the part being read and charged twice (#3817).
+pub(crate) fn may_scan_sheet(rels: &[crate::package::Rel]) -> bool {
+    rels.iter().any(|r| r.kind.eq_ignore_ascii_case("vmlDrawing") || SHEET_ELEMENT_KINDS.iter().any(|k| k.eq_ignore_ascii_case(&r.kind)))
+}
 /// Attributes of `<fileVersion>` (CT_FileVersion).
 const FILE_VERSION_ATTRS: &[&str] = &["appName", "lastEdited", "lowestEdited", "rupBuild", "codeName"];
 /// The workbook extension listing the calculation features the saved values were computed with.
