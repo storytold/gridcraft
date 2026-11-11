@@ -52,14 +52,19 @@ pub(super) fn abs_ref(c: CellRef) -> String {
     format!("${}${}", gridcraft_core::col_to_letters(c.col), u64::from(c.row) + 1)
 }
 
+/// How many cells to the left and above a cell its name is searched for.
+const NAME_REACH: u32 = 1_000;
+
 /// A cell's name in the reports: the nearest text to its left and the nearest text above it.
 pub(super) fn cell_name(sh: &Sheet, c: CellRef) -> String {
     let text = |c: CellRef| match sh.value(c) {
         Value::Text(t) if !t.trim().is_empty() => Some(t.to_string()),
         _ => None,
     };
-    let left = (0..c.col).rev().find_map(|col| text(CellRef::new(c.row, col)));
-    let top = (0..c.row).rev().find_map(|row| text(CellRef::new(row, c.col)));
+    // Labels are next to their cells: looking further than this on a sparse sheet only costs time
+    // (a thousand cells near the last row would each probe a million empty coordinates).
+    let left = (c.col.saturating_sub(NAME_REACH)..c.col).rev().find_map(|col| text(CellRef::new(c.row, col)));
+    let top = (c.row.saturating_sub(NAME_REACH)..c.row).rev().find_map(|row| text(CellRef::new(row, c.col)));
     [left, top].into_iter().flatten().collect::<Vec<_>>().join(" ")
 }
 
@@ -437,4 +442,18 @@ pub(super) fn report(s: &mut Session, p: &Json) -> Result<Json> {
         out["skippedReports"] = json!(skipped);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_name_is_searched_only_a_bounded_distance() {
+        let mut sh = Sheet::new("S".to_string());
+        sh.set_cell(CellRef::new(0, 0), gridcraft_model::Cell::value(Value::text("Far")));
+        sh.set_cell(CellRef::new(5, 4), gridcraft_model::Cell::value(Value::text("Near")));
+        assert_eq!(cell_name(&sh, CellRef::new(5, 5)), "Near");
+        assert_eq!(cell_name(&sh, CellRef::new(0, NAME_REACH + 1)), "");
+    }
 }
