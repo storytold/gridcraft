@@ -2,42 +2,60 @@
 
 - Date: 2026-11-11
 - Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`). **Delivered**: the fork's
-  `refs/heads/feature/realtime-collaboration` and the PR's `headRefOid` are both `5bcdf3c9`, the
-  commit the §25 gate ran on; the fork branch *is* the PR's head. The branch is 73 commits on the
-  PR's base `01abd954`, 84 files, +18012/−34. The push of 2026-11-11T17:30Z — the four check
-  suites it created carry that stamp, all `action_required` with no job started — published
-  `0224c0e8` (this page at `b9773627`), `7320106d` (the merge of `origin/main` into the branch) and
-  `5bcdf3c9` (§25: a session follows the workbook that replaces the blank start, with two tests).
-  The push of 11:28:40Z published `2a5f3e00` (§24: the code and the two tests of the 07:38Z
-  findings) and `b9773627`, the page that records them. The push of 07:26:44Z published
-  `7b42c82a` (§23: the code and the two tests of the 01:36Z finding) and `915d994e`; §19 records
-  the push of 2026-11-10T17:19Z, which published `ae4311ee`, `34e54b81`, `46783412` and the nine
-  review-fix commits `d91f838a`…`a2251b0e`; §21 records the push of 20:1xZ, which published
-  `f51237ea` and `8208607f`, and the 01:24Z one, which published `00b146df` and `bb5b3acf`.
+  `refs/heads/feature/realtime-collaboration` and the PR's `headRefOid` are both `42e2dbe5`, the
+  merge of `origin/main` `572bec28` into the branch (§26.1) and the tree the §26.3 gate ran on; the
+  fork branch *is* the PR's head. The branch is 75 commits on the PR's base `572bec28`, 84 files,
+  +18169/−34. The merge itself, over the branch tip `576f586d`, is 51 files, +1402/−191: main's
+  twelve commits — the workbook version at `0.19.1`, the engine's scan-allowance limits for
+  Advanced Filter, Remove Duplicates, filters, AutoFit and macro footprints, `data.circleInvalid`,
+  the CLI and `xtask` — with two conflicts resolved as a union. `crates/engine/src/tests.rs` keeps
+  the branch's remote-apply tests **and** main's
+  `circle_invalid_says_when_its_scan_allowance_ended_early`, each with its own `#[test]`. The
+  verbatim `Cargo.lock` merge left the four collaboration crates at the old workspace version
+  `0.16.0`; they now carry `0.19.1` like every other member, which `cargo metadata --locked` (the
+  `pdf-deps` step) checks. The push of 2026-11-11T21:29Z published `42e2dbe5`; the four check
+  suites it created carry that stamp, all `action_required` with no job started (§26.2). The push
+  of 17:30Z published `0224c0e8` (this page at `b9773627`), `7320106d` (the earlier merge of
+  `origin/main`) and `5bcdf3c9` (§25: a session follows the workbook that replaces the blank start,
+  with two tests) — §25's tree is no longer the branch's. The push of 11:28:40Z published
+  `2a5f3e00` (§24: the code and the two tests of the 07:38Z findings) and `b9773627`, the page that
+  records them. The push of 07:26:44Z published `7b42c82a` (§23: the code and the two tests of the
+  01:36Z finding) and `915d994e`; §19 records the push of 2026-11-10T17:19Z, which published
+  `ae4311ee`, `34e54b81`, `46783412` and the nine review-fix commits `d91f838a`…`a2251b0e`; §21
+  records the push of 20:1xZ, which published `f51237ea` and `8208607f`, and the 01:24Z one, which
+  published `00b146df` and `bb5b3acf`.
   **The only local commits are pages:** `git rev-list --count --left-right
   fork/feature/realtime-collaboration...HEAD` is `0 1` after this one, and it changes nothing but
-  `docs/collab/STATUS.md` (§25 included); every code commit of the branch is on the fork and in
+  `docs/collab/STATUS.md` (§26 included); every code commit of the branch is on the fork and in
   the PR.
-- Base: the PR's `baseRefOid` is `01abd954`, `origin/main`'s tip when `7320106d` merged it into
-  the branch (§25.1); `origin/main` has moved on since — its tip at this writing is `90180f4d`.
-  The PR is mergeable against the recorded base; rebasing is a separate step.
+- Base: the PR's `baseRefOid` is `572bec28`, `origin/main`'s tip and the second parent of
+  `42e2dbe5` (§26.1), so the PR is mergeable against the current `main`, not a recorded one. The
+  base of §25 was `01abd954`; that tree, and the gate it was given, stay in §25.
 - PR: <https://github.com/storytold/gridcraft/pull/3613> — open, **not a draft** since
-  2026-11-10T14:56:54Z, `mergeable = MERGEABLE`, `mergeStateStatus = UNSTABLE`, head `5bcdf3c9`,
-  last update 2026-11-11T17:30:03Z (the push itself; the review §24 records is the one of
-  07:38:33Z on `915d994e`), `reviewDecision` empty, 73 commits, 84 files, +18012/−34.
-- Gate on `5bcdf3c9`: no CI run. The four workflows the 17:30Z push created (`CI`, `House rules`,
-  `Nix`, `SonarCloud`) all ended `completed / action_required` with no job started — the repository
-  needs a maintainer to approve a run from a fork — and the commit's status API holds no status at
-  all. The head's rollup holds only CodeRabbit, `completed / skipped` at 17:30:05Z: it did not
-  review `5bcdf3c9`, so the review record ends at `5855372513` on `915d994e` (§24). The head itself
-  is §25's code over the merge of `origin/main`; the host gate of §25.4 is the only one it has:
-  `fmt --all` clean, `clippy -D warnings` clean on the four collab packages, `collab-client` 37
-  passed (10 in `document.rs`, two of them new), 49 in `gridcraft-collab`, 74 in the server, 11 +
-  11 in `gridcraft-collab-web`/`gridcraft-web`, the wasm32 check clean, workspace clippy clean and
-  `gridcraft-engine`'s lib tests green. Under it, `b9773627`'s code is `2a5f3e00`'s, gated in
-  §24.4, `915d994e`'s code is `7b42c82a`'s, gated in §23.4, and the code of `00b146df` was gated
-  in §22.3: `fmt` clean, `clippy -D warnings` on the five packages, and 176 passed, 0 failed.
-  CodeRabbit was green on the heads it did review. It reviewed four heads:
+  2026-11-10T14:56:54Z, `mergeable = MERGEABLE`, `mergeStateStatus = UNSTABLE`, head `42e2dbe5`,
+  last update 2026-11-11T21:29:41Z (the push itself; the review §24 records is the one of
+  07:38:33Z on `915d994e`), `reviewDecision` empty, 75 commits, 84 files, +18169/−34.
+- Gate on `42e2dbe5`: **no CI run.** The four workflows the 21:29Z push created — `CI`
+  (`43103512015`), `House rules` (`43103512003`), `SonarCloud` (`43103512011`) and `Nix`
+  (`43103512466`), all created 21:29:38–21:29:39Z — ended `completed / action_required` with no job
+  started: the repository needs a maintainer to approve a run from a fork. The commit's status API
+  holds no status, and its only check run is CodeRabbit, `completed / skipped`: it did not review
+  `42e2dbe5`, so the review record ends at `5855372513` on `915d994e` (§24). The gate the head has
+  is the host's (§26.3): `i18n-report`, `fmt` and `clippy -D warnings` over the workspace are
+  clean; the workspace test step stopped at `gridcraft-engine --lib` with **961 passed, 1 failed**
+  — main's `io::tests::save_keeps_the_destination_access_restrictions`, which needs `umask 022`
+  and got the host's `0002` (files at mode 664; §25.4.1) — and the four collaboration packages,
+  which ran before it, passed: `gridcraft-collab` 49, `collab-client` 37 (4 + 13 converge + 10
+  document + 5 parts + 5 rollback), `collab-server` 74 (40 + 5 + 6 + 2 + 9 + 12) and `collab-web`
+  11. The steps the stopped run skipped — `doctest`, `assets`, `layers`, `wasm`, `parity`,
+  `keytips` — ran in a second pass on the same head under `umask 022` and all returned `rc=0`: 34
+  assets attributed, 22 crates layered, the wasm32 check clean, 281 of 296 catalog commands
+  (94.9%), the keytips tables rewritten. No line of this paragraph is a CI result: the checks on
+  `42e2dbe5` never executed. Under the merge, the code is `5bcdf3c9`'s, gated in §25.4;
+  `b9773627`'s code is `2a5f3e00`'s, gated in §24.4; `915d994e`'s code is `7b42c82a`'s, gated in
+  §23.4; and the code of `00b146df` was gated in §22.3: `fmt` clean, `clippy -D warnings` on the
+  five packages, and 176 passed, 0 failed. CodeRabbit was green on the heads it did review. It
+  reviewed four heads:
   `5848894080` at 20:32Z (six threads and one finding outside the diff, closed by §21.4), `5851190259` at 23:35Z (one thread
   and one finding outside the diff, closed by §22), `5852406613` at 01:36Z on `bb5b3acf` (one
   thread, comment `4532845977` at `synced.rs:398`, closed by §23, and one finding outside the diff
@@ -1670,14 +1688,16 @@ the two tests. No CI file is touched: `git diff --name-only -- .github` is empty
 findings came from a review that already ran on a pushed head. The four workflows the push created
 sit in `action_required` with no job started, so §24.4's host run remains the gate, not a CI pass.
 
-## 25. The delivered head `5bcdf3c9`: a session follows the workbook that replaces the blank start (2026-11-11)
+## 25. The head the 17:30Z push delivered, `5bcdf3c9`: a session follows the workbook that replaces the blank start (2026-11-11)
 
 The push of 2026-11-11T17:30Z delivered `5bcdf3c9`. Until this section the page named `b9773627`
 (§24) as the head; every delivery check agrees on the new one: `git ls-remote fork
 refs/heads/feature/realtime-collaboration`, the PR's `headRefOid` (`gh api
 repos/storytold/gridcraft/pulls/3613`) and the checkout the gate ran on all read `5bcdf3c9`, and
 `git rev-list --count --left-right fork/feature/realtime-collaboration...HEAD` was `0 0` there. The
-PR is 73 commits, 84 files, +18012/−34, based on `01abd954`.
+PR is 73 commits, 84 files, +18012/−34, based on `01abd954`. The head has moved since: `42e2dbe5`
+merged `origin/main` `572bec28` into the branch (§26), and this section keeps the record of the
+tree and the gate that `5bcdf3c9` had.
 
 ### 25.1 What the head contains
 
@@ -1819,3 +1839,80 @@ has landed" (set when a snapshot installs, not inferred from the version), with 
 0. It is left as an open question rather than changed here: the delivered commit's contract is
 "nothing shared yet", and a seeded room with no operations is indistinguishable from it by
 `document_version` alone.
+
+## 26. The delivered head `42e2dbe5`: the merge of `origin/main` `572bec28` (2026-11-11)
+
+`main` moved twelve commits while the branch waited for a review of `5bcdf3c9`, and `572bec28` is
+its tip. The fork's branch, the PR's `headRefOid` and this checkout are `42e2dbe5`, a merge whose
+parents are `576f586d` (the page of §25) and `572bec28`. At delivery `git rev-list --count
+--left-right fork/feature/realtime-collaboration...HEAD` was `0 0`, and the PR's base moved with
+the merge: `baseRefOid = 572bec28`, `mergeable = MERGEABLE`, `mergeStateStatus = UNSTABLE`,
+`updatedAt 2026-11-11T21:29:41Z`, 75 commits, 84 files, +18169/−34.
+
+### 26.1 What the merge carries, and the two conflicts
+
+`git diff --stat 576f586d..42e2dbe5` is **51 files, +1402/−191**: main's work plus the two
+resolutions below. Main's side is the workspace version `0.16.0` → `0.19.1` for every member, the
+engine's scan-allowance limits for Advanced Filter, Remove Duplicates, filters, AutoFit and macro
+footprints (`#3295`), `data.circleInvalid`, the CLI's `check` rework and `xtask/src/stats.rs`.
+
+Two conflicts, resolved by hand:
+
+- `crates/engine/src/tests.rs` — the branch's remote-apply tests and main's
+  `circle_invalid_says_when_its_scan_allowance_ended_early` sat in the same spot. Both sides are
+  kept, each with its own `#[test]`; nothing of either is dropped.
+- `Cargo.lock` — the verbatim merge kept the four collaboration crates (`gridcraft-collab`,
+  `-client`, `-server`, `-web`) at the old workspace version `0.16.0`, because the branch's
+  entries did not conflict textually. They now carry `0.19.1` like every other member;
+  `cargo metadata --locked`, run by the `pdf-deps` step, is what notices a lock out of step.
+
+### 26.2 The runs on the head
+
+The 21:29Z push created four workflows, and none of them executed:
+
+| Workflow | Run | Created | Status | Jobs |
+|---|---|---|---|---|
+| `CI` | `43103512015` | 21:29:38Z | `completed / action_required` | 0 |
+| `House rules` | `43103512003` | 21:29:38Z | `completed / action_required` | 0 |
+| `SonarCloud` | `43103512011` | 21:29:38Z | `completed / action_required` | 0 |
+| `Nix` | `43103512466` | 21:29:39Z | `completed / action_required` | 0 |
+
+All four carry `headSha = 42e2dbe5`. The commit's status API lists no status, and its only check
+run is CodeRabbit, `completed / skipped`. A fork pull request needs a maintainer to approve a run;
+until then `42e2dbe5` has no CI evidence at all.
+
+### 26.3 The host gate (`cargo xtask ci`) on `42e2dbe5`
+
+Two logs from the build host, the same head, the host's default `umask 0002`:
+
+- `gate-gridcraft-42e2dbe5.log` — `i18n-report` ok, `fmt` ok, `clippy --workspace --all-targets
+  --keep-going -D warnings` ok, then the test step **failed**: `gridcraft-engine --lib` 961 passed,
+  1 failed. The failure is main's
+  `io::tests::save_keeps_the_destination_access_restrictions` (`crates/engine/src/io/tests.rs:66`,
+  `mode 664`): the test expects the file it writes to keep mode `644`, which holds only under
+  `umask 022`, and the test is main's at `6a08240e` — the branch does not touch it. §25.4.1
+  records the same test failing the same way on the previous head. Because the run stops at the
+  first failing step, `doctest`, `assets`, `layers`, `wasm`, `parity` and `keytips` are reported
+  `skip`.
+- The collaboration suites ran before `gridcraft-engine` in that same step and passed:
+  `gridcraft-collab` 49, `collab-client` 4 + 13 (converge) + 10 (document) + 5 (parts) + 5
+  (rollback) = 37, `collab-server` 40 + 0 + 5 (acceptance) + 6 (commit callback) + 2 (logging) +
+  9 (persistence) + 12 (ws) = 74, and `collab-web` 11. The merge left every count where
+  `5bcdf3c9` had it: it changed no collaboration test.
+- `gate-gridcraft-42e2dbe5-rest.log` — the six skipped steps, run separately on the same head under
+  `umask 022`: `assets` (34 files attributed), `layers` (22 crates, no violation), `wasm` (the
+  wasm32 check over thirteen crates), `parity` (281 / 296, 94.9%), `keytips` (tables rewritten) and
+  `doctest` (`test result: ok`, 0 tests) — `rc=0` for each step whose log carries the line.
+
+So the head has: fmt and clippy clean, the collaboration suites green, and `gridcraft-engine`
+961/1 under the host's umask — a property of main's test rather than of this merge. It has no run
+of the workspace suite past `gridcraft-engine` (the crates alphabetically after it did not run in
+this pass) and no CI result.
+
+### 26.4 What did not change
+
+No code changed in this delivery beyond the two resolutions above: `42e2dbe5` is main's twelve
+commits merged in. The 21:29Z push published it; nothing has been pushed since, the fork and the
+PR are untouched, `main` is untouched, and no CI file changed. The page itself is the only local
+commit above the delivered head (this section), which is why `rev-list fork...HEAD` reads `0 1`
+after it.
