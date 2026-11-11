@@ -207,6 +207,8 @@ pub(crate) fn read_xls_budgeted(bytes: &[u8], mut budget: Budget, functions: Fun
     // BoundSheet8 index → model sheet index.
     let mut model_index: Vec<Option<usize>> = Vec::with_capacity(g.sheets.len());
     let mut parsed = Vec::new();
+    // Names of the readable sheets so far: `wb.sheets` is only filled once every sheet is parsed.
+    let mut names: Vec<&str> = Vec::new();
     for bs in &g.sheets {
         if bs.kind != 0 {
             report.warn(match bs.kind {
@@ -218,11 +220,15 @@ pub(crate) fn read_xls_budgeted(bytes: &[u8], mut budget: Budget, functions: Fun
             continue;
         }
         wb.check_sheet_name(&bs.name, None).map_err(invalid)?;
+        if names.iter().any(|n| n.eq_ignore_ascii_case(&bs.name)) {
+            return Err(invalid("That name is already taken. Try a different one."));
+        }
         let Some(st) = worksheet(&stream, bs, &g, &styles, &mut budget, &mut report)? else {
             report.warn("Dialog sheets and unreadable sheets were skipped.");
             model_index.push(None);
             continue;
         };
+        names.push(&bs.name);
         model_index.push(Some(parsed.len()));
         parsed.push((bs.visibility, st));
     }
