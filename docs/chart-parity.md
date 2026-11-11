@@ -13,7 +13,6 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 
 | Excel type | Excel subtypes | GridCraft | Notes |
 |---|---|---|---|
-| 2026-11-11 | minor | Combo series drawn and saved by their own kind (`Chart::series_kind`): stacked columns, areas and scatter in combos round-trip XLSX as their own groups with matching axes; one-kind charts keep secondary-axis series; changing the type drops kinds it doesn't draw. No readiness score change. |
 | Column | clustered, stacked, 100% stacked, 3-D clustered/stacked/100%, 3-D column | 3 of 7 | no 3-D |
 | Bar | clustered, stacked, 100%, 3-D ×3 | 3 of 6 | no 3-D |
 | Line | line, stacked, 100% stacked, with markers ×3, 3-D line | 3 of 7 (line, with markers, stacked) | no 100% stacked; smoothed lines landed (#62) |
@@ -95,10 +94,13 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 Each series is drawn and saved as the kind `Chart::series_kind` gives it: in a combo chart its
 own kind (by default the first a column and the rest lines), elsewhere the chart's kind, with a
 line's own markers or a scatter's own lines kept. Changing the chart type drops the kinds the new
-type does not draw. The XLSX writer writes one chart group per drawn kind on each axis, with axes
+type does not draw. The XLSX writer writes one chart group per drawn type on each pair of axes (as Excel keeps
+them: clustered and stacked columns on the same axes share the first one's grouping), with axes
 of the kind those groups need (category, horizontal-bar or value axes; a group that can't share
 them is drawn in the nearest one that can), a secondary pair whenever a series is on it, and a
-stock group only for 3 or 4 series. The reader takes the primary axes from the value axis on the
+stock group only for 3 or 4 series. Pies and doughnuts have no axes, so their series are one
+group whatever their secondary flags. A one-kind bar chart's secondary series get secondary axes
+in XLSX, which the renderer does not yet draw for horizontal charts. The reader takes the primary axes from the value axis on the
 left or bottom, and orders series by `c:order`.
 
 ## Work (40–60 h)
@@ -114,6 +116,7 @@ left or bottom, and orders series by `c:order`.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | minor | Combo series drawn and saved by their own kind (`Chart::series_kind`): areas, stacked columns and marker lines in combos round-trip XLSX in one group per type and axis pair with matching axes; one-kind charts keep secondary-axis series (pies and doughnuts stay one group); changing the type drops kinds it doesn't draw. No readiness score change. |
 | 2026-11-02 | minor | Charts move and resize from eight handles, each moving only its own edges (#190); resizing leaves the work list (1–2 h, within the 40–60 h rounding) |
 | 2026-11-01 | minor | Chart data tables for column, bar, line, area and compatible combo charts: command/UI controls, formatted source values, blanks, grouped category headers, legend keys, independent borders, shared print/PDF rendering and native c:dTable import/export. Dense tables show a space notice; no readiness score change. |
 | 2026-10-29 | minor | Selected charts highlight their source cells beneath floating objects, so the blue outline no longer crosses the chart; uncovered source cells remain highlighted (#2861) |

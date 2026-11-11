@@ -170,3 +170,60 @@ fn a_secondary_scatter_listed_first_stays_secondary() {
     let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
     assert_eq!(ch.series.iter().map(|s| s.secondary).collect::<Vec<_>>(), vec![true, false]);
 }
+
+/// A chart built from `kinds` (with secondary flags), written to XLSX.
+fn written(kind: ChartKind, kinds: &[(Option<ChartKind>, bool)]) -> String {
+    use gridcraft_model::{Chart, Series, Workbook};
+    let xml = format!(
+        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>{}</c:plotArea></c:chart></c:chartSpace>",
+        bar(&ser(0))
+    );
+    let base = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let series = kinds
+        .iter()
+        .map(|(k, secondary)| Series { values: "Sheet1!$B$1:$B$3".into(), kind: *k, secondary: *secondary, ..Series::default() })
+        .collect();
+    crate::chart::write_chart(&Workbook::new(), 0, &Chart { kind, series, ..base }, "Book1")
+}
+
+/// Pies and doughnuts have no axes: a series marked secondary (left from a combo before the
+/// type changed) stays in the one group, so Excel draws one pie, not two on top of each other.
+#[test]
+fn pies_and_doughnuts_are_one_group_whatever_the_secondary_flags() {
+    for (kind, tag) in [(ChartKind::Pie, "<c:pieChart>"), (ChartKind::Doughnut, "<c:doughnutChart>")] {
+        let xml = written(kind, &[(None, false), (None, true)]);
+        assert_eq!(xml.matches(tag).count(), 1, "{xml}");
+        assert!(!xml.contains("<c:valAx>"), "{xml}");
+        let back = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+        assert_eq!((back.kind, back.series.len()), (kind, 2));
+    }
+}
+
+/// Excel keeps one group per type on a pair of axes: clustered and stacked columns (or lines
+/// and stacked lines) on the same axes are written as one group.
+#[test]
+fn one_group_per_type_on_a_pair_of_axes() {
+    use ChartKind::*;
+    for (kinds, tag) in [
+        (vec![(Some(ColumnStacked), false), (Some(Pie), false), (Some(Line), false)], "<c:barChart>"),
+        (vec![(Some(ColumnClustered), false), (Some(ColumnStacked), false)], "<c:barChart>"),
+        (vec![(Some(Line), false), (Some(LineStacked), false), (Some(ColumnClustered), false)], "<c:lineChart>"),
+        (vec![(Some(Area), false), (Some(AreaStacked), false), (Some(ColumnClustered), false)], "<c:areaChart>"),
+    ] {
+        let xml = written(Combo, &kinds);
+        assert_eq!(xml.matches(tag).count(), 1, "{kinds:?}: {xml}");
+    }
+    // On separate axes each keeps its own group.
+    let xml = written(Combo, &[(Some(ColumnClustered), false), (Some(ColumnStacked), true), (Some(Line), false)]);
+    assert_eq!(xml.matches("<c:barChart>").count(), 2, "{xml}");
+}
+
+/// A markers-only scatter series drawn among lines (a combo on category axes) keeps its
+/// markers.
+#[test]
+fn a_scatter_series_among_lines_keeps_its_markers() {
+    use ChartKind::*;
+    let xml = written(Combo, &[(Some(ColumnClustered), false), (Some(Scatter), false)]);
+    let back = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    assert_eq!(back.series_kind(1), LineMarkers, "{xml}");
+}

@@ -612,6 +612,8 @@ fn multi_level_cat(f: &str, values: &str, wb: &Workbook, si: usize) -> Option<St
 fn series_xml(s: &Series, idx: usize, g: G, own: ChartKind, wb: &Workbook, si: usize) -> String {
     let g = match (g, group_for(own)) {
         (G::Line { stacked, .. }, G::Line { markers, .. }) => G::Line { stacked, markers },
+        // A markers-only series drawn among lines keeps its markers.
+        (G::Line { stacked, .. }, G::Scatter { lines: false } | G::Bubble) => G::Line { stacked, markers: true },
         (G::Scatter { .. }, mine @ G::Scatter { .. }) => mine,
         _ => g,
     };
@@ -862,9 +864,12 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         G::Scatter { .. } => G::Scatter { lines: true },
         g => g,
     };
+    // A series is on the secondary axes only where its group has axes: pies and doughnuts have
+    // none, so their series are all one group.
+    let on_secondary = |i: usize, x: &Series| x.secondary && axes_of(group_of(i)) != Axes::None;
     let groups = |secondary: bool| {
         let mut out: Vec<(G, Vec<(usize, &Series)>)> = Vec::new();
-        for &(i, x) in all.iter().filter(|(_, x)| stock || x.secondary == secondary) {
+        for &(i, x) in all.iter().filter(|(i, x)| stock || on_secondary(*i, x) == secondary) {
             let g = group_of(i);
             match out.iter_mut().find(|(k, _)| *k == g) {
                 Some((_, members)) => members.push((i, x)),
@@ -880,7 +885,9 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
             // lines.
             let g = if g == G::Stock && !(3..=4).contains(&members.len()) { G::Line { stacked: false, markers: false } } else { g };
             let g = fit_axes(g, family);
-            match fitted.iter_mut().find(|(k, _)| *k == g) {
+            // One group per type on a pair of axes (as Excel keeps them): clustered and stacked
+            // columns, or lines and stacked lines, share the first one's grouping.
+            match fitted.iter_mut().find(|(k, _)| std::mem::discriminant(k) == std::mem::discriminant(&g)) {
                 Some((_, m)) => m.extend(members),
                 None => fitted.push((g, members)),
             }
