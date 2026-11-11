@@ -91,6 +91,10 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             source.comments.retain(|c, _| !src.contains(*c));
             source.hyperlinks.retain(|c, _| !src.contains(*c));
             source.merges.retain(|m| !src.contains_range(m));
+            // Validation rules move too: the destination takes its copy from the snapshot, and
+            // the emptied source cells stop being restricted (a rule that also covers cells
+            // outside the block keeps those).
+            super::super::data::remove_validation_cells(&mut source.validations, &[src]);
             for (c, _) in &taken {
                 cx.touch(clip.sheet, *c);
             }

@@ -476,6 +476,61 @@ fn cut_paste_that_overflows_the_grid_moves_nothing() {
 }
 
 #[test]
+fn cut_paste_moves_data_validation_off_the_emptied_source() {
+    // #3766: the rule was copied to the destination but stayed active on the emptied source.
+    let mut s = Session::new();
+    s.new_workbook();
+    let ok = |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == true;
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    s.execute("data.validation", json!({"range": "A1", "type": "whole", "operator": "between", "formula1": "1", "formula2": "10"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1"})).unwrap();
+    s.execute("edit.paste", json!({"at": "C1"})).unwrap();
+    assert!(ok(&mut s, "A1", "99"), "the emptied source is no longer restricted");
+    assert!(!ok(&mut s, "C1", "99"), "the destination keeps the rule");
+    assert!(ok(&mut s, "C1", "5"));
+
+    // A rule that covers more than the cut cell keeps covering the rest.
+    s.execute("data.validation", json!({"range": "E1:E3", "type": "whole", "operator": "between", "formula1": "1", "formula2": "10"})).unwrap();
+    s.execute("edit.cut", json!({"range": "E1"})).unwrap();
+    s.execute("edit.paste", json!({"at": "G1"})).unwrap();
+    assert!(ok(&mut s, "E1", "99"));
+    assert!(!ok(&mut s, "E2", "99"));
+    assert!(!ok(&mut s, "G1", "99"));
+}
+
+#[test]
+fn cut_paste_moves_data_validation_to_another_sheet_and_over_itself() {
+    // #3766: moving to another worksheet, and pasting onto cells that overlap the source.
+    let mut s = Session::new();
+    s.new_workbook();
+    let ok = |s: &mut Session, cell: &str, input: &str| {
+        let (sheet, cell) = cell.split_once('!').unwrap_or(("Sheet1", cell));
+        // `data.validate` checks the active sheet.
+        s.execute("sheet.activate", json!({"sheet": sheet})).unwrap();
+        s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == true
+    };
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    s.execute("data.validation", json!({"range": "A1", "type": "whole", "operator": "between", "formula1": "1", "formula2": "10"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Other"})).unwrap();
+    s.execute("edit.paste", json!({"at": "A1"})).unwrap();
+    assert!(ok(&mut s, "Sheet1!A1", "99"), "the source on the first sheet is free");
+    assert!(!ok(&mut s, "Other!A1", "99"), "the other sheet keeps the rule");
+
+    // A1:A3 cut and pasted one row down: A1 is free, A2:A4 carry the rule.
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("data.validation", json!({"range": "C1:C3", "type": "whole", "operator": "between", "formula1": "1", "formula2": "10"})).unwrap();
+    s.execute("edit.cut", json!({"range": "C1:C3"})).unwrap();
+    s.execute("edit.paste", json!({"at": "C2"})).unwrap();
+    assert!(ok(&mut s, "C1", "99"));
+    for c in ["C2", "C3", "C4"] {
+        assert!(!ok(&mut s, c, "99"), "{c} keeps the rule");
+    }
+}
+
+#[test]
 fn drag_and_drop_asks_before_replacing_data() {
     // #3136: dragging column B's border onto column A replaced A without asking.
     let mut s = Session::new();
