@@ -749,6 +749,8 @@ pub(crate) struct MergeSweep {
     next: usize,
     active: Vec<gridcraft_core::RangeRef>,
     budget: usize,
+    /// The first row was answered by a plain scan: a pass that fits one row never pays for a sort.
+    scanned: bool,
 }
 
 impl MergeSweep {
@@ -756,7 +758,7 @@ impl MergeSweep {
     /// [`MergeSweep::left`] of the previous sheet's sweep into the next). Every call to
     /// [`MergeSweep::at`] must pass that same sheet.
     pub(crate) fn new(budget: usize) -> Self {
-        Self { by_start: None, next: 0, active: Vec::new(), budget }
+        Self { by_start: None, next: 0, active: Vec::new(), budget, scanned: false }
     }
 
     /// Comparisons left for the rest of the pass.
@@ -781,6 +783,13 @@ impl MergeSweep {
     /// The merges covering `row`, or `None` when the budget is spent. Rows must not decrease
     /// between calls (skipping rows is fine).
     fn at(&mut self, sh: &gridcraft_model::Sheet, row: u32) -> Option<Vec<gridcraft_core::RangeRef>> {
+        if self.by_start.is_none() && !self.scanned {
+            self.scanned = true;
+            if !self.charge(sh.merges.len()) {
+                return None;
+            }
+            return Some(sh.merges.iter().copied().filter(|m| !m.is_single() && m.start.row <= row && row <= m.end.row).collect());
+        }
         if self.by_start.is_none() {
             // Sorting is about n log2 n comparisons, charged before it starts.
             let n = sh.merges.len();
@@ -902,7 +911,8 @@ mod merge_sweep_tests {
             sheet.merges.push(gridcraft_core::RangeRef::parse(r).unwrap());
         }
         let mut first = MergeSweep::new(5);
-        assert!(first.at(&sheet, 0).is_none(), "three merges cost three comparisons, two are left");
+        assert!(first.at(&sheet, 0).is_some(), "the first row is a plain scan: three comparisons");
+        assert!(first.at(&sheet, 1).is_none(), "the second row needs the sort: six comparisons, two are left");
         assert_eq!(first.left(), 0);
         // The next sheet starts with what is left: nothing, so it fits nothing.
         let mut second = MergeSweep::new(first.left());
@@ -916,10 +926,13 @@ mod merge_sweep_tests {
         for r in ["A1:B2", "C1:D2", "E1:F2", "G1:H2"] {
             sheet.merges.push(gridcraft_core::RangeRef::parse(r).unwrap());
         }
-        // Four merges sort in about 4 * 3 comparisons: 11 is not enough, 12 plus the row's 4 is.
+        // The first row costs a plain scan (4); from the second on the merges are sorted, about
+        // 4 * 3 comparisons: 7 left is not enough, 12 plus the row's 4 is.
         let mut sweep = MergeSweep::new(11);
-        assert!(sweep.at(&sheet, 0).is_none());
+        assert!(sweep.at(&sheet, 0).is_some());
+        assert!(sweep.at(&sheet, 1).is_none());
         assert_eq!(sweep.left(), 0);
-        assert!(MergeSweep::new(16).at(&sheet, 0).is_some());
+        let mut sweep = MergeSweep::new(20);
+        assert!(sweep.at(&sheet, 0).is_some() && sweep.at(&sheet, 1).is_some());
     }
 }
