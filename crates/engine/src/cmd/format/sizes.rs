@@ -146,34 +146,45 @@ pub(super) fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
         // scan per column would revisit every row for each selected column, empty or not).
         let cols: std::collections::BTreeSet<u32> = lines.iter().flat_map(|&(a, b)| a..=b.min(a + 16383)).collect();
         let mut maxes: std::collections::BTreeMap<u32, f32> = Default::default();
-        if let (Some(u), Some(&first), Some(&last)) = (sh.used_range(), cols.first(), cols.last()) {
-            let span = RangeRef::new(CellRef::new(u.start.row, first), CellRef::new(u.end.row, last));
-            for (cell, _) in sh.cells.iter_range(span) {
-                if !cols.contains(&cell.col) || sh.merge_at(cell).is_some_and(|m| !m.is_single()) {
-                    continue;
+        if let Some(u) = sh.used_range() {
+            // One pass per run of adjacent selected columns, so columns between distant selections
+            // (A and XFD) are never visited.
+            let mut runs: Vec<(u32, u32)> = Vec::new();
+            for &c in &cols {
+                match runs.last_mut() {
+                    Some((_, end)) if *end + 1 == c => *end = c,
+                    _ => runs.push((c, c)),
                 }
-                let id = sh.style_id(cell);
-                let st = cx.wb.styles.get(id);
-                let text = crate::display::cell_text(&cx.wb, sh, cell);
-                for line in text.lines() {
-                    let w = match &measure {
-                        Some(m) => {
-                            let known = measured.entry(id).or_default();
-                            match known.get(line) {
-                                Some(w) => *w,
-                                None => {
-                                    let w = m(line, &st.font, distinct < EXACT_TEXT_WIDTHS);
-                                    known.insert(line.to_owned(), w);
-                                    distinct += 1;
-                                    w
+            }
+            for (first, last) in runs {
+                let span = RangeRef::new(CellRef::new(u.start.row, first), CellRef::new(u.end.row, last));
+                for (cell, _) in sh.cells.iter_range(span) {
+                    if sh.merge_at(cell).is_some_and(|m| !m.is_single()) {
+                        continue;
+                    }
+                    let id = sh.style_id(cell);
+                    let st = cx.wb.styles.get(id);
+                    let text = crate::display::cell_text(&cx.wb, sh, cell);
+                    for line in text.lines() {
+                        let w = match &measure {
+                            Some(m) => {
+                                let known = measured.entry(id).or_default();
+                                match known.get(line) {
+                                    Some(w) => *w,
+                                    None => {
+                                        let w = m(line, &st.font, distinct < EXACT_TEXT_WIDTHS);
+                                        known.insert(line.to_owned(), w);
+                                        distinct += 1;
+                                        w
+                                    }
                                 }
                             }
-                        }
-                        None => approx_text_width(line, st.font.size, st.font.bold),
-                    };
-                    let w = w + 6.0 + st.align.indent as f32 * 9.0 + sh.filter_button_space(cell);
-                    let max = maxes.entry(cell.col).or_insert(0.0);
-                    *max = max.max(w);
+                            None => approx_text_width(line, st.font.size, st.font.bold),
+                        };
+                        let w = w + 6.0 + st.align.indent as f32 * 9.0 + sh.filter_button_space(cell);
+                        let max = maxes.entry(cell.col).or_insert(0.0);
+                        *max = max.max(w);
+                    }
                 }
             }
         }
