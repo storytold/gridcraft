@@ -561,12 +561,14 @@ pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
 fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
     gridcraft_xlsx::write_csv(sh, delimiter, |c| {
         // General's grid-width formatting rounds large identifiers to scientific notation.
-        // Delimited files have no column width, so preserve the whole numeric value instead.
+        // Delimited files have no column width, so the value is written whole — a General
+        // number at Excel's 15 significant digits (`number_to_text`, so 0.1 + 0.2 exports as
+        // 0.3), never the raw f64's extra digits.
         if wb.styles.get(sh.style_id(c)).num_fmt.as_str().eq_ignore_ascii_case("General")
             && let gridcraft_core::Value::Number(number) = sh.value(c)
             && number.is_finite()
         {
-            number.to_string()
+            gridcraft_core::number_to_text(number)
         } else {
             crate::display::value_text(wb, sh, c)
         }

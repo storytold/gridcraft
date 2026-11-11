@@ -137,6 +137,14 @@ pub fn value_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
 /// [`value_text`] for a value and a format code given apart from a cell (print takes the code
 /// from the cell's effective look, which a conditional format can override).
 pub fn value_text_as(wb: &Workbook, v: &Value, code: &str) -> String {
+    // A General number keeps full precision here: Excel's Save As CSV/Text (and the clipboard)
+    // writes the value — up to 15 significant digits (`number_to_text`) — never the narrowing a
+    // column-width display shows. The grid narrows General itself with the real column width.
+    if parsed(code).is_general()
+        && let Value::Number(n) = v
+    {
+        return gridcraft_core::number_to_text(*n);
+    }
     let f = format(v, code, wb);
     match f.fill {
         Some((_, pos)) => {
