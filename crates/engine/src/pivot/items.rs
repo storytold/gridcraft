@@ -1,4 +1,4 @@
-use super::{CellError, HashMap, MONTHS, Ordering, PivotDateGroup, PivotField, PivotFunc, PivotSort, Source, Value, Workbook, datetime_from_serial};
+use super::{CellError, HashMap, Ordering, PivotDateGroup, PivotField, PivotFunc, PivotSort, Source, Value, Workbook};
 
 // ---------------------------------------------------------------- items
 
@@ -35,34 +35,20 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: 
         first,
         formatted,
     };
+    let v = &v.scalar();
+    // The label is the model's, which file writers list items by too.
+    let label = gridcraft_model::pivot_source::item_label(v, group, &crate::display::number_format(fmt), wb.date_system);
     match v {
-        Value::Empty => ("b".into(), it(Value::text("(blank)"), "(blank)".into(), 4, 0.0, false)),
-        Value::Number(n) => {
-            if group != PivotDateGroup::None
-                && let Some(dt) = datetime_from_serial(wb.date_system, *n)
-            {
-                let mon = MONTHS.get(dt.month.saturating_sub(1) as usize).copied().unwrap_or("Jan");
-                let (label, key) = match group {
-                    PivotDateGroup::Years => (dt.year.to_string(), dt.year as f64),
-                    PivotDateGroup::Quarters => {
-                        let q = (dt.month.saturating_sub(1)) / 3 + 1;
-                        (format!("Qtr{q}"), q as f64)
-                    }
-                    PivotDateGroup::Months => (mon.to_string(), dt.month as f64),
-                    _ => (format!("{}-{mon}", dt.day), (dt.month * 100 + dt.day) as f64),
-                };
-                return (format!("g{key}"), it(Value::text(label.as_str()), label, 0, key, false));
-            }
-            let label = crate::display::format(v, fmt, wb).text;
-            (format!("n{}", n.to_bits()), it(v.clone(), label, 0, *n, true))
-        }
-        Value::Text(t) => (format!("t{}", t.to_lowercase()), it(v.clone(), t.to_string(), 1, 0.0, false)),
-        Value::Bool(b) => {
-            let l = if *b { "TRUE" } else { "FALSE" };
-            (format!("l{l}"), it(Value::Bool(*b), l.into(), 2, *b as u8 as f64, false))
-        }
-        Value::Error(e) => (format!("e{}", e.as_str()), it(v.clone(), e.as_str().into(), 3, 0.0, false)),
-        Value::Array(_) => make_item(wb, &v.scalar(), group, fmt, first),
+        Value::Empty => ("b".into(), it(Value::text("(blank)"), label, 4, 0.0, false)),
+        Value::Number(n) => match gridcraft_model::pivot_source::date_group_item(wb.date_system, *n, group) {
+            Some((_, key)) => (format!("g{key}"), it(Value::text(label.as_str()), label, 0, key, false)),
+            None => (format!("n{}", n.to_bits()), it(v.clone(), label, 0, *n, true)),
+        },
+        Value::Text(t) => (format!("t{}", t.to_lowercase()), it(v.clone(), label, 1, 0.0, false)),
+        Value::Bool(b) => (format!("l{label}"), it(Value::Bool(*b), label, 2, *b as u8 as f64, false)),
+        Value::Error(e) => (format!("e{}", e.as_str()), it(v.clone(), label, 3, 0.0, false)),
+        // An array in an array: no value an item can hold.
+        Value::Array(_) => ("b".into(), it(Value::text("(blank)"), label, 4, 0.0, false)),
     }
 }
 

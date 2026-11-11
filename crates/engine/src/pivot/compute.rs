@@ -386,14 +386,12 @@ fn show_value(definition: &PivotValue, raw: Value, lookup: &ValueLookup<'_>, con
 type ReportFilter<'a> = (usize, &'a PivotFilter, PivotDateGroup, bool);
 
 fn report_filters<'a>(pt: &'a PivotTable, src: &Source) -> (Vec<ReportFilter<'a>>, Vec<ReportFilter<'a>>) {
-    let axis_group =
-        |name: &str| pt.rows.iter().chain(pt.columns.iter()).find(|field| field.source_col.eq_ignore_ascii_case(name)).map(|field| field.date_group);
     let filters: Vec<_> = pt
         .filters
         .iter()
         .filter_map(|filter| {
             let column = src.col(&filter.source_col)?;
-            let group = axis_group(&filter.source_col);
+            let group = pt.axis_field(&filter.source_col).map(|field| field.date_group);
             Some((column, filter, group.unwrap_or_default(), group.is_none()))
         })
         .collect();

@@ -139,6 +139,14 @@ pub struct PivotTable {
     pub values_position: Option<usize>,
 }
 
+impl PivotTable {
+    /// The row or column field on source column `name`: a page field on the same column is
+    /// shown by it (not above the report) and takes its date grouping.
+    pub fn axis_field(&self, name: &str) -> Option<&PivotField> {
+        self.rows.iter().chain(&self.columns).find(|f| f.source_col.eq_ignore_ascii_case(name))
+    }
+}
+
 /// A calculated field: a formula over other fields (`=Sales*0.1`, `='Unit Price'*Units`). As in
 /// Excel, it is evaluated on the sums of the fields it names for each report cell, not per record.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

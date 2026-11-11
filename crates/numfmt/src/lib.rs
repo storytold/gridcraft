@@ -87,6 +87,21 @@ pub struct Formatted {
     pub numeric: bool,
 }
 
+impl Formatted {
+    /// The text as it reads at no particular width: a repeat fill (`*x`) shows as one space.
+    /// What text exports and labels use.
+    pub fn plain(self) -> String {
+        let mut t = self.text;
+        if let Some((_, pos)) = self.fill
+            && pos <= t.len()
+            && t.is_char_boundary(pos)
+        {
+            t.insert(pos, ' ');
+        }
+        t
+    }
+}
+
 #[derive(Debug)]
 struct Inner {
     code: String,

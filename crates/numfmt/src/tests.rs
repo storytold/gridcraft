@@ -901,3 +901,10 @@ fn closed_brackets_still_hold_their_semicolons() {
     assert_eq!(f("0\\[0", 5.0), "0[5");
     assert_eq!(f("\"[\"0;0", 5.0), "[5");
 }
+
+#[test]
+fn plain_shows_a_repeat_fill_as_one_space() {
+    assert_eq!(full("$* #,##0", Value::Number(1234.0)).plain(), "$ 1,234");
+    assert_eq!(full("0.0", Value::Number(2.0)).plain(), "2.0");
+    assert_eq!(full("@*-", Value::from("ab")).plain(), "ab ");
+}
