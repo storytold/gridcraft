@@ -945,14 +945,10 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
             if out.len().saturating_add(im.data.len().div_ceil(3).saturating_mul(4)) > HTML_EXPORT_MAX_BYTES {
                 return Err(html_too_big());
             }
-            let _ = write!(
-                out,
-                "<img src=\"data:{};base64,{}\" alt=\"{}\" style=\"{}\">",
-                esc(&im.mime),
-                base64_encode(&im.data),
-                esc(&im.alt),
-                place(&im.anchor)
-            );
+            // The attributes are escaped only as far as the page has room for them.
+            let room = HTML_EXPORT_MAX_BYTES.saturating_sub(out.len());
+            let (Some(mime), Some(alt)) = (esc_within(&im.mime, room), esc_within(&im.alt, room)) else { return Err(html_too_big()) };
+            let _ = write!(out, "<img src=\"data:{mime};base64,{}\" alt=\"{alt}\" style=\"{}\">", base64_encode(&im.data), place(&im.anchor));
             if out.len() > HTML_EXPORT_MAX_BYTES {
                 return Err(html_too_big());
             }
