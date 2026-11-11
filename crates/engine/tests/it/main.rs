@@ -20,6 +20,8 @@ mod line_count_overflow;
 mod long_operator_chains;
 mod offset_overflow;
 mod percent_entry;
+mod pivot_show_as;
+mod pivot_sort;
 mod pivot_unknown_func;
 mod pivotchart_link;
 mod range_fill_formats;

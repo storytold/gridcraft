@@ -41,7 +41,14 @@ pub enum PivotDateGroup {
 pub struct PivotField {
     /// Source column header name.
     pub source_col: String,
+    /// Ascending or descending by label (or by `sort_by`), or source order (or `custom_order`).
     pub sort: PivotSort,
+    /// Sort the items by this value field's totals (its caption) instead of their labels; only
+    /// with an ascending or descending `sort`.
+    pub sort_by: Option<String>,
+    /// A manual order of item labels (Excel's dragged items); only with `PivotSort::None`. Items
+    /// not listed follow, ascending by label.
+    pub custom_order: Vec<String>,
     pub date_group: PivotDateGroup,
     /// Item labels whose detail is hidden (collapsed).
     pub collapsed_items: Vec<String>,
@@ -65,6 +72,9 @@ pub enum PivotFunc {
 }
 
 /// Show-values-as transform.
+///
+/// The modes marked *base field* measure a cell against other items of one row or column field,
+/// [`PivotValue::base_field`] (the first row field, else the first column field, when unset).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PivotShowAs {
     #[default]
@@ -72,10 +82,89 @@ pub enum PivotShowAs {
     PercentOfGrandTotal,
     PercentOfColumnTotal,
     PercentOfRowTotal,
-    /// Running total in the first row field.
+    /// The value over the subtotal of its parent row item (the grand total for an outermost item).
+    PercentOfParentRowTotal,
+    /// Base field: the value over the base item's value.
+    PercentOf,
+    /// Base field: the value minus the base item's value.
+    DifferenceFrom,
+    /// Base field: (value − base item's value) / base item's value.
+    PercentDifferenceFrom,
+    /// Base field: the sum of the value over the base field's items up to this one.
     RunningTotal,
-    /// Rank largest to smallest among sibling row items.
+    /// Base field: the running total over the base field's total.
+    PercentRunningTotal,
+    /// Base field: the rank among the base field's items, largest first (ties share a rank).
     Rank,
+    /// Base field: the rank among the base field's items, smallest first.
+    RankAscending,
+    /// (value × grand total) / (row total × column total).
+    Index,
+}
+
+impl PivotShowAs {
+    /// Every mode, in the order Excel's Show Values As menu lists them.
+    pub const ALL: [PivotShowAs; 13] = [
+        Self::Normal,
+        Self::PercentOfGrandTotal,
+        Self::PercentOfColumnTotal,
+        Self::PercentOfRowTotal,
+        Self::PercentOf,
+        Self::PercentOfParentRowTotal,
+        Self::DifferenceFrom,
+        Self::PercentDifferenceFrom,
+        Self::RunningTotal,
+        Self::PercentRunningTotal,
+        Self::RankAscending,
+        Self::Rank,
+        Self::Index,
+    ];
+
+    /// Whether the mode reads [`PivotValue::base_field`].
+    pub fn uses_base_field(self) -> bool {
+        matches!(
+            self,
+            Self::PercentOf
+                | Self::DifferenceFrom
+                | Self::PercentDifferenceFrom
+                | Self::RunningTotal
+                | Self::PercentRunningTotal
+                | Self::Rank
+                | Self::RankAscending
+        )
+    }
+
+    /// Whether the mode reads [`PivotValue::base_item`].
+    pub fn uses_base_item(self) -> bool {
+        matches!(self, Self::PercentOf | Self::DifferenceFrom | Self::PercentDifferenceFrom)
+    }
+
+    /// Whether the mode shows a ratio (formatted as a percentage unless the field has a format).
+    pub fn is_percentage(self) -> bool {
+        matches!(
+            self,
+            Self::PercentOfGrandTotal
+                | Self::PercentOfColumnTotal
+                | Self::PercentOfRowTotal
+                | Self::PercentOfParentRowTotal
+                | Self::PercentOf
+                | Self::PercentDifferenceFrom
+                | Self::PercentRunningTotal
+        )
+    }
+}
+
+/// The item of the base field a value is measured against (% Of, Difference From,
+/// % Difference From).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PivotBaseItem {
+    /// The item before the cell's own item ("(previous)"); the first item has no base.
+    #[default]
+    Previous,
+    /// The item after the cell's own item ("(next)"); the last item has no base.
+    Next,
+    /// The item with this label (compared ignoring ASCII case).
+    Named(String),
 }
 
 /// A field in the Values area.
@@ -87,6 +176,10 @@ pub struct PivotValue {
     /// Caption, e.g. "Sum of Sales".
     pub name: String,
     pub show_as: PivotShowAs,
+    /// The row or column field a base-field mode measures against (see [`PivotShowAs`]).
+    pub base_field: Option<String>,
+    /// The base field's item % Of and the Difference From modes measure against.
+    pub base_item: PivotBaseItem,
     pub number_format: Option<String>,
 }
 
