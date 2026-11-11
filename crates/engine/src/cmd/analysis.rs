@@ -152,24 +152,30 @@ fn input_range(s: &Session, p: &Json, keys: &[&str]) -> Result<(usize, RangeRef)
 /// Splits a range into variables (columns, or rows when `by_rows`); with `labels` the first
 /// cell of each names it, else `default(i)` does.
 fn variables(s: &Session, si: usize, r: RangeRef, by_rows: bool, labels: bool, default: &dyn Fn(usize) -> String) -> Result<Vec<Var>> {
-    let d = s.doc()?;
-    let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
-    let (outer, inner) = if by_rows { (r.height(), r.width()) } else { (r.width(), r.height()) };
+    let outer = if by_rows { r.height() } else { r.width() };
     let mut out = Vec::with_capacity(outer as usize);
     for i in 0..outer {
-        let cell = |j: u32| if by_rows { CellRef::new(r.start.row + i, r.start.col + j) } else { CellRef::new(r.start.row + j, r.start.col + i) };
-        let mut vals: Vec<Value> = (0..inner).map(|j| sh.value(cell(j))).collect();
-        let mut name = default(i as usize);
-        if labels && !vals.is_empty() {
-            let first = vals.remove(0);
-            let t = first.display();
-            if !t.trim().is_empty() {
-                name = t;
-            }
-        }
-        out.push(Var { name, vals });
+        out.push(variable(s, si, r, by_rows, labels, default, i)?);
     }
     Ok(out)
+}
+
+/// Variable `i` of [`variables`], read alone so a caller that may stop early needn't build them all.
+fn variable(s: &Session, si: usize, r: RangeRef, by_rows: bool, labels: bool, default: &dyn Fn(usize) -> String, i: u32) -> Result<Var> {
+    let d = s.doc()?;
+    let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
+    let inner = if by_rows { r.width() } else { r.height() };
+    let cell = |j: u32| if by_rows { CellRef::new(r.start.row + i, r.start.col + j) } else { CellRef::new(r.start.row + j, r.start.col + i) };
+    let mut vals: Vec<Value> = (0..inner).map(|j| sh.value(cell(j))).collect();
+    let mut name = default(i as usize);
+    if labels && !vals.is_empty() {
+        let first = vals.remove(0);
+        let t = first.display();
+        if !t.trim().is_empty() {
+            name = t;
+        }
+    }
+    Ok(Var { name, vals })
 }
 
 /// The numbers of a variable; blanks are skipped when `skip_blank`, anything else that isn't a
@@ -322,7 +328,7 @@ fn idx(i: usize) -> u32 {
 
 fn descriptive(s: &Session, p: &Json) -> Result<Grid> {
     let (si, r) = input_range(s, p, &["range", "input"])?;
-    let vars = variables(s, si, r, by_rows(p), flag(p, "labels"), &|i| format!("Column{}", i + 1))?;
+    let (by_rows, labels) = (by_rows(p), flag(p, "labels"));
     let summary = p.get("summary").map(|_| flag(p, "summary")).unwrap_or(true);
     let conf = confidence(p, "confidence")?;
     let kl = num(p, "kthLargest").filter(|k| *k >= 1.0).map(|k| k as usize);
@@ -331,11 +337,14 @@ fn descriptive(s: &Session, p: &Json) -> Result<Grid> {
         return Err(bad(CMD, "choose at least one of summary, confidence, kthLargest or kthSmallest"));
     }
     let mut g = Grid::default();
-    for (i, v) in vars.iter().enumerate() {
+    // Variables are read one at a time: a million-row range grouped by rows is a million variables.
+    for i in 0..(if by_rows { r.height() } else { r.width() }) {
         // The report is refused once the grid is too large: the rest would only build discarded labels.
         if g.too_large {
             break;
         }
+        let v = variable(s, si, r, by_rows, labels, &|i| format!("Column{}", i + 1), i)?;
+        let i = i as usize;
         let x = numbers(&v.vals, true)?;
         let c = idx(i).saturating_mul(2);
         g.txt(0, c, &v.name);
