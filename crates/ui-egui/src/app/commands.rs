@@ -311,7 +311,7 @@ impl SheetApp {
                     let text = text.map(|text| {
                         self.session
                             .active()
-                            .map(|d| formula_locale::display_template(&text, self.ui.language.formula_locale(), &d.wb, d.wb.active_sheet()))
+                            .map(|d| formula_locale::display_template(&text, self.ui.language.formula_locale(self.ui.decimal_separator), &d.wb, d.wb.active_sheet()))
                             .unwrap_or(text)
                     });
                     self.begin_edit(text, false);

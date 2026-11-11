@@ -1,4 +1,5 @@
 use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, vec2};
+use crate::DecimalSeparator;
 
 /// Excel's File › Options page: General (display theme, interface language and Show formula bar),
 /// Editing (AutoComplete) and Save (the autosave checkbox toggling `app.ui.autosave`), plus Formulas
@@ -8,6 +9,7 @@ use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, ve
 /// settings are saved with the workbook.
 pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     let lang = app.ui.language;
+    let decimal_separator = app.ui.decimal_separator;
     section(ui, lang, "Options|General");
     general_options(app, ui, lang);
     ui.add_space(6.0);
@@ -48,7 +50,7 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     ui.add_space(18.0);
     section(ui, lang, "Formulas");
     ui.label(lang.tr("Workbook calculation"));
-    calc_options(app, ui, lang, &calc);
+    calc_options(app, ui, lang, &calc, decimal_separator);
     ui.add_space(6.0);
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
 }
@@ -94,7 +96,7 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
 }
 
 /// The calculation mode, and iterative calculation, of the active workbook.
-fn calc_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gridcraft_engine::model::CalcSettings) {
+fn calc_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gridcraft_engine::model::CalcSettings, decimal_separator: DecimalSeparator) {
     use gridcraft_engine::model::CalcMode;
     for (mode, id, label) in [
         (CalcMode::Automatic, "automatic", "Automatic"),
@@ -111,13 +113,13 @@ fn calc_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gridcraf
         app.run_or_alert("formulas.calculationOptions", json!({"iterative": iterative}));
     }
     // Maximum Iterations and Maximum Change apply only while iteration is on, as in Excel.
-    iteration_options(app, ui, lang, calc, iterative);
+    iteration_options(app, ui, lang, calc, iterative, decimal_separator);
     // TODO: add "Set precision as displayed" here once `formulas.calculationOptions` takes
     // `precisionAsDisplayed` (PR #1366); the model already stores it.
 }
 
 /// Maximum Iterations and Maximum Change, live only while iterative calculation is on.
-fn iteration_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gridcraft_engine::model::CalcSettings, iterative: bool) {
+fn iteration_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gridcraft_engine::model::CalcSettings, iterative: bool, decimal_separator: DecimalSeparator) {
     ui.add_enabled_ui(iterative, |ui| {
         ui.horizontal(|ui| {
             ui.add_space(24.0);
@@ -146,7 +148,7 @@ fn iteration_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gri
                     response.labelled_by(label.id);
                 }
                 if let Some(text) = committed.filter(|_| iterative) {
-                    match parse_max_change(&text, lang.formula_locale()) {
+                    match parse_max_change(&text, lang.formula_locale(decimal_separator)) {
                         Some(d) if d != calc.max_change => {
                             app.run_or_alert("formulas.calculationOptions", json!({"maxChange": d}));
                         }

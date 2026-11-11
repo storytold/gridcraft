@@ -296,7 +296,7 @@ fn active_input(app: &SheetApp) -> String {
         }
         return sh
             .cell(anchor)
-            .map(|c| crate::formula_locale::display(&c.input_text(), app.ui.language.formula_locale(), &d.wb, d.wb.active_sheet()))
+            .map(|c| crate::formula_locale::display(&c.input_text(), app.ui.language.formula_locale(app.ui.decimal_separator), &d.wb, d.wb.active_sheet()))
             .unwrap_or_default();
     }
     if let Some(c) = sh.cell(a) {
@@ -305,7 +305,7 @@ fn active_input(app: &SheetApp) -> String {
             return String::new();
         }
         return if let Some(f) = &c.formula {
-            let shown = crate::formula_locale::display(&c.input_text(), app.ui.language.formula_locale(), &d.wb, d.wb.active_sheet());
+            let shown = crate::formula_locale::display(&c.input_text(), app.ui.language.formula_locale(app.ui.decimal_separator), &d.wb, d.wb.active_sheet());
             // A legacy array formula shows in braces (`{=A1:A2*2}`), as `Cell::bar_text` does.
             if f.array.is_some() { format!("{{{shown}}}") } else { shown }
         } else {
