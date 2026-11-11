@@ -27,14 +27,17 @@ const ACCOUNTING_SYMBOLS: &[(&str, &str)] = &[
 pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let st = active_style(app);
-    // Excel's measured Home breakpoints, in client points: a section keeps its natural rows down
-    // to the width below, and shrinks to one row under it. Clipboard and Styles stay natural at
-    // every width; Font survives to the medium breakpoint, while Alignment and Number keep a
-    // two-row layout there.
+    // Excel's measured Home breakpoints, in client points, widest first: a section takes the
+    // first row whose width the window reaches. A group keeps its natural rows down to the width
+    // below, and shrinks to one row under it. Clipboard and Styles stay natural at every width;
+    // Font survives to the medium breakpoint, while Alignment and Number keep a two-row layout
+    // there. From 1280 points (Font, Alignment) and 1520 points (Number) Excel spreads the three
+    // rows back into its wide two-row form. Levels: 1 a group's single natural body, 2 two rows,
+    // 3 three rows.
     RibbonSections::breaks(ui, "Clipboard", &[(0.0, 1)]);
-    RibbonSections::breaks(ui, "Font", &[(921.0, 1)]);
-    RibbonSections::breaks(ui, "Alignment", &[(1109.0, 3), (921.0, 2)]);
-    RibbonSections::breaks(ui, "Number", &[(1109.0, 3), (921.0, 2)]);
+    RibbonSections::breaks(ui, "Font", &[(1280.0, 2), (921.0, 1)]);
+    RibbonSections::breaks(ui, "Alignment", &[(1280.0, 2), (1109.0, 3), (921.0, 2)]);
+    RibbonSections::breaks(ui, "Number", &[(1520.0, 2), (1109.0, 3), (921.0, 2)]);
     RibbonSections::breaks(ui, "Styles", &[(0.0, 1)]);
     RibbonSections::breaks(ui, "Cells", &[(1109.0, 1)]);
     RibbonSections::breaks(ui, "Editing", &[(1109.0, 1)]);
@@ -120,148 +123,29 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     sep(ui, "Clipboard");
     // Font
     section(ui, app, "Font", Icon::Bold, |app, ui| {
+        // Three rows keep the style buttons apart from the colour ones; the wide two-row form
+        // Excel uses from 1280 client points puts both on the second row.
+        let wide = RibbonSections::level(ui, "Font") == 2;
         ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                font_combo(app, ui, &st);
-                size_combo(app, ui, &st);
-                let __k = icon_button(ui, Icon::Plus, t.text, "Increase Font Size", vec2(22.0, 23.0));
-                control_keytip(app, ui, &__k, "home.increaseFontSize");
-                if __k.clicked() {
-                    act(app, "home.increaseFontSize", json!({}));
-                }
-                let __k = icon_button(ui, Icon::Minus, t.text, "Decrease Font Size", vec2(22.0, 23.0));
-                control_keytip(app, ui, &__k, "home.decreaseFontSize");
-                if __k.clicked() {
-                    act(app, "home.decreaseFontSize", json!({}));
-                }
-            });
-            ui.horizontal(|ui| {
-                let __k = toggle_button(ui, Icon::Bold, st.font.bold, "Bold");
-                control_keytip(app, ui, &__k, "home.bold");
-                if __k.clicked() {
-                    act(app, "home.bold", json!({}));
-                }
-                let __k = toggle_button(ui, Icon::Italic, st.font.italic, "Italic");
-                control_keytip(app, ui, &__k, "home.italic");
-                if __k.clicked() {
-                    act(app, "home.italic", json!({}));
-                }
-                let (u, ua) = split_button(ui, Icon::Underline, None, "Underline");
-                control_keytip(app, ui, &ua, "home.underline");
-                if u {
-                    act(app, "home.underline", json!({}));
-                }
-                egui::Popup::menu(&ua).show(|ui| {
-                    menu_items(
-                        app,
-                        ui,
-                        &[
-                            ("Underline", "home.underline", json!({"style": "single"})),
-                            ("Double Underline", "home.underline", json!({"style": "double"})),
-                        ],
-                    );
+            ui.horizontal(|ui| font_face(app, ui, &st));
+            if wide {
+                ui.horizontal(|ui| {
+                    font_style(app, ui, &st);
+                    font_color(app, ui);
                 });
-                let __k = toggle_button(ui, Icon::Strike, st.font.strike, "Strikethrough");
-                control_keytip(app, ui, &__k, "home.strikethrough");
-                if __k.clicked() {
-                    act(app, "home.strikethrough", json!({}));
-                }
-            });
-            ui.horizontal(|ui| {
-                let (b, ba) = split_button(ui, Icon::Borders, None, "Borders");
-                control_keytip(app, ui, &ba, "home.borders");
-                if b {
-                    act(app, "home.borders", json!({"preset": app.grid.last_border.clone()}));
-                }
-                ba.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Border presets"));
-                // Alt, H, B opens the menu with each item's letter, as Excel's does (#2964); a letter
-                // or Esc changes the prefix, which closes it again (`ribbon_keys`).
-                let prefix = app.keytips.prefix().unwrap_or_default().to_owned();
-                let keyed = keytip_table::opens_menu(&prefix, "home.borders");
-                egui::Popup::menu(&ba).open_memory(popup_command(keyed, ba.clicked())).show(|ui| {
-                    for (label, preset) in [
-                        ("Bottom Border", "bottom"),
-                        ("Top Border", "top"),
-                        ("Left Border", "left"),
-                        ("Right Border", "right"),
-                        ("No Border", "none"),
-                        ("All Borders", "all"),
-                        ("Outside Borders", "outside"),
-                        ("Thick Outside Borders", "thickOutside"),
-                        ("Bottom Double Border", "doubleBottom"),
-                        ("Thick Bottom Border", "thickBottom"),
-                        ("Top and Bottom Border", "topBottom"),
-                        ("Top and Thick Bottom Border", "topThickBottom"),
-                        ("Top and Double Bottom Border", "topDoubleBottom"),
-                        ("Inside Borders", "inside"),
-                    ] {
-                        let item = crate::border_preview::preset_button(ui, label, preset);
-                        if let Some(sequence) = keytip_table::item_letter_with(&prefix, "home.borders", &json!({"preset": preset})) {
-                            keytip(app, ui, sequence, egui::pos2(item.rect.right() - 10.0, item.rect.center().y));
-                        }
-                        if item.clicked() {
-                            app.grid.last_border = preset.to_string();
-                            act(app, "home.borders", json!({"preset": preset}));
-                        }
-                    }
-                    ui.separator();
-                    let more = ui.button("More Borders…");
-                    if let Some(sequence) = keytip_table::item_letter(&prefix, "dialog:formatCells") {
-                        keytip(app, ui, sequence, egui::pos2(more.rect.right() - 10.0, more.rect.center().y));
-                    }
-                    if more.clicked() {
-                        app.open_dialog("formatCells", json!({"tab": "Border"}));
-                    }
-                });
-                let fill = app.grid.last_fill.clone();
-                let fill_c = gridcraft_engine::model::Color::from_hex(&fill).and_then(|c| c.resolve(&Default::default())).map(theme::color32);
-                let (f, fa) = split_button(ui, Icon::Fill, fill_c, "Fill Color");
-                control_keytip(app, ui, &fa, "home.fillColor");
-                if f {
-                    act(app, "home.fillColor", json!({"color": fill}));
-                }
-                let forced = invoke(app, "home.fillColor");
-                egui::Popup::menu(&fa)
-                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                    .open_memory(popup_command(forced, fa.clicked()))
-                    .show(|ui| {
-                        if let Some(c) = color_palette(ui, &theme_colors(app), "No Fill") {
-                            if c != "none" {
-                                app.grid.last_fill = c.clone();
-                            }
-                            act(app, "home.fillColor", json!({"color": c}));
-                            ui.close();
-                        }
-                    });
-                let fc = app.grid.last_font_color.clone();
-                let fc_c = gridcraft_engine::model::Color::from_hex(&fc).and_then(|c| c.resolve(&Default::default())).map(theme::color32);
-                let (c, ca) = split_button(ui, Icon::FontColor, fc_c, "Font Color");
-                control_keytip(app, ui, &ca, "home.fontColor");
-                if c {
-                    act(app, "home.fontColor", json!({"color": fc}));
-                }
-                let forced = invoke(app, "home.fontColor");
-                egui::Popup::menu(&ca)
-                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                    .open_memory(popup_command(forced, ca.clicked()))
-                    .show(|ui| {
-                        if let Some(c) = color_palette(ui, &theme_colors(app), "Automatic") {
-                            if c != "none" {
-                                app.grid.last_font_color = c.clone();
-                            }
-                            act(app, "home.fontColor", json!({"color": if c == "none" { "auto".to_string() } else { c }}));
-                            ui.close();
-                        }
-                    });
-            });
+            } else {
+                ui.horizontal(|ui| font_style(app, ui, &st));
+                ui.horizontal(|ui| font_color(app, ui));
+            }
         });
     });
     sep(ui, "Font");
     // Alignment
     section(ui, app, "Alignment", Icon::AlignLeft, |app, ui| {
         // Excel's Alignment group loses its third row first: merge moves beside the indents at the
-        // medium breakpoint, and the whole group becomes one compact row below it.
-        let rows = RibbonSections::level(ui, "Alignment");
+        // narrow breakpoint and in the wide two-row form, and the whole group becomes one compact
+        // row below both.
+        let rows = if RibbonSections::level(ui, "Alignment") == 2 { 2 } else { 3 };
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 for (icon, v, id, tip) in [
@@ -337,7 +221,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     sep(ui, "Alignment");
     // Number
     section(ui, app, "Number", Icon::Percent, |app, ui| {
-        let rows = RibbonSections::level(ui, "Number");
+        let rows = if RibbonSections::level(ui, "Number") == 2 { 2 } else { 3 };
         ui.vertical(|ui| {
             number_combo(app, ui, &st);
             ui.horizontal(|ui| {
@@ -513,6 +397,141 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     group_end(ui, "Editing");
+}
+
+/// Home › Font, first row: the font name and size boxes and the grow/shrink buttons.
+fn font_face(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
+    let t = Tokens::get(ui.ctx());
+    font_combo(app, ui, st);
+    size_combo(app, ui, st);
+    let __k = icon_button(ui, Icon::Plus, t.text, "Increase Font Size", vec2(22.0, 23.0));
+    control_keytip(app, ui, &__k, "home.increaseFontSize");
+    if __k.clicked() {
+        act(app, "home.increaseFontSize", json!({}));
+    }
+    let __k = icon_button(ui, Icon::Minus, t.text, "Decrease Font Size", vec2(22.0, 23.0));
+    control_keytip(app, ui, &__k, "home.decreaseFontSize");
+    if __k.clicked() {
+        act(app, "home.decreaseFontSize", json!({}));
+    }
+}
+
+/// Home › Font, the character styles: bold, italic, underline with its menu, and strikethrough.
+fn font_style(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
+    let __k = toggle_button(ui, Icon::Bold, st.font.bold, "Bold");
+    control_keytip(app, ui, &__k, "home.bold");
+    if __k.clicked() {
+        act(app, "home.bold", json!({}));
+    }
+    let __k = toggle_button(ui, Icon::Italic, st.font.italic, "Italic");
+    control_keytip(app, ui, &__k, "home.italic");
+    if __k.clicked() {
+        act(app, "home.italic", json!({}));
+    }
+    let (u, ua) = split_button(ui, Icon::Underline, None, "Underline");
+    control_keytip(app, ui, &ua, "home.underline");
+    if u {
+        act(app, "home.underline", json!({}));
+    }
+    egui::Popup::menu(&ua).show(|ui| {
+        menu_items(
+            app,
+            ui,
+            &[("Underline", "home.underline", json!({"style": "single"})), ("Double Underline", "home.underline", json!({"style": "double"}))],
+        );
+    });
+    let __k = toggle_button(ui, Icon::Strike, st.font.strike, "Strikethrough");
+    control_keytip(app, ui, &__k, "home.strikethrough");
+    if __k.clicked() {
+        act(app, "home.strikethrough", json!({}));
+    }
+}
+
+/// Home › Font, the colour buttons: borders with its menu, fill colour and font colour.
+fn font_color(app: &mut SheetApp, ui: &mut Ui) {
+    let (b, ba) = split_button(ui, Icon::Borders, None, "Borders");
+    control_keytip(app, ui, &ba, "home.borders");
+    if b {
+        act(app, "home.borders", json!({"preset": app.grid.last_border.clone()}));
+    }
+    ba.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Border presets"));
+    // Alt, H, B opens the menu with each item's letter, as Excel's does (#2964); a letter
+    // or Esc changes the prefix, which closes it again (`ribbon_keys`).
+    let prefix = app.keytips.prefix().unwrap_or_default().to_owned();
+    let keyed = keytip_table::opens_menu(&prefix, "home.borders");
+    egui::Popup::menu(&ba).open_memory(popup_command(keyed, ba.clicked())).show(|ui| {
+        for (label, preset) in [
+            ("Bottom Border", "bottom"),
+            ("Top Border", "top"),
+            ("Left Border", "left"),
+            ("Right Border", "right"),
+            ("No Border", "none"),
+            ("All Borders", "all"),
+            ("Outside Borders", "outside"),
+            ("Thick Outside Borders", "thickOutside"),
+            ("Bottom Double Border", "doubleBottom"),
+            ("Thick Bottom Border", "thickBottom"),
+            ("Top and Bottom Border", "topBottom"),
+            ("Top and Thick Bottom Border", "topThickBottom"),
+            ("Top and Double Bottom Border", "topDoubleBottom"),
+            ("Inside Borders", "inside"),
+        ] {
+            let item = crate::border_preview::preset_button(ui, label, preset);
+            if let Some(sequence) = keytip_table::item_letter_with(&prefix, "home.borders", &json!({"preset": preset})) {
+                keytip(app, ui, sequence, egui::pos2(item.rect.right() - 10.0, item.rect.center().y));
+            }
+            if item.clicked() {
+                app.grid.last_border = preset.to_string();
+                act(app, "home.borders", json!({"preset": preset}));
+            }
+        }
+        ui.separator();
+        let more = ui.button("More Borders…");
+        if let Some(sequence) = keytip_table::item_letter(&prefix, "dialog:formatCells") {
+            keytip(app, ui, sequence, egui::pos2(more.rect.right() - 10.0, more.rect.center().y));
+        }
+        if more.clicked() {
+            app.open_dialog("formatCells", json!({"tab": "Border"}));
+        }
+    });
+    let fill = app.grid.last_fill.clone();
+    let fill_c = gridcraft_engine::model::Color::from_hex(&fill).and_then(|c| c.resolve(&Default::default())).map(theme::color32);
+    let (f, fa) = split_button(ui, Icon::Fill, fill_c, "Fill Color");
+    control_keytip(app, ui, &fa, "home.fillColor");
+    if f {
+        act(app, "home.fillColor", json!({"color": fill}));
+    }
+    let forced = invoke(app, "home.fillColor");
+    egui::Popup::menu(&fa).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).open_memory(popup_command(forced, fa.clicked())).show(
+        |ui| {
+            if let Some(c) = color_palette(ui, &theme_colors(app), "No Fill") {
+                if c != "none" {
+                    app.grid.last_fill = c.clone();
+                }
+                act(app, "home.fillColor", json!({"color": c}));
+                ui.close();
+            }
+        },
+    );
+    let fc = app.grid.last_font_color.clone();
+    let fc_c = gridcraft_engine::model::Color::from_hex(&fc).and_then(|c| c.resolve(&Default::default())).map(theme::color32);
+    let (c, ca) = split_button(ui, Icon::FontColor, fc_c, "Font Color");
+    control_keytip(app, ui, &ca, "home.fontColor");
+    if c {
+        act(app, "home.fontColor", json!({"color": fc}));
+    }
+    let forced = invoke(app, "home.fontColor");
+    egui::Popup::menu(&ca).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).open_memory(popup_command(forced, ca.clicked())).show(
+        |ui| {
+            if let Some(c) = color_palette(ui, &theme_colors(app), "Automatic") {
+                if c != "none" {
+                    app.grid.last_font_color = c.clone();
+                }
+                act(app, "home.fontColor", json!({"color": if c == "none" { "auto".to_string() } else { c }}));
+                ui.close();
+            }
+        },
+    );
 }
 
 /// Ends the Alignment group's third row: Merge & Center and its menu.

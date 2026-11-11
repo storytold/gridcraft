@@ -137,6 +137,9 @@ struct SectionPlan {
     natural: f32,
     /// The level the group was last planned at (`0` compact, `1..` its natural variants).
     level: u8,
+    /// The breakpoint row it took last frame (an index into the tab's widest-first table), so
+    /// hysteresis compares like with like even when two widths share a level.
+    slot: u8,
     /// A frame has drawn the natural body, so its width is known.
     measured: bool,
     /// A keytip opened a popup inside this group, so its natural body stays drawn while the popup
@@ -151,7 +154,11 @@ struct SectionPlan {
 /// drawn at, and the card width it was planned against.
 #[derive(Clone, Debug, Default)]
 struct TabSections {
-    viewport: f32,
+    /// The window's client width (Excel's own measurement basis) which Home's breakpoints use.
+    client: f32,
+    /// The card's content width: a group without breakpoints compacts once its measured body no
+    /// longer fits what is left of it.
+    content: f32,
     /// Card width already spent by the groups drawn before the one being planned.
     used: f32,
     /// The widths at which `label` switches level, for the groups that carry Excel's measured
@@ -178,21 +185,26 @@ impl TabSections {
         };
         let plan = &self.plans[i];
         let breaks = self.breaks.iter().find(|(l, _)| l == label).map(|(_, b)| b.as_slice());
-        let level = if plan.pinned {
-            widest_level(breaks)
-        } else if !plan.measured {
-            // The first frame draws every group natural, to measure it.
+        let mut slot = plan.slot;
+        let level = if plan.pinned || !plan.measured {
+            // The first frame draws every group in its widest natural form, to measure it; a group
+            // a keytip pinned keeps that body drawn.
+            slot = 0;
             widest_level(breaks)
         } else if let Some(b) = breaks {
-            break_level(b, self.viewport, plan.level)
+            let (level, chosen) = break_level(b, self.client, plan.slot);
+            slot = chosen;
+            level
         } else {
-            let remaining = self.viewport - self.used;
+            let remaining = self.content - self.used;
             let natural = plan.level != SECTION_COMPACT;
             // A dead band either side of the fit keeps a group from flapping as its neighbours
             // change width.
             if natural { u8::from(remaining >= plan.natural - SECTION_HYST) } else { u8::from(remaining >= plan.natural + SECTION_HYST) }
         };
-        self.plans[i].level = level;
+        let plan = &mut self.plans[i];
+        plan.level = level;
+        plan.slot = slot;
         level
     }
 
@@ -209,26 +221,39 @@ impl TabSections {
     }
 }
 
-/// The widest natural layout a group offers: the highest level of its breakpoints, or its single
-/// natural body.
+/// The widest natural layout a group offers: the first level of its widest-first breakpoint
+/// table, or its single natural body.
 fn widest_level(breaks: Option<&[(f32, u8)]>) -> u8 {
-    breaks.map_or(1, |b| b.iter().map(|(_, level)| *level).max().unwrap_or(1))
+    breaks.and_then(|b| b.first()).map_or(1, |(_, level)| *level)
 }
 
-/// The level a group with breakpoints draws at: the highest level whose width the card reaches,
-/// holding the previous level inside [`SECTION_HYST`] of the boundary it would cross.
-fn break_level(breaks: &[(f32, u8)], viewport: f32, previous: u8) -> u8 {
-    let raw = breaks.iter().filter(|(min, _)| viewport >= *min).map(|(_, level)| *level).max().unwrap_or(SECTION_COMPACT);
+/// The level at breakpoint row `slot`; the row past the table is the compact one.
+fn level_at(breaks: &[(f32, u8)], slot: u8) -> u8 {
+    breaks.get(slot as usize).map_or(SECTION_COMPACT, |(_, level)| *level)
+}
+
+/// The level a group with breakpoints draws at, and the row it took (an index into the
+/// widest-first table): the first row whose width the client reaches. Leaving a row takes the
+/// client [`SECTION_HYST`] points past that row's boundary, so a window dragged across a
+/// breakpoint does not make the group flicker between layouts.
+fn break_level(breaks: &[(f32, u8)], client: f32, previous: u8) -> (u8, u8) {
+    if breaks.is_empty() {
+        return (1, 0);
+    }
+    let previous = previous.min(breaks.len() as u8 - 1);
+    let raw = breaks.iter().position(|(min, _)| client >= *min).map_or(breaks.len() as u8, |i| i as u8);
     if raw == previous {
-        return raw;
+        return (level_at(breaks, raw), raw);
     }
-    if raw > previous {
-        let at = breaks.iter().filter(|(_, level)| *level == raw).map(|(min, _)| *min).fold(f32::INFINITY, f32::min);
-        if viewport >= at + SECTION_HYST { raw } else { previous }
+    let (boundary, level) = if raw < previous {
+        // A wider row: the card must clearly reach its width.
+        (breaks[raw as usize].0, breaks[raw as usize].1)
     } else {
-        let at = breaks.iter().filter(|(_, level)| *level == previous).map(|(min, _)| *min).fold(0.0, f32::max);
-        if viewport < at - SECTION_HYST { raw } else { previous }
-    }
+        // A narrower row: the card must clearly leave the row it is on.
+        (breaks[previous as usize].0, level_at(breaks, raw))
+    };
+    let crossed = if raw < previous { client >= boundary + SECTION_HYST } else { client < boundary - SECTION_HYST };
+    if crossed { (level, raw) } else { (level_at(breaks, previous), previous) }
 }
 
 /// Runs `f` on the plan of the tab the ribbon is drawing.
@@ -243,9 +268,10 @@ fn with_tab_sections(ui: &Ui, f: impl FnOnce(&mut TabSections)) {
 pub struct RibbonSections;
 
 impl RibbonSections {
-    /// Starts a frame's pass over `tab`'s groups: records the card's content width and resets the
-    /// width spent so far, so each group plans from what is left to its right.
-    pub(super) fn begin(ui: &Ui, tab: &str, viewport: f32) {
+    /// Starts a frame's pass over `tab`'s groups: records the window's client width (for the
+    /// measured breakpoints) and the card's content width, and resets the width spent so far, so
+    /// each group plans from what is left to its right.
+    pub(super) fn begin(ui: &Ui, tab: &str, content: f32, client: f32) {
         let id = TabSections::id(tab);
         let frame = ui.ctx().cumulative_frame_nr();
         // A tab opened afresh starts compact again: a group held open by a keytip on an earlier
@@ -259,7 +285,8 @@ impl RibbonSections {
         ui.ctx().data_mut(|d| {
             d.insert_temp(current_sections_id(), id);
             let sections = d.get_temp_mut_or_default::<TabSections>(id);
-            sections.viewport = viewport;
+            sections.content = content;
+            sections.client = client;
             sections.used = 0.0;
             for plan in &mut sections.plans {
                 if !plan.pinned {

@@ -152,8 +152,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         // the name of the group it closes, and the band is painted afterwards.
                         controls::begin_groups(ui);
                         // The planner picks each group's layout from the card's content width,
-                        // walking the tab's groups from left to right.
-                        RibbonSections::begin(ui, app.ui.ribbon_tab.as_str(), content.width());
+                        // walking the tab's groups from left to right; Home's measured breakpoints
+                        // use the window's client width, as Excel's were measured.
+                        RibbonSections::begin(ui, app.ui.ribbon_tab.as_str(), content.width(), screen.width());
                         match app.ui.ribbon_tab.as_str() {
                             "Home" => home(app, ui),
                             "Insert" => insert(app, ui),

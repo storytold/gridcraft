@@ -107,6 +107,56 @@ fn home_adapts_its_group_rows_to_the_card_width_like_excel() {
     for compact in ["Font", "Alignment", "Number", "Cells", "Editing"] {
         assert!(wide.query_by_label(compact).is_none(), "{compact} is natural at 1228 pt");
     }
+
+    // 1400 outer px (1120 pt): the three-row forms still stand, and Cells and Editing are natural
+    // above their 1109 pt breakpoint.
+    let rowed = app_at_size(vec2(1120.0, 768.0), "Home");
+    assert_eq!(
+        home_levels(&rowed),
+        [
+            ("Clipboard".to_string(), 1),
+            ("Font".to_string(), 1),
+            ("Alignment".to_string(), 3),
+            ("Number".to_string(), 3),
+            ("Styles".to_string(), 1),
+            ("Cells".to_string(), 1),
+            ("Editing".to_string(), 1),
+        ]
+    );
+
+    // 1600 outer px (1280 pt): Excel spreads Font and Alignment back into their wide two-row
+    // forms; Number keeps its three rows until 1900.
+    let spread = app_at_size(vec2(1280.0, 768.0), "Home");
+    assert_eq!(
+        home_levels(&spread),
+        [
+            ("Clipboard".to_string(), 1),
+            ("Font".to_string(), 2),
+            ("Alignment".to_string(), 2),
+            ("Number".to_string(), 3),
+            ("Styles".to_string(), 1),
+            ("Cells".to_string(), 1),
+            ("Editing".to_string(), 1),
+        ]
+    );
+
+    // 1900 outer px (1520 pt): Number takes its wide two-row form too.
+    let widest = app_at_size(vec2(1520.0, 768.0), "Home");
+    assert_eq!(
+        home_levels(&widest),
+        [
+            ("Clipboard".to_string(), 1),
+            ("Font".to_string(), 2),
+            ("Alignment".to_string(), 2),
+            ("Number".to_string(), 2),
+            ("Styles".to_string(), 1),
+            ("Cells".to_string(), 1),
+            ("Editing".to_string(), 1),
+        ]
+    );
+    for natural in ["Font", "Alignment", "Number"] {
+        assert!(widest.query_by_label(natural).is_none(), "{natural} is natural at 1900 px");
+    }
 }
 
 #[test]
