@@ -348,3 +348,21 @@ fn format_cells_sample_keeps_literal_identity_until_a_preset_is_chosen() {
     h.run_steps(3);
     assert_eq!(dialog_number_sample(&h), "01.01.2024");
 }
+
+/// Typed Turkish leading percentages use the locale captured by the cell editor.
+#[test]
+fn turkish_leading_percent_commits_through_the_cell_editor() {
+    for (input, expected) in [("%15", 0.15), ("%15,5", 0.155)] {
+        let mut h = harness(Some("tr-TR"));
+        let app = h.state_mut();
+        app.session.execute("selection.set", json!({"range":"A4"})).unwrap();
+        app.begin_edit(Some(input.into()), false);
+        app.session.display_locale = Locale::EN_US;
+        assert!(app.commit_edit(0, 0, false, false));
+        let wb = &app.session.active().unwrap().wb;
+        let sh = wb.sheet(0).unwrap();
+        let at = gridcraft_engine::core::CellRef::new(3, 0);
+        assert_eq!(sh.value(at), gridcraft_engine::core::Value::Number(expected), "{input}");
+        assert!(gridcraft_engine::numfmt::NumberFormat::parse(wb.styles.get(sh.style_id(at)).num_fmt.as_str()).is_percent());
+    }
+}
