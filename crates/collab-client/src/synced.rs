@@ -53,6 +53,12 @@ struct ImageParts {
 /// more is refused before a byte of it is buffered.
 const MAX_IMAGE_PARTS: u32 = (IMAGE_LIMIT / IMAGE_PART + 2) as u32;
 
+/// How many authoritative workbooks in a row this replica may ask for before it stops and says
+/// the session's document cannot be loaded here. The transport has already moved its cursor onto
+/// a snapshot that failed, so the replica has to repair itself; an endless stream of full
+/// workbooks would be the alternative (CodeRabbit 5852406613, `synced.rs:398`).
+const SNAPSHOT_ATTEMPTS: u32 = 3;
+
 /// Why a command could not be sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditError {
@@ -107,6 +113,11 @@ pub struct Synced {
     /// a resent operation, or a frame that was queued before a snapshot overtook it — and its
     /// command must not run a second time (CodeRabbit 5851190259, `synced.rs:565`).
     document_version: u64,
+    /// Authoritative workbooks this replica could not install, in a row. While it is above zero
+    /// the document is behind the transport's cursor, so no catch-up may move
+    /// [`document_version`](Self::document_version) onto it; a workbook that installs clears it
+    /// (CodeRabbit 5852406613, `synced.rs:398`).
+    snapshot_failures: u32,
 }
 
 impl Synced {
@@ -139,6 +150,7 @@ impl Synced {
             notice: None,
             image_parts: None,
             document_version: held,
+            snapshot_failures: 0,
         };
         synced.apply_sheets(&welcome.sheets);
         synced
@@ -146,6 +158,13 @@ impl Synced {
 
     pub fn state(&self) -> State {
         self.link.state()
+    }
+
+    /// The version of the document this replica holds. It stays below the link's cursor while a
+    /// snapshot could not be installed: the cursor is not the document
+    /// (CodeRabbit 5852406613, `synced.rs:398`).
+    pub fn document_version(&self) -> u64 {
+        self.document_version
     }
 
     /// Replaces the sheet map after `welcome` (the first one carries the keys,
@@ -156,6 +175,47 @@ impl Synced {
 
     pub fn actor(&self) -> &str {
         &self.actor
+    }
+
+    /// Replaces the shared workbook with the authoritative one, or leaves the document as it was.
+    ///
+    /// Either the workbook the session sent replaces the shared document, or nothing changes: a
+    /// parse error, or a document that is no longer open, leaves the old content and the old
+    /// version in place, and the caller asks again instead of claiming what it does not hold
+    /// (CodeRabbit 5852406613, `synced.rs:398`).
+    fn install_snapshot(&mut self, session: &mut Session, bytes: &[u8]) -> Option<()> {
+        let (workbook, _warnings) = gridcraft_engine::io::open_bytes("session.xlsx", bytes).ok()?;
+        self.bind(session);
+        let uid = self.doc_uid?;
+        // Only the shared document is replaced: the other open workbooks, their unsaved edits and
+        // the session's preferences stay.
+        let next = gridcraft_engine::DocState::from_saved(workbook, None, "session.xlsx".into(), gridcraft_engine::Trust::FromFile);
+        session.swap_document(uid, next).ok()?;
+        Some(())
+    }
+
+    /// Reports a workbook that could not be installed and asks for a way back, or stops asking.
+    ///
+    /// The cursor already sits on the snapshot's version, so a catch-up from there is empty by
+    /// definition. The first answer is therefore the whole workbook again; the second restarts
+    /// from the version the document really holds, where a journal tail can still be replayed;
+    /// past [`SNAPSHOT_ATTEMPTS`] the replica says so and waits for the session to be reopened
+    /// (CodeRabbit 5852406613, `synced.rs:398`).
+    fn snapshot_failed(&mut self) {
+        self.snapshot_failures = self.snapshot_failures.saturating_add(1);
+        match self.snapshot_failures {
+            n if n >= SNAPSHOT_ATTEMPTS => {
+                self.notice = Some("the session's document could not be loaded; reopen the session to reload it".into());
+            }
+            1 => {
+                self.notice = Some("the session's document could not be loaded; reloading it from the session".into());
+                self.link.send_message(ClientMessage::Snapshot);
+            }
+            _ => {
+                self.notice = Some(format!("the session's document could not be loaded; catching up from version {}", self.document_version));
+                self.link.send_message(ClientMessage::Resync { from: self.document_version });
+            }
+        }
     }
 
     /// Fixes this replica on the workbook it joined with, once. The session holds one document;
@@ -396,21 +456,16 @@ impl Synced {
                     }
                 }
                 Event::Snapshot { version, bytes, .. } => {
-                    if let Ok((workbook, _warnings)) = gridcraft_engine::io::open_bytes("session.xlsx", bytes) {
-                        self.bind(session);
-                        if let Some(uid) = self.doc_uid {
-                            // Only the shared document is replaced: the other open workbooks,
-                            // their unsaved edits and the session's preferences stay.
-                            let next =
-                                gridcraft_engine::DocState::from_saved(workbook, None, "session.xlsx".into(), gridcraft_engine::Trust::FromFile);
-                            if session.swap_document(uid, next).is_err() {
-                                self.notice = Some("the document of this session is gone; reconnecting".into());
-                                self.link.send_message(ClientMessage::Resync { from: self.link.state().version });
-                            } else {
-                                // The shared document is now the workbook the snapshot carries:
-                                // every answer at or below its version is already in it.
-                                self.document_version = self.document_version.max(*version);
-                            }
+                    // The transport moved its cursor onto this snapshot's version before the event
+                    // was handed over, so the install is all-or-nothing: a document left behind
+                    // while the cursor is ahead would make this replica claim a version whose
+                    // content it does not hold (CodeRabbit 5852406613, `synced.rs:398`).
+                    match self.install_snapshot(session, bytes) {
+                        Some(()) => {
+                            // The shared document is now the workbook the snapshot carries: every
+                            // answer at or below its version is already in it.
+                            self.document_version = self.document_version.max(*version);
+                            self.snapshot_failures = 0;
                             let sheets = self.link.state().sheets;
                             self.apply_sheets(&sheets);
                             // The document the previews sat on is gone. An `applied` still in
@@ -423,6 +478,7 @@ impl Synced {
                                 pending.previewed = false;
                             }
                         }
+                        None => self.snapshot_failed(),
                     }
                 }
                 Event::Reconnected { .. } => {
@@ -431,7 +487,12 @@ impl Synced {
                 Event::Resynced { version, .. } => {
                     // The catch-up is over: the tail (or the snapshot branch above) left the
                     // document at the room's version. Anything at or below it is in the document.
-                    self.document_version = self.document_version.max(*version);
+                    // A snapshot in that catch-up that could not be installed is the exception:
+                    // the document is then behind the transport's cursor, and claiming the version
+                    // is exactly what makes the operations it still needs look already covered.
+                    if self.snapshot_failures == 0 {
+                        self.document_version = self.document_version.max(*version);
+                    }
                 }
                 Event::Presence(_) | Event::Committed { .. } | Event::Disconnected { .. } | Event::Error { .. } | Event::Closed => {}
             }

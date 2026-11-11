@@ -28,6 +28,10 @@ impl Sink {
         self.events.borrow_mut().push_back(event);
     }
 
+    fn sent(&self) -> Vec<ClientMessage> {
+        self.sent.borrow().clone()
+    }
+
     fn deliver(&self, applied: &Applied) {
         let mut state = self.state.borrow_mut();
         gridcraft_collab_client::note_applied(&mut state, applied);
@@ -218,6 +222,86 @@ fn a_snapshot_replaces_only_the_shared_workbook() {
     assert_eq!(value(&session, 0, "A1"), Value::Number(99.0), "the shared workbook is the snapshot");
     assert_eq!(value(&session, 1, "A1"), Value::Empty, "the other workbook keeps its content");
     assert_eq!(session.prefs.user_name, "Ann", "the session's preferences stay");
+}
+
+/// A workbook the client cannot open leaves the document and its version alone, and the replica
+/// asks for the workbook again: the transport has already moved its cursor onto the snapshot, so
+/// claiming that version with the old content would hide every operation still missing
+/// (CodeRabbit 5852406613, `synced.rs:398`).
+#[test]
+fn a_snapshot_that_cannot_be_opened_claims_nothing_and_asks_again() {
+    let (mut synced, sink, mut session) = replica();
+    synced.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": 1 })).expect("the shared workbook is bound");
+
+    // The transport moves its cursor onto the snapshot before it hands the event over.
+    sink.state.borrow_mut().version = 4;
+    sink.push(Event::Snapshot { version: 4, epoch: 0, bytes: b"PK\x03\x04 broken workbook".to_vec() });
+    let _ = synced.poll(&mut session);
+
+    assert_eq!(value(&session, 0, "A1"), Value::Number(1.0), "the document is unchanged");
+    assert_eq!(synced.document_version(), 0, "the replica does not claim the snapshot's version");
+    assert!(synced.take_notice().is_some(), "the failure is reported, not swallowed");
+    assert!(
+        sink.sent().iter().any(|message| matches!(message, ClientMessage::Snapshot)),
+        "the whole workbook is asked for again, not a tail from the advanced cursor: {:?}",
+        sink.sent()
+    );
+
+    // The `resynced` that closes the same catch-up must not move the replica onto the version
+    // either: an answer the document never saw would then be skipped as already covered.
+    sink.push(Event::Resynced { version: 4, epoch: 0 });
+    let _ = synced.poll(&mut session);
+    assert_eq!(synced.document_version(), 0, "a failed snapshot is not a version the replica holds");
+
+    sink.deliver(&applied_set("bob-3", 3, 7));
+    let _ = synced.poll(&mut session);
+    assert_eq!(value(&session, 0, "A1"), Value::Number(7.0), "the operation the document missed still lands");
+}
+
+/// A snapshot for a workbook that is no longer open cannot be installed: the replica keeps its
+/// version, asks for the whole workbook once, then for the tail from the version it really holds,
+/// and stops instead of pulling full workbooks forever (CodeRabbit 5852406613, `synced.rs:398`).
+#[test]
+fn a_snapshot_for_a_workbook_that_was_closed_is_never_claimed() {
+    let (mut synced, sink, mut session) = replica();
+    synced.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": 1 })).expect("the shared workbook is bound");
+    session.close_document(0);
+
+    let mut source = Session::new();
+    source.new_workbook();
+    source.execute("cell.set", json!({ "cell": "A1", "input": 99 })).expect("the room's cell");
+    let bytes = gridcraft_engine::io::save_bytes(&source.doc().expect("a document").wb, "session.xlsx").expect("the snapshot bytes");
+
+    sink.state.borrow_mut().version = 4;
+    sink.push(Event::Snapshot { version: 4, epoch: 0, bytes: bytes.clone() });
+    let _ = synced.poll(&mut session);
+
+    assert!(session.documents().is_empty(), "the closed window is not recreated");
+    assert_eq!(synced.document_version(), 0, "the snapshot's version is not claimed");
+    assert!(synced.take_notice().is_some(), "the failure is reported");
+    assert!(
+        sink.sent().iter().any(|message| matches!(message, ClientMessage::Snapshot)),
+        "the whole workbook, not a resync from the cursor the snapshot already moved: {:?}",
+        sink.sent()
+    );
+
+    // The second workbook fails as well: the catch-up restarts from the version the document
+    // holds, where the journal tail can still repair it.
+    sink.push(Event::Snapshot { version: 5, epoch: 0, bytes });
+    let _ = synced.poll(&mut session);
+    assert!(
+        sink.sent().iter().any(|message| matches!(message, ClientMessage::Resync { from: 0 })),
+        "a tail from the version the document holds: {:?}",
+        sink.sent()
+    );
+    assert_eq!(synced.document_version(), 0, "still nothing claimed");
+
+    // A third one stops the requests: the replica says the session has to be reopened.
+    let before = sink.sent().len();
+    sink.push(Event::Snapshot { version: 6, epoch: 0, bytes: b"PK\x03\x04 broken workbook".to_vec() });
+    let _ = synced.poll(&mut session);
+    assert_eq!(sink.sent().len(), before, "no endless stream of workbooks");
+    assert!(synced.take_notice().is_some_and(|notice| notice.contains("reopen")), "the user is told what to do");
 }
 
 /// An answer the document already covers must not run its command again: the server answers a
