@@ -17,11 +17,13 @@ const MAX_ROW_SPAN: usize = gridcraft_core::MAX_ROWS as usize;
 /// table is ignored: the HTML only refines cells of the tab-separated text, which stays the source.
 const MAX_HTML_CELLS: usize = 1_000_000;
 
-/// One table cell: its visible text and the number the source recorded for it, if any.
+/// One table cell: its visible text, the number the source recorded for it, if any, and whether
+/// it is a header cell (`<th>`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct HtmlCell {
     pub text: String,
     pub num: Option<f64>,
+    pub header: bool,
 }
 
 /// The cells of the first table in `html`, row by row, read no further than `max_rows` rows of
@@ -88,7 +90,7 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
                 let num = attr(attrs, "x:num").or_else(|| attr(attrs, "sdval")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| n.is_finite());
                 let colspan = span(attrs, "colspan", MAX_SPAN);
                 let rowspan = span(attrs, "rowspan", MAX_ROW_SPAN);
-                cell = Some(OpenCell { cell: HtmlCell { text: String::new(), num }, colspan, rowspan });
+                cell = Some(OpenCell { cell: HtmlCell { text: String::new(), num, header: name == "th" }, colspan, rowspan });
             }
             ("td" | "th", true) | ("tr", true) => grid.finish(&mut cell),
             ("br", _) => {
@@ -376,18 +378,18 @@ mod tests {
             <tr><td colspan=2 x:num="2.5">2.50 &amp; up</td><td>x</td></tr><!--EndFragment--></table></body></html>"#;
         let rows = table_cells(excel, 2, 3);
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0][0], HtmlCell { text: "Rp10,000.00".into(), num: Some(10000.0) });
-        assert_eq!(rows[0][1], HtmlCell { text: "Name".into(), num: None });
+        assert_eq!(rows[0][0], HtmlCell { text: "Rp10,000.00".into(), num: Some(10000.0), ..HtmlCell::default() });
+        assert_eq!(rows[0][1], HtmlCell { text: "Name".into(), num: None, ..HtmlCell::default() });
         assert_eq!(rows[1].len(), 3, "colspan keeps the next cell in its column");
         assert_eq!(rows[1][0].text, "2.50 & up");
         assert_eq!(rows[1][2].text, "x");
 
         let calc = r#"<table cellspacing="0" border="0"><colgroup width="85"></colgroup><tr>
             <td height="17" align="right" sdval="10000" sdnum="1033;0;[$Rp-421]#,##0.00"><font face="Liberation Sans">Rp10,000.00</font></td></tr></table>"#;
-        assert_eq!(table_cells(calc, 1, 1), vec![vec![HtmlCell { text: "Rp10,000.00".into(), num: Some(10000.0) }]]);
+        assert_eq!(table_cells(calc, 1, 1), vec![vec![HtmlCell { text: "Rp10,000.00".into(), num: Some(10000.0), ..HtmlCell::default() }]]);
 
         let quoted_gt = r#"<table><tr><td style='mso-number-format:"\[>=1000\]0"' x:num="1500">1500</td></tr></table>"#;
-        assert_eq!(table_cells(quoted_gt, 1, 1), vec![vec![HtmlCell { text: "1500".into(), num: Some(1500.0) }]]);
+        assert_eq!(table_cells(quoted_gt, 1, 1), vec![vec![HtmlCell { text: "1500".into(), num: Some(1500.0), ..HtmlCell::default() }]]);
     }
 
     #[test]
@@ -434,7 +436,7 @@ mod tests {
         assert!(cells <= MAX_HTML_CELLS, "{cells} cells");
         assert!(rows.iter().all(|r| r.len() <= MAX_SPAN));
         assert_eq!(rows[0].len(), MAX_SPAN, "the first span fills the sheet's width");
-        assert_eq!(rows[0][0], HtmlCell { text: "1".into(), num: Some(1.0) });
+        assert_eq!(rows[0][0], HtmlCell { text: "1".into(), num: Some(1.0), ..HtmlCell::default() });
 
         // Bounded by the pasted text's shape, the same markup yields just that shape.
         let rows = table_cells(&html, 3, 2);
