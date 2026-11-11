@@ -42,6 +42,28 @@ fn go_to_lists_the_named_ranges_of_every_sheet() {
     assert_eq!(list["names"], json!(["Areas", "Local", "Price", "Sheet1!Own", "type"]), "{list}");
 }
 
+/// Thousands of names that alias other names are listed with one lookup per alias, not a scan of
+/// every name for each; aliases resolve through the chain like a single name does.
+#[test]
+fn go_to_lists_many_aliases_and_follows_them() {
+    let mut s = go_to_workbook();
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    let alias = |name: String, formula: String| gridcraft_model::DefinedName { name, scope: None, formula, comment: String::new(), hidden: false };
+    wb.names.push(alias("Chain0".into(), "Areas".into()));
+    for i in 1..20_000 {
+        wb.names.push(alias(format!("Chain{i}"), format!("Chain{},price", i - 1)));
+    }
+    let list = s.execute("edit.goTo", json!({"list": true})).unwrap();
+    let names: Vec<&str> = list["names"].as_array().unwrap().iter().filter_map(|n| n.as_str()).collect();
+    // Chain0..Chain6 are within the name depth Go To follows; longer chains are not ranges.
+    for i in 0..7 {
+        assert!(names.contains(&format!("Chain{i}").as_str()), "Chain{i} in {names:?}");
+    }
+    assert!(!names.contains(&"Chain7"), "{names:?}");
+    let out = s.execute("edit.goTo", json!({"reference": "chain1"})).unwrap();
+    assert_eq!(out["selection"], "A1,C3:C4,B2:B5", "{out}");
+}
+
 #[test]
 fn go_to_a_name_scoped_to_another_sheet_goes_to_that_sheet() {
     let mut s = go_to_workbook();
@@ -422,6 +444,50 @@ fn drag_and_drop_on_another_sheet_stays_on_that_sheet() {
     assert_eq!(wb.sheet(two).unwrap().value(CellRef::new(0, 0)), Value::text("Kiwi"));
     assert_eq!(wb.sheet(two).unwrap().value(CellRef::new(1, 0)), Value::text("Plum"));
     assert_eq!(wb.sheet(two).unwrap().value(CellRef::new(0, 1)), Value::Empty);
+}
+
+#[test]
+fn replace_refuses_text_that_would_grow_past_a_cell() {
+    // 10,000 matches × a 1,000-character replacement would make a 10 MB cell (and a few such
+    // cells gigabytes); the replacement is refused before that text is built.
+    let mut s = Session::new();
+    s.new_workbook();
+    let long = "a".repeat(10_000);
+    s.execute("range.setValues", json!({"range": "A1", "values": [[long.clone()], ["abc"]]})).unwrap();
+    for case in [false, true] {
+        let err = s.execute("edit.replace", json!({"what": "a", "with": "x".repeat(1_000), "matchCase": case})).expect_err("too long");
+        assert!(err.to_string().contains("too long"), "{err}");
+        assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["value"], json!(long));
+        assert_eq!(s.execute("cell.get", json!({"cell": "A2"})).unwrap()["value"], json!("abc"));
+    }
+    // A replacement that stays within a cell's limit still happens.
+    s.execute("edit.replace", json!({"what": "b", "with": "x".repeat(100)})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell": "A2"})).unwrap()["value"], json!(format!("a{}c", "x".repeat(100))));
+}
+
+#[test]
+fn replace_refuses_a_result_past_the_character_limit_though_it_fits_the_byte_limit() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["z"]]})).unwrap();
+    for whole in [false, true] {
+        let err = s.execute("edit.replace", json!({"what": "z", "with": "x".repeat(32_768), "wholeCell": whole})).expect_err("32,768 characters");
+        assert!(err.to_string().contains("too long"), "{err}");
+        assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["value"], json!("z"));
+    }
+    s.execute("edit.replace", json!({"what": "z", "with": "x".repeat(32_767)})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["value"], json!("x".repeat(32_767)));
+}
+
+#[test]
+fn bounded_replace_stops_at_its_limit() {
+    use super::find::{replace_ci_within, replace_cs_within};
+    assert_eq!(replace_cs_within("abab", "a", "xy", 6).as_deref(), Some("xybxyb"));
+    assert_eq!(replace_cs_within("abab", "a", "xy", 5), None);
+    assert_eq!(replace_ci_within("AbAb", "a", "xy", 6).as_deref(), Some("xybxyb"));
+    assert_eq!(replace_ci_within("AbAb", "a", "xy", 5), None);
+    assert_eq!(replace_cs_within("abc", "z", "", 3).as_deref(), Some("abc"));
+    assert_eq!(replace_cs_within("abc", "z", "", 2), None);
 }
 
 #[test]
