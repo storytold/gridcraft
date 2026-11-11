@@ -461,6 +461,35 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Maximum Iterations must be a whole number from 1 to 32767." => "Предельное число итераций должно быть целым числом от 1 до 32767.",
         "Maximum Change must be a number of 0 or more." => "Максимальное изменение должно быть числом не меньше 0.",
         "Calculation settings are saved with the workbook." => "Параметры вычислений сохраняются вместе с книгой.",
+        "Options|Data" => "Данные",
+        "Automatic data conversion" => "Автоматическое преобразование данных",
+        "Enable all default data conversions below when entering, pasting, or opening text files" => {
+            "Включить все перечисленные ниже преобразования данных по умолчанию при вводе, вставке или открытии текстовых файлов"
+        }
+        "Remove leading zeros and convert to a number" => "Удалять начальные нули и преобразовывать в число",
+        "Off: 0123 stays text, leading zeros included." => "Выкл.: 0123 остаётся текстом вместе с начальными нулями.",
+        "Keep first 15 digits of long numbers and display in scientific notation" => {
+            "Сохранять первые 15 цифр длинных чисел и отображать их в экспоненциальном представлении"
+        }
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text." => {
+            "Выкл.: ни одно число не обрезается и не переводится в экспоненциальное представление. То, что общий формат не может показать в исходном виде, остаётся текстом."
+        }
+        "Keep numbers with more than" => "Сохранять как текст числа длиннее",
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost." => {
+            "11 (по умолчанию): преобразуются только числа, которые общий формат показывает точно так, как они записаны, поэтому 12-значные коды и штрихкоды остаются текстом. Значения от 12 до 15 разрешают экспоненциальное отображение, например 1.24412E+11, для чисел до этого количества цифр; ни одна цифра не теряется."
+        }
+        "digits as text" => "цифр",
+        "Convert digits surrounding the letter \"E\" to a number in scientific notation" => {
+            "Преобразовывать цифры вокруг буквы «E» в число в экспоненциальном представлении"
+        }
+        "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Выкл.: 1244121406E6 остаётся текстом и не становится 1.24412E+15.",
+        "Convert continuous letters and numbers to a date" => "Преобразовывать непрерывные буквы и цифры в дату",
+        "GridCraft never makes this conversion: 12JAN2026 stays text." => {
+            "GridCraft никогда не выполняет это преобразование: 12JAN2026 остаётся текстом."
+        }
+        "Data conversion settings apply to every workbook; they are not saved in the file." => {
+            "Параметры преобразования данных применяются ко всем книгам и не сохраняются в файле."
+        }
         "Insert Sheet" => "Вставить лист",
         "Rename" => "Переименовать",
         "Move or Copy…" => "Переместить или скопировать…",
