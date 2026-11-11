@@ -1,5 +1,5 @@
 //! GridCraft file formats: XLSX (transitional and strict) and CSV import/export, plus XLSB and ODS data import
-//! and legacy Excel 97-2003 `.xls` (BIFF8) import, and password-encrypted workbooks (Agile and Standard encryption).
+//! and legacy Excel 97-2003 `.xls` (BIFF8) import, and password-encrypted workbooks (Agile and Standard encryption; RC4 and RC4 CryptoAPI for `.xls`).
 //!
 //! Clean-room implementation from ECMA-376 / ISO/IEC 29500 and observed behaviour. All entry
 //! points work on byte slices (no file system access), so the crate builds for WebAssembly.
@@ -52,7 +52,7 @@ pub use csv::{MAX_CSV_BYTES, decode_text, read_csv, read_csv_with_report, write_
 pub use ods::read_ods;
 pub use package::MAX_PART;
 pub use passthrough::rebase_links;
-pub use xls::{read_xls, read_xls_with};
+pub use xls::{is_encrypted_xls, read_xls, read_xls_with, read_xls_with_password};
 pub use xlsb::read_xlsb;
 
 /// Errors from reading or writing files.
@@ -66,6 +66,9 @@ pub enum IoError {
     Format(String),
     #[error("the file is too large: {0}")]
     TooLarge(String),
+    /// An encrypted workbook couldn't be decrypted.
+    #[error("{0}")]
+    Decrypt(DecryptError),
 }
 
 /// What a lenient read skipped or repaired.

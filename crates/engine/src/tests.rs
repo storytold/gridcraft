@@ -4841,6 +4841,25 @@ fn encrypted_workbooks_open_with_their_password() {
 }
 
 #[test]
+fn workbooks_encrypted_with_excels_default_password_open_without_one() {
+    let mut src = s();
+    src.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+    let xlsx = crate::io::save_bytes(&src.doc().unwrap().wb, "book.xlsx").unwrap();
+    let agile = gridcraft_xlsx::testing::encrypt_workbook(&xlsx, crate::io::DEFAULT_PASSWORD);
+    let standard = gridcraft_xlsx::testing::encrypt_workbook_standard(&xlsx, crate::io::DEFAULT_PASSWORD);
+    for file in [agile, standard] {
+        let mut s = Session::new();
+        let r = s.execute("file.open", json!({"name": "ReadOnly.xlsx", "base64": crate::io::base64_encode(&file)})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Number(42.0));
+        // Nobody set a password, so there is nothing to warn about.
+        assert!(r["warnings"].as_array().unwrap().iter().all(|w| w != crate::io::DECRYPTED_NOTICE), "{r}");
+        assert!(s.take_ui_requests().is_empty());
+        // Still never saved over the encrypted original.
+        assert_eq!(s.doc().unwrap().path, None);
+    }
+}
+
+#[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn a_decrypted_workbook_never_overwrites_its_encrypted_original() {
     const PW: &str = "synthetic-pw-5522";
