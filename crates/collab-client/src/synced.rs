@@ -239,8 +239,16 @@ impl Synced {
     /// Fixes this replica on the workbook it joined with, once. The session holds one document;
     /// everything the replica applies or sends is that workbook's, not whichever window the user
     /// switched to afterwards.
+    ///
+    /// Before the room's copy has landed, though, the app can still replace that workbook: the
+    /// web host opens its file over the blank workbook the shell starts with, and `file.open`
+    /// closes the blank one instead of reusing it. A session bound to the closed document sends
+    /// every edit locally and its snapshot install has nowhere to go, so it follows the workbook
+    /// in front while nothing has been shared yet — no version held and no operation in flight.
     fn bind(&mut self, session: &Session) {
-        if self.doc_uid.is_none() {
+        let replaced_before_joining =
+            self.doc_uid.is_some_and(|uid| session.document_index(uid).is_none()) && self.document_version == 0 && self.pending.is_empty();
+        if self.doc_uid.is_none() || replaced_before_joining {
             self.doc_uid = session.active().map(|doc| doc.uid);
         }
     }

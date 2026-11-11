@@ -356,6 +356,45 @@ fn an_answer_at_or_below_the_snapshot_changes_nothing() {
     assert_eq!(value(&session, 0, "A1"), Value::Number(5.0), "an operation newer than the snapshot is applied");
 }
 
+/// The web host opens its file over the blank workbook the shell starts with: `file.open` closes
+/// the untouched blank one and adds the file, so a session that bound to the blank workbook before
+/// the room's copy arrived held a document that no longer exists. Every edit then stayed local
+/// (`OtherDocument`) and the snapshot install had nowhere to go. While nothing has been shared
+/// yet, the session follows the workbook now in front.
+#[test]
+fn a_workbook_that_replaces_the_blank_start_becomes_the_shared_one() {
+    let (mut synced, _sink, mut session) = replica();
+    // The shell's first frame binds the session to the blank workbook.
+    let _ = synced.poll(&mut session);
+    // The host's file arrives: the blank one is closed and the file takes its place.
+    session.new_workbook();
+    session.close_document(0);
+    assert_eq!(session.documents().len(), 1, "the file is the only workbook open");
+    // The frame after the open rebinds: a session holds the workbook in front while nothing has
+    // been shared yet.
+    let _ = synced.poll(&mut session);
+
+    assert!(synced.shares_active_document(&session), "the workbook the host opened is the session's document");
+    let sent = synced.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": 1 }));
+    assert!(sent.is_ok(), "an edit in it reaches the room: {sent:?}");
+    assert_eq!(value(&session, 0, "A1"), Value::Number(1.0), "the edit is previewed on the shared workbook");
+}
+
+/// The rule above stops where the session really held the document: once the room's copy is in
+/// it, closing that workbook ends the session for this replica instead of moving it to another
+/// file (the notice says so, and no version is claimed for a document it does not hold).
+#[test]
+fn the_replacement_rule_does_not_move_a_joined_session_to_another_workbook() {
+    let (mut synced, sink, mut session) = replica();
+    let _ = synced.poll(&mut session);
+    sink.deliver(&applied_set("bob-0", 1, 1));
+    let _ = synced.poll(&mut session);
+    session.new_workbook();
+    session.close_document(0);
+    assert!(!synced.shares_active_document(&session), "another workbook is not the session's, once the document was joined");
+    assert_eq!(synced.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": 2 })), Err(gridcraft_collab_client::EditError::OtherDocument));
+}
+
 /// A confirmed `cell.set` of `A1` at `version`, as the server answers it.
 fn applied_set(op_id: &str, version: u64, input: i64) -> Applied {
     Applied {
