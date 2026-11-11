@@ -71,6 +71,7 @@ pub fn read_font(e: &El, palette: &[u32]) -> Font {
     f.bold = bool_prop(e, "b");
     f.italic = bool_prop(e, "i");
     f.strike = bool_prop(e, "strike");
+    f.outline = bool_prop(e, "outline");
     if let Some(u) = e.child("u") {
         f.underline = match u.attr("val").unwrap_or("single") {
             "double" => Underline::Double,
@@ -436,6 +437,10 @@ fn font_xml(f: &Font, dxf: Option<&DxfStated>, minor: bool) -> String {
             let _ = write!(s, "<{tag} val=\"0\"/>");
         }
     }
+    // Excel's order puts outline after strike (condense and extend aren't modelled).
+    if f.outline {
+        s.push_str("<outline/>");
+    }
     match f.underline {
         Underline::None if stated.underline => s.push_str("<u val=\"none\"/>"),
         Underline::None => {}
@@ -709,6 +714,7 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
         if d.font.bold
             || d.font.italic
             || d.font.strike
+            || d.font.outline
             || d.font.underline != Underline::None
             || d.font.color != Color::Auto
             || d.font.vert != VertAlign::Baseline

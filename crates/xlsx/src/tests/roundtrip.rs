@@ -790,6 +790,33 @@ fn empty_workbook_roundtrip() {
     assert!(crate::sniff(&bytes) == crate::Format::Xlsx);
 }
 
+/// Outlined (hollow) letters are kept on save and reopen, written after `<strike/>` as Excel does;
+/// `<outline val="0"/>` reads as not outlined.
+#[test]
+fn outlined_font_survives_xlsx_roundtrip() {
+    let mut wb = Workbook::new();
+    let outlined = wb.styles.derive(StyleId::DEFAULT, |s| {
+        s.font.outline = true;
+        s.font.strike = true;
+    });
+    let sheet = wb.sheet_mut(0).unwrap();
+    sheet.cells.set(at("A1"), Cell { value: Value::text("hollow"), formula: None, style: outlined, py: None });
+    sheet.set_value(at("A2"), Value::text("solid"));
+
+    let bytes = write_xlsx(&wb).unwrap();
+    let styles = Package::open(&bytes).unwrap().read("xl/styles.xml").unwrap().unwrap();
+    let styles = String::from_utf8(styles).unwrap();
+    assert!(styles.contains("<strike/><outline/>"), "{styles}");
+    assert_eq!(styles.matches("<outline").count(), 1, "only the outlined font says so: {styles}");
+
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let sheet = &back.sheets[0];
+    let style_of = |a: &str| back.styles.get(sheet.cells.get(at(a)).map_or(StyleId::DEFAULT, |c| c.style));
+    assert!(style_of("A1").font.outline && style_of("A1").font.strike);
+    assert!(!style_of("A2").font.outline);
+    assert!(!crate::styles::read_font(&crate::xml::parse(br#"<font><outline val="0"/></font>"#).unwrap(), &[]).outline);
+}
+
 #[test]
 fn cell_text_carriage_returns_survive_xlsx_roundtrip() {
     let mut wb = Workbook::new();

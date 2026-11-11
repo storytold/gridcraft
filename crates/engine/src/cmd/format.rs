@@ -870,6 +870,18 @@ mod tests {
         assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["num_fmt"], "0.00");
     }
 
+    /// Outlined letters have no Font-group command; Format Cells' style JSON sets and clears them.
+    #[test]
+    fn format_cells_sets_outlined_letters() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"font": {"outline": true}}})).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["font"]["outline"], true);
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"font": {"outline": false}}})).unwrap();
+        assert!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["font"].get("outline").is_none());
+    }
+
     #[test]
     fn width_units() {
         assert_eq!(chars_to_points(8.43), 64.0);
