@@ -1397,6 +1397,18 @@ fn macro_workbook_bytes() -> Vec<u8> {
 }
 
 #[test]
+fn circle_invalid_data_warns_when_its_scan_was_cut_short() {
+    let mut h = harness(blank());
+    h.state_mut().run("range.setValues", json!({"range": "A1", "values": [[-1]]})).unwrap();
+    h.state_mut().run("range.setValues", json!({"range": "A200000", "values": [[-1]]})).unwrap();
+    h.state_mut().run("data.validation", json!({"range": "A1:A200000", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    h.state_mut().run("data.circleInvalid", json!({})).unwrap();
+    let n = h.state().notice.clone().expect("a notice was shown");
+    assert!(n.text.contains("100,000"), "{}", n.text);
+    assert_eq!(n.kind, gridcraft_ui_egui::NoticeKind::Warning);
+}
+
+#[test]
 fn opening_a_macro_workbook_shows_a_notice() {
     // The reader's "macros kept but not executed" warning must reach a dismissible info bar,
     // not be silently dropped (issue #6 follow-up: Excel-style message bar).

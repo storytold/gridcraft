@@ -6486,9 +6486,11 @@ fn replace_does_not_search_hidden_formula_source() {
     s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)*7"})).unwrap();
     s.execute("home.formatCells", json!({"range": "A1", "style": {"protection": {"locked": true, "hidden": true}}})).unwrap();
     s.execute("review.protectSheet", json!({})).unwrap();
-    let hit = s.execute("edit.replace", json!({"what": "SEQUENCE", "with": "X"})).map_err(|e| e.to_string());
-    let miss = s.execute("edit.replace", json!({"what": "NOSUCHTEXT", "with": "X"})).map_err(|e| e.to_string());
+    // Both give the same answer, and it is not an error: a hidden formula's source is not searched.
+    let hit = s.execute("edit.replace", json!({"what": "SEQUENCE", "with": "X"})).unwrap();
+    let miss = s.execute("edit.replace", json!({"what": "NOSUCHTEXT", "with": "X"})).unwrap();
     assert_eq!(hit, miss);
+    assert_eq!(hit["replaced"], json!(0), "{hit}");
 }
 
 #[test]
