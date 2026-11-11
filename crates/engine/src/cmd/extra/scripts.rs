@@ -75,6 +75,9 @@ fn denied_script_step(id: &str, params: &Json) -> Option<String> {
     None
 }
 
+/// Commands that read the session's clipboard, which a script may use only for a copy made in its own workbook.
+const CLIPBOARD_READERS: [&str; 3] = ["edit.paste", "edit.pasteSpecial", "home.insertCopiedCells"];
+
 pub(super) fn trust_scripts(s: &mut Session, p: &Json) -> Result<Json> {
     // Only a missing `trusted` means "trust"; `"false"`, `0` or `null` are mistakes, not consent.
     let trusted = match p.get("trusted") {
@@ -84,6 +87,10 @@ pub(super) fn trust_scripts(s: &mut Session, p: &Json) -> Result<Json> {
     };
     s.doc_mut()?.scripts_trusted = trusted;
     Ok(json!({"trusted": trusted}))
+}
+
+fn d_uid(s: &Session) -> Result<u64> {
+    Ok(s.doc()?.uid)
 }
 
 /// Runs a stored script. Scripts in a workbook opened from a file run only once the workbook is
@@ -108,6 +115,7 @@ pub(super) fn run_script(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     let _sandbox = crate::io::ScriptSandbox::enter();
+    let home = d_uid(s)?;
     let mut n = 0;
     // What ran, for a recorder in progress: the recording keeps these steps with the run, so
     // editing or deleting the script before the recording stops does not change what it saved.
@@ -117,9 +125,25 @@ pub(super) fn run_script(s: &mut Session, p: &Json) -> Result<Json> {
         if id.starts_with("automate.") {
             continue;
         }
+        if CLIPBOARD_READERS.contains(&id) && s.clipboard.as_ref().is_some_and(|c| c.doc_uid != home) {
+            return Err(bad("automate.runScript", format!("scripts can't run `{id}` on cells copied from another workbook")));
+        }
         let before = s.ui_requests.len();
         let wb_before = s.doc().ok().map(|d| (d.uid, d.wb.clone()));
-        let ran = s.execute(id, st["params"].clone());
+        // A stored step is not the person: an `approve` it carries is not consent to run a macro.
+        let mut params = st["params"].clone();
+        if let Some(o) = params.as_object_mut() {
+            o.remove("approve");
+        }
+        let ran = s.execute(id, params);
+        // A step (a nested macro, an alias of a window command) that switched windows would point the
+        // rest of the script at another workbook: put the script's own back and stop.
+        if s.doc().map(|d| d.uid).ok() != Some(home) {
+            if let Some(i) = s.docs.iter().position(|d| d.uid == home) {
+                s.set_active(i);
+            }
+            return Err(bad("automate.runScript", format!("`{id}` switched to another workbook; scripts stay in their own")));
+        }
         // A step that asks the host to open a URL leaves the app: drop the request and stop.
         if s.ui_requests.get(before..).is_some_and(|new| new.iter().any(|r| matches!(r, crate::UiRequest::OpenUrl(_)))) {
             let mut i = 0;
