@@ -1827,6 +1827,54 @@ fn trim_references() {
 }
 
 #[test]
+fn lookup_of_an_empty_cell_stays_blank() {
+    // #374: B1 (the value for key "k") is empty.
+    let mut t = T::new();
+    t.set("A1", "k");
+    t.set("A2", "j");
+    t.set("B2", "v");
+    for (at, f, want) in [
+        ("D2", "=\"x\"&VLOOKUP(\"k\",A1:B2,2,0)&\"y\"", Value::from("xy")),
+        ("D3", "=CONCATENATE(\"x\",VLOOKUP(\"k\",A1:B2,2,0),\"y\")", Value::from("xy")),
+        ("D4", "=ISBLANK(XLOOKUP(\"k\",A1:A2,B1:B2))", Value::Bool(true)),
+        ("D5", "=\"x\"&XLOOKUP(\"k\",A1:A2,B1:B2)&\"y\"", Value::from("xy")),
+        // A bare lookup still shows 0, like a reference to an empty cell.
+        ("D8", "=VLOOKUP(\"k\",A1:B2,2,0)", Value::Number(0.0)),
+        // Arithmetic still reads the blank as 0.
+        ("D9", "=VLOOKUP(\"k\",A1:B2,2,0)+1", Value::Number(1.0)),
+        // A blank lookup given as an argument is still given, not omitted.
+        ("D10", "=FILTER(1,FALSE,VLOOKUP(\"k\",A1:B2,2,FALSE))", Value::Number(0.0)),
+        ("D11", "=XLOOKUP(\"z\",A1:A2,B1:B2,VLOOKUP(\"k\",A1:B2,2,0))", Value::Number(0.0)),
+        // The same holds per element when the call is lifted over an array of blank lookups.
+        ("D12", "=CEILING.MATH(6.7,VLOOKUP(\"k\",A1:B2,2,0))", Value::Number(0.0)),
+        ("D13", "=SUM(CEILING.MATH(6.7,VLOOKUP({\"k\",\"k\"},A1:B2,2,0)))", Value::Number(0.0)),
+        ("D14", "=FLOOR.MATH(6.7,VLOOKUP(\"k\",A1:B2,2,0))", Value::Number(0.0)),
+        ("D15", "=SUM(FLOOR.MATH(6.7,VLOOKUP({\"k\",\"k\"},A1:B2,2,0)))", Value::Number(0.0)),
+    ] {
+        t.set(at, f);
+        assert_eq!(t.get(at), want, "{f}");
+    }
+}
+
+#[test]
+fn blank_lookup_values_match_excel_windows_observation() {
+    // Excel 365 Windows 2609, build 16.0.20430.20032, black-box check 2026-10-13:
+    // A1="k", B1 and A2 genuinely empty.
+    // All three value lookups preserve blankness inside ISBLANK/concatenation.
+    let mut t = T::new();
+    t.set("A1", "k");
+    for (at, f, want) in [
+        ("D1", "=ISBLANK(VLOOKUP(\"k\",A1:B1,2,FALSE))", Value::Bool(true)),
+        ("D2", "=ISBLANK(HLOOKUP(\"k\",A1:A2,2,FALSE))", Value::Bool(true)),
+        ("D3", "=ISBLANK(LOOKUP(\"k\",A1:A1,B1:B1))", Value::Bool(true)),
+        ("D4", "=\"x\"&HLOOKUP(\"k\",A1:A2,2,FALSE)&\"y\"", Value::from("xy")),
+    ] {
+        t.set(at, f);
+        assert_eq!(t.get(at), want, "{f}");
+    }
+}
+
+#[test]
 fn cell_width_is_the_column_width_dialog_value_rounded() {
     // #735: Excel 365 values. Widths in px as `home.columnWidth {"chars"}` sets them
     // (chars * 7 + 5): 10.71 -> 80, 12 -> 89, 10.57 -> 79, 2.86 -> 25; B keeps the default 8.43 (64).
@@ -1922,6 +1970,119 @@ fn offset_extreme_arguments_return_ref() {
     }
 }
 
+/// `@` intersects a reference with the formula's row (a column range) or column (a row range);
+/// a 2D range both (circular when it includes the formula's cell); a range the formula does not
+/// line up with gives #VALUE!. An array gives its top-left value. Legacy formulas read from files use it where Excel intersects implicitly.
+#[test]
+fn implicit_intersection_operator() {
+    let mut t = T::new();
+    for (at, v) in [("A1", "1"), ("A2", "2"), ("A3", "3"), ("A5", "4"), ("B5", "5"), ("C5", "6")] {
+        t.set(at, v);
+    }
+    t.set("B2", "=TANH(@A1:A3)");
+    t.set("B7", "=TANH(@A5:C5)");
+    t.set("B3", "=@A1:C3");
+    t.set("B9", "=@A1:A3");
+    t.set("E9", "=@A5:C5");
+    t.set("D1", "=@{7,8;9,10}");
+    t.set("D2", "=@A2");
+    t.set("D3", "=SUM(@A1:A3)");
+    assert_eq!(t.num("B2"), 2f64.tanh());
+    assert_eq!(t.num("B7"), 5f64.tanh());
+    for at in ["B9", "E9"] {
+        assert_eq!(t.get(at), Value::Error(CellError::Value), "{at}");
+    }
+    // A 2D range that includes the formula's own cell is a circular reference (Excel shows 0).
+    assert_eq!(t.get("B3"), Value::Error(CellError::Circ));
+    // From another sheet a 2D range intersects on both row and column; outside it is #VALUE!.
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Other")));
+    for (at, input) in [("B2", "=@Sheet1!A1:C3"), ("C1", "=@Sheet1!A1:C3"), ("B9", "=@Sheet1!A1:C3"), ("E2", "=@Sheet1!A1:C3")] {
+        t.wb.sheet_mut(1).unwrap().cells.set(c(at), Cell::formula(Formula::new(input)));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    let other = |at: &str| t.wb.sheet(1).unwrap().value(c(at));
+    assert_eq!(other("B2"), Value::Number(2f64.tanh())); // Sheet1!B2
+    assert_eq!(other("C1"), Value::Number(0.0));
+    assert_eq!(other("B9"), Value::Error(CellError::Value));
+    assert_eq!(other("E2"), Value::Error(CellError::Value));
+    assert_eq!(t.num("D1"), 7.0);
+    assert_eq!(t.num("D2"), 2.0);
+    assert_eq!(t.num("D3"), 3.0);
+    // An array result shows its top-left value (T of a reference reads its top-left cell).
+    t.set("A11", "x");
+    t.set("C11", "y");
+    t.set("E1", "=@T(A11:C11)");
+    assert_eq!(t.get("E1"), Value::text("x"));
+    // Without `@` (a dynamic-array formula) the same formula spills.
+    t.set("F1", "=TANH(A1:A3)");
+    assert_eq!((t.num("F1"), t.num("F2"), t.num("F3")), (1f64.tanh(), 2f64.tanh(), 3f64.tanh()));
+}
+
+/// "Set precision as displayed": results are rounded to their cell's format before they are
+/// stored and before other formulas read them. Values observed in Excel (COM,
+/// `Workbook.PrecisionAsDisplayed = True`) with the same synthetic formulas.
+#[test]
+fn precision_as_displayed_rounds_results_by_cell_format() {
+    let fmt = |t: &mut T, at: &str, code: &str| {
+        let id = t.wb.styles.intern(gridcraft_model::Style { num_fmt: gridcraft_model::NumFmt::new(code), ..Default::default() });
+        t.wb.sheet_mut(0).unwrap().set_style(c(at), id);
+    };
+    let mut t = T::new();
+    t.set("A1", "=-130+657.91");
+    t.set("A2", "=A1*10");
+    t.set("A3", "=A1/7");
+    // Cross-cell: E2 rounds what it reads from E1; E1 itself (General) keeps full precision.
+    t.set("E1", "=10/3");
+    t.set("E2", "=E1");
+    t.set("E3", "=E2*10");
+    t.set("E4", "=E1*10");
+    // A spill: each element takes the format of the cell it lands in.
+    t.set("F1", "=SEQUENCE(3,1,0.123,0.111)");
+    t.set("G4", "=SUM(F1:F3)");
+    t.set("H1", "=TRUE");
+    t.set("H2", "=\"1.5\"");
+    // A conditional format rounds by the sign's section, not the one displayed: `[<1]0.00;0`
+    // shows 2+1/3 as `2` but stores 2.33, and stores -10/3 as -3.
+    t.set("J1", "=2+1/3");
+    t.set("J2", "=-10/3");
+    t.set("K1", "=J1*3");
+    t.set("K2", "=J2*3");
+    fmt(&mut t, "J1", "[<1]0.00;0");
+    fmt(&mut t, "J2", "[<1]0.00;0");
+    fmt(&mut t, "A1", "0");
+    fmt(&mut t, "A3", "0.0000");
+    fmt(&mut t, "E2", "0");
+    fmt(&mut t, "F1", "0.0");
+    fmt(&mut t, "F2", "0.0");
+    fmt(&mut t, "H1", "0");
+    fmt(&mut t, "H2", "0");
+    // Off: formats don't change values.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1"), -130.0 + 657.91);
+    assert_eq!(t.num("E2"), 10.0 / 3.0);
+    t.wb.calc.precision_as_displayed = true;
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (528.0, 5280.0, 75.4286));
+    assert_eq!((t.num("E1"), t.num("E2"), t.num("E3"), t.num("E4")), (10.0 / 3.0, 3.0, 30.0, 10.0 / 3.0 * 10.0));
+    let sh = t.wb.sheet(0).unwrap();
+    assert_eq!(
+        (sh.value(c("F1")), sh.value(c("F2")), sh.value(c("F3"))),
+        (Value::Number(0.1), Value::Number(0.2), Value::Number(0.123 + 0.111 * 2.0))
+    );
+    assert_eq!(t.num("G4"), 0.1 + 0.2 + (0.123 + 0.111 * 2.0));
+    assert_eq!((t.num("J1"), t.num("J2"), t.num("K1"), t.num("K2")), (2.33, -3.0, 2.33 * 3.0, -9.0));
+    // Booleans and text are left alone.
+    assert_eq!((t.get("H1"), t.get("H2")), (Value::Bool(true), Value::from("1.5")));
+    // An edit recalculates through the rounded values too.
+    t.set("A1", "=-130+657.41");
+    fmt(&mut t, "A1", "0");
+    t.calc.cells_changed(&mut t.wb, &[(0, c("A1"))]);
+    assert_eq!((t.num("A1"), t.num("A2")), (527.0, 5270.0));
+    // Off again: a recalculation brings back full precision.
+    t.wb.calc.precision_as_displayed = false;
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A2"), (-130.0 + 657.41) * 10.0);
+}
 #[test]
 fn analysis_toolpak_value_params_reject_multi_cell_references() {
     // Excel 365 (observed): EOMONTH, WORKDAY, COUPDAYS, BIN2DEC... give #VALUE! for a reference to more
@@ -2006,7 +2167,6 @@ fn analysis_toolpak_value_params_reject_multi_cell_references() {
         t.set("H5", "");
     }
 }
-
 /// A formula reading one further down (or on a later sheet) is calculated on demand, inside the
 /// formula that reads it. Chains of thousands of such formulas, common in financial models, used
 /// to overflow the stack (or give `#CIRC!` past 2,000 levels); they now calculate in full.
@@ -2311,6 +2471,354 @@ fn loan_schedule_residue_keeps_excels_sign() {
         other => panic!("O7: expected a number, got {other:?}"),
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
+}
+
+#[test]
+fn clearing_a_cell_unblocks_the_arrays_above_and_left_of_it() {
+    let mut t = T::new();
+    for r in 1..=50 {
+        t.set(&format!("D{r}"), &format!("={r}*2"));
+    }
+    t.set("B2", "7");
+    t.set("B1", "=SEQUENCE(3)");
+    t.set("C1", "=SEQUENCE(1,3)");
+    t.set("A20", "=B1+1");
+    assert_eq!(t.get("B1"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("A20"), Value::Error(CellError::Spill));
+    // Emptied: the array above it spills.
+    t.wb.sheet_mut(0).unwrap().cells.remove(c("B2"));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("B2"))]);
+    assert_eq!(t.num("B3"), 3.0);
+    assert_eq!(t.num("A20"), 2.0);
+    // Typing over the area blocks it again; far from it, nothing is disturbed.
+    t.set("B3", "9");
+    assert_eq!(t.get("B1"), Value::Error(CellError::Spill));
+    t.set("D50", "1");
+    assert_eq!(t.get("B1"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("D49"), 98.0);
+    // Clearing it again frees the array.
+    t.set("B3", "");
+    assert_eq!(t.num("B3"), 3.0);
+}
+
+/// A sheet with `#SPILL!` cells in rows 0..64, columns 100..16384 (as blocked arrays leave), none
+/// near column A.
+fn spill_error_field() -> T {
+    let mut t = T::new();
+    let sh = t.wb.sheet_mut(0).unwrap();
+    for r in 0..64 {
+        for col in 100..16_384 {
+            sh.cells.set(CellRef::new(r, col), Cell::value(Value::Error(CellError::Spill)));
+        }
+    }
+    t.calc.recalc_all(&mut t.wb);
+    t
+}
+
+#[test]
+fn an_edit_far_left_of_many_spill_errors_does_not_disturb_them() {
+    let mut t = spill_error_field();
+    t.set("A65", "5");
+    assert_eq!(t.num("A65"), 5.0);
+    assert_eq!(t.get("CW1"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("XFD64"), Value::Error(CellError::Spill));
+    // A blocked formula inside the window is still found when a cell to its right is cleared.
+    t.set("DA66", "7");
+    t.set("CZ66", "=SEQUENCE(1,3)");
+    assert_eq!(t.get("CZ66"), Value::Error(CellError::Spill));
+    t.wb.sheet_mut(0).unwrap().cells.remove(c("DA66"));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("DA66"))]);
+    assert_eq!(t.num("DA66"), 2.0);
+}
+
+/// Probe: single-cell edits in column A below a block of `#SPILL!` cells to its right.
+/// `cargo test -p gridcraft-calc --release -- --ignored --nocapture spill_error_field_probe`
+#[test]
+#[ignore]
+#[allow(clippy::disallowed_methods)]
+fn spill_error_field_probe() {
+    let mut t = spill_error_field();
+    let mut best = std::time::Duration::MAX;
+    for i in 0..9 {
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            t.set("A65", &format!("{i}"));
+        }
+        best = best.min(start.elapsed());
+    }
+    eprintln!("100 edits of A65 beside 1,040,000 spill errors: best of 9 = {best:?}");
+}
+
+/// A full-height column spill (inside the 10,000,000-cell cap) and a paste of 17 cells elsewhere:
+/// the paste must not register the spill's 65,536 blocks, and a paste over the spill must still
+/// block it.
+fn tall_spill_book() -> T {
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(1048576)");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1048576"), 1_048_576.0);
+    t
+}
+
+fn paste_into(t: &mut T, cells: &[(u32, u32)]) {
+    let changed: Vec<(usize, CellRef)> = cells.iter().map(|&(r, c)| (0, CellRef::new(r, c))).collect();
+    for k in &changed {
+        t.wb.sheet_mut(0).unwrap().cells.set(k.1, Cell::value(Value::Number(1.0)));
+    }
+    t.calc.cells_changed(&mut t.wb, &changed);
+}
+
+#[test]
+fn a_paste_beside_a_tall_spill_leaves_it_alone_and_one_over_it_blocks_it() {
+    let mut t = tall_spill_book();
+    let beside: Vec<(u32, u32)> = (0..17).map(|i| (i, 5)).collect();
+    paste_into(&mut t, &beside);
+    assert_eq!(t.num("A1048576"), 1_048_576.0);
+    let over: Vec<(u32, u32)> = (0..17).map(|i| (500_000 + i, if i == 9 { 0 } else { 5 })).collect();
+    paste_into(&mut t, &over);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Spill));
+}
+
+/// Probe: `cells_changed` for a 17-cell paste in column F beside the tall spill.
+/// `cargo test -p gridcraft-calc --release -- --ignored --nocapture tall_spill_paste_probe`
+#[test]
+#[ignore]
+#[allow(clippy::disallowed_methods)]
+fn tall_spill_paste_probe() {
+    let mut t = tall_spill_book();
+    let mut best = std::time::Duration::MAX;
+    for round in 0..9u32 {
+        let beside: Vec<(u32, u32)> = (0..17).map(|i| (round * 20 + i, 5)).collect();
+        let start = std::time::Instant::now();
+        paste_into(&mut t, &beside);
+        best = best.min(start.elapsed());
+    }
+    eprintln!("tall spill, 17-cell paste beside it: best of 9 = {best:?}");
+}
+
+#[test]
+fn many_spills_are_read_and_blocked_by_a_paste() {
+    let mut t = T::new();
+    // 40 arrays of 3 rows side by side in rows 1-3, and a reader of a range over two of them.
+    for i in 0..40u32 {
+        let anchor = CellRef::new(0, 2 * i);
+        t.wb.sheet_mut(0).unwrap().cells.set(anchor, Cell::formula(Formula::new(&format!("=SEQUENCE(3,1,{})", 10 * i))));
+    }
+    t.set("A10", "=SUM(C1:F3)");
+    t.set("A12", "=COUNT(C1:F3)");
+    t.set("A11", "=C2*1");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A10"), (10 + 11 + 12 + 20 + 21 + 22) as f64);
+    assert_eq!(t.num("A11"), 11.0);
+    assert_eq!(t.num("A12"), 6.0);
+    // Pasting 20 cells (more than one spill's width worth, so the changed set is indexed) over
+    // the second row of every other array blocks those arrays; the rest are unchanged.
+    let changed: Vec<(usize, CellRef)> = (0..20u32).map(|i| (0, CellRef::new(1, 4 * i))).collect();
+    for k in &changed {
+        t.wb.sheet_mut(0).unwrap().cells.set(k.1, Cell::value(Value::Number(1.0)));
+    }
+    t.calc.cells_changed(&mut t.wb, &changed);
+    assert_eq!(t.get("E1"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("C1"), Value::Number(10.0));
+    assert_eq!(t.get("G2"), Value::Number(31.0));
+    assert_eq!(t.get("A10"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("A12"), 4.0);
+}
+
+#[test]
+fn a_paste_over_small_and_tall_spills_blocks_those_it_touches() {
+    let mut t = T::new();
+    for i in 0..40u32 {
+        t.wb.sheet_mut(0).unwrap().cells.set(CellRef::new(0, 2 * i), Cell::formula(Formula::new("=SEQUENCE(3)")));
+    }
+    t.wb.sheet_mut(0).unwrap().cells.set(CellRef::new(0, 200), Cell::formula(Formula::new("=SEQUENCE(1048576)")));
+    t.calc.recalc_all(&mut t.wb);
+    // 20 cells: the middle row of the small arrays in columns 0, 8, 16 ... 72 (columns 80 and up hit
+    // nothing), and one deep inside the tall one.
+    let mut cells: Vec<(u32, u32)> = (0..19u32).map(|i| (1, 8 * i)).collect();
+    cells.push((700_000, 200));
+    paste_into(&mut t, &cells);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("GS1"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("C1"), 1.0);
+    assert_eq!(t.num("C3"), 3.0);
+    assert_eq!(t.get("I1"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("E3"), 3.0);
+}
+
+#[test]
+fn a_big_paste_on_one_sheet_and_one_cell_over_many_spills_on_another() {
+    let mut t = T::new();
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Data")));
+    for i in 0..1_500u32 {
+        t.wb.sheet_mut(1).unwrap().cells.set(CellRef::new(4 * i, 0), Cell::formula(Formula::new(&format!("=SEQUENCE(3,1,{})", 10 * i))));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.wb.sheet(1).unwrap().value(CellRef::new(4 * 700 + 2, 0)), Value::Number(7002.0));
+    // 5000 cells pasted on the first sheet, one over the middle of the 701st array on the second.
+    let mut changed: Vec<(usize, CellRef)> = (0..5_000u32).map(|i| (0, CellRef::new(i / 50, i % 50))).collect();
+    changed.push((1, CellRef::new(4 * 700 + 1, 0)));
+    for k in &changed {
+        t.wb.sheet_mut(k.0).unwrap().cells.set(k.1, Cell::value(Value::Number(1.0)));
+    }
+    t.calc.cells_changed(&mut t.wb, &changed);
+    let data = t.wb.sheet(1).unwrap();
+    assert_eq!(data.value(CellRef::new(4 * 700, 0)), Value::Error(CellError::Spill));
+    assert_eq!(data.value(CellRef::new(4 * 699 + 2, 0)), Value::Number(6992.0));
+    assert_eq!(data.value(CellRef::new(4 * 701 + 2, 0)), Value::Number(7012.0));
+}
+
+/// `SUM`, `COUNT` and `AVERAGE` over blocks of constants share one pass-wide answer per block, and a
+/// running total extends the shorter block's. Every result must equal the left-to-right sum of the
+/// cells, bit for bit, with text, blanks, errors, formulas and a nonzero start in the mix.
+#[test]
+fn aggregates_over_ranges_match_a_plain_fold_bit_for_bit() {
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self, n: u64) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0 % n
+        }
+    }
+    let nums = [0.1, 0.2, 0.3, 1e16, -1e16, 1.0, 3.7, -0.0, 12345.678, 1e-9, 7.0];
+    let rows = 40u32;
+    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    let mut wb = Workbook::new();
+    let fresh = |rng: &mut Rng, plain: bool| match rng.next(if plain { 8 } else { 14 }) {
+        0 => Cell::value(Value::text("t")),
+        1 => Cell::default(),
+        2 => Cell::value(Value::Bool(true)),
+        3 if !plain => Cell::value(Value::Error(CellError::NA)),
+        4 if !plain => Cell::formula(Formula::new("=A1*2")),
+        5 if !plain => Cell::formula(Formula::new("=\"x\"&B2")),
+        _ => Cell::value(Value::Number(nums[rng.next(nums.len() as u64) as usize])),
+    };
+    // Columns A:C mostly numbers; E holds a formula column and some errors only in a few rows.
+    for r in 0..rows {
+        for col in 0..3 {
+            let plain = !(r % 13 == 7 && col == 1);
+            wb.sheet_mut(0).unwrap().cells.set(CellRef::new(r, col), fresh(&mut rng, plain));
+        }
+    }
+    // Formulas in column H and up: (function, optional leading number, blocks).
+    type Oracle<'a> = (CellRef, &'a str, Option<f64>, Vec<(u32, u32, u32, u32)>);
+    let mut oracle: Vec<Oracle> = vec![];
+    let funcs = ["SUM", "COUNT", "AVERAGE"];
+    let mut at = 0;
+    let mut add = |wb: &mut Workbook, f: &'static str, lead: Option<f64>, blocks: Vec<(u32, u32, u32, u32)>| {
+        let args: Vec<String> = blocks
+            .iter()
+            .map(|&(r0, c0, r1, c1)| format!("{}{}:{}{}", (b'A' + c0 as u8) as char, r0 + 1, (b'A' + c1 as u8) as char, r1 + 1))
+            .collect();
+        let lead_s = lead.map(|l| format!("{l:e},")).unwrap_or_default();
+        let cell = CellRef::new(at % rows, 7 + at / rows);
+        wb.sheet_mut(0).unwrap().cells.set(cell, Cell::formula(Formula::new(&format!("={f}({lead_s}{})", args.join(",")))));
+        oracle.push((cell, f, lead, blocks));
+        at += 1;
+    };
+    // Running totals over a clean column and over a column with an error further down.
+    for r in 0..rows {
+        add(&mut wb, "SUM", None, vec![(0, 0, r, 0)]);
+        add(&mut wb, "SUM", None, vec![(0, 1, r, 1)]);
+        add(&mut wb, "COUNT", None, vec![(0, 0, r, 2)]);
+    }
+    for _ in 0..120 {
+        let (r0, r1) = (rng.next(rows as u64) as u32, rng.next(rows as u64) as u32);
+        let (c0, c1) = (rng.next(3) as u32, rng.next(3) as u32);
+        let n = 1 + rng.next(2) as usize;
+        let blocks = (0..n).map(|_| (r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1))).collect();
+        let lead = [None, Some(1e16), Some(0.5), Some(2.0)][rng.next(4) as usize];
+        let f = funcs[rng.next(3) as usize];
+        add(&mut wb, f, lead, blocks);
+    }
+    let check = |wb: &Workbook, when: &str| {
+        let sh = wb.sheet(0).unwrap();
+        for (cell, f, lead, blocks) in &oracle {
+            let (mut sum, mut count, mut error) = (lead.unwrap_or(0.0), u64::from(lead.is_some()), None);
+            for &(r0, c0, r1, c1) in blocks {
+                for r in r0..=r1 {
+                    for col in c0..=c1 {
+                        match sh.value(CellRef::new(r, col)) {
+                            Value::Number(n) => {
+                                sum += n;
+                                count += 1;
+                            }
+                            Value::Error(e) if *f != "COUNT" => error = error.or(Some(e)),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            let want = match (error, *f) {
+                (Some(e), _) => Value::Error(e),
+                (_, "SUM") => Value::number(sum),
+                (_, "COUNT") => Value::number(count as f64),
+                (_, _) if count == 0 => Value::Error(CellError::Div0),
+                _ => Value::number(sum / count as f64),
+            };
+            let got = sh.value(*cell);
+            let same = match (&got, &want) {
+                (Value::Number(a), Value::Number(b)) => a.to_bits() == b.to_bits(),
+                (a, b) => a == b,
+            };
+            assert!(same, "{when}: {:?} = {:?}, plain fold {:?}", cell, got, want);
+        }
+    };
+    let mut calc = Calc::new();
+    calc.rebuild(&wb);
+    calc.recalc_all(&mut wb);
+    check(&wb, "full recalc");
+    for round in 0..30 {
+        let mut changed = vec![];
+        for _ in 0..1 + rng.next(4) {
+            let at = CellRef::new(rng.next(rows as u64) as u32, rng.next(3) as u32);
+            wb.sheet_mut(0).unwrap().cells.set(at, fresh(&mut rng, round % 2 == 0));
+            changed.push((0, at));
+        }
+        calc.cells_changed(&mut wb, &changed);
+        check(&wb, &format!("edit round {round}"));
+    }
+}
+
+/// `rebuild` and `cells_changed` read formulas through `Formula::with_expr`, which borrows the
+/// cached tree or parses on the fly. The dependency graph must come out the same for formulas that
+/// carry their tree and for formulas that only carry their text (as after loading a file).
+#[test]
+fn graph_built_from_text_only_formulas_matches_cached() {
+    fn run(cached: bool) -> Vec<Value> {
+        let mut t = T::new();
+        t.set("A1", "2");
+        for (at, f) in [("B1", "=A1*10"), ("C1", "=B1+A1"), ("D1", "=SUM(A1:C1)"), ("E1", "=NOPE(")] {
+            // E1 does not parse, so it has no tree either way and only covers the `None` branch.
+            let mut formula = Formula::new(f);
+            if !cached {
+                formula.expr = None;
+            }
+            t.wb.sheet_mut(0).unwrap().cells.set(c(at), Cell::formula(formula));
+        }
+        t.calc.rebuild(&t.wb);
+        t.calc.recalc_all(&mut t.wb);
+        let mut out: Vec<Value> = ["B1", "C1", "D1", "E1"].iter().map(|a| t.get(a)).collect();
+        // Editing the input must reach the dependents through the rebuilt graph.
+        t.set("A1", "5");
+        out.extend(["B1", "C1", "D1"].iter().map(|a| t.get(a)));
+        // A text-only formula that is rewritten through `cells_changed` joins the graph too.
+        let mut formula = Formula::new("=A1+100");
+        if !cached {
+            formula.expr = None;
+        }
+        t.wb.sheet_mut(0).unwrap().cells.set(c("F1"), Cell::formula(formula));
+        t.calc.cells_changed(&mut t.wb, &[(0, c("F1"))]);
+        t.set("A1", "7");
+        out.push(t.get("F1"));
+        out
+    }
+    let cached = run(true);
+    assert_eq!(cached, run(false));
+    assert_eq!(cached[4], Value::Number(50.0));
+    assert_eq!(cached[7], Value::Number(107.0));
 }
 
 /// Makes `at` a Python cell showing `cached` (its value before this calculation), with `result`

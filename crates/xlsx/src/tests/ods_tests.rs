@@ -200,6 +200,18 @@ fn ods_expansion_bounds_stop_small_repeat_bombs() {
         "x".repeat(1024)
     );
     assert!(matches!(read_ods(&ods(&text)), Err(IoError::TooLarge(_))));
+    // One row of cells each just under the 1 MiB cell limit, past 64 MiB in all: refused while
+    // the row is read, before it holds them all. The row's end is never reached.
+    let long = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "x".repeat(1024 * 1024 - 1));
+    let cells = ods(&format!(r#"<table:table table:name="Data"><table:table-row>{}"#, long.repeat(65)));
+    assert!(matches!(read_ods(&cells), Err(IoError::TooLarge(_))));
+    // A row repeated once more than its cells' text allows is refused too, and one that fits reads.
+    let cell = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "y".repeat(1024));
+    let rows = |n: u32| {
+        ods(&format!(r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="{n}">{cell}</table:table-row></table:table>"#))
+    };
+    assert!(read_ods(&rows(65_536)).is_ok());
+    assert!(matches!(read_ods(&rows(65_537)), Err(IoError::TooLarge(_))));
 }
 
 #[test]

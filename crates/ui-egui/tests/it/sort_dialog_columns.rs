@@ -34,6 +34,18 @@ fn sort_dialog_seeds_the_active_column() {
     assert_eq!(col(&h), "B", "Sort by starts on the column the cursor is in, not A");
 }
 
+/// #3446: the closed "Sort by" box shows the column's name next to its letter,
+/// as the open list does ("B: Revenue", not just "B").
+#[test]
+fn closed_column_box_shows_the_column_name() {
+    use egui::accesskit::Role;
+    let mut h = harness(sales());
+    h.state_mut().open_dialog("sort", json!({}));
+    h.run_steps(2);
+    let shown: Vec<String> = h.get_all_by_role(Role::ComboBox).filter_map(|n| n.value()).collect();
+    assert!(shown.iter().any(|v| v == "B: Revenue"), "the Sort by box shows the column name: {shown:?}");
+}
+
 #[test]
 fn add_level_picks_a_column_no_level_uses_yet() {
     let mut h = harness(sales());
