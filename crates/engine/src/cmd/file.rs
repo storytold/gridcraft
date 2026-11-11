@@ -8,7 +8,7 @@ use crate::DocState;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
-        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {template?: bool} to create a new unsaved workbook from an xltx/xltm without changing its source, {password} for a password-protected workbook and {csvAsText?: bool} to keep every csv/tsv/txt field as text, with no number or date conversion (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)", always, open),
+        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {template?: bool} to create a new unsaved workbook without changing its source; .xltx/.xltm names and paths are detected as templates case-insensitively, {password} opens a password-protected workbook and {csvAsText?: bool} keeps every csv/tsv/txt field as text, with no number or date conversion (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)", always, open),
         cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
         cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
@@ -47,8 +47,8 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     // Opening a template must always create a new unsaved workbook. The explicit flag is used by
     // File › New, while recognizing the extension also protects a template opened from Explorer.
     let template = bool_param(p, "template").unwrap_or(false)
-        || str_param(p, "path").is_some_and(is_template_path)
-        || str_param(p, "name").is_some_and(is_template_path);
+        || str_param(p, "path").is_some_and(crate::io::is_template_path)
+        || str_param(p, "name").is_some_and(crate::io::is_template_path);
     let (name, bytes) = if let Some(b) = str_param(p, "base64") {
         (str_param(p, "name").unwrap_or("Book.xlsx").to_string(), crate::io::base64_decode(b).ok_or_else(|| bad("file.open", "invalid base64"))?)
     } else if let Some(path) = str_param(p, "path") {
@@ -113,14 +113,6 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     )
 }
 
-/// Whether `name` identifies an Excel template rather than an ordinary workbook.
-fn is_template_path(name: &str) -> bool {
-    std::path::Path::new(name)
-        .extension()
-        .and_then(std::ffi::OsStr::to_str)
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("xltx") || extension.eq_ignore_ascii_case("xltm"))
-}
-
 fn save(s: &mut Session, p: &Json) -> Result<Json> {
     let path = match str_param(p, "path").map(str::to_string).or_else(|| s.active().and_then(|d| d.path.clone())) {
         Some(p) => p,
@@ -174,7 +166,7 @@ fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     // A template title is already the complete stem (`Forecast.v2`, not `Forecast.v2.xltx`).
     // Taking `file_stem` from it again would discard the part after its final period.
     let title = d.display_title();
-    let stem = if d.path.is_none() && d.wb.source_path.as_ref().is_some_and(|p| is_template_path(&p.to_string_lossy())) {
+    let stem = if d.path.is_none() && d.wb.source_path.as_ref().is_some_and(|p| crate::io::is_template_path(&p.to_string_lossy())) {
         title
     } else {
         std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book").to_string()

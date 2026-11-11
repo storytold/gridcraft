@@ -364,7 +364,6 @@ fn new_tiles(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outc
     let folder = app.ui.personal_templates_location.trim();
     if !folder.is_empty() {
         ui.add_space(22.0);
-        ui.heading("Personal templates");
         ui.horizontal(|ui| {
             ui.heading("Personal templates");
             if ui.small_button("Refresh").clicked() {
@@ -384,13 +383,15 @@ fn new_tiles(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outc
             Some(Err(error)) => dim(ui, &format!("Could not read personal templates: {error}")),
             Some(Ok(templates)) if templates.is_empty() => dim(ui, "No .xltx or .xltm templates found in this folder."),
             Some(Ok(templates)) => {
-                for path in templates {
-                    let label = path.file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Template");
-                    if ui.button(label).clicked() {
-                        app.open_path(&path.to_string_lossy());
-                        out.close = true;
+                egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                    for path in templates {
+                        let label = path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("Template");
+                        if ui.button(label).on_hover_text(path.to_string_lossy()).clicked() {
+                            app.open_path(&path.to_string_lossy());
+                            out.close = true;
+                        }
                     }
-                }
+                });
             }
         }
     }
@@ -405,17 +406,22 @@ fn split_path(path: &str) -> (String, String) {
 }
 
 /// One scan at a time keeps a slow personal-template folder off the UI thread.
+#[cfg(not(target_arch = "wasm32"))]
 static TEMPLATE_ASKING: AtomicBool = AtomicBool::new(false);
+
+/// Shared slot filled by the background personal-template scan.
+type TemplateScan = Arc<Mutex<Option<Result<Vec<std::path::PathBuf>, String>>>>;
 
 /// Cached result of scanning a personal templates folder.
 #[derive(Clone, Debug, Default)]
 struct TemplateFiles {
     folder: String,
-    found: Arc<Mutex<Option<Result<Vec<std::path::PathBuf>, String>>>>,
+    found: TemplateScan,
 }
 
 impl TemplateFiles {
     /// Starts a scan when `folder` changes and returns its result once the worker finishes.
+    #[cfg(not(target_arch = "wasm32"))]
     fn known(&mut self, ctx: &egui::Context, folder: &str) -> Option<Result<Vec<std::path::PathBuf>, String>> {
         if self.folder != folder {
             *self.found.lock().unwrap_or_else(PoisonError::into_inner) = None;
@@ -438,7 +444,7 @@ impl TemplateFiles {
 
 /// Reads a personal templates folder on a worker and asks the UI to repaint with the result.
 #[cfg(not(target_arch = "wasm32"))]
-fn ask_templates(ctx: egui::Context, folder: String, found: Arc<Mutex<Option<Result<Vec<std::path::PathBuf>, String>>>>) -> bool {
+fn ask_templates(ctx: egui::Context, folder: String, found: TemplateScan) -> bool {
     struct Done;
     impl Drop for Done {
         fn drop(&mut self) {
@@ -469,23 +475,10 @@ fn scan_templates(folder: &str) -> Result<Vec<std::path::PathBuf>, String> {
         .collect::<Result<Vec<_>, String>>()?;
     let mut templates: Vec<_> = entries
         .into_iter()
-        .filter_map(|(path, is_file)| {
-            (is_file
-                && path
-                    .extension()
-                    .and_then(std::ffi::OsStr::to_str)
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("xltx") || extension.eq_ignore_ascii_case("xltm")))
-            .then_some(path)
-        })
+        .filter_map(|(path, is_file)| (is_file && gridcraft_engine::io::is_template_path(&path.to_string_lossy())).then_some(path))
         .collect();
     templates.sort();
     Ok(templates)
-}
-
-/// The web build cannot enumerate local folders.
-#[cfg(target_arch = "wasm32")]
-fn ask_templates(_ctx: egui::Context, _folder: String, _found: Arc<Mutex<Option<Result<Vec<std::path::PathBuf>, String>>>>) -> bool {
-    false
 }
 
 /// Width of the column that tells when a recent workbook was last changed.
@@ -1031,6 +1024,14 @@ mod tests {
         assert_eq!(split_path("Budget.xlsx"), ("Budget.xlsx".into(), "".into()));
     }
 
+    #[test]
+    fn personal_template_location_persists_and_defaults_for_old_preferences() {
+        let state = crate::UiState { personal_templates_location: "/templates".into(), ..Default::default() };
+        let restored: crate::UiState = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        assert_eq!(restored.personal_templates_location, "/templates");
+        assert!(serde_json::from_str::<crate::UiState>("{}").unwrap().personal_templates_location.is_empty());
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn personal_template_scan_filters_and_reports_errors() {
@@ -1039,14 +1040,19 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("Budget.xltx"), b"template").unwrap();
         std::fs::write(dir.join("Macro.xltm"), b"template").unwrap();
+        std::fs::write(dir.join("Upper.XLTX"), b"template").unwrap();
         std::fs::write(dir.join("Ignore.xlsx"), b"workbook").unwrap();
+        std::fs::create_dir(dir.join("Folder.xltx")).unwrap();
 
         let names: Vec<_> = scan_templates(&dir.to_string_lossy())
             .unwrap()
             .into_iter()
             .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, ["Budget.xltx", "Macro.xltm"]);
+        assert_eq!(names, ["Budget.xltx", "Macro.xltm", "Upper.XLTX"]);
+        let empty = dir.join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        assert!(scan_templates(&empty.to_string_lossy()).unwrap().is_empty());
         assert!(scan_templates(&dir.join("missing").to_string_lossy()).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
