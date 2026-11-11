@@ -335,7 +335,7 @@ fn check_input(wb: &Workbook, input: &gridcraft_model::NamedInput, place: Place)
                 gridcraft_model::ColType::Number => v.is_number(),
                 gridcraft_model::ColType::Text => v.is_text(),
                 gridcraft_model::ColType::Bool => matches!(v, Value::Bool(_)),
-                gridcraft_model::ColType::Date => v.is_number() && crate::display::number_format(&date()).is_date(),
+                gridcraft_model::ColType::Date => v.is_number() && crate::display::parsed(&date()).is_date(),
             };
             if !ok {
                 wrong.push((c, holds(&v, ty)));

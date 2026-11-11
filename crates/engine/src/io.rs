@@ -9,6 +9,13 @@ use crate::{EngineError, Result};
 
 mod sylk;
 
+/// The function library's answers to what the XLSX and XLS readers and the XLSX writer need to know about functions
+/// (which names are built in, which parameters take a single value).
+pub const XLSX_FUNCTIONS: gridcraft_xlsx::FunctionInfo = gridcraft_xlsx::FunctionInfo {
+    is_builtin: |name| gridcraft_functions::lookup(name).is_some(),
+    is_scalar_arg: |name, i| gridcraft_functions::lookup(name).is_none_or(|s| s.is_scalar_arg(i)),
+};
+
 /// File formats GridCraft reads or writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileKind {
@@ -264,7 +271,8 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
     let kind = FileKind::from_path(name);
     let sniffed = gridcraft_xlsx::sniff(bytes);
     if sniffed == gridcraft_xlsx::Format::Xls {
-        let (wb, report) = gridcraft_xlsx::read_xls(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
+        let (wb, report) =
+            gridcraft_xlsx::read_xls_with(bytes, XLSX_FUNCTIONS).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
         return Ok((wb, report.warnings));
     }
     if sniffed == gridcraft_xlsx::Format::LegacyBinary {
@@ -289,12 +297,13 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
     // Text named `.xlsx` is read as text.
     if sniffed == gridcraft_xlsx::Format::Xlsx || (kind == Some(FileKind::Xlsx) && sniffed != gridcraft_xlsx::Format::Csv) {
         // Google Sheets' export wrapper is read as the formula inside when GridCraft calculates it (#2871).
-        let (wb, report) = gridcraft_xlsx::read_xlsx_with(bytes, &gridcraft_calc::is_known_function).map_err(|e| {
-            EngineError::Other(match (&e, gridcraft_xlsx::oversized_part(bytes)) {
-                (gridcraft_xlsx::IoError::TooLarge(_), Some((part, size))) => part_too_large_message(name, &part, size),
-                _ => format!("We can't open '{name}': {e}"),
-            })
-        })?;
+        let (wb, report) = gridcraft_xlsx::read_xlsx_with(bytes, (XLSX_FUNCTIONS, &gridcraft_calc::is_known_function as &dyn Fn(&str) -> bool))
+            .map_err(|e| {
+                EngineError::Other(match (&e, gridcraft_xlsx::oversized_part(bytes)) {
+                    (gridcraft_xlsx::IoError::TooLarge(_), Some((part, size))) => part_too_large_message(name, &part, size),
+                    _ => format!("We can't open '{name}': {e}"),
+                })
+            })?;
         return Ok((wb, report.warnings));
     }
     if let Some(read) = read_html_table(name, kind, bytes, csv_as_text) {
@@ -502,7 +511,7 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
                 None => named,
             };
             let book = std::path::Path::new(path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default();
-            gridcraft_xlsx::write_xlsx_named(named.as_ref().unwrap_or(wb), gridcraft_xlsx::XlsxKind::from_path(path), book)
+            gridcraft_xlsx::write_xlsx_named_with(named.as_ref().unwrap_or(wb), gridcraft_xlsx::XlsxKind::from_path(path), book, XLSX_FUNCTIONS)
                 .map_err(|e| EngineError::Other(e.to_string()))
         }
         FileKind::Xls => {
@@ -567,7 +576,7 @@ pub fn csv_values_bytes(wb: &Workbook) -> Result<Vec<u8>> {
     let Some(sh) = wb.sheet(wb.active_sheet()) else { return Ok(Vec::new()) };
     gridcraft_xlsx::write_csv(sh, wb.csv_delimiter.unwrap_or(b','), |c| match sh.value(c) {
         gridcraft_core::Value::Number(n) if n.is_finite() => {
-            let shape = crate::display::number_format(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).date_shape(n);
+            let shape = crate::display::parsed(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).date_shape(n);
             match shape.zip(gridcraft_core::date::datetime_from_serial(wb.date_system, n)) {
                 Some(((date, time), d)) => iso(&d, date, time),
                 None => n.to_string(),
@@ -879,12 +888,12 @@ thread_local! {
 /// While one is alive, [`read_file`] and [`write_file`] on this thread refuse every path: a
 /// stored script's steps run inside one (#2178), so no command reaches the file system from a
 /// script whatever its parameters are called. Dropping it (also on unwind) lifts the refusal.
-pub(crate) struct ScriptSandbox(());
+pub struct ScriptSandbox(std::marker::PhantomData<*const ()>);
 
 impl ScriptSandbox {
-    pub(crate) fn enter() -> Self {
+    pub fn enter() -> Self {
         let _ = SCRIPT_SANDBOX.try_with(|c| c.set(c.get().saturating_add(1)));
-        ScriptSandbox(())
+        ScriptSandbox(std::marker::PhantomData)
     }
 }
 
@@ -912,6 +921,12 @@ const MAX_READ_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
     use std::io::Read;
     script_sandbox_check(path)?;
+    // Checked before opening: opening a FIFO nobody writes to blocks the calling (GUI) thread.
+    // shortcut: a FIFO swapped in between this check and the open still blocks; close that with
+    // O_NONBLOCK when the crate takes a libc dependency.
+    if !std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
+        return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
+    }
     let f = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     // A symlink to an endless device reports length 0 but streams forever, so metadata
     // alone never bounds the read: require a real file and cap the bytes actually taken.
@@ -933,24 +948,33 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
-/// Creates an exclusively owned temporary file beside the destination, with its prior permissions when available.
+/// Creates an exclusively owned temporary sibling and restores the destination's group and permissions.
 #[cfg(not(target_arch = "wasm32"))]
-fn create_save_temp(path: &std::path::Path, prior: Option<&std::fs::Permissions>) -> std::io::Result<tempfile::NamedTempFile> {
+fn create_save_temp(path: &std::path::Path, prior: Option<&std::fs::Metadata>) -> std::io::Result<tempfile::NamedTempFile> {
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
     let mut builder = tempfile::Builder::new();
     builder.prefix(".gridcraft-save-").suffix(".sctmp");
     #[cfg(unix)]
-    if let Some(p) = prior {
-        builder.permissions(p.clone());
+    if prior.is_some() {
+        use std::os::unix::fs::PermissionsExt;
+        // The temporary file has the writer's group until fchown succeeds; prevent
+        // that group from opening the file before its original group is restored.
+        builder.permissions(std::fs::Permissions::from_mode(0o600));
     }
     let temp = builder.tempfile_in(parent)?;
-    if let Some(p) = prior {
-        // The mode used at creation is masked by umask on Unix. Restore the
-        // destination's mode after opening, before replacing it.
+    if let Some(metadata) = prior {
         #[cfg(unix)]
-        temp.as_file().set_permissions(p.clone())?;
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let file = temp.as_file();
+            let _ = std::os::unix::fs::fchown(file, None, Some(metadata.gid()));
+            let group_kept = file.metadata()?.gid() == metadata.gid();
+            // If the original group cannot be restored, never grant its access
+            // bits to the temporary file's different group.
+            file.set_permissions(std::fs::Permissions::from_mode(restored_mode(metadata.mode(), group_kept)))?;
+        }
         #[cfg(not(unix))]
-        let _ = temp.as_file().set_permissions(p.clone());
+        let _ = temp.as_file().set_permissions(metadata.permissions());
     }
     Ok(temp)
 }
@@ -987,8 +1011,9 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     let metadata = save_metadata(path)?;
     #[cfg(not(windows))]
     let metadata = std::fs::metadata(path).ok();
-    let prior = metadata.map(|m| m.permissions());
-    let mut temp = create_save_temp(std::path::Path::new(path), prior.as_ref()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    #[cfg(windows)]
+    let prior = metadata.as_ref().map(std::fs::Metadata::permissions);
+    let mut temp = create_save_temp(std::path::Path::new(path), metadata.as_ref()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     temp.write_all(bytes).and_then(|()| temp.flush()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     #[cfg(windows)]
     {
@@ -1022,6 +1047,13 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     }
     #[cfg(not(windows))]
     temp.persist(path).map(|_| ()).map_err(|e| EngineError::Other(format!("{path}: {}", e.error)))
+}
+
+/// The mode a saved file gets from the file it replaces (`old`): all of it when its group was
+/// restored; without the group, the owner and other bits only.
+#[cfg(unix)]
+fn restored_mode(old: u32, group_kept: bool) -> u32 {
+    if group_kept { old & 0o7777 } else { old & 0o707 }
 }
 
 #[cfg(target_arch = "wasm32")]
