@@ -147,10 +147,10 @@ impl RangeRef {
         RangeRef::new(CellRef::new(0, 0), CellRef::new(MAX_ROWS - 1, MAX_COLS - 1))
     }
     pub fn height(&self) -> u32 {
-        self.end.row - self.start.row + 1
+        self.end.row.saturating_sub(self.start.row).saturating_add(1)
     }
     pub fn width(&self) -> u32 {
-        self.end.col - self.start.col + 1
+        self.end.col.saturating_sub(self.start.col).saturating_add(1)
     }
     pub fn count(&self) -> u64 {
         self.height() as u64 * self.width() as u64
@@ -320,6 +320,13 @@ pub fn split_areas(reference: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hostile_range_dimensions_saturate_instead_of_wrapping() {
+        let r = RangeRef { start: CellRef::new(0, 0), end: CellRef::new(u32::MAX, u32::MAX) };
+        assert_eq!((r.height(), r.width()), (u32::MAX, u32::MAX));
+        assert_eq!(r.count(), u64::from(u32::MAX) * u64::from(u32::MAX));
+    }
 
     #[test]
     fn areas_split_only_at_commas_outside_quoted_sheet_names() {

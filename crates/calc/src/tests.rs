@@ -1827,6 +1827,54 @@ fn trim_references() {
 }
 
 #[test]
+fn lookup_of_an_empty_cell_stays_blank() {
+    // #374: B1 (the value for key "k") is empty.
+    let mut t = T::new();
+    t.set("A1", "k");
+    t.set("A2", "j");
+    t.set("B2", "v");
+    for (at, f, want) in [
+        ("D2", "=\"x\"&VLOOKUP(\"k\",A1:B2,2,0)&\"y\"", Value::from("xy")),
+        ("D3", "=CONCATENATE(\"x\",VLOOKUP(\"k\",A1:B2,2,0),\"y\")", Value::from("xy")),
+        ("D4", "=ISBLANK(XLOOKUP(\"k\",A1:A2,B1:B2))", Value::Bool(true)),
+        ("D5", "=\"x\"&XLOOKUP(\"k\",A1:A2,B1:B2)&\"y\"", Value::from("xy")),
+        // A bare lookup still shows 0, like a reference to an empty cell.
+        ("D8", "=VLOOKUP(\"k\",A1:B2,2,0)", Value::Number(0.0)),
+        // Arithmetic still reads the blank as 0.
+        ("D9", "=VLOOKUP(\"k\",A1:B2,2,0)+1", Value::Number(1.0)),
+        // A blank lookup given as an argument is still given, not omitted.
+        ("D10", "=FILTER(1,FALSE,VLOOKUP(\"k\",A1:B2,2,FALSE))", Value::Number(0.0)),
+        ("D11", "=XLOOKUP(\"z\",A1:A2,B1:B2,VLOOKUP(\"k\",A1:B2,2,0))", Value::Number(0.0)),
+        // The same holds per element when the call is lifted over an array of blank lookups.
+        ("D12", "=CEILING.MATH(6.7,VLOOKUP(\"k\",A1:B2,2,0))", Value::Number(0.0)),
+        ("D13", "=SUM(CEILING.MATH(6.7,VLOOKUP({\"k\",\"k\"},A1:B2,2,0)))", Value::Number(0.0)),
+        ("D14", "=FLOOR.MATH(6.7,VLOOKUP(\"k\",A1:B2,2,0))", Value::Number(0.0)),
+        ("D15", "=SUM(FLOOR.MATH(6.7,VLOOKUP({\"k\",\"k\"},A1:B2,2,0)))", Value::Number(0.0)),
+    ] {
+        t.set(at, f);
+        assert_eq!(t.get(at), want, "{f}");
+    }
+}
+
+#[test]
+fn blank_lookup_values_match_excel_windows_observation() {
+    // Excel 365 Windows 2609, build 16.0.20430.20032, black-box check 2026-10-13:
+    // A1="k", B1 and A2 genuinely empty.
+    // All three value lookups preserve blankness inside ISBLANK/concatenation.
+    let mut t = T::new();
+    t.set("A1", "k");
+    for (at, f, want) in [
+        ("D1", "=ISBLANK(VLOOKUP(\"k\",A1:B1,2,FALSE))", Value::Bool(true)),
+        ("D2", "=ISBLANK(HLOOKUP(\"k\",A1:A2,2,FALSE))", Value::Bool(true)),
+        ("D3", "=ISBLANK(LOOKUP(\"k\",A1:A1,B1:B1))", Value::Bool(true)),
+        ("D4", "=\"x\"&HLOOKUP(\"k\",A1:A2,2,FALSE)&\"y\"", Value::from("xy")),
+    ] {
+        t.set(at, f);
+        assert_eq!(t.get(at), want, "{f}");
+    }
+}
+
+#[test]
 fn cell_width_is_the_column_width_dialog_value_rounded() {
     // #735: Excel 365 values. Widths in px as `home.columnWidth {"chars"}` sets them
     // (chars * 7 + 5): 10.71 -> 80, 12 -> 89, 10.57 -> 79, 2.86 -> 25; B keeps the default 8.43 (64).
@@ -1922,6 +1970,54 @@ fn offset_extreme_arguments_return_ref() {
     }
 }
 
+/// `@` intersects a reference with the formula's row (a column range) or column (a row range);
+/// a 2D range both (circular when it includes the formula's cell); a range the formula does not
+/// line up with gives #VALUE!. An array gives its top-left value. Legacy formulas read from files use it where Excel intersects implicitly.
+#[test]
+fn implicit_intersection_operator() {
+    let mut t = T::new();
+    for (at, v) in [("A1", "1"), ("A2", "2"), ("A3", "3"), ("A5", "4"), ("B5", "5"), ("C5", "6")] {
+        t.set(at, v);
+    }
+    t.set("B2", "=TANH(@A1:A3)");
+    t.set("B7", "=TANH(@A5:C5)");
+    t.set("B3", "=@A1:C3");
+    t.set("B9", "=@A1:A3");
+    t.set("E9", "=@A5:C5");
+    t.set("D1", "=@{7,8;9,10}");
+    t.set("D2", "=@A2");
+    t.set("D3", "=SUM(@A1:A3)");
+    assert_eq!(t.num("B2"), 2f64.tanh());
+    assert_eq!(t.num("B7"), 5f64.tanh());
+    for at in ["B9", "E9"] {
+        assert_eq!(t.get(at), Value::Error(CellError::Value), "{at}");
+    }
+    // A 2D range that includes the formula's own cell is a circular reference (Excel shows 0).
+    assert_eq!(t.get("B3"), Value::Error(CellError::Circ));
+    // From another sheet a 2D range intersects on both row and column; outside it is #VALUE!.
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Other")));
+    for (at, input) in [("B2", "=@Sheet1!A1:C3"), ("C1", "=@Sheet1!A1:C3"), ("B9", "=@Sheet1!A1:C3"), ("E2", "=@Sheet1!A1:C3")] {
+        t.wb.sheet_mut(1).unwrap().cells.set(c(at), Cell::formula(Formula::new(input)));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    let other = |at: &str| t.wb.sheet(1).unwrap().value(c(at));
+    assert_eq!(other("B2"), Value::Number(2f64.tanh())); // Sheet1!B2
+    assert_eq!(other("C1"), Value::Number(0.0));
+    assert_eq!(other("B9"), Value::Error(CellError::Value));
+    assert_eq!(other("E2"), Value::Error(CellError::Value));
+    assert_eq!(t.num("D1"), 7.0);
+    assert_eq!(t.num("D2"), 2.0);
+    assert_eq!(t.num("D3"), 3.0);
+    // An array result shows its top-left value (T of a reference reads its top-left cell).
+    t.set("A11", "x");
+    t.set("C11", "y");
+    t.set("E1", "=@T(A11:C11)");
+    assert_eq!(t.get("E1"), Value::text("x"));
+    // Without `@` (a dynamic-array formula) the same formula spills.
+    t.set("F1", "=TANH(A1:A3)");
+    assert_eq!((t.num("F1"), t.num("F2"), t.num("F3")), (1f64.tanh(), 2f64.tanh(), 3f64.tanh()));
+}
+
 /// "Set precision as displayed": results are rounded to their cell's format before they are
 /// stored and before other formulas read them. Values observed in Excel (COM,
 /// `Workbook.PrecisionAsDisplayed = True`) with the same synthetic formulas.
@@ -1987,7 +2083,6 @@ fn precision_as_displayed_rounds_results_by_cell_format() {
     t.calc.recalc_all(&mut t.wb);
     assert_eq!(t.num("A2"), (-130.0 + 657.41) * 10.0);
 }
-
 #[test]
 fn analysis_toolpak_value_params_reject_multi_cell_references() {
     // Excel 365 (observed): EOMONTH, WORKDAY, COUPDAYS, BIN2DEC... give #VALUE! for a reference to more
@@ -2072,7 +2167,6 @@ fn analysis_toolpak_value_params_reject_multi_cell_references() {
         t.set("H5", "");
     }
 }
-
 /// A formula reading one further down (or on a later sheet) is calculated on demand, inside the
 /// formula that reads it. Chains of thousands of such formulas, common in financial models, used
 /// to overflow the stack (or give `#CIRC!` past 2,000 levels); they now calculate in full.
@@ -2850,4 +2944,20 @@ fn formulas_read_a_dirty_python_cell_after_it_is_laid_out() {
     t.set("B2", "");
     assert_eq!((t.num("B1"), t.num("B2")), (5.0, 6.0));
     assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (5.0, 100.0, 111.0));
+}
+
+/// A computed criterion whose formula runs a database function over the same criteria counts as
+/// not met inside itself: before, each record's check ran the function again for every record, at
+/// every level, so the work grew exponentially with the nesting allowed.
+#[test]
+fn computed_criterion_that_reenters_itself_is_not_met() {
+    let mut t = T::new();
+    for (r, (name, age)) in [("name", "age"), ("a", "1"), ("b", "2"), ("c", "3"), ("d", "4"), ("e", "5")].iter().enumerate() {
+        t.set(&format!("F{}", r + 2), name);
+        t.set(&format!("G{}", r + 2), age);
+    }
+    t.set("N46", "Formula");
+    t.set("N47", "=DCOUNT($F$2:$G$7,\"age\",$N$46:$N$47)>0");
+    t.set("B60", "=DCOUNT($F$2:$G$7,\"age\",N46:N47)");
+    assert_eq!(t.num("B60"), 0.0);
 }

@@ -3,7 +3,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-mod builtin;
+mod calendar;
 mod decimal;
 mod parse;
 mod render;
@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellError, DateSystem, Value};
 
-pub use builtin::{builtin_format, builtin_id};
 pub use decimal::format_general_fit;
 
 use parse::{DatePart, SecKind, Section, Tok};
@@ -96,6 +95,9 @@ struct Inner {
     num_sections: usize,
     /// Index of the section that applies to text, if any.
     text_section: Option<usize>,
+    /// A code Excel rejects (a misplaced `B1`/`B2` calendar prefix): shown as General, and
+    /// `TEXT` returns `#VALUE!`, as for a code that is too long.
+    invalid: bool,
 }
 
 /// A parsed number format code. Cheap to clone.
@@ -130,7 +132,8 @@ fn too_long(code: &str) -> bool {
 
 impl NumberFormat {
     /// Parses a format code. Never fails: unknown or malformed parts degrade to literal text, and
-    /// a code longer than [`MAX_FORMAT_CODE_CHARS`] characters degrades to General.
+    /// a code longer than [`MAX_FORMAT_CODE_CHARS`] characters, or one Excel rejects for a
+    /// misplaced `B1`/`B2` calendar prefix, degrades to General.
     pub fn parse(code: &str) -> NumberFormat {
         Self::parse_inner(code, false)
     }
@@ -147,12 +150,16 @@ impl NumberFormat {
         let trimmed = code.trim();
         // `checkbox` marks a checkbox cell (Insert › Checkbox): TRUE/FALSE draw as a box, any other
         // value displays as General.
+        let general = |invalid: bool| NumberFormat {
+            inner: Arc::new(Inner { code: code.to_string(), general: true, sections: Vec::new(), num_sections: 0, text_section: None, invalid }),
+        };
         if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("general") || trimmed == "checkbox" || (!uncapped && too_long(code)) {
-            return NumberFormat {
-                inner: Arc::new(Inner { code: code.to_string(), general: true, sections: Vec::new(), num_sections: 0, text_section: None }),
-            };
+            return general(false);
         }
         let sections = parse::parse_sections(code);
+        if sections.iter().any(|s| s.invalid) {
+            return general(true);
+        }
         let len = sections.len();
         let last_is_text = sections.last().is_some_and(|s| s.kind == SecKind::Text);
         let text_section = if len >= 4 {
@@ -169,7 +176,7 @@ impl NumberFormat {
         } else {
             len
         };
-        NumberFormat { inner: Arc::new(Inner { code: code.to_string(), general: false, sections, num_sections, text_section }) }
+        NumberFormat { inner: Arc::new(Inner { code: code.to_string(), general: false, sections, num_sections, text_section, invalid: false }) }
     }
 
     pub fn general() -> NumberFormat {
@@ -386,6 +393,14 @@ impl NumberFormat {
             None => Formatted { text: t.to_string(), color: None, fill: None, numeric: false },
         }
     }
+
+    /// [`Self::format_text`]'s text, or `None` once it passes `max_units` UTF-16 code units.
+    fn format_text_within(&self, t: &str, max_units: usize) -> Option<String> {
+        match self.inner.text_section.and_then(|i| self.inner.sections.get(i)) {
+            Some(sec) => render::render_text_within(sec, t, max_units).map(|out| out.text),
+            None => (t.encode_utf16().count() <= max_units).then(|| t.to_string()),
+        }
+    }
 }
 
 /// Formats a cell value for display.
@@ -479,6 +494,10 @@ impl NumberFormat {
 /// The `TEXT()` worksheet function: formats a value with a format code. Numeric text is
 /// converted to a number first; other text and booleans (as `TRUE`/`FALSE`) go through the text
 /// section, or are returned as is.
+/// Longest text a cell holds, in UTF-16 code units (Excel's 32,767 characters, which XLSB also
+/// stores that way), and so the longest `TEXT` result.
+const MAX_CELL_TEXT_CHARS: usize = 32_767;
+
 pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellError> {
     if code.is_empty() {
         return Ok(String::new());
@@ -487,6 +506,9 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
         return Err(CellError::Value);
     }
     let fmt = NumberFormat::parse_cached(code);
+    if fmt.inner.invalid {
+        return Err(CellError::Value);
+    }
     let n = match v.scalar() {
         Value::Error(e) => return Err(e),
         Value::Empty => 0.0,
@@ -494,7 +516,9 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
         Value::Bool(b) => return Ok(fmt.format_text(if b { "TRUE" } else { "FALSE" }).text),
         Value::Text(t) => match gridcraft_core::parse::parse_number_text(&t) {
             Some(n) => n,
-            None => return Ok(fmt.format_text(&t).text),
+            // Every `@` repeats the text: a result past a cell's limit is `#VALUE!`, so nested
+            // TEXT calls can't multiply it further.
+            None => return fmt.format_text_within(&t, MAX_CELL_TEXT_CHARS).ok_or(CellError::Value),
         },
         Value::Array(_) => return Err(CellError::Value),
     };
