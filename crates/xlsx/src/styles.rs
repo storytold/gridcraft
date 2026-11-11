@@ -1,18 +1,22 @@
 //! `styles.xml`: reading cell formats and differential formats into model styles, and writing
 //! the workbook's style table.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use gridcraft_model::style::{DxfStated, Protection};
 use gridcraft_model::{
-    Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, Style, Underline, VAlign, VertAlign, Workbook,
+    Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, ReadingOrder, Style, Underline, VAlign, VertAlign,
+    Workbook,
 };
 
 use crate::tables::{INDEXED, builtin_format, builtin_id};
 use crate::xml::{El, esc_attr, num};
 
 // ---------------------------------------------------------------- reading
+
+/// Longest font name kept, in characters (Excel's own limit is 31).
+pub const MAX_FONT_NAME_CHARS: usize = 255;
 
 /// Styles read from a file.
 #[derive(Debug, Default)]
@@ -59,14 +63,15 @@ fn bool_prop(e: &El, name: &str) -> bool {
 
 const DEFAULT_FONT_FAMILY: u8 = 2;
 const MAX_FONT_FAMILY: u8 = 14;
-/// Longest font name kept, in characters (Excel's own limit). Every cell format copies its
-/// font, so a long name repeated by many formats would otherwise multiply in memory.
-const MAX_FONT_NAME: usize = 31;
 
 pub fn read_font(e: &El, palette: &[u32]) -> Font {
     let mut f = Font::default();
     if let Some(n) = e.child("name").or_else(|| e.child("rFont")).and_then(|n| n.attr("val")) {
-        f.name = n.chars().take(MAX_FONT_NAME).collect();
+        // Every cell format that uses the font copies its name: keep it short.
+        f.name = match n.char_indices().nth(MAX_FONT_NAME_CHARS) {
+            Some((at, _)) => n.get(..at).unwrap_or_default().to_string(),
+            None => n.to_string(),
+        };
     }
     if let Some(sz) = e.child("sz").and_then(|s| s.attr_f64("val")) {
         f.size = sz.clamp(1.0, 409.0) as f32;
@@ -264,6 +269,12 @@ fn read_alignment(a: &El) -> Alignment {
         shrink: a.flag("shrinkToFit", false),
         indent: a.attr_u32("indent").unwrap_or(0).min(250) as u8,
         rotation: 0,
+        reading_order: match a.attr_u32("readingOrder") {
+            Some(0) => Some(ReadingOrder::Context),
+            Some(1) => Some(ReadingOrder::LeftToRight),
+            Some(2) => Some(ReadingOrder::RightToLeft),
+            _ => None,
+        },
     };
     if let Some(r) = a.attr_i64("textRotation") {
         al.rotation = match r {
@@ -280,6 +291,8 @@ fn read_protection(p: &El) -> Protection {
     Protection { locked: p.flag("locked", true), hidden: p.flag("hidden", false) }
 }
 
+/// A number format by id. Custom formats are built once and shared (`NumFmt` is an `Arc`), so
+/// many cell formats naming one long code don't each copy it.
 fn num_fmt_code(id: u32, custom: &HashMap<u32, NumFmt>) -> NumFmt {
     if let Some(c) = custom.get(&id) {
         return c.clone();
@@ -339,8 +352,20 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
             }
         }
     }
-    // One shared copy of each custom code, which every format using it points to.
-    let shared_fmts: HashMap<u32, NumFmt> = fmts.iter().map(|(id, code)| (*id, NumFmt::new(code))).collect();
+    // One shared `NumFmt` per custom id a cell format or differential format refers to (`NumFmt`
+    // is an `Arc`); declared but unused codes get no second copy.
+    let mut used: HashSet<u32> = HashSet::new();
+    for list in ["cellXfs", "cellStyleXfs"] {
+        if let Some(x) = root.child(list) {
+            used.extend(x.kids("xf").map(|xf| xf.attr_u32("numFmtId").unwrap_or(0)));
+        }
+    }
+    if let Some(d) = root.child("dxfs") {
+        used.extend(
+            d.kids("dxf").filter_map(|x| x.child("numFmt")).filter(|n| n.attr("formatCode").is_none()).filter_map(|n| n.attr_u32("numFmtId")),
+        );
+    }
+    let shared_fmts: HashMap<u32, NumFmt> = fmts.iter().filter(|(id, _)| used.contains(id)).map(|(&id, code)| (id, NumFmt::new(code))).collect();
     // The scheme link only means something on a font in the body face; elsewhere it stays as a new font has it.
     let body_font = |e: &El| {
         let mut f = read_font(e, &palette);
@@ -586,6 +611,12 @@ fn alignment_xml(a: &Alignment) -> Option<String> {
     if a.shrink {
         s.push_str(" shrinkToFit=\"1\"");
     }
+    match a.reading_order {
+        None => {}
+        Some(ReadingOrder::Context) => s.push_str(" readingOrder=\"0\""),
+        Some(ReadingOrder::LeftToRight) => s.push_str(" readingOrder=\"1\""),
+        Some(ReadingOrder::RightToLeft) => s.push_str(" readingOrder=\"2\""),
+    }
     s.push_str("/>");
     Some(s)
 }
@@ -768,12 +799,10 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
         s.push_str("</numFmts>");
     }
     let _ = write!(s, "<fonts count=\"{}\">", fonts.len());
-    // Font names are cut to `MAX_FONT_NAME` on reading: so is the theme's, to compare with them.
-    let theme_minor: String = wb.theme.minor_font.chars().take(MAX_FONT_NAME).collect();
     for (i, f) in fonts.iter().enumerate() {
         // A Normal font in the theme's body face follows the theme, as Excel writes it (#805); so
         // does every other body-face font that kept the scheme link (#2517).
-        s.push_str(&font_xml(f, None, (i == 0 || f.minor) && f.name == theme_minor));
+        s.push_str(&font_xml(f, None, (i == 0 || f.minor) && f.name == wb.theme.minor_font));
     }
     let _ = write!(s, "</fonts><fills count=\"{}\">", fills.len());
     for f in &fills {
@@ -798,4 +827,51 @@ pub fn dxf_id(dxfs: &mut Vec<Style>, s: &Style) -> u32 {
     }
     dxfs.push(s.clone());
     (dxfs.len() - 1) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_or_invalid_reading_order_is_unspecified() {
+        for attribute in ["", " readingOrder=\"3\"", " readingOrder=\"-1\"", " readingOrder=\"rtl\"", " readingOrder=\"4294967296\""] {
+            let xml = format!("<alignment{attribute}/>");
+            let align = read_alignment(&crate::xml::parse(xml.as_bytes()).unwrap());
+            assert_eq!(align, Alignment::default(), "{attribute}");
+            assert_eq!(alignment_xml(&align), None);
+        }
+    }
+
+    #[test]
+    fn reading_order_survives_cell_named_and_differential_style_roundtrips() {
+        for order in [0, 1, 2] {
+            let xml = format!(
+                r#"<styleSheet><cellXfs><xf/><xf><alignment readingOrder="{order}"/></xf></cellXfs>
+                <cellStyleXfs><xf><alignment readingOrder="{order}"/></xf></cellStyleXfs>
+                <cellStyles><cellStyle name="Directional" xfId="0"/></cellStyles>
+                <dxfs><dxf><alignment readingOrder="{order}"/></dxf></dxfs></styleSheet>"#
+            );
+            let styles = read_styles(&crate::xml::parse(xml.as_bytes()).unwrap(), &[], "Calibri");
+            let mut wb = Workbook::new();
+            wb.styles.intern(styles.xfs[1].clone());
+            wb.cell_styles = styles.named.clone();
+            let (xml, _) = write_styles(&wb, &styles.dxfs, &[]);
+            let root = crate::xml::parse(xml.as_bytes()).unwrap();
+            for section in ["dxfs", "cellXfs", "cellStyleXfs"] {
+                let orders: Vec<_> = root
+                    .child(section)
+                    .unwrap()
+                    .children
+                    .iter()
+                    .filter_map(|style| style.child("alignment").and_then(|a| a.attr_u32("readingOrder")))
+                    .collect();
+                assert_eq!(orders, [order], "{section}");
+            }
+            let reopened = read_styles(&root, &[], "Calibri");
+            assert_eq!(reopened.xfs[1].align, styles.xfs[1].align);
+            assert_eq!(reopened.named, styles.named);
+            assert_eq!(reopened.dxfs, styles.dxfs);
+        }
+    }
 }

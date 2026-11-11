@@ -1,8 +1,8 @@
 use super::frame::{Bx, CatAxis, ValAxis, frame, on, value_range};
 use super::legend::{cat_label, point_color};
 use super::{
-    AXIS, Chart, ChartData, Ctx, DOWN, Fmt, GRID, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_MARKERS, Prim, QuartileMethod, STOCK, SeriesData,
-    TAU, TEXT, UP, VAlign, WHITE, clean, nice_scale,
+    AXIS, Chart, ChartData, Ctx, DOWN, Fmt, GRID, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_MARKERS, MAX_SERIES, MAX_WEDGES, Prim,
+    QuartileMethod, Rgba, STOCK, SeriesData, TAU, TEXT, UP, VAlign, WHITE, clean, nice_scale,
 };
 
 // ---------------------------------------------------------------- histogram
@@ -163,6 +163,66 @@ pub(super) fn funnel(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
 
 // ---------------------------------------------------------------- pie, doughnut, sunburst
 
+/// At most `cap` of the largest values, in category order. When a ring has more categories than
+/// its share of the wedge budget allows, the big slices survive rather than the first ones.
+fn largest_slices(vals: &[f64], cap: usize) -> Vec<(usize, f64)> {
+    let mut idx: Vec<usize> = (0..vals.len()).collect();
+    if idx.len() > cap {
+        // Partition descends by value, so the first `cap` entries are the largest ones.
+        idx.select_nth_unstable_by(cap - 1, |a, b| vals[*b].total_cmp(&vals[*a]));
+        idx.truncate(cap);
+        idx.sort_unstable();
+    }
+    idx.into_iter().map(|j| (j, vals[j])).collect()
+}
+
+/// One ring's geometry and separator stroke: the slices of a ring differ only in angle and colour.
+struct Ring {
+    cx: f32,
+    cy: f32,
+    outer: f32,
+    inner: f32,
+    stroke: Option<(Rgba, f32)>,
+}
+
+/// A wedge of `ring`, split at 12 o'clock when it crosses the end of the circle.
+fn wedge(ctx: &mut Ctx, ring: &Ring, a0: f32, sweep: f32, fill: Rgba) {
+    let Ring { cx, cy, outer, inner, stroke } = *ring;
+    if sweep <= 1e-4 {
+        return;
+    }
+    // A slice that starts past 12 o'clock still has to be split against 12 o'clock, not against
+    // its unwrapped start: otherwise the half after TAU is drawn from 0 over its neighbours.
+    let a0 = a0.rem_euclid(TAU);
+    let a1 = a0 + sweep;
+    if a1 <= TAU {
+        ctx.out.push(Prim::Wedge { cx, cy, r_outer: outer, r_inner: inner, a0, a1, fill, stroke });
+        return;
+    }
+    // The halves are filled without a stroke: each would outline its own radial edge at 12
+    // o'clock, painting the white separator straight through the slice.
+    ctx.out.push(Prim::Wedge { cx, cy, r_outer: outer, r_inner: inner, a0, a1: TAU, fill, stroke: None });
+    ctx.out.push(Prim::Wedge { cx, cy, r_outer: outer, r_inner: inner, a0: 0.0, a1: a1 - TAU, fill, stroke: None });
+    if let Some((color, width)) = stroke {
+        // One outline for the whole slice: the outer and inner arcs run through 12 o'clock, and
+        // the two radial edges at the slice's own start and end close the path.
+        let arc = |r: f32, from: f32, to: f32| -> Vec<[f32; 2]> {
+            let steps = ((r.abs() * (to - from).abs() / 2.0).ceil() as usize).clamp(4, 512);
+            let at = |a: f32| [cx + r * a.sin(), cy - r * a.cos()];
+            (0..=steps).map(|k| at(from + (to - from) * k as f32 / steps as f32)).collect()
+        };
+        let mut pts = arc(outer, a0, a1);
+        if inner > 0.0 {
+            pts.extend(arc(inner, a1, a0));
+        } else {
+            pts.push([cx, cy]);
+        }
+        let start = pts[0];
+        pts.push(start);
+        ctx.out.push(Prim::Line { pts, color, width, dash: false });
+    }
+}
+
 pub(super) fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inner: f32, names: bool) {
     let Some(s) = data.series.first() else { return };
     let vals: Vec<f64> = s.values.iter().take(MAX_CATS).map(|v| v.map(f64::abs).unwrap_or(0.0)).collect();
@@ -176,14 +236,15 @@ pub(super) fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inne
         return;
     }
     let ri = r * inner;
+    let ring = Ring { cx, cy, outer: r, inner: ri, stroke: Some((WHITE, 1.5)) };
     let f = Fmt::new(&s.number_format);
-    let mut a = 0.0f32;
+    let mut a = (chart.first_slice_angle % 360) as f32 * TAU / 360.0;
     let mut labels = Vec::new();
     for (j, v) in vals.iter().enumerate() {
         let sweep = (*v / total) as f32 * TAU;
         if sweep > 1e-4 {
             let fill = point_color(data, j);
-            ctx.out.push(Prim::Wedge { cx, cy, r_outer: r, r_inner: ri, a0: a, a1: (a + sweep).min(TAU), fill, stroke: Some((WHITE, 1.5)) });
+            wedge(ctx, &ring, a, sweep, fill);
             if (chart.data_labels || names) && vals.len() <= MAX_LABELS {
                 let t = if names { cat_label(data, j) } else { f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None) };
                 let mid = a + sweep / 2.0;
@@ -201,21 +262,97 @@ pub(super) fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inne
     }
 }
 
+/// Excel's doughnut: every series is one concentric ring, the first series innermost (measured in
+/// Excel: ring outer radii ≈0.83, 0.92 and 1.0 of the plot radius for series 1, 2 and 3). The hole
+/// size and first slice angle come from the chart; each ring is scaled to its own total.
+pub(super) fn doughnut(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
+    let nser = data.series.len().min(MAX_SERIES);
+    if nser == 0 {
+        return;
+    }
+    let (cx, cy) = (area.cx(), area.cy());
+    let r = area.w.min(area.h) / 2.0 * 0.92;
+    if r < 2.0 {
+        return;
+    }
+    let hole = f32::from(chart.hole_size.clamp(10, 90)) / 100.0;
+    let ri = r * hole;
+    let thick = (r - ri) / nser as f32;
+    // A ring thinner than a pixel would vanish. Rather than suppressing the whole chart when there
+    // are more series than the annulus has pixels, keep the outer rings at one pixel each and drop
+    // the innermost series that no longer fit: Excel's order makes the first series the innermost,
+    // so the outermost rings are the ones worth keeping.
+    let band = thick.max(1.0);
+    let start = (chart.first_slice_angle % 360) as f32 * TAU / 360.0;
+    // Only rings with a pixel of band are drawn, and the wedge budget is shared across them in
+    // drawing order: the innermost ring (the first series) gets its slices first, and the outer
+    // rings are capped instead of the series × category product growing without bound.
+    let rings: Vec<(&SeriesData, f32, f32)> = data
+        .series
+        .iter()
+        .take(nser)
+        .enumerate()
+        .filter_map(|(si, s)| {
+            let outer = (r - (nser - 1 - si) as f32 * band).min(r);
+            let inner = (r - (nser - si) as f32 * band).max(ri);
+            (outer - inner >= 1.0).then_some((s, outer, inner))
+        })
+        .collect();
+    let mut budget = MAX_WEDGES;
+    let mut labels = Vec::new();
+    for (k, (s, outer, inner)) in rings.iter().enumerate() {
+        // The white separator is 1.5 units wide, wider than a one-pixel band: on a thin ring it
+        // would paint over the fill of this ring and its neighbour, so such rings keep only fill.
+        let stroke = if outer - inner > 1.0 { Some((WHITE, 1.5)) } else { None };
+        let ring = Ring { cx, cy, outer: *outer, inner: *inner, stroke };
+        let vals: Vec<f64> = s.values.iter().take(MAX_CATS).map(|v| v.map(f64::abs).unwrap_or(0.0)).collect();
+        let cap = (budget / (rings.len() - k)).max(1);
+        let slices = largest_slices(&vals, cap);
+        let total: f64 = slices.iter().map(|(_, v)| *v).sum();
+        if !(total.is_finite() && total > 0.0) {
+            continue;
+        }
+        let n = slices.len();
+        budget = budget.saturating_sub(n);
+        let f = Fmt::new(&s.number_format);
+        let mut a = start;
+        for (j, v) in slices {
+            let sweep = (v / total) as f32 * TAU;
+            if sweep > 1e-4 {
+                let fill = point_color(data, j);
+                wedge(ctx, &ring, a, sweep, fill);
+                if chart.data_labels && n <= MAX_LABELS {
+                    let t = f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None);
+                    let mid = a + sweep / 2.0;
+                    let rr = (outer + inner) / 2.0;
+                    if ctx.tw(&t, LABEL_SIZE) <= (sweep * rr).max(outer - inner) && sweep * rr >= LABEL_SIZE {
+                        labels.push((cx + rr * mid.sin(), cy - rr * mid.cos(), t, on(fill)));
+                    }
+                }
+            }
+            a += sweep;
+        }
+    }
+    for (x, y, t, c) in labels {
+        ctx.text(x, y, &t, LABEL_SIZE, c, (HAlign::Center, VAlign::Middle));
+    }
+}
+
 // ---------------------------------------------------------------- treemap
 
-fn worst(row: &[f64], side: f64) -> f64 {
-    let s: f64 = row.iter().sum();
+/// Worst aspect ratio of a row with the given area sum, smallest and largest item, laid along `side`.
+fn worst(s: f64, mn: f64, mx: f64, side: f64) -> f64 {
     if s <= 0.0 || side <= 0.0 {
         return f64::INFINITY;
     }
-    let (mn, mx) = row.iter().fold((f64::INFINITY, 0.0f64), |(a, b), v| (a.min(*v), b.max(*v)));
     let s2 = s * s;
     let w2 = side * side;
     (w2 * mx / s2).max(s2 / (w2 * mn))
 }
 
-/// Squarified treemap layout of (index, area) items, sorted descending, into `r`.
-fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, Bx)> {
+/// Squarified treemap layout of (index, value) items, sorted descending, into `r`; each block
+/// comes back with its index and value.
+pub(super) fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, f64, Bx)> {
     let total: f64 = items.iter().map(|i| i.1).sum();
     let area = (r.w as f64) * (r.h as f64);
     if !(total > 0.0 && area > 0.0) {
@@ -224,9 +361,10 @@ fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, Bx)> {
     let scale = area / total;
     let mut out = Vec::with_capacity(items.len());
     let mut rem = r;
-    let mut row: Vec<(usize, f64)> = Vec::new();
+    let mut row: Vec<(usize, f64, f64)> = Vec::new();
+    let (mut sum, mut mn, mut mx) = (0.0f64, f64::INFINITY, 0.0f64);
     let mut i = 0;
-    let layout = |row: &[(usize, f64)], rem: &mut Bx, out: &mut Vec<(usize, Bx)>| {
+    let layout = |row: &[(usize, f64, f64)], rem: &mut Bx, out: &mut Vec<(usize, f64, Bx)>| {
         let s: f64 = row.iter().map(|x| x.1).sum();
         if s <= 0.0 {
             return;
@@ -234,9 +372,9 @@ fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, Bx)> {
         if rem.w >= rem.h {
             let cw = (s / rem.h.max(1e-6) as f64) as f32;
             let mut y = rem.y;
-            for (j, a) in row {
+            for (j, a, v) in row {
                 let h = (*a / cw.max(1e-6) as f64) as f32;
-                out.push((*j, Bx { x: rem.x, y, w: cw, h }));
+                out.push((*j, *v, Bx { x: rem.x, y, w: cw, h }));
                 y += h;
             }
             rem.x += cw;
@@ -244,9 +382,9 @@ fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, Bx)> {
         } else {
             let rh = (s / rem.w.max(1e-6) as f64) as f32;
             let mut x = rem.x;
-            for (j, a) in row {
+            for (j, a, v) in row {
                 let w = (*a / rh.max(1e-6) as f64) as f32;
-                out.push((*j, Bx { x, y: rem.y, w, h: rh }));
+                out.push((*j, *v, Bx { x, y: rem.y, w, h: rh }));
                 x += w;
             }
             rem.y += rh;
@@ -256,15 +394,17 @@ fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, Bx)> {
     while let Some(&(j, v)) = items.get(i) {
         let a = v * scale;
         let side = rem.w.min(rem.h) as f64;
-        let cur: Vec<f64> = row.iter().map(|x| x.1).collect();
-        let mut with = cur.clone();
-        with.push(a);
-        if row.is_empty() || worst(&with, side) <= worst(&cur, side) {
-            row.push((j, a));
+        // Sum, smallest and largest item of the open row, kept incrementally (same fold order as
+        // summing the row afresh, so the numbers are bit-identical).
+        let with = (sum + a, mn.min(a), mx.max(a));
+        if row.is_empty() || worst(with.0, with.1, with.2, side) <= worst(sum, mn, mx, side) {
+            row.push((j, a, v));
+            (sum, mn, mx) = with;
             i += 1;
         } else {
             layout(&row, &mut rem, &mut out);
             row.clear();
+            (sum, mn, mx) = (0.0, f64::INFINITY, 0.0);
         }
     }
     if !row.is_empty() {
@@ -279,14 +419,13 @@ pub(super) fn treemap(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         s.values.iter().take(MAX_MARKERS).enumerate().filter_map(|(j, v)| v.filter(|v| *v > 0.0).map(|v| (j, v))).collect();
     items.sort_by(|a, b| b.1.total_cmp(&a.1));
     let f = Fmt::new(&s.number_format);
-    for (j, b) in squarify(&items, area) {
+    for (j, v, b) in squarify(&items, area) {
         let fill = point_color(data, j);
         ctx.rect(b.x, b.y, b.w, b.h, fill, Some((WHITE, 1.5)));
         if b.w > 24.0 && b.h > LABEL_SIZE * 1.6 {
             let name = ctx.fit(&cat_label(data, j), LABEL_SIZE, b.w - 8.0);
             ctx.text(b.x + 4.0, b.y + 4.0, &name, LABEL_SIZE, on(fill), (HAlign::Left, VAlign::Top));
             if chart.data_labels && b.h > LABEL_SIZE * 3.2 {
-                let v = items.iter().find(|x| x.0 == j).map(|x| x.1).unwrap_or(0.0);
                 let t = ctx.fit(&f.format(v, None), LABEL_SIZE, b.w - 8.0);
                 ctx.text(b.x + 4.0, b.y + 4.0 + LABEL_SIZE * 1.4, &t, LABEL_SIZE, on(fill), (HAlign::Left, VAlign::Top));
             }
