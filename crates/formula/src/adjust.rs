@@ -143,6 +143,68 @@ pub fn adjust_if_changed(e: &Expr, host: &str, target: &str, edit: &Edit) -> Opt
     changes(e, host, target, edit).then(|| adjust(e.clone(), host, target, edit))
 }
 
+/// Adjusts a defined name's definition after `edit` on sheet `target`.
+///
+/// A name stores the relative parts of its references as offsets from A1 (see
+/// [`shift_relative_wrapping`]): `=Sheet1!$A1` means "column A of the row that uses the name",
+/// whichever row that is. Inserting or deleting lines moves cells, not that meaning, so those parts
+/// stay as they are and only the absolute parts follow the edit, as in [`adjust`]. In a range or a
+/// span of rows or columns with one absolute and one relative end, only the absolute end moves, and
+/// the reference becomes `#REF!` when that end's line is deleted. Any other edit (a cut and paste,
+/// Insert Cells, Delete Cells) is adjusted exactly as [`adjust`] does.
+pub fn adjust_name(e: Expr, target: &str, edit: &Edit) -> Expr {
+    // Names are workbook-level, so an unqualified reference does not occur: no host sheet matches.
+    const NO_HOST: &str = "\u{0}";
+    e.map(&mut |x| match x {
+        Expr::Ref(r) if on_target(&r, NO_HOST, target) => match adjust_name_ref(r, edit) {
+            Some(r) => Expr::Ref(r),
+            None => Expr::Error(CellError::Ref),
+        },
+        other => other,
+    })
+}
+
+/// [`adjust_ref`] for a reference inside a defined name: inserting or deleting lines moves only
+/// the absolute ends, on the edited axis. The other axis, and every other edit, is untouched here.
+fn adjust_name_ref(r: Reference, edit: &Edit) -> Option<Reference> {
+    let (axis, at, count, insert) = match edit {
+        Edit::Insert { axis, at, count } => (*axis, *at, *count, true),
+        Edit::Delete { axis, at, count } => (*axis, *at, *count, false),
+        _ => return adjust_ref(r, edit),
+    };
+    let max = if axis == Axis::Rows { MAX_ROWS } else { MAX_COLS };
+    // One end of a reference on the edited axis: only an absolute one is a position that moves.
+    let end = |index: u32, absolute: bool| if absolute { map_index(index, at, count, insert, max) } else { Some(index) };
+    // Both ends of a span. Two absolute ends adjust as a span does (it grows, shrinks or moves);
+    // otherwise each end is judged on its own.
+    let span = |a: (u32, bool), b: (u32, bool)| match (a.1, b.1) {
+        (true, true) => map_span(a.0.min(b.0), a.0.max(b.0), at, count, insert, max),
+        _ => Some((end(a.0, a.1)?, end(b.0, b.1)?)),
+    };
+    let kind = match (&r.kind, axis) {
+        (RefKind::Cell(a), Axis::Rows) => RefKind::Cell(Anchor { row: end(a.row, a.row_abs)?, ..*a }),
+        (RefKind::Cell(a), Axis::Cols) => RefKind::Cell(Anchor { col: end(a.col, a.col_abs)?, ..*a }),
+        (RefKind::Range(a, b), Axis::Rows) => {
+            let (lo, hi) = span((a.row, a.row_abs), (b.row, b.row_abs))?;
+            RefKind::Range(Anchor { row: lo, ..*a }, Anchor { row: hi, ..*b })
+        }
+        (RefKind::Range(a, b), Axis::Cols) => {
+            let (lo, hi) = span((a.col, a.col_abs), (b.col, b.col_abs))?;
+            RefKind::Range(Anchor { col: lo, ..*a }, Anchor { col: hi, ..*b })
+        }
+        (RefKind::Rows(r0, a0, r1, a1), Axis::Rows) => {
+            let (lo, hi) = span((*r0, *a0), (*r1, *a1))?;
+            RefKind::Rows(lo, *a0, hi, *a1)
+        }
+        (RefKind::Cols(c0, a0, c1, a1), Axis::Cols) => {
+            let (lo, hi) = span((*c0, *a0), (*c1, *a1))?;
+            RefKind::Cols(lo, *a0, hi, *a1)
+        }
+        (k, _) => k.clone(),
+    };
+    Some(Reference { sheet: r.sheet, kind })
+}
+
 /// New position of an index after an insert (`None` never) or delete (`None` = deleted).
 fn map_index(v: u32, at: u32, count: u32, insert: bool, max: u32) -> Option<u32> {
     if insert {

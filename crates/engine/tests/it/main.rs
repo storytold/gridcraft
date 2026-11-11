@@ -24,6 +24,7 @@ mod pivot_unknown_func;
 mod pivotchart_link;
 mod range_fill_formats;
 mod recently_used;
+mod relative_name_structural_edit;
 mod row_autofit;
 mod sheet_copy_spill;
 mod sheet_name_quoting;
