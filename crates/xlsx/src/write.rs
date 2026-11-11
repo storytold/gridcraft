@@ -134,6 +134,8 @@ pub struct Out {
     pub kept: crate::passthrough::KeptOut,
     /// Decides which formulas need dynamic-array metadata.
     pub functions: FunctionInfo,
+    /// Defined names analysed for implicit intersection, shared by every formula written.
+    pub(crate) names: crate::array_formula::NameCache,
     /// The code of the Python cells written so far, in order: script `i` of the Python part.
     pub python_scripts: Vec<String>,
 }
@@ -271,6 +273,7 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
         cell_pictures: Default::default(),
         kept: Default::default(),
         functions,
+        names: Default::default(),
         python_scripts: vec![],
     };
     out.kept.reserve_vml_blocks(wb);

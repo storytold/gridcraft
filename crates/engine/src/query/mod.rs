@@ -29,6 +29,10 @@ pub use access::{DataAccess, DbTable, FileEntry, HttpRequest, HttpResponse, StdA
 pub const MAX_ROWS: usize = 1_048_575;
 /// Most columns.
 pub const MAX_COLUMNS: usize = 16_384;
+/// Most cells (rows × columns, blanks included) a source is read into. Its rows are built densely,
+/// so a few sparse JSON records or one far-away CSV field must not expand into a rectangle of
+/// billions of slots.
+pub const MAX_CELLS: usize = 10_000_000;
 /// Deepest chain of queries referring to queries.
 pub const MAX_QUERY_DEPTH: usize = 32;
 /// Bytes of downloaded and read source content kept between previews.
@@ -37,6 +41,14 @@ const MAX_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_CACHE_ENTRIES: usize = 32;
 
 pub type QResult<T> = std::result::Result<T, String>;
+
+/// Refuses a table of `rows` × `cols` past [`MAX_CELLS`], before it is built.
+pub fn check_cells(rows: usize, cols: usize) -> QResult<()> {
+    if rows.saturating_mul(cols.max(1)) > MAX_CELLS {
+        return Err(format!("The data is too large to import ({MAX_CELLS} cells at most)."));
+    }
+    Ok(())
+}
 
 /// A query result: named, typed columns and rows of values (every row as wide as `columns`).
 #[derive(Clone, Debug, Default, PartialEq)]

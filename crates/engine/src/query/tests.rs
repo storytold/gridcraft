@@ -994,3 +994,26 @@ fn an_excel_workbook_refreshes_and_keeps_its_power_query_parts() {
     assert_eq!(r["excelQueries"][0]["rows"], 3, "{r}");
     assert_eq!(cell(&s, "Data", "A2"), Value::text("East"));
 }
+
+/// Sparse sources whose dense rows would be huge are refused before the rows are built, and
+/// nothing is added to the workbook.
+#[test]
+fn sparse_imports_are_refused_before_their_rows_are_built() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let sheets = s.doc().unwrap().wb.sheets.len();
+    // 5,000 records with one field each: 5,000 × 5,000 slots once every record gets every field.
+    let records: Vec<_> = (0..5_000).map(|i| json!({ format!("k{i}"): i })).collect();
+    let text = serde_json::to_string(&records).unwrap();
+    let err = s.execute("data.getData", json!({"text": text})).expect_err("too many cells");
+    assert!(err.to_string().contains("too large"), "{err}");
+    // A CSV whose last line reaches 16,001 columns, 1,000 lines down.
+    let text = format!("1{}{}x", "\n".repeat(999), ",".repeat(16_000));
+    let err = s.execute("data.fromTextCsv", json!({"text": text})).expect_err("too many cells");
+    assert!(err.to_string().contains("too large"), "{err}");
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), sheets);
+    assert!(s.doc().unwrap().wb.queries.is_empty());
+    // Small imports still work.
+    let out = s.execute("data.getData", json!({"text": r#"[{"a": 1}, {"b": 2}]"#})).unwrap();
+    assert_eq!((out["rows"].as_u64(), out["cols"].as_u64()), (Some(2), Some(2)), "{out}");
+}

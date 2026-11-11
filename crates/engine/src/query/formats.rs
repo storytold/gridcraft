@@ -8,7 +8,7 @@ use gridcraft_model::Workbook;
 use gridcraft_model::query::{ColType, WorkbookItemKind};
 
 use super::access::FileEntry;
-use super::{MAX_COLUMNS, MAX_ROWS, NavItem, QResult, QTable, unique_names};
+use super::{MAX_COLUMNS, MAX_ROWS, NavItem, QResult, QTable, check_cells, unique_names};
 
 /// Most nested levels of JSON records flattened into columns (`a.b.c`).
 const JSON_FLATTEN_DEPTH: usize = 4;
@@ -42,6 +42,7 @@ pub fn csv_table(bytes: &[u8], delimiter: Option<&str>, encoding: Option<&str>) 
         records.pop();
     }
     let width = records.iter().map(Vec::len).max().unwrap_or(0);
+    check_cells(records.len(), width)?;
     let mut t = QTable::with_columns((1..=width).map(|i| format!("Column{i}")).collect());
     for rec in records {
         t.push_row(rec.into_iter().map(Value::text).collect());
@@ -167,6 +168,7 @@ pub fn json_doc_table(doc: &Json, item: Option<&str>) -> QResult<QTable> {
         });
         flat_rows.push(fields);
     }
+    check_cells(flat_rows.len(), columns.len())?;
     let mut t = QTable::with_columns(columns);
     let width = t.columns.len();
     for fields in flat_rows {

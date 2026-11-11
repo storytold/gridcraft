@@ -514,6 +514,9 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     let mut styles = std::mem::take(&mut wb.styles);
     let mut fmt_cache: Vec<(&'static str, StyleId)> = vec![];
     let mut row: u32 = 0;
+    // The bounding box of the non-empty cells, which is the sheet's used range.
+    let mut used: Option<(u32, u32, u32, u32)> = None;
+    let mut too_many = false;
     parse_records(&text, delim, quote, |rec| {
         if row >= MAX_ROWS {
             return false;
@@ -527,6 +530,8 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
                 continue;
             }
             let pos = CellRef::new(row, col as u32);
+            let (r0, c0, c1) = used.map_or((row, col as u32, col as u32), |(r0, c0, _, c1)| (r0, c0.min(col as u32), c1.max(col as u32)));
+            used = Some((r0, c0, row, c1));
             let cell = if opts.parse_values {
                 let rule = date_columns.get(col).map_or(DateRule::NoDates, |(rule, _)| *rule);
                 let p = read_field(&f, opts.date_system, rule);
@@ -547,9 +552,19 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
             };
             sheet.cells.set(pos, cell);
         }
+        // Stop at the first record that takes the used range past the limit, before more is stored.
+        if let (Some(max), Some((r0, c0, r1, c1))) = (opts.max_used_cells, used)
+            && u64::from(r1 - r0 + 1) * u64::from(c1 - c0 + 1) > max
+        {
+            too_many = true;
+            return false;
+        }
         row += 1;
         true
     });
+    if too_many {
+        return Err(IoError::TooLarge(format!("the CSV's used range is over the limit of {} cells", opts.max_used_cells.unwrap_or(0))));
+    }
     wb.styles = styles;
     wb.sheets = vec![Arc::new(sheet)];
     Ok((wb, report))

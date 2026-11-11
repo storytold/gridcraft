@@ -54,7 +54,7 @@ pub use csv::{MAX_CSV_BYTES, csv_records, decode_text, read_csv, read_csv_with_r
 pub use ods::read_ods;
 pub use package::MAX_PART;
 pub use passthrough::rebase_links;
-pub use xls::read_xls;
+pub use xls::{read_xls, read_xls_with};
 pub use xlsb::read_xlsb;
 pub use xml::El as XmlElement;
 
@@ -240,11 +240,14 @@ pub struct CsvOptions {
     pub date_system: DateSystem,
     /// Interpret fields like typed input (numbers, dates, booleans…); otherwise keep text.
     pub parse_values: bool,
+    /// Refuse (with [`IoError::TooLarge`], while reading) a file whose used range, from its first to
+    /// its last non-empty cell, would pass this many cells; `None` for no limit.
+    pub max_used_cells: Option<u64>,
 }
 
 impl Default for CsvOptions {
     fn default() -> Self {
-        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true }
+        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true, max_used_cells: None }
     }
 }
 
