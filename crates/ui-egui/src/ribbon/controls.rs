@@ -235,6 +235,59 @@ fn combo_rows(ui: &mut Ui, head: ComboHead, items: &[(&str, &str)], row_w: f32) 
     (picked, sel, filtered)
 }
 
+/// Whether the item values a combo last saw differ from `items`: a different length, or any
+/// value at the same position, compared in place without building the new list. Displays do
+/// not count — a list whose previews changed but whose values did not needs no rematch.
+fn values_changed(old: &[String], items: &[(&str, &str)]) -> bool {
+    old.len() != items.len() || old.iter().zip(items.iter()).any(|(o, (v, _))| o.as_str() != *v)
+}
+
+/// What an open combo does with its state before it draws, given the item list as it now
+/// stands. On a fresh open, the previous session is forgotten (filter, remembered highlight)
+/// and the rematch starts from `current_value`; on a list change under an open popup, the
+/// highlight is rematched (see [`rematch_selection`]) and the new values are stored. Returns
+/// whether a repaint is needed: a fresh open's reset lands on the frame after the popup opens,
+/// which usually has no input of its own, and without the request the stale filtered list
+/// would stay on screen. A closed popup skips all of this — reopening rematches anyway — and
+/// only records that it is closed.
+fn sync_open_combo(st: &mut ComboState, items: &[(&str, &str)], current_value: &str, open_now: bool) -> bool {
+    let mut repaint = false;
+    if open_now {
+        // Change detection without allocating: the item values are compared against the stored
+        // ones in place, and the stored copy is only rebuilt when the list actually changed.
+        let changed = values_changed(&st.values, items);
+        if !st.was_open || changed {
+            if !st.was_open {
+                st.text = String::new();
+                // A fresh popup has no navigation to preserve: the rematch starts from the
+                // current value, not from wherever a previous popup session left its highlight.
+                st.highlight = None;
+                repaint = true;
+            }
+            // Rematch on a changed list too, not just on open: the font list grows when the
+            // background font scan lands, and a highlight left at its old position would sit on
+            // a different row, so Enter would apply that row instead. The position is computed
+            // against the filtered rows (under the filter as it stands — a mid-open change does
+            // not clear what the user typed), and the previously highlighted value wins over
+            // the current value, so navigation in progress is not reset by the scan landing.
+            let filtered = filtered_positions(items, &st.text);
+            st.sel = rematch_selection(items, &filtered, st.highlight.as_deref(), current_value);
+            if changed {
+                st.values = items.iter().map(|(v, _)| (*v).to_owned()).collect();
+            }
+        }
+    }
+    st.was_open = open_now;
+    repaint
+}
+
+/// The value the highlight points at: `sel` is a position in `filtered` (the rows shown), so
+/// resolving it back goes through the filtered rows to the item. None when that position shows
+/// nothing (no rows shown, or a stale position past the last shown row).
+fn highlighted_value(items: &[(&str, &str)], filtered: &[usize], sel: i32) -> Option<String> {
+    filtered.get(sel.max(0) as usize).and_then(|&i| items.get(i)).map(|(v, _)| (*v).to_string())
+}
+
 /// The engine behind [`editable_combo`] and [`list_combo`]: the popup drawn under the anchor,
 /// the state it keeps across frames (a `ComboState` in the egui memory: the filter text, the
 /// highlight and the item values it last saw) and the `ComboResult` the caller acts on. An open
@@ -257,35 +310,9 @@ fn combo_popup(
         egui::Popup::open_id(ui.ctx(), popup_id);
     }
     let open_now = egui::Popup::is_id_open(ui.ctx(), popup_id);
-    if open_now {
-        // Change detection without allocating: the item values are compared against the stored
-        // ones in place, and the stored copy is only rebuilt when the list actually changed.
-        // A closed popup skips this entirely — reopening rematches anyway (see `!st.was_open`).
-        let changed = st.values.len() != items.len() || st.values.iter().zip(items.iter()).any(|(old, (v, _))| old.as_str() != *v);
-        if !st.was_open || changed {
-            if !st.was_open {
-                st.text = String::new();
-                // A fresh popup has no navigation to preserve: the rematch starts from the
-                // current value, not from wherever a previous popup session left its highlight.
-                st.highlight = None;
-                // The reset lands on the frame AFTER the popup opens, which usually has no input of
-                // its own — without a repaint request the stale filtered list stays on screen.
-                ui.ctx().request_repaint();
-            }
-            // Rematch on a changed list too, not just on open: the font list grows when the
-            // background font scan lands, and a highlight left at its old position would sit on
-            // a different row, so Enter would apply that row instead. The position is computed
-            // against the filtered rows (under the filter as it stands — a mid-open change does
-            // not clear what the user typed), and the previously highlighted value wins over
-            // the current value, so navigation in progress is not reset by the scan landing.
-            let filtered = filtered_positions(items, &st.text);
-            st.sel = rematch_selection(items, &filtered, st.highlight.as_deref(), current_value);
-            if changed {
-                st.values = items.iter().map(|(v, _)| (*v).to_owned()).collect();
-            }
-        }
+    if sync_open_combo(&mut st, items, current_value, open_now) {
+        ui.ctx().request_repaint();
     }
-    st.was_open = open_now;
     // Below `under` and as wide as it, or below the anchor itself.
     let mut field = anchor.clone();
     if let Some(r) = under {
@@ -319,7 +346,7 @@ fn combo_popup(
         st.sel = sel;
         // Remember the highlighted value for the next list change: `sel` is a position in the
         // filtered rows just shown, so resolve it back to the item it points at.
-        st.highlight = filtered.get(sel.max(0) as usize).and_then(|&i| items.get(i)).map(|(v, _)| (*v).to_string());
+        st.highlight = highlighted_value(items, &filtered, sel);
         if let Some(value) = picked {
             result = ComboResult::Picked(value);
         }
@@ -406,5 +433,103 @@ mod combo_rematch_tests {
         assert_eq!(rematch_selection(&items, &filtered, Some("Gone"), "Also Gone"), 0);
         // Nothing shown at all still yields a valid (clamped downstream) position.
         assert_eq!(rematch_selection(&items, &[], Some("Meiryo"), "Meiryo"), 0);
+    }
+}
+
+#[cfg(test)]
+mod combo_sync_tests {
+    use super::*;
+
+    /// A state as a previous popup session left it: a typed filter, a moved highlight, and
+    /// the values of the (shorter) list that session saw.
+    fn left_over_state() -> ComboState {
+        ComboState { text: "me".to_string(), sel: 2, was_open: false, values: vec!["Alpha".into(), "Beta".into()], highlight: Some("Beta".into()) }
+    }
+
+    #[test]
+    fn a_closed_popup_keeps_its_state_and_stale_values() {
+        let items = [("Alpha", "Alpha"), ("Beta", "Beta"), ("Meiryo", "Meiryo")];
+        let mut st = left_over_state();
+        st.was_open = true;
+        assert!(!sync_open_combo(&mut st, &items, "Alpha", false));
+        // Nothing is rematched or stored while closed; reopening rematches anyway.
+        assert_eq!(st.text, "me");
+        assert_eq!(st.sel, 2);
+        assert_eq!(st.values.len(), 2);
+        assert!(!st.was_open);
+    }
+
+    #[test]
+    fn a_fresh_open_forgets_the_previous_session_and_starts_from_the_current_value() {
+        let items = [("Alpha", "Alpha"), ("Beta", "Beta"), ("Meiryo", "Meiryo")];
+        let mut st = left_over_state();
+        assert!(sync_open_combo(&mut st, &items, "Meiryo", true), "a fresh open asks for a repaint");
+        assert_eq!(st.text, "");
+        // Unfiltered now, so the current value's own position; the leftover highlight ("Beta",
+        // position 1) must not win.
+        assert_eq!(st.sel, 2);
+        assert_eq!(st.values, ["Alpha".to_string(), "Beta".to_string(), "Meiryo".to_string()]);
+        assert!(st.was_open);
+    }
+
+    #[test]
+    fn an_unchanged_list_leaves_navigation_and_values_alone() {
+        let items = [("Alpha", "Alpha"), ("Beta", "Beta"), ("Meiryo", "Meiryo")];
+        let mut st = ComboState {
+            sel: 2,
+            was_open: true,
+            values: vec!["Alpha".into(), "Beta".into(), "Meiryo".into()],
+            highlight: None,
+            ..Default::default()
+        };
+        assert!(!sync_open_combo(&mut st, &items, "Alpha", true));
+        // A rematch would pull the highlight back to the current value (position 0); with no
+        // list change none runs, so the position the user navigated to stays.
+        assert_eq!(st.sel, 2);
+        assert_eq!(st.values.len(), 3);
+    }
+
+    #[test]
+    fn a_list_change_under_an_open_popup_follows_the_highlight_and_stores_the_new_values() {
+        // The font scan lands: Cambria sorts in before the row the user had navigated to.
+        let items = [("Arial", "Arial"), ("Beta", "Beta"), ("Cambria", "Cambria"), ("Meiryo", "Meiryo")];
+        let mut st = ComboState {
+            sel: 2,
+            was_open: true,
+            values: vec!["Arial".into(), "Beta".into(), "Meiryo".into()],
+            highlight: Some("Meiryo".into()),
+            ..Default::default()
+        };
+        assert!(!sync_open_combo(&mut st, &items, "Beta", true));
+        assert_eq!(st.sel, 3);
+        assert_eq!(st.values, ["Arial".to_string(), "Beta".to_string(), "Cambria".to_string(), "Meiryo".to_string()]);
+    }
+
+    #[test]
+    fn a_list_change_with_the_highlight_gone_falls_back_to_the_current_value_in_the_filtered_rows() {
+        let items = [("Arial", "Arial"), ("Meiryo", "Meiryo"), ("Tahoma", "Tahoma")];
+        let mut st = ComboState { text: "a".into(), sel: 0, was_open: true, values: vec!["Arial".into()], highlight: Some("Gone".into()) };
+        assert!(!sync_open_combo(&mut st, &items, "Tahoma", true));
+        // The filter "a" shows Arial and Tahoma; Tahoma is filtered position 1, not 2.
+        assert_eq!(st.sel, 1);
+        assert_eq!(st.values.len(), 3);
+    }
+
+    #[test]
+    fn values_changed_compares_values_only() {
+        let old = vec!["Alpha".to_string(), "Beta".to_string()];
+        assert!(!values_changed(&old, &[("Alpha", "Alpha — a new preview"), ("Beta", "Beta")]), "display-only changes do not count");
+        assert!(values_changed(&old, &[("Alpha", "Alpha")]), "shorter");
+        assert!(values_changed(&old, &[("Alpha", "Alpha"), ("Gamma", "Gamma")]), "longer");
+        assert!(values_changed(&old, &[("Alpha", "Alpha"), ("Beta2", "Beta2")]), "a value replaced");
+    }
+
+    #[test]
+    fn the_highlighted_value_resolves_through_the_filtered_rows() {
+        let items = [("Alpha", "Alpha"), ("Beta", "Beta"), ("Meiryo", "Meiryo")];
+        let filtered = filtered_positions(&items, "me");
+        assert_eq!(highlighted_value(&items, &filtered, 0).as_deref(), Some("Meiryo"));
+        assert_eq!(highlighted_value(&items, &filtered, 5), None);
+        assert_eq!(highlighted_value(&items, &[], 0), None);
     }
 }
