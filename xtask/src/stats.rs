@@ -148,7 +148,8 @@ mod tests {
     /// A new, private directory: `create_dir` fails if the name exists (even as a link), so a
     /// directory somebody else made in advance is never used.
     fn private_dir(tag: &str) -> std::path::PathBuf {
-        for n in 0u32.. {
+        let mut n = 0u32;
+        loop {
             let dir = std::env::temp_dir().join(format!("xtask-stats-{tag}-{}-{n}", std::process::id()));
             let mut b = std::fs::DirBuilder::new();
             #[cfg(unix)]
@@ -158,8 +159,8 @@ mod tests {
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(e) => panic!("{e}"),
             }
+            n += 1;
         }
-        unreachable!()
     }
 
     #[test]
