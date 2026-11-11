@@ -26,19 +26,21 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
     let sample = app.session.active().and_then(|doc| doc.wb.active().map(|s| s.value(doc.selection.active))).unwrap_or_default();
     match d.tab.as_str() {
         "Number" => {
-            let mut code = st.num_fmt.as_str().to_string();
+            let region = app.session.active().map(|doc| doc.wb.region).unwrap_or_else(gridcraft_engine::core::region::default_region);
+            let mut code = gridcraft_engine::display::regional_code(st.num_fmt.as_str(), region);
             ui.columns(2, |cols| {
                 cols[0].label(egui::RichText::new(lang.tr("Category:")).strong());
                 for name in
                     ["General", "Number", "Currency", "Accounting", "Short Date", "Long Date", "Time", "Percentage", "Fraction", "Scientific", "Text"]
                 {
-                    let c = gridcraft_engine::cmd::format::format_code_for(name).to_string();
+                    let c = gridcraft_engine::display::regional_code(gridcraft_engine::cmd::format::format_code_for(name), region);
                     if cols[0].selectable_label(code == c, lang.tr(name)).clicked() {
                         code = c;
                     }
                 }
                 cols[1].label(egui::RichText::new(lang.tr("Sample")).strong());
-                let preview = app.session.active().map(|doc| gridcraft_engine::display::format(&sample, &code, &doc.wb).text).unwrap_or_default();
+                let preview =
+                    app.session.active().map(|doc| gridcraft_engine::display::format_regional(&sample, &code, &doc.wb).text).unwrap_or_default();
                 cols[1].label(egui::RichText::new(preview).font(theme::ui_font(15.0)));
                 cols[1].add_space(8.0);
                 let label = cols[1].label(lang.tr("Type (custom format code):"));
@@ -62,11 +64,11 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     "@",
                 ] {
                     if cols[1].small_button(c).clicked() {
-                        code = c.to_string();
+                        code = gridcraft_engine::display::regional_code(c, region);
                     }
                 }
             });
-            st.num_fmt = gridcraft_engine::model::NumFmt::new(&code);
+            st.num_fmt = gridcraft_engine::model::NumFmt::new(&gridcraft_engine::display::canonical_code(&code, region));
         }
         "Alignment" => {
             use gridcraft_engine::model::{HAlign, ReadingOrder, VAlign};

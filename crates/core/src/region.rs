@@ -642,6 +642,45 @@ pub fn default_region() -> &'static Region {
     &EN_US
 }
 
+/// The region the operating system or browser reports: `LC_ALL`, `LC_NUMERIC` and `LANG` in
+/// POSIX precedence order, `navigator.languages` on wasm. An unset, empty or `C`/`POSIX` locale
+/// is English (United States).
+pub fn system() -> &'static Region {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(tag) = web_locale() {
+        return lookup(&tag);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    for key in ["LC_ALL", "LC_NUMERIC", "LANG"] {
+        if let Ok(tag) = std::env::var(key)
+            && let Some(region) = from_locale(&tag)
+        {
+            return region;
+        }
+    }
+    default_region()
+}
+
+/// A locale as the environment writes it (`pt_BR.UTF-8`), unless it names no region (`C`, `POSIX`).
+#[cfg(not(target_arch = "wasm32"))]
+fn from_locale(tag: &str) -> Option<&'static Region> {
+    let base = tag.split(['.', '@']).next().unwrap_or("").trim();
+    if base.is_empty() || base.eq_ignore_ascii_case("C") || base.eq_ignore_ascii_case("POSIX") {
+        return None;
+    }
+    Some(lookup(base))
+}
+
+/// The first of the browser's languages, as a locale tag.
+#[cfg(target_arch = "wasm32")]
+fn web_locale() -> Option<String> {
+    let key = |k: &str| js_sys::JsString::from(k);
+    let global = js_sys::global();
+    let navigator = js_sys::Reflect::get(&global, key("navigator").as_ref()).ok()?;
+    let languages = js_sys::Reflect::get(&navigator, key("languages").as_ref()).ok()?;
+    js_sys::Reflect::get(&languages, key("0").as_ref()).ok()?.as_string()
+}
+
 /// The region with exactly this tag (`pt-BR`; case and `_` don't matter).
 pub fn find(tag: &str) -> Option<&'static Region> {
     let t = tag.trim().replace('_', "-");
