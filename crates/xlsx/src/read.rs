@@ -471,7 +471,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
     wb.apply_name_call_case();
     // Legacy formulas read as dynamic-array formulas with Excel's implicit `@`.
     crate::array_formula::apply_legacy(&mut wb, legacy_formulas, functions);
-    wb.styles = cx.styles;
+    wb.styles = cx.styles.into();
     wb.phonetics = cx.phonetics;
     Ok((wb, cx.report))
 }

@@ -116,6 +116,26 @@ fn pack_validations(src: &gridcraft_model::Sheet, sorted: &[RangeRef], shifts: &
     packed_rules
 }
 
+/// Clears the spilled values, notes, links and validations in `block`, each only when the block
+/// holds some: a write gives the sheet a copy of its own.
+fn clear_block_parts(dst: &mut gridcraft_model::Sheet, block: RangeRef) {
+    if dst.spill.range(block.start..=block.end).any(|(c, _)| block.contains(*c)) {
+        dst.spill.retain(|c, _| !block.contains(*c));
+    }
+    if dst.spill_ranges.range(block.start..=block.end).any(|(c, _)| block.contains(*c)) {
+        dst.spill_ranges.retain(|c, _| !block.contains(*c));
+    }
+    if dst.comments.range(block.start..=block.end).any(|(c, _)| block.contains(*c)) {
+        dst.comments.retain(|c, _| !block.contains(*c));
+    }
+    if dst.hyperlinks.range(block.start..=block.end).any(|(c, _)| block.contains(*c)) {
+        dst.hyperlinks.retain(|c, _| !block.contains(*c));
+    }
+    if dst.validations.iter().any(|v| v.ranges.iter().any(|r| r.intersects(&block))) {
+        super::super::data::remove_validation_cells(&mut dst.validations, &[block]);
+    }
+}
+
 /// Excel copies a multi-area selection only when the areas line up: all cover the same rows (they
 /// slide together side by side, left to right) or all cover the same columns (stacked, top to
 /// bottom), without overlapping. Returns a copy of the workbook whose sheet holds the areas packed
@@ -147,11 +167,7 @@ fn slide_together(wb: &gridcraft_model::Workbook, sheet: usize, areas: &[RangeRe
     let mut out = wb.clone();
     let dst = out.sheet_mut(sheet)?;
     dst.take_cells(block);
-    dst.spill.retain(|c, _| !block.contains(*c));
-    dst.spill_ranges.retain(|c, _| !block.contains(*c));
-    dst.comments.retain(|c, _| !block.contains(*c));
-    dst.hyperlinks.retain(|c, _| !block.contains(*c));
-    super::super::data::remove_validation_cells(&mut dst.validations, &[block]);
+    clear_block_parts(dst, block);
     dst.merges.retain(|m| !m.intersects(&block));
     if across {
         dst.cols.retain(|c, _| !(block.start.col..=block.end.col).contains(c));
