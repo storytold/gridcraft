@@ -236,29 +236,31 @@ fn dxf_font_and_parts_stated_at_their_defaults_survive_save() {
     assert_eq!(written, Some(format!(r#" count="4">{dxfs}"#).as_str()));
 }
 
-/// A differential format whose only font part is outlined letters keeps it on save.
+/// A differential format whose only font part is outlined letters keeps it on save, turned on
+/// or stated off (a conditional format turning the outline off), like strike.
 #[test]
 fn dxf_outline_font_survives_save() {
-    let dxfs = r#"<dxf><font><outline/></font></dxf>"#;
+    let dxfs = concat!(r#"<dxf><font><outline/></font></dxf>"#, r#"<dxf><font><strike val="0"/><outline val="0"/></font></dxf>"#);
     let styles = format!(
         r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
       <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
       <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
       <borders count="1"><border/></borders>
       <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>
-      <dxfs count="1">{dxfs}</dxfs>
+      <dxfs count="2">{dxfs}</dxfs>
     </styleSheet>"#
     );
     let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
     let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
-      <conditionalFormatting sqref="A1"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>"#;
+      <conditionalFormatting sqref="A1"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>
+      <conditionalFormatting sqref="A2"><cfRule type="cellIs" dxfId="1" priority="2" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>"#;
     let bytes = minimal(body, &[("xl/styles.xml", &styles)], rels, "");
     let (wb, _) = read_xlsx(&bytes).unwrap();
     let out = crate::write_xlsx(&wb).unwrap();
     let st = crate::package::Package::open(&out).unwrap().read("xl/styles.xml").unwrap().unwrap();
     let st = String::from_utf8(st).unwrap();
     let written = st.split_once("<dxfs").and_then(|(_, r)| r.split_once("</dxfs>")).map(|(d, _)| d);
-    assert_eq!(written, Some(format!(r#" count="1">{dxfs}"#).as_str()));
+    assert_eq!(written, Some(format!(r#" count="2">{dxfs}"#).as_str()));
 }
 
 /// A dxf writes its parts in schema order: the border comes before the protection.

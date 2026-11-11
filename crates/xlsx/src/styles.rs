@@ -379,6 +379,7 @@ fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, String>) -> Style {
         st.bold = e.child("b").is_some() && !f.bold;
         st.italic = e.child("i").is_some() && !f.italic;
         st.strike = e.child("strike").is_some() && !f.strike;
+        st.outline = e.child("outline").is_some() && !f.outline;
         st.underline = e.child("u").is_some() && f.underline == Underline::None;
         st.size = has_size && size == def.size;
         st.name = has_name && name == def.name;
@@ -440,6 +441,8 @@ fn font_xml(f: &Font, dxf: Option<&DxfStated>, minor: bool) -> String {
     // Excel's order puts outline after strike (condense and extend aren't modelled).
     if f.outline {
         s.push_str("<outline/>");
+    } else if stated.outline {
+        s.push_str("<outline val=\"0\"/>");
     }
     match f.underline {
         Underline::None if stated.underline => s.push_str("<u val=\"none\"/>"),
@@ -723,6 +726,7 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
             || st.bold
             || st.italic
             || st.strike
+            || st.outline
             || st.underline
             || st.size
             || st.name

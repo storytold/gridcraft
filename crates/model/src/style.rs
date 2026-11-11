@@ -402,6 +402,9 @@ pub struct DxfStated {
     pub bold: bool,
     pub italic: bool,
     pub strike: bool,
+    /// Outlined letters turned off (`<outline val="0"/>`). Defaulted so JSON saved before it opens.
+    #[serde(default)]
+    pub outline: bool,
     pub underline: bool,
     pub size: bool,
     pub name: bool,
@@ -518,6 +521,9 @@ mod tests {
         assert_eq!(serde_json::from_value::<Font>(json)?, Font::default());
         let on = serde_json::to_value(Font { outline: true, ..Font::default() })?;
         assert_eq!(on.get("outline"), Some(&serde_json::Value::Bool(true)));
+        let mut stated = serde_json::to_value(DxfStated::default())?;
+        assert!(stated.as_object_mut().ok_or("none")?.remove("outline").is_some());
+        assert_eq!(serde_json::from_value::<DxfStated>(stated)?, DxfStated::default());
         Ok(())
     }
 
