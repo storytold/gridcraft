@@ -781,12 +781,17 @@ impl MergeSweep {
     /// The merges covering `row`, or `None` when the budget is spent. Rows must not decrease
     /// between calls (skipping rows is fine).
     fn at(&mut self, sh: &gridcraft_model::Sheet, row: u32) -> Option<Vec<gridcraft_core::RangeRef>> {
-        let by_start = self.by_start.get_or_insert_with(|| {
+        if self.by_start.is_none() {
+            // Sorting is about n log2 n comparisons, charged before it starts.
+            let n = sh.merges.len();
+            if !self.charge(n.saturating_mul((usize::BITS - n.leading_zeros()) as usize)) {
+                return None;
+            }
             let mut v: Vec<gridcraft_core::RangeRef> = sh.merges.iter().copied().filter(|m| !m.is_single()).collect();
             v.sort_unstable_by_key(|m| m.start.row);
-            self.budget = self.budget.saturating_sub(v.len());
-            v
-        });
+            self.by_start = Some(v);
+        }
+        let by_start = self.by_start.as_ref()?;
         while let Some(m) = by_start.get(self.next).filter(|m| m.start.row <= row) {
             self.active.push(*m);
             self.next += 1;
@@ -801,6 +806,10 @@ impl MergeSweep {
 
 /// [`auto_row_height`] with the sheet's merges taken from `sweep`.
 pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut MergeSweep) {
+    // Out of budget: the row keeps the height it has.
+    if sweep.left() == 0 {
+        return;
+    }
     let Some(sh) = wb.sheet(si) else { return };
     if sh.rows.get(&row).is_some_and(|i| i.custom) {
         return;
@@ -899,5 +908,18 @@ mod merge_sweep_tests {
         let mut second = MergeSweep::new(first.left());
         assert!(second.at(&sheet, 0).is_none());
         assert!(MergeSweep::new(MERGE_FIT_WORK).at(&sheet, 0).is_some());
+    }
+
+    #[test]
+    fn sorting_the_merges_is_charged() {
+        let mut sheet = gridcraft_model::Sheet::new("S");
+        for r in ["A1:B2", "C1:D2", "E1:F2", "G1:H2"] {
+            sheet.merges.push(gridcraft_core::RangeRef::parse(r).unwrap());
+        }
+        // Four merges sort in about 4 * 3 comparisons: 11 is not enough, 12 plus the row's 4 is.
+        let mut sweep = MergeSweep::new(11);
+        assert!(sweep.at(&sheet, 0).is_none());
+        assert_eq!(sweep.left(), 0);
+        assert!(MergeSweep::new(16).at(&sheet, 0).is_some());
     }
 }
