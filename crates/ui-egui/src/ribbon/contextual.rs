@@ -1,6 +1,6 @@
-use super::controls::{act, anchor_keytip, control_keytip, keytip, menu_items, sep};
+use super::controls::{act, anchor_keytip, control_keytip, keytip, menu_items};
 use super::galleries::{paint_table_swatch, table_gallery};
-use super::{Color32, Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, icon_button, json, keytip_table, vec2};
+use super::{Color32, Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, group, icon_button, json, keytip_table, vec2};
 
 /// Draws the Table Design tab: rename, resize, remove duplicates, convert to range, slicer, table options and the style strip.
 pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
@@ -11,62 +11,68 @@ pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
     }) else {
         return;
     };
-    ui.vertical(|ui| {
-        ui.label(egui::RichText::new("Table Name:").small());
-        let field = egui::Id::unique(("gridcraft.table_name", &tname));
-        if let Some(name) = crate::widgets::committed_text(ui, field, &tname, Some(120.0))
-            && name != tname
-        {
-            act(app, "table.rename", json!({"table": tname, "name": name}));
-        }
-    });
-    let __k = big_button(ui, Icon::Table, "Resize\nTable", "Resize Table", false);
-    control_keytip(app, ui, &__k, "dialog:tableResize");
-    if __k.clicked() {
-        app.open_dialog("tableResize", json!({}));
-    }
-    sep(ui);
-    let __k = big_button(ui, Icon::Duplicates, "Remove\nDuplicates", "Remove Duplicates", false);
-    control_keytip(app, ui, &__k, "data.removeDuplicates");
-    if __k.clicked() {
-        act(app, "data.removeDuplicates", json!({}));
-    }
-    let __k = big_button(ui, Icon::Table, "Convert\nto Range", "Convert to Range", false);
-    control_keytip(app, ui, &__k, "table.convertToRange");
-    if __k.clicked() {
-        act(app, "table.convertToRange", json!({"table": tname}));
-    }
-    sep(ui);
-    if big_button(ui, Icon::Filter, "Insert\nSlicer", "Insert Slicer", false).clicked() {
-        act(app, "table.insertSlicer", json!({"table": tname}));
-    }
-    sep(ui);
-    ui.vertical(|ui| {
-        for (label, cmd, v) in [
-            ("Header Row", "table.headerRow", header && filter),
-            ("Total Row", "table.totalRow", totals),
-            ("Banded Rows", "table.bandedRows", banded),
-        ] {
-            let mut on = v;
-            if ui.checkbox(&mut on, label).changed() {
-                act(app, cmd, json!({"table": tname, "on": on}));
+    group(ui, "Properties", Icon::Table, |ui| {
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new("Table Name:").small());
+            let field = egui::Id::unique(("gridcraft.table_name", &tname));
+            if let Some(name) = crate::widgets::committed_text(ui, field, &tname, Some(120.0))
+                && name != tname
+            {
+                act(app, "table.rename", json!({"table": tname, "name": name}));
             }
+        });
+        let __k = big_button(ui, Icon::Table, "Resize\nTable", "Resize Table", false);
+        control_keytip(app, ui, &__k, "dialog:tableResize");
+        if __k.clicked() {
+            app.open_dialog("tableResize", json!({}));
         }
     });
-    ui.vertical(|ui| {
-        for (label, cmd, v) in [
-            ("First Column", "table.firstColumn", first),
-            ("Last Column", "table.lastColumn", last),
-            ("Banded Columns", "table.bandedColumns", banded_c),
-        ] {
-            let mut on = v;
-            if ui.checkbox(&mut on, label).changed() {
-                act(app, cmd, json!({"table": tname, "on": on}));
+    group(ui, "Tools", Icon::Duplicates, |ui| {
+        let __k = big_button(ui, Icon::Duplicates, "Remove\nDuplicates", "Remove Duplicates", false);
+        control_keytip(app, ui, &__k, "data.removeDuplicates");
+        if __k.clicked() {
+            act(app, "data.removeDuplicates", json!({}));
+        }
+        let __k = big_button(ui, Icon::Table, "Convert\nto Range", "Convert to Range", false);
+        control_keytip(app, ui, &__k, "table.convertToRange");
+        if __k.clicked() {
+            act(app, "table.convertToRange", json!({"table": tname}));
+        }
+    });
+    group(ui, "External Table Data", Icon::Filter, |ui| {
+        if big_button(ui, Icon::Filter, "Insert\nSlicer", "Insert Slicer", false).clicked() {
+            act(app, "table.insertSlicer", json!({"table": tname}));
+        }
+    });
+    group(ui, "Table Style Options", Icon::Table, |ui| {
+        ui.vertical(|ui| {
+            for (label, cmd, v) in [
+                ("Header Row", "table.headerRow", header && filter),
+                ("Total Row", "table.totalRow", totals),
+                ("Banded Rows", "table.bandedRows", banded),
+            ] {
+                let mut on = v;
+                if ui.checkbox(&mut on, label).changed() {
+                    act(app, cmd, json!({"table": tname, "on": on}));
+                }
             }
-        }
+        });
+        ui.vertical(|ui| {
+            for (label, cmd, v) in [
+                ("First Column", "table.firstColumn", first),
+                ("Last Column", "table.lastColumn", last),
+                ("Banded Columns", "table.bandedColumns", banded_c),
+            ] {
+                let mut on = v;
+                if ui.checkbox(&mut on, label).changed() {
+                    act(app, cmd, json!({"table": tname, "on": on}));
+                }
+            }
+        });
     });
-    sep(ui);
-    table_style_strip(app, ui, &tname, &style);
+    group(ui, "Table Styles", Icon::FormatTable, |ui| {
+        table_style_strip(app, ui, &tname, &style);
+    });
 }
 
 /// The first page of Excel's Table Styles gallery, drawn in the ribbon. The More arrow opens the
@@ -109,78 +115,80 @@ fn table_style_strip(app: &mut SheetApp, ui: &mut Ui, tname: &str, current: &str
 }
 
 pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
-    let Some(id) = app.selected_chart() else { return };
-    let ae = big_button(ui, Icon::Chart, "Add Chart\nElement", "Add Chart Element", true);
-    for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["chart.set"]) {
-        keytip(app, ui, sequence, ae.rect.center_bottom());
-    }
-    egui::Popup::menu(&ae).show(|ui| {
-        menu_items(
-            app,
-            ui,
-            &[
-                ("Legend: Bottom", "chart.set", json!({"chart": id, "legend": "bottom"})),
-                ("Legend: Right", "chart.set", json!({"chart": id, "legend": "right"})),
-                ("Legend: Top", "chart.set", json!({"chart": id, "legend": "top"})),
-                ("Legend: None", "chart.set", json!({"chart": id, "legend": "none"})),
-                ("-", "", json!(null)),
-                ("Data Labels: Show", "chart.set", json!({"chart": id, "dataLabels": true})),
-                ("Data Labels: None", "chart.set", json!({"chart": id, "dataLabels": false})),
-                ("Data Table: With Legend Keys", "chart.addElement", json!({"chart": id, "element": "dataTable", "dataTableKeys": true})),
-                ("Data Table: No Legend Keys", "chart.addElement", json!({"chart": id, "element": "dataTable", "dataTableKeys": false})),
-                ("Data Table: None", "chart.addElement", json!({"chart": id, "element": "dataTable", "on": false})),
-                ("Gridlines: Show", "chart.set", json!({"chart": id, "gridlines": true})),
-                ("Gridlines: None", "chart.set", json!({"chart": id, "gridlines": false})),
-            ],
-        );
-    });
-    let __k = big_button(ui, Icon::Redo, "Switch\nRow/Column", "Switch Row/Column", false);
-    control_keytip(app, ui, &__k, "chart.switchRowColumn");
-    if __k.clicked() {
-        act(app, "chart.switchRowColumn", json!({"chart": id}));
-    }
-    if big_button(ui, Icon::Table, "Select\nData", "Select Data", false).clicked() {
-        app.open_dialog("selectData", json!({"chart": id}));
-    }
-    let ct = big_button(ui, Icon::ChartBar, "Change\nChart Type", "Change Chart Type", true);
-    for sequence in keytip_table::group_extension(
-        app.keytips.prefix().unwrap_or_default(),
-        &["column", "bar", "line", "area", "pie", "doughnut", "scatter", "radar", "waterfall", "funnel", "treemap"],
-    ) {
-        keytip(app, ui, sequence, ct.rect.center_bottom());
-    }
-    egui::Popup::menu(&ct).show(|ui| {
-        for (label, k, s) in [
-            ("Clustered Column", "column", ""),
-            ("Stacked Column", "column", "stacked"),
-            ("Bar", "bar", ""),
-            ("Line", "line", "markers"),
-            ("Area", "area", ""),
-            ("Pie", "pie", ""),
-            ("Doughnut", "doughnut", ""),
-            ("Scatter", "scatter", ""),
-            ("Radar", "radar", ""),
-            ("Waterfall", "waterfall", ""),
-            ("Funnel", "funnel", ""),
-            ("Treemap", "treemap", ""),
-        ] {
-            if ui.button(label).clicked() {
-                act(app, "chart.set", json!({"chart": id, "type": k, "subtype": s}));
+    group(ui, "Chart Design", Icon::Chart, |ui| {
+        let Some(id) = app.selected_chart() else { return };
+        let ae = big_button(ui, Icon::Chart, "Add Chart\nElement", "Add Chart Element", true);
+        for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["chart.set"]) {
+            keytip(app, ui, sequence, ae.rect.center_bottom());
+        }
+        egui::Popup::menu(&ae).show(|ui| {
+            menu_items(
+                app,
+                ui,
+                &[
+                    ("Legend: Bottom", "chart.set", json!({"chart": id, "legend": "bottom"})),
+                    ("Legend: Right", "chart.set", json!({"chart": id, "legend": "right"})),
+                    ("Legend: Top", "chart.set", json!({"chart": id, "legend": "top"})),
+                    ("Legend: None", "chart.set", json!({"chart": id, "legend": "none"})),
+                    ("-", "", json!(null)),
+                    ("Data Labels: Show", "chart.set", json!({"chart": id, "dataLabels": true})),
+                    ("Data Labels: None", "chart.set", json!({"chart": id, "dataLabels": false})),
+                    ("Data Table: With Legend Keys", "chart.addElement", json!({"chart": id, "element": "dataTable", "dataTableKeys": true})),
+                    ("Data Table: No Legend Keys", "chart.addElement", json!({"chart": id, "element": "dataTable", "dataTableKeys": false})),
+                    ("Data Table: None", "chart.addElement", json!({"chart": id, "element": "dataTable", "on": false})),
+                    ("Gridlines: Show", "chart.set", json!({"chart": id, "gridlines": true})),
+                    ("Gridlines: None", "chart.set", json!({"chart": id, "gridlines": false})),
+                ],
+            );
+        });
+        let __k = big_button(ui, Icon::Redo, "Switch\nRow/Column", "Switch Row/Column", false);
+        control_keytip(app, ui, &__k, "chart.switchRowColumn");
+        if __k.clicked() {
+            act(app, "chart.switchRowColumn", json!({"chart": id}));
+        }
+        if big_button(ui, Icon::Table, "Select\nData", "Select Data", false).clicked() {
+            app.open_dialog("selectData", json!({"chart": id}));
+        }
+        let ct = big_button(ui, Icon::ChartBar, "Change\nChart Type", "Change Chart Type", true);
+        for sequence in keytip_table::group_extension(
+            app.keytips.prefix().unwrap_or_default(),
+            &["column", "bar", "line", "area", "pie", "doughnut", "scatter", "radar", "waterfall", "funnel", "treemap"],
+        ) {
+            keytip(app, ui, sequence, ct.rect.center_bottom());
+        }
+        egui::Popup::menu(&ct).show(|ui| {
+            for (label, k, s) in [
+                ("Clustered Column", "column", ""),
+                ("Stacked Column", "column", "stacked"),
+                ("Bar", "bar", ""),
+                ("Line", "line", "markers"),
+                ("Area", "area", ""),
+                ("Pie", "pie", ""),
+                ("Doughnut", "doughnut", ""),
+                ("Scatter", "scatter", ""),
+                ("Radar", "radar", ""),
+                ("Waterfall", "waterfall", ""),
+                ("Funnel", "funnel", ""),
+                ("Treemap", "treemap", ""),
+            ] {
+                if ui.button(label).clicked() {
+                    act(app, "chart.set", json!({"chart": id, "type": k, "subtype": s}));
+                }
             }
+        });
+        if big_button(ui, Icon::Settings, "Format\nPane", "Format Chart pane", false).clicked() {
+            app.grid.pane = Some("formatChart".into());
+        }
+        let __k = big_button(ui, Icon::TextBox, "Chart\nTitle", "Edit chart title", false);
+        control_keytip(app, ui, &__k, "chartTitle");
+        if __k.clicked() {
+            app.open_dialog("chartTitle", json!({"chart": id}));
+        }
+        let __k = big_button(ui, Icon::Delete, "Delete\nChart", "Delete chart", false);
+        control_keytip(app, ui, &__k, "chart.delete");
+        if __k.clicked() {
+            act(app, "chart.delete", json!({"chart": id}));
+            app.selected_object = None;
         }
     });
-    if big_button(ui, Icon::Settings, "Format\nPane", "Format Chart pane", false).clicked() {
-        app.grid.pane = Some("formatChart".into());
-    }
-    let __k = big_button(ui, Icon::TextBox, "Chart\nTitle", "Edit chart title", false);
-    control_keytip(app, ui, &__k, "chartTitle");
-    if __k.clicked() {
-        app.open_dialog("chartTitle", json!({"chart": id}));
-    }
-    let __k = big_button(ui, Icon::Delete, "Delete\nChart", "Delete chart", false);
-    control_keytip(app, ui, &__k, "chart.delete");
-    if __k.clicked() {
-        act(app, "chart.delete", json!({"chart": id}));
-        app.selected_object = None;
-    }
 }

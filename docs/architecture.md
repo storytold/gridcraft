@@ -69,11 +69,11 @@ drawing its own:
   report their label (an icon-only one its tooltip) as their accessible name. The ribbon card
   scrolls a tab wider than the window, with arrows at its edges; `ribbon::RibbonOverflow` records the groups' size each frame,
   and a test keeps every tab within the card's three rows.
-- **Function Library**: `function_library.rs` holds the function categories (engine id and
-  label, in the Insert Function dialog's order), the function list built once from
-  `cmd::formulas::function_list`, and the menus of Formulas › Function Library, including the
-  AutoSum menu that Home › Editing shares. Recently Used and the Insert Function dialog's Most
-  Recently Used category list what `formulas.recentlyUsed` returns.
+  The card is also responsive: when it is too narrow for a tab's groups, they
+  collapse rightmost-first into launcher buttons (`widgets::launcher_button`) that
+  open the group in a dropdown `egui::Area` (so nested control popups survive);
+  `ribbon::group` measures each group and `plan_for` keeps a per-tab plan with
+  hysteresis, re-expanding groups as space returns.
 - **Code editor**: `widgets::code_editor(ui, id, &mut text, Lang, max_lines)` (`code_editor.rs`)
   edits code in the monospace font with `Tokens::syntax` colours: Python (keywords, strings
   including triple-quoted ones, numbers, comments, builtins) and LaTeX (commands, scripts,

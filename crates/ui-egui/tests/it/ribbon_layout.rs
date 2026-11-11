@@ -39,9 +39,11 @@ fn every_tab_fits_the_card_height() {
 
 #[test]
 fn an_overflowing_tab_shows_scroll_arrows_that_scroll() {
-    let mut h = app_at(700.0, "Home");
+    // 480 px is below the collapse floor: fully collapsed, Home's row is still wider than the
+    // card, so the arrows are the last resort (every group already collapsed).
+    let mut h = app_at(480.0, "Home");
     let o = RibbonOverflow::get(&h.ctx);
-    assert!(o.overflows(), "Home is wider than a 700 px window");
+    assert!(o.overflows(), "Home is wider than a 480 px window even collapsed");
     assert_eq!(o.offset, 0.0);
     assert!(h.query_by_label("Scroll ribbon left").is_none(), "nothing to the left yet");
     h.get_by_label("Scroll ribbon right").click();
@@ -51,7 +53,7 @@ fn an_overflowing_tab_shows_scroll_arrows_that_scroll() {
     h.get_by_label("Scroll ribbon left").click();
     h.run_steps(3);
     assert!(RibbonOverflow::get(&h.ctx).offset < scrolled);
-    // A tab that fits shows no arrows.
+    // A tab that fits shows no arrows (and nothing collapses).
     let h = app_at(1440.0, "Automate");
     assert!(!RibbonOverflow::get(&h.ctx).overflows());
     assert!(h.query_by_label("Scroll ribbon right").is_none());
@@ -60,14 +62,15 @@ fn an_overflowing_tab_shows_scroll_arrows_that_scroll() {
 #[test]
 fn each_tab_keeps_a_scroll_offset_of_its_own() {
     // Scrolling Home must not hide the first groups of another overflowing tab, and Home keeps
-    // its offset while the other tab is used.
-    let mut h = app_at(700.0, "Home");
+    // its offset while the other tab is used. Below the collapse floor (≈ 505 px in these
+    // fonts) even collapsed rows overflow, so both tabs scroll.
+    let mut h = app_at(480.0, "Home");
     h.get_by_label("Scroll ribbon right").click();
     h.run_steps(3);
     let home_offset = RibbonOverflow::get(&h.ctx).offset;
     assert!(home_offset > 0.0);
-    let other = TABS.iter().copied().find(|t| *t != "Home" && RibbonOverflow::get(&app_at(700.0, t).ctx).overflows());
-    let other = other.expect("another tab overflows a 700 px window");
+    let other = TABS.iter().copied().find(|t| *t != "Home" && RibbonOverflow::get(&app_at(480.0, t).ctx).overflows());
+    let other = other.expect("another tab overflows a 480 px window even collapsed");
     h.state_mut().ui.ribbon_tab = other.into();
     h.run_steps(3);
     let o = RibbonOverflow::get(&h.ctx);
@@ -84,8 +87,10 @@ fn each_tab_keeps_a_scroll_offset_of_its_own() {
 #[test]
 fn the_scroll_arrows_stay_inside_a_narrow_window() {
     // The tab row can be wider than a narrow window (more so with wider system fonts); the card
-    // and its arrows stay inside the window, and the right arrow still scrolls.
-    for width in [600.0, 480.0] {
+    // and its arrows stay inside the window, and the right arrow still scrolls. Below the
+    // collapse floor (≈ 505 px in these fonts) the fully collapsed row still overflows, so the
+    // arrows show.
+    for width in [480.0, 440.0] {
         let mut h = app_at(width, "Home");
         let arrow = h.get_by_label("Scroll ribbon right").rect();
         assert!(arrow.max.x <= width, "{width}: the arrow ends at {}", arrow.max.x);
