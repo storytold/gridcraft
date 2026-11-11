@@ -2,35 +2,42 @@
 
 - Date: 2026-11-11
 - Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`). **Delivered**: the fork's
-  `refs/heads/feature/realtime-collaboration`, the PR's `headRefOid` and this checkout's HEAD are
-  all `b9773627`, so the fork branch *is* the PR's head. The branch is 70 commits on the base
-  `2c58c769`, 84 files, +17959/−34. The push of 2026-11-11T11:28:40Z — the check suites it created
-  carry that stamp — published `2a5f3e00` (§24: the code and the two tests of the 07:38Z findings)
-  and `b9773627`, the page that records them. The push of 07:26:44Z published `7b42c82a` (§23:
-  the code and the two tests of the 01:36Z finding) and `915d994e`; §19 records the push of
-  2026-11-10T17:19Z, which published `ae4311ee`, `34e54b81`, `46783412` and the nine review-fix
-  commits `d91f838a`…`a2251b0e`; §21 records the push of 20:1xZ, which published `f51237ea` and
-  `8208607f`, and the 01:24Z one, which published `00b146df` and `bb5b3acf`. **Nothing is local**:
-  `git rev-list --count fork/feature/realtime-collaboration...HEAD` is `0 0`, and the two commits
-  above `915d994e` — §24's code and this page — are on the fork and in the PR.
-- Base: `origin/main` = `2c58c769` at the time of the rebase (the PR's `baseRefOid`); `origin/main`
-  has moved **24 commits** since — its tip at this writing is `6a08240e`. The PR stays mergeable
-  against the recorded base; rebasing is a separate step.
+  `refs/heads/feature/realtime-collaboration` and the PR's `headRefOid` are both `5bcdf3c9`, the
+  commit the §25 gate ran on; the fork branch *is* the PR's head. The branch is 73 commits on the
+  PR's base `01abd954`, 84 files, +18012/−34. The push of 2026-11-11T17:30Z — the four check
+  suites it created carry that stamp, all `action_required` with no job started — published
+  `0224c0e8` (this page at `b9773627`), `7320106d` (the merge of `origin/main` into the branch) and
+  `5bcdf3c9` (§25: a session follows the workbook that replaces the blank start, with two tests).
+  The push of 11:28:40Z published `2a5f3e00` (§24: the code and the two tests of the 07:38Z
+  findings) and `b9773627`, the page that records them. The push of 07:26:44Z published
+  `7b42c82a` (§23: the code and the two tests of the 01:36Z finding) and `915d994e`; §19 records
+  the push of 2026-11-10T17:19Z, which published `ae4311ee`, `34e54b81`, `46783412` and the nine
+  review-fix commits `d91f838a`…`a2251b0e`; §21 records the push of 20:1xZ, which published
+  `f51237ea` and `8208607f`, and the 01:24Z one, which published `00b146df` and `bb5b3acf`.
+  **The only local commits are pages:** `git rev-list --count --left-right
+  fork/feature/realtime-collaboration...HEAD` is `0 1` after this one, and it changes nothing but
+  `docs/collab/STATUS.md` (§25 included); every code commit of the branch is on the fork and in
+  the PR.
+- Base: the PR's `baseRefOid` is `01abd954`, `origin/main`'s tip when `7320106d` merged it into
+  the branch (§25.1); `origin/main` has moved on since — its tip at this writing is `90180f4d`.
+  The PR is mergeable against the recorded base; rebasing is a separate step.
 - PR: <https://github.com/storytold/gridcraft/pull/3613> — open, **not a draft** since
-  2026-11-10T14:56:54Z, `mergeable = MERGEABLE`, `mergeStateStatus = UNSTABLE`, head `b9773627`,
-  last update 2026-11-11T11:28:42Z (the push itself; the review §24 records is the one of
-  07:38:33Z on `915d994e`), `reviewDecision` empty.
-- Gate on `b9773627`: no CI run. The four workflows the 11:28:40Z push created (`CI`, `House
-  rules`, `Nix`, `SonarCloud`) all ended `completed / action_required` with no job started — the
-  repository needs a maintainer to approve a run from a fork. The head's rollup holds only
-  CodeRabbit, `completed / skipped` at 11:31:05Z: it did not review `b9773627`, so the review
-  record ends at `5855372513` on `915d994e` (§24). `b9773627` itself changes only
-  `docs/collab/STATUS.md` (`git diff --stat 2a5f3e00..b9773627`), so its code is `2a5f3e00`'s,
-  gated on the host in §24.4: `fmt` clean, `clippy -D warnings` on `gridcraft-collab-client`, 35
-  passed in that package, 11 + 11 in `gridcraft-collab-web`/`gridcraft-web`, and the wasm32 check
-  clean. Under it, `915d994e`'s code is `7b42c82a`'s, gated in §23.4, and the code of `00b146df`
-  was gated in §22.3: `fmt` clean, `clippy -D warnings` on the five packages, and 176 passed,
-  0 failed. CodeRabbit was green on the heads it did review. It reviewed four heads:
+  2026-11-10T14:56:54Z, `mergeable = MERGEABLE`, `mergeStateStatus = UNSTABLE`, head `5bcdf3c9`,
+  last update 2026-11-11T17:30:03Z (the push itself; the review §24 records is the one of
+  07:38:33Z on `915d994e`), `reviewDecision` empty, 73 commits, 84 files, +18012/−34.
+- Gate on `5bcdf3c9`: no CI run. The four workflows the 17:30Z push created (`CI`, `House rules`,
+  `Nix`, `SonarCloud`) all ended `completed / action_required` with no job started — the repository
+  needs a maintainer to approve a run from a fork — and the commit's status API holds no status at
+  all. The head's rollup holds only CodeRabbit, `completed / skipped` at 17:30:05Z: it did not
+  review `5bcdf3c9`, so the review record ends at `5855372513` on `915d994e` (§24). The head itself
+  is §25's code over the merge of `origin/main`; the host gate of §25.4 is the only one it has:
+  `fmt --all` clean, `clippy -D warnings` clean on the four collab packages, `collab-client` 37
+  passed (10 in `document.rs`, two of them new), 49 in `gridcraft-collab`, 74 in the server, 11 +
+  11 in `gridcraft-collab-web`/`gridcraft-web`, the wasm32 check clean, workspace clippy clean and
+  `gridcraft-engine`'s lib tests green. Under it, `b9773627`'s code is `2a5f3e00`'s, gated in
+  §24.4, `915d994e`'s code is `7b42c82a`'s, gated in §23.4, and the code of `00b146df` was gated
+  in §22.3: `fmt` clean, `clippy -D warnings` on the five packages, and 176 passed, 0 failed.
+  CodeRabbit was green on the heads it did review. It reviewed four heads:
   `5848894080` at 20:32Z (six threads and one finding outside the diff, closed by §21.4), `5851190259` at 23:35Z (one thread
   and one finding outside the diff, closed by §22), `5852406613` at 01:36Z on `bb5b3acf` (one
   thread, comment `4532845977` at `synced.rs:398`, closed by §23, and one finding outside the diff
@@ -1662,3 +1669,153 @@ is `b9773627`, the fork's head and the PR's `headRefOid`. Both threads (`4535207
 the two tests. No CI file is touched: `git diff --name-only -- .github` is empty, and the two
 findings came from a review that already ran on a pushed head. The four workflows the push created
 sit in `action_required` with no job started, so §24.4's host run remains the gate, not a CI pass.
+
+## 25. The delivered head `5bcdf3c9`: a session follows the workbook that replaces the blank start (2026-11-11)
+
+The push of 2026-11-11T17:30Z delivered `5bcdf3c9`. Until this section the page named `b9773627`
+(§24) as the head; every delivery check agrees on the new one: `git ls-remote fork
+refs/heads/feature/realtime-collaboration`, the PR's `headRefOid` (`gh api
+repos/storytold/gridcraft/pulls/3613`) and the checkout the gate ran on all read `5bcdf3c9`, and
+`git rev-list --count --left-right fork/feature/realtime-collaboration...HEAD` was `0 0` there. The
+PR is 73 commits, 84 files, +18012/−34, based on `01abd954`.
+
+### 25.1 What the head contains
+
+`git diff --stat b9773627..5bcdf3c9` is **178 files, +12737/−1089**, and almost none of it is this
+project's: the branch was merged with `origin/main` in between, so the delivery also carries
+main's work. The head itself is two commits and one merge:
+
+- `0224c0e8` — this page as it stood at `b9773627` (§24);
+- `7320106d` — `Merge remote-tracking branch 'origin/main' into feature/realtime-collaboration`,
+  parents `0224c0e8` and `01abd954`; the merge resolved conflicts by hand in `Cargo.lock`,
+  `Cargo.toml`, `apps/gridcraft/Cargo.toml`, `apps/gridcraft/src/main.rs`,
+  `crates/engine/src/{cmd,lib,tests}.rs`, `crates/model/src/{lib,style,workbook}.rs`,
+  `crates/ui-egui/src/{app/editing,grid,grid/show,lib}.rs`,
+  `crates/ui-egui/tests/it/main.rs`, `docs/architecture.md` and `xtask/src/layers.rs`. Those
+  resolutions are code that no CI has read either (§25.5), which is why the gate below is wider
+  than the five collab packages;
+- `5bcdf3c9` — the code and the tests: `crates/collab-client/src/synced.rs` (+10/−1) and
+  `crates/collab-client/tests/document.rs` (+39), **2 files, +48/−1**.
+
+No CI file is touched: `git diff --name-only 01abd954...5bcdf3c9 -- .github` is empty.
+
+### 25.2 What `bind` does now, and which requirement it serves
+
+`Synced::bind` fixed the replica on the workbook the session joined with, once, and never looked
+at it again. The web host breaks that assumption: the shell starts with a blank workbook, the page
+sends `gridcraft:session`, and the host opens its file *over* the blank one — `file.open` closes
+the untouched blank workbook and adds the file instead of reusing it. A session that had bound to
+the blank workbook in the first frame then held a `doc_uid` for a document that was no longer
+open: `shares_active_document` was false for the file, so every edit stayed local with
+`EditError::OtherDocument`, `enter_shared` found no document and the snapshot install had nowhere
+to go, and the app reported "the session's document could not be loaded" while the room, presence
+and the participant list worked.
+
+The commit makes `bind` follow the workbook in front **while nothing has been shared yet** — no
+version held, no operation in flight — and keeps the old rule everywhere else:
+
+```rust
+let replaced_before_joining =
+    self.doc_uid.is_some_and(|uid| session.document_index(uid).is_none()) && self.document_version == 0 && self.pending.is_empty();
+if self.doc_uid.is_none() || replaced_before_joining {
+    self.doc_uid = session.active().map(|doc| doc.uid);
+}
+```
+
+This is `TASK.md` §1 «Модель сессии» — «одна активная сессия на workbook», join/reconnect — and
+the acceptance line «Два и более клиента одновременно редактируют одну книгу»: it repairs a case
+where the session and the shared workbook diverged, in the web host bridge of §2 above. It adds no
+requirement and no new command, and it touches nothing outside a session that has shared a
+document: a replica whose joined workbook is still open keeps the old rule, and so does one that
+has held the room's version or has an operation in flight (§25.6).
+
+### 25.3 The two tests
+
+`crates/collab-client/tests/document.rs` (now 10 tests, was 8):
+
+| Test | What it pins | Fails on the pre-fix `bind`? |
+|---|---|---|
+| `a_workbook_that_replaces_the_blank_start_becomes_the_shared_one` | first frame binds the blank workbook, `new_workbook` + `close_document(0)` replaces it, the next `poll` rebinds, and a `cell.set` reaches the room | **yes** — `document.rs:377`, `assert!(synced.shares_active_document(&session))`, `9 passed; 1 failed`, EXIT 101 |
+| `the_replacement_rule_does_not_move_a_joined_session_to_another_workbook` | after an `applied` at version 1 the document is joined: closing it ends the session for this replica (`shares_active_document` false, `cell.set` → `Err(EditError::OtherDocument)`) instead of moving to another file | no — it guards the boundary of the new rule, which the old code already respected |
+
+Verified by reverting only the `bind` hunk to `if self.doc_uid.is_none() {` in the working tree and
+running `cargo test -p gridcraft-collab-client --test document` on the host: the first test fails
+at the assertion above, the second passes. The working tree was restored to `5bcdf3c9` afterwards
+(`git status` empty); nothing was committed for that check.
+
+### 25.4 Gates (remote host `agents`, 2026-11-11, on `5bcdf3c9`)
+
+```text
+cargo fmt --all -- --check                                     clean, EXIT 0
+cargo clippy -p gridcraft-collab -p gridcraft-collab-client
+  --all-targets -j 8 -- -D warnings                            clean, EXIT 0
+cargo clippy -p gridcraft-collab-server -p gridcraft-collab-web
+  --all-targets -j 8 -- -D warnings                            clean, EXIT 0
+cargo test -p gridcraft-collab                                 49 passed, 0 failed, EXIT 0
+cargo test -p gridcraft-collab-client --all-targets            4 lib + 13 converge + 10 document
+                                                               + 5 parts + 5 rollback = 37 passed,
+                                                               0 failed, EXIT 0
+cargo test -p gridcraft-collab-server --all-targets            40 unit + 5 acceptance + 6 callback
+                                                               + 2 logging + 9 persistence + 12 socket
+                                                               = 74 passed, 0 failed, EXIT 0
+cargo test -p gridcraft-collab-web -p gridcraft-web            11 + 11 passed, 0 failed, EXIT 0
+cargo +1.95.0 check -p gridcraft-collab-web -p gridcraft-web
+  --target wasm32-unknown-unknown                              ok, EXIT 0
+cargo clippy --workspace --all-targets --keep-going -j 8
+  -- -D warnings                                               clean, EXIT 0
+cargo test -p gridcraft-engine --lib                           946 passed, 0 failed, EXIT 0
+                                                               (with the host's umask 0002:
+                                                               945 passed, 1 failed — §25.4.1)
+```
+
+182 passed, 0 failed across the five collab packages. The two wider runs cover §25.1's merge:
+workspace clippy checks every target of every crate with `-D warnings`, and the engine's lib suite
+exercises the crate whose `cmd.rs`, `lib.rs` and `tests.rs` the merge resolved by hand. The one
+warning the wasm check prints comes from `gridcraft-ui-egui` (lib) on the 1.95.0 toolchain and is
+not an error; the default toolchain's workspace clippy, which is the CI step, is clean.
+
+### 25.4.1 The one failure, and why it is the host's umask
+
+The first engine run (`umask 0002`, the host's default) failed
+`io::tests::save_keeps_the_destination_access_restrictions` at `crates/engine/src/io/tests.rs:66`
+with `mode 664`: a brand-new saved file takes the process umask, and the test expects it not to be
+group-writable (its own message, `mode {mode:o}`, is the one that fails). That test and the
+`write_file` it exercises are main's, from `6a08240e` (#3313), and our tree carries them
+byte-identically to the base: `git diff --stat 01abd954 5bcdf3c9 -- crates/engine/src/io.rs
+crates/engine/src/io/tests.rs` is empty. With `umask 022` — what a GitHub runner uses — the same
+suite is 946 passed, 0 failed, EXIT 0. So the failure is the build host's umask, not this branch,
+and it is left as it stands; it is recorded here because a reader running the gate on the same host
+will meet it.
+
+### 25.5 Runs on `5bcdf3c9`: none executed
+
+The push of 17:30Z created four workflow runs (`CI` 43068746080, `House rules` 43068746143, `Nix`
+43068746007, `SonarCloud` 43068745987). All four are `completed / action_required` with no job
+started — a fork's pull request needs a maintainer to approve its run. The head's rollup holds one
+check, CodeRabbit, `completed / skipped` at 17:30:05Z, and
+`/commits/5bcdf3c9/status` holds no status at all. So there is **no CI evidence for this head**: the
+runs did not execute, CodeRabbit did not review it (the review record still ends at `5855372513` on
+`915d994e`, §24), and §25.4's host run is the only gate. The same was true of `b9773627`; this
+section does not claim a green CI.
+
+### 25.6 The boundary the rule keeps
+
+The rule is keyed on "no version held and no operation in flight", not on "the room's copy has not
+landed". A room seeded from outside (`seeded()` in `ws.rs`: the cabinet's bytes or the volume) is
+adopted by a joining replica as a snapshot at **version 0**, and `document_version` stays 0, so
+such a replica holds the room's copy while still qualifying for the rule: closing that workbook
+moves the session to another open workbook. Two consequences, neither fixed here and both narrower
+than the bug §25.2 fixes:
+
+- with `pending` non-empty the session does not follow anything, by design: a preview that landed
+  in the closed document must not be rolled back into a different one, and the notice and reload
+  path of §23.3/§24.2 is what reports it;
+- at version 0 the room has no operations, so nothing is lost by following the workbook in front —
+  unless that workbook is a *different* file, in which case the first remote operation would apply
+  to it and this replica would show the room's content only after the next snapshot.
+
+If the cabinet flow ever opens a file other than the room's, the flag to add is "the room's copy
+has landed" (set when a snapshot installs, not inferred from the version), with a test at version
+0. It is left as an open question rather than changed here: the delivered commit's contract is
+"nothing shared yet", and a seeded room with no operations is indistinguishable from it by
+`document_version` alone.
