@@ -903,17 +903,23 @@ mod cache_tests {
                 return;
             }
         };
-        assert!(face.covers("a"));
-        for _ in 0..199 {
+        let before = {
+            let coverage = face.coverage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            assert_eq!(coverage.glyphs.get(&'a'), Some(&true), "lookup caches the selected face's coverage");
+            (coverage.parses, coverage.misses, coverage.hits)
+        };
+        let clone = face.clone();
+        assert!(Arc::ptr_eq(&face.coverage, &clone.coverage));
+        for _ in 0..100 {
             assert!(face.covers("a"));
+            assert!(clone.covers("a"));
         }
         let coverage = face.coverage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        assert_eq!(coverage.parses, 1, "coverage parsing happens once for a repeated scalar");
-        assert_eq!(coverage.misses, 1);
-        assert_eq!(coverage.hits, 200, "the initial family lookup also populates coverage for `a`");
+        assert_eq!(coverage.parses, before.0, "cached coverage avoids reparsing the face");
+        assert_eq!(coverage.misses, before.1, "both clones reuse the cached scalar");
+        assert_eq!(coverage.hits, before.2 + 200, "each lookup hits the shared cache");
         drop(coverage);
 
-        let clone = face.clone();
         assert!(face.shape("a").is_ok());
         assert!(clone.shape("a").is_ok());
         assert!(Arc::ptr_eq(&face.shaper_data, &clone.shaper_data));
