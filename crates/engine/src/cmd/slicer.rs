@@ -275,20 +275,26 @@ mod tests {
     fn cross_sheet_and_same_sheet_slicer_filters_clears_and_handles_missing_tables() {
         let mut s = Session::new();
         s.new_workbook();
-        s.execute("range.setValues", json!({"range": "A1:A3", "values": [["Quarter"], ["Q1"], ["Q2"]]})).unwrap();
-        s.execute("insert.table", json!({"range": "A1:A3", "name": "SalesTable"})).unwrap();
+        s.execute("range.setValues", json!({"range": "A1:B4", "values": [["Region", "Quarter"], ["East", "Q1"], ["West", "Q2"], ["East", "Q2"]]}))
+            .unwrap();
+        s.execute("insert.table", json!({"range": "A1:B4", "name": "SalesTable"})).unwrap();
+        s.execute("data.filterColumn", json!({"col": 0, "values": ["East"]})).unwrap();
 
-        // 1. Same-sheet slicer filters, clears, and deletes cleanly.
+        // 1. Same-sheet slicer on column 2 filters by Quarter, and deleting it preserves column 1's Region filter.
         let same_id = s.execute("insert.slicer", json!({"table": "SalesTable", "column": "Quarter"})).unwrap()["slicer"].as_u64().unwrap() as u32;
         s.execute("slicer.toggle", json!({"slicer": same_id, "value": "Q1", "multi": false})).unwrap();
-        assert!(s.doc().unwrap().wb.sheets[0].is_row_filtered(2));
+        assert!(!s.doc().unwrap().wb.sheets[0].is_row_filtered(1), "East/Q1 matches both filters");
+        assert!(s.doc().unwrap().wb.sheets[0].is_row_filtered(2), "West/Q2 filtered out");
+        assert!(s.doc().unwrap().wb.sheets[0].is_row_filtered(3), "East/Q2 filtered out by Quarter slicer");
         s.execute("slicer.clear", json!({"slicer": same_id})).unwrap();
-        assert!(!s.doc().unwrap().wb.sheets[0].is_row_filtered(2));
+        assert!(!s.doc().unwrap().wb.sheets[0].is_row_filtered(3), "clearing Quarter slicer unhides East/Q2");
+        assert!(s.doc().unwrap().wb.sheets[0].is_row_filtered(2), "Region filter on column 1 still hides West/Q2");
         s.execute("slicer.toggle", json!({"slicer": same_id, "value": "Q1", "multi": false})).unwrap();
-        assert!(s.doc().unwrap().wb.sheets[0].is_row_filtered(2));
+        assert!(s.doc().unwrap().wb.sheets[0].is_row_filtered(3));
         s.execute("slicer.delete", json!({"slicer": same_id})).unwrap();
-        assert!(!s.doc().unwrap().wb.sheets[0].is_row_filtered(2));
-
+        assert!(!s.doc().unwrap().wb.sheets[0].is_row_filtered(3), "deleting Quarter slicer clears only Quarter criterion");
+        assert!(s.doc().unwrap().wb.sheets[0].is_row_filtered(2), "deleting Quarter slicer preserves Region criterion on column 1");
+        s.execute("data.clearFilter", json!({})).unwrap();
         // 2. Cross-sheet slicer filters and clears the target table's sheet.
         s.execute("home.insertSheet", json!({"name": "Dashboard"})).unwrap();
         let id = 42;

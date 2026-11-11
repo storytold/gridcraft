@@ -525,9 +525,10 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     } else {
         paint_upright_galley(&cp, pos2(x, y), &galley, color, faux_bold, z);
     }
+    let deco_w = w + if faux_bold && !rotated { (0.55 * z).max(0.5) } else { 0.0 };
     paint_text_decorations(
         &cp,
-        TextDecoration { x, y: y + text_top, width: w, height: text_height, color, underline: st.font.underline, strike: st.font.strike },
+        TextDecoration { x, y: y + text_top, width: deco_w, height: text_height, color, underline: st.font.underline, strike: st.font.strike },
     );
 }
 

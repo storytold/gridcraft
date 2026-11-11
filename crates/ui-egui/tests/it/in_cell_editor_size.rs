@@ -98,33 +98,31 @@ fn in_cell_editor_shortcuts_toggle_bold_italic_underline_and_strikethrough_while
         h.run_steps(3);
     };
     let b2 = CellRef::parse("B2").unwrap();
+    let font_of = |h: &Harness, cell: CellRef| {
+        let doc = h.state().session.active().unwrap();
+        doc.wb.styles.get(doc.wb.active().unwrap().style_id(cell)).font.clone()
+    };
     let ctrl_only = Modifiers { ctrl: true, ..Modifiers::NONE };
     let cmd_only = Modifiers { command: true, ..Modifiers::NONE };
 
     // Test both CTRL-only and COMMAND-only branches for B, I, U, plus CTRL+5 for strikethrough.
     press(&mut h, ctrl_only, egui::Key::B);
-    assert!(h.state().session.active().unwrap().wb.styles.get(h.state().session.active().unwrap().wb.active().unwrap().style_id(b2)).font.bold);
+    assert!(font_of(&h, b2).bold);
     press(&mut h, cmd_only, egui::Key::B);
-    assert!(!h.state().session.active().unwrap().wb.styles.get(h.state().session.active().unwrap().wb.active().unwrap().style_id(b2)).font.bold);
+    assert!(!font_of(&h, b2).bold);
 
     press(&mut h, ctrl_only, egui::Key::I);
-    assert!(h.state().session.active().unwrap().wb.styles.get(h.state().session.active().unwrap().wb.active().unwrap().style_id(b2)).font.italic);
+    assert!(font_of(&h, b2).italic);
     press(&mut h, cmd_only, egui::Key::I);
-    assert!(!h.state().session.active().unwrap().wb.styles.get(h.state().session.active().unwrap().wb.active().unwrap().style_id(b2)).font.italic);
+    assert!(!font_of(&h, b2).italic);
 
     press(&mut h, ctrl_only, egui::Key::U);
-    assert_ne!(
-        h.state().session.active().unwrap().wb.styles.get(h.state().session.active().unwrap().wb.active().unwrap().style_id(b2)).font.underline,
-        gridcraft_engine::model::Underline::None
-    );
+    assert_ne!(font_of(&h, b2).underline, gridcraft_engine::model::Underline::None);
     press(&mut h, cmd_only, egui::Key::U);
-    assert_eq!(
-        h.state().session.active().unwrap().wb.styles.get(h.state().session.active().unwrap().wb.active().unwrap().style_id(b2)).font.underline,
-        gridcraft_engine::model::Underline::None
-    );
+    assert_eq!(font_of(&h, b2).underline, gridcraft_engine::model::Underline::None);
 
     press(&mut h, ctrl_only, egui::Key::Num5);
-    assert!(h.state().session.active().unwrap().wb.styles.get(h.state().session.active().unwrap().wb.active().unwrap().style_id(b2)).font.strike);
+    assert!(font_of(&h, b2).strike);
     assert_eq!(h.state().editor.as_ref().map(|e| e.text.as_str()), Some("hello"), "editor stays open and preserves its draft text");
 }
 

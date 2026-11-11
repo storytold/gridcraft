@@ -143,6 +143,10 @@ fn cross_sheet_table_slicer_imports_without_skipped_object_warning() {
             slicer1,
             r#"<?xml version="1.0"?><slicerCacheDefinition xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" name="UnrelatedCache" sourceName="MissingCol"/>"#,
         ),
+        (
+            slicer1,
+            r#"<?xml version="1.0"?><slicerCacheDefinition xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" name="SlicerCache_Table_3_Col_36" sourceName="MissingCol"/>"#,
+        ),
     ] {
         let zip_neg = make_zip(&[
             ("[Content_Types].xml", CT.as_bytes()),
