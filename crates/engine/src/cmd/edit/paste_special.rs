@@ -113,6 +113,11 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let src_wb = clip.wb.clone();
     let Some(src_sheet) = src_wb.sheet(clip.sheet) else { return Err(EngineError::Other("The copied sheet no longer exists.".into())) };
     let src_sheet_name = src_sheet.name.clone();
+    // A cut moves its block as it is, as Excel's does: it can't be transposed or tiled over a
+    // larger selection (the move's references, rules and arrays follow the block unturned).
+    if cut_move && (transpose || tiles_r > 1 || tiles_c > 1) {
+        return Err(EngineError::Other("The cut area can only be pasted as it is: paste it without Transpose, into one cell.".into()));
+    }
     if cut_move && at.offset((tiles_r * h).saturating_sub(1) as i64, (tiles_c * w).saturating_sub(1) as i64).is_none() {
         // Check the whole footprint before the source is emptied, so a move that overflows the grid loses nothing.
         return Err(EngineError::Other("The cut area doesn't fit at this position; nothing was moved.".into()));
@@ -390,7 +395,7 @@ fn move_cut_rules(cx: &mut crate::cmd::Ctx, snapshot: &gridcraft_model::Sheet, (
 }
 
 /// Applies a reference adjustment to every reference the workbook holds
-/// ([`Workbook::rewrite_references`]: formulas, names, conditional formats, validation, links,
+/// ([`Workbook::rewrite_references`]: formulas, names, conditional formats, validation,
 /// charts, sparklines, PivotTable sources) and its Python cells, and moves the legacy array
 /// ranges on `target`.
 ///

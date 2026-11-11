@@ -154,9 +154,10 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     }
     sh.merges = sh.merges.iter().filter_map(|m| map_range(*m)).filter(|m| !m.is_single()).collect();
     for cf in sh.cond_formats.iter_mut() {
-        let moves: Vec<(RangeRef, RangeRef)> = cf.ranges.iter().filter_map(|r| map_range(*r).map(|m| (*r, m))).collect();
+        let before = std::mem::take(&mut cf.ranges);
+        let moves: Vec<(RangeRef, RangeRef)> = before.iter().filter_map(|r| map_range(*r).map(|m| (*r, m))).collect();
         cf.ranges = moves.iter().map(|(_, m)| *m).collect();
-        rehost_rule(cf.rule.relative_formulas_mut(), &moves, &e);
+        rehost_rule(cf.rule.relative_formulas_mut(), &before, &moves, &e);
     }
     for er in sh.edit_ranges.iter_mut() {
         er.ranges = er.ranges.iter().filter_map(|r| map_range(*r)).collect();
@@ -164,9 +165,10 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     sh.edit_ranges.retain(|er| !er.ranges.is_empty());
     sh.cond_formats.retain(|cf| !cf.ranges.is_empty());
     for dv in sh.validations.iter_mut() {
-        let moves: Vec<(RangeRef, RangeRef)> = dv.ranges.iter().filter_map(|r| map_range(*r).map(|m| (*r, m))).collect();
+        let before = std::mem::take(&mut dv.ranges);
+        let moves: Vec<(RangeRef, RangeRef)> = before.iter().filter_map(|r| map_range(*r).map(|m| (*r, m))).collect();
         dv.ranges = moves.iter().map(|(_, m)| *m).collect();
-        rehost_rule(dv.formulas_mut(), &moves, &e);
+        rehost_rule(dv.formulas_mut(), &before, &moves, &e);
     }
     sh.validations.retain(|dv| !dv.ranges.is_empty());
     for t in sh.tables.iter_mut() {
@@ -707,11 +709,10 @@ pub(crate) fn map_range(r: RangeRef, e: &Edit) -> Option<RangeRef> {
 /// workbook's references for the edit then moves them as it moves a formula there. A range
 /// moved whole keeps its cells in step, so its top-left stood where the range's offset says;
 /// only one cut short (its first cells deleted) takes the cell that moved into its place.
-fn rehost_rule(formulas: Vec<&mut String>, moves: &[(RangeRef, RangeRef)], e: &Edit) {
-    let (Some(from), Some(to)) = (
-        RangeRef::top_left(&moves.iter().map(|(r, _)| *r).collect::<Vec<_>>()),
-        RangeRef::top_left(&moves.iter().map(|(_, m)| *m).collect::<Vec<_>>()),
-    ) else {
+/// `before` is every range the rule had before the edit (the formulas are written for their
+/// top-left cell, which may lie in a range the edit removed).
+fn rehost_rule(formulas: Vec<&mut String>, before: &[RangeRef], moves: &[(RangeRef, RangeRef)], e: &Edit) {
+    let (Some(from), Some(to)) = (RangeRef::top_left(before), RangeRef::top_left(&moves.iter().map(|(_, m)| *m).collect::<Vec<_>>())) else {
         return;
     };
     let whole = |(r, m): &(RangeRef, RangeRef)| r.width() == m.width() && r.height() == m.height();
@@ -767,9 +768,10 @@ pub(super) fn shift_cell_features(sh: &mut Sheet, e: &Edit) {
     let map_cell = |c: CellRef| map_range(RangeRef::cell(c), e).map(|r| r.start);
     sh.merges = sh.merges.iter().filter_map(|m| map_range(*m, e)).filter(|m| !m.is_single()).collect();
     for cf in sh.cond_formats.iter_mut() {
-        let moves: Vec<(RangeRef, RangeRef)> = cf.ranges.iter().filter_map(|r| map_range(*r, e).map(|m| (*r, m))).collect();
+        let before = std::mem::take(&mut cf.ranges);
+        let moves: Vec<(RangeRef, RangeRef)> = before.iter().filter_map(|r| map_range(*r, e).map(|m| (*r, m))).collect();
         cf.ranges = moves.iter().map(|(_, m)| *m).collect();
-        rehost_rule(cf.rule.relative_formulas_mut(), &moves, e);
+        rehost_rule(cf.rule.relative_formulas_mut(), &before, &moves, e);
     }
     for er in sh.edit_ranges.iter_mut() {
         er.ranges = er.ranges.iter().filter_map(|r| map_range(*r, e)).collect();
@@ -777,9 +779,10 @@ pub(super) fn shift_cell_features(sh: &mut Sheet, e: &Edit) {
     sh.edit_ranges.retain(|er| !er.ranges.is_empty());
     sh.cond_formats.retain(|cf| !cf.ranges.is_empty());
     for dv in sh.validations.iter_mut() {
-        let moves: Vec<(RangeRef, RangeRef)> = dv.ranges.iter().filter_map(|r| map_range(*r, e).map(|m| (*r, m))).collect();
+        let before = std::mem::take(&mut dv.ranges);
+        let moves: Vec<(RangeRef, RangeRef)> = before.iter().filter_map(|r| map_range(*r, e).map(|m| (*r, m))).collect();
         dv.ranges = moves.iter().map(|(_, m)| *m).collect();
-        rehost_rule(dv.formulas_mut(), &moves, e);
+        rehost_rule(dv.formulas_mut(), &before, &moves, e);
     }
     sh.validations.retain(|dv| !dv.ranges.is_empty());
     for t in sh.tables.iter_mut() {

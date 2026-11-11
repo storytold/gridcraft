@@ -5836,3 +5836,77 @@ fn rules_moved_whole_or_left_in_place_keep_their_formulas() {
     s.execute("edit.paste", json!({"at": "F2"})).unwrap();
     assert_eq!(cf(&s, two), vec!["Sheet1!B2>0@F2:F4".to_string()]);
 }
+
+/// A rule's formulas are written for the top-left of all its ranges: when an edit removes the
+/// range holding that cell, the rest re-host from it, not from their own top-left.
+#[test]
+fn rules_rehost_from_the_top_left_of_all_their_ranges() {
+    let texts = |s: &Session| -> (Vec<String>, Vec<String>) {
+        let sh = s.doc().unwrap().wb.sheets[0].clone();
+        let at = |ranges: &[gridcraft_core::RangeRef]| ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(",");
+        let cf = sh.cond_formats.iter().map(|c| match &c.rule {
+            gridcraft_model::CfRule::Expression { formula, .. } => format!("{}@{}", formula.trim_start_matches('='), at(&c.ranges)),
+            _ => String::new(),
+        });
+        let dv = sh.validations.iter().map(|v| format!("{}@{}", v.f1.trim_start_matches('='), at(&v.ranges)));
+        (cf.collect(), dv.collect())
+    };
+    let setup = || {
+        let mut s = super::tests::s();
+        s.execute(
+            "home.conditionalFormat",
+            json!({"range": "A1:A5,C10:C12", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}),
+        )
+        .unwrap();
+        s.execute("data.validation", json!({"range": "A1:A5,E10:E12", "type": "custom", "formula1": "=A1>0"})).unwrap();
+        s
+    };
+    // Deleting the rows of the first area: the second keeps testing itself.
+    let mut s = setup();
+    s.execute("home.deleteRows", json!({"rows": "1:5"})).unwrap();
+    assert_eq!(texts(&s), (vec!["C5>0@C5:C7".to_string()], vec!["E5>0@E5:E7".to_string()]));
+    // Deleting the cells of the first area, shifting up.
+    let mut s = setup();
+    s.execute("home.deleteCells", json!({"range": "A1:A5", "shift": "left"})).unwrap();
+    assert_eq!(texts(&s), (vec!["C10>0@C10:C12".to_string()], vec!["E10>0@E10:E12".to_string()]));
+}
+
+/// A cut is pasted as it is: a transposed or tiled paste of it is refused and changes nothing,
+/// so its rules never land on a block of another shape than its cells.
+#[test]
+fn a_cut_is_not_transposed_or_tiled() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:C1", "values": [[1, 2, 3]]})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "A1:C1", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("edit.cut", json!({"range": "A1:C1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "E1"})).is_err());
+    s.execute("selection.set", json!({"range": "E1:G2"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all"})).is_err());
+    let sh = s.doc().unwrap().wb.sheets[0].clone();
+    assert_eq!(sh.value(CellRef::new(0, 0)), Value::Number(1.0));
+    assert_eq!(sh.cond_formats[0].ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), vec!["A1:C1".to_string()]);
+    // Pasted as it is, the rule goes with the cells.
+    s.execute("edit.paste", json!({"at": "E1"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].cond_formats[0].ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), vec!["E1:G1".to_string()]);
+}
+
+/// Internal hyperlinks keep the place they name as typed, as Excel's "Place in This Document"
+/// links do: renaming or deleting a sheet, or inserting rows, leaves them as they were.
+#[test]
+fn internal_link_targets_stay_as_typed() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Lists"})).unwrap();
+    let one = s.doc().unwrap().wb.sheet_index("Sheet1").unwrap();
+    s.execute("insert.link", json!({"cell": "Sheet1!A1", "target": "Lists!B5"})).unwrap();
+    s.execute("insert.link", json!({"cell": "Sheet1!A2", "target": "Sheet1!C9"})).unwrap();
+    s.execute("home.insertRows", json!({"rows": "1:1", "sheet": "Sheet1"})).unwrap();
+    let lists = s.doc().unwrap().wb.sheet_index("Lists").unwrap();
+    s.execute("sheet.rename", json!({"sheet": lists, "name": "Data"})).unwrap();
+    s.execute("home.deleteSheet", json!({"sheet": lists})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let one = wb.sheet_index("Sheet1").unwrap_or(one);
+    let mut targets: Vec<String> = wb.sheets[one].hyperlinks.values().map(|h| h.target.clone()).collect();
+    targets.sort();
+    assert_eq!(targets, vec!["Lists!B5".to_string(), "Sheet1!C9".to_string()]);
+}
