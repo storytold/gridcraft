@@ -3,7 +3,7 @@ use gridcraft_core::{CellError, CellRef, DateSystem, RangeRef, Value};
 use gridcraft_model::Visibility;
 
 use super::make_zip;
-use crate::{Format, read_xlsb, read_xlsx, sniff, write_xlsx};
+use crate::{Format, FunctionInfo, read_xlsb, read_xlsb_with, read_xlsx, sniff, write_xlsx};
 
 const ROOT: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="book" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="records/book.bin"/></Relationships>"#;
 const RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="one" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/one.bin"/><Relationship Id="two" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/two.bin"/><Relationship Id="strings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="../text/strings.bin"/></Relationships>"#;
@@ -478,6 +478,36 @@ fn xlsb_unreadable_links_keep_every_formula_as_its_value() {
         assert!(cell.formula.is_none());
         assert_eq!(cell.value, Value::Number(0.0));
         assert!(report.warnings.iter().any(|w| w.contains("could not be read")));
+        // The overview doesn't claim formulas were read.
+        assert!(report.warnings[0].contains("formulas were kept as their saved results"), "{:?}", report.warnings);
+    }
+}
+
+#[test]
+fn xlsb_formula_grouping_follows_token_order() {
+    // Reverse-Polish tokens group by their order alone. Excel writes PtgParen wherever its text
+    // has parentheses, but another writer need not: the text gets the ones it needs to mean the
+    // same, and no more.
+    let a = |row: u32| [&[0x24u8][..], &loc(row, REL)].concat();
+    let int = |n: u8| vec![0x1E, n, 0];
+    let cases: Vec<(Vec<u8>, &str)> = vec![
+        ([int(1), int(2), vec![0x03], int(3), vec![0x05]].concat(), "(1+2)*3"),
+        ([int(1), int(2), int(3), vec![0x04, 0x04]].concat(), "1-(2-3)"),
+        ([int(1), int(2), vec![0x04], int(3), vec![0x04]].concat(), "1-2-3"),
+        ([int(2), vec![0x13], int(2), vec![0x07]].concat(), "-2^2"),
+        ([int(2), int(2), vec![0x07, 0x13]].concat(), "-(2^2)"),
+        // Excel's tokens for its own `-1%`: the parser groups it the other way, to the same value.
+        ([int(1), vec![0x13, 0x14]].concat(), "-1%"),
+        ([int(1), int(2), vec![0x03, 0x14]].concat(), "(1+2)%"),
+        ([a(0), a(1), vec![0x10], vec![0x19, 0x10, 0, 0]].concat(), "SUM((A1,A2))"),
+        ([int(1), int(2), vec![0x03, 0x15], int(3), vec![0x05]].concat(), "(1+2)*3"),
+    ];
+    let data: Vec<u8> =
+        [row(0)].into_iter().chain(cases.iter().enumerate().map(|(i, (rgce, _))| formula_cell(i as u32, rgce, &[]))).flatten().collect();
+    let (wb, _) = read_xlsb(&package(&book_with_links(&xti()), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES)).unwrap();
+    for (i, (_, want)) in cases.iter().enumerate() {
+        let f = wb.sheets[0].cell(CellRef::new(0, i as u32)).and_then(|c| c.formula.clone()).unwrap();
+        assert_eq!(f.text, *want);
     }
 }
 
@@ -519,12 +549,23 @@ fn xlsb_python_formulas_need_their_code_in_the_cell() {
     book.extend(name(0x0002_000b, "_xlfn._xlws.PY"));
     book.extend(end);
     let py = |arg: &[u8]| [&[0x23u8, 5, 0, 0, 0][..], arg, &[0x1E, 0, 0, 0x42, 3, 0xFF, 0]].concat();
-    let data = [row(0), formula_cell(0, &py(&[0x17, 1, 0, b'1', 0]), &[]), formula_cell(1, &py(&[0x1E, 0, 0]), &[])].concat();
-    let (wb, report) = read_xlsb(&package(&book, &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES)).unwrap();
-    let formula = |c| wb.sheets[0].cell(CellRef::new(0, c)).and_then(|x| x.formula.as_ref()).map(|f| f.text.clone());
-    assert_eq!(gridcraft_model::PyCode::from_formula(&formula(0).unwrap()).map(|p| p.code), Some("1".into()));
-    assert_eq!(formula(1), None);
-    assert!(report.warnings.iter().any(|w| w.contains("Python code stored outside")));
+    // Code longer than one string constant is written as constants joined with `&`.
+    let joined = [&[0x17u8, 1, 0, b'1', 0][..], &[0x17, 2, 0, b'+', 0, b'1', 0], &[0x08]].concat();
+    let data =
+        [row(0), formula_cell(0, &py(&[0x17, 1, 0, b'1', 0]), &[]), formula_cell(1, &py(&[0x1E, 0, 0]), &[]), formula_cell(2, &py(&joined), &[])]
+            .concat();
+    let bytes = package(&book, &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
+    // The engine's facts, where PY is no built-in function: a legacy formula calling it would get
+    // an implicit `@`, which the Python-cell reading wouldn't recognize. PY formulas don't.
+    let engine = FunctionInfo { is_builtin: |n| !n.eq_ignore_ascii_case("PY"), is_scalar_arg: |_, _| true };
+    for (wb, report) in [read_xlsb(&bytes).unwrap(), read_xlsb_with(&bytes, engine).unwrap()] {
+        let formula = |c| wb.sheets[0].cell(CellRef::new(0, c)).and_then(|x| x.formula.as_ref()).map(|f| f.text.clone());
+        let code = |c| gridcraft_model::PyCode::from_formula(&formula(c).unwrap()).map(|p| p.code);
+        assert_eq!(code(0), Some("1".into()), "{:?}", formula(0));
+        assert_eq!(code(2), Some("1+1".into()), "{:?}", formula(2));
+        assert_eq!(formula(1), None);
+        assert!(report.warnings.iter().any(|w| w.contains("Python code stored outside")));
+    }
 }
 
 /// `BrtShrFmla` (427) or `BrtArrFmla` (426) over `r0:c0`–`r1:c1`.
