@@ -171,9 +171,9 @@ fn a_secondary_scatter_listed_first_stays_secondary() {
     assert_eq!(ch.series.iter().map(|s| s.secondary).collect::<Vec<_>>(), vec![true, false]);
 }
 
-/// A chart built from `kinds` (with secondary flags), written to XLSX.
-fn written(kind: ChartKind, kinds: &[(Option<ChartKind>, bool)]) -> String {
-    use gridcraft_model::{Chart, Series, Workbook};
+/// A chart of `kind` whose series have `kinds` (and secondary flags).
+fn chart_of(kind: ChartKind, kinds: &[(Option<ChartKind>, bool)]) -> gridcraft_model::Chart {
+    use gridcraft_model::{Chart, Series};
     let xml = format!(
         "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>{}</c:plotArea></c:chart></c:chartSpace>",
         bar(&ser(0))
@@ -181,9 +181,31 @@ fn written(kind: ChartKind, kinds: &[(Option<ChartKind>, bool)]) -> String {
     let base = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
     let series = kinds
         .iter()
-        .map(|(k, secondary)| Series { values: "Sheet1!$B$1:$B$3".into(), kind: *k, secondary: *secondary, ..Series::default() })
+        .enumerate()
+        .map(|(i, (k, secondary))| Series { values: format!("Sheet1!$B${0}:$B${0}", i + 1), kind: *k, secondary: *secondary, ..Series::default() })
         .collect();
-    crate::chart::write_chart(&Workbook::new(), 0, &Chart { kind, series, ..base }, "Book1")
+    Chart { kind, series, ..base }
+}
+
+/// The chart written to XLSX, and read back.
+fn round_trip(chart: &gridcraft_model::Chart) -> (String, gridcraft_model::Chart) {
+    let xml = crate::chart::write_chart(&gridcraft_model::Workbook::new(), 0, chart, "Book1");
+    let back = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    (xml, back)
+}
+
+/// What a chart draws: each series' values, kind and axis.
+fn drawn(c: &gridcraft_model::Chart) -> Vec<(String, ChartKind, bool)> {
+    let any_primary = c.series.iter().any(|s| !s.secondary);
+    (0..c.series.len()).map(|i| c.series_kind(i)).zip(&c.series).map(|(k, s)| (s.values.clone(), k, s.secondary && any_primary)).collect()
+}
+
+/// A chart written to XLSX and read back draws the same series, kinds and axes.
+fn assert_round_trips(kind: ChartKind, kinds: &[(Option<ChartKind>, bool)]) -> String {
+    let chart = chart_of(kind, kinds);
+    let (xml, back) = round_trip(&chart);
+    assert_eq!(drawn(&back), drawn(&chart), "{kinds:?}: {xml}");
+    xml
 }
 
 /// Pies and doughnuts have no axes: a series marked secondary (left from a combo before the
@@ -191,31 +213,63 @@ fn written(kind: ChartKind, kinds: &[(Option<ChartKind>, bool)]) -> String {
 #[test]
 fn pies_and_doughnuts_are_one_group_whatever_the_secondary_flags() {
     for (kind, tag) in [(ChartKind::Pie, "<c:pieChart>"), (ChartKind::Doughnut, "<c:doughnutChart>")] {
-        let xml = written(kind, &[(None, false), (None, true)]);
+        let (xml, back) = round_trip(&chart_of(kind, &[(None, false), (None, true)]));
         assert_eq!(xml.matches(tag).count(), 1, "{xml}");
         assert!(!xml.contains("<c:valAx>"), "{xml}");
-        let back = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
         assert_eq!((back.kind, back.series.len()), (kind, 2));
     }
 }
 
-/// Excel keeps one group per type on a pair of axes: clustered and stacked columns (or lines
-/// and stacked lines) on the same axes are written as one group.
+/// A combination chart's pies and doughnuts are drawn as columns, on axes: on the secondary
+/// axis beside other secondary series, with primary axes always written, and a combo of only
+/// pies and doughnuts is one group of columns.
+#[test]
+fn combo_pies_are_columns_on_their_own_axes() {
+    use ChartKind::*;
+    let xml = assert_round_trips(Combo, &[(Some(Pie), true), (Some(ColumnClustered), true)]);
+    assert!(xml.contains("<c:axId val=\"1\"/>") && !xml.contains("<c:axId val=\"3\"/>"), "{xml}");
+    let xml = assert_round_trips(Combo, &[(Some(ColumnClustered), false), (Some(Line), true), (Some(Pie), true)]);
+    assert_eq!(xml.matches("<c:barChart>").count(), 2, "{xml}");
+    let xml = assert_round_trips(Combo, &[(Some(Pie), false), (Some(Doughnut), false)]);
+    assert!(!xml.contains("<c:pieChart>") && !xml.contains("<c:doughnutChart>"), "{xml}");
+    assert_eq!(xml.matches("<c:barChart>").count(), 1, "{xml}");
+}
+
+/// Excel keeps one group per type on a pair of axes: clustered and stacked columns (lines and
+/// stacked lines, areas and stacked areas) on the same axes are written as one group, drawn
+/// alike before saving and after reopening.
 #[test]
 fn one_group_per_type_on_a_pair_of_axes() {
     use ChartKind::*;
     for (kinds, tag) in [
         (vec![(Some(ColumnStacked), false), (Some(Pie), false), (Some(Line), false)], "<c:barChart>"),
+        (vec![(Some(Pie), false), (Some(ColumnStacked), false), (Some(Line), false)], "<c:barChart>"),
         (vec![(Some(ColumnClustered), false), (Some(ColumnStacked), false)], "<c:barChart>"),
+        (vec![(Some(ColumnStacked), false), (Some(ColumnClustered), false), (Some(Line), false)], "<c:barChart>"),
         (vec![(Some(Line), false), (Some(LineStacked), false), (Some(ColumnClustered), false)], "<c:lineChart>"),
+        (vec![(Some(LineStacked), false), (Some(LineMarkers), false), (Some(ColumnClustered), false)], "<c:lineChart>"),
         (vec![(Some(Area), false), (Some(AreaStacked), false), (Some(ColumnClustered), false)], "<c:areaChart>"),
     ] {
-        let xml = written(Combo, &kinds);
+        let xml = assert_round_trips(Combo, &kinds);
         assert_eq!(xml.matches(tag).count(), 1, "{kinds:?}: {xml}");
     }
-    // On separate axes each keeps its own group.
-    let xml = written(Combo, &[(Some(ColumnClustered), false), (Some(ColumnStacked), true), (Some(Line), false)]);
+    // A stacked column after a clustered one is drawn clustered, as it is saved.
+    let chart = chart_of(Combo, &[(Some(ColumnClustered), false), (Some(ColumnStacked), false)]);
+    assert_eq!((chart.series_kind(0), chart.series_kind(1)), (ColumnClustered, ColumnClustered));
+    // On separate axes each keeps its own grouping.
+    let xml = assert_round_trips(Combo, &[(Some(ColumnClustered), false), (Some(ColumnStacked), true), (Some(Line), false)]);
     assert_eq!(xml.matches("<c:barChart>").count(), 2, "{xml}");
+}
+
+/// A merged group writes its series in their own order: a bubble series drawn as a column joins
+/// the columns where it stands.
+#[test]
+fn a_merged_group_keeps_its_series_in_order() {
+    use ChartKind::*;
+    let (xml, back) = round_trip(&chart_of(Combo, &[(Some(ColumnClustered), false), (Some(Bubble), false), (Some(ColumnClustered), false)]));
+    assert_eq!(back.series.iter().map(|s| s.values.as_str()).collect::<Vec<_>>(), vec!["Sheet1!$B$1:$B$1", "Sheet1!$B$2:$B$2", "Sheet1!$B$3:$B$3"]);
+    let orders: Vec<&str> = xml.match_indices("<c:order val=\"").map(|(i, m)| &xml[i + m.len()..i + m.len() + 1]).collect();
+    assert_eq!(orders, vec!["0", "1", "2"], "{xml}");
 }
 
 /// A markers-only scatter series drawn among lines (a combo on category axes) keeps its
@@ -223,7 +277,6 @@ fn one_group_per_type_on_a_pair_of_axes() {
 #[test]
 fn a_scatter_series_among_lines_keeps_its_markers() {
     use ChartKind::*;
-    let xml = written(Combo, &[(Some(ColumnClustered), false), (Some(Scatter), false)]);
-    let back = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let (xml, back) = round_trip(&chart_of(Combo, &[(Some(ColumnClustered), false), (Some(Scatter), false)]));
     assert_eq!(back.series_kind(1), LineMarkers, "{xml}");
 }

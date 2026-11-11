@@ -612,8 +612,8 @@ fn multi_level_cat(f: &str, values: &str, wb: &Workbook, si: usize) -> Option<St
 fn series_xml(s: &Series, idx: usize, g: G, own: ChartKind, wb: &Workbook, si: usize) -> String {
     let g = match (g, group_for(own)) {
         (G::Line { stacked, .. }, G::Line { markers, .. }) => G::Line { stacked, markers },
-        // A markers-only series drawn among lines keeps its markers.
-        (G::Line { stacked, .. }, G::Scatter { lines: false } | G::Bubble) => G::Line { stacked, markers: true },
+        // A markers-only scatter series drawn among lines keeps its markers.
+        (G::Line { stacked, .. }, G::Scatter { lines: false }) => G::Line { stacked, markers: true },
         (G::Scatter { .. }, mine @ G::Scatter { .. }) => mine,
         _ => g,
     };
@@ -748,8 +748,10 @@ fn dlbls(show: bool) -> String {
     )
 }
 
-fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb: &Workbook, si: usize) -> String {
-    let sers: String = series.iter().map(|(i, s)| series_xml(s, *i, g, ch.series_kind(*i), wb, si)).collect();
+/// Group `g` of `series`, each drawn as its kind in `kinds` (by series index).
+fn group_xml(g: G, series: &[(usize, &Series)], kinds: &[ChartKind], ch: &Chart, axes: (u32, u32), wb: &Workbook, si: usize) -> String {
+    let sers: String =
+        series.iter().map(|(i, s)| series_xml(s, *i, g, kinds.get(*i).copied().unwrap_or(ChartKind::ColumnClustered), wb, si)).collect();
     let dl = dlbls(ch.data_labels);
     let ax = format!("<c:axId val=\"{}\"/><c:axId val=\"{}\"/>", axes.0, axes.1);
     match g {
@@ -859,17 +861,18 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     // other charts get one group per kind their series are drawn as, on each axis, in the order
     // they first appear (a line's markers and a scatter's lines are the series' own).
     let stock = ch.kind == ChartKind::Stock;
-    let group_of = |i: usize| match group_for(ch.series_kind(i)) {
+    let kinds = ch.series_kinds();
+    let group_of = |i: usize| match group_for(kinds.get(i).copied().unwrap_or(ChartKind::ColumnClustered)) {
         G::Line { stacked, .. } => G::Line { stacked, markers: false },
         G::Scatter { .. } => G::Scatter { lines: true },
         g => g,
     };
-    // A series is on the secondary axes only where its group has axes: pies and doughnuts have
-    // none, so their series are all one group.
-    let on_secondary = |i: usize, x: &Series| x.secondary && axes_of(group_of(i)) != Axes::None;
+    // A chart without axes (a pie or doughnut chart) has no secondary axes either: its series
+    // are all one group. (A combination chart's pies are drawn as columns, on axes.)
+    let has_axes = (0..all.len()).any(|i| axes_of(group_of(i)) != Axes::None);
     let groups = |secondary: bool| {
         let mut out: Vec<(G, Vec<(usize, &Series)>)> = Vec::new();
-        for &(i, x) in all.iter().filter(|(i, x)| stock || on_secondary(*i, x) == secondary) {
+        for &(i, x) in all.iter().filter(|(_, x)| stock || (x.secondary && has_axes) == secondary) {
             let g = group_of(i);
             match out.iter_mut().find(|(k, _)| *k == g) {
                 Some((_, members)) => members.push((i, x)),
@@ -879,18 +882,26 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         // The groups on one pair of axes share its kind of axes; one that can't (a pie beside
         // columns, a scatter beside lines) is drawn in the nearest group that can.
         let family = out.iter().map(|(g, _)| axes_of(*g)).find(|a| *a != Axes::None).unwrap_or(Axes::None);
+        // A stock group holds 3 or 4 series (high-low-close, open-high-low-close); others are
+        // lines.
+        let out: Vec<(G, Vec<(usize, &Series)>)> = out
+            .into_iter()
+            .map(|(g, m)| if g == G::Stock && !(3..=4).contains(&m.len()) { (G::Line { stacked: false, markers: false }, m) } else { (g, m) })
+            .collect();
+        // One group per type on a pair of axes (as Excel keeps them; `Chart::series_kind` gives
+        // the series of one type one grouping). Groups that fit the axes come first, so a group
+        // moved onto them joins one of its type there rather than setting its grouping.
+        let (fits, moved): (Vec<_>, Vec<_>) = out.into_iter().partition(|(g, _)| fit_axes(*g, family) == *g);
         let mut fitted: Vec<(G, Vec<(usize, &Series)>)> = Vec::new();
-        for (g, members) in out {
-            // A stock group holds 3 or 4 series (high-low-close, open-high-low-close); others are
-            // lines.
-            let g = if g == G::Stock && !(3..=4).contains(&members.len()) { G::Line { stacked: false, markers: false } } else { g };
-            let g = fit_axes(g, family);
-            // One group per type on a pair of axes (as Excel keeps them): clustered and stacked
-            // columns, or lines and stacked lines, share the first one's grouping.
+        for (g, members) in fits.into_iter().chain(moved.into_iter().map(|(g, m)| (fit_axes(g, family), m))) {
             match fitted.iter_mut().find(|(k, _)| std::mem::discriminant(k) == std::mem::discriminant(&g)) {
                 Some((_, m)) => m.extend(members),
                 None => fitted.push((g, members)),
             }
+        }
+        // Each group's series in their own order.
+        for (_, members) in &mut fitted {
+            members.sort_by_key(|(i, _)| *i);
         }
         fitted
     };
@@ -900,10 +911,10 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         std::mem::swap(&mut primary, &mut sec);
     }
     for (g, members) in &primary {
-        s.push_str(&group_xml(*g, members, ch, (1, 2), wb, si));
+        s.push_str(&group_xml(*g, members, &kinds, ch, (1, 2), wb, si));
     }
     for (g, members) in &sec {
-        s.push_str(&group_xml(*g, members, ch, (3, 4), wb, si));
+        s.push_str(&group_xml(*g, members, &kinds, ch, (3, 4), wb, si));
     }
     let family = |gs: &[(G, Vec<(usize, &Series)>)]| gs.iter().map(|(g, _)| axes_of(*g)).find(|a| *a != Axes::None).unwrap_or(Axes::None);
     let primary_axes = family(&primary);

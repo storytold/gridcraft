@@ -594,22 +594,88 @@ fn combo_series_kind(own: Option<ChartKind>, i: usize) -> ChartKind {
         Some(ChartKind::BarClustered) => ChartKind::ColumnClustered,
         Some(ChartKind::BarStacked) => ChartKind::ColumnStacked,
         Some(ChartKind::BarStacked100) => ChartKind::ColumnStacked100,
+        // Its pies and doughnuts are drawn as columns: a combination chart has axes.
+        Some(ChartKind::Pie | ChartKind::Doughnut) => ChartKind::ColumnClustered,
         Some(k) if k != ChartKind::Combo => k,
         _ if i == 0 => ChartKind::ColumnClustered,
         _ => ChartKind::Line,
     }
 }
 
+/// The types whose series on one pair of axes share one grouping (clustered or stacked).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Grouped {
+    Column,
+    Line,
+    Area,
+}
+
+fn grouped(k: ChartKind) -> Option<Grouped> {
+    use ChartKind::*;
+    match k {
+        ColumnClustered | ColumnStacked | ColumnStacked100 => Some(Grouped::Column),
+        Line | LineMarkers | LineStacked => Some(Grouped::Line),
+        Area | AreaStacked | AreaStacked100 => Some(Grouped::Area),
+        _ => None,
+    }
+}
+
+/// Kind `k` drawn in the grouping of `first`, the first series of its type on its axes: columns
+/// and areas take its kind; a line is stacked when it is, and unstacked (keeping its own
+/// markers) when it isn't.
+fn regroup(k: ChartKind, first: ChartKind) -> ChartKind {
+    match (grouped(k), first) {
+        (Some(Grouped::Line), ChartKind::LineStacked) => ChartKind::LineStacked,
+        (Some(Grouped::Line), _) if k == ChartKind::LineStacked => ChartKind::Line,
+        (Some(Grouped::Line), _) => k,
+        _ => first,
+    }
+}
+
 impl Chart {
     /// The kind series `i` is drawn as: its own kind; else in a combo chart column for the first
-    /// series and line for the rest, and in any other chart the chart's kind.
+    /// series and line for the rest, and in any other chart the chart's kind. In a combo chart
+    /// the series of one type on one pair of axes share the first one's grouping (as Excel keeps
+    /// them): a stacked column beside clustered ones before it is clustered.
     pub fn series_kind(&self, i: usize) -> ChartKind {
         let own = self.series.get(i).and_then(|s| s.kind).filter(|k| *k != ChartKind::Combo);
         match (self.kind, own) {
-            (ChartKind::Combo, own) => combo_series_kind(own, i),
+            (ChartKind::Combo, own) => {
+                let k = combo_series_kind(own, i);
+                let Some(t) = grouped(k) else { return k };
+                let secondary = self.series.get(i).is_some_and(|s| s.secondary);
+                let first = self.series.iter().enumerate().take(i).find_map(|(j, s)| {
+                    let kj = combo_series_kind(s.kind, j);
+                    (s.secondary == secondary && grouped(kj) == Some(t)).then_some(kj)
+                });
+                first.map_or(k, |f| regroup(k, f))
+            }
             (k, Some(own)) if same_family(k, own) => own,
             (k, _) => k,
         }
+    }
+
+    /// The kind every series is drawn as ([`Chart::series_kind`]), in one pass.
+    pub fn series_kinds(&self) -> Vec<ChartKind> {
+        if self.kind != ChartKind::Combo {
+            return (0..self.series.len()).map(|i| self.series_kind(i)).collect();
+        }
+        let mut firsts: Vec<(Grouped, bool, ChartKind)> = Vec::new();
+        self.series
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let k = combo_series_kind(s.kind, i);
+                let Some(t) = grouped(k) else { return k };
+                match firsts.iter().find(|(ft, sec, _)| *ft == t && *sec == s.secondary) {
+                    Some((_, _, f)) => regroup(k, *f),
+                    None => {
+                        firsts.push((t, s.secondary, k));
+                        k
+                    }
+                }
+            })
+            .collect()
     }
 
     /// Drops the series' own kinds the chart's kind doesn't draw (after a change of type):
@@ -979,10 +1045,13 @@ mod series_kind_tests {
     }
 
     #[test]
-    fn combo_series_default_to_a_column_then_lines_and_bars_stand_upright() {
+    fn combo_series_default_to_a_column_then_lines_and_bars_and_pies_stand_upright() {
         use ChartKind::*;
-        let c = chart(Combo, &[None, None, Some(Combo), Some(Area), Some(BarClustered), Some(BarStacked), Some(BarStacked100)]);
-        assert_eq!(drawn(&c), vec![ColumnClustered, Line, Line, Area, ColumnClustered, ColumnStacked, ColumnStacked100]);
+        let c = chart(Combo, &[None, None, Some(Combo), Some(Area), Some(BarClustered), Some(Doughnut)]);
+        assert_eq!(drawn(&c), vec![ColumnClustered, Line, Line, Area, ColumnClustered, ColumnClustered]);
+        for (bar, column) in [(BarStacked, ColumnStacked), (BarStacked100, ColumnStacked100)] {
+            assert_eq!(drawn(&chart(Combo, &[Some(bar), Some(Line)])), vec![column, Line]);
+        }
         // Out of range: the default for that position, never a panic.
         assert_eq!(c.series_kind(usize::MAX), Line);
     }
@@ -993,6 +1062,25 @@ mod series_kind_tests {
         assert_eq!(drawn(&chart(Line, &[None, Some(LineMarkers), Some(Area)])), vec![Line, LineMarkers, Line]);
         assert_eq!(drawn(&chart(ScatterLines, &[Some(Scatter), Some(Line)])), vec![Scatter, ScatterLines]);
         assert_eq!(drawn(&chart(ColumnClustered, &[Some(Line)])), vec![ColumnClustered]);
+    }
+
+    #[test]
+    fn combo_series_of_one_type_on_one_axis_share_the_first_grouping() {
+        use ChartKind::*;
+        let c = chart(
+            Combo,
+            &[Some(ColumnStacked), Some(ColumnClustered), Some(Pie), Some(LineStacked), Some(LineMarkers), Some(Area), Some(AreaStacked100)],
+        );
+        assert_eq!(drawn(&c), vec![ColumnStacked, ColumnStacked, ColumnStacked, LineStacked, LineStacked, Area, Area]);
+        assert_eq!(c.series_kinds(), drawn(&c));
+        // An unstacked line keeps its own markers; a stacked one after it is unstacked.
+        let c = chart(Combo, &[Some(Line), Some(LineMarkers), Some(LineStacked)]);
+        assert_eq!(drawn(&c), vec![Line, LineMarkers, Line]);
+        // Each pair of axes has its own first.
+        let mut c = chart(Combo, &[Some(ColumnClustered), Some(ColumnStacked)]);
+        c.series[1].secondary = true;
+        assert_eq!(drawn(&c), vec![ColumnClustered, ColumnStacked]);
+        assert_eq!(c.series_kinds(), drawn(&c));
     }
 
     #[test]
