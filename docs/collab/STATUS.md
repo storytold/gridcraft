@@ -2,28 +2,31 @@
 
 - Date: 2026-11-11
 - Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`). **Delivered**: the fork's
-  `refs/heads/feature/realtime-collaboration` and the PR's `headRefOid` are both `adc4dcd1`, the
-  four commits `8e76f729` (server and client code, tests, and the `rfc.md`/`server.md`/`client.md`
-  corrections), `437f19ee` (§21), `942e0007` (two numbers in it) and `adc4dcd1` (the same reconnect
-  rule in the browser transport, with its test), published by the push of 2026-11-10T23:24Z. The
-  branch is 64 commits on the base `2c58c769`, 84 files, +17223/−34. The next slice, `00b146df`
-  (§22: the two findings of the 23:35Z review), is **local**: pushing it is the human step §19
-  names, and the bus record `status/gridcraft` quotes the hash a commit cannot spell for itself.
-  §19 records the push of 2026-11-10T17:19Z, which published `ae4311ee`, `34e54b81`, `46783412`
-  and the nine review-fix commits `d91f838a`…`a2251b0e`; §21 records the push of 20:1xZ, which
-  published `f51237ea` and `8208607f`.
+  `refs/heads/feature/realtime-collaboration` and the PR's `headRefOid` are both `bb5b3acf`, so
+  the fork branch *is* the PR's head. The branch is 66 commits on the base `2c58c769`, 84 files,
+  +17521/−34. `00b146df` (§22: the two findings of the 23:35Z review) is **in** it, and so is
+  `bb5b3acf`, the page update that followed; both were published by the push of
+  2026-11-11T01:24Z, whose four workflow runs are stamped 01:24:30Z. §19 records the push of
+  2026-11-10T17:19Z, which published `ae4311ee`, `34e54b81`, `46783412` and the nine review-fix
+  commits `d91f838a`…`a2251b0e`; §21 records the push of 20:1xZ, which published `f51237ea` and
+  `8208607f`. The only commits above the delivered head are local, unpushed slices: `7b42c82a`
+  (§23: the code and the two tests of the 01:36Z finding) and the commit that carries this page.
 - Base: `origin/main` = `2c58c769` at the time of the rebase (the PR's `baseRefOid`); `origin/main`
   has moved **24 commits** since — its tip at this writing is `6a08240e`. The PR stays mergeable
   against the recorded base; rebasing is a separate step.
 - PR: <https://github.com/storytold/gridcraft/pull/3613> — open, **not a draft** since
-  2026-11-10T14:56:54Z, `mergeable = MERGEABLE`, head `adc4dcd1`, last update 2026-11-10T23:35:33Z
-- Gate on `adc4dcd1`: no CI run. The four workflows the 23:24Z push created (`CI`, `House rules`,
+  2026-11-10T14:56:54Z, `mergeable = MERGEABLE`, head `bb5b3acf`, last update 2026-11-11T01:36:39Z
+- Gate on `bb5b3acf`: no CI run. The four workflows the 01:24Z push created (`CI`, `House rules`,
   `Nix`, `SonarCloud`) all ended `action_required` with no job started — the repository needs a
-  maintainer to approve a run from a fork. The evidence is the host run §21.3: `fmt` clean,
-  `clippy -D warnings` on the five packages, and tests of the four collaboration packages plus
-  `gridcraft-web` — 172 passed, 0 failed. CodeRabbit reviewed the head twice: review `5848894080`
-  at 20:32Z (six threads and one finding outside the diff, closed by §21.4) and review
-  `5851190259` at 23:35Z (one thread and one finding outside the diff, closed by §22).
+  maintainer to approve a run from a fork. `bb5b3acf` itself changes only `docs/collab/STATUS.md`
+  (`git diff --stat 00b146df..bb5b3acf`), so its code is `00b146df`'s, gated on the host in §22.3:
+  `fmt` clean, `clippy -D warnings` on the five packages, and tests of the four collaboration
+  packages plus `gridcraft-web` — 176 passed, 0 failed. CodeRabbit is green on the head: its check
+  run completed `success`. It reviewed the head three times: review `5848894080` at 20:32Z (six
+  threads and one finding outside the diff, closed by §21.4), review `5851190259` at 23:35Z (one
+  thread and one finding outside the diff, closed by §22), and review `5852406613` at 01:36Z on
+  `bb5b3acf` — one thread, comment `4532845977` at `synced.rs:398`, closed by §23, and one finding
+  outside the diff that §23.2 confirms and leaves to its own slice.
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
 - Session handoff (project-level, outside this repository):
   `docs/collab/STATUS.md` in the cabinet project directory. This page is the canonical record and
@@ -1387,8 +1390,9 @@ raised two new findings (one thread, one outside the diff); both are triaged in 
 Review `5851190259` at 23:35:29Z, the first one on the delivered head: one inline thread
 (`crates/collab-client/src/synced.rs:565`) and one Major finding outside the diff
 (`crates/collab-web/src/link.rs:169-186`). Both were checked against the code, both were real, and
-`00b146df` fixes them. That commit is local until the branch is pushed again — the human step §19
-names — and the bus record `status/gridcraft` quotes it.
+`00b146df` fixes them. That commit was local until the branch was pushed again — the human step §19
+names — and the bus record `status/gridcraft` quoted it; it reached the fork with the push of
+2026-11-11T01:24Z (header, §23).
 
 ### 22.1 An answer the document already covers was replayed
 
@@ -1456,3 +1460,103 @@ The inline thread was answered on 2026-11-11T00:12Z (comment `4532196988`), nami
 two tests per finding and the corrected fixture, and saying the commit is local until the branch is
 pushed. The finding outside the diff has no thread of its own; its reply is the one on the
 `synced.rs` thread, which covers both halves and links them to the same rule.
+
+## 23. CodeRabbit's two findings on `bb5b3acf` (2026-11-11T01:36Z)
+
+Review `5852406613` is the first review that read the slice of `00b146df`. It carries two Major
+findings: one inline, at `crates/collab-client/src/synced.rs:398` (comment `4532845977`), and one
+outside the diff, aimed at `Synced::with_link` (`STATUS.md:116`, §23.2). The inline one was
+confirmed in the code and fixed in `7b42c82a`; the commit is local, and the push is the human step
+§19 names.
+
+### 23.1 The finding, confirmed
+
+`Event::Snapshot` carries the workbook the transport assembled, and both transports move their
+cursor onto the snapshot's version **before** the event reaches `Synced` (`ServerMessage::Snapshot`
+arm in `crates/collab-client/src/client.rs`, and the same arm in `crates/collab-web/src/link.rs`).
+The arm then installed the workbook only if `open_bytes` parsed it and `swap_document` found the
+session's workbook still open, and neither failure put the replica back in step:
+
+- `open_bytes` → `Err`: the `if let Ok(…)` skipped the whole arm — no notice, no request. The next
+  `Event::Resynced` moved `document_version` to the head anyway. The server does send it for the
+  catch-up that follows a snapshot request (`CatchUp::Registered` in
+  `apps/gridcraft-collab-server/src/ws.rs`), so the replica ends up holding old content under a new
+  version; every `applied` at or below that version is then skipped as already covered — the rule
+  `00b146df` added — and a later reconnect reports the head, so no catch-up is sent.
+- `swap_document` → `Err`: the arm sent `Resync { from: self.link.state().version }`, and that
+  cursor had already moved onto the snapshot's version. The server answers that with an empty
+  tail, so the notice "reconnecting" described a repair that could not happen.
+
+### 23.2 The finding outside the diff, confirmed and left to its own slice
+
+The second Major says `Synced::with_link` reads the transport version after the background task may
+have advanced it, and that queued `Applied` events can then be skipped. That is the same rule and
+the same failure: `with_link` takes `link.state().version` as the version of the document, but
+between `Client::connect` returning and `Synced` being built, the connection task may already have
+handled the catch-up frames and queued them as events; the state is then ahead of the document, the
+queued answers look covered, and the replica shows the pre-catch-up workbook. The race is real and
+unfixed here: the correct starting value is the one the caller passed as `Config::last_version`,
+which `Synced` cannot see — the honest fix passes it through the constructor (and the browser host
+bridge the same way), so it changes the public API of both transports and their call sites. That is
+its own slice with its own gate, not a rider on this one; the reviewer labelled it "Heavy lift" for
+the same reason. It is recorded here so the next push does not claim the finding is closed.
+
+### 23.3 The install is all-or-nothing
+
+`Synced` gained `install_snapshot`, which parses, binds and swaps, and answers `None` when any step
+fails. Only success moves `document_version`, resets the sheet map and drops the preview marks, so
+the document and the version it reports always move together. A failure goes through
+`snapshot_failed`, which counts the attempts:
+
+1. the first one sets a notice and asks for the whole workbook again (`ClientMessage::Snapshot`) —
+   a catch-up from the cursor would return nothing, and the workbook is the only answer that
+   carries what this replica missed;
+2. the second asks for a catch-up from the version the document really holds
+   (`Resync { from: document_version }`), where a journal tail — or the server's own fallback to the
+   workbook — can still repair it;
+3. past `SNAPSHOT_ATTEMPTS = 3` it stops asking and says the session has to be reopened, instead of
+   pulling full workbooks in a loop.
+
+While `snapshot_failures` is above zero the `Event::Resynced` arm no longer moves
+`document_version` either: the `resynced` that closes the same catch-up is the other half of the
+same false claim. A successful install clears the counter. `Synced::document_version()` exposes the
+value, so the invariant is testable and the shell can show what the document holds rather than what
+the cursor says.
+
+Two tests in `crates/collab-client/tests/document.rs`:
+
+- `a_snapshot_that_cannot_be_opened_claims_nothing_and_asks_again` — `PK\x03\x04` bytes that are not
+  a package, at version 4, with the cursor already moved: `A1` keeps its value, `document_version()`
+  stays `0`, the notice is set, `ClientMessage::Snapshot` is sent, the following
+  `Resynced { version: 4 }` claims nothing, and an `applied` at version 3 still lands.
+- `a_snapshot_for_a_workbook_that_was_closed_is_never_claimed` — the shared workbook is closed
+  before the snapshot lands: no window is recreated, the version is not claimed, the first failure
+  asks for the workbook, the second sends `Resync { from: 0 }`, the third sends nothing and the
+  notice names the reopen.
+
+Both fail without the fix, on the finding's own symptoms: the first on the missing notice, the
+second on `[Resync { from: 4 }]` — a tail from the cursor the snapshot had already moved.
+
+### 23.4 Gates (remote host `agents`, 2026-11-11, on this slice)
+
+```text
+cargo fmt --all -- --check                                  clean, EXIT 0
+cargo clippy -p gridcraft-collab-client --all-targets
+  -j 6 -- -D warnings                                       clean, EXIT 0
+cargo test -p gridcraft-collab-client --all-targets        4 lib + 13 converge + 7 document
+                                                           + 5 parts + 4 rollback,
+                                                           33 passed, 0 failed, EXIT 0
+```
+
+The other four packages of §22.3 (`gridcraft-collab`, `-server`, `-web`, `gridcraft-web`) are not
+touched by this slice: the code change is `synced.rs` and its tests, and the only public addition
+is `document_version()`. Their 176-test run on `00b146df` stands; the head `bb5b3acf` adds no code.
+
+### 23.5 Answering the review
+
+Nothing was pushed: the fork still points at `bb5b3acf`, so the inline thread has no commit to
+name yet. The reply on comment `4532845977` will be posted with the push that carries this commit,
+and it will say what it says here: the install is all-or-nothing now (`7b42c82a`), both failure
+paths are tested, and the finding outside the diff is confirmed but belongs to its own slice
+(§23.2). The bus record `status/gridcraft` quotes the hash of the page commit, which a commit
+cannot spell for itself. No CI file is touched: `git diff --name-only -- .github` is empty.
