@@ -1175,6 +1175,7 @@ mod tests {
         assert_eq!(build_params(&dialog)["range"], "D2:E6");
     }
 
+    /// The menu, key tips and command search send no params: they must get the dialog, not an alert.
     #[test]
     fn data_table_menu_opens_the_dialog_instead_of_a_missing_range_error() {
         let mut session = gridcraft_engine::Session::default();
@@ -1191,6 +1192,7 @@ mod tests {
         assert!(d.fields.iter().any(|f| matches!(f, Field::Ref { key: "rowInput", .. })));
     }
 
+    /// A one-variable table (inputs down the first column) filled in through the dialog's OK.
     #[test]
     fn data_table_dialog_ok_fills_a_one_variable_table() {
         let mut session = gridcraft_engine::Session::default();
@@ -1207,6 +1209,32 @@ mod tests {
         let sh = doc.wb.active().unwrap();
         let got: Vec<String> = (1..=3).map(|r| format!("{:?}", sh.value(CellRef::new(r, 4)))).collect();
         assert!(got[0].contains("10") && got[1].contains("20") && got[2].contains("30"), "{got:?}");
+    }
+
+    /// A two-variable table through the dialog: `rowInput` and `columnInput` both reach the command.
+    #[test]
+    fn data_table_dialog_ok_fills_a_two_variable_table() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        // B1, B2 inputs, B3 = B1 * B2; table D1:F3 with =B3 in D1, B1 values across E1:F1,
+        // B2 values down D2:D3.
+        session.execute("range.setValues", json!({"range": "B1:B3", "values": [[1], [1], ["=B1*B2"]]})).unwrap();
+        session.execute("range.setValues", json!({"range": "D1:F3", "values": [["=B3", 2, 3], [10, "", ""], [100, "", ""]]})).unwrap();
+        session.execute("selection.set", json!({"range": "D1:F3"})).unwrap();
+        let mut app = SheetApp::new(session, Default::default());
+        let mut d = Dialog::open(&mut app, "dataTable", json!({})).unwrap();
+        d.set_value("rowInput", json!("B1"));
+        d.set_value("columnInput", json!("B2"));
+        let params = build_params(&d);
+        assert_eq!(params["rowInput"], "B1");
+        app.run(d.command.unwrap(), params).unwrap();
+        let sh = app.session.active().unwrap().wb.active().unwrap();
+        let num = |r, c| format!("{:?}", sh.value(CellRef::new(r, c)));
+        // Row 2 (B2 = 10): 2*10, 3*10; row 3 (B2 = 100): 2*100, 3*100.
+        let got = [num(1, 4), num(1, 5), num(2, 4), num(2, 5)];
+        for (cell, want) in got.iter().zip(["20", "30", "200", "300"]) {
+            assert!(cell.contains(want), "{got:?}");
+        }
     }
 
     #[test]
