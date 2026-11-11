@@ -21,6 +21,7 @@ mod cell_pictures;
 pub mod chartview;
 pub mod code_editor;
 pub mod control;
+pub mod control_ui;
 mod craft_fonts_policy;
 pub mod credits;
 pub mod dialogs;
@@ -31,6 +32,7 @@ pub mod editor;
 pub mod equation;
 mod floating_pictures;
 pub mod fonts;
+pub mod form_controls;
 pub mod formula_bar;
 mod formula_locale;
 pub mod function_library;
@@ -51,6 +53,7 @@ pub mod ribbon;
 pub mod selection_glide;
 pub mod tabs;
 pub mod text_box;
+mod text_direction;
 pub mod theme;
 #[cfg(not(target_arch = "wasm32"))]
 mod updates_ui;
@@ -220,8 +223,9 @@ pub struct SheetApp {
     pub ui: UiState,
     /// The window chrome to draw (see [`Chrome`]).
     pub chrome: Chrome,
-    /// Scroll position per (window id, sheet index).
-    pub views: HashMap<(u64, usize), SheetView>,
+    /// Scroll position per (window id, sheet uid): each sheet keeps its own when sheets are
+    /// inserted, deleted or moved.
+    pub views: HashMap<(u64, u64), SheetView>,
     pub editor: Option<editor::EditState>,
     pub text_box_editor: Option<text_box::EditState>,
     pub dialog: Option<dialogs::Dialog>,
