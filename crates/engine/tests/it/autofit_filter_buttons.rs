@@ -7,6 +7,9 @@ fn table() -> Session {
     s.new_workbook();
     s.execute("range.setValues", json!({"range":"A1", "values":[["Quarterly Revenue"], ["1"]]})).unwrap();
     s.execute("insert.table", json!({"range":"A1:A2", "header":true})).unwrap();
+    // Bold in its own style too, so the table style's bold header row changes nothing here and
+    // these tests compare only the filter button's room, with or without the table.
+    s.execute("home.bold", json!({"range":"A1", "on": true})).unwrap();
     s
 }
 
