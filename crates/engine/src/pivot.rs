@@ -185,7 +185,7 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
     for (n, a) in numeric.iter_mut().zip(any.iter()) {
         *n = *n && *a;
     }
-    let dates = numeric.iter().zip(formats.iter()).map(|(n, f)| *n && crate::display::number_format(f).is_date()).collect();
+    let dates = numeric.iter().zip(formats.iter()).map(|(n, f)| *n && crate::display::parsed(f).is_date()).collect();
     Ok(Source { sheet: si, range: r, headers, formats, numeric, dates, rows })
 }
 

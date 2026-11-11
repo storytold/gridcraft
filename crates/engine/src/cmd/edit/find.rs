@@ -14,8 +14,13 @@ fn matches(hay: &str, what: &str, case: bool, whole: bool) -> bool {
 }
 
 /// `*`/`?` wildcard match with `~` escapes.
+///
+/// The pattern runs as a bit-parallel automaton over the text: one pass, each character costing
+/// one step per 64 pattern positions. Backtracking to the last `*` after a mismatch rescans the
+/// text and costs text × pattern comparisons on a long, repetitive cell, for every cell a
+/// filter or Find visits.
 pub(crate) fn wildcard(text: &str, pat: &str) -> bool {
-    let t: Vec<char> = text.chars().collect();
+    // The pattern as (character, escaped) items, runs of `*` folded into one.
     let mut p: Vec<(char, bool)> = Vec::new();
     let mut it = pat.chars();
     while let Some(c) = it.next() {
@@ -23,32 +28,85 @@ pub(crate) fn wildcard(text: &str, pat: &str) -> bool {
             if let Some(n) = it.next() {
                 p.push((n, true));
             }
-        } else {
+        } else if c != '*' || p.last() != Some(&('*', false)) {
             p.push((c, false));
         }
     }
-    let (mut ti, mut pi) = (0usize, 0usize);
-    let (mut star, mut mark) = (None, 0usize);
-    while ti < t.len() {
-        if pi < p.len() && (p[pi] == ('?', false) || (p[pi].0 == t[ti] && p[pi] != ('*', false))) {
-            ti += 1;
-            pi += 1;
-        } else if pi < p.len() && p[pi] == ('*', false) {
-            star = Some(pi);
-            mark = ti;
-            pi += 1;
-        } else if let Some(sp) = star {
-            pi = sp + 1;
-            mark += 1;
-            ti = mark;
-        } else {
-            return false;
+    let words = (p.len() + 1).div_ceil(64);
+    let bit = |set: &mut [u64], i: usize| set[i / 64] |= 1 << (i % 64);
+    // Positions holding a `*` and a `?`, and where each literal character sits in the pattern.
+    let mut stars = vec![0u64; words];
+    let mut any = vec![0u64; words];
+    let mut at: std::collections::HashMap<char, Vec<usize>> = std::collections::HashMap::new();
+    for (i, item) in p.iter().enumerate() {
+        match item {
+            ('*', false) => bit(&mut stars, i),
+            ('?', false) => bit(&mut any, i),
+            (c, _) => at.entry(*c).or_default().push(i),
         }
     }
-    while pi < p.len() && p[pi] == ('*', false) {
-        pi += 1;
+    // A literal's bit mask is built when the text first reads it, and kept for at most
+    // `MAX_CACHED_MASKS` literals: a long pattern of mostly distinct characters would otherwise
+    // allocate a mask of the pattern's width for each one up front. When there are more literals
+    // than that, the ones kept are those at the most pattern positions (the dearest to rebuild);
+    // each of the rest has at most pattern length / `MAX_CACHED_MASKS` positions, so rebuilding
+    // its mask in `scratch` costs less than one step of the scan.
+    const MAX_CACHED_MASKS: usize = 256;
+    let cacheable: Option<std::collections::HashSet<char>> = (at.len() > MAX_CACHED_MASKS).then(|| {
+        let mut by_count: Vec<(&char, usize)> = at.iter().map(|(c, v)| (c, v.len())).collect();
+        by_count.sort_unstable_by_key(|&(_, n)| std::cmp::Reverse(n));
+        by_count.into_iter().take(MAX_CACHED_MASKS).map(|(c, _)| *c).collect()
+    });
+    let mut masks: std::collections::HashMap<char, Vec<u64>> = std::collections::HashMap::new();
+    let mut scratch = vec![0u64; words];
+    // A set bit i: the text read so far matches the first i pattern items. A `*` matches nothing
+    // as well, so a state at a `*` is also at the item after it.
+    let close = |set: &mut Vec<u64>| {
+        let mut carry = 0u64;
+        for w in 0..words {
+            let s = set[w] & stars[w];
+            let next = (s << 1) | carry;
+            carry = s >> 63;
+            set[w] |= next;
+        }
+    };
+    let mut state = vec![0u64; words];
+    bit(&mut state, 0);
+    close(&mut state);
+    let mut next = vec![0u64; words];
+    for ch in text.chars() {
+        let lit: Option<&[u64]> = match at.get(&ch) {
+            None => None,
+            Some(positions) if cacheable.as_ref().is_none_or(|k| k.contains(&ch)) => {
+                let mask = masks.entry(ch).or_insert_with(|| {
+                    let mut m = vec![0u64; words];
+                    positions.iter().for_each(|&i| bit(&mut m, i));
+                    m
+                });
+                Some(mask)
+            }
+            Some(positions) => {
+                scratch.fill(0);
+                positions.iter().for_each(|&i| bit(&mut scratch, i));
+                Some(&scratch)
+            }
+        };
+        let mut carry = 0u64;
+        let mut alive = 0u64;
+        for w in 0..words {
+            // Items that read `ch` advance; a `*` reads it and stays.
+            let m = state[w] & (any[w] | lit.map_or(0, |l| l[w]));
+            next[w] = (m << 1) | carry | (state[w] & stars[w]);
+            carry = m >> 63;
+            alive |= next[w];
+        }
+        if alive == 0 {
+            return false;
+        }
+        std::mem::swap(&mut state, &mut next);
+        close(&mut state);
     }
-    pi == p.len()
+    state[p.len() / 64] & (1 << (p.len() % 64)) != 0
 }
 
 pub(super) fn find(s: &mut Session, p: &Json) -> Result<Json> {
@@ -112,9 +170,19 @@ pub(super) fn find(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"cell": c.a1(), "sheet": si, "value": t, "count": hits.len()}))
 }
 
+/// Most characters a cell holds (Excel's limit).
+const REPLACE_CELL_MAX_CHARS: usize = 32_767;
+/// Longest text one replacement may give a cell, in bytes: the character limit, each up to four
+/// bytes. Every occurrence copies the replacement text, so a short cell full of matches and a
+/// long replacement would otherwise expand to gigabytes. The character limit is checked on what
+/// fits in this.
+const REPLACE_CELL_MAX_BYTES: usize = REPLACE_CELL_MAX_CHARS * 4;
+/// Most bytes of replaced text one Replace All builds across all its cells.
+const REPLACE_TOTAL_MAX_BYTES: usize = 256 * 1024 * 1024;
+
 pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
     let what = str_param(p, "what").unwrap_or("").to_string();
-    let with = str_param(p, "with").unwrap_or("").to_string();
+    let with = str_param(p, "with").unwrap_or("");
     if what.is_empty() {
         return Err(bad("edit.replace", "missing `what`"));
     }
@@ -128,6 +196,7 @@ pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
     let n = edit(s, |cx| {
         let sheets: Vec<usize> = if workbook { (0..cx.wb.sheets.len()).collect() } else { vec![cx.wb.active_sheet()] };
         let mut n = 0;
+        let mut total = 0usize;
         for si in sheets {
             let cells: Vec<(CellRef, String)> =
                 cx.wb.sheet(si).map(|sh| sh.cells.iter().map(|(c, _)| (c, sh.input_text(c))).collect()).unwrap_or_default();
@@ -139,12 +208,20 @@ pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
                     continue;
                 }
                 let new = if whole {
-                    with.clone()
+                    (with.len() <= REPLACE_CELL_MAX_BYTES).then(|| with.to_string())
                 } else if case {
-                    text.replace(&what, &with)
+                    replace_cs_within(&text, &what, with, REPLACE_CELL_MAX_BYTES)
                 } else {
-                    replace_ci(&text, &what, &with)
+                    replace_ci_within(&text, &what, with, REPLACE_CELL_MAX_BYTES)
                 };
+                let new = new.filter(|n| n.chars().count() <= REPLACE_CELL_MAX_CHARS);
+                let Some(new) = new else {
+                    return Err(EngineError::Other(format!("The replacement makes the text of {} too long.", c.a1())));
+                };
+                total = total.saturating_add(new.len());
+                if total > REPLACE_TOTAL_MAX_BYTES {
+                    return Err(EngineError::Other("The replacements make too much text. Replace in a smaller range.".into()));
+                }
                 // A Python cell's text is its code: the replacement edits the code and the cell
                 // stays a Python cell. Code that would no longer fit in a PY formula is left as it was.
                 let old_py = cx.wb.sheet(si).and_then(|sh| sh.cell(c)).and_then(|x| x.py.clone());
@@ -199,7 +276,37 @@ fn folds_in_place(s: &str) -> bool {
     })
 }
 
+#[cfg(test)]
 pub(super) fn replace_ci(text: &str, what: &str, with: &str) -> String {
+    replace_ci_within(text, what, with, usize::MAX).unwrap_or_default()
+}
+
+/// `text` with every `what` replaced by `with`, or `None` once the result passes `limit` bytes
+/// (checked before each copy, so nothing larger is allocated).
+pub(super) fn replace_cs_within(text: &str, what: &str, with: &str, limit: usize) -> Option<String> {
+    if what.is_empty() {
+        return (text.len() <= limit).then(|| text.to_string());
+    }
+    let mut out = String::new();
+    let mut i = 0;
+    for (pos, m) in text.match_indices(what) {
+        if out.len() + (pos - i) + with.len() > limit {
+            return None;
+        }
+        out.push_str(text.get(i..pos).unwrap_or(""));
+        out.push_str(with);
+        i = pos + m.len();
+    }
+    let rest = text.get(i..).unwrap_or("");
+    if out.len() + rest.len() > limit {
+        return None;
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
+/// Case-insensitive [`replace_cs_within`].
+pub(super) fn replace_ci_within(text: &str, what: &str, with: &str, limit: usize) -> Option<String> {
     let lower = text.to_lowercase();
     let w = what.to_lowercase();
     // Slicing `text` at positions found in `lower` is only sound when folding kept every byte
@@ -207,15 +314,22 @@ pub(super) fn replace_ci(text: &str, what: &str, with: &str) -> String {
     // boundaries (U+212A KELVIN SIGN shrinks 3→1 bytes, U+0130 grows 2→3), where the tail used
     // to be dropped. Those fall back to the case-sensitive replace, as length changes already do.
     if lower.len() != text.len() || w.is_empty() || !folds_in_place(text) || !folds_in_place(what) {
-        return text.replace(what, with);
+        return replace_cs_within(text, what, with, limit);
     }
     let mut out = String::new();
     let mut i = 0;
     while let Some(pos) = lower.get(i..).and_then(|s| s.find(&w)) {
+        if out.len() + pos + with.len() > limit {
+            return None;
+        }
         out.push_str(text.get(i..i + pos).unwrap_or(""));
         out.push_str(with);
         i += pos + w.len();
     }
-    out.push_str(text.get(i..).unwrap_or(""));
-    out
+    let rest = text.get(i..).unwrap_or("");
+    if out.len() + rest.len() > limit {
+        return None;
+    }
+    out.push_str(rest);
+    Some(out)
 }

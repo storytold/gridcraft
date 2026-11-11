@@ -123,6 +123,18 @@ pub(super) enum ColKind {
     Grand,
 }
 
+/// Longest item caption Excel keeps; a subtotal caption repeats its parent's label for every value
+/// field at every level, so a long source label is cut rather than multiplied.
+const MAX_CAPTION_LABEL_CHARS: usize = 255;
+
+/// `label` (cut to [`MAX_CAPTION_LABEL_CHARS`]) and `suffix`, as in "East Total".
+pub(super) fn caption(label: &str, suffix: &str) -> String {
+    let mut out: String = label.chars().take(MAX_CAPTION_LABEL_CHARS).collect();
+    out.push(' ');
+    out.push_str(suffix);
+    out
+}
+
 pub(super) struct ColSpec {
     pub(super) kind: ColKind,
     pub(super) path: Vec<u32>,
@@ -164,7 +176,7 @@ impl Ctx<'_> {
                 leaf: false,
                 path: prefix.to_vec(),
                 values: true,
-                labels: vec![(col, Value::text(format!("{label} {name}")), indent, None)],
+                labels: vec![(col, Value::text(caption(label, name)), indent, None)],
                 vi: Some(vi),
             });
         }
@@ -251,7 +263,7 @@ impl Ctx<'_> {
                         leaf: false,
                         path: prefix.clone(),
                         values: true,
-                        labels: vec![(col, Value::text(format!("{label} Total")), indent, None)],
+                        labels: vec![(col, Value::text(caption(&label, "Total")), indent, None)],
                         vi,
                     });
                 }
@@ -318,7 +330,7 @@ impl Ctx<'_> {
                         leaf: false,
                         path: prefix.clone(),
                         values: true,
-                        labels: vec![(col, Value::text(format!("{label} Total")), 0, None)],
+                        labels: vec![(col, Value::text(caption(&label, "Total")), 0, None)],
                         vi,
                     });
                 }
@@ -439,4 +451,18 @@ pub(super) fn cell_style(lk: &Look, rk: RowKind, cell: &OutCell, last_header: bo
         s.num_fmt = NumFmt::new(f);
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn captions_cut_a_long_parent_label() {
+        assert_eq!(caption("East", "Total"), "East Total");
+        let long = "é".repeat(100_000);
+        let c = caption(&long, "Sum of Sales");
+        assert_eq!(c.chars().count(), MAX_CAPTION_LABEL_CHARS + " Sum of Sales".len());
+        assert!(c.ends_with(" Sum of Sales"));
+    }
 }
