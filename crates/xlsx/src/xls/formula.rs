@@ -529,6 +529,25 @@ mod tests {
     }
 
     #[test]
+    fn xlsb_function_numbers() {
+        // `function` binary-searches the table: sorted, each number once.
+        assert!(FTAB.windows(2).all(|w| w[0].0 < w[1].0));
+        // [MS-XLSB] 2.5.98.10 continues the table from 0x17C. Excel writes these by number in
+        // XLSB: PtgFunc for a fixed argument count, PtgFuncVar otherwise.
+        assert_eq!(function(0x17C), Some(("CUBEVALUE", -1)));
+        assert_eq!(function(449), Some(("EDATE", 2)));
+        assert_eq!(function(480), Some(("IFERROR", 2)));
+        assert_eq!(function(482), Some(("SUMIFS", -1)));
+        assert_eq!(function(0x1D4), None, "unassigned");
+        assert_eq!(function(0x1E5), None);
+        assert_eq!(text(&[0x1E, 1, 0, 0x1E, 2, 0, 0x41, 0xE0, 0x01], &[]).unwrap(), "IFERROR(1,2)");
+        let sumifs = [&[0x1Eu8, 1, 0][..], &[0x1E, 2, 0], &[0x17, 2, 0, b'>', b'0'], &[0x42, 3, 0xE2, 0x01]].concat();
+        assert_eq!(text(&sumifs, &[]).unwrap(), "SUMIFS(1,2,\">0\")");
+        let unknown: Vec<_> = FTAB.iter().filter(|(i, n, _)| *i >= 0x17C && gridcraft_functions::lookup(n).is_none()).map(|(_, n, _)| *n).collect();
+        assert!(unknown.is_empty(), "not gridcraft functions: {unknown:?}");
+    }
+
+    #[test]
     fn deep_nesting_is_refused_not_a_stack_overflow() {
         // 1 followed by thousands of PtgParen / PtgUminus tokens: a hostile file used to build a
         // 16K-deep tree that overflowed the stack when printed or dropped.
