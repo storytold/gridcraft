@@ -573,6 +573,9 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// Excel's font name box: shows the current font's name; the dropdown offers the shared font
+/// list ([`crate::fonts::families`]: the standard names first, then the installed families),
+/// and a pick applies through `home.fontName`.
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let name = st.font.name.clone();
     let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&name).font(theme::ui_font(12.5))));
@@ -677,6 +680,9 @@ fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     }
 }
 
+/// Excel's number format box: the dropdown lists each format kind with a live preview of the
+/// active cell's value in that format; a pick applies through `home.numberFormat`, except
+/// `__more`, which opens the Format Cells dialog instead.
 fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let code = st.num_fmt.as_str().to_string();
     let kind = gridcraft_engine::display::number_format(&code).kind();

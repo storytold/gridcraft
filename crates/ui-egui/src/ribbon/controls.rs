@@ -235,6 +235,12 @@ fn combo_rows(ui: &mut Ui, head: ComboHead, items: &[(&str, &str)], row_w: f32) 
     (picked, sel, filtered)
 }
 
+/// The engine behind [`editable_combo`] and [`list_combo`]: the popup drawn under the anchor,
+/// the state it keeps across frames (a `ComboState` in the egui memory: the filter text, the
+/// highlight and the item values it last saw) and the `ComboResult` the caller acts on. An open
+/// popup whose item list changes — the font scan landing under the font combo — rematches its
+/// highlight against the new list (see [`rematch_selection`]) instead of leaving it at a stale
+/// position, so Enter still applies the row the user sees highlighted.
 fn combo_popup(
     ui: &mut Ui,
     anchor: &egui::Response,
