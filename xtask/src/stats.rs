@@ -143,7 +143,7 @@ pub fn run(_root: &Path, exact: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_SOURCE_BYTES, count_tests, read_source};
+    use super::{Counts, MAX_SOURCE_BYTES, count_tests, read_source, walk};
 
     #[test]
     fn counts_attributes_and_proptest_blocks() {
@@ -162,6 +162,25 @@ mod tests {
         drop(file);
         assert_eq!(read_source(&small).as_deref(), Some("fn a() {}\n"));
         assert_eq!(read_source(&big), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walk_counts_regular_sources_once_and_skips_links_and_big_files() {
+        let dir = std::env::temp_dir().join(format!("xtask-stats-walk-{}", std::process::id()));
+        let sub = dir.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(dir.join("a.rs"), "#[test]\nfn a() {}\n").unwrap();
+        std::fs::write(sub.join("b.rs"), "fn b() {}\n").unwrap();
+        // A directory link back to the root is one identity, a file link is not a regular file,
+        // and a source over the size limit is not read.
+        std::os::unix::fs::symlink(&dir, sub.join("loop")).unwrap();
+        std::os::unix::fs::symlink(dir.join("a.rs"), sub.join("link.rs")).unwrap();
+        std::fs::File::create(dir.join("big.rs")).unwrap().set_len(MAX_SOURCE_BYTES + 1).unwrap();
+        let mut c = Counts::default();
+        walk(&dir, &mut c, &mut std::collections::HashSet::new(), &mut 100);
+        assert_eq!((c.files, c.tests), (2, 1));
         let _ = std::fs::remove_dir_all(dir);
     }
 }
