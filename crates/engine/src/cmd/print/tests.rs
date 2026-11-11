@@ -1638,6 +1638,14 @@ fn header_picture_input_is_checked() {
     let mut huge = png(5, 5);
     huge.resize(17 * 1024 * 1024, 0);
     assert!(run(&mut s, json!({"base64": crate::io::base64_encode(&huge)})).is_err(), "over 16 MB");
+    // A picture whose `&G` would take the text past 255 characters is refused, nothing changed
+    // (cut to fit, the text could lose that `&G`, or another section's).
+    s.execute("pageLayout.headerFooter", json!({"header": format!("&L{}", "x".repeat(252))})).unwrap();
+    let before = print_of(&s);
+    let e = run(&mut s, json!({"section": "left", "base64": b64_png(5, 5)})).unwrap_err().to_string();
+    assert!(e.contains("255 characters"), "{e}");
+    assert_eq!((print_of(&s).header, print_of(&s).hf_pictures.len()), (before.header.clone(), 0));
+    s.execute("pageLayout.headerFooter", json!({"header": ""})).unwrap();
     // Sizes printing would leave out are refused: 5,000 × 4,000 is 20 million pixels.
     let e = run(&mut s, json!({"base64": crate::io::base64_encode(&png_claiming(5000, 4000))})).unwrap_err().to_string();
     assert!(e.contains("16 million pixels"), "{e}");

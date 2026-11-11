@@ -655,8 +655,12 @@ fn header_footer_picture(s: &mut Session, p: &Json) -> Result<Json> {
                 adjust: vec![],
             });
         }
-        let spec = pr.hf_mut(page, footer);
-        *spec = super::print::join_header_footer(&parts).chars().take(MAX_HEADER_FOOTER).collect();
+        // Cut to fit, the text could lose a picture's `&G` (and with it the picture): refused.
+        let joined = super::print::join_header_footer(&parts);
+        if joined.chars().count() > MAX_HEADER_FOOTER {
+            return Err(bad(CMD, format!("a header or footer holds at most {MAX_HEADER_FOOTER} characters; shorten it to add the picture")));
+        }
+        *pr.hf_mut(page, footer) = joined;
         let shown = pr.hf_pictures.iter().find(|q| q.is_at(page, footer, usize::from(idx)));
         let section = ["left", "center", "right"].get(usize::from(idx)).copied().unwrap_or("center");
         Ok(json!({

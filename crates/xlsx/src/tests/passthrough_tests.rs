@@ -1017,6 +1017,30 @@ fn a_header_drawing_with_another_vml_prefix_is_kept() {
     assert!(vml.contains("<vml:shape") && vml.contains("<vml:imagedata"), "the kept drawing, as it was: {vml}");
 }
 
+/// A drawing with an element besides pictures (a rectangle, a text box in a picture shape) would
+/// lose it if written from its pictures: it stays kept and is written back as it was.
+#[test]
+fn a_header_drawing_with_other_elements_is_kept() {
+    for (extra, marker) in [
+        (HF_VML.replace("</xml>", "<v:rect id=\"R\" style=\"width:10pt;height:10pt\"/></xml>"), "<v:rect"),
+        (HF_VML.replace("<o:lock v:ext=\"edit\" rotation=\"t\"/></v:shape>", "<v:textbox>note</v:textbox></v:shape>"), "<v:textbox>"),
+    ] {
+        assert!(extra.contains(marker));
+        let (wb, _) = read_xlsx(&header_picture_package_with(extra.as_bytes())).unwrap();
+        assert!(wb.sheet(0).unwrap().print.hf_pictures.is_empty(), "nothing is modelled from it: {marker}");
+        let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+        u.assert_valid();
+        let sx = u.text(&sheet_part(&u, "Invoice"));
+        let vml = u.text(&u.target(&sheet_part(&u, "Invoice"), &attr_of(&sx, "legacyDrawingHF", "r:id")).1);
+        assert!(vml.contains(marker) && vml.contains("<v:imagedata"), "the kept drawing, as it was: {vml}");
+    }
+    // A drawing as Excel writes it, and as GridCraft writes it, is still read.
+    let (wb, _) = read_xlsx(&header_picture_package()).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().print.hf_pictures.len(), 2);
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheet(0).unwrap().print.hf_pictures, wb.sheet(0).unwrap().print.hf_pictures);
+}
+
 /// The shape blocks a VML drawing claims (`<o:idmap data>`) and the blocks of its shape ids
 /// (`_x0000_s1025` is in block 1).
 fn vml_blocks(vml: &str) -> (Vec<u64>, Vec<u64>) {

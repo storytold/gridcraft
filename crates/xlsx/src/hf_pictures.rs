@@ -81,7 +81,7 @@ fn parse(kept: &Preserved, vml: &PreservedPart) -> Option<Vec<HfPicture>> {
     // A drawing may be UTF-16: read from a UTF-8 copy.
     let utf8 = crate::xml::to_utf8(&vml.data);
     let text = std::str::from_utf8(&utf8).ok()?;
-    if other_vml_prefix(text) {
+    if other_vml_prefix(text) || !only_picture_elements(text) {
         return None;
     }
     let mut out: Vec<HfPicture> = vec![];
@@ -96,6 +96,26 @@ fn parse(kept: &Preserved, vml: &PreservedPart) -> Option<Vec<HfPicture>> {
         out.push(pic);
     }
     Some(out)
+}
+
+/// The elements Excel writes in a header/footer drawing: the root, the shape layout, the
+/// picture frame shape type and its parts, and picture shapes with their image.
+const PICTURE_ELEMENTS: &[&str] =
+    &["xml", "o:shapelayout", "o:idmap", "v:shapetype", "v:stroke", "v:formulas", "v:f", "v:path", "o:lock", "v:shape", "v:imagedata"];
+
+/// Whether `text` holds only [`PICTURE_ELEMENTS`]: anything else (a `<v:rect>`, a text box in a
+/// shape…) would be lost when GridCraft writes the drawing from its pictures, so such a drawing
+/// is kept as it is instead.
+fn only_picture_elements(text: &str) -> bool {
+    text.match_indices('<').all(|(i, _)| {
+        let rest = &text[i + 1..];
+        // End tags, declarations, comments and processing instructions name no new element.
+        if !rest.starts_with(|c: char| c.is_ascii_alphabetic()) {
+            return true;
+        }
+        let name = &rest[..rest.find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, ':' | '_' | '-' | '.'))).unwrap_or(rest.len())];
+        PICTURE_ELEMENTS.contains(&name)
+    })
 }
 
 /// Whether `text` binds the VML namespace to a prefix other than `v` (or makes it the default
