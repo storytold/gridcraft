@@ -1,5 +1,7 @@
 //! Text functions.
 
+use std::collections::HashMap;
+
 use gridcraft_core::parse::parse_number_text_in;
 use gridcraft_core::{CellError, Value, number_to_text};
 
@@ -339,11 +341,11 @@ fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     if body.is_empty() {
         return num_val(0.0);
     }
-    let mut pct = 0;
-    while let Some(b) = body.strip_suffix('%') {
-        body = b.to_string();
-        pct += 1;
-    }
+    // Count the trailing percent signs and cut them off in place: copying the rest once per sign
+    // made a long run of them quadratic.
+    let kept = body.trim_end_matches('%').len();
+    let pct = body.len() - kept;
+    body.truncate(kept);
     let mut seen_dec = false;
     let mut out = String::new();
     for c in body.chars() {
@@ -541,23 +543,52 @@ fn delimiters(v: &Value) -> R<Vec<Vec<char>>> {
     as_array(v).iter().map(|d| d.to_text().map(|s| chars(&s))).collect()
 }
 
+/// Most delimiter characters compared in one search: text length × delimiters is the formula's
+/// to choose, so the search gives up with `#VALUE!` rather than run on.
+const MAX_MATCH_WORK: u64 = 100_000_000;
+
 /// Non-overlapping delimiter matches (start, end) in char positions, in ascending order. Scans left
 /// to right preferring the longest delimiter starting at each position, or (`from_end`) right to
 /// left preferring the longest delimiter ending at each position. Empty delimiters are ignored unless all
-/// delimiters are empty, in which case every position matches with zero length.
-fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end: bool) -> Vec<(usize, usize)> {
+/// delimiters are empty, in which case every position matches with zero length. Repeated
+/// delimiters are tried once, and only those whose first (or, from the end, last) character is the
+/// one at hand; a search past [`MAX_MATCH_WORK`] is `#VALUE!`.
+fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end: bool) -> R<Vec<(usize, usize)>> {
     let t = if insensitive { fold(text) } else { text.to_vec() };
-    let ds: Vec<Vec<char>> = delims.iter().filter(|d| !d.is_empty()).map(|d| if insensitive { fold(d) } else { d.clone() }).collect();
+    let mut ds: Vec<Vec<char>> = delims.iter().filter(|d| !d.is_empty()).map(|d| if insensitive { fold(d) } else { d.clone() }).collect();
     if ds.is_empty() {
-        return (0..=t.len()).map(|i| (i, i)).collect();
+        return Ok((0..=t.len()).map(|i| (i, i)).collect());
     }
+    ds.sort_unstable();
+    ds.dedup();
+    // Delimiters by the character a match is anchored on.
+    let mut by_char: HashMap<char, Vec<&[char]>> = HashMap::new();
+    for d in &ds {
+        let anchor = if from_end { d.last() } else { d.first() };
+        if let Some(&c) = anchor {
+            by_char.entry(c).or_default().push(d);
+        }
+    }
+    let mut work = 0u64;
+    let mut longest = |candidates: Option<&Vec<&[char]>>, fits: &dyn Fn(&[char]) -> bool| -> R<Option<usize>> {
+        let mut best = None;
+        for d in candidates.into_iter().flatten() {
+            work = work.saturating_add(d.len() as u64);
+            if work > MAX_MATCH_WORK {
+                return Err(CellError::Value);
+            }
+            if fits(d) {
+                best = best.max(Some(d.len()));
+            }
+        }
+        Ok(best)
+    };
     let mut out = Vec::new();
     if from_end {
         let mut j = t.len();
         while j > 0 {
-            let best =
-                ds.iter().filter(|d| j.checked_sub(d.len()).and_then(|st| t.get(st..j)).is_some_and(|w| w == d.as_slice())).map(Vec::len).max();
-            match best {
+            let at = t.get(j - 1).and_then(|c| by_char.get(c));
+            match longest(at, &|d| j.checked_sub(d.len()).and_then(|st| t.get(st..j)).is_some_and(|w| w == d))? {
                 Some(l) => {
                     out.push((j - l, j));
                     j -= l;
@@ -566,12 +597,12 @@ fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end
             }
         }
         out.reverse();
-        return out;
+        return Ok(out);
     }
     let mut i = 0;
     while i < t.len() {
-        let best = ds.iter().filter(|d| t.get(i..i + d.len()).is_some_and(|w| w == d.as_slice())).map(Vec::len).max();
-        match best {
+        let at = t.get(i).and_then(|c| by_char.get(c));
+        match longest(at, &|d| t.get(i..i + d.len()).is_some_and(|w| w == d))? {
             Some(l) => {
                 out.push((i, i + l));
                 i += l;
@@ -579,7 +610,7 @@ fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end
             None => i += 1,
         }
     }
-    out
+    Ok(out)
 }
 
 fn text_before_after(a: &[Arg], before: bool) -> R<Value> {
@@ -591,7 +622,7 @@ fn text_before_after(a: &[Arg], before: bool) -> R<Value> {
     if !(0..=1).contains(&mode) || inst == 0 || inst.unsigned_abs() as usize > s.len().max(1) {
         return Err(CellError::Value);
     }
-    let mut m = find_matches(&s, &delims, mode == 1, inst < 0);
+    let mut m = find_matches(&s, &delims, mode == 1, inst < 0)?;
     if match_end {
         if inst > 0 {
             if m.last().is_none_or(|x| x.0 != s.len()) {
@@ -620,18 +651,18 @@ fn textafter(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     text_before_after(a, false)
 }
 
-fn split_by(s: &[char], delims: &[Vec<char>], insensitive: bool) -> Vec<Vec<char>> {
+fn split_by(s: &[char], delims: &[Vec<char>], insensitive: bool) -> R<Vec<Vec<char>>> {
     if delims.iter().all(Vec::is_empty) {
-        return vec![s.to_vec()];
+        return Ok(vec![s.to_vec()]);
     }
     let mut out = Vec::new();
     let mut last = 0;
-    for (st, en) in find_matches(s, delims, insensitive, false) {
+    for (st, en) in find_matches(s, delims, insensitive, false)? {
         out.push(s[last..st].to_vec());
         last = en;
     }
     out.push(s[last..].to_vec());
-    out
+    Ok(out)
 }
 
 fn textsplit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -648,12 +679,12 @@ fn textsplit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
     let pad = if has(a, 5) { scalar(arg(a, 5)?) } else { Value::Error(CellError::NA) };
     let mut rows: Vec<Vec<String>> = Vec::new();
-    for r in split_by(&s, &row_d, mode == 1) {
+    for r in split_by(&s, &row_d, mode == 1)? {
         if ignore && r.is_empty() {
             continue;
         }
         let cells: Vec<String> =
-            split_by(&r, &col_d, mode == 1).into_iter().filter(|c| !(ignore && c.is_empty())).map(|c| c.into_iter().collect()).collect();
+            split_by(&r, &col_d, mode == 1)?.into_iter().filter(|c| !(ignore && c.is_empty())).map(|c| c.into_iter().collect()).collect();
         if ignore && cells.is_empty() {
             continue;
         }
@@ -883,13 +914,25 @@ fn regexreplace(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         out.push_str(s.get(last..).unwrap_or_default());
         return check_len(out);
     }
-    let caps: Vec<regex::Captures> = re.captures_iter(&s).collect();
-    let k = occ.unsigned_abs() as usize;
-    let idx = if occ > 0 { k.checked_sub(1) } else { caps.len().checked_sub(k) };
-    let Some(cap) = idx.and_then(|i| caps.get(i)) else { return text_val(s) };
+    // An occurrence past what `usize` holds (32-bit targets) names no match: the text is returned as it was.
+    let Ok(k) = usize::try_from(occ.unsigned_abs()) else { return text_val(s) };
+    // Keeps only the wanted match's captures: the nth from the front, or a window of the last `k`.
+    let cap = if occ > 0 {
+        re.captures_iter(&s).nth(k - 1)
+    } else {
+        let mut last = std::collections::VecDeque::new();
+        for cap in re.captures_iter(&s) {
+            if last.len() == k {
+                last.pop_front();
+            }
+            last.push_back(cap);
+        }
+        if last.len() == k { last.pop_front() } else { None }
+    };
+    let Some(cap) = cap else { return text_val(s) };
     let Some(m) = cap.get(0) else { return text_val(s) };
     out.push_str(s.get(..m.start()).unwrap_or_default());
-    expand_capped(cap, &rep, &mut out, limit).ok_or(CellError::Value)?;
+    expand_capped(&cap, &rep, &mut out, limit).ok_or(CellError::Value)?;
     out.push_str(s.get(m.end()..).unwrap_or_default());
     check_len(out)
 }
@@ -1083,6 +1126,15 @@ mod tests {
     }
 
     use crate::util::testutil::*;
+
+    /// Trailing percent signs each divide by 100, and a long run of them is cut off in one pass.
+    #[test]
+    fn numbervalue_percent_signs() {
+        close(ev("NUMBERVALUE", vec![t("5%%")]), 0.0005);
+        close(ev("NUMBERVALUE", vec![t("1,5%"), t(","), t(".")]), 0.015);
+        let many = format!("1{}", "%".repeat(32_000));
+        close(ev("NUMBERVALUE", vec![t(&many)]), 0.0);
+    }
 
     #[test]
     fn bahttext() {
@@ -1364,6 +1416,24 @@ mod tests {
         is_text(ev("TEXTBEFORE", vec![t("aaaa"), t("aa"), n(-2.0)]), "");
         is_text(ev("TEXTBEFORE", vec![t("AaA"), t("aa"), n(-1.0), n(1.0)]), "A");
         is_text(ev("TEXTAFTER", vec![t("aaa"), t("aa"), n(1.0)]), "a");
+    }
+
+    /// Thousands of copies of one delimiter are tried once; delimiters that can't start where the
+    /// scan stands aren't compared; a search over a budget of comparisons is `#VALUE!`.
+    #[test]
+    fn delimiter_matching_stays_bounded() {
+        let text = "ab,".repeat(10_000);
+        let same: Vec<&str> = vec![","; 50_000];
+        let v = ev("TEXTSPLIT", vec![t(&text), av(row_t(&same))]);
+        assert_eq!(rows_of(&v).first().map(Vec::len), Some(10_001));
+        // Distinct long delimiters that start and end like every position: refused, not run.
+        let long: Vec<String> = (0..5_000).map(|i| format!("a{i}{}", "a".repeat(1_000))).collect();
+        let long: Vec<&str> = long.iter().map(String::as_str).collect();
+        is_err(ev("TEXTSPLIT", vec![t(&"a".repeat(30_000)), av(row_t(&long))]), CellError::Value);
+        is_err(ev("TEXTBEFORE", vec![t(&"a".repeat(30_000)), av(row_t(&long)), n(-1.0)]), CellError::Value);
+        // Longest match wins at a position, from either end.
+        is_text(ev("TEXTBEFORE", vec![t("x--y-z"), av(row_t(&["-", "--"]))]), "x");
+        is_text(ev("TEXTAFTER", vec![t("x--y-z"), av(row_t(&["-", "--"])), n(-1.0)]), "z");
     }
 
     #[test]
