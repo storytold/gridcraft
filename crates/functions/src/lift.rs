@@ -50,12 +50,7 @@ fn reject_multi_cell_refs(spec: &FnSpec, args: &[Arg]) -> Option<Vec<Arg>> {
     if !args.iter().enumerate().any(|(i, a)| multi(i, a)) {
         return None;
     }
-    Some(
-        args.iter()
-            .enumerate()
-            .map(|(i, a)| if multi(i, a) { Arg { value: Value::Error(CellError::Value), from_ref: false } } else { a.clone() })
-            .collect(),
-    )
+    Some(args.iter().enumerate().map(|(i, a)| if multi(i, a) { Arg::val(Value::Error(CellError::Value)) } else { a.clone() }).collect())
 }
 
 /// Lookups whose every call searches a lookup vector from its start, so a call lifted over `n`
@@ -120,6 +115,8 @@ pub(crate) fn call_lifted(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Val
                 {
                     let v = arr.get_broadcast(r, c);
                     slot.value = if let Value::Array(inner) = &v { inner.data.first().cloned().unwrap_or(Value::Empty) } else { v };
+                    // A blank element of a written array argument is given, as a scalar blank is.
+                    slot.blank_value = !slot.from_ref && matches!(slot.value, Value::Empty);
                 }
             }
             let out = (spec.imp)(&cell_args, ctx);
