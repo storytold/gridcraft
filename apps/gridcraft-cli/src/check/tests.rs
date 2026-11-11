@@ -11,8 +11,8 @@ fn discovery_reports_a_directory_read_error() {
     let path = std::env::temp_dir().join(format!("gridcraft-check-not-a-directory-{}", std::process::id()));
     std::fs::write(&path, "not a directory").unwrap();
     let mut discovery = Discovery::default();
-    let mut seen = std::collections::HashSet::new();
-    assert!(walk(&path, 0, &mut discovery, &mut seen));
+    let mut seen = std::collections::HashMap::new();
+    assert!(walk(&path, 0, false, &mut discovery, &mut seen));
     assert!(discovery.files.is_empty());
     assert_eq!(discovery.failures.len(), 1);
     assert_eq!(discovery.failures[0].path, path.to_string_lossy());

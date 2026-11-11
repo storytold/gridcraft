@@ -223,6 +223,26 @@ fn a_directory_past_the_depth_limit_is_still_scanned_when_named_as_an_input() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_directory_first_reached_at_the_depth_limit_is_completed_when_named_as_an_input() {
+    let dir = tmpdir("check-depth-shallower");
+    // The 32nd folder is scanned from the top, but its child (and the workbook in it) is past the limit.
+    let mut limit = dir.clone();
+    for _ in 0..32 {
+        limit.push("d");
+    }
+    let child = limit.join("c");
+    std::fs::create_dir_all(&child).unwrap();
+    ok(&["run", "--out", limit.join("at_limit.xlsx").to_str().unwrap(), "--quiet"]);
+    ok(&["run", "--out", child.join("below.xlsx").to_str().unwrap(), "--quiet"]);
+    let out = run(&["check", dir.to_str().unwrap(), limit.to_str().unwrap(), "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    // Named from depth 0 the subtree is read: the workbook below the limit is checked, the one at it only once.
+    assert_eq!(report["totals"]["opened"], 2, "{report}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A script line whose parameters are under a key `run` does not read used to run the command
 /// with no parameters at all, and the run still exited 0: three mistaken lines made Sheet2,
 /// Sheet3 and Sheet4 instead of the named sheets, and nothing said so (#2256).
