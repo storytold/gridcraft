@@ -1,8 +1,8 @@
 use super::frame::Bx;
 use super::trend::supports_trendline;
 use super::{
-    Chart, ChartData, ChartKind, Ctx, DOWN, HAlign, LABEL_SIZE, MAX_CATS, MAX_SERIES, MAX_TRENDLINES, Prim, Rgba, SeriesData, TEXT, Theme, UP,
-    VAlign, auto_name, series_color,
+    Chart, ChartData, ChartKind, Ctx, DOWN, HAlign, LABEL_SIZE, MAX_CATS, MAX_SERIES, MAX_TRENDLINES, Prim, Rgba, TEXT, Theme, UP, VAlign, auto_name,
+    series_color,
 };
 use gridcraft_model::LegendPos;
 
@@ -13,11 +13,6 @@ pub enum Swatch {
     Line,
     LineMarker,
     Marker,
-}
-
-/// The kind a series is drawn as (per-series kinds only apply to combo charts).
-pub(super) fn plot_kind(chart: &Chart, s: &SeriesData) -> ChartKind {
-    if chart.kind == ChartKind::Combo { if s.kind == ChartKind::Combo { ChartKind::Line } else { s.kind } } else { chart.kind }
 }
 
 /// Colour of point `j` for charts that colour by point (pie, doughnut, treemap, sunburst).
@@ -59,7 +54,7 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
             let mut out: Vec<(String, Rgba, Swatch)> = series
                 .clone()
                 .map(|s| {
-                    let sw = match plot_kind(chart, s) {
+                    let sw = match s.kind {
                         ChartKind::Line | ChartKind::LineStacked | ChartKind::Radar | ChartKind::ScatterLines => Swatch::Line,
                         ChartKind::LineMarkers => Swatch::LineMarker,
                         ChartKind::Scatter | ChartKind::Bubble => Swatch::Marker,
@@ -69,7 +64,7 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
                 })
                 .collect();
             // Trendlines follow the series, named "Linear (Sales)" unless given a name.
-            for s in series.filter(|s| supports_trendline(plot_kind(chart, s))) {
+            for s in series.filter(|s| supports_trendline(s.kind)) {
                 for t in s.trendlines.iter().take(MAX_TRENDLINES) {
                     out.push((t.spec.name.clone().unwrap_or_else(|| auto_name(t.spec.kind, &s.name)), t.color, Swatch::Line));
                 }

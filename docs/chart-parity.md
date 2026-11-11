@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-02 · **Change:** minor (charts resize from eight handles; earlier: chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-11 · **Change:** minor (combo series drawn and saved by their own kind; earlier: charts resize from eight handles; earlier: chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -13,6 +13,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 
 | Excel type | Excel subtypes | GridCraft | Notes |
 |---|---|---|---|
+| 2026-11-11 | minor | Combo series drawn and saved by their own kind (`Chart::series_kind`): stacked columns, areas and scatter in combos round-trip XLSX as their own groups with matching axes; one-kind charts keep secondary-axis series; changing the type drops kinds it doesn't draw. No readiness score change. |
 | Column | clustered, stacked, 100% stacked, 3-D clustered/stacked/100%, 3-D column | 3 of 7 | no 3-D |
 | Bar | clustered, stacked, 100%, 3-D ×3 | 3 of 6 | no 3-D |
 | Line | line, stacked, 100% stacked, with markers ×3, 3-D line | 3 of 7 (line, with markers, stacked) | no 100% stacked; smoothed lines landed (#62) |
@@ -30,7 +31,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Box & Whisker | 1 | 1 of 1 | |
 | Waterfall, Funnel | 2 | 2 of 2 | |
 | Filled map | 1 | 0 | needs geographic boundary data (licensing decision) |
-| Combo | custom combinations, secondary axis | yes (line on secondary axis) | |
+| Combo | custom combinations, secondary axis | yes: each series drawn as its own kind (column, stacked column, line, line with markers, area, scatter; bars stand upright as columns), secondary axis | |
 | **Total** | ~60 subtypes | **26 (~43%)** | usage-weighted breadth higher (~65%): column, bar, line, pie and scatter dominate |
 
 ## Chart elements and formatting
@@ -45,7 +46,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Gridlines | major/minor per axis, formatting | one on/off flag |
 | Axis options | min/max/units, log scale, reverse order, crossing point, display units, date axis, number format | **missing** (auto only) |
 | Multi-level category axis (a category range two or more columns wide beside the values: year beside month) | the outer levels grouped under the labels with separators | read (`multiLvlStrRef`), drawn (rows under the labels; columns beside them in bar charts; up to three outer levels), written back with Excel's level caches |
-| Secondary axis | any series | line series in combo charts |
+| Secondary axis | any series | any combo series; a one-kind chart's secondary series keep their axis in XLSX |
 | Trendlines | linear, exponential, logarithmic, polynomial, power, moving average, equation and R² | all six types, several per series, name, forward/backward forecast, set intercept, equation and R² label, line colour/width/dash; read, written and drawn on 2-D column, bar, line, area, scatter and bubble series; `chart.addElement` `trendline` adds/removes them. No Format Trendline pane, label position/number format not kept |
 | Error bars | fixed, %, standard deviation/error, custom | **missing** |
 | Up/down bars, high-low lines, drop lines, series lines | yes | **missing** |
@@ -90,6 +91,15 @@ name and writes it back with `[0]!`; a sheet-scoped name is written `Sheet!Name`
 qualifier: with a bare name in `<c:f>` it draws the whole chart blank, without a repair prompt
 (observed in Excel for Windows, Microsoft 365). External books (`[1]Sheet1!…`) are kept as they
 are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
+
+Each series is drawn and saved as the kind `Chart::series_kind` gives it: in a combo chart its
+own kind (by default the first a column and the rest lines), elsewhere the chart's kind, with a
+line's own markers or a scatter's own lines kept. Changing the chart type drops the kinds the new
+type does not draw. The XLSX writer writes one chart group per drawn kind on each axis, with axes
+of the kind those groups need (category, horizontal-bar or value axes; a group that can't share
+them is drawn in the nearest one that can), a secondary pair whenever a series is on it, and a
+stock group only for 3 or 4 series. The reader takes the primary axes from the value axis on the
+left or bottom, and orders series by `c:order`.
 
 ## Work (40–60 h)
 
