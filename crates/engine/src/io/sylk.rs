@@ -137,7 +137,7 @@ pub fn read(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
         }
     }
     for (first, last, width) in widths {
-        let size = crate::cmd::format::chars_to_points(width) as f32;
+        let size = crate::cmd::format::chars_to_points(width, gridcraft_model::DEFAULT_DIGIT_WIDTH) as f32;
         for c in first..=last {
             sheet.cols.entry(c).or_default().size = Some(size);
         }

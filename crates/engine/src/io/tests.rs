@@ -740,7 +740,7 @@ fn sylk_files_open_with_values_formulas_formats_and_widths() {
     assert_eq!(fmt("C3"), "General");
     assert_eq!(fmt("B5"), "yyyy\\-mm\\-dd");
     // Widths are in characters, like the Column Width dialog's.
-    let chars = |c: u32| gridcraft_model::points_to_chars(f64::from(sh.col_width(c)));
+    let chars = |c: u32| gridcraft_model::points_to_chars(f64::from(sh.col_width(c)), wb.digit_width());
     assert_eq!((chars(0), chars(1), chars(2)), (18.0, 9.0, 9.0));
     assert_eq!(sh.cols.get(&3).and_then(|i| i.size), None, "column D keeps the default width");
 }
