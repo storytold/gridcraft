@@ -11,7 +11,7 @@ use crate::io::esc;
 const MAX_SIDE: f32 = 16_384.0;
 
 /// Most bytes of SVG written for the charts of one web page together. A chart past what is
-/// left is left out of the page rather than grown without bound.
+/// left makes the export fail rather than grow without bound or be dropped without a word.
 pub(crate) const MAX_PAGE_SVG_BYTES: usize = 64 * 1024 * 1024;
 
 struct HelveticaMeasure;
@@ -22,16 +22,22 @@ impl gridcraft_chart::Measure for HelveticaMeasure {
     }
 }
 
-/// `chart` of sheet `sheet` as an `<svg>` element placed by `style`, or `None` for a degenerate
-/// size or an element longer than `budget` bytes.
-pub(crate) fn chart_svg(wb: &Workbook, sheet: usize, chart: &Chart, style: &str, budget: usize) -> Option<String> {
+/// `chart` of sheet `sheet` as an `<svg>` element placed by `style`, `None` for a degenerate size,
+/// or an error for an element longer than `budget` bytes.
+pub(crate) fn chart_svg(wb: &Workbook, sheet: usize, chart: &Chart, style: &str, budget: usize) -> crate::Result<Option<String>> {
     let (w, h) = (chart.anchor.width.min(MAX_SIDE), chart.anchor.height.min(MAX_SIDE));
     if !(w >= 1.0 && h >= 1.0) {
-        return None;
+        return Ok(None);
     }
     let data = gridcraft_chart::resolve(wb, sheet, chart);
     let prims = gridcraft_chart::render(chart, &data, w, h, &HelveticaMeasure);
-    prims_svg_within(&prims, w, h, style, budget)
+    match prims_svg_within(&prims, w, h, style, budget) {
+        Some(svg) => Ok(Some(svg)),
+        None => Err(crate::EngineError::Other(format!(
+            "the charts would make the web page over {} MiB. Save as .xlsx or PDF instead.",
+            MAX_PAGE_SVG_BYTES / (1024 * 1024)
+        ))),
+    }
 }
 
 #[cfg(test)]
