@@ -20,8 +20,8 @@ fn id_of(v: &serde_json::Value, key: &str) -> u32 {
 }
 
 /// A table with one object of each kind on the first sheet: a chart, a picture, a shape, a
-/// slicer and an equation, in `ObjKind::ALL` order.
-fn every_kind(s: &mut Session) -> [ObjRef; 5] {
+/// slicer, an equation and a form control, in `ObjKind::ALL` order.
+fn every_kind(s: &mut Session) -> [ObjRef; 6] {
     s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Qty"], ["East", 3], ["West", 5], ["East", 2], ["North", 8]]})).unwrap();
     s.execute("insert.table", json!({"range": "A1:B5", "name": "Sales"})).unwrap();
     let chart = id_of(&s.execute("insert.chart", json!({"range": "B1:B5", "type": "column", "at": "D2"})).unwrap(), "chart");
@@ -30,12 +30,14 @@ fn every_kind(s: &mut Session) -> [ObjRef; 5] {
     s.execute("selection.set", json!({"cell": "A2"})).unwrap();
     let slicer = id_of(&s.execute("insert.slicer", json!({"column": "Region", "at": "L2"})).unwrap(), "slicer");
     let equation = id_of(&s.execute("insert.equation", json!({"latex": "x^2", "cell": "L18"})).unwrap(), "equation");
+    let control = id_of(&s.execute("insert.slider", json!({"at": "P18", "link": "$B$7"})).unwrap(), "control");
     [
         ObjRef::new(ObjKind::Chart, chart),
         ObjRef::new(ObjKind::Image, image),
         ObjRef::new(ObjKind::Shape, shape),
         ObjRef::new(ObjKind::Slicer, slicer),
         ObjRef::new(ObjKind::Equation, equation),
+        ObjRef::new(ObjKind::Control, control),
     ]
 }
 
@@ -68,9 +70,9 @@ fn every_kind_is_found_moved_and_deleted_by_kind_and_id() {
             assert!(sheet(&s, 0).has_object(*later), "deleting {o:?} leaves {later:?}");
         }
     }
-    // One undo step per delete brings the equation back.
+    // One undo step per delete brings the control, deleted last, back.
     s.execute("edit.undo", json!({})).unwrap();
-    assert!(sheet(&s, 0).has_object(objs[4]));
+    assert!(sheet(&s, 0).has_object(objs[5]));
 }
 
 #[test]
@@ -84,9 +86,11 @@ fn selection_pane_lists_and_stacks_slicers() {
     for k in ObjKind::ALL {
         assert!(kinds.contains(&k.name()), "{k:?} listed in {kinds:?}");
     }
-    assert_eq!(kinds.last(), Some(&"slicer"), "slicers stack on top");
+    assert_eq!(kinds.last(), Some(&"control"), "form controls stack on top");
+    assert_eq!(kinds.get(kinds.len() - 2), Some(&"slicer"), "slicers stack above charts, pictures and shapes");
     let names: Vec<&str> = items.iter().map(|o| o["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"Region") && names.contains(&"Qty"), "{names:?}");
+    assert!(names.contains(&format!("Slider {}", objs[5].id).as_str()), "{names:?}");
     assert_eq!(sheet(&s, 0).slicers.first().map(|c| c.id), Some(objs[3].id));
     s.execute("arrange.sendBackward", json!({"kind": "slicer", "id": second, "toBack": true})).unwrap();
     assert_eq!(sheet(&s, 0).slicers.first().map(|c| c.id), Some(second));
@@ -122,17 +126,17 @@ fn cell_of(s: &Session, o: ObjRef) -> String {
 fn every_kind_follows_row_and_column_edits_and_sorts() {
     let mut s = s();
     let objs = every_kind(&mut s);
-    // Anchors: chart D2, picture D18, shape H18, slicer L2, equation L18.
+    // Anchors: chart D2, picture D18, shape H18, slicer L2, equation L18, slider P18.
     s.execute("object.setAnchorMode", json!({"kind": "shape", "id": objs[2].id, "mode": "absolute"})).unwrap();
     let cells = |s: &Session| objs.map(|o| cell_of(s, o));
-    assert_eq!(cells(&s), ["D2", "D18", "H18", "L2", "L18"]);
+    assert_eq!(cells(&s), ["D2", "D18", "H18", "L2", "L18", "P18"]);
     s.execute("home.insertRows", json!({"rows": "10:11"})).unwrap();
-    assert_eq!(cells(&s), ["D2", "D20", "H18", "L2", "L20"], "rows inserted above move the objects below them; an absolute shape stays");
+    assert_eq!(cells(&s), ["D2", "D20", "H18", "L2", "L20", "P20"], "rows inserted above move the objects below them; an absolute shape stays");
     s.execute("home.insertColumns", json!({"cols": "C:C"})).unwrap();
-    assert_eq!(cells(&s), ["E2", "E20", "H18", "M2", "M20"]);
+    assert_eq!(cells(&s), ["E2", "E20", "H18", "M2", "M20", "Q20"]);
     s.execute("home.deleteColumns", json!({"cols": "C:C"})).unwrap();
     s.execute("home.deleteRows", json!({"rows": "10:11"})).unwrap();
-    assert_eq!(cells(&s), ["D2", "D18", "H18", "L2", "L18"]);
+    assert_eq!(cells(&s), ["D2", "D18", "H18", "L2", "L18", "P18"]);
     // Sorting moves a picture anchored inside the sorted block with its row.
     s.execute("range.setValues", json!({"range": "T1", "values": [["k"], [3], [1], [2]]})).unwrap();
     let pic = ObjRef::new(ObjKind::Image, super::add_image(&mut s, "T2", AnchorMode::MoveAndSize));
@@ -261,6 +265,7 @@ fn a_copied_sheet_gives_its_objects_fresh_ids() {
             .chain(sh.images.iter().map(|c| c.id))
             .chain(sh.shapes.iter().map(|c| c.id))
             .chain(sh.slicers.iter().map(|c| c.id))
+            .chain(sh.controls.iter().map(|c| c.id))
             .collect()
     };
     let mut ids: Vec<u32> = wb.sheets.iter().flat_map(|sh| ids_of(sh)).collect();
@@ -312,6 +317,26 @@ fn object_ids_stay_unique_when_a_file_used_the_largest_id() {
     ids.sort_unstable();
     ids.dedup();
     assert_eq!(ids.len(), 6, "every shape id is distinct across both sheets");
+}
+
+/// A copied sheet's form controls take free ids like its other objects: a file's control can
+/// carry the largest id, and the ids the copy asks for count the controls.
+#[test]
+fn a_copied_sheets_form_controls_take_free_ids_too() {
+    let mut s = s();
+    let slider = id_of(&s.execute("insert.slider", json!({"at": "B2", "link": "$A$1"})).unwrap(), "control");
+    s.execute("insert.button", json!({"at": "B6"})).unwrap();
+    s.execute("insert.shape", json!({"kind": "rectangle", "at": "D2"})).unwrap();
+    // The file's slider carries the largest id (set on the model, as a loaded file would).
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().controls.iter_mut().find(|o| o.id == slider).unwrap().id = u32::MAX;
+    s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let mut ids: Vec<u32> = wb.sheets.iter().flat_map(|sh| sh.controls.iter().map(|o| o.id).chain(sh.shapes.iter().map(|o| o.id))).collect();
+    assert_eq!(ids.len(), 6);
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 6, "every control and shape id is distinct across both sheets: {ids:?}");
+    assert_eq!(ids.iter().filter(|&&i| i == u32::MAX).count(), 1, "only the file's slider keeps the largest id");
 }
 
 /// A file's anchors are not held to the 10,000 points `object.move` gives a new size. A picture
