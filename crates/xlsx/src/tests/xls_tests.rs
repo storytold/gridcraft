@@ -670,3 +670,30 @@ fn shared_formula_text_counts_against_the_text_allowance() {
     let (wb, _) = crate::xls::read_xls_with(&file, crate::xls::Budget::default()).unwrap();
     assert!(ftext(&wb, "B6").is_some());
 }
+
+/// Shared-formula text is optional: an early sheet's expanded formulas must not use the allowance
+/// a later sheet's inline strings need, or the whole import fails for text that fits.
+#[test]
+fn shared_formulas_do_not_starve_a_later_sheets_text() {
+    let shared = cat(&[&[0x4C], &u16s(&[0, 0xFFFF]), &ptg_int(10), &[0x05]]);
+    let boundsheet = |pos: u32, name: &str| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, name.len() as u8, 0], name.as_bytes()]));
+    let globals = |p: [u32; 2]| cat(&[&bof(0x0005), &boundsheet(p[0], "One"), &boundsheet(p[1], "Two"), &eof()]);
+    let one = cat(&[
+        &bof(0x0010),
+        &formula(4, 1, num(10.0), &exp(4, 1)),
+        &rec(0x04BC, &cat(&[&u16s(&[4, 5]), &[1, 1, 0, 2], &(shared.len() as u16).to_le_bytes(), &shared])),
+        &formula(5, 1, num(20.0), &exp(4, 1)),
+        &eof(),
+    ]);
+    let two = cat(&[&bof(0x0010), &rec(0x0204, &cat(&[&cell(0, 0, 0), &xlstr("abcdefgh")])), &eof()]);
+    let p1 = globals([0; 2]).len() as u32;
+    let file = compound("Workbook", &cat(&[&globals([p1, p1 + one.len() as u32]), &one, &two]));
+    // The smallest allowance that reads every string leaves nothing for expanded formulas.
+    let left = (0..1000).find(|n| crate::xls::read_xls_with(&file, crate::xls::Budget::with_text_left(*n)).is_ok()).unwrap();
+    let (wb, _) = crate::xls::read_xls_with(&file, crate::xls::Budget::with_text_left(left)).unwrap();
+    assert_eq!(v(&wb, 1, "A1"), Value::text("abcdefgh"));
+    assert_eq!(ftext(&wb, "B6"), None);
+    assert_eq!(v(&wb, 0, "B6"), Value::Number(20.0));
+    let (wb, _) = crate::xls::read_xls_with(&file, crate::xls::Budget::default()).unwrap();
+    assert!(ftext(&wb, "B6").is_some());
+}

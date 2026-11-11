@@ -196,6 +196,7 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
 
     // BoundSheet8 index → model sheet index.
     let mut model_index: Vec<Option<usize>> = Vec::with_capacity(g.sheets.len());
+    let mut parsed = Vec::new();
     for bs in &g.sheets {
         if bs.kind != 0 {
             report.warn(match bs.kind {
@@ -207,17 +208,22 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
             continue;
         }
         wb.check_sheet_name(&bs.name, None).map_err(invalid)?;
-        let Some((mut sheet, calc)) = worksheet(&stream, bs, &g, &styles, &mut budget, &mut report)? else {
+        let Some(st) = worksheet(&stream, bs, &g, &styles, &mut budget, &mut report)? else {
             report.warn("Dialog sheets and unreadable sheets were skipped.");
             model_index.push(None);
             continue;
         };
-        sheet.visibility = bs.visibility;
+        model_index.push(Some(parsed.len()));
+        parsed.push((bs.visibility, st));
+    }
+    // Every sheet's mandatory text is charged by now; shared formulas take what is left.
+    for (visibility, st) in parsed {
+        let (mut sheet, calc) = finish_sheet(st, &mut budget, &mut report);
+        sheet.visibility = visibility;
         // Every worksheet repeats the workbook's calculation settings; Excel applies the first.
         if wb.sheets.is_empty() {
             wb.calc = calc;
         }
-        model_index.push(Some(wb.sheets.len()));
         wb.sheets.push(Arc::new(sheet));
     }
     if wb.sheets.is_empty() {
@@ -572,14 +578,14 @@ fn blank_array_followers(st: &mut SheetState<'_>, pending: &[Pending]) {
     }
 }
 
-fn worksheet(
+fn worksheet<'g>(
     stream: &[u8],
     bs: &BoundSheet,
-    g: &Globals,
-    styles: &[StyleId],
+    g: &'g Globals,
+    styles: &'g [StyleId],
     budget: &mut Budget,
     report: &mut ReadReport,
-) -> Result<Option<(Sheet, CalcSettings)>, IoError> {
+) -> Result<Option<SheetState<'g>>, IoError> {
     if bs.pos >= stream.len() {
         return Err(invalid(format!("sheet '{}' points outside the Workbook stream", bs.name)));
     }
@@ -624,7 +630,13 @@ fn worksheet(
         }
         sheet_record(&rec, &mut st, budget, report)?;
     }
-    // Shared and array formulas: their definitions follow the first cell that uses them.
+    Ok(Some(st))
+}
+
+/// Attaches a sheet's shared and array formulas (their definitions follow the first cell that
+/// uses them). Run for every sheet only after all sheets' mandatory text is charged, so the
+/// optional shared-formula text can't use up the allowance a later sheet's strings need.
+fn finish_sheet(mut st: SheetState<'_>, budget: &mut Budget, report: &mut ReadReport) -> (Sheet, CalcSettings) {
     let (arrays, shared) = (std::mem::take(&mut st.arrays), std::mem::take(&mut st.shared));
     let pending = std::mem::take(&mut st.pending);
     resolve_pending(&mut st, budget, &arrays, &shared, &pending);
@@ -635,7 +647,7 @@ fn worksheet(
     for why in &st.unsupported {
         report.warn(format!("Some formulas use {why}; their saved results were kept as values."));
     }
-    Ok(Some((st.sheet, st.calc)))
+    (st.sheet, st.calc)
 }
 
 /// The shortest WINDOW2 a file holds (the chart-sheet form); a shorter one is truncated.
