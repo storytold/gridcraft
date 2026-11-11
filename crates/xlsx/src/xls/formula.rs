@@ -204,6 +204,13 @@ fn pop_n(stack: &mut Stack, n: usize, kids: &mut usize) -> Result<Vec<Expr>, Uns
 }
 
 /// Pushes the result of a token one level above the operands it consumed.
+fn sheet_ref_error(sheet: Result<Option<SheetSel>, Unsupported>) -> Expr {
+    match sheet {
+        Ok(Some(sheet)) => Expr::SheetRefError(sheet),
+        _ => Expr::Error(CellError::Ref),
+    }
+}
+
 fn push(stack: &mut Stack, kids: usize, e: Expr) -> Result<(), Unsupported> {
     let depth = kids.saturating_add(1);
     if depth > MAX_DEPTH {
@@ -402,13 +409,18 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], base: CellRef, mode: Mode, links:
                     },
                 )?;
             }
+            // PtgRefErr3d / PtgAreaErr3d: a deleted cell or range on a sheet that is still
+            // there. The sheet is kept (`Sheet1!#REF!`); one in another workbook, or on a sheet
+            // that is gone too, stays a bare `#REF!`.
             0x3C => {
-                t.take(6)?;
-                push(&mut stack, kids, Expr::Error(CellError::Ref))?;
+                let ixti = t.u16()?;
+                t.take(4)?;
+                push(&mut stack, kids, sheet_ref_error(links.sheet_sel(ixti)))?;
             }
             0x3D => {
-                t.take(10)?;
-                push(&mut stack, kids, Expr::Error(CellError::Ref))?;
+                let ixti = t.u16()?;
+                t.take(8)?;
+                push(&mut stack, kids, sheet_ref_error(links.sheet_sel(ixti)))?;
             }
             0x01 => return Err(Unsupported("nested shared or array formula reference")),
             0x02 => return Err(Unsupported("what-if data tables")),

@@ -407,6 +407,8 @@ impl<'h> Evaluator<'h> {
             Expr::Text(t) => Ev::V(Value::Text(t.clone())),
             Expr::Bool(b) => Ev::V(Value::Bool(*b)),
             Expr::Error(x) => err(*x),
+            // `Sheet1!#REF!` keeps the sheet it pointed into, and is the `#REF!` it prints as.
+            Expr::SheetRefError(_) => err(CellError::Ref),
             Expr::Missing => Ev::V(Value::Empty),
             Expr::Paren(x) => self.eval(x),
             Expr::Array(rows) => {

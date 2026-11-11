@@ -576,3 +576,27 @@ fn column_starting_with_at_round_trips() {
         assert_eq!(parse(&text).ok(), Some(Expr::Struct(s)), "printed as {text}");
     }
 }
+
+#[test]
+fn sheet_qualified_ref_error_keeps_its_sheet() -> Result<(), Box<dyn std::error::Error>> {
+    // Excel writes a reference whose cells were deleted as `Sheet!#REF!`, keeping the sheet it
+    // pointed into: the formula bar shows `='Data Sheet'!#REF!`, and renaming that sheet renames
+    // it there too (observed in Excel 365 for Mac).
+    assert_eq!(rt("'Data Sheet'!#REF!"), "'Data Sheet'!#REF!");
+    assert_eq!(rt("Data!#REF!"), "Data!#REF!");
+    assert_eq!(rt("'IS Base'!#REF!-E13"), "'IS Base'!#REF!-E13");
+    assert_eq!(rt("SUM(Data!#REF!,1)"), "SUM(Data!#REF!,1)");
+    assert_eq!(rt("'It''s'!#REF!"), "'It''s'!#REF!");
+    // A bare `#REF!` stays bare, and a 3-D span keeps both ends.
+    assert_eq!(rt("#REF!"), "#REF!");
+    assert_eq!(rt("Jan:Dec!#REF!"), "Jan:Dec!#REF!");
+    // Renaming the sheet it names renames it here too; deleting that sheet leaves a bare `#REF!`.
+    assert_eq!(print(&rename_sheet(parse("'Data Sheet'!#REF!")?, "data sheet", "Renamed Tab")), "'Renamed Tab'!#REF!");
+    assert_eq!(print(&rename_sheet(parse("Other!#REF!")?, "Data", "Renamed")), "Other!#REF!");
+    assert_eq!(print(&crate::adjust::delete_sheet(parse("Data!#REF!+1")?, "Data", &[])), "#REF!+1");
+    // Two of them are the same formula only when they name the same sheet.
+    assert_eq!(parse("Data!#REF!")?, parse("Data!#REF!")?);
+    assert_ne!(parse("Data!#REF!")?, parse("Other!#REF!")?);
+    assert_ne!(parse("Data!#REF!")?, parse("#REF!")?);
+    Ok(())
+}

@@ -335,7 +335,8 @@ impl Parser {
                 };
                 match self.next() {
                     Tok::Word(w) => self.reference_from_word(sheet, &w),
-                    Tok::Error(CellError::Ref) => Ok(Expr::Error(CellError::Ref)),
+                    // `Sheet1!#REF!`: the cells are gone but the sheet is still named.
+                    Tok::Error(CellError::Ref) => Ok(Expr::SheetRefError(sheet)),
                     t => Err(self.err(format!("expected a reference after the sheet name, found {}", describe(&t)))),
                 }
             }
