@@ -25,6 +25,8 @@ mod output;
 
 use charts::rebind_charts;
 pub use charts::{chart_link, chart_series, clear_output, links_to, parse_chart_link};
+#[cfg(test)]
+use compute::aggregation_too_large;
 use compute::compute_from;
 pub use compute::{NOT_A_VALUE_CELL, detail_cells, detail_records};
 pub use items::{distinct_labels, func_caption, item_label};
@@ -319,7 +321,21 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
 
 #[cfg(test)]
 mod fit_tests {
-    use super::data_cols_exceed_sheet;
+    use super::{aggregation_too_large, data_cols_exceed_sheet};
+
+    #[test]
+    fn aggregation_budget_counts_every_value_field() {
+        // #2169: a million groups of 256 value fields (about 20 GB) passed the old group count.
+        assert!(aggregation_too_large(1_000_000, 256 + 1));
+        assert!(aggregation_too_large(40_000, 256));
+        // A one-field report keeps the old limit of five million groups.
+        assert!(!aggregation_too_large(5_000_000, 1));
+        assert!(aggregation_too_large(5_000_001, 1));
+        assert!(!aggregation_too_large(3_000_000, 3));
+        assert!(!aggregation_too_large(0, 0));
+        assert!(aggregation_too_large(2, usize::MAX / 2 + 1));
+        assert!(aggregation_too_large(usize::MAX, usize::MAX));
+    }
 
     #[test]
     fn column_budget_counts_value_fields_and_grand_total() {
