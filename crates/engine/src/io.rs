@@ -611,6 +611,24 @@ pub(crate) fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
+/// [`esc`], or `None` once the escaped text would pass `limit` bytes (nothing larger is built).
+fn esc_within(s: &str, limit: usize) -> Option<String> {
+    let mut out = String::with_capacity(s.len().min(limit));
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            c => out.push(c),
+        }
+        if out.len() > limit {
+            return None;
+        }
+    }
+    Some(out)
+}
+
 fn html_cell_css(wb: &Workbook, sh: &Sheet, c: CellRef, dir: CellDir) -> String {
     let st = wb.styles.get(sh.style_id(c));
     let mut css = String::new();
@@ -686,10 +704,14 @@ fn table_dir(sh: &Sheet) -> &'static str {
 const CLIPBOARD_HTML_MAX_BYTES: usize = 4 * 1024 * 1024;
 const CLIPBOARD_HTML_MAX_CELLS: u64 = 10_000;
 
+/// Most cells the merge index holds: one entry per merged cell inside the exported range.
+const MERGE_INDEX_MAX_ENTRIES: usize = 1_000_000;
+
 /// The merge covering each cell of `rect`, as `Sheet::merge_at` would find it (the first in the
 /// sheet's list), built once so a table lookup is one probe instead of a scan of every merge.
-/// `None` when overlapping merges would cost more than a few visits per cell of `rect`: a
-/// hostile file's merge list can't multiply the work of a bounded export.
+/// `None` when overlapping merges would cost more than a few visits per cell of `rect`, or merged
+/// cells fill more than [`MERGE_INDEX_MAX_ENTRIES`]: a hostile file's merge list can't multiply the
+/// work or the memory of a bounded export.
 fn merge_index(sh: &Sheet, rect: RangeRef) -> Option<std::collections::HashMap<CellRef, RangeRef>> {
     let mut map = std::collections::HashMap::new();
     let mut left = rect.count().saturating_mul(4);
@@ -698,6 +720,9 @@ fn merge_index(sh: &Sheet, rect: RangeRef) -> Option<std::collections::HashMap<C
         left = left.checked_sub(part.count())?;
         for c in part.iter() {
             map.entry(c).or_insert(*m);
+        }
+        if map.len() > MERGE_INDEX_MAX_ENTRIES {
+            return None;
         }
     }
     Some(map)
@@ -834,7 +859,8 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
                 r.width()
             )));
         }
-        let merges = merge_index(sh, r).ok_or_else(|| EngineError::Other("the sheet's merged cells overlap too much for a web page.".into()))?;
+        let merges = merge_index(sh, r)
+            .ok_or_else(|| EngineError::Other("the sheet's merged cells overlap too much, or cover too many cells, for a web page.".into()))?;
         // Visible rows and columns of the table before each line, so a merge's span is counted
         // in constant time whatever the file says its size is.
         let visible_before = |hidden: &dyn Fn(u32) -> bool, from: u32, to: u32| {
@@ -888,7 +914,9 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
                         }
                     })
                     .unwrap_or_default();
-                let _ = write!(out, "<td style=\"{css}\"{}{span}>{}</td>", dir.attr(), esc(&text));
+                // The text is escaped only as far as the page still has room for it.
+                let Some(escaped) = esc_within(&text, HTML_EXPORT_MAX_BYTES.saturating_sub(out.len())) else { return Err(html_too_big()) };
+                let _ = write!(out, "<td style=\"{css}\"{}{span}>{escaped}</td>", dir.attr());
                 if out.len() > HTML_EXPORT_MAX_BYTES {
                     return Err(html_too_big());
                 }
@@ -913,6 +941,10 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
             )
         };
         for im in &sh.images {
+            // The base64 text is a third longer than the picture: refused before it is built.
+            if out.len().saturating_add(im.data.len().div_ceil(3).saturating_mul(4)) > HTML_EXPORT_MAX_BYTES {
+                return Err(html_too_big());
+            }
             let _ = write!(
                 out,
                 "<img src=\"data:{};base64,{}\" alt=\"{}\" style=\"{}\">",

@@ -864,3 +864,20 @@ fn html_export_refuses_a_page_past_its_byte_limit() {
     let err = to_html(&wb, 0).unwrap_err();
     assert!(err.to_string().contains("MiB"), "{err}");
 }
+
+#[test]
+fn escaping_stops_at_the_room_left() {
+    assert_eq!(esc_within("a&b<c>\"d", 100).as_deref(), Some(esc("a&b<c>\"d").as_str()));
+    assert_eq!(esc_within("&&&", 14), None, "three `&amp;` are 15 bytes");
+    assert_eq!(esc_within("&&&", 15).as_deref(), Some("&amp;&amp;&amp;"));
+}
+
+#[test]
+fn the_merge_index_holds_a_bounded_number_of_cells() {
+    let mut sh = Sheet::new("S");
+    let rect = RangeRef::new(CellRef::new(0, 0), CellRef::new(1_100_000, 0));
+    sh.merges.push(RangeRef::new(CellRef::new(0, 0), CellRef::new(999_999, 0)));
+    assert_eq!(merge_index(&sh, rect).map(|m| m.len()), Some(1_000_000));
+    sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(1_000_000, 0))];
+    assert!(merge_index(&sh, rect).is_none());
+}
