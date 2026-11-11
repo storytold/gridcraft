@@ -231,7 +231,7 @@ impl<'h> Evaluator<'h> {
             let horizontal = l.range.height() == 1 && l.range.width() > 1;
             let same_len = if vertical { r.range.height() == l.range.height() } else { r.range.width() == l.range.width() };
             if !matches!(key, Value::Array(_)) && (vertical || horizontal) && same_len {
-                let mut xargs = vec![Arg { value: key, from_ref: false }, Arg { value: self.area_value(&l), from_ref: true }];
+                let mut xargs = vec![Arg::val(key), Arg::reference(self.area_value(&l))];
                 // An empty match_mode before a given search_mode is the default (0), not the end.
                 let given = |i: usize| args.get(i).is_some_and(|e| !matches!(e, Expr::Missing));
                 let last = if given(5) {
@@ -243,10 +243,11 @@ impl<'h> Evaluator<'h> {
                 };
                 for i in 4..=last {
                     match args.get(i) {
-                        Some(Expr::Missing) | None => xargs.push(Arg { value: Value::Number(0.0), from_ref: false }),
+                        Some(Expr::Missing) | None => xargs.push(Arg::val(Value::Number(0.0))),
                         Some(e) => {
                             let value = self.value(e);
-                            xargs.push(Arg { value, from_ref: false });
+                            let blank_value = value == Value::Empty;
+                            xargs.push(Arg { value, from_ref: false, blank_value });
                         }
                     }
                 }

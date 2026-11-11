@@ -203,9 +203,9 @@ impl<'h> Evaluator<'h> {
         let index = self.value(&args[0]);
         if let Value::Array(_) = index {
             let Some(spec) = gridcraft_functions::lookup("CHOOSE") else { return err(CellError::Name) };
-            let mut evaluated = vec![Arg { value: index, from_ref: false }];
+            let mut evaluated = vec![Arg::val(index)];
             for argument in &args[1..] {
-                evaluated.push(Arg { value: self.value(argument), from_ref: false });
+                evaluated.push(Arg::val(self.value(argument)));
             }
             let mut context = FnCtx { ev: self, criteria: None, lambda: None };
             return gridcraft_functions::call(spec, &evaluated, &mut context).pipe(Ev::V);
@@ -351,7 +351,9 @@ impl<'h> Evaluator<'h> {
                 }
                 ev => self.deref(ev),
             };
-            evaluated.push(Arg { value, from_ref });
+            // Only an argument left out (`f(a,,b)`) is omitted; one that computes a blank is given.
+            let blank_value = !from_ref && value == Value::Empty && lambda_at != Some(i) && !matches!(a, Expr::Missing);
+            evaluated.push(Arg { value, from_ref, blank_value });
         }
         // The function may go through every value it is given (a SUM inside each call of a
         // LAMBDA over a large array): the values count against the cell's work.
@@ -396,6 +398,15 @@ impl<'h> Evaluator<'h> {
     /// Adds one area to `acc`; `Err` is the result the function ends with.
     fn aggregate_area(&mut self, kind: Agg, a: &Area, acc: &mut Acc) -> Result<(), Ev> {
         if !a.range.is_single() {
+            // Adding the block's remembered sum to anything but +0.0 would add in another order.
+            // COUNT never reads the sum, so it may reuse every block.
+            if (kind == Agg::Count || acc.sum.to_bits() == 0)
+                && let Some((sum, count)) = self.host.range_sum(a.sheet, a.range)
+            {
+                acc.sum = sum;
+                acc.count = acc.count.saturating_add(count);
+                return Ok(());
+            }
             // Folded without building an array, but still walked: the part inside the used
             // range counts against the cell's work.
             let r = self.read_range(a);
@@ -427,7 +438,7 @@ impl<'h> Evaluator<'h> {
         let (Some(sum), Some(count)) = (gridcraft_functions::lookup("SUM"), gridcraft_functions::lookup("COUNT")) else {
             return Err(err(CellError::Name));
         };
-        let args = [Arg { value, from_ref }];
+        let args = [Arg { value, from_ref, blank_value: false }];
         if kind != Agg::Count {
             match gridcraft_functions::call(sum, &args, &mut FnCtx { ev: self, criteria: None, lambda: None }) {
                 Value::Number(n) => acc.sum += n,

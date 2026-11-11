@@ -54,6 +54,86 @@ pub(super) fn decimate(pts: Vec<[f32; 2]>, max: usize) -> Vec<[f32; 2]> {
     out
 }
 
+/// Decimates the top and baseline of an area chart together at the same horizontal indices so
+/// `area_mesh`'s paired vertical-strip topology (`pts[i]` ↔ `pts[2n - 1 - i]`) is preserved.
+pub(super) fn decimate_area(top: Vec<[f32; 2]>, base: Vec<[f32; 2]>, max: usize) -> Vec<[f32; 2]> {
+    let n = top.len().min(base.len());
+    if n == 0 {
+        return Vec::new();
+    }
+    if n <= max {
+        let mut poly = top;
+        poly.truncate(n);
+        poly.extend(base.into_iter().take(n).rev());
+        return poly;
+    }
+    let mut cols: Vec<[usize; 6]> = Vec::new();
+    let mut keep = Vec::with_capacity(max * 2);
+    let mut i = 0;
+    while i < n {
+        let col = top[i][0].floor();
+        let (start, mut t_mn, mut t_mx, mut b_mn, mut b_mx) = (i, i, i, i, i);
+        let mut k = i + 1;
+        while k < n && top[k][0].floor() == col {
+            if top[k][1] < top[t_mn][1] {
+                t_mn = k;
+            }
+            if top[k][1] > top[t_mx][1] {
+                t_mx = k;
+            }
+            if base[k][1] < base[b_mn][1] {
+                b_mn = k;
+            }
+            if base[k][1] > base[b_mx][1] {
+                b_mx = k;
+            }
+            k += 1;
+        }
+        let entry = [start, t_mn, t_mx, b_mn, b_mx, k - 1];
+        cols.push(entry);
+        let mut idx = entry;
+        idx.sort_unstable();
+        let mut last = usize::MAX;
+        for ix in idx {
+            if ix != last {
+                keep.push(ix);
+                last = ix;
+            }
+        }
+        i = k;
+    }
+    if keep.len() > max * 4 {
+        let max_groups = (max * 4 / 6).max(1);
+        let group_size = cols.len().div_ceil(max_groups);
+        keep.clear();
+        for ch in cols.chunks(group_size) {
+            let start = ch[0][0];
+            let end = ch.last().map_or(start, |c| c[5]);
+            let t_mn = ch.iter().map(|c| c[1]).min_by(|&a, &b| top[a][1].total_cmp(&top[b][1])).unwrap_or(start);
+            let t_mx = ch.iter().map(|c| c[2]).max_by(|&a, &b| top[a][1].total_cmp(&top[b][1])).unwrap_or(start);
+            let b_mn = ch.iter().map(|c| c[3]).min_by(|&a, &b| base[a][1].total_cmp(&base[b][1])).unwrap_or(start);
+            let b_mx = ch.iter().map(|c| c[4]).max_by(|&a, &b| base[a][1].total_cmp(&base[b][1])).unwrap_or(start);
+            let mut idx = [start, t_mn, t_mx, b_mn, b_mx, end];
+            idx.sort_unstable();
+            let mut last = usize::MAX;
+            for ix in idx {
+                if ix != last {
+                    keep.push(ix);
+                    last = ix;
+                }
+            }
+        }
+    }
+    let mut poly = Vec::with_capacity(keep.len() * 2);
+    for &ix in &keep {
+        poly.push(top[ix]);
+    }
+    for &ix in keep.iter().rev() {
+        poly.push(base[ix]);
+    }
+    poly
+}
+
 /// Draws a polyline split at gaps (`None`), decimated when long. With `smooth` (the plot box),
 /// each run is interpolated with a Catmull-Rom spline so the line curves through the data points.
 pub(super) fn draw_runs(ctx: &mut Ctx, pts: &[Option<[f32; 2]>], color: Rgba, width: f32, smooth: Option<Bx>) {
@@ -154,5 +234,58 @@ mod smooth_tests {
         let out = smooth_run(pts, plot);
         assert!(out.len() > 5);
         assert!(out.iter().all(|p| (0.0..=300.0).contains(&p[0]) && (10.0..=110.0).contains(&p[1])));
+    }
+
+    #[test]
+    fn decimate_area_preserves_paired_vertical_strips() {
+        let top: Vec<[f32; 2]> = (0..1000).map(|i| [i as f32 * 0.25, ((i * 37) % 100) as f32]).collect();
+        let base: Vec<[f32; 2]> = (0..1000).map(|i| [i as f32 * 0.25, 100.0]).collect();
+        let poly = decimate_area(top, base, 64);
+        assert_eq!(poly.len() % 2, 0);
+        let half = poly.len() / 2;
+        for i in 0..half {
+            assert_eq!(poly[i][0], poly[poly.len() - 1 - i][0]);
+            assert_eq!(poly[poly.len() - 1 - i][1], 100.0);
+        }
+    }
+
+    #[test]
+    fn decimate_area_preserves_extrema_across_3000_columns() {
+        // 3,000 occupied pixel columns with 6 points per column (18,000 points total),
+        // where each column has distinct top and baseline extrema so the initial per-column
+        // index list exceeds `MAX_LINE_PTS * 2 * 4` (6,400).
+        let max = MAX_LINE_PTS * 2;
+        let mut top = Vec::with_capacity(18_000);
+        let mut base = Vec::with_capacity(18_000);
+        for col in 0..3_000 {
+            let y_top = [50.0, 20.0, 80.0, 50.0, 50.0, 50.0];
+            let y_base = [150.0, 150.0, 150.0, 120.0, 180.0, 150.0];
+            for s in 0..6 {
+                let x = col as f32 + s as f32 * 0.1;
+                top.push([x, y_top[s]]);
+                base.push([x, y_base[s]]);
+            }
+        }
+        // Plant sharp spikes on both top and baseline in interior columns.
+        top[777 * 6 + 1][1] = 1.0;
+        top[1999 * 6 + 2][1] = 99.0;
+        base[1234 * 6 + 3][1] = 101.0;
+        base[2501 * 6 + 4][1] = 199.0;
+
+        let poly = decimate_area(top, base, max);
+        assert_eq!(poly.len() % 2, 0);
+        let half = poly.len() / 2;
+        assert!(half <= max * 4, "retained {half} paired vertices, limit is {}", max * 4);
+        for i in 0..half {
+            assert_eq!(poly[i][0], poly[poly.len() - 1 - i][0]);
+        }
+        let top_kept = &poly[..half];
+        let base_kept = &poly[half..];
+        assert_eq!(top_kept.first().map(|p| p[0]), Some(0.0));
+        assert_eq!(top_kept.last().map(|p| p[0]), Some(2999.5));
+        assert!(top_kept.iter().any(|p| p[1] == 1.0), "top min spike preserved");
+        assert!(top_kept.iter().any(|p| p[1] == 99.0), "top max spike preserved");
+        assert!(base_kept.iter().any(|p| p[1] == 101.0), "base min spike preserved");
+        assert!(base_kept.iter().any(|p| p[1] == 199.0), "base max spike preserved");
     }
 }
