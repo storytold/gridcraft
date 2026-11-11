@@ -533,3 +533,63 @@ mod combo_sync_tests {
         assert_eq!(highlighted_value(&items, &[], 0), None);
     }
 }
+
+#[cfg(test)]
+mod combo_popup_tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    /// What the harness drives: the item values as they stand this frame (the test swaps them
+    /// mid-scenario, as the font scan landing does), the combo's current value, and the pick
+    /// the user made, if any.
+    struct ComboDrive {
+        values: Vec<String>,
+        current: String,
+        picked: Option<String>,
+    }
+
+    /// An editable combo on a plain anchor button, forced open, over the drive's values.
+    fn combo_harness(values: &[&str], current: &str) -> egui_kittest::Harness<'static, ComboDrive> {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 400.0)).build_ui_state(
+            |ui, drive: &mut ComboDrive| {
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    ui.ctx().set_fonts(theme::pinned_font_definitions());
+                    return;
+                }
+                let resp = ui.add(egui::Button::new("Font name"));
+                let items: Vec<(&str, &str)> = drive.values.iter().map(|v| (v.as_str(), v.as_str())).collect();
+                if let ComboResult::Picked(value) = editable_combo(ui, &resp, "font", &drive.current, &items, true) {
+                    drive.picked = Some(value);
+                }
+            },
+            ComboDrive { values: values.iter().map(|v| v.to_string()).collect(), current: current.to_string(), picked: None },
+        );
+        h.run_steps(2);
+        h
+    }
+
+    #[test]
+    fn a_list_change_under_the_open_combo_keeps_enter_on_the_current_value() {
+        // The review scenario, driven end to end: the combo opens over the standard names
+        // only, the background font scan lands and the list grows under the open popup, and
+        // Enter must still apply the current value — not the row that took its old position.
+        let mut h = combo_harness(&["Arial", "Calibri", "Tahoma"], "Tahoma");
+        assert!(h.query_by_label("Tahoma").is_some(), "the open popup draws its rows");
+        assert_eq!(h.state().picked, None);
+
+        h.state_mut().values = ["Arial", "Calibri", "Meiryo", "Tahoma", "Zebra"].iter().map(|v| v.to_string()).collect();
+        h.run_steps(2);
+        assert!(h.query_by_label("Meiryo").is_some(), "the grown list is what the popup now shows");
+        assert_eq!(h.state().picked, None);
+
+        h.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(2);
+        assert_eq!(h.state().picked.as_deref(), Some("Tahoma"), "Enter applies the current value, not Meiryo at its stale position");
+    }
+}
