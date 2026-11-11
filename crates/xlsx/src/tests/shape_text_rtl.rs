@@ -151,3 +151,19 @@ fn an_explicit_no_warp_on_a_filled_ellipse_stays_an_ellipse() {
         .replace(r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/>"#);
     assert_eq!(read_drawing(&bare).sheet(0).unwrap().shapes[0].kind, ShapeKind::WordArt);
 }
+
+/// #2170: a shape font typeface holding `"`, `<` or `&` is escaped as an attribute, so it can't
+/// close the `typeface` attribute early and inject others; it survives a save and reopen.
+#[test]
+fn shape_font_typeface_is_attribute_escaped() {
+    let font = r#"a"b<c&d' injected="x"#;
+    let wb = text_box("hi", ShapeFormat { font: Some(font.into()), ..Default::default() });
+    let xml = written_drawing(&wb);
+    assert!(xml.contains(r#"<a:latin typeface="a&quot;b&lt;c&amp;d"#), "typeface is attribute-escaped: {xml}");
+    assert!(!xml.contains(r#" injected="x""#), "no attribute injected: {xml}");
+
+    let (reopened, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let after = &reopened.sheet(0).unwrap().shapes[0];
+    assert_eq!(after.format.font.as_deref(), Some(font));
+    assert_eq!(after.text, "hi");
+}

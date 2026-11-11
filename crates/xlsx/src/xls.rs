@@ -78,11 +78,13 @@ pub(crate) struct Budget {
     text: usize,
     records: usize,
     max_records: usize,
+    /// A shared formula's text was refused: no later shared formula, in any sheet, is expanded.
+    shared_text_spent: bool,
 }
 
 impl Default for Budget {
     fn default() -> Self {
-        Budget { cells: 0, text: 0, records: 0, max_records: MAX_RECORDS }
+        Budget { cells: 0, text: 0, records: 0, max_records: MAX_RECORDS, shared_text_spent: false }
     }
 }
 
@@ -91,6 +93,11 @@ impl Budget {
     #[cfg(test)]
     pub(crate) fn with_max_records(max_records: usize) -> Self {
         Budget { max_records, ..Budget::default() }
+    }
+    /// A budget with only `left` bytes of text allowance (tests).
+    #[cfg(test)]
+    pub(crate) fn with_text_left(left: usize) -> Self {
+        Budget { text: MAX_TEXT.saturating_sub(left), ..Budget::default() }
     }
     fn record(&mut self) -> Result<(), IoError> {
         self.records = self.records.saturating_add(1);
@@ -105,6 +112,23 @@ impl Budget {
             return Err(IoError::TooLarge("XLS: more than 4 million cells".into()));
         }
         Ok(())
+    }
+    /// Charges `len` bytes of text if they fit the allowance, leaving it untouched otherwise:
+    /// for text the import can do without (expanded shared formulas keep their cached values).
+    fn try_text(&mut self, len: usize) -> bool {
+        let total = self.text.saturating_add(len);
+        let fits = total <= MAX_TEXT;
+        if fits {
+            self.text = total;
+        }
+        fits
+    }
+    /// [`try_text`](Self::try_text) for a shared formula's text. The first refusal ends shared
+    /// expansion for the whole workbook, so a shorter formula on a later sheet doesn't fit in the
+    /// room the refused one left, and refused formulas aren't decoded again on each sheet.
+    fn try_shared_text(&mut self, len: usize) -> bool {
+        self.shared_text_spent = self.shared_text_spent || !self.try_text(len);
+        !self.shared_text_spent
     }
     fn text(&mut self, len: usize) -> Result<(), IoError> {
         self.text = self.text.saturating_add(len);
@@ -182,6 +206,9 @@ pub(crate) fn read_xls_budgeted(bytes: &[u8], mut budget: Budget, functions: Fun
 
     // BoundSheet8 index → model sheet index.
     let mut model_index: Vec<Option<usize>> = Vec::with_capacity(g.sheets.len());
+    let mut parsed = Vec::new();
+    // Names of the readable sheets so far: `wb.sheets` is only filled once every sheet is parsed.
+    let mut names: Vec<&str> = Vec::new();
     for bs in &g.sheets {
         if bs.kind != 0 {
             report.warn(match bs.kind {
@@ -193,17 +220,26 @@ pub(crate) fn read_xls_budgeted(bytes: &[u8], mut budget: Budget, functions: Fun
             continue;
         }
         wb.check_sheet_name(&bs.name, None).map_err(invalid)?;
-        let Some((mut sheet, calc)) = worksheet(&stream, bs, &g, &styles, &mut budget, &mut report)? else {
+        if names.iter().any(|n| n.eq_ignore_ascii_case(&bs.name)) {
+            return Err(invalid("That name is already taken. Try a different one."));
+        }
+        let Some(st) = worksheet(&stream, bs, &g, &styles, &mut budget, &mut report)? else {
             report.warn("Dialog sheets and unreadable sheets were skipped.");
             model_index.push(None);
             continue;
         };
-        sheet.visibility = bs.visibility;
+        names.push(&bs.name);
+        model_index.push(Some(parsed.len()));
+        parsed.push((bs.visibility, st));
+    }
+    // Every sheet's mandatory text is charged by now; shared formulas take what is left.
+    for (visibility, st) in parsed {
+        let (mut sheet, calc) = finish_sheet(st, &mut budget, &mut report);
+        sheet.visibility = visibility;
         // Every worksheet repeats the workbook's calculation settings; Excel applies the first.
         if wb.sheets.is_empty() {
             wb.calc = calc;
         }
-        model_index.push(Some(wb.sheets.len()));
         wb.sheets.push(Arc::new(sheet));
     }
     if wb.sheets.is_empty() {
@@ -508,6 +544,7 @@ fn rk(v: u32) -> Value {
 /// keep their cached values).
 fn resolve_pending(
     st: &mut SheetState<'_>,
+    budget: &mut Budget,
     arrays: &HashMap<CellRef, (RangeRef, Parsed)>,
     shared: &HashMap<CellRef, Parsed>,
     pending: &[Pending],
@@ -520,11 +557,27 @@ fn resolve_pending(
                 st.attach(p.pos, f, Mode::Cell, Some(*range));
             }
         } else if let Some(f) = shared.get(&p.anchor) {
+            if budget.shared_text_spent {
+                st.unsupported("more shared-formula text than the import allows");
+                continue;
+            }
             if failed.contains(&p.anchor) || shared_attaches >= MAX_SHARED_ATTACHES {
                 continue;
             }
             shared_attaches += 1;
             st.attach(p.pos, f, Mode::Shared, None);
+            let len = st.sheet.cell(p.pos).and_then(|c| c.formula.as_ref()).map(|f| f.text.len());
+            // Every follower keeps its own text: charge it to the workbook's text allowance, and
+            // past it drop the formula again so the cell keeps its cached value.
+            if let Some(len) = len
+                && !budget.try_shared_text(len)
+            {
+                if let Some(cell) = st.sheet.cells.get_mut(p.pos) {
+                    cell.formula = None;
+                }
+                st.unsupported("more shared-formula text than the import allows");
+                continue;
+            }
             let imported = st.sheet.cell(p.pos).and_then(|c| c.formula.as_ref()).is_some_and(|f| f.text.chars().count() <= MAX_SHARED_TEMPLATE);
             if !imported {
                 failed.insert(p.anchor);
@@ -552,14 +605,14 @@ fn blank_array_followers(st: &mut SheetState<'_>, pending: &[Pending]) {
     }
 }
 
-fn worksheet(
+fn worksheet<'g>(
     stream: &[u8],
     bs: &BoundSheet,
-    g: &Globals,
-    styles: &[StyleId],
+    g: &'g Globals,
+    styles: &'g [StyleId],
     budget: &mut Budget,
     report: &mut ReadReport,
-) -> Result<Option<(Sheet, CalcSettings)>, IoError> {
+) -> Result<Option<SheetState<'g>>, IoError> {
     if bs.pos >= stream.len() {
         return Err(invalid(format!("sheet '{}' points outside the Workbook stream", bs.name)));
     }
@@ -604,10 +657,16 @@ fn worksheet(
         }
         sheet_record(&rec, &mut st, budget, report)?;
     }
-    // Shared and array formulas: their definitions follow the first cell that uses them.
+    Ok(Some(st))
+}
+
+/// Attaches a sheet's shared and array formulas (their definitions follow the first cell that
+/// uses them). Run for every sheet only after all sheets' mandatory text is charged, so the
+/// optional shared-formula text can't use up the allowance a later sheet's strings need.
+fn finish_sheet(mut st: SheetState<'_>, budget: &mut Budget, report: &mut ReadReport) -> (Sheet, CalcSettings) {
     let (arrays, shared) = (std::mem::take(&mut st.arrays), std::mem::take(&mut st.shared));
     let pending = std::mem::take(&mut st.pending);
-    resolve_pending(&mut st, &arrays, &shared, &pending);
+    resolve_pending(&mut st, budget, &arrays, &shared, &pending);
     blank_array_followers(&mut st, &pending);
     if st.dropped > 0 {
         report.warn(format!("{} cells outside the grid were skipped.", st.dropped));
@@ -615,7 +674,7 @@ fn worksheet(
     for why in &st.unsupported {
         report.warn(format!("Some formulas use {why}; their saved results were kept as values."));
     }
-    Ok(Some((st.sheet, st.calc)))
+    (st.sheet, st.calc)
 }
 
 /// The shortest WINDOW2 a file holds (the chart-sheet form); a shorter one is truncated.
@@ -897,5 +956,20 @@ fn defined_names(g: &Globals, model_index: &[Option<usize>], wb: &mut Workbook, 
             None if lbl.macro_name => report.warn("Macro names were skipped."),
             None => wb.names.push(DefinedName { name: lbl.name.clone(), scope, formula: text, comment: String::new(), hidden: lbl.hidden }),
         }
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_shared_formula_ends_shared_expansion_for_later_sheets() {
+        let mut budget = Budget::with_text_left(10);
+        assert!(budget.try_shared_text(8));
+        assert!(!budget.try_shared_text(8), "over the allowance");
+        // a shorter formula would fit the 2 bytes left, but the cut-off holds
+        assert!(!budget.try_shared_text(1));
+        assert!(budget.try_text(1), "text the import needs is still charged normally");
     }
 }
