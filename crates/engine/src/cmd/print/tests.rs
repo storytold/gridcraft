@@ -938,3 +938,45 @@ fn equations_print_with_the_symbol_font() {
     // A glyph no standard font has is a [?] box.
     assert!(contains(&pdf, "(?) Tj"));
 }
+
+/// Printing the workbook leaves out sheets marked not to print, unless every sheet is.
+#[test]
+fn workbook_printing_skips_excluded_sheets() {
+    use gridcraft_core::Value;
+    let mut wb = gridcraft_model::Workbook::new();
+    wb.sheets.clear();
+    for name in ["One", "Two"] {
+        let mut sh = gridcraft_model::Sheet::new(name);
+        sh.set_value(CellRef::new(0, 0), Value::Text(name.into()));
+        wb.sheets.push(std::sync::Arc::new(sh));
+    }
+    let all = super::layout::PrintOptions { all_sheets: true, ..Default::default() };
+    let printed = |wb: &gridcraft_model::Workbook| super::layout::layouts(wb, &all).iter().map(|l| l.sheet).collect::<Vec<_>>();
+    assert_eq!(printed(&wb), vec![0, 1]);
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).print.excluded = true;
+    assert_eq!(printed(&wb), vec![1]);
+    // Printing the active sheet alone still prints it.
+    let active = super::layout::PrintOptions::default();
+    assert_eq!(super::layout::layouts(&wb, &active).iter().map(|l| l.sheet).collect::<Vec<_>>(), vec![0]);
+    std::sync::Arc::make_mut(&mut wb.sheets[1]).print.excluded = true;
+    assert_eq!(printed(&wb), vec![0, 1]);
+}
+
+/// Page Setup's `excluded` marks the sheet; whole-workbook PDF export then skips it.
+#[test]
+fn page_setup_excluded_leaves_the_sheet_out_of_workbook_export() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "one"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "two"})).unwrap();
+    let (_, both) = pdf_of(&mut s, json!({"sheets": "all"}));
+    assert_eq!(both, 2);
+    assert!(s.execute("pageLayout.pageSetup", json!({})).unwrap().get("excluded").is_none());
+    let r = s.execute("pageLayout.pageSetup", json!({"sheet": "Two", "excluded": true})).unwrap();
+    assert_eq!(r["excluded"], true);
+    let (pdf, one) = pdf_of(&mut s, json!({"sheets": "all"}));
+    assert_eq!(one, 1);
+    assert!(contains(&pdf, "(one) Tj") && !contains(&pdf, "(two) Tj"));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(pdf_of(&mut s, json!({"sheets": "all"})).1, 2);
+}

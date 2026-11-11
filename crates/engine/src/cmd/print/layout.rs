@@ -340,7 +340,10 @@ pub fn layouts(wb: &Workbook, opts: &PrintOptions) -> Vec<SheetLayout> {
     let mut out = Vec::new();
     let mut pages = 0usize;
     let sheets: Vec<usize> = if opts.all_sheets {
-        (0..wb.sheets.len()).filter(|i| wb.sheet(*i).is_some_and(|s| s.visibility == Visibility::Visible)).collect()
+        let visible: Vec<usize> = (0..wb.sheets.len()).filter(|i| wb.sheet(*i).is_some_and(|s| s.visibility == Visibility::Visible)).collect();
+        // Sheets left out of workbook printing are skipped, unless that would leave none.
+        let printed: Vec<usize> = visible.iter().copied().filter(|i| wb.sheet(*i).is_some_and(|s| !s.print.excluded)).collect();
+        if printed.is_empty() { visible } else { printed }
     } else {
         vec![wb.active_sheet()]
     };
