@@ -157,17 +157,29 @@ impl Dialog {
         ref_edit::end_pick(app, self)
     }
 
-    /// Whether the dialog's own sheet is protected, once its reference boxes have picked and while
+    /// Whether the dialog's own sheet is protected, for a dialog with reference boxes and while
     /// that sheet exists (the sheet [`Self::end_pick`] shows again); `None` otherwise.
     pub(crate) fn home_sheet_protected(&self, app: &SheetApp) -> Option<bool> {
         ref_edit::home_sheet_protected(app, self)
     }
 
-    /// Whether the sheet the dialog was opened on was deleted while its reference boxes picked:
-    /// OK is then refused with [`SHEET_DELETED`], since references without a sheet name have
-    /// nothing to refer to.
+    /// Whether the sheet a dialog with reference boxes was opened on was deleted while it was
+    /// open: OK is then refused with [`SHEET_DELETED`], since references without a sheet name
+    /// have nothing to refer to.
     pub(crate) fn home_sheet_deleted(&mut self, app: &SheetApp) -> bool {
         ref_edit::home_sheet_deleted(app, self)
+    }
+
+    /// A press on the grid that selects cells: the reference box being picked into takes the
+    /// selection on this frame even when it is unchanged (a click on the cell already selected).
+    pub(crate) fn note_selecting_press(&mut self) {
+        ref_edit::note_selecting_press(self);
+    }
+
+    /// Whether a reference box is the one grid selections fill: a click on the grid is then a
+    /// pick, and a second click on the same cell does not edit the cell.
+    pub(crate) fn ref_box_picks(&self) -> bool {
+        ref_edit::picks(self)
     }
 
     /// Whether a click on the grid goes to a formula box of this dialog rather than the selection.
@@ -266,7 +278,7 @@ impl Dialog {
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();
         let p = |k: &str| params.get(k).cloned().unwrap_or(Json::Null);
         use Field::*;
-        let d = match name {
+        let mut d = match name {
             "insertCells" => Dialog::form(
                 "insertCells",
                 "Insert",
@@ -1095,6 +1107,9 @@ impl Dialog {
                 dialog
             }
             "pickList" => Dialog::custom("pickList", "Pick From List", json!({})),
+            "assignAction" => return crate::control_ui::open_assign(app, &params),
+            "formatControl" => return crate::control_ui::open_format(app, &params),
+            "controlQuestion" => return crate::control_ui::open_question(&params),
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
             "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title"), "quit": p("quit")})),
             "start" => Dialog::custom("start", "GridCraft", json!({})),
@@ -1116,6 +1131,7 @@ impl Dialog {
             }
             _ => return None,
         };
+        ref_edit::record_home(app, &mut d);
         Some(d)
     }
 }

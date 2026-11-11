@@ -148,12 +148,13 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let mut confirm = false;
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
-        "about" => 660.0,
+        "about" => 820.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "equation" => 520.0,
         "macros" => 480.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        "assignAction" => 440.0,
         "zoom" => 220.0,
         "pasteSpecial" => 480.0,
         _ => 380.0,
@@ -203,6 +204,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
+                "assignAction" => crate::control_ui::assign_dialog(app, ui, &mut d, &mut open),
+                "formatControl" => crate::control_ui::format_dialog(app, ui, &mut d, &mut open),
+                "controlQuestion" => crate::control_ui::question_dialog(app, ui, &mut d, &mut open),
                 "agents" => {
                     ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");
                     ui.add_space(4.0);
