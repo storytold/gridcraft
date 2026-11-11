@@ -693,7 +693,7 @@ fn filter_menu_sort_on_a_table_keeps_the_totals_row_and_uses_the_tables_header_f
     assert_eq!(column_text(&s, "A", 5..=5), totals_row);
     // With the table's header row off, the first row is data and sorts with the rest.
     s.execute("table.headerRow", json!({"table": tname, "on": false})).unwrap();
-    s.execute("data.sortDescending", json!({"column": "A", "filter": true})).unwrap();
-    assert_eq!(column_text(&s, "A", 1..=4), ["zzz", "c", "b", "a"]);
+    s.execute("data.sortAscending", json!({"column": "A", "filter": true})).unwrap();
+    assert_eq!(column_text(&s, "A", 1..=4), ["a", "b", "c", "zzz"]);
     assert_eq!(column_text(&s, "A", 5..=5), totals_row);
 }
