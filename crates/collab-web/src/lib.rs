@@ -642,9 +642,9 @@ mod tests {
         });
         assert!(collab.on_text(&welcome, &mut session));
 
-        let applied = |op_id: &str, input: u32| Applied {
+        let applied = |op_id: &str, version: u64, input: u32| Applied {
             op_id: op_id.into(),
-            version: 1,
+            version,
             epoch: 0,
             actor: "ann-jwt".into(),
             result: Outcome {
@@ -658,10 +658,10 @@ mod tests {
             image_part: None,
         };
         // This window previewed `w1-0`: its command is not run a second time.
-        assert!(collab.on_text(&wire(&ServerMessage::Applied { applied: applied("w1-0", 3) }), &mut session));
+        assert!(collab.on_text(&wire(&ServerMessage::Applied { applied: applied("w1-0", 1, 3) }), &mut session));
         assert_eq!(value(&session, "A1"), Value::Empty, "own preview is not replayed");
         // Another window of the same person did not preview `w2-0` here: the command runs.
-        assert!(collab.on_text(&wire(&ServerMessage::Applied { applied: applied("w2-0", 5) }), &mut session));
+        assert!(collab.on_text(&wire(&ServerMessage::Applied { applied: applied("w2-0", 2, 5) }), &mut session));
         assert_eq!(value(&session, "A1"), Value::Number(5.0), "the other window's command runs on this replica");
 
         // Both steps belong to the person the server named, so the room has something to undo:
@@ -747,5 +747,55 @@ mod tests {
         let people = collab.session_participants();
         assert_eq!(people.len(), 2, "the cabinet list has one row per window");
         assert_eq!(people.iter().map(|p| p.client_id.as_str()).collect::<Vec<_>>(), ["w1", "w2"]);
+    }
+
+    /// A snapshot belongs to one connection: a chunk of it must not complete with a chunk of the
+    /// next one, and `total` comes from the wire and never sizes an allocation unbounded
+    /// (CodeRabbit 5851190259, `link.rs:169`).
+    #[test]
+    fn a_snapshot_buffer_does_not_mix_two_catch_ups() {
+        use base64::Engine;
+        let mut collab = Collab::offline("s1", "ann", Role::Editor, "w1");
+        let mut session = replica();
+        let chunk = |version: u64, total: u32, seq: u32, bytes: &[u8]| {
+            wire(&ServerMessage::Snapshot {
+                mode: gridcraft_collab::SnapshotMode::Base,
+                version,
+                epoch: 0,
+                total,
+                seq,
+                bytes: base64::engine::general_purpose::STANDARD.encode(bytes),
+            })
+        };
+        let welcome = || {
+            wire(&ServerMessage::Welcome {
+                session_id: "s1".into(),
+                actor_id: "ann".into(),
+                role: Role::Editor,
+                version: 9,
+                epoch: 0,
+                sheets: vec![SheetName { key: "1".into(), name: "Sheet1".into() }],
+                participants: Vec::new(),
+                lease: None,
+            })
+        };
+
+        // The first catch-up stops after one of its two chunks.
+        assert!(collab.on_text(&chunk(4, 2, 0, b"AA"), &mut session));
+        // A new connection starts a new catch-up.
+        assert!(collab.on_text(&welcome(), &mut session));
+        // The rest of the old snapshot must not complete with the half of it.
+        assert!(collab.on_text(&chunk(4, 2, 1, b"BB"), &mut session));
+        assert_eq!(collab.state().version, 0, "the old buffer is gone: no snapshot completed");
+
+        // A snapshot of this connection does complete and moves the cursor.
+        assert!(collab.on_text(&chunk(4, 2, 0, b"AA"), &mut session));
+        assert!(collab.on_text(&chunk(4, 2, 1, b"BB"), &mut session));
+        assert_eq!(collab.state().version, 4, "a whole snapshot is a document at its version");
+
+        // An impossible `total` allocates nothing and completes nothing.
+        assert!(collab.on_text(&chunk(4, u32::MAX, 0, b"CC"), &mut session));
+        assert!(collab.on_text(&chunk(4, 2, 1, b"DD"), &mut session));
+        assert_eq!(collab.state().version, 4, "a chunk of an impossible snapshot is not buffered");
     }
 }

@@ -219,3 +219,52 @@ fn a_snapshot_replaces_only_the_shared_workbook() {
     assert_eq!(value(&session, 1, "A1"), Value::Empty, "the other workbook keeps its content");
     assert_eq!(session.prefs.user_name, "Ann", "the session's preferences stay");
 }
+
+/// An answer the document already covers must not run its command again: the server answers a
+/// resent operation out of its dedup window with the original `applied`, whose version is below
+/// the snapshot that replaced the document, and a frame queued before a snapshot can land after
+/// it. An inserted row would be inserted twice (CodeRabbit 5851190259, `synced.rs:565`).
+#[test]
+fn an_answer_at_or_below_the_snapshot_changes_nothing() {
+    let (mut synced, sink, mut session) = replica();
+    synced.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": 1 })).expect("the shared workbook is bound");
+
+    let mut source = Session::new();
+    source.new_workbook();
+    source.execute("cell.set", json!({ "cell": "A1", "input": 99 })).expect("the file's cell");
+    let authoritative = source.doc().expect("a document").wb.clone();
+    let bytes = gridcraft_engine::io::save_bytes(&authoritative, "session.xlsx").expect("the snapshot bytes");
+    sink.push(Event::Snapshot { version: 4, epoch: 0, bytes });
+    let _ = synced.poll(&mut session);
+    assert_eq!(value(&session, 0, "A1"), Value::Number(99.0), "the snapshot is the document");
+
+    // The deduplicated answer to the operation of version 3, which the snapshot already contains.
+    sink.deliver(&applied_set("ann-0", 3, 7));
+    let events = synced.poll(&mut session);
+    assert_eq!(value(&session, 0, "A1"), Value::Number(99.0), "a covered command is not run again");
+    assert!(!events.iter().any(|event| matches!(event, Event::Applied(_))), "the caller is not told a change happened");
+
+    // An operation above the snapshot still lands.
+    sink.deliver(&applied_set("bob-0", 5, 5));
+    let _ = synced.poll(&mut session);
+    assert_eq!(value(&session, 0, "A1"), Value::Number(5.0), "an operation newer than the snapshot is applied");
+}
+
+/// A confirmed `cell.set` of `A1` at `version`, as the server answers it.
+fn applied_set(op_id: &str, version: u64, input: i64) -> Applied {
+    Applied {
+        op_id: op_id.into(),
+        version,
+        epoch: 0,
+        actor: "bob".into(),
+        result: Outcome {
+            command: Some(CommandEcho { id: "cell.set".into(), params: json!({ "sheet": "Sheet1", "cell": "A1", "input": input }) }),
+            delta: None,
+        },
+        sheets: None,
+        images: None,
+        book: None,
+        more: false,
+        image_part: None,
+    }
+}

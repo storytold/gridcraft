@@ -102,6 +102,11 @@ pub struct Synced {
     notice: Option<String>,
     /// The sheet image of a structural undo/redo that is still arriving in parts.
     image_parts: Option<ImageParts>,
+    /// The version of the document this replica holds: `applied`, `snapshot` and `resynced`
+    /// move it. An `applied` at or below it is already in the document — a deduplicated answer to
+    /// a resent operation, or a frame that was queued before a snapshot overtook it — and its
+    /// command must not run a second time (CodeRabbit 5851190259, `synced.rs:565`).
+    document_version: u64,
 }
 
 impl Synced {
@@ -118,6 +123,8 @@ impl Synced {
     /// link and its window id from the page; the desktop `new` wraps the native
     /// client the same way.
     pub fn with_link(link: Box<dyn Link>, welcome: &Welcome, client_id: String) -> Synced {
+        // What this replica holds, not the room's head the welcome reports (RFC §4.4).
+        let held = link.state().version;
         let mut synced = Synced {
             link,
             actor: welcome.actor_id.clone(),
@@ -131,6 +138,7 @@ impl Synced {
             own: VecDeque::new(),
             notice: None,
             image_parts: None,
+            document_version: held,
         };
         synced.apply_sheets(&welcome.sheets);
         synced
@@ -342,28 +350,22 @@ impl Synced {
             };
             match &event {
                 Event::Applied(applied) => {
-                    self.apply(session, applied);
+                    // An answer the document already covers — the server answering a resent
+                    // operation out of its dedup window, or a frame queued before the snapshot
+                    // overtook it — must not run its command again: an inserted row would be
+                    // inserted twice, a `cell.set` would overwrite what came after it. The ack
+                    // still leaves the resend queue, and the step still counts as this person's
+                    // undo step, because the document does hold it (CodeRabbit 5851190259).
+                    let stale = applied.version <= self.document_version;
+                    if !stale {
+                        self.apply(session, applied);
+                        self.document_version = applied.version;
+                    }
                     self.pending.retain(|pending| pending.op_id != applied.op_id);
-                    if applied.actor == self.actor {
-                        if applied.result.command.is_some() {
-                            if !applied.op_id.starts_with("undo-") && !applied.op_id.starts_with("redo-") {
-                                self.own.push_back(applied.op_id.clone());
-                                while self.own.len() > 200 {
-                                    self.own.pop_front();
-                                }
-                            }
-                        } else if let Some(step) = applied.op_id.strip_prefix("undo-") {
-                            if self.own.back().is_some_and(|id| id == step) {
-                                self.own.pop_back();
-                            }
-                        } else if let Some(step) = applied.op_id.strip_prefix("redo-") {
-                            // Redo puts the step back on the undo stack: the next undo reverses it
-                            // again, and a later edit still ends the branch.
-                            self.own.push_back(step.to_string());
-                            while self.own.len() > 200 {
-                                self.own.pop_front();
-                            }
-                        }
+                    self.note_own(applied);
+                    if stale {
+                        // The caller is not told a change happened: the document did not move.
+                        continue;
                     }
                 }
                 Event::Rejected(rejected) => {
@@ -393,7 +395,7 @@ impl Synced {
                         }
                     }
                 }
-                Event::Snapshot { bytes, .. } => {
+                Event::Snapshot { version, bytes, .. } => {
                     if let Ok((workbook, _warnings)) = gridcraft_engine::io::open_bytes("session.xlsx", bytes) {
                         self.bind(session);
                         if let Some(uid) = self.doc_uid {
@@ -404,6 +406,10 @@ impl Synced {
                             if session.swap_document(uid, next).is_err() {
                                 self.notice = Some("the document of this session is gone; reconnecting".into());
                                 self.link.send_message(ClientMessage::Resync { from: self.link.state().version });
+                            } else {
+                                // The shared document is now the workbook the snapshot carries:
+                                // every answer at or below its version is already in it.
+                                self.document_version = self.document_version.max(*version);
                             }
                             let sheets = self.link.state().sheets;
                             self.apply_sheets(&sheets);
@@ -422,12 +428,12 @@ impl Synced {
                 Event::Reconnected { .. } => {
                     // Catch-up frames follow; the pending queue is resent by the transport.
                 }
-                Event::Presence(_)
-                | Event::Committed { .. }
-                | Event::Resynced { .. }
-                | Event::Disconnected { .. }
-                | Event::Error { .. }
-                | Event::Closed => {}
+                Event::Resynced { version, .. } => {
+                    // The catch-up is over: the tail (or the snapshot branch above) left the
+                    // document at the room's version. Anything at or below it is in the document.
+                    self.document_version = self.document_version.max(*version);
+                }
+                Event::Presence(_) | Event::Committed { .. } | Event::Disconnected { .. } | Event::Error { .. } | Event::Closed => {}
             }
             out.push(event);
         }
@@ -540,6 +546,36 @@ impl Synced {
             self.link.send_message(ClientMessage::Resync { from: buffer.from });
         }
         None
+    }
+
+    /// Records a confirmed step of this participant: `undo` may reverse it, and a redo puts it
+    /// back on the stack. An answer already recorded — a duplicate of the same op id — changes
+    /// nothing.
+    fn note_own(&mut self, applied: &Applied) {
+        if applied.actor != self.actor {
+            return;
+        }
+        if applied.result.command.is_some() {
+            if !applied.op_id.starts_with("undo-") && !applied.op_id.starts_with("redo-") && !self.own.contains(&applied.op_id) {
+                self.own.push_back(applied.op_id.clone());
+                while self.own.len() > 200 {
+                    self.own.pop_front();
+                }
+            }
+        } else if let Some(step) = applied.op_id.strip_prefix("undo-") {
+            if self.own.back().is_some_and(|id| id == step) {
+                self.own.pop_back();
+            }
+        } else if let Some(step) = applied.op_id.strip_prefix("redo-") {
+            // Redo puts the step back on the undo stack: the next undo reverses it again, and a
+            // later edit still ends the branch.
+            if !self.own.iter().any(|id| id.as_str() == step) {
+                self.own.push_back(step.to_string());
+                while self.own.len() > 200 {
+                    self.own.pop_front();
+                }
+            }
+        }
     }
 
     /// Applies one confirmed operation: the command first (structure, formulas, styles), then the

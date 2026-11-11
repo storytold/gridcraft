@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 
 use base64::Engine;
 use gridcraft_collab::{ClientMessage, ClientOp, Presence, Role, ServerMessage};
-use gridcraft_collab_client::{Event, Link, State};
+use gridcraft_collab_client::{Event, Link, Snapshot, State, snapshot_chunk};
 
 #[cfg(target_arch = "wasm32")]
 use crate::socket;
@@ -46,12 +46,6 @@ pub struct SessionLink {
     snapshot: Option<Snapshot>,
     #[cfg(target_arch = "wasm32")]
     transport: Option<socket::Transport>,
-}
-
-struct Snapshot {
-    version: u64,
-    epoch: u64,
-    chunks: Vec<Option<Vec<u8>>>,
 }
 
 impl SessionLink {
@@ -132,6 +126,10 @@ impl SessionLink {
     fn handle(&mut self, message: ServerMessage) {
         match message {
             ServerMessage::Welcome { session_id, actor_id, role, version, epoch, sheets, participants, .. } => {
+                // A welcome starts a catch-up on this connection. Half of an older snapshot must
+                // not continue into it: its `version`, `epoch` and chunk count would apply to the
+                // new chunks (CodeRabbit 5851190259, `link.rs:169`).
+                self.snapshot = None;
                 self.state.session_id = session_id;
                 self.state.actor = actor_id;
                 self.state.role = Some(role);
@@ -168,21 +166,10 @@ impl SessionLink {
             }
             ServerMessage::Snapshot { version, epoch, total, seq, bytes, mode: _ } => {
                 let Ok(chunk) = base64::engine::general_purpose::STANDARD.decode(bytes) else { return };
-                let buffer = self.snapshot.get_or_insert_with(|| Snapshot { version, epoch, chunks: vec![None; total as usize] });
-                if (seq as usize) < buffer.chunks.len() {
-                    buffer.chunks[seq as usize] = Some(chunk);
-                }
-                if buffer.chunks.iter().all(Option::is_some) {
-                    let mut bytes = Vec::new();
-                    for chunk in buffer.chunks.iter().flatten() {
-                        bytes.extend_from_slice(chunk);
-                    }
-                    let (version, epoch) = (buffer.version, buffer.epoch);
-                    self.snapshot = None;
-                    self.state.version = version;
-                    self.state.epoch = epoch;
-                    self.events.push_back(Event::Snapshot { version, epoch, bytes });
-                }
+                let Some((version, epoch, bytes)) = snapshot_chunk(&mut self.snapshot, version, epoch, total, seq, chunk) else { return };
+                self.state.version = version;
+                self.state.epoch = epoch;
+                self.events.push_back(Event::Snapshot { version, epoch, bytes });
             }
             ServerMessage::Committed { version, sha256, cabinet } => {
                 self.events.push_back(Event::Committed { version, sha256, cabinet });
@@ -243,6 +230,9 @@ impl SessionLink {
                 }
                 socket::Incoming::Closed => {
                     self.state.connected = false;
+                    // A snapshot belongs to the connection that started it: half of it must not
+                    // wait for the next one (CodeRabbit 5851190259, `link.rs:169`).
+                    self.snapshot = None;
                     self.events.push_back(Event::Disconnected { reason: "the socket closed; reconnecting".into() });
                 }
             }

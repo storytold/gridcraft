@@ -269,7 +269,7 @@ async fn session_once(
     events: &mpsc::UnboundedSender<Event>,
     pending: &mut Vec<ClientOp>,
 ) -> Outcome {
-    let mut snapshot: Option<Snapshot> = None;
+    let mut snapshot: Option<crate::Snapshot> = None;
     loop {
         tokio::select! {
             incoming = socket.next() => {
@@ -301,13 +301,6 @@ enum Handled {
     Closed,
 }
 
-/// Where a chunked snapshot is being assembled.
-struct Snapshot {
-    version: u64,
-    epoch: u64,
-    chunks: Vec<Option<Vec<u8>>>,
-}
-
 /// Handles one server frame. `pending` is the resend queue: an operation the server answered —
 /// with `applied` or `rejected` — leaves it here, so a reconnect does not send an old operation
 /// again. An operation outside the dedup window that came back that way would be applied a second
@@ -316,11 +309,14 @@ fn handle(
     message: ServerMessage,
     shared: &Arc<Mutex<State>>,
     events: &mpsc::UnboundedSender<Event>,
-    snapshot: &mut Option<Snapshot>,
+    snapshot: &mut Option<crate::Snapshot>,
     pending: &mut Vec<ClientOp>,
 ) -> Handled {
     match message {
         ServerMessage::Welcome { session_id, actor_id, role, version, epoch, sheets, participants, .. } => {
+            // A welcome starts a catch-up on this connection: half of an older snapshot must not
+            // continue into it (CodeRabbit 5851190259).
+            *snapshot = None;
             if let Ok(mut state) = shared.lock() {
                 state.session_id = session_id;
                 state.actor = actor_id;
@@ -362,23 +358,14 @@ fn handle(
         }
         ServerMessage::Snapshot { version, epoch, total, seq, bytes, mode: _ } => {
             let Ok(chunk) = base64::engine::general_purpose::STANDARD.decode(bytes) else { return Handled::Continue };
-            let buffer = snapshot.get_or_insert_with(|| Snapshot { version, epoch, chunks: vec![None; total as usize] });
-            if (seq as usize) < buffer.chunks.len() {
-                buffer.chunks[seq as usize] = Some(chunk);
+            let Some((version, epoch, bytes)) = crate::snapshot_chunk(snapshot, version, epoch, total, seq, chunk) else {
+                return Handled::Continue;
+            };
+            if let Ok(mut state) = shared.lock() {
+                state.version = version;
+                state.epoch = epoch;
             }
-            if buffer.chunks.iter().all(Option::is_some) {
-                let mut bytes = Vec::new();
-                for chunk in buffer.chunks.iter().flatten() {
-                    bytes.extend_from_slice(chunk);
-                }
-                let (version, epoch) = (buffer.version, buffer.epoch);
-                *snapshot = None;
-                if let Ok(mut state) = shared.lock() {
-                    state.version = version;
-                    state.epoch = epoch;
-                }
-                let _ = events.send(Event::Snapshot { version, epoch, bytes });
-            }
+            let _ = events.send(Event::Snapshot { version, epoch, bytes });
         }
         ServerMessage::Committed { version, sha256, cabinet } => {
             let _ = events.send(Event::Committed { version, sha256, cabinet });

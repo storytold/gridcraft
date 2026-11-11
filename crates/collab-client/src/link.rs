@@ -93,6 +93,59 @@ pub trait Link {
     fn poll(&mut self) -> Option<Event>;
 }
 
+/// The most chunks one snapshot may arrive in.
+///
+/// RFC §4.1 caps a document at 512 MB and the server sends 768 KiB per chunk (683 full chunks);
+/// 1024 leaves room for a server that picks a smaller chunk and is still a bound. `total` comes
+/// from the wire and sizes a `Vec`, so it is never trusted as it stands
+/// (CodeRabbit 5851190259, `crates/collab-web/src/link.rs:169`).
+pub const MAX_SNAPSHOT_CHUNKS: u32 = 1024;
+
+/// A chunked snapshot being assembled (RFC §4.1).
+pub struct Snapshot {
+    version: u64,
+    epoch: u64,
+    chunks: Vec<Option<Vec<u8>>>,
+}
+
+impl Snapshot {
+    /// `None` when `total` cannot describe a document: no chunks at all, or more than
+    /// [`MAX_SNAPSHOT_CHUNKS`].
+    pub fn new(version: u64, epoch: u64, total: u32) -> Option<Snapshot> {
+        if total == 0 || total > MAX_SNAPSHOT_CHUNKS {
+            return None;
+        }
+        Some(Snapshot { version, epoch, chunks: vec![None; total as usize] })
+    }
+}
+
+/// Takes one chunk of a snapshot: the workbook bytes when the last one is in.
+///
+/// A chunk that does not belong to the buffer — another `version`, `epoch` or `total` — starts a
+/// fresh one, so the parts of two snapshots are never woven together. The caller drops the
+/// buffer when the socket closes or a new `welcome` starts a new catch-up: a snapshot is about one
+/// connection, and half of the old one must not continue into the next
+/// (CodeRabbit 5851190259, `crates/collab-web/src/link.rs:169`).
+pub fn snapshot_chunk(buffer: &mut Option<Snapshot>, version: u64, epoch: u64, total: u32, seq: u32, chunk: Vec<u8>) -> Option<(u64, u64, Vec<u8>)> {
+    let fits = buffer.as_ref().is_some_and(|held| held.version == version && held.epoch == epoch && held.chunks.len() == total as usize);
+    if !fits {
+        *buffer = Snapshot::new(version, epoch, total);
+    }
+    let held = buffer.as_mut()?;
+    if let Some(slot) = held.chunks.get_mut(seq as usize) {
+        *slot = Some(chunk);
+    }
+    if !held.chunks.iter().all(Option::is_some) {
+        return None;
+    }
+    let done = buffer.take()?;
+    let mut bytes = Vec::new();
+    for part in done.chunks.iter().flatten() {
+        bytes.extend_from_slice(part);
+    }
+    Some((done.version, done.epoch, bytes))
+}
+
 /// Advances the state a transport shares with its callers from one `applied`.
 ///
 /// A part of a chunked sheet image (ADR-0013) changes nothing yet: the operation is not applied
@@ -107,5 +160,33 @@ pub fn note_applied(state: &mut State, applied: &Applied) {
     state.epoch = applied.epoch;
     if let Some(sheets) = &applied.sheets {
         state.sheets = sheets.clone();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_SNAPSHOT_CHUNKS, snapshot_chunk};
+
+    /// Chunks of two snapshots must never be woven into one workbook: a socket that dropped in
+    /// the middle of one catch-up and a new connection's snapshot are separate documents.
+    #[test]
+    fn chunks_of_two_snapshots_are_not_woven_together() {
+        let mut buffer = None;
+        assert_eq!(snapshot_chunk(&mut buffer, 4, 0, 2, 0, b"aa".to_vec()), None);
+        // Another snapshot resets the buffer instead of filling half of it.
+        assert_eq!(snapshot_chunk(&mut buffer, 5, 0, 2, 0, b"bb".to_vec()), None);
+        assert_eq!(snapshot_chunk(&mut buffer, 5, 0, 2, 1, b"cc".to_vec()), Some((5, 0, b"bbcc".to_vec())));
+        assert!(buffer.is_none(), "the buffer is gone once the snapshot is whole");
+    }
+
+    /// `total` comes from the wire and sizes a `Vec`: a zero or an impossible count allocates
+    /// nothing and starts no buffer.
+    #[test]
+    fn a_total_off_the_wire_is_bounded() {
+        let mut buffer = None;
+        assert_eq!(snapshot_chunk(&mut buffer, 4, 0, 0, 0, Vec::new()), None, "a snapshot of no chunks");
+        assert_eq!(snapshot_chunk(&mut buffer, 4, 0, MAX_SNAPSHOT_CHUNKS + 1, 0, b"aa".to_vec()), None, "more chunks than a document can have");
+        assert!(buffer.is_none(), "nothing was allocated or kept");
+        assert_eq!(snapshot_chunk(&mut buffer, 4, 0, 1, 0, b"aa".to_vec()), Some((4, 0, b"aa".to_vec())), "a count that fits still works");
     }
 }
