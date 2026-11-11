@@ -184,8 +184,10 @@ fn unprotect_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     edit(s, |cx| {
-        cx.structural = true;
-        cx.sheet_mut(sheet)?.protection = None;
+        // Only removing protection changes what FORMULATEXT reads; a no-op unprotect skips the full recalculation.
+        if cx.sheet_mut(sheet)?.protection.take().is_some() {
+            cx.structural = true;
+        }
         Ok(Json::Null)
     })
 }
