@@ -173,6 +173,20 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
                 .collect();
             pg.polygon(&pts, fill, line);
         }
+        ShapeKind::RoundedRectangle => {
+            // Match the grid's 10px corners at the printed scale, clamped so small shapes
+            // cannot fold their outline back over itself. Keep the tessellation bounded.
+            let radius = (10.0 * b.k).min(w / 2.0).min(h / 2.0).max(0.0);
+            let centers = [[x + w - radius, y + radius], [x + w - radius, y + h - radius], [x + radius, y + h - radius], [x + radius, y + radius]];
+            let mut points = Vec::with_capacity(36);
+            for (corner, center) in centers.iter().enumerate() {
+                for step in 0..=8 {
+                    let angle = (corner as f32 - 1.0 + step as f32 / 8.0) * std::f32::consts::FRAC_PI_2;
+                    points.push([center[0] + radius * angle.cos(), center[1] + radius * angle.sin()]);
+                }
+            }
+            pg.polygon(&points, fill, line);
+        }
         ShapeKind::Triangle => pg.polygon(&[[x + w / 2.0, y], [x + w, y + h], [x, y + h]], fill, line),
         ShapeKind::Line | ShapeKind::Arrow => {
             let c = line.map(|l| l.0).or(fill).unwrap_or([0, 0, 0]);
