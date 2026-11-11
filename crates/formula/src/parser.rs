@@ -64,7 +64,9 @@ pub fn parse_closing_parens<T>(src: &str, parse: impl Fn(&str) -> Result<T, Pars
 ///
 /// The tokens are bounded as text is: at most [`MAX_FORMULA_LEN`] tokens, and at most
 /// [`MAX_FORMULA_LEN`] characters of text, names, sheet names and structured-reference bodies
-/// in all. A number must be finite, as the A1 tokenizer reads it, and a sheet name non-empty.
+/// in all. A number must be finite, as the A1 tokenizer reads it, and a sheet name non-empty. A
+/// [`Tok::Word`] or [`Tok::Func`] must be one the A1 tokenizer would read from its text (so not
+/// empty, and `A!1` is not a word), so that the printed formula parses back.
 ///
 /// Only this grammar's operators are read: OpenFormula's `~` union is not handled here, so a
 /// tokenizer for that syntax translates it itself.
@@ -84,6 +86,8 @@ pub fn parse_tokens(toks: Vec<Token>) -> Result<Expr, ParseError> {
             Tok::Ref(Reference { sheet: SheetSel::Span(a, b), .. }) if a.is_empty() || b.is_empty() => Some("empty sheet name"),
             Tok::Sheet(a, b) if a.is_empty() || b.as_deref().is_some_and(str::is_empty) => Some("empty sheet name"),
             Tok::Number(n) if !n.is_finite() => Some("number too large"),
+            Tok::Word(w) if !lexes_as(w, &t.tok) => Some("not a name or reference"),
+            Tok::Func(f) if !lexes_as(&format!("{f}("), &t.tok) => Some("not a function name"),
             _ => None,
         };
         if let Some(msg) = bad {
@@ -116,6 +120,15 @@ fn token_chars(t: &Tok) -> usize {
         Tok::Sheet(a, b) => a.chars().count().saturating_add(b.as_deref().map_or(0, |b| b.chars().count())),
         Tok::Ref(r) => sheet(&r.sheet),
         _ => 0,
+    }
+}
+
+/// Whether the A1 tokenizer reads `src` as exactly the one token `tok`: a word or function name
+/// from another tokenizer must print as text that parses back to it.
+fn lexes_as(src: &str, tok: &Tok) -> bool {
+    match tokenize_locale(src, crate::FormulaLocale::En) {
+        Ok(toks) => matches!(toks.as_slice(), [only] | [only, Token { tok: Tok::Eof, .. }] if only.tok == *tok),
+        Err(_) => false,
     }
 }
 

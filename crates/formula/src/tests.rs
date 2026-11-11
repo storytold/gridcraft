@@ -639,6 +639,25 @@ fn parse_tokens_refuses_hostile_tokens() -> Result<(), ParseError> {
     }
     let toks = [Tok::Sheet(String::new(), None), Tok::Word("A1".into())].into_iter().map(|tok| Token { tok, start: 0, end: 0 }).collect();
     assert!(crate::parse_tokens(toks).is_err());
+    let toks = [Tok::Sheet("S".into(), Some(String::new())), Tok::Word("A1".into())].into_iter().map(|tok| Token { tok, start: 0, end: 0 }).collect();
+    assert!(crate::parse_tokens(toks).is_err());
+    // A word or function name must be one the A1 tokenizer would read as that token: empty, or
+    // text that reads as something else (`A!1` is a sheet then a number, `TRUE` a boolean, `a b`
+    // two words), would print as text that does not parse back to it.
+    let words = |w: &str| vec![Token { tok: Tok::Word(w.into()), start: 0, end: 0 }];
+    for w in ["", "A!1", "TRUE", "a b", "A#", "1abc", "x(", "A1:B2", "\"x\""] {
+        assert!(crate::parse_tokens(words(w)).is_err(), "Word({w:?})");
+    }
+    for w in ["Total", "A1", "$A$1", "My.Name", "_xleta.SUM", "\\x"] {
+        assert_eq!(crate::parse_tokens(words(w))?, parse(w)?, "Word({w:?})");
+    }
+    let call = |f: &str| vec![Token { tok: Tok::Func(f.into()), start: 0, end: 0 }, Token { tok: Tok::RParen, start: 0, end: 0 }];
+    for f in ["", "A B", "1", "(", "S!F"] {
+        assert!(crate::parse_tokens(call(f)).is_err(), "Func({f:?})");
+    }
+    assert_eq!(crate::parse_tokens(call("SUM"))?, parse("SUM()")?);
+    // An empty structured reference body is what text reads for `[]` (the whole table).
+    assert_eq!(one(Tok::Struct(String::new()))?, parse("[]")?);
     Ok(())
 }
 
