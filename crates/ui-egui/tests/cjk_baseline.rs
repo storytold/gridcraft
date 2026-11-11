@@ -5,6 +5,7 @@ use gridcraft_engine::{Session, core::CellRef};
 use gridcraft_ui_egui::{SheetApp, theme};
 use serde_json::json;
 
+/// Install the supplied font definitions and run a pass so deferred font changes are active.
 fn activate(ctx: &Context, definitions: egui::FontDefinitions) {
     ctx.set_fonts(definitions);
     let mut out = ctx.run_ui(Default::default(), |_| {});
@@ -27,6 +28,7 @@ fn assert_shared_baselines(galley: &egui::Galley) {
     }
 }
 
+/// Return the first and last primary-font line-box bounds, falling back to the galley extent for empty text.
 fn primary_text_bounds(galley: &egui::Galley) -> (f32, f32) {
     let first = galley.rows.iter().find_map(|row| row.glyphs.first().map(|glyph| row.pos.y + glyph.pos.y - glyph.font_ascent));
     let last =
@@ -125,6 +127,7 @@ fn mixed_script_wrapping_keeps_fixed_row_clips_alignment_and_editor_height() {
     }
 }
 
+/// Check that Latin and mixed-script neighbours share a baseline for every wrap and vertical-alignment combination.
 #[test]
 fn same_row_cells_keep_their_baseline_with_baseline_aligned_fallbacks() {
     for wraps in [[false, false], [true, true], [false, true], [true, false]] {
@@ -198,6 +201,7 @@ fn same_row_cells_keep_their_baseline_with_baseline_aligned_fallbacks() {
     }
 }
 
+/// Paint four settling frames with an explicit native display scale and assert that app logic preserves it.
 fn frames_at_native_scale(ctx: &Context, app: &mut SheetApp, native_ppp: f32) -> egui::FullOutput {
     let mut out = egui::FullOutput::default();
     for _ in 0..4 {
@@ -216,8 +220,8 @@ fn frames_at_native_scale(ctx: &Context, app: &mut SheetApp, native_ppp: f32) ->
     out
 }
 
-// Every fixture row starts in the primary Latin face. Compute the expected span
-// independently of the production row_primary_bounds helper.
+/// Derive a fixture row's line box from its leading primary-font Latin glyph.
+/// Keep this oracle independent of the production `row_primary_bounds` helper.
 fn fixture_line_span(row: &egui::epaint::text::PlacedRow) -> (f32, f32) {
     let g = row.glyphs.first().expect("nonempty fixture row");
     assert!(g.chr.is_ascii_alphabetic());
@@ -227,6 +231,8 @@ fn fixture_line_span(row: &egui::epaint::text::PlacedRow) -> (f32, f32) {
     (top, top + g.font_height)
 }
 
+/// Locate A1 text without requiring a positive clip, returning its clip, cell bounds and sheet scale.
+/// Keeping empty clips observable lets the regression diagnose disappearing lines.
 fn cjk_fixture_shape(app: &SheetApp, out: &egui::FullOutput, text: &str) -> (egui::epaint::TextShape, egui::Rect, egui::Rect, f32) {
     let sh = app.session.active().unwrap().wb.active().unwrap();
     let geo = gridcraft_ui_egui::grid::Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
@@ -243,6 +249,8 @@ fn cjk_fixture_shape(app: &SheetApp, out: &egui::FullOutput, text: &str) -> (egu
     (shape, clip, cell, geo.z)
 }
 
+/// Preserve zero, one or all fitting CJK lines across native display scales and sheet zoom levels.
+/// Require a fractional-scale case that distinguishes primary-font bounds from fallback-expanded row bounds.
 #[test]
 fn fractional_scale_preserves_fitting_baseline_cjk_lines() {
     const TEXT: &str = "ABC中文\nDEF中文\nGHI中文";
