@@ -7,11 +7,12 @@ The import reads worksheet names, visibility, numbers, text, booleans, errors, m
 and cell formulas. A formula keeps its last saved result until it recalculates, and reads as
 the same formula would from an `.xlsx` file saved by Excel: legacy formulas get Excel's
 implicit `@`, and newer functions such as `CONCAT`, `XLOOKUP` and `LET` are read by name.
+Shared formulas (filled down or across) become a formula in each cell; Ctrl+Shift+Enter arrays
+keep their range, and dynamic arrays spill again when they recalculate.
 
 Some formulas are not read yet and keep their **last saved results** as constants, with a
-warning saying why: shared formulas (filled down or across), array and dynamic-array
-formulas, formulas using defined names, table references or other workbooks, and Python cells
-whose code is stored outside the cell. Those results may be out of date if the source
+warning saying why: formulas using defined names, table references or other workbooks, and
+Python cells whose code is stored outside the cell. Those results may be out of date if the source
 application did not recalculate before saving.
 
 Source formatting is omitted: dates, times, percentages and currencies initially display as

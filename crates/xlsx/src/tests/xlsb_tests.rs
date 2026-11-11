@@ -422,7 +422,7 @@ fn xlsb_cell_formulas_are_read_in_their_xlsx_spelling() {
         // Kept as their saved results:
         (11, vec![0x43, 4, 0, 0, 0, 0x1E, 2, 0, 0x05], vec![]),
         (12, ref3d(4, 0, REL), vec![]),
-        (13, vec![0x01, 0, 0, 0, 0], vec![0, 0, 0, 0]),
+        (13, vec![0x01, 0, 0, 0, 0], vec![0, 0, 0, 0]), // Part of a shared formula at A1 that isn't one.
     ];
     let mut data = row(0);
     data.extend(cell(5, 0, &3.0f64.to_le_bytes()));
@@ -452,10 +452,12 @@ fn xlsb_cell_formulas_are_read_in_their_xlsx_spelling() {
     ];
     let mut want: Vec<_> = want.iter().map(|w| Some(w.to_string())).collect();
     want.resize(15, None);
+    // A BrtCellMeta before a cell marks a dynamic-array formula, as `cm` does in .xlsx.
+    want[13] = Some("1".into());
     assert_eq!(got, want);
     // Every formula cell keeps its saved result as its value until it recalculates.
     assert!((1..=15).all(|c| sheet.value(CellRef::new(0, c)) == Value::Number(0.0)));
-    for why in ["defined names", "other workbooks", "the shared or array formula form", "dynamic arrays", "structured table references"] {
+    for why in ["defined names", "other workbooks", "missing from the file", "structured table references"] {
         assert!(report.warnings.iter().any(|w| w.starts_with("Some formulas use") && w.contains(why)), "{why}: {:?}", report.warnings);
     }
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
@@ -523,4 +525,103 @@ fn xlsb_python_formulas_need_their_code_in_the_cell() {
     assert_eq!(gridcraft_model::PyCode::from_formula(&formula(0).unwrap()).map(|p| p.code), Some("1".into()));
     assert_eq!(formula(1), None);
     assert!(report.warnings.iter().any(|w| w.contains("Python code stored outside")));
+}
+
+/// `BrtShrFmla` (427) or `BrtArrFmla` (426) over `r0:c0`–`r1:c1`.
+fn range_formula(id: u16, (r0, c0, r1, c1): (u32, u32, u32, u32), rgce: &[u8]) -> Vec<u8> {
+    let mut data = vec![];
+    for n in [r0, r1, c0, c1] {
+        data.extend(n.to_le_bytes());
+    }
+    if id == 426 {
+        data.push(0x08); // The flags Excel writes for an ordinary array.
+    }
+    data.extend((rgce.len() as u32).to_le_bytes());
+    data.extend(rgce);
+    data.extend(0u32.to_le_bytes());
+    record(id, &data)
+}
+/// A cell of the shared or array formula whose first cell is `row`, `col` (PtgExp + PtgExtraCol).
+fn part(col: u32, (row, first_col): (u32, u32)) -> Vec<u8> {
+    formula_cell(col, &[&[0x01u8][..], &row.to_le_bytes()].concat(), &first_col.to_le_bytes())
+}
+fn ref_n(row: i32, col: u16) -> Vec<u8> {
+    [&[0x4Cu8][..], &row.to_le_bytes(), &col.to_le_bytes()].concat()
+}
+
+#[test]
+fn xlsb_shared_array_and_dynamic_formulas_read_as_from_xlsx() {
+    // As Excel writes them: C1:C3 share `A1*10` (PtgRefN, column offset -2 as 16382); D1:E2
+    // share `$A1+A$1`; F1:F2 hold the Ctrl+Shift+Enter array {=A1:A2*2}; G1 spills `=A1:A2`.
+    let area = [&[0x45u8][..], &0u32.to_le_bytes(), &1u32.to_le_bytes(), &REL.to_le_bytes(), &REL.to_le_bytes()].concat();
+    let mut data = row(0);
+    data.extend(cell(5, 0, &1.0f64.to_le_bytes()));
+    data.extend(part(2, (0, 2)));
+    data.extend(range_formula(427, (0, 2, 2, 2), &[ref_n(0, 16382 | REL), vec![0x1E, 10, 0, 0x05]].concat()));
+    data.extend(part(3, (0, 3)));
+    data.extend(range_formula(427, (0, 3, 1, 4), &[ref_n(0, 0x8000), ref_n(0, 16381 | 0x4000), vec![0x03]].concat()));
+    data.extend(part(4, (0, 3)));
+    data.extend(part(5, (0, 5)));
+    data.extend(range_formula(426, (0, 5, 1, 5), &[area.clone(), vec![0x1E, 2, 0, 0x05]].concat()));
+    data.extend(record(49, &1u32.to_le_bytes()));
+    data.extend(record(50, &1u32.to_le_bytes())); // BrtValueMeta in between, as Excel writes for a spill error.
+    data.extend(part(6, (0, 6)));
+    data.extend(range_formula(426, (0, 6, 1, 6), &area));
+    data.extend(row(1));
+    data.extend(cell(5, 0, &2.0f64.to_le_bytes()));
+    for (col, first) in [(2, (0, 2)), (3, (0, 3)), (4, (0, 3)), (5, (0, 5)), (6, (0, 6))] {
+        data.extend(part(col, first));
+    }
+    data.extend(row(2));
+    data.extend(part(2, (0, 2)));
+    let (wb, report) = read_xlsb(&file(&worksheet(&data, &[]))).unwrap();
+    let sheet = &wb.sheets[0];
+    let formula = |a: &str| sheet.cell(CellRef::parse(a).unwrap()).and_then(|c| c.formula.clone());
+    let text = |a: &str| formula(a).map(|f| f.text.clone());
+    for (at, want) in [("C1", "A1*10"), ("C2", "A2*10"), ("C3", "A3*10"), ("D1", "$A1+A$1"), ("E1", "$A1+B$1"), ("D2", "$A2+A$1"), ("E2", "$A2+B$1")]
+    {
+        assert_eq!(text(at).as_deref(), Some(want), "{at}");
+        assert!(formula(at).is_some_and(|f| !f.dynamic && f.array.is_none()));
+    }
+    // The array keeps its range; the dynamic array is marked and spills. Their other cells
+    // drop their cached values, as from .xlsx, for recalculation to fill.
+    let f1 = formula("F1").unwrap();
+    assert_eq!((f1.text.as_str(), f1.array, f1.dynamic), ("A1:A2*2", RangeRef::parse("F1:F2"), false));
+    let g1 = formula("G1").unwrap();
+    assert_eq!((g1.text.as_str(), g1.array, g1.dynamic), ("A1:A2", None, true));
+    for at in ["F2", "G2"] {
+        assert_eq!(sheet.value(CellRef::parse(at).unwrap()), Value::Empty, "{at}");
+        assert!(formula(at).is_none());
+    }
+    assert_eq!(sheet.value(CellRef::parse("F1").unwrap()), Value::Number(0.0));
+    assert!(!report.warnings.iter().any(|w| w.starts_with("Some formulas")), "{:?}", report.warnings);
+    // Saved as .xlsx and read back, every formula is the same.
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    for at in ["C3", "E2", "F1", "G1"] {
+        let a = formula(at).unwrap();
+        let b = back.sheets[0].cell(CellRef::parse(at).unwrap()).and_then(|c| c.formula.clone()).unwrap();
+        assert_eq!((&a.text, a.array, a.dynamic), (&b.text, b.array, b.dynamic), "{at}");
+    }
+}
+
+#[test]
+fn xlsb_unreadable_shared_formulas_keep_their_values() {
+    // A shared formula with an unsupported token, a range that doesn't start at its first cell,
+    // a truncated record, and a first cell with no formula record after it: every cell of each
+    // keeps its saved result, and the file opens.
+    let unknown = range_formula(427, (0, 0, 1, 0), &[0xFF]);
+    let wrong_start = range_formula(427, (0, 1, 1, 1), &[0x1E, 1, 0]);
+    // A well-framed record whose payload stops before rgcb's length.
+    let short: Vec<u8> = [&[0u8; 4][..], &1u32.to_le_bytes(), &[0; 8], &3u32.to_le_bytes(), &[0x1E, 1, 0]].concat();
+    let truncated = record(427, &short);
+    for after_first in [unknown, wrong_start, truncated, cell(5, 1, &1.0f64.to_le_bytes())] {
+        let data = [row(0), part(0, (0, 0)), after_first, row(1), part(0, (0, 0))].concat();
+        let (wb, report) = read_xlsb(&file(&worksheet(&data, &[]))).unwrap();
+        for r in [0, 1] {
+            let cell = wb.sheets[0].cell(CellRef::new(r, 0)).unwrap();
+            assert!(cell.formula.is_none());
+            assert_eq!(cell.value, Value::Number(0.0));
+        }
+        assert!(report.warnings.iter().any(|w| w.starts_with("Some formulas")));
+    }
 }

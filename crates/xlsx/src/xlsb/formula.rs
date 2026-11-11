@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use gridcraft_core::{CellError, MAX_COLS, MAX_ROWS};
+use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS};
 use gridcraft_formula::{Anchor, BinOp, Expr, RefKind, Reference, SheetSel, UnOp};
 
 use crate::xls::formula::{MAX_ARRAY, MAX_RGCE, Stack, Unsupported, error_code, function, pop, pop_n, push};
@@ -135,6 +135,14 @@ impl Bytes<'_> {
 const LAST_ROW: u32 = MAX_ROWS - 1;
 const LAST_COL: u32 = MAX_COLS - 1;
 
+/// Where a formula lives: a cell formula's references hold coordinates; a shared formula's
+/// relative tokens (`PtgRefN`, `PtgAreaN`) hold offsets from the shared formula's first cell.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum Mode {
+    Cell,
+    Shared(CellRef),
+}
+
 /// RgceLoc ([MS-XLSB] 2.5.98.91): a row and a `ColRelShort` (14-bit column, then the
 /// column-relative and row-relative flags). In a cell formula the coordinates are absolute
 /// whatever the flags say; the flags only decide where `$` goes.
@@ -146,9 +154,29 @@ fn anchor(row: u32, col: u16) -> Result<Anchor, Unsupported> {
     Ok(Anchor { row, col: c, row_abs: col & 0x8000 == 0, col_abs: col & 0x4000 == 0 })
 }
 
+/// RgceLocRel ([MS-XLSB] 2.5.98.92), in a shared formula: a relative row or column is an offset
+/// from `base`, wrapping around the grid (1,048,576 rows, 16,384 columns), as Excel adds them.
+/// An absolute one is a coordinate.
+fn relative_anchor(row: u32, col: u16, base: CellRef) -> Result<Anchor, Unsupported> {
+    let (row_rel, col_rel) = (col & 0x8000 != 0, col & 0x4000 != 0);
+    let r = if row_rel { base.row.wrapping_add(row) % MAX_ROWS } else { row };
+    let c = if col_rel { (base.col + u32::from(col & 0x3FFF)) % MAX_COLS } else { u32::from(col & 0x3FFF) };
+    anchor(r, (c as u16) | (col & 0xC000))
+}
+
+fn loc(row: u32, col: u16, mode: Mode) -> Result<Anchor, Unsupported> {
+    match mode {
+        Mode::Cell => anchor(row, col),
+        Mode::Shared(base) => relative_anchor(row, col, base),
+    }
+}
+
 /// RgceArea: a range spanning every row (or column) is a whole-column (row) reference.
 fn area(r0: u32, r1: u32, c0: u16, c1: u16) -> Result<RefKind, Unsupported> {
-    let (a, b) = (anchor(r0, c0)?, anchor(r1, c1)?);
+    area_of(anchor(r0, c0)?, anchor(r1, c1)?)
+}
+
+fn area_of(a: Anchor, b: Anchor) -> Result<RefKind, Unsupported> {
     Ok(if a.row == 0 && b.row == LAST_ROW {
         RefKind::Cols(a.col, a.col_abs, b.col, b.col_abs)
     } else if a.col == 0 && b.col == LAST_COL {
@@ -165,10 +193,11 @@ fn reference(sheet: Option<SheetSel>, kind: RefKind) -> Expr {
     }
 }
 
-/// Decodes a cell formula's `rgce` (tokens) with its `rgcb` (extra data for array constants and
+/// Decodes a formula's `rgce` (tokens) with its `rgcb` (extra data for array constants and
 /// cached areas). Returns the expression, with names in their file spelling, or why it can't be
-/// represented.
-pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links) -> Result<Expr, Unsupported> {
+/// represented. A shared formula is decoded for its first cell (`Mode::Shared`): the other cells
+/// shift its relative references, as `.xlsx` shared formulas are read.
+pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Result<Expr, Unsupported> {
     if rgce.len() > MAX_RGCE {
         return Err(Unsupported("formula too long"));
     }
@@ -357,7 +386,17 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links) -> Result<Expr, Un
             0x01 => return Err(Unsupported("the shared or array formula form")),
             0x02 => return Err(Unsupported("what-if data tables")),
             0x18 => return Err(Unsupported("structured table references")),
-            0x2C | 0x2D => return Err(Unsupported("relative references in a cell formula")),
+            0x2C => {
+                let Mode::Shared(_) = mode else { return Err(Unsupported("relative references in a cell formula")) };
+                let (r, c) = (t.u32()?, t.u16()?);
+                push(&mut stack, kids, Expr::Ref(Reference { sheet: SheetSel::Current, kind: RefKind::Cell(loc(r, c, mode)?) }))?;
+            }
+            0x2D => {
+                let Mode::Shared(_) = mode else { return Err(Unsupported("relative references in a cell formula")) };
+                let (r0, r1, c0, c1) = (t.u32()?, t.u32()?, t.u16()?, t.u16()?);
+                let kind = area_of(loc(r0, c0, mode)?, loc(r1, c1, mode)?)?;
+                push(&mut stack, kids, Expr::Ref(Reference { sheet: SheetSel::Current, kind }))?;
+            }
             _ => return Err(Unsupported("unknown formula token")),
         }
         if stack.len() > MAX_RGCE {
