@@ -874,10 +874,16 @@ fn worksheet(
         let dynamic = if id == 50 { meta } else { std::mem::take(&mut meta) };
         if let Some((at, dynamic)) = first.take() {
             if matches!(id, 426 | 427) {
-                if let Some(f) = formulas.range_formula(id, payload, at, dynamic, budget)
-                    && let Some(cell) = sheet.cells.get_mut(at)
-                {
-                    cell.formula = Some(Arc::new(f));
+                if let Some(f) = formulas.range_formula(id, payload, at, dynamic, budget) {
+                    // A formula record always holds a cached value, so the cell is stored; the
+                    // formula doesn't depend on it.
+                    match sheet.cells.get_mut(at) {
+                        Some(cell) => cell.formula = Some(Arc::new(f)),
+                        None => {
+                            budget.cell()?;
+                            sheet.cells.set(at, Cell { formula: Some(Arc::new(f)), ..Cell::value(Value::Empty) });
+                        }
+                    }
                 }
                 continue;
             }
