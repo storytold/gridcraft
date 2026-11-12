@@ -13,7 +13,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
     RibbonSections::breaks(ui, "Workbook Views", &[(880.0, 3)]);
     RibbonSections::breaks(ui, "Show", &[(1280.0, 2), (0.0, 1)]);
     RibbonSections::breaks(ui, "Window", &[(819.0, 3)]);
-    section(ui, app, "Sheet View", Icon::Sheet, |app, ui| {
+    section("View", ui, app, "Sheet View", Icon::Sheet, |app, ui| {
         // New Sheet View over Custom Views from 928 client points, side by side below it.
         if RibbonSections::level(ui, "Sheet View") == 2 {
             ui.vertical(|ui| {
@@ -26,7 +26,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Sheet View");
-    section(ui, app, "Workbook Views", Icon::Normal, |app, ui| {
+    section("View", ui, app, "Workbook Views", Icon::Normal, |app, ui| {
         for (icon, label, cmd) in [
             (Icon::Normal, "Normal", "view.normal"),
             (Icon::PageBreak, "Page Break\nPreview", "view.pageBreakPreview"),
@@ -40,7 +40,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Workbook Views");
-    section(ui, app, "Show", Icon::PageLayout, |app, ui| {
+    section("View", ui, app, "Show", Icon::PageLayout, |app, ui| {
         if RibbonSections::level(ui, "Show") == 1 {
             // One row of four checkboxes below 1280 client points.
             ui.horizontal(|ui| {
@@ -63,7 +63,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Show");
-    section(ui, app, "Zoom", Icon::Zoom, |app, ui| {
+    section("View", ui, app, "Zoom", Icon::Zoom, |app, ui| {
         let __k = big_button(ui, Icon::Zoom, "Zoom", "Zoom…", false);
         control_keytip(app, ui, &__k, "dialog:zoom");
         if __k.clicked() {
@@ -82,7 +82,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Zoom");
-    section(ui, app, "Window", Icon::Book, |app, ui| {
+    section("View", ui, app, "Window", Icon::Book, |app, ui| {
         let __k = big_button(ui, Icon::NewFile, "New\nWindow", "New Window", false);
         control_keytip(app, ui, &__k, "view.newWindow");
         if __k.clicked() {
@@ -141,7 +141,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     sep(ui, "Window");
-    section(ui, app, "Interface", Icon::Settings, |app, ui| {
+    section("View", ui, app, "Interface", Icon::Settings, |app, ui| {
         // Interface size (issue #230): scales the whole window on top of the desktop's scale.
         ui.vertical(|ui| {
             let label = ui.label(egui::RichText::new(lang.tr("Interface size")).font(theme::ui_font(11.5)).color(t.text_dim));
@@ -273,6 +273,7 @@ fn custom_views(app: &mut SheetApp, ui: &mut Ui) {
             ui.horizontal(|ui| {
                 if ui.button(&name).clicked() {
                     act(app, "view.customViews", json!({"show": name}));
+                    app.grid.ensure_visible = true;
                     ui.close();
                 }
                 if ui.small_button(lang.tr("Delete")).clicked() {

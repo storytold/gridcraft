@@ -8,7 +8,7 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     RibbonSections::breaks(ui, "Themes", &[(760.0, 3)]);
     RibbonSections::breaks(ui, "Page Setup", &[(928.0, 1), (0.0, 3)]);
     RibbonSections::breaks(ui, "Scale to Fit", &[(680.0, 2)]);
-    section(ui, app, "Themes", Icon::Theme, |app, ui| {
+    section("Page Layout", ui, app, "Themes", Icon::Theme, |app, ui| {
         let th = big_button(ui, Icon::Theme, "Themes", "Themes", true);
         anchor_keytip(app, ui, &th, &["pageLayout.theme"]);
         egui::Popup::menu(&th).show(|ui| {
@@ -26,7 +26,7 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     sep(ui, "Themes");
-    section(ui, app, "Page Setup", Icon::PageLayout, |app, ui| {
+    section("Page Layout", ui, app, "Page Setup", Icon::PageLayout, |app, ui| {
         // Excel's three-row form below 928 client points: six small buttons, two per row, in the
         // order Excel stacks them; one row of large buttons from 928.
         if RibbonSections::level(ui, "Page Setup") == 3 {
@@ -54,11 +54,11 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Page Setup");
-    section(ui, app, "Scale to Fit", Icon::PageLayout, |app, ui| {
+    section("Page Layout", ui, app, "Scale to Fit", Icon::PageLayout, |app, ui| {
         scale_to_fit(app, ui);
     });
     sep(ui, "Scale to Fit");
-    section(ui, app, "Sheet Options", Icon::Sheet, |app, ui| {
+    section("Page Layout", ui, app, "Sheet Options", Icon::Sheet, |app, ui| {
         let sh = app
             .session
             .active()

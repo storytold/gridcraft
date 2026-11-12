@@ -7,7 +7,7 @@ use egui::vec2;
 pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
     // Macros: the Macros dialog; Record Macro (Stop Recording while recording), Use Relative
     // References; Run Macro, whose main part runs the last macro and whose menu lists them all.
-    section(ui, app, "Macros", Icon::Macro, |app, ui| {
+    section("Automate", ui, app, "Macros", Icon::Macro, |app, ui| {
         if big_button(ui, Icon::Script, "Macros", "Macros and scripts in this workbook (Alt+F8)", false).clicked() {
             app.open_dialog("macros", json!({}));
         }
@@ -72,7 +72,7 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     sep(ui, "Macros");
-    section(ui, app, "Tools", Icon::Script, |app, ui| {
+    section("Automate", ui, app, "Tools", Icon::Script, |app, ui| {
         let __k = big_button(ui, Icon::Script, "Command\nPalette", "Search and run any command", false);
         control_keytip(app, ui, &__k, "commandSearch");
         if __k.clicked() {

@@ -390,7 +390,7 @@ impl RibbonSections {
     /// Draws one group: `body` in place while the group is natural, or as a single compact row
     /// whose menu holds the whole natural body. The following `sep`/`group_end` still names the
     /// group, so its label sits in the band either way.
-    fn draw(ui: &mut Ui, app: &mut SheetApp, label: &str, icon: Icon, mut body: impl FnMut(&mut SheetApp, &mut Ui)) {
+    fn draw(tab: &str, ui: &mut Ui, app: &mut SheetApp, label: &str, icon: Icon, mut body: impl FnMut(&mut SheetApp, &mut Ui)) {
         // A keytip request must reach its control: `begin` already put the whole tab in its
         // natural layout for that frame, so the control that owns the request is drawn (each body
         // still draws exactly once). The layout is held until the popup closes so its anchor, and
@@ -406,18 +406,17 @@ impl RibbonSections {
             // The menu is an area, not a popup: it holds buttons that open popups of their own,
             // and a popup nested in a popup would close its parent. Clicks inside reach those
             // buttons; a click elsewhere (or Escape) closes it.
-            let open_id = button.id.with("section_open");
-            let here = ui.ctx().data(|d| d.get_temp::<String>(last_sections_tab_id())).unwrap_or_default();
-            // A menu left open on another tab must not reappear: the tab switch skips this
-            // group's drawing path, so the flag records the tab it was opened on and a tab
-            // that did not open it starts closed.
-            let mut open =
-                ui.ctx().data(|d| d.get_temp::<(String, bool)>(open_id)).filter(|(tab, _)| tab == &here).map(|(_, open)| open).unwrap_or(false);
+            // Stable across resizes: the open flag and the Area derive from the tab and the
+            // group's label, not the allocation-order button id, so a resize that moves the
+            // button keeps the menu open instead of reading another group's flag.
+            let menu_id = egui::Id::unique(("gridcraft.compact_group", tab, label));
+            let open_id = menu_id.with("open");
+            let mut open = ui.ctx().data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
             if button.clicked() {
                 open = !open;
             }
             if open {
-                let area = egui::Area::new(button.id.with("section_body"))
+                let area = egui::Area::new(menu_id.with("body"))
                     .order(egui::Order::Foreground)
                     .fixed_pos(button.rect.left_bottom() + vec2(0.0, 4.0))
                     .constrain(true);
@@ -450,7 +449,7 @@ impl RibbonSections {
                     Self::release_forced(ui);
                 }
             }
-            ui.ctx().data_mut(|d| d.insert_temp(open_id, (here, open)));
+            ui.ctx().data_mut(|d| d.insert_temp(open_id, open));
         } else {
             let left = ui.cursor().min.x;
             body(app, ui);
@@ -477,9 +476,13 @@ impl RibbonSections {
     /// so nothing marks it used, and without this the group would stay expanded until some
     /// other dismissal. The next frame settles back, after the closing click reaches its target.
     fn release_forced(ui: &Ui) {
+        // Read the frame before `with_tab_sections`: its `data_mut` holds the context write
+        // lock and `cumulative_frame_nr` takes the read lock, which deadlocks the UI thread
+        // (debug builds panic after the lock timeout).
+        let frame = ui.ctx().cumulative_frame_nr();
         with_tab_sections(ui, |sections| {
             if sections.forced.is_some() && !sections.forced_used {
-                sections.forced_unpin_at.get_or_insert(ui.ctx().cumulative_frame_nr());
+                sections.forced_unpin_at.get_or_insert(frame);
             }
         });
     }
@@ -512,8 +515,8 @@ impl RibbonSections {
 /// Draws one group of a tab: its natural body in place when the planner has room for it, or one
 /// compact row whose menu holds the body. The `sep`/`group_end` that follows still names the
 /// group, so its label stays in the band either way.
-pub(crate) fn section(ui: &mut Ui, app: &mut SheetApp, label: &str, icon: Icon, body: impl FnMut(&mut SheetApp, &mut Ui)) {
-    RibbonSections::draw(ui, app, label, icon, body);
+pub(crate) fn section(tab: &str, ui: &mut Ui, app: &mut SheetApp, label: &str, icon: Icon, body: impl FnMut(&mut SheetApp, &mut Ui)) {
+    RibbonSections::draw(tab, ui, app, label, icon, body);
 }
 
 /// Paints the separators (from the buttons into the label band) and each group's name centred in

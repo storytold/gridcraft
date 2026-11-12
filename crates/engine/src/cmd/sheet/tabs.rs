@@ -105,6 +105,9 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let old = cx.wb.sheet(i).map(|s| s.name.clone()).unwrap_or_default();
         cx.sheet_mut(i)?.name = name.clone();
+        // Custom views store the sheet's name: retarget the renamed sheet's views so Show
+        // keeps working (a stale name would error, and a reused name could hit the wrong sheet).
+        crate::cmd::extra::retarget_views_on_rename(&mut cx.wb, &old, &name);
         for si in 0..cx.wb.sheets.len() {
             let keys: Vec<(CellRef, Arc<gridcraft_model::Formula>)> =
                 cx.wb.sheets.get(si).map(|s| s.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect()).unwrap_or_default();

@@ -6,7 +6,7 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
     // from 1520.
     RibbonSections::breaks(ui, "Data Tools", &[(1040.0, 3)]);
     RibbonSections::breaks(ui, "Outline", &[(1520.0, 3)]);
-    section(ui, app, "Get & Transform Data", Icon::Folder, |app, ui| {
+    section("Data", ui, app, "Get & Transform Data", Icon::Folder, |app, ui| {
         let gd = big_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);
         control_keytip(app, ui, &gd, "data.getData");
         if gd.clicked() {
@@ -14,7 +14,7 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Get & Transform Data");
-    section(ui, app, "Sort & Filter", Icon::SortFilter, |app, ui| {
+    section("Data", ui, app, "Sort & Filter", Icon::SortFilter, |app, ui| {
         ui.vertical(|ui| {
             let __k = small_button(ui, Icon::SortAsc, "", "Sort A to Z", false);
             control_keytip(app, ui, &__k, "data.sortAscending");
@@ -56,40 +56,31 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     sep(ui, "Sort & Filter");
-    section(ui, app, "Data Tools", Icon::Validation, |app, ui| {
-        let __k = big_button(ui, Icon::TextColumns, "Text to\nColumns", "Text to Columns", false);
-        control_keytip(app, ui, &__k, "dialog:textToColumns");
-        if __k.clicked() {
-            app.open_dialog("textToColumns", json!({}));
+    section("Data", ui, app, "Data Tools", Icon::Validation, |app, ui| {
+        // The measured three-row form stacks the four tools as small buttons; other levels
+        // keep one row of four big buttons.
+        if RibbonSections::level(ui, "Data Tools") == 3 {
+            // Three rows of two: the stacked columns of small buttons Excel's narrow form uses.
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    small_data_tool(app, ui, Icon::TextColumns, "Text to Columns", "dialog:textToColumns");
+                    small_data_tool(app, ui, Icon::FillDown, "Flash Fill", "edit.flashFill");
+                });
+                ui.add_space(2.0);
+                ui.vertical(|ui| {
+                    small_data_tool(app, ui, Icon::Duplicates, "Remove Duplicates", "dialog:removeDuplicates");
+                    small_data_validation(app, ui);
+                });
+            });
+        } else {
+            data_tool(app, ui, Icon::TextColumns, "Text to\nColumns", "Text to Columns", "dialog:textToColumns");
+            data_tool(app, ui, Icon::FillDown, "Flash\nFill", "Flash Fill", "edit.flashFill");
+            data_tool(app, ui, Icon::Duplicates, "Remove\nDuplicates", "Remove Duplicates", "dialog:removeDuplicates");
+            data_validation(app, ui);
         }
-        let __k = big_button(ui, Icon::FillDown, "Flash\nFill", "Flash Fill", false);
-        control_keytip(app, ui, &__k, "edit.flashFill");
-        if __k.clicked() {
-            act(app, "edit.flashFill", json!({}));
-        }
-        let __k = big_button(ui, Icon::Duplicates, "Remove\nDuplicates", "Remove Duplicates", false);
-        control_keytip(app, ui, &__k, "dialog:removeDuplicates");
-        if __k.clicked() {
-            app.open_dialog("removeDuplicates", json!({}));
-        }
-        let dv = big_button(ui, Icon::Validation, "Data\nValidation", "Data Validation", true);
-        for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["data.validation", "data.circleInvalid"]) {
-            keytip(app, ui, sequence, dv.rect.center_bottom());
-        }
-        egui::Popup::menu(&dv).show(|ui| {
-            menu_items(
-                app,
-                ui,
-                &[
-                    ("Data Validation…", "dialog:dataValidation", json!({})),
-                    ("Circle Invalid Data", "data.circleInvalid", json!({})),
-                    ("Clear Validation", "data.validation", json!({"clear": true})),
-                ],
-            );
-        });
     });
     sep(ui, "Data Tools");
-    section(ui, app, "Forecast", Icon::ChartLine, |app, ui| {
+    section("Data", ui, app, "Forecast", Icon::ChartLine, |app, ui| {
         let wi = big_button(ui, Icon::Calc, "What-If\nAnalysis", "What-If Analysis", true);
         for sequence in
             keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["dialog:goalSeek", "data.scenarioManager", "data.dataTable"])
@@ -112,7 +103,7 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Forecast");
-    section(ui, app, "Outline", Icon::Group, |app, ui| {
+    section("Data", ui, app, "Outline", Icon::Group, |app, ui| {
         ui.vertical(|ui| {
             let __k = small_button(ui, Icon::Group, "Group", "Group", false);
             control_keytip(app, ui, &__k, "data.group");
@@ -143,7 +134,7 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     sep(ui, "Outline");
-    section(ui, app, "Analysis", Icon::ChartBar, |app, ui| {
+    section("Data", ui, app, "Analysis", Icon::ChartBar, |app, ui| {
         if big_button(ui, Icon::ChartBar, "Data\nAnalysis", "Data Analysis", false).clicked() {
             app.open_dialog("analysisToolPak", json!({}));
         }
@@ -153,4 +144,69 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     group_end(ui, "Analysis");
+}
+
+/// One Data Tools big button: opens `dialog` for `dialog:*` targets, else runs the command.
+fn data_tool(app: &mut SheetApp, ui: &mut Ui, icon: Icon, label: &str, tip: &str, target: &str) {
+    let button = big_button(ui, icon, label, tip, false);
+    control_keytip(app, ui, &button, target);
+    if button.clicked() {
+        if let Some(dialog) = target.strip_prefix("dialog:") {
+            app.open_dialog(dialog, json!({}));
+        } else {
+            act(app, target, json!({}));
+        }
+    }
+}
+
+/// The Data Validation split control with its menu.
+fn data_validation(app: &mut SheetApp, ui: &mut Ui) {
+    let dv = big_button(ui, Icon::Validation, "Data\nValidation", "Data Validation", true);
+    for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["data.validation", "data.circleInvalid"]) {
+        keytip(app, ui, sequence, dv.rect.center_bottom());
+    }
+    egui::Popup::menu(&dv).show(|ui| {
+        menu_items(
+            app,
+            ui,
+            &[
+                ("Data Validation…", "dialog:dataValidation", json!({})),
+                ("Circle Invalid Data", "data.circleInvalid", json!({})),
+                ("Clear Validation", "data.validation", json!({"clear": true})),
+            ],
+        );
+    });
+}
+
+/// One Data Tools small button for the stacked three-row form: opens `dialog` for `dialog:*`
+/// targets, else runs the command.
+fn small_data_tool(app: &mut SheetApp, ui: &mut Ui, icon: Icon, label: &str, target: &str) {
+    let button = small_button(ui, icon, label, label, false);
+    control_keytip(app, ui, &button, target);
+    if button.clicked() {
+        if let Some(dialog) = target.strip_prefix("dialog:") {
+            app.open_dialog(dialog, json!({}));
+        } else {
+            act(app, target, json!({}));
+        }
+    }
+}
+
+/// The Data Validation control for the stacked three-row form, with its menu.
+fn small_data_validation(app: &mut SheetApp, ui: &mut Ui) {
+    let dv = small_button(ui, Icon::Validation, "Data Validation", "Data Validation", true);
+    for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["data.validation", "data.circleInvalid"]) {
+        keytip(app, ui, sequence, dv.rect.center_bottom());
+    }
+    egui::Popup::menu(&dv).show(|ui| {
+        menu_items(
+            app,
+            ui,
+            &[
+                ("Data Validation…", "dialog:dataValidation", json!({})),
+                ("Circle Invalid Data", "data.circleInvalid", json!({})),
+                ("Clear Validation", "data.validation", json!({"clear": true})),
+            ],
+        );
+    });
 }

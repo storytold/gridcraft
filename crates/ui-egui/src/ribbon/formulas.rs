@@ -79,7 +79,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     // Formula Auditing from 1040.
     RibbonSections::breaks(ui, "Defined Names", &[(1280.0, 3)]);
     RibbonSections::breaks(ui, "Formula Auditing", &[(1040.0, 3)]);
-    section(ui, app, "Function Library", Icon::Function, |app, ui| {
+    section("Formulas", ui, app, "Function Library", Icon::Function, |app, ui| {
         let __k = big_button(ui, Icon::Function, "Insert\nFunction", "Insert Function (⇧F3)", false);
         control_keytip(app, ui, &__k, "dialog:insertFunction");
         if __k.clicked() {
@@ -104,7 +104,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Function Library");
-    section(ui, app, "Defined Names", Icon::Name, |app, ui| {
+    section("Formulas", ui, app, "Defined Names", Icon::Name, |app, ui| {
         let __k = big_button(ui, Icon::Name, "Name\nManager", "Name Manager", false);
         control_keytip(app, ui, &__k, "dialog:nameManager");
         if __k.clicked() {
@@ -158,7 +158,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     sep(ui, "Defined Names");
-    section(ui, app, "Formula Auditing", Icon::Trace, |app, ui| {
+    section("Formulas", ui, app, "Formula Auditing", Icon::Trace, |app, ui| {
         ui.vertical(|ui| {
             if small_button(ui, Icon::Trace, "Trace Precedents", "Trace Precedents", false).clicked()
                 && let Ok(r) = app.run("formulas.tracePrecedents", json!({}))
@@ -223,7 +223,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Formula Auditing");
-    section(ui, app, "Calculation", Icon::Calc, |app, ui| {
+    section("Formulas", ui, app, "Calculation", Icon::Calc, |app, ui| {
         let co = big_button(ui, Icon::Calc, "Calculation\nOptions", "Calculation Options", true);
         for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["formulas.calculationOptions"]) {
             keytip(app, ui, sequence, co.rect.center_bottom());

@@ -41,7 +41,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     RibbonSections::breaks(ui, "Cells", &[(1520.0, 1), (1120.0, 3)]);
     RibbonSections::breaks(ui, "Editing", &[(1120.0, 3)]);
     // Clipboard
-    section(ui, app, "Clipboard", Icon::Paste, |app, ui| {
+    section("Home", ui, app, "Clipboard", Icon::Paste, |app, ui| {
         let paste = big_button(ui, Icon::Paste, "Paste", "Paste", true);
         paste.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Paste"));
         for sequence in
@@ -121,7 +121,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui, "Clipboard");
     // Font
-    section(ui, app, "Font", Icon::Bold, |app, ui| {
+    section("Home", ui, app, "Font", Icon::Bold, |app, ui| {
         // Three rows keep the style buttons apart from the colour ones; the wide two-row form
         // Excel uses from 1280 client points puts both on the second row.
         let wide = RibbonSections::level(ui, "Font") == 2;
@@ -140,7 +140,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui, "Font");
     // Alignment
-    section(ui, app, "Alignment", Icon::AlignLeft, |app, ui| {
+    section("Home", ui, app, "Alignment", Icon::AlignLeft, |app, ui| {
         // Excel's Alignment group loses its third row first: merge moves beside the indents at the
         // narrow breakpoint and in the wide two-row form, and the whole group becomes one compact
         // row below both.
@@ -219,7 +219,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui, "Alignment");
     // Number
-    section(ui, app, "Number", Icon::Percent, |app, ui| {
+    section("Home", ui, app, "Number", Icon::Percent, |app, ui| {
         let rows = if RibbonSections::level(ui, "Number") == 2 { 2 } else { 3 };
         ui.vertical(|ui| {
             number_combo(app, ui, &st);
@@ -257,7 +257,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui, "Number");
     // Styles
-    section(ui, app, "Styles", Icon::CellStyles, |app, ui| {
+    section("Home", ui, app, "Styles", Icon::CellStyles, |app, ui| {
         // Excel stacks the three style buttons until 1520 client points, then spreads them over
         // one row.
         let mut buttons = |ui: &mut Ui| {
@@ -279,7 +279,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui, "Styles");
     // Cells
-    section(ui, app, "Cells", Icon::Insert, |app, ui| {
+    section("Home", ui, app, "Cells", Icon::Insert, |app, ui| {
         // Three stacked buttons, or one row of three past 1520 client points.
         let mut buttons = |ui: &mut Ui| {
             let ins = small_button(ui, Icon::Insert, "Insert", "Insert", true);
@@ -386,7 +386,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui, "Cells");
     // Editing
-    section(ui, app, "Editing", Icon::Sum, |app, ui| {
+    section("Home", ui, app, "Editing", Icon::Sum, |app, ui| {
         // Excel's Editing group: AutoSum beside a two-by-two grid of small buttons.
         ui.horizontal(|ui| {
             let (s, sa) = split_button(ui, Icon::Sum, None, "AutoSum");

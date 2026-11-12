@@ -336,6 +336,10 @@ fn render_tests(entries: &[Entry], probe: &Probe) -> String {
                 seq = e.seq,
                 dialog = e.target,
             ),
+            "control" if e.target == "view.customViews" => format!(
+                "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().message.is_none() && h.state().toast.is_none(), \"{seq} must route to its control without an error box\");\n    assert_eq!(h.state().keytips.prefix(), None);\n    assert!(egui::Popup::is_id_open(&h.ctx, egui::Id::unique(\"gridcraft.custom_views\")), \"{seq} must open the Custom Views popup\");",
+                seq = e.seq,
+            ),
             "control" => format!(
                 "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().message.is_none() && h.state().toast.is_none(), \"{seq} must route to its control without an error box\");\n    assert_eq!(h.state().keytips.prefix(), None);",
                 seq = e.seq,

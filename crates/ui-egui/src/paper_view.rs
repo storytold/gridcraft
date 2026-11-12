@@ -880,7 +880,7 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
     let (sheet_name, file) =
         app.session.active().map(|d| (d.wb.sheet(e.sheet).map(|s| s.name.clone()).unwrap_or_default(), d.display_title())).unwrap_or_default();
     // Header & Footer presets (shown with sample values, as the result will read).
-    section(ui, app, "Header & Footer", Icon::Header, |app, ui| {
+    section(crate::paper_view::TAB, ui, app, "Header & Footer", Icon::Header, |app, ui| {
         for (label, part) in [("Header", false), ("Footer", true)] {
             let r = big_button(ui, if part { Icon::Footer } else { Icon::Header }, label, label, true);
             egui::Popup::menu(&r).show(|ui| {
@@ -905,7 +905,7 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
         }
     });
     sep(ui, "Header & Footer");
-    section(ui, app, "Elements", Icon::PageNumber, |app, ui| {
+    section(crate::paper_view::TAB, ui, app, "Elements", Icon::PageNumber, |app, ui| {
         for (icon, label, tip, field) in [
             (Icon::PageNumber, "Page\nNumber", "Page Number", "&[Page]"),
             (Icon::PageCount, "Number\nof Pages", "Number of Pages", "&[Pages]"),
@@ -921,7 +921,7 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
         }
     });
     sep(ui, "Elements");
-    section(ui, app, "Navigation", Icon::Header, |app, ui| {
+    section(crate::paper_view::TAB, ui, app, "Navigation", Icon::Header, |app, ui| {
         if big_button(ui, Icon::Header, "Go to\nHeader", "Go to Header", false).clicked() && footer {
             go_to(app, false);
         }
@@ -930,7 +930,7 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
         }
     });
     sep(ui, "Navigation");
-    section(ui, app, "Options", Icon::Settings, |app, ui| {
+    section(crate::paper_view::TAB, ui, app, "Options", Icon::Settings, |app, ui| {
         let (first, odd_even, scale_doc, align) =
             app.session.active().and_then(|d| d.wb.sheet(app.grid.hf_edit.as_ref().map_or(0, |e| e.sheet))).map_or((false, false, true, true), |s| {
                 (s.print.different_first, s.print.different_odd_even, s.print.hf_scale_with_doc, s.print.hf_align_with_margins)

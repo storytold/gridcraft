@@ -7,7 +7,7 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
     // six between 880 and 1280, one row from 1280 and compact below 880.
     RibbonSections::breaks(ui, "Proofing", &[(1280.0, 1), (819.0, 3)]);
     RibbonSections::breaks(ui, "Comments", &[(1280.0, 1), (880.0, 3)]);
-    section(ui, app, "Proofing", Icon::Spell, |app, ui| {
+    section("Review", ui, app, "Proofing", Icon::Spell, |app, ui| {
         if RibbonSections::level(ui, "Proofing") == 3 {
             ui.vertical(|ui| {
                 proofing_spelling(app, ui, false);
@@ -21,7 +21,7 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Proofing");
-    section(ui, app, "Comments", Icon::Comment, |app, ui| {
+    section("Review", ui, app, "Comments", Icon::Comment, |app, ui| {
         if RibbonSections::level(ui, "Comments") == 3 {
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
@@ -49,7 +49,7 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Comments");
-    section(ui, app, "Protect", Icon::Lock, |app, ui| {
+    section("Review", ui, app, "Protect", Icon::Lock, |app, ui| {
         let protected = app.active_sheet_protected();
         let __k = big_button(ui, Icon::Lock, if protected { "Unprotect\nSheet" } else { "Protect\nSheet" }, "Protect Sheet", false);
         control_keytip(app, ui, &__k, "dialog:protectSheet");

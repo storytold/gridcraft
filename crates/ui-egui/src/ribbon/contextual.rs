@@ -11,7 +11,7 @@ pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
     }) else {
         return;
     };
-    section(ui, app, "Properties", Icon::Table, |app, ui| {
+    section("Table Design", ui, app, "Properties", Icon::Table, |app, ui| {
         ui.vertical(|ui| {
             ui.label(egui::RichText::new("Table Name:").small());
             let field = egui::Id::unique(("gridcraft.table_name", &tname));
@@ -28,7 +28,7 @@ pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Properties");
-    section(ui, app, "Tools", Icon::Duplicates, |app, ui| {
+    section("Table Design", ui, app, "Tools", Icon::Duplicates, |app, ui| {
         let __k = big_button(ui, Icon::Duplicates, "Remove\nDuplicates", "Remove Duplicates", false);
         control_keytip(app, ui, &__k, "data.removeDuplicates");
         if __k.clicked() {
@@ -45,7 +45,7 @@ pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Tools");
-    section(ui, app, "Table Style Options", Icon::Table, |app, ui| {
+    section("Table Design", ui, app, "Table Style Options", Icon::Table, |app, ui| {
         ui.vertical(|ui| {
             for (label, cmd, v) in [
                 ("Header Row", "table.headerRow", header && filter),
@@ -72,7 +72,7 @@ pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     sep(ui, "Table Style Options");
-    section(ui, app, "Table Styles", Icon::Table, |app, ui| table_style_strip(app, ui, &tname, &style));
+    section("Table Design", ui, app, "Table Styles", Icon::Table, |app, ui| table_style_strip(app, ui, &tname, &style));
     group_end(ui, "Table Styles");
 }
 
@@ -117,7 +117,7 @@ fn table_style_strip(app: &mut SheetApp, ui: &mut Ui, tname: &str, current: &str
 
 pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
     let Some(id) = app.selected_chart() else { return };
-    section(ui, app, "Chart", Icon::Chart, |app, ui| {
+    section("Chart Design", ui, app, "Chart", Icon::Chart, |app, ui| {
         let ae = big_button(ui, Icon::Chart, "Add Chart\nElement", "Add Chart Element", true);
         for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["chart.set"]) {
             keytip(app, ui, sequence, ae.rect.center_bottom());

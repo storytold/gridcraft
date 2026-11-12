@@ -14,7 +14,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     RibbonSections::breaks(ui, "Illustrations", &[(1520.0, 3)]);
     RibbonSections::breaks(ui, "Filters", &[(1520.0, 1), (1280.0, 2)]);
     RibbonSections::breaks(ui, "Symbols", &[(1520.0, 2), (0.0, 1)]);
-    section(ui, app, "Tables", Icon::Table, |app, ui| {
+    section("Insert", ui, app, "Tables", Icon::Table, |app, ui| {
         let __k = big_button(ui, Icon::PivotTable, "PivotTable", "PivotTable", false);
         control_keytip(app, ui, &__k, "insert.pivotTable");
         if __k.clicked() {
@@ -27,7 +27,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Tables");
-    section(ui, app, "Illustrations", Icon::Picture, |app, ui| {
+    section("Insert", ui, app, "Illustrations", Icon::Picture, |app, ui| {
         let pic = big_button(ui, Icon::Picture, "Pictures", "Insert a picture", true);
         anchor_keytip(app, ui, &pic, &["insert.picture"]);
         pic.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Pictures"));
@@ -79,7 +79,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     sep(ui, "Illustrations");
-    section(ui, app, "Charts", Icon::Chart, |app, ui| {
+    section("Insert", ui, app, "Charts", Icon::Chart, |app, ui| {
         let __k = big_button(ui, Icon::Chart, "Recommended\nCharts", "Recommended Charts", false);
         control_keytip(app, ui, &__k, "insert.recommendedCharts");
         if __k.clicked() {
@@ -168,7 +168,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     sep(ui, "Charts");
-    section(ui, app, "Filters", Icon::Filter, |app, ui| {
+    section("Insert", ui, app, "Filters", Icon::Filter, |app, ui| {
         // Excel's Filters group: Slicer and Timeline, stacked until the card reaches 1520 client
         // points, one row from there, and the whole group as one compact row below 1280.
         if RibbonSections::level(ui, "Filters") == 2 {
@@ -183,7 +183,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Filters");
-    section(ui, app, "Sparklines", Icon::Sparkline, |app, ui| {
+    section("Insert", ui, app, "Sparklines", Icon::Sparkline, |app, ui| {
         let sp = big_button(ui, Icon::Sparkline, "Sparklines", "Sparklines", true);
         anchor_keytip(app, ui, &sp, &["dialog:sparkline"]);
         egui::Popup::menu(&sp).show(|ui| {
@@ -197,7 +197,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     sep(ui, "Sparklines");
     // Form controls: draw a button, slider or spin button on the sheet (a click places it at its
     // default size). Their key tips run the command at the active cell.
-    section(ui, app, "Form Controls", Icon::Button, |app, ui| {
+    section("Insert", ui, app, "Form Controls", Icon::Button, |app, ui| {
         use gridcraft_engine::model::ControlKind;
         let placing = app.grid.placing;
         ui.vertical(|ui| {
@@ -218,13 +218,13 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui, "Form Controls");
     // Cell Controls.
-    section(ui, app, "Cell Controls", Icon::Checkbox, |app, ui| {
+    section("Insert", ui, app, "Cell Controls", Icon::Checkbox, |app, ui| {
         if big_button(ui, Icon::Checkbox, "Checkbox", "Insert checkboxes in the selected cells", false).clicked() {
             act(app, "insert.checkbox", json!({}));
         }
     });
     sep(ui, "Cell Controls");
-    section(ui, app, "Links", Icon::Link, |app, ui| {
+    section("Insert", ui, app, "Links", Icon::Link, |app, ui| {
         let __k = big_button(ui, Icon::Link, "Link", "Insert Link", false);
         control_keytip(app, ui, &__k, "dialog:insertLink");
         if __k.clicked() {
@@ -237,7 +237,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Links");
-    section(ui, app, "Text", Icon::TextBox, |app, ui| {
+    section("Insert", ui, app, "Text", Icon::TextBox, |app, ui| {
         let __k = big_button(ui, Icon::TextBox, "Text\nBox", "Text Box", false);
         control_keytip(app, ui, &__k, "insert.textBox");
         if __k.clicked() {
@@ -252,7 +252,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     });
     // Symbols: Equation, then Symbol.
     sep(ui, "Text");
-    section(ui, app, "Symbols", Icon::Symbol, |app, ui| {
+    section("Insert", ui, app, "Symbols", Icon::Symbol, |app, ui| {
         // One row of large buttons, or the equation button above the symbol gallery past 1520.
         if RibbonSections::level(ui, "Symbols") == 2 {
             ui.vertical(|ui| {
@@ -362,7 +362,7 @@ fn symbol_menu(app: &mut SheetApp, ui: &mut Ui) {
 
 pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
     let tool = app.session.draw_tool.clone();
-    section(ui, app, "Tools", Icon::Shapes, |app, ui| {
+    section("Insert", ui, app, "Tools", Icon::Shapes, |app, ui| {
         let __k = big_button(ui, Icon::Shapes, "Select\nObjects", "Select and move ink and shapes", false);
         control_keytip(app, ui, &__k, "draw.lasso");
         if __k.clicked() {
@@ -370,7 +370,7 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Tools");
-    section(ui, app, "Pens", Icon::Pen, |app, ui| {
+    section("Insert", ui, app, "Pens", Icon::Pen, |app, ui| {
         for (label, color) in [("Pen\nBlue", "#1F5FC9"), ("Pen\nBlack", "#000000"), ("Pen\nRed", "#D13B2F"), ("Highlighter", "#F2E33A")] {
             let on = tool == "pen" && app.session.draw_color.eq_ignore_ascii_case(color);
             let r = big_button(ui, Icon::Pen, label, "Draw with ink", false);
@@ -391,7 +391,7 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui, "Pens");
-    section(ui, app, "Convert", Icon::Shapes, |app, ui| {
+    section("Insert", ui, app, "Convert", Icon::Shapes, |app, ui| {
         let __k = big_button(ui, Icon::Shapes, "Ink to\nShape", "Convert the last ink stroke to a shape", false);
         control_keytip(app, ui, &__k, "draw.inkToShape");
         if __k.clicked() {

@@ -434,6 +434,39 @@ fn typing_in_a_compact_group_size_field_keeps_the_menu_open_and_applies() {
 }
 
 #[test]
+fn a_compact_menu_survives_a_resize_that_moves_its_button() {
+    // The menu's state derives from the tab and group, not the button's allocation id:
+    // resizing 819 to 806 pt compacts Clipboard (changing Font's button id) while Font
+    // stays compact, and the open Font menu must not vanish or reopen later unasked.
+    let mut h = app_at_size(vec2(819.0, 614.0), "Home");
+    h.get_by_label("Font").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Border presets").is_some(), "the Font menu is open at 819 pt");
+    h.set_size(vec2(806.0, 614.0));
+    h.run_steps(3);
+    assert!(h.query_by_label("Border presets").is_some(), "the Font menu survives the resize that compacts Clipboard");
+}
+
+#[test]
+fn data_tools_stacks_three_rows_at_its_measured_width() {
+    // The registered level 3 must render: at 1040 pt Data Tools shows its four small buttons
+    // in two columns of two; one width below, the group is a single compact row.
+    let wide = app_at_size(vec2(1040.0, 768.0), "Data");
+    let level = RibbonSections::levels(&wide.ctx, "Data").into_iter().find(|(name, _)| name == "Data Tools").map(|(_, l)| l);
+    assert_eq!(level, Some(3), "Data Tools plans level 3 at 1040 pt");
+    let left = |label: &str| wide.get_by_role_and_label(egui::accesskit::Role::Button, label).rect().left();
+    let top = |label: &str| wide.get_by_role_and_label(egui::accesskit::Role::Button, label).rect().top();
+    assert!((top("Text to Columns") - top("Flash Fill")).abs() > 10.0, "Text to Columns sits over Flash Fill");
+    assert!((top("Remove Duplicates") - top("Data Validation")).abs() > 10.0, "Remove Duplicates sits over Data Validation");
+    assert!((left("Text to Columns") - left("Flash Fill")).abs() < 1.0, "first column shares x");
+    assert!((left("Remove Duplicates") - left("Data Validation")).abs() < 1.0, "second column shares x");
+    assert!(left("Remove Duplicates") > left("Text to Columns") + 10.0, "the columns sit side by side");
+
+    let narrow = app_at_size(vec2(1027.0, 768.0), "Data");
+    let level = RibbonSections::levels(&narrow.ctx, "Data").into_iter().find(|(name, _)| name == "Data Tools").map(|(_, l)| l);
+    assert_eq!(level, Some(0), "Data Tools is one compact row at 1027 pt");
+}
+#[test]
 fn every_tab_fits_the_card_height() {
     // Columns of small buttons hold three rows; a fourth would be cut off at the card's bottom.
     for tab in TABS {

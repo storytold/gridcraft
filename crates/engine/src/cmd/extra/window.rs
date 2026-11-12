@@ -121,6 +121,25 @@ pub(super) fn custom_views(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(stash_get(&s.doc()?.wb, VIEWS_NAME))
 }
 
+/// Retarget the custom views saved on sheet `old` to `new`, after a rename. A stale name
+/// would make Show error (or hit another sheet that later takes the name); renaming is an
+/// edit, so the retarget joins its undo step.
+pub(crate) fn retarget_views_on_rename(wb: &mut Workbook, old: &str, new: &str) {
+    let mut views = stash_map(wb, VIEWS_NAME);
+    let mut renamed = false;
+    if let Some(map) = views.as_object_mut() {
+        for view in map.values_mut() {
+            if view.get("sheet").and_then(Json::as_str) == Some(old) {
+                view["sheet"] = json!(new);
+                renamed = true;
+            }
+        }
+    }
+    if renamed {
+        stash_set(wb, VIEWS_NAME, &views);
+    }
+}
+
 pub(super) fn split(s: &mut Session, _: &Json) -> Result<Json> {
     let has = s.doc()?.wb.active().is_some_and(|sh| sh.freeze.is_some());
     if has { s.execute("view.unfreezePanes", json!({})) } else { s.execute("view.freezePanes", json!({})) }
