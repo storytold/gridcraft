@@ -171,13 +171,17 @@ fn sort(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let a = if by_col { a.transpose() } else { a };
     let idx = if has(args, 1) { int_list(&arg(args, 1)?.value)? } else { vec![1] };
     let ord = if has(args, 2) { int_list(&arg(args, 2)?.value)? } else { vec![1] };
-    if idx.is_empty() || idx.iter().any(|&i| i < 1 || i as usize > a.cols) || ord.iter().any(|&o| o != 1 && o != -1) {
+    if idx.is_empty() || idx.iter().any(|&i| i < 1 || i > a.cols as i64) || ord.iter().any(|&o| o != 1 && o != -1) {
         return Err(CellError::Value);
     }
     if ord.len() > 1 && ord.len() != idx.len() {
         return Err(CellError::Value);
     }
     let orders: Vec<i64> = (0..idx.len()).map(|i| *ord.get(i).or(ord.first()).unwrap_or(&1)).collect();
+    // A column repeated in sort_index can't break a tie its first use left, so only first uses
+    // stay: the keys copied per row are then at most the row itself, however long sort_index is.
+    let mut seen = std::collections::HashSet::new();
+    let (idx, orders): (Vec<i64>, Vec<i64>) = idx.into_iter().zip(orders).filter(|(i, _)| seen.insert(*i)).unzip();
     let mut lines: Vec<(Vec<Value>, Vec<Value>)> =
         rows_of(&a).into_iter().map(|r| (idx.iter().map(|&i| r.get(i as usize - 1).cloned().unwrap_or(Value::Empty)).collect(), r)).collect();
     lines.sort_by(|x, y| cmp_keys(&x.0, &y.0, &orders));
@@ -928,9 +932,16 @@ fn pivotby(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     let ckeys: Vec<Vec<Value>> = p.rows.iter().map(|&r| key_row(&cf, r)).collect();
     let rk = distinct_keys(&rkeys, if row_sort.unsigned_abs() as usize <= rf.cols { row_sort } else { 0 });
     let ck = distinct_keys(&ckeys, if col_sort.unsigned_abs() as usize <= cf.cols { col_sort } else { 0 });
+    // Source rows of every row key, column key and pair, built in one pass, so a total reads
+    // its rows instead of rescanning the whole source once per total.
     let mut cell: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    let mut by_row: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut by_col: HashMap<String, Vec<usize>> = HashMap::new();
     for ((r, c), &i) in rkeys.iter().zip(ckeys.iter()).zip(p.rows.iter()) {
-        cell.entry((row_key(r), row_key(c))).or_default().push(i);
+        let (r, c) = (row_key(r), row_key(c));
+        by_row.entry(r.clone()).or_default().push(i);
+        by_col.entry(c.clone()).or_default().push(i);
+        cell.entry((r, c)).or_default().push(i);
     }
     let mut agg = |rows: &[usize], c: usize| -> Value {
         if rows.is_empty() {
@@ -940,14 +951,12 @@ fn pivotby(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
         aggregate_with(f, &vs, ctx)
     };
     let rows_for = |r: Option<&Vec<Value>>, c: Option<&Vec<Value>>| -> Vec<usize> {
-        let rkey = r.map(|k| row_key(k));
-        let ckey = c.map(|k| row_key(k));
-        p.rows
-            .iter()
-            .zip(rkeys.iter().zip(ckeys.iter()))
-            .filter(|(_, (a, b))| rkey.as_ref().is_none_or(|k| *k == row_key(a)) && ckey.as_ref().is_none_or(|k| *k == row_key(b)))
-            .map(|(&i, _)| i)
-            .collect()
+        match (r, c) {
+            (Some(r), Some(c)) => cell.get(&(row_key(r), row_key(c))).cloned().unwrap_or_default(),
+            (Some(r), None) => by_row.get(&row_key(r)).cloned().unwrap_or_default(),
+            (None, Some(c)) => by_col.get(&row_key(c)).cloned().unwrap_or_default(),
+            (None, None) => p.rows.clone(),
+        }
     };
     let mut cols: Vec<Option<&Vec<Value>>> = ck.iter().map(Some).collect();
     if col_total > 0 {
@@ -997,10 +1006,7 @@ fn pivotby(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
             }
         };
         for c in &cols {
-            let rows = match (r, c) {
-                (Some(rk), Some(ck)) => cell.get(&(row_key(rk), row_key(ck))).cloned().unwrap_or_default(),
-                _ => rows_for(r, *c),
-            };
+            let rows = rows_for(r, *c);
             for vc in 0..vals.cols {
                 line.push(agg(&rows, vc));
             }
@@ -1202,6 +1208,21 @@ mod tests {
         let m = arr(vec![vec![nv(1.0), nv(2.0)], vec![nv(1.0), nv(1.0)], vec![nv(0.0), nv(5.0)]]);
         let r = ev("SORT", vec![av(m), av(row(&[1.0, 2.0])), av(row(&[1.0, -1.0]))]);
         assert_eq!(rows_of(&r), vec![vec![nv(0.0), nv(5.0)], vec![nv(1.0), nv(2.0)], vec![nv(1.0), nv(1.0)]]);
+    }
+
+    /// Security: a column repeated in sort_index keys the sort once. The keys copied per row stay
+    /// within the row, however long sort_index is, and a repeat (even with the other order) can't
+    /// change the result, since its first use already ordered the rows.
+    #[test]
+    fn sort_drops_repeated_sort_indices() {
+        let m = || av(arr(vec![vec![nv(1.0), nv(2.0)], vec![nv(1.0), nv(1.0)], vec![nv(0.0), nv(5.0)]]));
+        let want = vec![vec![nv(0.0), nv(5.0)], vec![nv(1.0), nv(2.0)], vec![nv(1.0), nv(1.0)]];
+        let r = ev("SORT", vec![m(), av(row(&[1.0, 1.0, 2.0, 1.0])), av(row(&[1.0, -1.0, -1.0, 1.0]))]);
+        assert_eq!(rows_of(&r), want);
+        let idx = vec![1.0; 1_000_000];
+        let tall = av(gridcraft_core::Array::filled(2_000, 1, nv(1.0)).into());
+        let r = ev("SORT", vec![tall, av(row(&idx))]);
+        assert_eq!(rows_of(&r).len(), 2_000);
     }
 
     #[test]
@@ -1445,6 +1466,16 @@ mod tests {
                 vec![tv("Total"), nv(31.0), nv(12.0), nv(43.0)],
             ]
         );
+    }
+
+    /// Security: PIVOTBY totals read their source rows from indexes built in the grouping pass,
+    /// rather than rescanning the source once per total, so many distinct keys stay linear.
+    #[test]
+    fn pivotby_totals_with_many_groups() {
+        let keys: Vec<f64> = (0..20_000).map(f64::from).collect();
+        let r = rows_of(&ev("PIVOTBY", vec![av(col(&keys)), av(col(&vec![1.0; 20_000])), av(col(&vec![2.0; 20_000])), t("SUM")]));
+        assert_eq!(r.get(1), Some(&vec![nv(0.0), nv(2.0), nv(2.0)]));
+        assert_eq!(r.last(), Some(&vec![tv("Total"), nv(40_000.0), nv(40_000.0)]));
     }
 
     #[test]
