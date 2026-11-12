@@ -61,6 +61,7 @@ fn regression_model_popup_keeps_enter_and_escape_inside_the_popup() {
     for key in [egui::Key::Enter, egui::Key::Escape] {
         let mut session = Session::new();
         session.new_workbook();
+        session.execute("range.setValues", json!({"range":"A1","values":[[2,1],[4,2],[6,3],[8,4]]})).unwrap();
         let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 1000.0)).build_ui_state(
             |ui, app: &mut SheetApp| {
                 app.logic(ui.ctx());
@@ -71,6 +72,13 @@ fn regression_model_popup_keeps_enter_and_escape_inside_the_popup() {
         h.run_steps(4);
         h.state_mut().open_dialog("analysisToolPak", json!({"tool":"regression"}));
         h.run_steps(4);
+        let ctx = h.ctx.clone();
+        for (field, value) in [("inputY", "A1:A4"), ("inputX", "B1:B4"), ("newSheet", "Fit")] {
+            let Outcome::Done(result) = handle(h.state_mut(), &ctx, "ui.dialog.set", &json!({"field":field,"value":value})) else {
+                panic!("unexpected dialog-set response");
+            };
+            assert_eq!(result["ok"], true);
+        }
         h.get_by_role(egui::accesskit::Role::ComboBox).click();
         h.run_steps(2);
         h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
@@ -78,6 +86,7 @@ fn regression_model_popup_keeps_enter_and_escape_inside_the_popup() {
 
         let dialog = h.state().dialog.as_ref().unwrap_or_else(|| panic!("{key:?} must not confirm or close the dialog"));
         assert_eq!(dialog.values.get("tool").and_then(serde_json::Value::as_str), Some("regression"));
+        assert!(h.state().message.is_none(), "valid regression inputs must not produce an error");
     }
 }
 

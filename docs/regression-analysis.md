@@ -1,7 +1,7 @@
 # Analysis ToolPak regression models
 
-Last updated: 2026-11-05. Reconciled with main
-`c40295382886f0a18d281a9911e9506fdf53b863`. For validation status, see
+Last updated: 2026-11-12. Reconciled with main
+`c0ee120ac2d9b59630f5abf1151dd9b471fe2926`. For validation status, see
 "Validation status and pending work".
 
 `data.analysisToolPak` accepts `tool: "regression"` and an optional `model`:
@@ -99,12 +99,15 @@ amplitude-one constraint for exponential/power.
 
 ## Validation status and pending work
 
-On 2026-11-12, the current reconciliation with main `a60db4f1` passed local
-`cargo test -p gridcraft-engine --lib` (969 tests), the regression UI integration
-tests (3 tests), and the focused dialog unit test (1 test). Formatting and
-`git diff --check` also pass. `cargo xtask ci`, WASM validation and Windows/Excel
-checks have not been rerun on this candidate; the Windows results below remain
-historical evidence for the earlier producer checkout only.
+On 2026-11-12, `cargo test -p gridcraft-engine --lib` passed 969 tests before
+merging main `c0ee120a`; that main merge changes chart rendering, PDF and UI
+caching, not the regression engine. On the merged candidate, all three focused
+regression UI integration tests pass, including the Enter/Escape popup case with
+valid ranges and no error message. A focused regression dialog unit test passed
+on the preceding feature head. Formatting and `git diff --check` pass.
+`cargo xtask ci`, WASM validation and Windows/Excel checks have not been rerun on
+this candidate; the Windows results below remain historical evidence for the
+earlier producer checkout only.
 
 On 2026-11-05, the reconciled candidate at main `c4029538` passed all ten
 `cargo xtask ci` gates on Fedora 45: i18n report, formatting, Clippy, tests,
@@ -159,6 +162,7 @@ cargo check -p gridcraft-ui-egui --target wasm32-unknown-unknown
 
 | Date | Change |
 |---|---|
+| 2026-11-12 | Reconcile with main c0ee120a, verify popup shortcuts with valid regression inputs, and record focused UI checks |
 | 2026-11-05 | Reconcile with main c4029538 and record its verified Fedora all-ten-gate CI; separately identify the earlier Windows/Excel validation source |
 | 2026-11-03 | Reconcile main df137b8; use upstream RefEdit and preserve expanded ToolPak; add independent exact benchmark; targeted checks: 8 engine and 1 power-model UI test passed; full CI, WASM and coordinator screenshots/visual review pending |
 | 2026-10-27 | Move ToolPak UI and regression tests into shared dialog modules |
