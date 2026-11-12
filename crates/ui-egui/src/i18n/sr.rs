@@ -558,7 +558,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Check Again" => "Proveri ponovo",
         "Insert Function" => "Umetni funkciju",
         "Search:" => "Pretraga:",
-        "e.g. lookup, average, date" => "npr. pretraga, prosek, datum",
+        "e.g. lookup, average, date" => "npr. LOOKUP, AVERAGE, DATE",
         "Cancel" => "Otkaži",
         "All" => "Sve",
         "Collapse dialog" => "Skupi dijalog",

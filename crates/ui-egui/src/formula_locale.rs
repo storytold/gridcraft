@@ -190,10 +190,14 @@ fn hide_udf_prefix(text: &str, locale: FormulaLocale) -> String {
     out
 }
 
+fn hint_function_name(name: &str, locale: FormulaLocale) -> &str {
+    if name.get(..6).is_some_and(|prefix| prefix.eq_ignore_ascii_case("_xlfn.")) { &name[6..] } else { locale.canonical_name(name) }
+}
+
 /// A function's argument hint. The name and separators follow the formula syntax; the argument
 /// names follow the interface language, all of them or none, so a hint never mixes two languages.
 pub(crate) fn signature(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
-    canonical_signature(locale.canonical_name(name), locale, language)
+    canonical_signature(hint_function_name(name, locale), locale, language)
 }
 
 /// Formats a hint for a function already identified by its engine name.
@@ -210,7 +214,7 @@ pub(crate) fn canonical_signature(name: &str, locale: FormulaLocale, language: L
 
 /// A function's description in the interface language (English while untranslated).
 pub(crate) fn description(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
-    canonical_description(locale.canonical_name(name), language)
+    canonical_description(hint_function_name(name, locale), language)
 }
 
 /// Translates the description of a function already identified by its engine name.
@@ -401,5 +405,19 @@ mod help_structure_tests {
                 assert!(hint.starts_with(&format!("{}(", locale.function_name(name))), "{language:?}: {name}: {hint}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod explicit_hint_tests {
+    use super::*;
+    #[test]
+    fn explicit_french_trim_keeps_its_canonical_hint() {
+        let mut editor = crate::editor::EditState::new(1, 0, gridcraft_engine::core::CellRef::new(0, 0), "=_xlfn.TRIM(".into(), true, false);
+        editor.locale = FormulaLocale::Fr;
+        let (name, _) = editor.current_function().unwrap();
+        assert_eq!(name, "_xlfn.TRIM");
+        assert_eq!(signature(&name, FormulaLocale::Fr, Language::En), canonical_signature("TRIM", FormulaLocale::Fr, Language::En));
+        assert_eq!(description(&name, FormulaLocale::Fr, Language::En), canonical_description("TRIM", Language::En));
     }
 }

@@ -931,7 +931,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Superscript" => "Apice",
         "Subscript" => "Pedice",
         "Color:" => "Colore:",
-        "Outline" => "Contorno",
+        "Outline" => "Struttura",
         "Diagonal ↘" => "Diagonale ↘",
         "Diagonal ↗" => "Diagonale ↗",
         "none" => "nessuno",

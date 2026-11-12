@@ -22,7 +22,7 @@ new descriptions translate GridCraft's own catalog. Localized error
 literals round-trip at the editor boundary, with canonical storage/API/XLSX syntax. Fixed
 messages use `tr_error`; selected dynamic parser/parameter messages preserve captured user data.
 The Format Cells editor displays Russian date/time tokens while keeping canonical format
-codes in storage. Full regional number/date rendering remains outstanding.
+codes in storage. The grid and format previews use the workbook region for number and date rendering.
 
 ## Czech catalog audit (2026-11-05)
 
@@ -198,8 +198,8 @@ language (none so far) and of localized function names.
    shows in English and never fails a check: `cargo xtask i18n-report` lists the missing strings
    per language, and `cargo xtask ci` runs it first. Language switching and the system-language default already exist (#31).
 2. Extend locale-aware formulas through the shared `LocaleData` and per-language modules at the
-   formula-bar boundary (files keep invariant names); regional number/date formats and CSV
-   separator policies remain separate work.
+   formula-bar boundary (files keep invariant names). Grid and format previews already use
+   the workbook region. Regional CSV separator policies and localized advanced-dialog input remain work to do.
 3. Text shaping and fallback: a shaping engine for grid, editor and PDF text (Arabic, Devanagari,
    Thai), system font fallback for CJK, bidirectional runs, right-to-left sheet tabs and printing;
    embedded subset fonts in PDF.

@@ -38,7 +38,7 @@ pub struct EditState {
     /// The other end of the selected text (char index), mirrored like `caret`; equal to `caret`
     /// when nothing is selected.
     pub anchor: usize,
-    /// The reference most recently inserted by point mode (byte range) — arrows/clicks replace it.
+    /// The reference most recently inserted by point mode (byte range) вЂ” arrows/clicks replace it.
     pub point: Option<(usize, usize)>,
     /// Where point mode's keyboard cursor is.
     pub point_cell: Option<CellRef>,
@@ -260,7 +260,7 @@ impl EditState {
             return;
         }
         let u = self.locale.fold_alias(&word);
-        // Not after a column letter of a reference like A1 (digits follow) – fine either way.
+        // Not after a column letter of a reference like A1 (digits follow) вЂ“ fine either way.
         self.autocomplete = names.iter().filter(|n| self.locale.fold_alias(n).starts_with(&u)).take(12).cloned().collect();
         if self.autocomplete.len() == 1 && self.locale.fold_alias(&self.autocomplete[0]) == u {
             self.autocomplete.clear();
@@ -359,7 +359,9 @@ impl EditState {
                         if name.is_empty() {
                             return None;
                         }
-                        return Some((self.locale.normalize_function_name(&name), arg));
+                        let explicit = name.get(..6).is_some_and(|prefix| prefix.eq_ignore_ascii_case("_xlfn."));
+                        let name = if explicit { name } else { self.locale.normalize_function_name(&name) };
+                        return Some((name, arg));
                     }
                     depth -= 1;
                 }
@@ -371,7 +373,7 @@ impl EditState {
     }
 }
 
-/// References in formula text with their byte spans and colour index (same reference text ⇒
+/// References in formula text with their byte spans and colour index (same reference text в‡’
 /// same colour), for colouring the editor and outlining ranges on the grid.
 pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, usize)> {
     formula_refs_in(text, gridcraft_engine::formula::FormulaLocale::En)
@@ -478,7 +480,7 @@ pub fn column_completion(sheet: &gridcraft_engine::model::Sheet, at: CellRef, ty
 }
 
 /// The part of `full` after the `typed` prefix, counted in characters: case folding can change
-/// a character's byte length ("ß" is two bytes, "ẞ" three).
+/// a character's byte length ("Гџ" is two bytes, "бєћ" three).
 pub fn completion_rest<'a>(full: &'a str, typed: &str) -> Option<&'a str> {
     let start = full.char_indices().nth(typed.chars().count())?.0;
     full.get(start..)

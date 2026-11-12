@@ -134,6 +134,7 @@ pub(super) fn display_text(
             None => ("#".repeat(max_chars.max(1)), None, true, None),
         };
     }
+    let code = if code.len() > 4 * gridcraft_engine::numfmt::MAX_FORMAT_CODE_CHARS { "General" } else { code };
     let fmt = gridcraft_engine::display::number_format(code);
     let f = gridcraft_engine::numfmt::format_value_with_region(v, &fmt, wb.date_system, options.region);
     (f.text, f.color.map(numfmt_color), f.numeric, f.fill)

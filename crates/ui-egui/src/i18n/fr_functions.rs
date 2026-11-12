@@ -968,7 +968,7 @@ pub(super) const ARGUMENTS: &[(&str, &str)] = &[
     ("quart", "quartile"),
     ("radix", "base"),
     ("range", "plage"),
-    ("range_lookup", "recherche_de_plage"),
+    ("range_lookup", "correspondance_approximative"),
     ("rank", "rang"),
     ("rate", "taux"),
     ("real_num", "coefficient_réel"),

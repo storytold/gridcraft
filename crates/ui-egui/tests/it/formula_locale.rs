@@ -581,3 +581,15 @@ fn polish_formula_round_trips_through_xlsx() {
     assert_eq!(app.editor.as_ref().unwrap().text, "=JEŻELI.BŁĄD(SUMA(1,5;2,25);#DZIEL/0!)");
     assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(3.75));
 }
+
+#[test]
+fn unchanged_array_literal_checks_the_top_left_destination() {
+    let mut app = app();
+    app.run("range.setValues", json!({"range":"B1","values":[["text"]],"parse":false})).unwrap();
+    app.run("data.validation", json!({"range":"A1","type":"custom","formula1":"=FALSE"})).unwrap();
+    app.run("selection.set", json!({"range":"A1:B1","active":"B1"})).unwrap();
+    app.begin_edit(None, false);
+    assert!(!app.commit_edit(0, 0, true, false));
+    assert!(app.editor.is_some());
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Empty);
+}

@@ -763,7 +763,7 @@ fn sylk_r1c1_formulas_become_a1() {
         ("R[-5]C", "#REF!"),
         ("\"RC\"&R1C1", "\"RC\"&$A$1"),
     ] {
-        assert_eq!(sylk::r1c1_formula_to_a1(r1c1, b2), a1, "{r1c1}");
+        assert_eq!(craft_csv::sylk::r1c1_formula_to_a1(r1c1, (b2.row, b2.col)), a1, "{r1c1}");
     }
 }
 

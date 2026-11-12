@@ -67,8 +67,8 @@ error values and formula syntax. The internal circular-reference marker remains 
 Function descriptions and argument labels for the current 515-function catalog live in
 `crates/ui-egui/src/i18n/ru_functions.rs`, keyed by the current English catalog. Signatures are
 assembled from the canonical metadata, preserving optional arguments. Missing help falls back
-to English. Regional number/date display and localized syntax in advanced dialogs remain
-separate work.
+to English. The grid and format previews use the workbook region for numbers and dates.
+Localized syntax in advanced dialogs and regional CSV separator policies remain work to do.
 
 ## Adding another language
 

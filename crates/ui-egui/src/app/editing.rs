@@ -198,7 +198,9 @@ impl SheetApp {
                 if fill_selection {
                     validate_literal_fill(d, ed.sheet, &text)
                 } else {
-                    gridcraft_engine::cmd::data::check_literal_validation(&d.wb, ed.sheet, ed.cell, &text)
+                    let selected = d.selection.current();
+                    let target = if array && ed.sheet == d.wb.active_sheet() && selected.contains(ed.cell) { selected.start } else { ed.cell };
+                    gridcraft_engine::cmd::data::check_literal_validation(&d.wb, ed.sheet, target, &text)
                 }
             } else {
                 gridcraft_engine::cmd::data::check_validation(&d.wb, ed.sheet, ed.cell, &text)

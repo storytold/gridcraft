@@ -159,7 +159,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Columns" => "Stulpeliai",
         "Columns (blank = all, e.g. A,C):" => "Stulpeliai (tuščias – visi, pvz., A,C):",
         "Combo" => "Mišri",
-        "Comma" => "Kablelis",
+        "Comma" => "Tūkstančių skirtuko stilius",
         "Comma Style" => "Tūkstančių skirtuko stilius",
         "Command\nPalette" => "Komandų\npaletė",
         "Comment" => "Komentaras",
