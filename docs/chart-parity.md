@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-12 · **Change:** local chart appearance templates integrated on current main; UI validation pending · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-12 · **Change:** local chart appearance templates integrated on current main; 9 template unit tests passed · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
