@@ -45,11 +45,22 @@ use view::view;
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 const _: () = assert!(TITLE_CONTROL_H < TITLE_BAR_H, "title-bar controls keep a margin above and below");
 
+/// Height of the tab row and of the ribbon card under it. The card is the 100 px Excel gives the
+/// ribbon (#1794); the panel is the tab row, the card and the frame's bottom gap, so the card's
+/// bottom edge is never clipped.
+const TABS_ROW_H: f32 = 32.0;
+const CARD_H: f32 = 100.0;
+const CARD_GAP_BOTTOM: f32 = 6.0;
+/// Padding inside the card. A tab's groups (three rows of small buttons plus the caption band)
+/// come to 92 px, and 100 px less this padding leaves exactly that; the former 6 px left only 88,
+/// which is why the card had grown to 104.
+const CARD_PAD_Y: f32 = 4.0;
+
 /// Draws the ribbon tabs and the active tab's horizontally scrollable card, resetting an unavailable contextual tab to Home.
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let collapsed = app.ui.ribbon_collapsed;
-    let h = if collapsed { 34.0 } else { 34.0 + 92.0 };
+    let h = if collapsed { 34.0 } else { TABS_ROW_H + CARD_H + CARD_GAP_BOTTOM };
     // A contextual tab exists only while its object is selected (Excel hides Table Design once the
     // cell leaves the table); a remembered one that is gone would draw an empty ribbon.
     if CONTEXTUAL_TABS.contains(&app.ui.ribbon_tab.as_str()) && !contextual_tabs(app).contains(&app.ui.ribbon_tab.as_str()) {
@@ -57,10 +68,10 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     }
     egui::Panel::top("ribbon")
         .exact_size(h)
-        .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 10, right: 10, top: 0, bottom: 6 }))
+        .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 10, right: 10, top: 0, bottom: CARD_GAP_BOTTOM as i8 }))
         .show(ui, |ui| {
             // Tabs row.
-            let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
+            let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), TABS_ROW_H));
             ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
@@ -121,10 +132,10 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             let left = ui.cursor().min.x;
             let screen = ui.ctx().content_rect();
             let fits = (screen.right() - left - (left - screen.left()).max(0.0)).max(0.0);
-            let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(fits), 88.0));
+            let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(fits), CARD_H));
             ui.painter().rect_filled(card, 10.0, t.ribbon);
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
-            let inner = card.shrink2(vec2(10.0, 6.0));
+            let inner = card.shrink2(vec2(10.0, CARD_PAD_Y));
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
                 // One scroll state per tab: a tab opened after scrolling another starts at its
                 // left edge, and a tab keeps its own offset while others are used.
