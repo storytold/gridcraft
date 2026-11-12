@@ -5,15 +5,16 @@
 //! Read: worksheets, shared strings, cell values, formulas (text and cached results, including
 //! shared and array formulas), cell formatting (number formats, fonts, fills, borders,
 //! alignment, protection, the colour palette and user-defined cell styles), the 1904 date
-//! system, merged cells, column widths, row heights, defined names, print areas, print titles
-//! and the calculation settings (mode, iteration, precision as displayed). Everything else
-//! (charts, pictures, comments, conditional formats, validation, macros) is skipped with a
+//! system, merged cells, column widths, row heights, defined names, print areas, print titles,
+//! the calculation settings (mode, iteration, precision as displayed) and data validation.
+//! Everything else (charts, pictures, comments, conditional formats, macros) is skipped with a
 //! warning.
 //! Encrypted workbooks and pre-BIFF8 versions are refused.
 //!
 //! Every formula in the file is a legacy (pre-dynamic-array) one, so it is read with Excel's
 //! implicit `@` (see `array_formula.rs`), like an `.xlsx` formula saved without `cm`.
 
+mod dv;
 mod formula;
 mod ftab;
 mod records;
@@ -38,6 +39,10 @@ const MAX_SHEETS: usize = 4096;
 const MAX_NAMES: usize = 65_536;
 const MAX_XFS: usize = 65_536;
 const MAX_MERGES: usize = 100_000;
+/// Data validation rules kept from the whole workbook. A rule can have no messages and so cost
+/// no text, but each one kept is held in memory (about 260 bytes from a 38-byte record), and the
+/// record limit alone would let a crafted file keep millions.
+const MAX_VALIDATIONS: usize = 65_536;
 /// Records read from the whole Workbook stream at most (a 65,536 × 256 sheet has fewer). One
 /// allowance shared by every substream: many BoundSheet records pointing into one huge
 /// substream must not each get their own.
@@ -78,13 +83,15 @@ pub(crate) struct Budget {
     text: usize,
     records: usize,
     max_records: usize,
+    /// Data validation rules kept so far, in every sheet.
+    validations: usize,
     /// A shared formula's text was refused: no later shared formula, in any sheet, is expanded.
     shared_text_spent: bool,
 }
 
 impl Default for Budget {
     fn default() -> Self {
-        Budget { cells: 0, text: 0, records: 0, max_records: MAX_RECORDS, shared_text_spent: false }
+        Budget { cells: 0, text: 0, records: 0, max_records: MAX_RECORDS, validations: 0, shared_text_spent: false }
     }
 }
 
@@ -255,7 +262,7 @@ pub(crate) fn read_xls_budgeted(bytes: &[u8], mut budget: Budget, functions: Fun
     // The overview comes first.
     report.warnings.insert(
         0,
-        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, merged cells, column widths, row heights and defined names were read. Charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
+        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, merged cells, column widths, row heights, defined names and data validation were read. Charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
     );
     Ok((wb, report))
 }
@@ -474,6 +481,9 @@ struct SheetState<'g> {
     dropped: usize,
     unsupported: Vec<&'static str>,
     calc: CalcSettings,
+    /// Dv records still to read: the last DVal's count, less those read since. Excel reads
+    /// exactly that many after a DVal, and none without one.
+    dv_left: u32,
 }
 
 impl SheetState<'_> {
@@ -634,6 +644,7 @@ fn worksheet<'g>(
         dropped: 0,
         unsupported: vec![],
         calc: CalcSettings::default(),
+        dv_left: 0,
     };
     let mut depth = 1usize;
     while let Some(rec) = recs.next_record()? {
@@ -871,7 +882,35 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
         0x001C => report.warn("Cell comments in .xls files are not imported yet."),
         0x00EC => report.warn("Pictures, charts and shapes in .xls files are not imported yet."),
         0x01B0 | 0x0879 => report.warn("Conditional formatting in .xls files is not imported yet."),
-        0x01B2 => report.warn("Data validation in .xls files is not imported yet."),
+        // A short DVal starts no rules.
+        0x01B2 => st.dv_left = dv::dval(&mut c).unwrap_or(0),
+        0x01BE => {
+            // A Dv past its DVal's count, or with no DVal, isn't read: Excel doesn't read it
+            // either, so it isn't a rule that failed. Say so rather than drop it unannounced.
+            if st.dv_left == 0 {
+                report.warn("Some data validation records in .xls files were ignored, as Excel ignores them: they have no DVal record before them, or come after the number of rules it gives.");
+                return Ok(());
+            }
+            st.dv_left -= 1;
+            if budget.validations >= MAX_VALIDATIONS {
+                report.warn("Some data validation rules in .xls files were skipped: GridCraft reads at most 65,536 in a workbook.");
+                return Ok(());
+            }
+            let rule = match dv::dv(&mut c) {
+                Ok(raw) => {
+                    budget.text(raw.text_len())?;
+                    dv::validation(raw, &st.g.links)
+                }
+                Err(_) => None,
+            };
+            match rule {
+                Some(v) => {
+                    budget.validations += 1;
+                    st.sheet.validations.push(v);
+                }
+                None => report.warn("Some data validation rules in .xls files could not be read and were skipped."),
+            }
+        }
         0x01B8 => report.warn("Hyperlinks in .xls files are not imported yet."),
         0x00B0 => report.warn("PivotTables in .xls files are not imported yet; their values were kept."),
         _ => {}
