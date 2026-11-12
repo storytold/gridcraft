@@ -21,6 +21,7 @@ mod cell_pictures;
 #[cfg(test)]
 mod chart_font_tests;
 mod chart_tools;
+mod chartcache;
 pub mod chartview;
 pub mod code_editor;
 pub mod control;
@@ -292,6 +293,8 @@ pub struct SheetApp {
     /// The floating object selected on the sheet (chart, picture, shape, equation or slicer).
     pub selected_object: Option<gridcraft_engine::model::ObjRef>,
     chart_context: Option<egui::Context>,
+    /// Rendered charts kept between frames ([`chartcache`]).
+    pub(crate) chart_cache: std::sync::Mutex<chartcache::ChartCache>,
     /// The system clipboard's text when GridCraft last copied without publishing to it (a
     /// control-channel or MCP `edit.copy`/`edit.cut`). While the system clipboard still holds this
     /// text, GridCraft's copy is the newer one and Paste uses it.
