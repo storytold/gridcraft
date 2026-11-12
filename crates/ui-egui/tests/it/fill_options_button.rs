@@ -257,7 +257,7 @@ fn windows_escape_cancels_ctrl_preview_without_an_undo_step() {
     move_to(&mut h, start, end);
     assert!(h.query_by_label("6\n7\n8").is_some());
     let undo_before = h.state().session.active().unwrap().undo.len();
-    h.key_press(egui::Key::Escape);
+    h.input_mut().events.push(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: ctrl });
     h.run_steps(3);
     assert!(h.query_by_label("6\n7\n8").is_none());
     release(&mut h, end, PointerButton::Primary);

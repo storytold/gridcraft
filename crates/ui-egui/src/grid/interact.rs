@@ -763,7 +763,16 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
     let ctx = input.context.clone();
     // Escape cancels either fill gesture before release can commit values or open a menu.
     // Consume it here so cancellation does not also clear the clipboard in the grid handler.
-    if matches!(app.grid.drag, Drag::Fill { .. }) && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+    if matches!(app.grid.drag, Drag::Fill { .. })
+        && ctx.input_mut(|i| {
+            let pressed = i.key_pressed(egui::Key::Escape);
+            if pressed {
+                // Escape cancels the gesture regardless of whether Ctrl/Cmd is still held.
+                i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. }));
+            }
+            pressed
+        })
+    {
         app.grid.drag = Drag::None;
     }
 
@@ -791,7 +800,6 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
             Drag::Fill { origin, target: Some(t), menu: true } => {
                 if let Some(p) = pos
                     && t != origin.source
-                    && !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
                 {
                     app.grid.fill_menu = Some((origin.source, t, geo.mirror_pos(p)));
                 }
