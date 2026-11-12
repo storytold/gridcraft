@@ -1568,6 +1568,9 @@ bridge the same way), so it changes the public API of both transports and their 
 its own slice with its own gate, not a rider on this one; the reviewer labelled it "Heavy lift" for
 the same reason. It is recorded here so the next push does not claim the finding is closed.
 
+**Closed by §28 (`4ae789c6`)**, in that slice: the version is now a parameter of `Synced::with_link`,
+provided by `Client::start_version()` on the desktop and by the host bridge in the browser.
+
 ### 23.3 The install is all-or-nothing
 
 `Synced` gained `install_snapshot`, which parses, binds and swaps, and answers `None` when any step
@@ -2113,3 +2116,98 @@ carries over to it, as §26.3's did to `b46ed3c3`.
   name the instant they were measured and the head they describe, a later push makes them
   historical instead of wrong, and the next measurement is a new section rather than an edit of
   this one.
+
+## 28. A replica starts at the version its workbook is at: `4ae789c6` (2026-11-12)
+
+The finding §23.2 confirmed and left to its own slice is closed here, in its own commit: the code
+head is `4ae789c6`, one commit above `ff26e8a0`, and the page that records it is the commit above
+that — a docs-only commit, as usual. **Nothing is pushed:** the delivered head is `ff26e8a0` (the
+push of 07:12Z, after this page's 06:40Z measurement), the PR still needs the owner's push (§28.5),
+and no CI file is touched —
+`git diff --name-only ff26e8a0..4ae789c6 -- .github` is empty.
+
+### 28.1 The race, in the code
+
+`Synced::with_link` took `link.state().version` as the version of the document it was building. That
+is the transport's **cursor**, and the cursor is not the document:
+
+- `Client::connect` returns as soon as `welcome` is in; the task it spawned goes on handling the
+  catch-up and queues the frames as [`Event`]s. The desktop shell builds the replica a frame later
+  (`apps/gridcraft/src/collab_ui.rs`, `tick`), so by then the cursor can already be at the room's
+  head while the document in front is still the file the user opened.
+- The browser has the same seam without a thread: `SessionLink`'s queue holds the frames the host
+  delivered, and the app drains it after the `Collab` is built.
+- With the cursor as the start, every queued `applied` at or below it looked already covered
+  (`applied.version <= document_version`), so its command never ran; the `resynced` that closed the
+  catch-up then moved `document_version` onto the head anyway. The replica kept the pre-catch-up
+  workbook, claimed the head, and a later reconnect reported the head — so no catch-up was sent to
+  repair it.
+
+### 28.2 What the constructors take now
+
+The starting version is a value the caller passes, the same way `Config::last_version` already is:
+
+| Where | Change |
+|---|---|
+| `Synced::with_link(link, welcome, client_id, last_version)` | `document_version` starts at `last_version` instead of `link.state().version`; the doc comment says why the cursor cannot be the source |
+| `Client::start_version()` (`crates/collab-client/src/client.rs`) | the client remembers `Config::last_version` at the handshake; `Synced::new` passes it, so the desktop path reads no cursor at all |
+| `Collab::with_link(…, last_version)` (`crates/collab-web/src/lib.rs`) | the host bridge hands the value to `Synced`; `connect` and `offline` pass `0`, because a browser window joins with the blank workbook, not with the room's document (the `gridcraft:session` message carries no version) |
+| `crates/collab-client/tests/{document,parts,rollback}.rs` | the three `with_link` call sites name their replica's version: `0`, `3` (the parts fixture is at version 3) and `0` |
+
+What deliberately stays: the `Resync { from: … }` requests still read the cursor where a cursor is
+what they mean — a transport-level re-ask after a refusal or a broken image sequence. The document's
+version is used where the document's content is what is being claimed, which is the constructor and
+the two claim paths §23 fixed.
+
+### 28.3 The two tests
+
+- `crates/collab-client/tests/document.rs`:
+  `a_catch_up_queued_before_the_session_was_built_still_lands` — a fake link whose cursor is already
+  at 3 (the connection task handled the catch-up), with the three `applied` answers queued and a
+  `welcome` at version 3; the replica is built with `last_version = 0`. All three answers reach the
+  document (`A1` ends at 9), the caller is told three times, and the document ends at 3.
+- `crates/collab-client/tests/converge.rs`:
+  `a_late_replica_starts_where_its_workbook_is_not_where_the_cursor_moved` — a real server, one
+  editor and three operations, then a second client that dials at `last_version = 0`; the test waits
+  until that client's own `state().version` reads 3 (the catch-up moved the cursor before the replica
+  existed) and only then builds it. The document must still receive the three queued answers.
+
+Both fail on the previous code, and on the finding's own symptom — the missed content, not only the
+number:
+
+```text
+# with `document_version: link.state().version`
+a_catch_up_queued_before_the_session_was_built_still_lands
+  the last queued answer is in the document: left: Empty, right: Number(9.0)
+a_late_replica_starts_where_its_workbook_is_not_where_the_cursor_moved
+  the queued catch-up landed in the document: left: Empty, right: Number(3.0)
+```
+
+### 28.4 Gates (remote host `agents`, 2026-11-12, on `4ae789c6`)
+
+```text
+cargo fmt --all -- --check                                          clean
+cargo clippy -p gridcraft-collab-client -p gridcraft-collab-web
+  --all-targets -- -D warnings                                      clean
+cargo test -p gridcraft-collab-client --all-targets                 4 lib + 14 converge + 11 document
+                                                                    + 5 parts + 5 rollback,
+                                                                    39 passed, 0 failed
+cargo test -p gridcraft-collab-web                                  11 passed, 0 failed
+cargo check -p gridcraft-web --target wasm32-unknown-unknown        ok (the changed `connect`)
+cargo check -p gridcraft --features collab                          ok
+```
+
+The converge suite is 14 now (it was 13 in §27.4) and `document.rs` 11 (it was 10); the two new tests
+are the difference. `gridcraft-collab`, `gridcraft-collab-server` and `gridcraft-engine` are not
+touched by this slice — the changed files are `client.rs`, `synced.rs`, `collab-web/src/lib.rs` and
+their tests — so §27.4's 3557/2 run stands for them.
+
+### 28.5 What remains
+
+- **Push the head** (owner action): it must still contain the merge `57c9e21e` (main's `6308fc9e`),
+  which is what clears `mergeable = false`. The local branch is now that merge, this slice and this
+  page; §27.5's rule stands — the next push delivers all three at once.
+- **Approve the runs** of the pushed head (maintainer action). No CI has executed on any head of
+  this branch (§27.1).
+- **The review reply** to comment `4532845977`'s thread can now name `4ae789c6`: §23.2's finding is
+  closed, not merely recorded.
