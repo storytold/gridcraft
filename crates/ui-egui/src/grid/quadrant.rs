@@ -378,7 +378,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let pad = 2.5 * z;
     let rotated = st.align.rotation != 0 && st.align.rotation != 255;
     // Rotated text wraps along its own direction (below), not across the column width.
-    if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
+    if !rotated && st.align.folds() {
         let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
         let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w);
         job.direction = direction;

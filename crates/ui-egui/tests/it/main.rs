@@ -65,6 +65,7 @@ mod ink_render;
 mod insert_copied_cells;
 mod interaction;
 mod interface_scale;
+mod justified_text;
 mod keyboard_shortcuts;
 mod keytips_generated;
 mod legacy_keytips;
