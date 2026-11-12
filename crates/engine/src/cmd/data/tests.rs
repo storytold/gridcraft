@@ -573,3 +573,13 @@ fn literal_validation_rechecks_formula_destinations_and_dependents() {
     let wb = &session.doc().unwrap().wb;
     assert!(super::check_literal_validation(wb, 0, CellRef::parse("A1").unwrap(), "-1").is_some());
 }
+
+#[test]
+fn literal_fill_validates_the_completed_range() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range":"A1","values":[["x"]],"parse":false})).unwrap();
+    s.execute("data.validation", json!({"range":"A1:A3","type":"custom","formula1":"=COUNTIF($A$1:$A$3,\"x\")<=2"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    assert!(super::check_literal_fill_validation(wb, 0, &[RangeRef::parse("A1:A3").unwrap()], "x").is_some());
+}
