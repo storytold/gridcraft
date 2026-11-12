@@ -5,6 +5,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Diagram" => "图示",
         "Decorative Text" => "装饰文字",
+        "Reading direction" => "阅读方向",
+        "Context" => "根据内容",
+        "Left to right" => "从左到右",
+        "Right to left" => "从右到左",
         "Paste" => "粘贴",
         "Paste Values" => "粘贴值",
         "Paste Formulas" => "粘贴公式",
