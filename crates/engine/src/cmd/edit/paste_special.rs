@@ -66,7 +66,15 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let cut_move = clip.cut && same_doc && what == What::All;
     let src_wb = clip.wb.clone();
     let Some(src_sheet) = src_wb.sheet(clip.sheet) else { return Err(EngineError::Other("The copied sheet no longer exists.".into())) };
-    let src_sheet_name = src_sheet.name.clone();
+    // Tabs moved, inserted or deleted since the copy change the source's index, so a cut takes its
+    // cells from, and a link names, the sheet found by identity, never whatever sits at the old
+    // index (#3867).
+    let live_src = if same_doc { clip.live_sheet(&s.doc()?.wb) } else { None };
+    if cut_move && live_src.is_none() {
+        return Err(EngineError::Other("The cut cells' sheet no longer exists.".into()));
+    }
+    let src_index = live_src.unwrap_or(clip.sheet);
+    let src_sheet_name = live_src.and_then(|i| s.doc().ok()?.wb.sheet(i).map(|sh| sh.name.clone())).unwrap_or_else(|| src_sheet.name.clone());
     edit(s, |cx| {
         // Styles from another workbook must be re-interned.
         let dest_name = cx.wb.sheet(dest_sheet).map(|sh| sh.name.clone()).unwrap_or_default();
@@ -81,7 +89,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         let mut moved_pictures = std::collections::BTreeMap::new();
         if cut_move {
             // Remove the source first (contents and formats), and fix references to it.
-            let source = cx.sheet_mut(clip.sheet)?;
+            let source = cx.sheet_mut(src_index)?;
             moved_pictures = source.cell_pictures.iter().filter(|(c, _)| src.contains(**c)).map(|(c, p)| (*c, p.clone())).collect();
             let taken = source.take_cells(src);
             // Notes, hyperlinks and merged areas sit beside the cells, and a cut takes them
@@ -92,7 +100,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             source.hyperlinks.retain(|c, _| !src.contains(*c));
             source.merges.retain(|m| !src.contains_range(m));
             for (c, _) in &taken {
-                cx.touch(clip.sheet, *c);
+                cx.touch(src_index, *c);
             }
             moved_formulas = taken.into_iter().collect();
         }
@@ -163,7 +171,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         if cut_move {
                             // A moved formula still reads cells on its original sheet. Qualify
                             // those references before the workbook-wide move adjustment below.
-                            let e = if dest_sheet != clip.sheet {
+                            let e = if dest_sheet != src_index {
                                 e.map(&mut |x| match x {
                                     gridcraft_formula::Expr::Ref(mut r) if r.sheet == gridcraft_formula::SheetSel::Current => {
                                         r.sheet = gridcraft_formula::SheetSel::Named(src_sheet_name.clone());
@@ -186,7 +194,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     };
                     let moved_py = |cell: &Cell| -> Result<Option<std::sync::Arc<gridcraft_model::PyCode>>> {
                         let Some(py) = cell.py.clone() else { return Ok(None) };
-                        if !cut_move || dest_sheet == clip.sheet {
+                        if !cut_move || dest_sheet == src_index {
                             return Ok(Some(py));
                         }
                         let qualified = gridcraft_model::python::rewrite_xl(&py.code, |reference| {
@@ -209,7 +217,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         }))
                     };
                     if link {
-                        let sheet_prefix = if dest_sheet == clip.sheet && same_doc {
+                        let sheet_prefix = if live_src == Some(dest_sheet) {
                             String::new()
                         } else {
                             format!("{}!", gridcraft_formula::quote_sheet(&src_sheet_name))
@@ -368,7 +376,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if cut_move {
             // References elsewhere to the moved block now point to its new place.
-            let e = if dest_sheet == clip.sheet {
+            let e = if dest_sheet == src_index {
                 gridcraft_formula::adjust::Edit::Move { from: src, to_row: at.row, to_col: at.col }
             } else {
                 gridcraft_formula::adjust::Edit::MoveToSheet { from: src, to_sheet: dest_name.clone(), to_row: at.row, to_col: at.col }

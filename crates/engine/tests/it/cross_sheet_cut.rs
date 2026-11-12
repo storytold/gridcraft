@@ -144,3 +144,95 @@ fn same_sheet_overlapping_cut_still_updates_references_once() {
     assert_eq!(formula(&s, "Sheet1", "A4"), "A2+A3");
     assert_eq!(formula(&s, "Sheet1", "B1"), "SUM(A2:A3)");
 }
+
+/// Sheet1!A1 = 10 with Sheet1!B1 = A1*2, and Other!A1 = 99, Other!D4 = 777 (#3867).
+fn source_and_other() -> Session {
+    let mut s = workbook();
+    set(&mut s, "A1", "10");
+    set(&mut s, "B1", "=A1*2");
+    run(&mut s, "home.insertSheet", json!({"name": "Other"}));
+    set(&mut s, "A1", "99");
+    set(&mut s, "D4", "777");
+    s
+}
+
+fn assert_moved_from_sheet1(s: &Session) {
+    assert_eq!(value(s, "Sheet1", "A1"), Value::Empty);
+    assert_eq!(value(s, "Other", "A1"), Value::Number(99.0));
+    assert_eq!(value(s, "Other", "D4"), Value::Number(10.0));
+    assert_eq!(formula(s, "Sheet1", "B1"), "Other!D4*2");
+    assert_eq!(value(s, "Sheet1", "B1"), Value::Number(20.0));
+}
+
+#[test]
+fn a_pending_cut_follows_its_sheet_when_the_tabs_move() {
+    let mut s = source_and_other();
+    activate(&mut s, "Sheet1");
+    run(&mut s, "edit.cut", json!({"range": "A1"}));
+    run(&mut s, "sheet.move", json!({"sheet": "Sheet1", "to": 1}));
+    activate(&mut s, "Other");
+    run(&mut s, "edit.paste", json!({"at": "D4"}));
+    assert_moved_from_sheet1(&s);
+}
+
+#[test]
+fn a_pending_cut_follows_its_sheet_when_a_sheet_is_inserted_before_it() {
+    let mut s = source_and_other();
+    activate(&mut s, "Sheet1");
+    run(&mut s, "edit.cut", json!({"range": "A1"}));
+    run(&mut s, "home.insertSheet", json!({"name": "Blank", "before": 0}));
+    activate(&mut s, "Other");
+    run(&mut s, "edit.paste", json!({"at": "D4"}));
+    assert_moved_from_sheet1(&s);
+}
+
+#[test]
+fn a_pending_cut_follows_its_sheet_when_an_earlier_sheet_is_deleted() {
+    let mut s = source_and_other();
+    run(&mut s, "home.insertSheet", json!({"name": "First", "before": 0}));
+    activate(&mut s, "Sheet1");
+    run(&mut s, "edit.cut", json!({"range": "A1"}));
+    run(&mut s, "home.deleteSheet", json!({"sheet": "First"}));
+    activate(&mut s, "Other");
+    run(&mut s, "edit.paste", json!({"at": "D4"}));
+    assert_moved_from_sheet1(&s);
+}
+
+#[test]
+fn a_pending_cut_whose_sheet_was_deleted_pastes_nothing() {
+    let mut s = source_and_other();
+    activate(&mut s, "Sheet1");
+    run(&mut s, "edit.cut", json!({"range": "A1"}));
+    run(&mut s, "home.deleteSheet", json!({"sheet": "Sheet1"}));
+    activate(&mut s, "Other");
+    assert!(s.execute("edit.paste", json!({"at": "D4"})).is_err());
+    assert_eq!(value(&s, "Other", "A1"), Value::Number(99.0));
+    assert_eq!(value(&s, "Other", "D4"), Value::Number(777.0));
+}
+
+#[test]
+fn insert_cut_cells_follows_its_sheet_when_the_tabs_move() {
+    let mut s = source_and_other();
+    activate(&mut s, "Sheet1");
+    run(&mut s, "edit.cut", json!({"range": "1:1"}));
+    run(&mut s, "sheet.move", json!({"sheet": "Sheet1", "to": 1}));
+    activate(&mut s, "Other");
+    run(&mut s, "home.insertCopiedCells", json!({"at": "A4"}));
+    assert_eq!(value(&s, "Sheet1", "A1"), Value::Empty);
+    assert_eq!(value(&s, "Other", "A1"), Value::Number(99.0));
+    assert_eq!(value(&s, "Other", "A4"), Value::Number(10.0));
+    assert_eq!(value(&s, "Other", "B4"), Value::Number(20.0));
+    assert_eq!(value(&s, "Other", "D5"), Value::Number(777.0));
+}
+
+#[test]
+fn paste_link_names_the_copied_sheet_after_the_tabs_move() {
+    let mut s = source_and_other();
+    activate(&mut s, "Sheet1");
+    run(&mut s, "edit.copy", json!({"range": "A1"}));
+    run(&mut s, "sheet.move", json!({"sheet": "Sheet1", "to": 1}));
+    activate(&mut s, "Other");
+    run(&mut s, "edit.pasteSpecial", json!({"link": true, "at": "D4"}));
+    assert_eq!(formula(&s, "Other", "D4"), "Sheet1!A1");
+    assert_eq!(value(&s, "Other", "D4"), Value::Number(10.0));
+}
