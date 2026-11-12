@@ -109,6 +109,48 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             held
         };
         let skip_cells = matches!(what, What::Validation | What::ColumnWidths);
+        if same_doc
+            && dest_sheet != clip.sheet
+            && matches!(what, What::All | What::AllExceptBorders | What::Formulas | What::FormulasAndNumberFormats)
+        {
+            let mut used_names = std::collections::BTreeSet::new();
+            for &(r, c) in &source_offsets {
+                let cell = src_sheet.cell(CellRef::new(src.start.row + r, src.start.col + c));
+                if let Some(expr) = cell.and_then(|cell| cell.formula.as_ref()).and_then(|formula| formula.expr()) {
+                    expr.walk(&mut |node| {
+                        if let gridcraft_formula::Expr::Name(name) = node {
+                            used_names.insert(name.clone());
+                        }
+                    });
+                }
+            }
+            for name in used_names {
+                if name.contains('!') {
+                    continue;
+                }
+                let Some(local) = src_wb.names.iter().find(|n| n.scope == Some(clip.sheet) && n.name.eq_ignore_ascii_case(&name)) else {
+                    continue;
+                };
+                if cx.wb.names.iter().any(|n| n.name.eq_ignore_ascii_case(&name) && (n.scope == Some(dest_sheet) || n.scope.is_none())) {
+                    continue;
+                }
+                let mut copied = local.clone();
+                copied.scope = Some(dest_sheet);
+                if let Ok(expr) = gridcraft_formula::parse_name(&copied.formula) {
+                    let expr = expr.map(&mut |node| match node {
+                        gridcraft_formula::Expr::Ref(mut reference)
+                            if matches!(&reference.sheet, gridcraft_formula::SheetSel::Named(sheet) if sheet.eq_ignore_ascii_case(&src_sheet_name)) =>
+                        {
+                            reference.sheet = gridcraft_formula::SheetSel::Named(dest_name.clone());
+                            gridcraft_formula::Expr::Ref(reference)
+                        }
+                        other => other,
+                    });
+                    copied.formula = gridcraft_formula::print(&expr);
+                }
+                cx.wb.names.push(copied);
+            }
+        }
         // A blank source cell clears (or reformats) a destination cell that holds something, so
         // those cells join the visit. One scan of the whole pasted area sorts them by tile.
         let mut dest_held: std::collections::BTreeMap<(u32, u32), Vec<(u32, u32)>> = Default::default();
