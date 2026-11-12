@@ -81,6 +81,8 @@ struct Extra<'a> {
     damage_ink: bool,
     /// InkML written into the part after its first trace: another `<trace>`, a `<traceGroup>`.
     extra_markup: Option<&'a str>,
+    /// A second `<brush>` appended inside `<definitions>`, when a test needs two brushes.
+    extra_brush: Option<&'a str>,
     /// The drawing's `a16:creationId`, when a test needs an invalid or differently-cased one.
     creation_id: Option<&'a str>,
     /// The drawing's `xdr14:xfrm` `a:off`, in EMU, when a test needs a stroke far down the sheet.
@@ -128,6 +130,9 @@ fn package_with(trace: &str, f: bool, props: &str, ink: bool, declared: bool, me
         drawing = two_anchors(&drawing, &drawing_with_off(second, ox, oy));
     }
     let mut ink_part = inkml(trace, f, props);
+    if let Some(brush) = extra.extra_brush {
+        ink_part = ink_part.replacen("</inkml:definitions>", &format!("{brush}</inkml:definitions>"), 1);
+    }
     if let Some(markup) = extra.extra_markup {
         ink_part = ink_part.replace("</inkml:ink>", &format!("{markup}</inkml:ink>"));
     }
@@ -473,12 +478,12 @@ fn a_wildcard_keeps_the_second_difference_order_too() {
 
 #[test]
 fn each_trace_reads_its_own_brush_not_the_first() {
-    // A second brush defined after the first, with the part's second trace naming it: the red
+    // A second brush inside `<definitions>`, with the part's second trace naming it: the red
     // second trace must not take the blue first brush.
     let red = r##"<inkml:brush xml:id="br1"><inkml:brushProperty name="width" value="0.05" units="cm"/><inkml:brushProperty name="height" value="0.05" units="cm"/><inkml:brushProperty name="color" value="#FF0000"/></inkml:brush>"##;
     let second = r##"<inkml:trace contextRef="#ctx0" brushRef="#br1">!500 !500</inkml:trace>"##;
-    let markup = format!("{red}{second}");
-    let (wb, _) = read(&package_with("!0 !0", false, PEN_PROPS, true, true, true, Extra { extra_markup: Some(&markup), ..Extra::default() }));
+    let extra = Extra { extra_brush: Some(red), extra_markup: Some(second), ..Extra::default() };
+    let (wb, _) = read(&package_with("!0 !0", false, PEN_PROPS, true, true, true, extra));
     let shapes = &wb.sheets[0].shapes;
     assert_eq!(shapes.len(), 2, "{shapes:?}");
     assert_eq!(thousandths(&shapes[0]), vec![[0, 0]]);
