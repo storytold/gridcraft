@@ -215,8 +215,9 @@ impl SheetApp {
         if !self.chrome.file_tab {
             self.backstage = None;
         }
-        // Keytips opened the File view (Alt, F): its letters keep working there.
-        if self.backstage.is_none() || self.keytips.prefix().is_some() {
+        // Keytips opened the File view (Alt, F): its letters keep working there. Without the
+        // ribbon there is nothing for keytips to point at.
+        if self.chrome.ribbon && (self.backstage.is_none() || self.keytips.prefix().is_some()) {
             self.ribbon_keys(&ctx);
         }
         if self.chrome.title_bar {
@@ -226,7 +227,9 @@ impl SheetApp {
             // File tab: the Backstage view replaces everything below the title bar.
             backstage::show(self, ui);
         } else {
-            ribbon::show(self, ui);
+            if self.chrome.ribbon {
+                ribbon::show(self, ui);
+            }
             widgets::notice_bar(self, ui);
             // Python mode edits only in the formula bar: it shows while a Python edit is open,
             // also when the preference hides it.
