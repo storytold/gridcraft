@@ -101,7 +101,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Calculation Options",
             ["Formulas", "Calculation"],
             None,
-            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001), precisionAsDisplayed?: bool (Set precision as displayed: numbers are stored as their format shows them; turning it on rounds every number constant permanently)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
+            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001), precisionAsDisplayed?: bool (Set precision as displayed: numbers are stored as their format shows them; turning it on rounds every number constant permanently), multiThreaded?: bool (Enable multi-threaded calculation), threads?: 0–1024 (0: every processor; at most the processors present run)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
             has_doc,
             calc_options
         ),
@@ -958,6 +958,16 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
                 crate::cmd::round_all_constants_as_displayed(&mut cx.wb);
             }
         }
+        if let Some(v) = bool_param(p, "multiThreaded") {
+            cx.wb.calc.multi_threaded = v;
+        } else if p.get("multiThreaded").is_some() {
+            return Err(bad("formulas.calculationOptions", "`multiThreaded` must be a boolean"));
+        }
+        if let Some(v) = u32_param(p, "threads") {
+            cx.wb.calc.threads = v.min(1024);
+        } else if p.get("threads").is_some() {
+            return Err(bad("formulas.calculationOptions", "`threads` must be a non-negative integer"));
+        }
         let c = &cx.wb.calc;
         // Switching to automatic, or changing how circular references are calculated outside
         // manual mode, recalculates the workbook.
@@ -974,6 +984,8 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
             "maxIterations": c.max_iterations,
             "maxChange": c.max_change,
             "precisionAsDisplayed": c.precision_as_displayed,
+            "multiThreaded": c.multi_threaded,
+            "threads": c.threads,
         }))
     })
 }

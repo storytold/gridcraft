@@ -99,6 +99,17 @@ pub struct CalcSettings {
     /// GridCraft itself shows and takes A1 references.
     #[serde(default)]
     pub r1c1: bool,
+    /// Calculate on several threads (Excel's "Enable multi-threaded calculation"; XLSX
+    /// `calcPr concurrentCalc`).
+    #[serde(default = "multi_threaded_default")]
+    pub multi_threaded: bool,
+    /// Calculation threads; 0 uses every processor (XLSX `concurrentManualCount`).
+    #[serde(default)]
+    pub threads: u32,
+}
+
+fn multi_threaded_default() -> bool {
+    true
 }
 
 impl Default for CalcSettings {
@@ -110,6 +121,8 @@ impl Default for CalcSettings {
             max_change: Self::DEFAULT_CHANGE,
             precision_as_displayed: false,
             r1c1: false,
+            multi_threaded: true,
+            threads: 0,
         }
     }
 }
