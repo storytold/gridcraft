@@ -392,12 +392,12 @@ fn text_result_of_a_formula_kept_as_its_value() {
 
 #[test]
 fn refuses_encrypted_old_and_foreign_files() {
-    // FILEPASS in the globals: an encrypted workbook.
+    // FILEPASS in the globals: a damaged encryption record must be rejected as such.
     let mut stream = bof(0x0005);
     stream.extend(rec(0x002F, &[1, 0, 1, 0]));
     stream.extend(eof());
     let err = read_xls(&compound("Workbook", &stream)).unwrap_err().to_string();
-    assert!(err.contains("password-protected"), "{err}");
+    assert!(err.contains("encryption record is damaged"), "{err}");
     // A BIFF5 (Excel 5.0/95) workbook keeps its data in a `Book` stream.
     let book = compound("Book", &stream);
     assert_eq!(sniff(&book), Format::Xls);
