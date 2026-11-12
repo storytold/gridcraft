@@ -21,7 +21,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Percent" => "Percentual",
         "and" => "e",
         "Borders|None" => "Nenhum",
-        "Report Layout|Outline" => "Contorno",
+        "Report Layout|Outline" => "Estrutura de Tópicos",
         "a linked (not embedded) picture was skipped" => "A imagem vinculada (não incorporada) foi ignorada.",
         "missing picture {target}" => "Imagem ausente: {target}.",
         "chart {target} has no supported plot and was skipped" => "O gráfico {target} não tem um tipo de gráfico compatível e foi ignorado.",

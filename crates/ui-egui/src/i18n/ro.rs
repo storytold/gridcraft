@@ -9,7 +9,7 @@
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Borders|None" => "Niciunul",
-        "Report Layout|Outline" => "Contur",
+        "Report Layout|Outline" => "Schiță",
         "Page {page}" => "Pagina {page}",
         "Diagram" => "Schemă",
         "Decorative Text" => "Text decorativ",

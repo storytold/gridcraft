@@ -63,7 +63,7 @@ fn fill(message: &str, source: &str, translated: &str, language: super::Language
     let mut rendered = Vec::with_capacity(values.len());
     for (name, value) in &values {
         let value = match *name {
-            "token" => language.translation(value).unwrap_or(value).to_string(),
+            "token" | "expected" | "actual" => language.translation(value).unwrap_or(value).to_string(),
             "function" => locale.function_name(value).to_string(),
             "signature" => {
                 let function = values.iter().find(|(key, _)| *key == "function")?.1;

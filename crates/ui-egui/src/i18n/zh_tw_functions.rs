@@ -256,7 +256,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Lognormal density or probability.", "對數正態分佈的機率密度或累積機率。"),
     ("Macaulay duration of a security with periodic interest.", "定期付息證券的麥考利久期。"),
     ("Matrix product of two arrays.", "兩個陣列的矩陣乘積。"),
-    ("Mean after trimming a fraction of points from both ends.", "兩端各剔除一定比例資料後的平均值。"),
+    ("Mean after trimming a fraction of points from both ends.", "從資料兩端合計剔除指定比例的資料後計算的平均值。"),
     ("Mean counting text as 0 and logical values as 1 or 0.", "把文字計為 0、邏輯值計為 1 或 0 時的平均值。"),
     ("Middle value of the numbers.", "數字的中間值。"),
     ("Modified Bessel function of the first kind, I_n(x).", "第一類修正貝塞爾函數 I_n(x)。"),

@@ -12,18 +12,6 @@ pub(crate) fn canonical(
     sheet: usize,
     cell: gridcraft_engine::core::CellRef,
 ) -> Result<String, ParseError> {
-    // The editor hid the `_xludf.` prefixes of this cell's formula; confirming it unchanged keeps
-    // the user-defined calls instead of binding them to the built-ins of the same name.
-    let stored = wb.sheet(sheet).and_then(|sh| sh.cell(cell)).filter(|c| c.formula.is_some()).map(|c| c.input_text());
-    if let Some(stored) = stored.as_deref()
-        && has_udf_prefix(stored)
-        && text == display(stored, locale, wb, sheet)
-    {
-        return Ok(stored.to_string());
-    }
-    let restored =
-        stored.as_deref().filter(|s| has_udf_prefix(s)).map(|s| restore_udf_calls(text, &display_with_prefixes(s, locale, wb, sheet), locale));
-    let text = restored.as_deref().unwrap_or(text);
     if locale == FormulaLocale::En || wb.sheet(sheet).is_some_and(|sh| wb.styles.get(sh.style_id(cell)).num_fmt.as_str() == "@") {
         return Ok(text.to_string());
     }
@@ -35,10 +23,10 @@ pub(crate) fn canonical(
         let expr = formula::parse_closing_parens(body, |text| formula::parse_input(text, locale, known));
         return Ok(format!("={}", formula::print(&expr?)));
     }
-    if let Some(error) = locale.parse_error(text) {
+    if let Some(error) = locale.parse_error(text.trim()) {
         return Ok(error.as_str().to_string());
     }
-    if let Some(value) = localized_boolean(text, locale) {
+    if let Some(value) = localized_boolean(text.trim(), locale) {
         return Ok(value.to_string());
     }
     // Decimal-comma number entry follows the same preference, without rewriting text or dates.
@@ -61,10 +49,9 @@ fn localized_boolean(text: &str, locale: FormulaLocale) -> Option<&'static str> 
 }
 
 /// Localizes a stored canonical formula for display, preserving the original text on parse failure.
-/// Workbook names keep precedence over aliases; user-defined call prefixes are hidden for presentation.
+/// Workbook names keep precedence over aliases. Explicit UDF qualifiers preserve call identity during edits.
 pub(crate) fn display(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: usize) -> String {
-    let shown = display_with_prefixes(text, locale, wb, sheet);
-    hide_udf_prefix(&shown, locale)
+    display_with_prefixes(text, locale, wb, sheet)
 }
 
 fn display_with_prefixes(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: usize) -> String {
@@ -103,91 +90,12 @@ pub(crate) fn edit_text(
     match sheet.value(cell) {
         Value::Text(text)
             if !raw.starts_with('\'')
-                && (is_formula_entry(&text) || localized_boolean(&text, locale).is_some() || locale.parse_error(&text).is_some()) =>
+                && (is_formula_entry(&text) || localized_boolean(text.trim(), locale).is_some() || locale.parse_error(text.trim()).is_some()) =>
         {
             format!("'{raw}")
         }
         value => localized_constant(&value, locale).map_or(raw, str::to_string),
     }
-}
-
-const UDF_PREFIX: &str = "_xludf.";
-
-fn has_udf_prefix(text: &str) -> bool {
-    text.to_ascii_lowercase().contains(UDF_PREFIX)
-}
-
-/// Calls that share a displayed spelling with a built-in keep the explicit UDF prefix.
-fn ordinary_calls(tokens: &[formula::lexer::Token], locale: FormulaLocale) -> std::collections::HashSet<String> {
-    tokens
-        .iter()
-        .filter_map(|token| match &token.tok {
-            formula::lexer::Tok::Func(name) if udf_name(name).is_none() => Some(locale.fold_alias(name)),
-            _ => None,
-        })
-        .collect()
-}
-
-fn udf_name(name: &str) -> Option<&str> {
-    name.get(..UDF_PREFIX.len()).filter(|prefix| prefix.eq_ignore_ascii_case(UDF_PREFIX))?;
-    name.get(UDF_PREFIX.len()..)
-}
-
-/// Restore only the function spellings hidden in this draft. A mixed built-in and UDF
-/// remains explicitly qualified, so deleting or moving either call preserves its identity.
-fn restore_udf_calls(draft: &str, marked: &str, locale: FormulaLocale) -> String {
-    use formula::lexer::{Tok, tokenize_locale};
-    let Some(body) = draft.strip_prefix('=') else { return draft.to_owned() };
-    let (Ok(stored), Ok(tokens)) = (tokenize_locale(marked.trim_start_matches('='), locale), tokenize_locale(body, locale)) else {
-        return draft.to_owned();
-    };
-    let ordinary = ordinary_calls(&stored, locale);
-    let mut hidden = std::collections::HashMap::new();
-    for token in &stored {
-        if let Tok::Func(name) = &token.tok
-            && let Some(short) = udf_name(name)
-        {
-            let key = locale.fold_alias(short);
-            if !ordinary.contains(&key) {
-                *hidden.entry(key).or_insert(0_usize) += 1;
-            }
-        }
-    }
-    let mut out = String::from("=");
-    let mut last = 0;
-    for token in tokens {
-        if let Tok::Func(name) = &token.tok
-            && let Some(count) = hidden.get_mut(&locale.fold_alias(name))
-            && *count > 0
-        {
-            out.push_str(&body[last..token.start]);
-            out.push_str(UDF_PREFIX);
-            last = token.start;
-            *count -= 1;
-        }
-    }
-    out.push_str(&body[last..]);
-    out
-}
-
-/// Excel hides the UDF qualifier when the short spelling is unambiguous in the formula.
-fn hide_udf_prefix(text: &str, locale: FormulaLocale) -> String {
-    let Some(body) = text.strip_prefix('=').filter(|b| has_udf_prefix(b)) else { return text.to_string() };
-    let Ok(tokens) = formula::lexer::tokenize_locale(body, locale) else { return text.to_string() };
-    let ordinary = ordinary_calls(&tokens, locale);
-    let mut out = String::from("=");
-    let mut from = 0;
-    for t in tokens {
-        if let formula::lexer::Tok::Func(name) = &t.tok
-            && let Some(short) = udf_name(name)
-            && !ordinary.contains(&locale.fold_alias(short))
-        {
-            out.push_str(&body[from..t.start]);
-            from = t.start + UDF_PREFIX.len();
-        }
-    }
-    out.push_str(&body[from..]);
-    out
 }
 
 fn hint_function_name(name: &str, locale: FormulaLocale) -> &str {

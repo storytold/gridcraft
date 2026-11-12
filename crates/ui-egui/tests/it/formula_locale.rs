@@ -417,19 +417,18 @@ fn czech_interface_retains_its_canonical_formula_fallback() {
 }
 
 #[test]
-fn user_defined_prefix_is_hidden_while_editing_and_kept_on_commit() {
-    // Excel shows `_xludf.EOMONTH()` as `=EOMONTH()`; the cell still holds the user-defined call
-    // (#726), and committing the edit unchanged must not turn it into the built-in.
+fn ambiguous_user_defined_prefix_is_visible_while_editing() {
+    // Explicit qualifiers preserve user-defined calls while the draft is edited.
     let mut app = app();
     app.run("cell.set", json!({"cell":"A1","input":"=_xludf.EOMONTH()&_xludf.CONCAT(\"_xludf.x\")"})).unwrap();
     app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=EOMONTH()&CONCAT(\"_xludf.x\")");
+    assert_eq!(app.editor.as_ref().unwrap().text, "=_xludf.EOMONTH()&_xludf.CONCAT(\"_xludf.x\")");
     assert!(app.commit_edit(0, 0, false, false));
     assert_eq!(formula(&app), "_xludf.EOMONTH()&_xludf.CONCAT(\"_xludf.x\")");
     assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Error(CellError::Name));
     app.run("app.language.set", json!({"language":"es"})).unwrap();
     app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=EOMONTH()&CONCAT(\"_xludf.x\")");
+    assert_eq!(app.editor.as_ref().unwrap().text, "=_xludf.EOMONTH()&_xludf.CONCAT(\"_xludf.x\")");
     assert!(app.commit_edit(0, 0, false, false));
     assert_eq!(formula(&app), "_xludf.EOMONTH()&_xludf.CONCAT(\"_xludf.x\")");
 }
@@ -449,20 +448,20 @@ fn deleting_either_same_named_call_preserves_the_other() {
 }
 
 #[test]
-fn editing_a_hidden_udf_does_not_rebind_it_to_a_builtin() {
+fn editing_an_explicit_udf_does_not_rebind_it_to_a_builtin() {
     let mut app = app();
     app.run("cell.set", json!({"cell":"A1","input":"=_xludf.SUM(1,2)"})).unwrap();
     app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1,2)");
-    app.editor.as_mut().unwrap().text = "=SUM(2,2)".into();
+    assert_eq!(app.editor.as_ref().unwrap().text, "=_xludf.SUM(1,2)");
+    app.editor.as_mut().unwrap().text = "=_xludf.SUM(2,2)".into();
     assert!(app.commit_edit(0, 0, false, false));
     assert_eq!(formula(&app), "_xludf.SUM(2,2)");
 
     app.run("app.language.set", json!({"language":"ru"})).unwrap();
     app.run("cell.set", json!({"cell":"A1","input":"=_xludf.SUM(1,2)"})).unwrap();
     app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1;2)");
-    app.editor.as_mut().unwrap().text = "=SUM(2;2)".into();
+    assert_eq!(app.editor.as_ref().unwrap().text, "=_xludf.SUM(1;2)");
+    app.editor.as_mut().unwrap().text = "=_xludf.SUM(2;2)".into();
     assert!(app.commit_edit(0, 0, false, false));
     assert_eq!(formula(&app), "_xludf.SUM(2,2)");
 }
@@ -592,4 +591,25 @@ fn unchanged_array_literal_checks_the_top_left_destination() {
     assert!(!app.commit_edit(0, 0, true, false));
     assert!(app.editor.is_some());
     assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Empty);
+}
+
+#[test]
+fn prepending_a_builtin_keeps_the_existing_udf() {
+    let mut app = app();
+    app.run("cell.set", json!({"cell":"A1","input":"=_xludf.SUM(2)"})).unwrap();
+    app.begin_edit(None, true);
+    let draft = app.editor.as_mut().unwrap();
+    draft.text = format!("=SUM(1)+{}", draft.text.trim_start_matches('='));
+    assert!(app.commit_edit(0, 0, false, false));
+    assert_eq!(formula(&app), "SUM(1)+_xludf.SUM(2)");
+}
+
+#[test]
+fn whitespace_around_localized_constants_matches_engine_entry() {
+    let mut app = app();
+    app.ui.language = Language::Ru;
+    for (input, value) in [(" ИСТИНА ", Value::Bool(true)), (" #ССЫЛКА! ", Value::Error(CellError::Ref))] {
+        assert!(enter(&mut app, input));
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), value);
+    }
 }

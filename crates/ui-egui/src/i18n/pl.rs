@@ -2,7 +2,7 @@
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Borders|None" => "Brak",
-        "Report Layout|Outline" => "Kontur",
+        "Report Layout|Outline" => "Konspekt",
         "Shapes|Line" => "Linia",
         "Cut (⌘X)" => "Wytnij (⌘X)",
         "Copy (⌘C)" => "Kopiuj (⌘C)",
