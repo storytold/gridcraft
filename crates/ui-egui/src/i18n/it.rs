@@ -6,7 +6,7 @@
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Borders|None" => "Nessuno",
-        "Report Layout|Outline" => "Contorno",
+        "Report Layout|Outline" => "Struttura",
         "Recently Used" => "Usate di recente",
         "Maximum Iterations:" => "Numero massimo:",
         "Maximum Change:" => "Scarto consentito:",
@@ -931,7 +931,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Superscript" => "Apice",
         "Subscript" => "Pedice",
         "Color:" => "Colore:",
-        "Outline" => "Struttura",
+        "Outline" => "Contorno",
         "Diagonal ↘" => "Diagonale ↘",
         "Diagonal ↗" => "Diagonale ↗",
         "none" => "nessuno",
