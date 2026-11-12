@@ -4102,6 +4102,33 @@ fn cell_picture_insert_validates_content_preserves_style_and_replaces_with_undo(
 }
 
 #[test]
+fn copied_table_formulas_keep_their_table_context_outside_the_table() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Qty", "Price", "Amount"], [2, 10, null], [3, 20, null]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:C3", "header": true, "name": "Orders"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C2", "input": "=[@Qty]*[@Price]"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C3", "input": "=[@Qty]*[@Price]"})).unwrap();
+    s.execute("edit.copy", json!({"range": "C2:C3"})).unwrap();
+    s.execute("edit.paste", json!({"at": "F2"})).unwrap();
+    assert_eq!(v(&s, "F2"), Value::Number(20.0));
+    assert_eq!(v(&s, "F3"), Value::Number(60.0));
+    s.execute("cell.set", json!({"cell": "A2", "input": "5"})).unwrap();
+    assert_eq!(v(&s, "F2"), Value::Number(50.0));
+    s.execute("cell.set", json!({"cell": "A2", "input": "2"})).unwrap();
+    let f2 = s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("F2").unwrap()).unwrap().formula.clone().unwrap();
+    assert!(f2.text.contains("Orders[@Qty]") && f2.text.contains("Orders[@Price]"), "{}", f2.text);
+    s.execute("edit.copy", json!({"range": "C2:C3"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "formulas", "at": "H2"})).unwrap();
+    assert_eq!(v(&s, "H2"), Value::Number(20.0));
+    assert_eq!(v(&s, "H3"), Value::Number(60.0));
+    s.execute("home.insertSheet", json!({"name": "Destination"})).unwrap();
+    s.execute("edit.copy", json!({"sheet": "Sheet1", "range": "C2:C3"})).unwrap();
+    s.execute("edit.paste", json!({"at": "A2"})).unwrap();
+    assert_eq!(v(&s, "A2"), Value::Number(20.0));
+    assert_eq!(v(&s, "A3"), Value::Number(60.0));
+}
+
+#[test]
 fn cell_picture_clipboard_clear_and_structural_edits_keep_complete_payload() {
     let mut s = s();
     insert_cell_picture(&mut s, "B2", "moves with the row");
