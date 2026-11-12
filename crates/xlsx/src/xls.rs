@@ -114,6 +114,16 @@ pub(crate) fn read_xls_budgeted(bytes: &[u8], limits: x::Limits, functions: Func
     }
     let mut unparsed = false;
     for s in &book.sheets {
+        // craft-xls keeps these rules in its read model, but GridCraft's XLS adapter does not
+        // import conditional formatting. Its own warnings cover rules it could not decode; this
+        // reports the additional rules that this adapter drops.
+        if !s.conditional_formats.is_empty() {
+            report.warn(warning(&x::Warning::ConditionalFormattingSkipped));
+        }
+        // Data validation is not yet imported by this adapter.
+        if !s.validations.is_empty() {
+            report.warn(warning(&x::Warning::DataValidationSkipped));
+        }
         let sheet = sheet_of(s, &styles, &mut unparsed);
         wb.sheets.push(Arc::new(sheet));
     }
