@@ -341,3 +341,58 @@ fn scenario_summary_counts_result_rows_in_its_cell_limit() {
     let err = s.execute("data.scenarioSummary", json!({"resultCells": "C1:C255"})).unwrap_err().to_string();
     assert!(err.contains("too many cells"), "{err}");
 }
+
+/// #3853: a scenario's changing cells move with inserted and deleted rows and columns, as the
+/// formulas that read them do, so Show writes to the moved input and leaves a value entered at
+/// the old address alone.
+#[test]
+fn scenario_changing_cells_follow_structural_edits() {
+    let changing = |s: &mut Session| -> Vec<String> {
+        let l = s.execute("data.scenarioManager", json!({"sheet": "*"})).unwrap();
+        l["scenarios"].as_array().unwrap().iter().map(|x| x["changing"].as_str().unwrap().to_string()).collect()
+    };
+    // (edit, the input's new address, the result's new address)
+    for (cmd, params, input, result) in [
+        ("home.insertRows", json!({"rows": "3:3"}), "C4", "H9"),
+        ("home.insertColumns", json!({"cols": "C:C"}), "D3", "I8"),
+        ("home.deleteRows", json!({"rows": "2:2"}), "C2", "H7"),
+        ("home.deleteColumns", json!({"cols": "B:B"}), "B3", "G8"),
+    ] {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "C3", "input": "10"})).unwrap();
+        s.execute("cell.set", json!({"cell": "H8", "input": "=C3*2"})).unwrap();
+        s.execute("data.scenarioAdd", json!({"name": "High", "changing": "C3", "values": [100]})).unwrap();
+        s.execute(cmd, params).unwrap();
+        assert_eq!(changing(&mut s), [input], "{cmd}");
+        s.execute("cell.set", json!({"cell": "C3", "input": "777"})).unwrap();
+        s.execute("data.scenarioShow", json!({"name": "High"})).unwrap();
+        assert_eq!((n(&s, input), n(&s, result), n(&s, "C3")), (100.0, 200.0, 777.0), "{cmd}");
+        // Undoing the edit puts the scenario back with it.
+        for _ in 0..3 {
+            s.execute("edit.undo", json!({})).unwrap();
+        }
+        assert_eq!(changing(&mut s), ["C3"], "{cmd}: undone");
+    }
+}
+
+/// A changing cell the edit deletes goes with its value; a scenario left with none goes; an
+/// edit on another sheet doesn't touch the scenario.
+#[test]
+fn deleting_a_changing_cell_drops_it_from_the_scenario() {
+    let mut s = s();
+    s.execute("data.scenarioAdd", json!({"name": "Two", "changing": "B2,B5", "values": [1, 2]})).unwrap();
+    s.execute("data.scenarioAdd", json!({"name": "One", "changing": "B2", "values": [9]})).unwrap();
+    s.execute("home.deleteRows", json!({"rows": "2:2"})).unwrap();
+    let l = s.execute("data.scenarioManager", json!({"sheet": "*"})).unwrap();
+    let got: Vec<(String, String, serde_json::Value)> = l["scenarios"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| (x["name"].as_str().unwrap().into(), x["changing"].as_str().unwrap().into(), x["values"].clone()))
+        .collect();
+    assert_eq!(got, [("Two".to_string(), "B4".to_string(), json!([2]))]);
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+    let l = s.execute("data.scenarioManager", json!({"sheet": "*"})).unwrap();
+    assert_eq!(l["scenarios"][0]["changing"], "B4", "an edit on another sheet");
+}
