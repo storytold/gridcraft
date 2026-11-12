@@ -2511,6 +2511,19 @@ fn loan_schedule_residue_keeps_excels_sign() {
 }
 
 #[test]
+fn pmt_keeps_a_tiny_rate_s_digits() {
+    // pmt.00051 and 00052: forming 1+rate first gives -277.7778049371228.
+    let mut t = T::new();
+    t.set("B1", "=PMT(1E-9,360,100000)");
+    t.set("B2", "=PMT(1E-9,360,-100000)");
+    assert_eq!(t.get("B1"), Value::Number(-277.7778279166697));
+    assert_eq!(t.get("B2"), Value::Number(277.7778279166697));
+    // A zero rate is still the plain division.
+    t.set("B3", "=PMT(0,10,1000)");
+    assert_eq!(t.get("B3"), Value::Number(-100.0));
+}
+
+#[test]
 fn clearing_a_cell_unblocks_the_arrays_above_and_left_of_it() {
     let mut t = T::new();
     for r in 1..=50 {

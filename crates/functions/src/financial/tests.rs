@@ -70,6 +70,32 @@ fn pmt_edge_cases_follow_excel() {
 }
 
 #[test]
+fn tvm_at_a_rate_of_minus_one_and_below() {
+    // Observed on Windows Excel (Microsoft 365, 16.0.20430). PMT, and IPMT and PPMT through it, has no
+    // value at a rate of -1 or below.
+    for rate in [-1.0, -1.5] {
+        is_err(ev("PMT", vec![n(rate), n(3.0), n(100.0)]), CellError::Num);
+        is_err(ev("PMT", vec![n(rate), n(3.0), n(100.0), n(50.0)]), CellError::Num);
+        is_err(ev("IPMT", vec![n(rate), n(2.0), n(3.0), n(100.0)]), CellError::Num);
+        is_err(ev("PPMT", vec![n(rate), n(2.0), n(3.0), n(100.0)]), CellError::Num);
+        is_err(ev("PPMT", vec![n(rate), n(1.0), n(3.0), n(100.0), n(0.0), n(1.0)]), CellError::Num);
+        // The first payment in advance carries no interest, whatever the rate.
+        close(ev("IPMT", vec![n(rate), n(1.0), n(3.0), n(100.0), n(0.0), n(1.0)]), 0.0);
+    }
+    // FV and PV keep a value: (1+rate)^nper is Excel's `^`, errors included.
+    close(ev("FV", vec![n(-1.0), n(3.0), n(-10.0), n(100.0)]), 10.0);
+    close(ev("FV", vec![n(-1.5), n(3.0), n(-10.0), n(100.0)]), 20.0);
+    close(ev("PV", vec![n(-1.5), n(3.0), n(-10.0), n(100.0), n(1.0)]), 830.0);
+    is_err(ev("FV", vec![n(-1.0), n(0.0), n(-10.0), n(100.0)]), CellError::Num);
+    is_err(ev("PV", vec![n(-1.0), n(0.0), n(-10.0), n(100.0)]), CellError::Num);
+    is_err(ev("FV", vec![n(-1.0), n(-3.0), n(-10.0), n(100.0)]), CellError::Div0);
+    is_err(ev("PV", vec![n(-1.0), n(3.0), n(-10.0), n(100.0)]), CellError::Div0);
+    is_err(ev("PV", vec![n(-0.9), n(310.0), n(0.0), n(-1.0)]), CellError::Div0);
+    is_err(ev("FV", vec![n(-1.5), n(2.5), n(-10.0), n(100.0)]), CellError::Num);
+    assert_eq!(ev("FV", vec![n(-1.5), n(1.0 / 3.0), n(0.0), n(-1.0)]), Value::Number(-0.7937005259840998));
+}
+
+#[test]
 fn fv_and_pv_powers_use_repeated_squaring() {
     // Observed on Windows Excel 16.0.20430; pow() would give 4113.435153940674 and 0.00024310581365115218.
     assert_eq!(ev("FV", vec![n(0.07), n(123.0), n(0.0), n(-1.0)]), Value::Number(4113.435153940649));

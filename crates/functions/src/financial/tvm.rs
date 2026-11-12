@@ -52,6 +52,11 @@ fn pv_calc(rate: f64, nper: f64, pmt: f64, fv: f64, typ: f64) -> R<f64> {
         return Ok(-(fv + pmt * nper));
     }
     let p = growth(rate, nper)?;
+    // PV(-1,3,-10,100) and PV(-0.9,310,0,-1) divide by a zero growth (a subnormal is 0): #DIV/0!
+    // (observed on Windows Excel 16.0.20430).
+    if p.abs() < f64::MIN_POSITIVE {
+        return Err(CellError::Div0);
+    }
     Ok(-(fv + pmt * (1.0 + rate * typ) * (p - 1.0) / rate) / p)
 }
 
