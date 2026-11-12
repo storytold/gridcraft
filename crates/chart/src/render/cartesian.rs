@@ -455,14 +455,15 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                         let c = center(j);
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();
-                        if horizontal {
+                        if cull {
+                            sink.bar(ctx, true, c, lo, len);
+                        } else if horizontal {
                             let y = c + group_width / 2.0 - bw - k * separation * bw;
                             ctx.rect(lo, y, len, bw, s.color, None);
                         } else {
                             let x = c - group_width / 2.0 + k * separation * bw;
                             ctx.rect(x, lo, bw, len, s.color, None);
                         }
-                        sink.bar(ctx, cull, c, lo, len);
                         if labels_on && let Some(v) = s.values.get(j).copied().flatten() {
                             let t = fmt.format(v, None);
                             let stacked = fam != Fam::Col;

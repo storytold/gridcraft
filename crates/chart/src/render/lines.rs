@@ -230,10 +230,13 @@ pub(super) fn inside_plot(p: [f32; 2], plot: Bx) -> bool {
 /// Clips disconnected runs to the plot before drawing or smoothing them.
 pub(super) fn draw_clipped_runs(ctx: &mut Ctx, pts: &[Option<[f32; 2]>], color: Rgba, plot: Bx, smooth: bool) {
     let units: Vec<_> = pts.iter().map(|p| p.map(|p| (((p[0] - plot.x) / plot.w) as f64, ((p[1] - plot.y) / plot.h) as f64))).collect();
-    for run in clip_unit(&units) {
-        let pts: Vec<_> = run.into_iter().map(|(x, y)| Some([plot.x + x as f32 * plot.w, plot.y + y as f32 * plot.h])).collect();
-        draw_runs(ctx, &pts, color, 2.25, smooth.then_some(plot));
+    let runs = clip_unit(&units);
+    let mut clipped = Vec::with_capacity(pts.len().min(MAX_LINE_PTS * 2));
+    for run in runs {
+        clipped.extend(run.into_iter().map(|(x, y)| Some([plot.x + x as f32 * plot.w, plot.y + y as f32 * plot.h])));
+        clipped.push(None);
     }
+    draw_runs(ctx, &clipped, color, 2.25, smooth.then_some(plot));
 }
 
 /// Applies series/marker overrides to the primitives emitted since `start`, including legend swatches.
