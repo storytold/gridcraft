@@ -733,6 +733,19 @@ pub fn creation_id(shape: &Shape) -> String {
 
 /// A transparent PNG of the stroke in its colour, at the anchor's aspect ratio. Excel needs it as
 /// the contentPart's `mc:Fallback`.
+/// The target of one rasterised dab: the picture bytes, its size, the dab centre and radius, and
+/// the shared pixel budget the dab spends.
+struct Dab<'a> {
+    img: &'a mut [u8],
+    w: u32,
+    h: u32,
+    cx: f64,
+    cy: f64,
+    r: f64,
+    color: [u8; 3],
+    budget: &'a mut usize,
+}
+
 fn fallback_png(shape: &Shape, ink: &InkStyle, points: &[[i64; 2]], color: [u8; 3]) -> Option<Vec<u8>> {
     let w = f64::from(shape.anchor.width).clamp(1.0, MAX_SHEET);
     let h = f64::from(shape.anchor.height).clamp(1.0, MAX_SHEET);
@@ -748,7 +761,7 @@ fn fallback_png(shape: &Shape, ink: &InkStyle, points: &[[i64; 2]], color: [u8; 
     let mut budget = 2_500_000usize;
     let pts: Vec<[f64; 2]> = points.iter().map(|p| [p[0] as f64 / THOUSANDTHS_PER_PX * scale, p[1] as f64 / THOUSANDTHS_PER_PX * scale]).collect();
     if pts.len() == 1 {
-        stamp(&mut rgba, pw, ph, pts[0][0], pts[0][1], radius, color, &mut budget);
+        stamp(Dab { img: &mut rgba, w: pw, h: ph, cx: pts[0][0], cy: pts[0][1], r: radius, color, budget: &mut budget });
     }
     for pair in pts.windows(2) {
         if budget == 0 {
@@ -762,7 +775,17 @@ fn fallback_png(shape: &Shape, ink: &InkStyle, points: &[[i64; 2]], color: [u8; 
                 break;
             }
             let t = i as f64 / steps as f64;
-            stamp(&mut rgba, pw, ph, a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, radius, color, &mut budget);
+            let dab = Dab {
+                img: &mut rgba,
+                w: pw,
+                h: ph,
+                cx: a[0] + (b[0] - a[0]) * t,
+                cy: a[1] + (b[1] - a[1]) * t,
+                r: radius,
+                color,
+                budget: &mut budget,
+            };
+            stamp(dab);
         }
     }
     let mut out = Vec::new();
@@ -778,7 +801,8 @@ fn fallback_png(shape: &Shape, ink: &InkStyle, points: &[[i64; 2]], color: [u8; 
 
 /// A soft round dab, source-over into the transparent picture. The pixel budget is shared with the
 /// stroke loop: each visited pixel spends it, and an exhausted budget stops the dab early.
-fn stamp(img: &mut [u8], w: u32, h: u32, cx: f64, cy: f64, r: f64, color: [u8; 3], budget: &mut usize) {
+fn stamp(dab: Dab<'_>) {
+    let Dab { img, w, h, cx, cy, r, color, budget } = dab;
     let x0 = (cx - r - 1.0).floor().max(0.0) as u32;
     let y0 = (cy - r - 1.0).floor().max(0.0) as u32;
     let x1 = ((cx + r + 1.0).ceil() as i64).clamp(0, i64::from(w) - 1) as u32;
