@@ -42,6 +42,8 @@ pub(crate) fn table_cells_for_rows(html: &str, row_widths: &[usize]) -> Vec<Vec<
     parse_table(html, row_widths.len(), max_cols, Some(row_widths))
 }
 
+/// Parse the first table within the shared HTML and logical-cell work budgets.
+/// Per-row widths limit retained metadata while spans keep their logical positions.
 fn parse_table(html: &str, max_rows: usize, max_cols: usize, row_widths: Option<&[usize]>) -> Vec<Vec<HtmlCell>> {
     let mut grid = Grid::new(max_rows, max_cols, row_widths);
     if html.len() > MAX_HTML {
@@ -157,6 +159,7 @@ struct Grid<'a> {
 }
 
 impl<'a> Grid<'a> {
+    /// Clamp sheet bounds and establish one logical-cell work budget.
     fn new(max_rows: usize, max_cols: usize, row_widths: Option<&'a [usize]>) -> Self {
         let max_rows = max_rows.min(MAX_ROW_SPAN);
         let max_cols = max_cols.min(MAX_SPAN);
@@ -234,11 +237,13 @@ impl<'a> Grid<'a> {
         self.column
     }
 
+    /// Number of metadata columns retained for the current clipboard or import row.
     fn row_width(&self) -> usize {
         let row = self.rows.len().saturating_sub(1);
         self.row_widths.and_then(|widths| widths.get(row)).copied().unwrap_or(self.max_cols).min(self.max_cols)
     }
 
+    /// Collect text when the next uncovered HTML column fits the current row.
     fn collect_text(&self) -> bool {
         let row = self.rows.len().saturating_sub(1);
         let mut column = self.column;
@@ -519,6 +524,7 @@ mod tests {
 mod shape_tests {
     use super::*;
 
+    /// Ragged TSV widths bound both cell metadata and colspan placeholders.
     #[test]
     fn ragged_rows_never_materialize_extra_html_cells() {
         let html = "<table><tr><td colspan=16384>one</td></tr><tr><td>two</td><td>unused &amp;</td></tr><tr><td>unused row</td></tr></table>";
@@ -528,6 +534,7 @@ mod shape_tests {
         assert!(table_cells_for_rows(html, &[]).is_empty());
     }
 
+    /// A span omitted from a short row still occupies its logical columns below.
     #[test]
     fn a_rowspan_outside_a_short_row_still_aligns_the_next_row() {
         let html = "<table><tr><td>a</td><td rowspan=2>hidden</td></tr><tr><td>b</td><td x:num='3'>3</td></tr></table>";
