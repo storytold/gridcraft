@@ -24,7 +24,8 @@ fn split_op(t: &str) -> (&str, &str) {
 pub(crate) fn criterion_matches(v: &Value, text: &str, crit: &Value) -> bool {
     let crit_text = match crit {
         Value::Empty => return true,
-        Value::Number(n) => return v.as_f64().is_some_and(|x| (x - n).abs() <= 1e-12 * n.abs().max(1.0)),
+        // Match explicit equality criteria: a tolerance also admits distinct stored numbers.
+        Value::Number(n) => return v.as_f64().is_some_and(|x| x == *n),
         Value::Bool(b) => return matches!(v, Value::Bool(x) if x == b),
         Value::Error(e) => return v.as_error() == Some(*e),
         Value::Text(t) => t.to_string(),
