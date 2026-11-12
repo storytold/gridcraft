@@ -104,3 +104,22 @@ fn the_control_channel_turns_the_ribbon_off_and_on() {
     h.run_steps(3);
     assert!(h.query_by_label("Paste").is_some(), "and back");
 }
+
+#[test]
+fn hiding_the_ribbon_ends_an_open_keytip_sequence() {
+    let mut h = harness(Chrome::default());
+    for key in [egui::Key::F10, egui::Key::H] {
+        for pressed in [true, false] {
+            h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE });
+        }
+        h.run_steps(2);
+    }
+    assert_eq!(h.state().keytips.prefix(), Some("H"), "keytips point at the Home tab");
+    // The host hides the ribbon mid-sequence and later shows it again: the next letter is typing,
+    // not the rest of the old sequence.
+    h.state_mut().chrome.ribbon = false;
+    h.run_steps(2);
+    h.state_mut().chrome.ribbon = true;
+    h.run_steps(2);
+    assert_eq!(h.state().keytips.prefix(), None);
+}
