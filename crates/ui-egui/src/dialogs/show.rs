@@ -407,44 +407,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             open = false;
         }
     }
-    if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
-        app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
-        confirm = false;
-    }
-    if confirm && d.name == "openLink" {
-        confirm = false;
-        if confirm_open_link(app, &d) {
-            open = false;
-        }
-    }
-    if confirm && d.name == "newSheetView" {
-        // The name prompt defaults to an unused `ViewN`, but it is editable: saving over an
-        // existing view would silently replace its sheet, selection, zoom and freeze. Stay open
-        // and say so; scripted `view.customViews` saves keep their overwrite behavior.
-        let taken: Vec<String> = app
-            .session
-            .execute("view.customViews", Json::Object(Default::default()))
-            .ok()
-            .and_then(|v| v.as_object().map(|o| o.keys().cloned().collect()))
-            .unwrap_or_default();
-        if let Some(save) = d.values.get("save").and_then(Json::as_str)
-            && taken.iter().any(|name| name == save)
-        {
-            app.message = Some((d.title.clone(), format!("A custom view named {save:?} already exists. Choose another name.")));
-            confirm = false;
-        }
-    }
-    if confirm && d.command.is_some() && home_sheet_deleted(app, &mut d) {
-        // References without a sheet name would land on whichever sheet is shown now.
-        app.message = Some((d.title.clone(), SHEET_DELETED.into()));
-        confirm = false;
-    }
-    if confirm && let Err(e) = end_pick(app, &mut d) {
-        // References without a sheet name mean the sheet the dialog was opened on: when it can't
-        // be shown again (a text-box draft on the picked sheet could not be saved), the command
-        // would read them against the wrong sheet, so it doesn't run and the dialog stays.
-        app.message = Some((d.title.clone(), crate::clean_error(&e)));
-        confirm = false;
+    if confirm {
+        confirm = confirm_allowed(app, &mut d, &mut open);
     }
     if confirm && let Some(cmd) = d.command {
         let params = build_params(&d);
@@ -525,6 +489,61 @@ pub(super) fn confirm_open_link(app: &mut SheetApp, d: &Dialog) -> bool {
         app.message = Some((d.title.clone(), crate::clean_error(&e)));
     }
     true
+}
+
+/// The checks OK passes before the dialog's command runs: each shows why and stops the confirm
+/// when the dialog must stay open instead. True means the command may run.
+fn confirm_allowed(app: &mut SheetApp, d: &mut Dialog, open: &mut bool) -> bool {
+    if d.name == "insertPicture" && d.picture_target != app.view_key() {
+        app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
+        return false;
+    }
+    if d.name == "openLink" {
+        if confirm_open_link(app, d) {
+            *open = false;
+        }
+        return false;
+    }
+    if new_sheet_view_name_taken(app, d) {
+        return false;
+    }
+    if d.command.is_some() && home_sheet_deleted(app, d) {
+        // References without a sheet name would land on whichever sheet is shown now.
+        app.message = Some((d.title.clone(), SHEET_DELETED.into()));
+        return false;
+    }
+    if let Err(e) = end_pick(app, d) {
+        // References without a sheet name mean the sheet the dialog was opened on: when it can't
+        // be shown again (a text-box draft on the picked sheet could not be saved), the command
+        // would read them against the wrong sheet, so it doesn't run and the dialog stays.
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+        return false;
+    }
+    true
+}
+
+/// Whether New Sheet View's OK names a view that already exists. The name prompt defaults to
+/// an unused `ViewN` but is editable; saving over an existing view would silently replace its
+/// stored sheet, selection, zoom and freeze, so the dialog stays open and says so. Scripted
+/// `view.customViews` saves keep their overwrite behavior. True means the caller leaves `confirm`
+/// unset.
+fn new_sheet_view_name_taken(app: &mut SheetApp, d: &Dialog) -> bool {
+    if d.name != "newSheetView" {
+        return false;
+    }
+    let taken: Vec<String> = app
+        .session
+        .execute("view.customViews", Json::Object(Default::default()))
+        .ok()
+        .and_then(|v| v.as_object().map(|o| o.keys().cloned().collect()))
+        .unwrap_or_default();
+    if let Some(save) = d.values.get("save").and_then(Json::as_str)
+        && taken.iter().any(|name| name == save)
+    {
+        app.message = Some((d.title.clone(), format!("A custom view named {save:?} already exists. Choose another name.")));
+        return true;
+    }
+    false
 }
 
 /// Why Open Hyperlink ignored an OK that arrived with synthetic control-channel input.

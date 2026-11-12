@@ -395,10 +395,12 @@ fn typing_in_a_compact_group_size_field_keeps_the_menu_open_and_applies() {
     let field = h.get_by_role_and_label(Role::TextInput, "Font Size").rect();
     // Press only: a full click would release first; the press must already keep the menu.
     h.input_mut().events.push(Event::PointerMoved(field.center()));
-    h.input_mut().events.push(Event::PointerButton { pos: field.center(), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::default() });
+    let press =
+        |pressed: bool| Event::PointerButton { pos: field.center(), button: PointerButton::Primary, pressed, modifiers: Modifiers::default() };
+    h.input_mut().events.push(press(true));
     h.run_steps(1);
     assert!(h.query_by_label("Border presets").is_some(), "the Font menu stays open through the press in its size field");
-    h.input_mut().events.push(Event::PointerButton { pos: field.center(), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::default() });
+    h.input_mut().events.push(press(false));
     h.run_steps(2);
     h.get_by_role_and_label(Role::TextInput, "Font Size").type_text("18");
     h.run_steps(2);

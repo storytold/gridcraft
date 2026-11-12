@@ -141,11 +141,7 @@ fn fit_pages(app: &mut SheetApp, ui: &mut Ui, label: &str, pages: u16, other: u1
     let caption = ui.label(egui::RichText::new(app.ui.language.tr(label)).small());
     let lang = app.ui.language;
     let pages_text = |n: u16| {
-        if n == 0 {
-            lang.tr("Automatic").to_owned()
-        } else {
-            format!("{n} page{}", if n == 1 { "" } else { "s" })
-        }
+        if n == 0 { lang.tr("Automatic").to_owned() } else { format!("{n} page{}", if n == 1 { "" } else { "s" }) }
     };
     let id = if is_width { "scale_to_fit_width" } else { "scale_to_fit_height" };
     let combo = craft_ui::ComboBox::from_id_salt(id).selected_text(egui::RichText::new(pages_text(pages)).small()).width(78.0).show_ui(ui, |ui| {
