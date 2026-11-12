@@ -220,3 +220,37 @@ fn replayed_ink_keeps_its_stacking_under_a_rectangle() {
         _ => panic!("expected both the replayed stroke and the rectangle to paint"),
     }
 }
+
+/// Zoom out thins every stroke: at 10% a 2 pt stroke paints 0.2 px wide, committed or replayed.
+/// The replay keeps no minimum width of its own.
+#[test]
+fn replayed_ink_thins_with_zoom_like_committed_ink() {
+    let mut session = session_with(&[[[40, 200], [320, 200]]]);
+    session.execute("view.zoom", serde_json::json!({"percent": 10})).unwrap();
+    let mut h = harness(session);
+    h.run_steps(2);
+    let committed: Vec<f32> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            Shape::Path(p) if p.stroke.color == ColorMode::Solid(INK) => Some(p.stroke.width),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(committed.len(), 1, "the stroke paints zoomed out");
+
+    h.get_by_label("Ink Replay").click();
+    h.run_steps(60);
+    let replayed: Vec<f32> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            Shape::Path(p) if p.stroke.color == ColorMode::Solid(INK) => Some(p.stroke.width),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(replayed, committed, "replay paints the zoomed width, with no 1 px floor");
+    assert!(replayed[0] < 1.0, "a 2 pt stroke at 10% is below one pixel: {}", replayed[0]);
+}

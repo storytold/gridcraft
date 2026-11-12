@@ -196,7 +196,7 @@ pub(crate) fn paint_replay_stroke(
         return;
     }
     let rect = chartview::anchor_rect(geo, sh, &stroke.anchor);
-    let width = (stroke.width * geo.z).max(1.0);
+    let width = stroke.width * geo.z;
     // Off-screen strokes cost nothing to skip: no point walk, no path built.
     if !rect.expand(width).intersects(p.clip_rect()) {
         return;
