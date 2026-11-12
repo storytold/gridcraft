@@ -558,9 +558,9 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
 
-/// Each custom rule sees its own proposed value and the original values of other destinations.
+/// Custom rules see all proposed destinations, while validation preserves the original workbook.
 #[test]
-fn literal_fill_validation_restores_the_previous_candidate() {
+fn literal_fill_validation_keeps_the_original_workbook_unchanged() {
     let mut session = Session::new();
     session.new_workbook();
     session.execute("range.setValues", json!({"range":"A1", "values":[["old","old"]]})).unwrap();
@@ -568,7 +568,7 @@ fn literal_fill_validation_restores_the_previous_candidate() {
     session.execute("data.validation", json!({"range":"B1", "type":"custom", "formula1":"=AND(A1=\"old\",B1=\"new\")"})).unwrap();
     let range = RangeRef::parse("A1:B1").unwrap();
     let wb = &session.doc().unwrap().wb;
-    assert!(super::check_literal_fill_validation(wb, 0, &[range], "new").is_none());
+    assert!(super::check_literal_fill_validation(wb, 0, &[range], "new").is_some());
     assert!(super::check_literal_fill_validation(wb, 0, &[range], "other").is_some());
 
     // Direct command calls retain their existing behavior, independently of UI validation.
@@ -622,4 +622,14 @@ fn formula_and_literal_with_the_same_filter_label_are_one_choice() {
     session.execute("data.filter", json!({"range":"A1:A3"})).unwrap();
     let rows = super::filter_entries(&session.doc().unwrap().wb, 0, 0);
     assert_eq!(rows.iter().map(|row| row.label.as_str()).collect::<Vec<_>>(), ["=A1"]);
+}
+
+#[test]
+fn literal_fill_validates_the_completed_range() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range":"A1","values":[["x"]],"parse":false})).unwrap();
+    s.execute("data.validation", json!({"range":"A1:A3","type":"custom","formula1":"=COUNTIF($A$1:$A$3,\"x\")<=2"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    assert!(super::check_literal_fill_validation(wb, 0, &[RangeRef::parse("A1:A3").unwrap()], "x").is_some());
 }

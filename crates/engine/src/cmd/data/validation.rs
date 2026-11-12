@@ -223,12 +223,12 @@ pub fn list_items(wb: &Workbook, sheet: usize, at: CellRef, dv: &Validation) -> 
 
 /// Checks typed input against the validation of a cell. `Ok(None)` = valid.
 pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
-    check_entry(wb, sheet, at, input, false, &mut None)
+    check_entry(wb, sheet, at, input, false, &mut None, None)
 }
 
 /// Checks a text entry using the same literal value that the cell command will store.
 pub fn check_literal_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
-    check_entry(wb, sheet, at, input, true, &mut None)
+    check_entry(wb, sheet, at, input, true, &mut None, None)
 }
 
 /// Checks a literal fill against the original sheet, reusing one scratch workbook for formulas.
@@ -236,13 +236,26 @@ pub fn check_literal_fill_validation(wb: &Workbook, sheet: usize, ranges: &[Rang
     if ranges.iter().any(|range| range.count() > 2_000_000) || wb.sheet(sheet)?.validations.is_empty() {
         return None;
     }
+    let mut entered = wb.clone();
+    let sh = wb.sheet(sheet)?;
+    let mut changed = Vec::new();
+    for range in ranges {
+        let filtered = crate::cmd::edit::filtered_rows(sh, *range);
+        for at in range.iter().filter(|at| !filtered.contains(&at.row)) {
+            entered.sheet_mut(sheet)?.cells.set(at, Cell { value: Value::text(input), style: sh.style_id(at), ..Default::default() });
+            changed.push((sheet, at));
+        }
+    }
+    let mut calc = gridcraft_calc::Calc::new();
+    calc.rebuild(&entered);
+    calc.cells_changed(&mut entered, &changed);
     let mut scratch = None;
     let mut warning = None;
     let sh = wb.sheet(sheet)?;
     for range in ranges {
         let filtered = crate::cmd::edit::filtered_rows(sh, *range);
         for at in range.iter().filter(|at| !filtered.contains(&at.row)) {
-            if let Some(issue) = check_entry(wb, sheet, at, input, true, &mut scratch) {
+            if let Some(issue) = check_entry(wb, sheet, at, input, true, &mut scratch, Some(&entered)) {
                 if issue.0.error_style == ErrorStyle::Stop {
                     return Some(issue);
                 }
@@ -261,6 +274,7 @@ fn check_entry(
     input: &str,
     literal: bool,
     scratch: &mut Option<(Workbook, gridcraft_calc::Calc)>,
+    completed: Option<&Workbook>,
 ) -> Option<(Validation, String)> {
     let sh = wb.sheet(sheet)?;
     let dv = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(at)))?;
@@ -276,6 +290,9 @@ fn check_entry(
     let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
     let mut eval = |f: &str| {
         let formula = formula_at(f, first, at);
+        if let Some(completed) = completed {
+            return gridcraft_calc::evaluate(completed, sheet, at, &formula);
+        }
         let replaces_code = sh.cell(at).is_some_and(|cell| cell.formula.is_some() || cell.py.is_some());
         if sh.value(at) == v && !replaces_code {
             return gridcraft_calc::evaluate(wb, sheet, at, &formula);

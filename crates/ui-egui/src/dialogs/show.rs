@@ -626,7 +626,8 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                     }
                     let label = ui.label(lang.tr(label));
                     let shown = scope_caption(&scope, lang);
-                    craft_ui::ComboBox::from_id_salt(("name_scope", key))
+                    let menu_was_open = egui::Popup::is_any_open(ui.ctx());
+                    let picker = craft_ui::ComboBox::from_id_salt(("name_scope", key))
                         .selected_text(shown)
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut scope, Json::Null, lang.tr("Workbook"));
@@ -636,8 +637,11 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                                 ui.selectable_value(&mut scope, identity, caption);
                             }
                         })
-                        .response
-                        .labelled_by(label.id);
+                        .response;
+                    if menu_was_open || picker.has_focus() || craft_ui::ComboBox::is_open(ui.ctx(), picker.id) {
+                        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+                    }
+                    picker.labelled_by(label.id);
                     d.values.insert(key.into(), scope);
                 }
                 Field::Ref { key, label } => {

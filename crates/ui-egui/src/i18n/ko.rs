@@ -10,7 +10,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "4 Ratings" => "4가지 등급",
         "5 Arrows" => "5방향 화살표",
         "5 Quarters" => "5개 사분면",
-        "Applies to" => "적용 대상",
+        "applies to" => "적용 대상",
         "Apply" => "적용",
         "Blanks" => "빈 셀",
         "Conditional Formatting Rules Manager" => "조건부 서식 규칙 관리자",
