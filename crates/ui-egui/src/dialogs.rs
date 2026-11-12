@@ -36,8 +36,8 @@ use find::go_to_entries;
 pub(crate) use names::insert_name;
 use names::pasteable_names;
 pub(crate) use ref_edit::SHEET_DELETED;
-pub(crate) use show::new_sheet_view_name_taken;
 pub use show::show;
+pub(crate) use show::{build_params, new_sheet_view_name_taken};
 use zoom::zoom_preset;
 
 /// A form field. `Ref` is a range reference that can also be picked by selecting on the grid
