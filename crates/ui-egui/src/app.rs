@@ -44,6 +44,7 @@ impl SheetApp {
             printing: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),
+            held_keys: Vec::new(),
             synthetic_pending: false,
             synthetic_injected_at_pass: None,
             control_rx: None,
@@ -100,6 +101,29 @@ impl SheetApp {
         Self::setup_context_for_language(ctx, dark, i18n::Language::En);
     }
 
+    /// Keys typed faster than the frames come (a quick typist on a slow machine) arrive several
+    /// in one frame, but widgets read a frame's keys as a set: the cell editor, opened by the
+    /// first character, takes Enter or Escape from anywhere in the frame and never sees the
+    /// characters before it opened. So a frame takes the keyboard events up to the first key
+    /// that is not typing, and the rest wait for the next frame, in order. The Python code
+    /// editor reads a frame's keys in order itself, so a frame keeps all its events while it is open.
+    fn pace_keys(&mut self, ctx: &egui::Context) {
+        let in_code_editor = self.editor.as_ref().is_some_and(|e| e.python);
+        ctx.input_mut(|i| {
+            let mut events = std::mem::take(&mut self.held_keys);
+            events.append(&mut i.events);
+            if let Some(end) = grid::frame_end(&events).filter(|_| !in_code_editor) {
+                let (now, later): (Vec<_>, Vec<_>) = events.drain(end..).partition(|e| !grid::is_keyboard_event(e));
+                events.extend(now);
+                self.held_keys = later;
+            }
+            i.events = events;
+        });
+        if !self.held_keys.is_empty() {
+            ctx.request_repaint();
+        }
+    }
+
     /// Sets up fonts and visuals for a specific persisted interface language.
     pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
         ctx.set_fonts(theme::font_definitions_for_language(language));
@@ -108,6 +132,7 @@ impl SheetApp {
 
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        self.pace_keys(ctx);
         self.ensure_text_width(ctx);
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped. One
