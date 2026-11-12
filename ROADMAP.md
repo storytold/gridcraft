@@ -200,6 +200,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | Conditional formatting: a rule gathers range statistics only when it reads them (top/bottom, above average, duplicates, scales, bars, icons) and borrows them instead of copying them per cell, so the per-frame lookup of an expression or cell-value rule no longer visits its whole range (#1098, part 1) |
 | 2026-10-13 | Grid: resizing several selected columns or rows previews on the dragged one and applies the size to all on release; Esc cancels (#1082) |
 | 2026-10-12 | Next/previous sheet navigation stops at the first/last visible worksheet instead of activating a hidden boundary sheet; the current selection is retained |
+| 2026-10-12 | PDF writer: objects are written straight to the output, identical pictures are stored once, style operators are emitted only when they change, `q` nesting is limited to 28 and polyline joins no longer leak into later strokes (#816) |
 | 2026-10-12 | Insert › Text › WordArt (`insert.wordArt`, `wordArt.set`): floating decorative text with 10 original styles, outline and shadow, in-place editing, XLSX and print (#784) |
 | 2026-10-12 | Number formatting: one table of built-in formats (xlsx); numbers, dates and General render with one scratch buffer instead of per-token strings; output unchanged, checked against digests recorded from the old code (#817) |
 | 2026-10-21 | Macro engine ([macros.md](docs/macros.md)): typed, declarative macros saved in the workbook (a JSON field; hidden names in xlsx); declared inputs checked with messages that name the cells; tokens (`Input.col(2)`, `Row`, `Output`, `Name:Total`, `{{…}}` in formulas); one undo step with full rollback; a footprint dry run with ask, fail, overwrite, shift down or shift right; a policy that keeps macros away from files and the app, with approval for macros in opened files; Repeat, If and Stop steps; a debugger; a relative recorder; `macro.*` commands beside the unchanged Automate scripts |
@@ -317,6 +318,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | minor | Progress log: conditional-format lookups no longer scan the range for rules without statistics (#1098) |
 | 2026-10-12 | minor | Progress log: hidden-sheet navigation at workbook boundaries |
 | 2026-10-13 | trivial | Progress log: charts cached between frames (#1139) |
+| 2026-10-12 | minor | Progress log: PDF writer cleanup (#816) |
 | 2026-10-12 | minor | Catalog 276 → 277 / 292: Insert › WordArt (#784) |
 | 2026-10-12 | minor | Numfmt cleanup: one built-in format table (gridcraft-xlsx), fewer allocations rendering numbers, dates and General, equality test against the previous output (#817); progress log row |
 | 2026-10-12 | minor | The control server requires an auth token and closes bad connections (#777); progress log row |
