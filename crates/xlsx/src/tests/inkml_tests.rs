@@ -576,7 +576,9 @@ fn a_part_with_two_traces_reads_as_two_strokes() {
     assert_eq!(shapes[0].line, shapes[1].line, "both keep the part's colour");
     assert_ne!(a.key, b.key, "each stroke keeps its own creation id");
     let orders: Vec<u32> = shapes.iter().filter_map(|s| s.ink.as_ref().map(|i| i.order)).collect();
-    assert_eq!(orders, vec![0, 1], "traces keep their document order as the draw order");
+    // No `gridcraftOrder` is recorded (an Excel part), so every trace keeps 0: the stable sort
+    // keeps document order instead of interleaving a later part between this part's strokes.
+    assert_eq!(orders, vec![0, 0], "orderless traces keep 0 and document order");
     // Saving writes one part per stroke, and reopening finds both again.
     let (back, _) = read(&write_xlsx(&wb).unwrap());
     assert_eq!(back.sheets[0].shapes.len(), 2);
@@ -602,11 +604,87 @@ fn nested_trace_groups_read_every_stroke_in_document_order() {
         assert_eq!(thousandths(shape), vec![[x, 0]], "document order: {shapes:?}");
     }
     let orders: Vec<u32> = shapes.iter().filter_map(|s| s.ink.as_ref().map(|i| i.order)).collect();
-    assert_eq!(orders, vec![0, 1, 2, 3], "nested traces keep their document order");
+    // No `gridcraftOrder` is recorded (an Excel part), so every trace keeps 0: the stable sort
+    // keeps document order instead of numbering the strokes.
+    assert_eq!(orders, vec![0, 0, 0, 0], "orderless nested traces keep 0 and document order");
     let keys: std::collections::HashSet<String> = shapes.iter().filter_map(|s| s.ink.as_ref()?.key.clone()).collect();
     assert_eq!(keys.len(), 4, "{keys:?}");
     let (back, _) = read(&write_xlsx(&wb).unwrap());
     assert_eq!(back.sheets[0].shapes.len(), 4, "a save writes one part per stroke");
+}
+
+#[test]
+fn an_orderless_two_trace_part_does_not_reorder_a_later_part() {
+    // EC6: `image.order` added the trace index even when the part records no `gridcraftOrder`,
+    // so a two-trace Excel part read as orders 0, 1 and the stable sort filed a later part's
+    // order-0 stroke between them. Replay then drew the second stroke after the third.
+    // Every trace without a recorded order keeps 0, so replay falls back to document order.
+    let second = "<inkml:trace contextRef=\"#ctx0\" brushRef=\"#br0\">!100 !0</inkml:trace>";
+    let base = package_with("!0 !0", false, PEN_PROPS, true, true, true, Extra { extra_markup: Some(second), ..Extra::default() });
+    let drawing = two_part_drawing();
+    let bytes = two_part_package(&base, &drawing);
+    let (wb, _) = read(&bytes);
+    assert_eq!(wb.sheets[0].shapes.len(), 3, "{:?}", wb.sheets[0].shapes);
+    let orders: Vec<u32> = wb.sheets[0].shapes.iter().filter_map(|s| s.ink.as_ref().map(|i| i.order)).collect();
+    assert_eq!(orders, vec![0, 0, 0], "no recorded order means every trace keeps 0: {orders:?}");
+    let xs: Vec<[i64; 2]> = wb.sheets[0].shapes.iter().map(thousandths).map(|p| p[0]).collect();
+    assert_eq!(xs, vec![[0, 0], [100, 0], [500, 500]], "the first part's strokes stay together: {xs:?}");
+    // `ink_in_draw_order` sorts only when a stroke records a non-zero order, so the replay is
+    // the document order here.
+    assert!(
+        !wb.sheets[0].shapes.iter().any(|s| s.ink.as_ref().is_some_and(|i| i.order != 0)),
+        "no stroke records an order, so the replay keeps document order"
+    );
+}
+
+/// The drawing of the two-part document the finding needs: a two-trace part (both traces below
+/// the same brush) followed by a one-trace part, each Excel-shaped (no `gridcraftOrder`), plus
+/// the second part's InkML. `rId`/`ink` extend the base package one for one.
+fn two_part_drawing() -> (String, &'static str, &'static str) {
+    let part = |n: u32, rid: &str, guid: &str| {
+        format!(
+            "<xdr:twoCellAnchor editAs=\"oneCell\"><xdr:from><xdr:col>3</xdr:col><xdr:colOff>76200</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>228600</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><mc:AlternateContent xmlns:mc=\"{MC}\"><mc:Choice xmlns:xdr14=\"{XDR14}\" xmlns:aink=\"http://schemas.microsoft.com/office/drawing/2016/ink\" Requires=\"xdr14 aink\"><xdr:contentPart r:id=\"{rid}\"><xdr14:nvContentPartPr><xdr14:cNvPr id=\"{n}\" name=\"Ink {n}\"><a:extLst><a:ext uri=\"{{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}}\"><a16:creationId xmlns:a16=\"http://schemas.microsoft.com/office/drawing/2014/main\" id=\"{guid}\"/></a:ext></a:extLst></xdr14:cNvPr><xdr14:cNvContentPartPr/></xdr14:nvContentPartPr><xdr14:nvPr macro=\"\"/><xdr14:xfrm><a:off x=\"228600\" y=\"381000\"/><a:ext cx=\"2743200\" cy=\"762000\"/></xdr14:xfrm></xdr:contentPart></mc:Choice></mc:AlternateContent></xdr:twoCellAnchor>",
+        )
+    };
+    let drawing = format!(
+        "<?xml version=\"1.0\"?><xdr:wsDr xmlns:xdr=\"{XDR}\" xmlns:a=\"{A}\" xmlns:r=\"{NS_REL}\">{}{}</xdr:wsDr>",
+        part(3, "rId1", GUIDE),
+        part(4, "rId3", "{22222222-2222-4333-8444-666666666666}"),
+    );
+    let second_ink = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><inkml:ink xmlns:inkml=\"http://www.w3.org/2003/InkML\"><inkml:definitions><inkml:context xml:id=\"ctx0\"><inkml:inkSource xml:id=\"inkSrc0\"><inkml:traceFormat><inkml:channel name=\"X\" type=\"integer\" min=\"-2.14748E9\" max=\"2.14748E9\" units=\"cm\"/><inkml:channel name=\"Y\" type=\"integer\" min=\"-2.14748E9\" max=\"2.14748E9\" units=\"cm\"/></inkml:traceFormat><inkml:channelProperties><inkml:channelProperty channel=\"X\" name=\"resolution\" value=\"1000\" units=\"1/cm\"/><inkml:channelProperty channel=\"Y\" name=\"resolution\" value=\"1000\" units=\"1/cm\"/></inkml:channelProperties></inkml:inkSource></inkml:context><inkml:brush xml:id=\"br0\">PEN</inkml:brush></inkml:definitions><inkml:trace contextRef=\"#ctx0\" brushRef=\"#br0\">!500 !500</inkml:trace></inkml:ink>";
+    (drawing, second_ink, PEN_PROPS)
+}
+
+/// `base` rebuilt with the two-part drawing and its second InkML part added: the same workbook,
+/// sheet and relationship layout, plus `xl/ink/ink2.xml` behind `rId3`.
+fn two_part_package(base: &[u8], drawing: &(String, &str, &str)) -> Vec<u8> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(base.to_vec())).unwrap();
+    let mut kept: Vec<(String, Vec<u8>)> = Vec::new();
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).unwrap();
+        let name = file.name().to_string();
+        if name == "xl/drawings/drawing1.xml" {
+            continue;
+        }
+        let mut data = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut data).unwrap();
+        kept.push((name, data));
+    }
+    drop(archive);
+    let mut types = String::from_utf8(kept.iter().find(|(n, _)| n == "[Content_Types].xml").expect("types").1.clone()).expect("types");
+    types = types.replace(
+        "<Override PartName=\"/xl/ink/ink1.xml\" ContentType=\"application/inkml+xml\"/>",
+        "<Override PartName=\"/xl/ink/ink1.xml\" ContentType=\"application/inkml+xml\"/><Override PartName=\"/xl/ink/ink2.xml\" ContentType=\"application/inkml+xml\"/>",
+    );
+    let drels = format!(
+        "<?xml version=\"1.0\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"{NS_REL}/customXml\" Target=\"../ink/ink1.xml\"/><Relationship Id=\"rId2\" Type=\"{NS_REL}/image\" Target=\"../media/image1.png\"/><Relationship Id=\"rId3\" Type=\"{NS_REL}/customXml\" Target=\"../ink/ink2.xml\"/></Relationships>"
+    );
+    kept.retain(|(n, _)| n != "[Content_Types].xml" && n != "xl/drawings/_rels/drawing1.xml.rels");
+    kept.push(("[Content_Types].xml".into(), types.into_bytes()));
+    kept.push(("xl/drawings/_rels/drawing1.xml.rels".into(), drels.into_bytes()));
+    kept.push(("xl/drawings/drawing1.xml".into(), drawing.0.clone().into_bytes()));
+    kept.push(("xl/ink/ink2.xml".into(), drawing.1.replace("PEN", drawing.2).into_bytes()));
+    make_zip(&kept.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect::<Vec<_>>())
 }
 
 fn zip_part(bytes: &[u8], name: &str) -> Vec<u8> {

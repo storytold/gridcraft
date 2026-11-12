@@ -160,8 +160,9 @@ fn read_traces(
             }
         };
         image.pressure = pressure;
-        // The part carries one brush; successive strokes keep their drawing order.
-        image.order = style.order.saturating_add(i as u32);
+        // Without a recorded order (Excel parts) every trace keeps 0, so the stable sort keeps
+        // document order; adding the index would sort a later part between this part's strokes.
+        image.order = if style.order == 0 { 0 } else { style.order.saturating_add(i as u32) };
         let text = points.iter().map(|p| format!("{},{}", p[0] as f32, p[1] as f32)).collect::<Vec<_>>().join(";");
         shapes.push(Shape {
             id: 0,
