@@ -77,6 +77,14 @@ impl FormatLocale {
             {
                 out.push_str(&rest[..marker.len()]);
                 pos += marker.len() - ch.len_utf8();
+            } else if to_local
+                && self
+                    .tokens
+                    .iter()
+                    .any(|(canonical, local)| ch.to_lowercase().eq(local.to_lowercase()) && !ch.to_lowercase().eq(canonical.to_lowercase()))
+            {
+                out.push('\\');
+                out.push(ch);
             } else {
                 out.push(self.token(ch, to_local));
             }
@@ -117,6 +125,14 @@ impl FormatLocale {
 #[cfg(test)]
 mod tests {
     use crate::i18n::Language;
+
+    #[test]
+    fn unquoted_local_token_letters_remain_literals_after_editing() {
+        let locale = Language::Ru.format_locale();
+        let shown = locale.display("0 г");
+        assert_eq!(shown, "0 \\г");
+        assert_eq!(locale.canonical(&shown), "0 \\г");
+    }
 
     /// Date/time input and display agree, including elapsed hours and uppercase Russian input.
     #[test]

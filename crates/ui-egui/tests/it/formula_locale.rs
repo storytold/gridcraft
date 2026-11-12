@@ -613,3 +613,19 @@ fn whitespace_around_localized_constants_matches_engine_entry() {
         assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), value);
     }
 }
+
+#[test]
+fn localized_function_callbacks_work_in_every_formula_language() {
+    for language in [Language::De, Language::Es, Language::Fr, Language::It, Language::Pl, Language::PtBr, Language::Ru, Language::Tr] {
+        let mut app = app();
+        app.ui.language = language;
+        app.run("range.setValues", json!({"range":"A1","values":[[1],[4]]})).unwrap();
+        app.run("selection.set", json!({"cell":"B1"})).unwrap();
+        let locale = language.formula_locale();
+        let text = format!("=MAP(A1:A2{}{})", locale.list_separator(), locale.function_name("SQRT"));
+        assert!(enter(&mut app, &text), "{language:?}");
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        assert_eq!(sheet.value(CellRef::new(0, 1)), Value::Number(1.0), "{language:?}");
+        assert_eq!(sheet.value(CellRef::new(1, 1)), Value::Number(2.0), "{language:?}");
+    }
+}

@@ -643,3 +643,12 @@ fn literal_fill_rejects_a_simple_stop_rule_before_snapshotting_a_column() {
     assert!(super::check_literal_fill_validation(wb, 0, &[RangeRef::parse("A1:A1048576").unwrap()], "x").is_some());
     assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Empty);
 }
+
+#[test]
+fn literal_empty_text_is_validated_even_when_blank_cells_are_allowed() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("data.validation", json!({"range":"B1","type":"custom","formula1":"=ISBLANK(B1)","allowBlank":true})).unwrap();
+    let wb = &session.doc().unwrap().wb;
+    assert!(super::check_literal_fill_validation(wb, 0, &[RangeRef::parse("B1").unwrap()], "").is_some());
+}

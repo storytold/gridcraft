@@ -237,12 +237,10 @@ pub fn check_literal_fill_validation(wb: &Workbook, sheet: usize, ranges: &[Rang
         return None;
     }
     let sh = wb.sheet(sheet)?;
-    let applies = sh.validations.iter().any(|dv| {
-        dv.kind != ValidationKind::Any
-            && dv.show_error
-            && !(input.is_empty() && dv.allow_blank)
-            && dv.ranges.iter().any(|rule| ranges.iter().any(|range| rule.intersects(range)))
-    });
+    let applies = sh
+        .validations
+        .iter()
+        .any(|dv| dv.kind != ValidationKind::Any && dv.show_error && dv.ranges.iter().any(|rule| ranges.iter().any(|range| rule.intersects(range))));
     if !applies {
         return None;
     }
@@ -253,7 +251,7 @@ pub fn check_literal_fill_validation(wb: &Workbook, sheet: usize, ranges: &[Rang
         let filtered = crate::cmd::edit::filtered_rows(sh, *range);
         for at in range.iter().filter(|at| !filtered.contains(&at.row)) {
             let Some(dv) = sh.validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(at))) else { continue };
-            if dv.kind == ValidationKind::Any || !dv.show_error || (input.is_empty() && dv.allow_blank) {
+            if dv.kind == ValidationKind::Any || !dv.show_error {
                 continue;
             }
             let numeric_bound = |f: &str| f.trim().trim_start_matches('=').parse::<f64>().is_ok();
@@ -262,6 +260,9 @@ pub fn check_literal_fill_validation(wb: &Workbook, sheet: usize, ranges: &[Rang
                 ValidationKind::TextLength => !numeric_bound(&dv.f1) || dv.f2.as_deref().is_some_and(|f| !numeric_bound(f)),
                 _ => false,
             };
+            if dv.kind == ValidationKind::Custom && dv.f1.trim().strip_prefix('=').unwrap_or(dv.f1.trim()).trim().eq_ignore_ascii_case("TRUE") {
+                continue;
+            }
             if depends {
                 dependent.push(at);
             } else if let Some(issue) = check_entry(wb, sheet, at, input, true, &mut scratch, None) {
@@ -313,7 +314,7 @@ fn check_entry(
     if dv.kind == ValidationKind::Any || !dv.show_error {
         return None;
     }
-    if input.is_empty() && dv.allow_blank {
+    if !literal && input.is_empty() && dv.allow_blank {
         return None;
     }
     let v = if literal { Value::text(input) } else { gridcraft_core::parse::parse_input(input, wb.date_system).value };
@@ -321,6 +322,18 @@ fn check_entry(
     // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).
     let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
     let mut eval = |f: &str| {
+        let constant = f.trim().strip_prefix('=').unwrap_or(f.trim()).trim();
+        if constant.eq_ignore_ascii_case("TRUE") {
+            return Value::Bool(true);
+        }
+        if constant.eq_ignore_ascii_case("FALSE") {
+            return Value::Bool(false);
+        }
+        if let Ok(number) = constant.parse::<f64>()
+            && number.is_finite()
+        {
+            return Value::Number(number);
+        }
         let formula = formula_at(f, first, at);
         if let Some(completed) = completed {
             return gridcraft_calc::evaluate(completed, sheet, at, &formula);

@@ -357,9 +357,15 @@ fn normalize(
                 *expr = Expr::Name(alias.into());
             }
         }
-        Expr::Name(name) if !display && !bound(name, bindings) => {
-            if let Some(value) = boolean_alias(name, locale) {
+        Expr::Name(name) if !bound(name, bindings) => {
+            if display {
+                *name = locale.unshadowed_function_name(name, |alias| bound(alias, bindings)).into_owned();
+            } else if let Some(canonical) = name.strip_prefix("_xlfn.") {
+                *name = canonical.to_owned();
+            } else if let Some(value) = boolean_alias(name, locale) {
                 *expr = Expr::Bool(value);
+            } else {
+                *name = locale.canonical_name(name).to_owned();
             }
         }
         Expr::Call(name, args) if name == "LET" && args.len() >= 3 && !args.len().is_multiple_of(2) => {
