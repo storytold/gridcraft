@@ -1,5 +1,5 @@
 use super::{
-    INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, NoticeKind, SheetApp, UiRequest, backstage, clamp_interface_scale, clean_error, dialogs,
+    INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, NoticeKind, SheetApp, UiRequest, backstage, clamp_interface_scale, clean_error, dialogs,
     formula_locale, i18n, json, now_ms, printing,
 };
 
@@ -139,6 +139,21 @@ impl SheetApp {
             && let Ok(r) = &r
         {
             self.deliver_pdf(r);
+        }
+        // The scan stopped at its cell allowance: say that some cells were not checked.
+        if id == "data.circleInvalid"
+            && let Ok(r) = &r
+            && r.get("truncated").and_then(Json::as_bool) == Some(true)
+        {
+            let scan = "The scan stopped after 100,000 cell visits; some validated cells were not checked for invalid data.";
+            // An open-time warning that is still shown keeps its text and action; the scan note joins it.
+            match self.notice.as_mut() {
+                Some(n) => {
+                    n.text = format!("{} {scan}", n.text);
+                    n.kind = NoticeKind::Warning;
+                }
+                None => self.notice = Some(Notice { text: scan.into(), kind: NoticeKind::Warning, action: None }),
+            }
         }
         r
     }

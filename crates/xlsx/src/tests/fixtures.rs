@@ -872,3 +872,17 @@ fn every_skipped_drawing_object_is_reported() {
         assert_eq!(hits, 1, "object {n}: {:?}", rep.warnings);
     }
 }
+
+/// A number format code repeated by many differential formats is read into one allocation.
+#[test]
+fn inline_dxf_number_formats_are_shared() {
+    let code = format!("0.00{}", " \"x\"".repeat(50));
+    let dxfs: String = (0..3).map(|_| format!(r#"<dxf><numFmt numFmtId="170" formatCode="{}"/></dxf>"#, code.replace('"', "&quot;"))).collect();
+    let styles =
+        format!(r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dxfs count="3">{dxfs}</dxfs></styleSheet>"#);
+    let root = crate::xml::parse(styles.as_bytes()).unwrap();
+    let read = crate::styles::read_styles(&root, &[], "Calibri");
+    assert_eq!(read.dxfs.len(), 3);
+    assert_eq!(read.dxfs[0].num_fmt.as_str(), code);
+    assert!(read.dxfs.iter().all(|d| std::sync::Arc::ptr_eq(&d.num_fmt.0, &read.dxfs[0].num_fmt.0)));
+}
