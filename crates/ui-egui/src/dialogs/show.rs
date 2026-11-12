@@ -527,7 +527,7 @@ fn confirm_allowed(app: &mut SheetApp, d: &mut Dialog, open: &mut bool) -> bool 
 /// stored sheet, selection, zoom and freeze, so the dialog stays open and says so. Scripted
 /// `view.customViews` saves keep their overwrite behavior. True means the caller leaves `confirm`
 /// unset.
-fn new_sheet_view_name_taken(app: &mut SheetApp, d: &Dialog) -> bool {
+pub(crate) fn new_sheet_view_name_taken(app: &mut SheetApp, d: &Dialog) -> bool {
     if d.name != "newSheetView" {
         return false;
     }
@@ -537,11 +537,15 @@ fn new_sheet_view_name_taken(app: &mut SheetApp, d: &Dialog) -> bool {
         .ok()
         .and_then(|v| v.as_object().map(|o| o.keys().cloned().collect()))
         .unwrap_or_default();
-    if let Some(save) = d.values.get("save").and_then(Json::as_str)
-        && taken.iter().any(|name| name == save)
-    {
-        app.message = Some((d.title.clone(), format!("A custom view named {save:?} already exists. Choose another name.")));
-        return true;
+    if let Some(save) = d.values.get("save").and_then(Json::as_str) {
+        if save.trim().is_empty() {
+            app.message = Some((d.title.clone(), "Name the view before saving it.".into()));
+            return true;
+        }
+        if taken.iter().any(|name| name == save) {
+            app.message = Some((d.title.clone(), format!("A custom view named {save:?} already exists. Choose another name.")));
+            return true;
+        }
     }
     false
 }

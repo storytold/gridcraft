@@ -162,7 +162,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             |s, p| set_view(s, p, SheetViewMode::PageBreakPreview)
         ),
-        cmd!(noundo "view.customViews", "Custom Views…", ["View", "Workbook Views"], None, "{save?: name, show?: name, delete?: name} → list", has_doc, custom_views),
+        cmd!(noundo "view.customViews", "Custom Views…", ["View", "Sheet View"], None, "{save?: name, show?: name, delete?: name} → list", has_doc, custom_views),
         cmd!(noundo "view.split", "Split", ["View", "Window"], None, "{} (toggles a split at the active cell; shown as frozen panes in this version)", has_doc, split),
         cmd!(noundo "view.newWindow", "New Window", ["View", "Window"], None, "{} → {window, doc, title}: opens another window on the active workbook (the same workbook: saving from either window saves it)", has_doc, new_window),
         cmd!(

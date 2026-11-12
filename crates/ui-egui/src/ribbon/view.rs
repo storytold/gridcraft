@@ -263,7 +263,7 @@ fn custom_views(app: &mut SheetApp, ui: &mut Ui) {
     // list, and its groups settle into their compact/natural forms on later frames. Anchoring by
     // response id would lose the open state when those controls move (see `switch_windows`).
     let forced = invoke(app, "view.customViews");
-    egui::Popup::menu(&anchor).open_memory(popup_command(forced, anchor.clicked())).show(|ui| {
+    egui::Popup::menu(&anchor).id(egui::Id::unique("gridcraft.custom_views")).open_memory(popup_command(forced, anchor.clicked())).show(|ui| {
         let views = saved_views(app);
         if views.is_empty() {
             ui.label(lang.tr("No saved views"));

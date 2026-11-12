@@ -339,10 +339,14 @@ impl RibbonSections {
                 sections.forced_used = false;
                 sections.forced_unpin_at = None;
             } else if sections.forced.is_some() {
-                // The popup the keytip opened has closed (Enter applied the size, a click picked
-                // a row, or Escape dismissed it): settle back even with no pointer press, or the
-                // group would stay expanded at narrow widths after a keyboard-only edit.
-                let popup_gone = sections.forced_used && !any_popup;
+                // The popup the keytip opened has closed (a click picked a row, or Escape
+                // dismissed it): settle back even with no pointer press, or the group would stay
+                // expanded at narrow widths. A focused size field counts as the interaction
+                // still running: the fontSize keytip opens no popup, and the layout must stay
+                // until the field loses focus or the edit completes.
+                let size_field = egui::Id::unique("gridcraft.font_size_box");
+                let editing = ui.ctx().memory(|m| m.focused()) == Some(size_field);
+                let popup_gone = sections.forced_used && !any_popup && !editing;
                 let stale = switched || popup_gone || sections.forced_unpin_at.is_some_and(|at| frame > at);
                 if stale {
                     sections.forced = None;
@@ -396,10 +400,12 @@ impl RibbonSections {
             // and a popup nested in a popup would close its parent. Clicks inside reach those
             // buttons; a click elsewhere (or Escape) closes it.
             let open_id = button.id.with("section_open");
-            let mut open = ui.ctx().data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
-            if button.clicked() {
-                open = !open;
-            }
+            let here = ui.ctx().data(|d| d.get_temp::<String>(last_sections_tab_id())).unwrap_or_default();
+            // A menu left open on another tab must not reappear: the tab switch skips this
+            // group's drawing path, so the flag records the tab it was opened on and a tab
+            // that did not open it starts closed.
+            let mut open =
+                ui.ctx().data(|d| d.get_temp::<(String, bool)>(open_id)).filter(|(tab, _)| tab == &here).map(|(_, open)| open).unwrap_or(false);
             if open {
                 let area = egui::Area::new(button.id.with("section_body"))
                     .order(egui::Order::Foreground)
@@ -407,10 +413,15 @@ impl RibbonSections {
                     .constrain(true);
                 let shown = area.show(ui.ctx(), |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                            body(app, ui);
-                        });
+                        // A body wider than the viewport (Function Library on a narrow card)
+                        // still fits: the menu scrolls instead of running off screen.
+                        let room = ui.ctx().content_rect().width() - 16.0;
+                        egui::ScrollArea::horizontal().max_width(room.max(0.0)).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                                body(app, ui);
+                            });
+                        })
                     })
                 });
                 let rect = shown.response.rect;
@@ -425,7 +436,7 @@ impl RibbonSections {
                     open = false;
                 }
             }
-            ui.ctx().data_mut(|d| d.insert_temp(open_id, open));
+            ui.ctx().data_mut(|d| d.insert_temp(open_id, (here, open)));
         } else {
             let left = ui.cursor().min.x;
             body(app, ui);
