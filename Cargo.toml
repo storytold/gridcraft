@@ -31,6 +31,9 @@ gridcraft-math = { path = "crates/math" }
 # craft-libs revision.
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "=0.1.0", features = ["egui"] }
+# Compound files ([MS-CFB]) and password-encrypted OOXML packages ([MS-OFFCRYPTO]).
+craft-cfb = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
+craft-offcrypto = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
 # Delimited text (CSV, TSV) and SYLK; `crates/xlsx/src/csv.rs` and `crates/engine/src/io/sylk.rs`
 # turn them into workbooks.
 craft-csv = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
@@ -50,9 +53,6 @@ regex = { version = "1", default-features = false, features = ["std", "unicode",
 quick-xml = "0.41"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 sha2 = { version = "0.11", default-features = false }
-# Decrypting password-protected workbooks ([MS-OFFCRYPTO]): AES and SHA-1, pure Rust (wasm-safe).
-aes = { version = "0.9", default-features = false }
-sha1 = { version = "0.11", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # equations: RaTeX (MIT) lays LaTeX out as positioned glyphs, rules and paths. Exact pins: it is
