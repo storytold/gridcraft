@@ -35,6 +35,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Allow Edit Ranges…",
             menu: &["Review", "Protect"],
             shortcut: None,
+            shortcut_mac: None,
             params: "{action?: list (default) | add | modify | delete | unlock, title?, range?, password?, newTitle?, sheet?} → ranges",
             enabled: has_doc,
             run: allow_edit_ranges,
@@ -162,6 +163,8 @@ fn protect_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let what = d.wb.sheet(sheet).map(|sh| sh.name.clone()).unwrap_or_default();
     let prot = SheetProtection { password: str_param(p, "password").filter(|x| !x.is_empty()).map(|pw| new_password_hash(d, &what, pw)), ..prot };
     edit(s, |cx| {
+        // FORMULATEXT reads a sheet's protection: its results are recalculated.
+        cx.recalc_all = true;
         cx.sheet_mut(sheet)?.protection = Some(prot.clone());
         Ok(Json::Null)
     })
@@ -181,7 +184,10 @@ fn unprotect_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     edit(s, |cx| {
-        cx.sheet_mut(sheet)?.protection = None;
+        // Only removing protection changes what FORMULATEXT reads; a no-op unprotect skips the full recalculation.
+        if cx.sheet_mut(sheet)?.protection.take().is_some() {
+            cx.recalc_all = true;
+        }
         Ok(Json::Null)
     })
 }
@@ -401,6 +407,21 @@ mod tests {
         assert!(s.execute("review.nextComment", json!({})).is_err());
         assert!(s.execute("review.previousComment", json!({})).is_err());
         assert_eq!(at(&s), (0, "A1".to_string()));
+    }
+
+    #[test]
+    fn protecting_and_unprotecting_leave_table_headers_alone() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["a", "b"], [1, 2]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:B2", "header": true})).unwrap();
+        // An imported header can hold a number: only a structural edit would turn it back into text.
+        let d = s.doc_mut().unwrap();
+        std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().set_value(gridcraft_core::CellRef::new(0, 0), gridcraft_core::Value::Number(7.0));
+        s.execute("review.protectSheet", json!({})).unwrap();
+        s.execute("review.unprotectSheet", json!({})).unwrap();
+        let v = s.doc().unwrap().wb.sheet(0).unwrap().value(gridcraft_core::CellRef::new(0, 0));
+        assert_eq!(v, gridcraft_core::Value::Number(7.0));
     }
 
     #[test]
