@@ -446,6 +446,7 @@ pub enum ChartKind {
     Bubble,
     Radar,
     Histogram,
+    Pareto,
     Waterfall,
     Funnel,
     Treemap,

@@ -203,6 +203,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
                 ("Doughnut", "doughnut", ""),
                 ("Scatter", "scatter", ""),
                 ("Radar", "radar", ""),
+                ("Pareto", "pareto", ""),
             ] {
                 let cur = chart.kind == gridcraft_engine::cmd::insert::chart_kind(k, s);
                 if ui.selectable_label(cur, l).clicked() {

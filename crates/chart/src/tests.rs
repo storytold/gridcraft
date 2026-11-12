@@ -3,12 +3,13 @@ use std::sync::Arc;
 use gridcraft_core::{CellRef, Value};
 use gridcraft_model::{Anchor, Chart, ChartKind, Color, LegendPos, Series, SparklineKind, Style, Workbook};
 
+use crate::render::MAX_MARKERS;
 use crate::*;
 
 mod budget;
 mod data_table;
 
-const ALL_KINDS: [ChartKind; 26] = [
+const ALL_KINDS: [ChartKind; 27] = [
     ChartKind::ColumnClustered,
     ChartKind::ColumnStacked,
     ChartKind::ColumnStacked100,
@@ -28,6 +29,7 @@ const ALL_KINDS: [ChartKind; 26] = [
     ChartKind::Bubble,
     ChartKind::Radar,
     ChartKind::Histogram,
+    ChartKind::Pareto,
     ChartKind::Waterfall,
     ChartKind::Funnel,
     ChartKind::Treemap,
@@ -150,6 +152,198 @@ fn every_kind_renders_sanely() {
             assert!(n_shapes > 2, "{kind:?}: nothing drawn");
         }
     }
+}
+
+#[test]
+fn pareto_sorts_categories_and_draws_the_cumulative_line() {
+    let mut c = chart(ChartKind::Pareto);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.gridlines = false;
+    // A appears twice: Excel groups equal categories and sums them (A = 15).
+    let cats = ["A", "B", "A", "C"];
+    let vals = [10.0, 40.0, 5.0, 20.0];
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: cats.iter().map(|s| s.to_string()).collect(),
+        series: vec![series("Count", &vals, [20, 96, 130, 255], ChartKind::Pareto)],
+    };
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let x_of = |label: &str| {
+        prims.iter().find_map(|p| match p {
+            Prim::Text { x, text, .. } if text == label => Some(*x),
+            _ => None,
+        })
+    };
+    let (a, b, cc) = (x_of("A").unwrap(), x_of("B").unwrap(), x_of("C").unwrap());
+    assert!(b < cc && cc < a, "grouped and sorted largest first: B C A");
+    // Three cumulative markers and the line itself.
+    assert_eq!(prims.iter().filter(|p| matches!(p, Prim::Circle { r, .. } if *r == 2.0)).count(), 3);
+    assert!(prims.iter().any(|p| matches!(p, Prim::Line { pts, .. } if pts.len() == 3)), "cumulative line");
+    let t = texts(&prims);
+    assert!(t.contains(&"100%"), "right percentage axis labels: {t:?}");
+}
+
+#[test]
+fn pareto_secondary_axis_is_fixed_at_100_percent() {
+    let mut c = chart(ChartKind::Pareto);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.gridlines = false;
+    let cats = ["A", "B", "C", "D", "E"];
+    let vals = [50.0, 20.0, 10.0, 5.0, 15.0];
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: cats.iter().map(|s| s.to_string()).collect(),
+        series: vec![series("Count", &vals, [20, 96, 130, 255], ChartKind::Pareto)],
+    };
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    // The secondary axis runs 0–100%, so the cumulative line can use the plot's full height.
+    let mut ticks: Vec<(f32, &str)> = prims
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Text { y, text, .. } if text.ends_with('%') => Some((*y, text.as_str())),
+            _ => None,
+        })
+        .collect();
+    ticks.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let labels: Vec<&str> = ticks.iter().map(|(_, t)| *t).collect();
+    // Top of the plot first: 100% down to 0%, with no 120% headroom.
+    assert_eq!(labels, ["100%", "80%", "60%", "40%", "20%", "0%"], "fixed 0–100% axis with a 20% step");
+    // Evenly spaced: 0.2 of the scale per step.
+    let first = ticks.first().map(|(y, _)| *y).unwrap_or_default();
+    let last = ticks.last().map(|(y, _)| *y).unwrap_or_default();
+    let step = (last - first) / 5.0;
+    for (i, (y, label)) in ticks.iter().enumerate() {
+        assert!((first + step * i as f32 - y).abs() < 0.5, "{label} sits on its 0.2 step: {ticks:?}");
+    }
+    // The cumulative line's last point (100%) lands on the 100% tick, and A's 50% midway.
+    let line = prims
+        .iter()
+        .find_map(|p| match p {
+            Prim::Line { pts, .. } if pts.len() == 5 => Some(pts.clone()),
+            _ => None,
+        })
+        .expect("cumulative line");
+    let top = first;
+    let mid = (first + last) / 2.0;
+    assert!((line[4][1] - top).abs() < 0.01, "line top {} on the 100% tick {top}", line[4][1]);
+    assert!((line[0][1] - mid).abs() < 0.01, "A's 50% {} halfway up the axis ({mid})", line[0][1]);
+}
+
+#[test]
+fn pareto_bins_numbers_when_there_is_no_category_range() {
+    let mut c = chart(ChartKind::Pareto);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.gridlines = false;
+    c.series.push(Series { name: Some("Values".into()), values: "Data!$A$1:$A$6".into(), ..Default::default() });
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: vec![],
+        series: vec![series("Values", &[1.0, 1.0, 1.0, 2.0, 2.0, 3.0], [20, 96, 130, 255], ChartKind::Pareto)],
+    };
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    assert_eq!(prims.iter().filter(|p| matches!(p, Prim::Circle { r, .. } if *r == 2.0)).count(), 3, "three bins");
+    assert!(prims.iter().any(|p| matches!(p, Prim::Line { pts, .. } if pts.len() == 3)), "cumulative line");
+    let t = texts(&prims);
+    assert!(t.iter().any(|s| s.starts_with('[') && s.contains(", ")), "bin labels: {t:?}");
+}
+
+#[test]
+fn pareto_skips_cumulative_line_for_signed_categories() {
+    let mut c = chart(ChartKind::Pareto);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.gridlines = false;
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: vec!["A".into(), "B".into()],
+        series: vec![series("Count", &[10.0, -5.0], [20, 96, 130, 255], ChartKind::Pareto)],
+    };
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    // A negative category makes the cumulative percentage meaningless, so no line or markers.
+    // The cumulative line is the only 1.5 px polyline a Pareto draws (bars are rects, axes 0.75).
+    let line = |prims: &[Prim]| prims.iter().any(|p| matches!(p, Prim::Line { pts, width, .. } if *width == 1.5 && pts.len() >= 2));
+    assert_eq!(prims.iter().filter(|p| matches!(p, Prim::Circle { r, .. } if *r == 2.0)).count(), 0);
+    assert!(!line(&prims), "signed categories draw no cumulative line");
+    // The same chart with nonnegative values does draw it, so the check above can fail.
+    let d = ChartData { series: vec![series("Count", &[10.0, 5.0], [20, 96, 130, 255], ChartKind::Pareto)], ..d };
+    assert!(line(&render(&c, &d, 640.0, 400.0, &ApproxMeasure)), "nonnegative categories draw the cumulative line");
+}
+
+#[test]
+fn pareto_caps_cumulative_line_and_markers() {
+    let mut c = chart(ChartKind::Pareto);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.gridlines = false;
+    let n = MAX_MARKERS + 1000;
+    let cats: Vec<String> = (0..n).map(|i| format!("C{i}")).collect();
+    let vals: Vec<f64> = (0..n).map(|i| (i % 7 + 1) as f64).collect();
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: cats,
+        series: vec![series("Count", &vals, [20, 96, 130, 255], ChartKind::Pareto)],
+    };
+    // Wide enough for markers: they stop at MAX_MARKERS.
+    let wide = render(&c, &d, 30_000.0, 400.0, &ApproxMeasure);
+    assert_eq!(wide.iter().filter(|p| matches!(p, Prim::Circle { r, .. } if *r == 2.0)).count(), MAX_MARKERS);
+    // Narrow columns carry no marker information; the line is decimated instead.
+    let narrow = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    assert_eq!(narrow.iter().filter(|p| matches!(p, Prim::Circle { r, .. } if *r == 2.0)).count(), 0);
+    let longest = narrow.iter().filter_map(|p| match p {
+        Prim::Line { pts, .. } if pts.len() > 2 => Some(pts.len()),
+        _ => None,
+    });
+    assert!(longest.max().unwrap_or(0) < n, "the cumulative line is decimated");
+}
+
+#[test]
+fn pareto_legend_uses_the_supplied_label() {
+    let mut c = chart(ChartKind::Pareto);
+    c.legend = LegendPos::Bottom;
+    let d = sample(ChartKind::Pareto);
+    let entries = legend_entries_with(&c, &d, &ChartLabels { cumulative: "Kumuliert %" });
+    assert!(entries.iter().any(|(name, _, sw)| name == "Kumuliert %" && *sw == Swatch::Line), "{entries:?}");
+}
+
+#[test]
+fn pareto_line_falls_back_to_the_second_theme_accent() {
+    let c = chart(ChartKind::Pareto);
+    // A resolved short palette (one series) has no second colour: the line must still stand
+    // apart from the bars instead of reusing the first series colour.
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: ["A", "B", "C", "D"].iter().map(|s| s.to_string()).collect(),
+        series: vec![series("Count", &[4.0, 3.0, 2.0, 1.0], [20, 96, 130, 255], ChartKind::Pareto)],
+    };
+    let accent = series_color(&gridcraft_model::Theme::default(), 1);
+    assert_ne!(accent, d.series[0].color);
+    let entries = legend_entries(&c, &d);
+    assert_eq!(entries.get(1).map(|e| e.1), Some(accent), "the legend swatch matches the line");
+    let lines: Vec<Rgba> = render(&c, &d, 640.0, 400.0, &ApproxMeasure)
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Line { color, width, .. } if *width == 1.5 => Some(*color),
+            _ => None,
+        })
+        .collect();
+    assert!(lines.contains(&accent), "{lines:?}");
+    // A second palette colour still takes precedence.
+    let d = ChartData { palette: vec![[1, 2, 3, 255], [9, 8, 7, 255]], ..d };
+    assert_eq!(legend_entries(&c, &d).get(1).map(|e| e.1), Some([9, 8, 7, 255]));
 }
 
 #[test]
@@ -470,6 +664,7 @@ fn legend_counts() {
     assert_eq!(legend_entries(&chart(ChartKind::Pie), &d).len(), 6);
     assert_eq!(legend_entries(&chart(ChartKind::Waterfall), &d).len(), 3);
     assert_eq!(legend_entries(&chart(ChartKind::Histogram), &d).len(), 0);
+    assert_eq!(legend_entries(&chart(ChartKind::Pareto), &d).len(), 2);
     let mut c = chart(ChartKind::Line);
     c.legend = LegendPos::None;
     assert!(legend_entries(&c, &d).is_empty());

@@ -1,16 +1,19 @@
+use std::collections::HashMap;
+
 use super::frame::{Bx, CatAxis, ValAxis, frame, on, value_range};
-use super::legend::{cat_label, point_color};
+use super::legend::{cat_label, pareto_line_color, point_color};
+use super::lines::decimate;
 use super::{
-    AXIS, Chart, ChartData, Ctx, DOWN, Fmt, GRID, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_MARKERS, MAX_SERIES, MAX_WEDGES, Prim,
-    QuartileMethod, Rgba, STOCK, SeriesData, TAU, TEXT, UP, VAlign, WHITE, clean, nice_scale,
+    AXIS, Chart, ChartData, Ctx, DOWN, Fmt, GRID, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, MAX_SERIES, MAX_WEDGES, Prim,
+    QuartileMethod, Rgba, STOCK, Scale, SeriesData, TAU, TEXT, UP, VAlign, WHITE, clean, nice_scale,
 };
 
 // ---------------------------------------------------------------- histogram
 
-pub(super) fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
-    let Some(s) = data.series.first() else { return };
-    let vals: Vec<f64> = s.values.iter().flatten().copied().collect();
-    let Some((lo, hi)) = value_range(vals.iter().copied()) else { return };
+/// Histogram bins for `vals`: right-inclusive labels and counts, as Excel's histogram and the
+/// numeric-only form of a Pareto chart use.
+fn histogram_bins(vals: &[f64], f: &Fmt) -> Option<(Vec<String>, Vec<usize>)> {
+    let (lo, hi) = value_range(vals.iter().copied())?;
     let n = vals.len();
     let span = hi - lo;
     let mut bins = ((n as f64).sqrt().ceil() as usize).clamp(1, 100);
@@ -22,13 +25,12 @@ pub(super) fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     // equal to an edge belongs to the bin that ends there.
     let edges: Vec<f64> = (0..bins).map(|b| if b + 1 == bins { hi.max(lo + b as f64 * width) } else { lo + (b + 1) as f64 * width }).collect();
     let mut counts = vec![0usize; bins];
-    for v in &vals {
+    for v in vals {
         let b = edges.partition_point(|e| e < v).min(bins - 1);
         if let Some(c) = counts.get_mut(b) {
             *c += 1;
         }
     }
-    let f = Fmt::new(&s.number_format);
     let labels: Vec<String> = (0..bins)
         .map(|b| {
             let a = lo + b as f64 * width;
@@ -37,6 +39,15 @@ pub(super) fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
             format!("{open}{}, {}]", f.format(a, Some(width / 10.0)), f.format(e, Some(width / 10.0)))
         })
         .collect();
+    Some((labels, counts))
+}
+
+pub(super) fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
+    let Some(s) = data.series.first() else { return };
+    let vals: Vec<f64> = s.values.iter().flatten().copied().collect();
+    let f = Fmt::new(&s.number_format);
+    let Some((labels, counts)) = histogram_bins(&vals, &f) else { return };
+    let bins = counts.len();
     let maxc = counts.iter().copied().max().unwrap_or(0) as f64;
     let ys = nice_scale(0.0, maxc, true);
     let fc = Fmt::new("General");
@@ -51,6 +62,111 @@ pub(super) fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         ctx.rect(x, top, cw, plot.bottom() - top, s.color, Some((WHITE, 0.75)));
         if chart.data_labels {
             ctx.text(x + cw / 2.0, top - 2.0, &c.to_string(), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+        }
+    }
+}
+
+// ---------------------------------------------------------------- pareto
+
+/// Sorted columns and a cumulative-percentage line on a secondary 0–100% axis.
+pub(super) fn pareto(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
+    let Some(s) = data.series.first() else { return };
+    let f = Fmt::new(&s.number_format);
+    // With no category range Excel charts a Pareto's numbers in histogram bins (the Pareto page:
+    // "If you select two columns of numbers ... Excel charts your data in bins").
+    let binned = chart.series.first().is_some_and(|x| x.categories.is_none());
+    let (labels, vals): (Vec<String>, Vec<f64>) = if binned {
+        let raw: Vec<f64> = s.values.iter().flatten().copied().collect();
+        let Some((labels, counts)) = histogram_bins(&raw, &f) else { return };
+        let mut items: Vec<(String, f64)> = labels.into_iter().zip(counts.into_iter().map(|c| c as f64)).collect();
+        items.sort_by(|a, b| b.1.total_cmp(&a.1));
+        items.into_iter().unzip()
+    } else {
+        let n = data.categories.len().max(s.values.len()).min(MAX_CATS);
+        if n == 0 {
+            return;
+        }
+        // Excel groups equal categories and sums their values before sorting (the Pareto doc's
+        // "groups the same categories and sums the corresponding numbers").
+        let mut groups: Vec<(String, f64)> = Vec::new();
+        let mut index: HashMap<String, usize> = HashMap::new();
+        for j in 0..n {
+            let label = cat_label(data, j);
+            let v = s.values.get(j).copied().flatten().unwrap_or(0.0);
+            match index.get(&label) {
+                Some(&i) => {
+                    if let Some(g) = groups.get_mut(i) {
+                        g.1 += v;
+                    }
+                }
+                None => {
+                    index.insert(label.clone(), groups.len());
+                    groups.push((label, v));
+                }
+            }
+        }
+        // Largest first; a stable sort keeps first-appearance order for equal sums.
+        groups.sort_by(|a, b| b.1.total_cmp(&a.1));
+        (groups.iter().map(|(l, _)| l.clone()).collect(), groups.iter().map(|(_, v)| *v).collect())
+    };
+    let n = labels.len();
+    if n == 0 {
+        return;
+    }
+    let hi = vals.iter().copied().fold(0.0f64, f64::max);
+    let lo = vals.iter().copied().fold(0.0f64, f64::min);
+    let ys = nice_scale(lo, hi, true);
+    let pct = Fmt::new("0%");
+    let value_fmt = if binned { Fmt::new("General") } else { Fmt::new(&s.number_format) };
+    // A cumulative percentage axis is fixed at 0–100%: Excel shows it that way, and the line
+    // below maps each cumulative share straight onto the plot height.
+    let ys2 = Scale { min: 0.0, max: 1.0, step: 0.2 };
+    let plot = frame(
+        ctx,
+        area,
+        CatAxis::Labels(&labels, &[]),
+        &ValAxis { scale: ys, fmt: &value_fmt },
+        Some(&ValAxis { scale: ys2, fmt: &pct }),
+        false,
+        chart.gridlines,
+    );
+    if !plot.ok() {
+        return;
+    }
+    let total: f64 = vals.iter().copied().sum();
+    // A cumulative percentage is only meaningful when every category is nonnegative. The binned
+    // path counts values, so its counts always are.
+    let cumulative = total.is_finite() && total != 0.0 && (binned || vals.iter().all(|v| *v >= 0.0));
+    let cw = plot.w / n as f32;
+    let bw = (cw * 0.72).clamp(1.0, 120.0);
+    let y0 = plot.bottom() - ys.frac(0.0) * plot.h;
+    let mut pts = Vec::with_capacity(n);
+    let mut cum = 0.0;
+    for (j, v) in vals.iter().enumerate() {
+        let x = plot.x + (j as f32 + 0.5) * cw;
+        let yv = plot.bottom() - ys.frac(*v) * plot.h;
+        ctx.rect(x - bw / 2.0, yv.min(y0), bw, (y0 - yv).abs().max(0.5), s.color, None);
+        if chart.data_labels && n <= MAX_LABELS {
+            let t = value_fmt.format(*v, None);
+            if *v >= 0.0 {
+                ctx.text(x, yv.min(y0) - 2.0, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+            } else {
+                ctx.text(x, yv.max(y0) + 2.0, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Top));
+            }
+        }
+        if cumulative {
+            cum += *v;
+            let frac = (cum / total).clamp(0.0, 1.0) as f32;
+            pts.push([x, plot.bottom() - frac * plot.h]);
+        }
+    }
+    if pts.len() >= 2 {
+        let color = pareto_line_color(data);
+        // Keep the line and markers bounded on category-heavy charts, as the other renderers do.
+        let markers: Vec<[f32; 2]> = if cw >= 3.0 { pts.iter().take(MAX_MARKERS).copied().collect() } else { Vec::new() };
+        ctx.line(decimate(pts, MAX_LINE_PTS), color, 1.5);
+        for p in markers {
+            ctx.out.push(Prim::Circle { cx: p[0], cy: p[1], r: 2.0, fill: Some(color), stroke: Some((WHITE, 0.75)) });
         }
     }
 }

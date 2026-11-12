@@ -299,6 +299,8 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Automate", "自動化"),
     ("Table Design", "テーブル デザイン"),
     ("Chart Design", "グラフ デザイン"),
+    ("Pareto", "パレート図"),
+    ("Cumulative %", "累積 %"),
     ("Ready", "準備完了"),
     ("Enter", "入力"),
     ("Edit", "編集"),

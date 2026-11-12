@@ -821,6 +821,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Scatter with Lines" => "Dispersão com Linhas",
         "Radar" => "Radar",
         "Histogram" => "Histograma",
+        "Pareto" => "Pareto",
+        "Cumulative %" => "% Acumulado",
         "Waterfall" => "Cascata",
         "Funnel" => "Funil",
         "Combo" => "Combinação",

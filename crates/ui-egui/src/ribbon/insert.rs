@@ -123,7 +123,12 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
                     "insert.chart.scatter",
                     vec![("Scatter", "scatter", ""), ("Scatter with Lines", "scatter", "lines"), ("Bubble", "bubble", "")],
                 ),
-                (Icon::Chart, "Statistic", "insert.chart.statistic", vec![("Histogram", "histogram", ""), ("Box & Whisker", "boxWhisker", "")]),
+                (
+                    Icon::Chart,
+                    "Statistic",
+                    "insert.chart.statistic",
+                    vec![("Histogram", "histogram", ""), ("Pareto", "pareto", ""), ("Box & Whisker", "boxWhisker", "")],
+                ),
                 (
                     Icon::Theme,
                     "Hierarchy & more",

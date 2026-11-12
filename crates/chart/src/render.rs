@@ -20,9 +20,9 @@ mod trend;
 
 use cartesian::{cartesian, scatter};
 use frame::{Bx, axis_titles, chart_title};
-use kinds::{box_whisker, doughnut, funnel, histogram, pie, radar, stock, treemap, waterfall};
+use kinds::{box_whisker, doughnut, funnel, histogram, pareto, pie, radar, stock, treemap, waterfall};
 use legend::draw_legend;
-pub use legend::{Swatch, legend_entries};
+pub use legend::{ChartLabels, Swatch, legend_entries, legend_entries_with};
 pub use trend::supports_trendline;
 
 pub(crate) const TEXT: Rgba = [0x59, 0x59, 0x59, 0xFF];
@@ -40,9 +40,9 @@ const AXIS_TITLE_SIZE: f32 = 10.0;
 /// Most categories drawn by category-axis charts.
 const MAX_CATS: usize = 20_000;
 /// Lines with more points than this are decimated (min/max per pixel column).
-const MAX_LINE_PTS: usize = 2000;
+pub(crate) const MAX_LINE_PTS: usize = 2000;
 /// Most markers per series (after de-duplicating by pixel).
-const MAX_MARKERS: usize = 5000;
+pub(crate) const MAX_MARKERS: usize = 5000;
 /// Data labels are skipped when a series has more points than this.
 const MAX_LABELS: usize = 200;
 /// Columns and bars narrower than this (in pixels) are merged per pixel column into one rectangle.
@@ -209,6 +209,11 @@ pub(crate) fn sanitized(d: &ChartData) -> Cow<'_, ChartData> {
 
 /// Lays out and draws a chart into a `w`×`h` box at the origin. Empty for a degenerate box.
 pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) -> Vec<Prim> {
+    render_with_labels(chart, data, w, h, m, &ChartLabels::default())
+}
+
+/// [`render`] with interface strings supplied by the UI.
+pub fn render_with_labels(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure, labels: &ChartLabels<'_>) -> Vec<Prim> {
     if !(w.is_finite() && h.is_finite()) || w < 1.0 || h < 1.0 || w > 1e7 || h > 1e7 {
         return vec![];
     }
@@ -225,7 +230,7 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
         area.y += used;
         area.h -= used;
     }
-    let entries = legend_entries(chart, &data);
+    let entries = legend_entries_with(chart, &data, labels);
     if !entries.is_empty() && area.ok() {
         area = draw_legend(&mut ctx, &entries, chart.legend, area);
     }
@@ -253,6 +258,7 @@ fn draw_kind(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
                 BarClustered | BarStacked | BarStacked100 => cartesian(ctx, chart, data, area, true),
                 Scatter | ScatterLines | Bubble => scatter(ctx, chart, data, area),
                 Histogram => histogram(ctx, chart, data, area),
+                Pareto => pareto(ctx, chart, data, area),
                 Waterfall => waterfall(ctx, chart, data, area),
                 BoxWhisker => box_whisker(ctx, chart, data, area),
                 Stock => stock(ctx, chart, data, area),

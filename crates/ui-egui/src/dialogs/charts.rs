@@ -2,7 +2,7 @@ use super::show::ok_cancel;
 use super::{Color32, Dialog, Icon, Json, Sense, SheetApp, Stroke, StrokeKind, icons, json, vec2};
 
 /// Every chart type the All Charts tab offers: `(type, subtype, label)` for `insert.chart`.
-const ALL_CHARTS: [(&str, &str, &str); 21] = [
+const ALL_CHARTS: [(&str, &str, &str); 22] = [
     ("column", "", "Clustered Column"),
     ("column", "stacked", "Stacked Column"),
     ("column", "stacked100", "100% Stacked Column"),
@@ -21,6 +21,7 @@ const ALL_CHARTS: [(&str, &str, &str); 21] = [
     ("scatter", "lines", "Scatter with Lines"),
     ("radar", "", "Radar"),
     ("histogram", "", "Histogram"),
+    ("pareto", "", "Pareto"),
     ("waterfall", "", "Waterfall"),
     ("funnel", "", "Funnel"),
     ("combo", "", "Combo"),
@@ -49,7 +50,7 @@ pub(super) fn select_chart(d: &mut Dialog, i: usize) {
 
 fn chart_icon(t: &str) -> Icon {
     match t {
-        "column" | "bar" | "histogram" | "waterfall" | "funnel" | "combo" => Icon::ChartBar,
+        "column" | "bar" | "histogram" | "pareto" | "waterfall" | "funnel" | "combo" => Icon::ChartBar,
         "line" | "area" | "radar" => Icon::ChartLine,
         "pie" | "doughnut" => Icon::ChartPie,
         "scatter" | "bubble" => Icon::ChartScatter,

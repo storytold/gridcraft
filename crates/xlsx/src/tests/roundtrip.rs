@@ -463,6 +463,7 @@ fn sample() -> Workbook {
     });
     s.charts.push(combo);
     s.charts.push(Chart { kind: ChartKind::Waterfall, legend: LegendPos::None, title: None, ..base_chart.clone() });
+    s.charts.push(Chart { kind: ChartKind::Pareto, ..base_chart.clone() });
     let mut doughnut = Chart { kind: ChartKind::Doughnut, hole_size: 25, first_slice_angle: 180, legend: LegendPos::Right, ..base_chart.clone() };
     doughnut.series.push(base_chart.series[0].clone());
     s.charts.push(doughnut);
