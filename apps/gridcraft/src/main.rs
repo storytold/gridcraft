@@ -325,6 +325,10 @@ fn main() -> eframe::Result<()> {
         log::warn!("sample {s}: {e}");
     }
     let mut app = SheetApp::new(session, services());
+    // The pane and the control channel run commands on the UI frame: `translate.run` would
+    // freeze the window there for up to `timeoutMs`, so those callers use `translate.start`
+    // plus `translate.status` instead. Headless sessions leave the flag unset.
+    app.session.block_translate_run_on_ui = true;
     model_host::refresh(&mut app.session);
     app.watch_desktop_theme();
     app.start_update_check();

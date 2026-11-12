@@ -341,16 +341,14 @@ fn backend(s: &Session) -> Result<Arc<dyn gridcraft_translate::Backend>> {
 fn no_model_message(s: &Session) -> String {
     let dir = models_dir_display(s);
     format!(
-        "no translation model is installed. Open Review > Language > Translate and download one (or place the model files in {dir}), then try again"
+        "no translation model is installed ({} or {}). Open Review > Language > Translate and download one (or place the model files in {dir}), then try again",
+        manifest::MANIFESTS.first().map(|m| m.id).unwrap_or("qwen3-1.7b"),
+        manifest::MANIFESTS.get(1).map(|m| m.id).unwrap_or("qwen3-0.6b")
     )
 }
 
 fn models_dir_display(s: &Session) -> String {
-    if s.translate_models_dir.trim().is_empty() {
-        "the model directory (set GRIDCRAFT_MODELS)".to_string()
-    } else {
-        Path::new(&s.translate_models_dir).join("qwen3-1.7b").display().to_string()
-    }
+    if s.translate_models_dir.trim().is_empty() { "the model directory (set GRIDCRAFT_MODELS)".to_string() } else { s.translate_models_dir.clone() }
 }
 
 fn timeout_param(p: &Json) -> Result<u64> {

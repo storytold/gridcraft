@@ -86,10 +86,14 @@ impl ModelFetcher for HttpFetcher {
 /// installs the opener the engine's install commands call to refresh the running session's
 /// backend after their own verified install, so a model-less session translates right away.
 pub fn refresh(session: &mut Session) {
+    // The desktop session guards `translate.run` off the UI frame; reinstalling the backend
+    // after an install/removal must not drop that host-set flag.
+    let ui_guarded = session.block_translate_run_on_ui;
     let root = gridcraft_translate_candle::models_root();
     session.translate_models_dir = root.display().to_string();
     session.translate_fetcher = Some(Arc::new(HttpFetcher));
     session.translate_backend = gridcraft_translate_candle::installed_backend(&root);
+    session.block_translate_run_on_ui = ui_guarded;
     session.translate_backend_opener = Some(Arc::new(|s: &Session, id: &str| {
         (!s.translate_models_dir.trim().is_empty() && gridcraft_translate::manifest::valid_id(id))
             .then(|| gridcraft_translate_candle::installed_backend_for(std::path::Path::new(&s.translate_models_dir), id))

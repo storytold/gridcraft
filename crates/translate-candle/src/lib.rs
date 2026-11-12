@@ -384,4 +384,28 @@ mod tests {
         assert!(CandleBackend::open(std::env::temp_dir(), "../../etc").is_err());
         assert!(CandleBackend::open(std::env::temp_dir(), "no-such-model").is_err());
     }
+
+    #[test]
+    fn an_incomplete_preferred_model_falls_back_to_a_complete_one() {
+        // IDX 34: an interrupted 1.7B download used to shadow a usable 0.6B install because
+        // selection never checked file presence. Presence (with exact sizes) decides; the
+        // full SHA-256 stays on the inference worker, not on startup selection.
+        let root = temp_dir("fallback");
+        let good = root.join("qwen3-0.6b");
+        let bad = root.join("qwen3-1.7b");
+        for dir in [&good, &bad] {
+            std::fs::create_dir_all(dir).unwrap_or(());
+        }
+        let m6 = manifest::find("qwen3-0.6b").expect("manifest");
+        for file in m6.files {
+            // Sparse: selection checks presence and exact size only, so no bytes are written.
+            std::fs::File::create(good.join(file.path)).unwrap_or_else(|e| panic!("{e}")).set_len(file.bytes).unwrap_or_else(|e| panic!("{e}"));
+        }
+        // The 1.7B directory exists but is missing its weights file: incomplete.
+        let m17 = manifest::find("qwen3-1.7b").expect("manifest");
+        std::fs::write(bad.join(m17.files[1].path), b"tokenizer").unwrap_or_else(|e| panic!("{e}"));
+        assert!(installed_backend_for(&root, "qwen3-1.7b").is_none());
+        assert!(installed_backend(&root).is_some_and(|b| b.model_id() == "qwen3-0.6b"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

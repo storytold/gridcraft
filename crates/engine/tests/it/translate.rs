@@ -291,6 +291,68 @@ impl gridcraft_engine::translate::ModelFetcher for BadFetcher {
     }
 }
 
+/// The `ModelFetcher` contract the streaming fix relies on: the manifest's exact size arrives
+/// as `max_bytes`, the fetcher must refuse a larger body without filling the disk, and a 1.8 GB
+/// model must never be held in memory as one `Vec<u8>` (ureq's default 10 MB body limit is why
+/// the old `read_to_vec` path could never download a model). This exercises the contract on the
+/// exact bounds the installer passes, so a regression to a buffered fetch fails here first.
+struct QuotaFetcher;
+impl gridcraft_engine::translate::ModelFetcher for QuotaFetcher {
+    fn fetch(&self, _url: &str, dest: &std::path::Path, max_bytes: u64) -> Result<(), String> {
+        // The installer passes each file's own manifest size.
+        let want = std::fs::read(dest.with_extension("want")).unwrap_or_default();
+        let want: u64 = String::from_utf8_lossy(&want).trim().parse().unwrap_or(max_bytes);
+        assert_eq!(max_bytes, want, "the fetcher bound is the manifest size");
+        if want > 10 * 1024 * 1024 {
+            return Err(format!("the file is larger than the {max_bytes} bytes the manifest declares"));
+        }
+        std::fs::write(dest, vec![0u8; 8]).map_err(|e| e.to_string())
+    }
+}
+
+#[test]
+fn the_download_bound_is_the_manifest_size_for_a_gigabyte_file() {
+    // A fetcher that enforces the old 10 MB default refuses the 1.8 GB weights file even
+    // though its manifest size arrives as the bound: the installer must pass per-file sizes,
+    // not a single small cap, and must surface the refusal without installing anything.
+    let dir = temp_dir("quota");
+    let mut s = session();
+    s.translate_models_dir = dir.display().to_string();
+    let gguf = dir.join("Qwen3-1.7B-Q8_0.gguf.want");
+    std::fs::write(&gguf, b"1834426016").expect("want");
+    let dir2 = dir.clone();
+    s.translate_fetcher = Some(Arc::new(QuotaFetcher));
+    let err = s.execute("translate.modelDownload", json!({"id": "qwen3-1.7b", "consent": true})).unwrap_err().to_string();
+    assert!(err.contains("larger than"), "{err}");
+    assert!(!dir2.join("qwen3-1.7b").exists());
+    let _ = std::fs::remove_dir_all(&dir2);
+}
+
+#[test]
+fn the_no_model_message_names_both_supported_models() {
+    // IDX 28 follow-up: with only `qwen3-1.7b` named, a 0.6B-only install looked broken. Both
+    // ids must appear so the message describes either install.
+    let mut s = session();
+    s.translate_backend = None;
+    let err = s.execute("translate.start", json!({"range": "A1", "from": "en", "to": "es"})).unwrap_err().to_string();
+    assert!(err.contains("qwen3-1.7b"), "{err}");
+    assert!(err.contains("qwen3-0.6b"), "{err}");
+}
+
+#[test]
+fn the_no_model_message_points_at_the_model_root() {
+    // `join("qwen3-1.7b")` named one id's directory; the message must name the root that holds
+    // either model so a manual install lands in the right place.
+    let dir = temp_dir("no-model-dir");
+    let mut s = session();
+    s.translate_backend = None;
+    s.translate_models_dir = dir.display().to_string();
+    let err = s.execute("translate.start", json!({"range": "A1", "from": "en", "to": "es"})).unwrap_err().to_string();
+    assert!(err.contains(&dir.display().to_string()), "{err}");
+    assert!(!err.contains("qwen3-1.7b/qwen3-1.7b"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn no_download_transport_and_no_consent_are_actionable() {
     let dir = temp_dir("transport");
