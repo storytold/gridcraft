@@ -504,6 +504,30 @@ fn a_trace_inherits_its_groups_context() {
 }
 
 #[test]
+fn a_trace_inherits_its_groups_brush() {
+    // The group names the red brush; the trace inside names none. Inheritance resolves it, so
+    // the second stroke reads red rather than the part's blue default.
+    let red = r##"<inkml:brush xml:id="br1"><inkml:brushProperty name="width" value="0.05" units="cm"/><inkml:brushProperty name="height" value="0.05" units="cm"/><inkml:brushProperty name="color" value="#FF0000"/></inkml:brush>"##;
+    let markup = "<inkml:traceGroup brushRef=\"#br1\"><inkml:trace contextRef=\"#ctx0\">!100 !200</inkml:trace></inkml:traceGroup>";
+    let extra = Extra { extra_brush: Some(red), extra_markup: Some(markup), ..Extra::default() };
+    let (wb, _) = read(&package_with("!0 !0", false, PEN_PROPS, true, true, true, extra));
+    let shapes = &wb.sheets[0].shapes;
+    assert_eq!(shapes.len(), 2, "{shapes:?}");
+    assert_eq!(shapes[1].line, Color::Rgb(0xFF0000), "the grouped trace keeps the group's brush");
+}
+
+#[test]
+fn a_dangling_brush_ref_falls_back_to_the_picture() {
+    // The trace names a brush the part does not define: the part is refused rather than read
+    // with a guessed brush, so the fallback picture is used with a warning.
+    let bad = r##"<inkml:trace contextRef="#ctx0" brushRef="#missing">!500 !500</inkml:trace>"##;
+    let (wb, report) = read(&package_with("!0 !0", false, PEN_PROPS, true, true, true, Extra { extra_markup: Some(bad), ..Extra::default() }));
+    assert!(wb.sheets[0].shapes.is_empty(), "the part with the dangling brush is refused: {shapes:?}", shapes = wb.sheets[0].shapes);
+    assert_eq!(wb.sheets[0].images.len(), 1, "the fallback picture is used");
+    assert!(report.warnings.iter().any(|w| w.contains("ink")), "{:?}", report.warnings);
+}
+
+#[test]
 fn a_damaged_ink_part_costs_only_its_own_allowance() {
     // The ink entry fails partway (a bad CRC) inside an intact archive. The read is optional, so
     // the failure is charged to the ink part and the fallback picture still opens.
