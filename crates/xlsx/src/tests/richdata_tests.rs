@@ -152,6 +152,30 @@ fn reads_independent_indices_reordered_keys_and_both_relationship_layouts() {
 }
 
 #[test]
+fn dynamic_array_metadata_is_spelled_the_same_with_and_without_pictures() {
+    // #2339: with an in-cell picture the XLDAPR extension URI was written in upper case, and
+    // Excel refused the workbook; the dynamic-array-only metadata, which Excel opens, is lower case.
+    let xldapr_uri = |pictures: bool| {
+        let mut wb = Workbook::new();
+        let sheet = wb.sheet_mut(0).unwrap();
+        if pictures {
+            sheet.set_picture(at("B2"), Arc::new(picture(png(), "image/png", "red")));
+        }
+        let mut f = Cell::formula(Formula::new("SEQUENCE(3)"));
+        f.value = Value::Number(1.0);
+        sheet.cells.set(at("D1"), f);
+        sheet.spill_ranges.insert(at("D1"), RangeRef::parse("D1:D3").unwrap());
+        let bytes = write_xlsx(&wb).unwrap();
+        let mut package = Package::open(&bytes).unwrap();
+        let metadata = package.read_xml("xl/metadata.xml").unwrap().unwrap();
+        let future = metadata.kids("futureMetadata").find(|m| m.attr("name") == Some("XLDAPR")).unwrap();
+        future.child("bk").unwrap().child("extLst").unwrap().child("ext").unwrap().attr("uri").unwrap().to_string()
+    };
+    assert_eq!(xldapr_uri(false), "{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}");
+    assert_eq!(xldapr_uri(true), xldapr_uri(false));
+}
+
+#[test]
 fn pictures_roundtrip_across_sheets_with_and_without_dynamic_arrays() {
     for dynamic in [false, true] {
         let mut wb = Workbook::new();
@@ -269,4 +293,35 @@ fn picture_metadata_limits_and_relationship_read_errors_do_not_block_workbooks()
         assert_eq!(sh.value(at("C3")), Value::Number(42.0));
         assert!(report.warnings.iter().any(|w| w.contains("cell-picture data could not be read")), "{:?}", report.warnings);
     }
+}
+
+/// Many values over one wide structure, and a repeated relationship id: the structure's layout
+/// is worked out once and relationships are indexed, so the import is linear in the records;
+/// the repeated id is invalid and keeps the scalar fallback.
+#[test]
+fn wide_structures_and_repeated_relationship_ids_are_resolved_through_indexes() {
+    let mut parts = independent_parts(false);
+    // 200,000 keys in one structure and 50,000 short values that name it: rebuilding the key
+    // list per value would be ten billion steps.
+    let padding = r#"<k n="pad" t="s"/>"#.repeat(200_000);
+    replace(&mut parts, "rich/structures.xml", r#"<k n="CalcOrigin" t="i"/>"#, &format!(r#"<k n="CalcOrigin" t="i"/>{padding}"#));
+    // The count is right, and the one valid picture record comes after the repeated values (cell
+    // A1 is pointed at it), so an early read failure can't pass for the malformed-value warning.
+    let valid = r#"<rv s="1"><v>green &amp; &lt;image&gt;</v><v>1</v><v>5</v></rv>"#;
+    let values = r#"<rv s="1"><v/></rv>"#.repeat(50_000);
+    // The valid record supplies a value for each of the structure's padding keys.
+    let wide_valid = valid.replace("</rv>", &format!("{}</rv>", "<v>0</v>".repeat(200_000)));
+    replace(&mut parts, "rich/values.xml", valid, &format!("{values}{wide_valid}"));
+    replace(&mut parts, "rich/values.xml", r#"<rvData count="2">"#, r#"<rvData count="50002">"#);
+    replace(&mut parts, "meta/state.xml", r#"<rv:rvb i="1"/>"#, r#"<rv:rvb i="50001"/>"#);
+    let (wb, report) = read_xlsx(&zip(&parts)).unwrap();
+    assert!(wb.sheet(0).unwrap().cell_pictures.contains_key(&at("A1")), "{:?}", report.warnings);
+    assert!(report.warnings.iter().all(|w| !w.contains("count")), "{:?}", report.warnings);
+    // The same id twice makes every reference to it invalid.
+    let mut parts = independent_parts(false);
+    let dup = r#"<Relationship Id="opaqueImageId" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/original.bin"/>"#;
+    replace(&mut parts, "rich/_rels/images.xml.rels", dup, &dup.repeat(2));
+    let (wb, report) = read_xlsx(&zip(&parts)).unwrap();
+    assert!(!wb.sheet(0).unwrap().cell_pictures.contains_key(&at("A1")));
+    assert!(report.warnings.iter().any(|w| w.contains("invalid image relationship")), "{:?}", report.warnings);
 }

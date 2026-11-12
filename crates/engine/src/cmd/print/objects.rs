@@ -26,6 +26,14 @@ pub(super) struct PicCache {
     map: std::collections::HashMap<PicKey, Option<Decoded>>,
     /// Bytes of pixels in `map`.
     bytes: u64,
+    /// Laid-out charts (with their [`chart_cost`](super::chart_cost)) keyed by (sheet, chart),
+    /// rendered once however many pages they touch. Only charts that can still be drawn are kept.
+    pub(super) charts: std::collections::HashMap<(usize, usize), (Vec<gridcraft_chart::Prim>, usize)>,
+    /// Charts too big for what was left of the budget: never drawn, so not rendered again.
+    pub(super) rejected_charts: std::collections::HashSet<(usize, usize)>,
+    /// Chart cost units emitted so far. Each page a chart touches gets its own copy in the PDF,
+    /// so a workbook-controlled anchor over thousands of pages would multiply them without bound.
+    pub(super) chart_prims: usize,
 }
 
 impl PicCache {
@@ -45,6 +53,29 @@ impl PicCache {
             }
         };
         slot.as_ref().map(Cow::Borrowed)
+    }
+
+    /// The chart's primitives for one more page, or `None` once they no longer fit
+    /// [`MAX_CHART_PRIMS`](super::MAX_CHART_PRIMS). `render` runs at most once per chart; a chart
+    /// that doesn't fit is dropped at once and remembered, so its vectors are never retained.
+    pub(super) fn chart(&mut self, key: (usize, usize), render: impl FnOnce() -> Vec<gridcraft_chart::Prim>) -> Option<&[gridcraft_chart::Prim]> {
+        if self.rejected_charts.contains(&key) {
+            return None;
+        }
+        let (prims, cost) = match self.charts.remove(&key) {
+            Some(cached) => cached,
+            None => {
+                let prims = render();
+                let cost = super::chart_cost(&prims);
+                (prims, cost)
+            }
+        };
+        if self.chart_prims.saturating_add(cost) > super::MAX_CHART_PRIMS {
+            self.rejected_charts.insert(key);
+            return None;
+        }
+        self.chart_prims += cost;
+        Some(&self.charts.entry(key).or_insert((prims, cost)).0)
     }
 }
 
@@ -188,15 +219,20 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         }
         draw_shape(pg, wb, shp, b, (x, y, w, h));
     }
-    for ch in &sh.charts {
+    for (chi, ch) in sh.charts.iter().enumerate() {
         let r = anchor_rect(sh, &ch.anchor);
         if !visible(r) {
             continue;
         }
         let (x, y, _, _) = place(r);
-        let data = gridcraft_chart::resolve(wb, si, ch);
-        let prims = gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure);
-        draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
+        // As for pictures, each page gets its own copy of the drawing commands.
+        let prims = pics.chart((si, chi), || {
+            let data = gridcraft_chart::resolve(wb, si, ch);
+            gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure)
+        });
+        if let Some(prims) = prims {
+            draw_prims(pg, prims, Xf { ox: x, oy: y, k: b.k });
+        }
     }
     pg.restore();
 }

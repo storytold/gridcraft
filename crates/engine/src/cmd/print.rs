@@ -33,6 +33,24 @@ pub use header_footer::{
     HF_FIELDS, HfContext, HfSection, codes_to_fields, expand_header_footer, fields_to_codes, hf_date_time, join_header_footer, split_header_footer,
 };
 
+/// What a chart's drawing costs in the PDF: one unit per primitive plus one per path point (a
+/// smoothed line holds thousands of points, each written out) and per point of a wedge's outline.
+fn chart_cost(prims: &[gridcraft_chart::Prim]) -> usize {
+    use gridcraft_chart::Prim;
+    prims
+        .iter()
+        .map(|p| match p {
+            Prim::Line { pts, .. } | Prim::Polygon { pts, .. } => pts.len().saturating_add(1),
+            // At most 400 steps along each of the outer and inner arcs (see `draw_prims`).
+            Prim::Wedge { .. } => 803,
+            _ => 1,
+        })
+        .fold(0, usize::saturating_add)
+}
+
+/// Most chart cost units (primitives and path points, see [`chart_cost`]) one render draws across all pages.
+const MAX_CHART_PRIMS: usize = 4_000_000;
+
 #[cfg(test)]
 use layout::bands;
 pub(crate) use layout::split_bands;

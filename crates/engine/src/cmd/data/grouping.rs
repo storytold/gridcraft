@@ -21,6 +21,15 @@ fn outline_lines(s: &Session, p: &Json) -> Result<(bool, u32, u32)> {
     }
 }
 
+/// Outline commands change line visibility and grouping: a protected sheet must allow formatting that axis.
+fn refuse_unless_outline_allowed(s: &Session, sheet: usize, rows: bool) -> Result<()> {
+    if rows {
+        crate::cmd::refuse_unless_allowed(s, sheet, "Formatting rows", |p| p.format_rows)
+    } else {
+        crate::cmd::refuse_unless_allowed(s, sheet, "Formatting columns", |p| p.format_columns)
+    }
+}
+
 pub(super) fn group(s: &mut Session, p: &Json, on: bool) -> Result<Json> {
     let si = target_sheet(s, p)?;
     // The selection belongs to the active sheet, so another sheet needs its lines.
@@ -28,6 +37,7 @@ pub(super) fn group(s: &mut Session, p: &Json, on: bool) -> Result<Json> {
         return Err(bad(if on { "data.group" } else { "data.ungroup" }, "missing `rows` or `cols`: the selection is on the active sheet"));
     }
     let (rows, a, b) = outline_lines(s, p)?;
+    refuse_unless_outline_allowed(s, si, rows)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         let before = outline::summary_before(sh, rows);
@@ -58,6 +68,7 @@ pub(super) fn group(s: &mut Session, p: &Json, on: bool) -> Result<Json> {
 /// + button, saved to XLSX); showing keeps inner groups that were collapsed on their own collapsed.
 pub(super) fn detail(s: &mut Session, p: &Json, hide: bool) -> Result<Json> {
     let (rows, a, b) = outline_lines(s, p)?;
+    refuse_unless_outline_allowed(s, s.doc()?.wb.active_sheet(), rows)?;
     let want = p.get("level").and_then(Json::as_u64).map(|l| l.min(outline::MAX_LEVEL as u64) as u8);
     edit(s, |cx| {
         let si = cx.sheet_index();
@@ -122,6 +133,12 @@ pub(super) fn show_levels(s: &mut Session, p: &Json) -> Result<Json> {
             cmd: "data.showLevels".into(),
             msg: "give `rows` or `cols`: the outline level to show (1 = top-level summaries only)".into(),
         });
+    }
+    let active = s.doc()?.wb.active_sheet();
+    for (n, is_rows) in [(rows, true), (cols, false)] {
+        if n.is_some() {
+            refuse_unless_outline_allowed(s, active, is_rows)?;
+        }
     }
     edit(s, |cx| {
         let si = cx.sheet_index();
