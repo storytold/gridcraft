@@ -13,8 +13,9 @@ use craft_xls as x;
 use gridcraft_core::{CellError, CellRef, DateSystem, RangeRef, Value};
 use gridcraft_model::style::Protection;
 use gridcraft_model::{
-    Alignment, BorderLine, BorderStyle, Borders, CalcMode, CalcSettings, Cell, Color, DefinedName, Fill, Font, Formula, HAlign, LineInfo, NumFmt,
-    PatternType, Sheet, Style, StyleId, StyleTable, Underline, VAlign, VertAlign, Visibility, Workbook,
+    Alignment, BorderLine, BorderStyle, Borders, CalcMode, CalcSettings, Cell, CfOperator, Color, DefinedName, ErrorStyle, Fill, Font, Formula,
+    HAlign, LineInfo, NumFmt, PatternType, Sheet, Style, StyleId, StyleTable, Underline, VAlign, Validation, ValidationKind, VertAlign, Visibility,
+    Workbook,
 };
 
 use crate::tables::{col_width_to_px, pt_to_px};
@@ -72,8 +73,8 @@ fn warning(w: &x::Warning) -> String {
         W::Charts => "Charts in .xls files are not imported yet.".into(),
         W::PicturesSkipped => "Some pictures in .xls files were skipped.".into(),
         W::ConditionalFormattingSkipped | W::ConditionalFormatting12 => "Some conditional formatting in .xls files was not imported.".into(),
-        W::DataValidationSkipped => "Some data validation in .xls files could not be read and was skipped.".into(),
-        W::DataValidationIgnored => "Some data validation records in .xls files were ignored, as Excel ignores them.".into(),
+        W::DataValidationSkipped => "Some data validation rules in .xls files could not be read and were skipped.".into(),
+        W::DataValidationIgnored => "Some data validation records in .xls files were ignored, as Excel ignores them: they have no DVal record before them, or come after the number of rules it gives.".into(),
         W::Hyperlinks => "Hyperlinks in .xls files are not imported yet.".into(),
         W::PivotTables => "PivotTables in .xls files are not imported yet; their values were kept.".into(),
         W::CellsOutsideGrid(n) => format!("{n} cells outside the grid were skipped."),
@@ -113,22 +114,18 @@ pub(crate) fn read_xls_budgeted(bytes: &[u8], limits: x::Limits, functions: Func
     }
     let mut unparsed = false;
     for s in &book.sheets {
-        // craft-xls keeps these rules in its read model, but GridCraft's XLS adapter does not
-        // import conditional formatting. Its own warnings cover rules it could not decode; this
-        // reports the additional rules that this adapter drops.
-        if !s.conditional_formats.is_empty() {
-            report.warn(warning(&x::Warning::ConditionalFormattingSkipped));
-        }
-        // Data validation is not yet imported by this adapter.
-        if !s.validations.is_empty() {
-            report.warn(warning(&x::Warning::DataValidationSkipped));
+        // Report rules craft-xls kept that the adapter cannot represent. craft-xls already warns
+        // about records it could not decode.
+        for (dropped, skipped) in [
+            (!s.conditional_formats.is_empty(), x::Warning::ConditionalFormattingSkipped),
+            (s.validations.iter().any(|v| validation_of(v).is_none()), x::Warning::DataValidationSkipped),
+        ] {
+            if dropped {
+                report.warn(warning(&skipped));
+            }
         }
         let sheet = sheet_of(s, &styles, &mut unparsed);
         wb.sheets.push(Arc::new(sheet));
-    }
-    // craft-xls reads the rules; GridCraft does not take them from .xls yet.
-    if book.sheets.iter().any(|s| !s.validations.is_empty()) {
-        report.warn("Data validation in .xls files is not imported yet.");
     }
     if unparsed {
         report.warn("Some formulas use syntax GridCraft can't parse yet; their saved results were kept as values.");
@@ -149,7 +146,7 @@ pub(crate) fn read_xls_budgeted(bytes: &[u8], limits: x::Limits, functions: Func
     // The overview comes first.
     report.warnings.insert(
         0,
-        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, merged cells, column widths, row heights and defined names were read. Charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
+        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, merged cells, column widths, row heights, defined names and data validation were read. Charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
     );
     Ok((wb, report))
 }
@@ -261,6 +258,7 @@ fn sheet_of(s: &x::Sheet, styles: &[StyleId], unparsed: &mut bool) -> Sheet {
         sheet.show_zeros = v.show_zeros;
         sheet.right_to_left = v.right_to_left;
     }
+    sheet.validations = s.validations.iter().filter_map(validation_of).collect();
     if let Some(text) = &s.print_area {
         sheet.print.print_area = crate::read::parse_print_area(text);
     }
@@ -270,6 +268,59 @@ fn sheet_of(s: &x::Sheet, styles: &[StyleId], unparsed: &mut bool) -> Sheet {
         sheet.print.title_cols = cols;
     }
     sheet
+}
+
+/// A data validation rule, as `sheet_read` maps a SpreadsheetML `dataValidation`: a list that
+/// is not a literal refers to cells (`=…`).
+fn validation_of(v: &x::DataValidation) -> Option<Validation> {
+    let ranges: Vec<RangeRef> = v.ranges.iter().map(|r| range(*r)).collect();
+    if ranges.is_empty() {
+        return None;
+    }
+    let kind = match v.kind {
+        x::ValidationType::Whole => ValidationKind::Whole,
+        x::ValidationType::Decimal => ValidationKind::Decimal,
+        x::ValidationType::List => ValidationKind::List,
+        x::ValidationType::Date => ValidationKind::Date,
+        x::ValidationType::Time => ValidationKind::Time,
+        x::ValidationType::TextLength => ValidationKind::TextLength,
+        x::ValidationType::Custom => ValidationKind::Custom,
+        _ => ValidationKind::Any,
+    };
+    let f1 = if kind == ValidationKind::List && !v.formula1.is_empty() && !v.formula1.starts_with('"') {
+        format!("={}", v.formula1)
+    } else {
+        v.formula1.clone()
+    };
+    Some(Validation {
+        ranges,
+        kind,
+        op: match v.operator {
+            x::Operator::NotBetween => CfOperator::NotBetween,
+            x::Operator::Equal => CfOperator::Equal,
+            x::Operator::NotEqual => CfOperator::NotEqual,
+            x::Operator::Greater => CfOperator::Greater,
+            x::Operator::Less => CfOperator::Less,
+            x::Operator::GreaterOrEqual => CfOperator::GreaterOrEqual,
+            x::Operator::LessOrEqual => CfOperator::LessOrEqual,
+            _ => CfOperator::Between,
+        },
+        f1,
+        f2: v.formula2.clone(),
+        allow_blank: v.allow_blank,
+        in_cell_dropdown: v.in_cell_dropdown,
+        input_title: v.prompt_title.clone(),
+        input_message: v.prompt.clone(),
+        show_input: v.show_prompt,
+        error_title: v.error_title.clone(),
+        error_message: v.error.clone(),
+        error_style: match v.error_style {
+            x::ErrorStyle::Warning => ErrorStyle::Warning,
+            x::ErrorStyle::Information => ErrorStyle::Information,
+            _ => ErrorStyle::Stop,
+        },
+        show_error: v.show_error,
+    })
 }
 
 fn color(c: x::Color) -> Color {
