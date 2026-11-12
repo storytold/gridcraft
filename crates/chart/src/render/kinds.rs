@@ -341,7 +341,7 @@ pub(super) fn doughnut(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx)
 
 // ---------------------------------------------------------------- treemap
 
-/// Worst aspect ratio of a row with the given sum, smallest and largest area.
+/// Worst aspect ratio of a row with the given area sum, smallest and largest item, laid along `side`.
 fn worst(s: f64, mn: f64, mx: f64, side: f64) -> f64 {
     if s <= 0.0 || side <= 0.0 {
         return f64::INFINITY;
@@ -351,8 +351,9 @@ fn worst(s: f64, mn: f64, mx: f64, side: f64) -> f64 {
     (w2 * mx / s2).max(s2 / (w2 * mn))
 }
 
-/// Squarified treemap layout of (index, area) items, sorted descending, into `r`.
-fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, Bx)> {
+/// Squarified treemap layout of (index, value) items, sorted descending, into `r`; each block
+/// comes back with its index and value.
+pub(super) fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, f64, Bx)> {
     let total: f64 = items.iter().map(|i| i.1).sum();
     let area = (r.w as f64) * (r.h as f64);
     if !(total > 0.0 && area > 0.0) {
@@ -361,11 +362,10 @@ fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, Bx)> {
     let scale = area / total;
     let mut out = Vec::with_capacity(items.len());
     let mut rem = r;
-    let mut row: Vec<(usize, f64)> = Vec::new();
-    // The row's sum, smallest and largest area, kept as items join so each step is O(1).
+    let mut row: Vec<(usize, f64, f64)> = Vec::new();
     let (mut sum, mut mn, mut mx) = (0.0f64, f64::INFINITY, 0.0f64);
     let mut i = 0;
-    let layout = |row: &[(usize, f64)], rem: &mut Bx, out: &mut Vec<(usize, Bx)>| {
+    let layout = |row: &[(usize, f64, f64)], rem: &mut Bx, out: &mut Vec<(usize, f64, Bx)>| {
         let s: f64 = row.iter().map(|x| x.1).sum();
         if s <= 0.0 {
             return;
@@ -373,9 +373,9 @@ fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, Bx)> {
         if rem.w >= rem.h {
             let cw = (s / rem.h.max(1e-6) as f64) as f32;
             let mut y = rem.y;
-            for (j, a) in row {
+            for (j, a, v) in row {
                 let h = (*a / cw.max(1e-6) as f64) as f32;
-                out.push((*j, Bx { x: rem.x, y, w: cw, h }));
+                out.push((*j, *v, Bx { x: rem.x, y, w: cw, h }));
                 y += h;
             }
             rem.x += cw;
@@ -383,9 +383,9 @@ fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, Bx)> {
         } else {
             let rh = (s / rem.w.max(1e-6) as f64) as f32;
             let mut x = rem.x;
-            for (j, a) in row {
+            for (j, a, v) in row {
                 let w = (*a / rh.max(1e-6) as f64) as f32;
-                out.push((*j, Bx { x, y: rem.y, w, h: rh }));
+                out.push((*j, *v, Bx { x, y: rem.y, w, h: rh }));
                 x += w;
             }
             rem.y += rh;
@@ -395,9 +395,12 @@ fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, Bx)> {
     while let Some(&(j, v)) = items.get(i) {
         let a = v * scale;
         let side = rem.w.min(rem.h) as f64;
-        if row.is_empty() || worst(sum + a, mn.min(a), mx.max(a), side) <= worst(sum, mn, mx, side) {
-            row.push((j, a));
-            (sum, mn, mx) = (sum + a, mn.min(a), mx.max(a));
+        // Sum, smallest and largest item of the open row, kept incrementally (same fold order as
+        // summing the row afresh, so the numbers are bit-identical).
+        let with = (sum + a, mn.min(a), mx.max(a));
+        if row.is_empty() || worst(with.0, with.1, with.2, side) <= worst(sum, mn, mx, side) {
+            row.push((j, a, v));
+            (sum, mn, mx) = with;
             i += 1;
         } else {
             layout(&row, &mut rem, &mut out);
@@ -417,15 +420,13 @@ pub(super) fn treemap(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         s.values.iter().take(MAX_MARKERS).enumerate().filter_map(|(j, v)| v.filter(|v| *v > 0.0).map(|v| (j, v))).collect();
     items.sort_by(|a, b| b.1.total_cmp(&a.1));
     let f = Fmt::new(&s.number_format);
-    let value_of: std::collections::HashMap<usize, f64> = items.iter().copied().collect();
-    for (j, b) in squarify(&items, area) {
+    for (j, v, b) in squarify(&items, area) {
         let fill = point_color(data, j);
         ctx.rect(b.x, b.y, b.w, b.h, fill, Some((WHITE, 1.5)));
         if b.w > 24.0 && b.h > LABEL_SIZE * 1.6 {
             let name = ctx.fit(&cat_label(data, j), ctx.font_size("x_axis", LABEL_SIZE), b.w - 8.0);
             ctx.text_role("x_axis", b.x + 4.0, b.y + 4.0, &name, LABEL_SIZE, on(fill), HAlign::Left, VAlign::Top);
             if chart.data_labels && b.h > LABEL_SIZE * 3.2 {
-                let v = value_of.get(&j).copied().unwrap_or(0.0);
                 let t = ctx.fit(&f.format(v, None), LABEL_SIZE, b.w - 8.0);
                 ctx.text(b.x + 4.0, b.y + 4.0 + LABEL_SIZE * 1.4, &t, LABEL_SIZE, on(fill), (HAlign::Left, VAlign::Top));
             }

@@ -1,11 +1,12 @@
 //! Chart layout: title, legend, axes and every chart kind, drawn into [`Prim`]s.
 
+use std::borrow::Cow;
 use std::f32::consts::{PI, TAU};
 
 use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, QuartileMethod, Theme, TrendlineKind};
 
 use crate::axis::{Fmt, Scale, clean, configured_scale, fixed_scale, nice_scale};
-use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
+use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, points_per_series, series_color};
 use crate::trend::{auto_name, fit_trendline, moving_average};
 use crate::{ChartData, HAlign, Measure, Prim, Rgba, SeriesData, VAlign};
 
@@ -44,6 +45,8 @@ const MAX_LINE_PTS: usize = 2000;
 const MAX_MARKERS: usize = 5000;
 /// Data labels are skipped when a series has more points than this.
 const MAX_LABELS: usize = 200;
+/// Columns and bars narrower than this (in pixels) are merged per pixel column into one rectangle.
+const MIN_BAR_PX: f32 = 0.25;
 /// Most wedges a doughnut draws for the whole chart. The per-series and per-category limits do not
 /// bound their product: 255 series of 20,000 categories would be millions of wedges. Every drawable
 /// ring shares this budget, so the innermost ring keeps its largest slices and the outer rings are
@@ -58,25 +61,53 @@ struct Ctx<'a> {
     plot: Option<Bx>,
 }
 
+#[cfg(test)]
+#[path = "render_perf_tests.rs"]
+mod perf_tests;
+
 impl Ctx<'_> {
     fn tw(&self, s: &str, size: f32) -> f32 {
         let w = self.m.text_width(s, size, false);
         if w.is_finite() { w.max(0.0) } else { 0.0 }
     }
+    /// `s` shortened with an ellipsis to fit `maxw`; empty when not even one character fits.
+    ///
+    /// Binary search over the number of kept characters (at most 400 are tried), about nine
+    /// `Measure` calls instead of one per character. It assumes the width of `prefix + "…"` does not
+    /// shrink as the prefix grows, which holds for per-character advance sums (`ApproxMeasure`, the
+    /// PDF metrics) and for the UI's text layout up to kerning of a few hundredths of a point; with
+    /// such a non-monotone measure the result may differ from the old linear scan by a character.
+    /// A label with a line break is not monotone (the ellipsis moves to a new line and the widest
+    /// line can get shorter), so it takes the linear scan, longest prefix first.
     fn fit(&self, s: &str, size: f32, maxw: f32) -> String {
         if self.tw(s, size) <= maxw {
             return s.to_string();
         }
-        let chars: Vec<char> = s.chars().collect();
-        let mut n = chars.len().min(400);
-        while n > 0 {
-            n -= 1;
-            let t: String = chars.iter().take(n).collect::<String>() + "…";
-            if self.tw(&t, size) <= maxw {
-                return if n == 0 { String::new() } else { t };
+        // Byte offset where each of the first 400 characters starts; a prefix of `k` characters
+        // (k < number of characters, so the offset exists) ends at `starts[k]`.
+        let starts: Vec<usize> = s.char_indices().map(|(i, _)| i).take(400).collect();
+        let top = starts.len().saturating_sub(1);
+        let fits = |k: usize| -> bool {
+            let end = starts.get(k).copied().unwrap_or(s.len());
+            let mut t = String::with_capacity(end + 3);
+            t.push_str(s.get(..end).unwrap_or(""));
+            t.push('…');
+            self.tw(&t, size) <= maxw
+        };
+        if s.contains('\n') {
+            let k = (1..=top).rev().find(|&k| fits(k));
+            return k.map_or_else(String::new, |k| format!("{}…", s.get(..starts.get(k).copied().unwrap_or(s.len())).unwrap_or("")));
+        }
+        let (mut lo, mut hi) = (0usize, top);
+        while lo < hi {
+            let mid = lo + (hi - lo).div_ceil(2);
+            if fits(mid) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
             }
         }
-        String::new()
+        if lo == 0 { String::new() } else { format!("{}…", s.get(..starts.get(lo).copied().unwrap_or(s.len())).unwrap_or("")) }
     }
     fn text(&mut self, x: f32, y: f32, s: &str, size: f32, color: Rgba, (align, valign): (HAlign, VAlign)) {
         if s.is_empty() {
@@ -127,7 +158,7 @@ fn sanitize_vals(v: &[Option<f64>]) -> Vec<Option<f64>> {
     v.iter().take(MAX_POINTS).map(|x| x.filter(|n| n.is_finite()).map(clean)).collect()
 }
 
-fn sanitize(d: &ChartData) -> ChartData {
+pub(crate) fn sanitize(d: &ChartData) -> ChartData {
     ChartData {
         palette: d.palette.iter().take(MAX_POINTS).copied().collect(),
         categories: d.categories.iter().take(MAX_POINTS).cloned().collect(),
@@ -152,12 +183,62 @@ fn sanitize(d: &ChartData) -> ChartData {
     }
 }
 
+/// Whether `v` survives `sanitize_vals` unchanged.
+fn is_clean(v: &Option<f64>) -> bool {
+    v.is_none_or(|n| n.is_finite() && clean(n) == n)
+}
+
+/// Whether [`sanitize`] and [`apply_budget`] would change `d`.
+fn needs_sanitizing(d: &ChartData) -> bool {
+    let cap = points_per_series(d.series.len());
+    let long = |n: usize| n > cap;
+    let mut trendlines = 0usize;
+    d.palette.len() > MAX_POINTS
+        || long(d.categories.len())
+        || d.category_levels.len() > 3
+        || d.category_levels.iter().any(|l| l.len() > MAX_POINTS)
+        || d.series.len() > MAX_SERIES
+        || d.series.iter().any(|s| {
+            trendlines += s.trendlines.len();
+            long(s.values.len())
+                || !s.values.iter().all(is_clean)
+                || s.x.as_ref().is_some_and(|x| long(x.len()) || !x.iter().all(is_clean))
+                || s.sizes.as_ref().is_some_and(|x| long(x.len()) || !x.iter().all(is_clean))
+                || s.trendlines.len() > MAX_TRENDLINES
+        })
+        || trendlines > MAX_TRENDLINES
+}
+
+/// Enforces the chart's budget of points (`MAX_TOTAL_POINTS` = series x points: every series and
+/// the category list keep their first `MAX_TOTAL_POINTS / series` points) and of trendlines
+/// (`MAX_TRENDLINES` per chart, in series order).
+fn apply_budget(mut d: ChartData) -> ChartData {
+    let cap = points_per_series(d.series.len());
+    d.categories.truncate(cap);
+    let mut trendlines = MAX_TRENDLINES;
+    for s in &mut d.series {
+        s.values.truncate(cap);
+        for v in [&mut s.x, &mut s.sizes].into_iter().flatten() {
+            v.truncate(cap);
+        }
+        s.trendlines.truncate(trendlines);
+        trendlines = trendlines.saturating_sub(s.trendlines.len());
+    }
+    d
+}
+
+/// The data `render` draws: `d` itself when it is already clean and within budget (the usual
+/// case: no copy), else a cleaned, truncated copy.
+pub(crate) fn sanitized(d: &ChartData) -> Cow<'_, ChartData> {
+    if needs_sanitizing(d) { Cow::Owned(apply_budget(sanitize(d))) } else { Cow::Borrowed(d) }
+}
+
 /// Lays out and draws a chart into a `w`×`h` box at the origin. Empty for a degenerate box.
 pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) -> Vec<Prim> {
     if !(w.is_finite() && h.is_finite()) || w < 1.0 || h < 1.0 || w > 1e7 || h > 1e7 {
         return vec![];
     }
-    let data = sanitize(data);
+    let data = sanitized(data);
     let mut ctx = Ctx { out: Vec::new(), m, format: &chart.format, size: [w, h], plot: None };
     let area_style = &chart.format.chart_area;
     let border = area_style.border_width.or(chart.format.border_width).unwrap_or(1.0);

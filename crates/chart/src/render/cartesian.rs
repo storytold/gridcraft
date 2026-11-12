@@ -3,8 +3,8 @@ use super::legend::{cat_label, plot_kind};
 use super::lines::{draw_area_run, draw_clipped_runs, draw_markers, inside_plot, style_series};
 use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward, max_forward_slots, supports_trendline};
 use super::{
-    Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT, VAlign, WHITE,
-    clean, configured_scale, fixed_scale, nice_scale,
+    Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_MARKERS, MIN_BAR_PX, Prim, Rgba, Scale, SeriesData, TEXT,
+    VAlign, WHITE, clean, configured_scale, fixed_scale, nice_scale,
 };
 
 // ---------------------------------------------------------------- cartesian (column/bar/line/area/combo)
@@ -53,8 +53,108 @@ fn is_line(f: Fam) -> bool {
     matches!(f, Fam::Line | Fam::LineStack | Fam::Line100)
 }
 
-fn is_stacked(f: Fam) -> bool {
-    matches!(f, Fam::ColStack | Fam::Col100 | Fam::LineStack | Fam::Line100 | Fam::AreaStack | Fam::Area100)
+/// Bars that fall into one pixel column, merged: extent along the category axis (`a0..=a1`, the
+/// bars' start positions) and along the value axis (`lo..hi`).
+struct BarRun {
+    bucket: f32,
+    a0: f32,
+    a1: f32,
+    lo: f32,
+    hi: f32,
+    /// More than one bar was merged.
+    merged: bool,
+}
+
+impl BarRun {
+    fn new(pos: f32, lo: f32, hi: f32) -> Self {
+        BarRun { bucket: pos.floor(), a0: pos, a1: pos, lo, hi, merged: false }
+    }
+    /// Whether `lo..hi` touches the run's value span; a disjoint bar would be joined by a filled gap.
+    fn touches(&self, lo: f32, hi: f32) -> bool {
+        lo <= self.hi && hi >= self.lo
+    }
+    fn add(&mut self, pos: f32, lo: f32, hi: f32) {
+        self.merged = true;
+        self.a0 = self.a0.min(pos);
+        self.a1 = self.a1.max(pos);
+        self.lo = self.lo.min(lo);
+        self.hi = self.hi.max(hi);
+    }
+    /// `band` is the part of the pixel column reserved for this series (`start`, `len`): in a
+    /// clustered chart a merged run stays inside it, so the other series keep a visible strip.
+    fn draw(&self, ctx: &mut Ctx, bw: f32, horizontal: bool, color: Rgba, band: Option<(f32, f32)>) {
+        let (a0, along) = match band {
+            Some((start, len)) if self.merged => (self.bucket + start, len),
+            _ => (self.a0, self.a1 - self.a0 + bw),
+        };
+        if horizontal {
+            ctx.rect(self.lo, a0, self.hi - self.lo, along, color, None);
+        } else {
+            ctx.rect(a0, self.lo, along, self.hi - self.lo, color, None);
+        }
+    }
+}
+
+/// Whether bars of width `bw` are merged per pixel column (never when they carry data labels).
+fn merge_hairlines(bw: f32, labels_on: bool) -> bool {
+    bw < MIN_BAR_PX && !labels_on
+}
+
+/// Draws the bars of one series: a rectangle each, or, for hairline bars, one merged [`BarRun`]
+/// per pixel column.
+struct BarSink {
+    run: Option<BarRun>,
+    bw: f32,
+    horizontal: bool,
+    color: Rgba,
+    nslots: f32,
+    k: f32,
+}
+
+impl BarSink {
+    fn new(bw: f32, horizontal: bool, color: Rgba, nslots: f32, k: f32) -> Self {
+        BarSink { run: None, bw, horizontal, color, nslots, k }
+    }
+    /// Start of this series' slot along the category axis, for the category centered at `c`.
+    fn pos(&self, c: f32) -> f32 {
+        if self.horizontal { c + self.nslots * self.bw / 2.0 - (self.k + 1.0) * self.bw } else { c - self.nslots * self.bw / 2.0 + self.k * self.bw }
+    }
+    /// This series' strip of a pixel column (offset, length) when the columns hold several
+    /// clustered series, in the direction the slots run.
+    fn band(&self) -> Option<(f32, f32)> {
+        (self.nslots > 1.0).then(|| {
+            let idx = if self.horizontal { self.nslots - 1.0 - self.k } else { self.k };
+            (idx / self.nslots, 1.0 / self.nslots)
+        })
+    }
+    /// Draws the bar at category center `c` spanning `lo..lo + len` on the value axis, or, when
+    /// `merge` is set, adds it to the current run.
+    fn bar(&mut self, ctx: &mut Ctx, merge: bool, c: f32, lo: f32, len: f32) {
+        let pos = self.pos(c);
+        let band = self.band();
+        if !merge {
+            if self.horizontal {
+                ctx.rect(lo, pos, len, self.bw, self.color, None);
+            } else {
+                ctx.rect(pos, lo, self.bw, len, self.color, None);
+            }
+            return;
+        }
+        match &mut self.run {
+            Some(m) if m.bucket == pos.floor() && m.touches(lo, lo + len) => m.add(pos, lo, lo + len),
+            run => {
+                if let Some(m) = run.replace(BarRun::new(pos, lo, lo + len)) {
+                    m.draw(ctx, self.bw, self.horizontal, self.color, band);
+                }
+            }
+        }
+    }
+    fn finish(self, ctx: &mut Ctx) {
+        let band = self.band();
+        if let Some(m) = self.run {
+            m.draw(ctx, self.bw, self.horizontal, self.color, band);
+        }
+    }
 }
 
 fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Vec<Vec<Option<(f64, f64)>>> {
@@ -89,7 +189,7 @@ fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Ve
     for (i, s) in data.series.iter().enumerate() {
         let fam = fams.get(i).copied().unwrap_or(Fam::Col);
         let a = sec.get(i).copied().unwrap_or(false);
-        let stacked = is_stacked(fam);
+        let stacked = matches!(fam, Fam::ColStack | Fam::Col100 | Fam::LineStack | Fam::Line100 | Fam::AreaStack | Fam::Area100);
         let key = (a, fam);
         let si = if stacked {
             match stacks.iter().position(|(k, _, _)| *k == key) {
@@ -154,32 +254,13 @@ fn axis_scales(
         let all100 = members.iter().all(|i| fams.get(*i).is_some_and(|f| is_100(*f)));
         let range = value_range(members.iter().flat_map(|i| {
             let line = fams.get(*i).is_some_and(|f| is_line(*f));
-            spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| if line { vec![*t] } else { vec![*b, *t] })
+            // Lines contribute only their top value, bars both ends (no per-point `Vec`).
+            spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| [*b, *t].into_iter().skip(usize::from(line)))
         }));
         let (mut lo, hi) = range.unwrap_or((0.0, 0.0));
         let primary_options = if horizontal { &chart.format.x_axis } else { &chart.format.y_axis };
         if !axis && primary_options.logarithmic {
-            let has_stacked = members.iter().any(|i| fams.get(*i).is_some_and(|f| is_stacked(*f)));
-            lo = if all100 {
-                members
-                    .iter()
-                    .flat_map(|i| spans.get(*i).into_iter().flatten().flatten().flat_map(|(base, top)| [*base, *top]))
-                    .filter(|v| *v > 0.0)
-                    .fold(hi, f64::min)
-            } else if has_stacked {
-                members
-                    .iter()
-                    .flat_map(|i| spans.get(*i).into_iter().flatten().filter_map(|span| span.map(|(_, top)| top)))
-                    .filter(|v| *v > 0.0)
-                    .fold(hi, f64::min)
-            } else {
-                members
-                    .iter()
-                    .filter_map(|i| data.series.get(*i))
-                    .flat_map(|s| s.values.iter().flatten().copied())
-                    .filter(|v| *v > 0.0)
-                    .fold(hi, f64::min)
-            };
+            lo = members.iter().filter_map(|i| spans.get(*i)).flatten().flatten().map(|(_, top)| *top).filter(|v| *v > 0.0).fold(hi, f64::min);
         }
         let (scale, fmt) = if all100 {
             (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), Fmt::new("0%"))
@@ -194,22 +275,19 @@ fn axis_scales(
                 Fmt::new(code),
             )
         };
-        let mut scale = if !axis
-            && all100
-            && (primary_options.minimum.is_some()
-                || primary_options.maximum.is_some()
-                || primary_options.major_unit.is_some()
-                || primary_options.logarithmic)
-        {
-            let mut options = primary_options.clone();
-            if !options.logarithmic {
-                options.minimum = options.minimum.or(Some(scale.min));
-                options.maximum = options.maximum.or(Some(scale.max));
-            }
-            configured_scale(if options.logarithmic { lo } else { scale.min }, scale.max, false, &options)
+        let mut scale = if !axis && all100 && primary_options.logarithmic {
+            configured_scale(lo, hi, false, primary_options)
+        } else if !axis && all100 && (primary_options.minimum.is_some() || primary_options.maximum.is_some()) {
+            configured_scale(scale.min, scale.max, false, primary_options)
         } else {
             scale
         };
+        if !axis
+            && all100
+            && let Some(step) = primary_options.major_unit.filter(|v| v.is_finite() && *v > 0.0)
+        {
+            scale.step = step;
+        }
         if !axis {
             scale.reversed = primary_options.reversed;
         }
@@ -265,7 +343,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     if ncat == 0 {
         return;
     }
-    let kinds: Vec<ChartKind> = data.series.iter().map(|s| if horizontal { chart.kind } else { plot_kind(chart, s) }).collect();
+    let kinds: Vec<ChartKind> = data.series.iter().enumerate().map(|(i, s)| if horizontal { chart.kind } else { plot_kind(chart, s, i) }).collect();
     let fams: Vec<Fam> = kinds.iter().map(|k| family(*k)).collect();
     let any_primary = data.series.iter().any(|s| !s.secondary);
     let sec: Vec<bool> = data.series.iter().map(|s| s.secondary && any_primary && !horizontal).collect();
@@ -364,6 +442,9 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 }
                 1 => {
                     let k = slot_of.get(i).copied().unwrap_or(0) as f32;
+                    // Hairline bars are merged per pixel column (their envelope is what shows).
+                    let cull = merge_hairlines(bw, labels_on);
+                    let mut sink = BarSink::new(bw, horizontal, s.color, nslots, k);
                     for (j, sp) in row.iter().enumerate() {
                         let Some((b, t)) = sp else { continue };
                         let baseline = if sc.logarithmic && *b <= 0.0 { sc.min } else { *b };
@@ -371,7 +452,9 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                         let c = center(j);
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();
-                        if horizontal {
+                        if cull {
+                            sink.bar(ctx, true, c, lo, len);
+                        } else if horizontal {
                             let y = c + group_width / 2.0 - bw - k * separation * bw;
                             ctx.rect(lo, y, len, bw, s.color, None);
                         } else {
@@ -403,6 +486,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                             }
                         }
                     }
+                    sink.finish(ctx);
                 }
                 _ => {
                     let pts: Vec<Option<[f32; 2]>> = row

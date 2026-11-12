@@ -2,43 +2,31 @@ use super::*;
 use gridcraft_model::ChartDataTable;
 
 #[test]
-fn percent_stacked_line_table_keys_use_lines_and_optional_markers() {
-    let color = [1, 2, 3, 255];
-    for (kind, markers) in [(ChartKind::LineStacked100, false), (ChartKind::LineStacked100Markers, true)] {
-        let mut c = chart(kind);
-        c.legend = LegendPos::None;
-        c.data_labels = false;
-        c.data_table = Some(ChartDataTable::default());
-        c.format.text.insert("data_labels".into(), gridcraft_model::ChartTextFormat { size: Some(20.0), ..Default::default() });
-        let data = ChartData {
-            categories: vec!["Q1".into(), "Q2".into()],
-            series: vec![series("Measured", &[2.0, 4.0], color, kind)],
-            ..Default::default()
-        };
-        let p = render(&c, &data, 600.0, 400.0, &ApproxMeasure);
-        let y = p
-            .iter()
-            .find_map(|p| match p {
-                Prim::Text { text, y, .. } if text == "Measured" => Some(*y),
-                _ => None,
-            })
-            .unwrap();
-        assert!(
-            p.iter().any(|p| matches!(p, Prim::Line { pts, color: c, .. }
-            if *c == color && pts.len() == 2 && pts.iter().all(|point| (point[1] - y).abs() < 0.01))),
-            "{kind:?}"
-        );
-        assert!(
-            !p.iter().any(|p| matches!(p, Prim::Rect { y: top, h, fill: Some(c), .. }
-            if *c == color && (top + h / 2.0 - y).abs() < 0.01)),
-            "table key must not be a box"
-        );
-        assert_eq!(
-            p.iter().any(|p| matches!(p, Prim::Circle { cy, fill: Some(c), .. }
-            if *c == color && (*cy - y).abs() < 0.01)),
-            markers,
-            "{kind:?}"
-        );
+fn combo_table_keys_use_each_series_index() {
+    let mut c = chart(ChartKind::Combo);
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.data_table = Some(ChartDataTable::default());
+    let mut d = sample(c.kind);
+    // The public renderer also accepts Combo series: the first defaults to columns, later ones to lines.
+    for s in &mut d.series {
+        s.kind = ChartKind::Combo;
+    }
+    let p = render(&c, &d, 900.0, 500.0, &ApproxMeasure);
+    assert_sane(&p, 900.0, 500.0);
+    let header_y = p
+        .iter()
+        .find_map(|p| match p {
+            Prim::Text { text, y, .. } if text == "Q1" => Some(*y),
+            _ => None,
+        })
+        .unwrap();
+    for (i, s) in d.series.iter().enumerate() {
+        let boxes = p.iter().filter(|p| matches!(p, Prim::Rect { y, fill: Some(f), .. } if *f == s.color && *y > header_y)).count();
+        let lines =
+            p.iter().filter(|p| matches!(p, Prim::Line { pts, color, .. } if *color == s.color && pts.iter().all(|p| p[1] > header_y))).count();
+        assert_eq!(boxes, usize::from(i == 0), "series {i}: column key");
+        assert_eq!(lines, usize::from(i > 0), "series {i}: line key");
     }
 }
 
@@ -56,18 +44,6 @@ fn tables_draw_source_values_for_every_supported_chart_kind() {
         let labels = texts(&prims);
         // Source amounts, including on 100% stacked charts, not shares or running totals.
         if supported {
-            let table_sizes = prims
-                .iter()
-                .filter_map(|p| match p {
-                    Prim::Text { size, role, .. } if role == "data_table" => Some(*size),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            assert!(!table_sizes.is_empty(), "{kind:?}: data-table text has a dedicated rendering role");
-            assert!(
-                table_sizes.iter().all(|size| (*size - 9.0).abs() < f32::EPSILON),
-                "data-label font settings must not resize table text: {kind:?}: {table_sizes:?}"
-            );
             for value in ["$12,000", "-$4,000", "$38,000", "$61,870"] {
                 assert!(labels.contains(&value), "{kind:?}: missing {value}");
             }

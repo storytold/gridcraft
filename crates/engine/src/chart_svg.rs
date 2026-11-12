@@ -10,6 +10,10 @@ use crate::io::esc;
 /// Widest or tallest chart written; larger anchors are clamped.
 const MAX_SIDE: f32 = 16_384.0;
 
+/// Most bytes of SVG written for the charts of one web page together. A chart past what is
+/// left makes the export fail rather than grow without bound or be dropped without a word.
+pub(crate) const MAX_PAGE_SVG_BYTES: usize = 64 * 1024 * 1024;
+
 struct HelveticaMeasure;
 
 impl gridcraft_chart::Measure for HelveticaMeasure {
@@ -18,24 +22,40 @@ impl gridcraft_chart::Measure for HelveticaMeasure {
     }
 }
 
-/// `chart` of sheet `sheet` as an `<svg>` element placed by `style`, or `None` for a degenerate size.
-pub(crate) fn chart_svg(wb: &Workbook, sheet: usize, chart: &Chart, style: &str) -> Option<String> {
+/// `chart` of sheet `sheet` as an `<svg>` element placed by `style`, `None` for a degenerate size,
+/// or an error for an element longer than `budget` bytes.
+pub(crate) fn chart_svg(wb: &Workbook, sheet: usize, chart: &Chart, style: &str, budget: usize) -> crate::Result<Option<String>> {
     let (w, h) = (chart.anchor.width.min(MAX_SIDE), chart.anchor.height.min(MAX_SIDE));
     if !(w >= 1.0 && h >= 1.0) {
-        return None;
+        return Ok(None);
     }
     let data = gridcraft_chart::resolve(wb, sheet, chart);
     let prims = gridcraft_chart::render(chart, &data, w, h, &HelveticaMeasure);
-    Some(prims_svg(&prims, w, h, style))
+    match prims_svg_within(&prims, w, h, style, budget) {
+        Some(svg) => Ok(Some(svg)),
+        None => Err(crate::EngineError::Other(format!(
+            "the charts would make the web page over {} MiB. Save as .xlsx or PDF instead.",
+            MAX_PAGE_SVG_BYTES / (1024 * 1024)
+        ))),
+    }
 }
 
+#[cfg(test)]
 fn prims_svg(prims: &[Prim], w: f32, h: f32, style: &str) -> String {
+    prims_svg_within(prims, w, h, style, usize::MAX).unwrap_or_default()
+}
+
+/// The `<svg>` element, or `None` as soon as it grows past `budget` bytes.
+fn prims_svg_within(prims: &[Prim], w: f32, h: f32, style: &str, budget: usize) -> Option<String> {
     let mut out = String::new();
     let _ = write!(
         out,
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" font-family=\"Helvetica,Arial,sans-serif\" style=\"{style}\">"
     );
     for p in prims {
+        if out.len() > budget {
+            return None;
+        }
         match p {
             Prim::Rect { x, y, w, h, fill, stroke, radius } => {
                 let _ = write!(out, "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"", num(*x), num(*y), num(*w), num(*h));
@@ -98,7 +118,7 @@ fn prims_svg(prims: &[Prim], w: f32, h: f32, style: &str) -> String {
         }
     }
     out.push_str("</svg>");
-    out
+    (out.len() <= budget).then_some(out)
 }
 
 /// Fill and stroke attributes of an open shape element; the caller closes it.
@@ -154,6 +174,17 @@ fn num(v: f32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_svg_past_its_byte_budget_is_left_out() {
+        let rect = Prim::Rect { x: 1.0, y: 2.0, w: 3.0, h: 4.0, fill: Some([255, 0, 0, 255]), stroke: None, radius: 0.0 };
+        let prims = vec![rect; 10_000];
+        let full = prims_svg(&prims, 100.0, 50.0, "");
+        assert!(full.len() > 100_000);
+        assert_eq!(prims_svg_within(&prims, 100.0, 50.0, "", full.len()), Some(full.clone()));
+        assert_eq!(prims_svg_within(&prims, 100.0, 50.0, "", full.len() - 1), None);
+        assert_eq!(prims_svg_within(&prims, 100.0, 50.0, "", 1_000), None);
+    }
 
     #[test]
     fn every_primitive_becomes_an_svg_element() {
