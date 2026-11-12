@@ -353,12 +353,13 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         // Merged areas inside the copied block travel with it.
-        if matches!(what, What::All | What::Formats) && !transpose {
+        if matches!(what, What::All | What::Formats) {
             let merges: Vec<RangeRef> = src_sheet.merges.iter().filter(|m| src.contains_range(m)).copied().collect();
             for m in merges {
-                let dr = at.row as i64 - src.start.row as i64;
-                let dc = at.col as i64 - src.start.col as i64;
-                if let (Some(a), Some(b)) = (m.start.offset(dr, dc), m.end.offset(dr, dc)) {
+                let (r0, c0) = (i64::from(m.start.row - src.start.row), i64::from(m.start.col - src.start.col));
+                let (r1, c1) = (i64::from(m.end.row - src.start.row), i64::from(m.end.col - src.start.col));
+                let (dr0, dc0, dr1, dc1) = if transpose { (c0, r0, c1, r1) } else { (r0, c0, r1, c1) };
+                if let (Some(a), Some(b)) = (at.offset(dr0, dc0), at.offset(dr1, dc1)) {
                     let nm = RangeRef::new(a, b);
                     let sh = cx.sheet_mut(dest_sheet)?;
                     sh.merges.retain(|x| !x.intersects(&nm));
