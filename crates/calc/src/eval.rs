@@ -79,6 +79,82 @@ fn err(e: CellError) -> Ev {
     Ev::V(Value::Error(e))
 }
 
+/// The cells a structured reference written in cell `at` of sheet `sheet` refers to, or the error
+/// it evaluates to.
+pub fn resolve_struct(wb: &Workbook, sheet: usize, at: CellRef, s: &StructRef) -> Result<Area, CellError> {
+    let found = if s.table.is_empty() {
+        wb.sheet(sheet).and_then(|sh| sh.tables.iter().position(|t| t.range.contains(at)).map(|ti| (sheet, ti)))
+    } else {
+        wb.table(&s.table)
+    };
+    let Some((si, ti)) = found else { return Err(CellError::Ref) };
+    let Some(t) = wb.sheet(si).and_then(|sh| sh.tables.get(ti)) else { return Err(CellError::Ref) };
+    let mut r0 = t.range.start.row;
+    let mut r1 = t.range.end.row;
+    let data = t.data_range();
+    let items = &s.specifiers;
+    if items.is_empty() || items == &[StructItem::Data] {
+        match data {
+            Some(d) => {
+                r0 = d.start.row;
+                r1 = d.end.row;
+            }
+            None => return Err(CellError::Ref),
+        }
+    } else if items.contains(&StructItem::ThisRow) {
+        if at.row < t.range.start.row || at.row > t.range.end.row {
+            return Err(CellError::Value);
+        }
+        r0 = at.row;
+        r1 = at.row;
+    } else if !items.contains(&StructItem::All) {
+        let has = |i: StructItem| items.contains(&i);
+        let hdr = t.header_row.then_some(t.range.start.row);
+        let tot = t.totals_row.then_some(t.range.end.row);
+        let mut lo = u32::MAX;
+        let mut hi = 0;
+        let mut add = |a: u32, b: u32| {
+            lo = lo.min(a);
+            hi = hi.max(b);
+        };
+        if has(StructItem::Headers) {
+            match hdr {
+                Some(h) => add(h, h),
+                None => return Err(CellError::Ref),
+            }
+        }
+        if has(StructItem::Data)
+            && let Some(d) = data
+        {
+            add(d.start.row, d.end.row);
+        }
+        if has(StructItem::Totals) {
+            match tot {
+                Some(h) => add(h, h),
+                None => return Err(CellError::Ref),
+            }
+        }
+        if lo > hi {
+            return Err(CellError::Ref);
+        }
+        r0 = lo;
+        r1 = hi;
+    }
+    let (mut c0, mut c1) = (t.range.start.col, t.range.end.col);
+    if let Some(a) = &s.col_start {
+        let Some(i) = t.column_index(a) else { return Err(CellError::Ref) };
+        c0 = t.range.start.col + i as u32;
+        c1 = c0;
+        if let Some(b) = &s.col_end {
+            let Some(j) = t.column_index(b) else { return Err(CellError::Ref) };
+            let cj = t.range.start.col + j as u32;
+            c0 = c0.min(cj);
+            c1 = c1.max(cj);
+        }
+    }
+    Ok(Area { sheet: si, range: RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1)) })
+}
+
 /// LAMBDA calls that one formula may have in progress at once, counted the same way on every build.
 /// The next call answers `#NUM!`. A countdown from 131, the deepest that `MAX_DEPTH` allows, has 132
 /// calls in progress, so it still runs.
@@ -498,78 +574,10 @@ impl<'h> Evaluator<'h> {
     }
 
     fn structured(&mut self, s: &StructRef) -> Ev {
-        let wb = self.host.workbook();
-        let found = if s.table.is_empty() {
-            wb.sheet(self.sheet).and_then(|sh| sh.tables.iter().position(|t| t.range.contains(self.at)).map(|ti| (self.sheet, ti)))
-        } else {
-            wb.table(&s.table)
-        };
-        let Some((si, ti)) = found else { return err(CellError::Ref) };
-        let Some(t) = wb.sheet(si).and_then(|sh| sh.tables.get(ti)) else { return err(CellError::Ref) };
-        let mut r0 = t.range.start.row;
-        let mut r1 = t.range.end.row;
-        let data = t.data_range();
-        let items = &s.specifiers;
-        if items.is_empty() || items == &[StructItem::Data] {
-            match data {
-                Some(d) => {
-                    r0 = d.start.row;
-                    r1 = d.end.row;
-                }
-                None => return err(CellError::Ref),
-            }
-        } else if items.contains(&StructItem::ThisRow) {
-            if self.at.row < t.range.start.row || self.at.row > t.range.end.row {
-                return err(CellError::Value);
-            }
-            r0 = self.at.row;
-            r1 = self.at.row;
-        } else if !items.contains(&StructItem::All) {
-            let has = |i: StructItem| items.contains(&i);
-            let hdr = t.header_row.then_some(t.range.start.row);
-            let tot = t.totals_row.then_some(t.range.end.row);
-            let mut lo = u32::MAX;
-            let mut hi = 0;
-            let mut add = |a: u32, b: u32| {
-                lo = lo.min(a);
-                hi = hi.max(b);
-            };
-            if has(StructItem::Headers) {
-                match hdr {
-                    Some(h) => add(h, h),
-                    None => return err(CellError::Ref),
-                }
-            }
-            if has(StructItem::Data)
-                && let Some(d) = data
-            {
-                add(d.start.row, d.end.row);
-            }
-            if has(StructItem::Totals) {
-                match tot {
-                    Some(h) => add(h, h),
-                    None => return err(CellError::Ref),
-                }
-            }
-            if lo > hi {
-                return err(CellError::Ref);
-            }
-            r0 = lo;
-            r1 = hi;
+        match resolve_struct(self.host.workbook(), self.sheet, self.at, s) {
+            Ok(a) => Ev::R(vec![a]),
+            Err(e) => err(e),
         }
-        let (mut c0, mut c1) = (t.range.start.col, t.range.end.col);
-        if let Some(a) = &s.col_start {
-            let Some(i) = t.column_index(a) else { return err(CellError::Ref) };
-            c0 = t.range.start.col + i as u32;
-            c1 = c0;
-            if let Some(b) = &s.col_end {
-                let Some(j) = t.column_index(b) else { return err(CellError::Ref) };
-                let cj = t.range.start.col + j as u32;
-                c0 = c0.min(cj);
-                c1 = c1.max(cj);
-            }
-        }
-        Ev::R(vec![Area { sheet: si, range: RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1)) }])
     }
 
     fn unary(&mut self, op: UnOp, x: &Expr) -> Ev {
