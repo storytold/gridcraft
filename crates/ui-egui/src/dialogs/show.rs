@@ -537,17 +537,24 @@ pub(crate) fn new_sheet_view_name_taken(app: &mut SheetApp, d: &Dialog) -> bool 
         .ok()
         .and_then(|v| v.as_object().map(|o| o.keys().cloned().collect()))
         .unwrap_or_default();
-    if let Some(save) = d.values.get("save").and_then(Json::as_str) {
-        if save.trim().is_empty() {
-            app.message = Some((d.title.clone(), "Name the view before saving it.".into()));
-            return true;
+    match d.values.get("save").and_then(Json::as_str) {
+        Some(save) if save.trim().is_empty() || taken.iter().any(|name| name == save) => {
+            // Blank or already-taken: saving would store an empty key or silently replace a
+            // view, so the dialog stays open and says so.
+            app.message = if save.trim().is_empty() {
+                Some((d.title.clone(), "Name the view before saving it.".into()))
+            } else {
+                Some((d.title.clone(), format!("A custom view named {save:?} already exists. Choose another name.")))
+            };
+            true
         }
-        if taken.iter().any(|name| name == save) {
-            app.message = Some((d.title.clone(), format!("A custom view named {save:?} already exists. Choose another name.")));
-            return true;
+        Some(_) => false,
+        // Missing or non-string: nothing valid to save, so the dialog stays open.
+        None => {
+            app.message = Some((d.title.clone(), "Name the view before saving it.".into()));
+            true
         }
     }
-    false
 }
 
 /// Why Open Hyperlink ignored an OK that arrived with synthetic control-channel input.

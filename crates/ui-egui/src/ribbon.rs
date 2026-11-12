@@ -157,6 +157,16 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         // the group it targets, so only that group takes a natural form first.
                         let keytip_group =
                             app.ui.keytip_invoke.and_then(gridcraft_engine::find_command).and_then(|command| command.menu.get(1).copied());
+                        // Prefix-driven menus (Borders at HB): a Continue entry sets no invoke,
+                        // but the menu renders inside its group's body, so that group must be
+                        // natural while the prefix waits for the next key.
+                        let prefix_group = match app.keytips.prefix() {
+                            // Borders is the only prefix-driven menu on the ribbon: HB opens its
+                            // popup inside the Font body without setting keytip_invoke.
+                            Some(prefix) => keytip_table::menu_owner(prefix, "home.borders"),
+                            None => None,
+                        };
+                        let keytip_group = keytip_group.or(prefix_group);
                         RibbonSections::begin(ui, app.ui.ribbon_tab.as_str(), content.width(), screen.width(), keytip_group);
                         match app.ui.ribbon_tab.as_str() {
                             "Home" => home(app, ui),
