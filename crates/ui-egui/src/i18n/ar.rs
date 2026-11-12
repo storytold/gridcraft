@@ -1820,6 +1820,8 @@ Macro",
     // From main (2026-11)
     ("Diagram", "رسم تخطيطي"),
     ("Decorative Text", "نص زخرفي"),
+    // The Insert tab splits the translated label over two lines before `big_button` translates it again.
+    ("نص\nزخرفي", "نص\nزخرفي"),
     ("Reading direction", "اتجاه القراءة"),
     ("Context", "حسب السياق"),
     ("Left to right", "من اليسار إلى اليمين"),
