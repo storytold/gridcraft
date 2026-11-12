@@ -904,6 +904,8 @@ fn explicit_region_renders_numbers_dates_and_currency_without_rewriting_codes() 
     let render = |n, code| format_value_with_region(&Value::Number(n), &NumberFormat::parse(code), DateSystem::D1900, german).text;
     assert_eq!(render(1234.56, "#,##0.00"), "1.234,56");
     assert_eq!(render(46310.0, "dddd, d. mmmm yyyy"), "Donnerstag, 15. Oktober 2026");
+    assert_eq!(render(46310.0, "[$-409]dddd, mmmm"), "Thursday, October");
+    assert_eq!(render(46310.0, "[$-407]mmmm"), "Oktober");
     assert_eq!(render(46096.0, "d mmm yyyy"), "15 Mär 2026");
     assert_eq!(render(1234.56, r##""$"#,##0.00"##), "$1.234,56");
     assert_eq!(render(1234.56, r#"#,##0.00 "€""#), "1.234,56 €");

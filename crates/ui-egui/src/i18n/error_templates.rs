@@ -45,7 +45,14 @@ fn fill(message: &str, source: &str, translated: &str, language: super::Language
         let (name, tail) = slot.split_once('}')?;
         let delimiter = tail.split('{').next()?;
         let end = if delimiter.is_empty() { rest.len() } else { rest.find(delimiter)? };
-        values.push((name, rest.get(..end)?));
+        let value = rest.get(..end)?;
+        // A value that repeats the template's own backticks cannot be told from the delimiter:
+        // "`a` for `b` for `key`" splits as (a, "b` for `key`"), and the message would show the
+        // captures in the wrong places. Leave it English instead of mangling it.
+        if value.contains('`') && (prefix.ends_with('`') || delimiter.starts_with('`')) {
+            return None;
+        }
+        values.push((name, value));
         rest = rest.get(end..)?;
         pattern = tail;
     }
@@ -91,6 +98,29 @@ mod tests {
         assert_eq!(format_message("Printer Office: permission denied", super::super::Language::Ru), None);
     }
 
+    /// A captured value that repeats the template's own backticks cannot be told from the
+    /// delimiter: the message stays English instead of showing the captures in the wrong places.
+    #[test]
+    fn a_value_that_repeats_the_template_backticks_leaves_the_message_english() {
+        let ru = super::super::Language::Ru;
+        let ambiguous = "`a` for `b` for `key` names a sheet other than the one this command works on";
+        assert_eq!(format_message(ambiguous, ru), None, "the split would be (a, b` for `key`)");
+        // The same words inside a value without a backtick are matched whole and translated.
+        let unambiguous = "`'a for b'!C1` for `key` names a sheet other than the one this command works on";
+        assert_eq!(format_message(unambiguous, ru), Some("Ссылка `'a for b'!C1` в параметре `key` указывает на другой лист".into()));
+    }
+
+    /// Repeated braces in a captured value stay literal: each slot is resolved once.
+    #[test]
+    fn repeated_braces_in_a_captured_value_stay_literal() {
+        let ru = super::super::Language::Ru;
+        assert_eq!(
+            format_message("invalid cell reference `A{a}{b}` for `cell`", ru),
+            Some("Неверная ссылка на ячейку `A{a}{b}` в параметре `cell`".into())
+        );
+        assert_eq!(format_message("unexpected `{token}`", ru), Some("Неожиданный элемент: `{token}`".into()));
+    }
+
     /// A parser token containing a pipe keeps the entire captured text during localization.
     #[test]
     fn parser_tokens_do_not_use_context_fallback() {
@@ -119,6 +149,15 @@ mod contract_tests {
                     assert_eq!(names(source), names(translated), "{language:?}: {source}");
                 }
             }
+        }
+    }
+
+    /// A template without a translation shows the English text, so the reference language covers
+    /// the whole shared set; `translated_templates_preserve_slots_for_every_catalog` skips the rest.
+    #[test]
+    fn russian_covers_every_shared_template() {
+        for source in TEMPLATES {
+            assert!(crate::i18n::Language::Ru.translation(source).is_some(), "missing Russian template: {source}");
         }
     }
 

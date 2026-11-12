@@ -435,6 +435,20 @@ fn user_defined_prefix_is_hidden_while_editing_and_kept_on_commit() {
 }
 
 #[test]
+fn deleting_either_same_named_call_preserves_the_other() {
+    for (remaining, expected) in [("=_xludf.SUM(2)", "_xludf.SUM(2)"), ("=SUM(1)", "SUM(1)")] {
+        let mut app = app();
+        app.run("cell.set", json!({"cell":"A1","input":"=SUM(1)+_xludf.SUM(2)"})).unwrap();
+        app.begin_edit(None, true);
+        let draft = app.editor.as_mut().unwrap();
+        assert_eq!(draft.text, "=SUM(1)+_xludf.SUM(2)");
+        draft.text = remaining.into();
+        assert!(app.commit_edit(0, 0, false, false));
+        assert_eq!(formula(&app), expected);
+    }
+}
+
+#[test]
 fn editing_a_hidden_udf_does_not_rebind_it_to_a_builtin() {
     let mut app = app();
     app.run("cell.set", json!({"cell":"A1","input":"=_xludf.SUM(1,2)"})).unwrap();

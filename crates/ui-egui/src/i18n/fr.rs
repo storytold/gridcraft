@@ -181,7 +181,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bottom Border" => "Bordure inférieure",
         "Bottom Double Border" => "Bordure double inférieure",
         "Bottom margin (in):" => "Marge inférieure (po) :",
-        "Box & Whisker" => "Zone et valeur",
+        "Box & Whisker" => "Boîte à moustaches",
         "Bubble" => "Bulles",
         "By Changing Variable Cells:" => "En modifiant les cellules variables :",
         "By changing cell:" => "Cellule à modifier :",

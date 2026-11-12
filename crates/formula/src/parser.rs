@@ -320,6 +320,7 @@ impl Parser {
             }
             Tok::LBrace => self.array(),
             Tok::Func(name) => {
+                let explicit = name.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("_xlfn."));
                 let name = self.locale.normalize_function_name(&name);
                 let mut args = self.args()?;
                 // Files write `A1#` as `_xlfn.ANCHORARRAY(A1)`.
@@ -353,6 +354,8 @@ impl Parser {
                 {
                     return Ok(Expr::Unary(UnOp::Trim(mode), Box::new(x)));
                 }
+                // Keep an explicitly canonical spelling through localized alias resolution.
+                let name = if explicit && self.locale.canonical_name(&name) != name { format!("_xlfn.{name}") } else { name };
                 Ok(Expr::Call(name, args))
             }
             Tok::Sheet(a, b) => {

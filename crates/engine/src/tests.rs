@@ -2429,6 +2429,21 @@ fn sheets() {
 }
 
 #[test]
+fn rename_and_delete_keep_references_to_the_other_case_variant() {
+    let mut session = s();
+    // An imported book can contain spellings the new-sheet dialog would decline.
+    let wb = std::sync::Arc::make_mut(&mut session.doc_mut().unwrap().wb);
+    for name in ["лист1", "ЛИСТ1"] {
+        wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new(name)));
+    }
+    session.execute("cell.set", json!({"cell":"A1", "input":"=лист1!B1+ЛИСТ1!B1"})).unwrap();
+    session.execute("sheet.rename", json!({"sheet":1, "name":"Data"})).unwrap();
+    assert_eq!(session.execute("cell.get", json!({"cell":"A1"})).unwrap()["formula"], "=Data!B1+ЛИСТ1!B1");
+    session.execute("home.deleteSheet", json!({"sheet":1})).unwrap();
+    assert_eq!(session.execute("cell.get", json!({"cell":"A1"})).unwrap()["formula"], "=#REF!+ЛИСТ1!B1");
+}
+
+#[test]
 fn sheet_operations_keep_names_on_their_sheets() {
     let names = |s: &Session| -> Vec<(String, Option<String>, String)> {
         let wb = &s.doc().unwrap().wb;

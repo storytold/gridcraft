@@ -553,6 +553,8 @@ fn paste_validations(
 
 /// Applies a reference adjustment to every cell formula and defined name in the workbook.
 pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &str, e: &gridcraft_formula::adjust::Edit) -> Result<()> {
+    let target_index = wb.sheet_index(target);
+    let order: Vec<_> = wb.sheets.iter().map(|sheet| sheet.name.clone()).collect();
     use gridcraft_formula::adjust::Edit;
     // Rows and columns inserted or deleted on the target sheet move its legacy array ranges too
     // (a cut moves its arrays itself).
@@ -564,14 +566,13 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
         if keys.is_empty() {
             continue;
         }
-        // Array ranges move with the lines only on the edited sheet; names compare case-folded, as
-        // `Workbook::sheet_index` resolves a reference to this sheet.
-        let on_target = moves_arrays && gridcraft_formula::same_name(&host, target);
+        // Array ranges move with the lines only on the edited sheet.
+        let on_target = moves_arrays && Some(si) == target_index;
         let Some(sheet) = wb.sheet_mut(si) else { continue };
         for (c, f) in keys {
             // Borrows the tree and copies and prints only the formulas the edit changes. A formula
             // the edit leaves alone keeps its stored text, even if that text is not canonical.
-            let Some(new) = f.with_expr(|x| gridcraft_formula::adjust::adjust_if_changed(x, &host, target, e)) else { continue };
+            let Some(new) = f.with_expr(|x| gridcraft_formula::adjust::adjust_if_changed_in(x, &host, target, e, &order)) else { continue };
             let array = match f.array {
                 Some(a) if on_target => crate::cmd::sheet::map_range(a, e),
                 a => a,
@@ -589,12 +590,12 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
     for n in wb.names.iter_mut() {
         if let Ok(expr) = gridcraft_formula::parse_name(&n.formula) {
             // Names are workbook-level: unqualified refs don't occur; qualified ones adjust.
-            let new = gridcraft_formula::adjust::adjust(expr, "\u{0}", target, e);
+            let new = gridcraft_formula::adjust::adjust_in(expr, "\u{0}", target, e, &order);
             n.formula = gridcraft_formula::print(&new);
         }
     }
-    rewrite_cell_links(wb, |host, expr| gridcraft_formula::adjust::adjust(expr, host, target, e));
-    rewrite_python_refs(wb, &|host, expr| gridcraft_formula::adjust::adjust(expr, host, target, e))
+    rewrite_cell_links(wb, |host, expr| gridcraft_formula::adjust::adjust_in(expr, host, target, e, &order));
+    rewrite_python_refs(wb, &|host, expr| gridcraft_formula::adjust::adjust_in(expr, host, target, e, &order))
 }
 
 /// Runs `f` over every reference a floating object holds (a chart's series values, categories,
@@ -629,7 +630,7 @@ pub(crate) fn rewrite_cell_links(wb: &mut gridcraft_model::Workbook, f: impl Fn(
     }
 }
 
-/// Rewrites the `xl("…")` literals in every Python cell with `f`, which maps a reference held on
+/// Rewrites the `xl("вЂ¦")` literals in every Python cell with `f`, which maps a reference held on
 /// sheet `host` to its new form. Every reference-moving edit (insert and delete of lines or cells,
 /// cut-move, sheet rename and delete) runs it, as it adjusts formulas. A literal is only replaced
 /// when the reference it names changed, and text that doesn't parse is kept. A cell's cached

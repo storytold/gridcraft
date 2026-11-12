@@ -101,6 +101,7 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem, region: &Regio
     if !v.is_finite() || !(0.0..max_serial(sys) as f64 + 1.0).contains(&v) {
         return None;
     }
+    let date_region = sec.date_lcid.and_then(|id| gridcraft_core::region::all().iter().copied().find(|r| r.lcid == id)).unwrap_or(region);
     let unit: i64 = 10i64.pow(3 - u32::from(sec.sub_digits.min(3)));
     let mut day = v.floor() as i64;
     let mut ms = (((v - v.floor()) * 86_400_000.0) / unit as f64).round() as i64 * unit;
@@ -131,12 +132,12 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem, region: &Regio
             let month_index = usize::try_from(date.month.saturating_sub(1)).unwrap_or(usize::MAX);
             let weekday_index = usize::try_from(dt.weekday).unwrap_or(usize::MAX);
             let has_day = sec.toks.iter().any(|t| matches!(t, Tok::Date(DatePart::Day(1 | 2))));
-            let month_names = if has_day { region.months_genitive.as_ref().unwrap_or(&region.months) } else { &region.months };
+            let month_names = if has_day { date_region.months_genitive.as_ref().unwrap_or(&date_region.months) } else { &date_region.months };
             (
                 month_names.get(month_index).copied().unwrap_or("").into(),
-                region.months_abbr.get(month_index).copied().unwrap_or("").into(),
-                region.weekdays.get(weekday_index).copied().unwrap_or("").into(),
-                region.weekdays_abbr.get(weekday_index).copied().unwrap_or("").into(),
+                date_region.months_abbr.get(month_index).copied().unwrap_or("").into(),
+                date_region.weekdays.get(weekday_index).copied().unwrap_or("").into(),
+                date_region.weekdays_abbr.get(weekday_index).copied().unwrap_or("").into(),
             )
         }
         Calendar::Hijri => (date.month_name.into(), date.month_short.into(), date.day_name.into(), date.day_short.into()),
@@ -188,7 +189,7 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem, region: &Regio
                     DatePart::ElapsedH(n) => push_padded(text, total_ms / 3_600_000, n),
                     DatePart::ElapsedM(n) => push_padded(text, total_ms / 60_000, n),
                     DatePart::ElapsedS(n) => push_padded(text, total_ms / 1000, n),
-                    DatePart::AmPm => text.push_str(region.am_pm[usize::from(hour >= 12)]),
+                    DatePart::AmPm => text.push_str(date_region.am_pm[usize::from(hour >= 12)]),
                     DatePart::AP(a, p) => text.push(if hour >= 12 { p } else { a }),
                 }
             }

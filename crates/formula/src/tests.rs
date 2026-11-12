@@ -243,6 +243,21 @@ fn sheet_references_follow_case_folded_names() -> Result<(), Box<dyn std::error:
 }
 
 #[test]
+fn edits_preserve_case_variant_sheet_identities() -> Result<(), Box<dyn std::error::Error>> {
+    use crate::adjust::{adjust_in, delete_sheet, rename_sheet_in};
+    let order = ["лист1", "ЛИСТ1", "Last"].map(String::from);
+    let source = "лист1!A1+ЛИСТ1!A1+ЛиСт1!Tax+ЛИСТ1!Tax";
+    assert_eq!(print(&rename_sheet_in(parse(source)?, "лист1", "New", &order)), "New!A1+ЛИСТ1!A1+New!Tax+ЛИСТ1!Tax");
+    assert_eq!(print(&delete_sheet(parse(source)?, "лист1", &order)), "#REF!+ЛИСТ1!A1+#REF!+ЛИСТ1!Tax");
+    let span = "SUM(лист1:Last!A1)";
+    assert_eq!(print(&delete_sheet(parse(span)?, "Last", &order)), "SUM(лист1:ЛИСТ1!A1)");
+    assert_eq!(print(&rename_sheet_in(parse(span)?, "ЛИСТ1", "New", &order)), span);
+    let rows = Edit::Insert { axis: Axis::Rows, at: 0, count: 1 };
+    assert_eq!(print(&adjust_in(parse("A1+лист1!A1+ЛИСТ1!A1")?, "ЛИСТ1", "лист1", &rows, &order)), "A1+лист1!A2+ЛИСТ1!A1");
+    Ok(())
+}
+
+#[test]
 fn rename_sheet_updates_qualified_names() -> Result<(), Box<dyn std::error::Error>> {
     let e = parse("Data!MyName+MyName+Other!MyName")?;
     assert_eq!(print(&rename_sheet(e, "data", "Numbers")), "Numbers!MyName+MyName+Other!MyName");

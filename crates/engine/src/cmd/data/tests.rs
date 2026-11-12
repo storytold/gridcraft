@@ -611,3 +611,15 @@ fn literal_fill_validation_ignores_filtered_rows() {
     let wb = &session.doc().unwrap().wb;
     assert!(super::check_literal_fill_validation(wb, 0, &[range], "blocked").is_some());
 }
+
+#[test]
+fn formula_and_literal_with_the_same_filter_label_are_one_choice() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("range.setValues", json!({"range":"A1:A2","values":[["=A1"],["=A1"]],"parse":false})).unwrap();
+    session.execute("cell.set", json!({"cell":"A3","input":"=A1"})).unwrap();
+    session.execute("formulas.showFormulas", json!({"on":true})).unwrap();
+    session.execute("data.filter", json!({"range":"A1:A3"})).unwrap();
+    let rows = super::filter_entries(&session.doc().unwrap().wb, 0, 0);
+    assert_eq!(rows.iter().map(|row| row.label.as_str()).collect::<Vec<_>>(), ["=A1"]);
+}

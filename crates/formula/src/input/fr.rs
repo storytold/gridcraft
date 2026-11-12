@@ -473,6 +473,10 @@ mod tests {
         assert_eq!(print(&expr), "SUM({1.5,2.25;3,4},0)");
         assert_eq!(print_input(&expr, locale, |_| false).unwrap(), input);
         assert_eq!(print(&parse_input("TRIM(A1;0,1;0,2)", locale, |_| false).unwrap()), "MIRR(A1,0.1,0.2)");
-        assert_eq!(print(&parse("TRIM(A1)").unwrap()), "TRIM(A1)");
+        let canonical = parse("TRIM(A1)").unwrap();
+        let bound = |name: &str| name == "SUPPRESPACE";
+        let displayed = print_input(&canonical, locale, bound).unwrap();
+        assert_eq!(displayed, "_xlfn.TRIM(A1)");
+        assert_eq!(parse_input(&displayed, locale, bound).unwrap(), canonical);
     }
 }

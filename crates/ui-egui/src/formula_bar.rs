@@ -608,7 +608,11 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         let names: Vec<String> = function_names()
             .iter()
             .map(|name| {
-                app.session.active().map(|d| crate::formula_locale::completion_name(name, ed.locale, &d.wb, ed.sheet)).unwrap_or(name).to_string()
+                app.session
+                    .active()
+                    .map(|d| crate::formula_locale::completion_name(name, ed.locale, &d.wb, ed.sheet))
+                    .unwrap_or_else(|| name.into())
+                    .into_owned()
             })
             .collect();
         ed.update_autocomplete(&names);

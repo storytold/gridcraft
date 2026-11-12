@@ -381,7 +381,7 @@ impl Workbook {
         self.sheets.get_mut(i).map(Arc::make_mut)
     }
     pub fn sheet_index(&self, name: &str) -> Option<usize> {
-        self.sheets.iter().position(|s| gridcraft_formula::same_name(&s.name, name))
+        self.sheets.iter().position(|s| s.name == name).or_else(|| self.sheets.iter().position(|s| gridcraft_formula::same_name(&s.name, name)))
     }
     /// The index of the sheet the workbook's window shows (the file's active tab).
     pub fn active_sheet(&self) -> usize {
@@ -691,5 +691,20 @@ mod tests {
         assert_eq!(wb.next_sheet_name_with_prefix("Лист"), "Лист2");
         assert!(wb.check_sheet_name("Лист1", None).is_err());
         assert!(wb.check_sheet_name("ЛИСТ1", Some(index)).is_ok());
+    }
+
+    #[test]
+    fn existing_unicode_case_variant_sheet_names_keep_their_identity() {
+        let mut wb = Workbook::new();
+        let lower = wb.sheets.len();
+        wb.sheets.push(Arc::new(Sheet::new("лист1")));
+        let upper = wb.sheets.len();
+        wb.sheets.push(Arc::new(Sheet::new("ЛИСТ1")));
+
+        assert_eq!(wb.sheet_index("лист1"), Some(lower));
+        assert_eq!(wb.sheet_index("ЛИСТ1"), Some(upper));
+        assert_eq!(wb.sheet_index("ЛиСт1"), Some(lower));
+        assert!(wb.check_sheet_name("лист1", Some(lower)).is_ok());
+        assert!(wb.check_sheet_name("ЛиСт1", Some(upper)).is_err());
     }
 }

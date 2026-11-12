@@ -72,9 +72,13 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             let all = checks.iter().filter(|entry| matches(entry)).all(|entry| entry.selected);
             let mut all_new = all;
             let label = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
+            // Different displayed captions can select the same case-insensitive engine value.
+            let command_key = |entry: &FilterValue| (entry.value == gridcraft_engine::core::Value::Empty, entry.label.to_ascii_lowercase());
+            let mut changed = std::collections::HashMap::new();
             if ui.checkbox(&mut all_new, lang.tr(label)).changed() {
                 for entry in checks.iter_mut().filter(|entry| matches(entry)) {
                     entry.selected = all_new;
+                    changed.insert(command_key(entry), all_new);
                 }
             }
             // Full width: shrunk to the longest value, the scroll bar sat mid-menu and the wheel only
@@ -82,9 +86,18 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
                 for entry in checks.iter_mut().filter(|entry| matches(entry)) {
                     let label = label_for(entry);
-                    ui.checkbox(&mut entry.selected, label);
+                    if ui.checkbox(&mut entry.selected, label).changed() {
+                        changed.insert(command_key(entry), entry.selected);
+                    }
                 }
             });
+            if !changed.is_empty() {
+                for entry in &mut checks {
+                    if let Some(on) = changed.get(&command_key(entry)) {
+                        entry.selected = *on;
+                    }
+                }
+            }
             ui.ctx().data_mut(|d| {
                 d.insert_temp(key, checks.clone());
                 d.insert_temp(search_key, search.clone());

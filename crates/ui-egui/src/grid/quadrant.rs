@@ -237,8 +237,9 @@ fn paint_cells(
     outside: &[(CellRef, Rect, Look, Option<CfLook>)],
     merges: &[RangeRef],
 ) {
+    let language = crate::i18n::current(q.painter.ctx());
     for cell in looks.iter().chain(outside) {
-        paint_cell(q, cell, merges);
+        paint_cell(q, cell, merges, language);
     }
 }
 
@@ -324,7 +325,7 @@ fn localized_cell_text(text: String, wb: &Workbook, si: usize, sh: &Sheet, c: Ce
 ///
 /// Handles text layout, wrapping, alignment, overflow into neighbouring cells,
 /// and clipping, while preserving cell decoration and merged-cell constraints.
-fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLook>), merges: &[RangeRef]) {
+fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLook>), merges: &[RangeRef], language: crate::i18n::Language) {
     let (cell, rect, lk, cfl) = painted;
     let c = *cell;
     let p = q.painter;
@@ -365,7 +366,6 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     // Digits fit by the cell's own font and size, not the default 11pt (9pt marks in narrow columns).
     let char_w = p.layout_no_wrap("0".to_string(), font.clone(), Color32::PLACEHOLDER).size().x.max(1.0);
     let avail_w = rect.right() - text_left;
-    let language = crate::i18n::current(p.ctx());
     let options = super::cell_paint::TextOptions { region: wb.region, width_px: avail_w / z.max(0.1) * z, char_w };
     let (text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, options);
     let text = localized_cell_text(text, wb, si, sh, c, &v, language);

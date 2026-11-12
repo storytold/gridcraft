@@ -126,7 +126,7 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
                 .session
                 .active()
                 .map(|doc| crate::formula_locale::completion_name(&f.name, locale, &doc.wb, doc.wb.active_sheet()))
-                .unwrap_or(&f.name);
+                .unwrap_or_else(|| f.name.as_str().into());
             app.begin_edit(Some(format!("={name}(")), false);
         }
     }

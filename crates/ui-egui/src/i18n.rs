@@ -324,6 +324,20 @@ impl Language {
         if let Some(target) = warning.strip_prefix("chart ").and_then(|s| s.strip_suffix(" has no supported plot and was skipped")) {
             return self.tr("chart {target} has no supported plot and was skipped").replace("{target}", target);
         }
+        const DRAWING_WARNINGS: [&str; 3] = [
+            "a histogram, waterfall, treemap… chart without its chart part was skipped",
+            "an embedded object (SmartArt, OLE…) was skipped",
+            "grouped shapes are not supported and were skipped",
+        ];
+        for base in DRAWING_WARNINGS {
+            if let Some(suffix) = warning.strip_prefix(base)
+                && suffix.starts_with(" (")
+                && suffix.ends_with(')')
+            {
+                let translated = self.translation(base).unwrap_or(base);
+                return format!("{translated}{suffix}");
+            }
+        }
         self.translation(warning).unwrap_or(warning).to_owned()
     }
 
@@ -343,10 +357,11 @@ impl Language {
             message.to_owned()
         };
 
-        let translated = self.tr(&message);
-        let fallback = message.rsplit_once('|').map_or(message.as_str(), |(_, label)| label);
-
-        if translated != fallback {
+        // A hit in the catalog is the answer, even when the translation reads exactly like the
+        // English: a shared word (`Maximum`), or a `context|label` key whose translation is the
+        // label itself (`AutoSum|MAX` => `MAX`). Comparing the rendered text with the English
+        // would drop such a translation and show the raw `context|` key instead.
+        if let Some(translated) = self.translation(&message) {
             return translated.to_owned();
         }
         error_templates::format_message(&message, self).unwrap_or_else(|| original_parameters.map_or(message, str::to_owned))
@@ -463,6 +478,31 @@ fn name_sort_key(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_translation_that_reads_like_english_is_still_a_translation() {
+        assert_eq!(Language::Es.tr_error("Options|General"), "General");
+        assert_eq!(Language::Cs.tr_error("AutoSum|MAX"), "MAX");
+        // An untranslated message is still shown whole, prefix and all.
+        assert_eq!(Language::PtBr.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
+    }
+
+    #[test]
+    fn drawing_warning_translation_preserves_its_location() {
+        let suffix = " (xl/drawings/drawing1.xml, object 7)";
+        let cases = [
+            (
+                "a histogram, waterfall, treemap… chart without its chart part was skipped",
+                "Histogram, vodopádový nebo stromový graf… bez příslušné části grafu byl přeskočen.",
+            ),
+            ("an embedded object (SmartArt, OLE…) was skipped", "Vložený objekt (SmartArt, OLE…) byl přeskočen."),
+            ("grouped shapes are not supported and were skipped", "Seskupené obrazce nejsou podporovány a byly přeskočeny."),
+        ];
+
+        for (warning, translation) in cases {
+            assert_eq!(Language::Cs.open_warning(&format!("{warning}{suffix}")), format!("{translation}{suffix}"));
+        }
+    }
 
     #[test]
     fn unmatched_import_warnings_keep_pipe_delimited_data() {

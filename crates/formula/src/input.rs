@@ -112,6 +112,15 @@ impl FormulaLocale {
         self.data().functions.iter().find(|(en, _)| en.eq_ignore_ascii_case(canonical)).map_or(canonical, |(_, local)| *local)
     }
 
+    /// Spells a built-in without capturing a workbook name or another localized built-in.
+    pub fn unshadowed_function_name<'a>(self, name: &'a str, bound: impl Fn(&str) -> bool) -> std::borrow::Cow<'a, str> {
+        let alias = self.function_name(name);
+        if !bound(alias) {
+            return alias.into();
+        }
+        if self.canonical_name(name) != name { format!("_xlfn.{name}").into() } else { name.into() }
+    }
+
     /// Resolves a local alias; unmapped names remain unchanged.
     pub fn canonical_name(self, localized: &str) -> &str {
         let data = self.data();
@@ -382,9 +391,14 @@ fn normalize(
             bindings.truncate(saved);
         }
         Expr::Call(name, args) => {
-            let alias = if display { locale.function_name(name) } else { locale.canonical_name(name) };
-            if !bound(name, bindings) && (!display || !bound(alias, bindings)) {
-                *name = if display { alias.to_string() } else { parser::normalize_function_name(alias) };
+            if !display && let Some(explicit) = name.strip_prefix("_xlfn.") {
+                *name = explicit.to_owned();
+            } else if !bound(name, bindings) {
+                *name = if display {
+                    locale.unshadowed_function_name(name, |alias| bound(alias, bindings)).into_owned()
+                } else {
+                    parser::normalize_function_name(locale.canonical_name(name))
+                };
             }
             for arg in args {
                 normalize(arg, locale, known_name, bindings, depth + 1, display)?;

@@ -21,7 +21,8 @@ pub(crate) fn canonical(
     {
         return Ok(stored.to_string());
     }
-    let restored = stored.as_deref().filter(|s| has_udf_prefix(s)).map(|s| restore_udf_calls(text, s, locale));
+    let restored =
+        stored.as_deref().filter(|s| has_udf_prefix(s)).map(|s| restore_udf_calls(text, &display_with_prefixes(s, locale, wb, sheet), locale));
     let text = restored.as_deref().unwrap_or(text);
     if locale == FormulaLocale::En || wb.sheet(sheet).is_some_and(|sh| wb.styles.get(sh.style_id(cell)).num_fmt.as_str() == "@") {
         return Ok(text.to_string());
@@ -62,17 +63,19 @@ fn localized_boolean(text: &str, locale: FormulaLocale) -> Option<&'static str> 
 /// Localizes a stored canonical formula for display, preserving the original text on parse failure.
 /// Workbook names keep precedence over aliases; user-defined call prefixes are hidden for presentation.
 pub(crate) fn display(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: usize) -> String {
-    // English (and every language without a formula table) shows the stored text, `_xludf.`
-    // prefixes aside, and skips a parse per frame.
+    let shown = display_with_prefixes(text, locale, wb, sheet);
+    hide_udf_prefix(&shown, locale)
+}
+
+fn display_with_prefixes(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: usize) -> String {
     if locale == FormulaLocale::En {
-        return hide_udf_prefix(text, locale);
+        return text.to_string();
     }
     let Some(body) = text.strip_prefix('=') else { return text.to_string() };
-    let shown = formula::parse(body)
+    formula::parse(body)
         .and_then(|expr| formula::print_input(&expr, locale, |name| wb.name(name, sheet).is_some() || wb.table(name).is_some()))
         .map(|body| format!("={body}"))
-        .unwrap_or_else(|_| text.to_string());
-    hide_udf_prefix(&shown, locale)
+        .unwrap_or_else(|_| text.to_string())
 }
 
 /// Display spelling of Boolean/error constants, independent of the grid's layout and formatting.
@@ -114,76 +117,76 @@ fn has_udf_prefix(text: &str) -> bool {
     text.to_ascii_lowercase().contains(UDF_PREFIX)
 }
 
-/// Restores hidden UDF names in an edited draft by matching each call's occurrence among
-/// same-named calls. Token spans keep string literals and unrelated text untouched.
-fn restore_udf_calls(draft: &str, stored: &str, locale: FormulaLocale) -> String {
-    use formula::lexer::Tok;
-    use std::collections::HashMap;
+/// Calls that share a displayed spelling with a built-in keep the explicit UDF prefix.
+fn ordinary_calls(tokens: &[formula::lexer::Token], locale: FormulaLocale) -> std::collections::HashSet<String> {
+    tokens
+        .iter()
+        .filter_map(|token| match &token.tok {
+            formula::lexer::Tok::Func(name) if udf_name(name).is_none() => Some(locale.fold_alias(name)),
+            _ => None,
+        })
+        .collect()
+}
 
-    let Some(stored_body) = stored.strip_prefix('=') else { return draft.to_string() };
-    let Some(draft_body) = draft.strip_prefix('=') else { return draft.to_string() };
-    let (Ok(stored_tokens), Ok(draft_tokens)) =
-        (formula::lexer::tokenize_locale(stored_body, FormulaLocale::En), formula::lexer::tokenize_locale(draft_body, locale))
-    else {
-        return draft.to_string();
+fn udf_name(name: &str) -> Option<&str> {
+    name.get(..UDF_PREFIX.len()).filter(|prefix| prefix.eq_ignore_ascii_case(UDF_PREFIX))?;
+    name.get(UDF_PREFIX.len()..)
+}
+
+/// Restore only the function spellings hidden in this draft. A mixed built-in and UDF
+/// remains explicitly qualified, so deleting or moving either call preserves its identity.
+fn restore_udf_calls(draft: &str, marked: &str, locale: FormulaLocale) -> String {
+    use formula::lexer::{Tok, tokenize_locale};
+    let Some(body) = draft.strip_prefix('=') else { return draft.to_owned() };
+    let (Ok(stored), Ok(tokens)) = (tokenize_locale(marked.trim_start_matches('='), locale), tokenize_locale(body, locale)) else {
+        return draft.to_owned();
     };
-    let mut totals = HashMap::<String, usize>::new();
-    let mut targets = Vec::new();
-    for token in &stored_tokens {
-        if let Tok::Func(name) = &token.tok {
-            let raw = stored_body.get(token.start..token.end).unwrap_or("");
-            let udf_name = raw.strip_prefix(UDF_PREFIX).or_else(|| raw.strip_prefix("_XLUDF.")).and_then(|n| n.strip_suffix('('));
-            let key = if let Some(udf_name) = udf_name { locale.fold_alias(udf_name) } else { locale.fold_alias(locale.function_name(name)) };
-            let occurrence = totals.entry(key.clone()).or_default();
-            *occurrence += 1;
-            if let Some(udf_name) = udf_name {
-                targets.push((key, *occurrence, format!("{UDF_PREFIX}{udf_name}(")));
+    let ordinary = ordinary_calls(&stored, locale);
+    let mut hidden = std::collections::HashMap::new();
+    for token in &stored {
+        if let Tok::Func(name) = &token.tok
+            && let Some(short) = udf_name(name)
+        {
+            let key = locale.fold_alias(short);
+            if !ordinary.contains(&key) {
+                *hidden.entry(key).or_insert(0_usize) += 1;
             }
         }
     }
-    if targets.is_empty() {
-        return draft.to_string();
-    }
-    let mut occurrences = HashMap::<String, usize>::new();
-    let mut replacements = Vec::new();
-    for token in &draft_tokens {
-        if let Tok::Func(name) = &token.tok {
-            let key = locale.fold_alias(name);
-            let occurrence = occurrences.entry(key.clone()).or_default();
-            *occurrence += 1;
-            if let Some((_, _, replacement)) = targets.iter().find(|(target, ordinal, _)| target == &key && ordinal == occurrence) {
-                replacements.push((token.start, token.end, replacement.as_str()));
-            }
+    let mut out = String::from("=");
+    let mut last = 0;
+    for token in tokens {
+        if let Tok::Func(name) = &token.tok
+            && let Some(count) = hidden.get_mut(&locale.fold_alias(name))
+            && *count > 0
+        {
+            out.push_str(&body[last..token.start]);
+            out.push_str(UDF_PREFIX);
+            last = token.start;
+            *count -= 1;
         }
     }
-    let mut out = String::with_capacity(draft.len() + replacements.len() * UDF_PREFIX.len());
-    out.push('=');
-    let mut from = 0;
-    for (start, end, replacement) in replacements {
-        out.push_str(draft_body.get(from..start).unwrap_or(""));
-        out.push_str(replacement);
-        from = end;
-    }
-    out.push_str(draft_body.get(from..).unwrap_or(""));
+    out.push_str(&body[last..]);
     out
 }
 
-/// Excel shows a user-defined call such as `_xludf.EOMONTH()` as `=EOMONTH()`. Only function
-/// names lose the prefix: text literals and names keep it.
+/// Excel hides the UDF qualifier when the short spelling is unambiguous in the formula.
 fn hide_udf_prefix(text: &str, locale: FormulaLocale) -> String {
     let Some(body) = text.strip_prefix('=').filter(|b| has_udf_prefix(b)) else { return text.to_string() };
     let Ok(tokens) = formula::lexer::tokenize_locale(body, locale) else { return text.to_string() };
+    let ordinary = ordinary_calls(&tokens, locale);
     let mut out = String::from("=");
     let mut from = 0;
     for t in tokens {
-        if matches!(t.tok, formula::lexer::Tok::Func(_))
-            && body.get(t.start..t.start + UDF_PREFIX.len()).is_some_and(|p| p.eq_ignore_ascii_case(UDF_PREFIX))
+        if let formula::lexer::Tok::Func(name) = &t.tok
+            && let Some(short) = udf_name(name)
+            && !ordinary.contains(&locale.fold_alias(short))
         {
-            out.push_str(body.get(from..t.start).unwrap_or(""));
+            out.push_str(&body[from..t.start]);
             from = t.start + UDF_PREFIX.len();
         }
     }
-    out.push_str(body.get(from..).unwrap_or(""));
+    out.push_str(&body[from..]);
     out
 }
 
@@ -242,9 +245,8 @@ fn translate_argument(arg: &str, language: Language) -> Option<String> {
 }
 
 /// Avoid suggesting an alias that would call a workbook/table name instead of the function.
-pub(crate) fn completion_name<'a>(name: &'a str, locale: FormulaLocale, wb: &Workbook, sheet: usize) -> &'a str {
-    let alias = locale.function_name(name);
-    if wb.name(alias, sheet).is_some() || wb.table(alias).is_some() { name } else { alias }
+pub(crate) fn completion_name<'a>(name: &'a str, locale: FormulaLocale, wb: &Workbook, sheet: usize) -> std::borrow::Cow<'a, str> {
+    locale.unshadowed_function_name(name, |alias| wb.name(alias, sheet).is_some() || wb.table(alias).is_some())
 }
 
 /// Engine-generated edit templates use canonical syntax. The only incomplete template is
