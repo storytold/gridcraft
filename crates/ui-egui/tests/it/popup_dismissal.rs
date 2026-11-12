@@ -129,7 +129,7 @@ fn popup_actions_still_execute_and_filter_checkboxes_stay_open() {
     let outside = cell_pos(&h, "H7");
     click(&mut h, outside, PointerButton::Primary);
     open(&mut h, Menu::Filter);
-    h.get_by_label("Apply").click();
+    h.get_by_label("OK").click();
     h.run_steps(2);
     let sh = h.state().session.active().unwrap().wb.active().unwrap();
     assert!(!sh.is_row_hidden(1) && !sh.is_row_hidden(2), "cancelled checkbox edits must not be applied after reopening");
@@ -137,7 +137,10 @@ fn popup_actions_still_execute_and_filter_checkboxes_stay_open() {
     open(&mut h, Menu::Filter);
     h.get_by_label("(Select All)").click();
     h.run_steps(2);
-    h.get_by_label("Apply").click();
+    // With nothing ticked OK is off (every row would hide); keep one value.
+    h.get_by_label("Blue").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
     h.run_steps(2);
     assert!(!is_open(&h, Menu::Filter));
     assert!(h.state().session.active().unwrap().wb.active().unwrap().is_row_hidden(1));

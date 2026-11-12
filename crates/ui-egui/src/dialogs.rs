@@ -53,6 +53,27 @@ pub enum Field {
     Note(String),
 }
 
+/// Custom AutoFilter's conditions: the operator `data.filterBy` takes (the "not" text forms are
+/// rewritten as `<>` with a wildcard by `build_params`) and the label shown.
+pub(crate) const FILTER_OPS: [(&str, &str); 12] = [
+    ("=", "equals"),
+    ("<>", "does not equal"),
+    (">", "is greater than"),
+    (">=", "is greater than or equal to"),
+    ("<", "is less than"),
+    ("<=", "is less than or equal to"),
+    ("beginsWith", "begins with"),
+    ("notBeginsWith", "does not begin with"),
+    ("endsWith", "ends with"),
+    ("notEndsWith", "does not end with"),
+    ("contains", "contains"),
+    ("notContains", "does not contain"),
+];
+
+/// The same comparisons worded for dates.
+pub(crate) const DATE_FILTER_OPS: [(&str, &str); 6] =
+    [("=", "equals"), ("<>", "does not equal"), (">", "is after"), (">=", "is on or after"), ("<", "is before"), ("<=", "is on or before")];
+
 #[derive(Clone, Debug)]
 pub struct Dialog {
     pub name: String,
@@ -687,6 +708,51 @@ impl Dialog {
                 }
                 d
             }
+            "customAutoFilter" => {
+                // The filter menu's Number / Text / Date Filters items open this with the column,
+                // its header, its kind and the operators the item stands for.
+                let header = params.get("header").and_then(Json::as_str).unwrap_or("").to_string();
+                let date = params.get("kind").and_then(Json::as_str) == Some("date");
+                let ops = if date { DATE_FILTER_OPS.to_vec() } else { FILTER_OPS.to_vec() };
+                let mut ops2 = vec![("", "(no second condition)")];
+                ops2.extend_from_slice(&ops);
+                let date1904 = app.session.active().is_some_and(|d| d.wb.date_system == gridcraft_engine::core::DateSystem::D1904);
+                Dialog::form(
+                    "customAutoFilter",
+                    "Custom AutoFilter",
+                    "data.filterBy",
+                    vec![
+                        Note(format!("Keep the rows where “{header}”:")),
+                        Choice { key: "op", label: "Condition", options: ops },
+                        Text { key: "value", label: if date { "Value (a date such as 2026-03-31):" } else { "Value:" } },
+                        Choice { key: "join", label: "Combine with", options: vec![("and", "And"), ("or", "Or")] },
+                        Choice { key: "op2", label: "Second condition", options: ops2 },
+                        Text { key: "value2", label: "Value:" },
+                        Note("In text, ? stands for any one character and * for any run of characters.".into()),
+                    ],
+                    json!({
+                        "column": p("column"),
+                        "kind": p("kind"),
+                        "date1904": date1904,
+                        "op": params.get("op").and_then(Json::as_str).unwrap_or("="),
+                        "value": params.get("value").and_then(Json::as_str).unwrap_or(""),
+                        "join": "and",
+                        "op2": params.get("op2").and_then(Json::as_str).unwrap_or(""),
+                        "value2": "",
+                    }),
+                )
+            }
+            "top10AutoFilter" => Dialog::form(
+                "top10AutoFilter",
+                "Top 10 AutoFilter",
+                "data.filterBy",
+                vec![
+                    Choice { key: "which", label: "Show", options: vec![("top", "Top"), ("bottom", "Bottom")] },
+                    Number { key: "count", label: "How many:" },
+                    Choice { key: "unit", label: "Counted as", options: vec![("items", "Items"), ("percent", "Percent")] },
+                ],
+                json!({"column": p("column"), "which": "top", "count": 10, "unit": "items"}),
+            ),
             "equation" => return crate::equation::open_editor(app, &params),
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),
             "forecastSheet" => Dialog::form(

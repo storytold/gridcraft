@@ -557,3 +557,126 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+/// Filter by Color: `fillColor` / `fontColor` keep the rows whose cell shows that colour; a theme
+/// colour matches the RGB it resolves to, and "none" keeps the cells without a fill.
+#[test]
+fn filter_by_fill_and_font_color() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["k"], ["red"], ["plain"], ["red2"], ["blue"]]})).unwrap();
+    s.execute("home.fillColor", json!({"range": "A2", "color": "#FF0000"})).unwrap();
+    s.execute("home.fillColor", json!({"range": "A4", "color": "#FF0000"})).unwrap();
+    s.execute("home.fontColor", json!({"range": "A5", "color": "#0000FF"})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:A5"})).unwrap();
+    let hidden = |s: &Session| -> Vec<u32> { (1..=4).filter(|r| s.doc().unwrap().wb.sheet(0).unwrap().is_row_hidden(*r)).collect() };
+    let r = s.execute("data.filterBy", json!({"column": "A", "fillColor": "#FF0000"})).unwrap();
+    assert_eq!(r["hiddenRows"], json!(2));
+    assert_eq!(hidden(&s), vec![2, 4], "the red rows (A2, A4) stay");
+    s.execute("data.filterBy", json!({"column": "A", "fillColor": "none"})).unwrap();
+    assert_eq!(hidden(&s), vec![1, 3], "no fill: A3 and A5 stay");
+    s.execute("data.filterBy", json!({"column": "A", "fontColor": "#0000FF"})).unwrap();
+    assert_eq!(hidden(&s), vec![1, 2, 3]);
+    assert!(s.execute("data.filterBy", json!({"column": "A", "fillColor": "not a colour"})).is_err());
+    // A theme colour matches the RGB it stands for.
+    let theme_rgb = s.doc().unwrap().wb.theme.clone();
+    s.execute("home.fillColor", json!({"range": "A3", "color": {"theme": 4}})).unwrap();
+    let hex = gridcraft_model::Color::Theme(4, 0).hex(&theme_rgb).unwrap();
+    s.execute("data.filterBy", json!({"column": "A", "fillColor": hex})).unwrap();
+    assert_eq!(hidden(&s), vec![1, 3, 4], "only A3 (theme accent 1) shows the accent's RGB");
+}
+
+/// Sort by Color with a colour named puts the cells showing it on top and keeps the rest in order.
+#[test]
+fn sort_by_a_named_color_puts_it_on_top() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["k"], ["a"], ["b"], ["c"], ["d"]]})).unwrap();
+    s.execute("home.fillColor", json!({"range": "A4", "color": "#FFFF00"})).unwrap();
+    s.execute("home.fillColor", json!({"range": "A5", "color": "#00FF00"})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A5", "header": true, "keys": [{"column": "A", "by": "cellColor", "color": "#00FF00"}]})).unwrap();
+    let col = |s: &mut Session| -> Vec<Json> {
+        (2..=5).map(|r| s.execute("cell.get", json!({"cell": format!("A{r}")})).unwrap()["value"].clone()).collect()
+    };
+    assert_eq!(col(&mut s), vec![json!("d"), json!("a"), json!("b"), json!("c")]);
+    s.execute("data.sort", json!({"range": "A1:A5", "header": true, "keys": [{"column": "A", "by": "cellColor", "color": "#FFFF00"}]})).unwrap();
+    assert_eq!(col(&mut s), vec![json!("c"), json!("d"), json!("a"), json!("b")]);
+}
+
+/// The filter menu's view of a column: its kind, header, filter state and colours.
+#[test]
+fn filter_column_describes_kind_colors_and_state() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Qty", "When"], ["x", 1, 46082], ["y", 2, 46083]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "C2:C3", "code": "yyyy-mm-dd"})).unwrap();
+    s.execute("home.fillColor", json!({"range": "B3", "color": "#FFFF00"})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:C3"})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let a = filter_column(&wb, 0, 0).unwrap();
+    assert_eq!((a.kind, a.header.as_str(), a.filtered), (FilterKind::Text, "Name", false));
+    let b = filter_column(&wb, 0, 1).unwrap();
+    assert_eq!(b.kind, FilterKind::Number);
+    assert_eq!(b.fills.len(), 2, "no fill and yellow: {:?}", b.fills);
+    assert_eq!(filter_column(&wb, 0, 2).unwrap().kind, FilterKind::Date);
+    assert!(filter_column(&wb, 0, 3).is_none(), "outside the filter");
+    s.execute("data.filterBy", json!({"column": "B", "custom": {"op": ">", "value": "1"}})).unwrap();
+    assert!(filter_column(&s.doc().unwrap().wb, 0, 1).unwrap().filtered);
+}
+
+/// Date Filters' periods, as of Thursday 12 November 2026 (weeks start on Sunday).
+#[test]
+fn date_periods_cover_the_right_days() {
+    use gridcraft_core::DateSystem::D1900;
+    let d = |y, m, day| gridcraft_core::date::serial_from_ymd(D1900, y, m, day).unwrap();
+    let today = d(2026, 11, 12) + 0.75; // the time of day doesn't matter
+    let p = |name| date_period(name, D1900, today).unwrap();
+    assert_eq!(p("today"), (d(2026, 11, 12), d(2026, 11, 13)));
+    assert_eq!(p("yesterday"), (d(2026, 11, 11), d(2026, 11, 12)));
+    assert_eq!(p("thisWeek"), (d(2026, 11, 8), d(2026, 11, 15)));
+    assert_eq!(p("lastWeek"), (d(2026, 11, 1), d(2026, 11, 8)));
+    assert_eq!(p("thisMonth"), (d(2026, 11, 1), d(2026, 12, 1)));
+    assert_eq!(p("nextMonth"), (d(2026, 12, 1), d(2027, 1, 1)), "December rolls into the next year");
+    assert_eq!(p("lastQuarter"), (d(2026, 7, 1), d(2026, 10, 1)));
+    assert_eq!(p("nextQuarter"), (d(2027, 1, 1), d(2027, 4, 1)));
+    assert_eq!(p("lastYear"), (d(2025, 1, 1), d(2026, 1, 1)));
+    assert_eq!(p("yearToDate"), (d(2026, 1, 1), d(2026, 11, 13)));
+    assert!(date_period("someday", D1900, today).is_none());
+    for name in DATE_PERIODS {
+        let (a, b) = p(name);
+        assert!(a < b, "{name}");
+    }
+    // January's last month is December of the year before.
+    assert_eq!(date_period("lastMonth", D1900, d(2026, 1, 20)).unwrap(), (d(2025, 12, 1), d(2026, 1, 1)));
+}
+
+/// `period` filters the dates of that period as of today.
+#[test]
+fn filter_by_period_keeps_todays_rows() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["When"], ["=TODAY()"], ["=TODAY()-400"], ["=TODAY()+1"]]})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:A4"})).unwrap();
+    let r = s.execute("data.filterBy", json!({"column": "A", "period": "today"})).unwrap();
+    assert_eq!(r["hiddenRows"], json!(2), "only today's row stays");
+    assert!(!s.doc().unwrap().wb.sheet(0).unwrap().is_row_hidden(1));
+    assert!(s.execute("data.filterBy", json!({"column": "A", "period": "someday"})).is_err());
+}
+
+/// A table with no filter yet: `data.filterBy` filters the table, even with the active cell on a
+/// title above it. It used to set up a one-cell filter around that title, so ">1010" hid nothing
+/// and other columns were "outside the filter range".
+#[test]
+fn filter_by_uses_the_table_when_the_active_cell_is_outside_it() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Monthly orders"]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "A3", "values": [["OrderID", "Customer"], [1009, "a"], [1010, "b"], [1011, "c"], [1012, "d"]]}))
+        .unwrap();
+    s.execute("insert.table", json!({"range": "A3:B7"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    let r = s.execute("data.filterBy", json!({"column": "A", "custom": {"op": ">", "value": "1010"}})).unwrap();
+    assert_eq!(r["hiddenRows"], json!(2), "1009 and 1010 hide");
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().autofilter.as_ref().map(|a| a.range.a1()), Some("A3:B7".to_string()));
+    s.execute("data.filterBy", json!({"column": "B", "values": ["c"]})).expect("B is in the table's filter");
+}

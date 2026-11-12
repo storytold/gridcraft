@@ -15,6 +15,43 @@ use super::zoom::zoom;
 use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
 use gridcraft_engine::model::PageOrder;
 
+/// Custom AutoFilter's `data.filterBy` parameters: `{column, custom: {op, value, op2?, value2?, and}}`.
+/// "does not begin / end with" become `<>` with a wildcard; on a date column a typed date becomes
+/// its serial, so it compares with the dates' numbers. A second operator without a value, or none
+/// chosen, leaves the second condition out.
+pub(crate) fn custom_auto_filter_params(values: &Map<String, Json>) -> Json {
+    let s = |k: &str| values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+    let date = s("kind") == "date";
+    let sys = if values.get("date1904").and_then(Json::as_bool) == Some(true) {
+        gridcraft_engine::core::DateSystem::D1904
+    } else {
+        gridcraft_engine::core::DateSystem::D1900
+    };
+    let condition = |op: String, value: String| -> (String, String) {
+        let value = if date {
+            match gridcraft_engine::core::parse::parse_input(value.trim(), sys).value {
+                gridcraft_engine::core::Value::Number(n) => n.to_string(),
+                _ => value,
+            }
+        } else {
+            value
+        };
+        match op.as_str() {
+            "notBeginsWith" => ("<>".into(), format!("{value}*")),
+            "notEndsWith" => ("<>".into(), format!("*{value}")),
+            _ => (op, value),
+        }
+    };
+    let (op, value) = condition(if s("op").is_empty() { "=".into() } else { s("op") }, s("value"));
+    let mut custom = json!({"op": op, "value": value, "and": s("join") != "or"});
+    if !s("op2").is_empty() && !s("value2").trim().is_empty() {
+        let (op2, value2) = condition(s("op2"), s("value2"));
+        custom["op2"] = json!(op2);
+        custom["value2"] = json!(value2);
+    }
+    json!({"column": values.get("column").cloned().unwrap_or(Json::Null), "custom": custom})
+}
+
 /// Builds the command params from form values for dialogs that need translation.
 /// The parameters OK sends to the dialog's command: its field values, reshaped per dialog.
 /// Unchanged hyperlink display text is omitted so its number or formula stays intact.
@@ -27,6 +64,18 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
             {
                 m.remove("text");
             }
+        }
+        "customAutoFilter" => return custom_auto_filter_params(&d.values),
+        "top10AutoFilter" => {
+            let count = d.values.get("count").and_then(Json::as_f64).filter(|n| n.is_finite()).unwrap_or(10.0).round().clamp(1.0, 1_000_000.0) as u64;
+            return json!({
+                "column": d.values.get("column").cloned().unwrap_or(Json::Null),
+                "top": {
+                    "count": count,
+                    "bottom": d.values.get("which").and_then(Json::as_str) == Some("bottom"),
+                    "percent": d.values.get("unit").and_then(Json::as_str) == Some("percent"),
+                },
+            });
         }
         "advancedFilter" => {
             if let Some(m) = v.as_object_mut() {
@@ -652,7 +701,8 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                     ui.vertical(|ui| {
                         let field_label = ui.label(egui::RichText::new(lang.tr(label)).strong());
                         let cur = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
-                        if d.name == "dataValidation" {
+                        // Long lists (validation types, filter conditions) are drop-downs; short ones radios.
+                        if d.name == "dataValidation" || (d.name == "customAutoFilter" && key != "join") {
                             let selected = options.iter().find(|(val, _)| *val == cur).map(|(_, text)| lang.tr(text)).unwrap_or("");
                             craft_ui::ComboBox::from_id_salt(("dataValidation", key))
                                 .selected_text(selected)
@@ -730,4 +780,39 @@ fn page_order_preview(ui: &mut egui::Ui, order: PageOrder) {
     let d = (to - from).normalized();
     let n = vec2(-d.y, d.x);
     p.add(egui::Shape::convex_polygon(vec![to, to - d * 6.0 + n * 3.5, to - d * 6.0 - n * 3.5], t.accent, egui::Stroke::NONE));
+}
+
+#[cfg(test)]
+mod custom_auto_filter_tests {
+    use super::{Json, Map, custom_auto_filter_params, json};
+
+    fn params(v: Json) -> Json {
+        let m: Map<String, Json> = v.as_object().cloned().unwrap_or_default();
+        custom_auto_filter_params(&m)
+    }
+
+    #[test]
+    fn negated_text_conditions_become_wildcards() {
+        let p = params(json!({"column": "A", "op": "notBeginsWith", "value": "ab", "join": "or", "op2": "notEndsWith", "value2": "z"}));
+        assert_eq!(p, json!({"column": "A", "custom": {"op": "<>", "value": "ab*", "and": false, "op2": "<>", "value2": "*z"}}));
+    }
+
+    #[test]
+    fn a_second_condition_needs_an_operator_and_a_value() {
+        let p = params(json!({"column": "B", "op": ">", "value": "10", "join": "and", "op2": "<", "value2": " "}));
+        assert_eq!(p, json!({"column": "B", "custom": {"op": ">", "value": "10", "and": true}}));
+        let p = params(json!({"column": "B", "op": ">", "value": "10", "op2": "", "value2": "5"}));
+        assert!(p["custom"].get("op2").is_none());
+    }
+
+    #[test]
+    fn dates_on_a_date_column_compare_as_serials() {
+        let p = params(json!({"column": "C", "kind": "date", "op": ">=", "value": "2026-03-01", "join": "and", "op2": "<=", "value2": "2026-03-31"}));
+        assert_eq!(p["custom"]["value"], json!("46082"));
+        assert_eq!(p["custom"]["value2"], json!("46112"));
+        // Not a date: kept as typed (it then matches nothing, as in Excel).
+        assert_eq!(params(json!({"column": "C", "kind": "date", "op": "=", "value": "soon"}))["custom"]["value"], json!("soon"));
+        // On a text column the same text stays text.
+        assert_eq!(params(json!({"column": "A", "op": "=", "value": "2026-03-01"}))["custom"]["value"], json!("2026-03-01"));
+    }
 }

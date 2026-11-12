@@ -9,6 +9,9 @@ struct SortKey {
     desc: bool,
     by: String,
     list: Option<Vec<String>>,
+    /// Sort by colour with a colour named: cells showing it go on top (`desc`: at the bottom),
+    /// the rest keep their order. Without one, colours sort by their RGB value.
+    color: Option<gridcraft_model::Color>,
 }
 
 /// The sheet and range a sort works on: the sheet `sheet` or a `Sheet!` prefix on `range` names,
@@ -34,7 +37,7 @@ pub(super) fn quick_sort(s: &mut Session, p: &Json, asc: bool) -> Result<Json> {
     let d = s.doc()?;
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
     let header = guess_header(&d.wb, sh, r);
-    do_sort(s, sheet, r, header, vec![SortKey { col, desc: !asc, by: "values".into(), list: None }], false, false)
+    do_sort(s, sheet, r, header, vec![SortKey { col, desc: !asc, by: "values".into(), list: None, color: None }], false, false)
 }
 
 pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
@@ -65,6 +68,7 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
             desc: k.get("order").and_then(Json::as_str) == Some("desc"),
             by: k.get("by").and_then(Json::as_str).unwrap_or("values").to_string(),
             list: k.get("customList").and_then(Json::as_array).map(|l| l.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()),
+            color: crate::cmd::format::color_param(k.get("color")),
         });
     }
     if keys.is_empty() {
@@ -102,14 +106,16 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
         let key_val = |i: u32, k: &SortKey| -> (Value, u32) {
             let c = line(i, k.col);
             let v = sh.value(c);
-            let color = match k.by.as_str() {
-                "cellColor" => {
-                    styles.get(sh.style_id(c)).fill.fg.resolve(&theme).map(|[r, g, b]| u32::from_be_bytes([0, r, g, b])).unwrap_or(u32::MAX)
-                }
-                "fontColor" => {
-                    styles.get(sh.style_id(c)).font.color.resolve(&theme).map(|[r, g, b]| u32::from_be_bytes([0, r, g, b])).unwrap_or(u32::MAX)
-                }
-                _ => 0,
+            let shown = match k.by.as_str() {
+                "cellColor" => Some(super::filter::fill_color(styles.get(sh.style_id(c)))),
+                "fontColor" => Some(styles.get(sh.style_id(c)).font.color),
+                _ => None,
+            };
+            let color = match (shown, &k.color) {
+                // A colour named: 0 for cells showing it, 1 for the rest (a stable sort keeps their order).
+                (Some(shown), Some(target)) => u32::from(!super::filter::same_color(&shown, target, &theme)),
+                (Some(shown), None) => shown.resolve(&theme).map(|[r, g, b]| u32::from_be_bytes([0, r, g, b])).unwrap_or(u32::MAX),
+                (None, _) => 0,
             };
             (v, color)
         };
