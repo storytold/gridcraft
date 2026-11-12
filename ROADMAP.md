@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-10 · **Change:** minor (shared CJK/Latin fallback baselines; Arabic text layout, reading direction, script fallbacks and B1/B2 calendar formats; form controls: buttons, sliders and spin buttons; RefEdit range selection in Goal Seek, Solver and Data Analysis dialogs; GNOME Wayland window controls without bundled title fonts; Python mode in the formula bar and Python cells preserved as data; equations with LaTeX editing, Office Math and PDF output; Solver Sensitivity reports for Simplex LP and GRG Nonlinear; floating objects share one selection, eight resize handles and keyboard deletion; chart data tables with live values, XLSX round-trip and print/PDF; Formulas Function Library, Recently Used and Insert Function categories; XLSX workbook-view selection and bounded tab ratios; CSV column date-order detection; macro engine and Automate interface; CLI/MCP PDF font families and Unicode extraction; readiness estimates unchanged) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-12 · **Change:** minor (embedded PDF fonts retain direct object output and tracked fill colours; shared CJK/Latin fallback baselines; Arabic text layout, reading direction, script fallbacks and B1/B2 calendar formats; form controls: buttons, sliders and spin buttons; RefEdit range selection in Goal Seek, Solver and Data Analysis dialogs; GNOME Wayland window controls without bundled title fonts; Python mode in the formula bar and Python cells preserved as data; equations with LaTeX editing, Office Math and PDF output; Solver Sensitivity reports for Simplex LP and GRG Nonlinear; floating objects share one selection, eight resize handles and keyboard deletion; chart data tables with live values, XLSX round-trip and print/PDF; Formulas Function Library, Recently Used and Insert Function categories; XLSX workbook-view selection and bounded tab ratios; CSV column date-order detection; macro engine and Automate interface; CLI/MCP PDF font families and Unicode extraction; readiness estimates unchanged) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -134,6 +134,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-11-12 | Embedded PDF fonts use the direct object writer and tracked fill colours; regressions cover shapes, text, save/restore, shared images, links and Unicode maps across pages |
 | 2026-11-06 | A sheet keeps its own scroll position when sheets are inserted, deleted or moved before it: a new PivotTable or inserted sheet opens at the top instead of where its neighbour was scrolled; a closed window's positions are let go (#3485) |
 | 2026-11-02 | Form controls: Insert › Controls places buttons, sliders (scroll bars) and spin buttons on the sheet. A slider or spin button holds a whole number from 0 to 30000 in a linked cell (a drag or a held arrow is one undo step, and editing the cell moves the control); a button runs a macro or one command through the macro policy, asking first in a workbook opened from a file; Assign Action and Format Control edit them, and XLSX files read and write them (control properties, `<controls>` and VML), alongside the form controls GridCraft keeps unchanged |
 | 2026-11-02 | Dialogs take ranges by selection on the grid: reference boxes (RefEdit) with a collapse button that shrinks the dialog while the person selects, in Goal Seek, Solver (including the Model Range of Load/Save) and Data Analysis; while collapsed, the arrow keys move the selection and Shift+arrow extends it, and F4 cycles a reference's anchors |
@@ -201,7 +202,10 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | XLSX export writes a picture used on several sheets once, as one `xl/media` part every drawing points to (it wrote a copy per drawing: a 16-sheet workbook with one 112 KB logo grew from 0.4 to 1.9 MB) (#985) |
 | 2026-10-13 | XLSX: `[Content_Types].xml`, `_rels/.rels`, the workbook rels and `xl/workbook.xml` are the first zip entries (document properties last), so libmagic and PHP `finfo` detect the file type even with large properties (#1090) |
 | 2026-10-13 | Conditional formatting: a rule gathers range statistics only when it reads them (top/bottom, above average, duplicates, scales, bars, icons) and borrows them instead of copying them per cell, so the per-frame lookup of an expression or cell-value rule no longer visits its whole range (#1098, part 1) |
+| 2026-10-13 | Grid: resizing several selected columns or rows previews on the dragged one and applies the size to all on release; Esc cancels (#1082) |
 | 2026-10-12 | Next/previous sheet navigation stops at the first/last visible worksheet instead of activating a hidden boundary sheet; the current selection is retained |
+| 2026-10-12 | PDF writer: objects are written straight to the output, identical pictures are stored once, style operators are emitted only when they change, `q` nesting is limited to 28 and polyline joins no longer leak into later strokes (#816) |
+| 2026-10-12 | Insert › Text › WordArt (`insert.wordArt`, `wordArt.set`): floating decorative text with 10 original styles, outline and shadow, in-place editing, XLSX and print (#784) |
 | 2026-10-12 | Number formatting: one table of built-in formats (xlsx); numbers, dates and General render with one scratch buffer instead of per-token strings; output unchanged, checked against digests recorded from the old code (#817) |
 | 2026-10-21 | Macro engine ([macros.md](docs/macros.md)): typed, declarative macros saved in the workbook (a JSON field; hidden names in xlsx); declared inputs checked with messages that name the cells; tokens (`Input.col(2)`, `Row`, `Output`, `Name:Total`, `{{…}}` in formulas); one undo step with full rollback; a footprint dry run with ask, fail, overwrite, shift down or shift right; a policy that keeps macros away from files and the app, with approval for macros in opened files; Repeat, If and Stop steps; a debugger; a relative recorder; `macro.*` commands beside the unchanged Automate scripts |
 | 2026-10-13 | Charts: work and memory are bounded by series x points (2,000,000 per chart: every series keeps its first points; 16 trendlines per chart), hairline columns and bars are merged per pixel column, series ranges are clipped before they are evaluated, the moving average is linear and rendering clean data no longer copies it (#1147) |
@@ -269,6 +273,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | Integrate embedded PDF fonts with direct object output, shared images and tracked drawing styles |
 | 2026-11-10 | trivial | Reconcile upstream CJK baseline and legacy-formula changes with per-export PDF fonts; retain both feature histories |
 | 2026-11-09 | trivial | Reconcile upstream Arabic text layout, fallback and calendar progress with TrueType PDF export capabilities and limits |
 | 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |
@@ -322,6 +327,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | trivial | Progress log: shared pictures written once on XLSX export (#985) |
 | 2026-10-13 | minor | Progress log: conditional-format lookups no longer scan the range for rules without statistics (#1098) |
 | 2026-10-12 | minor | Progress log: hidden-sheet navigation at workbook boundaries |
+| 2026-10-12 | minor | Progress log: PDF writer cleanup (#816) |
+| 2026-10-12 | minor | Catalog 276 → 277 / 292: Insert › WordArt (#784) |
 | 2026-10-12 | minor | Numfmt cleanup: one built-in format table (gridcraft-xlsx), fewer allocations rendering numbers, dates and General, equality test against the previous output (#817); progress log row |
 | 2026-10-12 | minor | The control server requires an auth token and closes bad connections (#777); progress log row |
 | 2026-10-12 | minor | Rows auto-fit oversized fonts on open and whole-row/column formatting (#833); progress log row |
