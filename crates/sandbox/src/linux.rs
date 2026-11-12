@@ -268,12 +268,28 @@ const TIOCLINUX: u64 = libc::TIOCLINUX as u64;
 const IOC_WRITE: u64 = 0x4000_0000;
 /// Changes a directory, though its number says it only reads, as the kernel's headers have it.
 const FS_IOC_SET_ENCRYPTION_POLICY: u64 = 0x800C_6613;
+#[allow(clippy::unnecessary_cast)]
+const F_SETOWN: u64 = libc::F_SETOWN as u64;
+#[allow(clippy::unnecessary_cast)]
+const F_SETFL: u64 = libc::F_SETFL as u64;
+#[allow(clippy::unnecessary_cast)]
+const O_ASYNC: u64 = libc::O_ASYNC as u64;
+/// The two `fcntl` commands of the same family that the kernel's headers name and `libc` doesn't;
+/// the numbers are the same on every architecture (`asm-generic/fcntl.h`).
+const F_SETOWN_EX: u64 = 15;
+const F_SETSIG: u64 = 10;
 
 /// What the main filter refuses with `EPERM`: the calls above, and these when their arguments match.
 /// - `clone` without `CLONE_THREAD`: a new process.
 /// - A signal to any process but `me`, whose ID `exec` keeps. Landlock's signal scope needs a newer
 ///   kernel than the rest (ABI 6), and `kill(-1, 9)` must not get through on an older one.
 /// - A change to the limits, priority or scheduling of any process but `me`.
+/// - The `fcntl` commands that arrange asynchronous notification: naming the process to notify
+///   (`F_SETOWN`, `F_SETOWN_EX`), choosing its signal (`F_SETSIG`), and `F_SETFL` when it sets
+///   `O_ASYNC`, the switch without which nothing is sent. None is a signal call, and the only rule
+///   that would cover them is Landlock's signal scope, which needs ABI 6, newer than a launch
+///   requires; without these a confined program could have the kernel signal any process of its
+///   user. `F_SETFL` itself still works, as `O_NONBLOCK` comes from it.
 /// - `TIOCSTI` and `TIOCLINUX`, which type into a terminal the program inherited, as when
 ///   `gridcraft-cli sandbox-check` runs a program from a shell.
 /// - An `ioctl` that hands the kernel data ([`IOC_WRITE`]), as those that change a file's flags or
@@ -309,6 +325,15 @@ fn main_rules(me: u32) -> Result<BTreeMap<i64, Vec<SeccompRule>>> {
             rule(vec![word(1, SeccompCmpOp::Eq, TIOCLINUX)?])?,
             rule(vec![word(1, SeccompCmpOp::MaskedEq(IOC_WRITE), IOC_WRITE)?])?,
             rule(vec![word(1, SeccompCmpOp::Eq, FS_IOC_SET_ENCRYPTION_POLICY)?])?,
+        ],
+    );
+    rules.insert(
+        libc::SYS_fcntl,
+        vec![
+            rule(vec![word(1, SeccompCmpOp::Eq, F_SETOWN)?])?,
+            rule(vec![word(1, SeccompCmpOp::Eq, F_SETOWN_EX)?])?,
+            rule(vec![word(1, SeccompCmpOp::Eq, F_SETSIG)?])?,
+            rule(vec![word(1, SeccompCmpOp::Eq, F_SETFL)?, word(2, SeccompCmpOp::MaskedEq(O_ASYNC), O_ASYNC)?])?,
         ],
     );
     Ok(rules)

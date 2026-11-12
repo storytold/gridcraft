@@ -78,6 +78,8 @@ fn the_self_test_finds_every_denial() {
     ] {
         assert!(out.contains(line), "missing `{line}` in:\n{out}");
     }
+    #[cfg(target_os = "linux")]
+    assert!(out.contains("denied: switch a descriptor's notifications on"), "missing the notification switch in:\n{out}");
     std::fs::remove_dir_all(home).unwrap();
 }
 
@@ -181,7 +183,9 @@ fn system_python() -> Option<(String, String)> {
 /// Confined, a program can't signal another process (this test, signal 0 delivering nothing), but can
 /// still signal itself and its own threads. On Linux, where the filter names them, it also can't
 /// change another process's limits or priority, or type into a terminal: no call here reaches a real
-/// terminal, since its standard input isn't one.
+/// terminal, since its standard input isn't one. Linux also refuses the `fcntl` commands that would
+/// have the kernel signal a process for it: naming the owner, choosing the signal, or switching the
+/// notification on.
 #[test]
 fn a_confined_program_leaves_other_processes_alone() {
     if !confines() {
@@ -226,6 +230,13 @@ if sys.platform == "linux":
     assert refused(os.setpriority, os.PRIO_USER, 0, 0), "every process's priority"
     assert refused(os.sched_setaffinity, other, {0}), "another process's processors"
     assert refused(os.pidfd_open, other), "a handle on another process"
+    read, write = os.pipe()
+    assert refused(fcntl.fcntl, write, fcntl.F_SETOWN, other), "giving a descriptor's notifications to another process"
+    # 15 is F_SETOWN_EX and 10 is F_SETSIG, which Python's fcntl doesn't name; the filter refuses
+    # them whatever owner or signal they name, so the argument doesn't matter.
+    assert refused(fcntl.fcntl, write, 15), "naming a descriptor's owner the extended way"
+    assert refused(fcntl.fcntl, write, 10), "choosing a descriptor's notification signal"
+    assert refused(fcntl.fcntl, write, fcntl.F_SETFL, fcntl.fcntl(write, fcntl.F_GETFL) | os.O_ASYNC), "switching a descriptor's notifications on"
     resource.prlimit(0, resource.RLIMIT_NOFILE)
     resource.prlimit(os.getpid(), resource.RLIMIT_NOFILE)
     os.setpriority(os.PRIO_PROCESS, 0, os.getpriority(os.PRIO_PROCESS, 0))

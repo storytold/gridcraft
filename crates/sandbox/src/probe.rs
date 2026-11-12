@@ -44,6 +44,8 @@ pub fn enforcement(canary: &Path, exe: &Path, target: u32) -> Vec<Check> {
         Check { name: "TCP connection", outcome: denied(tcp_probe()) },
         Check { name: "start a process", outcome: spawn_probe(exe) },
         Check { name: "signal another process", outcome: signal_probe(target) },
+        #[cfg(target_os = "linux")]
+        Check { name: "switch a descriptor's notifications on", outcome: async_probe() },
     ]
 }
 
@@ -126,6 +128,20 @@ fn write_probe(dir: &Path) -> Outcome {
         let _ = std::fs::remove_file(&file);
     }
     denied(r.map(drop))
+}
+
+/// `O_ASYNC` on a descriptor of the program's own: the switch that has the kernel signal the
+/// descriptor's owner when its state changes. The owner may be a process the program didn't name, a
+/// standard stream the parent made, so on Linux the filter refuses setting it, the same way it
+/// refuses the commands that name another owner. Naming one can't be asked here without `fcntl`'s
+/// variable-argument form, which no safe API wraps; the rules refuse those commands, and the
+/// confined-program test covers them.
+#[cfg(target_os = "linux")]
+fn async_probe() -> Outcome {
+    let r = nix::unistd::pipe().map_err(std::io::Error::from).and_then(|(_, write)| {
+        nix::fcntl::fcntl(write, nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_ASYNC)).map(drop).map_err(std::io::Error::from)
+    });
+    denied(r)
 }
 
 fn tcp_probe() -> std::io::Result<()> {

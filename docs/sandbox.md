@@ -24,7 +24,7 @@ other programs. The sandbox's job is that it can do none of these:
 - **Network:** no sockets, no connections and no listeners. The exception is a standard stream the
   parent made a socket (see below).
 - **Other processes and the system:** no debugging or reading another process, no System V shared
-  memory, message queues or semaphores, no POSIX message queues, no signals to another process, no typing into a terminal it inherited, no mounts or namespaces, no kernel
+  memory, message queues or semaphores, no POSIX message queues, no signals to another process — on Linux not even indirectly, as the `fcntl` commands that have the kernel send one are refused — no typing into a terminal it inherited, no mounts or namespaces, no kernel
   modules, BPF, keyrings or performance counters. On Linux it also can't change another process's
   limits, priority or scheduling.
 
