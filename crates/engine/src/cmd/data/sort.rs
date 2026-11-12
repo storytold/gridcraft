@@ -41,7 +41,13 @@ fn expand_sort_range(s: &Session, p: &Json, sheet: usize, r: RangeRef) -> Result
     if sh.table_at(d.selection.active).is_some() {
         return Ok(r);
     }
-    let region = current_region(sh, r.start);
+    // Blank cells at the start of the selection (a whole column over data that starts lower) are no
+    // anchor: grow the region from the first cell of the selection that holds something.
+    let anchor = (r.start.row..=r.end.row)
+        .map(|row| CellRef::new(row, r.start.col))
+        .find(|c| sh.cell(*c).is_some_and(Cell::has_content))
+        .unwrap_or(r.start);
+    let region = current_region(sh, anchor);
     Ok(if region.width() > 1 && region.intersects(&r) && !sh.tables.iter().any(|t| t.range.intersects(&region)) { region } else { r })
 }
 

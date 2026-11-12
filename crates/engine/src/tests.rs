@@ -1284,6 +1284,27 @@ fn sorting_a_column_expands_even_when_the_region_does_not_hold_the_whole_selecti
     assert_eq!(v(&tall, "E20"), Value::from("x"));
 }
 
+/// A selection that starts above the data (a whole column, or B1:B10 over data that starts at row 3)
+/// expands from its first filled cell, with or without unrelated content that widens the used range.
+#[test]
+fn sorting_a_column_that_starts_blank_expands_from_the_first_filled_cell() {
+    for unrelated in [false, true] {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A3", "values": [["Name", "Score"], ["b", 3], ["c", 1], ["a", 2]]})).unwrap();
+        if unrelated {
+            s.execute("cell.set", json!({"cell": "Z1", "input": "unrelated"})).unwrap();
+        }
+        s.execute("selection.set", json!({"range": "B1:B10"})).unwrap();
+        s.execute("data.sortDescending", json!({})).unwrap();
+        for (cell, want) in [("A4", "b"), ("A5", "a"), ("A6", "c")] {
+            assert_eq!(v(&s, cell), Value::from(want), "unrelated {unrelated} {cell}");
+        }
+        for (cell, want) in [("B4", 3.0), ("B5", 2.0), ("B6", 1.0)] {
+            assert_eq!(v(&s, cell), Value::Number(want), "unrelated {unrelated} {cell}");
+        }
+    }
+}
+
 /// The expansion has limits: an explicit `range` is sorted as given, a sort by columns is not
 /// widened, and a region that takes in a table the selection is not in is left alone.
 #[test]
