@@ -398,7 +398,10 @@ fn write(model: &mut Option<DataModel>, metadata: &mut ModelMetadata, view: &mut
                 // reordered tables while adding a measure rolls back to the original order
                 // (CodeRabbit, #3412). Another group's later edit of that entity keeps its
                 // edit: `revert` skips a change whose current value is no longer `after`.
-                (Some(table), Some(index)) if index != at => {
+                // A content-only restore must not move the entity: only reposition when the
+                // entity already holds the restored value and just sits elsewhere (a group
+                // that inserted ahead of it shifted it, CodeRabbit #3412 follow-up).
+                (Some(table), Some(index)) if index != at && model.tables[index] == table => {
                     model.tables.remove(index);
                     // The recorded position counts the entity itself, so removing an entity
                     // at or before it shifts the target down by one.
@@ -423,7 +426,7 @@ fn write(model: &mut Option<DataModel>, metadata: &mut ModelMetadata, view: &mut
             let Some(model) = model.as_mut() else { return };
             let found = model.measure_index(name);
             match (state, found) {
-                (Some(measure), Some(index)) if index != at => {
+                (Some(measure), Some(index)) if index != at && model.measures[index] == measure => {
                     model.measures.remove(index);
                     let target = if index < at { at.saturating_sub(1) } else { at };
                     model.measures.insert(target.min(model.measures.len()), measure);
@@ -440,7 +443,7 @@ fn write(model: &mut Option<DataModel>, metadata: &mut ModelMetadata, view: &mut
             let Some(model) = model.as_mut() else { return };
             let found = model.relationships.iter().position(|entry| key.matches(entry));
             match (state, found) {
-                (Some(relationship), Some(index)) if index != at => {
+                (Some(relationship), Some(index)) if index != at && model.relationships[index] == relationship => {
                     model.relationships.remove(index);
                     let target = if index < at { at.saturating_sub(1) } else { at };
                     model.relationships.insert(target.min(model.relationships.len()), relationship);
@@ -666,5 +669,24 @@ mod tests {
         revert_all(&changes, &mut model, &mut metadata, &mut current);
         assert!(!current.show_hidden, "the group's toggle went");
         assert!(current.show_implicit_measures, "the other group's toggle stayed");
+    }
+    /// A content-only change restores the value where the entity sits: with `[M, N]`, a group
+    /// changing `N`'s formula while another group inserts `X` ahead must roll back to
+    /// `[X, M, N]`, not move `N` back to index 1 (CodeRabbit, #3412).
+    #[test]
+    fn a_content_only_change_does_not_reposition_its_entity() {
+        let before = Some(DataModel { tables: Vec::new(), measures: vec![measure("M", "1"), measure("N", "1")], ..DataModel::default() });
+        let mut edited = before.clone();
+        edited.as_mut().expect("model").measures[1].formula = "2".into();
+        let changes = model_changes(&before, edited.as_ref());
+        assert_eq!(changes.len(), 1, "one measure changed");
+        // Another group inserted X ahead: N's formula still matches `after`, so the guard
+        // passes, but the restore must not move N back to index 1.
+        let mut current =
+            Some(DataModel { tables: Vec::new(), measures: vec![measure("X", "0"), measure("M", "1"), measure("N", "2")], ..DataModel::default() });
+        revert_all(&changes, &mut current, &mut ModelMetadata::default(), &mut ModelView::default());
+        let names: Vec<&str> = current.as_ref().expect("model").measures.iter().map(|entry| entry.name.as_str()).collect();
+        assert_eq!(names, ["X", "M", "N"], "the insert stays, nothing reordered");
+        assert_eq!(current.as_ref().expect("model").measures[2].formula, "1", "the formula went back");
     }
 }
