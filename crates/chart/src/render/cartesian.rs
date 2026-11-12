@@ -333,6 +333,15 @@ fn has_markers(chart: &Chart, series: usize, kind: ChartKind) -> bool {
         || chart.format.series.get(&series).is_some_and(|style| style.marker.is_some())
 }
 
+/// Selects which chart-family pass renders a series.
+fn belongs_to_pass(fam: Fam, pass: usize) -> bool {
+    match pass {
+        0 => matches!(fam, Fam::Area | Fam::AreaStack | Fam::Area100),
+        1 => is_col(fam),
+        _ => is_line(fam),
+    }
+}
+
 fn reversed_categories(chart: &Chart, horizontal: bool) -> bool {
     if horizontal {
         chart.format.y_axis.reversed
@@ -404,12 +413,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     for pass in 0..3 {
         for (i, s) in data.series.iter().enumerate() {
             let fam = fams.get(i).copied().unwrap_or(Fam::Col);
-            let want = match pass {
-                0 => matches!(fam, Fam::Area | Fam::AreaStack | Fam::Area100),
-                1 => is_col(fam),
-                _ => is_line(fam),
-            };
-            if !want {
+            if !belongs_to_pass(fam, pass) {
                 continue;
             }
             let sc = scale_of(i);
