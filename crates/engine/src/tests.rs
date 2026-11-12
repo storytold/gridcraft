@@ -533,6 +533,118 @@ fn shape_text_edit_survives_xlsx_roundtrip() {
 }
 
 #[test]
+fn word_art_insert_respects_sheet_protection() {
+    let mut s = s();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let undo_len = s.doc().unwrap().undo.len();
+    assert!(s.execute("insert.wordArt", json!({})).is_err());
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before));
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("insert.wordArt", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes.len(), 1);
+}
+
+#[test]
+fn word_art_inserts_with_defaults_and_undoes() {
+    use gridcraft_model::ShapeKind;
+    let mut s = s();
+    // Empty params: default style and text, no dialog.
+    let r = s.execute("insert.wordArt", json!({})).unwrap();
+    assert!(s.take_ui_requests().is_empty());
+    let shape = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    assert_eq!(shape.id, r["shape"].as_u64().unwrap() as u32);
+    assert_eq!(shape.kind, ShapeKind::WordArt);
+    assert_eq!(shape.text, crate::cmd::wordart::DEFAULT_TEXT);
+    assert!(shape.anchor.width > 8.0 && shape.format.text_color.is_some());
+    // Named style plus overrides; restyle and edit the text through wordArt.set.
+    s.execute("insert.wordArt", json!({"style": "ember", "text": "Q3", "fontSize": 60, "shadow": false, "outline": "#112233", "outlineWidth": 3}))
+        .unwrap();
+    let ember = s.doc().unwrap().wb.active().unwrap().shapes[1].clone();
+    assert_eq!(ember.format.font_size, Some(60.0));
+    assert_eq!((ember.format.text_shadow, ember.format.text_outline.map(|o| o.1)), (None, Some(3.0)));
+    s.execute("wordArt.set", json!({"id": ember.id, "style": 3, "text": "Q4"})).unwrap();
+    let styled = s.doc().unwrap().wb.active().unwrap().shapes[1].clone();
+    assert_eq!((styled.text.as_str(), styled.format.italic), ("Q4", true));
+    s.execute("shape.setText", json!({"id": ember.id, "text": "Q5"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[1], ember);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[1].text, "Q4");
+    // Moves and deletes like any floating shape.
+    s.execute("object.move", json!({"kind": "shape", "id": ember.id, "at": "D4"})).unwrap();
+    s.execute("object.delete", json!({"kind": "shape", "id": ember.id})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes.len(), 1);
+}
+
+#[test]
+fn word_art_rejects_hostile_params() {
+    let mut s = s();
+    let id = s.execute("insert.wordArt", json!({})).unwrap()["shape"].clone();
+    let rectangle = s.execute("insert.shape", json!({"kind": "rectangle"})).unwrap()["shape"].clone();
+    let before = s.doc().unwrap().wb.clone();
+    for (cmd, params) in [
+        ("insert.wordArt", json!({"style": "No Such Style"})),
+        ("insert.wordArt", json!({"style": 99})),
+        ("insert.wordArt", json!({"style": -1})),
+        ("insert.wordArt", json!({"text": 5})),
+        ("insert.wordArt", json!({"text": ""})),
+        ("insert.wordArt", json!({"text": "x".repeat(crate::cmd::wordart::MAX_CHARS + 1)})),
+        ("insert.wordArt", json!({"fill": "not a colour"})),
+        ("wordArt.set", json!({})),
+        ("wordArt.set", json!({"id": 999})),
+        ("wordArt.set", json!({"id": rectangle})),
+        ("shape.setText", json!({"id": id, "text": ""})),
+    ] {
+        assert!(matches!(s.execute(cmd, params), Err(crate::EngineError::BadParams { .. })), "{cmd}");
+        assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before));
+    }
+    // Absurd sizes are clamped, not trusted.
+    s.execute("insert.wordArt", json!({"fontSize": 1e12, "width": 1e300, "height": -5})).unwrap();
+    let big = &s.doc().unwrap().wb.active().unwrap().shapes[2];
+    assert!(big.anchor.width <= 4000.0 && big.anchor.height >= 8.0 && big.format.font_size == Some(400.0));
+}
+
+#[test]
+fn word_art_survives_xlsx_roundtrip() {
+    use gridcraft_model::ShapeKind;
+    let mut s = s();
+    s.execute("insert.wordArt", json!({"style": "Lagoon", "text": "Sales <2026>\nOutlook & more"})).unwrap();
+    let before = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "wordart.xlsx", "base64": saved["base64"]})).unwrap();
+    let after = &s.doc().unwrap().wb.active().unwrap().shapes[0];
+    assert_eq!(after.kind, ShapeKind::WordArt);
+    assert_eq!(after.text, before.text);
+    assert_eq!(after.format.text_color, before.format.text_color);
+    assert_eq!(after.format.text_outline, before.format.text_outline);
+    assert_eq!(after.format.text_shadow, before.format.text_shadow);
+    assert_eq!((after.format.bold, after.format.italic, after.format.font_size), (true, true, before.format.font_size));
+    assert!(after.format.no_line);
+}
+
+/// White text with a green outline (Mint Outline) prints its outline, so it is not invisible on a
+/// white page.
+#[test]
+fn word_art_outline_prints() {
+    let mut s = s();
+    s.execute("insert.wordArt", json!({"style": "Mint Outline", "text": "VISIBLE", "at": "A1"})).unwrap();
+    let pdf = s.execute("file.exportPdf", json!({"range": "A1:G10"})).unwrap();
+    let data = crate::io::base64_decode(pdf["base64"].as_str().unwrap()).unwrap();
+    let text = String::from_utf8_lossy(&data);
+    let outline = text.matches("0.18 0.608 0.416 rg").count();
+    assert!(outline >= 1, "the outline colour (2E9B6A) is drawn");
+    assert_eq!(text.matches("(VISIBLE) Tj").count(), 9, "eight outline copies under the white text");
+    assert!(text.contains("1 1 1 rg"), "the white fill is drawn on top");
+    // The last copy drawn is the filled text, in white; every outline copy comes before it.
+    let before_fill = &text[..text.rfind("(VISIBLE) Tj").unwrap()];
+    assert!(before_fill.rfind("1 1 1 rg") > before_fill.rfind("0.18 0.608 0.416 rg"), "the white fill is drawn last");
+    assert_eq!(before_fill.matches("(VISIBLE) Tj").count(), 8);
+}
+
+#[test]
 fn no_border_clears_only_shared_edges_and_undo_restores_them() {
     use gridcraft_core::RangeRef;
     use gridcraft_model::{BorderLine, Borders};
@@ -1348,6 +1460,18 @@ fn scripts_leave_file_access_working_after_they_run() {
     s.execute("automate.runScript", json!({"name": "Ok"})).unwrap();
     s.execute("data.fromTextCsv", json!({"path": csv})).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn get_data_refuses_json_with_too_many_fields_or_rows_before_building_rows() {
+    let mut s = s();
+    let wide = format!("[{}]", (0..=gridcraft_core::MAX_COLS).map(|i| format!("{{\"k{i}\":1}}")).collect::<Vec<_>>().join(","));
+    let err = s.execute("data.fromTextCsv", json!({"text": wide})).unwrap_err().to_string();
+    assert!(err.contains("more fields"), "{err}");
+    // MAX_ROWS objects plus the header row are one too many.
+    let tall = format!("[{}]", vec!["{}"; gridcraft_core::MAX_ROWS as usize].join(","));
+    let err = s.execute("data.fromTextCsv", json!({"text": tall})).unwrap_err().to_string();
+    assert!(err.contains("more rows"), "{err}");
 }
 
 #[test]
@@ -3600,6 +3724,8 @@ fn xls_fixture() -> Vec<u8> {
     let mut put = |at: usize, v: &[u8]| b[at..at + v.len()].copy_from_slice(v);
     put(0, &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
     put(26, &3u16.to_le_bytes());
+    // The byte order mark [MS-CFB] 2.2 requires; craft-cfb refuses a header without it.
+    put(28, &0xFFFEu16.to_le_bytes());
     put(30, &9u16.to_le_bytes());
     put(32, &6u16.to_le_bytes());
     put(44, &1u32.to_le_bytes());
@@ -6469,6 +6595,36 @@ fn clearing_links_and_notes_keeps_allow_edit_ranges() {
 }
 
 #[test]
+fn replace_does_not_search_hidden_formula_source() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)*7"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"protection": {"locked": true, "hidden": true}}})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    // Both give the same answer, and it is not an error: a hidden formula's source is not searched.
+    let hit = s.execute("edit.replace", json!({"what": "SEQUENCE", "with": "X"})).unwrap();
+    let miss = s.execute("edit.replace", json!({"what": "NOSUCHTEXT", "with": "X"})).unwrap();
+    assert_eq!(hit, miss);
+    assert_eq!(hit["replaced"], json!(0), "{hit}");
+}
+
+#[test]
+fn formulatext_does_not_reveal_a_hidden_formula() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=1+1"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"protection": {"locked": false, "hidden": true}}})).unwrap();
+    s.execute("home.formatCells", json!({"range": "B1", "style": {"protection": {"locked": false}}})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=FORMULATEXT(A1)"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::from("=1+1"), "not protected yet");
+    s.execute("review.protectSheet", json!({})).unwrap();
+    // Without entering the formula again: protecting recalculates what reads the protection.
+    assert_eq!(v(&s, "B1"), Value::Error(gridcraft_core::CellError::NA));
+    s.execute("cell.set", json!({"cell": "B1", "input": "=FORMULATEXT(A1)"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Error(gridcraft_core::CellError::NA));
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::from("=1+1"), "unprotecting shows it again without re-entering");
+}
+
+#[test]
 fn protected_sheet_refuses_layout_commands_its_permissions_do_not_allow() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["h"], [1], [2]]})).unwrap();
@@ -6525,4 +6681,40 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
         assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "destination": dest})).is_err(), "destination {dest:?}");
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
+}
+
+#[test]
+fn circle_invalid_says_when_its_scan_allowance_ended_early() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[-1]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "A200000", "values": [[-1]]})).unwrap();
+    s.execute("data.validation", json!({"range": "A1:A5", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    let out = s.execute("data.circleInvalid", json!({})).unwrap();
+    assert_eq!((out["invalid"].as_array().map(Vec::len), out["truncated"].as_bool()), (Some(1), Some(false)), "{out}");
+    s.execute("data.validation", json!({"range": "A1:A200000", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    let out = s.execute("data.circleInvalid", json!({})).unwrap();
+    assert_eq!(out["truncated"].as_bool(), Some(true), "{out}");
+}
+
+#[test]
+fn history_charges_a_changed_sheets_comment_text() {
+    let mut s = s();
+    s.execute("review.newNote", json!({"cell": "A1", "text": "n".repeat(30_000), "author": "Example"})).unwrap();
+    let older = (*s.doc().unwrap().wb).clone();
+    s.execute("cell.set", json!({"cell": "B2", "input": "x"})).unwrap();
+    let newer = (*s.doc().unwrap().wb).clone();
+    // The older snapshot owns the comment text now that the sheet changed under it.
+    assert!(crate::history_retained_bytes(&older, &newer) >= 30_000);
+}
+
+#[test]
+fn history_charges_the_storage_of_empty_comment_replies() {
+    let mut s = s();
+    s.execute("review.newComment", json!({"cell": "A1", "text": "c", "author": "Ann"})).unwrap();
+    for _ in 0..500 {
+        s.execute("review.replyComment", json!({"cell": "A1", "text": "", "author": ""})).unwrap();
+    }
+    let sheet = s.doc().unwrap().wb.sheet(0).unwrap().clone();
+    // 500 replies of no text are still 500 elements.
+    assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
 }
