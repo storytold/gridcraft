@@ -412,3 +412,24 @@ fn numeric_filter_search_uses_regional_display_and_canonical_values() {
         assert_eq!(sheet.value(gridcraft_engine::core::CellRef::new(1, 0)), gridcraft_engine::core::Value::Number(value));
     }
 }
+
+#[test]
+fn matching_localized_filter_captions_share_one_selection() {
+    use egui::{Key, Modifiers, accesskit::Role};
+    let mut h = harness();
+    use_german_region(&mut h);
+    h.state_mut().run("range.setValues", json!({"range":"A1","values":[["Header"],[1.5],["1,5"],["other"]],"parse":false})).unwrap();
+    h.state_mut().run("data.filter", json!({"range":"A1:A4"})).unwrap();
+    h.state_mut().run("selection.set", json!({"cell":"A1"})).unwrap();
+    press(&mut h, Key::ArrowDown, Modifiers::ALT);
+    h.run_steps(4);
+    assert_eq!(h.get_all_by_label("1,5").count(), 1);
+    h.get_by_role_and_label(Role::CheckBox, "1,5").click();
+    h.run_steps(3);
+    press(&mut h, Key::Enter, Modifiers::NONE);
+    h.run_steps(3);
+    let sheet = h.state().session.active().unwrap().wb.active().unwrap();
+    assert!(sheet.is_row_hidden(1));
+    assert!(sheet.is_row_hidden(2));
+    assert!(!sheet.is_row_hidden(3));
+}

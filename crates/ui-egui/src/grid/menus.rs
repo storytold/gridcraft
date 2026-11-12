@@ -84,10 +84,23 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             // Full width: shrunk to the longest value, the scroll bar sat mid-menu and the wheel only
             // worked over the values themselves (#432).
             egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
-                for entry in checks.iter_mut().filter(|entry| matches(entry)) {
+                let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+                let mut positions = std::collections::HashMap::new();
+                for (index, entry) in checks.iter().enumerate().filter(|(_, entry)| matches(entry)) {
                     let label = label_for(entry);
-                    if ui.checkbox(&mut entry.selected, label).changed() {
-                        changed.insert(command_key(entry), entry.selected);
+                    let group = *positions.entry(label.clone()).or_insert_with(|| {
+                        groups.push((label, Vec::new()));
+                        groups.len() - 1
+                    });
+                    groups[group].1.push(index);
+                }
+                for (label, indices) in groups {
+                    let mut selected = indices.iter().all(|&index| checks[index].selected);
+                    if ui.checkbox(&mut selected, label).changed() {
+                        for index in indices {
+                            checks[index].selected = selected;
+                            changed.insert(command_key(&checks[index]), selected);
+                        }
                     }
                 }
             });

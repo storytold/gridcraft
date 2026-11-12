@@ -246,6 +246,35 @@ pub fn check_literal_fill_validation(wb: &Workbook, sheet: usize, ranges: &[Rang
     if !applies {
         return None;
     }
+    let mut scratch = None;
+    let mut warning = None;
+    let mut dependent = Vec::new();
+    for range in ranges {
+        let filtered = crate::cmd::edit::filtered_rows(sh, *range);
+        for at in range.iter().filter(|at| !filtered.contains(&at.row)) {
+            let Some(dv) = sh.validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(at))) else { continue };
+            if dv.kind == ValidationKind::Any || !dv.show_error || (input.is_empty() && dv.allow_blank) {
+                continue;
+            }
+            let numeric_bound = |f: &str| f.trim().trim_start_matches('=').parse::<f64>().is_ok();
+            let depends = match dv.kind {
+                ValidationKind::Custom => !matches!(dv.f1.trim().trim_start_matches('=').to_ascii_uppercase().as_str(), "TRUE" | "FALSE"),
+                ValidationKind::TextLength => !numeric_bound(&dv.f1) || dv.f2.as_deref().is_some_and(|f| !numeric_bound(f)),
+                _ => false,
+            };
+            if depends {
+                dependent.push(at);
+            } else if let Some(issue) = check_entry(wb, sheet, at, input, true, &mut scratch, None) {
+                if issue.0.error_style == ErrorStyle::Stop {
+                    return Some(issue);
+                }
+                warning = Some(issue);
+            }
+        }
+    }
+    if dependent.is_empty() {
+        return warning;
+    }
     let mut entered = wb.clone();
     let mut changed = Vec::new();
     for range in ranges {
@@ -258,18 +287,12 @@ pub fn check_literal_fill_validation(wb: &Workbook, sheet: usize, ranges: &[Rang
     let mut calc = gridcraft_calc::Calc::new();
     calc.rebuild(&entered);
     calc.cells_changed(&mut entered, &changed);
-    let mut scratch = None;
-    let mut warning = None;
-    let sh = wb.sheet(sheet)?;
-    for range in ranges {
-        let filtered = crate::cmd::edit::filtered_rows(sh, *range);
-        for at in range.iter().filter(|at| !filtered.contains(&at.row)) {
-            if let Some(issue) = check_entry(wb, sheet, at, input, true, &mut scratch, Some(&entered)) {
-                if issue.0.error_style == ErrorStyle::Stop {
-                    return Some(issue);
-                }
-                warning = Some(issue);
+    for at in dependent {
+        if let Some(issue) = check_entry(wb, sheet, at, input, true, &mut scratch, Some(&entered)) {
+            if issue.0.error_style == ErrorStyle::Stop {
+                return Some(issue);
             }
+            warning = Some(issue);
         }
     }
     warning

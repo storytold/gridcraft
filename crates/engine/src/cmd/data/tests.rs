@@ -633,3 +633,13 @@ fn literal_fill_validates_the_completed_range() {
     let wb = &s.doc().unwrap().wb;
     assert!(super::check_literal_fill_validation(wb, 0, &[RangeRef::parse("A1:A3").unwrap()], "x").is_some());
 }
+
+#[test]
+fn literal_fill_rejects_a_simple_stop_rule_before_snapshotting_a_column() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("data.validation", json!({"range":"A1","type":"custom","formula1":"=FALSE"})).unwrap();
+    let wb = &session.doc().unwrap().wb;
+    assert!(super::check_literal_fill_validation(wb, 0, &[RangeRef::parse("A1:A1048576").unwrap()], "x").is_some());
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Empty);
+}
