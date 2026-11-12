@@ -649,6 +649,19 @@ fn accounting_negative_text_coerces() {
 }
 
 #[test]
+fn unary_plus_keeps_a_logical() {
+    // logical.00008, logical-cell.00005 and 00021: =+TRUE is TRUE, not 1; unary minus still converts.
+    let mut t = T::new();
+    t.set("A1", "TRUE");
+    t.set("B1", "=+TRUE");
+    t.set("B2", "=+A1");
+    t.set("B3", "=-A1");
+    assert_eq!(t.get("B1"), Value::Bool(true));
+    assert_eq!(t.get("B2"), Value::Bool(true));
+    assert_eq!(t.get("B3"), Value::Number(-1.0));
+}
+
+#[test]
 fn operators() {
     let mut t = T::new();
     t.set("A1", "=\"a\"&1&TRUE");
