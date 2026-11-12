@@ -1021,6 +1021,11 @@ mod tests {
         let got = s.execute("cell.get", json!({"cell": "A2"})).unwrap();
         let fill: Fill = serde_json::from_value(got["style"]["fill"].clone()).unwrap();
         assert!(fill.gradient.is_some(), "an fg-only patch keeps the gradient");
+        // A `bg`-only patch names no fill type either, so it keeps the gradient too.
+        s.execute("home.formatCells", json!({"range": "A2", "style": {"fill": {"bg": {"Rgb": 255}}}})).unwrap();
+        let got = s.execute("cell.get", json!({"cell": "A2"})).unwrap();
+        let fill: Fill = serde_json::from_value(got["style"]["fill"].clone()).unwrap();
+        assert!(fill.gradient.is_some(), "a bg-only patch keeps the gradient");
 
         // A partial solid still replaces (clears) an existing gradient.
         s.execute("home.formatCells", json!({"range": "A2", "style": {"fill": {"pattern": "Solid", "fg": {"Rgb": 65280}}}})).unwrap();
