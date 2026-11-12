@@ -190,5 +190,5 @@ fn a_textured_pencil_commits_as_narrow_as_its_preview() {
     h.run_steps(4);
     let extents = textured_mesh_extents(&h);
     assert_eq!(extents.len(), 2, "both strokes are painted as textured meshes");
-    assert!((extents[1] / extents[0] - 0.8).abs() < 0.01, "a pencil paints at 0.8 of the pen width: {extents:?}");
+    assert!((extents[0] / extents[1] - 0.8).abs() < 0.01, "a pencil paints at 0.8 of the pen width: {extents:?}");
 }

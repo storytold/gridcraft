@@ -731,9 +731,7 @@ fn package_two_parts(first_trace: &str, second_trace: &str) -> Vec<u8> {
 
 /// `[Content_Types].xml` declaring both ink parts and the picture fallback.
 fn content_types_two() -> String {
-    format!(
-        r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/ink/ink1.xml" ContentType="application/inkml+xml"/><Override PartName="/xl/ink/ink2.xml" ContentType="application/inkml+xml"/></Types>"#
-    )
+    r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/ink/ink1.xml" ContentType="application/inkml+xml"/><Override PartName="/xl/ink/ink2.xml" ContentType="application/inkml+xml"/></Types>"#.to_string()
 }
 
 /// An Excel-shaped drawing part with two ink anchors: the first `contentPart` names `rId1` and

@@ -56,7 +56,7 @@ struct Tier {
     /// that shows more patterns than the ceiling can keep never decodes the overflow again on the
     /// next repaint. `None` until the first overflow needs it.
     fallback: Option<TextureHandle>,
-
+}
 impl Tier {
     /// A tier that decodes at `side` and drops its least recently drawn uploads once `max_items`
     /// entries or `max_bytes` bytes would be exceeded.
@@ -499,6 +499,8 @@ mod tests {
 
     /// The item ceiling is still hard: a frame that paints more textures than the tier holds keeps
     /// its own uploads only up to twice the budget, so one frame cannot grow it without bound.
+    /// Past the ceiling the overflow paints the tier's stable fallback instead of evicting a
+    /// framed upload.
     #[test]
     fn the_item_ceiling_holds_even_for_textures_the_frame_paints() {
         let ctx = egui::Context::default();
@@ -510,7 +512,8 @@ mod tests {
             assert!(tier.texture(&ctx, &t.id, &t.data).is_some());
         }
         assert_eq!(tier.entries.len(), 4, "the hard bound is twice the item budget");
-        assert!(tier.entries.contains_key(&textures[4].id), "the upload just inserted is kept");
+        let fallback = tier.fallback.clone().expect("the overflow mints the fallback");
+        assert!(tier.texture(&ctx, &textures[4].id, &textures[4].data).map(|h| h.id()) == Some(fallback.id()), "the overflow paints the fallback");
     }
 
     /// A frame that paints more patterns than the budget keeps them cached, so the next repaint is
