@@ -180,6 +180,47 @@ fn optimise(ev: &mut Evaluator, m: &Model, goal: Goal, x0: &[f64], bounds: Bound
     Solve { outcome, not_linear, evo_end }
 }
 
+/// Rounds `x` to each variable cell's displayed precision when enabled and verifies that the
+/// committed values still satisfy every bound, integrality and general constraint.
+fn verify_displayed_solution(wb: &Workbook, sheet: usize, ev: &mut Evaluator, prob: &problem::Problem, x: Vec<f64>) -> Option<Vec<f64>> {
+    if !wb.calc.precision_as_displayed {
+        return Some(x);
+    }
+    let mut prec = gridcraft_calc::DisplayedPrecision::new();
+    let rounded: Vec<f64> = ev.vars.iter().zip(&x).map(|(c, v)| prec.round(wb, sheet, *c, *v)).collect();
+    if rounded.iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+    for ((&v, &lo), &hi) in rounded.iter().zip(&prob.lo).zip(&prob.hi) {
+        if v < lo - PRECISION * (1.0 + lo.abs()) || v > hi + PRECISION * (1.0 + hi.abs()) {
+            return None;
+        }
+    }
+    for (&v, &is_int) in rounded.iter().zip(&prob.integer) {
+        if is_int && (v - v.round()).abs() > PRECISION * (1.0 + v.abs()) {
+            return None;
+        }
+    }
+    if !prob.rows.is_empty() {
+        ev.budget = ev.budget.saturating_add(1);
+        let p = ev.eval(&rounded)?;
+        if !p.f.is_finite() || p.g.iter().any(|v| !v.is_finite()) {
+            return None;
+        }
+        for (g, r) in p.g.iter().zip(&prob.rows) {
+            let viol = match r.sense {
+                lp::Sense::Le => *g,
+                lp::Sense::Ge => -*g,
+                lp::Sense::Eq => g.abs(),
+            };
+            if viol > PRECISION * (1.0 + r.rhs_const.abs()) {
+                return None;
+            }
+        }
+    }
+    Some(rounded)
+}
+
 // ---------------------------------------------------------------- command
 
 fn run(s: &mut Session, p: &Json) -> Result<Json> {
@@ -237,6 +278,13 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let Solve { outcome, not_linear, evo_end } =
         optimise(&mut ev, &model, model.goal, &x0, Bounds { lo: &prob.lo, hi: &prob.hi, integer: &prob.integer }, gap);
+    let outcome = match outcome {
+        Outcome::Solved(x, obj, converged) if !not_linear => match verify_displayed_solution(&d.wb, model.sheet, &mut ev, &prob, x) {
+            Some(x) => Outcome::Solved(x, obj, converged),
+            None => Outcome::Infeasible,
+        },
+        other => other,
+    };
     let (status, message, solution) = match outcome {
         _ if not_linear => ("notLinear", "The model isn't linear in the variable cells, so Simplex LP can't solve it. Try GRG Nonlinear.", None),
         Outcome::Solved(x, _, true) if model.method == Method::Evolutionary => match evo_end {

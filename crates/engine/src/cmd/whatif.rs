@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use gridcraft_calc::Calc;
+use gridcraft_calc::{Calc, DisplayedPrecision};
 use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{CalcMode, Cell, DefinedName, Sheet, StyleId, Workbook};
 use serde::{Deserialize, Serialize};
@@ -196,6 +196,7 @@ fn value_json(v: &Value) -> Json {
 pub(crate) struct Trial {
     base: Workbook,
     calc: Calc,
+    precision: Option<DisplayedPrecision>,
 }
 
 impl Trial {
@@ -203,7 +204,8 @@ impl Trial {
         let mut base = (*d.wb).clone();
         // What-if analysis always recalculates, even in manual mode.
         base.calc.mode = CalcMode::Automatic;
-        Trial { base, calc: d.calc.clone() }
+        let precision = base.calc.precision_as_displayed.then(DisplayedPrecision::new);
+        Trial { base, calc: d.calc.clone(), precision }
     }
 
     /// Sets `sets` to constants, recalculates their dependents and reads `reads`.
@@ -211,9 +213,13 @@ impl Trial {
         let mut wb = self.base.clone();
         let mut keys = Vec::with_capacity(sets.len());
         for (si, c, v) in sets {
+            let v = match (&mut self.precision, v) {
+                (Some(prec), Value::Number(n)) => Value::number(prec.round(&wb, *si, *c, *n)),
+                _ => v.clone(),
+            };
             if let Some(sh) = wb.sheet_mut(*si) {
                 let style = sh.style_id(*c);
-                sh.set_cell(*c, Cell { value: v.clone(), formula: None, style, py: None });
+                sh.set_cell(*c, Cell { value: v, formula: None, style, py: None });
                 keys.push((*si, *c));
             }
         }
