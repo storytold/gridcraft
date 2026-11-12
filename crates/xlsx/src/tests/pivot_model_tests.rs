@@ -926,6 +926,38 @@ fn a_strict_workbook_with_a_model_refuses_to_save() {
         other => panic!("expected DroppedPart, got {other:?}"),
     }
 }
+#[test]
+fn an_unreadable_workbook_rels_part_refuses_to_save() {
+    // More than `MAX_RELS` relationships makes `raw_rels` fail; the disabled-preservation branch
+    // used to treat that as "no model relationship" and the save silently lost the model. An
+    // unreadable set cannot rule a model out, so it fails closed through the same save guard.
+    let mut rels = String::from(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>"#,
+    );
+    for n in 0..10_001 {
+        rels.push_str(&format!(
+            r#"<Relationship Id="rPad{n}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>"#
+        ));
+    }
+    rels.push_str("</Relationships>");
+    let strict_root_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
+    let ct = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="data" ContentType="application/vnd.openxmlformats-officedocument.model+data"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#;
+    let wb = r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
+    let sheet = r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#;
+    let bytes = super::make_zip(&[
+        ("[Content_Types].xml", ct.as_bytes()),
+        ("_rels/.rels", strict_root_rels.as_bytes()),
+        ("xl/workbook.xml", wb.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+        ("xl/model/item.data", b"the model database"),
+    ]);
+    let (wb, _) = read_xlsx(&bytes).expect("an unreadable rels part still opens");
+    let dropped = wb.dropped_model.as_ref().expect("an unreadable relationship set fails closed");
+    assert!(matches!(&dropped.reason, DroppedReason::Unpreservable(why) if why.contains("could not be read")), "{:?}", dropped.reason);
+    let error = write_xlsx(&wb).expect_err("the save must refuse when the model cannot be ruled out");
+    assert!(matches!(error, IoError::DroppedPart { .. }), "got {error:?}");
+}
 
 #[test]
 fn a_workbook_without_a_model_saves_as_before() {

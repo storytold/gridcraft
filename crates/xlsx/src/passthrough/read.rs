@@ -194,7 +194,13 @@ impl KeptReader {
     /// Package-root and workbook-level content.
     pub fn workbook(&mut self, cx: &mut Ctx<'_>, wb_part: &str, wb_xml: &xml::El, file_to_model: &[Option<usize>]) -> Option<Arc<Preserved>> {
         if !self.on {
-            let wb_rels = raw_rels(cx, wb_part).unwrap_or_default();
+            // `raw_rels` fails only for a damaged or absurdly large rels part (past `MAX_META` /
+            // `MAX_RELS`); an unreadable set cannot rule out a model hiding in it, so it fails
+            // closed below instead of looking like "no model relationship".
+            let (wb_rels, rels_failed) = match raw_rels(cx, wb_part) {
+                Ok(rels) => (rels, false),
+                Err(_) => (Vec::new(), true),
+            };
             for (_, se) in chart_sheet_entries(wb_xml, &wb_rels, file_to_model) {
                 cx.warn(format!("chart sheet \"{}\" was skipped and is not kept on save", se.attr("name").unwrap_or("")));
             }
@@ -205,15 +211,24 @@ impl KeptReader {
             // model — but a save must still refuse rather than silently lose it. Record the model
             // behind the workbook's `powerPivotData` relationship with the same mechanism the keep
             // path uses, so `write_xlsx` refuses through the existing save guard.
-            for r in wb_rels.iter().filter(|r| is_kind(r, WORKBOOK_ROOTS)) {
-                if kind(&r.rel_type) == "powerPivotData" {
-                    let why = if self.strict {
-                        "Strict Open XML content is not kept".to_string()
-                    } else {
-                        "content preservation is disabled for this workbook".to_string()
-                    };
-                    self.dropped_model = Some(DroppedPart { name: r.target.clone(), reason: DroppedReason::Unpreservable(why) });
-                    break;
+            if rels_failed {
+                self.dropped_model = Some(DroppedPart {
+                    name: wb_part.to_string(),
+                    reason: DroppedReason::Unpreservable(format!(
+                        "workbook relationships in {wb_part} could not be read, so a data model named there cannot be ruled out"
+                    )),
+                });
+            } else {
+                for r in wb_rels.iter().filter(|r| is_kind(r, WORKBOOK_ROOTS)) {
+                    if kind(&r.rel_type) == "powerPivotData" {
+                        let why = if self.strict {
+                            "Strict Open XML content is not kept".to_string()
+                        } else {
+                            "content preservation is disabled for this workbook".to_string()
+                        };
+                        self.dropped_model = Some(DroppedPart { name: r.target.clone(), reason: DroppedReason::Unpreservable(why) });
+                        break;
+                    }
                 }
             }
             return None;
