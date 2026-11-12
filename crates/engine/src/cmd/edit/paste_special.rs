@@ -315,7 +315,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                 cx.sheet_mut(dest_sheet)?.comments.insert(dest, cm);
                             }
                         }
-                        What::All => {
+                        What::All | What::AllExceptBorders => {
                             if let Some(cm) = src_sheet.comments.get(&sc).cloned() {
                                 cx.sheet_mut(dest_sheet)?.comments.insert(dest, cm);
                             }
@@ -353,7 +353,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         // Merged areas inside the copied block travel with it.
-        if matches!(what, What::All | What::Formats) && !transpose {
+        if matches!(what, What::All | What::AllExceptBorders | What::Formats) && !transpose {
             let merges: Vec<RangeRef> = src_sheet.merges.iter().filter(|m| src.contains_range(m)).copied().collect();
             for m in merges {
                 let dr = at.row as i64 - src.start.row as i64;

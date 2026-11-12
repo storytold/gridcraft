@@ -743,3 +743,29 @@ fn find_and_replace_within_the_selection() {
     let all = s.execute("edit.find", json!({"what": "pear", "all": true})).unwrap();
     assert_eq!(all["count"], 3, "A1, A3 and A4 on the whole sheet");
 }
+
+#[test]
+fn paste_special_all_except_borders_copies_notes_hyperlinks_and_merges() {
+    // #3892: Paste Special All Except Borders must copy source notes, hyperlinks, and merges
+    // while preserving destination borders.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "new record"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    s.execute("review.newNote", json!({"cell": "A1", "text": "SOURCE NOTE"})).unwrap();
+    s.execute("insert.link", json!({"cell": "A1", "target": "https://example.com/source", "text": "new record"})).unwrap();
+    s.execute("home.borders", json!({"range": "D1:E1", "preset": "bottom", "style": "thick", "color": "#FF0000"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:B1"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "allExceptBorders"})).unwrap();
+
+    let d1 = s.execute("cell.get", json!({"cell": "D1"})).unwrap();
+    let e1 = s.execute("cell.get", json!({"cell": "E1"})).unwrap();
+    assert_eq!(d1["value"], "new record", "value copied: {d1}");
+    assert_eq!(d1["comment"]["text"], "SOURCE NOTE", "note copied: {d1}");
+    assert_eq!(d1["hyperlink"]["target"], "https://example.com/source", "hyperlink copied: {d1}");
+    assert_eq!(d1["merge"], "D1:E1", "D1 merged: {d1}");
+    assert_eq!(e1["merge"], "D1:E1", "E1 merged: {e1}");
+    assert_eq!(d1["style"]["borders"]["bottom"]["style"], "Thick", "D1 border preserved: {d1}");
+    assert_eq!(e1["style"]["borders"]["bottom"]["style"], "Thick", "E1 border preserved: {e1}");
+}
