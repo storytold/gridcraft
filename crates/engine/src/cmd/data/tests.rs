@@ -616,7 +616,9 @@ fn literal_fill_validation_ignores_filtered_rows() {
 fn formula_and_literal_with_the_same_filter_label_are_one_choice() {
     let mut session = Session::new();
     session.new_workbook();
-    session.execute("range.setValues", json!({"range":"A1:A2","values":[["=A1"],["=A1"]],"parse":false})).unwrap();
+    for cell in ["A1", "A2"] {
+        session.execute("cell.set", json!({"cell":cell,"input":"=A1","literal":true})).unwrap();
+    }
     session.execute("cell.set", json!({"cell":"A3","input":"=A1"})).unwrap();
     session.execute("formulas.showFormulas", json!({"on":true})).unwrap();
     session.execute("data.filter", json!({"range":"A1:A3"})).unwrap();
