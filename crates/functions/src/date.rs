@@ -51,6 +51,7 @@ fn date(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     num_val(ymd_serial(c.date_system(), y, m, d)? as f64)
 }
 
+/// Returns the fractional day serial for `(hour, minute, second)`, flooring each argument.
 fn time(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let h = num(a, 0)?.floor();
     let m = num(a, 1)?.floor();
@@ -627,6 +628,7 @@ mod tests {
         close(ev("TIME", vec![n(1.0), n(-30.0), n(0.0)]), 1.0 / 48.0);
         close(ev("TIME", vec![n(6.0), n(0.0), n(-0.25)]), 21599.0 / 86400.0);
         close(ev("TIME", vec![n(-0.5), n(60.0), n(0.0)]), 0.0);
+        close(ev("TIME", vec![n(1.0), n(-0.5), n(0.0)]), 3540.0 / 86400.0);
         close(ev("TIME", vec![n(0.0), n(1.0), n(-1.5)]), 58.0 / 86400.0);
     }
 

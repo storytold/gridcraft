@@ -154,6 +154,7 @@ impl Criterion {
         }
     }
 
+    /// Matches `v` against a literal text operand without wildcards.
     fn matches_text(&self, v: &Value, pat: &str) -> bool {
         match self.op {
             Op::Eq | Op::Ne => {
@@ -167,6 +168,7 @@ impl Criterion {
         }
     }
 
+    /// Matches `v` against a pre-tokenized wildcard pattern (`*`, `?`, `~` escapes).
     fn matches_wildcard(&self, v: &Value, p: &[Tok]) -> bool {
         // Blank cells hold no text: `"*"` skips them and `"<>*"` counts them.
         let m = match v {
@@ -175,7 +177,6 @@ impl Criterion {
         };
         if self.op == Op::Eq { m } else { !m }
     }
-
     fn matches_cut_text(&self, v: &Value, kept: &str) -> bool {
         match self.op {
             Op::Eq => false,
@@ -293,6 +294,7 @@ pub(crate) fn has_wildcards(pattern: &str) -> bool {
     pattern.bytes().any(|b| matches!(b, b'*' | b'?' | b'~'))
 }
 
+/// Case-insensitive whole-text match against pre-tokenized wildcard tokens `p`.
 fn wildcard_match_tokens(p: &[Tok], text: &str) -> bool {
     let t = lower_chars(text);
     let mut budget = MAX_STEPS;

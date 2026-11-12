@@ -51,6 +51,7 @@ fn criteria_positions<'a>(pairs: &'a [(std::borrow::Cow<'a, Array>, Criterion)],
     MatchedPositions::Mask(mask)
 }
 
+/// Parses `(range, criteria)` argument pairs starting at `first_pair` and validates shape `(rows, cols)`.
 fn parse_criteria_pairs<'a>(a: &'a [Arg], first_pair: usize, rows: usize, cols: usize) -> R<Vec<(std::borrow::Cow<'a, Array>, Criterion)>> {
     let rest = a.get(first_pair..).unwrap_or(&[]);
     if rest.is_empty() || rest.len() % 2 != 0 {

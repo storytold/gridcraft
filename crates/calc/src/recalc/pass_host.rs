@@ -19,7 +19,7 @@ type BlockSums = std::collections::BTreeMap<u32, Option<(f64, u64)>>;
 
 /// Maximum cells in a single range array kept in [`PassHost::range_cache`], and total cells cached
 /// across all ranges before the cache is evicted to bound pass memory.
-const MAX_SINGLE_CACHE_CELLS: usize = 524_288;
+const MAX_SINGLE_CACHE_CELLS: usize = 2_097_152;
 const MAX_RANGE_CACHE_CELLS: usize = 4_000_000;
 pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
@@ -692,6 +692,8 @@ impl Host for PassHost<'_> {
         }
         out
     }
+    /// Evaluates `range` into a shared [`Array`], caching ranges up to [`MAX_SINGLE_CACHE_CELLS`]
+    /// while no cell inside `range` is in progress or waiting and dynamic-array spills are unchanged.
     fn range_array(&mut self, sheet: usize, range: RangeRef) -> Option<std::sync::Arc<Array>> {
         if self.spills.len() != self.range_cache_spills {
             self.clear_range_cache();

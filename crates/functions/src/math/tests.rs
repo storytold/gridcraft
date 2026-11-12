@@ -501,3 +501,23 @@ fn criteria_cut_inside_a_surrogate_pair() {
     close(sumifs(format!(">={}", e.repeat(128))), 1.0 + 2.0);
     close(sumifs(format!("<={}", e.repeat(128))), 3.0);
 }
+
+#[test]
+fn malformed_zero_col_array_exact_text_sumif_and_averageif_do_not_divide_by_zero() {
+    let malformed = Value::Array(std::sync::Arc::new(gridcraft_core::Array {
+        rows: 64,
+        cols: 0,
+        data: (0..64).map(|_| tv("hit")).collect(),
+        ..Default::default()
+    }));
+    let sums = Value::Array(std::sync::Arc::new(gridcraft_core::Array {
+        rows: 64,
+        cols: 0,
+        data: (0..64).map(|_| nv(1.0)).collect(),
+        ..Default::default()
+    }));
+    for _ in 0..3 {
+        close(ev("SUMIF", vec![rf(malformed.clone()), t("hit"), rf(sums.clone())]), 0.0);
+        is_err(ev("AVERAGEIF", vec![rf(malformed.clone()), t("hit"), rf(sums.clone())]), Div0);
+    }
+}

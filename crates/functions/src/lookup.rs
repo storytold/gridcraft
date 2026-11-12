@@ -46,12 +46,21 @@ fn find_exact(x: &Value, hay: &[Value], wild: bool, reverse: bool) -> Option<usi
     if reverse { hay.iter().rposition(|v| lookup_equal(x, v, wild)) } else { hay.iter().position(|v| lookup_equal(x, v, wild)) }
 }
 
+/// Exact search in an [`Array`]: uses [`Array::text_positions`] or [`Array::number_positions`]
+/// when available, falling back to [`find_exact`].
 fn find_exact_in_array(x: &Value, arr: &Array, wild: bool, reverse: bool) -> Option<usize> {
-    if let Value::Text(t) = x
-        && !(wild && has_wildcards(t))
-        && let Some(pos) = arr.text_positions(t)
-    {
-        return if reverse { pos.last().map(|&i| i as usize) } else { pos.first().map(|&i| i as usize) };
+    match x {
+        Value::Text(t) if !(wild && has_wildcards(t)) => {
+            if let Some(pos) = arr.text_positions(t) {
+                return if reverse { pos.last().map(|&i| i as usize) } else { pos.first().map(|&i| i as usize) };
+            }
+        }
+        Value::Number(n) => {
+            if let Some(pos) = arr.number_positions(*n) {
+                return if reverse { pos.last().map(|&i| i as usize) } else { pos.first().map(|&i| i as usize) };
+            }
+        }
+        _ => {}
     }
     find_exact(x, &arr.data, wild, reverse)
 }
@@ -145,6 +154,43 @@ fn row(a: &Array, r: usize) -> Vec<Value> {
 // ---------------------------------------------------------------------------------------------
 // VLOOKUP / HLOOKUP / LOOKUP / MATCH
 
+/// Resolves the 0-based `(row_or_col_pos, col_or_row_index)` of a `VLOOKUP` or `HLOOKUP` against a
+/// 1-D key array, without requiring the caller to materialize the rest of `table_array`.
+pub fn vh_lookup_pos(needle_val: &Value, keys_val: &Value, idx_val: &Value, approx_val: Option<&Value>, max_len: usize) -> R<(usize, usize)> {
+    let x = match needle_val.scalar() {
+        Value::Error(e) => return Err(e),
+        Value::Empty => Value::Number(0.0),
+        v => v,
+    };
+    let idx = idx_val.to_number()?;
+    if idx.is_nan() || idx < 1.0 {
+        return Err(CellError::Value);
+    }
+    let idx = (idx.trunc() as usize).saturating_sub(1);
+    let approx = match approx_val {
+        Some(v) => v.to_bool()?,
+        None => true,
+    };
+    if idx >= max_len {
+        return Err(CellError::Ref);
+    }
+    let keys = as_array(keys_val);
+    let pos = if approx { bsearch_last(&x, &keys.data, false) } else { find_exact_in_array(&x, &keys, true, false) };
+    Ok((pos.ok_or(CellError::NA)?, idx))
+}
+
+/// Resolves the 0-based match position of `LOOKUP` against a 1-D key array.
+pub fn lookup_vec_pos(needle_val: &Value, keys_val: &Value) -> R<usize> {
+    let x = match needle_val.scalar() {
+        Value::Error(e) => return Err(e),
+        Value::Empty => Value::Number(0.0),
+        v => v,
+    };
+    let keys = as_array(keys_val);
+    bsearch_last(&x, &keys.data, false).ok_or(CellError::NA)
+}
+
+/// `VLOOKUP` (`vertical = true`) and `HLOOKUP` (`vertical = false`) over an evaluated table array.
 fn vh_lookup(args: &[Arg], vertical: bool) -> R<Value> {
     let x = needle(args, 0)?;
     let table = as_array(&arg(args, 1)?.value);
@@ -158,11 +204,43 @@ fn vh_lookup(args: &[Arg], vertical: bool) -> R<Value> {
     }
     let idx = (idx.trunc() as usize).saturating_sub(1);
     let approx = opt_bool(args, 3, true)?;
-    let (keys, len) = if vertical { (column(&table, 0), table.cols) } else { (row(&table, 0), table.rows) };
+    let len = if vertical { table.cols } else { table.rows };
     if idx >= len {
         return Err(CellError::Ref);
     }
-    let pos = if approx { bsearch_last(&x, &keys, false) } else { find_exact(&x, &keys, true, false) };
+    // An exact text or numeric key is found through the table's index without copying its first
+    // column or row: the first indexed position in it, as positions ascend in row-major order.
+    let first_in_key_axis = |pos: &[u32]| {
+        if vertical {
+            pos.iter().find(|&&p| (p as usize).is_multiple_of(table.cols)).map(|&p| p as usize / table.cols)
+        } else {
+            pos.iter().find(|&&p| (p as usize) < table.cols).map(|&p| p as usize)
+        }
+    };
+    let indexed = if !approx && table.cols != 0 {
+        match &x {
+            Value::Text(t) if !has_wildcards(t) => table.text_positions(t).map(first_in_key_axis),
+            Value::Number(n) => table.number_positions(*n).map(first_in_key_axis),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let pos = match indexed {
+        Some(pos) => pos,
+        None if !approx => {
+            let wild = matches!(&x, Value::Text(t) if has_wildcards(t));
+            if vertical {
+                (0..table.rows).find(|&r| table.get(r, 0).is_some_and(|v| lookup_equal(&x, v, wild)))
+            } else {
+                (0..table.cols).find(|&c| table.get(0, c).is_some_and(|v| lookup_equal(&x, v, wild)))
+            }
+        }
+        None => {
+            let keys = if vertical { column(&table, 0) } else { row(&table, 0) };
+            bsearch_last(&x, &keys, false)
+        }
+    };
     let pos = pos.ok_or(CellError::NA)?;
     let v = if vertical { table.get(pos, idx) } else { table.get(idx, pos) };
     // An empty target stays blank, as in Excel: ISBLANK sees it as blank and `&` /
@@ -616,6 +694,24 @@ mod tests {
         // Lifting over the lookup value.
         let r = ev("VLOOKUP", vec![av(col(&[1.0, 3.0])), rf(table()), n(3.0), b(false)]);
         assert_eq!(rows_of(&r), vec![vec![nv(10.0)], vec![nv(30.0)]]);
+        // Indexed exact lookups (tables >= 64 cells, queried more than once) match only column 0.
+        let mut rows = Vec::new();
+        for r in 0..40 {
+            rows.push(vec![tv(&format!("k-{r}")), tv("k-35"), nv(r as f64)]);
+        }
+        let big = rf(arr(rows));
+        for r in [0, 35, 39] {
+            close(ev("VLOOKUP", vec![t(&format!("K-{r}")), big.clone(), n(3.0), b(false)]), r as f64);
+        }
+        let mut num_rows = Vec::new();
+        for r in 0..40 {
+            num_rows.push(vec![nv(r as f64), nv(35.0), tv(&format!("v-{r}"))]);
+        }
+        let big_num = rf(arr(num_rows));
+        for r in [0, 35, 39] {
+            is_text(ev("VLOOKUP", vec![n(r as f64), big_num.clone(), n(3.0), b(false)]), &format!("v-{r}"));
+        }
+        close(ev("VLOOKUP", vec![n(-0.0), big_num, n(2.0), b(false)]), 35.0);
     }
 
     #[test]

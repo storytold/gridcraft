@@ -102,6 +102,7 @@ impl fmt::Display for CellError {
     }
 }
 
+/// Case-insensitive exact-text lookup index over an [`Array`]'s elements.
 #[derive(Default, Debug)]
 #[doc(hidden)]
 pub struct TextIndex {
@@ -109,6 +110,7 @@ pub struct TextIndex {
 }
 
 impl TextIndex {
+    /// Builds a case-insensitive text position index from `data`.
     fn build(data: &[Value]) -> Self {
         let mut by_text: std::collections::HashMap<Box<str>, Vec<u32>> = std::collections::HashMap::new();
         for (i, v) in data.iter().enumerate() {
@@ -120,6 +122,7 @@ impl TextIndex {
         Self { by_text }
     }
 
+    /// Returns the 0-based positions whose text matches `pat` case-insensitively.
     fn positions(&self, pat: &str) -> &[u32] {
         if pat.is_ascii() {
             if !pat.bytes().any(|b| b.is_ascii_uppercase()) {
@@ -140,6 +143,42 @@ impl TextIndex {
     }
 }
 
+/// Exact-number lookup index over an [`Array`]'s elements (`0.0` and `-0.0` normalized to `+0.0`).
+#[derive(Default, Debug)]
+#[doc(hidden)]
+pub struct NumberIndex {
+    by_bits: std::collections::HashMap<u64, Vec<u32>>,
+}
+
+/// Canonical IEEE-754 bit pattern for exact numeric lookup (`-0.0` normalized to `+0.0`).
+fn number_bits(n: f64) -> u64 {
+    if n == 0.0 { 0.0f64.to_bits() } else { n.to_bits() }
+}
+
+impl NumberIndex {
+    /// Builds an exact numeric position index from `data`.
+    fn build(data: &[Value]) -> Self {
+        let mut by_bits: std::collections::HashMap<u64, Vec<u32>> = std::collections::HashMap::new();
+        for (i, v) in data.iter().enumerate() {
+            if let Value::Number(n) = v
+                && !n.is_nan()
+            {
+                by_bits.entry(number_bits(*n)).or_default().push(i as u32);
+            }
+        }
+        Self { by_bits }
+    }
+
+    /// Returns the 0-based positions whose numeric value equals `n` (`0.0 == -0.0`).
+    fn positions(&self, n: f64) -> &[u32] {
+        if n.is_nan() {
+            return &[];
+        }
+        self.by_bits.get(&number_bits(n)).map_or(&[], Vec::as_slice)
+    }
+}
+
+/// Lowercases `s` for case-insensitive text indexing.
 fn lower_text_key(s: &str) -> String {
     if s.is_ascii() { s.to_ascii_lowercase() } else { s.chars().flat_map(char::to_lowercase).collect() }
 }
@@ -156,6 +195,12 @@ pub struct Array {
     #[serde(skip)]
     #[doc(hidden)]
     pub text_queries: std::sync::atomic::AtomicU32,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub number_index: std::sync::OnceLock<NumberIndex>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub number_queries: std::sync::atomic::AtomicU32,
 }
 
 impl Clone for Array {
@@ -166,6 +211,8 @@ impl Clone for Array {
             data: self.data.clone(),
             text_index: std::sync::OnceLock::new(),
             text_queries: std::sync::atomic::AtomicU32::new(0),
+            number_index: std::sync::OnceLock::new(),
+            number_queries: std::sync::atomic::AtomicU32::new(0),
         }
     }
 }
@@ -181,32 +228,26 @@ impl Array {
         if rows == 0 || cols == 0 || rows.checked_mul(cols)? != data.len() {
             return None;
         }
-        Some(Array { rows, cols, data, text_index: std::sync::OnceLock::new(), text_queries: std::sync::atomic::AtomicU32::new(0) })
+        Some(Array { rows, cols, data, ..Default::default() })
     }
     pub fn filled(rows: usize, cols: usize, v: Value) -> Array {
         let (rows, cols) = (rows.max(1), cols.max(1));
-        Array {
-            rows,
-            cols,
-            data: vec![v; rows.saturating_mul(cols)],
-            text_index: std::sync::OnceLock::new(),
-            text_queries: std::sync::atomic::AtomicU32::new(0),
-        }
+        Array { rows, cols, data: vec![v; rows.saturating_mul(cols)], ..Default::default() }
     }
     pub fn scalar(v: Value) -> Array {
-        Array { rows: 1, cols: 1, data: vec![v], text_index: std::sync::OnceLock::new(), text_queries: std::sync::atomic::AtomicU32::new(0) }
+        Array { rows: 1, cols: 1, data: vec![v], ..Default::default() }
     }
     pub fn column(v: Vec<Value>) -> Array {
         if v.is_empty() {
             return Array::scalar(Value::Error(CellError::Calc));
         }
-        Array { rows: v.len(), cols: 1, data: v, text_index: std::sync::OnceLock::new(), text_queries: std::sync::atomic::AtomicU32::new(0) }
+        Array { rows: v.len(), cols: 1, data: v, ..Default::default() }
     }
     pub fn row(v: Vec<Value>) -> Array {
         if v.is_empty() {
             return Array::scalar(Value::Error(CellError::Calc));
         }
-        Array { rows: 1, cols: v.len(), data: v, text_index: std::sync::OnceLock::new(), text_queries: std::sync::atomic::AtomicU32::new(0) }
+        Array { rows: 1, cols: v.len(), data: v, ..Default::default() }
     }
     pub fn get(&self, r: usize, c: usize) -> Option<&Value> {
         if r >= self.rows || c >= self.cols {
@@ -228,7 +269,7 @@ impl Array {
                 data.push(self.get(r, c).cloned().unwrap_or(Value::Empty));
             }
         }
-        Array { rows: self.cols, cols: self.rows, data, text_index: std::sync::OnceLock::new(), text_queries: std::sync::atomic::AtomicU32::new(0) }
+        Array { rows: self.cols, cols: self.rows, data, ..Default::default() }
     }
     pub fn iter(&self) -> impl Iterator<Item = &Value> {
         self.data.iter()
@@ -243,6 +284,17 @@ impl Array {
             return None;
         }
         Some(self.text_index.get_or_init(|| TextIndex::build(&self.data)).positions(pat))
+    }
+    /// Positions (0-based into `data`, ascending) whose value is `Value::Number` equal to `n`
+    /// (`0.0 == -0.0`), or `None` when the array is too small to index or only queried once.
+    pub fn number_positions(&self, n: f64) -> Option<&[u32]> {
+        if self.data.len() < 64 {
+            return None;
+        }
+        if self.number_index.get().is_none() && self.number_queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+            return None;
+        }
+        Some(self.number_index.get_or_init(|| NumberIndex::build(&self.data)).positions(n))
     }
 }
 

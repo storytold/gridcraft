@@ -2929,6 +2929,43 @@ fn full_column_match_and_sumifs_scale() {
     assert_eq!(rep.value(CellRef::new(13, 7)), Value::from("NA"));
 }
 
+#[test]
+fn wide_table_vlookup_text_and_numeric_keys_and_unused_columns() {
+    use gridcraft_model::{Cell, Formula, Sheet};
+    let mut wb = Workbook::new();
+    wb.sheets.clear();
+    let mut data = Sheet::new("Data");
+    let mut report = Sheet::new("Report");
+    let fcell = |f: String| Cell { value: Value::Empty, formula: Some(Formula::new(&f).into()), style: Default::default(), py: None };
+    let vcell = |v: Value| Cell { value: v, formula: None, style: Default::default(), py: None };
+    for r in 0u32..4_000 {
+        let row1 = r + 1;
+        // Column F (col 5): text key; Column G (col 6): value; Column H (col 7): numeric key; Column I (col 8): value.
+        data.set_cell(CellRef::new(r, 5), vcell(Value::from(format!("Key-{r:04}"))));
+        data.set_cell(CellRef::new(r, 6), vcell(Value::Number(f64::from(r) * 2.0)));
+        data.set_cell(CellRef::new(r, 7), vcell(Value::Number(f64::from(r) + 10_000.0)));
+        data.set_cell(CellRef::new(r, 8), vcell(Value::Number(f64::from(r) * 3.0)));
+        // Column CV (col 99): formula that reads Report!B{row1} (would be a circular reference if VLOOKUP read unused columns).
+        data.set_cell(CellRef::new(r, 99), fcell(format!("Report!B{row1}+1")));
+
+        report.set_cell(CellRef::new(r, 0), vcell(Value::from(format!("Key-{r:04}"))));
+        report.set_cell(CellRef::new(r, 1), fcell(format!("VLOOKUP(A{row1},Data!F:CV,2,0)")));
+        report.set_cell(CellRef::new(r, 2), vcell(Value::Number(f64::from(r) + 10_000.0)));
+        report.set_cell(CellRef::new(r, 3), fcell(format!("VLOOKUP(C{row1},Data!H:CV,2,0)")));
+    }
+    wb.sheets.push(std::sync::Arc::new(data));
+    wb.sheets.push(std::sync::Arc::new(report));
+
+    let mut calc = Calc::new();
+    calc.recalc_all(&mut wb);
+
+    let rep = wb.sheet(1).unwrap_or_else(|| panic!("Report"));
+    assert_eq!(rep.value(CellRef::new(0, 1)), Value::Number(0.0));
+    assert_eq!(rep.value(CellRef::new(3_999, 1)), Value::Number(3_999.0 * 2.0));
+    assert_eq!(rep.value(CellRef::new(0, 3)), Value::Number(0.0));
+    assert_eq!(rep.value(CellRef::new(3_999, 3)), Value::Number(3_999.0 * 3.0));
+}
+
 /// A computed criterion whose formula runs a database function over the same criteria counts as
 /// not met inside itself: before, each record's check ran the function again for every record, at
 /// every level, so the work grew exponentially with the nesting allowed.
