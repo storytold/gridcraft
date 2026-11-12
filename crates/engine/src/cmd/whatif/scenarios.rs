@@ -195,6 +195,10 @@ const MAX_SUMMARY_CELLS: usize = 1_000_000;
 pub(super) fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "data.scenarioSummary";
     let d = s.doc()?;
+    // A summary adds a worksheet, so it needs the same structure permission as Insert Sheet.
+    if d.wb.protected_structure {
+        return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
+    }
     let si = d.wb.active_sheet();
     let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
     let scenarios: Vec<Scenario> = load_scenarios(&d.wb).into_iter().filter(|x| x.sheet.eq_ignore_ascii_case(&sh.name)).collect();
