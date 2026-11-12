@@ -258,6 +258,9 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
         for (a, n) in shm.object_anchors_mut().zip(new_anchors) {
             *a = n;
         }
+        if cx.wb.sheet(sheet).is_some_and(|sh| sh.autofilter.as_ref().is_some_and(|af| !af.criteria.is_empty())) {
+            super::apply_filter(&mut cx.wb, sheet);
+        }
         for (c, _) in moved {
             cx.changed.push((sheet, c));
         }
