@@ -286,6 +286,21 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
             }
         }
     }
+    // Clearing a multi-cell legacy array's formula cell removes the whole array, so the cleared
+    // range must hold all of it (#3894). The commit can't tell this apart from clearing every
+    // cell: only the formula cell is stored either way.
+    if matches!(what, "all" | "contents") {
+        let d = s.doc()?;
+        if let Some(sh) = d.wb.sheet(sheet) {
+            let partial = sh.spill_ranges.keys().any(|&anchor| {
+                ranges.iter().any(|r| r.contains(anchor) && !filtered_rows(sh, *r).contains(&anchor.row))
+                    && super::legacy_array_at(sh, anchor).is_some_and(|a| !ranges.iter().any(|r| r.contains_range(&a)))
+            });
+            if partial {
+                return Err(EngineError::Other(super::PART_OF_ARRAY.into()));
+            }
+        }
+    }
     edit(s, |cx| {
         for &whole in &ranges {
             // Cells are only stored inside the used range. Notes and links are kept apart from

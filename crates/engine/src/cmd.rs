@@ -663,7 +663,11 @@ fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
         if std::sync::Arc::ptr_eq(sh, after) {
             continue;
         }
-        for c in sh.cells.diff(&after.cells) {
+        let diff = sh.cells.diff(&after.cells);
+        if replaced_part_of_array(sh, after, &diff) {
+            return Err(EngineError::Other(PART_OF_ARRAY.into()));
+        }
+        for c in diff {
             let filled = after.cell(c).is_some_and(gridcraft_model::Cell::has_content);
             if !filled || !sh.spill.contains_key(&c) || same_content(sh.cell(c), after.cell(c)) {
                 continue;
@@ -673,11 +677,42 @@ fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
                     && after.cell(anchor).and_then(|x| x.formula.as_ref()).and_then(|f| f.array).is_some_and(|a| a.start == anchor && a.contains(c))
             });
             if in_array {
-                return Err(EngineError::Other("You can't change part of an array.".into()));
+                return Err(EngineError::Other(PART_OF_ARRAY.into()));
             }
         }
     }
     Ok(())
+}
+
+/// Excel's message for an edit of some, but not all, cells of a multi-cell legacy array.
+pub(crate) const PART_OF_ARRAY: &str = "You can't change part of an array.";
+
+/// The multi-cell legacy array anchored at `anchor` on `sh`: its range, when the cell there holds
+/// an array formula entered over more than one cell.
+pub(crate) fn legacy_array_at(sh: &gridcraft_model::Sheet, anchor: CellRef) -> Option<gridcraft_core::RangeRef> {
+    sh.cell(anchor).and_then(|x| x.formula.as_ref()).and_then(|f| f.array).filter(|a| a.start == anchor && !a.is_single())
+}
+
+/// Whether an edit put new content into a multi-cell legacy array's formula cell without writing
+/// the rest of its cells (#3894): the array would vanish, its other results with it, though only
+/// one cell was changed. Re-entering the array over at least its range, or writing every one of
+/// its cells, replaces the whole array and is fine. A formula cell left empty can't be told apart
+/// from the whole array cleared or moved here, so clearing is guarded by the commands that clear.
+fn replaced_part_of_array(sh: &gridcraft_model::Sheet, after: &gridcraft_model::Sheet, diff: &[CellRef]) -> bool {
+    sh.spill_ranges.keys().any(|&anchor| {
+        let Some(range) = legacy_array_at(sh, anchor) else { return false };
+        let now = after.cell(anchor);
+        if same_content(sh.cell(anchor), now) || !now.is_some_and(gridcraft_model::Cell::has_content) {
+            return false;
+        }
+        if now.and_then(|x| x.formula.as_ref()).and_then(|f| f.array).is_some_and(|a| a.start == anchor && a.contains_range(&range)) {
+            return false;
+        }
+        // `diff` lists each changed cell once, so counting those inside the range tells whether
+        // every cell of it was written.
+        let written = diff.iter().filter(|c| range.contains(**c)).count() as u64;
+        written < range.count()
+    })
 }
 
 /// Two cells hold the same value, formula or Python code (formats aside; a Python cell's result

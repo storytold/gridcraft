@@ -2357,6 +2357,43 @@ fn part_of_a_legacy_array_cant_be_changed() {
 }
 
 #[test]
+fn a_legacy_arrays_formula_cell_alone_cant_be_changed() {
+    // #3894: clearing or overwriting only the first cell of a multi-cell legacy array removed
+    // the whole array (Excel refuses the edit and keeps the array).
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[10], [20], [30]]})).unwrap();
+    s.execute("selection.set", json!({"range": "C1:C3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "=A1:A3*2", "array": true})).unwrap();
+    s.execute("cell.set", json!({"cell": "E1", "input": "=SUM(C1:C3)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "G1", "input": "999"})).unwrap();
+    let kept = |s: &Session| {
+        assert_eq!([v(s, "C1"), v(s, "C2"), v(s, "C3"), v(s, "E1")], [20.0, 40.0, 60.0, 120.0].map(Value::Number));
+    };
+    kept(&s);
+    for (id, p) in [
+        ("edit.clearContents", json!({"range": "C1"})),
+        ("edit.clearAll", json!({"range": "C1"})),
+        ("range.setValues", json!({"range": "C1", "values": [[999]]})),
+        ("cell.set", json!({"cell": "C1", "input": "999"})),
+    ] {
+        let e = s.execute(id, p).unwrap_err();
+        assert!(e.to_string().contains("part of an array"), "{id}: {e}");
+        kept(&s);
+    }
+    s.execute("edit.copy", json!({"range": "G1"})).unwrap();
+    let e = s.execute("edit.paste", json!({"at": "C1"})).unwrap_err();
+    assert!(e.to_string().contains("part of an array"), "{e}");
+    kept(&s);
+    // Changing the whole array is fine.
+    s.execute("range.setValues", json!({"range": "C1", "values": [[999], [999], [999]]})).unwrap();
+    assert_eq!(v(&s, "E1"), Value::Number(2997.0));
+    s.execute("edit.undo", json!({})).unwrap();
+    kept(&s);
+    s.execute("edit.clearContents", json!({"range": "B1:C5"})).unwrap();
+    assert_eq!([v(&s, "C2"), v(&s, "E1")], [Value::Empty, Value::Number(0.0)]);
+}
+
+#[test]
 fn create_names_from_selection() {
     let names = |s: &Session| -> Vec<(String, String)> {
         let mut v: Vec<_> = s.doc().unwrap().wb.names.iter().map(|n| (n.name.clone(), n.formula.clone())).collect();
