@@ -3132,3 +3132,16 @@ fn text_criteria_indexes_see_python_results_laid_out_in_the_pass() {
     t.calc.recalc_all(&mut t.wb);
     assert_eq!((t.num("A1"), t.num("B1")), (2.0, 2.0), "spilled into the range");
 }
+
+#[test]
+fn indexed_text_criteria_spend_the_work_the_scan_would() {
+    // Each COUNTIF over 100,000 cells reads and hands over every cell (200,000 units); 1,500
+    // calls run past the formula's work, so the scan ends in #CALC!. Indexed calls (from the
+    // second on) read nothing but must count the same work, or the result would change.
+    let mut t = T::new();
+    t.set("A1", "b");
+    t.set("B1", "=SUM(MAP(SEQUENCE(1500),LAMBDA(x,COUNTIF(A1:A100000,\"b\"))))");
+    assert_eq!(t.get("B1"), Value::Error(CellError::Calc));
+    t.set("B1", "=SUM(MAP(SEQUENCE(10),LAMBDA(x,COUNTIF(A1:A100000,\"b\"))))");
+    assert_eq!(t.num("B1"), 10.0, "within the work, indexed calls give the scan's count");
+}
