@@ -251,6 +251,47 @@ print("left alone")
     assert!(String::from_utf8_lossy(&o.stdout).contains("left alone"), "{}", text(&o));
 }
 
+/// A socket the parent made, which the program inherited as a standard stream, can't be pointed at
+/// another process through the ioctls that do what `fcntl`'s notification commands do: `FIOSETOWN`
+/// (0x8901) and `FIOASYNC` (0x5452), which Python's `fcntl` passes straight through. Linux only:
+/// macOS's profile has no rule for them, and its standard streams here are pipes.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_program_cant_point_an_inherited_socket_at_another_process() {
+    if !confines() {
+        return;
+    }
+    let Some((python, prefix)) = system_python() else {
+        return;
+    };
+    let code = r#"
+import fcntl, sys
+other = int(sys.argv[1])
+def refused(call, *args):
+    try:
+        call(*args)
+    except PermissionError:
+        return True
+    except OSError as e:
+        print("other error", e)
+    return False
+assert refused(fcntl.ioctl, 0, 0x8901, other), "giving a socket's notifications to another process"
+assert refused(fcntl.ioctl, 0, 0x5452, 1), "switching a socket's notifications on"
+print("socket quiet")
+"#;
+    let (mine, _) = std::os::unix::net::UnixStream::pair().unwrap();
+    let socket: std::os::fd::OwnedFd = mine.into();
+    let me = std::process::id().to_string();
+    let o = Command::new(env!("CARGO_BIN_EXE_gridcraft-cli"))
+        .args(["sandbox-check", "--read", &prefix, "--", &python, "-I", "-c", code, &me])
+        .stdin(std::process::Stdio::from(socket))
+        .output()
+        .unwrap();
+    let out = text(&o);
+    assert!(o.status.success(), "{out}");
+    assert!(String::from_utf8_lossy(&o.stdout).contains("socket quiet"), "{out}");
+}
+
 /// Confined, a program changes no file, whether the policy lets it read that file or not, by path or
 /// by a descriptor: not its contents, permissions, owner, extended attributes, times or flags.
 /// Skipped when there is no `python3`.

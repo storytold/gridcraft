@@ -1,6 +1,6 @@
 # The sandbox for helper processes
 
-> **Last updated:** 2026-11-07 · **Change:** minor (no file changes by any route on Linux: Landlock's truncation right is required, and seccomp refuses what Landlock has no right for; earlier: more is refused on Linux: other processes, System V and POSIX queues, the terminal; earlier: first version: the `sandbox` crate and `gridcraft-cli sandbox-check`)
+> **Last updated:** 2026-11-12 · **Change:** minor (no signals to another process on Linux, not even indirectly: `fcntl`'s notification commands and the socket ioctls that do the same are refused; earlier: no file changes by any route on Linux: Landlock's truncation right is required, and seccomp refuses what Landlock has no right for; earlier: more is refused on Linux: other processes, System V and POSIX queues, the terminal; earlier: first version: the `sandbox` crate and `gridcraft-cli sandbox-check`)
 
 The sandbox is the layer GridCraft is to run code it doesn't trust in, such as a workbook's
 Python cells: a separate process that confines itself before the code starts. Here only
@@ -24,7 +24,7 @@ other programs. The sandbox's job is that it can do none of these:
 - **Network:** no sockets, no connections and no listeners. The exception is a standard stream the
   parent made a socket (see below).
 - **Other processes and the system:** no debugging or reading another process, no System V shared
-  memory, message queues or semaphores, no POSIX message queues, no signals to another process — on Linux not even indirectly, as the `fcntl` commands that have the kernel send one are refused — no typing into a terminal it inherited, no mounts or namespaces, no kernel
+  memory, message queues or semaphores, no POSIX message queues, no signals to another process — on Linux not even indirectly, as the `fcntl` commands and socket ioctls that have the kernel send one are refused — no typing into a terminal it inherited, no mounts or namespaces, no kernel
   modules, BPF, keyrings or performance counters. On Linux it also can't change another process's
   limits, priority or scheduling.
 

@@ -278,6 +278,13 @@ const O_ASYNC: u64 = libc::O_ASYNC as u64;
 /// the numbers are the same on every architecture (`asm-generic/fcntl.h`).
 const F_SETOWN_EX: u64 = 15;
 const F_SETSIG: u64 = 10;
+/// Socket ioctls that do what those commands do: `FIOSETOWN` and `SIOCSPGRP` name the process to
+/// notify, and `FIOASYNC` switches the notification on. Their requests carry no data-direction
+/// bit, so the [`IOC_WRITE`] rule doesn't name them. `libc` doesn't name them; the numbers are
+/// the kernel's, the same on every architecture (`asm-generic/sockios.h`).
+const FIOSETOWN: u64 = 0x8901;
+const SIOCSPGRP: u64 = 0x8902;
+const FIOASYNC: u64 = 0x5452;
 
 /// What the main filter refuses with `EPERM`: the calls above, and these when their arguments match.
 /// - `clone` without `CLONE_THREAD`: a new process.
@@ -289,7 +296,10 @@ const F_SETSIG: u64 = 10;
 ///   `O_ASYNC`, the switch without which nothing is sent. None is a signal call, and the only rule
 ///   that would cover them is Landlock's signal scope, which needs ABI 6, newer than a launch
 ///   requires; without these a confined program could have the kernel signal any process of its
-///   user. `F_SETFL` itself still works, as `O_NONBLOCK` comes from it.
+///   user. `F_SETFL` itself still works, as `O_NONBLOCK` comes from it. A socket answers the same
+///   arrangement through ioctls — `FIOSETOWN` and `SIOCSPGRP` to name the process, `FIOASYNC` to
+///   switch the notification on — and those requests carry no data-direction bit, so they are
+///   named alongside the others.
 /// - `TIOCSTI` and `TIOCLINUX`, which type into a terminal the program inherited, as when
 ///   `gridcraft-cli sandbox-check` runs a program from a shell.
 /// - An `ioctl` that hands the kernel data ([`IOC_WRITE`]), as those that change a file's flags or
@@ -323,6 +333,9 @@ fn main_rules(me: u32) -> Result<BTreeMap<i64, Vec<SeccompRule>>> {
         vec![
             rule(vec![word(1, SeccompCmpOp::Eq, TIOCSTI)?])?,
             rule(vec![word(1, SeccompCmpOp::Eq, TIOCLINUX)?])?,
+            rule(vec![word(1, SeccompCmpOp::Eq, FIOSETOWN)?])?,
+            rule(vec![word(1, SeccompCmpOp::Eq, SIOCSPGRP)?])?,
+            rule(vec![word(1, SeccompCmpOp::Eq, FIOASYNC)?])?,
             rule(vec![word(1, SeccompCmpOp::MaskedEq(IOC_WRITE), IOC_WRITE)?])?,
             rule(vec![word(1, SeccompCmpOp::Eq, FS_IOC_SET_ENCRYPTION_POLICY)?])?,
         ],
@@ -443,7 +456,9 @@ mod tests {
         ] {
             assert_eq!(rules.get(&nr).map(Vec::len), Some(0), "{nr} is refused outright");
         }
-        assert_eq!(rules.get(&libc::SYS_ioctl).map(Vec::len), Some(4));
+        // The terminal rules, the socket notification ioctls (`FIOSETOWN`, `SIOCSPGRP`,
+        // `FIOASYNC`), the data-carrying rule and the encryption rule.
+        assert_eq!(rules.get(&libc::SYS_ioctl).map(Vec::len), Some(7));
     }
 
     #[test]
