@@ -461,4 +461,25 @@ mod packaging_tests {
             assert!(FileKind::from_path(&format!("book.{ext}")).is_some(), "GridCraft doesn't open .{ext}");
         }
     }
+
+    /// Every macOS document type names the app icon, so Finder draws GridCraft's icon on files
+    /// GridCraft is the default app for, not the icon of the app that had them before (#3671).
+    #[test]
+    fn macos_document_types_name_the_app_icon() {
+        let plist = include_str!("../../../packaging/macos/Info.plist.in");
+        let value = |text: &str, key: &str| -> Option<String> {
+            let rest = text.split_once(&format!("<key>{key}</key>"))?.1;
+            Some(rest.split_once("<string>")?.1.split('<').next()?.to_string())
+        };
+        let app_icon = value(plist, "CFBundleIconFile").unwrap_or_default();
+        assert_eq!(app_icon, "GridCraft");
+        // The document types run to the top-level `</array>` (inner arrays are indented deeper).
+        let types = plist.split("<key>CFBundleDocumentTypes</key>").nth(1).and_then(|s| s.split("\n  </array>").next()).unwrap_or("");
+        let dicts: Vec<&str> = types.split("<dict>").skip(1).collect();
+        assert!(!dicts.is_empty(), "no CFBundleDocumentTypes found");
+        for d in dicts {
+            let name = value(d, "CFBundleTypeName").unwrap_or_default();
+            assert_eq!(value(d, "CFBundleTypeIconFile").as_deref(), Some(app_icon.as_str()), "{name} names no app icon");
+        }
+    }
 }
