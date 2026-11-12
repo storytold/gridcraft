@@ -111,16 +111,23 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     group_end(ui, "Sheet Options");
 }
 
-/// Page Layout › Scale to Fit: Excel's Width, Height and Scale fields, on two rows (width and
-/// height, then scale) as Excel draws them from 680 client points.
+/// One Width/Height page-count field: `fit` is the stored setting the new choice is compared
+/// against, so re-clicking the current choice issues no command.
+struct FitPages<'a> {
+    label: &'a str,
+    pages: u16,
+    other: u16,
+    is_width: bool,
+}
+
 fn scale_to_fit(app: &mut SheetApp, ui: &mut Ui) {
     let (fit, scale) = app.session.active().and_then(|d| d.wb.active().map(|s| (s.print.fit_to, s.print.scale))).unwrap_or((None, 100));
     let (width, height) = fit.unwrap_or((0, 0));
     ui.vertical(|ui| {
         ui.horizontal(|ui| {
-            fit_pages(app, ui, "Width:", width, height, true, scale);
+            fit_pages(app, ui, FitPages { label: "Width:", pages: width, other: height, is_width: true }, fit, scale);
             ui.add_space(6.0);
-            fit_pages(app, ui, "Height:", height, width, false, scale);
+            fit_pages(app, ui, FitPages { label: "Height:", pages: height, other: width, is_width: false }, fit, scale);
         });
         ui.horizontal(|ui| {
             let caption = ui.label(egui::RichText::new(app.ui.language.tr("Scale:")).small());
@@ -136,8 +143,9 @@ fn scale_to_fit(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 /// One of Scale to Fit's page counts: Automatic for this dimension (the other keeps its
-/// limit, unless it is Automatic too), or 1–9 pages tall or wide.
-fn fit_pages(app: &mut SheetApp, ui: &mut Ui, label: &str, pages: u16, other: u16, is_width: bool, scale: u16) {
+/// limit, unless it is Automatic too), or 1-9 pages tall or wide.
+fn fit_pages(app: &mut SheetApp, ui: &mut Ui, field: FitPages<'_>, fit: Option<(u16, u16)>, scale: u16) {
+    let FitPages { label, pages, other, is_width } = field;
     let caption = ui.label(egui::RichText::new(app.ui.language.tr(label)).small());
     let lang = app.ui.language;
     let pages_text = |n: u16| {
@@ -148,6 +156,14 @@ fn fit_pages(app: &mut SheetApp, ui: &mut Ui, label: &str, pages: u16, other: u1
         for n in 0..=9u16 {
             if ui.selectable_label(n == pages, pages_text(n)).clicked() {
                 let (width, height) = if is_width { (n, other) } else { (other, n) };
+                // An Automatic/Automatic choice stores no fit-to pages: compare with the
+                // stored setting and skip the command when nothing would change, so a click
+                // on the current choice neither dirties the workbook nor adds an undo step.
+                // A stored (0, 0) fit still differs from None, so Automatic clears it.
+                let target = if width == 0 && height == 0 { None } else { Some((width, height)) };
+                if target == fit {
+                    continue;
+                }
                 if width == 0 && height == 0 {
                     // Both dimensions Automatic: no fit-to pages, the percent scale applies.
                     act(app, "pageLayout.scaleToFit", json!({"scale": scale}));

@@ -140,6 +140,9 @@ struct SectionPlan {
     /// The breakpoint row it took last frame (an index into the tab's widest-first table), so
     /// hysteresis compares like with like even when two widths share a level.
     slot: u8,
+    /// A breakpoint row has been chosen, so `slot` holds history for hysteresis. Breakpoint
+    /// groups select their row from the client width and never draw a measuring frame.
+    planned: bool,
     /// A frame has drawn the natural body, so its width is known.
     measured: bool,
 }
@@ -196,14 +199,20 @@ impl TabSections {
         let plan = &self.plans[i];
         let breaks = self.breaks.iter().find(|(l, _)| l == label).map(|(_, b)| b.as_slice());
         let mut slot = plan.slot;
-        let level = if !plan.measured {
-            // The first frame draws every group in its widest natural form, to measure it.
-            slot = 0;
-            widest_level(breaks)
-        } else if let Some(b) = breaks {
-            let (level, chosen) = break_level(b, self.client, plan.slot);
+        let level = if let Some(b) = breaks {
+            // Breakpoint rows need no measurement: an unplanned group starts on the row the
+            // client reaches, so the first frame never treats the widest row as hysteresis
+            // history (a fresh 810 pt window would otherwise keep Clipboard natural until
+            // the next input past the dead band).
+            let raw = b.iter().position(|(min, _)| self.client >= *min).map_or(b.len() as u8, |i| i as u8);
+            let previous = if plan.planned { plan.slot } else { raw };
+            let (level, chosen) = break_level(b, self.client, previous);
             slot = chosen;
             level
+        } else if !plan.measured {
+            // The first frame draws the group in its natural form, to measure it.
+            slot = 0;
+            1
         } else {
             let remaining = self.content - self.used;
             let natural = plan.level != SECTION_COMPACT;
@@ -214,6 +223,7 @@ impl TabSections {
         let plan = &mut self.plans[i];
         plan.level = level;
         plan.slot = slot;
+        plan.planned = breaks.is_some();
         level
     }
 
@@ -252,12 +262,6 @@ impl TabSections {
         }
         false
     }
-}
-
-/// The widest natural layout a group offers: the first level of its widest-first breakpoint
-/// table, or its single natural body.
-fn widest_level(breaks: Option<&[(f32, u8)]>) -> u8 {
-    breaks.and_then(|b| b.first()).map_or(1, |(_, level)| *level)
 }
 
 /// The level at breakpoint row `slot`; the row past the table is the compact one.

@@ -196,6 +196,33 @@ fn scale_to_fit_has_two_rows_of_fields_from_680() {
 }
 
 #[test]
+fn reselecting_the_current_page_count_issues_no_command() {
+    // Clicking the already-selected Width choice is a no-op: no undo step, no dirty workbook.
+    let setup = json!({"width": 2, "height": 3});
+    let needle = "2 pages";
+    let mut h = app_at_size(vec2(1000.0, 700.0), "Page Layout");
+    h.state_mut().session.execute("pageLayout.scaleToFit", setup.clone()).unwrap();
+    h.run_steps(2);
+    // The setup command dirties the workbook and leaves one undo step; the no-op
+    // check below measures only the reselected click against that baseline.
+    if let Some(d) = h.state_mut().session.active_mut() {
+        d.undo.clear();
+        d.saved = d.wb.clone();
+    }
+    // The Width combo shows the stored count; its popup holds the choices.
+    h.get_by_label_contains("Width:").click();
+    h.run_steps(3);
+    // Clicking the already-selected choice is a no-op: the command never runs, so
+    // there is no new undo step and the workbook stays as dirty as it was.
+    let undo_before = h.state().session.active().map(|d| d.undo.len());
+    let dirty_before = h.state().session.active().unwrap().is_dirty();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, needle).click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.active().map(|d| d.undo.len()), undo_before, "{needle} after {setup}: no undo step");
+    assert_eq!(h.state().session.active().unwrap().is_dirty(), dirty_before, "{needle} after {setup}: stays clean");
+}
+
+#[test]
 fn sheet_view_is_one_row_below_928_and_two_from_it() {
     let one_row = app_at_size(vec2(915.0, 768.0), "View");
     let new = one_row.get_by_label("New Sheet View").rect();
