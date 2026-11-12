@@ -1,85 +1,63 @@
 # Real-time collaboration: status and acceptance evidence
 
-- Date: 2026-11-12, measured at 21:05Z. Every hash and number below is the state at that instant;
-  §27.5 and §28.5 name what the 13:27Z and 17:31Z pushes changed and what remains, so a later reader
-  can tell a stale line from a wrong one.
-- **Rule of the record:** a sentence that says a commit is or is not pushed is written only after
-  `git ls-remote fork refs/heads/feature/realtime-collaboration` at the measurement instant. A local
-  `git rev-list` cannot tell a pushed head from an unpushed one, and the 16:40Z version of this page
-  failed there: it called `bfa13a40` local when the fork already had it.
-- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`). **At 21:05Z the delivered
-  head is `bfa13a40`**: the fork's `refs/heads/feature/realtime-collaboration` (ls-remote at
-  17:31Z and again at 21:01Z), the PR's `headRefOid` and the local HEAD read it, and
-  `git rev-list --count --left-right fork/feature/realtime-collaboration...HEAD` read `0 0` on a
-  clean tree. `bfa13a40` is the docs-only commit above `ce9f48db` — 1 file, +122/−89, this page
-  — and the push of **2026-11-12T17:31:21Z** published it. `ce9f48db` is in turn the docs-only
-  commit over the **code head `4ae789c6`** —
-  `git diff --stat 4ae789c6..ce9f48db` is 1 file, +98, the page that closes §23.2 (§28) — and
-  `4ae789c6` is `ff26e8a0` plus §28's slice: the constructor change and its two tests. The push of
-  **2026-11-12T13:27:33Z** published `ce9f48db`; the four workflows it created ended
-  `action_required` with no job started and CodeRabbit skipped that head at 13:27:37Z. The next
-  push, **2026-11-12T17:31:21Z**, published `bfa13a40`; its four workflows are also
-  `action_required` with no job started, and CodeRabbit skipped it at 17:31:23Z, so the delivered
-  head has no CI evidence of its own either (§27.5, §28.5). **The PR reads `mergeable = true` /
-  `mergeable_state = unstable`** — mergeable, and `unstable` because those four runs wait for a
-  maintainer, not because a job failed; the field was computed at the push, on the base `6308fc9e`
-  the merge `57c9e21e` had already taken into the head (§27.5). `origin/main` has since moved to
-  `c0ee120a`, 101 commits past `6308fc9e` (91 past `37941f06`), and
-  `git merge-tree --write-tree origin/main HEAD` is clean, so the next recomputation keeps
-  `MERGEABLE`. The PR is 82 commits, 84 files, +18736/−34 (`gh api
-  repos/storytold/gridcraft/pulls/3613` at 21:05Z).
-  `42e2dbe5` alone measured 75 commits, 84 files, +18169/−34 while it was the head. The
-  merge `42e2dbe5` itself, over the branch tip `576f586d`, is 51 files, +1402/−191: main's twelve
-  commits — the workbook version at `0.19.1`, the engine's scan-allowance limits for Advanced
-  Filter, Remove Duplicates, filters, AutoFit and macro footprints, `data.circleInvalid`, the CLI
-  and `xtask` — with two conflicts resolved as a union. `crates/engine/src/tests.rs` keeps the
-  branch's remote-apply tests **and** main's
-  `circle_invalid_says_when_its_scan_allowance_ended_early`, each with its own `#[test]`. The
-  verbatim `Cargo.lock` merge left the four collaboration crates at the old workspace version
-  `0.16.0`; they now carry `0.19.1` like every other member, which `cargo metadata --locked` — run
-  in §27.4's third pass — checks. The push of 2026-11-11T23:10:46Z published `b46ed3c3` — this
-  page, no code — and that was the delivered head from then until the 03:10Z push; the four
-  workflows it created (23:10:40Z) ended `action_required` with no job started and CodeRabbit
-  skipped that head at 23:10:48Z (§26.4). The push of 21:29Z published `42e2dbe5`; the four check
-  suites it created carry that stamp, all `action_required` with no job started (§26.2), and they
-  stay the runs of the code head. The push of 17:30Z published `0224c0e8` (this page at
-  `b9773627`), `7320106d` (the earlier merge of `origin/main`) and `5bcdf3c9` (§25: a session
-  follows the workbook that replaces the blank start, with two tests) — §25's tree is no longer the
-  branch's. The push of 11:28:40Z published `2a5f3e00` (§24: the code and the two tests of the
-  07:38Z findings) and `b9773627`, the page that records them. The push of 07:26:44Z published
-  `7b42c82a` (§23: the code and the two tests of the 01:36Z finding) and `915d994e`; §19 records
-  the push of 2026-11-10T17:19Z, which published `ae4311ee`, `34e54b81`, `46783412` and the nine
-  review-fix commits `d91f838a`…`a2251b0e`; §21 records the push of 20:1xZ, which published
-  `f51237ea` and `8208607f`, and the 01:24Z one, which published `00b146df` and `bb5b3acf`.
-  **The delivery adds §28's slice and this page and nothing else:** `bfa13a40`'s only parent is
-  `ce9f48db`, whose only parent is `4ae789c6`,
-  which is `ff26e8a0` plus the constructor change and its two tests, and `ff26e8a0` is the merge
-  `57c9e21e` plus a page; `git diff --stat 6308fc9e..bfa13a40` is 84 files, +18736/−34 — the PR's
-  own numbers — so no code of the branch's was dropped and none came from the merge itself. Every
-  branch commit is on the fork and in the PR.
+- Date: 2026-11-12, measured at 23:37Z. Every hash and number below is the state at that instant;
+  §27.5 and §28.5 name what the 13:27Z, 17:31Z and 23:20Z pushes changed and what remains, so a
+  later reader can tell a stale line from a wrong one.
+- **Rule of the record — pushes:** a sentence that says a commit is or is not pushed is written only
+  after `git ls-remote fork refs/heads/feature/realtime-collaboration` at the measurement instant. A
+  local `git rev-list` cannot tell a pushed head from an unpushed one, and the 16:40Z version of this
+  page failed there: it called `bfa13a40` local when the fork already had it.
+- **Rule of the record — the head is read, not asserted.** The header names the PR
+  (<https://github.com/storytold/gridcraft/pull/3613>) and the two commands that read its head —
+  `gh pr view 3613 --repo storytold/gridcraft --json headRefOid,mergeable,mergeableState,reviewDecision`
+  and `git ls-remote fork refs/heads/feature/realtime-collaboration` — with the instant of the
+  measurement. It does not assert a commit as the delivered head. The hash is what the commands
+  returned at that instant, not a property of the page: every
+  docs commit above the head makes the previous header's hash historical, and a header that asserts
+  one as current makes itself false with the very commit that delivers it. The 21:05Z header did
+  exactly that: it named `bfa13a40` as the delivered head, and the commit that carried the correction
+  (`8e3610b0`) became the head in turn. So the header states a reading and its instant; the standing
+  facts — the code head, the merge, the gate — name their own measurement in §27 and §28.
+- **Head at 23:37Z: `8e3610b0`.** `gh pr view 3613` reads `headRefOid = 8e3610b0`,
+  `mergeable = MERGEABLE`, `mergeableState = UNSTABLE` and an empty `reviewDecision`;
+  `git ls-remote fork refs/heads/feature/realtime-collaboration` reads
+  `8e3610b0800ce3b9899a27d89f49f96de70e5e0d`; the local HEAD is the same commit, and
+  `git rev-list --count --left-right fork/feature/realtime-collaboration...HEAD` is `0 0` on a clean
+  tree. `8e3610b0` is the docs-only commit above `bfa13a40` — one parent, 1 file, +88/−63, this page
+  and these two rules — and `bfa13a40` is the previous head, now an ancestor: the branch has not
+  rewound, the two heads are one line. The push of **2026-11-12T23:20Z** published `8e3610b0` (its
+  four workflows carry the 23:20:11Z stamp, CodeRabbit skipped the head at 23:20:15Z, the PR's
+  `updatedAt` is 23:20:13Z); the push of **17:31:21Z** published `bfa13a40`; the push of
+  **13:27:33Z** published `ce9f48db`.
+- **What the delivered head contains.** `8e3610b0` → `bfa13a40` → `ce9f48db` → the **code head
+  `4ae789c6`** (§28: the constructor change and its two tests) → the merge `57c9e21e` (main's
+  `6308fc9e`, the merge that cleared the conflict, §27) → `ff26e8a0`. Each of the three commits above
+  `4ae789c6` changes one file, this page. `git diff --stat 6308fc9e..8e3610b0` is 84 files,
+  +18761/−34 — the PR's own numbers — so no code of the branch's was dropped and none came from the
+  merge itself. Every branch commit is on the fork and in the PR.
 - Base: `main`. The base SHA the PR reports — `6308fc9e`, last computed with the mergeable fields at
   the 17:31:21Z push — is the tip `57c9e21e` merged, so the head contains its own base and there is
   nothing left for `f800472b`'s deletions to conflict with (§27.2). `origin/main` is `c0ee120a` at
-  21:05Z, 101 commits further (91 past the `37941f06` of the previous measurement), and
-  `git merge-tree --write-tree origin/main HEAD` is clean, so the
-  next computation keeps `MERGEABLE`. The base of §25 was `01abd954`; that tree, and the gate it was
+  23:37Z, 101 commits further (91 past the `37941f06` of the previous measurement), and
+  `git merge-tree --write-tree origin/main HEAD` is clean (tree `3e48fb2b`), so the next
+  computation keeps `MERGEABLE`. The base of §25 was `01abd954`; that tree, and the gate it was
   given, stay in §25.
 - PR: <https://github.com/storytold/gridcraft/pull/3613> — open, **not a draft** since
-  2026-11-10T14:56:54Z, `mergeable = true`, `mergeable_state = unstable`, head `bfa13a40`, base
-  `main` at `6308fc9e`, last update 2026-11-12T17:31:21Z, `reviewDecision` empty, 82 commits, 84
-  files, +18736/−34. `unstable` names the four runs of `bfa13a40` that wait for a maintainer's
+  2026-11-10T14:56:54Z, `mergeable = true`, `mergeable_state = unstable`, head `8e3610b0`, base
+  `main` at `6308fc9e`, last update 2026-11-12T23:20:13Z, `reviewDecision` empty, 83 commits, 84
+  files, +18761/−34. `unstable` names the four runs of `8e3610b0` that wait for a maintainer's
   approval; no job has failed (§27.5). `4ae789c6` is the code head — §23.2's closure (§28).
-- Gate on the delivered head `bfa13a40`: **no executed CI run.** The four workflows the 17:31:21Z
-  push created — `Nix` (`43270319489`), `House rules` (`43270319510`), `CI` (`43270319650`) and
-  `SonarCloud` (`43270319627`) — ended `completed / action_required` with **zero jobs**: the
+- Gate on the delivered head `8e3610b0`: **no executed CI run.** The four workflows the 23:20Z push
+  created — `Nix` (`43327980207`), `House rules` (`43327980433`), `CI` (`43327980035`) and
+  `SonarCloud` (`43327980249`) — ended `completed / action_required` with **zero jobs**: the
   repository needs a maintainer to approve a run from a fork. The commit's status API holds no
   context (`pending`, 0 statuses) and its only check run is CodeRabbit, `completed / skipped` at
-  17:31:23Z; the rollup therefore shows nothing but that skip. The head changes nothing but this
-  page over `ce9f48db`, which changes nothing but its page over `4ae789c6`, whose own gate is
-  §28.4's: `fmt`
-  clean, `clippy --all-targets -D warnings` clean on the two collaboration crates, the client
-  suites 39 passed (4 lib + 14 converge + 11 document + 5 parts + 5 rollback), `collab-web` 11, and
-  both checks — `gridcraft-web` on wasm32 and `gridcraft --features collab` — ok.
+  23:20:15Z; the rollup therefore shows nothing but that skip. The head changes nothing but this page
+  over `bfa13a40`, which changes nothing but its page over `ce9f48db`, which changes nothing but its
+  page over `4ae789c6`, whose own gate is §28.4's: `fmt` clean, `clippy --all-targets -D warnings`
+  clean on the two collaboration crates, the client suites 39 passed (4 lib + 14 converge + 11
+  document + 5 parts + 5 rollback), `collab-web` 11, and both checks — `gridcraft-web` on wasm32 and
+  `gridcraft --features collab` — ok.
   **The gate below the page is the host's, on the code head `4ae789c6` (§28.4) and on the merge
   `57c9e21e` (§27.4):**
   `i18n-report`, `fmt` and `clippy --workspace --all-targets --keep-going -D warnings` clean; the
@@ -96,13 +74,14 @@
   296 catalog commands (94.9%), the keytips tables already matching (`--check`), and
   `cargo metadata --locked` silent. The code head `42e2dbe5` keeps §26.3's gate, whose test step
   stopped on the same `umask` test. No line of this paragraph is a CI result: no run of `42e2dbe5`,
-  `b46ed3c3`, `dff6971a`, `4ae789c6`, `ce9f48db` or `bfa13a40` ever executed. Under earlier pages, the code is
+  `b46ed3c3`, `dff6971a`, `4ae789c6`, `ce9f48db`, `bfa13a40` or `8e3610b0` ever executed. Under
+  earlier pages, the code is
   `5bcdf3c9`'s, gated in
   §25.4; `b9773627`'s code is `2a5f3e00`'s, gated in §24.4; `915d994e`'s code is `7b42c82a`'s,
   gated in §23.4; and the code of `00b146df` was gated in §22.3: `fmt` clean, `clippy -D warnings`
   on the five packages, and 176 passed, 0 failed. CodeRabbit was green on the heads it did review.
-  It reviewed four heads, none of them `42e2dbe5`, `b46ed3c3`, `dff6971a`, `4ae789c6` or
-  `ce9f48db`:
+  It reviewed four heads, none of `42e2dbe5`, `b46ed3c3`, `dff6971a`, `4ae789c6`, `ce9f48db`,
+  `bfa13a40` or `8e3610b0`:
   `5848894080` at 20:32Z (six threads and one finding outside the diff, closed by §21.4), `5851190259` at 23:35Z (one thread
   and one finding outside the diff, closed by §22), `5852406613` at 01:36Z on `bb5b3acf` (one
   thread, comment `4532845977` at `synced.rs:398`, closed by §23, and one finding outside the diff
@@ -2125,48 +2104,55 @@ for a maintainer (§27.5). The docs-only commit above it changed this page and n
 result carried over to it, as §26.3's did to `b46ed3c3`; the code head `4ae789c6` above that page
 has its own gate in §28.4.
 
-### 27.5 The pushes of 13:27:33Z and 17:31:21Z, and what remains
+### 27.5 The pushes of 13:27:33Z, 17:31:21Z and 23:20Z, and what remains
 
-- **Pushed.** The owner pushed at 2026-11-12T13:27:33Z, publishing `ce9f48db`, and again at
-  2026-11-12T17:31:21Z, publishing `bfa13a40`. At 21:05Z the fork's
-  `refs/heads/feature/realtime-collaboration` (ls-remote at 17:31Z and 21:01Z), the PR's
-  `headRefOid` and the local HEAD read `bfa13a40`,
+- **Pushed.** The owner pushed at 2026-11-12T13:27:33Z, publishing `ce9f48db`, again at
+  2026-11-12T17:31:21Z, publishing `bfa13a40`, and again at 23:20Z, publishing `8e3610b0`. At
+  23:37Z the fork's `refs/heads/feature/realtime-collaboration` (ls-remote), the PR's `headRefOid`
+  and the local HEAD read `8e3610b0`,
   `git rev-list --count --left-right fork/feature/realtime-collaboration...HEAD` is `0 0`, and the
-  tree is clean. `bfa13a40` is the docs-only commit above `ce9f48db` — one parent, 1 file, +122/−89,
-  this page — and `ce9f48db` is the docs-only commit above `4ae789c6` — one parent, 1 file, +98,
-  the §28 page; `4ae789c6` sits on `57c9e21e`, the merge that took the conflict away. So the head
-  the PR carries is exactly what §27.3 and §28 built plus the page that recorded the delivery.
-  The 16:40Z version of this bullet called `bfa13a40` local; the push at 17:31:21Z had already
-  published it, which is why the rule at the top of this page now requires a `git ls-remote` before
-  any sentence about a push.
-- **MERGEABLE.** `gh api repos/storytold/gridcraft/pulls/3613` at 21:05Z reads `mergeable = true`,
-  `mergeable_state = unstable`, 82 commits, 84 files, +18736/−34, base `main` reported at
-  `6308fc9e`, last update 17:31:21Z. `unstable` is the four runs of `bfa13a40` awaiting approval,
-  not a failed job: the rollup holds CodeRabbit `skipped` and nothing else. `main` has moved to
-  `c0ee120a` (101 commits past `6308fc9e`) after the computation, and
+  tree is clean. `8e3610b0` is the docs-only commit above `bfa13a40` — one parent, 1 file, +88/−63,
+  this page and the rule of the record — `bfa13a40` is the docs-only commit above `ce9f48db` — one
+  parent, +122/−89, the §27.5 correction — and `ce9f48db` is the docs-only commit above `4ae789c6`
+  — one parent, +98, the §28 page; `4ae789c6` sits on `57c9e21e`, the merge that took the conflict
+  away. `bfa13a40` is an ancestor of the head, not a second tip. So the head the PR carries is
+  exactly what §27.3 and §28 built plus the pages that recorded the delivery and read the head.
+  The 16:40Z version of this bullet called `bfa13a40` local; the 17:31:21Z push had already
+  published it, which is why the rule at the top of this page requires a `git ls-remote` before any
+  sentence about a push.
+- **MERGEABLE.** `gh api repos/storytold/gridcraft/pulls/3613` at 23:37Z reads `mergeable = true`,
+  `mergeable_state = unstable`, 83 commits, 84 files, +18761/−34, base `main` reported at
+  `6308fc9e`, last update 23:20:13Z, `reviewDecision` empty, `isDraft = false`. `unstable` is the
+  four runs of `8e3610b0` awaiting approval, not a failed job: the rollup holds CodeRabbit `skipped`
+  and nothing else. `main` has moved to `c0ee120a` (101 commits past `6308fc9e`) and
   `git merge-tree --write-tree origin/main HEAD` is clean, so a recomputation keeps the field
   `MERGEABLE`.
-- **No CI executed on either head.** The 13:27:33Z push created `CI` (`43227482343`), `House rules`
-  (`43227482457`), `SonarCloud` (`43227482406`) and `Nix` (`43227482462`) on `ce9f48db`; the
-  17:31:21Z push created its own four on `bfa13a40` — `Nix` (`43270319489`), `House rules`
-  (`43270319510`), `CI` (`43270319650`) and `SonarCloud` (`43270319627`). All eight are
-  `completed / action_required` with zero jobs; the status API of `bfa13a40` holds no context
-  (`pending`, 0 statuses) and its only check run is CodeRabbit, `completed / skipped` at 17:31:23Z.
-  No run has executed on any head of this branch.
-- **Approve the runs of `bfa13a40`** — the four above, not the four of `ce9f48db` (`4322748…`):
-  approving the old runs would not cover the delivered head, so the approval is needed anew. It is
-  the only step that turns a check rollup into evidence; the gate the branch has is the host's —
-  §27.4 on `57c9e21e`, §28.4 on `4ae789c6`.
+- **No CI executed on any head.** The 23:20Z push created four runs on `8e3610b0` — `Nix`
+  (`43327980207`), `House rules` (`43327980433`), `CI` (`43327980035`) and `SonarCloud`
+  (`43327980249`) — all `completed / action_required`, stamped 23:20:11Z, with zero jobs; the
+  status API of `8e3610b0` holds no context (`pending`, 0 statuses) and its only check run is
+  CodeRabbit, `completed / skipped` at 23:20:15Z. The eight earlier runs stay with their heads: the
+  13:27:33Z push created `CI` (`43227482343`), `House rules` (`43227482457`), `SonarCloud`
+  (`43227482406`) and `Nix` (`43227482462`) on `ce9f48db`, and the 17:31:21Z push created `Nix`
+  (`43270319489`), `House rules` (`43270319510`), `CI` (`43270319650`) and `SonarCloud`
+  (`43270319627`) on `bfa13a40`; those are also `action_required` with zero jobs and no longer
+  cover the PR. No run has executed on any head of this branch.
+- **Approve the runs of `8e3610b0`** — the four above, not the four of `bfa13a40` (`432703…`) or of
+  `ce9f48db` (`4322748…`): approving an older head's runs would not cover the delivered head, so
+  the approval is needed anew. It is the only step that turns a check rollup into evidence; the gate
+  the branch has is the host's — §27.4 on `57c9e21e`, §28.4 on `4ae789c6`.
 - **Reply to comment `4532845977`** — CodeRabbit's thread of review `5852406613` at `synced.rs:398`
   — and it can now name `4ae789c6`: §23.2's finding is closed by the constructor change and its two
   tests, not merely recorded.
-- **No docs commit per push, and the live lists are edited in place.** The rule of this section's
-  previous version stands for the measurements: they name the instant they were taken and the head
-  they describe, a later push makes them historical instead of wrong, and a new measurement is a new
-  section. The two lists that name the *current* state of the PR — this one and §28.5 — are the
+- **The header reads the head; the live lists are edited in place.** The header names the PR, the two
+  commands and the instant, and does not bind the page to a commit, so a docs push no longer makes it
+  false. The measurements of §21–§28 stay as taken: they name the instant and the head they
+  describe, a later push makes them historical instead of wrong, and a new measurement of code is a
+  new section. The two lists that name the *current* state of the PR — this one and §28.5 — are the
   exception: they are rewritten at the instant of a measurement, and neither asserts a push state
   without a `git ls-remote fork refs/heads/feature/realtime-collaboration` at that instant, which is
   why neither asks for a push that has happened.
+
 
 ## 28. A replica starts at the version its workbook is at: `4ae789c6` (2026-11-12)
 
@@ -2256,16 +2242,17 @@ their tests — so §27.4's 3557/2 run stands for them.
 
 ### 28.5 What remains
 
-- **Pushed:** the head is `bfa13a40` since 2026-11-12T17:31:21Z — the fork (ls-remote at 17:31Z
-  and 21:01Z) = `headRefOid` = local HEAD, `0 0` against the fork and a clean tree at the 21:05Z
-  measurement. `bfa13a40` is the docs-only commit above `ce9f48db` (1 file, +122/−89, the §27.5
-  correction); `ce9f48db` is the docs-only page above `4ae789c6`; the head contains the merge
+- **Pushed:** the head is `8e3610b0` since the 23:20Z push — the fork (ls-remote at 23:37Z) =
+  `headRefOid` = local HEAD, `0 0` against the fork and a clean tree at the 23:37Z measurement.
+  `8e3610b0` is the docs-only commit above `bfa13a40` (1 file, +88/−63, this page and the rule of
+  the record), and `bfa13a40` is the previous head, now an ancestor; the head contains the merge
   `57c9e21e` (main's `6308fc9e`), which is what cleared `mergeable`; the PR reads `true` /
-  `unstable`, 82 commits, 84 files, +18736/−34.
-- **Approve the runs** of `bfa13a40` — `Nix` (`43270319489`), `House rules` (`43270319510`), `CI`
-  (`43270319650`) and `SonarCloud` (`43270319627`), all `completed / action_required` with zero
-  jobs; the rollup holds only CodeRabbit `skipped` at 17:31:23Z. The four runs of `ce9f48db`
-  (`4322748…`) are the previous head's and no longer cover the PR. Approval is needed anew. No CI
-  has executed on any head of this branch (§27.1, §27.5).
+  `unstable`, 83 commits, 84 files, +18761/−34, `reviewDecision` empty.
+- **Approve the runs** of `8e3610b0` — `Nix` (`43327980207`), `House rules` (`43327980433`), `CI`
+  (`43327980035`) and `SonarCloud` (`43327980249`), all `completed / action_required`, stamped
+  23:20:11Z, with zero jobs; the rollup holds only CodeRabbit `skipped` at 23:20:15Z. The four runs
+  of `bfa13a40` (`432703…`) and of `ce9f48db` (`4322748…`) are the previous heads' and no longer
+  cover the PR. Approval is needed anew. No CI has executed on any head of this branch (§27.1,
+  §27.5).
 - **The review reply** to comment `4532845977`'s thread can now name `4ae789c6`: §23.2's finding is
   closed, not merely recorded.
