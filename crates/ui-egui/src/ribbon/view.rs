@@ -181,7 +181,13 @@ fn switch_windows(app: &mut SheetApp, ui: &mut Ui) {
     let anchor = big_button(ui, Icon::Book, "Switch\nWindows", "Switch Windows", true);
     anchor.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Switch Windows"));
     control_keytip(app, ui, &anchor, "view.switchWindows");
-    let forced = if super::pack::measuring() { false } else { std::mem::take(&mut app.open_switch_windows) } | invoke(app, "view.switchWindows");
+    // Peek only. `invoke` and `take` run on the real pass, so measurement does not drop the request.
+    // A group that does not fit is built only inside the overflow menu; ask the packer to open it.
+    let wants_open = app.open_switch_windows || app.ui.keytip_invoke == Some("view.switchWindows");
+    if super::pack::measuring() && wants_open {
+        super::pack::request_overflow_for_current_group();
+    }
+    let forced = if super::pack::measuring() { false } else { std::mem::take(&mut app.open_switch_windows) | invoke(app, "view.switchWindows") };
     egui::Popup::menu(&anchor).open_memory(popup_command(forced, anchor.clicked())).show(|ui| {
         for w in app.open_windows() {
             let label = theme::available_text(ui, &format!("{}{}", if w.active { "✓ " } else { "    " }, w.label()));

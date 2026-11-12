@@ -62,11 +62,31 @@ pub(crate) fn ribbon_panel_height(collapsed: bool) -> f32 {
 
 thread_local! {
     static MEASURING: Cell<bool> = const { Cell::new(false) };
+    /// Index of the group whose body is running.
+    static GROUP_INDEX: Cell<usize> = const { Cell::new(0) };
+    /// Group that asked, during measurement, for the overflow menu to open when it does not fit.
+    static OVERFLOW_GROUP: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
 /// True while a tab is being measured off-screen. Clicks and one-shot keytip invokes must not run.
 pub(crate) fn measuring() -> bool {
     MEASURING.with(|c| c.get())
+}
+
+/// The group being measured wants the overflow menu open when that group does not fit.
+///
+/// A closed overflow menu never builds the group, so a command-search or key-tip request would
+/// stay pending or be dropped. Measurement still does not consume the request.
+pub(crate) fn request_overflow_for_current_group() {
+    if !measuring() {
+        return;
+    }
+    let index = GROUP_INDEX.with(|c| c.get());
+    OVERFLOW_GROUP.with(|c| c.set(Some(index)));
+}
+
+fn take_overflow_group() -> Option<usize> {
+    OVERFLOW_GROUP.with(|c| c.replace(None))
 }
 
 struct MeasuringGuard;
@@ -194,6 +214,8 @@ pub(crate) struct Groups<'a> {
     index: usize,
     fit: usize,
     widths: &'a mut Vec<f32>,
+    /// Tallest group seen while measuring. Unused on the place and overflow passes.
+    max_height: &'a mut f32,
     pass: u64,
 }
 
@@ -201,10 +223,12 @@ impl Groups<'_> {
     pub(crate) fn group(&mut self, body: impl FnOnce(&mut Ui)) {
         let index = self.index;
         self.index += 1;
+        GROUP_INDEX.with(|c| c.set(index));
         match self.mode {
             Mode::Measure => {
-                let w = measure_group(self.ui, self.pass, index, body);
-                self.widths.push(w);
+                let rect = measure_group(self.ui, self.pass, index, body);
+                self.widths.push(rect.width());
+                *self.max_height = self.max_height.max(rect.height());
             }
             Mode::Place => {
                 if index >= self.fit {
@@ -230,52 +254,59 @@ impl Groups<'_> {
 
 /// A tab whose groups stay at full density. Groups that do not fit move into the chevron.
 pub(crate) fn pack_tab(ui: &mut Ui, budget: f32, mut build: impl FnMut(&mut Groups<'_>)) {
-    let widths = measure_groups(ui, 0, &mut build);
+    let (widths, height) = measure_groups(ui, 0, &mut build);
     let mut content = [0.0; 4];
     content[0] = row_width(&widths);
-    place_groups(ui, budget, &widths, 0, content, &mut build);
+    place_groups(ui, budget, &widths, 0, content, height, &mut build);
 }
 
 /// Two densities: full labels, then the same groups with long text buttons reduced to icons.
 /// The icon step is used only when the full row does not fit. Group overflow comes after that.
 pub(crate) fn pack_density(ui: &mut Ui, budget: f32, mut build: impl FnMut(bool, &mut Groups<'_>)) {
-    let full = measure_groups(ui, 0, &mut |g| build(false, g));
-    let compact = measure_groups(ui, 1, &mut |g| build(true, g));
+    let (full, full_h) = measure_groups(ui, 0, &mut |g| build(false, g));
+    let (compact, compact_h) = measure_groups(ui, 1, &mut |g| build(true, g));
     let full_w = row_width(&full);
     let compact_w = row_width(&compact);
     let use_compact = full_w + PACK_SLACK > budget;
     let widths = if use_compact { compact } else { full };
+    let height = if use_compact { compact_h } else { full_h };
     let mut content = [0.0; 4];
     content[0] = full_w;
     content[1] = compact_w;
-    place_groups(ui, budget, &widths, u8::from(use_compact), content, &mut |g| build(use_compact, g));
+    place_groups(ui, budget, &widths, u8::from(use_compact), content, height, &mut |g| build(use_compact, g));
 }
 
 /// Home's four measured densities. The least compact one that fits is placed.
 pub(crate) fn pack_home(ui: &mut Ui, budget: f32, mut build: impl FnMut(HomeStep, &mut Groups<'_>)) {
     let mut content = [0.0; 4];
     let mut widths_of = Vec::new();
+    let mut heights = Vec::new();
     for (i, step) in HomeStep::ALL.into_iter().enumerate() {
-        let widths = measure_groups(ui, i as u64, &mut |g| build(step, g));
+        let (widths, height) = measure_groups(ui, i as u64, &mut |g| build(step, g));
         content[i] = row_width(&widths);
         widths_of.push(widths);
+        heights.push(height);
     }
     let chosen = HomeStep::choose(content, budget);
     let widths = widths_of.get(chosen as usize).map(Vec::as_slice).unwrap_or(&[]);
-    place_groups(ui, budget, widths, chosen as u8, content, &mut |g| build(chosen, g));
+    let height = heights.get(chosen as usize).copied().unwrap_or(0.0);
+    place_groups(ui, budget, widths, chosen as u8, content, height, &mut |g| build(chosen, g));
 }
 
-fn measure_groups(ui: &mut Ui, pass: u64, build: &mut impl FnMut(&mut Groups<'_>)) -> Vec<f32> {
+fn measure_groups(ui: &mut Ui, pass: u64, build: &mut impl FnMut(&mut Groups<'_>)) -> (Vec<f32>, f32) {
     MEASURING.with(|c| c.set(true));
     let _guard = MeasuringGuard;
+    OVERFLOW_GROUP.with(|c| c.set(None));
     let mut widths = Vec::new();
-    let mut groups = Groups { ui, mode: Mode::Measure, index: 0, fit: 0, widths: &mut widths, pass };
+    let mut max_height = 0.0;
+    let mut groups = Groups { ui, mode: Mode::Measure, index: 0, fit: 0, widths: &mut widths, max_height: &mut max_height, pass };
     build(&mut groups);
-    widths
+    (widths, max_height)
 }
 
-fn place_groups(ui: &mut Ui, budget: f32, widths: &[f32], step: u8, content: [f32; 4], build: &mut impl FnMut(&mut Groups<'_>)) {
+fn place_groups(ui: &mut Ui, budget: f32, widths: &[f32], step: u8, content: [f32; 4], group_height: f32, build: &mut impl FnMut(&mut Groups<'_>)) {
     let fit = groups_that_fit(widths, budget);
+    let open_overflow = take_overflow_group().is_some_and(|index| index >= fit);
     let card = ui.max_rect();
     let mut row = ui.new_child(
         egui::UiBuilder::new()
@@ -287,15 +318,21 @@ fn place_groups(ui: &mut Ui, budget: f32, widths: &[f32], step: u8, content: [f3
     row.spacing_mut().item_spacing = vec2(ITEM_SPACING_X, 2.0);
     {
         let mut unused = Vec::new();
-        let mut groups = Groups { ui: &mut row, mode: Mode::Place, index: 0, fit, widths: &mut unused, pass: 0 };
+        let mut unused_height = 0.0;
+        let mut groups = Groups { ui: &mut row, mode: Mode::Place, index: 0, fit, widths: &mut unused, max_height: &mut unused_height, pass: 0 };
         build(&mut groups);
     }
     if fit < widths.len() {
         let resp = overflow_button(&mut row);
-        egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        let mut popup = egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        if open_overflow {
+            popup = popup.open_memory(Some(egui::SetOpenCommand::Bool(true)));
+        }
+        popup.show(|ui| {
             ui.set_min_width(48.0);
             let mut unused = Vec::new();
-            let mut groups = Groups { ui, mode: Mode::Overflow, index: 0, fit, widths: &mut unused, pass: 0 };
+            let mut unused_height = 0.0;
+            let mut groups = Groups { ui, mode: Mode::Overflow, index: 0, fit, widths: &mut unused, max_height: &mut unused_height, pass: 0 };
             build(&mut groups);
         });
     }
@@ -320,7 +357,9 @@ fn place_groups(ui: &mut Ui, budget: f32, widths: &[f32], step: u8, content: [f3
         content: row_width(widths),
         visible: card.width(),
         offset: 0.0,
-        content_height: shown.height(),
+        // Unclipped group height from measurement. The card intersection above would hide a group
+        // cut off at the bottom, and an open menu is a separate popup, not part of this height.
+        content_height: group_height,
         visible_height: card.height(),
     };
     ui.ctx().data_mut(|d| {
@@ -339,8 +378,8 @@ fn place_group(ui: &mut Ui, index: usize, body: impl FnOnce(&mut Ui)) {
     ui.allocate_rect(used, Sense::hover());
 }
 
-fn measure_group(ui: &mut Ui, pass: u64, index: usize, body: impl FnOnce(&mut Ui)) -> f32 {
-    layout_group(ui, ui.max_rect().left_top(), pass, index, true, body).width()
+fn measure_group(ui: &mut Ui, pass: u64, index: usize, body: impl FnOnce(&mut Ui)) -> Rect {
+    layout_group(ui, ui.max_rect().left_top(), pass, index, true, body)
 }
 
 fn layout_group(ui: &mut Ui, origin: egui::Pos2, pass: u64, index: usize, invisible: bool, body: impl FnOnce(&mut Ui)) -> Rect {
