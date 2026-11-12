@@ -47,10 +47,14 @@ pub struct Ctx<'a> {
     /// workbook with many drawings does not decompress and parse that part again per drawing.
     pub inkml_parts: Option<Arc<HashSet<String>>>,
     /// Ink creation ids the workbook already holds: a trace that needs a new id mints one no
-    /// earlier stroke uses, across every drawing part, not just its own.
+    /// earlier stroke uses, across every drawing part, not just its own. Reservations for parts
+    /// not yet read live in `ink_reserved`, never here, so consuming a reservation can never
+    /// take a key an earlier stroke already owns.
     pub ink_keys: HashSet<String>,
+    /// Part GUIDs reserved for drawings not yet read: an unkeyed trace mints past these, but a
+    /// part still claims its own GUID when its turn comes, even if an earlier part reserved it.
+    pub ink_reserved: HashSet<String>,
 }
-
 impl Ctx<'_> {
     pub fn warn(&mut self, m: impl Into<String>) {
         self.report.warn(m);
@@ -284,6 +288,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         python: Default::default(),
         inkml_parts: None,
         ink_keys: HashSet::new(),
+        ink_reserved: HashSet::new(),
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());

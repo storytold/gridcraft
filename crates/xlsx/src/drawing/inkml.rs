@@ -163,18 +163,17 @@ fn read_traces(
     let anchor = anchor_for(content_part, anchor, sheet)?;
     let width_px = (style.width_cm * PX_PER_CM as f32).clamp(1.0, 255.0).round();
     let fill = Color::Rgb((width_px as u32) << 16);
-    // workbook (`cx.ink_keys`), so two parts never hand out the same new id. The GUIDs of the
-    // *other* parts in this drawing are reserved first: an unkeyed trace in an earlier-read part
-    // must not mint the GUID of a part read later, or both strokes would share one key. The
-    // reservation is lifted for this part's own GUID before the `insert` below, so the part still
-    // claims it; the `insert` is false only when an earlier part already holds it (a copied
-    // sheet, another tool's file): the key is then not reused, and this part's first trace mints
-    // a free one instead.
-    reserve_other_part_guids(drawing, content_part, &mut cx.ink_keys);
-    if let Some(own) = creation_id_of(content_part) {
-        cx.ink_keys.remove(&own);
-    }
-    let part_key = creation_id_of(content_part).filter(|key| cx.ink_keys.insert(key.clone()));
+    // The part's GUID names the first stroke. Later traces mint ids no earlier stroke holds
+    // (`cx.ink_keys`), and past the GUIDs of parts not yet read (`cx.ink_reserved`), so two
+    // parts never hand out the same new id. Reservations live apart from assignments: claiming
+    // this part's own GUID consumes its reservation but can never take a key an earlier stroke
+    // already owns — that `insert` is false (a copied sheet, another tool's file), and this
+    // part's first trace mints a free one instead.
+    reserve_other_part_guids(drawing, content_part, &mut cx.ink_reserved);
+    let part_key = creation_id_of(content_part).filter(|key| {
+        cx.ink_reserved.remove(key);
+        cx.ink_keys.insert(key.clone())
+    });
     let mut total = 0usize;
     let mut shapes = Vec::new();
     for (i, trace) in traces(&root)?.into_iter().enumerate() {
@@ -185,11 +184,12 @@ fn read_traces(
         }
         let mut image = style.clone();
         // The part's GUID names the first stroke and is kept for the hidden sheet's extras lookup;
-        // a part without a valid GUID, and every later trace in one part, gets a free key reserved
-        // across the workbook, so a gridcraft save writes one part per stroke without repeating an id.
+        // a part without a valid GUID, and every later trace in one part, gets a free key past
+        // every held and reserved id, so a gridcraft save writes one part per stroke without
+        // repeating an id.
         image.key = match (i, part_key.clone()) {
             (0, Some(first)) => Some(first),
-            _ => Some(mint_ink_key(&mut cx.ink_keys)),
+            _ => Some(mint_ink_key(&mut cx.ink_keys, &cx.ink_reserved)),
         };
         image.pressure = pressure;
         // The part carries one brush; successive strokes keep their drawing order.
@@ -703,10 +703,11 @@ fn effect_name(e: InkEffect) -> &'static str {
     }
 }
 
-/// A creation id no stroke this workbook already holds uses, reserved as it is minted.
-pub(crate) fn mint_ink_key(reserved: &mut HashSet<String>) -> String {
-    let key = gridcraft_model::ink_creation_id_free(|k| reserved.contains(k));
-    reserved.insert(key.clone());
+/// A creation id no stroke this workbook already holds uses, past held keys and reservations for
+/// parts not yet read, reserved as it is minted.
+pub(crate) fn mint_ink_key(held: &mut HashSet<String>, reserved: &HashSet<String>) -> String {
+    let key = gridcraft_model::ink_creation_id_free(|k| held.contains(k) || reserved.contains(k));
+    held.insert(key.clone());
     key
 }
 

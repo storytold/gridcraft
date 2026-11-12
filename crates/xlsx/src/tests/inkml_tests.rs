@@ -685,7 +685,7 @@ fn an_unkeyed_trace_never_mints_a_later_parts_guid() {
     // Two anchors in one drawing. The first part has no creation id, so its trace must mint; the
     // second part carries GUIDE. Without the reservation the earlier trace mints exactly GUIDE
     // (the deterministic counter starts each process at the same key) and both strokes share it.
-    let bytes = package_two_parts("!0 !0,'100'100", "!400 !400,'500'500");
+    let bytes = package_two_parts_with_guids("!0 !0,'100'100", "!400 !400,'500'500", None, Some(GUIDE));
     let (wb, _) = read(&bytes);
     let keys: Vec<String> = wb.sheets[0].shapes.iter().filter_map(|s| s.ink.as_ref()?.key.clone()).collect();
     assert_eq!(keys.len(), 2, "{keys:?}");
@@ -693,9 +693,24 @@ fn an_unkeyed_trace_never_mints_a_later_parts_guid() {
     assert_eq!(keys[1].as_str(), GUIDE, "the later part keeps its own GUID: {keys:?}");
 }
 
-/// A drawing with two ink anchors: the first part carries no creation id (its trace must mint a
-/// key), the second carries `second`. Both ink parts hold one trace each.
-fn package_two_parts(first_trace: &str, second_trace: &str) -> Vec<u8> {
+/// Two parts carrying the same GUID keep distinct stroke keys: the first part claims the GUID
+/// into `ink_keys`, so the second part's `insert` finds the key already owned and mints a free
+/// key instead. Consuming the reservation never removes the owned key.
+#[test]
+fn two_parts_with_the_same_guid_keep_distinct_stroke_keys() {
+    // A copied sheet (or another tool's file) names both parts GUIDE.
+    let bytes = package_two_parts_with_guids("!0 !0,'100'100", "!400 !400,'500'500", Some(GUIDE), Some(GUIDE));
+    let (wb, _) = read(&bytes);
+    let keys: Vec<String> = wb.sheets[0].shapes.iter().filter_map(|s| s.ink.as_ref()?.key.clone()).collect();
+    assert_eq!(keys.len(), 2, "{keys:?}");
+    assert_eq!(keys[0].as_str(), GUIDE, "the first part claims its GUID: {keys:?}");
+    assert_ne!(keys[1].as_str(), GUIDE, "the duplicate GUID is not reused: {keys:?}");
+    assert_ne!(keys[0], keys[1], "each stroke keeps its own key: {keys:?}");
+}
+
+/// A drawing with two ink anchors: GUIDs come from `first_guid`/`second_guid`, so the builder
+/// covers both the unkeyed and the duplicate-GUID shapes. Both ink parts hold one trace each.
+fn package_two_parts_with_guids(first_trace: &str, second_trace: &str, first_guid: Option<&str>, second_guid: Option<&str>) -> Vec<u8> {
     let wb = r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
     let wb_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
     let sheet = format!(
@@ -709,7 +724,7 @@ fn package_two_parts(first_trace: &str, second_trace: &str) -> Vec<u8> {
     );
     let root = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
     let ct = content_types_two();
-    let drawing = drawing_two_anchors();
+    let drawing = drawing_two_anchors_with(first_guid, second_guid);
     let first = inkml(first_trace, false, PEN_PROPS);
     let second = inkml(second_trace, false, PEN_PROPS);
     let png = tiny_png();
@@ -734,21 +749,20 @@ fn content_types_two() -> String {
     r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/ink/ink1.xml" ContentType="application/inkml+xml"/><Override PartName="/xl/ink/ink2.xml" ContentType="application/inkml+xml"/></Types>"#.to_string()
 }
 
-/// An Excel-shaped drawing part with two ink anchors: the first `contentPart` names `rId1` and
-/// carries no creation id, the second names `rId2` and carries GUIDE.
-fn drawing_two_anchors() -> String {
+/// An Excel-shaped drawing part with two ink anchors: GUIDs from the arguments.
+fn drawing_two_anchors_with(first: Option<&str>, second: Option<&str>) -> String {
     let anchor = |rid: &str, id: u32, creation: Option<&str>| {
         let guid = creation
             .map(|c| format!(r#"<a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="{c}"/>"#))
             .unwrap_or_default();
         format!(
-            r#"<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>3</xdr:col><xdr:colOff>76200</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>228600</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><mc:AlternateContent xmlns:mc="{MC}"><mc:Choice xmlns:xdr14="{XDR14}" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" Requires="xdr14 aink"><xdr:contentPart r:id="{rid}"><xdr14:nvContentPartPr><xdr14:cNvPr id="{id}" name="Ink {id}"><a:extLst><a:ext uri="{{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}}">{guid}</a:ext></a:extLst></xdr14:cNvPr><xdr14:cNvContentPartPr/></xdr14:nvContentPartPr><xdr14:nvPr macro=""/><xdr14:xfrm><a:off x="1905000" y="952500"/><a:ext cx="762000" cy="381000"/></a:xfrm></xdr:contentPart></mc:Choice><mc:Fallback><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="{id}" name="Ink {id}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId3"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="762000" cy="381000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></a:spPr></xdr:pic></mc:Fallback></mc:AlternateContent><xdr:clientData/></xdr:twoCellAnchor>"#
+            r#"<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>3</xdr:col><xdr:colOff>76200</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>228600</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><mc:AlternateContent xmlns:mc="{MC}"><mc:Choice xmlns:xdr14="{XDR14}" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" Requires="xdr14 aink"><xdr:contentPart r:id="{rid}"><xdr14:nvContentPartPr><xdr14:cNvPr id="{id}" name="Ink {id}"><a:extLst><a:ext uri="{{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}}">{guid}</a:ext></a:extLst></xdr14:cNvPr><xdr14:cNvContentPartPr/></xdr14:nvContentPartPr><xdr14:nvPr macro=""/><xdr14:xfrm><a:off x="1905000" y="952500"/><a:ext cx="762000" cy="381000"/></a:xfrm></xdr:contentPart></mc:Choice><mc:Fallback><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="{id}" name="Ink {id}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId3"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="762000" cy="381000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></a:spPr></xdr:pic></mc:Fallback></mc:AlternateContent><xdr:clientData/></xdr:twoCellAnchor>"#,
         )
     };
     format!(
         r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="{XDR}" xmlns:a="{A}" xmlns:r="{NS_REL}">{}{}</xdr:wsDr>"#,
-        anchor("rId1", 3, None),
-        anchor("rId2", 4, Some(GUIDE)),
+        anchor("rId1", 3, first),
+        anchor("rId2", 4, second),
     )
 }
 
@@ -817,16 +831,17 @@ fn the_content_types_part_is_read_once_for_the_whole_workbook() {
 /// A key minted for a stroke no other stroke in the workbook holds, across parts.
 #[test]
 fn minted_ink_keys_never_repeat_a_workbook_id() {
-    // A second trace in a part needs a new creation id. Minting against a set that lives for the
+    // A second trace in a part needs a new creation id. Minting against sets that live for the
     // whole workbook (rather than one part's keys) keeps two parts from handing out the same id.
-    let mut reserved = std::collections::HashSet::new();
-    let a = crate::drawing::mint_ink_key(&mut reserved);
-    let b = crate::drawing::mint_ink_key(&mut reserved);
+    let mut held = std::collections::HashSet::new();
+    let reserved = std::collections::HashSet::new();
+    let a = crate::drawing::mint_ink_key(&mut held, &reserved);
+    let b = crate::drawing::mint_ink_key(&mut held, &reserved);
     assert_ne!(a, b, "the second mint repeats an id the workbook already holds");
-    reserved.insert("{11111111-2222-4333-8444-555555555555}".into());
-    let c = crate::drawing::mint_ink_key(&mut reserved);
+    held.insert("{11111111-2222-4333-8444-555555555555}".into());
+    let c = crate::drawing::mint_ink_key(&mut held, &reserved);
     assert_ne!(c, "{11111111-2222-4333-8444-555555555555}", "a key already in the workbook is not minted again");
-    assert!(!reserved.contains(&c) || reserved.iter().filter(|k| **k == c).count() == 1, "the mint is reserved");
+    assert!(held.iter().filter(|k| ***k == c).count() == 1, "the mint is reserved");
 }
 
 /// A brush that states a width but no height is as tall as it is wide, not the model's 0.05 cm.

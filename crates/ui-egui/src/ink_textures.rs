@@ -87,9 +87,10 @@ impl Tier {
             self.remove(&oldest);
         }
         // The hard bound: even a frame painting more patterns than it holds never grows the tier
-        // past twice the budget. Past it the texture paints with the tier's stable fallback
-        // instead of evicting a framed upload and decoding it again on the next repaint.
-        if self.entries.len() >= self.max_items.saturating_mul(2) || self.bytes.saturating_add(bytes) > self.max_bytes.saturating_mul(2) {
+        // past twice the budget. Past it the texture paints with the tier's stable fallback.
+        // (The item ceiling is also checked in `texture` before decoding, so misses past it cost
+        // no decode or upload; callers holding a decoded image still land here.)
+        if self.is_past_item_ceiling() || self.is_past_byte_ceiling(bytes) {
             return self.fallback(ctx);
         }
         self.bytes = self.bytes.saturating_add(bytes);
@@ -101,6 +102,18 @@ impl Tier {
     /// asking for room), so an insert cannot evict the uploads the same frame still needs.
     fn oldest_drawn_before(&self, before: u64) -> Option<String> {
         self.entries.iter().filter(|(_, e)| e.used < before).min_by_key(|(_, e)| e.used).map(|(key, _)| key.clone())
+    }
+
+    /// Whether the tier already holds twice its item budget: past this no new upload is admitted,
+    /// so the item-capacity decision runs before any decode or GPU upload. (The byte ceiling
+    /// needs the decoded size, so it stays inside `insert`.)
+    fn is_past_item_ceiling(&self) -> bool {
+        self.entries.len() >= self.max_items.saturating_mul(2)
+    }
+
+    /// Whether admitting `bytes` more would pass twice the byte budget.
+    fn is_past_byte_ceiling(&self, bytes: usize) -> bool {
+        self.bytes.saturating_add(bytes) > self.max_bytes.saturating_mul(2)
     }
 
     /// Drops one upload, taking its bytes off the budget.
@@ -122,11 +135,24 @@ impl Tier {
 
     /// The upload for `key`, decoded at this tier's [`Self::side`] on first use and kept until the
     /// budget drops it. The newest frame that drew it is stamped so eviction takes the least
-    /// recently painted textures.
+    /// recently painted textures. Past twice the budget the tier is full: the caller paints the
+    /// stable fallback without decoding or uploading, so an overflowing frame costs no repeated
+    /// work on repaints.
     fn texture(&mut self, ctx: &egui::Context, key: &str, data: &[u8]) -> Option<TextureHandle> {
         let frame = ctx.cumulative_frame_nr();
         if let Some(texture) = self.get(key, frame) {
             return texture;
+        }
+        // A new frame drops uploads no frame is painting first, so a later pattern trims an
+        // overshot tier back towards the budget. Entries the current frame drew stay: when the
+        // tier is still past the item ceiling after that, the stable fallback answers before
+        // any decode or upload.
+        while self.entries.len() >= self.max_items {
+            let Some(oldest) = self.oldest_drawn_before(frame) else { break };
+            self.remove(&oldest);
+        }
+        if self.is_past_item_ceiling() {
+            return self.fallback(ctx);
         }
         self.insert(ctx, key, decode(data, self.side), frame)
     }
@@ -191,11 +217,13 @@ pub(crate) fn thumbnail(ctx: &egui::Context, ink: &InkTexture) -> Option<Texture
     cache(ctx).lock().unwrap_or_else(std::sync::PoisonError::into_inner).thumb(ctx, ink)
 }
 
-// Counts calls into the texture caches, so a test can assert which tiles a frame resolved. Kept
-// per thread (the test harness runs each test on its own) to stay out of other tests' counts.
+// Counts calls into the texture caches, so a test can assert which tiles a frame resolved, and
+// decodes, so a test can assert an overflowing frame costs no repeated work. Kept per thread (the
+// test harness runs each test on its own) to stay out of other tests' counts.
 #[cfg(test)]
 thread_local! {
     static RESOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Adds one to this thread's resolve count.
@@ -210,11 +238,25 @@ fn resolve_count() -> usize {
     RESOLVES.with(std::cell::Cell::get)
 }
 
+/// Adds one to this thread's decode count.
+#[cfg(test)]
+fn note_decode() {
+    DECODES.with(|count| count.set(count.get() + 1));
+}
+
+/// This thread's decode count so far.
+#[cfg(test)]
+fn decode_count() -> usize {
+    DECODES.with(std::cell::Cell::get)
+}
+
 /// Decodes an imported image into RGBA at no more than `side` pixels a side; `None` for bytes the
 /// store never should have accepted, a format the store does not hold, or an image over the
 /// engine's own caps. The engine caps bound the decode itself, so a huge source can't allocate more
 /// than a capped image before it is shrunk.
 fn decode(data: &[u8], side: u32) -> Option<image::RgbaImage> {
+    #[cfg(test)]
+    note_decode();
     let format = image::guess_format(data).ok()?;
     // The store holds PNG and JPEG only; anything else is a damaged file, not a texture.
     if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Jpeg) {
@@ -541,7 +583,8 @@ mod tests {
     }
 
     /// Past the hard ceiling a texture paints with the tier's stable fallback: the same handle on
-    /// every repaint, so the frame never decodes the overflow again.
+    /// every repaint, with no decode or upload after the first frame, so an overflowing frame
+    /// costs no repeated work.
     #[test]
     fn a_texture_past_the_hard_ceiling_keeps_a_stable_fallback_across_repaints() {
         let ctx = egui::Context::default();
@@ -556,6 +599,7 @@ mod tests {
         assert_eq!(tier.entries.len(), 4, "the hard ceiling still bounds one frame: {}", tier.entries.len());
         let fallback = tier.fallback.clone().expect("the overflow mints the fallback");
         assert!(first.contains(&Some(fallback.id())), "the overflow paints the fallback");
+        let decodes = decode_count();
         advance(&ctx);
         let mut second: Vec<Option<egui::TextureId>> = Vec::new();
         for t in &textures {
@@ -563,6 +607,7 @@ mod tests {
         }
         assert_eq!(first, second, "the repaint resolves every texture to its stable handle");
         assert_eq!(tier.fallback.clone().map(|h| h.id()), Some(fallback.id()), "the fallback is minted once");
+        assert_eq!(decode_count(), decodes, "the repaint decodes nothing: past the item ceiling the fallback answers before any decode");
         assert!(tier.entries.len() <= 4, "repaints never grow the tier past the ceiling");
     }
 
