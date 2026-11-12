@@ -345,6 +345,11 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
         let style = sh.style_id(chg);
         sh.set_cell(chg, Cell { value: Value::number(r.x), formula: None, style, py: None });
         cx.touch(csi, chg);
+        // As for Solver: under Manual calculation the set cell and its dependents still show the
+        // value found, and the mode stays Manual (#3856).
+        if cx.wb.calc.mode == gridcraft_model::CalcMode::Manual {
+            cx.recalc_all = true;
+        }
         Ok(())
     })?;
     let result = s.doc()?.wb.sheet(ssi).map(|sh| sh.value(set)).unwrap_or_default();
