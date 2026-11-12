@@ -180,7 +180,10 @@ fn arithmetic() {
     close(ev2("POWER", -2.0, 3.0), -8.0);
     is_err(ev2("POWER", 0.0, 0.0), Num);
     is_err(ev2("POWER", 0.0, -1.0), Div0);
-    is_err(ev2("POWER", -8.0, 1.0 / 3.0), Num);
+    // An odd root of a negative base has a value; an even root does not (observed on Windows Excel 16.0.20430).
+    close(ev2("POWER", -8.0, 1.0 / 3.0), -2.0);
+    is_err(ev2("POWER", -8.0, 0.5), Num);
+    close(ev2("POWER", -0.5, 1e17), 0.0);
     is_err(ev2("POWER", 10.0, 400.0), Num);
     close(ev1("EXP", 1.0), std::f64::consts::E);
     close(ev2("LOG", 8.0, 2.0), 3.0);
