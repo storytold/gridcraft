@@ -306,6 +306,14 @@ fn color_choices(
         for c in list {
             let rgb = c.resolve(theme);
             let (rect, resp) = ui.allocate_exact_size(vec2(170.0, 22.0), Sense::click());
+            // The swatch alone says nothing to a screen reader, nor tells two close shades
+            // apart: each choice is named by its kind and hex value, also shown on hover.
+            let name = match c.hex(theme) {
+                Some(hex) => format!("{title} {hex}"),
+                None => none.to_string(),
+            };
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
+            let resp = if rgb.is_some() { resp.on_hover_text(&name) } else { resp };
             let t = Tokens::get(ui.ctx());
             if resp.hovered() {
                 ui.painter().rect_filled(rect, 2.0, ui.visuals().widgets.hovered.weak_bg_fill);

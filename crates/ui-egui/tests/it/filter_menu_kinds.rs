@@ -130,3 +130,18 @@ fn confirm(h: &mut Harness, field: &str, value: serde_json::Value) {
     }
     h.run_steps(4);
 }
+
+#[test]
+fn filter_by_color_choices_are_named_by_their_colour() {
+    let mut h = harness();
+    h.state_mut().run("home.fillColor", json!({"range": "A3", "color": "#FF0000"})).unwrap();
+    h.run_steps(2);
+    open_filter(&mut h, "A1");
+    // Each swatch has a name a screen reader reads (and the same text on hover).
+    choose(&mut h, "Filter by Color", "Cell Color #FF0000");
+    assert_eq!(hidden(&h), vec![1, 3], "only Blue (red fill) stays");
+    open_filter(&mut h, "A1");
+    h.get_by_label("Filter by Color").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("No Fill").is_some(), "the no-fill choice keeps its text");
+}

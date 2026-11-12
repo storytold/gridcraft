@@ -143,7 +143,8 @@ fn popup_actions_still_execute_and_filter_checkboxes_stay_open() {
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert!(!is_open(&h, Menu::Filter));
-    assert!(h.state().session.active().unwrap().wb.active().unwrap().is_row_hidden(1));
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    assert!(sh.is_row_hidden(1) && !sh.is_row_hidden(2), "only Red hides: Blue, the value kept, stays");
     h.state_mut().run("data.clearFilter", json!({})).unwrap();
     h.run_steps(2);
 
