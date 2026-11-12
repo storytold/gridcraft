@@ -575,6 +575,15 @@ fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
         }
+        // A PivotTable whose source is the table follows the rename (#3737).
+        for i in 0..cx.wb.sheets.len() {
+            let Some(sh) = cx.wb.sheet_mut(i) else { continue };
+            for pt in sh.pivots.iter_mut() {
+                if !old.is_empty() && pt.source.trim().trim_start_matches('=').trim().eq_ignore_ascii_case(&old) {
+                    pt.source = name.clone();
+                }
+            }
+        }
         cx.structural = true;
         Ok(Json::Null)
     })

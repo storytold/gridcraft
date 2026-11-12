@@ -501,6 +501,40 @@ fn refresh_after_source_edits() {
     s.execute("pivot.refresh", json!({"pivot": "PivotTable1"})).unwrap();
 }
 
+/// #3737: renaming the source table keeps a table-backed PivotTable working, before and after an
+/// XLSX round trip.
+#[test]
+fn source_follows_a_renamed_table() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Amount"], ["East", 10], ["West", 20]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3", "header": true, "name": "Sales"})).unwrap();
+    s.execute(
+        "insert.pivotTable",
+        json!({"source": "Sales", "destination": "Sheet1!E1", "name": "RegionPivot", "rows": ["Region"], "values": [{"field": "Amount", "func": "sum"}]}),
+    )
+    .unwrap();
+    s.execute("pivot.refresh", json!({"pivot": "RegionPivot"})).unwrap();
+    let source = |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().pivots[0].source.clone();
+    let total = |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().value(CellRef::parse("F4").unwrap());
+    s.execute("table.rename", json!({"table": "Sales", "name": "RenamedSales"})).unwrap();
+    assert_eq!(source(&s), "RenamedSales");
+    // Undo restores the old source with the old table name.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(source(&s), "Sales");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(source(&s), "RenamedSales");
+    s.execute("cell.set", json!({"cell": "B2", "input": "12"})).unwrap();
+    s.execute("pivot.refresh", json!({"pivot": "RegionPivot"})).unwrap();
+    assert_eq!(total(&s), Value::Number(32.0));
+    // The PivotTable is saved and still resolves after reopening.
+    let wb = (*s.doc().unwrap().wb).clone();
+    let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+    let pts = &back.sheet(0).unwrap().pivots;
+    assert_eq!(pts.len(), 1);
+    assert!(crate::pivot::resolve_source(&back, &pts[0].source, 0).is_ok(), "{}", pts[0].source);
+}
+
 fn pivot_chart(s: &Session) -> gridcraft_model::Chart {
     s.doc().unwrap().wb.active().unwrap().charts.last().unwrap().clone()
 }
