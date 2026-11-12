@@ -3,10 +3,8 @@ use super::legend::{cat_label, plot_kind};
 use super::lines::{draw_area_run, draw_clipped_runs, draw_markers, inside_plot, style_series};
 use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward, max_forward_slots, supports_trendline};
 use super::{
-    Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT, VAlign, WHITE,
-    clean, configured_scale, fixed_scale, nice_scale,
-    Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, MIN_BAR_PX, Prim, Rgba, Scale,
-    SeriesData, TEXT, VAlign, WHITE, clean, nice_scale,
+    Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_MARKERS, MIN_BAR_PX, Prim, Rgba, Scale, SeriesData, TEXT,
+    VAlign, WHITE, clean, configured_scale, fixed_scale, nice_scale,
 };
 
 // ---------------------------------------------------------------- cartesian (column/bar/line/area/combo)
@@ -270,7 +268,7 @@ fn axis_scales(
                 .fold(hi, f64::min);
         }
         let (scale, fmt) = if all100 {
-            (Scale { min: if lo < -1e-9 { -1.0 } else { 0.0 }, max: if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, step: 0.2 }, Fmt::new("0%"))
+            (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), Fmt::new("0%"))
         } else {
             let code = members.first().and_then(|i| data.series.get(*i)).map(|s| s.number_format.as_str()).unwrap_or("General");
             (

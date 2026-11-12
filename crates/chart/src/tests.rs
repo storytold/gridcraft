@@ -2021,10 +2021,10 @@ fn drawing_and_resolving_agree_on_the_combo_plot_kind() {
 
 #[test]
 fn ticks_of_a_scale_off_the_step_grid_start_at_its_min() {
-    let s = Scale { min: 3.0, max: 7.0, step: 4.0 };
+    let s = Scale { min: 3.0, max: 7.0, step: 4.0, logarithmic: false, reversed: false };
     assert_eq!(s.ticks(), vec![3.0, 7.0]);
     // Aligned scales still snap float error away.
-    let s = Scale { min: 0.0, max: 1.0, step: 0.1 };
+    let s = Scale { min: 0.0, max: 1.0, step: 0.1, logarithmic: false, reversed: false };
     assert!((s.ticks()[3] - 0.3).abs() < 1e-12 && s.ticks()[0] == 0.0);
 }
 

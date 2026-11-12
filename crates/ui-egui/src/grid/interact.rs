@@ -140,9 +140,10 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         // Only they resize: a press anywhere on another object selects and moves it, as the
         // hover cursor shows.
         let under = at.and_then(|p| object_under(app, geo, sh, p));
+        let on_handle = under.filter(|(_, _, handle)| handle.is_some());
         let handle = under.and_then(|(.., h)| h);
         if let Some(p) = at
-            && let Some((obj, rect)) = on_handle.map(|(o, r, _)| (o, r)).or_else(|| crate::chartview::hit(app, geo, sh, p))
+            && let Some((_obj, rect)) = on_handle.map(|(o, r, _)| (o, r)).or_else(|| crate::chartview::hit(app, geo, sh, p))
             && let Some((obj, _, _)) = under
         {
             app.selected_object = Some(obj);
@@ -205,6 +206,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         {
             let element = crate::chartview::element_at(input.ui, wb, wb.active_sheet(), chart, rect, p);
             crate::chartview::select_element(input.ui.ctx(), obj.id, element);
+        }
         if obj.kind == ObjKind::Control {
             app.grid.focused_control = None;
         }

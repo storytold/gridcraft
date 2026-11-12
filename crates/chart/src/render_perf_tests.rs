@@ -7,7 +7,35 @@ use super::kinds::squarify;
 use super::legend::swatch_w;
 use super::*;
 use crate::{ApproxMeasure, Measure};
-use gridcraft_model::LegendPos;
+use gridcraft_model::{Chart, ChartFormat, ChartKind, LegendPos};
+
+fn test_ctx(m: &dyn Measure) -> Ctx<'_> {
+    static FORMAT: std::sync::OnceLock<ChartFormat> = std::sync::OnceLock::new();
+    Ctx { out: vec![], m, format: FORMAT.get_or_init(ChartFormat::default), size: [400.0, 300.0], plot: None }
+}
+
+fn test_chart() -> Chart {
+    Chart {
+        id: 1,
+        kind: ChartKind::ColumnClustered,
+        anchor: Default::default(),
+        title: None,
+        series: vec![],
+        legend: LegendPos::Right,
+        data_labels: false,
+        data_table: None,
+        gridlines: false,
+        style: 1,
+        hole_size: 75,
+        first_slice_angle: 0,
+        x_title: None,
+        y_title: None,
+        source: None,
+        by_rows: false,
+        pivot: None,
+        format: ChartFormat::default(),
+    }
+}
 
 /// The pre-rewrite `Ctx::fit`: one `Measure` call per candidate length, longest first.
 fn fit_reference(ctx: &Ctx, s: &str, size: f32, maxw: f32) -> String {
@@ -102,7 +130,7 @@ fn corpus() -> Vec<String> {
 }
 
 fn run_fit(m: &dyn Measure) {
-    let ctx = Ctx { out: vec![], m };
+    let ctx = test_ctx(m);
     for s in corpus() {
         for size in [9.0f32, 11.0, 40.0] {
             for maxw in [-5.0, 0.0, 0.4, 6.0, 25.0, 61.5, 120.0, 800.0, 1e6, f32::INFINITY, f32::NAN] {
@@ -123,7 +151,7 @@ fn fit_matches_linear_reference() {
 fn a_multiline_label_keeps_its_fitting_prefix() {
     // The whole label is 18 wide and "iii…" is 12.5, both too wide for 10.5, but "iiii\n…" is
     // 10 wide and fits. A binary search that stops at the failing midpoint would return nothing.
-    let ctx = Ctx { out: vec![], m: &WidestLine };
+    let ctx = test_ctx(&WidestLine);
     let s = "iiii\nMM";
     let size = 10.0;
     let maxw = 10.5;
@@ -136,13 +164,13 @@ fn a_multiline_label_keeps_its_fitting_prefix() {
 fn fit_measures_logarithmically() {
     let long = "x".repeat(1000);
     let c = Counting(&ApproxMeasure, Cell::new(0));
-    let ctx = Ctx { out: vec![], m: &c };
+    let ctx = test_ctx(&c);
     let r = ctx.fit(&long, 11.0, 60.0);
     assert!(r.ends_with('…') && r.chars().count() > 3);
     // 1 whole-string check + ceil(log2(399)) + 1 probes; the old scan needed ~390 here.
     assert!(c.1.get() <= 12, "{} Measure calls", c.1.get());
     let c2 = Counting(&ApproxMeasure, Cell::new(0));
-    let ctx2 = Ctx { out: vec![], m: &c2 };
+    let ctx2 = test_ctx(&c2);
     assert_eq!(ctx2.fit("short", 11.0, 500.0), "short");
     assert_eq!(c2.1.get(), 1);
 }
@@ -153,7 +181,7 @@ fn legend_entries(n: usize, label: &dyn Fn(usize) -> String) -> Vec<(String, Rgb
 
 /// Colour column width as the old code computed it, from the returned remaining area.
 fn old_colw(m: &dyn Measure, entries: &[(String, Rgba, Swatch)], area: Bx) -> f32 {
-    let ctx = Ctx { out: vec![], m };
+    let ctx = test_ctx(m);
     let size = LABEL_SIZE;
     let s = size * 0.8;
     entries.iter().map(|e| swatch_w(e.2, s) + 4.0 + ctx.tw(&e.0, size)).fold(0.0f32, f32::max).min(area.w * 0.35)
@@ -168,8 +196,9 @@ fn side_legend_matches_old_column_width_and_stops_measuring_at_the_cap() {
         for (k, label) in labels.iter().enumerate() {
             for n in [0usize, 1, 5, 40] {
                 let entries = legend_entries(n, label);
-                let mut ctx = Ctx { out: vec![], m: &ApproxMeasure };
-                let rest = draw_legend(&mut ctx, &entries, pos, area);
+                let mut ctx = test_ctx(&ApproxMeasure);
+                let chart = test_chart();
+                let rest = draw_legend(&mut ctx, &entries, pos, area, &chart, entries.len());
                 let colw = old_colw(&ApproxMeasure, &entries, area);
                 assert!((rest.w - (area.w - (colw + 8.0))).abs() < 1e-4, "{pos:?} labels {k} n {n}");
             }
@@ -179,8 +208,9 @@ fn side_legend_matches_old_column_width_and_stops_measuring_at_the_cap() {
     // plus the drawn rows, now only the first entry and the drawn rows are measured.
     let entries = legend_entries(20_000, &|i| if i == 0 { "w".repeat(200) } else { format!("e{i}") });
     let c = Counting(&ApproxMeasure, Cell::new(0));
-    let mut ctx = Ctx { out: vec![], m: &c };
-    let _ = draw_legend(&mut ctx, &entries, LegendPos::Right, area);
+    let mut ctx = test_ctx(&c);
+    let chart = test_chart();
+    let _ = draw_legend(&mut ctx, &entries, LegendPos::Right, area, &chart, entries.len());
     let drawn = ctx.out.iter().filter(|p| matches!(p, Prim::Text { .. })).count();
     assert!(c.1.get() <= drawn * 10 + 5, "{} Measure calls for {drawn} drawn entries", c.1.get());
     assert!(c.1.get() < 500);

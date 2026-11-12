@@ -674,6 +674,8 @@ impl ChartFormat {
             italic: local.italic.or(base.italic),
         }
     }
+}
+
 /// Charts saved before `hole_size` existed were drawn with a 50% hole. New charts and charts read
 /// from XLSX set 75 explicitly (Excel's default), so only a missing JSON field keeps the old look.
 fn default_hole_size() -> u8 {
@@ -1263,6 +1265,7 @@ mod tests {
             source: None,
             by_rows: false,
             pivot: None,
+            format: ChartFormat::default(),
         };
         let mut json = serde_json::to_value(&chart).expect("serialize chart");
         json.as_object_mut().expect("chart object").remove("hole_size");

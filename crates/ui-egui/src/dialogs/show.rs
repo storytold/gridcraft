@@ -127,17 +127,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let home = app.ui_window();
     // The macro step editor is a large resizable window of its own.
     if d.name == "macroEditor" {
-        let mut open = true;
-        crate::macro_editor::window(app, ctx, &mut d, &mut open);
-        if !open {
-            app.macros.editor = None;
-            app.grid.macro_overlay = None;
-        } else if app.ui_window() != home {
-            // Something run from the editor switched windows: the editor stays in its own.
-            app.return_dialog(home, d);
-        } else {
-            app.dialog = Some(d);
-        }
+        show_macro_editor(app, ctx, d, home);
         return;
     }
     if d.name == "pasteSpecial" {
@@ -235,57 +225,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         ui.monospace(serde_json::to_string_pretty(&r.unwrap_or(Json::Null)).unwrap_or_default());
                     });
                 }
-                "insertPicture" => {
-                    // A private inbox dies with this dialog; late browser results
-                    // cannot affect a later picture choice or another workbook.
-                    let arrived = d.picture_inbox.as_ref().and_then(|inbox| {
-                        inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop()
-                    });
-                    if let Some((name, bytes)) = arrived {
-                        d.picture_inbox = None;
-                        if bytes.len() > 16 * 1024 * 1024 {
-                            app.message = Some((d.title.clone(), "Choose a PNG or JPEG no larger than 16 MB.".into()));
-                        } else {
-                            d.values.remove("path");
-                            d.values.insert("alt".into(), json!(name));
-                            d.values.insert("base64".into(), json!(gridcraft_engine::io::base64_encode(&bytes)));
-                        }
-                    }
-                    if app.services.pick_picture_async.is_some() {
-                        let name = d.values.get("alt").and_then(Json::as_str).unwrap_or("No picture selected");
-                        ui.label(name);
-                    } else {
-                        ui.label("Picture file path (PNG or JPEG):");
-                        let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
-                        if ui.text_edit_singleline(&mut path).changed() {
-                            d.values.remove("base64");
-                            d.values.insert("path".into(), json!(path));
-                        }
-                    }
-                    if (app.services.pick_picture.is_some() || app.services.pick_picture_async.is_some()) && ui.button("Browse…").clicked() {
-                        if let Some(start) = &app.services.pick_picture_async {
-                            let inbox = crate::Inbox::default();
-                            start(inbox.clone());
-                            d.picture_inbox = Some(inbox);
-                        } else if let Some(pick) = &app.services.pick_picture
-                            && let Some(path) = pick()
-                        {
-                            d.values.remove("base64");
-                            let alt = std::path::Path::new(&path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("");
-                            d.values.insert("alt".into(), json!(alt));
-                            d.values.insert("path".into(), json!(path));
-                        }
-                    }
-                    ui.label("Description (optional):");
-                    let mut alt = d.values.get("alt").and_then(Json::as_str).unwrap_or("").to_string();
-                    if ui.text_edit_singleline(&mut alt).changed() {
-                        d.values.insert("alt".into(), json!(alt));
-                    }
-                    if d.values.get("placement").and_then(Json::as_str) == Some("cell") {
-                        ui.label(egui::RichText::new("Fits inside the selected cell and moves with its content.").small());
-                    }
-                    ok_cancel(ui, &mut confirm, &mut open);
-                }
+                "insertPicture" => insert_picture_dialog(app, ui, &mut d, &mut confirm, &mut open),
                 "pickList" => {
                     let items: Vec<String> = app
                         .session
@@ -498,6 +438,68 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
+fn show_macro_editor(app: &mut SheetApp, ctx: &egui::Context, mut d: Dialog, home: Option<u64>) {
+    let mut open = true;
+    crate::macro_editor::window(app, ctx, &mut d, &mut open);
+    if !open {
+        app.macros.editor = None;
+        app.grid.macro_overlay = None;
+    } else if app.ui_window() != home {
+        // Something run from the editor switched windows: the editor stays in its own.
+        app.return_dialog(home, d);
+    } else {
+        app.dialog = Some(d);
+    }
+}
+
+fn insert_picture_dialog(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    // A private inbox dies with this dialog; late browser results cannot affect another choice.
+    let arrived = d.picture_inbox.as_ref().and_then(|inbox| inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop());
+    if let Some((name, bytes)) = arrived {
+        d.picture_inbox = None;
+        if bytes.len() > 16 * 1024 * 1024 {
+            app.message = Some((d.title.clone(), "Choose a PNG or JPEG no larger than 16 MB.".into()));
+        } else {
+            d.values.remove("path");
+            d.values.insert("alt".into(), json!(name));
+            d.values.insert("base64".into(), json!(gridcraft_engine::io::base64_encode(&bytes)));
+        }
+    }
+    if app.services.pick_picture_async.is_some() {
+        ui.label(d.values.get("alt").and_then(Json::as_str).unwrap_or("No picture selected"));
+    } else {
+        ui.label("Picture file path (PNG or JPEG):");
+        let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
+        if ui.text_edit_singleline(&mut path).changed() {
+            d.values.remove("base64");
+            d.values.insert("path".into(), json!(path));
+        }
+    }
+    if (app.services.pick_picture.is_some() || app.services.pick_picture_async.is_some()) && ui.button("Browse…").clicked() {
+        if let Some(start) = &app.services.pick_picture_async {
+            let inbox = crate::Inbox::default();
+            start(inbox.clone());
+            d.picture_inbox = Some(inbox);
+        } else if let Some(pick) = &app.services.pick_picture
+            && let Some(path) = pick()
+        {
+            d.values.remove("base64");
+            let alt = std::path::Path::new(&path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("");
+            d.values.insert("alt".into(), json!(alt));
+            d.values.insert("path".into(), json!(path));
+        }
+    }
+    ui.label("Description (optional):");
+    let mut alt = d.values.get("alt").and_then(Json::as_str).unwrap_or("").to_string();
+    if ui.text_edit_singleline(&mut alt).changed() {
+        d.values.insert("alt".into(), json!(alt));
+    }
+    if d.values.get("placement").and_then(Json::as_str) == Some("cell") {
+        ui.label(egui::RichText::new("Fits inside the selected cell and moves with its content.").small());
+    }
+    ok_cancel(ui, confirm, open);
+}
+
 fn chart_dialog(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     if d.name == "chartExport" {
         ui.label(crate::widgets::tr(ui, "Image Format"));
@@ -550,6 +552,8 @@ fn confirm_chart_dialog(app: &mut SheetApp, d: &Dialog, open: &mut bool) {
             Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
         }
     }
+}
+
 /// OK in Open Hyperlink; returns whether the prompt closes. A pass that carries control-channel
 /// input (`ui.key`, `ui.click`, `ui.drag`) can't say yes for the user (#2181): the link stays
 /// unopened and the prompt open, with a message. Real input in that same pass is refused too, so

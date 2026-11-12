@@ -453,6 +453,8 @@ mod chart_cycle_tests {
             data_table: None,
             gridlines: false,
             style: 2,
+            hole_size: 75,
+            first_slice_angle: 0,
             x_title: None,
             y_title: None,
             source: None,

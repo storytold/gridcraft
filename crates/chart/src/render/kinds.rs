@@ -239,7 +239,6 @@ pub(super) fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inne
     let ring = Ring { cx, cy, outer: r, inner: ri, stroke: Some((WHITE, 1.5)) };
     let f = Fmt::new(&s.number_format);
     let role = if names { "x_axis" } else { "data_labels" };
-    let mut a = 0.0f32;
     let mut a = (chart.first_slice_angle % 360) as f32 * TAU / 360.0;
     let mut labels = Vec::new();
     for (j, v) in vals.iter().enumerate() {

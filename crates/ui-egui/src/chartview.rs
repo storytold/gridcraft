@@ -977,6 +977,10 @@ mod selection_tests {
         assert!(matches!(marks[0], SeriesSelectionMark::Shape(_)));
         assert!(matches!(marks[1], SeriesSelectionMark::Shape(_)));
         assert_eq!(marks[2..], [SeriesSelectionMark::Point(egui::pos2(10.0, 20.0)), SeriesSelectionMark::Point(egui::pos2(20.0, 25.0)),]);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use gridcraft_chart::Measure;
 

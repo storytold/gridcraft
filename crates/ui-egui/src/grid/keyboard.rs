@@ -8,7 +8,6 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     if !prepare_grid_keyboard(app, ctx, resp) {
         return;
     }
-    let events = ctx.input(|i| i.events.clone());
     if ctx.memory(|m| m.focused()).is_none() {
         resp.request_focus();
     }
@@ -170,6 +169,8 @@ fn prepare_grid_keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::R
         m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
     });
     true
+}
+
 /// This frame's input events, without those the focused form control took.
 fn grid_events(app: &mut SheetApp, ctx: &egui::Context, sh: &Sheet) -> Vec<egui::Event> {
     let events = ctx.input(|i| i.events.clone());

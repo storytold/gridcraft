@@ -50,6 +50,8 @@ fn percent_stacked_chart_writer_defaults_round_trip_without_series_overrides() {
             data_labels: false,
             gridlines: true,
             style: 2,
+            hole_size: 75,
+            first_slice_angle: 0,
             x_title: None,
             y_title: None,
             source: None,

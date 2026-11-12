@@ -332,72 +332,60 @@ fn chart_general_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_eng
     let id = chart.id;
     let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
     egui::CollapsingHeader::new(crate::widgets::tr(ui, "Chart Settings")).default_open(true).show(ui, |ui| {
-        ui.collapsing(crate::widgets::tr(ui, "Chart Title"), |ui| {
+        let lang = crate::i18n::current(ui.ctx());
+        ui.collapsing("Chart Title", |ui| {
             let field = egui::Id::unique(("gridcraft.chart_title", id));
             if let Some(title) = crate::widgets::committed_text(ui, field, chart.title.as_deref().unwrap_or(""), None) {
                 app.run_or_alert("chart.set", json!({"chart": id, "title": title}));
             }
         });
-        ui.collapsing(crate::widgets::tr(ui, "Legend"), |ui| {
-            ui.horizontal(|ui| {
-                for (l, v) in [("None", "none"), ("Bottom", "bottom"), ("Top", "top"), ("Left", "left"), ("Right", "right")] {
-                    let cur = format!("{:?}", chart.legend).eq_ignore_ascii_case(v);
-                    if ui.selectable_label(cur, crate::widgets::tr(ui, l)).clicked() {
-                        app.run_or_alert("chart.set", json!({"chart": id, "legend": v}));
+        ui.collapsing("Chart Type", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (l, k, s) in [
+                    ("Column", "column", ""),
+                    ("Stacked Column", "column", "stacked"),
+                    ("100% Stacked Column", "column", "stacked100"),
+                    ("Bar", "bar", ""),
+                    ("Stacked Bar", "bar", "stacked"),
+                    ("100% Stacked Bar", "bar", "stacked100"),
+                    ("Line", "line", "markers"),
+                    ("Stacked Line", "line", "stacked"),
+                    ("Area", "area", ""),
+                    ("Stacked Area", "area", "stacked"),
+                    ("100% Stacked Area", "area", "stacked100"),
+                    ("Pie", "pie", ""),
+                    ("Doughnut", "doughnut", ""),
+                    ("Scatter", "scatter", ""),
+                    ("Radar", "radar", ""),
+                ] {
+                    let cur = chart.kind == gridcraft_engine::cmd::insert::chart_kind(k, s);
+                    if ui.selectable_label(cur, l).clicked() {
+                        app.run_or_alert("chart.set", json!({"chart": id, "type": k, "subtype": s}));
                     }
-    let lang = crate::i18n::current(ui.ctx());
-    ui.collapsing("Chart Title", |ui| {
-        let field = egui::Id::unique(("gridcraft.chart_title", id));
-        if let Some(title) = crate::widgets::committed_text(ui, field, chart.title.as_deref().unwrap_or(""), None) {
-            app.run_or_alert("chart.set", json!({"chart": id, "title": title}));
-        }
-    });
-    ui.collapsing("Chart Type", |ui| {
-        ui.horizontal_wrapped(|ui| {
-            for (l, k, s) in [
-                ("Column", "column", ""),
-                ("Stacked Column", "column", "stacked"),
-                ("100% Stacked Column", "column", "stacked100"),
-                ("Bar", "bar", ""),
-                ("Stacked Bar", "bar", "stacked"),
-                ("100% Stacked Bar", "bar", "stacked100"),
-                ("Line", "line", "markers"),
-                ("Stacked Line", "line", "stacked"),
-                ("Area", "area", ""),
-                ("Stacked Area", "area", "stacked"),
-                ("100% Stacked Area", "area", "stacked100"),
-                ("Pie", "pie", ""),
-                ("Doughnut", "doughnut", ""),
-                ("Scatter", "scatter", ""),
-                ("Radar", "radar", ""),
-            ] {
-                let cur = chart.kind == gridcraft_engine::cmd::insert::chart_kind(k, s);
-                if ui.selectable_label(cur, l).clicked() {
-                    app.run_or_alert("chart.set", json!({"chart": id, "type": k, "subtype": s}));
+                }
+            });
+            if matches!(chart.kind, gridcraft_chart::ChartKind::Pie | gridcraft_chart::ChartKind::Doughnut) {
+                let draft = egui::Id::unique(("gridcraft.chart_first_slice_draft", id));
+                let current = u32::from(chart.first_slice_angle);
+                if let Some(angle) = chart_slider(ui, draft, current, 0..=359, lang.tr("First slice angle")) {
+                    app.run_or_alert("chart.set", json!({"chart": id, "firstSliceAngle": angle}));
+                }
+            }
+            if chart.kind == gridcraft_chart::ChartKind::Doughnut {
+                let draft = egui::Id::unique(("gridcraft.chart_hole_size_draft", id));
+                let current = u32::from(chart.hole_size);
+                if let Some(hole) = chart_slider(ui, draft, current, 10..=90, lang.tr("Doughnut hole size")) {
+                    app.run_or_alert("chart.set", json!({"chart": id, "holeSize": hole}));
                 }
             }
         });
-        if matches!(chart.kind, gridcraft_chart::ChartKind::Pie | gridcraft_chart::ChartKind::Doughnut) {
-            let draft = egui::Id::unique(("gridcraft.chart_first_slice_draft", id));
-            let current = u32::from(chart.first_slice_angle);
-            if let Some(angle) = chart_slider(ui, draft, current, 0..=359, lang.tr("First slice angle")) {
-                app.run_or_alert("chart.set", json!({"chart": id, "firstSliceAngle": angle}));
-            }
-        }
-        if chart.kind == gridcraft_chart::ChartKind::Doughnut {
-            let draft = egui::Id::unique(("gridcraft.chart_hole_size_draft", id));
-            let current = u32::from(chart.hole_size);
-            if let Some(hole) = chart_slider(ui, draft, current, 10..=90, lang.tr("Doughnut hole size")) {
-                app.run_or_alert("chart.set", json!({"chart": id, "holeSize": hole}));
-            }
-        }
-    });
-    ui.collapsing("Legend", |ui| {
-        ui.horizontal(|ui| {
-            for (l, v) in [("None", "none"), ("Bottom", "bottom"), ("Top", "top"), ("Left", "left"), ("Right", "right")] {
-                let cur = format!("{:?}", chart.legend).eq_ignore_ascii_case(v);
-                if ui.selectable_label(cur, l).clicked() {
-                    app.run_or_alert("chart.set", json!({"chart": id, "legend": v}));
+        ui.collapsing("Legend", |ui| {
+            ui.horizontal(|ui| {
+                for (l, v) in [("None", "none"), ("Bottom", "bottom"), ("Top", "top"), ("Left", "left"), ("Right", "right")] {
+                    let cur = format!("{:?}", chart.legend).eq_ignore_ascii_case(v);
+                    if ui.selectable_label(cur, l).clicked() {
+                        app.run_or_alert("chart.set", json!({"chart": id, "legend": v}));
+                    }
                 }
             });
         });
@@ -1104,10 +1092,29 @@ fn chart_number_f32(ui: &mut Ui, label: &str, value: &mut Option<f32>) -> bool {
     }
 }
 
+/// A chart slider that keeps the value being dragged in a per-chart draft and submits it once
+/// through `chart.set` when the interaction ends, like the Size controls. Escape cancels, and a
+/// value the chart already has is not sent again.
+fn chart_slider(ui: &mut Ui, draft: egui::Id, value: u32, range: std::ops::RangeInclusive<u32>, label: &str) -> Option<u32> {
+    let mut current = ui.data_mut(|d| d.get_temp::<u32>(draft)).unwrap_or(value);
+    let r = ui.add(egui::Slider::new(&mut current, range).text(label));
+    if r.drag_stopped() || r.clicked() || r.lost_focus() {
+        ui.data_mut(|d| d.remove::<u32>(draft));
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) || current == value { None } else { Some(current) }
+    } else if r.dragged() || r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(draft, current));
+        None
+    } else {
+        ui.data_mut(|d| d.remove::<u32>(draft));
+        None
+    }
+}
+
 #[cfg(test)]
 mod chart_numeric_tests {
     use super::*;
     use egui_kittest::kittest::Queryable as _;
+
     #[test]
     fn chart_marker_step_buttons_work_from_automatic_and_respect_bounds() {
         let mut h = egui_kittest::Harness::builder().build_ui_state(
@@ -1134,20 +1141,5 @@ mod chart_numeric_tests {
         h.get_by_label("−").click();
         h.run_steps(2);
         assert_eq!(*h.state(), Some(4.0));
-/// A chart slider that keeps the value being dragged in a per-chart draft and submits it once
-/// through `chart.set` when the interaction ends, like the Size controls. Escape cancels, and a
-/// value the chart already has is not sent again.
-fn chart_slider(ui: &mut Ui, draft: egui::Id, value: u32, range: std::ops::RangeInclusive<u32>, label: &str) -> Option<u32> {
-    let mut current = ui.data_mut(|d| d.get_temp::<u32>(draft)).unwrap_or(value);
-    let r = ui.add(egui::Slider::new(&mut current, range).text(label));
-    if r.drag_stopped() || r.clicked() || r.lost_focus() {
-        ui.data_mut(|d| d.remove::<u32>(draft));
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) || current == value { None } else { Some(current) }
-    } else if r.dragged() || r.has_focus() {
-        ui.data_mut(|d| d.insert_temp(draft, current));
-        None
-    } else {
-        ui.data_mut(|d| d.remove::<u32>(draft));
-        None
     }
 }

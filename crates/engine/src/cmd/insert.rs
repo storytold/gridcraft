@@ -100,8 +100,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Chart Properties",
             ["Chart Design"],
             None,
-            "{chart?: id, type?, subtype?: clustered|stacked|stacked100|markers|stacked100Markers, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, dataTable?: bool, dataTableKeys?: bool, dataTableHorizontalBorder?: bool, dataTableVerticalBorder?: bool, dataTableOutline?: bool, quartiles?: exclusive|inclusive, style?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?, format?: ChartFormat with axis, gridline, text, surface and series styling overrides}",
-            "{chart?: id, type?, subtype?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, dataTable?: bool, dataTableKeys?: bool, dataTableHorizontalBorder?: bool, dataTableVerticalBorder?: bool, dataTableOutline?: bool (data tables: column/bar/line/area and compatible combo charts), quartiles?: exclusive|inclusive, style?, holeSize?, firstSliceAngle?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
+            "{chart?: id, type?, subtype?: clustered|stacked|stacked100|markers|stacked100Markers, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, dataTable?: bool, dataTableKeys?: bool, dataTableHorizontalBorder?: bool, dataTableVerticalBorder?: bool, dataTableOutline?: bool (data tables: column/bar/line/area and compatible combo charts), quartiles?: exclusive|inclusive, style?, holeSize?, firstSliceAngle?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?, format?: ChartFormat with axis, gridline, text, surface and series styling overrides}",
             has_doc,
             chart_set
         ),
@@ -884,8 +883,6 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         gridlines: bool_param(p, "gridlines")
             .unwrap_or(!matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel)),
         style: u32_param(p, "style").map(|style| style.clamp(1, 16)).unwrap_or(1),
-        gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
-        style: 1,
         hole_size: 75,
         first_slice_angle: 0,
         x_title: None,
