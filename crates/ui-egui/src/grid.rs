@@ -117,15 +117,19 @@ pub enum Drag {
         source: RangeRef,
         before: Option<u32>,
     },
+    /// `to`: the previewed size once the pointer moved. Only the dragged line changes while the
+    /// button is held; the release applies the size to every selected line (Excel).
     ResizeCol {
         col: u32,
         start: f32,
         orig: f32,
+        to: Option<f32>,
     },
     ResizeRow {
         row: u32,
         start: f32,
         orig: f32,
+        to: Option<f32>,
     },
     /// Dragging the fill handle; `menu` when the right button drags it (the fill menu opens on release).
     Fill {
@@ -240,7 +244,21 @@ impl Trace {
 
 #[derive(Default)]
 pub struct GridState {
+    /// The active sheet's line positions and outlines, kept with a weak reference to the sheet
+    /// they were built from: while it still upgrades to the very sheet shown, the sheet hasn't
+    /// changed (every change goes through `Arc::make_mut`, which moves or copies a sheet that
+    /// has a weak reference to it), so they still hold.
+    pub(crate) lines: Option<(std::sync::Weak<Sheet>, geo::SheetLines)>,
+    /// The conditional formatting statistics (minimum, maximum, percentiles, duplicates) of the
+    /// active sheet's rules, kept the same way: they are read from that sheet's cells alone.
+    pub(crate) cf: Option<(std::sync::Weak<Sheet>, CfCache)>,
     pub drag: Drag,
+    /// A header-boundary resize drag: the workbook as it was when the drag began. The drag's own
+    /// undo entries are the ones from the first entry that snapshots it; earlier edits with the
+    /// same label are not the drag's to merge or cancel.
+    pub resize_base: Option<Arc<Workbook>>,
+    /// The redo stack when that drag began; Esc puts it back (the preview commands clear it).
+    pub resize_redo: Vec<gridcraft_engine::HistoryEntry>,
     pub ensure_visible: bool,
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
     /// (Shift/Ctrl+Shift+arrows keep the active cell on the anchor while the far corner moves).
