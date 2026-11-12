@@ -15,6 +15,7 @@ mod el;
 mod es;
 mod es_functions;
 mod fr;
+mod hu;
 mod it;
 mod ja;
 mod ko;
@@ -45,6 +46,7 @@ pub enum Language {
     De,
     Cs,
     Fr,
+    Hu,
     Sr,
     Tr,
     Pl,
@@ -56,7 +58,7 @@ pub enum Language {
 }
 
 impl Language {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::En,
         Self::Es,
         Self::El,
@@ -68,6 +70,7 @@ impl Language {
         Self::De,
         Self::Cs,
         Self::Fr,
+        Self::Hu,
         Self::Sr,
         Self::Pl,
         Self::It,
@@ -101,6 +104,7 @@ impl Language {
             Self::De => "Deutsch",
             Self::Cs => "Čeština",
             Self::Fr => "Français",
+            Self::Hu => "Magyar",
             Self::Sr => "Srpski",
             Self::Tr => "Türkçe",
             Self::Pl => "Polski",
@@ -126,6 +130,7 @@ impl Language {
             Self::De => "de",
             Self::Cs => "cs",
             Self::Fr => "fr",
+            Self::Hu => "hu",
             Self::Sr => "sr",
             Self::Tr => "tr",
             Self::Pl => "pl",
@@ -160,6 +165,7 @@ impl Language {
             "de" => Some(Self::De),
             "cs" => Some(Self::Cs),
             "fr" => Some(Self::Fr),
+            "hu" => Some(Self::Hu),
             "sr" => Some(Self::Sr),
             "tr" => Some(Self::Tr),
             "pl" => Some(Self::Pl),
@@ -211,6 +217,7 @@ impl Language {
             Self::De => de::translate(text),
             Self::Cs => cs::translate(text),
             Self::Fr => fr::translate(text),
+            Self::Hu => hu::translate(text),
             Self::Sr => sr::translate(text),
             Self::Tr => tr::translate(text),
             Self::Pl => pl::translate(text),
@@ -451,9 +458,11 @@ mod tests {
         assert_eq!(Language::from_tag("ja-JP"), Some(Language::Ja));
         assert_eq!(Language::from_tag("en_US"), Some(Language::En));
         assert_eq!(Language::from_tag("es_MX"), Some(Language::Es));
+        assert_eq!(Language::from_tag("hu-HU"), Some(Language::Hu));
         assert_eq!(Language::from_tag("el-GR"), Some(Language::El));
         assert_eq!(Language::from_tag("el_GR.UTF-8"), Some(Language::El));
         assert_eq!(Language::parse("el"), Some(Language::El));
+        assert_eq!(Language::parse("hu"), Some(Language::Hu));
         assert_eq!(Language::from_tag("zh-Hans-CN"), Some(Language::Zh));
         assert_eq!(Language::from_tag("ko-KR"), Some(Language::Ko));
         assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));

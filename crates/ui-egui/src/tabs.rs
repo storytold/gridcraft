@@ -407,7 +407,10 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
                         ui.add_space(12.0);
-                        text(ui, egui::RichText::new("Macros preserved (not executed)").font(theme::ui_font(12.5)).color(t.danger));
+                        text(
+                            ui,
+                            egui::RichText::new(app.ui.language.tr("Macros preserved (not executed)")).font(theme::ui_font(12.5)).color(t.danger),
+                        );
                     }
                     if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
                         ui.add_space(12.0);
@@ -417,8 +420,8 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                         ui.add_space(12.0);
                         // Only a loop on the active sheet is named, so the address needs no sheet.
                         let label = match d.calc.circular.iter().find(|(si, _)| *si == d.wb.active_sheet()) {
-                            Some((_, c)) => format!("Circular References: {}", c.a1()),
-                            None => "Circular References".to_owned(),
+                            Some((_, c)) => app.ui.language.tr("Circular References: {cell}").replace("{cell}", &c.a1()),
+                            None => app.ui.language.tr("Circular References").to_owned(),
                         };
                         text(ui, egui::RichText::new(label).font(theme::ui_font(12.5)).color(t.danger));
                     }
@@ -516,26 +519,27 @@ pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
         let code = if code == "General" { "#,##0.##########".to_string() } else { code };
         gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(v), &code, &d.wb).text.trim_end_matches('.').to_string()
     };
+    let lang = app.ui.language;
     let mut parts = Vec::new();
     if on.average
         && let Some(a) = st.average
     {
-        parts.push(format!("Average: {}", fmt(a)));
+        parts.push(lang.tr("Average: {value}").replace("{value}", &fmt(a)));
     }
     if on.count && st.count > 0 {
-        parts.push(format!("Count: {}", st.count));
+        parts.push(lang.tr("Count: {count}").replace("{count}", &st.count.to_string()));
     }
     if on.numerical_count && st.count > 0 {
-        parts.push(format!("Numerical Count: {}", st.numeric));
+        parts.push(lang.tr("Numerical Count: {count}").replace("{count}", &st.numeric.to_string()));
     }
     if on.minimum && st.numeric > 0 {
-        parts.push(format!("Minimum: {}", fmt(st.min)));
+        parts.push(lang.tr("Minimum: {value}").replace("{value}", &fmt(st.min)));
     }
     if on.maximum && st.numeric > 0 {
-        parts.push(format!("Maximum: {}", fmt(st.max)));
+        parts.push(lang.tr("Maximum: {value}").replace("{value}", &fmt(st.max)));
     }
     if on.sum && st.numeric > 0 {
-        parts.push(format!("Sum: {}", fmt(st.sum)));
+        parts.push(lang.tr("Sum: {value}").replace("{value}", &fmt(st.sum)));
     }
     parts
 }
@@ -608,6 +612,18 @@ mod tests {
         assert_eq!(super::selection_statistics(&app), ["Count: 2", "Numerical Count: 0"]);
         app.run("selection.set", json!({"range": "A1"})).unwrap();
         assert!(super::selection_statistics(&app).is_empty(), "one cell shows no statistics");
+    }
+
+    #[test]
+    fn status_bar_statistics_use_the_interface_language() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.ui.language = crate::i18n::Language::Hu;
+        app.run("cell.set", json!({"cell": "A1", "input": "4"})).unwrap();
+        app.run("cell.set", json!({"cell": "A2", "input": "8"})).unwrap();
+        app.run("selection.set", json!({"range": "A1:A2"})).unwrap();
+        assert_eq!(super::selection_statistics(&app), ["Átlag: 6", "Darab: 2", "Összeg: 12"]);
     }
 
     #[test]

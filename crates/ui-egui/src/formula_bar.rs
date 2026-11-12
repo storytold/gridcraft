@@ -280,7 +280,11 @@ fn active_input(app: &SheetApp) -> String {
     let Some(sh) = d.wb.active() else { return String::new() };
     let a = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
     if let Some(picture) = sh.cell_pictures.get(&a) {
-        return if picture.alt.is_empty() { "Picture in cell".into() } else { format!("Picture: {}", picture.alt) };
+        return if picture.alt.is_empty() {
+            app.ui.language.tr("Picture in cell").into()
+        } else {
+            app.ui.language.tr("Picture: {alt}").replace("{alt}", &picture.alt)
+        };
     }
     // Python code is shown as it is: it isn't a formula to translate or a value to format. Like
     // a formula, it stays out of view in a Hidden cell on a protected sheet.
@@ -429,7 +433,7 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Rect {
     let r = ui.interact(mb, id.with("drop"), Sense::click());
     egui::Popup::menu(&r).show(|ui| {
         if names.is_empty() {
-            ui.label(egui::RichText::new("No names defined").italics());
+            ui.label(egui::RichText::new(app.ui.language.tr("No names defined")).italics());
         }
         for n in names {
             if ui.button(&n).clicked() {

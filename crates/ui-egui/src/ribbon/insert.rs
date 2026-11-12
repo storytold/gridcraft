@@ -251,7 +251,8 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
                 "✓", "★", "½", "¼",
             ] {
                 // No bundled face has ✓: the button paints a code-drawn check instead of a tofu box.
-                if crate::widgets::glyph_button(ui, ch.chars().next().unwrap_or('?'), &format!("Insert {ch}")).clicked() {
+                let tip = app.ui.language.tr("Insert {symbol}").replace("{symbol}", ch);
+                if crate::widgets::glyph_button(ui, ch.chars().next().unwrap_or('?'), &tip).clicked() {
                     act(app, "insert.symbol", json!({"char": ch}));
                 }
             }

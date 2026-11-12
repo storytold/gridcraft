@@ -274,6 +274,7 @@ impl Dialog {
 
     /// Opens the named dialog with defaults from the active workbook, including a cell's stored hyperlink.
     pub fn open(app: &mut SheetApp, name: &str, params: Json) -> Option<Dialog> {
+        let lang = app.ui.language;
         let sel = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();
         let p = |k: &str| params.get(k).cloned().unwrap_or(Json::Null);
@@ -359,7 +360,7 @@ impl Dialog {
                     vec![
                         Number { key: "to", label: "Before sheet (position, 0 = first):" },
                         Check { key: "copy", label: "Create a copy" },
-                        Note(format!("Sheets: {}", sheets.join(", "))),
+                        Note(lang.tr("Sheets: {sheets}").replace("{sheets}", &sheets.join(", "))),
                     ],
                     json!({"to": 0, "copy": false}),
                 );
@@ -412,7 +413,7 @@ impl Dialog {
                     "Allow Edit Ranges",
                     "review.allowEditRanges",
                     vec![
-                        Note(format!("Ranges that stay editable when the sheet is protected:\n{summary}")),
+                        Note(lang.tr("Ranges that stay editable when the sheet is protected:\n{summary}").replace("{summary}", &summary)),
                         Choice {
                             key: "action",
                             label: "Action",
@@ -448,18 +449,18 @@ impl Dialog {
                 // The file rides along in the values (`path` on the desktop, `name` and `base64`
                 // on the web) and goes back to `file.open` with the password.
                 let source = p("path").as_str().or(p("name").as_str()).map(str::to_string).unwrap_or_default();
-                let file = std::path::Path::new(&source).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("This workbook").to_string();
+                let filename = std::path::Path::new(&source).file_name().and_then(std::ffi::OsStr::to_str);
+                let file = filename.unwrap_or("This workbook").to_string();
+                let note = if filename.is_some() {
+                    lang.tr("'{file}' is protected.").replace("{file}", &file)
+                } else {
+                    lang.tr("This workbook is protected.").to_string()
+                };
                 // An empty password from the start, so OK on the untouched field says "incorrect"
                 // rather than asking for the password again.
                 let mut values = params.clone();
                 values["password"] = json!("");
-                Dialog::form(
-                    "openPassword",
-                    "Password",
-                    "file.open",
-                    vec![Note(format!("'{file}' is protected.")), Password { key: "password", label: "Password:" }],
-                    values,
-                )
+                Dialog::form("openPassword", "Password", "file.open", vec![Note(note), Password { key: "password", label: "Password:" }], values)
             }
             "unprotectSheet" => Dialog::form(
                 "unprotectSheet",
@@ -476,7 +477,7 @@ impl Dialog {
                     "unhideSheet",
                     "Unhide",
                     "sheet.unhide",
-                    vec![Text { key: "sheet", label: "Unhide sheet:" }, Note(format!("Hidden: {}", opts.join(", ")))],
+                    vec![Text { key: "sheet", label: "Unhide sheet:" }, Note(lang.tr("Hidden: {sheets}").replace("{sheets}", &opts.join(", ")))],
                     json!({"sheet": first}),
                 );
                 d.values.insert("sheet".into(), json!(first));
@@ -553,9 +554,12 @@ impl Dialog {
             "openLink" => {
                 let url = params.get("url").and_then(Json::as_str).unwrap_or_default().to_string();
                 let mut d = Dialog::custom("openLink", "Open Hyperlink", json!({"url": url}));
-                d.fields = vec![Note(format!(
-                    "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.\n\n{url}"
-                ))];
+                d.fields = vec![Note(
+                    lang.tr(
+                        "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.\n\n{url}"
+                    )
+                    .replace("{url}", &url),
+                )];
                 d.link = Some(url);
                 d
             }
