@@ -244,6 +244,27 @@ fn sheet_view_saves_and_lists_a_view() {
 }
 
 #[test]
+fn a_saved_view_follows_its_sheet_after_a_move() {
+    // The view stores the sheet's name, not its index: moving sheets must not retarget Show.
+    let mut h = app_at_size(vec2(1440.0, 768.0), "View");
+    h.state_mut().session.execute("home.insertSheet", json!({})).unwrap();
+    h.state_mut().session.execute("selection.set", json!({"range": "B2"})).unwrap();
+    h.get_by_label("New Sheet View").click();
+    h.run_steps(3);
+    h.get_by_label_contains("OK").click();
+    h.run_steps(3);
+    let before = h.state_mut().session.execute("view.customViews", json!({})).unwrap();
+    assert_eq!(before["View1"]["sheet"], json!("Sheet2"), "the view names its sheet: {before}");
+    // Move the first sheet after the second; the saved view still shows Sheet2.
+    h.state_mut().session.execute("sheet.move", json!({"sheet": 0, "to": 1})).unwrap();
+    h.state_mut().session.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    h.state_mut().session.execute("view.customViews", json!({"show": "View1"})).unwrap();
+    let doc = h.state().session.active().unwrap();
+    assert_eq!(doc.wb.active().map(|s| s.name.clone()).as_deref(), Some("Sheet2"), "Show follows the sheet, not the old index");
+    assert_eq!(doc.selection.active.to_string(), "B2", "the saved selection is restored on that sheet");
+}
+
+#[test]
 fn every_new_group_renders_the_measured_rows_at_its_transition_widths() {
     // Renders each newly modelled group just below and at each of its transitions: the planner's
     // level is Excel's measured row count there (0 is the compact row, 1 and 2 its natural rows),

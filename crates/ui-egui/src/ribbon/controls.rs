@@ -437,13 +437,17 @@ impl RibbonSections {
                 let rect = shown.response.rect;
                 // A click that opened one of the body's menus keeps the group; any other click
                 // outside the group closes it, including the one that picked a menu item.
+                // Closing the menu also releases a prefix-forced layout (HB's Borders menu):
+                // the popup it held open is done, like a consumed keytip request.
                 let any_click = ui.input(|i| i.pointer.any_click());
                 let menu_open = egui::Popup::is_any_open(ui.ctx());
                 let pos = ui.input(|i| i.pointer.interact_pos());
                 let pressed = any_click && !menu_open;
                 let outside = pos.is_some_and(|p| !rect.contains(p) && !button.rect.contains(p));
-                if pressed && outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                let done = pressed && outside || ui.input(|i| i.key_pressed(egui::Key::Escape));
+                if done {
                     open = false;
+                    Self::release_forced(ui);
                 }
             }
             ui.ctx().data_mut(|d| d.insert_temp(open_id, (here, open)));
@@ -465,6 +469,17 @@ impl RibbonSections {
         with_tab_sections(ui, |sections| {
             if sections.forced.is_some() {
                 sections.forced_used = true;
+            }
+        });
+    }
+
+    /// Releases a prefix-forced layout whose popup is done: a Continue prefix sets no invoke,
+    /// so nothing marks it used, and without this the group would stay expanded until some
+    /// other dismissal. The next frame settles back, after the closing click reaches its target.
+    fn release_forced(ui: &Ui) {
+        with_tab_sections(ui, |sections| {
+            if sections.forced.is_some() && !sections.forced_used {
+                sections.forced_unpin_at.get_or_insert(ui.ctx().cumulative_frame_nr());
             }
         });
     }

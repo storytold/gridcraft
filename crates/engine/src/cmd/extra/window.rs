@@ -71,8 +71,13 @@ pub(super) fn custom_views(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let mut views = stash_map(&d.wb, VIEWS_NAME);
     if let Some(name) = str_param(p, "save") {
+        let d = s.doc()?;
         let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
-        views[name] = json!({"sheet": d.wb.active_sheet(), "selection": d.selection.a1(), "zoom": sh.zoom, "freeze": sh.freeze});
+        // Sheets move: a saved numeric index can later point at another sheet or past the
+        // end. Sheet names are unique per workbook and survive moves, renames of other
+        // sheets and save/reopen, so the view stores the sheet's name and Show resolves it.
+        let sheet = sh.name.clone();
+        views[name] = json!({"sheet": sheet, "selection": d.selection.a1(), "zoom": sh.zoom, "freeze": sh.freeze});
         let v = views.clone();
         edit(s, |cx| {
             stash_set(&mut cx.wb, VIEWS_NAME, &v);
@@ -80,7 +85,10 @@ pub(super) fn custom_views(s: &mut Session, p: &Json) -> Result<Json> {
         })?;
     } else if let Some(name) = str_param(p, "show") {
         let v = views.get(name).cloned().ok_or_else(|| bad("view.customViews", "no such view"))?;
-        if let Some(si) = v["sheet"].as_u64() {
+        if let Some(sheet) = v["sheet"].as_str() {
+            s.execute("sheet.activate", json!({"sheet": sheet}))?;
+        } else if let Some(si) = v["sheet"].as_u64() {
+            // Views saved before the sheet-name form: keep resolving the old numeric index.
             s.execute("sheet.activate", json!({"sheet": si}))?;
         }
         if let Some(sel) = v["selection"].as_str() {
