@@ -239,8 +239,17 @@ pub fn check_literal_fill_validation(wb: &Workbook, sheet: usize, ranges: &[Rang
     if ranges.iter().any(|range| range.count() > 2_000_000) || sh.validations.is_empty() {
         return None;
     }
-    let mut entered = wb.clone();
     let sh = wb.sheet(sheet)?;
+    let applies = sh.validations.iter().any(|dv| {
+        dv.kind != ValidationKind::Any
+            && dv.show_error
+            && !(input.is_empty() && dv.allow_blank)
+            && dv.ranges.iter().any(|rule| ranges.iter().any(|range| rule.intersects(range)))
+    });
+    if !applies {
+        return None;
+    }
+    let mut entered = wb.clone();
     let mut changed = Vec::new();
     for range in ranges {
         let filtered = crate::cmd::edit::filtered_rows(sh, *range);
