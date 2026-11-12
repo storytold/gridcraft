@@ -25,6 +25,7 @@ craft-csv = { workspace = true }
 gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
 gridcraft-math = { workspace = true }
+gridcraft-brush = { workspace = true }
 image = { workspace = true }
 
 [dev-dependencies]

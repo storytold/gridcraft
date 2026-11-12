@@ -23,6 +23,7 @@ type PagesCache = ((u64, u64, usize), Vec<(RangeRef, u32)>);
 type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>);
 
 mod active_row;
+mod brush;
 pub use active_row::active_row_band;
 mod cell_paint;
 mod cursor;
@@ -284,6 +285,8 @@ pub struct GridState {
     pub pane: Option<String>,
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
+    pub(crate) brush: Option<brush::Gesture>,
+    pub(crate) brush_input_frame: Option<u64>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
     pub pages: Option<PagesCache>,
     /// The PivotTable Fields pane's `pivot.fields` answer, cached per (doc uid, revision, pivot):

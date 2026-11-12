@@ -16,6 +16,7 @@ mod automate;
 mod contextual;
 mod controls;
 mod data;
+mod draw_brush;
 mod formulas;
 mod galleries;
 mod home;
