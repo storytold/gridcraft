@@ -384,20 +384,22 @@ fn a_compact_group_holds_its_whole_natural_body_in_its_menu() {
 
 #[test]
 fn typing_in_a_compact_group_size_field_keeps_the_menu_open_and_applies() {
-    // At 819 pt the Font group is one row. Clicking into its size field must not close the
-    // group menu (its `Area` dismisses clicks when no child popup is open), and Enter applies
-    // the typed size to the selection.
+    // At 819 pt the Font group is one row. A press inside its menu's size field must not end the
+    // compact menu before the release arrives (egui clicks on release), and Enter applies the
+    // typed size to the selection.
     use egui::accesskit::Role;
+    use egui::{Event, Modifiers, PointerButton};
     let mut h = app_at_size(vec2(819.0, 614.0), "Home");
     h.get_by_label("Font").click();
     h.run_steps(2);
     let field = h.get_by_role_and_label(Role::TextInput, "Font Size").rect();
-    // Click (press and release) inside the group menu's field.
-    h.input_mut().events.push(egui::Event::PointerMoved(field.center()));
+    // Press only: a full click would release first; the press must already keep the menu.
+    h.input_mut().events.push(Event::PointerMoved(field.center()));
+    h.input_mut().events.push(Event::PointerButton { pos: field.center(), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::default() });
     h.run_steps(1);
-    h.get_by_role_and_label(Role::TextInput, "Font Size").click();
+    assert!(h.query_by_label("Border presets").is_some(), "the Font menu stays open through the press in its size field");
+    h.input_mut().events.push(Event::PointerButton { pos: field.center(), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::default() });
     h.run_steps(2);
-    assert!(h.query_by_label("Border presets").is_some(), "the Font menu stays open while its size field is clicked");
     h.get_by_role_and_label(Role::TextInput, "Font Size").type_text("18");
     h.run_steps(2);
     h.key_press(egui::Key::Enter);

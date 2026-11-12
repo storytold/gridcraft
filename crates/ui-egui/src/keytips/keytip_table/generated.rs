@@ -336,7 +336,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("RTN", Entry::Finish(Action::Command("review.newNote"))),      // Excel: New Note
     ("RV", Entry::Finish(Action::Command("review.previousComment"))), // Excel: Previous Comment
     ("WA", Entry::Finish(Action::Command("view.arrangeAll"))),      // Excel: Arrange All
-    ("WC", Entry::Finish(Action::Command("view.customViews"))),     // Excel: Custom Views
+    ("WC", Entry::Finish(Action::Control("view.customViews"))),     // Excel: Custom Views; opens the saved-view menu
     ("WF", Entry::Continue),                                        // Excel: Freeze Panes Menu; group level:
     ("WFC", Entry::Finish(Action::Command("view.freezeFirstColumn"))), // Excel: Freeze First Column
     ("WFF", Entry::Finish(Action::Command("view.freezePanes"))),    // Excel: Freeze Panes
