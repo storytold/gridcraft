@@ -403,6 +403,9 @@ mod tests {
     #[test]
     fn the_calls_that_reach_another_process_have_rules() {
         let rules = main_rules(4242).unwrap();
+        // `fcntl`'s notification commands: naming the owner to notify, both ways, choosing its
+        // signal, and the switch itself.
+        assert_eq!(rules.get(&libc::SYS_fcntl).map(Vec::len), Some(4), "the asynchronous-notification commands");
         for nr in [
             libc::SYS_kill,
             libc::SYS_tkill,

@@ -232,6 +232,15 @@ mod tests {
         }
     }
 
+    /// Unconfined, the notification probe reports what the system allows; confined, the launch
+    /// check needs it `Denied`. Either way it comes out of the same three calls, so this proves
+    /// the probe runs and classifies rather than failing outright.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_notification_probe_classifies() {
+        assert!(matches!(async_probe(), Outcome::Allowed(_)), "unconfined the switch can be set");
+    }
+
     #[test]
     fn the_checks_on_the_canary_change_nothing_where_they_are_allowed() {
         let canary = crate::Canary::create().unwrap();
