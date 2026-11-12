@@ -99,6 +99,13 @@ amplitude-one constraint for exponential/power.
 
 ## Validation status and pending work
 
+On 2026-11-12, the current reconciliation with main `a60db4f1` passed local
+`cargo test -p gridcraft-engine --lib` (969 tests), the regression UI integration
+tests (3 tests), and the focused dialog unit test (1 test). Formatting and
+`git diff --check` also pass. `cargo xtask ci`, WASM validation and Windows/Excel
+checks have not been rerun on this candidate; the Windows results below remain
+historical evidence for the earlier producer checkout only.
+
 On 2026-11-05, the reconciled candidate at main `c4029538` passed all ten
 `cargo xtask ci` gates on Fedora 45: i18n report, formatting, Clippy, tests,
 doctests, assets, dependency layering, WASM, parity and keytips. The run used

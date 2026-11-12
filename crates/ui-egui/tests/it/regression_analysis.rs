@@ -55,3 +55,46 @@ fn power_model_survives_shared_refedit_collapse_and_control_confirmation() {
     assert!((number("B18") - 2.0).abs() < 1e-10);
     assert_eq!(sheet.value(CellRef::parse("A3").unwrap()), gridcraft_engine::core::Value::text("Regression Statistics (ln(Y) domain)"));
 }
+
+#[test]
+fn regression_model_popup_keeps_enter_and_escape_inside_the_popup() {
+    for key in [egui::Key::Enter, egui::Key::Escape] {
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 1000.0)).build_ui_state(
+            |ui, app: &mut SheetApp| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            },
+            crate::common::app(session),
+        );
+        h.run_steps(4);
+        h.state_mut().open_dialog("analysisToolPak", json!({"tool":"regression"}));
+        h.run_steps(4);
+        h.get_by_role(egui::accesskit::Role::ComboBox).click();
+        h.run_steps(2);
+        h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+
+        let dialog = h.state().dialog.as_ref().unwrap_or_else(|| panic!("{key:?} must not confirm or close the dialog"));
+        assert_eq!(dialog.values.get("tool").and_then(serde_json::Value::as_str), Some("regression"));
+    }
+}
+
+#[test]
+fn rendering_regression_form_preserves_an_invalid_non_string_model() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 1000.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        crate::common::app(session),
+    );
+    h.run_steps(4);
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool":"regression"}));
+    h.state_mut().dialog.as_mut().unwrap().values.insert("model".into(), serde_json::Value::Null);
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values.get("model"), Some(&serde_json::Value::Null));
+}

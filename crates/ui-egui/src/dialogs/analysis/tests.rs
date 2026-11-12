@@ -26,3 +26,20 @@ fn regression_models_use_upstream_references_and_independent_options() {
     assert_eq!(params["labels"], true);
     assert_eq!(params["constantZero"], true);
 }
+
+#[test]
+fn regression_model_keeps_a_non_string_value_until_an_option_is_selected() {
+    let mut defaults = toolpak_defaults("A1:A5", "regression");
+    defaults["model"] = Json::Null;
+    let fields = toolpak_fields("regression", &defaults);
+    assert!(matches!(fields.get(3), Some(Field::Choice { key: "model", .. })));
+
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    let mut app = SheetApp::new(session, Default::default());
+    app.open_dialog("analysisToolPak", json!({"tool":"regression", "model":null}));
+    let d = app.dialog.as_mut().unwrap();
+    d.set_value("model", Json::Null);
+    assert_eq!(d.values.get("model"), Some(&Json::Null));
+    assert_eq!(build_params(d)["model"], Json::Null);
+}

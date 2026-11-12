@@ -1,5 +1,5 @@
 use super::ref_edit::{RefLabel, SHEET_DELETED, current_area_ref, end_pick, home_sheet_deleted, ref_edit};
-use super::show::{build_params, form_fields, ok_cancel};
+use super::show::{build_params, form_fields, ok_cancel, ok_cancel_with_enter};
 use super::{Dialog, Field, Json, Map, SheetApp, json, vec2};
 
 #[cfg(test)]
@@ -292,18 +292,25 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
             ui.label(egui::RichText::new(lang.tr("Regression method")).strong());
             if let Some(Field::Choice { key, label, options }) = fields.get(3) {
                 let label = ui.label(lang.tr(label));
-                let mut selected = d.values.get(*key).and_then(Json::as_str).unwrap_or("linear").to_string();
-                let text = options.iter().find(|(value, _)| *value == selected).map(|(_, label)| lang.tr(label)).unwrap_or("");
-                craft_ui::ComboBox::from_id_salt("regression-model")
+                let model_id = ui.make_persistent_id("regression-model");
+                let popup_was_open = craft_ui::ComboBox::is_open(ui.ctx(), model_id);
+                let mut selected = d.values.get(*key).cloned().unwrap_or_else(|| json!("linear"));
+                let text = selected
+                    .as_str()
+                    .and_then(|selected| options.iter().find(|(value, _)| *value == selected))
+                    .map(|(_, label)| lang.tr(label))
+                    .unwrap_or("");
+                let response = craft_ui::ComboBox::from_id_salt("regression-model")
                     .selected_text(text)
                     .show_ui(ui, |ui| {
                         for (value, label) in options {
-                            ui.selectable_value(&mut selected, (*value).into(), lang.tr(label));
+                            ui.selectable_value(&mut selected, json!(*value), lang.tr(label));
                         }
                     })
                     .response
                     .labelled_by(label.id);
-                d.values.insert((*key).into(), json!(selected));
+                d.popup_owns_shortcuts |= popup_was_open || response.has_focus();
+                d.values.insert((*key).into(), selected);
             }
             ui.separator();
             ui.label(egui::RichText::new(lang.tr("Regression options")).strong());
@@ -349,7 +356,7 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
             }
         });
     }
-    ok_cancel(ui, confirm, open);
+    ok_cancel_with_enter(ui, confirm, open, !d.popup_owns_shortcuts);
 }
 
 /// The Solver Options fields: (key, label, default).
