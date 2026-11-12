@@ -362,6 +362,17 @@ fn percentiles() {
     }
     close_tol(ev("PERCENTRANK.INC", vec![k.clone(), n(2.123_456_789), n(14.0)]), 0.187_242_798_166_66, 1e-15);
     close(ev("PERCENTRANK.EXC", vec![k, n(2.123_456_789), n(16.0)]), 0.265_432_098_625);
+    // Between two values Excel interpolates from the last copy of the lower one.
+    let d = c(&[1.0, 1.0, 2.0]);
+    close(ev("PERCENTRANK.INC", vec![d.clone(), n(1.5), n(6.0)]), 0.75);
+    close(ev("PERCENTRANK", vec![d.clone(), n(1.5), n(6.0)]), 0.75);
+    close(ev("PERCENTRANK.EXC", vec![d.clone(), n(1.5), n(6.0)]), 0.625);
+    // An exact match still takes the rank of its first copy.
+    close(ev("PERCENTRANK.INC", vec![d.clone(), n(1.0)]), 0.0);
+    close(ev("PERCENTRANK.EXC", vec![d, n(1.0)]), 0.25);
+    let d4 = c(&[1.0, 1.0, 2.0, 3.0]);
+    close(ev("PERCENTRANK.INC", vec![d4.clone(), n(1.5), n(6.0)]), 0.5);
+    close(ev("PERCENTRANK.EXC", vec![d4, n(1.5), n(6.0)]), 0.5);
 }
 
 #[test]
