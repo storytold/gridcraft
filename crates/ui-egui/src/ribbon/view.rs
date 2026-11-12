@@ -269,18 +269,21 @@ fn custom_views(app: &mut SheetApp, ui: &mut Ui) {
             ui.label(lang.tr("No saved views"));
             return;
         }
-        for name in views {
-            ui.horizontal(|ui| {
-                if ui.button(&name).clicked() {
-                    act(app, "view.customViews", json!({"show": name}));
-                    app.grid.ensure_visible = true;
-                    ui.close();
-                }
-                if ui.small_button(lang.tr("Delete")).clicked() {
-                    act(app, "view.customViews", json!({"delete": name}));
-                }
-            });
-        }
+        // A long saved-view list exceeds the window: cap the popup and scroll the rows.
+        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+            for name in views {
+                ui.horizontal(|ui| {
+                    if ui.button(&name).clicked() {
+                        act(app, "view.customViews", json!({"show": name}));
+                        app.grid.ensure_visible = true;
+                        ui.close();
+                    }
+                    if ui.small_button(lang.tr("Delete")).clicked() {
+                        act(app, "view.customViews", json!({"delete": name}));
+                    }
+                });
+            }
+        });
     });
 }
 

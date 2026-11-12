@@ -155,14 +155,21 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         // walking the tab's groups from left to right; Home's measured breakpoints
                         // use the window's client width, as Excel's were measured. A keytip names
                         // the group it targets, so only that group takes a natural form first.
-                        let keytip_group =
-                            app.ui.keytip_invoke.and_then(gridcraft_engine::find_command).and_then(|command| command.menu.get(1).copied());
+                        // UI-only control ids (chart subtype pickers) are not catalog commands;
+                        // they live in Insert › Charts, so force that group by prefix match.
+                        let keytip_group = app.ui.keytip_invoke.and_then(|id| {
+                            gridcraft_engine::find_command(id)
+                                .and_then(|command| command.menu.get(1).copied())
+                                .or_else(|| id.strip_prefix("insert.chart.").map(|_| "Charts"))
+                        });
                         // Prefix-driven menus (Borders at HB): a Continue entry sets no invoke,
                         // but the menu renders inside its group's body, so that group must be
                         // natural while the prefix waits for the next key.
                         let prefix_group = match app.keytips.prefix() {
-                            // Borders is the only prefix-driven menu on the ribbon: HB opens its
-                            // popup inside the Font body without setting keytip_invoke.
+                            // Paste (HV, legacy E) and Format (HO, legacy OC) open their popups
+                            // inside compact Clipboard/Cells bodies without setting keytip_invoke.
+                            Some("HV" | "E") => Some("Clipboard"),
+                            Some("HO" | "OC") => Some("Cells"),
                             Some(prefix) => keytip_table::menu_owner(prefix, "home.borders"),
                             None => None,
                         };

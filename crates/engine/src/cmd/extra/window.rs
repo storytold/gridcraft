@@ -140,6 +140,19 @@ pub(crate) fn retarget_views_on_rename(wb: &mut Workbook, old: &str, new: &str) 
     }
 }
 
+/// Drop the custom views saved on a deleted sheet, inside the deletion's edit so undo
+/// restores them. A later sheet reusing the name must not inherit the old sheet's views.
+pub(crate) fn drop_views_on_sheet(wb: &mut Workbook, sheet: &str) {
+    let mut views = stash_map(wb, VIEWS_NAME);
+    let before = views.as_object().map(|m| m.len()).unwrap_or(0);
+    if let Some(map) = views.as_object_mut() {
+        map.retain(|_, view| view.get("sheet").and_then(Json::as_str) != Some(sheet));
+    }
+    if views.as_object().map(|m| m.len()).unwrap_or(0) != before {
+        stash_set(wb, VIEWS_NAME, &views);
+    }
+}
+
 pub(super) fn split(s: &mut Session, _: &Json) -> Result<Json> {
     let has = s.doc()?.wb.active().is_some_and(|sh| sh.freeze.is_some());
     if has { s.execute("view.unfreezePanes", json!({})) } else { s.execute("view.freezePanes", json!({})) }

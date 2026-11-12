@@ -293,14 +293,20 @@ fn break_level(breaks: &[(f32, u8)], client: f32, previous: u8) -> (u8, u8) {
         }
         return (level_at(breaks, slot), slot);
     }
-    let (boundary, level) = if let Some((min, _)) = breaks.get(previous as usize) {
-        // A narrower row: the card must clearly leave the row it is on. The compact slot past
-        // the table has no boundary of its own, so leaving it re-enters the narrowest row.
-        (*min, level_at(breaks, raw))
-    } else {
-        (breaks[breaks.len() - 1].0, level_at(breaks, raw))
-    };
-    if client < boundary - SECTION_HYST { (level, raw) } else { (level_at(breaks, previous), previous) }
+    // A narrower row: the card must clearly leave each row it passes, stepping like the
+    // widening branch so resize history cannot change the layout at the same width (Font
+    // jumping 1280→928 pt must cross 960−HYST and settle compact, not rest on the
+    // three-row layout it happened to pass through).
+    let mut slot = previous;
+    while slot < raw {
+        let boundary = breaks.get(slot as usize).map_or(breaks[breaks.len() - 1].0, |(min, _)| *min);
+        if client < boundary - SECTION_HYST {
+            slot += 1;
+        } else {
+            break;
+        }
+    }
+    if slot == raw { (level_at(breaks, raw), raw) } else { (level_at(breaks, slot), slot) }
 }
 
 /// Runs `f` on the plan of the tab the ribbon is drawing.
@@ -329,11 +335,20 @@ impl RibbonSections {
         // A click dismisses whatever a keytip opened, and Escape does the same; the tab settles
         // back the frame after, once the click has reached the popup's own widgets. egui
         // registers a click on release, so a press inside an open popup must not end the layout
-        // before the release arrives, or the popup's anchor would move out from under it.
+        // before the release arrives, or the popup's anchor would move out from under it. A
+        // press inside the focused size field never ends it either: moving the caret must not
+        // collapse the group out from under the editor.
         let any_popup = egui::Popup::is_any_open(ui.ctx());
         // Read focus before `data_mut`: `ctx.memory` must not run inside that closure.
         let size_typing = ui.ctx().memory(|m| m.has_focus(super::home::font_size_field()));
-        let dismiss = ui.input(|i| i.key_pressed(egui::Key::Escape) || (i.pointer.any_pressed() && !any_popup));
+        let size_press = size_typing
+            && ui.input(|i| {
+                i.pointer.any_pressed()
+                    && i.pointer
+                        .interact_pos()
+                        .is_some_and(|p| ui.ctx().read_response(super::home::font_size_field()).is_some_and(|r| r.rect.contains(p)))
+            });
+        let dismiss = ui.input(|i| i.key_pressed(egui::Key::Escape) || (i.pointer.any_pressed() && !any_popup && !size_press));
         ui.ctx().data_mut(|d| {
             d.insert_temp(current_sections_id(), id);
             let sections = d.get_temp_mut_or_default::<TabSections>(id);
@@ -869,5 +884,36 @@ mod checkbox_on_tests {
         // Key tip: the bool still holds the current setting, so toggle it.
         assert!(checkbox_on(false, false));
         assert!(!checkbox_on(false, true));
+    }
+}
+
+#[cfg(test)]
+mod break_level_tests {
+    use super::*;
+
+    /// Font's measured table, widest first: 2 from 1280, 3 from 929, else compact.
+    fn font() -> Vec<(f32, u8)> {
+        vec![(1280.0, 2), (929.0, 3)]
+    }
+
+    #[test]
+    fn narrowing_steps_through_each_crossed_row() {
+        // A jump 1280 → 928 walks the 1280 boundary then rests on the 929 row: 928 is
+        // inside its dead band. Exactly the same as arriving through a 960-pt frame,
+        // so history cannot change the layout at the same width.
+        assert_eq!(break_level(&font(), 928.0, 0), (3, 1));
+        assert_eq!(break_level(&font(), 960.0, 0), (3, 1));
+        assert_eq!(break_level(&font(), 928.0, 1), (3, 1));
+        // Past the dead band the row is left either way.
+        assert_eq!(break_level(&font(), 915.0, 0), (SECTION_COMPACT, 2));
+        assert_eq!(break_level(&font(), 915.0, 1), (SECTION_COMPACT, 2));
+    }
+
+    #[test]
+    fn a_narrow_row_holds_until_clearly_left() {
+        // 947 is 13 pt below 960... inside the dead band below 929: the form holds.
+        assert_eq!(break_level(&font(), 947.0, 1), (3, 1));
+        // Below 929 − 12 the row is left.
+        assert_eq!(break_level(&font(), 915.0, 1), (SECTION_COMPACT, 2));
     }
 }

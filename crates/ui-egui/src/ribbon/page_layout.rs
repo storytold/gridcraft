@@ -133,7 +133,10 @@ fn scale_to_fit(app: &mut SheetApp, ui: &mut Ui) {
             let caption = ui.label(egui::RichText::new(app.ui.language.tr("Scale:")).small());
             let mut percent = scale as f64;
             let resp = ui
-                .add_sized([54.0, 18.0], egui::DragValue::new(&mut percent).range(10.0..=400.0).max_decimals(0).suffix("%"))
+                .add_sized(
+                    [54.0, 18.0],
+                    egui::DragValue::new(&mut percent).range(10.0..=400.0).max_decimals(0).update_while_editing(false).suffix("%"),
+                )
                 .labelled_by(caption.id);
             if resp.changed() {
                 act(app, "pageLayout.scaleToFit", json!({"scale": percent.round()}));
