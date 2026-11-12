@@ -43,6 +43,10 @@ pub struct Ctx<'a> {
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
     /// The code of the workbook's Python cells, from its Python part.
     pub python: crate::python_part::ScriptsIn,
+    /// The parts `[Content_Types].xml` declares as InkML, read at most once per package: one read
+    /// spends one part allowance, but a workbook with many drawings must not spend it once per
+    /// drawing and run the package budget dry before its later parts are read.
+    pub inkml_parts: Option<Arc<HashSet<String>>>,
 }
 
 impl Ctx<'_> {
@@ -261,6 +265,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         shared_formula_bytes: 0,
         known_function,
         python: Default::default(),
+        inkml_parts: None,
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());

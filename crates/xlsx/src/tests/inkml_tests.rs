@@ -472,6 +472,33 @@ fn a_wildcard_keeps_the_second_difference_order_too() {
 }
 
 #[test]
+fn each_trace_reads_its_own_brush_not_the_first() {
+    // A second brush defined after the first, with the part's second trace naming it: the red
+    // second trace must not take the blue first brush.
+    let red = r##"<inkml:brush xml:id="br1"><inkml:brushProperty name="width" value="0.05" units="cm"/><inkml:brushProperty name="height" value="0.05" units="cm"/><inkml:brushProperty name="color" value="#FF0000"/></inkml:brush>"##;
+    let second = r##"<inkml:trace contextRef="#ctx0" brushRef="#br1">!500 !500</inkml:trace>"##;
+    let markup = format!("{red}{second}");
+    let (wb, _) = read(&package_with("!0 !0", false, PEN_PROPS, true, true, true, Extra { extra_markup: Some(&markup), ..Extra::default() }));
+    let shapes = &wb.sheets[0].shapes;
+    assert_eq!(shapes.len(), 2, "{shapes:?}");
+    assert_eq!(thousandths(&shapes[0]), vec![[0, 0]]);
+    assert_eq!(thousandths(&shapes[1]), vec![[500, 500]]);
+    assert_eq!(shapes[0].line, Color::Rgb(0x1F5FC9), "the first trace keeps its brush");
+    assert_eq!(shapes[1].line, Color::Rgb(0xFF0000), "the second trace keeps its own brush");
+}
+
+#[test]
+fn a_trace_inherits_its_groups_context() {
+    // The group names the context; the trace inside names none. Inheritance resolves it, so the
+    // part reads as a stroke rather than falling back to the picture.
+    let markup = "<inkml:traceGroup contextRef=\"#ctx0\"><inkml:trace brushRef=\"#br0\">!100 !200</inkml:trace></inkml:traceGroup>";
+    let (wb, _) = read(&package_with("!0 !0", false, PEN_PROPS, true, true, true, Extra { extra_markup: Some(markup), ..Extra::default() }));
+    let shapes = &wb.sheets[0].shapes;
+    assert_eq!(shapes.len(), 2, "{shapes:?}");
+    assert_eq!(thousandths(&shapes[1]), vec![[100, 200]]);
+}
+
+#[test]
 fn a_damaged_ink_part_costs_only_its_own_allowance() {
     // The ink entry fails partway (a bad CRC) inside an intact archive. The read is optional, so
     // the failure is charged to the ink part and the fallback picture still opens.
