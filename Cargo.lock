@@ -915,7 +915,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=bb57d422d0bc842cbde430
 [[package]]
 name = "craft-csv"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=119415f46f601e20b9bc6b1b4d6979ceda86d88e#119415f46f601e20b9bc6b1b4d6979ceda86d88e"
+source = "git+https://github.com/storytold/craft-libs?rev=bb57d422d0bc842cbde430955825553ab7b976f4#bb57d422d0bc842cbde430955825553ab7b976f4"
 dependencies = [
  "thiserror 2.0.21",
 ]
