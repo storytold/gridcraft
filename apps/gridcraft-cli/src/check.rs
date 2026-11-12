@@ -214,7 +214,7 @@ pub fn main(args: &[String]) -> ExitCode {
             Err(_) => return usage(format!("--max-report needs a whole number, not `{n}`")),
         }
     }
-    let Discovery { files, failures: mut reports } = collect_inputs(&a.positional);
+    let Discovery { files, failures: mut reports, .. } = collect_inputs(&a.positional);
     reports.extend(files.iter().map(|p| {
         let path = p.to_string_lossy().into_owned();
         match gridcraft_engine::io::read_file(&path) {
@@ -233,6 +233,9 @@ pub fn main(args: &[String]) -> ExitCode {
 #[derive(Default)]
 struct Discovery {
     files: Vec<PathBuf>,
+    /// Identity (dev+inode) of each collected file, so a rescan reached by a shallower path doesn't add it twice.
+    #[cfg(unix)]
+    file_ids: std::collections::HashSet<(u64, u64)>,
     failures: Vec<FileReport>,
 }
 
@@ -257,11 +260,11 @@ impl Discovery {
 /// (`~$…`) are skipped.
 fn collect_inputs(inputs: &[String]) -> Discovery {
     let mut out = Discovery::default();
-    let mut seen = HashSet::new();
+    let mut seen = std::collections::HashMap::new();
     for i in inputs {
         let p = PathBuf::from(i);
         if p.is_dir() {
-            if !walk(&p, 0, &mut out, &mut seen) {
+            if !walk(&p, 0, false, &mut out, &mut seen) {
                 break;
             }
         } else if !out.add_file(p) {
@@ -277,24 +280,36 @@ fn collect_inputs(inputs: &[String]) -> Discovery {
     out
 }
 
-/// Returns false only when the global file budget stops traversal.
-fn walk(dir: &Path, depth: usize, out: &mut Discovery, seen: &mut HashSet<u64>) -> bool {
-    // Non-Unix targets keep this shared recursive signature, while their traversal relies on the
-    // depth and file limits because directory identity is only available through Unix metadata.
+/// Returns false only when the global file budget stops traversal. `seen` holds the shallowest
+/// depth each directory was scanned from; `rescan` is set below a directory reached again from a
+/// shallower path (its depth-limited subtree may now fit), where already collected files are skipped.
+#[cfg_attr(not(unix), allow(unused_mut))]
+fn walk(dir: &Path, depth: usize, mut rescan: bool, out: &mut Discovery, seen: &mut std::collections::HashMap<(u64, u64), usize>) -> bool {
+    // Directory identities are only available on Unix; elsewhere these arguments
+    // are forwarded unchanged while the depth and file limits bound traversal.
     #[cfg(not(unix))]
-    let _ = seen;
-
-    // A directory is visited once by identity (dev+inode on unix): several links to the same
-    // directory are aliases, not exponential branches of the scan. Other platforms keep the
-    // depth cap only.
+    {
+        let _ = seen;
+        let _ = rescan;
+    }
+    // A directory is visited once by identity (dev+inode on unix) unless reached from a shallower
+    // path: several links to the same directory are aliases, not exponential branches of the scan
+    // (each directory is scanned at most MAX_DEPTH + 1 times). Other platforms keep the depth cap only.
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-        if let Ok(m) = std::fs::metadata(dir)
-            && let Some(id) = m.dev().checked_mul(1 << 60).and_then(|d| d.checked_add(m.ino()))
-            && !seen.insert(id)
-        {
-            return true;
+        if let Ok(m) = std::fs::metadata(dir) {
+            let identity = (m.dev(), m.ino());
+            // A directory past the depth limit is not scanned, so it is not recorded: asked for
+            // by name later, it is walked from depth 0.
+            match seen.get(&identity) {
+                Some(&shallowest) if shallowest <= depth => return true,
+                Some(_) => rescan = true,
+                None => {}
+            }
+            if depth <= MAX_DEPTH {
+                seen.insert(identity, depth);
+            }
         }
     }
     if depth > MAX_DEPTH {
@@ -329,13 +344,20 @@ fn walk(dir: &Path, depth: usize, out: &mut Discovery, seen: &mut HashSet<u64>) 
             }
         };
         if metadata.is_dir() {
-            if !walk(&p, depth + 1, out, seen) {
+            if !walk(&p, depth + 1, rescan, out, seen) {
                 return false;
             }
-        } else if p.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("xlsx") || e.eq_ignore_ascii_case("xlsm"))
-            && !out.add_file(p)
-        {
-            return false;
+        } else if p.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("xlsx") || e.eq_ignore_ascii_case("xlsm")) {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt as _;
+                if !out.file_ids.insert((metadata.dev(), metadata.ino())) && rescan {
+                    continue;
+                }
+            }
+            if !out.add_file(p) {
+                return false;
+            }
         }
     }
     true
