@@ -118,7 +118,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("insert.picture", "Insert", "Illustrations", "Pictures"),
     ("insert.shape", "Insert", "Illustrations", "Shapes"),
     ("insert.icons", "Insert", "Illustrations", "Icons"),
-    ("insert.smartArt", "Insert", "Illustrations", "SmartArt"),
+    ("insert.smartArt", "Insert", "Illustrations", "Diagram"),
     ("insert.screenshot", "Insert", "Illustrations", "Screenshot"),
     ("insert.recommendedCharts", "Insert", "Charts", "Recommended Charts"),
     ("insert.chart", "Insert", "Charts", "Charts"),
@@ -131,7 +131,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("review.newComment", "Insert", "Comments", "Comment"),
     ("insert.textBox", "Insert", "Text", "Text Box"),
     ("pageLayout.headerFooter", "Insert", "Text", "Header & Footer"),
-    ("insert.wordArt", "Insert", "Text", "WordArt"),
+    ("insert.wordArt", "Insert", "Text", "Decorative Text"),
     ("insert.signatureLine", "Insert", "Text", "Signature Line"),
     ("insert.object", "Insert", "Text", "Object"),
     ("insert.equation", "Insert", "Symbols", "Equation"),
@@ -341,4 +341,16 @@ pub fn parity() -> (usize, usize) {
     let ids = ids();
     let done = ids.iter().filter(|id| crate::find_command(id).is_some()).count();
     (done, ids.len())
+}
+
+#[cfg(test)]
+mod feature_name_tests {
+    #[test]
+    fn own_feature_labels_keep_command_ids() {
+        for (id, expected) in [("insert.smartArt", "Diagram"), ("insert.wordArt", "Decorative Text")] {
+            let entries: Vec<_> = super::CATALOG.iter().filter(|entry| entry.0 == id).collect();
+            assert_eq!(entries.len(), 1, "{id} appears once");
+            assert_eq!(entries[0].3, expected);
+        }
+    }
 }
