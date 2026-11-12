@@ -249,6 +249,11 @@ fn a_file_read_is_bounded_before_a_texture_import_parses_it() {
     std::fs::write(&path, b"1234").unwrap();
     let p = path.to_string_lossy().to_string();
     assert_eq!(crate::io::read_file_limited(&p, 4).unwrap(), b"1234");
+    assert_eq!(
+        crate::io::read_file_limited(&p, u64::MAX).unwrap(),
+        b"1234",
+        "a u64::MAX cap never overflows the sentinel byte"
+    );
     assert!(crate::io::read_file_limited(&p, 3).is_err(), "a file over the cap is refused before it is read whole");
     std::fs::remove_dir_all(&dir).ok();
 }

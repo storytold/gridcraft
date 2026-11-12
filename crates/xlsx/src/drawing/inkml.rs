@@ -90,13 +90,14 @@ pub(super) fn ink_parts(cx: &mut Ctx<'_>) -> Arc<HashSet<String>> {
 /// markup cannot be used; the caller warns and falls back to the picture.
 pub(super) fn read(
     cx: &mut Ctx<'_>,
+    drawing: &El,
     rels: &[Rel],
     content_part: &El,
     sheet: &Sheet,
     anchor: gridcraft_model::Anchor,
     declared: &HashSet<String>,
 ) -> Vec<Shape> {
-    read_traces(cx, rels, content_part, sheet, anchor, declared).unwrap_or_default()
+    read_traces(cx, drawing, rels, content_part, sheet, anchor, declared).unwrap_or_default()
 }
 
 /// Every trace below `el` in document order: a bare `<trace>` and the traces inside nested
@@ -135,6 +136,7 @@ fn traces(root: &El) -> Option<Vec<&El>> {
 /// part is missing, undeclared or unreadable, so the caller falls back to the picture.
 fn read_traces(
     cx: &mut Ctx<'_>,
+    drawing: &El,
     rels: &[Rel],
     content_part: &El,
     sheet: &Sheet,
@@ -161,10 +163,17 @@ fn read_traces(
     let anchor = anchor_for(content_part, anchor, sheet)?;
     let width_px = (style.width_cm * PX_PER_CM as f32).clamp(1.0, 255.0).round();
     let fill = Color::Rgb((width_px as u32) << 16);
-    // The part's GUID names the first stroke. Later traces mint ids reserved across the whole
-    // workbook (`cx.ink_keys`), so two parts never hand out the same new id. `insert` is false
-    // when an earlier part already holds this GUID (a copied sheet, another tool's file): the
-    // key is then not reused, and this part's first trace mints a free one instead.
+    // workbook (`cx.ink_keys`), so two parts never hand out the same new id. The GUIDs of the
+    // *other* parts in this drawing are reserved first: an unkeyed trace in an earlier-read part
+    // must not mint the GUID of a part read later, or both strokes would share one key. The
+    // reservation is lifted for this part's own GUID before the `insert` below, so the part still
+    // claims it; the `insert` is false only when an earlier part already holds it (a copied
+    // sheet, another tool's file): the key is then not reused, and this part's first trace mints
+    // a free one instead.
+    reserve_other_part_guids(drawing, content_part, &mut cx.ink_keys);
+    if let Some(own) = creation_id_of(content_part) {
+        cx.ink_keys.remove(&own);
+    }
     let part_key = creation_id_of(content_part).filter(|key| cx.ink_keys.insert(key.clone()));
     let mut total = 0usize;
     let mut shapes = Vec::new();
@@ -235,6 +244,27 @@ fn creation_id_of(content_part: &El) -> Option<String> {
     let id = content_part.path(&["nvContentPartPr", "cNvPr", "extLst", "ext", "creationId"])?.attr("id")?;
     // ST_Guid or nothing: a malformed id is not an identity, and must never be written back.
     gridcraft_model::ink_guid(id)
+}
+
+/// Reserves the GUIDs of the *other* parts in this drawing before any trace mints a key, so an
+/// unkeyed trace in an earlier-read part cannot mint the GUID a later-read part already carries.
+/// Parts are read in document order, but their GUIDs are all visible up front; the part's own
+/// GUID stays for the `insert` at the read site, which treats an already-held GUID (a copied
+/// sheet, another tool's file) as absent. Parts are matched by their relationship id.
+fn reserve_other_part_guids(drawing: &El, content_part: &El, reserved: &mut HashSet<String>) {
+    let here = content_part.attr("id");
+    for anchor in &drawing.children {
+        for obj in &anchor.children {
+            let Some(choice) = (obj.name == "AlternateContent").then(|| obj.child("Choice")).flatten() else { continue };
+            let Some(part) = choice.child("contentPart") else { continue };
+            if part.attr("id") == here {
+                continue;
+            }
+            if let Some(key) = creation_id_of(part) {
+                reserved.insert(key);
+            }
+        }
+    }
 }
 
 /// One channel's difference-decoding state: its last value, its last first difference, and the

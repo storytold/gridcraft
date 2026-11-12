@@ -52,13 +52,16 @@ struct Tier {
     /// `String` lets a frame look up by a borrowed id instead of cloning one per stroke.
     entries: HashMap<String, Entry>,
     bytes: usize,
-}
+    /// The upload a texture past the hard ceiling paints with: one stable 1×1 handle, so a frame
+    /// that shows more patterns than the ceiling can keep never decodes the overflow again on the
+    /// next repaint. `None` until the first overflow needs it.
+    fallback: Option<TextureHandle>,
 
 impl Tier {
     /// A tier that decodes at `side` and drops its least recently drawn uploads once `max_items`
     /// entries or `max_bytes` bytes would be exceeded.
     fn new(side: u32, max_bytes: usize, max_items: usize) -> Self {
-        Self { side, max_bytes, max_items, entries: HashMap::new(), bytes: 0 }
+        Self { side, max_bytes, max_items, entries: HashMap::new(), bytes: 0, fallback: None }
     }
 
     /// The upload for `key` when this tier holds it, stamped as drawn this frame.
@@ -84,10 +87,10 @@ impl Tier {
             self.remove(&oldest);
         }
         // The hard bound: even a frame painting more patterns than it holds never grows the tier
-        // past twice the budget, and only then are patterns it is painting dropped.
-        while self.entries.len() >= self.max_items.saturating_mul(2) || self.bytes.saturating_add(bytes) > self.max_bytes.saturating_mul(2) {
-            let Some(oldest) = self.oldest_drawn_before(u64::MAX) else { break };
-            self.remove(&oldest);
+        // past twice the budget. Past it the texture paints with the tier's stable fallback
+        // instead of evicting a framed upload and decoding it again on the next repaint.
+        if self.entries.len() >= self.max_items.saturating_mul(2) || self.bytes.saturating_add(bytes) > self.max_bytes.saturating_mul(2) {
+            return self.fallback(ctx);
         }
         self.bytes = self.bytes.saturating_add(bytes);
         self.entries.insert(key.to_string(), Entry { texture: texture.clone(), bytes, used: frame });
@@ -105,6 +108,16 @@ impl Tier {
         if let Some(entry) = self.entries.remove(key) {
             self.bytes = self.bytes.saturating_sub(entry.bytes);
         }
+    }
+
+    /// The tier's stable overflow upload: one 1×1 handle minted once, so every texture past the
+    /// hard ceiling paints the same handle and no frame decodes the overflow again.
+    fn fallback(&mut self, ctx: &egui::Context) -> Option<TextureHandle> {
+        if self.fallback.is_none() {
+            let image = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, 255]));
+            self.fallback = Some(upload(ctx, &image));
+        }
+        self.fallback.clone()
     }
 
     /// The upload for `key`, decoded at this tier's [`Self::side`] on first use and kept until the
@@ -522,6 +535,32 @@ mod tests {
             assert!(tier.texture(&ctx, &t.id, &t.data).is_some());
         }
         assert_eq!(keys(&tier), first, "the repaint kept every upload the frame drew");
+    }
+
+    /// Past the hard ceiling a texture paints with the tier's stable fallback: the same handle on
+    /// every repaint, so the frame never decodes the overflow again.
+    #[test]
+    fn a_texture_past_the_hard_ceiling_keeps_a_stable_fallback_across_repaints() {
+        let ctx = egui::Context::default();
+        let mut tier = Tier::new(THUMB_SIDE, usize::MAX, 2);
+        advance(&ctx);
+        let textures: Vec<InkTexture> = (0..6).map(|i| distinct(32, 32, i)).collect();
+        // Six textures in one frame, past the hard bound of four: the overflow paints the fallback.
+        let mut first: Vec<Option<egui::TextureId>> = Vec::new();
+        for t in &textures {
+            first.push(tier.texture(&ctx, &t.id, &t.data).map(|h| h.id()));
+        }
+        assert_eq!(tier.entries.len(), 4, "the hard ceiling still bounds one frame: {}", tier.entries.len());
+        let fallback = tier.fallback.clone().expect("the overflow mints the fallback");
+        assert!(first.contains(&Some(fallback.id())), "the overflow paints the fallback");
+        advance(&ctx);
+        let mut second: Vec<Option<egui::TextureId>> = Vec::new();
+        for t in &textures {
+            second.push(tier.texture(&ctx, &t.id, &t.data).map(|h| h.id()));
+        }
+        assert_eq!(first, second, "the repaint resolves every texture to its stable handle");
+        assert_eq!(tier.fallback.clone().map(|h| h.id()), Some(fallback.id()), "the fallback is minted once");
+        assert!(tier.entries.len() <= 4, "repaints never grow the tier past the ceiling");
     }
 
     /// A new pattern trims a tier that overshot back towards the budget.

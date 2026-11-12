@@ -173,7 +173,7 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
             // Ink parts are only trusted when `[Content_Types].xml` declares them as InkML; the
             // set is read once per package, and only by a drawing that actually has one.
             let parts = inkml::ink_parts(cx);
-            let strokes = inkml::read(cx, &rels, cp, sheet, anchor, &parts);
+            let strokes = inkml::read(cx, &x, &rels, cp, sheet, anchor, &parts);
             if !strokes.is_empty() {
                 for s in strokes {
                     let id = cx.next_object_id();

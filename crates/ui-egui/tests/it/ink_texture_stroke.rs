@@ -171,3 +171,24 @@ fn a_textured_highlighter_commits_as_wide_as_its_preview() {
     assert_eq!(extents.len(), 2, "both strokes are painted as textured meshes");
     assert!((extents[1] / extents[0] - 2.0).abs() < 0.01, "a highlighter paints at its height, twice the pen width: {extents:?}");
 }
+
+/// A textured pencil commits as narrow as its preview, not at the full pen width.
+#[test]
+fn a_textured_pencil_commits_as_narrow_as_its_preview() {
+    // The preview measures a pencil at 0.8 of its width; the committed textured branch must use
+    // the same across width, or the image widens on release.
+    let mut h = harness();
+    let id = h
+        .state_mut()
+        .run("draw.textureImport", json!({"name": "tiles.png", "base64": gridcraft_engine::io::base64_encode(&png(16, 16))}))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    h.state_mut().run("draw.stroke", json!({"points": [[80, 80], [280, 80]], "texture": id, "width": 10, "brush": "pen"})).unwrap();
+    h.state_mut().run("draw.stroke", json!({"points": [[80, 160], [280, 160]], "texture": id, "width": 10, "brush": "pencil"})).unwrap();
+    h.run_steps(4);
+    let extents = textured_mesh_extents(&h);
+    assert_eq!(extents.len(), 2, "both strokes are painted as textured meshes");
+    assert!((extents[1] / extents[0] - 0.8).abs() < 0.01, "a pencil paints at 0.8 of the pen width: {extents:?}");
+}

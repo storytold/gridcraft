@@ -677,6 +677,83 @@ fn a_repeated_part_guid_is_not_reused_for_a_second_stroke() {
     assert_ne!(keys[1].as_str(), GUIDE, "the second trace mints a free key: {keys:?}");
 }
 
+/// An unkeyed trace in an earlier part never mints the GUID a later part carries: every part GUID
+/// in the drawing is reserved before any trace mints a key, so the earlier trace mints a free key
+/// and the later part keeps its own GUID for the hidden sheet's extras lookup.
+#[test]
+fn an_unkeyed_trace_never_mints_a_later_parts_guid() {
+    // Two anchors in one drawing. The first part has no creation id, so its trace must mint; the
+    // second part carries GUIDE. Without the reservation the earlier trace mints exactly GUIDE
+    // (the deterministic counter starts each process at the same key) and both strokes share it.
+    let bytes = package_two_parts("!0 !0,'100'100", "!400 !400,'500'500");
+    let (wb, _) = read(&bytes);
+    let keys: Vec<String> = wb.sheets[0].shapes.iter().filter_map(|s| s.ink.as_ref()?.key.clone()).collect();
+    assert_eq!(keys.len(), 2, "{keys:?}");
+    assert_ne!(keys[0].as_str(), GUIDE, "the unkeyed trace mints a free key: {keys:?}");
+    assert_eq!(keys[1].as_str(), GUIDE, "the later part keeps its own GUID: {keys:?}");
+}
+
+/// A drawing with two ink anchors: the first part carries no creation id (its trace must mint a
+/// key), the second carries `second`. Both ink parts hold one trace each.
+fn package_two_parts(first_trace: &str, second_trace: &str) -> Vec<u8> {
+    let wb = r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
+    let wb_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
+    let sheet = format!(
+        r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="{NS_REL}"><sheetData/><drawing r:id="rId1"/></worksheet>"#
+    );
+    let sheet_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#
+    );
+    let drels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/customXml" Target="../ink/ink1.xml"/><Relationship Id="rId2" Type="{NS_REL}/customXml" Target="../ink/ink2.xml"/><Relationship Id="rId3" Type="{NS_REL}/image" Target="../media/image1.png"/></Relationships>"#
+    );
+    let root = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
+    let ct = content_types_two();
+    let drawing = drawing_two_anchors();
+    let first = inkml(first_trace, false, PEN_PROPS);
+    let second = inkml(second_trace, false, PEN_PROPS);
+    let png = tiny_png();
+    let parts: Vec<(&str, &[u8])> = vec![
+        ("[Content_Types].xml", ct.as_bytes()),
+        ("_rels/.rels", root.as_bytes()),
+        ("xl/workbook.xml", wb.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", wb_rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+        ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels.as_bytes()),
+        ("xl/drawings/drawing1.xml", drawing.as_bytes()),
+        ("xl/drawings/_rels/drawing1.xml.rels", drels.as_bytes()),
+        ("xl/ink/ink1.xml", first.as_bytes()),
+        ("xl/ink/ink2.xml", second.as_bytes()),
+        ("xl/media/image1.png", &png),
+    ];
+    make_zip(&parts)
+}
+
+/// `[Content_Types].xml` declaring both ink parts and the picture fallback.
+fn content_types_two() -> String {
+    format!(
+        r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/ink/ink1.xml" ContentType="application/inkml+xml"/><Override PartName="/xl/ink/ink2.xml" ContentType="application/inkml+xml"/></Types>"#
+    )
+}
+
+/// An Excel-shaped drawing part with two ink anchors: the first `contentPart` names `rId1` and
+/// carries no creation id, the second names `rId2` and carries GUIDE.
+fn drawing_two_anchors() -> String {
+    let anchor = |rid: &str, id: u32, creation: Option<&str>| {
+        let guid = creation
+            .map(|c| format!(r#"<a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="{c}"/>"#))
+            .unwrap_or_default();
+        format!(
+            r#"<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>3</xdr:col><xdr:colOff>76200</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>228600</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><mc:AlternateContent xmlns:mc="{MC}"><mc:Choice xmlns:xdr14="{XDR14}" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" Requires="xdr14 aink"><xdr:contentPart r:id="{rid}"><xdr14:nvContentPartPr><xdr14:cNvPr id="{id}" name="Ink {id}"><a:extLst><a:ext uri="{{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}}">{guid}</a:ext></a:extLst></xdr14:cNvPr><xdr14:cNvContentPartPr/></xdr14:nvContentPartPr><xdr14:nvPr macro=""/><xdr14:xfrm><a:off x="1905000" y="952500"/><a:ext cx="762000" cy="381000"/></a:xfrm></xdr:contentPart></mc:Choice><mc:Fallback><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="{id}" name="Ink {id}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId3"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="762000" cy="381000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></a:spPr></xdr:pic></mc:Fallback></mc:AlternateContent><xdr:clientData/></xdr:twoCellAnchor>"#
+        )
+    };
+    format!(
+        r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="{XDR}" xmlns:a="{A}" xmlns:r="{NS_REL}">{}{}</xdr:wsDr>"#,
+        anchor("rId1", 3, None),
+        anchor("rId2", 4, Some(GUIDE)),
+    )
+}
+
 /// A key that reached the model from JSON or a hand edit is replaced before it becomes an invalid creation id.
 #[test]
 fn an_invalid_stored_key_is_replaced_before_it_is_written() {
