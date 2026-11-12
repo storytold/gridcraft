@@ -265,6 +265,9 @@ pub fn check_literal_fill_validation(wb: &Workbook, sheet: usize, ranges: &[Rang
                 ValidationKind::TextLength => !numeric_bound(&dv.f1) || dv.f2.as_deref().is_some_and(|f| !numeric_bound(f)),
                 _ => false,
             };
+            if dv.kind == ValidationKind::Custom && dv.f1.trim().strip_prefix('=').unwrap_or(dv.f1.trim()).trim().eq_ignore_ascii_case("TRUE") {
+                continue;
+            }
             if depends {
                 dependent.push(at);
             } else if let Some(issue) = check_entry(wb, sheet, at, input, true, &mut scratch, None) {
@@ -324,6 +327,18 @@ fn check_entry(
     // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).
     let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
     let mut eval = |f: &str| {
+        let constant = f.trim().strip_prefix('=').unwrap_or(f.trim()).trim();
+        if constant.eq_ignore_ascii_case("TRUE") {
+            return Value::Bool(true);
+        }
+        if constant.eq_ignore_ascii_case("FALSE") {
+            return Value::Bool(false);
+        }
+        if let Ok(number) = constant.parse::<f64>()
+            && number.is_finite()
+        {
+            return Value::Number(number);
+        }
         let formula = formula_at(f, first, at);
         if let Some(completed) = completed {
             return gridcraft_calc::evaluate(completed, sheet, at, &formula);
