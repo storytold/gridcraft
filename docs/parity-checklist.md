@@ -307,7 +307,7 @@ Implemented:
 - `view.normal` Normal (Workbook Views)
 - `view.pageBreakPreview` Page Break Preview (Workbook Views)
 - `view.pageLayout` Page Layout (Workbook Views)
-- `view.customViews` Custom Views (Workbook Views)
+- `view.customViews` Custom Views (Sheet View)
 - `view.ruler` Ruler (Show)
 - `view.formulaBar` Formula Bar (Show)
 - `view.zoom` Zoom (Zoom)

@@ -106,6 +106,16 @@ pub fn opens_menu(prefix: &str, target: &str) -> bool {
     !prefix.is_empty() && is_group_level(prefix) && sequences_for(target).iter().any(|seq| seq.len() == prefix.len() + 1 && seq.starts_with(prefix))
 }
 
+/// The ribbon group a prefix-driven menu belongs to: the menu `target`'s catalog group when
+/// `prefix` is that menu's group level (Borders' "HB" opens `home.borders`, whose group is
+/// Font). `None` when the prefix opens no known menu.
+pub fn menu_owner(prefix: &str, target: &str) -> Option<&'static str> {
+    if !opens_menu(prefix, target) {
+        return None;
+    }
+    gridcraft_engine::find_command(target).and_then(|command| command.menu.get(1).copied())
+}
+
 /// The badge for a menu item that runs `target` with `params`: its finish sequence one key below
 /// the prefix. Items sharing one command (the Borders presets) are told apart by their params,
 /// compared as JSON values, so key order and spacing don't matter.

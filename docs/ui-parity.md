@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (preserve centered emoji and symbol fallback placement; earlier: preserve leading and trailing blank cell lines; earlier: align wrapped and unwrapped cells; earlier: CJK title baseline regression and mixed-script rendering validation; earlier: form controls: buttons, sliders and spin buttons on the sheet; earlier: Highlight the active cell's row, a global preference in File › Options › General; earlier: a linked cell's menu edits, opens or removes the link; earlier: Display options for this workbook: sheet tabs and scroll bars; earlier: dragging over row or column headers in point mode extends the reference; earlier: a picture on the system clipboard pastes as a floating picture at the active cell with Cmd/Ctrl+V or Paste (#699); earlier: frozen columns keep their text, gridlines and merged borders whole while the sheet scrolls (#2544); earlier: every Paste Special option has its access key; earlier: the Draw tab's live stroke preview uses the pen's colour and thickness; earlier: copy quotes only cells with a tab or line break, as Excel does; earlier: Ctrl+. Next Corner of Selection; earlier: dragging the selection's border onto data asks before replacing it; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis use them, the arrow keys select while a dialog is collapsed and F4 cycles a reference's anchors; earlier: Python cells: Python mode in the formula bar; earlier: Insert › Equation and the equation editor; earlier: every floating object selects, resizes from eight handles and deletes with the keyboard; earlier: Formulas › Error Checking › Trace Error; trace arrows stay through a zoom (#3097); earlier: Page Setup sets the page order, Down, then over or Over, then down, which printing, the print preview, Page Break Preview and Page Layout view follow; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-11 · **Change:** minor (Page Layout › Page Setup takes its two-by-two three-row form below 928 client points, Review › Proofing stacks between 819 and 1280 and Comments between 880 and 1280, the measured five-row states are recorded as nested-menu artefacts, and Insert › Filters' Timeline as a feature gap; earlier: Insert › Filters stacks between 1280 and 1520, Page Layout › Scale to Fit gains its two-row fields from 680 client points and View › Sheet View its two rows from 928; earlier: measured rows for every tab: Home follows the measured 1/2/3-row widths, Styles and Cells spread to one row at 1520 client points, Insert › Symbols and View › Show add a second row at 1520/1280, and the other tabs' natural rows switch at their measured widths; earlier: Home's wide two-row forms: Font and Alignment from 1280 client points and Number from 1520 spread their three rows back into two, as measured; earlier: ribbon card: Excel's group-label band under every group, and per-section adaptive rows — a section keeps its natural rows while it fits and otherwise becomes one row (icon, name, chevron) whose menu holds the whole section, with Home's breakpoints measured from Excel); earlier: minor (preserve centered emoji and symbol fallback placement; earlier: preserve leading and trailing blank cell lines; earlier: align wrapped and unwrapped cells; earlier: CJK title baseline regression and mixed-script rendering validation; earlier: form controls: buttons, sliders and spin buttons on the sheet; earlier: Highlight the active cell's row, a global preference in File › Options › General; earlier: a linked cell's menu edits, opens or removes the link; earlier: Display options for this workbook: sheet tabs and scroll bars; earlier: dragging over row or column headers in point mode extends the reference; earlier: a picture on the system clipboard pastes as a floating picture at the active cell with Cmd/Ctrl+V or Paste (#699); earlier: frozen columns keep their text, gridlines and merged borders whole while the sheet scrolls (#2544); earlier: every Paste Special option has its access key; earlier: the Draw tab's live stroke preview uses the pen's colour and thickness; earlier: copy quotes only cells with a tab or line break, as Excel does; earlier: Ctrl+. Next Corner of Selection; earlier: dragging the selection's border onto data asks before replacing it; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis use them, the arrow keys select while a dialog is collapsed and F4 cycles a reference's anchors; earlier: Python cells: Python mode in the formula bar; earlier: Insert › Equation and the equation editor; earlier: every floating object selects, resizes from eight handles and deletes with the keyboard; earlier: Formulas › Error Checking › Trace Error; trace arrows stay through a zoom (#3097); earlier: Page Setup sets the page order, Down, then over or Over, then down, which printing, the print preview, Page Break Preview and Page Layout view follow; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -10,13 +10,29 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 `crates/engine/src/cmd` (shortcuts in command specs), the owner's black-box notes
 (`plan/excel/observed-ui.md`, local only) and user issues.
 
+## Ribbon card at 1024 × 768
+
+Measured against Excel 16.0.20527 at a 1024×768 client window on a 125% display (819×614 logical
+points). Excel's ribbon card has three bands — tab strip, commands, group names — and each section
+chooses its own row count from the width it gets. Home at 819 pt keeps Clipboard and Styles at three
+rows and shows Font, Alignment, Number, Cells and Editing as one-row drop-downs; at about 921 client
+points Font reaches three rows and Alignment/Number two; at about 1109 points Alignment, Number,
+Styles and Cells reach three and Editing two. Widening further spreads groups back out: Font and
+Alignment take their wide two-row form from 1600 outer px (1280 client points), and Number from
+1900 outer px (1520 points). The group-name band is present in every case.
+
+GridCraft draws the same three bands and now plans per-section rows: `ribbon::RibbonSections`
+remembers each section's natural width per tab and `ribbon::section` draws either the natural body
+or one row whose popup holds it; `sep`/`group_end` keep the names and separators in both. The
+card grows by `RIBBON_LABEL_H` (18 px); scrolling and the edge arrows are unchanged.
+
 ## Window and chrome
 
 | Element | Excel | GridCraft | Status |
 |---|---|---|---|
 | 2026-10-14 | minor | Dialogs (Find and Replace, Go To, Format Cells, Sort and the rest) move by their title bar instead of staying pinned to the centre (#1250) |
 | Title bar, Quick Access Toolbar, AutoSave toggle | yes | yes | done; macOS window controls misaligned (#170), Dock icon size (#169) |
-| Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable, Header & Footer tabs); Fill Color, Font Color and the Format Cells colour pickers end with Recent Colors and More Colors… (#928); large split buttons (Formulas › AutoSum); arrows at the card's edges scroll a tab wider than the window | done; missing contextual tabs for pictures, shapes, sparklines, slicers; groups do not collapse when narrow |
+| Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable, Header & Footer tabs); Fill Color, Font Color and the Format Cells colour pickers end with Recent Colors and More Colors… (#928); large split buttons (Formulas › AutoSum); arrows at the card's edges scroll a tab wider than the window; groups collapse to one row at the measured narrow widths and Font, Alignment and Number take Excel's wide two-row forms again from 1280/1520 client points | done; missing contextual tabs for pictures, shapes, sparklines, slicers |
 | Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing (File ▸ Options is the one missing File command) |
 | Formulas › Function Library | Insert Function, AutoSum, Recently Used and a menu per function category | yes (10-24): a big Insert Function button and three columns of labelled small buttons, the layout Excel uses when the window is not wide enough for a big button per category; each category's book icon has its own colour; a category menu shows each function's description on hover and ends with Insert Function…, which opens the dialog on that category; More Functions cascades into Statistical, Engineering, Cube, Information, Compatibility and Web; AutoSum is a split button whose menu (Sum, Average, Count Numbers, Max, Min, More Functions…) Home › Editing shares; Recently Used has the MR key tip | the wide layout with a big button per category is not offered; a function counts as recently used once its formula is entered, not when Insert Function's OK is pressed |
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable tabs) | done; missing contextual tabs for pictures, shapes, sparklines, header/footer, slicers |
@@ -263,10 +279,74 @@ Key tips 3–5 · remaining shortcuts with their features 2–4 · context menus
 8–12 · Options dialog and ribbon/QAT customization 6–10 · accessibility 12–18 · selection and
 scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
+## Measured section rows
+
+Office 16.0.20527, 125% DPI, unmaximised window; widths are outer px. Each entry is the section's
+control-row count (1, 2 or 3; a 5 is a menu with nested rows) at the width where it changes.
+
+| Tab | Section | Rows by width |
+|---|---|---|
+| Home | Clipboard | 450: 1 → 1024: 3 |
+| Home | Font | 450: 1 → 1161: 3 → 1600: 2 |
+| Home | Alignment | 450: 1 → 1200: 3 → 1600: 2 |
+| Home | Number | 450: 1 → 1300: 3 → 1900: 2 |
+| Home | Styles | 450: 3 → 1900: 1 |
+| Home | Cells | 450: 1 → 1400: 3 → 1900: 1 |
+| Home | Editing | 450: 1 → 1400: 3 |
+| Insert | Illustrations | 450: 1 → 1900: 3 |
+| Insert | Filters | 450: 1 → 1600: 2 → 1900: 1 |
+| Insert | Symbols | 450: 1 → 1900: 2 |
+| Page Layout | Themes | 450: 1 → 950: 3 |
+| Page Layout | Page Setup | 450: 3 → 1161: 1 |
+| Page Layout | Scale to Fit | 450: 1 → 850: 2 |
+| Page Layout | Sheet Options | 450: 1 → 1024: 0 |
+| Page Layout | Arrange | 450: 1 → 1400: 3 → 1600: 1 |
+| Formulas | Function Library | 450: 1 → 1100: 5 → 1600: 1 |
+| Formulas | Defined Names | 450: 1 → 1600: 3 |
+| Formulas | Formula Auditing | 450: 1 → 1300: 3 |
+| Data | Data Types | 450: 1 → 950: 0 |
+| Data | Sort & Filter | 450: 1 → 1024: 5 |
+| Data | Data Tools | 450: 1 → 1300: 3 |
+| Data | Outline | 450: 1 → 1900: 3 |
+| Review | Proofing | 450: 1 → 1024: 3 → 1600: 1 |
+| Review | Comments | 450: 1 → 1100: 3 → 1600: 1 |
+| View | Sheet View | 450: 1 → 1161: 2 |
+| View | Workbook Views | 450: 1 → 1100: 3 |
+| View | Show | 450: 1 → 1600: 2 |
+| View | Window | 450: 1 → 1024: 3 |
+
+The planner keeps a section's natural rows while it fits and collapses it to one row below the
+measured narrow breakpoint. The measured transitions are modelled where GridCraft has the
+section: Home follows the widths above (Clipboard three rows from 819 client points, Font from
+929, Alignment from 960, Number from 1040, Cells and Editing from 1120; Font and Alignment widen
+to two rows at 1280 and Number at 1520; Styles and Cells become one row of three at 1520), Insert
+› Symbols stacks the Equation button over the Symbol gallery from 1520, Insert › Filters stacks
+its Slicer over its Timeline between 1280 and 1520 and puts them on one row from 1520 (the group
+is one compact row below 1280), Page Layout › Scale to Fit shows its Width and Height fields over
+its Scale field from 680 client points, View › Sheet View lays New Sheet View over Custom Views
+from 928, View › Show takes its second row from 1280, and Insert › Illustrations, Page Layout ›
+Themes, Formulas › Defined Names and Formula Auditing, Data › Data Tools and Outline, and View ›
+Workbook Views and Window switch to their natural rows at the measured widths. Page Layout ›
+Page Setup stacks its six buttons two by two below 928 client points and is one row from 928;
+Review › Proofing stacks its three buttons between 819 and 1280 and is one row above that (its
+compact row below 819); Review › Comments stacks its six two by two between 880 and 1280 and is
+one row from 1280 (compact below 880). Page Layout has no Arrange group.
+Insert › Filters is a feature gap, not a row variant: the Timeline button is drawn disabled
+because GridCraft has no timeline object yet (gap #8), and the group still renders the measured
+two rows between 1280 and 1520. The measured five-row states for Formulas › Function Library and
+Data › Sort & Filter are nested-menu artefacts: the "5" counts the rows inside their menus, not
+rows of the section, so both stay one row of first-level controls (or their compact row).
+
 ## Revision history
 
 | Date | Change | Summary |
-|---|---|---|
+| 2026-11-12 | minor | Ribbon follow-ups: Scale to Fit's Automatic keeps the other dimension's page limit, the WC keytip opens the Custom Views menu, New Sheet View refuses taken or blank names, and compact menus scroll wide bodies, clear on tab switches and keep the forced layout while the size field has focus |
+| 2026-11-11 | minor | Page Layout › Page Setup (two-by-two below 928 client points, one row from 928), Review › Proofing (three rows between 819 and 1280) and Review › Comments (three rows between 880 and 1280) now take Excel's measured forms. The five-row states measured for Function Library and Sort & Filter are recorded as nested-menu artefacts (the section stays one row), and Insert › Filters' missing Timeline is recorded as a feature gap (gap #8) while the section keeps its measured two rows |
+| 2026-11-11 | minor | The last measured section rows: Insert › Filters stacks its Slicer over its Timeline between 1280 and 1520 client points and puts them on one row from 1520 (the group is one compact row below 1280), Page Layout › Scale to Fit draws its Width and Height fields over its Scale field from 680, View › Sheet View lays New Sheet View over Custom Views from 928, and every other measured 1↔3 threshold is checked at its width. The Timeline button stays disabled until GridCraft builds timeline objects (gap #8); Scale to Fit drives `pageLayout.scaleToFit`, Sheet View saves and shows `view.customViews` |
+| 2026-11-11 | minor | Measured section rows across the tabs: Home's Clipboard/Font/Alignment/Number/Cells/Editing row counts and thresholds now follow the UIA measurements exactly, Styles and Cells spread their three buttons into one row from 1520 client points, Insert › Symbols stacks its second row from 1520, View › Show uses one row below 1280 and two from it, and Insert › Illustrations, Page Layout › Themes, Formulas › Defined Names and Formula Auditing, Data › Data Tools and Outline, and View › Workbook Views and Window switch at their measured widths. Page Layout has no Scale to Fit or Arrange group and View no Sheet View, Insert › Filters has one button, and the five-row nested menus are not modelled |
+| 2026-11-11 | minor | Home's wide two-row forms, as measured in Excel: from 1280 client points Font puts its style and colour buttons back on one row and Alignment brings Merge & Center back beside the alignment buttons; from 1520 points Number puts the decimal buttons back on the currency row. The breakpoints compare against the window's client width, as Excel's were measured, with hysteresis; below them the previous compact → narrow two-row → three-row plan is unchanged |
+| 2026-11-10 | minor | Ribbon groups adapt to the card width: natural rows while a section fits, else one row (icon, name, chevron) whose menu holds the whole section. Home follows Excel's measured rows; every tab's groups go through `ribbon::section` |
+| 2026-11-10 | minor | Ribbon card is three bands at 1024×768: an 18 px group-name band under the commands, names centred per group, separators through the band, on every tab including Table Design, Chart Design and Header & Footer |
 | 2026-11-05 | minor | Reconcile upstream form-control coverage with the CJK baseline and cell-alignment updates |
 | 2026-11-04 | minor | Keep centered emoji and symbol fallback placement when a row starts with a fallback or contains only fallbacks; use primary or baseline-aligned glyphs to anchor cell alignment |
 | 2026-11-04 | minor | Preserve leading and trailing blank lines in wrapped cells when calculating vertical alignment; regression covers single, multiple and all-empty lines |

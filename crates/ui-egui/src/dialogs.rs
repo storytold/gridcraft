@@ -36,8 +36,8 @@ use find::go_to_entries;
 pub(crate) use names::insert_name;
 use names::pasteable_names;
 pub(crate) use ref_edit::SHEET_DELETED;
-pub(crate) use show::build_params;
 pub use show::show;
+pub(crate) use show::{build_params, new_sheet_view_name_taken};
 use zoom::zoom_preset;
 
 /// A form field. `Ref` is a range reference that can also be picked by selecting on the grid
@@ -349,6 +349,14 @@ impl Dialog {
                 "sheet.rename",
                 vec![Text { key: "name", label: "Name:" }],
                 json!({"name": app.session.active().and_then(|d| d.wb.active().map(|s| s.name.clone()))}),
+            ),
+            // View › Sheet View › New: saves the sheet, selection, zoom and freeze under a name.
+            "newSheetView" => Dialog::form(
+                "newSheetView",
+                "New Sheet View",
+                "view.customViews",
+                vec![Text { key: "save", label: "View name:" }],
+                json!({"save": saved_view_name(app)}),
             ),
             "moveSheet" => {
                 let sheets: Vec<String> = app.session.active().map(|d| d.wb.sheets.iter().map(|s| s.name.clone()).collect()).unwrap_or_default();
@@ -1134,6 +1142,17 @@ impl Dialog {
         ref_edit::record_home(app, &mut d);
         Some(d)
     }
+}
+
+/// A name the workbook's saved views don't use yet: `View1`, `View2`, … (View › Sheet View › New).
+fn saved_view_name(app: &mut SheetApp) -> String {
+    let taken: Vec<String> = app
+        .session
+        .execute("view.customViews", Json::Object(Default::default()))
+        .ok()
+        .and_then(|v| v.as_object().map(|o| o.keys().cloned().collect()))
+        .unwrap_or_default();
+    (1..).map(|n| format!("View{n}")).find(|name| !taken.contains(name)).unwrap_or_else(|| "View1".into())
 }
 
 #[cfg(test)]

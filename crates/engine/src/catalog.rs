@@ -250,7 +250,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("view.normal", "View", "Workbook Views", "Normal"),
     ("view.pageBreakPreview", "View", "Workbook Views", "Page Break Preview"),
     ("view.pageLayout", "View", "Workbook Views", "Page Layout"),
-    ("view.customViews", "View", "Workbook Views", "Custom Views"),
+    ("view.customViews", "View", "Sheet View", "Custom Views"),
     ("view.ruler", "View", "Show", "Ruler"),
     ("view.formulaBar", "View", "Show", "Formula Bar"),
     ("view.gridlines", "View", "Show", "Gridlines"),

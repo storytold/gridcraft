@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-12 · **Change:** minor (ribbon follow-ups: compact menus scroll wide bodies, clear on tab switches and keep the forced layout while the size field has focus; earlier: shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -67,8 +67,27 @@ drawing its own:
   translated through `i18n` in one place. Split buttons return the main and arrow responses
   separately, with accessible names (`AutoSum`, `AutoSum options`); big and small buttons
   report their label (an icon-only one its tooltip) as their accessible name. The ribbon card
-  scrolls a tab wider than the window, with arrows at its edges; `ribbon::RibbonOverflow` records the groups' size each frame,
-  and a test keeps every tab within the card's three rows.
+  has Excel's three bands: the tab strip, the buttons (76 px of content) and a group-label band
+  `ribbon::RIBBON_LABEL_H` (18 px) tall that names every group in the dim text token at 11 pt
+  (the card is 106 px expanded). A tab's groups are delimited by `ribbon::sep`, which takes the
+  Excel name of the group it closes and runs its line through the label band; `group_end` names
+  the last group without a separator. The measured sections carry Excel's width breakpoints
+  (`ribbon::RibbonSections`, compared against the window's client width): a group with room
+  draws its natural body (Home's Clipboard keeps three rows from 819 points, Font from 929,
+  Alignment from 960, Number from 1040, Cells and Editing from 1120; Font and Alignment spread
+  back into two rows at 1280 and Number at 1520; Styles and Cells become one row of three at
+  1520; Insert › Symbols stacks at 1520, Insert › Filters stacks its Slicer over its Timeline
+  from 1280 and returns to one row at 1520, Page Layout › Page Setup stacks two by two below
+  928, Page Layout › Scale to Fit has two rows of fields from 680, Review › Proofing stacks
+  between 819 and 1280 and Comments between 880 and 1280, and View › Sheet View two rows from
+  928 while View › Show takes its second row at 1280), and a narrower card
+  draws it as one compact row (icon, name and chevron) whose menu holds the natural body; tabs
+  without breakpoints compact a group once its measured body no longer fits what is left of the
+  card, with hysteresis at the boundary. The card scrolls a
+  tab wider than the window, with arrows at its edges (the labels scroll and clip with the
+  groups); `ribbon::RibbonOverflow` records the groups' size each frame, `ribbon::RibbonLabels`
+  the names painted and `ribbon::RibbonSections::levels` the layout planned per group, and a test
+  keeps every tab within the card's three rows and checks a name per group.
 - **Function Library**: `function_library.rs` holds the function categories (engine id and
   label, in the Insert Function dialog's order), the function list built once from
   `cmd::formulas::function_list`, and the menus of Formulas › Function Library, including the
@@ -240,7 +259,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 ## Revision history
 
-| Date | Change | Summary |
+| 2026-11-12 | minor | Ribbon follow-ups: compact menus scroll wide bodies, clear on tab switches and keep the forced layout while the size field has focus; the WC keytip opens Custom Views (now grouped under Sheet View); New Sheet View refuses taken or blank names on OK and on `ui.dialog.confirm` |
 |---|---|---|
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-02 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |

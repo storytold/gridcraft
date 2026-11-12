@@ -28,7 +28,8 @@ mod view;
 
 use automate::automate;
 use contextual::{chart_design, table_design};
-pub(crate) use controls::{ComboResult, editable_combo};
+pub(crate) use controls::{ComboResult, editable_combo, group_end, section, sep};
+pub use controls::{GroupLabel, RIBBON_LABEL_H, RibbonLabels, RibbonSections};
 use controls::{act, keytip};
 use data::data;
 use formulas::formulas;
@@ -49,7 +50,7 @@ const _: () = assert!(TITLE_CONTROL_H < TITLE_BAR_H, "title-bar controls keep a 
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let collapsed = app.ui.ribbon_collapsed;
-    let h = if collapsed { 34.0 } else { 34.0 + 92.0 };
+    let h = if collapsed { 34.0 } else { 34.0 + 92.0 + RIBBON_LABEL_H };
     // A contextual tab exists only while its object is selected (Excel hides Table Design once the
     // cell leaves the table); a remembered one that is gone would draw an empty ribbon.
     if CONTEXTUAL_TABS.contains(&app.ui.ribbon_tab.as_str()) && !contextual_tabs(app).contains(&app.ui.ribbon_tab.as_str()) {
@@ -121,11 +122,15 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             let left = ui.cursor().min.x;
             let screen = ui.ctx().content_rect();
             let fits = (screen.right() - left - (left - screen.left()).max(0.0)).max(0.0);
-            let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(fits), 88.0));
+            let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(fits), 88.0 + RIBBON_LABEL_H));
             ui.painter().rect_filled(card, 10.0, t.ribbon);
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));
-            ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+            // Excel's card has three bands: the buttons, then the group names below them. The
+            // buttons keep their 76 px, so a tab's rows and separators are laid out as before.
+            let content = Rect::from_min_size(inner.min, vec2(inner.width(), inner.height() - RIBBON_LABEL_H));
+            let band = Rect::from_min_max(pos2(content.left(), content.bottom()), inner.max);
+            ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| {
                 // One scroll state per tab: a tab opened after scrolling another starts at its
                 // left edge, and a tab keeps its own offset while others are used.
                 let tab = app.ui.ribbon_tab.clone();
@@ -143,6 +148,26 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 let scroll = area.show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                        // Group boundaries start at the tab's left edge; each separator records
+                        // the name of the group it closes, and the band is painted afterwards.
+                        controls::begin_groups(ui);
+                        // The planner picks each group's layout from the card's content width,
+                        // walking the tab's groups from left to right; Home's measured breakpoints
+                        // use the window's client width, as Excel's were measured. A keytip names
+                        // the group it targets, so only that group takes a natural form first.
+                        let keytip_group =
+                            app.ui.keytip_invoke.and_then(gridcraft_engine::find_command).and_then(|command| command.menu.get(1).copied());
+                        // Prefix-driven menus (Borders at HB): a Continue entry sets no invoke,
+                        // but the menu renders inside its group's body, so that group must be
+                        // natural while the prefix waits for the next key.
+                        let prefix_group = match app.keytips.prefix() {
+                            // Borders is the only prefix-driven menu on the ribbon: HB opens its
+                            // popup inside the Font body without setting keytip_invoke.
+                            Some(prefix) => keytip_table::menu_owner(prefix, "home.borders"),
+                            None => None,
+                        };
+                        let keytip_group = keytip_group.or(prefix_group);
+                        RibbonSections::begin(ui, app.ui.ribbon_tab.as_str(), content.width(), screen.width(), keytip_group);
                         match app.ui.ribbon_tab.as_str() {
                             "Home" => home(app, ui),
                             "Insert" => insert(app, ui),
@@ -160,6 +185,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         }
                     });
                 });
+                controls::paint_group_labels(ui, content, band, scroll.inner_rect);
                 scroll_arrows(ui, &t, tab.as_str(), scroll);
             });
         });

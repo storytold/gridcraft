@@ -357,6 +357,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                         app.dialog = Some(d);
                         return err(e);
                     }
+                    if crate::dialogs::new_sheet_view_name_taken(app, &d) {
+                        let message = app.message.clone().map(|(_, body)| body).unwrap_or_else(|| "the dialog stays open".into());
+                        app.dialog = Some(d);
+                        return err(message);
+                    }
                     let params = crate::dialogs::build_params(&d);
                     let home = app.ui_window();
                     let r = app.run(cmd, params);

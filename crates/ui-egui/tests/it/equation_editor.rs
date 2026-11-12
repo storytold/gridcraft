@@ -24,6 +24,32 @@ fn harness(s: Session) -> Harness {
     h
 }
 
+/// Equation lives in the Insert tab's Symbols section; when the ribbon folds that section at
+/// narrow widths, open it first so the button is reachable.
+fn open_symbols_if_folded(h: &mut Harness) {
+    if h.query_by_label("Equation").is_some() || h.query_by_label("Equation options").is_some() {
+        return;
+    }
+    if let Some(section) = h.query_by_label("Symbols") {
+        section.click();
+        h.run_steps(2);
+    }
+}
+
+/// A card wide enough that no Insert section folds, for tests that need two popups at once.
+fn wide_harness(s: Session) -> Harness {
+    let mut h =
+        egui_kittest::Harness::builder().with_os(OperatingSystem::Mac).with_size(vec2(3000.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut SheetApp| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            },
+            SheetApp::new(s, Default::default()),
+        );
+    h.run_steps(4);
+    h
+}
+
 fn blank() -> Session {
     let mut s = Session::new();
     s.new_workbook();
@@ -57,6 +83,7 @@ fn the_ribbon_button_opens_the_editor_and_typing_inserts_an_equation() {
     let mut h = harness(blank());
     h.state_mut().run("ui.ribbonTab", json!({"tab": "Insert"})).unwrap();
     h.run_steps(2);
+    open_symbols_if_folded(&mut h);
     h.get_by_label("Equation").click();
     h.run_steps(3);
     assert_eq!(dialog_latex(&h).as_deref(), Some(""), "a new, empty equation");
@@ -160,7 +187,7 @@ fn double_click_edits_an_equation_in_one_undo_step() {
 
 #[test]
 fn the_gallery_inserts_its_examples() {
-    let mut h = harness(blank());
+    let mut h = wide_harness(blank());
     h.state_mut().run("ui.ribbonTab", json!({"tab": "Insert"})).unwrap();
     h.run_steps(2);
     h.get_by_label("Equation options").click();
@@ -187,6 +214,7 @@ fn reopening_after_escape_focuses_the_source_again() {
     h.state_mut().run("ui.ribbonTab", json!({"tab": "Insert"})).unwrap();
     h.run_steps(2);
     for round in 0..2 {
+        open_symbols_if_folded(&mut h);
         h.get_by_label("Equation").click();
         h.run_steps(3);
         assert_eq!(dialog_latex(&h).as_deref(), Some(""), "round {round}: the editor is open");

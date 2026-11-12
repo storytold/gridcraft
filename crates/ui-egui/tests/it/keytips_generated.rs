@@ -2494,7 +2494,8 @@ fn keytip_wa_() {
 fn keytip_wc_() {
     let mut h = harness(blank());
     sequence(&mut h, "WC", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "view.customViews"), "WC must journal view.customViews");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "WC must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
