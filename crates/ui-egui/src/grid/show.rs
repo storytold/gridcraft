@@ -48,10 +48,14 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // A right-to-left sheet has its vertical scrollbar on the left.
     let rtl = app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.right_to_left);
     let bar = vertical_bar_width(app, available);
+    // The integrated caption has no native frame, so a 6 px band on the window edge resizes it.
+    // The bar keeps its width and moves inward; a bar that stops short of the edge stays put.
+    let window = ui.input(|i| i.viewport_rect());
+    let (track_left, track_right) = crate::ribbon::vertical_scrollbar_x(available, window, rtl, bar, crate::ribbon::frame_resize_margin(ui));
     let rect = if rtl {
-        Rect::from_min_max(pos2(available.left() + bar, available.top()), available.max)
+        Rect::from_min_max(pos2(track_right, available.top()), available.max)
     } else {
-        Rect::from_min_max(available.min, pos2(available.right() - bar, available.bottom()))
+        Rect::from_min_max(available.min, pos2(track_left, available.bottom()))
     };
     let resp = ui.allocate_rect(rect, Sense::click_and_drag());
     app.grid.rect = Some(rect);
@@ -237,7 +241,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         crate::paper_view::paint_rulers(app, &painter, rect, &geo, &t);
     }
     show_grid_interactions(app, ui, &resp, &geo, sh, &wb);
-    let track_x = vertical_scroll_track(available, rect, rtl);
+    let track_x = (track_left, track_right);
     // The track starts below the column headings and frozen rows; the bar's column beside them
     // takes its colour too instead of showing a light square in dark mode.
     ui.painter().rect_filled(Rect::from_min_max(pos2(track_x.0, rect.top()), pos2(track_x.1, rect.bottom())), 0.0, t.tab_bar);
@@ -249,10 +253,6 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
 /// Display options for this workbook), and the grid takes its room.
 fn vertical_bar_width(app: &SheetApp, available: Rect) -> f32 {
     if app.session.active().is_none_or(|d| d.wb.view.show_vertical_scroll) { 14.0_f32.min(available.width()) } else { 0.0 }
-}
-
-fn vertical_scroll_track(available: Rect, grid: Rect, rtl: bool) -> (f32, f32) {
-    if rtl { (available.left(), grid.left()) } else { (grid.right(), available.right()) }
 }
 
 fn update_clipboard_repaint(app: &mut SheetApp, ui: &egui::Ui, now: f64) {

@@ -349,6 +349,12 @@ fn main() -> eframe::Result<()> {
     if cfg!(target_os = "macos") {
         viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
     }
+    // Windows draws minimize, maximize and close in the app title bar. Leaving the native
+    // caption up would show the file name twice and cost a second row. macOS already hides
+    // its title and keeps the traffic lights; other desktops keep their own frame.
+    if gridcraft_ui_egui::INTEGRATED_CAPTION {
+        viewport = viewport.with_decorations(false);
+    }
     if let Some(i) = icon() {
         viewport = viewport.with_icon(i);
     }

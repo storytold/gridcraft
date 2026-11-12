@@ -23,6 +23,14 @@ use serde_json::json;
 
 use crate::SheetApp;
 
+/// Who draws the window frame. Windows turns decorations off because the caption buttons live
+/// in the app title bar ([`crate::INTEGRATED_CAPTION`]). macOS and other desktops keep the
+/// desktop frame: macOS for the traffic lights, the others because their button order is the
+/// window manager's.
+fn window_frame() -> Frame {
+    if crate::INTEGRATED_CAPTION { Frame::App(craft_window::Layout::default()) } else { Frame::Desktop }
+}
+
 /// The native windows (see the module docs).
 pub struct DocWindows {
     /// Engine window id per native window.
@@ -40,8 +48,9 @@ impl DocWindows {
     /// Takes over `app`'s windows. `base` is the root window's builder, used for new windows.
     pub fn new(app: &mut SheetApp, base: egui::ViewportBuilder, quit_with_last_window: bool) -> DocWindows {
         app.native_windows = true;
-        // The root window keeps the desktop's frame, so every window does.
-        DocWindows { list: WindowList::new(), viewports: Viewports::new(Frame::Desktop), base, quit_with_last_window, root_hidden: false }
+        // The root window's frame (set where the root viewport is built) is this same choice,
+        // so every workbook window matches it.
+        DocWindows { list: WindowList::new(), viewports: Viewports::new(window_frame()), base, quit_with_last_window, root_hidden: false }
     }
 
     /// The platform default for the last window closing: macOS keeps running, others quit.
@@ -302,5 +311,15 @@ pub fn arrange_rects(arrange: &str, n: usize, bounds: Rect) -> Vec<Rect> {
                 })
                 .collect()
         }
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+
+    #[test]
+    fn integrated_caption_drops_the_native_frame() {
+        assert_eq!(window_frame().decorations(), !crate::INTEGRATED_CAPTION);
     }
 }
