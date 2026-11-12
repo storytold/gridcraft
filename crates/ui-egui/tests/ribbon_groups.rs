@@ -62,6 +62,23 @@ fn a_launcher_is_named_and_opens_its_groups_dialog() {
 }
 
 #[test]
+fn the_outline_launcher_opens_outline_settings() {
+    // The Outline group carries Excel's launcher in its caption-band corner (#1795): it must
+    // open the Outline Settings form, not just any dialog.
+    let mut s = Session::new();
+    s.new_workbook();
+    let mut h = harness(s);
+    h.state_mut().ui.ribbon_tab = "Data".into();
+    h.run_steps(3);
+
+    let launcher = h.get_by_role_and_label(egui::accesskit::Role::Button, "Outline dialog launcher");
+    launcher.click();
+    h.run_steps(2);
+    let dialog = h.state().dialog.as_ref().expect("the Outline launcher opens a dialog");
+    assert_eq!(dialog.name.as_str(), "outlineSettings", "the Outline launcher opens Outline Settings");
+}
+
+#[test]
 fn a_long_caption_sets_a_floor_on_a_content_sized_group() {
     // A group is as wide as its controls, or as wide as its caption needs — whichever is larger.
     // In a narrow window that floor is what keeps the caption whole instead of clipping it: on the
