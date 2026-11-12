@@ -314,8 +314,8 @@ fn wrapped_text_in_fixed_height_row_shows_only_complete_lines() {
     let mut full_rows_visible = 0;
 
     for (index, row) in text.galley.rows.iter().enumerate() {
-        let top = text.pos.y + row.rect().top();
-        let bottom = text.pos.y + row.rect().bottom();
+        let top = text.pos.y + row.pos.y + row.visuals.mesh_bounds.top();
+        let bottom = text.pos.y + row.pos.y + row.visuals.mesh_bounds.bottom();
         let full_height = bottom - top;
 
         let visible_height = (bottom.min(clip.bottom()) - top.max(clip.top())).max(0.0);

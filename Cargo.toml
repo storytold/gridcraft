@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/gridcraft", "apps/gridcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.16.0"
+version = "0.19.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -14,6 +14,7 @@ repository = "https://github.com/storytold/gridcraft"
 # internal
 gridcraft-core = { path = "crates/core" }
 gridcraft-numfmt = { path = "crates/numfmt" }
+gridcraft-sandbox = { path = "crates/sandbox" }
 gridcraft-formula = { path = "crates/formula" }
 gridcraft-functions = { path = "crates/functions" }
 gridcraft-model = { path = "crates/model" }
@@ -25,10 +26,21 @@ gridcraft-ui-egui = { path = "crates/ui-egui" }
 gridcraft-mcp = { path = "crates/mcp" }
 gridcraft-pdf = { path = "crates/pdf" }
 gridcraft-math = { path = "crates/math" }
-# Every craft-libs crate (craft-update and craft-window here, craft-ui in ui-egui, craft-print in
-# the app) comes from one storytold/craft-libs revision.
+# Every craft-libs crate (craft-update, craft-window and the file-format crates here, craft-ui in
+# ui-egui, craft-print in the app, craft-web-api and craft-web-host in the web app) comes from one
+# craft-libs revision.
 # craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", version = "=0.1.0", features = ["egui"] }
+craft-update = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "=0.1.0", features = ["egui"] }
+# Compound files ([MS-CFB]) and password-encrypted OOXML packages ([MS-OFFCRYPTO]).
+craft-cfb = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
+craft-offcrypto = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
+# OPC zip packages (parts, relationships, the zip writer) under `crates/xlsx/src/package.rs`.
+craft-opc = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
+# Delimited text (CSV, TSV) and SYLK; `crates/xlsx/src/csv.rs` and `crates/engine/src/io/sylk.rs`
+# turn them into workbooks.
+craft-csv = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
+# Excel 97-2003 (.xls, BIFF8) workbooks; `crates/xlsx/src/xls.rs` maps them onto the model.
+craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
 
 # foundation
 thiserror = "2"
@@ -43,9 +55,6 @@ regex = { version = "1", default-features = false, features = ["std", "unicode",
 quick-xml = "0.41"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 sha2 = { version = "0.11", default-features = false }
-# Decrypting password-protected workbooks ([MS-OFFCRYPTO]): AES and SHA-1, pure Rust (wasm-safe).
-aes = { version = "0.9", default-features = false }
-sha1 = { version = "0.11", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # equations: RaTeX (MIT) lays LaTeX out as positioned glyphs, rules and paths. Exact pins: it is
@@ -71,7 +80,7 @@ skrifa = { version = "0.44", default-features = false, features = ["std"] }
 epaint_default_fonts = "0.37"
 # One native window per workbook: the window list, Window menu titles and the immediate-viewport
 # driver. Same craft-libs revision as craft-update above.
-craft-window = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", default-features = false, features = ["egui"] }
+craft-window = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", default-features = false, features = ["egui"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -98,19 +107,20 @@ codegen-units = 16
 debug = 0
 
 # Keep the complete egui family and native event bridge on reviewed fork commits.
+# This egui pin fixes RTL ligature continuation carets (GridCraft #3717).
 [patch.crates-io]
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+ecolor = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+emath = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+epaint = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+epaint_default_fonts = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui-winit = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui-wgpu = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui_glow = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui_extras = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui_kittest = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui_system_font_provider = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+eframe = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui_demo_lib = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui_inspection = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }

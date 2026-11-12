@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-09 · **Change:** minor (dark worksheet conflicts reconciled with frozen-pane geometry and form-control tokens; earlier: dark worksheet rendering merged with current main; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-13 · **Change:** minor (Arabic ligature carets use the cluster trailing edge through the pinned egui fix; earlier: dark worksheet rendering reconciled with cached sheet geometry, conditional formatting and text baselines; earlier: shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -89,6 +89,12 @@ drawing its own:
   ahead of its input, so the field never gets a Tab or an Enter of a focused editor; and it
   scrolls past `max_lines` with the caret in view. The tokenizer and the key edits are pure functions with tests, including
   hostile input.
+- **CJK text baselines**: system CJK fallback faces and permitted embedded faces tagged with
+  CJK scripts use epaint's baseline fallback alignment in cells, editors and window titles.
+  Other scripts, symbols and emoji keep their existing alignment. Baseline alignment can
+  increase line height; manual row heights and clipping remain unchanged. Reports:
+  [#1265](https://github.com/storytold/gridcraft/issues/1265) and
+  [#2621](https://github.com/storytold/gridcraft/issues/2621).
 - **Code editor marks**: `code_editor_marked` underlines a byte range in the error colour (the
   equation editor marks the position of a LaTeX error with it).
 - **Formula bar**: grows with its content from one line to `formula_bar::MAX_LINES` (five), then
@@ -241,6 +247,8 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | Pin the egui RTL ligature-caret fix: invisible continuation glyphs use the left cluster edge in RTL runs, preserving visible mark offsets, LTR behavior and system font precedence; the existing Arabic caret regression passes unchanged (#3717) |
+| 2026-11-13 | minor | Reconciled dark worksheet rendering with upstream sheet-geometry and conditional-format caches, hidden-row iteration and text-baseline fixes |
 | 2026-11-09 | minor | Preserved theme-aware sheet styling alongside upstream frozen-pane overflow geometry and contrasting dark form-control tokens |
 | 2026-11-03 | minor | Resolved dark-mode branch conflicts with current main, retaining both rendering and feature histories |
 | 2026-11-02 | minor | Reconciled worksheet dark-mode rendering and regression tests with the shared module layout and current UI changes; Page Layout header/footer text and Page Break Preview labels follow worksheet ink |
@@ -250,6 +258,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | 2026-11-01 | minor | Equations: the `math` crate (L1), the layout cache and code editor marks |
 | 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
 | 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
+| 2026-10-31 | minor | System and embedded CJK fallback faces share the Latin baseline without changing other script, symbol or emoji alignment |
 | 2026-10-26 | minor | Text overflow and Center Across Selection stop at empty neighbours with resolved explicit, table, conditional or patterned fills; offscreen source discovery respects the same blockers in both themes |
 | 2026-10-26 | minor | Editor text preserves its resolved font colour while the caret independently chooses contrasting black or white, including when explicit text matches its fill; documented the affected rendering and regression-test contracts |
 | 2026-10-26 | minor | In-cell editing uses the grid's shared resolved style and active conditional-format cache, preserving table, conditional, scale and patterned fills plus explicit font colours for text and caret |
