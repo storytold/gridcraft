@@ -262,9 +262,29 @@ fn write_atomically(path: &str, bytes: &[u8]) -> Result<(), String> {
     let target = std::path::Path::new(path);
     let directory = target.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
     let file_name = target.file_name().ok_or_else(|| format!("can't write {path}: no file name"))?;
-    let temporary = directory.join(format!(".{}.{}.tmp", file_name.to_string_lossy(), std::process::id()));
+    // The name is unpredictable and the file is created exclusively: the process id alone is
+    // guessable, and `File::create` would truncate a link another user placed under that name
+    // before the rename. The counter is process-local (each process draws a distinct sequence)
+    // and the address makes two writers that share a pid and a counter value unlikely to collide.
+    // No clock is read: this code also builds for wasm, where clocks trap.
+    static ATTEMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let (temporary, mut file) = loop {
+        let attempt = ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let candidate = directory.join(format!(
+            ".{}.{}.{}.{:x}.tmp",
+            file_name.to_string_lossy(),
+            std::process::id(),
+            attempt,
+            (&ATTEMPT as *const std::sync::atomic::AtomicU64) as usize ^ attempt as usize,
+        ));
+        match create_temporary(&candidate).map_err(|e| format!("can't write {path}: {e}"))? {
+            Some(file) => break (candidate, file),
+            // A taken name means someone else holds it: draw the next sequence value and retry
+            // instead of truncating.
+            None => continue,
+        }
+    };
     let written = (|| -> std::io::Result<()> {
-        let mut file = create_temporary(&temporary)?;
         file.write_all(bytes)?;
         #[cfg(unix)]
         copy_target_permissions(target, &temporary)?;
@@ -284,25 +304,29 @@ fn write_atomically(path: &str, bytes: &[u8]) -> Result<(), String> {
 ///
 /// `File::create` would give the temporary the umask-dependent default mode, and renaming it over
 /// an existing `0600` workbook would then widen that workbook's permissions. Unix temporaries
-/// therefore start at `0600` and only ever inherit the target's own permissions. The temporary is
-/// created exclusively: a crash can leave a stale one behind under a reused process id, so any
-/// leftover is removed first.
+/// therefore start at `0600` and only ever inherit the target's own permissions. Creation is
+/// exclusive (`create_new`): `Ok(None)` means this attempt's unpredictable name is already taken,
+/// so the caller retries with another one instead of truncating it.
 #[cfg(unix)]
-fn create_temporary(temporary: &std::path::Path) -> std::io::Result<std::fs::File> {
+fn create_temporary(temporary: &std::path::Path) -> std::io::Result<Option<std::fs::File>> {
     use std::os::unix::fs::OpenOptionsExt;
 
-    match std::fs::remove_file(temporary) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
+    match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(temporary) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+        Err(error) => Err(error),
     }
-    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(temporary)
 }
 
 /// Opens the temporary file `write_atomically` writes into, with the platform default mode.
+/// Creation is exclusive like on Unix: a taken name retries instead of truncating.
 #[cfg(not(unix))]
-fn create_temporary(temporary: &std::path::Path) -> std::io::Result<std::fs::File> {
-    std::fs::File::create(temporary)
+fn create_temporary(temporary: &std::path::Path) -> std::io::Result<Option<std::fs::File>> {
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(temporary) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// Gives `temporary` the permissions of an existing `target`, so an in-place rewrite keeps the
@@ -607,6 +631,26 @@ mod tests {
         assert_eq!(written, Ok(()));
         assert_eq!(std::fs::read(&path)?, b"new");
         assert_eq!(std::fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
+        std::fs::remove_dir_all(&directory)?;
+        Ok(())
+    }
+    #[test]
+    fn exclusive_creation_never_truncates_a_taken_name() -> Result<(), Box<dyn std::error::Error>> {
+        // A sibling writer (or a planted link) may already hold the file the writer would create:
+        // `create_new` reports it instead of truncating it. Pinning the whole unpredictable name
+        // is impractical, so this test pins the mechanism directly: a taken path reports `None`
+        // (the retry signal) with the planted bytes intact, and a free path is created.
+        let directory = std::env::temp_dir().join(format!("gridcraft-cli-exclusive-{}", std::process::id()));
+        std::fs::create_dir_all(&directory)?;
+        let taken = directory.join("taken.tmp");
+        std::fs::write(&taken, b"planted")?;
+        assert!(create_temporary(&taken)?.is_none(), "a taken name reports instead of truncating");
+        assert_eq!(std::fs::read(&taken)?, b"planted");
+        let free = directory.join("free.tmp");
+        let created = create_temporary(&free)?;
+        assert!(created.is_some(), "a free name is created");
+        drop(created);
+        assert!(std::fs::read_dir(&directory)?.count() == 2, "only the planted file and the new temporary remain");
         std::fs::remove_dir_all(&directory)?;
         Ok(())
     }

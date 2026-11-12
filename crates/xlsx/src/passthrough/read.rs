@@ -201,6 +201,21 @@ impl KeptReader {
             if self.strict {
                 cx.warn("unmodelled content of a Strict Open XML workbook (custom XML, links, controls…) is not kept on save");
             }
+            // Preservation is disabled (or the workbook is Strict), so nothing below can keep the
+            // model — but a save must still refuse rather than silently lose it. Record the model
+            // behind the workbook's `powerPivotData` relationship with the same mechanism the keep
+            // path uses, so `write_xlsx` refuses through the existing save guard.
+            for r in wb_rels.iter().filter(|r| is_kind(r, WORKBOOK_ROOTS)) {
+                if kind(&r.rel_type) == "powerPivotData" {
+                    let why = if self.strict {
+                        "Strict Open XML content is not kept".to_string()
+                    } else {
+                        "content preservation is disabled for this workbook".to_string()
+                    };
+                    self.dropped_model = Some(DroppedPart { name: r.target.clone(), reason: DroppedReason::Unpreservable(why) });
+                    break;
+                }
+            }
             return None;
         }
         let mut p = Preserved::default();
