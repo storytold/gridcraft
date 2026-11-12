@@ -548,6 +548,13 @@ fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, o
     ok_cancel(ui, confirm, open);
 }
 
+/// The fixed height the performance cell list gives every virtualized row: tall enough for the
+/// Go To button, which is at least the theme's minimum interaction height. Without the floor,
+/// `show_rows` would position rows with a height shorter than the button and rows would clip.
+fn performance_row_height(ui: &egui::Ui) -> f32 {
+    (ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y).max(ui.spacing().interact_size.y)
+}
+
 /// Review › Check Performance: Excel's Workbook Performance pane. It reports cells used and how
 /// many blank formatted cells can be optimized, per sheet, with Optimize all / Optimize sheet and
 /// a bounded list of the optimizable cells. Calculation auditing is a separate, opt-in command
@@ -619,9 +626,9 @@ fn check_performance(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open
     } else {
         ui.add_space(4.0);
         ui.label(egui::RichText::new(lang.tr("Cells to optimize")).strong());
-        let cells: &[Json] = report.get("cells").and_then(Json::as_array).map_or(&[], Vec::as_slice);
         // A workbook can list thousands of optimizable cells: only the rows in view are laid out.
-        let row_height = ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y;
+        let cells: &[Json] = report.get("cells").and_then(Json::as_array).map_or(&[], Vec::as_slice);
+        let row_height = performance_row_height(ui);
         egui::ScrollArea::vertical().max_height(340.0).auto_shrink([false, true]).show_rows(ui, row_height, cells.len(), |ui, rows| {
             for cell in cells.get(rows).unwrap_or_default() {
                 ui.horizontal(|ui| {
@@ -866,4 +873,25 @@ fn page_order_preview(ui: &mut egui::Ui, order: PageOrder) {
     let d = (to - from).normalized();
     let n = vec2(-d.y, d.x);
     p.add(egui::Shape::convex_polygon(vec![to, to - d * 6.0 + n * 3.5, to - d * 6.0 - n * 3.5], t.accent, egui::Stroke::NONE));
+}
+
+#[cfg(test)]
+mod performance_row_tests {
+    use super::performance_row_height;
+
+    #[test]
+    fn rows_fit_the_go_to_button() {
+        // The virtualized list positions rows by a fixed height: if it is shorter than the
+        // Go To button, buttons overlap and rows clip. The theme's minimum interaction
+        // height (22 px) exceeds plain button text plus padding, so it must be the floor.
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            crate::theme::apply(ui.ctx(), false);
+            egui::CentralPanel::default().show(ui, |ui| {
+                let height = performance_row_height(ui);
+                assert!(height >= ui.spacing().interact_size.y, "row {height} clips the Go To button");
+            });
+        });
+        out.textures_delta.clear();
+    }
 }
