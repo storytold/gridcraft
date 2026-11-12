@@ -105,7 +105,7 @@ fn prims_svg_within(prims: &[Prim], w: f32, h: f32, style: &str, budget: usize) 
                     out.push_str(" font-weight=\"bold\"");
                 }
                 if let Some(name) = &format.name {
-                    let _ = write!(out, " font-family=\"{}\"", esc(name));
+                    let _ = write!(out, " font-family=\"{}, Helvetica, Arial, sans-serif\"", esc(name));
                 }
                 if format.italic.unwrap_or(false) {
                     out.push_str(" font-style=\"italic\"");
@@ -224,6 +224,25 @@ mod tests {
             assert!(svg.contains(part), "{part} in {svg}");
         }
         assert!(svg.starts_with("<svg ") && svg.ends_with("</svg>") && svg.contains("style=\"left:1px\""), "{svg}");
+    }
+
+    #[test]
+    fn custom_font_families_keep_a_generic_fallback_and_are_escaped() {
+        let prims = [Prim::Text {
+            role: "title".into(),
+            format: gridcraft_model::ChartTextFormat { name: Some("A & <Serif>".into()), ..Default::default() },
+            x: 0.0,
+            y: 0.0,
+            text: "Title".into(),
+            size: 10.0,
+            color: [0, 0, 0, 255],
+            bold: false,
+            align: HAlign::Left,
+            valign: VAlign::Bottom,
+            rotation: 0.0,
+        }];
+        let svg = prims_svg(&prims, 100.0, 50.0, "");
+        assert!(svg.contains("font-family=\"A &amp; &lt;Serif&gt;, Helvetica, Arial, sans-serif\""), "{svg}");
     }
 
     #[test]

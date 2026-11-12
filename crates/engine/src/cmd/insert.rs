@@ -1153,8 +1153,20 @@ pub(super) fn chart_export(s: &mut Session, p: &Json) -> Result<Json> {
 /// Duplicates a chart through the same validated, undoable snapshot path used by paste.
 pub(super) fn chart_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, ci) = find_chart(s, p)?;
-    let chart = s.doc()?.wb.sheet(si).and_then(|sh| sh.charts.get(ci)).ok_or_else(|| bad("chart.duplicate", "no such chart"))?;
+    let chart = s.doc()?.wb.sheet(si).and_then(|sh| sh.charts.get(ci)).cloned().ok_or_else(|| bad("chart.duplicate", "no such chart"))?;
+    let chart = duplicate_snapshot(chart);
     chart_paste(s, &json!({"snapshot":chart,"at":p.get("at")}))
+}
+
+fn duplicate_snapshot(mut chart: Chart) -> Chart {
+    // Existing workbook charts can be larger than the bounds allowed for pasted snapshots.
+    clamp_duplicate_anchor(&mut chart.anchor);
+    chart
+}
+
+fn clamp_duplicate_anchor(anchor: &mut Anchor) {
+    anchor.width = anchor.width.clamp(20.0, 10000.0);
+    anchor.height = anchor.height.clamp(20.0, 10000.0);
 }
 
 /// Validates an imported chart snapshot before inserting it with a fresh object ID.
@@ -2033,6 +2045,13 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_chart_dimensions_are_clamped_to_snapshot_limits() {
+        let mut anchor = Anchor { width: 12_000.0, height: 5.0, ..Default::default() };
+        clamp_duplicate_anchor(&mut anchor);
+        assert_eq!((anchor.width, anchor.height), (10_000.0, 20.0));
+    }
 
     #[test]
     fn chart_from_whole_columns_uses_the_rows_in_use() {

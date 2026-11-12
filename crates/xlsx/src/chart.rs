@@ -362,10 +362,6 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
             } else {
                 format.horizontal_gridline = style;
             }
-        } else if category_grid {
-            format.vertical_gridline = Default::default();
-        } else {
-            format.horizontal_gridline = Default::default();
         }
         options.number_format =
             a.child("numFmt").filter(|n| n.attr("sourceLinked") == Some("0")).and_then(|n| n.attr("formatCode")).map(str::to_string);
@@ -819,7 +815,7 @@ pub(crate) fn format_extension(format: &gridcraft_model::ChartFormat, prefix: &s
 
 // ---------------------------------------------------------------- writing
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum G {
     Bar { bar: bool, grouping: &'static str },
     Line { stacked: bool, markers: bool },
@@ -1131,6 +1127,8 @@ fn series_format_xml(spec: &gridcraft_model::ChartSeriesFormat, idx: usize, g: G
 }
 
 fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize, spec: Option<&gridcraft_model::ChartSeriesFormat>) -> String {
+    // Pie, doughnut, and stock series do not support these series-wide overrides natively.
+    let spec = spec.filter(|_| !matches!(g, G::Pie | G::Doughnut | G::Stock));
     let smooth = spec.and_then(|s| s.smooth).unwrap_or(s.smooth);
     let mut x = format!("<c:ser><c:idx val=\"{idx}\"/><c:order val=\"{idx}\"/>");
     if let Some(n) = &s.name {
@@ -1586,11 +1584,25 @@ mod marker_safety_tests {
     }
 
     #[test]
+    fn pie_doughnut_and_stock_ignore_unsupported_series_wide_styles() {
+        let series = Series { values: "A1:A2".into(), ..Default::default() };
+        let spec = gridcraft_model::ChartSeriesFormat { fill_color: Some([255, 0, 0, 255]), line_width: Some(4.0), ..Default::default() };
+        for kind in [G::Pie, G::Doughnut, G::Stock] {
+            let xml = series_xml(&series, 0, kind, &Workbook::default(), 0, Some(&spec));
+            assert!(!xml.contains("<c:spPr><a:solidFill"), "unsupported fill override leaked into {kind:?}: {xml}");
+        }
+        let stock = series_xml(&series, 0, G::Stock, &Workbook::default(), 0, Some(&spec));
+        assert!(stock.contains("<a:ln w=\"19050\"><a:noFill/></a:ln>"), "stock keeps its default no-line styling: {stock}");
+    }
+
+    #[test]
     fn native_xlsx_format_overrides_extension_but_extension_keeps_gridcraft_only_fields() {
         let mut custom = gridcraft_model::ChartFormat::default();
         custom.x_axis.minimum = Some(5.0);
         custom.x_axis.maximum = Some(50.0);
         custom.legend_overlay = true;
+        custom.horizontal_gridline.width = Some(2.5);
+        custom.vertical_gridline.color = Some([12, 34, 56, 255]);
         custom.text.insert("title".into(), gridcraft_model::ChartTextFormat { size: Some(22.0), ..Default::default() });
         custom.series.insert(0, gridcraft_model::ChartSeriesFormat { marker: Some("circle".into()), smooth: Some(false), ..Default::default() });
         let ext = format_extension(&custom, "c");
@@ -1607,5 +1619,7 @@ mod marker_safety_tests {
         assert_eq!(chart.format.series[&0].marker, None);
         assert_eq!(chart.format.series[&0].smooth, Some(true));
         assert_eq!(chart.format.series[&0].line_width, Some(2.0));
+        assert_eq!(chart.format.horizontal_gridline.width, Some(2.5));
+        assert_eq!(chart.format.vertical_gridline.color, Some([12, 34, 56, 255]));
     }
 }

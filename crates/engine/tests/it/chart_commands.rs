@@ -364,6 +364,9 @@ fn chart_text_format_reaches_html_and_pdf() {
 
     s.execute("chart.set", json!({"format":{"text":{"title":{"name":"A \" & <Serif>","italic":true}}}})).unwrap();
     let html = io::to_html(&s.doc().unwrap().wb, 0).unwrap();
-    assert!(html.contains("font-family=\"A &quot; &amp; &lt;Serif&gt;\""), "chart font must be escaped in HTML");
+    assert!(
+        html.contains("font-family=\"A &quot; &amp; &lt;Serif&gt;, Helvetica, Arial, sans-serif\""),
+        "chart font must be escaped and retain a generic fallback in HTML"
+    );
     assert!(html.contains("font-style=\"italic\""));
 }

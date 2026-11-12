@@ -147,7 +147,7 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
             surface
         })
         .map(|surface| gridcraft_model::ChartStroke { color: surface.border, width: surface.border_width })
-        .unwrap_or_default();
+        .unwrap_or_else(|| format.horizontal_gridline.clone());
     for (i, native_series) in region.kids("series").filter(|s| s.attr("layoutId") != Some("paretoLine")).enumerate() {
         if native_series.child("spPr").is_some() {
             let sp = native_series.child("spPr");
@@ -486,6 +486,21 @@ mod quartile_tests {
             assert_eq!(chart.format.plot_area.border_width, expected, "plot border: {width}");
             assert_eq!(chart.format.horizontal_gridline.width, expected, "gridlines: {width}");
         }
+    }
+
+    #[test]
+    fn hidden_native_gridlines_preserve_the_extension_style() {
+        let format = gridcraft_model::ChartFormat {
+            horizontal_gridline: gridcraft_model::ChartStroke { color: Some([12, 34, 56, 255]), width: Some(2.5) },
+            ..Default::default()
+        };
+        let extension = crate::chart::format_extension(&format, "cx");
+        let xml = format!(
+            r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:gc="urn:gridcraft:chart-format:1" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">{extension}<cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="boxWhisker"/></cx:plotAreaRegion><cx:axis id="1"/></cx:plotArea></cx:chart></cx:chartSpace>"#
+        );
+        let chart = read_chartex(&crate::xml::parse(xml.as_bytes()).unwrap()).unwrap();
+        assert_eq!(chart.format.horizontal_gridline.color, Some([12, 34, 56, 255]));
+        assert_eq!(chart.format.horizontal_gridline.width, Some(2.5));
     }
 
     #[test]

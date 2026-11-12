@@ -1083,12 +1083,24 @@ fn chart_number(ui: &mut Ui, label: &str, value: &mut Option<f64>) -> bool {
 }
 
 fn chart_number_f32(ui: &mut Ui, label: &str, value: &mut Option<f32>) -> bool {
-    let mut n = value.map(f64::from);
+    let mut n = value.map(chart_f32_as_f64);
     if chart_number(ui, label, &mut n) {
         *value = n.map(|v| v as f32);
         true
     } else {
         false
+    }
+}
+
+fn chart_f32_as_f64(value: f32) -> f64 {
+    value.to_string().parse::<f64>().unwrap_or_else(|_| f64::from(value))
+}
+
+#[cfg(test)]
+mod chart_number_tests {
+    #[test]
+    fn f32_fields_use_the_shortest_f32_text() {
+        assert_eq!(super::chart_f32_as_f64(1.1_f32), 1.1_f64);
     }
 }
 
