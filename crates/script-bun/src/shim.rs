@@ -845,13 +845,16 @@ class Workbook {
   }
   getWorksheet(name: string): Worksheet | undefined {
     // ExcelScript returns `undefined` for a name the workbook does not have, so
-    // `workbook.getWorksheet("Report") ?? workbook.addWorksheet("Report")` works.
+    // `workbook.getWorksheet("Report") ?? workbook.addWorksheet("Report")` works. The
+    // returned sheet keeps the workbook's stored spelling: the engine compares names with
+    // ASCII-only case folding, so answering with the requested spelling would fail later calls.
     const sheets = bridge("Workbook.getWorksheets", {}) as any[];
     const wanted = String(name).toLowerCase();
-    if (!sheets.some((sheet) => String(sheet.name).toLowerCase() === wanted)) {
+    const found = sheets.find((sheet) => String(sheet.name).toLowerCase() === wanted);
+    if (!found) {
       return undefined;
     }
-    return new Worksheet(String(name));
+    return new Worksheet(String(found.name));
   }
   getActiveCell(): Range {
     const info = bridge("Workbook.getActiveCell", {});

@@ -308,12 +308,23 @@ pub fn parse_response(line: &str) -> Result<Response, BridgeError> {
         return Err(BridgeError::protocol("an empty line is not a reply"));
     }
     parse_bounded(line)?;
-    // A `null` result is a result: serde reads it as `None`, so the rule is about the key.
+    // A `null` result is a result: serde reads it as `None`, so the rule is about the raw JSON.
+    // `{"result": null, "error": null}` carries neither: a null error is the absence of an error.
     let value: Json = serde_json::from_str(line).map_err(|e| BridgeError::protocol(format!("not a bridge reply: {e}")))?;
-    if value.get("result").is_none() && value.get("error").is_none() {
+    // A present `"result"` key counts even when its value is null (`Some(Null)` and `None`
+    // both serialize the same way); a null `"error"` is the absence of an error.
+    let has_result = value.get("result").is_some();
+    let has_error = value.get("error").is_some_and(|v| !v.is_null());
+    if !has_result && !has_error {
         return Err(BridgeError::protocol("a reply carries a result or an error"));
     }
-    serde_json::from_value(value).map_err(|e| BridgeError::protocol(format!("not a bridge reply: {e}")))
+    let mut response: Response = serde_json::from_value(value).map_err(|e| BridgeError::protocol(format!("not a bridge reply: {e}")))?;
+    // Serde reads `"result": null` as `None`, which `to_line` would then omit: restore it so
+    // the parsed reply serializes back to the line it came from.
+    if has_result && response.result.is_none() {
+        response.result = Some(Json::Null);
+    }
+    Ok(response)
 }
 
 #[cfg(test)]
@@ -322,10 +333,20 @@ mod null_reply_tests {
 
     #[test]
     fn a_null_result_round_trips_through_parse_response() {
+        // `{"result": null}` is a result, not the absence of one: the parsed reply must carry
+        // it as `Some(Null)` so `to_line` writes the same line back.
         let line = Response::ok(1, serde_json::Value::Null).to_line();
         let parsed = parse_response(&line).unwrap();
         assert!(parsed.error.is_none());
-        assert!(parsed.result.is_none(), "a null result is still a result");
+        assert_eq!(parsed.result, Some(Json::Null));
+        assert_eq!(parsed.to_line(), line);
+    }
+
+    #[test]
+    fn a_null_error_alone_is_not_a_reply() {
+        // A line with neither a result nor an error is refused, even when the `error` key is
+        // present with a null value.
+        assert!(parse_response(r#"{"id":1,"error":null}"#).is_err());
     }
 }
 

@@ -261,6 +261,30 @@ function main(workbook: ExcelScript.Workbook) {
 
 #[test]
 #[ignore = "needs Bun; set GRIDCRAFT_BUN"]
+fn get_worksheet_keeps_the_stored_sheet_spelling() {
+    let Some(host) = host() else { return };
+    // A differently-cased lookup must answer with the stored name (`Data`), not the
+    // requested spelling: the engine compares names with ASCII-only case folding, so a
+    // later call with the requested spelling would fail.
+    let script = r#"
+function main(workbook: ExcelScript.Workbook) {
+  const sheet = workbook.getWorksheet("data");
+  console.log(sheet ? sheet.getName() : "missing");
+}
+"#;
+    let mut calls = Calls { calls: Vec::new() };
+    let report = host.run(script, &Limits::default(), &mut calls).expect("the script runs");
+    assert_eq!(report.output, vec!["Data".to_string()]);
+    // The second call is the stored spelling, not the requested lowercase one: without the
+    // fix the shim asks for `getName` with `sheet: "data"`, which the engine (ASCII-only
+    // case folding) answers with "no such worksheet".
+    assert_eq!(calls.calls[0].method, "Workbook.getWorksheets");
+    assert_eq!(calls.calls[1].method, "Worksheet.getName");
+    assert_eq!(calls.calls[1].params["sheet"], json!("Data"));
+}
+
+#[test]
+#[ignore = "needs Bun; set GRIDCRAFT_BUN"]
 fn a_missing_table_column_is_undefined() {
     let Some(host) = host() else { return };
     // `table.getColumn("Nope") ?? …` is the documented way to look a column up.

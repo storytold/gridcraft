@@ -1233,37 +1233,39 @@ fn validation_set(s: &mut Session, params: &Json) -> Result<Json, BridgeError> {
     Ok(Json::Null)
 }
 
-/// The ExcelScript `ChartType` name for a model kind (names only; the reference is the source of
-/// the names).
+/// The ExcelScript `ChartType` name for a model kind, as `ExcelScriptNs` defines it: the
+/// getter must match the enum (`ColumnClustered`, `LineStacked`, `BoxWhisker`), or
+/// `chart.getChartType() === ExcelScript.ChartType.pie` never holds. `chart_kind_from_name`
+/// lowercases its input, so parsing still accepts either casing.
 pub(crate) fn chart_type_name(kind: ChartKind) -> &'static str {
     match kind {
-        ChartKind::ColumnClustered => "columnClustered",
-        ChartKind::ColumnStacked => "columnStacked",
-        ChartKind::ColumnStacked100 => "columnStacked100",
-        ChartKind::BarClustered => "barClustered",
-        ChartKind::BarStacked => "barStacked",
-        ChartKind::BarStacked100 => "barStacked100",
-        ChartKind::Line => "line",
-        ChartKind::LineMarkers => "lineMarkers",
-        ChartKind::LineStacked => "lineStacked",
-        ChartKind::Pie => "pie",
-        ChartKind::Doughnut => "doughnut",
-        ChartKind::Area => "area",
-        ChartKind::AreaStacked => "areaStacked",
-        ChartKind::AreaStacked100 => "areaStacked100",
-        ChartKind::Scatter => "scatter",
-        ChartKind::ScatterLines => "scatterLines",
-        ChartKind::Bubble => "bubble",
-        ChartKind::Radar => "radar",
-        ChartKind::Histogram => "histogram",
-        ChartKind::Waterfall => "waterfall",
-        ChartKind::Funnel => "funnel",
-        ChartKind::Treemap => "treemap",
-        ChartKind::Sunburst => "sunburst",
-        ChartKind::BoxWhisker => "boxwhisker",
-        ChartKind::Stock => "stock",
+        ChartKind::ColumnClustered => "ColumnClustered",
+        ChartKind::ColumnStacked => "ColumnStacked",
+        ChartKind::ColumnStacked100 => "ColumnStacked100",
+        ChartKind::BarClustered => "BarClustered",
+        ChartKind::BarStacked => "BarStacked",
+        ChartKind::BarStacked100 => "BarStacked100",
+        ChartKind::Line => "Line",
+        ChartKind::LineMarkers => "LineMarkers",
+        ChartKind::LineStacked => "LineStacked",
+        ChartKind::Pie => "Pie",
+        ChartKind::Doughnut => "Doughnut",
+        ChartKind::Area => "Area",
+        ChartKind::AreaStacked => "AreaStacked",
+        ChartKind::AreaStacked100 => "AreaStacked100",
+        ChartKind::Scatter => "Scatter",
+        ChartKind::ScatterLines => "ScatterLines",
+        ChartKind::Bubble => "Bubble",
+        ChartKind::Radar => "Radar",
+        ChartKind::Histogram => "Histogram",
+        ChartKind::Waterfall => "Waterfall",
+        ChartKind::Funnel => "Funnel",
+        ChartKind::Treemap => "Treemap",
+        ChartKind::Sunburst => "Sunburst",
+        ChartKind::BoxWhisker => "BoxWhisker",
+        ChartKind::Stock => "Stock",
         // ExcelScript has no combo chart type; the column form is the closest single kind.
-        ChartKind::Combo => "columnClustered",
+        ChartKind::Combo => "ColumnClustered",
     }
 }
 
@@ -1382,5 +1384,23 @@ mod tests {
             let (t, sub) = chart_kind_from_name(name);
             assert_eq!(crate::cmd::insert::chart_kind(t, sub), kind, "{name}");
         }
+    }
+
+    #[test]
+    fn chart_getter_names_match_the_excel_script_enum() {
+        // `getChartType` must answer the `ExcelScriptNs` value (`ColumnClustered`), or a script
+        // comparing with `ExcelScript.ChartType.pie` never matches. The parser lowercases, so
+        // each returned name is still a known name the setter accepts back.
+        for (kind, name) in
+            [(ChartKind::ColumnClustered, "ColumnClustered"), (ChartKind::LineStacked, "LineStacked"), (ChartKind::BoxWhisker, "BoxWhisker")]
+        {
+            assert_eq!(chart_type_name(kind), name);
+            assert!(chart_name_known(name), "{name}");
+            let (t, sub) = chart_kind_from_name(name);
+            assert_eq!(crate::cmd::insert::chart_kind(t, sub), kind, "{name}");
+        }
+        // ExcelScript has no combo type: the getter answers the closest kind, which parses back.
+        assert_eq!(chart_type_name(ChartKind::Combo), "ColumnClustered");
+        assert!(chart_name_known("ColumnClustered"));
     }
 }

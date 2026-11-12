@@ -1038,6 +1038,13 @@ mod tests {
             let texts = BridgeCall::new("Range.setTexts", json!({"range": "A2", "texts": [["'abc"]]}));
             gridcraft_script::BridgeExecutor::execute(&mut bridge, &texts).unwrap();
             assert_eq!(value(bridge.session, 0, "A2"), Value::Text("'abc".into()));
+            // The old code also preserved `'abc` here; only the `=` case regressed, which
+            // `a_verbatim_text_write_keeps_text_that_starts_with_equals` already covers with
+            // `setText("=1+1")` and `setTexts("=B1*2")`. This pins the same path with a leading
+            // apostrophe: `setTexts` stores the text given, marker included.
+            let equals = BridgeCall::new("Range.setTexts", json!({"range": "A3", "texts": [["'=1+1"]]}));
+            gridcraft_script::BridgeExecutor::execute(&mut bridge, &equals).unwrap();
+            assert_eq!(value(bridge.session, 0, "A3"), Value::Text("'=1+1".into()));
         }
         // The recording's marker still decodes: `'=1+1` with `parse: false` is the text `=1+1`.
         s.execute("range.setValues", json!({"range": "A3", "values": [["'=1+1"]], "parse": false})).unwrap();
