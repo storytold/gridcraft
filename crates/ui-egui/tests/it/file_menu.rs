@@ -348,6 +348,28 @@ fn closing_the_window_can_save_first_and_a_saved_workbook_closes_at_once() {
 }
 
 #[test]
+fn closing_the_window_keeps_a_text_box_draft_as_an_unsaved_change() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-close-text-box-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx").to_string_lossy().into_owned();
+    let mut h = harness(Services::default());
+    let r = h.state_mut().run("insert.textBox", serde_json::json!({"at": "B2", "width": 240, "height": 120, "text": "Note"})).unwrap();
+    let id = r["shape"].as_u64().unwrap() as u32;
+    h.state_mut().run("file.save", serde_json::json!({"path": &path})).unwrap();
+    h.run_steps(2);
+    assert!(h.state_mut().begin_text_box_edit(id));
+    h.run_steps(2);
+    h.state_mut().text_box_editor.as_mut().unwrap().text = "Draft note".into();
+    // The workbook itself is saved; only the text box being typed in holds a change. Closing the
+    // window (one window, as when docked in a host) enters the draft and asks about it.
+    let sent = request_window_close(&mut h);
+    assert!(sent.contains(&egui::ViewportCommand::CancelClose), "the draft holds the window open: {sent:?}");
+    assert!(h.state().text_box_editor.is_none(), "the draft was entered");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn quitting_with_one_of_two_workbooks_unsaved_asks_once() {
     let mut h = harness(Services::default());
     h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();

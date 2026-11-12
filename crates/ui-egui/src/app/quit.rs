@@ -7,8 +7,13 @@ impl SheetApp {
         if self.native_windows || self.allow_close || !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
-        // A cell still being edited is part of the workbook, as for File › Close.
-        if !self.commit_edit(0, 0, false, false) {
+        // A cell or text box still being edited is part of the workbook, as for File › Close: it
+        // is entered first, so its change counts as unsaved. A draft that can't be entered keeps
+        // the window open, with the reason shown.
+        if let Err(e) = self.settle_drafts() {
+            if self.message.is_none() {
+                self.message = Some(("Text Box".into(), super::clean_error(&e)));
+            }
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
         }
