@@ -257,11 +257,8 @@ fn axis_scales(
             // Lines contribute only their top value, bars both ends (no per-point `Vec`).
             spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| [*b, *t].into_iter().skip(usize::from(line)))
         }));
-        let (mut lo, hi) = range.unwrap_or((0.0, 0.0));
+        let (lo, hi) = range.unwrap_or((0.0, 0.0));
         let primary_options = if horizontal { &chart.format.x_axis } else { &chart.format.y_axis };
-        if !axis && primary_options.logarithmic {
-            lo = members.iter().filter_map(|i| spans.get(*i)).flatten().flatten().map(|(_, top)| *top).filter(|v| *v > 0.0).fold(hi, f64::min);
-        }
         let (scale, fmt) = if all100 {
             (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), Fmt::new("0%"))
         } else {
@@ -276,7 +273,18 @@ fn axis_scales(
             )
         };
         let mut scale = if !axis && all100 && primary_options.logarithmic {
-            configured_scale(lo, hi, false, primary_options)
+            let mut options = primary_options.clone();
+            options.minimum = options.minimum.or_else(|| {
+                members
+                    .iter()
+                    .filter_map(|i| spans.get(*i))
+                    .flatten()
+                    .flatten()
+                    .flat_map(|(bottom, top)| [*bottom, *top])
+                    .filter(|value| value.is_finite() && *value > 0.0)
+                    .min_by(f64::total_cmp)
+            });
+            configured_scale(scale.min, scale.max, false, &options)
         } else if !axis && all100 && (primary_options.minimum.is_some() || primary_options.maximum.is_some()) {
             configured_scale(scale.min, scale.max, false, primary_options)
         } else {

@@ -174,6 +174,28 @@ fn logarithmic_stacked_line_uses_positive_accumulated_tops() {
 }
 
 #[test]
+fn logarithmic_stacked_100_axis_keeps_the_smallest_positive_share() {
+    let kind = ChartKind::LineStacked100;
+    let mut c = chart(kind);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.y_title = None;
+    c.format.y_axis.logarithmic = true;
+    let tiny_color = [220, 30, 40, 255];
+    let data = ChartData {
+        categories: vec!["A".into(), "B".into()],
+        series: vec![series("Tiny", &[1.0, 1.0], tiny_color, kind), series("Large", &[1_000_000.0, 1_000_000.0], [20, 80, 180, 255], kind)],
+        ..Default::default()
+    };
+    let prims = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+    assert!(
+        prims.iter().any(|primitive| matches!(primitive, Prim::Line { color, pts, .. } if *color == tiny_color && pts.len() >= 2)),
+        "the 1e-6 normalized series should remain visible on the automatic logarithmic axis"
+    );
+}
+
+#[test]
 fn logarithmic_area_chart_omits_non_positive_values() {
     let mut c = chart(ChartKind::Area);
     c.title = None;
