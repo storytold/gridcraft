@@ -125,6 +125,18 @@ fn depreciation() {
     close_tol(ev("DDB", vec![n(2400.0), n(300.0), n(10.0), n(2.0), n(1.5)]), 306.0, 1e-12);
     close_tol(ev("DDB", vec![n(2400.0), n(300.0), n(10.0), n(10.0)]), 22.1225472, 1e-8);
     is_err(ev("DDB", vec![n(2400.0), n(300.0), n(10.0), n(11.0)]), CellError::Num);
+    // A period below 1 depreciates like the first (Excel values from #3956); 1.5 and 2.5 keep
+    // their former results.
+    for (life, period, factor, excel) in [
+        (5.0, 0.5, 2.0, 400.0),
+        (2.5, 0.5, 2.0, 800.0),
+        (5.0, 0.5, 10.0, 900.0),
+        (5.0, 1.0, 2.0, 400.0),
+        (5.0, 1.5, 2.0, 309.838667696593),
+        (5.0, 2.5, 2.0, 185.903200617956),
+    ] {
+        close_tol(ev("DDB", vec![n(1000.0), n(100.0), n(life), n(period), n(factor)]), excel, 1e-9);
+    }
     close_tol(ev("VDB", vec![n(2400.0), n(300.0), n(3650.0), n(0.0), n(1.0)]), 1.315068493, 1e-8);
     close(ev("VDB", vec![n(2400.0), n(300.0), n(120.0), n(0.0), n(1.0)]), 40.0);
     close(ev("VDB", vec![n(2400.0), n(300.0), n(10.0), n(0.0), n(1.0)]), 480.0);
