@@ -179,6 +179,18 @@ impl FillExtent {
 
 /// Fills `target` (which contains `src` at one edge) from the pattern in `src`.
 pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: FillMode) -> Result<()> {
+    fill_except(cx, sheet, src, target, mode, &std::collections::BTreeSet::new())
+}
+
+/// [`fill`], leaving the rows in `skip_rows` untouched (Fill Down over a filtered range).
+pub fn fill_except(
+    cx: &mut Ctx,
+    sheet: usize,
+    src: RangeRef,
+    target: RangeRef,
+    mode: FillMode,
+    skip_rows: &std::collections::BTreeSet<u32>,
+) -> Result<()> {
     let custom = cx.wb.custom_lists.clone();
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
     let extent = FillExtent::new(src, target);
@@ -199,7 +211,7 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
                 (c, sh.cell(c).cloned())
             })
             .collect();
-        let targets: Vec<CellRef> = if vertical {
+        let mut targets: Vec<CellRef> = if vertical {
             let rows: Vec<u32> =
                 if forward { (src.end.row + 1..=target.end.row).collect() } else { (target.start.row..src.start.row).rev().collect() };
             rows.into_iter().map(|r| CellRef::new(r, lane)).collect()
@@ -208,6 +220,7 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
                 if forward { (src.end.col + 1..=target.end.col).collect() } else { (target.start.col..src.start.col).rev().collect() };
             cols.into_iter().map(|c| CellRef::new(lane, c)).collect()
         };
+        targets.retain(|t| !skip_rows.contains(&t.row));
         let fmt = |c: &(CellRef, Option<Cell>)| cx.wb.styles.get(c.1.as_ref().map(|c| c.style).unwrap_or_default()).num_fmt.as_str();
         let pattern = Pattern::for_mode(&src_cells, &custom, cx.wb.date_system, src_cells.first().map(fmt).unwrap_or_default(), mode);
         // A source with no common pattern (`Product 1`, `On backorder`): each cell continues its
