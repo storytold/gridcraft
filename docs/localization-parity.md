@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (Ukrainian Chart is Діаграма); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 ## Traditional Chinese update / 繁體中文更新（2026-11-03）
 
@@ -145,6 +145,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |
 | 2026-11-10 | minor | Diagram and Decorative Text labels in all 18 non-English catalogs; Diagram never repeats the catalog's chart word (German `Schema`, Ukrainian `Схема`, Romanian `Schemă`), see [feature-names.md](feature-names.md) |
 | 2026-11-03 | minor | Traditional Chinese: 1,196 lookup entries, script-aware locale selection, persistent preferences and native TC font fallback / 繁中：1,196 個查表項目、繁簡語系分流、設定保存與桌面繁中字型回退 |
 | 2026-10-31 | minor | System and embedded CJK text fallbacks share the Latin baseline in cells, editors and window titles; other scripts, symbols and emoji keep their alignment |
