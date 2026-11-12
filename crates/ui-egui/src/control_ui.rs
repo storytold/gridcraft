@@ -162,12 +162,13 @@ fn press_binding(app: &SheetApp, params: &Json) -> Option<String> {
 pub fn press(app: &mut SheetApp, params: Json) {
     let bound = press_binding(app, &params);
     let Err(e) = app.run("control.press", params.clone()) else { return };
+    let lang = app.ui.language;
     let (text, choices) = if let Some(q) = approve_text(&e) {
-        (q, json!([["Run", {"approve": true}]]))
+        (lang.tr_error(&q), json!([["Run", {"approve": true}]]))
     } else if let Some(q) = confirm_text(&e) {
         let what = q.split_once(" Overwrite them").map_or(q.as_str(), |(a, _)| a).trim_end_matches(['.', ' ']).to_string();
         (
-            format!("{what}. Overwrite them, or move the data out of the way?"),
+            lang.tr("{what}. Overwrite them, or move the data out of the way?").replace("{what}", &lang.tr_error(&what)),
             json!([["Overwrite", {"onConflict": "overwrite"}], ["Shift Down", {"onConflict": "shiftDown"}], ["Shift Right", {"onConflict": "shiftRight"}]]),
         )
     } else {
@@ -190,7 +191,7 @@ pub fn open_question(params: &Json) -> Option<Dialog> {
 
 /// The prompt [`press`] opens: the question, a button per answer, and Cancel.
 pub fn question_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut bool) {
-    ui.label(val(d, "text"));
+    ui.label(app.ui.language.tr_error(&val(d, "text")));
     ui.add_space(8.0);
     let choices: Vec<(String, Json)> = d
         .values
@@ -200,11 +201,11 @@ pub fn question_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &m
         .unwrap_or_default();
     let mut answer = None;
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if ui.button(" Cancel ").clicked() {
+        if ui.button(app.ui.language.tr("Cancel")).clicked() {
             *open = false;
         }
         for (label, extra) in choices.iter().rev() {
-            if ui.button(format!(" {label} ")).clicked() {
+            if ui.button(format!(" {} ", app.ui.language.tr(label))).clicked() {
                 answer = Some(extra.clone());
             }
         }
@@ -223,7 +224,7 @@ pub fn question_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &m
             } else {
                 "The button changed while the question was open, so nothing ran. Press it again to see what it runs now."
             };
-            app.message = Some(("Button".into(), why.into()));
+            app.message = Some(("Button".into(), app.ui.language.tr(why).into()));
             return;
         }
         if let (Some(p), Some(x)) = (params.as_object_mut(), extra.as_object()) {
@@ -272,7 +273,8 @@ pub fn open_assign(app: &SheetApp, params: &Json) -> Option<Dialog> {
             v["macro"] = json!(macros(app).first().map(|m| m.0.clone()).unwrap_or_default());
         }
     }
-    Some(Dialog::custom("assignAction", &format!("Assign Action: {}", c.display_name()), v))
+    let title = app.ui.language.tr("Assign Action: {name}").replace("{name}", &c.display_name());
+    Some(Dialog::custom("assignAction", &title, v))
 }
 
 /// The `control.assign` params the dialog describes, or why it can't yet.
@@ -327,23 +329,24 @@ fn text_field(ui: &mut Ui, d: &mut Dialog, key: &str, width: f32) {
 
 pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut bool) {
     let t = Tokens::get(ui.ctx());
+    let lang = app.ui.language;
     let mut mode = val(d, "mode");
     ui.horizontal(|ui| {
-        ui.radio_value(&mut mode, "macro".to_string(), "Run a macro");
-        ui.radio_value(&mut mode, "command".to_string(), "Run a command");
+        ui.radio_value(&mut mode, "macro".to_string(), lang.tr("Run a macro"));
+        ui.radio_value(&mut mode, "command".to_string(), lang.tr("Run a command"));
     });
     d.values.insert("mode".into(), json!(mode));
     ui.add_space(4.0);
     if mode == "macro" {
         let macros = macros(app);
         let mut name = val(d, "macro");
-        ui.label("Macro name:");
+        ui.label(lang.tr("Macro name:"));
         ui.add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY).id_salt("assign_macro"));
         egui::Frame::NONE.fill(t.input_bg).stroke(Stroke::new(1.0, t.input_border)).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_size(vec2(ui.available_width(), 110.0));
             egui::ScrollArea::vertical().max_height(110.0).show(ui, |ui| {
                 if macros.is_empty() {
-                    ui.label(egui::RichText::new("This workbook has no macros yet.").italics().color(t.text_dim));
+                    ui.label(egui::RichText::new(lang.tr("This workbook has no macros yet.")).italics().color(t.text_dim));
                 }
                 for (n, desc) in &macros {
                     let r =
@@ -358,29 +361,29 @@ pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
         d.values.insert("macro".into(), json!(name));
         ui.add_space(4.0);
         let mut input = val(d, "input");
-        ui.label("Run it on:");
-        ui.radio_value(&mut input, "selection".to_string(), "The selection when the button is pressed");
+        ui.label(lang.tr("Run it on:"));
+        ui.radio_value(&mut input, "selection".to_string(), lang.tr("The selection when the button is pressed"));
         ui.horizontal(|ui| {
-            ui.radio_value(&mut input, "fixed".to_string(), "Always this range:");
+            ui.radio_value(&mut input, "fixed".to_string(), lang.tr("Always this range:"));
             if input == "fixed" {
                 text_field(ui, d, "range", 160.0);
             }
         });
         d.values.insert("input".into(), json!(input));
         ui.horizontal(|ui| {
-            ui.label("Output to (optional):");
+            ui.label(lang.tr("Output to (optional):"));
             text_field(ui, d, "output", 120.0);
         });
     } else {
         let mut search = val(d, "search");
         let command = val(d, "command");
-        ui.label("Command:");
-        ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search commands").desired_width(f32::INFINITY).id_salt("assign_search"));
+        ui.label(lang.tr("Command:"));
+        ui.add(egui::TextEdit::singleline(&mut search).hint_text(lang.tr("Search commands")).desired_width(f32::INFINITY).id_salt("assign_search"));
         egui::Frame::NONE.fill(t.input_bg).stroke(Stroke::new(1.0, t.input_border)).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_size(vec2(ui.available_width(), 130.0));
             egui::ScrollArea::vertical().max_height(130.0).show(ui, |ui| {
                 for (cid, label) in command_choices(&search) {
-                    let text = format!("{label}  ({cid})");
+                    let text = format!("{}  ({cid})", lang.tr(label));
                     if ui.add(egui::Button::selectable(cid == command, text).min_size(vec2(ui.available_width(), 20.0))).clicked() {
                         d.values.insert("command".into(), json!(cid));
                     }
@@ -392,14 +395,14 @@ pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
         if !doc.is_empty() {
             ui.label(egui::RichText::new(doc).small().color(t.text_dim));
         }
-        ui.label("Parameters (JSON):");
+        ui.label(lang.tr("Parameters (JSON):"));
         let mut params = val(d, "params");
         ui.add(egui::TextEdit::multiline(&mut params).code_editor().desired_rows(3).desired_width(f32::INFINITY).id_salt("assign_params"));
         d.values.insert("params".into(), json!(params));
     }
     let problem = assign_params(d).err();
     if let Some(p) = &problem {
-        ui.label(egui::RichText::new(p).color(t.danger));
+        ui.label(egui::RichText::new(lang.tr_error(p)).color(t.danger));
     }
     let (ok, cancel) = ok_cancel(ui, problem.is_none());
     if cancel || (ok && assign(app, d)) {
@@ -414,8 +417,9 @@ fn ok_cancel(ui: &mut Ui, enabled: bool) -> (bool, bool) {
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let t = Tokens::get(ui.ctx());
-        ok = ui.add_enabled(enabled, egui::Button::new(egui::RichText::new("   OK   ").color(t.on_accent)).fill(t.accent)).clicked();
-        cancel = ui.button(" Cancel ").clicked();
+        let lang = crate::i18n::current(ui.ctx());
+        ok = ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(lang.tr("OK")).color(t.on_accent)).fill(t.accent)).clicked();
+        cancel = ui.button(lang.tr("Cancel")).clicked();
     });
     (ok, cancel)
 }
@@ -455,7 +459,11 @@ pub fn open_format(app: &SheetApp, params: &Json) -> Option<Dialog> {
         "print": c.print,
         "locked": c.locked,
     });
-    let title = if text_only { "Edit Text".to_string() } else { format!("Format Control: {}", c.display_name()) };
+    let title = if text_only {
+        app.ui.language.tr("Edit Text").to_string()
+    } else {
+        app.ui.language.tr("Format Control: {name}").replace("{name}", &c.display_name())
+    };
     Some(Dialog::custom("formatControl", &title, v))
 }
 
@@ -505,6 +513,7 @@ pub fn format_params(app: &SheetApp, d: &Dialog) -> Result<Json, String> {
 
 pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut bool) {
     let t = Tokens::get(ui.ctx());
+    let lang = app.ui.language;
     let Some(c) = d.values.get("id").and_then(Json::as_u64).and_then(|i| u32::try_from(i).ok()).and_then(|id| control(app, id)) else {
         *open = false;
         return;
@@ -512,7 +521,7 @@ pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
     let text_only = d.values.get("textOnly").and_then(Json::as_bool) == Some(true);
     if c.kind == ControlKind::Button {
         let mut text = val(d, "text");
-        ui.label("Text:");
+        ui.label(lang.tr("Text:"));
         ui.add(egui::TextEdit::multiline(&mut text).desired_rows(2).desired_width(f32::INFINITY).id_salt("control_text"));
         d.values.insert("text".into(), json!(text));
     } else {
@@ -523,7 +532,7 @@ pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
             }
             fields.push(("link", "Cell link:"));
             for (key, label) in fields {
-                ui.label(label);
+                ui.label(lang.tr(label));
                 text_field(ui, d, key, if key == "link" { 160.0 } else { 90.0 });
                 ui.end_row();
             }
@@ -531,9 +540,9 @@ pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
         if c.kind == ControlKind::Slider {
             let mut h = d.values.get("horizontal").and_then(Json::as_bool).unwrap_or(true);
             ui.horizontal(|ui| {
-                ui.label("Orientation:");
-                ui.radio_value(&mut h, true, "Horizontal");
-                ui.radio_value(&mut h, false, "Vertical");
+                ui.label(lang.tr("Orientation:"));
+                ui.radio_value(&mut h, true, lang.tr("Horizontal"));
+                ui.radio_value(&mut h, false, lang.tr("Vertical"));
             });
             d.values.insert("horizontal".into(), json!(h));
         }
@@ -541,20 +550,20 @@ pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
     if !text_only {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label("Name:");
+            ui.label(lang.tr("Name:"));
             let mut name = val(d, "name");
             ui.add(egui::TextEdit::singleline(&mut name).hint_text(c.display_name()).desired_width(200.0).id_salt("control_name"));
             d.values.insert("name".into(), json!(name));
         });
         for (key, label) in [("locked", "Locked (when the sheet is protected)"), ("print", "Print object")] {
             let mut on = d.values.get(key).and_then(Json::as_bool).unwrap_or(true);
-            ui.checkbox(&mut on, label);
+            ui.checkbox(&mut on, lang.tr(label));
             d.values.insert(key.into(), json!(on));
         }
     }
     let params = format_params(app, d);
     if let Err(p) = &params {
-        ui.label(egui::RichText::new(p).color(t.danger));
+        ui.label(egui::RichText::new(lang.tr_error(p)).color(t.danger));
     }
     let (ok, cancel) = ok_cancel(ui, params.is_ok());
     if cancel {

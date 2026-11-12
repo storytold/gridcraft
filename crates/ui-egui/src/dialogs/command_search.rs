@@ -2,6 +2,7 @@ use super::{Dialog, Key, SheetApp, json, vec2};
 
 /// Shows enabled commands and their shortcuts from engine metadata.
 pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
+    let lang = app.ui.language;
     let (down, up, home, end, pgup, pgdn) = ui.input_mut(|i| {
         (
             i.consume_key(egui::Modifiers::NONE, Key::ArrowDown),
@@ -13,7 +14,7 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         )
     });
     let width = ui.available_width();
-    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text("Type a command, e.g. freeze, chart, bold…"));
+    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text(lang.tr("Type a command, e.g. freeze, chart, bold…")));
 
     if !d.focus_initialized {
         r.request_focus();
@@ -65,6 +66,8 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     egui::ScrollArea::vertical().max_height(LIST_HEIGHT).auto_shrink([true, false]).show(ui, |ui| {
         let scroll_area_width = ui.available_width();
         for (i, (id, label, menu, shortcut)) in cmds.iter().enumerate() {
+            let label = lang.tr(label);
+            let menu = menu.split(" › ").map(|part| lang.tr(part)).collect::<Vec<_>>().join(" › ");
             let text = match shortcut {
                 Some(keys) => format!("{label}  ({keys})    {menu}"),
                 None => format!("{label}    {menu}"),
