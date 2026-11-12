@@ -34,9 +34,14 @@ fn median_finite_midpoint_does_not_overflow() {
 fn median_midpoint_keeps_small_values_and_argument_semantics() {
     // Halving each operand unconditionally can lose the smallest numbers. Use exact
     // equality here: the usual aggregate-test tolerance would accept zero.
-    for value in [f64::MIN_POSITIVE, -f64::MIN_POSITIVE, f64::from_bits(1), -f64::from_bits(1)] {
+    for value in [f64::MIN_POSITIVE, -f64::MIN_POSITIVE] {
         assert_eq!(ev("MEDIAN", vec![n(value), n(value)]), nv(value));
         assert_eq!(aggregate_values(12, &[nv(value), nv(value)]), nv(value));
+    }
+    // A subnormal is 0, as Excel holds it.
+    for value in [f64::from_bits(1), -f64::from_bits(1)] {
+        assert_eq!(ev("MEDIAN", vec![n(value), n(value)]), nv(0.0));
+        assert_eq!(aggregate_values(12, &[nv(value), nv(value)]), nv(0.0));
     }
     close(ev("MEDIAN", vec![c(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])]), 3.5);
     close(ev("MEDIAN", vec![c(&[1e308, -1e308, 3.0])]), 3.0);
