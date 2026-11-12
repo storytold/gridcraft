@@ -339,14 +339,10 @@ impl RibbonSections {
                 sections.forced_used = false;
                 sections.forced_unpin_at = None;
             } else if sections.forced.is_some() {
-                // The popup the keytip opened has closed (a click picked a row, or Escape
-                // dismissed it): settle back even with no pointer press, or the group would stay
-                // expanded at narrow widths. A focused size field counts as the interaction
-                // still running: the fontSize keytip opens no popup, and the layout must stay
-                // until the field loses focus or the edit completes.
-                let size_field = egui::Id::unique("gridcraft.font_size_box");
-                let editing = ui.ctx().memory(|m| m.focused()) == Some(size_field);
-                let popup_gone = sections.forced_used && !any_popup && !editing;
+                // The popup the keytip opened has closed (Enter applied the size, a click picked
+                // a row, or Escape dismissed it): settle back even with no pointer press, or the
+                // group would stay expanded at narrow widths after a keyboard-only edit.
+                let popup_gone = sections.forced_used && !any_popup;
                 let stale = switched || popup_gone || sections.forced_unpin_at.is_some_and(|at| frame > at);
                 if stale {
                     sections.forced = None;
@@ -406,6 +402,9 @@ impl RibbonSections {
             // that did not open it starts closed.
             let mut open =
                 ui.ctx().data(|d| d.get_temp::<(String, bool)>(open_id)).filter(|(tab, _)| tab == &here).map(|(_, open)| open).unwrap_or(false);
+            if button.clicked() {
+                open = !open;
+            }
             if open {
                 let area = egui::Area::new(button.id.with("section_body"))
                     .order(egui::Order::Foreground)
