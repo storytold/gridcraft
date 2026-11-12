@@ -118,6 +118,24 @@ fn consolidate_opens_its_dialog_and_merges_the_named_sources() {
     assert_eq!((at("A1"), at("B1")), ("30".to_string(), "32".to_string()), "both sources are summed at the destination");
 }
 
+/// The Consolidate dialog defaults its destination to the active cell, not the selection's start:
+/// a B2 active cell in A1:B3 consolidates at B2 instead of overwriting A1.
+#[test]
+fn consolidate_defaults_its_destination_to_the_active_cell() {
+    let mut h = harness();
+    run(&mut h, "range.setValues", json!({"range": "A1:B3", "values": [[1, 2], [3, 4], [5, 6]]}));
+    run(&mut h, "selection.set", json!({"range": "A1:B3", "active": "B2"}));
+    tab(&mut h, "Data");
+    click(&mut h, "Consolidate");
+    let d = h.state().dialog.as_ref().expect("Consolidate opens its dialog");
+    assert_eq!(
+        d.values.get("destination").and_then(Json::as_str),
+        Some("B2"),
+        "the destination is the active cell: {:?}",
+        d.values.get("destination")
+    );
+}
+
 #[test]
 fn pivot_chart_asks_for_the_report_instead_of_failing() {
     let mut h = harness();
@@ -245,6 +263,30 @@ fn the_selection_pane_opens_through_its_ui_command() {
     let r = control(&mut h, "command", json!({"command": "view.selectionPane", "params": {"on": true}}));
     assert_eq!(r["result"]["on"], true);
     assert_eq!(h.state().grid.pane.as_deref(), Some("selection"));
+}
+
+/// A `view.selectionPane` request naming another window acts on that window: `run_in` follows the
+/// engine to the target before dispatch, so the target window's pane opens (not the origin's),
+/// and the origin still shows its own pane afterwards.
+#[test]
+fn selection_pane_commands_reach_the_named_window() {
+    let mut h = harness();
+    let w1 = h.state().session.active_window().expect("the harness opens a window");
+    run(&mut h, "view.newWindow", json!({}));
+    let w2 = h.state().session.active_window().expect("New Window opens a second window");
+    assert_ne!(w1, w2, "the two windows have distinct ids");
+    h.state_mut().enter_window(w1);
+    h.run_steps(2);
+    assert_eq!(h.state().grid.pane, None, "window 1 starts with no pane");
+    // From window 1, open the pane in window 2: the target's UI state is what changes.
+    let r = control(&mut h, "command", json!({"command": "view.selectionPane", "params": {"on": true}, "window": w2}));
+    assert_eq!(r["result"]["on"], true, "the targeted call reports the pane open: {r}");
+    h.state_mut().enter_window(w2);
+    h.run_steps(2);
+    assert_eq!(h.state().grid.pane.as_deref(), Some("selection"), "the target window shows the pane");
+    h.state_mut().enter_window(w1);
+    h.run_steps(2);
+    assert_eq!(h.state().grid.pane, None, "the originating window keeps its own pane state");
 }
 
 /// An unfilled field reaches `run_or_alert` as `""` or `[]`; blank means absent, so the dialogs
