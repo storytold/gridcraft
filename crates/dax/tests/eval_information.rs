@@ -839,6 +839,20 @@ fn isafter_rejects_an_odd_argument_count() {
     // error: here the `3` after the second pair is neither a flag nor paired.
     assert!(eval("ISONORAFTER(1, 1, 2, 2, 3)").is_err());
 }
+
+#[test]
+fn isafter_evaluates_a_computed_flag_once() {
+    // A computed `Order` flag must keep the direction it had when the argument list was split:
+    // the flag is evaluated once and the cached value decides both the split and the sort.
+    // `TRUE` is ascending, `FALSE` is descending (as in `ISAFTER(1, 2, FALSE)` above).
+    assert!(!boolean("ISAFTER(1, 2, IF(1 > 0, TRUE, FALSE))"));
+    assert!(boolean("ISAFTER(2, 1, IF(1 > 0, TRUE, FALSE))"));
+    assert!(boolean("ISAFTER(1, 2, IF(1 > 0, FALSE, TRUE))"));
+    assert!(!boolean("ISAFTER(2, 1, IF(1 > 0, FALSE, TRUE))"));
+    assert!(boolean("ISONORAFTER(1, 1, IF(1 > 0, TRUE, FALSE))"));
+    assert!(boolean("ISONORAFTER(1, 1, IF(1 > 0, FALSE, TRUE))"));
+}
+
 #[test]
 fn contains_row_needs_one_value_per_column() {
     // `Sales` has four columns: a short value list is an error, not a leading-prefix match.

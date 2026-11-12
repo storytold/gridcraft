@@ -267,8 +267,12 @@ fn compare_groups(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, str
         return Err(EvalError::new("ISAFTER/ISONORAFTER need at least two values"));
     }
     let mut possible = vec![None; args.len() + 1];
-    let mut flags = vec![None; args.len()];
-    if !groups(args, 0, ev, ctx, &mut possible, &mut flags)? {
+    // `evaluated` caches the evaluated value of every flag candidate, so a computed Boolean is
+    // evaluated at most once per call: the split phase and the direction read would otherwise
+    // evaluate the same expression twice, and a volatile argument such as `RAND () > 0.5` could
+    // change direction between the two reads.
+    let mut evaluated: Vec<Option<Scalar>> = vec![None; args.len()];
+    if !groups(args, 0, ev, ctx, &mut possible, &mut evaluated)? {
         return Err(EvalError::new("ISAFTER/ISONORAFTER need value pairs"));
     }
     let mut index = 0;
@@ -277,8 +281,13 @@ fn compare_groups(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, str
         let right = ev.eval(&args[index + 1], ctx)?;
         index += 2;
         let mut ascending = true;
-        if index < args.len() && flag_candidate(ev, args, index, ctx, &mut flags)? && groups(args, index + 1, ev, ctx, &mut possible, &mut flags)? {
-            ascending = order_flag_value(ev, &args[index], ctx)?;
+        if index < args.len()
+            && flag_candidate(ev, args, index, ctx, &mut evaluated)?
+            && groups(args, index + 1, ev, ctx, &mut possible, &mut evaluated)?
+        {
+            // The split phase already evaluated this flag into `evaluated`, so the direction
+            // read reuses the cached value and never evaluates twice.
+            ascending = flag_direction(&args[index], &evaluated[index]);
             index += 1;
         }
         let ordering = ordering_with_blanks(&left, &right)?;
@@ -303,7 +312,7 @@ fn groups(
     ev: &Evaluator<'_>,
     ctx: &mut Context,
     possible: &mut [Option<bool>],
-    flags: &mut [Option<bool>],
+    evaluated: &mut [Option<Scalar>],
 ) -> Result<bool, EvalError> {
     if start == args.len() {
         return Ok(true);
@@ -317,44 +326,54 @@ fn groups(
     // A flag is preferred when the arguments after it still group, so an optional `Order` is not
     // mistaken for the first value of the next pair.
     let mut splits = false;
-    if start + 2 < args.len() && flag_candidate(ev, args, start + 2, ctx, flags)? {
-        splits = groups(args, start + 3, ev, ctx, possible, flags)?;
+    if start + 2 < args.len() && flag_candidate(ev, args, start + 2, ctx, evaluated)? {
+        splits = groups(args, start + 3, ev, ctx, possible, evaluated)?;
     }
     if !splits {
-        splits = groups(args, start + 2, ev, ctx, possible, flags)?;
+        splits = groups(args, start + 2, ev, ctx, possible, evaluated)?;
     }
     possible[start] = Some(splits);
     Ok(splits)
 }
 
 /// Whether the argument at `index` can be an `Order` flag, evaluated at most once per call.
-fn flag_candidate(ev: &Evaluator<'_>, args: &[BoundExpr], index: usize, ctx: &mut Context, flags: &mut [Option<bool>]) -> Result<bool, EvalError> {
-    if let Some(known) = flags[index] {
-        return Ok(known);
+///
+/// The single evaluation is stored in `evaluated`, which also feeds [`flag_direction`]: the
+/// direction read reuses the cached [`Scalar`] instead of evaluating the expression again.
+fn flag_candidate(
+    ev: &Evaluator<'_>,
+    args: &[BoundExpr],
+    index: usize,
+    ctx: &mut Context,
+    evaluated: &mut [Option<Scalar>],
+) -> Result<bool, EvalError> {
+    if let Some(cached) = evaluated[index].as_ref() {
+        return Ok(is_order_scalar(&args[index], cached));
     }
-    let candidate = is_order_flag(ev, &args[index], ctx)?;
-    flags[index] = Some(candidate);
+    let value = ev.eval(&args[index], ctx)?;
+    let candidate = is_order_scalar(&args[index], &value);
+    evaluated[index] = Some(value);
     Ok(candidate)
 }
-/// Recognises an optional `Order` argument of `ISAFTER`/`ISONORAFTER`: a Boolean, an
-/// `ASC`/`DESC` keyword, or the documented `0`/`1` shorthand.
-fn is_order_flag(ev: &Evaluator<'_>, argument: &BoundExpr, ctx: &mut Context) -> Result<bool, EvalError> {
+/// Whether an already-evaluated argument reads as an `Order` flag: a Boolean, an `ASC`/`DESC`
+/// keyword, or the documented `0`/`1` shorthand. A computed flag counts when it produced a
+/// Boolean, matching the old `is_order_flag` behaviour; [`flag_direction`] then decides the side.
+fn is_order_scalar(argument: &BoundExpr, value: &Scalar) -> bool {
     match argument {
-        BoundExpr::Literal(Literal::Boolean(_)) => Ok(true),
-        BoundExpr::Keyword(word) => Ok(word.eq_ignore_ascii_case("ASC") || word.eq_ignore_ascii_case("DESC")),
-        BoundExpr::Literal(Literal::Integer(value)) => Ok(*value == 0 || *value == 1),
-        BoundExpr::Literal(Literal::Decimal(value)) => Ok(*value == 0.0 || *value == 1.0),
-        other => Ok(matches!(ev.eval(other, ctx)?, Scalar::Boolean(_))),
+        BoundExpr::Keyword(word) => word.eq_ignore_ascii_case("ASC") || word.eq_ignore_ascii_case("DESC"),
+        BoundExpr::Literal(Literal::Boolean(_)) => matches!(value, Scalar::Boolean(_)),
+        BoundExpr::Literal(Literal::Integer(_)) => matches!(value, Scalar::Integer(0) | Scalar::Integer(1)),
+        BoundExpr::Literal(Literal::Decimal(_)) => matches!(value, Scalar::Decimal(number) if *number == 0.0 || *number == 1.0),
+        _ => matches!(value, Scalar::Boolean(_)),
     }
 }
-
-/// Returns whether an `Order` argument sorts ascending; `DESC` is descending and unparsable
-/// values default to ascending.
-fn order_flag_value(ev: &Evaluator<'_>, argument: &BoundExpr, ctx: &mut Context) -> Result<bool, EvalError> {
+/// The sort direction of an already-evaluated `Order` flag from its cached [`Scalar`]: `DESC`
+/// is descending and unparsable values default to ascending.
+fn flag_direction(argument: &BoundExpr, cached: &Option<Scalar>) -> bool {
     if let BoundExpr::Keyword(word) = argument {
-        return Ok(!word.eq_ignore_ascii_case("DESC"));
+        return !word.eq_ignore_ascii_case("DESC");
     }
-    Ok(ev.eval(argument, ctx)?.to_bool().unwrap_or(true))
+    cached.as_ref().and_then(Scalar::to_bool).unwrap_or(true)
 }
 
 /// DAX ordering with BLANK before every value and an empty string after BLANK (but before other
