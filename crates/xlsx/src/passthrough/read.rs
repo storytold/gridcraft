@@ -71,7 +71,9 @@ impl KeptReader {
             k.on = false;
             k.strict = true;
         }
-        match cx.pkg.read_limited("[Content_Types].xml", MAX_META).ok().flatten().and_then(|b| xml::parse(&b).ok()) {
+        // Optional: a part that fails partway costs only its own allowance, never the package
+        // budget the kept parts still need.
+        match cx.pkg.read_optional_limited("[Content_Types].xml", MAX_META).ok().flatten().and_then(|b| xml::parse(&b).ok()) {
             Some(types) => {
                 for d in types.kids("Default") {
                     if let (Some(e), Some(t)) = (d.attr("Extension"), d.attr("ContentType")) {

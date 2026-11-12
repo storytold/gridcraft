@@ -88,7 +88,9 @@ pub(crate) fn unique_keys(wb: &mut Workbook) {
 ///
 /// A contentPart is only trusted when its part carries that type; anything else is not ink.
 pub(super) fn declared_parts(cx: &mut Ctx<'_>) -> Option<HashSet<String>> {
-    let bytes = match cx.pkg.read_limited("[Content_Types].xml", 16 * 1024 * 1024) {
+    // Optional like the ink part itself: a read that fails partway costs only this part's
+    // allowance, never the package budget the fallback picture still needs.
+    let bytes = match cx.pkg.read_optional_limited("[Content_Types].xml", 16 * 1024 * 1024) {
         Ok(Some(b)) => b,
         _ => return None,
     };
@@ -125,33 +127,41 @@ pub(super) fn read(
 }
 
 /// Every trace below `el` in document order: a bare `<trace>` and the traces inside nested
-/// `<traceGroup>`s, to a bounded depth. Each entry carries the `contextRef` in force at that
-/// trace: the group's when the trace names none, which InkML defines by inheritance. False when
-/// the part holds too many traces or nests too deeply to be a mark.
-fn collect_traces<'a>(el: &'a El, context: Option<&'a str>, depth: u8, out: &mut Vec<(&'a El, Option<&'a str>)>) -> bool {
+/// `<traceGroup>`s, to a bounded depth. Each entry carries the refs in force at that trace: the
+/// group's `contextRef` and `brushRef` when the trace names none, which InkML defines by
+/// inheritance. False when the part holds too many traces or nests too deeply to be a mark.
+struct TraceRef<'a> {
+    trace: &'a El,
+    context: Option<&'a str>,
+    brush: Option<&'a str>,
+}
+
+fn collect_traces<'a>(el: &'a El, context: Option<&'a str>, brush: Option<&'a str>, depth: u8, out: &mut Vec<TraceRef<'a>>) -> bool {
     if depth > MAX_TRACE_DEPTH {
         return false;
     }
     for child in &el.children {
         match child.name.as_str() {
             "trace" => {
-                out.push((child, child.attr("contextRef").or(context)));
+                out.push(TraceRef { trace: child, context: child.attr("contextRef").or(context), brush: child.attr("brushRef").or(brush) });
                 if out.len() > MAX_TRACES {
                     return false;
                 }
             }
-            "traceGroup" if !collect_traces(child, child.attr("contextRef").or(context), depth + 1, out) => return false,
+            "traceGroup" if !collect_traces(child, child.attr("contextRef").or(context), child.attr("brushRef").or(brush), depth + 1, out) => {
+                return false;
+            }
             _ => {}
         }
     }
     true
 }
 
-/// The traces of a part in document order, each with its effective `contextRef`. A part with more
-/// than [`MAX_TRACES`] strokes is refused: it is a drawing, not a mark.
-fn traces(root: &El) -> Option<Vec<(&El, Option<&str>)>> {
+/// The traces of a part in document order, each with its effective refs. A part with more than
+/// [`MAX_TRACES`] strokes is refused: it is a drawing, not a mark.
+fn traces(root: &El) -> Option<Vec<TraceRef<'_>>> {
     let mut out = Vec::new();
-    if !collect_traces(root, None, 0, &mut out) || out.is_empty() {
+    if !collect_traces(root, None, None, 0, &mut out) || out.is_empty() {
         return None;
     }
     Some(out)
@@ -188,14 +198,15 @@ fn read_traces(
     let part_order = brush_order(definitions);
     let mut total = 0usize;
     let mut shapes = Vec::new();
-    for (i, (trace, context)) in traces(&root)?.into_iter().enumerate() {
-        let (points, pressure) = decode(trace, context, definitions)?;
+    for (i, r) in traces(&root)?.into_iter().enumerate() {
+        let (points, pressure) = decode(r.trace, r.context, definitions)?;
         total = total.checked_add(points.len())?;
         if total > MAX_POINTS {
             return None;
         }
-        // Each trace names its own brush; a trace that names none takes the part's default.
-        let (style, color) = brush_for(definitions, trace)?;
+        // Each trace takes its own brush, else its group's, else the part's default; a dangling
+        // id refuses the part so the fallback picture is used, never a guessed brush.
+        let (style, color) = brush_for(definitions, r.trace, r.brush)?;
         let width_px = (style.width_cm * PX_PER_CM as f32).clamp(1.0, 255.0).round();
         let fill = Color::Rgb((width_px as u32) << 16);
         let mut image = style.clone();
@@ -439,18 +450,17 @@ fn referenced<'a>(definitions: &'a El, name: &'a str, reference: Option<&str>) -
     definitions.kids(name).find(|e| e.attr("id") == Some(id))
 }
 
-/// The stroke's brush and colour: the trace's own `brushRef` names its brush. A part that names a
-/// brush the file does not define is refused, not guessed. Excel writes one brush per part and
-/// every trace names it, so single-brush files read exactly as before.
-fn brush_for(definitions: &El, trace: &El) -> Option<(InkStyle, Color)> {
-    // The trace's own brush wins; a trace that names none takes the part's first brush, which is
-    // what Excel writes. Unknown ids are refused rather than guessed.
-    let el = trace
-        .attr("brushRef")
-        .and_then(|r| r.trim().strip_prefix('#'))
-        .and_then(|id| definitions.kids("brush").find(|b| b.attr("id") == Some(id)))
-        .or_else(|| definitions.child("brush"))?;
-    Some(brush(el))
+/// The stroke's brush and colour from its effective `brushRef`: the trace's own wins, else its
+/// group's, else the part's first brush, which is what Excel writes. A present id that names no
+/// brush refuses the part, so the fallback picture is used rather than a guessed brush.
+fn brush_for(definitions: &El, trace: &El, inherited: Option<&str>) -> Option<(InkStyle, Color)> {
+    match trace.attr("brushRef").or(inherited) {
+        Some(r) => {
+            let id = r.trim().strip_prefix('#')?;
+            Some(brush(definitions.kids("brush").find(|b| b.attr("id") == Some(id))?))
+        }
+        None => Some(brush(definitions.child("brush")?)),
+    }
 }
 
 /// The part-level draw order GridCraft wrote, if any: traces inherit the part's brush order and
@@ -799,10 +809,15 @@ fn fallback_png(shape: &Shape, ink: &InkStyle, points: &[[i64; 2]], color: [u8; 
     Some(out)
 }
 
-/// A soft round dab, source-over into the transparent picture. The pixel budget is shared with the
-/// stroke loop: each visited pixel spends it, and an exhausted budget stops the dab early.
+/// A soft round dab, source-over into the transparent picture. The shared budget counts one unit
+/// per dab plus one per visited pixel: an off-picture dab still spends its call, so a stroke of
+/// only off-picture dabs cannot loop through every segment for free.
 fn stamp(dab: Dab<'_>) {
     let Dab { img, w, h, cx, cy, r, color, budget } = dab;
+    if *budget == 0 {
+        return;
+    }
+    *budget -= 1;
     let x0 = (cx - r - 1.0).floor().max(0.0) as u32;
     let y0 = (cy - r - 1.0).floor().max(0.0) as u32;
     let x1 = ((cx + r + 1.0).ceil() as i64).clamp(0, i64::from(w) - 1) as u32;
