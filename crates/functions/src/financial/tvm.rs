@@ -129,7 +129,9 @@ pub(super) fn ppmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(pmt_calc(rate, np, pv, fv, typ) - ipmt_calc(rate, per, np, pv, fv, typ)?)
 }
 
-fn cumulative(a: &[Arg], principal: bool) -> R<Value> {
+/// The validated (rate, periods, pv, start, end, type) of CUMIPMT/CUMPRINC: every check that
+/// refuses a call before its period loop, shared with the lifted-call work preflight.
+pub(crate) fn cumulative_args(a: &[Arg]) -> R<(f64, f64, f64, f64, f64, f64)> {
     let (rate, np, pv) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
     let (start, end, typ) = (num(a, 3)?.trunc(), num(a, 4)?.trunc(), num(a, 5)?);
     let np_i = np.trunc();
@@ -139,6 +141,11 @@ fn cumulative(a: &[Arg], principal: bool) -> R<Value> {
     if end - start > 1e7 || np_i > 1e15 {
         return Err(CellError::Num);
     }
+    Ok((rate, np_i, pv, start, end, typ))
+}
+
+fn cumulative(a: &[Arg], principal: bool) -> R<Value> {
+    let (rate, np_i, pv, start, end, typ) = cumulative_args(a)?;
     let p = pmt_calc(rate, np_i, pv, 0.0, typ);
     let mut sum = 0.0;
     let mut per = start;
