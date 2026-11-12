@@ -80,6 +80,7 @@ mod number_stored_as_text;
 mod objects;
 mod open_encrypted;
 mod outline;
+mod page_break_preview_layers;
 mod page_layout_view;
 mod page_setup_margins;
 mod page_setup_page_order;

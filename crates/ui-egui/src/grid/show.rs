@@ -178,6 +178,13 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // not every frame.
     let cf_sheet = wb.sheets.get(si).map(Arc::downgrade);
     let mut cf = kept_cf(app, &wb, si);
+    // Page Break Preview: the printed pages, as screen rects.
+    let page_rects: Vec<(Rect, u32)> = if sh.view == gridcraft_engine::model::SheetViewMode::PageBreakPreview {
+        print_pages(app, sh).iter().map(|(r, n)| (geo.range_rect(sh, *r), *n)).collect()
+    } else {
+        Vec::new()
+    };
+    let printed = page_rects.iter().map(|(r, _)| *r).reduce(Rect::union);
     let quads = if geo.paper.is_some() {
         crate::paper_view::paint_pages(
             crate::paper_view::PagePaintInput {
@@ -195,7 +202,18 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         )
     } else {
         paint_panes(
-            PanesInput { app, painter: &painter, geo: &geo, workbook: &wb, sheet_index: si, sheet: sh, selection: &sel, outline, tokens: &t },
+            PanesInput {
+                app,
+                painter: &painter,
+                geo: &geo,
+                workbook: &wb,
+                sheet_index: si,
+                sheet: sh,
+                selection: &sel,
+                outline,
+                tokens: &t,
+                printed,
+            },
             &mut cf,
         )
     };
@@ -205,6 +223,8 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     if crate::chartview::objects_hidden(&wb) {
         app.selected_object = None;
     }
+    // Excel's page numbers sit under the objects: a chart on a page covers its label.
+    paint_page_numbers(&painter.with_clip_rect(geo.cells), &page_rects);
     let objects = crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
     paint_overlays(OverlayInput {
         app,
@@ -216,9 +236,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         sheet: sh,
         selection: &sel,
     });
-    if sh.view == gridcraft_engine::model::SheetViewMode::PageBreakPreview {
-        paint_pages(app, &painter.with_clip_rect(geo.cells), &geo, sh);
-    }
+    paint_page_breaks(&painter.with_clip_rect(geo.cells), &page_rects);
     if geo.paper.is_some() {
         crate::paper_view::paint_headers_footers(app, ui, &painter, &geo, &wb, sh);
     }
@@ -417,10 +435,12 @@ struct PanesInput<'a> {
     selection: &'a gridcraft_engine::Selection,
     outline: Rect,
     tokens: &'a Tokens,
+    /// Page Break Preview: the printed area; the cells outside it are greyed.
+    printed: Option<Rect>,
 }
 
 fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
-    let PanesInput { app, painter, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel, outline, tokens: t } = input;
+    let PanesInput { app, painter, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel, outline, tokens: t, printed } = input;
     // Quadrants: (rows, cols, clip).
     let (sr0, sr1) = geo.scroll_rows(sh);
     let (sc0, sc1) = geo.scroll_cols(sh);
@@ -454,6 +474,7 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
             cf,
             tokens: t,
             active_row,
+            printed,
         });
         paint_selection(SelectionPaintInput { painter: &p, geo, sheet: sh, selection: sel, outline, tokens: t, app, rows: *rows, cols: *cols });
     }
@@ -812,8 +833,10 @@ pub(crate) fn paint_overlays(input: OverlayInput<'_>) {
     let _ = (wb, si);
 }
 
-fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
-    let Some(d) = app.session.active() else { return };
+/// The printed pages of the active sheet (range, page number), from the print layout, kept
+/// until the workbook changes.
+fn print_pages<'a>(app: &'a mut SheetApp, sh: &Sheet) -> &'a [(RangeRef, u32)] {
+    let Some(d) = app.session.active() else { return &[] };
     let key = (d.uid, d.revision, d.wb.active_sheet());
     if app.grid.pages.as_ref().is_none_or(|(k, _)| *k != key) {
         let pages: Vec<(RangeRef, u32)> = app
@@ -831,32 +854,30 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
             .unwrap_or_default();
         app.grid.pages = Some((key, pages));
     }
-    let Some((_, pages)) = &app.grid.pages else { return };
-    if pages.is_empty() {
-        return;
-    }
-    // Grey everything, then clear the printed pages.
-    let mut printed = pages[0].0;
-    for (r, _) in pages {
-        printed = printed.union(r);
-    }
-    let pr = geo.range_rect(sh, printed);
-    let grey = Color32::from_black_alpha(70);
-    let c = p.clip_rect();
-    for r in [
-        Rect::from_min_max(c.min, pos2(c.right(), pr.top())),
-        Rect::from_min_max(pos2(c.left(), pr.bottom()), c.max),
-        Rect::from_min_max(pos2(c.left(), pr.top()), pos2(pr.left(), pr.bottom())),
-        Rect::from_min_max(pos2(pr.right(), pr.top()), pos2(c.right(), pr.bottom())),
-    ] {
-        if r.is_positive() {
-            p.rect_filled(r, 0.0, grey);
+    app.grid.pages.as_ref().map_or(&[], |(_, pages)| pages.as_slice())
+}
+
+/// Page Break Preview's page labels, under the objects as in Excel.
+fn paint_page_numbers(p: &Painter, pages: &[(Rect, u32)]) {
+    for (rr, n) in pages {
+        if rr.intersects(p.clip_rect()) {
+            p.text(
+                rr.center(),
+                Align2::CENTER_CENTER,
+                format!("Page {n}"),
+                theme::ui_bold((rr.height().min(rr.width()) / 6.0).clamp(14.0, 72.0)),
+                Color32::from_black_alpha(45),
+            );
         }
     }
+}
+
+/// Page Break Preview's page edges and the printed area's outline, over everything.
+fn paint_page_breaks(p: &Painter, pages: &[(Rect, u32)]) {
+    let Some(printed) = pages.iter().map(|(r, _)| *r).reduce(Rect::union) else { return };
     let blue = Color32::from_rgb(0x2E, 0x6F, 0xD8);
-    for (r, n) in pages {
-        let rr = geo.range_rect(sh, *r);
-        if !rr.intersects(c) {
+    for (rr, _) in pages {
+        if !rr.intersects(p.clip_rect()) {
             continue;
         }
         p.extend(egui::Shape::dashed_line(
@@ -865,15 +886,8 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
             6.0,
             3.0,
         ));
-        p.text(
-            rr.center(),
-            Align2::CENTER_CENTER,
-            format!("Page {n}"),
-            theme::ui_bold((rr.height().min(rr.width()) / 6.0).clamp(14.0, 72.0)),
-            Color32::from_black_alpha(45),
-        );
     }
-    p.rect_stroke(pr, 0.0, Stroke::new(3.0, blue), StrokeKind::Outside);
+    p.rect_stroke(printed, 0.0, Stroke::new(3.0, blue), StrokeKind::Outside);
 }
 
 #[cfg(test)]
