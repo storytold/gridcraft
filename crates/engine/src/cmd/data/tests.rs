@@ -760,3 +760,32 @@ fn a_blank_cell_moves_with_its_color_in_a_descending_color_sort() {
     let tags: Vec<Json> = (2..=4).map(|r| s.execute("cell.get", json!({"cell": format!("B{r}")})).unwrap()["value"].clone()).collect();
     assert_eq!(tags, vec![json!("b"), json!("blank"), json!("a")]);
 }
+
+/// A custom filter's whole-day value on a cell shown as a date compares the cell's day, so a
+/// time of day still counts as that day, also next to a second condition. Numbers that aren't
+/// dates still compare exactly.
+#[test]
+fn custom_filter_compares_dates_by_day() {
+    let mut s = Session::new();
+    s.new_workbook();
+    // 31 March 2026 is serial 46112.
+    s.execute("range.setValues", json!({"range": "A1", "values": [["When", "Qty"], [46112.6, 5.5], [46111.5, 5], [46112, 7], [46113.25, 6]]}))
+        .unwrap();
+    s.execute("home.numberFormat", json!({"range": "A2:A5", "code": "yyyy-mm-dd hh:mm"})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:B5"})).unwrap();
+    let hidden = |s: &Session| -> Vec<u32> { (1..=4).filter(|r| s.doc().unwrap().wb.sheet(0).unwrap().is_row_hidden(*r)).collect() };
+    let by = |s: &mut Session, col: &str, custom: Json| {
+        s.execute("data.filterBy", json!({"column": col, "custom": custom})).unwrap();
+    };
+    by(&mut s, "A", json!({"op": "=", "value": "46112", "op2": ">=", "value2": "46000", "and": true}));
+    assert_eq!(hidden(&s), vec![2, 4], "both cells on 31 March stay, the one at 14:24 too");
+    by(&mut s, "A", json!({"op": "<=", "value": "46112", "op2": "=", "value2": "46113", "and": false}));
+    assert_eq!(hidden(&s), Vec::<u32>::new(), "on or before the 31st, or on 1 April at 06:00");
+    by(&mut s, "A", json!({"op": ">", "value": "46112"}));
+    assert_eq!(hidden(&s), vec![1, 2, 3], "after the 31st: only 1 April");
+    by(&mut s, "A", json!({"op": "<", "value": "46112.5"}));
+    assert_eq!(hidden(&s), vec![1, 4], "a time typed is exact");
+    s.execute("data.filterBy", json!({"column": "A", "clear": true})).unwrap();
+    by(&mut s, "B", json!({"op": "=", "value": "5"}));
+    assert_eq!(hidden(&s), vec![1, 3, 4], "5.5 is not 5 when it isn't a date");
+}

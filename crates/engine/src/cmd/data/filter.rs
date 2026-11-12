@@ -157,6 +157,16 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"hiddenRows": hidden}))
 }
 
+/// A whole-day value (a date without a time) compared with a cell shown as a date compares the
+/// cell's day: 31 March at 14:24 equals 31 March and is on or before it, also when the criterion
+/// has a second condition or came from a file. `None` leaves the comparison exact: a value with
+/// a time, a number that isn't shown as a date, or anything not a number.
+fn by_day(v: &Value, crit: &str, shown_as_date: impl Fn() -> bool) -> Option<Value> {
+    let n = v.as_f64().filter(|n| n.is_finite())?;
+    let day = gridcraft_core::parse::parse_number_text(crit).filter(|d| d.is_finite() && d.fract() == 0.0)?;
+    (matches!(v, Value::Number(_)) && day >= 0.0 && shown_as_date()).then(|| Value::Number(n.floor()))
+}
+
 /// Does a value pass a custom comparison (`>`, `=*abc*`, `<>x`…)?
 fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
     let num = gridcraft_core::parse::parse_number_text(crit);
@@ -415,10 +425,15 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
                     }
                 }
                 FilterCriterion::Custom { a, b, and } => {
-                    let x = custom_ok(&v, &text, &a.0, &a.1);
+                    let shown_as_date = || crate::display::number_format(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).is_date();
+                    let ok = |op: &str, crit: &str| match by_day(&v, crit, shown_as_date) {
+                        Some(day) => custom_ok(&day, &text, op, crit),
+                        None => custom_ok(&v, &text, op, crit),
+                    };
+                    let x = ok(&a.0, &a.1);
                     match b {
                         Some(b) => {
-                            let y = custom_ok(&v, &text, &b.0, &b.1);
+                            let y = ok(&b.0, &b.1);
                             if *and { x && y } else { x || y }
                         }
                         None => x,
