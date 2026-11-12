@@ -49,7 +49,7 @@ fn view_macros_answers_the_script_list_and_opens_the_dialog_only_when_asked() {
     let mut h = harness("Developer");
     h.state_mut().run("automate.newScript", json!({"name": "One", "commands": []})).unwrap();
     let list = json!([{"name": "One", "steps": 0, "trusted": true}]);
-    for params in [serde_json::Value::Null, json!({}), json!({"dialogs": true}), json!({"dialog": false}), json!({"unrelated": [1, 2]})] {
+    for params in [serde_json::Value::Null, json!({}), json!({"dialogs": true}), json!({"dialog": false}), json!({"dialog": "true"}), json!({"dialog": 1}), json!({"unrelated": [1, 2]})] {
         let got = h.state_mut().run("view.macros", params.clone()).expect("the query");
         h.run_steps(2);
         assert_eq!(got, list, "{params}");
