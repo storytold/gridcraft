@@ -31,6 +31,9 @@ gridcraft-math = { path = "crates/math" }
 # craft-libs revision.
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", rev = "119415f46f601e20b9bc6b1b4d6979ceda86d88e", version = "=0.1.0", features = ["egui"] }
+# Delimited text (CSV, TSV) and SYLK; `crates/xlsx/src/csv.rs` and `crates/engine/src/io/sylk.rs`
+# turn them into workbooks.
+craft-csv = { git = "https://github.com/storytold/craft-libs", rev = "119415f46f601e20b9bc6b1b4d6979ceda86d88e", version = "0.1.0" }
 # Excel 97-2003 (.xls, BIFF8) workbooks; `crates/xlsx/src/xls.rs` maps them onto the model.
 craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "119415f46f601e20b9bc6b1b4d6979ceda86d88e", version = "0.1.0" }
 

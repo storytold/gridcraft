@@ -913,6 +913,14 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=119415f46f601e20b9bc6b1b4d6979ceda86d88e#119415f46f601e20b9bc6b1b4d6979ceda86d88e"
 
 [[package]]
+name = "craft-csv"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=119415f46f601e20b9bc6b1b4d6979ceda86d88e#119415f46f601e20b9bc6b1b4d6979ceda86d88e"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-fonts-build"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=119415f46f601e20b9bc6b1b4d6979ceda86d88e#119415f46f601e20b9bc6b1b4d6979ceda86d88e"
@@ -2120,6 +2128,7 @@ dependencies = [
 name = "gridcraft-engine"
 version = "0.19.1"
 dependencies = [
+ "craft-csv",
  "gridcraft-calc",
  "gridcraft-chart",
  "gridcraft-core",
@@ -2261,6 +2270,7 @@ name = "gridcraft-xlsx"
 version = "0.19.1"
 dependencies = [
  "aes",
+ "craft-csv",
  "craft-xls",
  "gridcraft-core",
  "gridcraft-formula",
