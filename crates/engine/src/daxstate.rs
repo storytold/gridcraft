@@ -33,7 +33,8 @@ enum Key {
     TableDate(String),
     ColumnMeta(String, String),
     TableView(String),
-    ViewToggles,
+    ShowHidden,
+    ShowImplicitMeasures,
 }
 
 /// A relationship, by its four names, lowercased.
@@ -79,7 +80,8 @@ enum Entity {
     TableDate(Option<String>),
     ColumnMeta(Option<ColumnMetadata>),
     TableView(Option<TableView>),
-    ViewToggles { show_hidden: bool, show_implicit_measures: bool },
+    ShowHidden(bool),
+    ShowImplicitMeasures(bool),
 }
 
 /// One data-model edit, as the group that made it holds it: the entity, what it held before and
@@ -151,6 +153,18 @@ fn model_entities(before: &DataModel, after: &DataModel, out: &mut Vec<Change>) 
         match (was, is) {
             (Some(was), Some(is)) => {
                 if was == is {
+                    if found.0 != found.1 {
+                        // The entity survived unchanged but moved: a load that reorders tables
+                        // while adding a measure would otherwise leave the order wrong after the
+                        // rollback (CodeRabbit, #3412). The reorder rides on the entity's own
+                        // key, so an entity another group edited since keeps that group's edit.
+                        changed.push(Change::new(
+                            Key::Table(name),
+                            Entity::Table(Some(was.clone())),
+                            Entity::Table(Some(is.clone())),
+                            found.0.unwrap_or(0),
+                        ));
+                    }
                     continue;
                 }
                 if same_table_shape(was, is) {
@@ -173,6 +187,11 @@ fn model_entities(before: &DataModel, after: &DataModel, out: &mut Vec<Change>) 
         let found = (before.measure_index(&name), after.measure_index(&name));
         let (was, is) = (found.0.map(|i| &before.measures[i]), found.1.map(|i| &after.measures[i]));
         if was == is {
+            if found.0.is_some_and(|was| Some(was) != found.1) {
+                // Same rule as tables: an unchanged measure that only moved is recorded so
+                // the rollback puts the order back (CodeRabbit, #3412).
+                changed.push(Change::new(Key::Measure(name), Entity::Measure(was.cloned()), Entity::Measure(is.cloned()), found.0.unwrap_or(0)));
+            }
             continue;
         }
         let change = Change::new(Key::Measure(name), Entity::Measure(was.cloned()), Entity::Measure(is.cloned()), found.0.unwrap_or(0));
@@ -190,6 +209,15 @@ fn model_entities(before: &DataModel, after: &DataModel, out: &mut Vec<Change>) 
         );
         let (was, is) = (found.0.map(|i| &before.relationships[i]), found.1.map(|i| &after.relationships[i]));
         if was == is {
+            if found.0.is_some_and(|was| Some(was) != found.1) {
+                // Same rule: an unchanged relationship that only moved is recorded.
+                changed.push(Change::new(
+                    Key::Relationship(key),
+                    Entity::Relationship(was.cloned()),
+                    Entity::Relationship(is.cloned()),
+                    found.0.unwrap_or(0),
+                ));
+            }
             continue;
         }
         let change = Change::new(Key::Relationship(key), Entity::Relationship(was.cloned()), Entity::Relationship(is.cloned()), found.0.unwrap_or(0));
@@ -286,11 +314,14 @@ pub(crate) fn view_changes(before: &ModelView, after: &ModelView) -> Vec<Change>
     if before == after {
         return out;
     }
-    if (before.show_hidden, before.show_implicit_measures) != (after.show_hidden, after.show_implicit_measures) {
+    if before.show_hidden != after.show_hidden {
+        out.push(Change::new(Key::ShowHidden, Entity::ShowHidden(before.show_hidden), Entity::ShowHidden(after.show_hidden), 0));
+    }
+    if before.show_implicit_measures != after.show_implicit_measures {
         out.push(Change::new(
-            Key::ViewToggles,
-            Entity::ViewToggles { show_hidden: before.show_hidden, show_implicit_measures: before.show_implicit_measures },
-            Entity::ViewToggles { show_hidden: after.show_hidden, show_implicit_measures: after.show_implicit_measures },
+            Key::ShowImplicitMeasures,
+            Entity::ShowImplicitMeasures(before.show_implicit_measures),
+            Entity::ShowImplicitMeasures(after.show_implicit_measures),
             0,
         ));
     }
@@ -347,7 +378,8 @@ fn read(model: &Option<DataModel>, metadata: &ModelMetadata, view: &ModelView, k
         Key::TableDate(name) => Entity::TableDate(metadata.table(name).and_then(|table| table.date_column.clone())),
         Key::ColumnMeta(table, column) => Entity::ColumnMeta(metadata.column(table, column).cloned()),
         Key::TableView(name) => Entity::TableView(view.tables.get(name).cloned()),
-        Key::ViewToggles => Entity::ViewToggles { show_hidden: view.show_hidden, show_implicit_measures: view.show_implicit_measures },
+        Key::ShowHidden => Entity::ShowHidden(view.show_hidden),
+        Key::ShowImplicitMeasures => Entity::ShowImplicitMeasures(view.show_implicit_measures),
     }
 }
 
@@ -361,6 +393,18 @@ fn write(model: &mut Option<DataModel>, metadata: &mut ModelMetadata, view: &mut
             let Some(model) = model.as_mut() else { return };
             let found = model.table_index(name);
             match (state, found) {
+                // A surviving entity that only moved comes back to its recorded position:
+                // take it out where it sits, then put it back where it was, so a load that
+                // reordered tables while adding a measure rolls back to the original order
+                // (CodeRabbit, #3412). Another group's later edit of that entity keeps its
+                // edit: `revert` skips a change whose current value is no longer `after`.
+                (Some(table), Some(index)) if index != at => {
+                    model.tables.remove(index);
+                    // The recorded position counts the entity itself, so removing an entity
+                    // at or before it shifts the target down by one.
+                    let target = if index < at { at.saturating_sub(1) } else { at };
+                    model.tables.insert(target.min(model.tables.len()), table);
+                }
                 (Some(table), Some(index)) => model.tables[index] = table,
                 (Some(table), None) => model.tables.insert(at.min(model.tables.len()), table),
                 (None, Some(index)) => {
@@ -379,6 +423,11 @@ fn write(model: &mut Option<DataModel>, metadata: &mut ModelMetadata, view: &mut
             let Some(model) = model.as_mut() else { return };
             let found = model.measure_index(name);
             match (state, found) {
+                (Some(measure), Some(index)) if index != at => {
+                    model.measures.remove(index);
+                    let target = if index < at { at.saturating_sub(1) } else { at };
+                    model.measures.insert(target.min(model.measures.len()), measure);
+                }
                 (Some(measure), Some(index)) => model.measures[index] = measure,
                 (Some(measure), None) => model.measures.insert(at.min(model.measures.len()), measure),
                 (None, Some(index)) => {
@@ -391,6 +440,11 @@ fn write(model: &mut Option<DataModel>, metadata: &mut ModelMetadata, view: &mut
             let Some(model) = model.as_mut() else { return };
             let found = model.relationships.iter().position(|entry| key.matches(entry));
             match (state, found) {
+                (Some(relationship), Some(index)) if index != at => {
+                    model.relationships.remove(index);
+                    let target = if index < at { at.saturating_sub(1) } else { at };
+                    model.relationships.insert(target.min(model.relationships.len()), relationship);
+                }
                 (Some(relationship), Some(index)) => model.relationships[index] = relationship,
                 (Some(relationship), None) => model.relationships.insert(at.min(model.relationships.len()), relationship),
                 (None, Some(index)) => {
@@ -424,9 +478,11 @@ fn write(model: &mut Option<DataModel>, metadata: &mut ModelMetadata, view: &mut
                 view.tables.remove(name);
             }
         },
-        (Key::ViewToggles, Entity::ViewToggles { show_hidden, show_implicit_measures }) => {
-            view.show_hidden = show_hidden;
-            view.show_implicit_measures = show_implicit_measures;
+        (Key::ShowHidden, Entity::ShowHidden(show)) => {
+            view.show_hidden = show;
+        }
+        (Key::ShowImplicitMeasures, Entity::ShowImplicitMeasures(show)) => {
+            view.show_implicit_measures = show;
         }
         // A key and a value of different entities never pair up: the diff builds both.
         _ => {}
@@ -577,5 +633,38 @@ mod tests {
         revert_all(&changes, &mut model, &mut metadata, &mut current);
         assert_eq!(current.tables, before.tables, "the sort went");
         assert!(current.show_hidden, "the other edit's toggle stayed");
+    }
+    /// A reorder of surviving entities is recorded even when value changes exist: a load that
+    /// reorders the tables while adding a measure rolls back to the original order.
+    #[test]
+    fn a_reorder_of_surviving_tables_rolls_back_with_value_changes() {
+        let table = |name: &str| ModelTable { name: name.into(), columns: Vec::new(), rows: Vec::new() };
+        let before = Some(DataModel { tables: vec![table("A"), table("B")], measures: vec![measure("M", "1")], ..DataModel::default() });
+        let after =
+            Some(DataModel { tables: vec![table("B"), table("A")], measures: vec![measure("M", "1"), measure("X", "2")], ..DataModel::default() });
+        let changes = model_changes(&before, after.as_ref());
+        let mut current = after;
+        revert_all(&changes, &mut current, &mut ModelMetadata::default(), &mut ModelView::default());
+        assert_eq!(current, before, "the reorder rolls back with the added measure");
+    }
+
+    /// Each display toggle reverts on its own: rolling back one group's toggle keeps the other
+    /// group's toggle.
+    #[test]
+    fn each_display_toggle_reverts_on_its_own() {
+        let before = ModelView::default();
+        let mut after = before.clone();
+        after.show_hidden = true;
+        let changes = view_changes(&before, &after);
+        assert_eq!(changes.len(), 1, "only the toggled toggle changed");
+
+        // Another group enabled the other toggle since: it survives the rollback.
+        let mut current = after;
+        current.show_implicit_measures = true;
+        let mut model = None;
+        let mut metadata = ModelMetadata::default();
+        revert_all(&changes, &mut model, &mut metadata, &mut current);
+        assert!(!current.show_hidden, "the group's toggle went");
+        assert!(current.show_implicit_measures, "the other group's toggle stayed");
     }
 }
