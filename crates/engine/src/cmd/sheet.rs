@@ -351,6 +351,16 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
         check_lines_protection(s, p, axis, at, count, false)?;
     }
     let sheet = target_sheet(s, p)?;
+    // Like Excel, deleting whole rows never takes a table's header row without the whole table:
+    // otherwise its first record would become the header and leave the table's data (#3753).
+    if axis == Axis::Rows
+        && let Some(sh) = s.doc()?.wb.sheet(sheet)
+    {
+        for &(at, count) in &areas {
+            let range = RangeRef::rows(at, at.saturating_add(count.saturating_sub(1)).min(MAX_ROWS - 1));
+            check_table_shift(sh, &Edit::DeleteCells { axis, range })?;
+        }
+    }
     let out = edit(s, |cx| {
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
         cx.protection_checked = true;

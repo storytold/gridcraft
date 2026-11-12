@@ -2059,18 +2059,62 @@ fn table_header_formatted_as_accounting_keeps_its_text_as_the_column_name() {
 
 #[test]
 fn a_formula_moved_into_a_table_header_becomes_its_text() {
-    // Found by the command-sequence fuzzer: deleting a header row moved a formula into the
-    // header, which kept it while the XLSX writer wrote the column name there instead.
+    // Found by the command-sequence fuzzer: a formula in the header was kept while the XLSX
+    // writer wrote the column name there instead. Deleting the header row used to move one there;
+    // that is refused now (#3753), so the formula is entered into the header directly.
     let mut s = s();
-    s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Qty"], ["x", "=1+1"], ["y", 5]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Qty"], ["x", 4], ["y", 5]]})).unwrap();
     s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
-    s.execute("home.deleteRows", json!({"rows": "1:1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=1+1"})).unwrap();
     let d = s.doc().unwrap();
     let sh = d.wb.sheet(0).unwrap();
     assert_eq!(sh.cell(CellRef::new(0, 1)).and_then(|x| x.formula.clone()), None);
-    assert_eq!(v(&s, "B1"), Value::text("2"));
-    let names: Vec<_> = sh.tables[0].columns.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(names, ["x", "2"]);
+    let header = v(&s, "B1");
+    assert_eq!(sh.tables[0].columns[1].name.as_str(), header.as_text().unwrap());
+    reopen(&mut s);
+    assert_eq!(v(&s, "B1"), header);
+}
+
+#[test]
+fn deleting_only_a_table_header_row_is_refused() {
+    // #3753: deleting row 1 made the first record the header, dropped it from the totals and
+    // rewrote `Orders[Amount]` as `Orders[10]`. Like Excel, it is refused and nothing changes.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Amount"], ["a", 10], ["b", 20], ["c", 30]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B4", "header": true, "name": "Orders"})).unwrap();
+    s.execute("table.totalRow", json!({"table": "Orders", "on": true})).unwrap();
+    s.execute("table.totalFunction", json!({"table": "Orders", "column": "Amount", "function": "sum"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Report"})).unwrap();
+    s.execute(
+        "range.setValues",
+        json!({"range": "A1", "values": [["=SUM(Orders[Amount])"], ["=ROWS(Orders[Amount])"], ["=Orders[[#Totals],[Amount]]"]]}),
+    )
+    .unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    let report = |s: &mut Session| {
+        let f = s.execute("sheet.read", json!({"sheet": "Report", "range": "A1:A3", "formulas": true})).unwrap().to_string();
+        let d = s.doc().unwrap();
+        let sh = d.wb.sheet(d.wb.sheet_index("Report").unwrap()).unwrap();
+        (f, (0..3).map(|r| sh.value(CellRef::new(r, 0))).collect::<Vec<_>>())
+    };
+    let before = report(&mut s);
+    assert!(before.0.contains("Orders[Amount]"), "{}", before.0);
+    assert_eq!(before.1, [Value::Number(60.0), Value::Number(3.0), Value::Number(60.0)]);
+    for rows in ["1:1", "1:2", "1:4"] {
+        let e = s.execute("home.deleteRows", json!({"rows": rows})).unwrap_err();
+        assert!(e.to_string().contains("shift cells in a table"), "{rows}: {e}");
+    }
+    let d = s.doc().unwrap();
+    let t = &d.wb.active().unwrap().tables[0];
+    assert_eq!(t.range.a1(), "A1:B5");
+    let names: Vec<_> = t.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["Item", "Amount"]);
+    assert_eq!(report(&mut s), before);
+    // Deleting a record, or the whole table with its header, still works.
+    s.execute("home.deleteRows", json!({"rows": "3:3"})).unwrap();
+    assert_eq!(report(&mut s).1, [Value::Number(40.0), Value::Number(2.0), Value::Number(40.0)]);
+    s.execute("home.deleteRows", json!({"rows": "1:4"})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().tables.is_empty());
 }
 
 #[test]
