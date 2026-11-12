@@ -1,4 +1,4 @@
-use super::{Area, Evaluator, Expr, Value, resized_sum_range};
+use super::{Area, CellError, Evaluator, Expr, Value, resized_sum_range};
 
 impl Evaluator<'_> {
     /// Fast path for one literal text equality over constant reference ranges. No expression is
@@ -18,6 +18,8 @@ impl Evaluator<'_> {
         } else if range.range.height() != target.range.height() || range.range.width() != target.range.width() {
             return None;
         }
+        // As the ordinary path reads them: SUMIF's sum range already takes the criteria's size.
+        let (given_range, given_target) = (range, target);
         range = self.materialized_area(&range).ok()?;
         target = self.materialized_area(&target).ok()?;
         if range.range.height() != target.range.height() || range.range.width() != target.range.width() {
@@ -30,6 +32,19 @@ impl Evaluator<'_> {
         };
         let key = gridcraft_functions::TextCriteriaIndex::key(&criterion)?;
         let index = self.host.text_criteria_index(range, target)?;
+        // Count the work the ordinary path does, so the formula runs out (#CALC!) where it would:
+        // a unit per argument evaluated and for the criterion handed over, and each multi-cell
+        // range's cells once read and once handed over (a single cell is only handed over).
+        let handed = |given: Area, read: Area| {
+            if given.range.is_single() { 1 } else { 2 * u64::from(read.range.height()) * u64::from(read.range.width()) }
+        };
+        let mut work = (args.len() as u64) + 1 + handed(given_range, range);
+        if target_at != range_at {
+            work += handed(given_target, target);
+        }
+        if !self.spend(work) {
+            return Some(Value::Error(CellError::Calc));
+        }
         Some(index.aggregate(name, &key))
     }
 
