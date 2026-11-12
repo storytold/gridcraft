@@ -4,6 +4,8 @@
 /// Returns the Portuguese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Diagrama",
+        "Decorative Text" => "Texto decorativo",
         "Regression Type:" => "Tipo de regressão:",
         "Regression method" => "Método de regressão",
         "Regression options" => "Opções de regressão",
