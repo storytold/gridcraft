@@ -841,10 +841,12 @@ fn isafter_rejects_an_odd_argument_count() {
 }
 
 #[test]
-fn isafter_evaluates_a_computed_flag_once() {
-    // A computed `Order` flag must keep the direction it had when the argument list was split:
-    // the flag is evaluated once and the cached value decides both the split and the sort.
-    // `TRUE` is ascending, `FALSE` is descending (as in `ISAFTER(1, 2, FALSE)` above).
+fn isafter_accepts_a_computed_order_flag() {
+    // A computed `Order` flag is accepted by the pair split and decides the sort direction:
+    // `TRUE` is ascending, `FALSE` is descending (as in `ISAFTER(1, 2, FALSE)` above). The
+    // single-evaluation guarantee itself is structural — the cached `Scalar` feeds both the
+    // split and the direction read, and `flag_direction` takes no evaluator to re-evaluate
+    // with — so a constant flag cannot observe the evaluation count here.
     assert!(!boolean("ISAFTER(1, 2, IF(1 > 0, TRUE, FALSE))"));
     assert!(boolean("ISAFTER(2, 1, IF(1 > 0, TRUE, FALSE))"));
     assert!(boolean("ISAFTER(1, 2, IF(1 > 0, FALSE, TRUE))"));
