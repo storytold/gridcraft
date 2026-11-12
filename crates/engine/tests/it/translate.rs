@@ -299,9 +299,13 @@ impl gridcraft_engine::translate::ModelFetcher for BadFetcher {
 struct QuotaFetcher;
 impl gridcraft_engine::translate::ModelFetcher for QuotaFetcher {
     fn fetch(&self, _url: &str, dest: &std::path::Path, max_bytes: u64) -> Result<(), String> {
-        // The installer passes each file's own manifest size.
-        let want = std::fs::read(dest.with_extension("want")).unwrap_or_default();
-        let want: u64 = String::from_utf8_lossy(&want).trim().parse().unwrap_or(max_bytes);
+        // The installer passes each file's own manifest size: look it up from the manifest by
+        // the staged file name, and fail loudly when the name is unknown rather than comparing
+        // the bound with itself. No fixture file is involved, so there is nothing to misalign
+        // with the staging path.
+        let name = dest.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+        let m = gridcraft_engine::translate::manifest::find("qwen3-1.7b").expect("manifest");
+        let want = gridcraft_engine::translate::manifest::file(m, name).unwrap_or_else(|| panic!("unexpected staged file {name}")).bytes;
         assert_eq!(max_bytes, want, "the fetcher bound is the manifest size");
         if want > 10 * 1024 * 1024 {
             return Err(format!("the file is larger than the {max_bytes} bytes the manifest declares"));
@@ -318,8 +322,6 @@ fn the_download_bound_is_the_manifest_size_for_a_gigabyte_file() {
     let dir = temp_dir("quota");
     let mut s = session();
     s.translate_models_dir = dir.display().to_string();
-    let gguf = dir.join("Qwen3-1.7B-Q8_0.gguf.want");
-    std::fs::write(&gguf, b"1834426016").expect("want");
     let dir2 = dir.clone();
     s.translate_fetcher = Some(Arc::new(QuotaFetcher));
     let err = s.execute("translate.modelDownload", json!({"id": "qwen3-1.7b", "consent": true})).unwrap_err().to_string();
