@@ -712,13 +712,19 @@ pub const FONTS: &[&str] = &[
     "Verdana",
 ];
 
+/// The Font size text field's id, shared with `RibbonSections::begin` so the forced Font
+/// layout holds while the field has focus (the fontSize keytip opens no popup).
+pub(super) fn font_size_field() -> egui::Id {
+    egui::Id::unique("gridcraft.font_size_box")
+}
+
 /// Excel's size box: type a size and press Enter to apply exactly that number (the command refuses
 /// sizes outside 1 to 409), Escape or clicking away reverts; the arrow opens the standard sizes.
 fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let t = Tokens::get(ui.ctx());
     let size = st.font.size;
     let current = if size.fract() == 0.0 { format!("{}", size as i32) } else { format!("{size}") };
-    let field = egui::Id::unique("gridcraft.font_size_box");
+    let field = font_size_field();
     let draft = field.with("draft");
     let mut text = ui.data_mut(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| current.clone());
     // One frame like the Font name box beside it (same fill, border, height and corners), with the

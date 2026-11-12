@@ -278,18 +278,25 @@ fn break_level(breaks: &[(f32, u8)], client: f32, previous: u8) -> (u8, u8) {
     if raw == previous {
         return (level_at(breaks, raw), raw);
     }
-    let (boundary, level) = if raw < previous {
-        // A wider row: the card must clearly reach its width.
-        (breaks[raw as usize].0, breaks[raw as usize].1)
-    } else if let Some((min, _)) = breaks.get(previous as usize) {
+    if raw < previous {
+        // A wider row: the card must clearly reach its width. Step through each crossed row
+        // from the one past `previous`, so a wide jump lands on the widest row it reaches
+        // instead of testing only the destination's boundary (Font widened 819→1280 pt
+        // would otherwise sit 12 pt short of 1280+HYST and stay compact forever).
+        let mut slot = previous;
+        while slot > raw && client >= breaks[(slot - 1) as usize].0 + SECTION_HYST {
+            slot -= 1;
+        }
+        return (level_at(breaks, slot), slot);
+    }
+    let (boundary, level) = if let Some((min, _)) = breaks.get(previous as usize) {
         // A narrower row: the card must clearly leave the row it is on. The compact slot past
         // the table has no boundary of its own, so leaving it re-enters the narrowest row.
         (*min, level_at(breaks, raw))
     } else {
         (breaks[breaks.len() - 1].0, level_at(breaks, raw))
     };
-    let crossed = if raw < previous { client >= boundary + SECTION_HYST } else { client < boundary - SECTION_HYST };
-    if crossed { (level, raw) } else { (level_at(breaks, previous), previous) }
+    if client < boundary - SECTION_HYST { (level, raw) } else { (level_at(breaks, previous), previous) }
 }
 
 /// Runs `f` on the plan of the tab the ribbon is drawing.
@@ -320,6 +327,8 @@ impl RibbonSections {
         // registers a click on release, so a press inside an open popup must not end the layout
         // before the release arrives, or the popup's anchor would move out from under it.
         let any_popup = egui::Popup::is_any_open(ui.ctx());
+        // Read focus before `data_mut`: `ctx.memory` must not run inside that closure.
+        let size_typing = ui.ctx().memory(|m| m.has_focus(super::home::font_size_field()));
         let dismiss = ui.input(|i| i.key_pressed(egui::Key::Escape) || (i.pointer.any_pressed() && !any_popup));
         ui.ctx().data_mut(|d| {
             d.insert_temp(current_sections_id(), id);
@@ -341,8 +350,10 @@ impl RibbonSections {
             } else if sections.forced.is_some() {
                 // The popup the keytip opened has closed (Enter applied the size, a click picked
                 // a row, or Escape dismissed it): settle back even with no pointer press, or the
-                // group would stay expanded at narrow widths after a keyboard-only edit.
-                let popup_gone = sections.forced_used && !any_popup;
+                // group would stay expanded at narrow widths after a keyboard-only edit. A
+                // focused size field still counts as the interaction running: the fontSize
+                // keytip opens no popup, and the layout must stay until the field loses focus.
+                let popup_gone = sections.forced_used && !any_popup && !size_typing;
                 let stale = switched || popup_gone || sections.forced_unpin_at.is_some_and(|at| frame > at);
                 if stale {
                     sections.forced = None;
