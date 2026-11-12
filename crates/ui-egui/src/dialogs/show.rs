@@ -417,6 +417,23 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             open = false;
         }
     }
+    if confirm && d.name == "newSheetView" {
+        // The name prompt defaults to an unused `ViewN`, but it is editable: saving over an
+        // existing view would silently replace its sheet, selection, zoom and freeze. Stay open
+        // and say so; scripted `view.customViews` saves keep their overwrite behavior.
+        let taken: Vec<String> = app
+            .session
+            .execute("view.customViews", Json::Object(Default::default()))
+            .ok()
+            .and_then(|v| v.as_object().map(|o| o.keys().cloned().collect()))
+            .unwrap_or_default();
+        if let Some(save) = d.values.get("save").and_then(Json::as_str)
+            && taken.iter().any(|name| name == save)
+        {
+            app.message = Some((d.title.clone(), format!("A custom view named {save:?} already exists. Choose another name.")));
+            confirm = false;
+        }
+    }
     if confirm && d.command.is_some() && home_sheet_deleted(app, &mut d) {
         // References without a sheet name would land on whichever sheet is shown now.
         app.message = Some((d.title.clone(), SHEET_DELETED.into()));

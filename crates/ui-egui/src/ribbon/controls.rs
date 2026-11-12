@@ -237,15 +237,20 @@ impl TabSections {
     }
 
     /// Notes the width `label` took this frame and remembers the natural body's own width.
-    fn record(&mut self, label: &str, level: u8, width: f32) {
+    /// True when this recording can change the next frame's plan: the group's first measure,
+    /// which moves it off the first-frame natural layout.
+    fn record(&mut self, label: &str, level: u8, width: f32) -> bool {
         self.used += width + SECTION_GAP;
         if level == SECTION_COMPACT {
-            return;
+            return false;
         }
         if let Some(plan) = self.plans.iter_mut().find(|p| p.label == label) {
+            let first = !plan.measured;
             plan.natural = plan.natural.max(width);
             plan.measured = true;
+            return first;
         }
+        false
     }
 }
 
@@ -268,7 +273,7 @@ fn break_level(breaks: &[(f32, u8)], client: f32, previous: u8) -> (u8, u8) {
     if breaks.is_empty() {
         return (1, 0);
     }
-    let previous = previous.min(breaks.len() as u8 - 1);
+    let previous = previous.min(breaks.len() as u8);
     let raw = breaks.iter().position(|(min, _)| client >= *min).map_or(breaks.len() as u8, |i| i as u8);
     if raw == previous {
         return (level_at(breaks, raw), raw);
@@ -276,9 +281,12 @@ fn break_level(breaks: &[(f32, u8)], client: f32, previous: u8) -> (u8, u8) {
     let (boundary, level) = if raw < previous {
         // A wider row: the card must clearly reach its width.
         (breaks[raw as usize].0, breaks[raw as usize].1)
+    } else if let Some((min, _)) = breaks.get(previous as usize) {
+        // A narrower row: the card must clearly leave the row it is on. The compact slot past
+        // the table has no boundary of its own, so leaving it re-enters the narrowest row.
+        (*min, level_at(breaks, raw))
     } else {
-        // A narrower row: the card must clearly leave the row it is on.
-        (breaks[previous as usize].0, level_at(breaks, raw))
+        (breaks[breaks.len() - 1].0, level_at(breaks, raw))
     };
     let crossed = if raw < previous { client >= boundary + SECTION_HYST } else { client < boundary - SECTION_HYST };
     if crossed { (level, raw) } else { (level_at(breaks, previous), previous) }
@@ -307,9 +315,12 @@ impl RibbonSections {
         let previous = ui.ctx().data(|d| d.get_temp::<String>(last_sections_tab_id()));
         ui.ctx().data_mut(|d| d.insert_temp(last_sections_tab_id(), tab.to_owned()));
         let switched = previous.as_deref() != Some(tab);
-        // A click or Escape dismisses whatever a keytip opened; the tab settles back the frame
-        // after, once the click has reached the popup's own widgets.
-        let dismiss = ui.input(|i| i.pointer.any_pressed() || i.key_pressed(egui::Key::Escape));
+        // A click dismisses whatever a keytip opened, and Escape does the same; the tab settles
+        // back the frame after, once the click has reached the popup's own widgets. egui
+        // registers a click on release, so a press inside an open popup must not end the layout
+        // before the release arrives, or the popup's anchor would move out from under it.
+        let any_popup = egui::Popup::is_any_open(ui.ctx());
+        let dismiss = ui.input(|i| i.key_pressed(egui::Key::Escape) || (i.pointer.any_pressed() && !any_popup));
         ui.ctx().data_mut(|d| {
             d.insert_temp(current_sections_id(), id);
             let sections = d.get_temp_mut_or_default::<TabSections>(id);
@@ -328,7 +339,11 @@ impl RibbonSections {
                 sections.forced_used = false;
                 sections.forced_unpin_at = None;
             } else if sections.forced.is_some() {
-                let stale = switched || !sections.forced_used || sections.forced_unpin_at.is_some_and(|at| frame > at);
+                // The popup the keytip opened has closed (Enter applied the size, a click picked
+                // a row, or Escape dismissed it): settle back even with no pointer press, or the
+                // group would stay expanded at narrow widths after a keyboard-only edit.
+                let popup_gone = sections.forced_used && !any_popup;
+                let stale = switched || popup_gone || sections.forced_unpin_at.is_some_and(|at| frame > at);
                 if stale {
                     sections.forced = None;
                     sections.forced_unpin_at = None;
@@ -440,7 +455,13 @@ impl RibbonSections {
     }
 
     fn record(ui: &Ui, label: &str, level: u8, width: f32) {
-        with_tab_sections(ui, |sections| sections.record(label, level, width));
+        let mut first = false;
+        with_tab_sections(ui, |sections| first = sections.record(label, level, width));
+        // The first measure moves the group off its first-frame natural layout; ask for the
+        // frame that applies the compact plan instead of waiting for the next input event.
+        if first {
+            ui.ctx().request_repaint();
+        }
     }
 
     /// The level each group of `tab` was last drawn at, in draw order (`0` compact, `1..` natural

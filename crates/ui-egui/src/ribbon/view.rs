@@ -256,12 +256,17 @@ fn new_sheet_view(app: &mut SheetApp, ui: &mut Ui) {
 /// View › Sheet View, Custom Views: the saved views, each one shown on a click, with a Delete
 /// beside it.
 fn custom_views(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
     let anchor = small_button(ui, Icon::Book, "Custom Views", "Show or delete a saved view", true);
     control_keytip(app, ui, &anchor, "view.customViews");
-    egui::Popup::menu(&anchor).show(|ui| {
+    // A stable id: the View tab is drawn for the first time on the frame the command opens this
+    // list, and its groups settle into their compact/natural forms on later frames. Anchoring by
+    // response id would lose the open state when those controls move (see `switch_windows`).
+    let forced = invoke(app, "view.customViews");
+    egui::Popup::menu(&anchor).open_memory(popup_command(forced, anchor.clicked())).show(|ui| {
         let views = saved_views(app);
         if views.is_empty() {
-            ui.label("No saved views");
+            ui.label(lang.tr("No saved views"));
             return;
         }
         for name in views {
@@ -270,7 +275,7 @@ fn custom_views(app: &mut SheetApp, ui: &mut Ui) {
                     act(app, "view.customViews", json!({"show": name}));
                     ui.close();
                 }
-                if ui.small_button("Delete").clicked() {
+                if ui.small_button(lang.tr("Delete")).clicked() {
                     act(app, "view.customViews", json!({"delete": name}));
                 }
             });

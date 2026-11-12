@@ -2332,10 +2332,10 @@
   },
   {
    "seq": "WC",
-   "kind": "command",
+   "kind": "control",
    "target": "view.customViews",
    "excel": "Custom Views",
-   "note": ""
+   "note": "opens the saved-view menu"
   },
   {
    "seq": "WF",

@@ -135,22 +135,28 @@ fn scale_to_fit(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
-/// One of Scale to Fit's page counts: Automatic (which drops the fit-to and scales by `scale`),
-/// or 1–9 pages tall or wide.
+/// One of Scale to Fit's page counts: Automatic for this dimension (the other keeps its
+/// limit, unless it is Automatic too), or 1–9 pages tall or wide.
 fn fit_pages(app: &mut SheetApp, ui: &mut Ui, label: &str, pages: u16, other: u16, is_width: bool, scale: u16) {
     let caption = ui.label(egui::RichText::new(app.ui.language.tr(label)).small());
-    let pages_text = |n: u16| if n == 0 { "Automatic".to_owned() } else { format!("{n} page{}", if n == 1 { "" } else { "s" }) };
+    let lang = app.ui.language;
+    let pages_text = |n: u16| {
+        if n == 0 {
+            lang.tr("Automatic").to_owned()
+        } else {
+            format!("{n} page{}", if n == 1 { "" } else { "s" })
+        }
+    };
     let id = if is_width { "scale_to_fit_width" } else { "scale_to_fit_height" };
     let combo = craft_ui::ComboBox::from_id_salt(id).selected_text(egui::RichText::new(pages_text(pages)).small()).width(78.0).show_ui(ui, |ui| {
         for n in 0..=9u16 {
             if ui.selectable_label(n == pages, pages_text(n)).clicked() {
-                if n == 0 {
-                    // Automatic: no fit-to pages, the percent scale applies.
+                let (width, height) = if is_width { (n, other) } else { (other, n) };
+                if width == 0 && height == 0 {
+                    // Both dimensions Automatic: no fit-to pages, the percent scale applies.
                     act(app, "pageLayout.scaleToFit", json!({"scale": scale}));
-                } else if is_width {
-                    act(app, "pageLayout.scaleToFit", json!({"width": n, "height": other}));
                 } else {
-                    act(app, "pageLayout.scaleToFit", json!({"width": other, "height": n}));
+                    act(app, "pageLayout.scaleToFit", json!({"width": width, "height": height}));
                 }
             }
         }
