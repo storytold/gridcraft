@@ -1,30 +1,27 @@
 # Real-time collaboration: status and acceptance evidence
 
-- Date: 2026-11-12, measured at 06:40Z. Every hash and number below is the state at that instant;
-  §27 names the instant and says what the next push changes, so a later reader can tell a stale
-  line from a wrong one.
-- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`). **At 06:40Z the delivered
-  head is `dff6971a`**: the fork's `refs/heads/feature/realtime-collaboration` and the PR's
-  `headRefOid` both read it, and it is a **docs-only** commit over `b46ed3c3` —
-  `git diff --stat b46ed3c3..dff6971a` is 1 file, +98/−45, the page that recorded the 23:10Z push
-  (§26.4). The **code head stays `42e2dbe5`** — the merge of `origin/main` `572bec28` into the
-  branch (§26.1) and the tree §26.3's gate ran on. The push of 2026-11-12T03:10:16Z published
-  `dff6971a`; the four workflows it created ended `action_required` with no job started and
-  CodeRabbit skipped the head at 03:10:19Z, so the delivered head has no CI evidence of its own
-  (§27.1). **The PR has read `mergeable = false` / `mergeable_state = dirty` since
-  2026-11-12T03:23:14Z** — the owner's comment of 03:23:13Z refreshed the computation — because
-  `origin/main` had taken the craft-libs file-format switch (`f800472b`, 02:37:30Z) over the same
-  `crates/xlsx` files the branch's merge had rewritten; main is now `6308fc9e`, 33 commits past the
-  base (§27.2). **The branch's next head is local, not pushed:** `57c9e21e` merges `6308fc9e` into
-  `dff6971a` and resolves both conflicts by hand; at 06:40Z
-  `git rev-list --count --left-right fork/feature/realtime-collaboration...HEAD` read `0 34` with a
-  clean tree — 33 of the 34 are main's commits, the thirty-fourth is the merge itself, and the
-  commit that carries this page makes it `0 35` — so the PR stays dirty until the owner pushes it
-  (§27.3, §27.5). The commit that carries this correction is
-  one docs-only commit above `57c9e21e`: it changes no code and leaves the merge below it intact,
-  which is why the head to push is named by the merge and not by this page. The PR is 77 commits on
-  its base `572bec28`, 84 files, +18319/−34 (`gh api repos/storytold/gridcraft/pulls/3613` at
-  06:40Z). `42e2dbe5` alone measured 75 commits, 84 files, +18169/−34 while it was the head. The
+- Date: 2026-11-12, measured at 16:40Z. Every hash and number below is the state at that instant;
+  §27.5 and §28.5 name what the 13:27Z push changed and what remains, so a later reader can tell a
+  stale line from a wrong one.
+- Branch: `feature/realtime-collaboration` (fork `copoka/gridcraft`). **At 16:40Z the delivered
+  head is `ce9f48db`**: the fork's `refs/heads/feature/realtime-collaboration` and the PR's
+  `headRefOid` both read it, the local HEAD read it when the numbers below were taken, and
+  `git rev-list --count --left-right fork/feature/realtime-collaboration...HEAD` read `0 0` on a
+  clean tree. The commit that carries this correction is the docs-only commit one above it: it
+  changes no code, names no new head, and the three read the same again once it is pushed. It is a
+  **docs-only** commit over the **code head `4ae789c6`** —
+  `git diff --stat 4ae789c6..ce9f48db` is 1 file, +98, the page that closes §23.2 (§28) — and
+  `4ae789c6` is `ff26e8a0` plus §28's slice: the constructor change and its two tests. The push of
+  **2026-11-12T13:27:33Z** published `ce9f48db`; the four workflows it created ended
+  `action_required` with no job started and CodeRabbit skipped the head at 13:27:37Z, so the
+  delivered head has no CI evidence of its own (§27.5). **The PR reads `mergeable = true` /
+  `mergeable_state = unstable`** — mergeable, and `unstable` because those four runs wait for a
+  maintainer, not because a job failed; the field was computed at the push, on the base `6308fc9e`
+  the merge `57c9e21e` had already taken into the head (§27.5). `main` has since moved to
+  `37941f06`, ten commits further, and `git merge-tree --write-tree origin/main HEAD` is clean, so
+  the next recomputation keeps `MERGEABLE`. The PR is 81 commits, 84 files, +18703/−34 (`gh api
+  repos/storytold/gridcraft/pulls/3613` at 16:40Z).
+  `42e2dbe5` alone measured 75 commits, 84 files, +18169/−34 while it was the head. The
   merge `42e2dbe5` itself, over the branch tip `576f586d`, is 51 files, +1402/−191: main's twelve
   commits — the workbook version at `0.19.1`, the engine's scan-allowance limits for Advanced
   Filter, Remove Duplicates, filters, AutoFit and macro footprints, `data.circleInvalid`, the CLI
@@ -47,29 +44,33 @@
   the push of 2026-11-10T17:19Z, which published `ae4311ee`, `34e54b81`, `46783412` and the nine
   review-fix commits `d91f838a`…`a2251b0e`; §21 records the push of 20:1xZ, which published
   `f51237ea` and `8208607f`, and the 01:24Z one, which published `00b146df` and `bb5b3acf`.
-  **No code commit is new:** `57c9e21e`'s first parent is the branch's `dff6971a` and its second is
-  main's `6308fc9e`; `git diff --stat 6308fc9e..57c9e21e` is 84 files, +18319/−34 — the PR's own
-  numbers — so the merge adds no code of its own and drops none of the branch's. Every branch
-  commit is on the fork and in the PR; the local head is the merge that takes the conflict away, and
-  it moves the delivered head only when it is pushed (§27.5).
-- Base: the PR's `baseRefOid` is still `572bec28`, the second parent of `42e2dbe5` (§26.1) and
-  `main`'s tip on 2026-11-11; `origin/main` is now `6308fc9e`, 33 commits further, and the local
-  merge's base is that tip (§27.2). The base of §25 was `01abd954`; that tree, and the gate it was
+  **The delivery adds §28's slice and nothing else:** `ce9f48db`'s only parent is `4ae789c6`,
+  which is `ff26e8a0` plus the constructor change and its two tests, and `ff26e8a0` is the merge
+  `57c9e21e` plus a page; `git diff --stat 6308fc9e..ce9f48db` is 84 files, +18703/−34 — the PR's
+  own numbers — so no code of the branch's was dropped and none came from the merge itself. Every
+  branch commit is on the fork and in the PR.
+- Base: `main`. The base SHA the PR reports — `6308fc9e`, last computed with the mergeable fields at
+  the 13:27:35Z push — is the tip `57c9e21e` merged, so the head contains its own base and there is
+  nothing left for `f800472b`'s deletions to conflict with (§27.2). `origin/main` is `37941f06` at
+  16:40Z, ten commits further, and `git merge-tree --write-tree origin/main HEAD` is clean, so the
+  next computation keeps `MERGEABLE`. The base of §25 was `01abd954`; that tree, and the gate it was
   given, stay in §25.
 - PR: <https://github.com/storytold/gridcraft/pull/3613> — open, **not a draft** since
-  2026-11-10T14:56:54Z, `mergeable = false`, `mergeable_state = DIRTY`, head `dff6971a`, base
-  `572bec28`, last update 2026-11-12T03:23:14Z (the owner's comment of 03:23:13Z; the review §24
-  records is the one of 07:38:33Z on `915d994e`), `reviewDecision` empty, 77 commits, 84 files,
-  +18319/−34. Pushing `57c9e21e` is what changes the mergeable fields (§27.5); nothing else on the
-  branch touches them.
-- Gate on the delivered head `dff6971a`: **no CI run.** The four workflows the 03:10Z push created —
-  `CI` (`43146368080`), `House rules` (`43146368148`), `SonarCloud` (`43146368182`) and `Nix`
-  (`43146368034`), all created 03:10:16Z — ended `completed / action_required` with **zero jobs**:
-  the repository needs a maintainer to approve a run from a fork. The commit's status API holds no
-  context (`pending`, 0 statuses) and its only check run is CodeRabbit, `completed / skipped` at
-  03:10:19Z (§27.1). `dff6971a` changes nothing but this page over `b46ed3c3`, whose own four runs
-  (23:10:40Z) ended the same way; the code those runs belong to is `42e2dbe5`'s (§26.2).
-  **The gate the branch has is the host's, and it ran on the local merge `57c9e21e`** (§27.4):
+  2026-11-10T14:56:54Z, `mergeable = true`, `mergeable_state = unstable`, head `ce9f48db`, base
+  `main` at `6308fc9e`, last update 2026-11-12T13:27:35Z, `reviewDecision` empty, 81 commits, 84
+  files, +18703/−34. `unstable` names the four runs that wait for a maintainer's approval; no job
+  has failed (§27.5). `4ae789c6` is the code head — §23.2's closure (§28).
+- Gate on the delivered head `ce9f48db`: **no CI run.** The four workflows the 13:27:33Z push
+  created — `CI` (`43227482343`), `House rules` (`43227482457`), `SonarCloud` (`43227482406`) and
+  `Nix` (`43227482462`) — ended `completed / action_required` with **zero jobs**: the repository
+  needs a maintainer to approve a run from a fork. The commit's status API holds no context
+  (`pending`, 0 statuses) and its only check run is CodeRabbit, `completed / skipped` at 13:27:37Z
+  (§27.5). The head changes nothing but this page over `4ae789c6`, whose own gate is §28.4's: `fmt`
+  clean, `clippy --all-targets -D warnings` clean on the two collaboration crates, the client
+  suites 39 passed (4 lib + 14 converge + 11 document + 5 parts + 5 rollback), `collab-web` 11, and
+  both checks — `gridcraft-web` on wasm32 and `gridcraft --features collab` — ok.
+  **The gate below the page is the host's, on the code head `4ae789c6` (§28.4) and on the merge
+  `57c9e21e` (§27.4):**
   `i18n-report`, `fmt` and `clippy --workspace --all-targets --keep-going -D warnings` clean; the
   test step **3557 passed, 2 failed** — the two host-font glyph tests of §15
   (`interaction::column_autocomplete_folds_case_beyond_ascii`,
@@ -84,15 +85,17 @@
   296 catalog commands (94.9%), the keytips tables already matching (`--check`), and
   `cargo metadata --locked` silent. The code head `42e2dbe5` keeps §26.3's gate, whose test step
   stopped on the same `umask` test. No line of this paragraph is a CI result: no run of `42e2dbe5`,
-  `b46ed3c3` or `dff6971a` ever executed. Under earlier pages, the code is `5bcdf3c9`'s, gated in
+  `b46ed3c3`, `dff6971a`, `4ae789c6` or `ce9f48db` ever executed. Under earlier pages, the code is
+  `5bcdf3c9`'s, gated in
   §25.4; `b9773627`'s code is `2a5f3e00`'s, gated in §24.4; `915d994e`'s code is `7b42c82a`'s,
   gated in §23.4; and the code of `00b146df` was gated in §22.3: `fmt` clean, `clippy -D warnings`
   on the five packages, and 176 passed, 0 failed. CodeRabbit was green on the heads it did review.
-  It reviewed four heads, none of them `42e2dbe5`, `b46ed3c3` or `dff6971a`:
+  It reviewed four heads, none of them `42e2dbe5`, `b46ed3c3`, `dff6971a`, `4ae789c6` or
+  `ce9f48db`:
   `5848894080` at 20:32Z (six threads and one finding outside the diff, closed by §21.4), `5851190259` at 23:35Z (one thread
   and one finding outside the diff, closed by §22), `5852406613` at 01:36Z on `bb5b3acf` (one
   thread, comment `4532845977` at `synced.rs:398`, closed by §23, and one finding outside the diff
-  that §23.2 confirms and leaves to its own slice), and `5855372513` at 07:38Z on `915d994e` (two
+  that §23.2 confirms and §28 closes), and `5855372513` at 07:38Z on `915d994e` (two
   Major threads on the §23 code, both valid, closed by §24).
 - Design: `rfc.md`; server run book: `server.md`; client guide: `client.md`
 - Session handoff (project-level, outside this repository):
@@ -1627,7 +1630,9 @@ is `document_version()`. Their 176-test run on `00b146df` stands; the head `bb5b
 The push of 2026-11-11T07:26:44Z carried `7b42c82a` and this page into the fork, so the reply on
 comment `4532845977` can name the commit instead of promising one. It will say what it says here:
 the install is all-or-nothing now (`7b42c82a`), both failure paths are tested, and the finding
-outside the diff is confirmed but belongs to its own slice (§23.2). The bus record
+outside the diff is confirmed but belongs to its own slice (§23.2). That slice landed on
+2026-11-12 as `4ae789c6`, so a reply made now names two hashes: `7b42c82a` for the thread and
+`4ae789c6` for the finding outside it (§28). The bus record
 `status/gridcraft` quotes the hash of the page commit, which a commit cannot spell for itself. No
 CI file is touched: `git diff --name-only -- .github` is empty.
 
@@ -2000,8 +2005,10 @@ local and docs-only, which is why `rev-list fork...HEAD` read `0 1` then. That c
 
 The docs commit that closes §26 was pushed at 03:10:16Z, and thirteen minutes later the PR began to
 report a conflict. This section records the three facts a reviewer needs — what the delivered head
-is, why the PR is dirty, and what the local head does about it — each with the instant it was
-measured, so that the next push makes these lines stale rather than wrong.
+is, why the PR read unmergeable, and what the local head did about it — each with the instant it was
+measured, so that the next push makes these lines stale rather than wrong. **All three became the
+delivered fact on 2026-11-12T13:27:33Z**, when the fork's branch became `ce9f48db` (§27.5); the
+numbers below stay as measured at 06:40Z.
 
 ### 27.1 The push of 03:10Z and the runs on `dff6971a`
 
@@ -2023,7 +2030,7 @@ The commit's status API holds no context (`pending`, 0 statuses) and its only ch
 CodeRabbit, `completed / skipped` at 03:10:19Z. So `dff6971a` has neither CI evidence nor a review
 of its own; being docs-only, the evidence it rests on is §26.3's gate on `42e2dbe5`.
 
-### 27.2 Why the PR is `dirty`: `main` took the file-format switch
+### 27.2 Why the PR read `dirty` until the 13:27Z push: `main` took the file-format switch
 
 `origin/main` is `6308fc9e`, 33 commits past the PR's base `572bec28`. Thirty-two of them are the
 craft-libs switch — `.xls` import through `craft-xls`, encrypted workbooks through
@@ -2034,7 +2041,9 @@ their tests, plus `xtask/src/layers.rs` and `docs/file-format-parity.md`; the th
 CI nightly dry run `#3820`.
 
 The PR's `mergeable` was last computed at 2026-11-12T03:23:14Z — the owner's comment of 03:23:13Z
-refreshed it — and it read `false` / `dirty` from then on. That is not a timing accident: against
+refreshed it — and it read `false` / `dirty` from then on, until the push of 13:27Z delivered a head
+that contains `f800472b`; at 16:40Z the field reads `true` / `unstable` (§27.5). It was not a timing
+accident: against
 main's tip at that minute (`f800472b`, 02:37:30Z) and against today's `6308fc9e`,
 `git merge-tree --write-tree` reports the same two conflicts:
 
@@ -2048,13 +2057,14 @@ The comment of 03:23:13Z says `git merge-tree origin/main dff6971a` is clean; th
 main's tip of that minute reports both files, so the mergeability field is the one to trust here.
 `f800472b` is also what makes the conflict unavoidable rather than cosmetic: the switch's deletions
 and the branch's merge of the same module cannot both apply, so a head that does not contain
-`f800472b` cannot become mergeable by a docs commit.
+`f800472b` cannot become mergeable by a docs commit. `ce9f48db` does contain it — through the merge
+`57c9e21e` — which is why the 13:27Z push cleared the field.
 
 ### 27.3 The local merge `57c9e21e`
 
 `57c9e21e` (2026-11-12T09:21:06+03:00) merges `origin/main` `6308fc9e` into `dff6971a`. Its parents
-are `dff6971a` and `6308fc9e`; it is 34 commits ahead of the fork and 0 behind, and the tree is
-clean. It is not pushed.
+are `dff6971a` and `6308fc9e`; it was 34 commits ahead of the fork and 0 behind with a clean tree
+when it was local, and the push of 13:27:33Z delivered it as an ancestor of `ce9f48db`.
 
 - The two conflicts were resolved by hand: `crates/engine/src/tests.rs` is not among them this
   time. `Cargo.lock` keeps both sides — the craft-libs crates at the revision the merged root
@@ -2066,9 +2076,10 @@ clean. It is not pushed.
   +671/−4722 — the switch's deletions, `xtask/src/layers.rs`, the parity page and the two pins —
   while `git diff --stat 6308fc9e..57c9e21e` is 84 files, +18319/−34, exactly the PR's numbers at its
   head. So the branch's content is unchanged and the base it is measured against is new.
-- That is the whole purpose of the local commit: GitHub compares the PR's head with
-  `baseRefOid`'s merge base. A head containing `6308fc9e` leaves nothing for `f800472b`'s deletions
-  to conflict with, so pushing it is what turns `dirty` into a computed merge.
+- That was the whole purpose of the local commit: GitHub compares the PR's head with the base's
+  merge base. A head containing `6308fc9e` leaves nothing for `f800472b`'s deletions to conflict
+  with, so pushing it is what turned `dirty` into a computed merge — which the 13:27:33Z push did,
+  and the field has read `true` / `unstable` since.
 
 ### 27.4 Gate on `57c9e21e` (remote host `agents`, 2026-11-12, `cargo xtask ci` twice and its skipped steps)
 
@@ -2095,36 +2106,56 @@ step leaves unrun:
   `-numfmt`, `-pdf`, `-sandbox`, `-web`, `-xlsx`), `parity` 281 of 296 catalog commands (94.9%),
   `keytips --check` matching, and `cargo metadata --locked` silent.
 
-So the local head has: fmt and clippy clean over the workspace, every suite green but two
-host-font tests, the engine green under the umask a GitHub runner uses, and the wasm target clean.
+So the local head had: fmt and clippy clean over the workspace, every suite green but two host-font
+tests, the engine green under the umask a GitHub runner uses, and the wasm target clean.
 That is the set of steps §26.3 ran on the code head, repeated on the merge, and it is not a CI
-result — no run executed on `57c9e21e`, and none will until the head is pushed and a maintainer
-approves its runs. The docs-only commit above it changes this page and nothing else, so the result
-carries over to it, as §26.3's did to `b46ed3c3`.
+result — no run executed on `57c9e21e`, and none has since: the four runs of the pushed head wait
+for a maintainer (§27.5). The docs-only commit above it changed this page and nothing else, so the
+result carried over to it, as §26.3's did to `b46ed3c3`; the code head `4ae789c6` above that page
+has its own gate in §28.4.
 
-### 27.5 What remains, and how this page will be written from now on
+### 27.5 The push of 13:27:33Z, and what remains
 
-- **Push the local head** (owner action): the merge `57c9e21e`, or the docs-only commit above it that
-  carries this page — either contains `6308fc9e`, which is what clears `mergeable = false`. It is
-  the only step that does: pushing a docs commit above `dff6971a` alone would leave the conflict in
-  place, since the head would still lack main's switch.
-- **Approve the runs of the pushed head** (maintainer action). Three deliveries have ended
-  `action_required` with zero jobs — `42e2dbe5` (§26.2), `b46ed3c3` (§26.4) and `dff6971a`
-  (§27.1) — and no CI has executed on the branch at all.
-- **No docs commit per push.** This header has now drifted three times because each delivery came
-  with a page written on top of it. From this section on, the record is anchored: the numbers above
-  name the instant they were measured and the head they describe, a later push makes them
-  historical instead of wrong, and the next measurement is a new section rather than an edit of
-  this one.
+- **Pushed.** The owner pushed at 2026-11-12T13:27:33Z. The fork's
+  `refs/heads/feature/realtime-collaboration`, the PR's `headRefOid` and the local HEAD read
+  `ce9f48db` at 16:40Z,
+  `git rev-list --count --left-right fork/feature/realtime-collaboration...HEAD` is `0 0`, and the
+  tree is clean. `ce9f48db` is the docs-only commit above `4ae789c6` — one parent, 1 file, +98, the
+  §28 page — and `4ae789c6` sits on `57c9e21e`, the merge that took the conflict away. So the head
+  the PR carries is exactly what §27.3 and §28 built, and the next head is not local: there is
+  nothing left to push.
+- **MERGEABLE.** `gh api repos/storytold/gridcraft/pulls/3613` at 16:40Z reads `mergeable = true`,
+  `mergeable_state = unstable`, 81 commits, 84 files, +18703/−34, base `main` reported at
+  `6308fc9e`, last update 13:27:35Z. `unstable` is the four runs awaiting approval, not a failed
+  job: the rollup holds CodeRabbit `skipped` and nothing else. `main` has moved to `37941f06` (ten
+  commits) after the computation, and `git merge-tree --write-tree origin/main HEAD` is clean, so a
+  recomputation keeps the field `MERGEABLE`.
+- **No CI executed on the head.** The push created `CI` (`43227482343`), `House rules`
+  (`43227482457`), `SonarCloud` (`43227482406`) and `Nix` (`43227482462`) at 13:27:33Z; all four are
+  `completed / action_required` with zero jobs, the commit's status API holds no context
+  (`pending`, 0 statuses) and its only check run is CodeRabbit, `completed / skipped` at 13:27:37Z.
+  No run has executed on any head of this branch.
+- **Approve the runs of `ce9f48db`** (maintainer action). It is the only step that turns a check
+  rollup into evidence; the gate the branch has is the host's — §27.4 on `57c9e21e`, §28.4 on
+  `4ae789c6`.
+- **Reply to comment `4532845977`** — CodeRabbit's thread of review `5852406613` at `synced.rs:398`
+  — and it can now name `4ae789c6`: §23.2's finding is closed by the constructor change and its two
+  tests, not merely recorded.
+- **No docs commit per push, and the live lists are edited in place.** The rule of this section's
+  previous version stands for the measurements: they name the instant they were taken and the head
+  they describe, a later push makes them historical instead of wrong, and a new measurement is a new
+  section. The two lists that name the *current* state of the PR — this one and §28.5 — are the
+  exception: they are rewritten at the instant of a measurement, which is why neither asks for a
+  push that has happened.
 
 ## 28. A replica starts at the version its workbook is at: `4ae789c6` (2026-11-12)
 
 The finding §23.2 confirmed and left to its own slice is closed here, in its own commit: the code
 head is `4ae789c6`, one commit above `ff26e8a0`, and the page that records it is the commit above
-that — a docs-only commit, as usual. **Nothing is pushed:** the delivered head is `ff26e8a0` (the
-push of 07:12Z, after this page's 06:40Z measurement), the PR still needs the owner's push (§28.5),
-and no CI file is touched —
-`git diff --name-only ff26e8a0..4ae789c6 -- .github` is empty.
+that — a docs-only commit, as usual. **Pushed at 13:27:33Z:** the delivered head is `ce9f48db`, the
+page's own commit above `4ae789c6`; the PR reads `mergeable = true` / `unstable` since, and no CI
+file is touched — `git diff --name-only ff26e8a0..4ae789c6 -- .github` is empty. What remains is the
+approval of the runs and the reply to the review thread (§28.5).
 
 ### 28.1 The race, in the code
 
@@ -2204,10 +2235,12 @@ their tests — so §27.4's 3557/2 run stands for them.
 
 ### 28.5 What remains
 
-- **Push the head** (owner action): it must still contain the merge `57c9e21e` (main's `6308fc9e`),
-  which is what clears `mergeable = false`. The local branch is now that merge, this slice and this
-  page; §27.5's rule stands — the next push delivers all three at once.
-- **Approve the runs** of the pushed head (maintainer action). No CI has executed on any head of
-  this branch (§27.1).
+- **Pushed:** the head is `ce9f48db` since 2026-11-12T13:27:33Z — fork = `headRefOid`, and the
+  local HEAD read it at the 16:40Z measurement with `0 0` against the fork and a clean tree; this
+  page's own commit is the docs-only commit above it (§27.5) — and it contains the merge
+  `57c9e21e` (main's `6308fc9e`), which is what cleared `mergeable`; the PR reads `true` /
+  `unstable`.
+- **Approve the runs** of `ce9f48db` (maintainer action). No CI has executed on any head of this
+  branch (§27.1, §27.5).
 - **The review reply** to comment `4532845977`'s thread can now name `4ae789c6`: §23.2's finding is
   closed, not merely recorded.
