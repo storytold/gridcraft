@@ -180,3 +180,43 @@ fn replay_moves_ink_with_a_right_to_left_sheet() {
     h.run_steps(60);
     assert_eq!(ink_points(&h), committed, "replayed ink lands where the committed ink does, not reflected");
 }
+
+/// Ink past the report stays visible: the replay animates only the strokes the report lists, so
+/// a stroke the cap (or a stale report) leaves out is painted as committed ink, not hidden.
+#[test]
+fn ink_outside_the_replay_report_stays_visible() {
+    let session = session_with(&[[[40, 40], [160, 40]], [[200, 40], [320, 40]], [[40, 120], [160, 120]]]);
+    // A report naming only the first two strokes: the third is past the cap, unknown here.
+    let ids: Vec<u64> =
+        session.active().unwrap().wb.active().unwrap().shapes.iter().filter(|s| s.kind == ShapeKind::Ink).map(|s| s.id as u64).collect();
+    assert_eq!(ids.len(), 3);
+    let report = serde_json::json!({"replaying": true, "strokes": [{"id": ids[0]}, {"id": ids[1]}]});
+    let mut h = harness(session);
+    assert!(gridcraft_ui_egui::ink::start(h.state_mut(), &report), "the partial report starts a replay");
+    h.run_steps(60);
+    assert!(h.state().grid.replay.is_some(), "the replay runs");
+    assert_eq!(ink_paths(&h), 3, "the two animated strokes and the untouched third are all painted");
+}
+
+/// Replayed ink keeps its stacking: an opaque rectangle over the stroke still covers it while the
+/// replay paints the stroke at its own position, instead of painting over the rectangle.
+#[test]
+fn replayed_ink_keeps_its_stacking_under_a_rectangle() {
+    let mut session = session_with(&[[[40, 120], [320, 120]]]);
+    session.execute("insert.shape", serde_json::json!({"kind": "rectangle", "at": "B2", "width": 200, "height": 100, "fill": "#FF0000"})).unwrap();
+    let mut h = harness(session);
+    h.run_steps(2);
+    assert_eq!(ink_paths(&h), 1, "the stroke is painted under the rectangle");
+
+    h.get_by_label("Ink Replay").click();
+    h.run_steps(60);
+    assert!(h.state().grid.replay.is_some(), "the replay runs");
+    let shapes = &h.output().shapes;
+    let ink_at = shapes.iter().position(|s| matches!(&s.shape, Shape::Path(p) if p.stroke.color == ColorMode::Solid(INK)));
+    // The opaque red rectangle painted for the `insert.shape` cover.
+    let rect_at = shapes.iter().position(|s| matches!(&s.shape, Shape::Rect(r) if r.fill == egui::Color32::RED));
+    match (ink_at, rect_at) {
+        (Some(i), Some(r)) => assert!(i < r, "the replayed stroke still paints under its rectangle"),
+        _ => panic!("expected both the replayed stroke and the rectangle to paint"),
+    }
+}

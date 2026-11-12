@@ -30,12 +30,16 @@ pub struct Replay {
     /// The sheet's ink when the replay started: any change to it ends the replay.
     ink: u64,
     strokes: Vec<ReplayStroke>,
+    /// The ids of the strokes in `strokes`: the sheet hides only this ink, so strokes past the
+    /// replay cap stay visible instead of vanishing until the replay stops.
+    ids: std::collections::HashSet<u32>,
     /// Seconds into the replay.
     t: f32,
     playing: bool,
 }
 
-struct ReplayStroke {
+pub(crate) struct ReplayStroke {
+    id: u32,
     anchor: Anchor,
     points: Vec<[f32; 2]>,
     color: egui::Color32,
@@ -61,6 +65,7 @@ pub fn start(app: &mut SheetApp, report: &Json) -> bool {
     let Some(sh) = d.wb.sheet(sheet) else { return false };
     let mut start = 0.0;
     let mut strokes = Vec::new();
+    let mut ids = std::collections::HashSet::new();
     for listed in report.get("strokes").and_then(Json::as_array).into_iter().flatten().take(MAX_STROKES) {
         let Some(id) = listed.get("id").and_then(Json::as_u64).and_then(|v| u32::try_from(v).ok()) else { continue };
         let Some(shape) = sh.shapes.iter().find(|s| s.id == id && s.kind == ShapeKind::Ink) else { continue };
@@ -72,14 +77,15 @@ pub fn start(app: &mut SheetApp, report: &Json) -> bool {
         let base = shape.line.resolve(&d.wb.theme).map(crate::theme::color32).unwrap_or(egui::Color32::DARK_GRAY);
         let length = path_len(&points);
         let dur = (length / REPLAY_SPEED).clamp(MIN_STROKE_SECS, MAX_STROKE_SECS);
-        strokes.push(ReplayStroke { anchor: shape.anchor, points, color: chartview::ink_color(base, width), width, start, dur, length });
+        strokes.push(ReplayStroke { id, anchor: shape.anchor, points, color: chartview::ink_color(base, width), width, start, dur, length });
+        ids.insert(id);
         start += dur + REPLAY_GAP;
     }
     if strokes.is_empty() {
         return false;
     }
     let ink = ink_sig(sh);
-    app.grid.replay = Some(Replay { doc, sheet, ink, strokes, t: 0.0, playing: true });
+    app.grid.replay = Some(Replay { doc, sheet, ink, strokes, ids, t: 0.0, playing: true });
     true
 }
 
@@ -116,6 +122,21 @@ pub fn replay_tick(app: &mut SheetApp, ctx: &egui::Context) {
 }
 
 impl Replay {
+    /// Whether the replay animates the stroke with this id: only that ink hides while it runs.
+    pub(crate) fn animates(&self, id: u32) -> bool {
+        self.ids.contains(&id)
+    }
+
+    /// The animated stroke with this id, if the replay covers it.
+    pub(crate) fn stroke(&self, id: u32) -> Option<&ReplayStroke> {
+        self.strokes.iter().find(|s| s.id == id)
+    }
+
+    /// Seconds into the replay: the shape loop paints each animated stroke up to this clock.
+    pub(crate) fn clock(&self) -> f32 {
+        self.t
+    }
+
     /// The replay's total length in seconds: the end of the last stroke.
     fn end(&self) -> f32 {
         self.strokes.last().map_or(0.0, |s| s.start + s.dur)
@@ -156,54 +177,58 @@ fn path_len(points: &[[f32; 2]]) -> f32 {
     points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum()
 }
 
-/// The replayed ink so far: finished strokes whole, the current one up to where it has got.
+/// One animated stroke at its anchor rectangle, painted only when its start time has come: the
+/// shape loop calls this at the stroke's own position in `sh.shapes`, so replayed ink keeps its
+/// stacking relative to overlapping shapes. Timing still comes from the replay clock alone.
 ///
-/// `done` records the shape range one stroke painted and its anchor rectangle, so a
+/// `done` records the shape range the stroke painted and its anchor rectangle, so a
 /// right-to-left sheet moves a replayed stroke as a whole exactly as it moves the committed one;
 /// without it the mirror pass would reflect the points and flip the stroke.
-pub(crate) fn paint_replay(
+pub(crate) fn paint_replay_stroke(
     p: &egui::Painter,
     geo: &crate::grid::Geo,
     sh: &Sheet,
-    r: &Replay,
+    t: f32,
+    stroke: &ReplayStroke,
     done: &mut dyn FnMut(egui::layers::ShapeIdx, egui::Rect),
 ) {
-    for stroke in r.strokes.iter().filter(|s| s.start <= r.t) {
-        let rect = chartview::anchor_rect(geo, sh, &stroke.anchor);
-        let width = (stroke.width * geo.z).max(1.0);
-        // Off-screen strokes cost nothing to skip: no point walk, no path built.
-        if !rect.expand(width).intersects(p.clip_rect()) {
-            continue;
-        }
-        let start = p.add(egui::Shape::Noop);
-        let frac = if stroke.dur > 0.0 { ((r.t - stroke.start) / stroke.dur).clamp(0.0, 1.0) } else { 1.0 };
-        let map = |q: [f32; 2]| egui::pos2(rect.left() + q[0] * geo.z, rect.top() + q[1] * geo.z);
-        if stroke.points.len() == 1 {
-            p.circle_filled(map(stroke.points[0]), width / 2.0, stroke.color);
-        } else {
-            let mut left = stroke.length * frac;
-            let mut pts: Vec<egui::Pos2> = Vec::new();
-            for w in stroke.points.windows(2) {
-                let (a, b) = (w[0], w[1]);
-                if pts.is_empty() {
-                    pts.push(map(a));
-                }
-                let seg = (b[0] - a[0]).hypot(b[1] - a[1]);
-                if seg <= left {
-                    pts.push(map(b));
-                    left -= seg;
-                } else {
-                    let f = if seg > 0.0 { left / seg } else { 0.0 };
-                    pts.push(map([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]));
-                    break;
-                }
-            }
-            if pts.len() >= 2 {
-                p.add(PathShape::line(pts, PathStroke::new(width, stroke.color)));
-            }
-        }
-        done(start, rect);
+    if stroke.start > t {
+        return;
     }
+    let rect = chartview::anchor_rect(geo, sh, &stroke.anchor);
+    let width = (stroke.width * geo.z).max(1.0);
+    // Off-screen strokes cost nothing to skip: no point walk, no path built.
+    if !rect.expand(width).intersects(p.clip_rect()) {
+        return;
+    }
+    let start = p.add(egui::Shape::Noop);
+    let frac = if stroke.dur > 0.0 { ((t - stroke.start) / stroke.dur).clamp(0.0, 1.0) } else { 1.0 };
+    let map = |q: [f32; 2]| egui::pos2(rect.left() + q[0] * geo.z, rect.top() + q[1] * geo.z);
+    if stroke.points.len() == 1 {
+        p.circle_filled(map(stroke.points[0]), width / 2.0, stroke.color);
+    } else {
+        let mut left = stroke.length * frac;
+        let mut pts: Vec<egui::Pos2> = Vec::new();
+        for w in stroke.points.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            if pts.is_empty() {
+                pts.push(map(a));
+            }
+            let seg = (b[0] - a[0]).hypot(b[1] - a[1]);
+            if seg <= left {
+                pts.push(map(b));
+                left -= seg;
+            } else {
+                let f = if seg > 0.0 { left / seg } else { 0.0 };
+                pts.push(map([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]));
+                break;
+            }
+        }
+        if pts.len() >= 2 {
+            p.add(PathShape::line(pts, PathStroke::new(width, stroke.color)));
+        }
+    }
+    done(start, rect);
 }
 
 #[cfg(test)]

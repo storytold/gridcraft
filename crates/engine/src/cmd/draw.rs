@@ -10,6 +10,16 @@ use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edi
 /// make an animation nobody can watch, and the report is built per click.
 const MAX_REPLAY_STROKES: usize = 2_000;
 
+pub fn held_ink_keys(wb: &gridcraft_model::Workbook) -> std::collections::HashSet<String> {
+    wb.sheets
+        .iter()
+        .flat_map(|sheet| sheet.shapes.iter())
+        .filter_map(|x| x.ink.as_ref())
+        .filter_map(|i| i.key.as_deref())
+        .filter_map(gridcraft_model::ink_guid)
+        .collect()
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "draw.pen", "Pen", ["Draw", "Tools"], None, "{on?: bool, color?: hex, width?: 2}", has_doc, pen),
@@ -97,9 +107,8 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     let width_cm = px_to_cm(width);
     // A reopened workbook holds keys minted by an earlier process, whose counter started at zero,
     // so a freshly minted key can be one the workbook already uses: mint past those.
-    let held: Vec<&str> =
-        d.wb.sheets.iter().flat_map(|sheet| sheet.shapes.iter()).filter_map(|x| x.ink.as_ref()).filter_map(|i| i.key.as_deref()).collect();
-    let key = gridcraft_model::ink_creation_id_free(|k| held.contains(&k));
+    let held = held_ink_keys(&d.wb);
+    let key = gridcraft_model::ink_creation_id_free(|k| held.contains(k));
     let shape = Shape {
         math: Default::default(),
         id,

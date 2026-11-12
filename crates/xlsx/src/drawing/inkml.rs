@@ -397,11 +397,17 @@ fn brush(definitions: &El) -> (InkStyle, Color) {
     let mut ink_effects = None;
     let mut mask_pen = false;
     let Some(brush) = definitions.child("brush") else { return (style, color) };
+    // A missing height defaults to the width (the W3C InkML elliptical/rectangular tip rule),
+    // not to the Pen default: track whether the part named one.
+    let mut height_set = false;
     for p in brush.kids("brushProperty") {
         let (Some(name), Some(value)) = (p.attr("name"), p.attr("value")) else { continue };
         match name {
             "width" => style.width_cm = brush_cm(value).unwrap_or(style.width_cm),
-            "height" => style.height_cm = brush_cm(value).unwrap_or(style.height_cm),
+            "height" => {
+                style.height_cm = brush_cm(value).unwrap_or(style.height_cm);
+                height_set = true;
+            }
             "color" => color = Color::from_hex(value).unwrap_or(color),
             "tip" => mask_pen |= value.trim() == "rectangle",
             "rasterOp" => mask_pen |= value.trim() == "maskPen",
@@ -414,7 +420,7 @@ fn brush(definitions: &El) -> (InkStyle, Color) {
             _ => {}
         }
     }
-    if style.height_cm <= 0.0 {
+    if !height_set || style.height_cm <= 0.0 {
         style.height_cm = style.width_cm;
     }
     style.effect = ink_effects.as_deref().and_then(effect);

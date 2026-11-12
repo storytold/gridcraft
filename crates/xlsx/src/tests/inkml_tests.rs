@@ -562,6 +562,20 @@ fn excel_brush_properties_infer_pen_pencil_and_highlighter_without_a_channel() {
 }
 
 #[test]
+fn a_brush_without_a_height_defaults_to_its_width() {
+    // The W3C InkML tip rule: a missing height means a round tip of the brush's width, not the
+    // Pen default of 0.05. An explicit height is still kept.
+    let no_height = r##"<inkml:brushProperty name="width" value="0.3" units="cm"/><inkml:brushProperty name="color" value="#1F5FC9"/>"##;
+    let (wb, _) = read(&package("!0 !0", false, no_height, true, true, true));
+    let ink = ink_shape(&wb).ink.as_ref().expect("editable ink");
+    assert_eq!(ink.width_cm, 0.3);
+    assert_eq!(ink.height_cm, 0.3, "a missing height defaults to the width: {ink:?}");
+    let explicit = r##"<inkml:brushProperty name="width" value="0.3" units="cm"/><inkml:brushProperty name="height" value="0.6" units="cm"/><inkml:brushProperty name="color" value="#1F5FC9"/>"##;
+    let (wb, _) = read(&package("!0 !0", false, explicit, true, true, true));
+    assert_eq!(wb.sheets[0].shapes[0].ink.as_ref().expect("editable ink").height_cm, 0.6);
+}
+
+#[test]
 fn a_part_with_two_traces_reads_as_two_strokes() {
     // An InkML trace is a stroke: a part that holds two of them is two editable strokes, not one
     // first stroke and a silently dropped second.

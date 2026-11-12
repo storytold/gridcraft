@@ -152,3 +152,27 @@ fn replay_leaves_the_document_alone() {
     let after = session.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
     assert_eq!(before, after, "Ink Replay must not change what the workbook saves");
 }
+
+/// A key restored with uppercase digits or padding names the same stroke: the held-key set keeps
+/// its canonical form, so the mint-past check cannot miss the identity under another spelling.
+#[test]
+fn held_keys_keep_the_canonical_spelling_of_an_unclean_key() {
+    use gridcraft_engine::cmd::draw::held_ink_keys;
+    let mut session = workbook();
+    let shape = session.execute("draw.stroke", json!({"points": [[0, 0], [10, 10]]})).unwrap()["shape"].as_u64().unwrap();
+    let key = {
+        let d = session.doc().unwrap();
+        d.wb.active().unwrap().shapes.iter().find(|s| s.id as u64 == shape).unwrap().ink.as_ref().unwrap().key.clone().unwrap()
+    };
+    // The same identity in another spelling, as JSON restore can leave it.
+    let unclean = format!(" {} ", key.to_ascii_uppercase());
+    {
+        let d = session.doc_mut().unwrap();
+        let sh = std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap();
+        sh.shapes.iter_mut().find(|s| s.id as u64 == shape).unwrap().ink.as_mut().unwrap().key = Some(unclean.clone());
+    }
+    let held = held_ink_keys(&session.doc().unwrap().wb);
+    assert_eq!(held.len(), 1, "one stroke, one identity: {held:?}");
+    assert!(held.contains(&key), "the canonical spelling is held, so minting moves past it: {held:?}");
+    assert!(!held.contains(&unclean), "the unclean spelling itself is not the identity: {held:?}");
+}

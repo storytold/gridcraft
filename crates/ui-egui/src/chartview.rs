@@ -284,11 +284,19 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
     let mut done = |start: egui::layers::ShapeIdx, rect: Rect| painted.push(PaintedObject { shapes: start.0..p.add(egui::Shape::Noop).0, rect });
     // The grid paints the active workbook: its pictures are cached under it.
     let doc = app.session.active().map_or(0, |d| d.uid);
-    // While Ink Replay runs, the sheet's own strokes are left out and the replayed ink below
-    // paints them again, progressively.
+    // While Ink Replay runs, the animated strokes paint progressively at their own position in
+    // the shape loop, so they keep their stacking relative to overlapping shapes. Strokes the
+    // report did not cover (past the replay cap) stay visible as committed ink.
     let replay = crate::ink::replay_for(app, doc, si);
     for sp in &sh.shapes {
-        if replay.is_some() && sp.kind == ShapeKind::Ink {
+        if let Some(replay) = replay
+            && sp.kind == ShapeKind::Ink
+            && let Some(stroke) = replay.stroke(sp.id)
+        {
+            crate::ink::paint_replay_stroke(p, geo, sh, replay.clock(), stroke, &mut done);
+            continue;
+        }
+        if replay.is_some_and(|r| r.animates(sp.id)) {
             continue;
         }
         let r = anchor_rect(geo, sh, &sp.anchor);
@@ -357,9 +365,6 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             paint_shape_text(p, wb, sp, r, geo.z);
         }
         done(start, r);
-    }
-    if let Some(replay) = replay {
-        crate::ink::paint_replay(p, geo, sh, replay, &mut done);
     }
     for im in &sh.images {
         let r = anchor_rect(geo, sh, &im.anchor);
