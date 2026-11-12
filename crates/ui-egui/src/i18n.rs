@@ -493,6 +493,18 @@ mod tests {
         }
     }
 
+    /// The command palette translates every engine command's label and menu path (see
+    /// `command_search`), so a Chinese interface must not fall back to English there.
+    #[test]
+    fn every_engine_command_label_and_menu_part_has_a_chinese_translation() {
+        for spec in gridcraft_engine::cmd::command_specs() {
+            assert!(zh::translate(spec.label).is_some(), "command {} label {:?} has no zh entry", spec.id, spec.label);
+            for part in spec.menu {
+                assert!(zh::translate(part).is_some(), "command {} menu part {:?} has no zh entry", spec.id, part);
+            }
+        }
+    }
+
     /// Ukrainian Chart uses the shared craft-i18n term, which is not the Diagram word.
     #[test]
     fn ukrainian_chart_uses_the_shared_term() {
