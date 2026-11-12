@@ -3,6 +3,7 @@ use super::{
     AutoFilter, CellRef, EngineError, FilterCriterion, Json, Ordering, RangeRef, Result, Session, Sheet, Value, Workbook, bad, bool_param, col_param,
     current_region, data_target, edit, json,
 };
+use crate::cf::CfCache;
 use crate::cmd::format::color_param;
 use gridcraft_model::{Color, PatternType, Style, Theme};
 
@@ -250,6 +251,28 @@ pub(super) fn fill_color(st: &Style) -> Color {
     if st.fill.pattern == PatternType::None { Color::Auto } else { st.fill.fg }
 }
 
+/// The fill and font colour cell `c` shows, as the grid paints it: its own, under a conditional
+/// format's fill and font colour where a rule sets them, and a colour scale's fill over both
+/// (Filter and Sort by Color, and the colours the filter menu lists).
+pub(super) fn shown_colors(wb: &Workbook, sheet: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (Color, Color) {
+    let st = wb.styles.get(sh.style_id(c));
+    let (mut fill, mut font) = (fill_color(st), st.font.color);
+    if let Some(look) = cf.look(wb, sheet, c) {
+        if let Some(rule) = &look.style {
+            if rule.fill.pattern != PatternType::None {
+                fill = rule.fill.fg;
+            }
+            if rule.font.color != Color::Auto {
+                font = rule.font.color;
+            }
+        }
+        if let Some([r, g, b]) = look.scale_fill {
+            fill = Color::rgb(r, g, b);
+        }
+    }
+    (fill, font)
+}
+
 /// Two colours look the same: equal, or the same RGB once theme colours are resolved, so a
 /// theme accent and the RGB it stands for match (filter and sort by colour).
 pub(super) fn same_color(a: &Color, b: &Color, theme: &Theme) -> bool {
@@ -297,11 +320,13 @@ pub fn filter_column(wb: &Workbook, sheet: usize, col: u32) -> Option<FilterColu
         }
     };
     let last = af.range.end.row.min(af.range.start.row.saturating_add(1_000_000)).min(gridcraft_core::MAX_ROWS - 1);
+    let mut cf = CfCache::new();
     for row in af.range.start.row + 1..=last {
         let c = CellRef::new(row, col);
         let st = wb.styles.get(sh.style_id(c));
-        add(&mut fills, fill_color(st));
-        add(&mut fonts, st.font.color);
+        let (fill, font) = shown_colors(wb, sheet, sh, c, &mut cf);
+        add(&mut fills, fill);
+        add(&mut fonts, font);
         match sh.value(c) {
             Value::Number(_) => {
                 numbers += 1;
@@ -374,6 +399,7 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
             col_stats.insert(i, (thr, avg));
         }
     }
+    let mut cf = CfCache::new();
     for row in r.start.row + 1..=r.end.row {
         let mut visible = true;
         for (i, (off, crit)) in af.criteria.iter().enumerate() {
@@ -415,8 +441,8 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
                     }
                     _ => false,
                 },
-                FilterCriterion::FillColor(col) => same_color(&fill_color(wb.styles.get(sh.style_id(c))), col, &wb.theme),
-                FilterCriterion::FontColor(col) => same_color(&wb.styles.get(sh.style_id(c)).font.color, col, &wb.theme),
+                FilterCriterion::FillColor(col) => same_color(&shown_colors(wb, sheet, sh, c, &mut cf).0, col, &wb.theme),
+                FilterCriterion::FontColor(col) => same_color(&shown_colors(wb, sheet, sh, c, &mut cf).1, col, &wb.theme),
                 // Icons are not evaluated here: the row keeps its current visibility.
                 FilterCriterion::Icon { .. } => !sh.is_row_hidden(row),
             };

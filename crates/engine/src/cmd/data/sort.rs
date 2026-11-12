@@ -63,12 +63,18 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
             col_param(k.get("column"), r.start.col)
         };
         let Some(col) = col else { continue };
+        // A colour that isn't one is refused rather than read as "no colour named", which would
+        // sort by RGB instead.
+        let color = match k.get("color") {
+            None | Some(Json::Null) => None,
+            Some(c) => Some(crate::cmd::format::color_param(Some(c)).ok_or_else(|| bad("data.sort", "invalid sort key `color`"))?),
+        };
         keys.push(SortKey {
             col,
             desc: k.get("order").and_then(Json::as_str) == Some("desc"),
             by: k.get("by").and_then(Json::as_str).unwrap_or("values").to_string(),
             list: k.get("customList").and_then(Json::as_array).map(|l| l.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()),
-            color: crate::cmd::format::color_param(k.get("color")),
+            color,
         });
     }
     if keys.is_empty() {
@@ -102,13 +108,15 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
         let n = if by_cols { body.width() } else { body.height() };
         let line = |i: u32, k: u32| if by_cols { CellRef::new(k, body.start.col + i) } else { CellRef::new(body.start.row + i, k) };
         let theme = cx.wb.theme.clone();
-        let styles = &cx.wb.styles;
-        let key_val = |i: u32, k: &SortKey| -> (Value, u32) {
+        let wb = &cx.wb;
+        // The colour a cell shows, conditional formats included, as Filter by Color sees it.
+        let mut cf = crate::cf::CfCache::new();
+        let mut key_val = |i: u32, k: &SortKey| -> (Value, u32) {
             let c = line(i, k.col);
             let v = sh.value(c);
             let shown = match k.by.as_str() {
-                "cellColor" => Some(super::filter::fill_color(styles.get(sh.style_id(c)))),
-                "fontColor" => Some(styles.get(sh.style_id(c)).font.color),
+                "cellColor" => Some(super::filter::shown_colors(wb, sheet, sh, c, &mut cf).0),
+                "fontColor" => Some(super::filter::shown_colors(wb, sheet, sh, c, &mut cf).1),
                 _ => None,
             };
             let color = match (shown, &k.color) {
@@ -120,7 +128,10 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
             (v, color)
         };
         let mut order: Vec<u32> = (0..n).collect();
-        let keyed: Vec<Vec<(Value, u32)>> = (0..n).map(|i| keys.iter().map(|k| key_val(i, k)).collect()).collect();
+        let mut keyed: Vec<Vec<(Value, u32)>> = Vec::new();
+        for i in 0..n {
+            keyed.push(keys.iter().map(|k| key_val(i, k)).collect());
+        }
         order.sort_by(|&a, &b| {
             for (ki, k) in keys.iter().enumerate() {
                 let (va, ca) = &keyed[a as usize][ki];
@@ -135,8 +146,10 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
                 } else {
                     sort_compare(va, vb)
                 };
-                // Blanks always sort last, whatever the order.
-                let o = if k.desc && !(va.is_empty() || vb.is_empty()) { o.reverse() } else { o };
+                // Blanks always sort last by value, whatever the order. By colour the colour
+                // decides, so an empty cell showing it moves with the other cells that do (and
+                // the order stays total).
+                let o = if k.desc && (k.by != "values" || !(va.is_empty() || vb.is_empty())) { o.reverse() } else { o };
                 if o != Ordering::Equal {
                     return o;
                 }

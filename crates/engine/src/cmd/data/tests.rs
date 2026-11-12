@@ -696,3 +696,67 @@ fn filter_by_keeps_to_the_active_region_beside_an_unrelated_table() {
     let sh = s.doc().unwrap().wb.sheet(0).unwrap();
     assert_eq!(sh.autofilter.as_ref().map(|a| a.range.a1()), Some("D1:E4".to_string()));
 }
+
+/// Filter and Sort by Color go by the colour a cell shows, so a conditional format's fill or
+/// font colour counts, as the grid paints it; cells the rule doesn't style keep their own.
+#[test]
+fn color_filter_and_sort_use_the_conditional_format_color() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["n"], [1], [5], [2], [7]]})).unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "A2:A5", "rule": {"type": "cellIs", "operator": "greater", "value": "4", "preset": "greenFill"}}),
+    )
+    .unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "A2:A5", "rule": {"type": "cellIs", "operator": "equal", "value": "2", "preset": "redText"}}),
+    )
+    .unwrap();
+    s.execute("data.filter", json!({"range": "A1:A5"})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let col = filter_column(&wb, 0, 0).unwrap();
+    assert!(col.fills.contains(&gridcraft_model::Color::Rgb(0xC6EFCE)), "the menu offers the rule's fill: {:?}", col.fills);
+    assert!(col.fonts.contains(&gridcraft_model::Color::rgb(0x9C, 0x00, 0x06)), "and its font colour: {:?}", col.fonts);
+    let hidden = |s: &Session| -> Vec<u32> { (1..=4).filter(|r| s.doc().unwrap().wb.sheet(0).unwrap().is_row_hidden(*r)).collect() };
+    s.execute("data.filterBy", json!({"column": "A", "fillColor": "#C6EFCE"})).unwrap();
+    assert_eq!(hidden(&s), vec![1, 3], "5 and 7 show the rule's green");
+    s.execute("data.filterBy", json!({"column": "A", "fillColor": "none"})).unwrap();
+    assert_eq!(hidden(&s), vec![2, 4], "1 and 2 have no fill");
+    s.execute("data.filterBy", json!({"column": "A", "fontColor": "#9C0006"})).unwrap();
+    assert_eq!(hidden(&s), vec![1, 2, 4], "2 shows the rule's red text");
+    s.execute("data.filterBy", json!({"column": "A", "clear": true})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A5", "header": true, "keys": [{"column": "A", "by": "cellColor", "color": "#C6EFCE"}]})).unwrap();
+    let vals: Vec<Json> = (2..=5).map(|r| s.execute("cell.get", json!({"cell": format!("A{r}")})).unwrap()["value"].clone()).collect();
+    assert_eq!(vals, vec![json!(5.0), json!(7.0), json!(1.0), json!(2.0)], "the green cells go on top");
+}
+
+/// A sort key's `color` that isn't a colour is refused instead of sorting by RGB.
+#[test]
+fn sort_refuses_an_invalid_key_color() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["k"], ["b"], ["a"]]})).unwrap();
+    s.execute("home.fillColor", json!({"range": "A3", "color": "#000000"})).unwrap();
+    let e = s.execute("data.sort", json!({"range": "A1:A3", "header": true, "keys": [{"column": "A", "by": "cellColor", "color": "#GGGGGG"}]}));
+    assert!(e.is_err(), "{e:?}");
+    assert_eq!(s.execute("cell.get", json!({"cell": "A2"})).unwrap()["value"], json!("b"), "nothing moved");
+}
+
+/// Sort by Color, colour at the bottom: an empty cell showing the colour goes down with the other
+/// cells showing it, rather than staying on top.
+#[test]
+fn a_blank_cell_moves_with_its_color_in_a_descending_color_sort() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["k", "tag"], [null, "blank"], ["a", "a"], ["b", "b"]]})).unwrap();
+    s.execute("home.fillColor", json!({"range": "A2:A3", "color": "#FFFF00"})).unwrap();
+    s.execute(
+        "data.sort",
+        json!({"range": "A1:B4", "header": true, "keys": [{"column": "A", "by": "cellColor", "color": "#FFFF00", "order": "desc"}]}),
+    )
+    .unwrap();
+    let tags: Vec<Json> = (2..=4).map(|r| s.execute("cell.get", json!({"cell": format!("B{r}")})).unwrap()["value"].clone()).collect();
+    assert_eq!(tags, vec![json!("b"), json!("blank"), json!("a")]);
+}
