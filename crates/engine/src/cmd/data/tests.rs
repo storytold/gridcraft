@@ -680,3 +680,19 @@ fn filter_by_uses_the_table_when_the_active_cell_is_outside_it() {
     assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().autofilter.as_ref().map(|a| a.range.a1()), Some("A3:B7".to_string()));
     s.execute("data.filterBy", json!({"column": "B", "values": ["c"]})).expect("B is in the table's filter");
 }
+
+/// The sheet's only table is not the filter when the active cell sits in a separate data region
+/// beside it: that region is filtered, and the table gets no filter of its own.
+#[test]
+fn filter_by_keeps_to_the_active_region_beside_an_unrelated_table() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["ID", "Name"], [1, "a"], [2, "b"]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3"})).unwrap();
+    s.execute("range.setValues", json!({"range": "D1", "values": [["Qty", "Item"], [5, "x"], [9, "y"], [7, "z"]]})).unwrap();
+    s.execute("selection.set", json!({"range": "D2"})).unwrap();
+    let r = s.execute("data.filterBy", json!({"column": "D", "custom": {"op": ">", "value": "6"}})).unwrap();
+    assert_eq!(r["hiddenRows"], json!(1), "the 5 hides");
+    let sh = s.doc().unwrap().wb.sheet(0).unwrap();
+    assert_eq!(sh.autofilter.as_ref().map(|a| a.range.a1()), Some("D1:E4".to_string()));
+}

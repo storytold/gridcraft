@@ -70,8 +70,15 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     // Without a filter yet, a table's filter is the table: the one at the active cell, else the
     // sheet's only one. The active cell's region would be wrong when it sits outside the table
     // (a report's title above it), and the column would then be "outside the filter range".
+    // The only table is that filter when the column asked for is one of its columns and the active
+    // cell isn't in a data region of its own beside the table (a header with rows below it).
     let active = s.doc()?.selection.active;
-    let table = sh.table_at(active).or(if sh.tables.len() == 1 { sh.tables.first() } else { None });
+    let region = current_region(sh, active);
+    let sole = if sh.tables.len() == 1 { sh.tables.first() } else { None }.filter(|t| {
+        let in_table = col_param(p.get("column"), t.range.start.col).is_some_and(|c| c >= t.range.start.col && c <= t.range.end.col);
+        in_table && (region.height() < 2 || region.intersects(&t.range))
+    });
+    let table = sh.table_at(active).or(sole);
     let table_range = table.map(|t| {
         let r = t.range;
         if t.totals_row && r.end.row > r.start.row { RangeRef::new(r.start, CellRef::new(r.end.row - 1, r.end.col)) } else { r }
