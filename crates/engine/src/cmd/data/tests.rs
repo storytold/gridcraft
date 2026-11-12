@@ -557,3 +557,19 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+#[test]
+fn literal_validation_rechecks_formula_destinations_and_dependents() {
+    let mut session = Session::default();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell":"A1", "input":"=\"same\""})).unwrap();
+    session.execute("data.validation", json!({"range":"A1", "type":"custom", "formula1":"=ISFORMULA(A1)"})).unwrap();
+    let wb = &session.doc().unwrap().wb;
+    assert!(super::check_literal_validation(wb, 0, CellRef::parse("A1").unwrap(), "same").is_some());
+
+    session.execute("cell.set", json!({"cell":"A1", "input":"5"})).unwrap();
+    session.execute("cell.set", json!({"cell":"B1", "input":"=A1*1"})).unwrap();
+    session.execute("data.validation", json!({"range":"A1", "type":"custom", "formula1":"=B1>0"})).unwrap();
+    let wb = &session.doc().unwrap().wb;
+    assert!(super::check_literal_validation(wb, 0, CellRef::parse("A1").unwrap(), "-1").is_some());
+}
