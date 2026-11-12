@@ -221,12 +221,13 @@ pub(super) fn rewrite(cx: &mut Ctx, target: &str, e: &Edit) -> Result<()> {
     cx.edits.push((target.to_string(), e.clone()));
     let wb = &mut cx.wb;
     super::edit::rewrite_all_formulas(wb, target, e)?;
+    let order: Vec<_> = wb.sheets.iter().map(|sheet| sheet.name.clone()).collect();
     for si in 0..wb.sheets.len() {
         let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
         let Some(sh) = wb.sheet_mut(si) else { continue };
         let fix = |text: &str| -> String {
             match gridcraft_formula::parse(text) {
-                Ok(expr) => gridcraft_formula::print(&gridcraft_formula::adjust::adjust(expr, &host, target, e)),
+                Ok(expr) => gridcraft_formula::print(&gridcraft_formula::adjust::adjust_in(expr, &host, target, e, &order)),
                 Err(_) => text.to_string(),
             }
         };
@@ -239,7 +240,7 @@ pub(super) fn rewrite(cx: &mut Ctx, target: &str, e: &Edit) -> Result<()> {
             let body = pt.source.trim().trim_start_matches('=');
             if let Ok(expr) = gridcraft_formula::parse(body) {
                 let before = gridcraft_formula::print(&expr);
-                let after = gridcraft_formula::print(&gridcraft_formula::adjust::adjust(expr, &host, target, e));
+                let after = gridcraft_formula::print(&gridcraft_formula::adjust::adjust_in(expr, &host, target, e, &order));
                 if after != before {
                     pt.source = after;
                 }
