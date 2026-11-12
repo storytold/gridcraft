@@ -3,7 +3,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-mod builtin;
+mod calendar;
 mod decimal;
 mod parse;
 mod render;
@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellError, DateSystem, Value};
 
-pub use builtin::{builtin_format, builtin_id};
 pub use decimal::format_general_fit;
 
 use parse::{DatePart, SecKind, Section, Tok};
@@ -96,6 +95,9 @@ struct Inner {
     num_sections: usize,
     /// Index of the section that applies to text, if any.
     text_section: Option<usize>,
+    /// A code Excel rejects (a misplaced `B1`/`B2` calendar prefix): shown as General, and
+    /// `TEXT` returns `#VALUE!`, as for a code that is too long.
+    invalid: bool,
 }
 
 /// A parsed number format code. Cheap to clone.
@@ -130,7 +132,8 @@ fn too_long(code: &str) -> bool {
 
 impl NumberFormat {
     /// Parses a format code. Never fails: unknown or malformed parts degrade to literal text, and
-    /// a code longer than [`MAX_FORMAT_CODE_CHARS`] characters degrades to General.
+    /// a code longer than [`MAX_FORMAT_CODE_CHARS`] characters, or one Excel rejects for a
+    /// misplaced `B1`/`B2` calendar prefix, degrades to General.
     pub fn parse(code: &str) -> NumberFormat {
         Self::parse_inner(code, false)
     }
@@ -147,12 +150,16 @@ impl NumberFormat {
         let trimmed = code.trim();
         // `checkbox` marks a checkbox cell (Insert › Checkbox): TRUE/FALSE draw as a box, any other
         // value displays as General.
+        let general = |invalid: bool| NumberFormat {
+            inner: Arc::new(Inner { code: code.to_string(), general: true, sections: Vec::new(), num_sections: 0, text_section: None, invalid }),
+        };
         if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("general") || trimmed == "checkbox" || (!uncapped && too_long(code)) {
-            return NumberFormat {
-                inner: Arc::new(Inner { code: code.to_string(), general: true, sections: Vec::new(), num_sections: 0, text_section: None }),
-            };
+            return general(false);
         }
         let sections = parse::parse_sections(code);
+        if sections.iter().any(|s| s.invalid) {
+            return general(true);
+        }
         let len = sections.len();
         let last_is_text = sections.last().is_some_and(|s| s.kind == SecKind::Text);
         let text_section = if len >= 4 {
@@ -169,7 +176,7 @@ impl NumberFormat {
         } else {
             len
         };
-        NumberFormat { inner: Arc::new(Inner { code: code.to_string(), general: false, sections, num_sections, text_section }) }
+        NumberFormat { inner: Arc::new(Inner { code: code.to_string(), general: false, sections, num_sections, text_section, invalid: false }) }
     }
 
     pub fn general() -> NumberFormat {
@@ -323,6 +330,60 @@ impl NumberFormat {
         (Formatted { text: out.text, color: sec.color, fill: out.fill, numeric: true }, false)
     }
 
+    /// The number `n` as this format displays it: what Excel stores when "Set precision as
+    /// displayed" is on. Fixed decimals, percent, thousands scaling (`0.0,,`), scientific and
+    /// fraction sections round to what they show; the section is picked as for display, so
+    /// `0.00;(0.0)` keeps one decimal for negatives. Observed in Excel (COM,
+    /// `Workbook.PrecisionAsDisplayed`), these keep the full value: General, date and time
+    /// formats (`mm:ss.0` included), text formats and sections without digits (`"x"`, `;;;`).
+    /// The section is picked by [`NumberFormat::rounding_section`], which ignores conditions.
+    /// Never returns `-0`.
+    pub fn round_as_displayed(&self, n: f64) -> f64 {
+        if self.is_general() || !n.is_finite() {
+            return n;
+        }
+        let Some(sec) = self.rounding_section(n) else { return n };
+        if sec.kind != SecKind::Number {
+            return n;
+        }
+        let Some(m) = render::shown_value(sec, n) else { return n };
+        if m == 0.0 {
+            0.0
+        } else if n < 0.0 {
+            -m
+        } else {
+            m
+        }
+    }
+
+    /// The section whose digits "Set precision as displayed" rounds `n` by. Observed in Excel
+    /// (COM), this differs from the section that displays `n`:
+    /// - Conditions are ignored; the sign picks the section, the first for positives and the
+    ///   second for negatives. `[<1]0.00;0` shows 2.333 as `2` but stores 2.33, and stores -10/3
+    ///   as -3 although it shows `-3.00`. `[>1]0.0;0.000` stores 1/3 as 0.3.
+    /// - A format with a condition and a single number section keeps negatives at full value
+    ///   (`[<1]0.00`, `[>=-100]0.0`); with an `@` section added (`[<1]0.00;@`) negatives use the
+    ///   first section, as every format without a condition does.
+    /// - A completely empty section (no characters, not even a colour) passes to the next one:
+    ///   `0.0;;0.000` stores -2.333 as -2.333, `;0.0` stores 2.333 as 2.3, `;;0.0` too. A section
+    ///   with only a colour or a literal (`0.0;[Red];0.000`, `0.0;" "`) has no digits and keeps
+    ///   the full value.
+    ///
+    /// `None` keeps the full value.
+    fn rounding_section(&self, n: f64) -> Option<&Section> {
+        let secs = self.num_sections();
+        let conditional = secs.iter().any(|s| s.cond.is_some());
+        let slot = if n < 0.0 && secs.len() >= 2 {
+            1
+        } else if n < 0.0 && conditional && self.inner.text_section.is_none() {
+            return None;
+        } else {
+            0
+        };
+        let empty = |s: &Section| s.toks.is_empty() && s.color.is_none() && s.cond.is_none();
+        secs.get(slot..)?.iter().find(|s| !empty(s))
+    }
+
     fn format_text(&self, t: &str) -> Formatted {
         match self.inner.text_section.and_then(|i| self.inner.sections.get(i)) {
             Some(sec) => {
@@ -433,6 +494,9 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
         return Err(CellError::Value);
     }
     let fmt = NumberFormat::parse_cached(code);
+    if fmt.inner.invalid {
+        return Err(CellError::Value);
+    }
     let n = match v.scalar() {
         Value::Error(e) => return Err(e),
         Value::Empty => 0.0,

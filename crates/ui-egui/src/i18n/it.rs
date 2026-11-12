@@ -5,6 +5,8 @@
 /// Returns the Italian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Diagramma",
+        "Decorative Text" => "Testo decorativo",
         "Paste" => "Incolla",
         "Paste Values" => "Incolla valori",
         "Paste Formulas" => "Incolla formule",
