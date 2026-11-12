@@ -26,6 +26,7 @@ pub mod spelling;
 pub mod stash;
 pub mod view;
 pub mod whatif;
+pub mod wordart;
 
 use gridcraft_calc::Key;
 use gridcraft_core::{CellRef, RangeRef};
@@ -176,6 +177,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(extra::specs());
         v.extend(macros::specs());
         v.extend(draw::specs());
+        v.extend(wordart::specs());
         v.extend(spelling::specs());
         v.extend(solver::specs());
         v.extend(pivot::specs());
@@ -453,8 +455,18 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     fit_rows.sort_unstable();
     fit_rows.dedup();
+    let mut sweep: Option<(usize, MergeSweep)> = None;
+    let mut left = MERGE_FIT_WORK;
     for (si, row) in fit_rows {
-        auto_row_height(&mut wb, si, row);
+        if sweep.as_ref().is_none_or(|(at, _)| *at != si) {
+            if let Some((_, old)) = &sweep {
+                left = old.left();
+            }
+            sweep = Some((si, MergeSweep::new(left)));
+        }
+        if let Some((_, sw)) = sweep.as_mut() {
+            fit_row_height(&mut wb, si, row, sw);
+        }
     }
     if let Some(t0) = t0 {
         eprintln!("commit: + rows {:?}", since(t0));
@@ -728,6 +740,94 @@ fn wrapped_line_count(line: &str, width: f32, size: f32, bold: bool) -> f32 {
 /// Line breaks in a cell's text count only when the cell wraps, as in Excel: with Wrap Text off
 /// a multi-line value shows on one line and AutoFit gives a one-line row.
 pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
+    let mut sweep = MergeSweep::new(MERGE_FIT_WORK);
+    fit_row_height(wb, si, row, &mut sweep);
+}
+
+/// Most merge comparisons one auto-fit pass (a commit, or opening a workbook) makes. Past it the
+/// remaining rows keep the heights they have rather than stall on a sheet whose merges overlap
+/// the fitted rows many times over.
+pub(crate) const MERGE_FIT_WORK: usize = 50_000_000;
+
+/// The merged areas of one sheet that touch a row, for rows visited in ascending order: the
+/// merges are sorted by first row once and swept, so fitting many rows never rescans every merge
+/// per row. All comparisons count against [`MERGE_FIT_WORK`].
+pub(crate) struct MergeSweep {
+    /// Built on the first row that needs merge checks, so rows that return early never pay for it.
+    by_start: Option<Vec<gridcraft_core::RangeRef>>,
+    next: usize,
+    active: Vec<gridcraft_core::RangeRef>,
+    budget: usize,
+    /// The first row was answered by a plain scan: a pass that fits one row never pays for a sort.
+    scanned: bool,
+}
+
+impl MergeSweep {
+    /// A sweep for one sheet's merges with `budget` comparisons left for the pass (carry
+    /// [`MergeSweep::left`] of the previous sheet's sweep into the next). Every call to
+    /// [`MergeSweep::at`] must pass that same sheet.
+    pub(crate) fn new(budget: usize) -> Self {
+        Self { by_start: None, next: 0, active: Vec::new(), budget, scanned: false }
+    }
+
+    /// Comparisons left for the rest of the pass.
+    pub(crate) fn left(&self) -> usize {
+        self.budget
+    }
+
+    /// Takes `n` comparisons from the budget; `false` once it is spent.
+    fn charge(&mut self, n: usize) -> bool {
+        match self.budget.checked_sub(n) {
+            Some(rest) => {
+                self.budget = rest;
+                true
+            }
+            None => {
+                self.budget = 0;
+                false
+            }
+        }
+    }
+
+    /// The merges covering `row`, or `None` when the budget is spent. Rows must not decrease
+    /// between calls (skipping rows is fine).
+    fn at(&mut self, sh: &gridcraft_model::Sheet, row: u32) -> Option<Vec<gridcraft_core::RangeRef>> {
+        if self.by_start.is_none() && !self.scanned {
+            self.scanned = true;
+            if !self.charge(sh.merges.len()) {
+                return None;
+            }
+            return Some(sh.merges.iter().copied().filter(|m| !m.is_single() && m.start.row <= row && row <= m.end.row).collect());
+        }
+        if self.by_start.is_none() {
+            // Sorting is about n log2 n comparisons, charged before it starts.
+            let n = sh.merges.len();
+            if !self.charge(n.saturating_mul((usize::BITS - n.leading_zeros()) as usize)) {
+                return None;
+            }
+            let mut v: Vec<gridcraft_core::RangeRef> = sh.merges.iter().copied().filter(|m| !m.is_single()).collect();
+            v.sort_unstable_by_key(|m| m.start.row);
+            self.by_start = Some(v);
+        }
+        let by_start = self.by_start.as_ref()?;
+        while let Some(m) = by_start.get(self.next).filter(|m| m.start.row <= row) {
+            self.active.push(*m);
+            self.next += 1;
+        }
+        if !self.charge(self.active.len()) {
+            return None;
+        }
+        self.active.retain(|m| m.end.row >= row);
+        Some(self.active.clone())
+    }
+}
+
+/// [`auto_row_height`] with the sheet's merges taken from `sweep`.
+pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut MergeSweep) {
+    // Out of budget: the row keeps the height it has.
+    if sweep.left() == 0 {
+        return;
+    }
     let Some(sh) = wb.sheet(si) else { return };
     if sh.rows.get(&row).is_some_and(|i| i.custom) {
         return;
@@ -757,9 +857,14 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
     // picked out once, and per cell the candidates are re-checked (normally none or a couple;
     // a sheet with many merges and many saved columns would otherwise scan all of them per
     // cell, rows × merges × columns).
-    let row_merges: Vec<gridcraft_core::RangeRef> =
-        sh.merges.iter().copied().filter(|m| !m.is_single() && m.start.row <= row && row <= m.end.row).collect();
+    // Rows are fitted in ascending order, so the merges touching this one come from a sweep over
+    // the sheet's merges sorted once, not from a scan of all of them. Out of budget: the row keeps
+    // the height it has.
+    let Some(row_merges) = sweep.at(sh, row) else { return };
     for (c, cell) in sh.cells.row(row, 0, gridcraft_core::MAX_COLS - 1) {
+        if !sweep.charge(row_merges.len()) {
+            return;
+        }
         // Merged cells never auto-fit their rows, like Excel (column autofit skips them too).
         if row_merges.iter().any(|m| m.contains(CellRef::new(row, c))) {
             continue;
@@ -801,5 +906,42 @@ impl Ctx<'_> {
     }
     pub fn touch(&mut self, sheet: usize, c: CellRef) {
         self.changed.push((sheet, c));
+    }
+}
+
+#[cfg(test)]
+mod merge_sweep_tests {
+    use super::*;
+
+    #[test]
+    fn the_budget_carries_from_one_sheets_sweep_to_the_next() {
+        let mut sheet = gridcraft_model::Sheet::new("S");
+        for r in ["A1:B2", "C1:D2", "E1:F2"] {
+            sheet.merges.push(gridcraft_core::RangeRef::parse(r).unwrap());
+        }
+        let mut first = MergeSweep::new(5);
+        assert!(first.at(&sheet, 0).is_some(), "the first row is a plain scan: three comparisons");
+        assert!(first.at(&sheet, 1).is_none(), "the second row needs the sort: six comparisons, two are left");
+        assert_eq!(first.left(), 0);
+        // The next sheet starts with what is left: nothing, so it fits nothing.
+        let mut second = MergeSweep::new(first.left());
+        assert!(second.at(&sheet, 0).is_none());
+        assert!(MergeSweep::new(MERGE_FIT_WORK).at(&sheet, 0).is_some());
+    }
+
+    #[test]
+    fn sorting_the_merges_is_charged() {
+        let mut sheet = gridcraft_model::Sheet::new("S");
+        for r in ["A1:B2", "C1:D2", "E1:F2", "G1:H2"] {
+            sheet.merges.push(gridcraft_core::RangeRef::parse(r).unwrap());
+        }
+        // The first row costs a plain scan (4); from the second on the merges are sorted, about
+        // 4 * 3 comparisons: 7 left is not enough, 12 plus the row's 4 is.
+        let mut sweep = MergeSweep::new(11);
+        assert!(sweep.at(&sheet, 0).is_some());
+        assert!(sweep.at(&sheet, 1).is_none());
+        assert_eq!(sweep.left(), 0);
+        let mut sweep = MergeSweep::new(20);
+        assert!(sweep.at(&sheet, 0).is_some() && sweep.at(&sheet, 1).is_some());
     }
 }
