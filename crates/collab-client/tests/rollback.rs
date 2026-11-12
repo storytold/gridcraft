@@ -83,7 +83,7 @@ fn replica() -> (Synced, Sink, Session) {
         participants: Vec::new(),
     };
     let link = FakeLink(sink.clone());
-    let synced = Synced::with_link(Box::new(link), &welcome, "w1".into());
+    let synced = Synced::with_link(Box::new(link), &welcome, "w1".into(), 0);
     let mut session = Session::new();
     session.new_workbook();
     (synced, sink, session)

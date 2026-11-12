@@ -95,7 +95,7 @@ fn replica() -> (Synced, Sink, Session) {
         sheets: sheets(),
         participants: Vec::new(),
     };
-    let synced = Synced::with_link(Box::new(FakeLink(sink.clone())), &welcome, "w1".into());
+    let synced = Synced::with_link(Box::new(FakeLink(sink.clone())), &welcome, "w1".into(), 0);
     let mut session = Session::new();
     session.new_workbook();
     (synced, sink, session)
@@ -244,6 +244,55 @@ fn a_snapshot_replaces_only_the_shared_workbook() {
     assert_eq!(value(&session, 0, "A1"), Value::Number(99.0), "the shared workbook is the snapshot");
     assert_eq!(value(&session, 1, "A1"), Value::Empty, "the other workbook keeps its content");
     assert_eq!(session.prefs.user_name, "Ann", "the session's preferences stay");
+}
+
+/// The transport's cursor can be ahead of the document when the replica is built: the connection
+/// task, or a host's frame queue, handled the catch-up frames and queued them as events before the
+/// caller got the `welcome`. Starting from the cursor made every queued answer look already
+/// covered, so the window kept the workbook from before the catch-up and no version of it ever
+/// arrived (CodeRabbit 5852406613, the finding outside the diff of that review).
+#[test]
+fn a_catch_up_queued_before_the_session_was_built_still_lands() {
+    let sink = Sink {
+        state: Rc::new(RefCell::new(State {
+            session_id: "session".into(),
+            actor: "ann".into(),
+            window_id: "w1".into(),
+            role: Some(Role::Editor),
+            version: 0,
+            epoch: 0,
+            sheets: sheets(),
+            participants: Vec::new(),
+            connected: true,
+        })),
+        events: Rc::new(RefCell::new(VecDeque::new())),
+        sent: Rc::new(RefCell::new(Vec::new())),
+    };
+    // The connection is already running: the room's three operations are queued and the cursor
+    // sits on the head by the time the caller builds the replica.
+    for (op_id, version, input) in [("bob-1", 1, 7), ("bob-2", 2, 8), ("bob-3", 3, 9)] {
+        sink.deliver(&applied_set(op_id, version, input));
+    }
+    assert_eq!(sink.state.borrow().version, 3, "the cursor is ahead of the document");
+    let welcome = Welcome {
+        session_id: "session".into(),
+        actor_id: "ann".into(),
+        role: Role::Editor,
+        version: 3,
+        epoch: 0,
+        sheets: sheets(),
+        participants: Vec::new(),
+    };
+    // The workbook in front is at version 0: that is what the caller passes, not the cursor.
+    let mut synced = Synced::with_link(Box::new(FakeLink(sink.clone())), &welcome, "w1".into(), 0);
+
+    let mut session = Session::new();
+    session.new_workbook();
+    let events = synced.poll(&mut session);
+
+    assert_eq!(value(&session, 0, "A1"), Value::Number(9.0), "the last queued answer is in the document");
+    assert_eq!(events.iter().filter(|event| matches!(event, Event::Applied(_))).count(), 3, "every queued answer reaches the caller");
+    assert_eq!(synced.document_version(), 3, "the document ends at the version its content is at");
 }
 
 /// A workbook the client cannot open leaves the document and its version alone, and the replica

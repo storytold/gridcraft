@@ -93,7 +93,7 @@ fn replica() -> (Synced, Sink, Session) {
         sheets: vec![SheetName { key: "0".into(), name: "Sheet1".into() }],
         participants: Vec::new(),
     };
-    let synced = Synced::with_link(Box::new(FakeLink(sink.clone())), &welcome, "ann-1".into());
+    let synced = Synced::with_link(Box::new(FakeLink(sink.clone())), &welcome, "ann-1".into(), 3);
     let mut session = Session::new();
     session.new_workbook();
     session.execute("cell.set", json!({"cell": "Z9", "input": 42})).expect("a local cell");

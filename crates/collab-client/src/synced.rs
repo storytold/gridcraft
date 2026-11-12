@@ -129,18 +129,28 @@ impl Synced {
     /// A desktop session over the native client. The window id the client sent in `hello` is the
     /// id of this replica (RFC §13.6): operation ids are prefixed with it, so two windows of one
     /// actor never collide, and presence stays per window.
+    ///
+    /// The document starts at the version the caller dialed with (`Config::last_version`), not at
+    /// the connection's cursor: the catch-up may already have landed and queued its answers.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(client: crate::Client, welcome: &Welcome) -> Synced {
         let window_id = client.window_id().to_string();
-        Synced::with_link(Box::new(client), welcome, window_id)
+        let held = client.start_version();
+        Synced::with_link(Box::new(client), welcome, window_id, held)
     }
 
     /// A session over any transport. The browser build passes its own `WebSocket`
     /// link and its window id from the page; the desktop `new` wraps the native
     /// client the same way.
-    pub fn with_link(link: Box<dyn Link>, welcome: &Welcome, client_id: String) -> Synced {
-        // What this replica holds, not the room's head the welcome reports (RFC §4.4).
-        let held = link.state().version;
+    ///
+    /// `last_version` is the version the local document is at when the replica is built — for the
+    /// desktop that is `Config::last_version`, for the browser a blank workbook (`0`). It is a
+    /// parameter rather than `link.state().version` on purpose: the connection task, or the
+    /// host's frame queue, may have handled the catch-up before this call, and the cursor is then
+    /// ahead of the document. Every `applied` in that queue would look already covered and be
+    /// skipped, leaving the replica with the pre-catch-up workbook (CodeRabbit 5852406613, the
+    /// finding outside the diff of that review; `synced.rs:398`).
+    pub fn with_link(link: Box<dyn Link>, welcome: &Welcome, client_id: String, last_version: u64) -> Synced {
         let mut synced = Synced {
             link,
             actor: welcome.actor_id.clone(),
@@ -154,7 +164,7 @@ impl Synced {
             own: VecDeque::new(),
             notice: None,
             image_parts: None,
-            document_version: held,
+            document_version: last_version,
             snapshot_failures: 0,
             authoritative_only: false,
         };

@@ -86,6 +86,11 @@ pub struct Client {
     state: Arc<Mutex<State>>,
     task: JoinHandle<()>,
     window_id: String,
+    /// The version the caller's document was at when it dialed (`Config::last_version`). The
+    /// catch-up may land — and move `state` — before the caller builds its
+    /// [`Synced`](crate::Synced); the document's version is this one, not the cursor's
+    /// (CodeRabbit 5852406613, the finding outside the diff of that review: `synced.rs:398`).
+    start_version: u64,
 }
 
 impl Client {
@@ -137,12 +142,25 @@ impl Client {
         let (ops, ops_rx) = mpsc::unbounded_channel();
         let (events_tx, events) = mpsc::unbounded_channel();
         let window_id = cfg.window_id.clone();
+        let start_version = cfg.last_version;
         let task = tokio::spawn(run(socket, cfg, shared.clone(), ops_rx, events_tx));
-        Ok((Client { ops, events, state: shared, task, window_id }, welcome))
+        Ok((Client { ops, events, state: shared, task, window_id, start_version }, welcome))
     }
 
     pub fn state(&self) -> State {
         self.state.lock().map(|state| state.clone()).unwrap_or_default()
+    }
+
+    /// The version the caller's document was at when this client dialed
+    /// (`Config::last_version`).
+    ///
+    /// `state().version` is the connection's cursor, and the background task advances it as the
+    /// catch-up lands — which it may do before the caller builds its
+    /// [`Synced`](crate::Synced). The document is still at this version at that moment, so this
+    /// is the value a replica starts from; taking the cursor instead would make the queued
+    /// catch-up answers look already covered (CodeRabbit 5852406613, `synced.rs:398`).
+    pub fn start_version(&self) -> u64 {
+        self.start_version
     }
 
     /// The id of this window, as the server knows it (RFC §13.6). It is the same after a

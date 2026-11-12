@@ -241,21 +241,32 @@ pub struct Collab {
 impl Collab {
     /// Dial the session the host sent. The token goes in the first frame, never
     /// in the URL.
+    ///
+    /// A browser window joins with a blank workbook, not with the room's document, so its replica
+    /// starts at version `0`: the welcome and its catch-up bring the document up. The value is
+    /// passed in rather than read from the link, whose cursor the frame queue may already have
+    /// moved (CodeRabbit 5852406613, `synced.rs:398`).
     #[cfg(target_arch = "wasm32")]
     pub fn connect(session: &HostSession, actor: &str, client_id: &str) -> Result<Collab, String> {
         let role = session.parsed_role()?;
         let name = actor.to_string();
         let link = SessionLink::open(session.session_id(), session.ws_url(), session.token(), role, actor, &name, client_id)?;
-        Ok(Collab::with_link(link, session.session_id(), actor, role, client_id))
+        Ok(Collab::with_link(link, session.session_id(), actor, role, client_id, 0))
     }
 
-    /// A session without a socket: the tests feed it the server's frames.
+    /// A session without a socket: the tests feed it the server's frames. The
+    /// page handed it a blank workbook, so the replica starts at version `0`
+    /// until the room's catch-up moves it.
     pub fn offline(session_id: &str, actor: &str, role: Role, client_id: &str) -> Collab {
         let link = SessionLink::offline(session_id, actor, role, actor, client_id);
-        Collab::with_link(link, session_id, actor, role, client_id)
+        Collab::with_link(link, session_id, actor, role, client_id, 0)
     }
 
-    fn with_link(link: SessionLink, session_id: &str, actor: &str, role: Role, client_id: &str) -> Collab {
+    /// `last_version` is the version of the document the page hands this replica: `0` for the
+    /// blank workbook a browser window opens with. It is a parameter, not `link.state().version`,
+    /// because the host's frame queue can move the cursor before the replica exists
+    /// (CodeRabbit 5852406613, `synced.rs:398`).
+    fn with_link(link: SessionLink, session_id: &str, actor: &str, role: Role, client_id: &str, last_version: u64) -> Collab {
         let handle = LinkHandle(Rc::new(RefCell::new(link)));
         let welcome = Welcome {
             session_id: session_id.to_string(),
@@ -266,7 +277,7 @@ impl Collab {
             sheets: Vec::new(),
             participants: Vec::new(),
         };
-        let sync = Synced::with_link(Box::new(handle.clone()), &welcome, client_id.to_string());
+        let sync = Synced::with_link(Box::new(handle.clone()), &welcome, client_id.to_string(), last_version);
         Collab {
             sync,
             link: handle,

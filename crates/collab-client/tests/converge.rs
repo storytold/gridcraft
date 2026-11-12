@@ -820,3 +820,57 @@ async fn structural_undo_restores_the_package_state_and_vba_on_every_replica() {
     assert_eq!(ann.synced.state().version, bob.synced.state().version);
     server.stop().await;
 }
+
+/// A replica starts at the version its own workbook is at, not at the transport's cursor.
+///
+/// The connection task handles the catch-up as soon as `welcome` is in, and the caller builds the
+/// replica afterwards: by then `state().version` is the room's head while the document in front is
+/// still the file the user opened. Starting from the cursor made the queued catch-up look already
+/// covered, so the window showed the pre-catch-up workbook and no version of it ever arrived
+/// (CodeRabbit 5852406613, the finding outside the diff of that review).
+#[tokio::test]
+async fn a_late_replica_starts_where_its_workbook_is_not_where_the_cursor_moved() {
+    let server = support::start().await;
+    let session = support::create(&server, 46).await;
+    let mut ann = join(&server, 46, &session, "ann", Role::Editor).await;
+    for input in 1..=3 {
+        ann.synced.execute(&mut ann.session, "cell.set", json!({ "cell": "A1", "input": input })).unwrap();
+    }
+    settle_one(&mut ann).await;
+    assert_eq!(ann.synced.state().version, 3);
+
+    // Bob opens the blank workbook he has and dials: the room's three operations are the catch-up.
+    let mut local = Session::new();
+    local.new_workbook();
+    let cfg = Config {
+        url: server.url(&session),
+        token: support::token("bob", Role::Editor, 46, &session),
+        name: "bob".into(),
+        last_version: 0,
+        reconnect: Some(Duration::from_millis(200)),
+        window_id: String::new(),
+    };
+    let (client, welcome) = Client::connect(cfg).await.expect("bob joins");
+    // Wait for the connection task to handle the catch-up, which is what moves the cursor before
+    // the caller can build the replica.
+    for _ in 0..200 {
+        if client.state().version == 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(client.state().version, 3, "the catch-up moved the cursor before the replica existed");
+    assert_eq!(client.start_version(), 0, "the client remembers the version its workbook is at");
+
+    let mut bob = Peer { session: local, synced: Synced::new(client, &welcome) };
+    for _ in 0..200 {
+        bob.synced.poll(&mut bob.session);
+        if value(&bob, "A1") == Value::Number(3.0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(value(&bob, "A1"), Value::Number(3.0), "the queued catch-up landed in the document");
+    assert_eq!(bob.synced.document_version(), 3, "the document ends at the version its content is at");
+    server.stop().await;
+}
