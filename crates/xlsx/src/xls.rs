@@ -71,7 +71,7 @@ fn warning(w: &x::Warning) -> String {
         W::Comments => "Cell comments in .xls files are not imported yet.".into(),
         W::Drawings => "Pictures, charts and shapes in .xls files are not imported yet.".into(),
         W::ConditionalFormatting => "Conditional formatting in .xls files is not imported yet.".into(),
-        W::DataValidation => "Data validation in .xls files is not imported yet.".into(),
+        W::DataValidationSkipped | W::DataValidationIgnored => "Data validation in .xls files is not imported yet.".into(),
         W::Hyperlinks => "Hyperlinks in .xls files are not imported yet.".into(),
         W::PivotTables => "PivotTables in .xls files are not imported yet; their values were kept.".into(),
         W::CellsOutsideGrid(n) => format!("{n} cells outside the grid were skipped."),
@@ -113,6 +113,10 @@ pub(crate) fn read_xls_budgeted(bytes: &[u8], limits: x::Limits, functions: Func
     for s in &book.sheets {
         let sheet = sheet_of(s, &styles, &mut unparsed);
         wb.sheets.push(Arc::new(sheet));
+    }
+    // craft-xls reads the rules; GridCraft does not take them from .xls yet.
+    if book.sheets.iter().any(|s| !s.validations.is_empty()) {
+        report.warn("Data validation in .xls files is not imported yet.");
     }
     if unparsed {
         report.warn("Some formulas use syntax GridCraft can't parse yet; their saved results were kept as values.");
