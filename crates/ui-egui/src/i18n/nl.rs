@@ -556,6 +556,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Weergeven",
         "Collapse dialog" => "Dialoogvenster samenvouwen",
         "Expand dialog" => "Dialoogvenster uitvouwen",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Deze werkmap bevat een draaitabel met een waardeveld ‘Uniek aantal’. In het .xlsx-bestand wordt het opgeslagen als een gewoon Aantal met een markering die alleen GridCraft leest; Vernieuwen in Excel maakt er een gewoon aantal van."
+        }
         _ => return None,
     })
 }

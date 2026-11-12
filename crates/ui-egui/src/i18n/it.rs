@@ -681,6 +681,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Description (optional):" => "Descrizione (facoltativa):",
         "Fits inside the selected cell and moves with its content." => "Si adatta alla cella selezionata e si sposta insieme al suo contenuto.",
         "Choose a PNG or JPEG no larger than 16 MB." => "Scegli un file PNG o JPEG di dimensioni non superiori a 16 MB.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Questa cartella di lavoro contiene una tabella pivot con un campo valore «Conteggio distinto». Nel file .xlsx è salvato come Conteggio normale con un indicatore che legge solo GridCraft; Aggiorna in Excel lo trasforma in un conteggio normale."
+        }
         "About" => "Informazioni",
         "Contributors" => "Collaboratori",
         "Models" => "Modelli",

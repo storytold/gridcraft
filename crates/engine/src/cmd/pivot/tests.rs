@@ -1138,3 +1138,34 @@ fn distinct_count_survives_an_xlsx_round_trip_and_a_refresh() {
     assert_eq!(text(&back, "E3"), "Distinct Count of Customer");
     assert_eq!(cells.map(|a| val(&back, a)), expected, "a refresh after reopening still counts distinct customers");
 }
+
+#[test]
+fn saving_a_distinct_count_pivot_as_xlsx_says_only_gridcraft_reads_it() {
+    // #3385: the file stores a plain Count; Excel's Refresh turns it into a count, so the user is told.
+    let notices =
+        |s: &mut Session| s.take_ui_requests().iter().filter(|r| matches!(r, crate::UiRequest::Message(m) if m.contains("Distinct Count"))).count();
+    let dir = std::env::temp_dir().join(format!("gridcraft-distinct-notice-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([["Region", "Customer"], ["East", "Alice"], ["East", "Bob"], ["West", "Alice"]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    let make = json!({"source": "Sheet1!$A$1:$B$4", "destination": "Sheet1!D3", "rows": ["Region"], "values": ["Customer"]});
+    s.execute("insert.pivotTable", make).unwrap();
+    s.take_ui_requests();
+
+    s.execute("file.saveAs", json!({"path": dir.join("plain.xlsx")})).unwrap();
+    assert_eq!(notices(&mut s), 0, "a plain Count is saved as it is");
+
+    s.execute("pivot.valueSettings", json!({"index": 0, "func": "distinctCount"})).unwrap();
+    s.execute("file.saveBytes", json!({"format": "csv"})).unwrap();
+    s.execute("file.saveAs", json!({"path": dir.join("book.csv")})).unwrap();
+    assert_eq!(notices(&mut s), 0, "only an .xlsx file stores the marker");
+    s.execute("file.saveAs", json!({"path": dir.join("book.xlsx")})).unwrap();
+    assert_eq!(notices(&mut s), 1);
+    s.execute("file.save", json!({})).unwrap();
+    assert_eq!(notices(&mut s), 0, "saving the same file again does not repeat it");
+    s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    assert_eq!(notices(&mut s), 1, "a download is an export too");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

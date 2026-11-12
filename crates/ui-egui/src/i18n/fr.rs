@@ -481,6 +481,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Afficher",
         "Collapse dialog" => "Réduire la boîte de dialogue",
         "Expand dialog" => "Développer la boîte de dialogue",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Ce classeur contient un tableau croisé dynamique avec un champ de valeur « Nombre distinct ». Dans le fichier .xlsx, il est enregistré comme un simple Nombre, avec un marqueur que seul GridCraft lit ; Actualiser dans Excel le transforme en simple nombre."
+        }
         _ => return None,
     })
 }
