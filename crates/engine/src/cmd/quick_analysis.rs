@@ -10,7 +10,7 @@ use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use gridcraft_model::{Color, NumFmt, Sparkline, SparklineKind};
 use serde_json::{Value as Json, json};
 
-use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, has_doc, str_param, target_range, target_sheet};
+use super::{CommandSpec, EngineError, PROTECTED, Result, Session, bad, bool_param, cmd, edit, has_doc, str_param, target_range, target_sheet};
 
 const CMD: &str = "analysis.addTotal";
 const SPARK: &str = "analysis.addSparklines";
@@ -266,6 +266,10 @@ fn add_sparklines(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let sheet = b.sheet;
     let sh = s.doc()?.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
+    // Sparklines are not cell content, so the commit-time protection check does not see them.
+    if sh.is_protected() {
+        return Err(EngineError::Other(PROTECTED.into()));
+    }
     if !overwrite && sparks.iter().any(|(t, _)| !sh.value(*t).is_empty() || sh.sparklines.iter().any(|x| x.cell == *t)) {
         return Err(EngineError::Other("The cells next to the selection already hold data; clear them first.".into()));
     }

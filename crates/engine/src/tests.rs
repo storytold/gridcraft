@@ -5095,6 +5095,22 @@ fn analysis_add_sparklines_one_per_row_in_one_undo_step() {
 }
 
 #[test]
+fn analysis_add_sparklines_refuses_a_protected_sheet() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    s.execute("analysis.addSparklines", json!({"range": "A1:C4"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let (undo, sparks) = (s.doc().unwrap().undo.len(), s.doc().unwrap().wb.active().unwrap().sparklines.clone());
+    for p in [json!({"range": "A1:C4", "overwrite": true}), json!({"range": "A1:B3", "direction": "columns"})] {
+        assert!(s.execute("analysis.addSparklines", p).is_err());
+    }
+    assert_eq!(s.doc().unwrap().undo.len(), undo, "a refused command leaves no undo step");
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().sparklines, sparks);
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("analysis.addSparklines", json!({"range": "A1:C4", "overwrite": true})).unwrap();
+}
+
+#[test]
 fn link_open_refuses_every_scheme_but_http_https_and_mailto() {
     let mut s = s();
     s.execute("insert.link", json!({"cell": "A1", "target": "file:///etc/passwd"})).unwrap();
