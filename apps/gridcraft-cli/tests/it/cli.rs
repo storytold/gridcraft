@@ -329,8 +329,8 @@ fn dax_pivot_splits_only_on_separating_commas() {
     std::fs::write(
         &model,
         r#"{
-            "tables": [{"name":"Sales, EU","columns":[{"name":"Last, First"},{"name":"Amount"},{"name":"A]B"}],
-                        "rows":[["Ada, Lovelace",10,"x"],["Alan, Turing",20,"y"]]}],
+            "tables": [{"name":"Sales, EU","columns":[{"name":"Last, First"},{"name":"Amount"},{"name":"A]B"},{"name":"A[B,C]"}],
+                        "rows":[["Ada, Lovelace",10,"x","p"],["Alan, Turing",20,"y","q"]]}],
             "relationships": [],
             "measures": [{"name":"Total","formula":"SUM('Sales, EU'[Amount])","table":"Sales, EU"}]
         }"#,
@@ -351,6 +351,15 @@ fn dax_pivot_splits_only_on_separating_commas() {
     // A doubled bracket inside the column name is an escape, not the end of the reference.
     let pivot = ok(&["dax", "pivot", "--model", model, "--measure", "Total", "--rows", "'Sales, EU'[A]]B]"]);
     assert!(pivot.contains("\"A]B\""), "{pivot}");
+    // An opening `[` inside a bracketed column name is literal too: the lexer only ends the name at
+    // an unescaped `]`, so the `]` inside `A[B,C]` is doubled and the reference closes with three
+    // brackets — the comma after it still separates two fields, on `--rows` and `--columns`.
+    let pivot = ok(&["dax", "pivot", "--model", model, "--measure", "Total", "--rows", "'Sales, EU'[A[B,C]]], 'Sales, EU'[Amount]"]);
+    assert!(pivot.contains("\"A[B,C]\"") && pivot.contains("\"Amount\""), "{pivot}");
+    // A `--columns` reference splits the same way: the column groups are the field's values.
+    let pivot =
+        ok(&["dax", "pivot", "--model", model, "--measure", "Total", "--rows", "'Sales, EU'[Last, First]", "--columns", "'Sales, EU'[A[B,C]]]"]);
+    assert!(pivot.contains("\"p\"") && pivot.contains("\"q\"") && pivot.contains("Ada, Lovelace"), "{pivot}");
     let _ = std::fs::remove_dir_all(dir);
 }
 

@@ -156,7 +156,9 @@ fn split_fields(list: &str) -> Vec<String> {
                     quoted = true;
                 }
             }
-            '[' if !quoted => brackets += 1,
+            // An opening `[` inside a bracketed column name is literal — the DAX lexer only ends the
+            // name at an unescaped `]`, so `Sales[A[B,C]` is one reference, not two fields.
+            '[' if !quoted && brackets == 0 => brackets += 1,
             ']' if !quoted && brackets > 0 => {
                 if chars.peek().is_some_and(|(_, next)| *next == ']') {
                     // An escaped `]` inside the column name, not the closing bracket.
