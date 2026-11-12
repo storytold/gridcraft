@@ -392,12 +392,12 @@ fn text_result_of_a_formula_kept_as_its_value() {
 
 #[test]
 fn refuses_encrypted_old_and_foreign_files() {
-    // FILEPASS in the globals: an encrypted workbook.
+    // FILEPASS in the globals: a damaged encryption record must be rejected as such.
     let mut stream = bof(0x0005);
     stream.extend(rec(0x002F, &[1, 0, 1, 0]));
     stream.extend(eof());
     let err = read_xls(&compound("Workbook", &stream)).unwrap_err().to_string();
-    assert!(err.contains("password-protected"), "{err}");
+    assert!(err.contains("encryption record is damaged"), "{err}");
     // A BIFF5 (Excel 5.0/95) workbook keeps its data in a `Book` stream.
     let book = compound("Book", &stream);
     assert_eq!(sniff(&book), Format::Xls);
@@ -484,6 +484,45 @@ fn dialog_sheets_are_skipped_not_read_as_worksheets() {
     assert!(report.warnings.iter().any(|w| w.contains("Dialog sheets")), "{:?}", report.warnings);
 }
 
+/// A workbook opens on the sheet it was saved on (WINDOW1's `itabCur`), as Excel does: counted
+/// over all the file's sheets, skipped ones included. A hidden or skipped sheet, or no window
+/// record, falls back to the first visible sheet.
+#[test]
+fn opens_on_the_sheet_it_was_saved_on() {
+    // BoundSheet: position, visibility (0 visible, 1 hidden), kind, name.
+    let boundsheet = |pos: u32, state: u8, name: &str| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[state, 0, name.len() as u8, 0], name.as_bytes()]));
+    let window1 = |tab: u16| rec(0x003D, &u16s(&[0, 0, 0x4000, 0x2000, 0x0038, tab, 0, 1, 600]));
+    let dialog = cat(&[&bof(0x0010), &rec(0x0081, &[0x10, 0x00]), &eof()]);
+    let worksheet = |n: f64| cat(&[&bof(0x0010), &rec(0x0081, &[0x01, 0x04]), &rec(0x0203, &cat(&[&cell(0, 0, 0), &n.to_le_bytes()])), &eof()]);
+    // Dialog1 (skipped), Sheet1, Sheet2, Hidden (hidden).
+    let book = |window: &[u8]| {
+        let globals = |p: [u32; 4]| {
+            cat(&[
+                &bof(0x0005),
+                window,
+                &boundsheet(p[0], 0, "Dialog1"),
+                &boundsheet(p[1], 0, "Sheet1"),
+                &boundsheet(p[2], 0, "Sheet2"),
+                &boundsheet(p[3], 1, "Hidden"),
+                &eof(),
+            ])
+        };
+        let (d, s1, s2, h) = (dialog.clone(), worksheet(1.0), worksheet(2.0), worksheet(3.0));
+        let base = globals([0; 4]).len() as u32;
+        let p = [base, base + d.len() as u32, base + (d.len() + s1.len()) as u32, base + (d.len() + s1.len() + s2.len()) as u32];
+        let stream = cat(&[&globals(p), &d, &s1, &s2, &h]);
+        let (wb, _) = read_xls(&compound("Workbook", &stream)).unwrap();
+        wb.active().map(|s| s.name.clone()).unwrap_or_default()
+    };
+    assert_eq!(book(&window1(2)), "Sheet2", "itabCur 2 is Sheet2, counting the skipped dialog sheet");
+    assert_eq!(book(&window1(1)), "Sheet1");
+    assert_eq!(book(&window1(3)), "Sheet1", "a hidden sheet falls back to the first visible one");
+    assert_eq!(book(&window1(0)), "Sheet1", "a skipped sheet falls back to the first visible one");
+    assert_eq!(book(&window1(99)), "Sheet1", "an index past the sheets falls back too");
+    assert_eq!(book(&[]), "Sheet1", "no window record");
+    assert_eq!(book(&rec(0x003D, &u16s(&[0, 0, 0, 0, 0]))), "Sheet1", "a window record too short for the index");
+}
+
 #[test]
 fn sheets_share_one_record_budget() {
     // Many BoundSheet records point into one long substream (at successive nested BOFs), so each
@@ -509,10 +548,13 @@ fn sheets_share_one_record_budget() {
     let file = compound("Workbook", &stream);
     // About n × 2,000 records in all: over a 100,000 shared allowance, though each sheet alone fits.
     assert!(matches!(
-        crate::xls::read_xls_budgeted(&file, crate::xls::Budget::with_max_records(100_000), crate::FunctionInfo::default()),
+        crate::xls::read_xls_budgeted(&file, craft_xls::Limits { max_records: 100_000, ..Default::default() }, crate::FunctionInfo::default()),
         Err(IoError::TooLarge(_))
     ));
-    assert!(crate::xls::read_xls_budgeted(&file, crate::xls::Budget::with_max_records(10_000_000), crate::FunctionInfo::default()).is_ok());
+    assert!(
+        crate::xls::read_xls_budgeted(&file, craft_xls::Limits { max_records: 10_000_000, ..Default::default() }, crate::FunctionInfo::default())
+            .is_ok()
+    );
 
     // Two sheets at the same offset are refused outright.
     let mut dup = bof(0x0005);
@@ -768,15 +810,17 @@ fn xls_short_window2_is_ignored() {
 fn shared_formula_text_counts_against_the_text_allowance() {
     let file = compound("Workbook", &sample(false));
     // The smallest allowance that reads every string: nothing is left for expanded formulas.
-    let left = (0..1000).find(|n| crate::xls::read_xls_budgeted(&file, crate::xls::Budget::with_text_left(*n), Default::default()).is_ok()).unwrap();
-    let (wb, report) = crate::xls::read_xls_budgeted(&file, crate::xls::Budget::with_text_left(left), Default::default()).unwrap();
+    let left = (0..1000)
+        .find(|n| crate::xls::read_xls_budgeted(&file, craft_xls::Limits { max_text: *n, ..Default::default() }, Default::default()).is_ok())
+        .unwrap();
+    let (wb, report) = crate::xls::read_xls_budgeted(&file, craft_xls::Limits { max_text: left, ..Default::default() }, Default::default()).unwrap();
     assert_eq!(ftext(&wb, "B6"), None);
     assert_eq!(v(&wb, 0, "B6"), Value::Number(20.0));
     assert!(report.warnings.iter().any(|w| w.contains("shared-formula text")), "{:?}", report.warnings);
     // an array anchor after the cut-off still gets its formula
     assert!(ftext(&wb, "C5").is_some());
     // With room, the followers keep their formulas.
-    let (wb, _) = crate::xls::read_xls_budgeted(&file, crate::xls::Budget::default(), Default::default()).unwrap();
+    let (wb, _) = crate::xls::read_xls_budgeted(&file, Default::default(), Default::default()).unwrap();
     assert!(ftext(&wb, "B6").is_some());
 }
 
@@ -798,12 +842,14 @@ fn shared_formulas_do_not_starve_a_later_sheets_text() {
     let p1 = globals([0; 2]).len() as u32;
     let file = compound("Workbook", &cat(&[&globals([p1, p1 + one.len() as u32]), &one, &two]));
     // The smallest allowance that reads every string leaves nothing for expanded formulas.
-    let left = (0..1000).find(|n| crate::xls::read_xls_budgeted(&file, crate::xls::Budget::with_text_left(*n), Default::default()).is_ok()).unwrap();
-    let (wb, _) = crate::xls::read_xls_budgeted(&file, crate::xls::Budget::with_text_left(left), Default::default()).unwrap();
+    let left = (0..1000)
+        .find(|n| crate::xls::read_xls_budgeted(&file, craft_xls::Limits { max_text: *n, ..Default::default() }, Default::default()).is_ok())
+        .unwrap();
+    let (wb, _) = crate::xls::read_xls_budgeted(&file, craft_xls::Limits { max_text: left, ..Default::default() }, Default::default()).unwrap();
     assert_eq!(v(&wb, 1, "A1"), Value::text("abcdefgh"));
     assert_eq!(ftext(&wb, "B6"), None);
     assert_eq!(v(&wb, 0, "B6"), Value::Number(20.0));
-    let (wb, _) = crate::xls::read_xls_budgeted(&file, crate::xls::Budget::default(), Default::default()).unwrap();
+    let (wb, _) = crate::xls::read_xls_budgeted(&file, Default::default(), Default::default()).unwrap();
     assert!(ftext(&wb, "B6").is_some());
 }
 
@@ -826,7 +872,7 @@ fn xls_duplicate_sheet_names_are_refused() {
         g.extend(&sheet);
         compound("Workbook", &g)
     };
-    let err = crate::xls::read_xls_budgeted(&file("One", "one"), crate::xls::Budget::default(), Default::default()).unwrap_err().to_string();
+    let err = crate::xls::read_xls_budgeted(&file("One", "one"), Default::default(), Default::default()).unwrap_err().to_string();
     assert!(err.contains("already taken"), "{err}");
-    assert!(crate::xls::read_xls_budgeted(&file("One", "Two"), crate::xls::Budget::default(), Default::default()).is_ok());
+    assert!(crate::xls::read_xls_budgeted(&file("One", "Two"), Default::default(), Default::default()).is_ok());
 }

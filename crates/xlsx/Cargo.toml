@@ -18,6 +18,7 @@ gridcraft-core = { workspace = true }
 gridcraft-formula = { workspace = true }
 gridcraft-math = { workspace = true }
 gridcraft-model = { workspace = true }
+craft-xls = { workspace = true }
 thiserror = { workspace = true }
 quick-xml = { workspace = true }
 zip = { workspace = true }

@@ -298,11 +298,6 @@ impl<'a> Compound<'a> {
         Ok(None)
     }
 
-    /// Whether the root storage holds a stream called `name`, without reading it.
-    pub(crate) fn has_root_stream(&self, name: &str) -> bool {
-        matches!(self.root_entry(name), Ok(Some(_)))
-    }
-
     /// The contents of the stream called `name` (case-insensitive) directly under the root
     /// storage, or `None` when there is no such stream.
     pub(crate) fn root_stream(&self, name: &str) -> Result<Option<Vec<u8>>, String> {
