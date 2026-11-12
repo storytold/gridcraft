@@ -410,6 +410,32 @@ fn t2c_fixed_widths_are_positions_in_any_order_without_duplicates() {
     }
 }
 
+/// #3802: a row with fewer fields than the widest clears the rest of the output's width, as an
+/// empty field does, instead of keeping the value that was there; a cell right of the widest
+/// row is left alone.
+#[test]
+fn t2c_a_shorter_row_clears_the_rest_of_the_output() {
+    let run = |a: [&str; 2], params: Json| {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[a[0]], [a[1]]]})).unwrap();
+        for (cell, v) in [("E1", "old1"), ("E2", "old2"), ("F1", "keep1"), ("F2", "keep2")] {
+            s.execute("cell.set", json!({"cell": cell, "input": v})).unwrap();
+        }
+        let mut p = json!({"range": "A1:A2", "destination": "D1"});
+        p.as_object_mut().unwrap().extend(params.as_object().unwrap().clone());
+        s.execute("data.textToColumns", p).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        (0..2).map(|r| (3..6).map(|c| sh.value(CellRef::new(r, c)).display()).collect::<Vec<_>>()).collect::<Vec<_>>()
+    };
+    let comma = json!({"delimiters": [","]});
+    assert_eq!(run(["a,b", "c"], comma.clone()), [["a", "b", "keep1"], ["c", "", "keep2"]], "the issue's case");
+    assert_eq!(run(["c", "a,b"], comma.clone()), [["c", "", "keep1"], ["a", "b", "keep2"]], "shorter row first");
+    assert_eq!(run(["c,", "a,b"], comma.clone()), [["c", "", "keep1"], ["a", "b", "keep2"]], "an explicit empty field, as before");
+    assert_eq!(run(["a,b", "c,d"], comma), [["a", "b", "keep1"], ["c", "d", "keep2"]], "equal rows, as before");
+    assert_eq!(run(["abcDEF", "ghi"], json!({"fixedWidths": [3]})), [["abc", "DEF", "keep1"], ["ghi", "", "keep2"]], "fixed width");
+}
+
 #[test]
 fn split() {
     assert_eq!(split_delimited("a,b,,c", &[','], false, '"'), ["a", "b", "", "c"]);
