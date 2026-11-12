@@ -5,23 +5,8 @@
 use gridcraft_core::{CellRef, RangeRef};
 use gridcraft_model::{CfOperator, ErrorStyle, Validation, ValidationKind, Workbook};
 
-use super::xls_tests::compound;
+use super::xls_tests::{cat, compound, rec, u16s};
 use crate::{ReadReport, read_xls};
-
-fn rec(id: u16, payload: &[u8]) -> Vec<u8> {
-    let mut v = id.to_le_bytes().to_vec();
-    v.extend_from_slice(&(payload.len() as u16).to_le_bytes());
-    v.extend_from_slice(payload);
-    v
-}
-
-fn cat(parts: &[&[u8]]) -> Vec<u8> {
-    parts.concat()
-}
-
-fn u16s(v: &[u16]) -> Vec<u8> {
-    v.iter().flat_map(|x| x.to_le_bytes()).collect()
-}
 
 fn bof(dt: u16) -> Vec<u8> {
     rec(0x0809, &cat(&[&u16s(&[0x0600, dt, 0x0DBB, 0x07CC]), &[0; 8]]))
