@@ -126,6 +126,10 @@ pub(crate) fn read_xls_budgeted(bytes: &[u8], limits: x::Limits, functions: Func
         let sheet = sheet_of(s, &styles, &mut unparsed);
         wb.sheets.push(Arc::new(sheet));
     }
+    // craft-xls reads the rules; GridCraft does not take them from .xls yet.
+    if book.sheets.iter().any(|s| !s.validations.is_empty()) {
+        report.warn("Data validation in .xls files is not imported yet.");
+    }
     if unparsed {
         report.warn("Some formulas use syntax GridCraft can't parse yet; their saved results were kept as values.");
     }
