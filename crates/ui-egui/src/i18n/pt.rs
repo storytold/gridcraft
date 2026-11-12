@@ -7,6 +7,8 @@
 /// Context prefixes and embedded newlines are part of the key and are matched literally.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Diagrama",
+        "Decorative Text" => "Texto decorativo",
         "Paste" => "Colar",
         "Paste Values" => "Colar Valores",
         "Paste Formulas" => "Colar Fórmulas",
