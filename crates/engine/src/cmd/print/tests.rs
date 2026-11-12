@@ -967,3 +967,27 @@ fn equations_print_with_the_symbol_font() {
     // A glyph no standard font has is a [?] box.
     assert!(contains(&pdf, "(?) Tj"));
 }
+
+#[test]
+fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
+    use gridcraft_chart::Prim;
+    let line = |n: usize| Prim::Line { pts: vec![[0.0, 0.0]; n], color: [0, 0, 0, 255], width: 1.0, dash: false };
+    // A smoothed line is its points, not one unit.
+    assert_eq!(chart_cost(&[line(4000), Prim::Circle { cx: 0.0, cy: 0.0, r: 1.0, fill: None, stroke: None }]), 4002);
+    // Room for exactly two copies of a 1,000-point chart.
+    let mut pics = PicCache { chart_prims: MAX_CHART_PRIMS - 2002, ..Default::default() };
+    let mut renders = 0;
+    for expect in [true, true, false, false] {
+        let got = pics.chart((0, 0), || {
+            renders += 1;
+            vec![line(1000)]
+        });
+        assert_eq!(got.is_some(), expect);
+    }
+    assert_eq!(renders, 1, "a rejected chart is not rendered again");
+    assert!(pics.charts.is_empty(), "and its primitives are not kept");
+    // A chart too big for what is left is dropped without being cached at all.
+    let mut pics = PicCache { chart_prims: MAX_CHART_PRIMS - 10, ..Default::default() };
+    assert!(pics.chart((0, 1), || vec![line(1000)]).is_none());
+    assert!(pics.charts.is_empty() && pics.rejected_charts.contains(&(0, 1)));
+}
