@@ -72,6 +72,9 @@ pub struct SheetLayout {
     pub heading_h: f32,
     /// Manual page breaks apply (they don't when the sheet is fitted to pages).
     pub manual_breaks: bool,
+    /// How much wider a column is on paper than on screen, for paginating (see
+    /// [`print_col_scale`]).
+    pub col_scale: f32,
 }
 
 impl SheetLayout {
@@ -201,6 +204,36 @@ fn title_span(t: Option<(u32, u32)>, max: u32) -> Option<(u32, u32)> {
     Some((a, b.min(max - 1).min(a.saturating_add(499))))
 }
 
+/// Advance of the digits, in em, of fonts whose digits share one width: Excel sizes columns by it.
+fn digit_em(font: &str) -> Option<f32> {
+    let units = match font.to_ascii_lowercase().as_str() {
+        "calibri" => 1038.0,
+        "arial" => 1139.0,
+        "times new roman" => 1024.0,
+        "courier new" => 1229.0,
+        "verdana" => 1302.0,
+        _ => return None,
+    };
+    Some(units / 2048.0)
+}
+
+/// How much wider a column prints than its on-screen width, for paginating. A column's width is
+/// a number of characters of the workbook's default font (screen pixels / 7). On screen a
+/// character is that font's digit width in whole pixels at 96 dpi, 7 for Calibri 11. Excel prints
+/// it at the printer's resolution instead, as whole printer dots, with the same character count.
+/// Measured in Excel 365 on fit-to-width scales, assuming a 600 dpi printer: Calibri 11 prints 47
+/// dots (5.64 pt) a character, so a column is 7.4% wider on paper; Arial 10, Times New Roman 12,
+/// Verdana 10 and Calibri 16 match the same rule. Fonts not listed use Calibri's digits.
+pub(crate) fn print_col_scale(wb: &Workbook) -> f32 {
+    const DPI: f32 = 600.0;
+    let font = &wb.styles.get(gridcraft_model::StyleId::DEFAULT).font;
+    let size = if font.size.is_finite() && font.size > 0.0 { font.size.clamp(1.0, 409.0) } else { 11.0 };
+    let em = digit_em(&font.name).unwrap_or(1038.0 / 2048.0);
+    let dots = ((size * DPI / 72.0).round() * em).round().max(1.0);
+    // Printed points per character, over the 7 screen pixels (5.25 pt) a character is stored as.
+    (dots * 72.0 / DPI) / (7.0 * PX_TO_PT)
+}
+
 /// Paginates one sheet.
 pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_override: Option<RangeRef>) -> Option<SheetLayout> {
     let sh = wb.sheet(si)?;
@@ -255,6 +288,7 @@ pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_overrid
         heading_w,
         heading_h,
         manual_breaks: fit.is_none(),
+        col_scale: print_col_scale(wb),
     };
     let paginate = |lay: &mut SheetLayout, manual: bool| {
         lay.manual_breaks = manual;
@@ -263,7 +297,7 @@ pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_overrid
     };
     match fit {
         Some((fw, fh)) => {
-            let total_w: f32 = (area.start.col..=area.end.col).map(|c| sh.col_width(c)).sum::<f32>() + heading_w;
+            let total_w: f32 = (area.start.col..=area.end.col).map(|c| sh.col_width(c)).sum::<f32>() * lay.col_scale + heading_w;
             let total_h: f32 = if area.height() > 200_000 {
                 f32::INFINITY
             } else {
@@ -272,7 +306,9 @@ pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_overrid
             let (aw, ah) = lay.avail();
             let sw = if fw > 0 { aw * fw as f32 / (total_w * PX_TO_PT).max(1.0) } else { f32::INFINITY };
             let sh_ = if fh > 0 { ah * fh as f32 / (total_h * PX_TO_PT).max(1.0) } else { f32::INFINITY };
-            lay.scale = sw.min(sh_).min(1.0).clamp(0.1, 1.0);
+            // Excel fits in whole percents, rounding down.
+            let pct = (sw.min(sh_).min(1.0) * 100.0).floor().clamp(10.0, 100.0);
+            lay.scale = pct / 100.0;
             for _ in 0..40 {
                 paginate(&mut lay, false);
                 let ok_w = fw == 0 || lay.col_bands.len() <= fw as usize;
@@ -280,7 +316,7 @@ pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_overrid
                 if (ok_w && ok_h) || lay.scale <= 0.1 {
                     break;
                 }
-                lay.scale = (lay.scale * 0.97).max(0.1);
+                lay.scale = (((lay.scale * 100.0).round() * 0.97).floor().max(10.0)) / 100.0;
             }
         }
         None => paginate(&mut lay, true),
@@ -331,13 +367,14 @@ pub(crate) fn split_bands(sh: &Sheet, lay: &SheetLayout, cap: usize) -> (Bands, 
     };
     let title_w = |start: u32| -> f32 {
         match title_cols {
-            Some((a, b)) if a < start => (a..=b.min(start - 1)).map(|c| sh.col_width(c)).sum(),
+            Some((a, b)) if a < start => (a..=b.min(start - 1)).map(|c| sh.col_width(c) * lay.col_scale).sum(),
             _ => 0.0,
         }
     };
     let area = lay.area;
     let rows = bands(area.start.row, area.end.row, |r| sh.row_height(r), |start| (ah - lay.heading_h - title_h(start)).max(1.0), &rb, cap);
-    let cols = bands(area.start.col, area.end.col, |c| sh.col_width(c), |start| (aw - lay.heading_w - title_w(start)).max(1.0), &cb, cap);
+    let cols =
+        bands(area.start.col, area.end.col, |c| sh.col_width(c) * lay.col_scale, |start| (aw - lay.heading_w - title_w(start)).max(1.0), &cb, cap);
     (rows, cols)
 }
 
@@ -399,5 +436,52 @@ mod tests {
         let lay = layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
         assert_eq!((lay.area.end.row, lay.area.end.col), (MAX_ROWS - 1, MAX_COLS - 1));
         assert!(lay.pages.len() <= MAX_PAGES);
+    }
+
+    /// A workbook whose default font is `font`, with `n` columns `w` characters wide (padding
+    /// included, as the file stores them) on A4 landscape with half-inch margins, fitted to one
+    /// page wide.
+    fn fitted(font: &str, size: f32, w: f32, n: u32) -> Workbook {
+        let mut normal = gridcraft_model::Style::default();
+        normal.font.name = font.into();
+        normal.font.size = size;
+        let mut wb = Workbook::new();
+        wb.styles = gridcraft_model::StyleTable::with_default(normal);
+        let sh = wb.sheet_mut(0).unwrap();
+        for c in 0..n {
+            sh.cols.entry(c).or_default().size = Some(w * 7.0);
+        }
+        sh.print.paper = "A4".into();
+        sh.print.orientation = Orientation::Landscape;
+        sh.print.margins = [0.5, 0.5, 0.5, 0.5, 0.3, 0.3];
+        sh.print.fit_to = Some((1, 0));
+        sh.print.print_area = Some(RangeRef { start: CellRef::new(0, 0), end: CellRef::new(39, n - 1) });
+        wb
+    }
+
+    /// The scale Excel 365 picked for these sheets ("fit to 1 page wide", measured with Excel's
+    /// default printer, Microsoft Print to PDF): columns print wider than on screen, by the
+    /// default font's digit width at the printer's resolution.
+    #[test]
+    fn fit_to_width_matches_excels_scale() {
+        for (font, size, w, n, excel) in
+            [("Calibri", 11.0, 10.777_344, 20, 63), ("Calibri", 11.0, 40.777_344, 6, 55), ("Arial", 10.0, 10.777_344, 20, 64)]
+        {
+            let lay = layout_sheet(&fitted(font, size, w, n), 0, &PrintOptions::default(), None).unwrap();
+            assert_eq!((lay.scale * 100.0).round() as i32, excel, "{font} {size}, {n} columns of {w}");
+            assert_eq!(lay.col_bands.len(), 1);
+        }
+    }
+
+    #[test]
+    fn printed_columns_widen_by_the_default_fonts_digits() {
+        let scale = |font: &str, size: f32| print_col_scale(&fitted(font, size, 8.43, 1));
+        // Calibri 11: 47 dots at 600 dpi a character, 5.64pt against 7 screen pixels (5.25pt).
+        assert!((scale("Calibri", 11.0) - 5.64 / 5.25).abs() < 1e-4);
+        // Arial 10: 46 dots; Times New Roman 12: 50 dots.
+        assert!((scale("Arial", 10.0) - 5.52 / 5.25).abs() < 1e-4);
+        assert!((scale("Times New Roman", 12.0) - 6.0 / 5.25).abs() < 1e-4);
+        // A font without known digits uses Calibri's.
+        assert_eq!(scale("Unknown Sans", 11.0), scale("Calibri", 11.0));
     }
 }
