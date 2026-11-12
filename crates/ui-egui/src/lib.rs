@@ -232,6 +232,9 @@ pub struct SheetApp {
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,
     pub message: Option<(String, String)>,
+    /// Files to open on the first frame, once the text measure the grid draws with is installed
+    /// (rows of wrapped text fit with it on open).
+    pub(crate) startup_files: Vec<String>,
     pub toast: Option<(String, f64)>,
     /// Dismissible info bar under the ribbon (open-time notices).
     pub notice: Option<Notice>,

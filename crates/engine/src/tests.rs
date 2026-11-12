@@ -6291,6 +6291,115 @@ fn a_saved_workbook_keeps_its_values_until_an_edit_reaches_them() {
     assert_eq!(v(&saved, "C1"), Value::Number(7.0));
 }
 
+/// Rows of wrapped text that a file leaves to fit on open fit with the front end's text widths when
+/// there is one: the built-in estimate is wider than the grid's fonts and could make a row a line
+/// taller than the text takes (Excel fits the row to the lines the text really takes).
+#[test]
+fn rows_of_wrapped_text_fit_with_the_front_ends_measure_on_open() {
+    let mut s = s();
+    s.execute("home.columnWidth", json!({"range": "A1", "chars": 45})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Check whether it was chosen on purpose or should be on, and keep it so."})).unwrap();
+    s.execute("home.wrapText", json!({"range": "A1", "on": true})).unwrap();
+    // As a file that saves no row heights.
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).rows.clear();
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let height = |measure: Option<&crate::TextWidth>| {
+        let (wb, _) = crate::io::open_bytes_measured("book.xlsx", &bytes, None, false, measure).unwrap();
+        wb.sheets[0].row_height(0)
+    };
+    let one_line = wb.sheets[0].default_row_height;
+    let narrow: crate::TextWidth = std::sync::Arc::new(|text: &str, _: &gridcraft_model::Font, _| text.chars().count() as f32 * 4.0);
+    // Two lines exactly: the same cell broken by hand, with a measure that never folds.
+    let two_lines = {
+        let mut wb = wb.clone();
+        let sheet = std::sync::Arc::make_mut(&mut wb.sheets[0]);
+        let a1 = CellRef::parse("A1").unwrap();
+        let mut cell = sheet.cells.get(a1).unwrap().clone();
+        cell.value = Value::Text("Check whether it was chosen\non purpose".into());
+        sheet.set_cell(a1, cell);
+        let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+        let (wb, _) = crate::io::open_bytes_measured("book.xlsx", &bytes, None, false, Some(&narrow)).unwrap();
+        wb.sheets[0].row_height(0)
+    };
+    assert!(two_lines > one_line + 1.0);
+    // The estimate folds this text onto two lines.
+    assert_eq!(height(None), two_lines);
+    // A front end whose font fits it on one line keeps the row one line tall.
+    assert_eq!(height(Some(&narrow)), one_line);
+    // And one whose font is wider folds it as the estimate does.
+    let wide: crate::TextWidth = std::sync::Arc::new(|text: &str, _: &gridcraft_model::Font, _| text.chars().count() as f32 * 6.0);
+    assert_eq!(height(Some(&wide)), two_lines);
+    // The measure is asked with the cell's own font: a bold cell measured wider folds.
+    let bold_wide: crate::TextWidth =
+        std::sync::Arc::new(|text: &str, f: &gridcraft_model::Font, _| text.chars().count() as f32 * if f.bold { 6.0 } else { 4.0 });
+    assert_eq!(height(Some(&bold_wide)), one_line);
+    s.execute("home.bold", json!({"range": "A1", "on": true})).unwrap();
+    let mut bold = (*s.doc().unwrap().wb).clone();
+    std::sync::Arc::make_mut(&mut bold.sheets[0]).rows.clear();
+    let bytes = gridcraft_xlsx::write_xlsx(&bold).unwrap();
+    let (bold, _) = crate::io::open_bytes_measured("book.xlsx", &bytes, None, false, Some(&bold_wide)).unwrap();
+    assert_eq!(bold.sheets[0].row_height(0), two_lines, "the bold cell folds");
+}
+
+/// `file.open` fits rows with the session's measure when the front end installed one, else with
+/// the estimate.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn file_open_fits_rows_with_the_sessions_measure() {
+    let mut s = s();
+    s.execute("home.columnWidth", json!({"range": "A1", "chars": 45})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Check whether it was chosen on purpose or should be on, and keep it so."})).unwrap();
+    s.execute("home.wrapText", json!({"range": "A1", "on": true})).unwrap();
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).rows.clear();
+    let one_line = wb.sheets[0].default_row_height;
+    /// Removes the test's file when the test ends, also when an assertion fails.
+    struct TempFile(std::path::PathBuf);
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let file = TempFile(std::env::temp_dir().join(format!("gridcraft-fit-open-{}-{}.xlsx", std::process::id(), unique_nonce())));
+    let path = &file.0;
+    std::fs::write(path, gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+    let opened = |measure: Option<crate::TextWidth>| {
+        let mut s = Session::new();
+        s.text_width = measure;
+        s.execute("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+        s.doc().unwrap().wb.sheets[0].row_height(0)
+    };
+    let estimate = opened(None);
+    let narrow = opened(Some(std::sync::Arc::new(|text: &str, _: &gridcraft_model::Font, _| text.chars().count() as f32 * 4.0)));
+    assert!(estimate > one_line + 1.0, "the estimate folds the text");
+    assert_eq!(narrow, one_line, "the session's measure fits it on one line");
+
+    // A front end that installs a workbook's fonts after it opens asks `file.open` to wait: the
+    // rows fit when it says the fonts are ready, with the measure it has then.
+    let mut s = Session::new();
+    s.text_width = Some(std::sync::Arc::new(|text: &str, _: &gridcraft_model::Font, _| text.chars().count() as f32 * 4.0));
+    s.defer_row_fit = true;
+    s.execute("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+    assert!(s.doc().unwrap().rows_unfit);
+    // The fonts arrive, and with them wider text: it folds now.
+    s.text_width = Some(std::sync::Arc::new(|text: &str, _: &gridcraft_model::Font, _| text.chars().count() as f32 * 6.0));
+    let revision = s.doc().unwrap().revision;
+    assert!(s.fit_deferred_rows());
+    let d = s.doc().unwrap();
+    assert!(d.wb.sheets[0].row_height(0) > one_line + 1.0, "fitted with the measure it has now");
+    assert!(!d.rows_unfit && d.revision > revision);
+    assert!(!d.is_dirty(), "fitting on open is no change to save");
+    assert!(d.undo.is_empty());
+    assert!(!s.fit_deferred_rows(), "once");
+    // Without a measure there is nothing to wait for: the rows fit on open, with the estimate.
+    let mut s = Session::new();
+    s.defer_row_fit = true;
+    s.execute("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+    assert!(!s.doc().unwrap().rows_unfit);
+    assert_eq!(s.doc().unwrap().wb.sheets[0].row_height(0), estimate);
+}
+
 /// A per-test unique suffix for temp dir names.
 #[cfg(not(target_arch = "wasm32"))]
 fn unique_nonce() -> u64 {

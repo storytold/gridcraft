@@ -74,10 +74,29 @@ pub fn open_bytes_with_password(name: &str, bytes: &[u8], password: Option<&str>
 /// the text it holds, with no number, date or boolean conversion (identifiers such as GTINs, SKUs
 /// and ZIP codes survive). It does not apply to other formats.
 pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
+    open_bytes_measured(name, bytes, password, csv_as_text, None)
+}
+
+/// [`open_bytes_with`], fitting rows of wrapped text with `measure`, the front end's text widths,
+/// when there is one: the built-in estimate is wider than the grid's fonts and can make rows a
+/// line taller than Excel does.
+pub fn open_bytes_measured(
+    name: &str,
+    bytes: &[u8],
+    password: Option<&str>,
+    csv_as_text: bool,
+    measure: Option<&crate::TextWidth>,
+) -> Result<(Workbook, Vec<String>)> {
+    let (mut wb, warnings) = open_bytes_unfitted(name, bytes, password, csv_as_text)?;
+    fit_imported_rows(&mut wb, measure);
+    Ok((wb, warnings))
+}
+
+/// [`open_bytes_with`] without fitting the rows to their text: the caller fits them later with
+/// [`fit_imported_rows`], once it can measure the text with the workbook's own fonts.
+pub fn open_bytes_unfitted(name: &str, bytes: &[u8], password: Option<&str>, csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
     if gridcraft_xlsx::sniff(bytes) != gridcraft_xlsx::Format::Encrypted {
-        let (mut wb, warnings) = open_plain(name, bytes, csv_as_text)?;
-        fit_imported_rows(&mut wb);
-        return Ok((wb, warnings));
+        return open_plain(name, bytes, csv_as_text);
     }
     // A scheme no password opens is said straight away, rather than after asking for one.
     let decrypt_error = |e: gridcraft_xlsx::DecryptError| EngineError::Other(decrypt_message(name, e));
@@ -89,8 +108,7 @@ pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_
     if gridcraft_xlsx::sniff(&plain) == gridcraft_xlsx::Format::Encrypted {
         return Err(EngineError::Other(format!("We can't open '{name}': the encrypted file is damaged (it holds another encrypted file).")));
     }
-    let (mut wb, mut warnings) = open_plain(name, &plain, csv_as_text)?;
-    fit_imported_rows(&mut wb);
+    let (wb, mut warnings) = open_plain(name, &plain, csv_as_text)?;
     warnings.insert(0, DECRYPTED_NOTICE.into());
     Ok((wb, warnings))
 }
@@ -99,7 +117,7 @@ pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_
 /// height grow to fit their content. Rows the file made taller keep their height — our
 /// line-height estimate can differ from Excel's, and shrinking files that already look
 /// right would be a visible regression. Custom-height rows are left alone entirely.
-fn fit_imported_rows(wb: &mut Workbook) {
+pub fn fit_imported_rows(wb: &mut Workbook, measure: Option<&crate::TextWidth>) {
     // The whole pass shares one budget of merge comparisons: later sheets keep their heights once it is spent.
     let mut left = crate::cmd::MERGE_FIT_WORK;
     for si in 0..wb.sheets.len() {
@@ -111,7 +129,7 @@ fn fit_imported_rows(wb: &mut Workbook) {
         let mut sweep = crate::cmd::MergeSweep::new(left);
         for row in rows {
             let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
-            crate::cmd::fit_row_height(wb, si, row, &mut sweep);
+            crate::cmd::fit_row_height(wb, si, row, &mut sweep, measure);
             let Some(before) = before else { continue };
             let after = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
             if after.is_none_or(|a| before > a + 0.5)

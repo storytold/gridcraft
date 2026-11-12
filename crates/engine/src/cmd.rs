@@ -461,7 +461,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
             sweep = Some((si, MergeSweep::new(left)));
         }
         if let Some((_, sw)) = sweep.as_mut() {
-            fit_row_height(&mut wb, si, row, sw);
+            fit_row_height(&mut wb, si, row, sw, None);
         }
     }
     if let Some(t0) = t0 {
@@ -702,8 +702,11 @@ fn same_content(a: Option<&gridcraft_model::Cell>, b: Option<&gridcraft_model::C
 /// words (egui's LayoutJob), so dividing the total width by the column width undercounts: each
 /// drawn line ends early at the last word that fits. A word wider than the column breaks
 /// mid-word, the way egui does. (#1969)
-fn wrapped_line_count(line: &str, width: f32, size: f32, bold: bool) -> f32 {
-    let word_w = |w: &str| crate::cmd::format::approx_text_width(w, size, bold);
+fn wrapped_line_count(line: &str, width: f32, word_w: &dyn Fn(&str) -> f32) -> f32 {
+    // A line that fits is one line: one measure, the usual case.
+    if word_w(line) <= width {
+        return 1.0;
+    }
     let space_w = word_w(" ");
     let mut lines = 1.0f32;
     let mut used = 0.0f32;
@@ -736,8 +739,15 @@ fn wrapped_line_count(line: &str, width: f32, size: f32, bold: bool) -> f32 {
 /// Line breaks in a cell's text count only when the cell wraps, as in Excel: with Wrap Text off
 /// a multi-line value shows on one line and AutoFit gives a one-line row.
 pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
+    auto_row_height_measured(wb, si, row, None);
+}
+
+/// [`auto_row_height`], folding wrapped text with `measure` (the front end's own text widths) when
+/// there is one, else with [`format::approx_text_width`]. The estimate is wider than the fonts the
+/// grid draws with, so it can count a line more than the text takes.
+pub fn auto_row_height_measured(wb: &mut Workbook, si: usize, row: u32, measure: Option<&crate::TextWidth>) {
     let mut sweep = MergeSweep::new(MERGE_FIT_WORK);
-    fit_row_height(wb, si, row, &mut sweep);
+    fit_row_height(wb, si, row, &mut sweep, measure);
 }
 
 /// Most merge comparisons one auto-fit pass (a commit, or opening a workbook) makes. Past it the
@@ -818,8 +828,8 @@ impl MergeSweep {
     }
 }
 
-/// [`auto_row_height`] with the sheet's merges taken from `sweep`.
-pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut MergeSweep) {
+/// [`auto_row_height_measured`] with the sheet's merges taken from `sweep`.
+pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut MergeSweep, measure: Option<&crate::TextWidth>) {
     // Out of budget: the row keeps the height it has.
     if sweep.left() == 0 {
         return;
@@ -877,7 +887,11 @@ pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut
             if st.align.wrap {
                 let text = crate::display::cell_text(wb, sh, CellRef::new(row, c));
                 let w = sh.col_width(c).max(1.0) - 6.0;
-                lines = text.lines().map(|l| wrapped_line_count(l, w.max(1.0), size, st.font.bold)).sum::<f32>().max(1.0);
+                let word_w = |s: &str| match measure {
+                    Some(m) => m(s, &st.font, true),
+                    None => crate::cmd::format::approx_text_width(s, size, st.font.bold),
+                };
+                lines = text.lines().map(|l| wrapped_line_count(l, w.max(1.0), &word_w)).sum::<f32>().max(1.0);
             }
         } else if st.font.size <= gridcraft_model::DEFAULT_FONT_SIZE {
             continue;
@@ -939,5 +953,28 @@ mod merge_sweep_tests {
         assert_eq!(sweep.left(), 0);
         let mut sweep = MergeSweep::new(20);
         assert!(sweep.at(&sheet, 0).is_some() && sweep.at(&sheet, 1).is_some());
+    }
+}
+
+#[cfg(test)]
+mod wrapped_line_count_tests {
+    use super::wrapped_line_count;
+
+    /// Ten points a character, spaces included.
+    fn ten(s: &str) -> f32 {
+        s.chars().count() as f32 * 10.0
+    }
+
+    #[test]
+    fn counts_the_lines_a_measured_line_folds_onto() {
+        // Fits whole, also when empty.
+        assert_eq!(wrapped_line_count("abc def", 70.0, &ten), 1.0);
+        assert_eq!(wrapped_line_count("", 70.0, &ten), 1.0);
+        // Breaks between words.
+        assert_eq!(wrapped_line_count("abc def", 60.0, &ten), 2.0);
+        assert_eq!(wrapped_line_count("abc def ghi", 30.0, &ten), 3.0);
+        // A word wider than the column fills the line, then breaks across lines.
+        assert_eq!(wrapped_line_count("abcdefgh", 30.0, &ten), 3.0);
+        assert_eq!(wrapped_line_count("ab abcdefgh", 30.0, &ten), 4.0);
     }
 }

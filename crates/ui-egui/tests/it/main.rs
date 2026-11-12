@@ -97,6 +97,7 @@ mod python_mode;
 mod ref_edit;
 mod ribbon_layout;
 mod right_to_left;
+mod rows_fit_on_open;
 mod scroll_position;
 mod scrollbar_column_fill;
 mod selection;
