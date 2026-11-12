@@ -238,6 +238,37 @@ fn a_stored_creation_id_is_never_changed() {
     assert_eq!(keys, [GUIDE, GUIDE2]);
 }
 
+/// A workbook-level id minted for a stroke without one is drawn past every id the file stores.
+///
+/// Seeding the unkeyed stroke's stored neighbour with the counter's first minted key forces the
+/// collision a later-read part would cause: [`crate::drawing::unique_keys`] must collect the
+/// stored id before it mints, so the first stroke cannot borrow the second's key.
+#[test]
+fn a_key_minted_for_an_unkeyed_stroke_never_repeats_a_stored_id() {
+    let minted_first = gridcraft_model::ink_creation_id_free(|_| false);
+    let stroke = |key: Option<&str>| Shape {
+        id: 0,
+        kind: ShapeKind::Ink,
+        anchor: Anchor { cell: CellRef::parse("B2").unwrap(), dx: 0.0, dy: 0.0, width: 60.0, height: 30.0, mode: AnchorMode::Absolute },
+        fill: Color::Rgb(2 << 16),
+        line: Color::Rgb(0x1F5FC9),
+        text: "0,0;30,20".into(),
+        format: Default::default(),
+        math: Default::default(),
+        ink: Some(InkStyle { tool: InkTool::Pen, width_cm: 0.1, height_cm: 0.1, key: key.map(str::to_owned), ..InkStyle::default() }),
+    };
+    let sheet = Sheet { shapes: vec![stroke(None), stroke(Some(&minted_first))], ..Sheet::new("Keys") };
+    let mut wb = Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() };
+    crate::drawing::unique_keys(&mut wb);
+    let keys: Vec<String> = wb.sheets[0].shapes.iter().filter_map(|s| s.ink.as_ref()?.key.clone()).collect();
+    assert_eq!(keys.len(), 2, "every stroke ends with a key: {keys:?}");
+    assert_eq!(keys[1], minted_first, "the stored id is never replaced: {keys:?}");
+    assert_ne!(keys[0], minted_first, "the minted key is drawn past the stored id: {keys:?}");
+    for key in &keys {
+        assert_eq!(gridcraft_model::ink_guid(key).as_deref(), Some(key.as_str()), "{key} is an ST_Guid");
+    }
+}
+
 #[test]
 fn an_absolute_offset_below_the_old_clamp_keeps_its_row() {
     // Row 600,001 at the default 20 px row height is 12,000,020 px: past the 1e7 px (row 500,000)
