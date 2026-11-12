@@ -74,13 +74,14 @@ fn decimate(pts: Vec<Pos2>) -> Vec<Pos2> {
 }
 
 /// Decimates a stroke's points while keeping its pressure aligned: a complete array loses exactly
-/// the entries of the dropped points, and a short array stays short so the painter keeps its
-/// fallback taper (CodeRabbit, #3599).
+/// the entries of the dropped points, and a short array is dropped so the painter keeps its
+/// fallback taper (a kept short array could end up as long as the decimated points and read as
+/// recorded pressure where the stroke ends). CodeRabbit #3599 follow-up: a three-point stroke
+/// with two pressures decimates to two points, and the old pass-through then tapered nothing.
 fn decimate_with_pressure(pts: &[Pos2], pressure: &[u16]) -> (Vec<Pos2>, Vec<u16>) {
     let kept = decimate_indices(pts);
     let points: Vec<Pos2> = kept.iter().map(|&index| pts[index]).collect();
-    let pressure =
-        if pressure.len() == pts.len() { kept.iter().filter_map(|&index| pressure.get(index).copied()).collect() } else { pressure.to_vec() };
+    let pressure = if pressure.len() == pts.len() { kept.iter().filter_map(|&index| pressure.get(index).copied()).collect() } else { Vec::new() };
     (points, pressure)
 }
 
@@ -858,7 +859,9 @@ mod tests {
     use super::*;
 
     /// A decimated stroke keeps its pressure aligned with the points it kept, and a short array
-    /// stays short so the painter still tapers the whole stroke (CodeRabbit, #3599).
+    /// is dropped so the painter still tapers the whole stroke (CodeRabbit, #3599 follow-up: a
+    /// three-point stroke with two pressures decimates to two points, and a passed-through short
+    /// array would then read as recorded pressure instead of the taper).
     #[test]
     fn decimating_a_stroke_keeps_its_pressure_aligned() {
         let pts = [egui::pos2(0.0, 0.0), egui::pos2(0.2, 0.0), egui::pos2(5.0, 0.0)];
@@ -866,8 +869,9 @@ mod tests {
         let (kept, kept_pressure) = decimate_with_pressure(&pts, &pressure);
         assert_eq!(kept, vec![egui::pos2(0.0, 0.0), egui::pos2(5.0, 0.0)]);
         assert_eq!(kept_pressure, vec![100, 30_000], "each kept point keeps its own pressure");
-        let (_, short) = decimate_with_pressure(&pts, &pressure[..2]);
-        assert_eq!(short.len(), 2, "a short array is not padded");
+        let (decimated, short) = decimate_with_pressure(&pts, &pressure[..2]);
+        assert_eq!(decimated, kept, "the same points are kept");
+        assert!(short.is_empty(), "a short array is dropped so the taper applies: {short:?}");
     }
 
     /// The production measure is not monotone for labels with a line break: egui lays the text out
