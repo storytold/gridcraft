@@ -354,3 +354,17 @@ fn hostile_validation_records_never_panic() {
     assert_eq!(wb.sheets[0].validations.len(), 200);
     assert_eq!(wb.sheets[0].validations[199].ranges, vec![RangeRef::cell(CellRef::new(199, 0))]);
 }
+
+/// Rules with no messages cost no text, so a crafted file could otherwise keep millions of them:
+/// the workbook keeps 65,536 and says it skipped the rest.
+#[test]
+fn rules_past_the_workbook_limit_are_skipped() {
+    let one = rule(0, 0, 0, &[], &[], &[[0, 0, 0, 0]]);
+    let mut records = vec![dval(65_537)];
+    records.extend(std::iter::repeat_n(one, 65_537));
+    let (wb, report) = workbook(&[], &records);
+    assert_eq!(wb.sheets[0].validations.len(), 65_536);
+    let limit = "Some data validation rules in .xls files were skipped: GridCraft reads at most 65,536 in a workbook.";
+    assert_eq!(report.warnings.iter().filter(|w| w.as_str() == limit).count(), 1, "{:?}", report.warnings);
+    assert!(!report.warnings.iter().any(|w| w == SKIPPED || w == IGNORED), "{:?}", report.warnings);
+}

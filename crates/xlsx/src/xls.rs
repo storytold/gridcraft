@@ -39,6 +39,10 @@ const MAX_SHEETS: usize = 4096;
 const MAX_NAMES: usize = 65_536;
 const MAX_XFS: usize = 65_536;
 const MAX_MERGES: usize = 100_000;
+/// Data validation rules kept from the whole workbook. A rule can have no messages and so cost
+/// no text, but each one kept is held in memory (about 260 bytes from a 38-byte record), and the
+/// record limit alone would let a crafted file keep millions.
+const MAX_VALIDATIONS: usize = 65_536;
 /// Records read from the whole Workbook stream at most (a 65,536 × 256 sheet has fewer). One
 /// allowance shared by every substream: many BoundSheet records pointing into one huge
 /// substream must not each get their own.
@@ -79,13 +83,15 @@ pub(crate) struct Budget {
     text: usize,
     records: usize,
     max_records: usize,
+    /// Data validation rules kept so far, in every sheet.
+    validations: usize,
     /// A shared formula's text was refused: no later shared formula, in any sheet, is expanded.
     shared_text_spent: bool,
 }
 
 impl Default for Budget {
     fn default() -> Self {
-        Budget { cells: 0, text: 0, records: 0, max_records: MAX_RECORDS, shared_text_spent: false }
+        Budget { cells: 0, text: 0, records: 0, max_records: MAX_RECORDS, validations: 0, shared_text_spent: false }
     }
 }
 
@@ -886,6 +892,10 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
                 return Ok(());
             }
             st.dv_left -= 1;
+            if budget.validations >= MAX_VALIDATIONS {
+                report.warn("Some data validation rules in .xls files were skipped: GridCraft reads at most 65,536 in a workbook.");
+                return Ok(());
+            }
             let rule = match dv::dv(&mut c) {
                 Ok(raw) => {
                     budget.text(raw.text_len())?;
@@ -894,7 +904,10 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
                 Err(_) => None,
             };
             match rule {
-                Some(v) => st.sheet.validations.push(v),
+                Some(v) => {
+                    budget.validations += 1;
+                    st.sheet.validations.push(v);
+                }
                 None => report.warn("Some data validation rules in .xls files could not be read and were skipped."),
             }
         }
