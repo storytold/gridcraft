@@ -1143,9 +1143,60 @@ fn trend_fills_are_offered_for_numbers_only() {
     // Down A1:B2, each column keeps one sign; across it, row 1 holds 1 and -1.
     assert!(offered(&s, "A1:B2", "A1:B5", true));
     assert!(offered(&s, "A1:B2", "A1:E2", false) && !offered(&s, "A1:B2", "A1:E2", true));
+    let r = |a: &str| gridcraft_core::RangeRef::parse(a).unwrap();
+    assert_eq!(crate::fill::trends_that_apply(&s.doc().unwrap().wb, 0, r("A1:B2"), r("A1:E2")), (true, false));
+    assert_eq!(crate::fill::trends_that_apply(&s.doc().unwrap().wb, 0, r("A1:B2"), r("A1:B5")), (true, true));
     assert!(!offered(&s, "C1:C2", "C1:C4", false), "text");
     assert!(!offered(&s, "D1:D2", "D1:D4", false), "a formula");
     assert!(!offered(&s, "E1:E2", "E1:E4", false), "empty cells");
+    // A fill `edit.autoFill` refuses is not offered: five columns down to the last row is more than
+    // MAX_FILL_CELLS cells, and a target that doesn't hold the source in a corner.
+    s.execute("range.setValues", json!({"range": "F1", "values": [[1, 2, 3, 4, 5], [2, 4, 6, 8, 10]]})).unwrap();
+    assert!(offered(&s, "F1:J2", "F1:J1000", false) && offered(&s, "F1:J2", "F1:J1000", true));
+    assert!(!offered(&s, "F1:J2", "F1:J1048576", false) && !offered(&s, "F1:J2", "F1:J1048576", true), "too large");
+    assert!(!offered(&s, "F1:J2", "F2:J5", false), "source outside the target");
+}
+
+#[test]
+fn trend_fills_fit_each_lane_of_a_two_dimensional_source() {
+    let mut s = s();
+    let nums = |s: &Session, cells: &[&str]| cells.iter().map(|c| v(s, c)).collect::<Vec<_>>();
+    let n = |xs: &[f64]| xs.iter().map(|x| Value::Number(*x)).collect::<Vec<_>>();
+    let fill =
+        |s: &mut Session, src: &str, target: &str, mode: &str| s.execute("edit.autoFill", json!({"source": src, "target": target, "mode": mode}));
+    // Down: column A holds 1, 2 and column B 10, 20, and one command fits each column on its own.
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 10], [2, 20]]})).unwrap();
+    let down = ["A3", "A4", "A5", "B3", "B4", "B5"];
+    fill(&mut s, "A1:B2", "A1:B5", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &down), n(&[3.0, 4.0, 5.0, 30.0, 40.0, 50.0]));
+    fill(&mut s, "A1:B2", "A1:B5", "growthTrend").unwrap();
+    assert_eq!(nums(&s, &down), n(&[4.0, 8.0, 16.0, 40.0, 80.0, 160.0]));
+    // Across: row 1 holds 1, 10 and row 2 holds 2, 20, and each row is fitted on its own.
+    s.execute("range.setValues", json!({"range": "H1", "values": [[1, 10], [2, 20]]})).unwrap();
+    let across = ["J1", "K1", "L1", "J2", "K2", "L2"];
+    fill(&mut s, "H1:I2", "H1:L2", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &across), n(&[19.0, 28.0, 37.0, 38.0, 56.0, 74.0]));
+    fill(&mut s, "H1:I2", "H1:L2", "growthTrend").unwrap();
+    assert_eq!(nums(&s, &across), n(&[100.0, 1000.0, 10000.0, 200.0, 2000.0, 20000.0]));
+    // The sources keep their values.
+    assert_eq!(nums(&s, &["A1", "A2", "B1", "B2", "H1", "I1", "H2", "I2"]), n(&[1.0, 2.0, 10.0, 20.0, 1.0, 10.0, 2.0, 20.0]));
+}
+
+#[test]
+fn a_trend_fill_undoes_as_one_step() {
+    let mut s = s();
+    let nums = |s: &Session, cells: &[&str]| cells.iter().map(|c| v(s, c)).collect::<Vec<_>>();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 10], [2, 20]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "A4", "input": "99"})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "A1:B2", "target": "A1:B5", "mode": "linearTrend"})).unwrap();
+    assert_eq!(v(&s, "A4"), Value::Number(4.0));
+    s.execute("edit.undo", json!({})).unwrap();
+    // The targets are back as they were (empty, and 99 in A4), and the source is unchanged.
+    assert_eq!(
+        nums(&s, &["A3", "A4", "A5", "B3", "B4", "B5"]),
+        [Value::Empty, Value::Number(99.0), Value::Empty, Value::Empty, Value::Empty, Value::Empty]
+    );
+    assert_eq!(nums(&s, &["A1", "A2", "B1", "B2"]), [Value::Number(1.0), Value::Number(2.0), Value::Number(10.0), Value::Number(20.0)]);
 }
 
 #[test]

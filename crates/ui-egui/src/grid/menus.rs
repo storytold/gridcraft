@@ -284,9 +284,10 @@ fn trend_fill_modes(app: &mut SheetApp, src: RangeRef, target: RangeRef) -> Vec<
     {
         return modes.clone();
     }
-    let modes: Vec<(&'static str, &'static str)> = [("Linear Trend", "linearTrend", false), ("Growth Trend", "growthTrend", true)]
+    let (linear, growth) = gridcraft_engine::fill::trends_that_apply(&d.wb, d.wb.active_sheet(), src, target);
+    let modes: Vec<(&'static str, &'static str)> = [("Linear Trend", "linearTrend", linear), ("Growth Trend", "growthTrend", growth)]
         .into_iter()
-        .filter(|(_, _, growth)| gridcraft_engine::fill::trend_applies(&d.wb, d.wb.active_sheet(), src, target, *growth))
+        .filter(|(_, _, applies)| *applies)
         .map(|(label, mode, _)| (label, mode))
         .collect();
     app.grid.fill_menu_trends = Some((key, modes.clone()));

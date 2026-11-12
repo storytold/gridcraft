@@ -71,22 +71,55 @@ fn numeric_lanes(wb: &Workbook, sheet: usize, src: RangeRef, target: RangeRef) -
             (0..len)
                 .map(|i| {
                     let c = if vertical { CellRef::new(src.start.row + i, lane) } else { CellRef::new(lane, src.start.col + i) };
-                    let cell = sh.cell(c)?;
-                    if cell.formula.is_some() || cell.py.is_some() || !cell.value.is_number() {
-                        return None;
-                    }
-                    cell.value.as_f64()
+                    trend_number(sh, c)
                 })
                 .collect()
         })
         .collect()
 }
 
+/// The number a trend fill reads from source cell `c`, or `None` when it is empty or holds text, a
+/// logical value, an error, a formula or Python code.
+fn trend_number(sh: &gridcraft_model::Sheet, c: CellRef) -> Option<f64> {
+    let cell = sh.cell(c)?;
+    if cell.formula.is_some() || cell.py.is_some() || !cell.value.is_number() {
+        return None;
+    }
+    cell.value.as_f64()
+}
+
 /// Whether the fill menu offers Linear Trend (`growth` false) or Growth Trend (`growth` true) for a
 /// fill from `src` to `target`: every source cell holds a number, and for Growth Trend the numbers
-/// of each lane are all above zero or all below zero.
+/// of each lane are all above zero or all below zero. A source or target larger than
+/// [`MAX_FILL_CELLS`], or a target that doesn't hold the source in a corner, is refused by
+/// `edit.autoFill`, so neither trend applies to it and no source cell is read.
 pub fn trend_applies(wb: &Workbook, sheet: usize, src: RangeRef, target: RangeRef, growth: bool) -> bool {
-    numeric_lanes(wb, sheet, src, target).is_some_and(|lanes| !growth || lanes.iter().all(|nums| Pattern::growth(nums).is_some()))
+    let (linear, growth_fits) = trends_that_apply(wb, sheet, src, target);
+    if growth { growth_fits } else { linear }
+}
+
+/// [`trend_applies`] for both trends from one read of the source: (Linear Trend, Growth Trend). It
+/// checks each cell's number and sign and fits nothing, so the menu does not wait on a fit.
+pub fn trends_that_apply(wb: &Workbook, sheet: usize, src: RangeRef, target: RangeRef) -> (bool, bool) {
+    if src.count() > MAX_FILL_CELLS || target.count() > MAX_FILL_CELLS || !holds_source_in_corner(src, target) {
+        return (false, false);
+    }
+    let Some(sh) = wb.sheet(sheet) else { return (false, false) };
+    let vertical = fills_vertically(src, target);
+    let (lanes, len) = if vertical { (src.start.col..=src.end.col, src.height()) } else { (src.start.row..=src.end.row, src.width()) };
+    let mut growth = true;
+    for lane in lanes {
+        // Growth Trend needs the lane all above zero or all below zero, as `Pattern::growth` does.
+        let (mut above, mut below) = (true, true);
+        for i in 0..len {
+            let c = if vertical { CellRef::new(src.start.row + i, lane) } else { CellRef::new(lane, src.start.col + i) };
+            let Some(y) = trend_number(sh, c) else { return (false, false) };
+            above &= y > 0.0;
+            below &= y < 0.0;
+        }
+        growth &= above || below;
+    }
+    (true, growth)
 }
 
 /// Whether a number format shows a calendar date (`YYYY-MM-DD` and `m/d/yyyy h:mm` do; `0 "days"`
