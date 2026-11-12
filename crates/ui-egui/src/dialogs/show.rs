@@ -27,24 +27,44 @@ pub(crate) fn custom_auto_filter_params(values: &Map<String, Json>) -> Json {
     } else {
         gridcraft_engine::core::DateSystem::D1900
     };
+    let serial = |value: &str| match gridcraft_engine::core::parse::parse_input(value.trim(), sys).value {
+        gridcraft_engine::core::Value::Number(n) if date => Some(n),
+        _ => None,
+    };
+    // A date typed without a time stands for its whole day, so a cell on that day with a time
+    // of day counts as on it: "on or before" and "after" end at the next midnight.
+    let whole_day = |value: &str| serial(value).filter(|n| n.fract() == 0.0 && n.is_finite());
     let condition = |op: String, value: String| -> (String, String) {
-        let value = if date {
-            match gridcraft_engine::core::parse::parse_input(value.trim(), sys).value {
-                gridcraft_engine::core::Value::Number(n) => n.to_string(),
-                _ => value,
-            }
-        } else {
-            value
-        };
+        if let Some(n) = whole_day(&value) {
+            return match op.as_str() {
+                "<=" => ("<".into(), (n + 1.0).to_string()),
+                ">" => (">=".into(), (n + 1.0).to_string()),
+                _ => (op, n.to_string()),
+            };
+        }
+        let value = serial(&value).map(|n| n.to_string()).unwrap_or(value);
         match op.as_str() {
             "notBeginsWith" => ("<>".into(), format!("{value}*")),
             "notEndsWith" => ("<>".into(), format!("*{value}")),
             _ => (op, value),
         }
     };
-    let (op, value) = condition(if s("op").is_empty() { "=".into() } else { s("op") }, s("value"));
+    let first_op = if s("op").is_empty() { "=".to_string() } else { s("op") };
+    let second = !s("op2").is_empty() && !s("value2").trim().is_empty();
+    // Equals / does not equal a day, alone, is that day's span (or everything outside it).
+    if !second && let Some(n) = whole_day(&s("value")) {
+        let span = match first_op.as_str() {
+            "=" => Some(json!({"op": ">=", "value": n.to_string(), "op2": "<", "value2": (n + 1.0).to_string(), "and": true})),
+            "<>" => Some(json!({"op": "<", "value": n.to_string(), "op2": ">=", "value2": (n + 1.0).to_string(), "and": false})),
+            _ => None,
+        };
+        if let Some(custom) = span {
+            return json!({"column": values.get("column").cloned().unwrap_or(Json::Null), "custom": custom});
+        }
+    }
+    let (op, value) = condition(first_op, s("value"));
     let mut custom = json!({"op": op, "value": value, "and": s("join") != "or"});
-    if !s("op2").is_empty() && !s("value2").trim().is_empty() {
+    if second {
         let (op2, value2) = condition(s("op2"), s("value2"));
         custom["op2"] = json!(op2);
         custom["value2"] = json!(value2);
@@ -808,11 +828,25 @@ mod custom_auto_filter_tests {
     #[test]
     fn dates_on_a_date_column_compare_as_serials() {
         let p = params(json!({"column": "C", "kind": "date", "op": ">=", "value": "2026-03-01", "join": "and", "op2": "<=", "value2": "2026-03-31"}));
-        assert_eq!(p["custom"]["value"], json!("46082"));
-        assert_eq!(p["custom"]["value2"], json!("46112"));
+        assert_eq!((&p["custom"]["op"], &p["custom"]["value"]), (&json!(">="), &json!("46082")));
+        // Between ends after the last day, so 31 March with a time of day is included.
+        assert_eq!((&p["custom"]["op2"], &p["custom"]["value2"]), (&json!("<"), &json!("46113")));
         // Not a date: kept as typed (it then matches nothing, as in Excel).
         assert_eq!(params(json!({"column": "C", "kind": "date", "op": "=", "value": "soon"}))["custom"]["value"], json!("soon"));
         // On a text column the same text stays text.
         assert_eq!(params(json!({"column": "A", "op": "=", "value": "2026-03-01"}))["custom"]["value"], json!("2026-03-01"));
+    }
+
+    #[test]
+    fn a_typed_day_covers_its_times_of_day() {
+        let p = params(json!({"column": "C", "kind": "date", "op": "=", "value": "2026-03-31"}));
+        assert_eq!(p["custom"], json!({"op": ">=", "value": "46112", "op2": "<", "value2": "46113", "and": true}));
+        let p = params(json!({"column": "C", "kind": "date", "op": "<>", "value": "2026-03-31"}));
+        assert_eq!(p["custom"], json!({"op": "<", "value": "46112", "op2": ">=", "value2": "46113", "and": false}));
+        let p = params(json!({"column": "C", "kind": "date", "op": ">", "value": "2026-03-31"}));
+        assert_eq!((&p["custom"]["op"], &p["custom"]["value"]), (&json!(">="), &json!("46113")), "after the day: from the next midnight");
+        // A typed time is exact.
+        let p = params(json!({"column": "C", "kind": "date", "op": "<=", "value": "2026-03-31 12:00"}));
+        assert_eq!((&p["custom"]["op"], &p["custom"]["value"]), (&json!("<="), &json!("46112.5")));
     }
 }
