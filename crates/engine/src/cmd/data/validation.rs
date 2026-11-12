@@ -240,12 +240,10 @@ pub fn check_literal_fill_validation(wb: &Workbook, sheet: usize, ranges: &[Rang
         return None;
     }
     let sh = wb.sheet(sheet)?;
-    let applies = sh.validations.iter().any(|dv| {
-        dv.kind != ValidationKind::Any
-            && dv.show_error
-            && !(input.is_empty() && dv.allow_blank)
-            && dv.ranges.iter().any(|rule| ranges.iter().any(|range| rule.intersects(range)))
-    });
+    let applies = sh
+        .validations
+        .iter()
+        .any(|dv| dv.kind != ValidationKind::Any && dv.show_error && dv.ranges.iter().any(|rule| ranges.iter().any(|range| rule.intersects(range))));
     if !applies {
         return None;
     }
@@ -256,7 +254,7 @@ pub fn check_literal_fill_validation(wb: &Workbook, sheet: usize, ranges: &[Rang
         let filtered = crate::cmd::edit::filtered_rows(sh, *range);
         for at in range.iter().filter(|at| !filtered.contains(&at.row)) {
             let Some(dv) = sh.validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(at))) else { continue };
-            if dv.kind == ValidationKind::Any || !dv.show_error || (input.is_empty() && dv.allow_blank) {
+            if dv.kind == ValidationKind::Any || !dv.show_error {
                 continue;
             }
             let numeric_bound = |f: &str| f.trim().trim_start_matches('=').parse::<f64>().is_ok();
@@ -319,7 +317,7 @@ fn check_entry(
     if dv.kind == ValidationKind::Any || !dv.show_error {
         return None;
     }
-    if input.is_empty() && dv.allow_blank {
+    if !literal && input.is_empty() && dv.allow_blank {
         return None;
     }
     let v = if literal { Value::text(input) } else { gridcraft_core::parse::parse_input(input, wb.date_system).value };
