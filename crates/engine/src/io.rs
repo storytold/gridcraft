@@ -531,9 +531,12 @@ fn written_number(text: &str) -> Option<WrittenNumber<'_>> {
     if let Some(rest) = t.strip_prefix(['-', '\u{2212}']) {
         negative = true;
         t = rest.trim_start();
+    } else if let Some(rest) = t.strip_prefix('+') {
+        t = rest.trim_start();
     }
     let percent = t.ends_with('%');
-    t = t.trim_end_matches('%').trim_end();
+    // One percent sign: "1,5%%" stays text.
+    t = t.strip_suffix('%').unwrap_or(t).trim_end();
     let end = t.find(|c: char| c.is_ascii_digit() || c == '-' || c.is_whitespace()).unwrap_or(t.len());
     let symbol = t.get(..end)?;
     // Only a currency symbol: "R$", "US$", "€". A word before a number keeps the cell text.
