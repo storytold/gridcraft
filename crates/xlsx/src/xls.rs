@@ -73,8 +73,8 @@ fn warning(w: &x::Warning) -> String {
         W::Charts => "Charts in .xls files are not imported yet.".into(),
         W::PicturesSkipped => "Some pictures in .xls files were skipped.".into(),
         W::ConditionalFormattingSkipped | W::ConditionalFormatting12 => "Some conditional formatting in .xls files was not imported.".into(),
-        W::DataValidationSkipped => "Some data validation in .xls files could not be read and was skipped.".into(),
-        W::DataValidationIgnored => "Some data validation records in .xls files were ignored, as Excel ignores them.".into(),
+        W::DataValidationSkipped => "Some data validation rules in .xls files could not be read and were skipped.".into(),
+        W::DataValidationIgnored => "Some data validation records in .xls files were ignored, as Excel ignores them: they have no DVal record before them, or come after the number of rules it gives.".into(),
         W::Hyperlinks => "Hyperlinks in .xls files are not imported yet.".into(),
         W::PivotTables => "PivotTables in .xls files are not imported yet; their values were kept.".into(),
         W::CellsOutsideGrid(n) => format!("{n} cells outside the grid were skipped."),
@@ -114,15 +114,15 @@ pub(crate) fn read_xls_budgeted(bytes: &[u8], limits: x::Limits, functions: Func
     }
     let mut unparsed = false;
     for s in &book.sheets {
-        // craft-xls keeps these rules in its read model, but GridCraft's XLS adapter does not
-        // import conditional formatting. Its own warnings cover rules it could not decode; this
-        // reports the additional rules that this adapter drops.
-        if !s.conditional_formats.is_empty() {
-            report.warn(warning(&x::Warning::ConditionalFormattingSkipped));
-        }
-        // Data validation is not yet imported by this adapter.
-        if !s.validations.is_empty() {
-            report.warn(warning(&x::Warning::DataValidationSkipped));
+        // Report rules craft-xls kept that the adapter cannot represent. craft-xls already warns
+        // about records it could not decode.
+        for (dropped, skipped) in [
+            (!s.conditional_formats.is_empty(), x::Warning::ConditionalFormattingSkipped),
+            (s.validations.iter().any(|v| validation_of(v).is_none()), x::Warning::DataValidationSkipped),
+        ] {
+            if dropped {
+                report.warn(warning(&skipped));
+            }
         }
         let sheet = sheet_of(s, &styles, &mut unparsed);
         wb.sheets.push(Arc::new(sheet));
