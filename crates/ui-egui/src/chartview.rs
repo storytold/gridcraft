@@ -1,6 +1,8 @@
 //! Floating objects on the sheet: charts (rendered by `gridcraft-chart` into primitives that
 //! we paint with egui), pictures, shapes, equations, slicers and form controls (`form_controls.rs`).
 
+use std::sync::Arc;
+
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
@@ -259,6 +261,31 @@ fn paint_shape_text(p: &Painter, wb: &Workbook, sp: &gridcraft_engine::model::Sh
     clip.galley(pos, g, color);
 }
 
+/// Resolves and renders `ch` (chart `ci` of sheet `si`), at zoom `z`.
+fn render_chart(p: &Painter, z: f32, wb: &Workbook, si: usize, ch: &gridcraft_engine::model::Chart) -> Vec<Prim> {
+    #[cfg(test)]
+    tests::RENDERS.with(|c| c.set(c.get() + 1));
+    let data = gridcraft_chart::resolve(wb, si, ch);
+    let m = EguiMeasure { painter: p, z };
+    gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m)
+}
+
+/// The primitives of chart `ci` of sheet `si`: from the frame cache when the workbook, zoom and
+/// screen scale are those it was rendered for, else rendered now (see [`crate::chartcache`]).
+fn chart_prims(app: &SheetApp, p: &Painter, z: f32, wb: &Arc<Workbook>, si: usize, ci: usize, ch: &gridcraft_engine::model::Chart) -> Arc<[Prim]> {
+    // Only the active document's own workbook is cached: anything else cannot be tied to a uid.
+    let Some(d) = app.session.active().filter(|d| Arc::ptr_eq(&d.wb, wb)) else {
+        return render_chart(p, z, wb, si, ch).into();
+    };
+    // A series that calls NOW or RAND, directly or through a defined name, must be evaluated
+    // again on every paint.
+    if gridcraft_chart::has_volatile_series(wb, si, ch) {
+        return render_chart(p, z, wb, si, ch).into();
+    }
+    let mut cache = app.chart_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache.get(d.uid, wb, si, ci, (z, p.ctx().pixels_per_point()), || render_chart(p, z, wb, si, ch))
+}
+
 pub(crate) fn anchor_rect(geo: &Geo, sh: &Sheet, a: &Anchor) -> Rect {
     let x = geo.x(sh, a.cell.col) + a.dx * geo.z;
     let y = geo.y(sh, a.cell.row) + a.dy * geo.z;
@@ -278,7 +305,7 @@ pub(crate) fn objects_hidden(wb: &Workbook) -> bool {
     wb.show_objects == gridcraft_engine::model::ShowObjects::None
 }
 
-pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) -> Vec<PaintedObject> {
+pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Workbook>, si: usize, sh: &Sheet) -> Vec<PaintedObject> {
     let mut painted = Vec::new();
     if objects_hidden(wb) {
         return painted;
@@ -386,7 +413,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         }
         done(start, r);
     }
-    for ch in &sh.charts {
+    for (ci, ch) in sh.charts.iter().enumerate() {
         let r = anchor_rect(geo, sh, &ch.anchor);
         if !r.intersects(p.clip_rect()) {
             continue;
@@ -395,9 +422,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         // Soft shadow + white card.
         p.rect_filled(r.translate(vec2(0.0, 1.5)), 2.0, Color32::from_black_alpha(18));
         p.rect_filled(r, 0.0, Tokens::get(p.ctx()).grid_bg);
-        let data = gridcraft_chart::resolve(wb, si, ch);
-        let m = EguiMeasure { painter: p, z: geo.z };
-        let prims = gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m);
+        let prims = chart_prims(app, p, geo.z, wb, si, ci, ch);
         paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
         done(start, r);
     }
@@ -604,10 +629,17 @@ pub(crate) fn ink_color(line: Color32, width_pt: f32) -> Color32 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use std::cell::Cell;
+
     use gridcraft_chart::Measure;
 
     use super::*;
+
+    thread_local! {
+        /// Charts resolved and rendered on this thread (a test runs on its own thread).
+        pub(crate) static RENDERS: Cell<usize> = const { Cell::new(0) };
+    }
 
     /// The production measure is not monotone for labels with a line break: egui lays the text out
     /// line by line, so ending a prefix with `\n…` can be narrower than the shorter `iii…`. The
