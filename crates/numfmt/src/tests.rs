@@ -30,6 +30,23 @@ fn t(code: &str, s: &str) -> String {
     format_value(&Value::from(s), &NumberFormat::parse(code), S).text
 }
 
+/// Portuguese Excel shows and reads the year as `a` (`dd/mm/aaaa`) and the file stores `yyyy`.
+/// `AM/PM`, `A/P`, `General`, quoted text, `[...]` tags and escapes keep their letters, and
+/// other regions keep `y`.
+#[test]
+fn portuguese_codes_write_the_year_as_a() {
+    let pt = gridcraft_core::region::lookup("pt-BR");
+    let fr = gridcraft_core::region::lookup("fr-FR");
+    assert_eq!(regional_code("dd/mm/yyyy", pt), "dd/mm/aaaa");
+    assert_eq!(regional_code("d mmm YY h AM/PM \"y\" \\y [$-416]", pt), "d mmm AA h AM/PM \"y\" \\y [$-416]");
+    assert_eq!(canonical_code("dd/mm/aaaa", pt), "dd/mm/yyyy");
+    assert_eq!(canonical_code("aa h:mm a/p \"ano\" \\a General", pt), "yy h:mm a/p \"ano\" \\a General");
+    assert_eq!(canonical_code("dd/mm/aaaa", gridcraft_core::region::lookup("pt-PT")), "dd/mm/yyyy");
+    assert_eq!(regional_code("dd/mm/yyyy", fr), "dd/mm/yyyy");
+    assert_eq!(canonical_code("dd/mm/aaaa", fr), "dd/mm/aaaa");
+    assert_eq!(format_value_in(&Value::Number(46337.0), &NumberFormat::parse_in("dd/mm/aaaa", pt), S, pt).text, "11/11/2026");
+}
+
 /// Formats `n` with `code` in the region tagged `tag`.
 fn in_region(tag: &str, code: &str, n: f64) -> String {
     format_value_in(&Value::Number(n), &NumberFormat::parse(code), S, gridcraft_core::region::lookup(tag)).text
