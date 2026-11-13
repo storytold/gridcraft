@@ -294,3 +294,37 @@ fn a_list_from_a_huge_column_is_read_within_the_source_budget() {
     let list = h.state().editor.as_ref().and_then(|e| e.list.as_ref()).map(|l| (l.items.len(), l.truncated, l.matches.len()));
     assert_eq!(list, Some((budget, true, 0)));
 }
+
+#[test]
+fn the_dropdown_arrow_reads_a_huge_list_once_and_draws_only_its_visible_rows() {
+    // The full list the arrow opens comes from a whole column used far past the search budget: it
+    // is read once within the budget (not again every frame) and only the rows in view are drawn.
+    let budget = gridcraft_engine::cmd::data::LIST_SOURCE_BUDGET;
+    let rows: Vec<Vec<String>> = (0..budget + 1_000).map(|r| vec![format!("Item {r}")]).collect();
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("range.setValues", json!({"range": "H1", "values": rows})).unwrap();
+    session.execute("data.validation", json!({"range": "B2", "type": "list", "formula1": "=$H:$H"})).unwrap();
+    session.execute("selection.set", json!({"cell": "B2"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        SheetApp::new(session, Default::default()),
+    );
+    h.run_steps(4);
+    key(&mut h, Key::ArrowDown, Modifiers::ALT);
+    assert!(h.state().grid.list_picker.is_some(), "Alt+Down opens the full list");
+    let read = |h: &Harness| h.state().grid.list_picker_items.as_ref().map(|l| (l.source.items.len(), l.source.truncated, l.source.items.as_ptr()));
+    let first = read(&h);
+    assert_eq!(first.map(|(n, t, _)| (n, t)), Some((budget, true)));
+    h.run_steps(3);
+    assert_eq!(read(&h), first, "the open list is not read again");
+    assert!(shown(&h, "Item 0"));
+    assert!(!shown(&h, "Item 500"), "rows out of view are not drawn");
+    assert!(shown(&h, "More entries not shown"));
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().grid.list_picker.is_none());
+    assert!(h.state().grid.list_picker_items.is_none(), "closing drops the list");
+}

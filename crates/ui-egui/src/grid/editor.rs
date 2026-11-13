@@ -1,6 +1,8 @@
 use super::cell_paint::ink_on;
 use super::geo::Geo;
-use super::{Align2, CellRef, Color32, FontId, PatternType, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, Workbook, json, pos2, theme, vec2};
+use super::{
+    Align2, Arc, CellRef, Color32, FontId, PatternType, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, Workbook, json, pos2, theme, vec2,
+};
 
 /// Room the in-cell editor keeps right of its text. It is sized from the text of the last frame, so
 /// the next typed character must still fit: a fixed 14 px was less than one glyph at high zoom,
@@ -192,17 +194,35 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
     let wb = d.wb.clone();
     let si = wb.active_sheet();
     let Some(sh) = wb.sheet(si) else { return };
-    let Some(dv) = sh.validations.iter().find(|x| x.ranges.iter().any(|r| r.contains(c))).cloned() else {
+    let Some(dv) = sh.validations.iter().find(|x| x.ranges.iter().any(|r| r.contains(c))) else {
         app.grid.list_picker = None;
+        app.grid.list_picker_items = None;
         return;
     };
-    let items = gridcraft_engine::cmd::data::list_items(&wb, si, c, &dv);
+    // Read the list once while it stays open on the same cell of the same workbook version, and
+    // within the search budget, so a list over a huge column can't stall every frame.
+    // Taken out while the popup draws (a click runs a command on `app`), put back below.
+    let list = match app.grid.list_picker_items.take() {
+        Some(l) if Arc::ptr_eq(&l.wb, &wb) && l.sheet == si && l.cell == c => l,
+        _ => {
+            let budget = gridcraft_engine::cmd::data::LIST_SOURCE_BUDGET;
+            let source = gridcraft_engine::cmd::data::list_search_source(&wb, si, c, dv, budget);
+            super::ListPickerItems { wb: wb.clone(), sheet: si, cell: c, source }
+        }
+    };
+    let (items, truncated) = (&list.source.items, list.source.truncated);
     let r = geo.cell_rect(sh, c);
     // Fit the popup to its rows (up to LIST_PICKER_MAX_ROWS); without a minimum the scroll area collapses to its 64 px default.
-    let height = list_picker_height(items.len(), LIST_PICKER_ROW_H, ui.spacing().item_spacing.y);
+    let gap = ui.spacing().item_spacing.y;
+    // A row is as tall as its button really is (text plus padding), so `show_rows` places the rows
+    // where they are drawn and the popup shows LIST_PICKER_MAX_ROWS of them.
+    let row_h = LIST_PICKER_ROW_H.max(ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y);
+    let height = list_picker_height(items.len(), row_h, gap);
+    let note = if truncated { row_h + gap } else { 0.0 };
     // Open below the cell, or above it when the rows would run past the bottom of the window (as Excel does).
     let screen = ui.ctx().content_rect();
-    let above = r.bottom() + height + LIST_PICKER_CHROME > screen.bottom() && r.top() - height - LIST_PICKER_CHROME >= screen.top();
+    let (outer, top_room) = (height + note + LIST_PICKER_CHROME, r.top() - height - note - LIST_PICKER_CHROME);
+    let above = r.bottom() + outer > screen.bottom() && top_room >= screen.top();
     let (at, pivot) = match (above, geo.rtl) {
         (false, false) => (geo.mirror_pos(r.left_bottom()), Align2::LEFT_TOP),
         (false, true) => (geo.mirror_pos(r.left_bottom()), Align2::RIGHT_TOP),
@@ -213,20 +233,23 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
     let response = egui::Area::new(egui::Id::unique("dv_list")).fixed_pos(at).pivot(pivot).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_width(r.width().max(100.0));
-            egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).show(ui, |ui| {
-                for it in &items {
-                    if ui
-                        .add(egui::Button::new(it.as_str()).frame_when_inactive(false).min_size(vec2(r.width().max(100.0), LIST_PICKER_ROW_H)))
-                        .clicked()
-                    {
+            // Only the rows in view are drawn: a long list costs what eight rows cost.
+            egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).show_rows(ui, row_h, items.len(), |ui, rows| {
+                for it in rows.filter_map(|i| items.get(i)) {
+                    if ui.add(egui::Button::new(it.as_str()).frame_when_inactive(false).min_size(vec2(r.width().max(100.0), row_h))).clicked() {
                         app.run_or_alert("cell.set", json!({"cell": c.a1(), "input": it}));
                         close = true;
                     }
                 }
             });
+            if truncated {
+                ui.weak("More entries not shown");
+            }
         });
     });
     if close || popup_dismissed(&response.response, was_open) {
         app.grid.list_picker = None;
+    } else {
+        app.grid.list_picker_items = Some(list);
     }
 }
