@@ -163,6 +163,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | PDF of a right-to-left sheet keeps explicit Left and Right alignment on the side the grid shows them |
 | 2026-11-12 | minor | `.xls` files open with their data validation (drop-down lists, input messages, error alerts and the rules), read by craft-xls and mapped as the `.xlsx` reader maps the same rules. A rule Excel would refuse, or one past 65,536 in a workbook, is skipped with a warning (#3634, from #3636) |
 | 2026-11-12 | minor | .xls import reads the file with craft-xls (storytold/craft-libs), the reader that moved there from this repository; GridCraft keeps the mapping onto its model. The workbook now opens on the sheet it was saved on (WINDOW1 `itabCur`), falling back to the first visible sheet as before (from #3551), and cells saved as RString records (text with formatting runs) are read as text instead of skipped |
 | 2026-11-10 | minor | `.xls` import: every formula except a Ctrl+Shift+Enter array is read as a legacy one with Excel's implicit `@` (a title row `=Other!A1:G1` shows its first cell instead of `#SPILL!`), one-cell Ctrl+Shift+Enter arrays stay arrays, and `@` of a 2-D range meets the formula's row and column (#410, PR #1367) |

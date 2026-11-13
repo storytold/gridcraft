@@ -234,6 +234,23 @@ fn rtl_sheet_sparkline_reflects_with_cell_geometry() {
 }
 
 #[test]
+fn explicit_left_and_right_keep_their_side_on_a_right_to_left_sheet() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["LEFT"], ["RIGHT"]]})).unwrap();
+    s.execute("home.alignLeft", json!({"range": "A1"})).unwrap();
+    s.execute("home.alignRight", json!({"range": "A2"})).unwrap();
+    let (ltr, _) = pdf_of(&mut s, json!({}));
+    s.execute("view.rightToLeft", json!({"on": true})).unwrap();
+    let (rtl, _) = pdf_of(&mut s, json!({}));
+    let width = |label| gridcraft_pdf::text_width(Font::Helvetica, 11.0, label);
+    let (left, right) = (width("LEFT"), width("RIGHT"));
+    let ltr_gap = exported_text_x(&ltr, "RIGHT") + right - exported_text_x(&ltr, "LEFT");
+    let rtl_gap = exported_text_x(&rtl, "RIGHT") + right - exported_text_x(&rtl, "LEFT");
+    assert!((ltr_gap - rtl_gap).abs() < 0.01, "Left stays left of Right in the cell: {ltr_gap}, {rtl_gap}");
+    assert!(exported_text_x(&rtl, "LEFT") + left < exported_text_x(&rtl, "RIGHT") + right);
+}
+
+#[test]
 fn rtl_sheet_pdf_mirrors_cells_merges_headings_and_object_anchors() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["FIRST", "SECOND"], [null, "MERGED"]]})).unwrap();

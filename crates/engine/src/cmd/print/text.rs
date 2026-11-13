@@ -159,14 +159,18 @@ fn text_direction(order: ReadingOrder) -> TextDirection {
     }
 }
 
-fn text_align(align: HAlign, value: &Value, right_to_left_text: bool) -> HAlign {
+/// The alignment a cell is laid out with before a right-to-left sheet is mirrored. Explicit Left
+/// and Right are swapped there, as in the grid, so they print on the side the user chose.
+fn text_align(align: HAlign, value: &Value, direction: TextDirection, right_to_left_sheet: bool) -> HAlign {
     match align {
         HAlign::General => match value {
             Value::Number(_) => HAlign::Right,
             Value::Bool(_) | Value::Error(_) => HAlign::Center,
-            _ if right_to_left_text => HAlign::Right,
+            _ if direction == TextDirection::RightToLeft && !right_to_left_sheet => HAlign::Right,
             _ => HAlign::Left,
         },
+        HAlign::Left if right_to_left_sheet => HAlign::Right,
+        HAlign::Right if right_to_left_sheet => HAlign::Left,
         HAlign::CenterAcross | HAlign::Distributed => HAlign::Center,
         HAlign::Justify | HAlign::Fill => HAlign::Left,
         other => other,
@@ -288,7 +292,7 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         text = "#".repeat(((avail / hash).floor().max(1.0) as usize).min(255));
         tw = gridcraft_pdf::text_width_with_direction(font, size, &text, direction);
     }
-    let h_align = text_align(st.align.h, &v, direction == TextDirection::RightToLeft && !sh.right_to_left);
+    let h_align = text_align(st.align.h, &v, direction, sh.right_to_left);
     let rot = st.align.rotation;
     let rotated = rot != 0 && rot != 255;
     // Rotated text wraps along its own direction: upright (±90°) text to the row height.
