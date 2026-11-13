@@ -220,6 +220,36 @@ fn basic_tools() {
     assert!(info["sheets"][0]["cells"].as_u64().unwrap() > 10, "{info}");
 }
 
+/// Real MCP tool calls can step/cancel or publish the same engine job without partial reports.
+#[test]
+fn cooperative_analysis_jobs_work_through_mcp() {
+    let mut s = server();
+    ok(&mut s, "set_cell", json!({"cell":"A1","input":"10"}));
+    ok(&mut s, "set_cell", json!({"cell":"B1","input":"=A1*2"}));
+    let params = json!({"inputs":[{"cell":"Sheet1!A1","min":0,"max":1}],"outputs":["Sheet1!B1"],"iterations":8,"samples":false});
+    let id = ok(&mut s, "execute_command", json!({"command":"analysis.start","params":{"params":params}}))["job"].clone();
+    ok(&mut s, "execute_command", json!({"command":"analysis.step","params":{"job":id,"trials":1}}));
+    assert_eq!(ok(&mut s, "execute_command", json!({"command":"analysis.step","params":{"job":id,"trials":1}}))["completed"], 1);
+    ok(&mut s, "execute_command", json!({"command":"analysis.cancel","params":{"job":id}}));
+    assert_eq!(ok(&mut s, "inspect_workbook", json!({}))["sheets"].as_array().unwrap().len(), 1);
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell":"A1"}))["value"], json!(10.0));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell":"B1"}))["value"], json!(20.0));
+    let id = ok(&mut s, "execute_command", json!({"command":"analysis.start","params":{"params":params}}))["job"].clone();
+    let mut completed = false;
+    for _ in 0..20 {
+        let progress = ok(&mut s, "execute_command", json!({"command":"analysis.step","params":{"job":id,"trials":2}}));
+        if progress["state"] == "ready" {
+            completed = true;
+            break;
+        }
+    }
+    assert!(completed);
+    ok(&mut s, "execute_command", json!({"command":"analysis.finish","params":{"job":id}}));
+    assert_eq!(ok(&mut s, "inspect_workbook", json!({}))["sheets"].as_array().unwrap().len(), 2);
+    ok(&mut s, "undo", json!({}));
+    assert_eq!(ok(&mut s, "inspect_workbook", json!({}))["sheets"].as_array().unwrap().len(), 1);
+}
+
 #[test]
 fn sort_and_filter() {
     let mut s = server();

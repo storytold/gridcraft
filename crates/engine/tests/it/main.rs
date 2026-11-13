@@ -1,5 +1,6 @@
 //! The crate's integration tests, one module per file, built as one test binary.
 
+mod analysis_job_source_conflict;
 mod autofit_filter_buttons;
 mod cf_formula_validate;
 mod chart_area_stacked100;

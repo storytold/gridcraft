@@ -1,7 +1,9 @@
 //! The command registry. Ids follow Excel's ribbon (`home.bold`, `insert.chart`,
 //! `data.sortAscending`) plus primitive editing commands (`cell.set`, `selection.set`).
 
+pub mod actuarial_report;
 pub mod analysis;
+pub mod analysis_job;
 pub mod controls;
 pub mod data;
 pub mod draw;
@@ -15,6 +17,7 @@ pub mod formulas;
 pub mod insert;
 pub mod inspect;
 pub mod macros;
+pub mod monte_carlo;
 pub mod pivot;
 pub mod print;
 pub mod python;
@@ -158,6 +161,7 @@ macro_rules! cmd {
 }
 pub(crate) use cmd;
 
+/// Lazily assembles the shared engine command registry used by UI, CLI, control and MCP callers.
 pub fn command_specs() -> &'static [CommandSpec] {
     static SPECS: std::sync::OnceLock<Vec<CommandSpec>> = std::sync::OnceLock::new();
     SPECS.get_or_init(|| {
@@ -186,6 +190,9 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(whatif::specs());
         v.extend(forecast::specs());
         v.extend(analysis::specs());
+        v.extend(monte_carlo::specs());
+        v.extend(actuarial_report::specs());
+        v.extend(analysis_job::specs());
         v.extend(print::specs());
         v
     })
@@ -392,10 +399,12 @@ pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) ->
     })
 }
 
+/// Reads profiling time without calling clock APIs that trap on WASM.
 fn wall_clock() -> std::time::Duration {
     std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default()
 }
 
+/// Publishes a recalculated edit only while its logical work policy still permits it.
 pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
     // `GRIDCRAFT_PROFILE` timing, never on wasm where the clock traps. `elapsed` on the epoch
     // reads the wall clock without the (disallowed) `now`.
@@ -468,6 +477,10 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     if let Some(t0) = t0 {
         eprintln!("commit: + rows {:?}", since(t0));
+    }
+    if !gridcraft_calc::WorkHook::allowed() {
+        d.calc.rebuild(&d.wb);
+        return Err(EngineError::Other("Calculation stopped by its work limit or cancellation; source cells were preserved.".into()));
     }
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;

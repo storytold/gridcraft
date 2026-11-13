@@ -105,6 +105,9 @@ sync_github_name = true
 [people.dylanmtaylor]
 sync_github_name = true
 
+[people.betosaco]
+real_name = "Alberto Saco Puntriano"
+
 [people.Plutonium-fream]
 sync_github_name = true
 

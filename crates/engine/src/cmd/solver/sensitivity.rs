@@ -113,8 +113,32 @@ fn out_of_evaluations() -> EngineError {
     EngineError::Other("Solver ran out of evaluations.".into())
 }
 
-fn not_optimal() -> EngineError {
-    EngineError::Other("The Sensitivity report needs an optimal solution: these values are not optimal for the model. Solve it first.".into())
+/// A skippable solution mismatch is distinct from an operational failure.
+#[derive(Debug)]
+pub(super) enum SensitivityError {
+    NotOptimal,
+    IncompatibleOptimal,
+    Failure(EngineError),
+}
+
+impl From<EngineError> for SensitivityError {
+    fn from(error: EngineError) -> Self {
+        Self::Failure(error)
+    }
+}
+
+impl From<SensitivityError> for EngineError {
+    fn from(error: SensitivityError) -> Self {
+        match error {
+            SensitivityError::NotOptimal => EngineError::Other(
+                "The Sensitivity report needs an optimal solution: these values are not optimal for the model. Solve it first.".into(),
+            ),
+            SensitivityError::IncompatibleOptimal => EngineError::Other(
+                "The Sensitivity report needs the values at the Simplex LP solution: these values are another optimal solution, whose ranges differ. Solve the model with Simplex LP first.".into(),
+            ),
+            SensitivityError::Failure(error) => error,
+        }
+    }
 }
 
 /// What both report bodies share: the model, the solution, its objective value and the rows'
@@ -139,10 +163,10 @@ impl At<'_> {
 /// The variable rows, the constraint rows and their headers.
 type Body = (Vec<Vec<Value>>, Vec<Vec<Value>>, Vec<&'static str>, Vec<&'static str>);
 
-pub(super) fn sensitivity_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> Result<Lines> {
+pub(super) fn sensitivity_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> std::result::Result<Lines, SensitivityError> {
     let m = inp.model;
     if let Some(why) = sensitivity_refusal(m, inp.prob) {
-        return Err(EngineError::Other(why.into()));
+        return Err(EngineError::Other(why.into()).into());
     }
     let n = m.vars.len();
     let x = &inp.solution;
@@ -167,7 +191,7 @@ pub(super) fn sensitivity_report(d: &DocState, sh: &Sheet, inp: &ReportInput) ->
     let mut trial = Trial::new(d);
     let sets: Vec<(usize, CellRef, Value)> = m.vars.iter().zip(x).map(|(c, v)| (m.sheet, *c, Value::number(*v))).collect();
     let reads: Vec<(usize, CellRef)> = cells.iter().map(|c| (m.sheet, *c)).collect();
-    let mut vals = trial.run(&sets, &reads).into_iter().map(|v| as_num(&v));
+    let mut vals = trial.run(&sets, &reads)?.into_iter().map(|v| as_num(&v));
     let finals: Vec<(f64, f64)> = inp
         .prob
         .rows
@@ -190,7 +214,7 @@ pub(super) fn sensitivity_report(d: &DocState, sh: &Sheet, inp: &ReportInput) ->
 }
 
 /// Simplex LP: reduced costs, shadow prices and their ranges from the final tableau.
-fn simplex_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
+fn simplex_body(ev: &mut Evaluator, at: &At) -> std::result::Result<Body, SensitivityError> {
     let (inp, m) = (at.inp, at.inp.model);
     // The program the solve built, from the same start values (data.solver's x0, which Solver
     // Results passes back as `original`), so the solve below repeats its pivots. Start values
@@ -209,21 +233,18 @@ fn simplex_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
     })?;
     let (outcome, tab) = solve_lp_tableau(&c, &rows, &inp.prob.lo, &inp.prob.hi, &mut work);
     let (Outcome::Solved(vertex, best, _), Some(tab)) = (outcome, tab) else {
-        return Err(EngineError::Other("Solver could not find an optimal basis for the Sensitivity report.".into()));
+        return Err(EngineError::Other("Solver could not find an optimal basis for the Sensitivity report.".into()).into());
     };
     // The report describes the optimum, so the values it shows must be one.
     if !optimal_point(&c, &rows, (&inp.prob.lo, &inp.prob.hi), &inp.solution, best) {
-        return Err(not_optimal());
+        return Err(SensitivityError::NotOptimal);
     }
     // The prices and ranges come from the tableau of `vertex`, so the values shown must be that
     // vertex. Another optimum with the same objective (when the optimum is not unique) has other
     // ranges, so it is refused too, although it is optimal.
     let near = |a: f64, b: f64| (a - b).abs() <= super::PRECISION * (1.0 + a.abs().max(b.abs()));
     if vertex.len() != inp.solution.len() || !vertex.iter().zip(&inp.solution).all(|(a, b)| near(*a, *b)) {
-        return Err(EngineError::Other(
-            "The Sensitivity report needs the values at the Simplex LP solution: these values are another optimal solution, whose ranges differ. Solve the model with Simplex LP first."
-                .into(),
-        ));
+        return Err(SensitivityError::IncompatibleOptimal);
     }
     // Minimising `sign · objective`.
     let sign = if m.goal == Goal::Max { -1.0 } else { 1.0 };
@@ -517,7 +538,7 @@ fn kkt_point(at: &At, rows: &[Row], terms: &[f64], reduced: &[f64]) -> bool {
 }
 
 /// GRG Nonlinear: reduced gradients and the binding rows' Lagrange multipliers.
-fn nonlinear_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
+fn nonlinear_body(ev: &mut Evaluator, at: &At) -> std::result::Result<Body, SensitivityError> {
     let (inp, m) = (at.inp, at.inp.model);
     let x = &inp.solution;
     let (df, dg) = gradients(ev, inp)?;
@@ -552,7 +573,7 @@ fn nonlinear_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
         .collect();
     // The report describes the optimum, so the values it shows must be one.
     if !kkt_point(at, &ev.rows, &terms, &reduced) {
-        return Err(not_optimal());
+        return Err(SensitivityError::NotOptimal);
     }
     // Difference gradients are good to about 1E-6 of each component, so a reduced gradient's
     // noise is 1E-6 of its terms' sizes, plus each multiplier's own noise
