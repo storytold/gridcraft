@@ -713,7 +713,12 @@ impl<'a> Legacy<'a> {
             | "ACT.MARKOV.NONHOMOGENEOUS.REWARD"
             | "ACT.SEMIMARKOV.STATE"
             | "ACT.SEMIMARKOV.TRACE"
-            | "ACT.SEMIMARKOV.REWARD" => Kind::Array,
+            | "ACT.SEMIMARKOV.REWARD"
+            | "ACT.PREMIUM.SENSITIVITY"
+            | "ACT.GPD.FIT.MLE"
+            | "ACT.GPD.THRESHOLDS"
+            | "ACT.COPULA.TAIL"
+            | "ACT.COPULA.FIT" => Kind::Array,
             // Every match (mode 1) or the capture groups (mode 2); the first match by default.
             "REGEXEXTRACT" => match out.get(2) {
                 None | Some(Expr::Missing) => Kind::Scalar,

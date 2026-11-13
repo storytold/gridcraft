@@ -1999,3 +1999,35 @@ fn remove_personal_information_is_kept_and_honoured() {
     assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), None);
     assert!(String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap().contains("Jane Example"));
 }
+
+/// Imported legacy ACT table functions retain implicit intersection and round-trip without
+/// dynamic-array metadata; scalar ACT functions are not changed.
+#[test]
+fn legacy_actuarial_array_functions_retain_single_value() {
+    let calls = [
+        "ACT.PREMIUM.SENSITIVITY(1)",
+        "ACT.GPD.FIT.MLE(1)",
+        "ACT.GPD.THRESHOLDS(1,2)",
+        "ACT.COPULA.TAIL(1,2)",
+        "ACT.COPULA.FIT(1,2,3)",
+    ];
+    let rows = calls
+        .iter()
+        .enumerate()
+        .map(|(i, call)| format!(r#"<row r="{}"><c r="A{}"><f>{call}</f><v>1</v></c></row>"#, i + 1, i + 1))
+        .collect::<String>();
+    let body = format!(r#"<sheetData>{rows}<row r="6"><c r="A6"><f>ACT.GPD.CDF(1,2,3)</f><v>1</v></c></row></sheetData>"#);
+    let (wb, _) = read_xlsx(&super::minimal(&body, &[], "", "")).unwrap();
+    let sheet = wb.sheet(0).unwrap();
+    for (i, call) in calls.iter().enumerate() {
+        let cell = CellRef::new(i as u32, 0);
+        let text = &sheet.cell(cell).unwrap().formula.as_ref().unwrap().text;
+        assert_eq!(text, &format!("@{call}"), "{call}");
+    }
+    assert_eq!(sheet.cell(at("A6")).unwrap().formula.as_ref().unwrap().text, "ACT.GPD.CDF(1,2,3)");
+    let bytes = write_xlsx(&wb).unwrap();
+    for (i, call) in calls.iter().enumerate() {
+        let address = format!("A{}", i + 1);
+        assert_eq!(written_formula(&bytes, &address), (Some((*call).to_string()), None));
+    }
+}
