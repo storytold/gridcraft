@@ -6,7 +6,8 @@ use std::fmt::Write as _;
 
 use gridcraft_model::style::{DxfStated, Protection};
 use gridcraft_model::{
-    Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, Style, Underline, VAlign, VertAlign, Workbook,
+    Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, ReadingOrder, Style, Underline, VAlign, VertAlign,
+    Workbook,
 };
 
 use crate::tables::{INDEXED, builtin_format, builtin_id};
@@ -268,6 +269,12 @@ fn read_alignment(a: &El) -> Alignment {
         shrink: a.flag("shrinkToFit", false),
         indent: a.attr_u32("indent").unwrap_or(0).min(250) as u8,
         rotation: 0,
+        reading_order: match a.attr_u32("readingOrder") {
+            Some(0) => Some(ReadingOrder::Context),
+            Some(1) => Some(ReadingOrder::LeftToRight),
+            Some(2) => Some(ReadingOrder::RightToLeft),
+            _ => None,
+        },
     };
     if let Some(r) = a.attr_i64("textRotation") {
         al.rotation = match r {
@@ -386,12 +393,14 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
             }
         }
     }
-    let dxfs = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf(x, &palette, &shared_fmts)).collect()).unwrap_or_default();
+    // Inline dxf format codes are interned: a code repeated by many dxfs is one allocation.
+    let mut inline_fmts = HashMap::new();
+    let dxfs = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf(x, &palette, &shared_fmts, &mut inline_fmts)).collect()).unwrap_or_default();
     StylesIn { xfs, dxfs, palette, named, num_fmts: fmts }
 }
 
 /// One differential format (`dxf`): the style it sets over a cell's own.
-fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, NumFmt>) -> Style {
+fn read_dxf<'a>(x: &'a El, palette: &[u32], fmts: &HashMap<u32, NumFmt>, inline_fmts: &mut HashMap<&'a str, NumFmt>) -> Style {
     let mut s = Style::default();
     if let Some(e) = x.child("font") {
         let f = read_font(e, palette);
@@ -414,7 +423,7 @@ fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, NumFmt>) -> Style {
     }
     if let Some(n) = x.child("numFmt") {
         if let Some(code) = n.attr("formatCode") {
-            s.num_fmt = NumFmt::new(code);
+            s.num_fmt = inline_fmts.entry(code).or_insert_with(|| NumFmt::new(code)).clone();
         } else if let Some(id) = n.attr_u32("numFmtId") {
             s.num_fmt = num_fmt_code(id, fmts);
         }
@@ -439,7 +448,8 @@ fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, NumFmt>) -> Style {
 pub fn read_x14_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, String>) -> Style {
     let shared: HashMap<u32, NumFmt> =
         x.child("numFmt").and_then(|n| n.attr_u32("numFmtId")).and_then(|id| fmts.get(&id).map(|c| (id, NumFmt::new(c)))).into_iter().collect();
-    read_dxf(x, palette, &shared)
+    let mut inline_fmts = HashMap::new();
+    read_dxf(x, palette, &shared, &mut inline_fmts)
 }
 
 // ---------------------------------------------------------------- writing
@@ -608,6 +618,12 @@ fn alignment_xml(a: &Alignment) -> Option<String> {
     }
     if a.shrink {
         s.push_str(" shrinkToFit=\"1\"");
+    }
+    match a.reading_order {
+        None => {}
+        Some(ReadingOrder::Context) => s.push_str(" readingOrder=\"0\""),
+        Some(ReadingOrder::LeftToRight) => s.push_str(" readingOrder=\"1\""),
+        Some(ReadingOrder::RightToLeft) => s.push_str(" readingOrder=\"2\""),
     }
     s.push_str("/>");
     Some(s)
@@ -826,4 +842,51 @@ pub fn dxf_id(dxfs: &mut Vec<Style>, s: &Style) -> u32 {
     }
     dxfs.push(s.clone());
     (dxfs.len() - 1) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_or_invalid_reading_order_is_unspecified() {
+        for attribute in ["", " readingOrder=\"3\"", " readingOrder=\"-1\"", " readingOrder=\"rtl\"", " readingOrder=\"4294967296\""] {
+            let xml = format!("<alignment{attribute}/>");
+            let align = read_alignment(&crate::xml::parse(xml.as_bytes()).unwrap());
+            assert_eq!(align, Alignment::default(), "{attribute}");
+            assert_eq!(alignment_xml(&align), None);
+        }
+    }
+
+    #[test]
+    fn reading_order_survives_cell_named_and_differential_style_roundtrips() {
+        for order in [0, 1, 2] {
+            let xml = format!(
+                r#"<styleSheet><cellXfs><xf/><xf><alignment readingOrder="{order}"/></xf></cellXfs>
+                <cellStyleXfs><xf><alignment readingOrder="{order}"/></xf></cellStyleXfs>
+                <cellStyles><cellStyle name="Directional" xfId="0"/></cellStyles>
+                <dxfs><dxf><alignment readingOrder="{order}"/></dxf></dxfs></styleSheet>"#
+            );
+            let styles = read_styles(&crate::xml::parse(xml.as_bytes()).unwrap(), &[], "Calibri");
+            let mut wb = Workbook::new();
+            wb.styles.intern(styles.xfs[1].clone());
+            wb.cell_styles = styles.named.clone();
+            let (xml, _) = write_styles(&wb, &styles.dxfs, &[], NumFmts::default());
+            let root = crate::xml::parse(xml.as_bytes()).unwrap();
+            for section in ["dxfs", "cellXfs", "cellStyleXfs"] {
+                let orders: Vec<_> = root
+                    .child(section)
+                    .unwrap()
+                    .children
+                    .iter()
+                    .filter_map(|style| style.child("alignment").and_then(|a| a.attr_u32("readingOrder")))
+                    .collect();
+                assert_eq!(orders, [order], "{section}");
+            }
+            let reopened = read_styles(&root, &[], "Calibri");
+            assert_eq!(reopened.xfs[1].align, styles.xfs[1].align);
+            assert_eq!(reopened.named, styles.named);
+            assert_eq!(reopened.dxfs, styles.dxfs);
+        }
+    }
 }
