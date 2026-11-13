@@ -103,7 +103,7 @@ fn wrapping_keeps_combining_marks_with_their_letters() {
 #[test]
 fn arabic_cells_headers_and_charts_export_searchable_shaped_text() {
     if gridcraft_pdf::text_width(Font::Helvetica, 10.0, "مرحبا") == 0.0 && std::env::var_os("CRAFT_FONTS_REQUIRED").is_none() {
-        return; // Optional font input; required-font CI exercises this regression.
+        return;
     }
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["مَرْحَبًا 123 (ABC)", "القيمة"], ["تفاح", 3], ["كمثرى", 5], ["العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة", null], ["تقرير ١٢٣ (ABC)", null], ["مرحبا", null]]})).unwrap();
@@ -117,7 +117,6 @@ fn arabic_cells_headers_and_charts_export_searchable_shaped_text() {
     s.execute("home.orientation", json!({"range": "A6", "angle": 30})).unwrap();
     s.execute("pageLayout.pageSetup", json!({"header": "&Cتقرير المبيعات 2026", "gridlines": true})).unwrap();
     s.execute("insert.chart", json!({"range": "A1:B3", "type": "column"})).unwrap();
-    // Keep the chart below the table in this synthetic workbook.
     {
         let d = s.doc_mut().unwrap();
         let wb = std::sync::Arc::make_mut(&mut d.wb);

@@ -117,7 +117,6 @@ fn bundled_match(fonts: &[(&str, &'static [u8])], is_bold: bool) -> Option<&'sta
 #[cfg(not(target_arch = "wasm32"))]
 fn system_font_dirs() -> Vec<std::path::PathBuf> {
     use std::path::PathBuf;
-    // Only the redistributable Noto family is used. Never embed proprietary system fonts.
     let mut dirs: Vec<PathBuf> = [
         "/usr/share/fonts/noto",
         "/usr/share/fonts/google-noto-vf",
@@ -231,8 +230,6 @@ pub(crate) fn layout(font: Font, text: &str, direction: TextDirection) -> Result
         for run in runs {
             let rtl = levels.get(run.start).is_some_and(|level| level.is_rtl());
             let run_text = text.get(run.clone()).ok_or_else(|| Error("Invalid PDF text boundary".into()))?;
-            // Older Noto Arabic fonts omit Latin. Split only on coverage changes, retaining
-            // Arabic joining context and reversing the span order inside RTL runs.
             let mut spans = Vec::new();
             let mut start = 0;
             let mut embedded = None;
@@ -315,7 +312,6 @@ pub(crate) fn vertical_extents(font: Font, text: &str, direction: TextDirection)
                 let (bottom, top) = if let Some(bounds) = metrics.bounds(id.into()) {
                     (bounds.y_min, bounds.y_max)
                 } else {
-                    // Variable-font spaces have a valid empty outline but no ink bounding box.
                     let glyph = raw.outline_glyphs().get(id.into()).ok_or_else(|| Error("Missing Arabic PDF glyph outline".into()))?;
                     let mut pen = Pen::default();
                     glyph
@@ -369,7 +365,6 @@ pub(crate) fn latin_visual(text: &str, direction: TextDirection) -> Result<Cow<'
     Ok(Cow::Owned(out))
 }
 
-// The mirrored characters representable by WinAnsi. HarfRust handles embedded glyphs.
 fn mirror_ansi(ch: char) -> char {
     match ch {
         '(' => ')',

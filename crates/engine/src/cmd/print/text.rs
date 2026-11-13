@@ -59,8 +59,6 @@ fn wrap_summed_paragraph(para: &str, font: Font, size: f32, width: f32, directio
             line.push_str(word);
             line_units = word_units;
         }
-        // Break a single over-long word by graphemes, keeping marks with their base letter:
-        // each piece is the longest that fits (at least one grapheme).
         if !fits(line_units) && line.graphemes(true).nth(1).is_some() {
             let mut piece = String::new();
             let mut units: u64 = 0;

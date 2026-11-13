@@ -950,7 +950,7 @@ fn arabic_is_shaped_and_preserved_or_falls_back_without_a_font() {
 #[test]
 fn latin_inside_arabic_text_declares_its_page_font() {
     if arabic::layout(Font::Helvetica, "مرحبا", TextDirection::Auto).is_err() && arabic::ARABIC_FONTS.is_empty() {
-        return; // Optional font input; required-font CI exercises this regression.
+        return;
     }
     let mut doc = PdfDoc::new();
     doc.add_page(600.0, 300.0).text(30.0, 70.0, 20.0, Font::Helvetica, [0, 0, 0], "مرحبا\u{2028}عالم");
@@ -963,7 +963,7 @@ fn latin_inside_arabic_text_declares_its_page_font() {
 #[test]
 fn cjk_inside_arabic_text_uses_the_cid_font() {
     if arabic::layout(Font::Helvetica, "مرحبا", TextDirection::Auto).is_err() && arabic::ARABIC_FONTS.is_empty() {
-        return; // Optional font input; required-font CI exercises this regression.
+        return;
     }
     let text = "مرحبا 编号";
     let mut doc = PdfDoc::new();
@@ -995,7 +995,7 @@ fn oversized_arabic_text_is_an_error_instead_of_partial_pdf() {
 #[test]
 fn arabic_joining_marks_styles_and_rotation() {
     if arabic::layout(Font::Helvetica, "مرحبا", TextDirection::Auto).is_err() && arabic::ARABIC_FONTS.is_empty() {
-        return; // Optional font input; required-font CI exercises this regression.
+        return;
     }
     for (text, expected) in [("مرحبا 123 (ABC)", "(ABC)"), ("مرحبا [ABC]", "[ABC]"), ("مرحبا <ABC>", "<ABC>")] {
         let mixed = arabic::layout(Font::Helvetica, text, TextDirection::Auto).unwrap();
@@ -1059,7 +1059,7 @@ fn arabic_joining_marks_styles_and_rotation() {
 #[test]
 fn line_breaks_in_arabic_text_draw_as_spaces() {
     if arabic::layout(Font::Helvetica, "مرحبا", TextDirection::Auto).is_err() && arabic::ARABIC_FONTS.is_empty() {
-        return; // Optional font input; required-font CI exercises this regression.
+        return;
     }
     for (text, direction) in ["مرحبا\r\nعالم", "مرحبا\u{2028}عالم", "مرحبا\u{2029}ABC\r"]
         .into_iter()
@@ -1098,7 +1098,7 @@ fn arabic_text_respects_the_save_nesting_limit() -> Result<(), Box<dyn Error>> {
 #[test]
 fn arabic_subsets_split_after_255_character_codes() -> Result<(), Box<dyn Error>> {
     if arabic::layout(Font::Helvetica, "مرحبا", TextDirection::Auto).is_err() && arabic::ARABIC_FONTS.is_empty() {
-        return Ok(()); // Optional font input; required-font CI exercises this regression.
+        return Ok(());
     }
     let mut doc = PdfDoc::new();
     let page = doc.add_page(600.0, 300.0);
