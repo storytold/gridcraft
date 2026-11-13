@@ -438,7 +438,8 @@ impl NumberFormat {
 /// Quoted text, bracket tags and escaped characters keep their own separators. A region that
 /// writes the canonical characters gets the code back unchanged.
 pub fn regional_code(code: &str, region: &Region) -> String {
-    remap_separators(code, '.', region.decimal, ',', region.group)
+    let code = remap_separators(code, '.', region.decimal, ',', region.group);
+    if writes_year_as_a(region) { swap_year_letter(&code, 'y', 'a') } else { code }
 }
 
 /// `code` with the region's separators replaced by the canonical `,` thousands and `.` decimal,
@@ -446,7 +447,48 @@ pub fn regional_code(code: &str, region: &Region) -> String {
 /// [`regional_code`] cannot: a region whose thousands separator is not `,` (fr-FR writes a
 /// non-breaking space) needs one function for showing a code and another for reading it back.
 pub fn canonical_code(code: &str, region: &Region) -> String {
-    remap_separators(code, region.decimal, '.', region.group, ',')
+    let code = remap_separators(code, region.decimal, '.', region.group, ',');
+    if writes_year_as_a(region) { swap_year_letter(&code, 'a', 'y') } else { code }
+}
+
+/// Portuguese Excel writes the year as `a` (`dd/mm/aaaa`, for "ano"); the file stores `yyyy`.
+fn writes_year_as_a(region: &Region) -> bool {
+    region.tag.starts_with("pt")
+}
+
+/// `code` with the year letter `from` written as `to`, in either case. `AM/PM`, `A/P`,
+/// `General`, quoted text, `[...]` tags, `\` escapes and the character after a `*` fill or a
+/// `_` space are copied untouched, because their letters are not the year.
+fn swap_year_letter(code: &str, from: char, to: char) -> String {
+    const KEEP: [&str; 3] = ["am/pm", "a/p", "general"];
+    let chars: Vec<char> = code.chars().collect();
+    let mut out = String::with_capacity(code.len());
+    let mut quoted = false;
+    let mut bracketed = false;
+    let mut i = 0usize;
+    while let Some(&c) = chars.get(i) {
+        let free = !quoted && !bracketed;
+        let keep =
+            KEEP.iter().find(|w| free && w.chars().enumerate().all(|(k, wc)| chars.get(i + k).is_some_and(|cc| cc.to_ascii_lowercase() == wc)));
+        let take = match (c, keep) {
+            (_, Some(w)) => w.len(),
+            ('\\' | '*' | '_', None) if free => 2,
+            _ => 1,
+        };
+        match c {
+            '"' if !bracketed => quoted = !quoted,
+            '[' if !quoted => bracketed = true,
+            ']' if !quoted => bracketed = false,
+            _ => {}
+        }
+        if take == 1 && free && c.eq_ignore_ascii_case(&from) {
+            out.push(if c.is_ascii_uppercase() { to.to_ascii_uppercase() } else { to });
+        } else {
+            out.extend(chars.get(i..(i + take).min(chars.len())).unwrap_or(&[]));
+        }
+        i += take;
+    }
+    out
 }
 
 /// `code` with `from_decimal`/`from_group` written as `to_decimal`/`to_group`. A decimal counts
