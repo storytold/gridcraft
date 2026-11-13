@@ -48,7 +48,17 @@ impl SheetApp {
 
     pub(super) fn submit_print(&mut self, params: Json) -> Result<Json, String> {
         if self.services.print_native.is_some() && !self.printing.ready() {
-            return Err("Select an available printer in File > Print before submitting.".into());
+            // Fix: If no printer is selected (e.g. via Quick Print without opening File > Print),
+            // attempt to discover and select the system default printer automatically.
+            if let Some(discover) = &self.services.printers {
+                if self.printing.printers.is_empty() && !self.printing.discovering() {
+                    self.printing.refresh(discover);
+                    return Err("Discovering printers... Please try again in a moment.".into());
+                }
+            }
+            if !self.printing.ready() {
+                return Err("Select an available printer in File > Print before submitting.".into());
+            }
         }
         let pdf = self.run("file.print", params)?;
         let encoded = pdf.get("base64").and_then(Json::as_str).ok_or("The print command did not produce a PDF.")?;
@@ -87,3 +97,4 @@ impl SheetApp {
         }
     }
 }
+
