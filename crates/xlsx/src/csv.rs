@@ -1,6 +1,7 @@
-//! CSV import and export (RFC 4180 with the usual real-world leniency). Decoding, delimiter
-//! sniffing, the record parser and field quoting are `craft-csv`'s; this module turns records into
-//! typed cells (with each column's date order) and writes a sheet.
+//! CSV import and export (RFC 4180 with the usual real-world leniency). Decoding, the record parser
+//! and field quoting are `craft-csv`'s; how the lines split and which decimal separator the numbers
+//! use are detected in [`crate::text_layout`]; this module turns records into typed cells (with
+//! each column's decimal separator and date order) and writes a sheet.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -19,7 +20,7 @@ use crate::{CsvOptions, IoError, ReadReport};
 /// The largest CSV or tab-separated file written (bytes).
 pub const MAX_CSV_BYTES: usize = 512 << 20;
 
-pub use craft_csv::{decode_text, sniff_delimiter};
+pub use craft_csv::decode_text;
 
 /// [`craft_csv::parse_records`] with a record kept to the grid's [`MAX_COLS`] fields.
 pub(crate) fn parse_records(text: &str, delim: char, quote: char, on_record: impl FnMut(Vec<String>) -> bool) {

@@ -244,7 +244,7 @@ fn lines(text: &str) -> impl Iterator<Item = &str> {
 pub fn split_records(text: &str, split: &Split, quote: Option<char>, mut on_record: impl FnMut(Vec<String>) -> bool) {
     match split {
         Split::Delimited { delimiters, consecutive } => match (split.single_char(), quote) {
-            // One character, quoted: the CSV reader's own loop.
+            // One character, quoted: craft-csv's record parser, as a CSV is read.
             (Some(d), Some(q)) if !consecutive => crate::csv::parse_records(text, d, q, on_record),
             _ => delimited(text, delimiters, *consecutive, quote, on_record),
         },
