@@ -4412,6 +4412,25 @@ fn editing_a_note_or_a_comment_keeps_its_thread() {
     assert!(!replaced.threaded && replaced.replies.is_empty());
 }
 
+/// A protected sheet locks its drawing objects, notes included: adding or editing a note was
+/// accepted, and saved, on a protected sheet.
+#[test]
+fn notes_respect_sheet_protection() {
+    let mut s = s();
+    s.execute("review.newNote", json!({"cell": "B1", "text": "Original", "author": "QA"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let undo_len = s.doc().unwrap().undo.len();
+    assert!(s.execute("review.newNote", json!({"cell": "A1", "text": "New note", "author": "QA"})).is_err());
+    assert!(s.execute("review.newNote", json!({"cell": "B1", "text": "Updated", "author": "QA"})).is_err());
+    assert!(s.execute("review.newComment", json!({"cell": "A1", "text": "New comment"})).is_err());
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before));
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+    let comments = &s.doc().unwrap().wb.active().unwrap().comments;
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[&CellRef::parse("B1").unwrap()].text, "Original");
+}
+
 /// A cut moves the block's notes, hyperlinks and merged areas with it. The source's cells and
 /// pictures were removed but the block's merges and notes were not, so one merged block became
 /// two (an empty one left at the old place) and a note ended up on both the old and the new

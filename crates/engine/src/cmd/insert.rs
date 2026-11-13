@@ -1411,6 +1411,10 @@ fn comment(s: &mut Session, p: &Json, threaded: bool) -> Result<Json> {
     let text = str_param(p, "text").unwrap_or("").to_string();
     let named = str_param(p, "author").map(str::to_string);
     let author = named.clone().unwrap_or_else(|| s.prefs.user_name.clone());
+    // Sheet protection locks drawing objects, notes included (there is no "edit objects" allowance yet).
+    if s.doc()?.wb.sheets.get(sheet).is_some_and(|sh| sh.is_protected()) {
+        return Err(EngineError::Other(PROTECTED.into()));
+    }
     edit(s, |cx| {
         let comments = &mut cx.sheet_mut(sheet)?.comments;
         // Writing a note on a cell that has one edits it, as Excel's Edit Note does: the box, the
