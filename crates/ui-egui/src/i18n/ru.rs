@@ -3,6 +3,8 @@
 /// Returns the Russian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Схема",
+        "Decorative Text" => "Декоративный текст",
         "Paste" => "Вставить",
         "Paste Values" => "Вставить значения",
         "Paste Formulas" => "Вставить формулы",
@@ -62,6 +64,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Область\nформатирования",
         "Format" => "Формат",
         "Insert" => "Вставить",
+        "Header Menu|Insert" => "Вставить",
         "Insert Cells…" => "Вставить ячейки…",
         "Delete" => "Удалить",
         "Delete Cells…" => "Удалить ячейки…",
@@ -115,6 +118,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sparklines" => "Спарклайны",
         "Checkbox" => "Флажок",
         "Insert checkboxes in the selected cells" => "Вставить флажки в выбранные ячейки",
+        "Button" => "Кнопка",
+        "Slider" => "Ползунок",
+        "Spin Button" => "Счётчик",
+        "Draw a button that runs a macro or a command" => "Нарисовать кнопку, которая запускает макрос или команду",
+        "Draw a slider that sets a whole number in a linked cell" => "Нарисовать ползунок, который задаёт целое число в связанной ячейке",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Нарисовать счётчик, который изменяет целое число в связанной ячейке с шагом"
+        }
+        "Edit Text" => "Изменить текст",
+        "Assign Action…" => "Назначить действие…",
+        "Format Control…" => "Формат элемента управления…",
         "Header & Footer" => "Верхний и нижний колонтитулы",
         "Draw with ink" => "Рисование от руки",
         "Eraser" => "Ластик",
@@ -249,6 +263,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Легенда: снизу",
         "Legend: Top" => "Легенда: сверху",
         "Legend: Right" => "Легенда: справа",
+        "First slice angle" => "Угол первого сектора",
+        "Doughnut hole size" => "Размер отверстия кольцевой диаграммы",
         "Gridlines: None" => "Линии сетки: нет",
         "Gridlines: Show" => "Линии сетки: показать",
         "Chart\nTitle" => "Название\nдиаграммы",

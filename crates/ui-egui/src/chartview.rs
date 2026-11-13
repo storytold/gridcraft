@@ -1,5 +1,7 @@
 //! Floating objects on the sheet: charts (rendered by `gridcraft-chart` into primitives that
-//! we paint with egui), pictures, shapes, equations and slicers.
+//! we paint with egui), pictures, shapes, equations, slicers and form controls (`form_controls.rs`).
+
+use std::sync::Arc;
 
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
@@ -198,10 +200,11 @@ fn area_mesh(v: &[Pos2], col: Color32) -> egui::Mesh {
 fn paint_shape_text(p: &Painter, wb: &Workbook, sp: &gridcraft_engine::model::Shape, r: Rect, z: f32) {
     use gridcraft_engine::model::{ShapeTextAlign, ShapeTextAnchor};
     let f = &sp.format;
+    let word_art = sp.kind == ShapeKind::WordArt;
     let text_box = sp.kind == ShapeKind::TextBox;
     let align = f.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
     let anchor = f.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
-    let default_color = if text_box { Color32::BLACK } else { Color32::WHITE };
+    let default_color = if text_box || word_art { Color32::BLACK } else { Color32::WHITE };
     let color = f.text_color.and_then(|c| c.resolve(&wb.theme)).map(theme::color32).unwrap_or(default_color);
     // Default 14 px (as before); a set size is in points.
     let size = f.font_size.map_or(14.0, |pt| pt * 96.0 / 72.0).clamp(1.0, 2000.0) * z;
@@ -227,6 +230,11 @@ fn paint_shape_text(p: &Painter, wb: &Workbook, sp: &gridcraft_engine::model::Sh
     };
     let pos = pos2(x, y);
     let clip = p.with_clip_rect(r.intersect(p.clip_rect()));
+    // WordArt's drop shadow: the text again, offset down and right, under everything else.
+    if let Some(sc) = f.text_shadow.and_then(|c| c.resolve(&wb.theme)).map(theme::color32) {
+        let d = (size * 0.05).clamp(1.0, 24.0);
+        clip.galley_with_override_text_color(pos + vec2(d, d), g.clone(), sc);
+    }
     // egui has no stroked text: the outline is the text drawn in the outline colour, offset in
     // eight directions by the outline width, under the filled text.
     if let Some((c, w)) = f.text_outline
@@ -238,6 +246,31 @@ fn paint_shape_text(p: &Painter, wb: &Workbook, sp: &gridcraft_engine::model::Sh
         }
     }
     clip.galley(pos, g, color);
+}
+
+/// Resolves and renders `ch` (chart `ci` of sheet `si`), at zoom `z`.
+fn render_chart(p: &Painter, z: f32, wb: &Workbook, si: usize, ch: &gridcraft_engine::model::Chart) -> Vec<Prim> {
+    #[cfg(test)]
+    tests::RENDERS.with(|c| c.set(c.get() + 1));
+    let data = gridcraft_chart::resolve(wb, si, ch);
+    let m = EguiMeasure { painter: p, z };
+    gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m)
+}
+
+/// The primitives of chart `ci` of sheet `si`: from the frame cache when the workbook, zoom and
+/// screen scale are those it was rendered for, else rendered now (see [`crate::chartcache`]).
+fn chart_prims(app: &SheetApp, p: &Painter, z: f32, wb: &Arc<Workbook>, si: usize, ci: usize, ch: &gridcraft_engine::model::Chart) -> Arc<[Prim]> {
+    // Only the active document's own workbook is cached: anything else cannot be tied to a uid.
+    let Some(d) = app.session.active().filter(|d| Arc::ptr_eq(&d.wb, wb)) else {
+        return render_chart(p, z, wb, si, ch).into();
+    };
+    // A series that calls NOW or RAND, directly or through a defined name, must be evaluated
+    // again on every paint.
+    if gridcraft_chart::has_volatile_series(wb, si, ch) {
+        return render_chart(p, z, wb, si, ch).into();
+    }
+    let mut cache = app.chart_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache.get(d.uid, wb, si, ci, (z, p.ctx().pixels_per_point()), || render_chart(p, z, wb, si, ch))
 }
 
 pub(crate) fn anchor_rect(geo: &Geo, sh: &Sheet, a: &Anchor) -> Rect {
@@ -259,7 +292,7 @@ pub(crate) fn objects_hidden(wb: &Workbook) -> bool {
     wb.show_objects == gridcraft_engine::model::ShowObjects::None
 }
 
-pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) -> Vec<PaintedObject> {
+pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Workbook>, si: usize, sh: &Sheet) -> Vec<PaintedObject> {
     let mut painted = Vec::new();
     if objects_hidden(wb) {
         return painted;
@@ -295,6 +328,8 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         let line =
             if sp.format.no_line { Color32::TRANSPARENT } else { sp.line.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::DARK_GRAY) };
         match sp.kind {
+            // WordArt is only its text (no fill or outline of its own).
+            ShapeKind::WordArt => {}
             ShapeKind::Rectangle | ShapeKind::TextBox => {
                 p.rect_filled(r, 0.0, fill);
                 p.rect_stroke(r, 0.0, Stroke::new(1.0, line), StrokeKind::Inside);
@@ -365,7 +400,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         }
         done(start, r);
     }
-    for ch in &sh.charts {
+    for (ci, ch) in sh.charts.iter().enumerate() {
         let r = anchor_rect(geo, sh, &ch.anchor);
         if !r.intersects(p.clip_rect()) {
             continue;
@@ -374,13 +409,23 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         // Soft shadow + white card.
         p.rect_filled(r.translate(vec2(0.0, 1.5)), 2.0, Color32::from_black_alpha(18));
         p.rect_filled(r, 0.0, Tokens::get(p.ctx()).grid_bg);
-        let data = gridcraft_chart::resolve(wb, si, ch);
-        let m = EguiMeasure { painter: p, z: geo.z };
-        let prims = gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m);
+        let prims = chart_prims(app, p, geo.z, wb, si, ci, ch);
         paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
         done(start, r);
     }
     paint_slicers(p, geo, wb, si, sh);
+    // Form controls sit above every other object.
+    let hover = p.ctx().input(|i| i.pointer.hover_pos()).map(|h| geo.mirror_pos(h)).filter(|h| geo.in_cells(*h));
+    for c in &sh.controls {
+        let r = anchor_rect(geo, sh, &c.anchor);
+        // A slider's value shows beside it while it is dragged.
+        if !r.expand(24.0).intersects(p.clip_rect()) {
+            continue;
+        }
+        let start = p.add(egui::Shape::Noop);
+        crate::form_controls::paint(p, r, c, geo.z, crate::form_controls::look(app, geo, c, r, hover));
+        done(start, r);
+    }
     // The selected object's frame and handles go over every object, and move with it on a
     // right-to-left sheet.
     if let Some(r) = app.selected_object.and_then(|o| object_rect(geo, sh, o))
@@ -523,12 +568,18 @@ pub fn selected_handle(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option
     crate::objects::handle_at(r, p).map(|h| (o, r, h))
 }
 
-/// The topmost object under `p` and its rect: slicers paint on top, so they are hit first, then
-/// charts, pictures and shapes (equations included), each from the top of its stack. Nothing is hit outside the cell
-/// area or while objects are hidden.
+/// The topmost object under `p` and its rect: form controls paint on top, so they are hit first,
+/// then slicers, charts, pictures and shapes (equations included), each from the top of its stack.
+/// Nothing is hit outside the cell area or while objects are hidden.
 pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect)> {
     if !geo.cells.contains(p) || app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
         return None;
+    }
+    for c in sh.controls.iter().rev() {
+        let r = anchor_rect(geo, sh, &c.anchor);
+        if r.contains(p) {
+            return Some((ObjRef::new(ObjKind::Control, c.id), r));
+        }
     }
     for sl in sh.slicers.iter().rev() {
         let r = anchor_rect(geo, sh, &sl.anchor);
@@ -562,4 +613,38 @@ pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Re
 /// width in points, so the live pen stroke and the committed ink agree at every zoom.
 pub(crate) fn ink_color(line: Color32, width_pt: f32) -> Color32 {
     if width_pt > 8.0 { line.gamma_multiply(0.45) } else { line }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use std::cell::Cell;
+
+    use gridcraft_chart::Measure;
+
+    use super::*;
+
+    thread_local! {
+        /// Charts resolved and rendered on this thread (a test runs on its own thread).
+        pub(crate) static RENDERS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// The production measure is not monotone for labels with a line break: egui lays the text out
+    /// line by line, so ending a prefix with `\n…` can be narrower than the shorter `iii…`. The
+    /// chart's label fitting must not assume otherwise (#1152).
+    #[test]
+    fn egui_measure_shrinks_when_a_prefix_ends_in_a_line_break() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(theme::pinned_font_definitions());
+        let mut checked = false;
+        // Fonts are ready from the second pass on.
+        for _ in 0..2 {
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                let m = EguiMeasure { painter: ui.painter(), z: 1.0 };
+                let (short, long) = (m.text_width("iii…", 11.0, false), m.text_width("iiii\n…", 11.0, false));
+                checked = long < short;
+            });
+            out.textures_delta.clear();
+        }
+        assert!(checked);
+    }
 }

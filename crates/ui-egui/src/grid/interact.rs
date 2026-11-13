@@ -64,6 +64,15 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     let in_col_header = pos.is_some_and(|p| p.y < geo.cells.top() && p.y >= geo.head_top() && p.x >= geo.cells.left());
     let in_row_header = pos.is_some_and(|p| p.x < geo.cells.left() && p.x >= geo.head_left() && p.y >= geo.cells.top());
     let in_corner = pos.is_some_and(|p| p.x < geo.cells.left() && p.y < geo.cells.top() && p.x >= geo.head_left() && p.y >= geo.head_top());
+    // Insert › Controls places a control; a click works a form control (Ctrl or Cmd+click, or a
+    // right-click, selects it instead).
+    if app.editor.is_none() && crate::control_ui::place(app, ui, resp, geo, sh) {
+        return;
+    }
+    if app.editor.is_none() && app.session.draw_tool.is_empty() && crate::form_controls::interact(app, &ctx, resp, geo, sh) {
+        keyboard(app, &ctx, resp, geo, sh);
+        return;
+    }
     let sel = app.session.active().map(|d| d.selection.clone()).unwrap_or_default();
     let cur_rect = geo.range_rect(sh, sel.current());
     let handle = Rect::from_center_size(cur_rect.right_bottom(), vec2(9.0, 9.0));
@@ -100,10 +109,14 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         return;
     }
     // A plain click on a slicer value tile toggles it (Ctrl/Cmd for multi-select); the clear
-    // button resets it. Runs before the generic object select/drag so tiles stay clickable.
+    // button resets it. Runs before the generic object select/drag so tiles stay clickable, but
+    // only when the slicer is what the press lands on: a form control over a tile (Ctrl or
+    // Cmd+clicked, or clicked while selected, so `form_controls::interact` left the click) and a
+    // selected object's handle keep the generic path, which selects, moves or resizes them.
     if primary_clicked
         && !resp.drag_started()
         && let Some(p) = pos
+        && object_under(app, geo, sh, p).is_some_and(|(o, _, handle)| o.kind == ObjKind::Slicer && handle.is_none())
         && let Some((id, act)) = crate::chartview::slicer_click(geo, sh, wb, wb.active_sheet(), p)
     {
         app.selected_object = Some(ObjRef::new(ObjKind::Slicer, id));
@@ -126,10 +139,10 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         // The selected object's handles reach a little outside it, so they win over hit-testing.
         // Only they resize: a press anywhere on another object selects and moves it, as the
         // hover cursor shows.
-        let on_handle = at.and_then(|p| crate::chartview::selected_handle(app, geo, sh, p));
-        let handle = on_handle.map(|(.., h)| h);
+        let under = at.and_then(|p| object_under(app, geo, sh, p));
+        let handle = under.and_then(|(.., h)| h);
         if let Some(p) = at
-            && let Some((obj, _)) = on_handle.map(|(o, r, _)| (o, r)).or_else(|| crate::chartview::hit(app, geo, sh, p))
+            && let Some((obj, _, _)) = under
         {
             app.selected_object = Some(obj);
             if resp.double_clicked() && app.open_object(obj) != crate::objects::OpenAction::Select {
@@ -146,14 +159,18 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         }
         app.selected_object = None;
     }
-    // A right-click on a chart, picture, shape or slicer opens the object's menu, not the cell's
-    // under it; a right press that wobbles into a drag counts too (#2067).
+    // A right-click on a chart, picture, shape, slicer or form control opens the object's menu, not
+    // the cell's under it; a right press that wobbles into a drag counts too (#2067). On a form
+    // control it selects the control without running it.
     let secondary_drag = resp.drag_started_by(egui::PointerButton::Secondary);
     if (resp.secondary_clicked() || secondary_drag)
         && let Some(p) = if secondary_drag { pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) } else { pos }
         && let Some((obj, _)) = crate::chartview::hit(app, geo, sh, p)
     {
         app.selected_object = Some(obj);
+        if obj.kind == ObjKind::Control {
+            app.grid.focused_control = None;
+        }
         app.grid.object_menu = Some((geo.mirror_pos(p), obj.kind.name(), obj.id));
         return;
     }
@@ -308,7 +325,8 @@ fn handle_column_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, 
     let in_col_header = input.in_column_header;
     if in_col_header {
         if let Some((c, x)) = col_edge(geo, sh, p.x) {
-            app.grid.drag = Drag::ResizeCol { col: c, start: p.x, orig: sh.col_width(c).max(0.0) * 0.0 + (x - geo.x(sh, c)) / geo.z };
+            begin_resize(app);
+            app.grid.drag = Drag::ResizeCol { col: c, start: p.x, orig: sh.col_width(c).max(0.0) * 0.0 + (x - geo.x(sh, c)) / geo.z, to: None };
             return;
         }
         let c = geo.col_at(sh, p.x);
@@ -333,6 +351,7 @@ fn handle_column_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, 
             return;
         }
         let range = if mods.shift { RangeRef::cols(sel.anchor.col.min(c), sel.anchor.col.max(c)) } else { RangeRef::cols(c, c) };
+        note_selecting_press(app);
         select_ranges(app, range, mods.command, CellRef::new(geo.row_at(sh, geo.cells.top() + 1.0), c));
         app.grid.drag = Drag::Cols(if mods.shift { sel.anchor.col } else { c });
     }
@@ -344,7 +363,8 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
     let in_row_header = input.in_row_header;
     if in_row_header {
         if let Some((r, y)) = row_edge(geo, sh, p.y) {
-            app.grid.drag = Drag::ResizeRow { row: r, start: p.y, orig: (y - geo.y(sh, r)) / geo.z };
+            begin_resize(app);
+            app.grid.drag = Drag::ResizeRow { row: r, start: p.y, orig: (y - geo.y(sh, r)) / geo.z, to: None };
             return;
         }
         let r = geo.row_at(sh, p.y);
@@ -353,6 +373,7 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
             return;
         }
         let range = if mods.shift { RangeRef::rows(sel.anchor.row.min(r), sel.anchor.row.max(r)) } else { RangeRef::rows(r, r) };
+        note_selecting_press(app);
         select_ranges(app, range, mods.command, CellRef::new(r, geo.col_at(sh, geo.cells.left() + 1.0)));
         app.grid.drag = Drag::Rows(if mods.shift { sel.anchor.row } else { r });
     }
@@ -384,6 +405,7 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         return;
     }
     if in_corner {
+        note_selecting_press(app);
         let _ = app.session.run("selection.set", json!({"range": RangeRef::all().a1()}));
         return;
     }
@@ -469,11 +491,16 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         return;
     }
     let now = crate::now_ms();
-    if handle_cell_double_click(app, input, c, now) {
+    // While a reference box picks, a click only picks: a second click on a cell does not edit it,
+    // and a link is not followed nor a checkbox toggled.
+    let ref_box_picks = app.dialog.as_ref().is_some_and(|d| d.ref_box_picks());
+    let acts = primary_clicked && !ref_box_picks;
+    if !ref_box_picks && handle_cell_double_click(app, input, c, now) {
         return;
     }
     app.grid.last_click = Some((c, now));
     if mods.shift {
+        note_selecting_press(app);
         let _ = app.session.run("selection.set", json!({"range": RangeRef::new(sel.anchor, c).a1(), "active": sel.active.a1()}));
         if let Some(d) = app.session.active_mut() {
             d.selection.anchor = sel.anchor;
@@ -481,22 +508,24 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
     } else if mods.command {
         // Ctrl+click (without Alt) on a hyperlink's text follows it instead of adding the cell to the selection.
         if let Some(h) = sh.hyperlinks.get(&c).cloned()
-            && primary_clicked
+            && acts
             && !mods.alt
             && p.x < geo.cell_rect(sh, c).left() + geo.cell_rect(sh, c).width() * 0.8
         {
             follow_link(app, &h.target);
         } else {
+            note_selecting_press(app);
             select_ranges(app, RangeRef::cell(c), true, c);
         }
     } else {
+        note_selecting_press(app);
         let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
-        if primary_clicked && wb.styles.get(sh.style_id(c)).num_fmt.as_str() == "checkbox" {
+        if acts && wb.styles.get(sh.style_id(c)).num_fmt.as_str() == "checkbox" {
             let _ = app.run("cell.toggleCheckbox", json!({"cell": c.a1()}));
         }
         // A click on a hyperlink's text follows it (like Excel); elsewhere in the cell selects.
         if let Some(h) = sh.hyperlinks.get(&c).cloned()
-            && primary_clicked
+            && acts
             && !mods.any()
         {
             let r = geo.cell_rect(sh, c);
@@ -512,6 +541,15 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
     {
         // The first recognised drag already includes movement away from the press.
         select_to_pointer(app, geo, sh, wb, p);
+    }
+}
+
+/// Tells the open dialog that a press on the grid selects: the reference box being picked into
+/// takes the selection even when the press leaves it as it was (a click on the cell already
+/// selected), as a deliberate pick.
+fn note_selecting_press(app: &mut SheetApp) {
+    if let Some(d) = app.dialog.as_mut() {
+        d.note_selecting_press();
     }
 }
 
@@ -542,6 +580,15 @@ fn handle_cell_double_click(app: &mut SheetApp, input: &InteractionInput<'_>, c:
         return true;
     }
     false
+}
+
+/// What a press at `p` lands on, for slicer tiles and the generic object handling alike, so the
+/// z-order decides once: the selected object's handle (handles reach a little past the frame and
+/// win over hit-testing), else the topmost object under `p` and its rect.
+fn object_under(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect, Option<crate::objects::Handle>)> {
+    crate::chartview::selected_handle(app, geo, sh, p)
+        .map(|(o, r, h)| (o, r, Some(h)))
+        .or_else(|| crate::chartview::hit(app, geo, sh, p).map(|(o, r)| (o, r, None)))
 }
 
 fn handle_context_menu_and_keyboard(app: &mut SheetApp, input: &InteractionInput<'_>) {
@@ -586,6 +633,31 @@ fn handle_context_menu_and_keyboard(app: &mut SheetApp, input: &InteractionInput
 fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
     let (geo, sh, wb, sel, pos) = (input.geo, input.sheet, input.workbook, &input.selection, input.position);
     let resp = input.response;
+    // Esc during a header-boundary drag cancels it: undo the preview, ignore the release. egui
+    // aborts the drag on Esc, so `resp.dragged()` is already false in this frame. The key is
+    // spent on the drag, so the grid's Esc doesn't also drop a pending copy or Format Painter.
+    if matches!(app.grid.drag, Drag::ResizeCol { .. } | Drag::ResizeRow { .. })
+        && input.context.input_mut(|i| {
+            let pressed = i.key_pressed(egui::Key::Escape);
+            if pressed {
+                // With any modifiers, as before: the drag is cancelled and every Esc press spent.
+                i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. }));
+            }
+            pressed
+        })
+    {
+        // Undo back to where the drag began, but never past it into an earlier edit.
+        let steps = resize_steps(app);
+        if steps > 0 {
+            let _ = app.session.run("edit.undo", json!({"steps": steps}));
+        }
+        // Undo pushes the cancelled preview onto the redo stack; put back what the drag began with.
+        if let Some(d) = app.session.active_mut() {
+            d.redo = std::mem::take(&mut app.grid.resize_redo);
+        }
+        app.grid.drag = Drag::None;
+        app.grid.resize_base = None;
+    }
     if resp.dragged()
         && let Some(p) = pos
     {
@@ -637,35 +709,22 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 app.grid.drag = Drag::MoveCols { source, before };
                 scroll_by(app, vec2(auto.x, 0.0));
             }
-            Drag::ResizeCol { col, start, orig } => {
-                let w = (orig + (p.x - start) / geo.z).max(0.0);
+            Drag::ResizeCol { col, start, orig, to } => {
+                let w = nan_safe_size(orig + (p.x - start) / geo.z);
                 app.toast =
                     Some((format!("Width: {:.2} ({} pixels)", gridcraft_engine::cmd::format::points_to_chars(w as f64), w.round()), crate::now_ms()));
-                // Inside a selection of whole columns, every selected column takes the new width
-                // (Ctrl-selected areas included); otherwise only the dragged one.
-                let cols = if sel.ranges.iter().any(|r| r.is_full_cols() && col >= r.start.col && col <= r.end.col) {
-                    sel.ranges.iter().filter(|r| r.is_full_cols()).map(|r| r.a1()).collect::<Vec<_>>().join(",")
-                } else {
-                    RangeRef::cols(col, col).a1()
-                };
-                let _ = app.session.run("home.columnWidth", json!({"cols": cols, "width": w.round()}));
-                coalesce_last_undo(app);
+                // Preview on the dragged column only; the release applies it to the selection. A
+                // rejected size leaves the last shown preview (and `to`) as it was.
+                let ok = app.session.run("home.columnWidth", json!({"cols": RangeRef::cols(col, col).a1(), "width": w.round()})).is_ok();
+                coalesce_resize_undo(app);
+                app.grid.drag = Drag::ResizeCol { col, start, orig, to: if ok { Some(w) } else { to } };
             }
-            Drag::ResizeRow { row, start, orig } => {
-                let h = (orig + (p.y - start) / geo.z).max(0.0);
+            Drag::ResizeRow { row, start, orig, to } => {
+                let h = nan_safe_size(orig + (p.y - start) / geo.z);
                 app.toast = Some((format!("Height: {:.2} ({} pixels)", h * 0.75, h.round()), crate::now_ms()));
-                let rows = if sel.ranges.iter().any(|r| r.is_full_rows() && row >= r.start.row && row <= r.end.row) {
-                    sel.ranges
-                        .iter()
-                        .filter(|r| r.is_full_rows())
-                        .map(|r| format!("{}:{}", r.start.row + 1, r.end.row + 1))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                } else {
-                    format!("{}:{}", row + 1, row + 1)
-                };
-                let _ = app.session.run("home.rowHeight", json!({"rows": rows, "height": h.round()}));
-                coalesce_last_undo(app);
+                let ok = app.session.run("home.rowHeight", json!({"rows": format!("{}:{}", row + 1, row + 1), "height": h.round()})).is_ok();
+                coalesce_resize_undo(app);
+                app.grid.drag = Drag::ResizeRow { row, start, orig, to: if ok { Some(h) } else { to } };
             }
             Drag::Freeze { cols, .. } => {
                 app.grid.drag = Drag::Freeze { cols, to: Some(freeze_boundary(geo, sh, p, cols)) };
@@ -747,6 +806,21 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 // Dropping on cells that hold data asks first, as in Excel.
                 if to != src.start {
                     crate::macro_ui::call(app, "GridCraft", "range.move", json!({"range": src.a1(), "to": to.a1()}));
+                }
+            }
+            Drag::ResizeCol { col, to: Some(w), .. } => {
+                // The preview already sized the dragged column; the other selected ones follow now.
+                let cols = resize_targets(&sel.ranges, col, true);
+                if cols != RangeRef::cols(col, col).a1() {
+                    let _ = app.session.run("home.columnWidth", json!({"cols": cols, "width": w.round()}));
+                    coalesce_resize_undo(app);
+                }
+            }
+            Drag::ResizeRow { row, to: Some(h), .. } => {
+                let rows = resize_targets(&sel.ranges, row, false);
+                if rows != format!("{}:{}", row + 1, row + 1) {
+                    let _ = app.session.run("home.rowHeight", json!({"rows": rows, "height": h.round()}));
+                    coalesce_resize_undo(app);
                 }
             }
             Drag::MoveCols { source, before: Some(before) } => {
@@ -891,6 +965,29 @@ fn select_to_pointer(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, p
     }
 }
 
+/// A drag size in points: NaN or negative becomes 0 (a hidden line).
+fn nan_safe_size(v: f32) -> f32 {
+    if v.is_nan() { 0.0 } else { v.max(0.0) }
+}
+
+/// The lines a header-boundary drag resizes on release: every selected whole line when the
+/// dragged one is part of the selection (Ctrl-selected areas included), otherwise only it.
+fn resize_targets(ranges: &[RangeRef], index: u32, cols: bool) -> String {
+    let whole = |r: &RangeRef| if cols { r.is_full_cols() } else { r.is_full_rows() };
+    let span = |r: &RangeRef| if cols { (r.start.col, r.end.col) } else { (r.start.row, r.end.row) };
+    let name = |r: &RangeRef| {
+        let (a, b) = span(r);
+        if cols { RangeRef::cols(a, b).a1() } else { format!("{}:{}", a + 1, b + 1) }
+    };
+    if ranges.iter().any(|r| whole(r) && (span(r).0..=span(r).1).contains(&index)) {
+        ranges.iter().filter(|r| whole(r)).map(name).collect::<Vec<_>>().join(",")
+    } else if cols {
+        RangeRef::cols(index, index).a1()
+    } else {
+        format!("{}:{}", index + 1, index + 1)
+    }
+}
+
 fn coalesce_last_undo(app: &mut SheetApp) {
     // Merge consecutive drag steps into one undo entry.
     if let Some(d) = app.session.active_mut()
@@ -900,6 +997,29 @@ fn coalesce_last_undo(app: &mut SheetApp) {
         if d.undo[n - 1].label == d.undo[n - 2].label {
             d.undo.remove(n - 1);
         }
+    }
+}
+
+/// Starts a header resize drag: remembers the workbook and the redo stack it began with.
+fn begin_resize(app: &mut SheetApp) {
+    app.grid.resize_base = app.session.active().map(|d| d.wb.clone());
+    app.grid.resize_redo = app.session.active().map(|d| d.redo.clone()).unwrap_or_default();
+}
+
+/// Undo entries a header resize drag has pushed so far: those from the first one that snapshots
+/// the workbook the drag started from (`resize_base`). A failed command pushes none.
+fn resize_steps(app: &SheetApp) -> usize {
+    let (Some(base), Some(d)) = (&app.grid.resize_base, app.session.active()) else { return 0 };
+    d.undo.iter().position(|e| std::sync::Arc::ptr_eq(&e.wb, base)).map_or(0, |first| d.undo.len() - first)
+}
+
+/// Like [`coalesce_last_undo`] for a resize drag: merges only the drag's own entries, so an
+/// earlier edit with the same label ("Column width") stays a separate undo step.
+fn coalesce_resize_undo(app: &mut SheetApp) {
+    if resize_steps(app) >= 2
+        && let Some(d) = app.session.active_mut()
+    {
+        d.undo.pop();
     }
 }
 
@@ -1069,8 +1189,9 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
 }
 
 /// A click on a hyperlink. References select; web and e-mail addresses ask first (the dialog's
-/// OK runs `link.open`); every other kind is refused with a message. The decision is the
-/// engine's ([`gridcraft_engine::links::classify`]), the same one `link.open` applies.
+/// OK calls `Session::open_confirmed_link`, since `link.open` refuses them for programmatic
+/// callers, #2181); every other kind is refused with a message. The decision is the engine's
+/// ([`gridcraft_engine::links::classify`]), the same one `link.open` applies.
 pub fn follow_link(app: &mut SheetApp, target: &str) {
     use gridcraft_engine::links::{LinkKind, classify};
     match classify(target) {
@@ -1113,6 +1234,28 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
     ed.point_cell = Some(to);
     ed.point_anchor = Some((sheet, anchor));
     app.grid.ensure_visible = true;
+}
+
+#[cfg(test)]
+mod resize_tests {
+    use super::*;
+
+    #[test]
+    fn resize_targets_follow_the_selection_only_when_the_dragged_line_is_in_it() {
+        let sel = [RangeRef::cols(0, 0), RangeRef::cols(2, 3)];
+        assert_eq!(resize_targets(&sel, 3, true), "A:A,C:D");
+        assert_eq!(resize_targets(&sel, 1, true), "B:B");
+        assert_eq!(resize_targets(&[RangeRef::rows(1, 2)], 2, false), "2:3");
+        assert_eq!(resize_targets(&[RangeRef::rows(1, 2)], 5, false), "6:6");
+        assert_eq!(resize_targets(&[], 0, true), "A:A");
+    }
+
+    #[test]
+    fn drag_sizes_are_nan_safe() {
+        assert_eq!(nan_safe_size(f32::NAN), 0.0);
+        assert_eq!(nan_safe_size(-4.0), 0.0);
+        assert_eq!(nan_safe_size(12.5), 12.5);
+    }
 }
 
 #[cfg(test)]
