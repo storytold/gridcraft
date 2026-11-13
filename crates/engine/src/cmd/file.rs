@@ -279,6 +279,58 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    /// A refusal at the post-handler barrier must undo file-open document and window changes.
+    #[test]
+    fn posthandler_refusal_restores_document_membership() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let mut source = Session::new();
+        source.new_workbook();
+        source.execute("cell.set", json!({"cell":"A1","input":"=1+2"})).unwrap();
+        let bytes = gridcraft_xlsx::write_xlsx(&source.doc().unwrap().wb).unwrap();
+        let params = json!({"name":"test.xlsx","base64":crate::io::base64_encode(&bytes)});
+        for count in 0..=2 {
+            let make = || {
+                let mut s = Session::new();
+                for _ in 0..count {
+                    s.new_workbook();
+                }
+                s
+            };
+            let probes = Arc::new(AtomicUsize::new(0));
+            let observed = probes.clone();
+            let hook = gridcraft_calc::WorkHook::new(move |n| {
+                if n == 0 {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                }
+                true
+            });
+            let mut control = make();
+            {
+                let _scope = hook.enter().unwrap();
+                control.execute("file.open", params.clone()).unwrap();
+            }
+            let last = probes.load(Ordering::SeqCst);
+            assert!(last >= 2);
+            let seen = Arc::new(AtomicUsize::new(0));
+            let seen_hook = seen.clone();
+            let hook = gridcraft_calc::WorkHook::new(move |n| n != 0 || seen_hook.fetch_add(1, Ordering::SeqCst) + 1 < last);
+            let mut session = make();
+            let windows = session.window_list();
+            let docs = session.documents().iter().map(|d| (d.uid, d.wb.clone())).collect::<Vec<_>>();
+            {
+                let _scope = hook.enter().unwrap();
+                assert!(session.execute("file.open", params.clone()).is_err());
+            }
+            assert_eq!(seen.load(Ordering::SeqCst), last);
+            assert_eq!(session.window_list(), windows);
+            assert_eq!(session.documents().len(), docs.len());
+            for (d, (uid, wb)) in session.documents().iter().zip(docs) {
+                assert_eq!(d.uid, uid);
+                assert!(Arc::ptr_eq(&d.wb, &wb));
+            }
+        }
+    }
+
     /// A rejected import cannot replace a blank, publish a partial document or alter windows.
     #[test]
     fn refused_open_preserves_empty_blank_and_existing_sessions() {

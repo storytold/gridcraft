@@ -857,6 +857,10 @@ impl Session {
             self.journal_rollback =
                 Some(JournalRollback { mark: self.journal.len(), bytes: self.journal_bytes, recording: self.recording, backup: None });
         }
+        // Opening can replace an untouched blank or add a document before the final inherited
+        // work check. Keep membership so a late refusal cannot publish a different window set.
+        let open_before =
+            (id == "file.open").then(|| (self.docs.clone(), self.windows.clone(), self.active, self.active_window, self.groups.clone()));
         let revision_before = self.active().map(|d| d.revision);
         let sheet_selections_before = self.active().map(|d| d.sheet_selections.clone());
         let analysis_job_before = self.analysis_job.as_ref().map(|job| job.id);
@@ -923,6 +927,13 @@ impl Session {
         let result = match guarded {
             Ok(r) => r,
             Err(failure) => {
+                if let Some((docs, windows, active, active_window, groups)) = open_before {
+                    self.docs = docs;
+                    self.windows = windows;
+                    self.active = active;
+                    self.active_window = active_window;
+                    self.groups = groups;
+                }
                 // Runtime state is not part of a workbook snapshot. A failed start may have
                 // retained a new job before an inherited policy refused the post-handler check.
                 let created_job = self.analysis_job.as_ref().map(|job| job.id) != analysis_job_before;

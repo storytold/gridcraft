@@ -210,6 +210,19 @@ impl Trial {
         Trial { base, calc, meter }
     }
 
+    /// Upper bound on spill entries copied when sheet storage is made mutable.
+    pub(crate) fn spill_copy_work(&self) -> u64 {
+        self.base.sheets.iter().fold(0u64, |sum, sheet| sum.saturating_add(sheet.spill.len() as u64))
+    }
+
+    /// Recalculate a private baseline so stale cached precedents cannot affect trials.
+    pub(crate) fn refresh_baseline(&mut self) -> Result<()> {
+        self.charge(self.spill_copy_work().saturating_add(self.calc.formula_count() as u64))?;
+        let _scope = self.meter.hook().enter().ok_or_else(|| EngineError::Other("Cannot enter analysis work scope.".into()))?;
+        self.calc.recalc_all(&mut self.base);
+        self.check()
+    }
+
     /// Charges preparation/evaluation work before execution and remembers any terminal failure.
     pub(crate) fn charge(&mut self, units: u64) -> Result<()> {
         self.meter.charge(units)
@@ -231,7 +244,8 @@ impl Trial {
 
     /// Sets `sets` to constants, recalculates their dependents and reads `reads`.
     pub(crate) fn run(&mut self, sets: &[(usize, CellRef, Value)], reads: &[(usize, CellRef)]) -> Result<Vec<Value>> {
-        let units = self.calc.formula_count().saturating_add(sets.len()).saturating_add(reads.len()).saturating_add(1) as u64;
+        let units = (self.calc.formula_count().saturating_add(sets.len()).saturating_add(reads.len()).saturating_add(1) as u64)
+            .saturating_add(self.spill_copy_work());
         self.charge(units)?;
         let _scope = self.meter.hook().enter().ok_or_else(|| EngineError::Other("Cannot enter analysis work scope.".into()))?;
         let mut wb = self.base.clone();

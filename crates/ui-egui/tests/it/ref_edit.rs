@@ -1883,3 +1883,18 @@ fn a_click_on_the_selected_cell_picks_into_a_collapsed_box_on_another_sheet() {
     single_click(&mut h, "A1");
     assert_eq!(field(&h, "changing"), "Rates!$A$1", "a click on that sheet's selected cell is");
 }
+
+/// Monte Carlo input references use the grid picker, including the collapsed editor.
+#[test]
+fn monte_carlo_input_can_be_picked_from_grid() {
+    let mut h = harness(workbook());
+    h.state_mut().open_dialog("monteCarlo", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+    assert_eq!(collapsed(&h).as_deref(), Some("monteCarloInput0"));
+    drag(&mut h, "B2", "B2");
+    assert_eq!(field(&h, "monteCarloInput0"), "$B$2");
+    click_button(&mut h, "Expand dialog", 0);
+    let input = &h.state().dialog.as_ref().unwrap().values["inputs"][0]["cell"];
+    assert_eq!(input, "$B$2");
+}

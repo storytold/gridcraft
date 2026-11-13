@@ -203,7 +203,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "equation" => crate::equation::editor(app, ui, &mut d, &mut confirm, &mut open),
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
-                "monteCarlo" => super::monte_carlo::form(ui, &mut d, &mut confirm, &mut open),
+                "monteCarlo" => super::monte_carlo::form(app, ui, &mut d, &mut confirm, &mut open),
                 "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
