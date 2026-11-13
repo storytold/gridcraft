@@ -32,6 +32,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     ctx.memory_mut(|m| {
         m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
     });
+    request_grid_ime(app, ctx, resp, geo, sh);
     let events = grid_events(app, ctx, sh);
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
     let shortcut_pressed = events.iter().any(|e| {
@@ -43,6 +44,11 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     // a shortcut ran, that text must not start an edit over what it just did.
     let mut shortcut_ran = false;
     for ev in events {
+        // IME events are handled outside the match to keep this loop's complexity down. Any
+        // non-commit IME event (preedit, delete-surrounding) falls through to `_ => {}` below.
+        if handle_ime_commit(app, &ev, shortcut_pressed, shortcut_ran) {
+            return;
+        }
         match ev {
             egui::Event::Copy => {
                 app.copy_to_clipboard(ctx, "edit.copy");
@@ -59,10 +65,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             egui::Event::MiddleClickPaste { .. } => {}
             egui::Event::Text(_) if shortcut_pressed || shortcut_ran => {}
             egui::Event::Text(text) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
-                app.begin_edit(Some(text), false);
-                if let Some(ed) = app.editor.as_mut() {
-                    ed.caret = ed.text.chars().count();
-                }
+                seed_editor(app, text);
                 return;
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
@@ -154,6 +157,78 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             _ => {}
         }
     }
+}
+
+/// Open the in-cell editor with typed or committed text and put the caret after it.
+fn seed_editor(app: &mut SheetApp, text: String) {
+    app.begin_edit(Some(text), false);
+    if let Some(ed) = app.editor.as_mut() {
+        ed.caret = ed.text.chars().count();
+    }
+}
+
+/// Seed the editor from a finished composition, if `ev` is one.
+///
+/// Only `ImeEvent::Commit` is finished text; a preedit is the input method's in-progress
+/// spelling and must not seed the editor. `Event::Ime` and `Event::Text` are mutually
+/// exclusive for one keystroke, so accepting a commit cannot double-insert a character.
+/// Returns whether the caller should stop handling this frame's events.
+fn handle_ime_commit(app: &mut SheetApp, ev: &egui::Event, shortcut_pressed: bool, shortcut_ran: bool) -> bool {
+    let egui::Event::Ime(egui::ImeEvent::Commit(text)) = ev else { return false };
+    if shortcut_pressed || shortcut_ran || text.is_empty() {
+        return false;
+    }
+    seed_editor(app, text.clone());
+    true
+}
+
+/// Ask the OS to route keystrokes through the input method while the grid owns keyboard input.
+///
+/// egui enables IME only for a widget that publishes `PlatformOutput::ime` in that frame. The
+/// in-cell `TextEdit` opens *after* the grid has consumed the first keystroke, so without this
+/// the first key of a CJK composition is delivered as raw `Event::Text` and lands in the cell
+/// (Wubi `xta` writes `x` and the input method only ever sees `ta`). The request must be
+/// published on every focused frame, not in response to a key: winit applies it at the end of
+/// the frame, so a key arriving while IME is still off cannot be recovered.
+///
+/// `PlatformOutput` is rebuilt every frame, so returning early (an editor, a dialog or another
+/// widget taking focus) simply leaves `ime` as `None` and the input method turns off.
+fn request_grid_ime(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
+    if !ctx.memory(|m| m.owns_ime_events(resp.id)) {
+        return;
+    }
+    let Some(d) = app.session.active() else { return };
+    let active = d.selection.active;
+    let merged = sh.merge_at(active);
+    // `begin_edit` refuses a locked cell on a protected sheet. Publishing an IME request for
+    // one would let the user compose text that is then discarded, so skip it up front, using
+    // the same merged-cell anchor and protection check as `SheetApp::begin_edit`.
+    let anchor = merged.map(|m| m.start).unwrap_or(active);
+    if app.session.locked_cell_message(d.wb.active_sheet(), anchor).is_some() {
+        return;
+    }
+    // `cell_rect`/`range_rect` are logical coordinates, but `IMEOutput` needs screen ones.
+    // On a right-to-left sheet the grid is mirrored, so publishing the logical rect puts the
+    // candidate window on the opposite side. After mirroring, `rect.min` is the screen-side
+    // start of the cell in both layouts, which is where the caret belongs.
+    let rect = match merged {
+        Some(m) => geo.mirror_rect(geo.range_rect(sh, m)),
+        None => geo.mirror_rect(geo.cell_rect(sh, active)),
+    };
+    let cursor_rect = egui::Rect::from_min_size(rect.min, egui::vec2(1.0, rect.height()));
+    // egui 0.37 identifies an IME context by (owner, generation). The generation must change
+    // when this owner gains focus and stay stable for ordinary text and selection updates.
+    let gained_focus = resp.gained_focus();
+    let generation = ctx.data_mut(|data| {
+        let g: &mut u64 = data.get_temp_mut_or_default(egui::Id::unique("gridcraft.grid_ime_generation"));
+        if gained_focus || *g == 0 {
+            *g = g.wrapping_add(1);
+        }
+        *g
+    });
+    ctx.output_mut(|o| {
+        o.ime = Some(egui::output::IMEOutput::new(resp.id, generation, egui::IMEPurpose::Normal, rect, cursor_rect));
+    });
 }
 
 /// This frame's input events, without those the focused form control took.
