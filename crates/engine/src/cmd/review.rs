@@ -14,7 +14,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Protect Sheet…",
             ["Review", "Protect"],
             None,
-            "{password?, formatCells?, formatColumns?, formatRows?, insertRows?, insertColumns?, deleteRows?, deleteColumns?, sort?, autofilter?}",
+            "{password?, formatCells?, formatColumns?, formatRows?, insertHyperlinks?, insertRows?, insertColumns?, deleteRows?, deleteColumns?, sort?, autofilter?}",
             has_doc,
             protect_sheet
         ),
@@ -152,6 +152,7 @@ fn protect_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         format_cells: b("formatCells"),
         format_columns: b("formatColumns"),
         format_rows: b("formatRows"),
+        insert_hyperlinks: b("insertHyperlinks"),
         insert_columns: b("insertColumns"),
         insert_rows: b("insertRows"),
         delete_columns: b("deleteColumns"),

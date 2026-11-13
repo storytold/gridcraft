@@ -308,6 +308,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
                     format_cells: !e.flag("formatCells", true),
                     format_columns: !e.flag("formatColumns", true),
                     format_rows: !e.flag("formatRows", true),
+                    insert_hyperlinks: !e.flag("insertHyperlinks", true),
                     insert_columns: !e.flag("insertColumns", true),
                     insert_rows: !e.flag("insertRows", true),
                     delete_columns: !e.flag("deleteColumns", true),
