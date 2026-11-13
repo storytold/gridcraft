@@ -13,6 +13,7 @@ mod day_count;
 mod depreciation;
 mod securities;
 mod tvm;
+pub(crate) use tvm::cumulative_args;
 
 use day_count::{coupdaybs, coupdays, coupdaysnc, coupncd, coupnum, couppcd};
 use depreciation::{amordegrc, amorlinc, db, ddb, sln, syd, vdb};
