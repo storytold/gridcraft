@@ -10,12 +10,19 @@ pub(crate) const PY_FORMULA: &str = "Python cells are made with the python.set c
 
 /// Whether typing `input` into a cell enters a formula: `=…`, or `+…`/`-…` followed by a name or
 /// a parenthesis (not a number), as Excel takes `+SUM(1)`.
-#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: `-R$ 10` typed in pt-BR reads as a formula
+/// Reads numbers in en-US: it only serves finding the functions a formula calls, and a number
+/// calls none.
 pub(crate) fn is_formula_input(input: &str) -> bool {
+    is_formula_input_in(input, gridcraft_core::DateSystem::D1900, &gridcraft_core::region::EN_US)
+}
+
+/// Like is_formula_input, with numbers read in the workbook region: a negative amount in the
+/// region currency, typed in pt-BR, is a number and not a formula.
+pub(crate) fn is_formula_input_in(input: &str, sys: gridcraft_core::DateSystem, region: &gridcraft_core::Region) -> bool {
     input.starts_with('=')
         || (input.len() > 1
             && (input.starts_with('+') || input.starts_with('-'))
-            && gridcraft_core::parse::parse_number_text(input).is_none()
+            && gridcraft_core::parse::parse_number_text_in_region(input, sys, region).is_none()
             && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
 }
 
@@ -32,7 +39,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     if fmt_is_text {
         return Ok(Some(Cell { value: Value::text(input), formula: None, style, py: None }));
     }
-    let is_formula = is_formula_input(input);
+    let is_formula = is_formula_input_in(input, wb.date_system, wb.region);
     if is_formula && gridcraft_model::python::is_py_formula(input) {
         return Err(EngineError::Other(PY_FORMULA.into()));
     }

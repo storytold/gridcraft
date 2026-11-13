@@ -228,7 +228,6 @@ pub fn list_items(wb: &Workbook, sheet: usize, at: CellRef, dv: &Validation) -> 
 }
 
 /// Checks typed input against the validation of a cell. `Ok(None)` = valid.
-#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: a text bound formula result ignores the region
 pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
     let sh = wb.sheet(sheet)?;
     let dv = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(at)))?;
@@ -256,7 +255,7 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
         &entered
     };
     let eval = |f: &str| gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at));
-    let num = |f: &str| eval(f).to_number().ok();
+    let num = |f: &str| eval(f).to_number_region(wb.date_system, wb.region).ok();
     let ok = match dv.kind {
         // The list is the one the dropdown showed before the entry, as in Excel: a source that takes
         // in the cell itself (`=$A1:$A2` on A2:A3 is A2:A3 at A3) doesn't list the value being typed.

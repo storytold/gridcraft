@@ -6865,3 +6865,25 @@ fn generated_text_uses_the_region_decimal_separator() {
     let texts: Vec<String> = (0..40).flat_map(|r| (0..8).map(move |c| (r, c))).map(|(r, c)| report.value(CellRef::new(r, c)).display()).collect();
     assert!(texts.iter().any(|t| t == "$F$1<=1,5"), "{texts:?}");
 }
+
+/// Numeric text is read in the workbook region by typing (a negative currency amount is not a
+/// formula), by a validation bound whose formula gives text and by Paste Special operations on
+/// numbers stored as text.
+#[test]
+fn typing_validation_and_paste_special_read_numeric_text_in_the_workbook_region() {
+    let mut s = s();
+    s.set_region(gridcraft_core::region::lookup("pt-BR"));
+    s.execute("cell.set", json!({"cell": "A1", "input": "-R$ 10"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(-10.0));
+    assert!(s.doc().unwrap().wb.active().unwrap().cells.get(CellRef::parse("A1").unwrap()).is_some_and(|c| c.formula.is_none()));
+    s.execute("data.validation", json!({"range": "B1", "type": "decimal", "operator": "lessOrEqual", "formula1": "=\"2,5\""})).unwrap();
+    let ok = |s: &mut Session, input: &str| s.execute("data.validate", json!({"cell": "B1", "input": input})).unwrap()["ok"] == true;
+    assert!(ok(&mut s, "2"));
+    assert!(!ok(&mut s, "3"));
+    s.execute("cell.set", json!({"cell": "C1", "input": "'1,5"})).unwrap();
+    assert_eq!(v(&s, "C1"), Value::text("1,5"));
+    s.execute("cell.set", json!({"cell": "D1", "input": "2"})).unwrap();
+    s.execute("edit.copy", json!({"range": "D1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "values", "at": "C1", "operation": "multiply"})).unwrap();
+    assert_eq!(v(&s, "C1"), Value::Number(3.0));
+}

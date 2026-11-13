@@ -85,7 +85,6 @@ impl<'h> Evaluator<'h> {
         }
     }
 
-    #[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: text INDEX rows and columns ignore the region
     pub(super) fn index(&mut self, args: &[Expr]) -> Ev {
         if args.is_empty() || args.len() > 4 {
             return err(CellError::Value);
@@ -101,7 +100,8 @@ impl<'h> Evaluator<'h> {
             Err(e) => return err(e),
         };
         let two = args.len() == 2;
-        let num = |v: &Option<Value>| v.as_ref().map_or(Ok(0.0), |v| v.to_number()).map(|n| n.trunc() as i64);
+        let (sys, region) = (self.host.workbook().date_system, self.host.workbook().region);
+        let num = |v: &Option<Value>| v.as_ref().map_or(Ok(0.0), |v| v.to_number_region(sys, region)).map(|n| n.trunc() as i64);
         // Arrays of positions pick a value for each: INDEX(A1:C10,{1;2},{1,3}) is 2×2.
         if let (Some(Value::Array(_)), _) | (_, Some(Value::Array(_))) = (&rows, &cols) {
             let as_array = |v: &Option<Value>| match v {

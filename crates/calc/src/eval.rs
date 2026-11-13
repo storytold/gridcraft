@@ -735,13 +735,13 @@ impl<'h> Evaluator<'h> {
     fn arg_val(&mut self, args: &[Expr], i: usize) -> Option<Value> {
         args.get(i).map(|e| self.value(e))
     }
-    #[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: a text numeric argument ignores the region
     fn arg_num(&mut self, args: &[Expr], i: usize, default: f64) -> Result<f64, CellError> {
         match args.get(i) {
             None | Some(Expr::Missing) => Ok(default),
             Some(e) => {
                 let v = self.value(e);
-                v.scalar().to_number()
+                let wb = self.host.workbook();
+                v.scalar().to_number_region(wb.date_system, wb.region)
             }
         }
     }

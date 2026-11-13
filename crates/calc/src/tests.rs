@@ -2950,3 +2950,30 @@ fn datevalue_and_timevalue_read_in_the_workbook_region() {
     t.set("A2", "=TIMEVALUE(\"10:30 PM\")");
     assert_eq!((t.num("A1"), t.num("A2")), (0.9375, 0.9375));
 }
+
+/// Numeric text given as a CHOOSE index, an INDEX row or column, an OFFSET argument or a
+/// TRIMRANGE mode is read in the workbook region; en-US keeps it an error.
+#[test]
+fn position_arguments_read_numeric_text_in_the_workbook_region() {
+    let formulas = [
+        ("B1", "=CHOOSE(\"2,5\",10,20,30)"),
+        ("B2", "=INDEX({1,2,3},1,\"2,5\")"),
+        ("B3", "=OFFSET(A1,\"1,5\",0)"),
+        ("B4", "=ROWS(TRIMRANGE(A1:A9,\"2,5\"))"),
+    ];
+    let mut t = T::new();
+    t.wb.region = gridcraft_core::region::lookup("pt-BR");
+    t.set("A1", "1");
+    t.set("A2", "7");
+    for (at, f) in formulas {
+        t.set(at, f);
+    }
+    assert_eq!((t.num("B1"), t.num("B2"), t.num("B3"), t.num("B4")), (20.0, 2.0, 7.0, 2.0));
+    let mut t = T::new();
+    t.set("A1", "1");
+    t.set("A2", "7");
+    for (at, f) in formulas {
+        t.set(at, f);
+        assert_eq!(t.get(at), Value::Error(CellError::Value), "{f} in en-US");
+    }
+}

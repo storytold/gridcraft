@@ -200,7 +200,6 @@ impl<'h> Evaluator<'h> {
         }
     }
 
-    #[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: a text CHOOSE index ignores the region
     fn choose_call(&mut self, args: &[Expr]) -> Ev {
         if args.len() < 2 {
             return err(CellError::Value);
@@ -215,7 +214,8 @@ impl<'h> Evaluator<'h> {
             let mut context = FnCtx { ev: self, criteria: None, lambda: None };
             return gridcraft_functions::call(spec, &evaluated, &mut context).pipe(Ev::V);
         }
-        let index = match index.to_number() {
+        let wb = self.host.workbook();
+        let index = match index.to_number_region(wb.date_system, wb.region) {
             Ok(number) => number.trunc() as i64,
             Err(error) => return err(error),
         };
