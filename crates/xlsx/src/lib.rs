@@ -12,7 +12,6 @@
 #![forbid(unsafe_code)]
 
 mod array_formula;
-mod cfb;
 mod chart;
 mod chartex;
 mod controls;
@@ -273,8 +272,8 @@ pub fn sniff(bytes: &[u8]) -> Format {
     // CFB/OLE2 compound file: a password-protected workbook when it holds an encryption
     // stream, an Excel 97-2003 workbook when it holds a workbook stream, otherwise another
     // legacy binary (.doc…).
-    if bytes.starts_with(&cfb::SIGNATURE) {
-        return if cfb::is_encrypted(bytes) {
+    if bytes.starts_with(&craft_cfb::SIGNATURE) {
+        return if crypto::is_encrypted(bytes) {
             Format::Encrypted
         } else if xls::is_xls(bytes) {
             Format::Xls
