@@ -581,10 +581,10 @@ impl Session {
     pub fn region(&self) -> &'static gridcraft_core::Region {
         self.region.unwrap_or_else(gridcraft_core::region::default_region)
     }
-    /// Sets the region, applies it to the active document, and opens the next documents in it.
+    /// Sets the region, applies it to every open document, and opens the next documents in it.
     pub fn set_region(&mut self, region: &'static gridcraft_core::Region) {
         self.region = Some(region);
-        if let Some(d) = self.docs.get_mut(self.active) {
+        for d in &mut self.docs {
             d.adopt_region(region);
         }
     }
