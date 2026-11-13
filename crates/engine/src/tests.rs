@@ -43,10 +43,18 @@ fn opening_a_template_creates_an_unsaved_workbook_with_a_stem_title() {
 
 #[test]
 fn opening_a_template_path_twice_creates_two_unsaved_workbooks() {
+    struct RemoveFileOnDrop(std::path::PathBuf);
+    impl Drop for RemoveFileOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
     let mut source = s();
     source.execute("cell.set", json!({"cell": "A1", "input": "from template"})).unwrap();
     let bytes = crate::io::save_bytes(&source.doc().unwrap().wb, "Template.XLTX").unwrap();
     let path = std::env::temp_dir().join(format!("gridcraft-personal-template-{}.XLTX", std::process::id()));
+    let _cleanup = RemoveFileOnDrop(path.clone());
     std::fs::write(&path, bytes).unwrap();
 
     let mut s = s();
@@ -60,7 +68,6 @@ fn opening_a_template_path_twice_creates_two_unsaved_workbooks() {
         assert!(document.path.is_none(), "a template must never become its own save target");
         assert_eq!(document.wb.active().unwrap().value(CellRef::parse("A1").unwrap()), Value::text("from template"));
     }
-    let _ = std::fs::remove_file(&path);
 }
 
 #[test]

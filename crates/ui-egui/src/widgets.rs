@@ -297,11 +297,18 @@ pub fn small_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (R
 /// A one-line text field for a value stored in the workbook, which callers reload every frame. The text being typed is
 /// kept in egui memory until the field loses focus, then returned to commit (`None` when Escape cancels the edit).
 pub fn committed_text(ui: &mut Ui, id: egui::Id, current: &str, width: Option<f32>) -> Option<String> {
+    committed_text_with_hint(ui, id, current, width, "")
+}
+
+/// [`committed_text`] with placeholder text for an empty field.
+pub fn committed_text_with_hint(ui: &mut Ui, id: egui::Id, current: &str, width: Option<f32>, hint: &str) -> Option<String> {
     let width = width.unwrap_or(ui.spacing().text_edit_width);
     let draft = id.with("draft");
-    let mut text = ui.data_mut(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| current.to_string());
-    let r = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(width));
-    if r.lost_focus() {
+    let was_focused = ui.memory(|memory| memory.has_focus(id));
+    let mut text =
+        if was_focused { ui.data_mut(|data| data.get_temp::<String>(draft)).unwrap_or_else(|| current.to_string()) } else { current.to_string() };
+    let r = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(width).hint_text(hint));
+    if was_focused && r.lost_focus() {
         ui.data_mut(|d| d.remove::<String>(draft));
         return (!ui.input(|i| i.key_pressed(egui::Key::Escape))).then_some(text);
     }
@@ -710,6 +717,38 @@ mod color_tests {
         assert_eq!(&r[..2], ["#0B0000", "#050000"]);
         assert_eq!(r.iter().filter(|h| *h == "#050000").count(), 1);
         assert_eq!(r.len(), RECENT_COLORS);
+    }
+}
+
+#[cfg(test)]
+mod committed_text_tests {
+    use super::*;
+
+    fn run(ctx: &egui::Context, raw: egui::RawInput, id: egui::Id, current: &str) -> Option<String> {
+        let mut committed = None;
+        let mut output = ctx.run_ui(raw, |ui| committed = committed_text(ui, id, current, None));
+        output.textures_delta.clear();
+        committed
+    }
+
+    #[test]
+    fn escape_cancels_the_draft_and_an_unfocused_field_drops_stale_state() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::unique("committed-text-test");
+        let draft = id.with("draft");
+
+        ctx.data_mut(|data| data.insert_temp(draft, "draft".to_string()));
+        ctx.memory_mut(|memory| memory.request_focus(id));
+        assert_eq!(run(&ctx, egui::RawInput::default(), id, "saved"), None);
+
+        let escape = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        assert_eq!(run(&ctx, egui::RawInput { events: vec![escape], ..Default::default() }, id, "saved"), None);
+        assert!(ctx.data_mut(|data| data.get_temp::<String>(draft)).is_none());
+
+        ctx.data_mut(|data| data.insert_temp(draft, "stale".to_string()));
+        ctx.memory_mut(|memory| memory.surrender_focus(id));
+        assert_eq!(run(&ctx, egui::RawInput::default(), id, "new saved value"), None);
+        assert!(ctx.data_mut(|data| data.get_temp::<String>(draft)).is_none());
     }
 }
 
