@@ -1,5 +1,10 @@
 use super::{Dialog, Key, SheetApp, json, vec2};
 
+fn matches_command_query(query: &str, label: &str, id: &str, lang: crate::i18n::Language) -> bool {
+    let q = query.trim().to_lowercase();
+    q.is_empty() || label.to_lowercase().contains(&q) || id.to_lowercase().contains(&q) || lang.tr(label).to_lowercase().contains(&q)
+}
+
 /// Shows enabled commands and their shortcuts from engine metadata.
 pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     let lang = app.ui.language;
@@ -22,13 +27,12 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     }
 
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-    let q = d.search.to_ascii_lowercase();
     let cmds: Vec<(String, String, String, Option<String>)> = app
         .session
         .commands()
         .into_iter()
         .filter(|c| c.enabled)
-        .filter(|c| q.is_empty() || c.label.to_ascii_lowercase().contains(&q) || c.id.to_ascii_lowercase().contains(&q))
+        .filter(|c| matches_command_query(&d.search, c.label, c.id, lang))
         .map(|c| (c.id.to_string(), c.label.to_string(), c.menu.join(" › "), c.shortcut_for_platform(mac)))
         .take(40)
         .collect();
@@ -93,5 +97,18 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         let id = id.clone();
         app.dialog = None;
         app.run_or_alert(&id, json!({}));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_search_matches_translated_labels_and_keeps_source_search() {
+        let hu = crate::i18n::Language::Hu;
+        assert!(matches_command_query("FÉLKÖVÉR", "Bold", "home.bold", hu));
+        assert!(matches_command_query("bold", "Bold", "home.bold", hu));
+        assert!(matches_command_query("home.bold", "Bold", "home.bold", hu));
     }
 }

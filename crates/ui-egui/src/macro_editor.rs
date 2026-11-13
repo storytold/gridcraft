@@ -1660,22 +1660,22 @@ fn delete(ed: &mut Editor) {
 // ---------------------------------------------------------------- Add Step
 
 /// The steps the picker offers for `query`: control steps first, then commands a macro may run.
-pub fn picker_items(query: &str) -> Vec<(String, String, String)> {
-    let q = query.trim().to_ascii_lowercase();
+pub fn picker_items(query: &str, lang: crate::i18n::Language) -> Vec<(String, String, String)> {
+    let q = query.trim().to_lowercase();
     let mut out: Vec<(String, String, String)> = [
         ("@repeat", "Repeat for each row", "Control: run steps once per row of a range"),
         ("@if", "If", "Control: run steps when a cell meets a condition"),
         ("@stop", "Stop with message", "Control: end the run with a message"),
     ]
     .iter()
-    .filter(|(_, l, _)| q.is_empty() || l.to_ascii_lowercase().contains(&q))
+    .filter(|(_, l, _)| q.is_empty() || l.to_lowercase().contains(&q) || lang.tr(l).to_lowercase().contains(&q))
     .map(|(a, b, c)| (a.to_string(), b.to_string(), c.to_string()))
     .collect();
     for c in gridcraft_engine::command_specs() {
         if matches!(macro_policy(c.id, &json!({}), gridcraft_engine::Trust::Local), Policy::Deny(_)) || c.id.starts_with("ui.") {
             continue;
         }
-        if q.is_empty() || c.label.to_ascii_lowercase().contains(&q) || c.id.to_ascii_lowercase().contains(&q) {
+        if q.is_empty() || c.label.to_lowercase().contains(&q) || c.id.to_lowercase().contains(&q) || lang.tr(c.label).to_lowercase().contains(&q) {
             out.push((c.id.to_string(), c.label.to_string(), c.menu.join(" › ")));
         }
         if out.len() >= 60 {
@@ -1725,7 +1725,7 @@ fn picker(ui: &mut Ui, ed: &mut Editor) {
     if r.changed() {
         pk.index = 0;
     }
-    let mut items = picker_items(&pk.search);
+    let mut items = picker_items(&pk.search, lang);
     // Change swaps a command step's command; it can't turn the step into Repeat, If or Stop.
     if pk.replace.is_some() {
         items.retain(|(id, ..)| !id.starts_with('@'));
@@ -2683,13 +2683,15 @@ mod tests {
 
     #[test]
     fn the_picker_offers_control_steps_and_allowed_commands_only() {
-        let all = picker_items("");
+        let all = picker_items("", crate::i18n::Language::En);
         assert_eq!(all.first().map(|x| x.0.as_str()), Some("@repeat"));
         // Denied commands aren't offered (exports without a path are allowed).
-        let all = picker_items("e");
+        let all = picker_items("e", crate::i18n::Language::En);
         assert!(!all.iter().any(|x| x.0 == "file.save" || x.0 == "edit.undo" || x.0.starts_with("macro.")));
-        let bold = picker_items("bold");
+        let bold = picker_items("bold", crate::i18n::Language::En);
         assert!(bold.iter().any(|x| x.0 == "home.bold"));
+        let translated_bold = picker_items("FÉLKÖVÉR", crate::i18n::Language::Hu);
+        assert!(translated_bold.iter().any(|x| x.0 == "home.bold"));
         assert!(matches!(new_step("@if").kind, StepKind::If { .. }));
         assert!(matches!(new_step("cell.set").kind, StepKind::Command { params, .. } if params.get("cell").is_some()));
     }

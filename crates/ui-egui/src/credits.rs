@@ -424,7 +424,7 @@ fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View, lang: crate::i1
                 body.row(h, |mut row| {
                     row.col(|ui| {
                         aligned(ui, false, |ui| ui.hyperlink_to(c.name(v.names), format!("https://github.com/{}", c.login)))
-                            .on_hover_text(c.summary());
+                            .on_hover_text(c.summary_in(lang));
                     });
                     for text in cells {
                         row.col(|ui| {

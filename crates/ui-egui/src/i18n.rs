@@ -471,6 +471,11 @@ mod tests {
     }
 
     #[test]
+    fn hungarian_merge_commands_have_distinct_labels() {
+        assert_ne!(Language::Hu.tr("Merge & Center"), Language::Hu.tr("Merge Cells"));
+    }
+
+    #[test]
     fn tags_reduce_to_supported_languages_with_locale_suffixes() {
         assert_eq!(Language::from_tag("de-CH"), Some(Language::De));
         assert_eq!(Language::from_tag("pt-BR"), Some(Language::PtBr));

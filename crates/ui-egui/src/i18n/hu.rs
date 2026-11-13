@@ -24,7 +24,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Increase Font Size" => "Betűméret növelése",
         "Decrease Font Size" => "Betűméret csökkentése",
         "Wrap Text" => "Sortöréssel több sorba",
-        "Merge & Center" => "Cellaegyesítés",
+        "Merge & Center" => "Cellák egyesítése és középre igazítása",
         "Merge Cells" => "Cellaegyesítés",
         "Merge Across" => "Cellák egyesítése soronként",
         "Unmerge Cells" => "Cellák egyesítésének megszüntetése",

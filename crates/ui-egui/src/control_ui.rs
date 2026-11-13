@@ -307,15 +307,17 @@ pub fn assign_params(d: &Dialog) -> Result<Json, String> {
     Ok(json!({"id": id, "macro": name.trim(), "input": input.trim(), "output": val(d, "output").trim()}))
 }
 
-/// Commands a button may run whose id or label contains `search` (every one when it is empty):
+/// Commands a button may run whose id, source label or translated label contains `search`:
 /// (id, label). File commands are left out: the ones a button may run only produce bytes.
-fn command_choices(search: &str) -> Vec<(&'static str, &'static str)> {
+fn command_choices(search: &str, lang: crate::i18n::Language) -> Vec<(&'static str, &'static str)> {
     let q = search.trim().to_lowercase();
     gridcraft_engine::command_specs()
         .iter()
         .filter(|c| c.journal && !c.id.starts_with("file."))
         .filter(|c| !matches!(macro_policy(c.id, &json!({}), gridcraft_engine::Trust::Local), Policy::Deny(_)))
-        .filter(|c| q.is_empty() || c.id.to_lowercase().contains(&q) || c.label.to_lowercase().contains(&q))
+        .filter(|c| {
+            q.is_empty() || c.id.to_lowercase().contains(&q) || c.label.to_lowercase().contains(&q) || lang.tr(c.label).to_lowercase().contains(&q)
+        })
         .map(|c| (c.id, c.label))
         .take(200)
         .collect()
@@ -382,7 +384,7 @@ pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
         egui::Frame::NONE.fill(t.input_bg).stroke(Stroke::new(1.0, t.input_border)).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_size(vec2(ui.available_width(), 130.0));
             egui::ScrollArea::vertical().max_height(130.0).show(ui, |ui| {
-                for (cid, label) in command_choices(&search) {
+                for (cid, label) in command_choices(&search, lang) {
                     let text = format!("{}  ({cid})", lang.tr(label));
                     if ui.add(egui::Button::selectable(cid == command, text).min_size(vec2(ui.available_width(), 20.0))).clicked() {
                         d.values.insert("command".into(), json!(cid));
@@ -574,5 +576,16 @@ pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
             Ok(_) => *open = false,
             Err(e) => app.message = Some(("Format Control".into(), crate::clean_error(&e))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_choices_match_translated_labels() {
+        let choices = command_choices("FÉLKÖVÉR", crate::i18n::Language::Hu);
+        assert!(choices.iter().any(|(id, _)| *id == "home.bold"));
     }
 }
