@@ -139,6 +139,38 @@ fn depreciation() {
 }
 
 #[test]
+fn cumipmt_and_cumprinc_follow_excel_on_fractions_ends_and_logicals() {
+    let cum = |f: &str, args: [f64; 6]| ev(f, args.iter().map(|x| n(*x)).collect());
+    // A fractional nper is used as it is (#4016).
+    close_tol(cum("CUMIPMT", [0.1, 12.9, 1000.0, 1.0, 3.0, 0.0]), -287.1875617766533, 1e-10);
+    close_tol(cum("CUMPRINC", [0.1, 12.9, 1000.0, 1.0, 3.0, 0.0]), -136.80377586863798, 1e-10);
+    // The periods are the whole ones from start to end: 1.5 to 3.5 is 2 and 3 (#4016).
+    close_tol(cum("CUMIPMT", [0.1, 12.0, 1000.0, 1.5, 3.5, 0.0]), -185.50337231891098, 1e-10);
+    close_tol(cum("CUMPRINC", [0.1, 12.0, 1000.0, 1.5, 3.5, 0.0]), -108.0232578816637, 1e-10);
+    close_tol(cum("CUMIPMT", [0.1, 12.0, 1000.0, 2.0, 3.0, 0.0]), -185.50337231891098, 1e-10);
+    close_tol(cum("CUMIPMT", [0.1, 12.0, 1000.0, 1.0, 3.0, 0.0]), -285.50337231891103, 1e-10);
+    close_tol(cum("CUMPRINC", [0.1, 12.0, 1000.0, 1.0, 3.0, 0.0]), -154.78657298195097, 1e-10);
+    // An end period past nper is refused, before it is truncated (#4029).
+    is_err(cum("CUMIPMT", [0.1, 2.0, 1000.0, 1.0, 2.5, 0.0]), CellError::Num);
+    is_err(cum("CUMPRINC", [0.1, 2.0, 1000.0, 1.0, 2.5, 0.0]), CellError::Num);
+    close_tol(cum("CUMIPMT", [0.1, 2.0, 1000.0, 1.0, 2.0, 0.0]), -152.38095238095252, 1e-10);
+    close_tol(cum("CUMPRINC", [0.1, 2.0, 1000.0, 1.0, 2.0, 0.0]), -1000.0, 1e-10);
+    // A logical in any argument is #VALUE!, typed or from a cell (#4039).
+    for f in ["CUMIPMT", "CUMPRINC"] {
+        for i in 0..6 {
+            for v in [true, false] {
+                let mut args: Vec<Arg> = [0.1, 12.0, 1000.0, 1.0, 3.0, 0.0].iter().map(|x| n(*x)).collect();
+                args[i] = b(v);
+                is_err(ev(f, args), CellError::Value);
+            }
+            let mut args: Vec<Arg> = [0.1, 12.0, 1000.0, 1.0, 3.0, 0.0].iter().map(|x| n(*x)).collect();
+            args[i] = rf(Value::Bool(true));
+            is_err(ev(f, args), CellError::Value);
+        }
+    }
+}
+
+#[test]
 fn coupons() {
     let args = |f: &str| ev(f, vec![d(2011, 1, 25), d(2011, 11, 15), n(2.0), n(1.0)]);
     close(args("COUPDAYBS"), 71.0);
