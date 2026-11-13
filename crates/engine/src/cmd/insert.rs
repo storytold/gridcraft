@@ -1672,10 +1672,15 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
             };
             let a = rule.get("value").map(super::edit::json_to_input).unwrap_or_default();
             let b = rule.get("value2").map(super::edit::json_to_input);
+            let (sys, region) = s.doc().map(|d| (d.wb.date_system, d.wb.region))?;
             let quote = |v: String| {
-                // A number, a formula, or text already written as a string literal (`"Closed"`, as
-                // in the file and in openpyxl's `CellIsRule`) is kept; other text is quoted.
-                if gridcraft_core::parse::parse_number_text(&v).is_some() || v.starts_with('=') {
+                // A number (the en-US `.` the API sends, or the workbook region's form, `12,5` in
+                // pt-BR) is written canonical. A formula, or text already written as a string
+                // literal (`"Closed"`, as in the file and in openpyxl's `CellIsRule`), is kept;
+                // other text is quoted.
+                if let Some(n) = gridcraft_core::parse::parse_number_param(&v, sys, region) {
+                    gridcraft_core::number_to_text(n)
+                } else if v.starts_with('=') {
                     v.trim_start_matches('=').to_string()
                 } else if is_string_literal(&v) {
                     v
