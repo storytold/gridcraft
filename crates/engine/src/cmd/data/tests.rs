@@ -277,6 +277,30 @@ fn validation_circles_follow_their_cells_through_cut_and_paste() {
 }
 
 #[test]
+fn undo_and_redo_drop_the_circles_of_a_sheet_name_they_take_away() {
+    // Left under a name the workbook no longer has, the circles would show on the next sheet to
+    // take that name.
+    let mut s = qty_sheet();
+    s.execute("sheet.rename", json!({"name": "Data"})).unwrap();
+    s.execute("data.circleInvalid", json!({})).unwrap();
+    assert_eq!(circles(&s, "Data"), ["A3", "A4", "A5"]);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.doc().unwrap().validation_circles.is_empty(), "undoing the rename takes Data's circles");
+    s.execute("data.circleInvalid", json!({})).unwrap();
+    assert_eq!(circles(&s, "Sheet1"), ["A3", "A4", "A5"]);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(s.doc().unwrap().validation_circles.is_empty(), "redoing it takes Sheet1's");
+    s.execute("home.insertSheet", json!({"name": "Sheet1"})).unwrap();
+    assert!(circles(&s, "Sheet1").is_empty(), "a new Sheet1 starts without circles");
+    // Where the sheet stays, Undo leaves the circles where they are.
+    s.execute("sheet.activate", json!({"sheet": "Data"})).unwrap();
+    s.execute("data.circleInvalid", json!({})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "x"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(circles(&s, "Data"), ["A3", "A4", "A5"]);
+}
+
+#[test]
 fn validation_circles_are_not_saved_and_stay_on_the_open_sheet_after_a_save() {
     let mut s = qty_sheet();
     s.execute("data.circleInvalid", json!({})).unwrap();
