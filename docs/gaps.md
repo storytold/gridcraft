@@ -59,7 +59,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora). Arabic shared shaping/bidi,
   editing and cell Context/LTR/RTL now have focused regressions and full gates. Arabic font
   delivery and PDF output are separate PRs; other script shaping still needs verification.
-- **Missing:** CJK font fallback, complex shaping (Arabic, Devanagari, Thai), bidi, non-Latin PDF.
+- **Missing:** CJK font fallback, complex shaping (Arabic, Devanagari, Thai), bidi, non-Latin PDF outside Arabic.
 - **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32), and for
   Arabic (system, fontconfig and craft-fonts faces); a UI font with Arabic of its own (DejaVu Sans
   in the Flatpak) still draws interface Arabic ahead of fontconfig's choice (#229); #142
