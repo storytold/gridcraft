@@ -39,7 +39,7 @@ pub fn paint_chart(p: &Painter, rect: Rect, wb: &Workbook, sheet: usize, chart: 
     let origin = rect.center() - vec2(w * z, h * z) / 2.0;
     let data = gridcraft_chart::resolve(wb, sheet, chart);
     let m = EguiMeasure { painter: p, z };
-    let prims = gridcraft_chart::render_in(chart, &data, w, h, &m, wb.region);
+    let prims = gridcraft_chart::render_in(chart, &data, w, h, &m, wb.region, wb.date_system);
     paint_prims(&p.with_clip_rect(rect.intersect(p.clip_rect())), origin, &prims, z);
 }
 
@@ -254,7 +254,7 @@ fn render_chart(p: &Painter, z: f32, wb: &Workbook, si: usize, ch: &gridcraft_en
     tests::RENDERS.with(|c| c.set(c.get() + 1));
     let data = gridcraft_chart::resolve(wb, si, ch);
     let m = EguiMeasure { painter: p, z };
-    gridcraft_chart::render_in(ch, &data, ch.anchor.width, ch.anchor.height, &m, wb.region)
+    gridcraft_chart::render_in(ch, &data, ch.anchor.width, ch.anchor.height, &m, wb.region, wb.date_system)
 }
 
 /// The primitives of chart `ci` of sheet `si`: from the frame cache when the workbook, zoom and
