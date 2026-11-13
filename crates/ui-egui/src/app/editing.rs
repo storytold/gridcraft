@@ -205,6 +205,10 @@ impl SheetApp {
             use gridcraft_engine::cmd::data::{FillValidation, check_fill_validation};
             use gridcraft_engine::model::ErrorStyle;
             let accepted = ed.fill_warning_accepted.take();
+            // The selection this check runs on, after the draft's sheet was re-activated
+            // above: re-activating a sheet restores its remembered selection, which can
+            // differ from the one the Warning answer compared against.
+            let writing_selection = self.session.active().map(|d| d.selection.a1());
             let check = self.session.active().map(|d| check_fill_validation(&d.wb, ed.sheet, &d.selection.ranges, &text));
             let refusal = match check {
                 Some(FillValidation::NotChecked) => Some(("GridCraft".to_string(), FILL_NOT_CHECKED.to_string())),
@@ -212,7 +216,7 @@ impl SheetApp {
                     let title = if a.rule.error_title.is_empty() { "GridCraft".to_string() } else { a.rule.error_title.clone() };
                     match a.rule.error_style {
                         ErrorStyle::Stop => Some((title, a.message)),
-                        ErrorStyle::Warning if accepted.as_deref() != Some(text.as_str()) => {
+                        ErrorStyle::Warning if !matches!(&accepted, Some((t, sel)) if t == &text && *sel == writing_selection) => {
                             let checked_selection = self.session.active().map(|d| d.selection.a1());
                             let ask = json!({"title": title, "message": a.message, "messageCustom": !a.rule.error_message.is_empty(), "text": text, "doc": ed.doc, "sheetUid": ed.sheet_uid, "cell": ed.cell.a1(), "selection": checked_selection, "dr": dr, "dc": dc});
                             self.editor = Some(ed);
@@ -276,6 +280,9 @@ impl SheetApp {
     /// It also applies only to the selection the question checked, in the window the draft
     /// belongs to: if that selection moved while the question was open, the new selection is
     /// checked on its own rules (asked, refused, or filled) instead of inheriting this answer.
+    /// The checked selection is stored with the answer and compared again when the fill
+    /// runs, after the draft's sheet is re-activated: re-activating a sheet restores its
+    /// remembered selection, which may be a selection this answer never checked.
     /// Returns whether the fill was written.
     pub fn answer_fill_warning(&mut self, yes: bool, ask: &serde_json::Map<String, serde_json::Value>) -> bool {
         let text = ask.get("text").and_then(serde_json::Value::as_str);
@@ -303,7 +310,7 @@ impl SheetApp {
         if checked != current.as_deref() {
             return self.commit_edit(step("dr"), step("dc"), false, true);
         }
-        ed.fill_warning_accepted = Some(text.to_string());
+        ed.fill_warning_accepted = Some((text.to_string(), checked.map(str::to_string)));
         self.commit_edit(step("dr"), step("dc"), false, true)
     }
 
@@ -816,6 +823,42 @@ mod fill_validation_tests {
 
         let ask = warning_values(&app);
         assert_eq!(ask.get("message"), Some(&json!("warning at C2")), "the owning selection's own Warning is asked");
+        assert_eq!(ask.get("selection"), Some(&json!("C1:C3")), "the question names the checked selection");
+
+        assert!(app.answer_fill_warning(true, &ask), "Yes for the checked selection fills it");
+        assert_eq!(column(&app, &["C1", "C2", "C3"]), vec![Value::Number(5.0); 3]);
+        assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Empty; 3], "the first selection was never written");
+    }
+
+    #[test]
+    fn a_yes_is_not_granted_to_the_selection_restored_by_sheet_activation() {
+        let mut app = book();
+        rule(&mut app, "A2", "warning");
+        rule(&mut app, "C2", "warning");
+        // A second sheet whose remembered selection is the checked one.
+        app.run("home.insertSheet", json!({})).unwrap();
+        app.run("selection.set", json!({"range": "A1:A3", "active": "A1"})).unwrap();
+        app.run("sheet.activate", json!({"sheet": 0})).unwrap();
+
+        assert!(!ctrl_enter(&mut app, "A1:A3", "A1", "5"));
+        let ask = warning_values(&app);
+        assert_eq!(ask.get("message"), Some(&json!("warning at A2")));
+        assert_eq!(ask.get("selection"), Some(&json!("A1:A3")));
+        let undo = undo_len(&app);
+
+        // The draft's sheet moves to another selection while the question is open, and
+        // the second sheet (showing the checked selection) comes forward: activating
+        // the draft's sheet for the fill restores the moved selection there.
+        app.run("selection.set", json!({"range": "C1:C3", "active": "C1"})).unwrap();
+        app.run("sheet.activate", json!({"sheet": 1})).unwrap();
+
+        assert!(!app.answer_fill_warning(true, &ask), "Yes was for A1:A3: the restored selection is asked again, writes nothing");
+        assert_eq!(column(&app, &["A1", "A2", "A3", "C1", "C2", "C3"]), vec![Value::Empty; 6]);
+        assert_eq!(undo_len(&app), undo, "no undo step");
+        assert_eq!(draft(&app), Some("5"), "the draft stays in the cell");
+
+        let ask = warning_values(&app);
+        assert_eq!(ask.get("message"), Some(&json!("warning at C2")), "the restored selection's own Warning is asked");
         assert_eq!(ask.get("selection"), Some(&json!("C1:C3")), "the question names the checked selection");
 
         assert!(app.answer_fill_warning(true, &ask), "Yes for the checked selection fills it");

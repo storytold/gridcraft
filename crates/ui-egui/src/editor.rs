@@ -62,10 +62,10 @@ pub struct EditState {
     /// Python mode: the text is a Python cell's code, edited in the formula bar's code editor and
     /// committed with Ctrl+Enter (Cmd+Enter on macOS) through `python.set`.
     pub python: bool,
-    /// The entry (as committed, in canonical syntax) for which "Yes" was answered to a destination's
-    /// Warning alert before a Ctrl+Enter fill. Only that entry skips the question, once; a draft
-    /// changed since is asked about again.
-    pub fill_warning_accepted: Option<String>,
+    /// The entry (as committed, in canonical syntax) and the selection (A1) for which "Yes" was
+    /// answered to a destination's Warning alert before a Ctrl+Enter fill. Only that entry, for
+    /// that selection, skips the question, once; a draft changed since is asked about again.
+    pub fill_warning_accepted: Option<(String, Option<String>)>,
 }
 
 /// A digest of the order of `wb`'s sheets by identity: it changes when a sheet is inserted,
