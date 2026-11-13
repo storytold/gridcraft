@@ -147,10 +147,10 @@ impl RangeRef {
         RangeRef::new(CellRef::new(0, 0), CellRef::new(MAX_ROWS - 1, MAX_COLS - 1))
     }
     pub fn height(&self) -> u32 {
-        self.end.row - self.start.row + 1
+        self.end.row.saturating_sub(self.start.row).saturating_add(1)
     }
     pub fn width(&self) -> u32 {
-        self.end.col - self.start.col + 1
+        self.end.col.saturating_sub(self.start.col).saturating_add(1)
     }
     pub fn count(&self) -> u64 {
         self.height() as u64 * self.width() as u64
@@ -296,9 +296,46 @@ pub fn split_sheet(reference: &str) -> (Option<String>, &str) {
     }
 }
 
+/// The areas of a reference list, split at the commas between them. A comma inside a quoted
+/// sheet name (`'Sales, West'!A1`) is part of the name, and a doubled quote inside the quotes
+/// (`'O''Brien, Jr'!A1`) is an escaped quote, not the end of the name: a quote toggles the
+/// quoted state, so a doubled one toggles it twice.
+pub fn split_areas(reference: &str) -> Vec<&str> {
+    let mut areas = Vec::new();
+    let (mut start, mut quoted) = (0, false);
+    for (i, c) in reference.char_indices() {
+        match c {
+            '\'' => quoted = !quoted,
+            ',' if !quoted => {
+                areas.push(reference.get(start..i).unwrap_or_default());
+                start = i.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+    areas.push(reference.get(start..).unwrap_or_default());
+    areas
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hostile_range_dimensions_saturate_instead_of_wrapping() {
+        let r = RangeRef { start: CellRef::new(0, 0), end: CellRef::new(u32::MAX, u32::MAX) };
+        assert_eq!((r.height(), r.width()), (u32::MAX, u32::MAX));
+        assert_eq!(r.count(), u64::from(u32::MAX) * u64::from(u32::MAX));
+    }
+
+    #[test]
+    fn areas_split_only_at_commas_outside_quoted_sheet_names() {
+        assert_eq!(split_areas("B2:B4,D1"), ["B2:B4", "D1"]);
+        assert_eq!(split_areas("'Sales, West'!$A$1"), ["'Sales, West'!$A$1"]);
+        assert_eq!(split_areas("'O''Brien, Jr'!A1:B2,D4"), ["'O''Brien, Jr'!A1:B2", "D4"]);
+        assert_eq!(split_areas("'Q1, Q2'!A1,'Q3, Q4'!B2"), ["'Q1, Q2'!A1", "'Q3, Q4'!B2"]);
+        assert_eq!(split_areas(""), [""]);
+    }
 
     #[test]
     fn range_parse_rejects_signed_rows() -> Result<(), std::io::Error> {
