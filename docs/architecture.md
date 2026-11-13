@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-11 · **Change:** minor (paper names and sizes in one table, `model::paper`; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-13 · **Change:** minor (paper names and sizes in one table, `model::paper`; earlier: shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -84,6 +84,12 @@ drawing its own:
   ahead of its input, so the field never gets a Tab or an Enter of a focused editor; and it
   scrolls past `max_lines` with the caret in view. The tokenizer and the key edits are pure functions with tests, including
   hostile input.
+- **CJK text baselines**: system CJK fallback faces and permitted embedded faces tagged with
+  CJK scripts use epaint's baseline fallback alignment in cells, editors and window titles.
+  Other scripts, symbols and emoji keep their existing alignment. Baseline alignment can
+  increase line height; manual row heights and clipping remain unchanged. Reports:
+  [#1265](https://github.com/storytold/gridcraft/issues/1265) and
+  [#2621](https://github.com/storytold/gridcraft/issues/2621).
 - **Code editor marks**: `code_editor_marked` underlines a byte range in the error colour (the
   equation editor marks the position of a LaTeX error with it).
 - **Formula bar**: grows with its content from one line to `formula_bar::MAX_LINES` (five), then
@@ -236,13 +242,14 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-11 | minor | Paper sizes: `model::paper` (`canonical`, `size_pt`, `for_size`) replaces the engine's `known_paper` and the XLSX alias list; an empty `PrintSettings::paper` means the file stated none; `for_size` picks the nearest paper; Statement, Envelope #10 and Envelope DL are accepted by Page Setup and Size |
+| 2026-11-13 | minor | Paper sizes: `model::paper` (`canonical`, `size_pt`, `for_size`) replaces the engine's `known_paper` and the XLSX alias list; an empty `PrintSettings::paper` means the file stated none; `for_size` picks the nearest paper; Statement, Envelope #10 and Envelope DL are accepted by Page Setup and Size |
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-02 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-11-01 | trivial | Equations: the layout cache answers for a source over the cap by its length alone, without hashing it |
 | 2026-11-01 | minor | Equations: the `math` crate (L1), the layout cache and code editor marks |
 | 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
 | 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
+| 2026-10-31 | minor | System and embedded CJK fallback faces share the Latin baseline without changing other script, symbol or emoji alignment |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
 | 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
