@@ -589,6 +589,23 @@ fn circle_invalid_data_lists_a_cell_in_two_of_a_rules_own_ranges_once() {
 }
 
 #[test]
+fn circle_invalid_data_doesnt_pass_over_a_cell_an_earlier_range_left_unscanned() {
+    // A cell an earlier range holds is skipped as checked there. When the scan allowance cut that
+    // range short of the cell, it was never checked: the result lists it or says the scan stopped.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[5]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "A100001", "values": [[50]]})).unwrap();
+    s.execute("data.validation", json!({"range": "A1:A100001", "type": "whole", "operator": "between", "formula1": "1", "formula2": "10"})).unwrap();
+    // A file can list A100001 a second time in the same rule.
+    let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    sh.validations[0].ranges.push(RangeRef::parse("A100001").unwrap());
+    let out = s.execute("data.circleInvalid", json!({})).unwrap();
+    let listed = out["invalid"].as_array().is_some_and(|cells| cells.contains(&json!("A100001")));
+    assert!(listed || out["truncated"] == json!(true), "{out}");
+}
+
+#[test]
 fn a_relative_list_source_is_read_from_the_cell_being_checked() {
     // As in Excel, `=$B1:$B2` on A3:A4,A1:A2 is written for A1 (the top-left cell of all the
     // areas) and lists B4:B5 at A4. It used to list B1:B2 in every cell.
