@@ -990,8 +990,8 @@ fn oversized_arabic_text_is_an_error_instead_of_partial_pdf() {
     let mut doc = PdfDoc::new();
     doc.add_page(600.0, 300.0).text(0.0, 50.0, 10.0, Font::Helvetica, [0, 0, 0], &"ب".repeat(65_537));
     if doc.missing_arabic_font() {
-        check_xref(&doc.finish()?)?;
-        return Ok(());
+        check_xref(&doc.finish().unwrap()).unwrap();
+        return;
     }
     assert!(doc.finish().unwrap_err().to_string().contains("128 KiB"));
 }
