@@ -171,7 +171,7 @@ impl EditState {
         !self.python
             && (self.text.starts_with('=')
                 || (self.text.starts_with('+') && self.text.len() > 1)
-                || (self.text.starts_with('-') && self.text.len() > 1 && !self.text[1..].starts_with(|c: char| c.is_ascii_digit())))
+                || (self.text.starts_with('-') && self.text.len() > 1 && !self.text[1..].starts_with(|c: char| c.is_numeric())))
     }
 
     fn byte_caret(&self) -> usize {
@@ -252,14 +252,14 @@ impl EditState {
         }
         let before = self.text.get(..self.byte_caret()).unwrap_or("");
         let word: String =
-            before.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
-        if word.is_empty() || word.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            before.chars().rev().take_while(|c| c.is_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+        if word.is_empty() || word.chars().next().is_some_and(|c| c.is_numeric()) {
             return;
         }
-        let u = word.to_ascii_uppercase();
+        let u = word.to_uppercase();
         // Not after a column letter of a reference like A1 (digits follow) – fine either way.
-        self.autocomplete = names.iter().filter(|n| n.starts_with(&u)).take(12).cloned().collect();
-        if self.autocomplete.len() == 1 && self.autocomplete[0] == u {
+        self.autocomplete = names.iter().filter(|n| n.to_uppercase().starts_with(&u)).take(12).cloned().collect();
+        if self.autocomplete.len() == 1 && self.autocomplete[0].to_uppercase() == u {
             self.autocomplete.clear();
         }
         self.ac_index = self.ac_index.min(self.autocomplete.len().saturating_sub(1));
@@ -270,7 +270,7 @@ impl EditState {
         let Some(name) = self.autocomplete.get(self.ac_index).cloned() else { return false };
         let caret_b = self.byte_caret();
         let before = self.text.get(..caret_b).unwrap_or("");
-        let wlen: usize = before.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').map(char::len_utf8).sum();
+        let wlen: usize = before.chars().rev().take_while(|c| c.is_alphanumeric() || *c == '.' || *c == '_').map(char::len_utf8).sum();
         let start = caret_b - wlen;
         let (Some(a), Some(b)) = (self.text.get(..start), self.text.get(caret_b..)) else { return false };
         self.text = format!("{a}{name}({b}");
@@ -300,8 +300,8 @@ impl EditState {
         }
         let head = before.strip_suffix('(').unwrap_or(before);
         let name: String =
-            head.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
-        if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
+            head.chars().rev().take_while(|c| c.is_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+        if name.is_empty() || name.starts_with(|c: char| c.is_numeric()) {
             return false;
         }
         let Some(signature) = crate::formula_locale::signature(&name, self.locale, language) else { return false };
@@ -348,7 +348,7 @@ impl EditState {
                         let name: String = chars[..i]
                             .iter()
                             .rev()
-                            .take_while(|c| c.is_ascii_alphanumeric() || **c == '.' || **c == '_')
+                            .take_while(|c| c.is_alphanumeric() || **c == '.' || **c == '_')
                             .collect::<String>()
                             .chars()
                             .rev()
@@ -356,7 +356,7 @@ impl EditState {
                         if name.is_empty() {
                             return None;
                         }
-                        return Some((name.to_ascii_uppercase(), arg));
+                        return Some((name.to_uppercase(), arg));
                     }
                     depth -= 1;
                 }

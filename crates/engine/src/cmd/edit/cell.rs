@@ -15,7 +15,7 @@ pub(crate) fn is_formula_input(input: &str) -> bool {
         || (input.len() > 1
             && (input.starts_with('+') || input.starts_with('-'))
             && gridcraft_core::parse::parse_number_text(input).is_none()
-            && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
+            && input.chars().nth(1).is_some_and(|c| c.is_alphabetic() || c == '('))
 }
 
 /// What typing `input` into a cell produces (constant or formula, plus an automatic number
@@ -89,12 +89,45 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     Ok(Some(Cell { value: parsed.value, formula: None, style, py: None }))
 }
 
+fn no_known(_: &str) -> bool { false }
+
 /// Parses a formula as it is typed (without the `=`). Excel closes missing parentheses for you,
 /// and refuses a formula that still doesn't parse.
 pub(crate) fn parse_typed_formula(body: &str) -> Result<gridcraft_formula::Expr> {
     // Excel closes missing parentheses for you.
-    let parsed = gridcraft_formula::parse_closing_parens(body, gridcraft_formula::parse);
-    parsed.map_err(|e| EngineError::Other(format!("There's a problem with this formula: {e}")))
+    let parsed = gridcraft_formula::parse_closing_parens(body, |text| {
+        gridcraft_formula::parse(text)
+            .or_else(|_| gridcraft_formula::parse_input(text, gridcraft_formula::FormulaLocale::Ru, no_known))
+            .or_else(|_| gridcraft_formula::parse_input(text, gridcraft_formula::FormulaLocale::Es, no_known))
+    });
+    let mut expr = parsed.map_err(|e| EngineError::Other(format!("There's a problem with this formula: {e}")))?;
+
+    expr = expr.map(&mut |node| match node {
+        gridcraft_formula::Expr::Call(name, args) => {
+            let ru_canonical = gridcraft_formula::FormulaLocale::Ru.canonical_name(&name);
+            let es_canonical = gridcraft_formula::FormulaLocale::Es.canonical_name(&name);
+            let canonical = if ru_canonical != name {
+                ru_canonical
+            } else if es_canonical != name {
+                es_canonical
+            } else {
+                &name
+            };
+            gridcraft_formula::Expr::Call(canonical.to_string(), args)
+        }
+        gridcraft_formula::Expr::Name(name) => {
+            if let Some(b) = gridcraft_formula::boolean_alias(&name, gridcraft_formula::FormulaLocale::Ru)
+                .or_else(|| gridcraft_formula::boolean_alias(&name, gridcraft_formula::FormulaLocale::Es))
+            {
+                gridcraft_formula::Expr::Bool(b)
+            } else {
+                gridcraft_formula::Expr::Name(name)
+            }
+        }
+        other => other,
+    });
+
+    Ok(expr)
 }
 
 /// Like Excel, a formula that calls a built-in function with too few or too many arguments is
