@@ -1,10 +1,11 @@
-//! Static in-cell PNG/JPEG images, from the public MS-XLSX rich-data schemas.
-//! `vm` and metadata type IDs are one-based; every subsequent table index is zero-based.
+//! Static in-cell PNG/JPEG images and the newer error values, from the public MS-XLSX rich-data
+//! schemas. `vm` and metadata type IDs are one-based; every subsequent table index is zero-based.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
+use gridcraft_core::CellError;
 use gridcraft_model::CellPicture;
 
 use crate::IoError;
@@ -21,6 +22,43 @@ const MAX_IMAGES_TOTAL: usize = 128 * 1024 * 1024;
 const MAX_RECORDS: usize = 100_000;
 const MAX_XML: u64 = 16 * 1024 * 1024;
 const MAX_PIXELS: u64 = 16_000_000;
+
+/// What the value metadata of a cell names: an in-cell picture, or an error the cell error codes
+/// of the file format lack ([MS-XLSX] 2.3.6.1.3), whose cell caches `#VALUE!` for older readers.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RichValue {
+    Picture(Arc<CellPicture>),
+    Error(CellError),
+}
+
+/// The `errorType` of an error saved as a rich value ([MS-XLSX] 2.3.6.1.3.1 to 2.3.6.1.3.10):
+/// `None` for the errors that have a cell error code of their own.
+pub fn error_type(error: CellError) -> Option<u32> {
+    match error {
+        CellError::Spill => Some(8),
+        CellError::Blocked => Some(10),
+        CellError::Calc => Some(13),
+        CellError::Busy => Some(14),
+        // The External error type, which Excel shows as #PYTHON! for the Python service.
+        CellError::Python => Some(18),
+        CellError::Timeout => Some(19),
+        _ => None,
+    }
+}
+
+fn error_of_type(error_type: u32) -> Option<CellError> {
+    match error_type {
+        4 => Some(CellError::Name),
+        8 => Some(CellError::Spill),
+        10 => Some(CellError::Blocked),
+        13 => Some(CellError::Calc),
+        14 => Some(CellError::Busy),
+        17 => Some(CellError::Busy),
+        18 => Some(CellError::Python),
+        19 => Some(CellError::Timeout),
+        _ => None,
+    }
+}
 
 /// Header dimensions bound decode allocations in consumers. Full decoding is left to the UI.
 fn image_type(data: &[u8]) -> Option<(&'static str, &'static str)> {
@@ -115,7 +153,7 @@ fn entries<'a>(cx: &mut Ctx<'_>, el: &'a El, child: &'a str) -> Result<Vec<&'a E
 }
 
 /// Resolves every value-metadata block without assuming the indices at each layer coincide.
-pub fn read(cx: &mut Ctx<'_>, workbook_rels: &[Rel]) -> Result<Vec<Option<Arc<CellPicture>>>, IoError> {
+pub fn read(cx: &mut Ctx<'_>, workbook_rels: &[Rel]) -> Result<Vec<Option<RichValue>>, IoError> {
     let Some(metadata_path) = part(cx, workbook_rels, "sheetMetadata") else { return Ok(vec![]) };
     let Some(metadata) = read_xml(cx, &metadata_path, "metadata")? else { return Ok(vec![]) };
     let Some(types) = metadata.child("metadataTypes") else { return Ok(vec![]) };
@@ -133,19 +171,32 @@ pub fn read(cx: &mut Ctx<'_>, workbook_rels: &[Rel]) -> Result<Vec<Option<Arc<Ce
         return Ok(vec![]);
     };
     rels.extend(cx.pkg.rels(&data_path)?);
-    let (Some(structure_path), Some(image_rels_path)) = (part(cx, &rels, "rdRichValueStructure"), part(cx, &rels, "richValueRel")) else {
-        cx.warn("missing rich-value structure or image relationships; cell pictures were not loaded");
+    let Some(structure_path) = part(cx, &rels, "rdRichValueStructure") else {
+        cx.warn("missing rich-value structure relationship; cell pictures were not loaded");
         return Ok(vec![]);
     };
     let Some(data) = read_xml(cx, &data_path, "rvData")? else { return Ok(vec![]) };
     let Some(structures) = read_xml(cx, &structure_path, "rvStructures")? else { return Ok(vec![]) };
-    let Some(image_rel_list) = read_xml(cx, &image_rels_path, "richValueRels")? else { return Ok(vec![]) };
-    let image_rels = cx.pkg.rels(&image_rels_path)?;
+    // Only pictures need the image relationships: a workbook with error values alone has none,
+    // and a damaged list (already warned about) still leaves the error values readable.
+    let (image_rel_list, image_rels) = match part(cx, &rels, "richValueRel") {
+        Some(path) => match read_xml(cx, &path, "richValueRels")? {
+            Some(list) => {
+                let image_rels = cx.pkg.rels(&path)?;
+                (Some(list), image_rels)
+            }
+            None => (None, vec![]),
+        },
+        None => (None, vec![]),
+    };
     let structures = entries(cx, &structures, "s")?;
     // Each structure's key layout, worked out once: every value would otherwise walk its
     // structure's keys again. Only local-image structures matter here.
     let layouts: Vec<Option<Layout>> = structures.iter().map(|s| Layout::of(s)).collect();
-    let image_rel_list = entries(cx, &image_rel_list, "rel")?;
+    let image_rel_list = match &image_rel_list {
+        Some(list) => entries(cx, list, "rel")?,
+        None => vec![],
+    };
     // Relationships by id, a repeated id recorded as invalid (`None`), so a value's lookup is
     // one probe rather than a scan of the whole table for duplicates.
     let mut rels_by_id: HashMap<&str, Option<&Rel>> = HashMap::new();
@@ -157,7 +208,11 @@ pub fn read(cx: &mut Ctx<'_>, workbook_rels: &[Rel]) -> Result<Vec<Option<Arc<Ce
     let mut cache = HashMap::new();
     let mut total = 0usize;
     for value in values {
-        let picture = read_value(cx, value, &layouts, &image_rel_list, &rels_by_id, &mut cache, &mut total)?;
+        if let Some(error) = read_error(value, &structures) {
+            pictures.push(error.map(RichValue::Error));
+            continue;
+        }
+        let picture = read_value(cx, value, &layouts, &image_rel_list, &rels_by_id, &mut cache, &mut total)?.map(RichValue::Picture);
         if picture.is_none() {
             cx.warn("some rich values are unsupported or malformed; their scalar fallbacks were retained (cell pictures may be missing)");
         }
@@ -195,6 +250,21 @@ pub fn read(cx: &mut Ctx<'_>, workbook_rels: &[Rel]) -> Result<Vec<Option<Arc<Ce
                 .flatten()
         })
         .collect())
+}
+
+/// `None` when the value is no error; `Some(None)` for an error type GridCraft lacks, which keeps
+/// the cell's scalar fallback as Excel's older readers do.
+fn read_error(value: &El, structures: &[&El]) -> Option<Option<CellError>> {
+    let structure = value.attr_u32("s").and_then(|n| structures.get(n as usize))?;
+    if structure.attr("t") != Some("_error") {
+        return None;
+    }
+    let error_type = structure
+        .kids("k")
+        .zip(value.kids("v"))
+        .find(|(key, _)| key.attr("n") == Some("errorType") && key.attr("t") == Some("i"))
+        .and_then(|(_, v)| v.text.trim().parse::<u32>().ok());
+    Some(error_type.and_then(error_of_type))
 }
 
 /// Where a `_localImage` structure keeps the values a picture needs.
@@ -276,59 +346,106 @@ fn read_value(
     Ok(Some(picture))
 }
 
-/// One rich value per shared model payload; copied cells can reuse a metadata block.
+/// One rich value per shared model payload and per error; copied cells can reuse a metadata block.
 #[derive(Default)]
-pub struct PicturesOut {
-    pictures: Vec<Arc<CellPicture>>,
-    indices: HashMap<*const CellPicture, u32>,
+pub struct RichValuesOut {
+    values: Vec<RichValue>,
+    pictures: HashMap<*const CellPicture, u32>,
+    errors: HashMap<CellError, u32>,
 }
 
-impl PicturesOut {
+impl RichValuesOut {
     pub fn is_empty(&self) -> bool {
-        self.pictures.is_empty()
+        self.values.is_empty()
     }
-    pub fn index(&mut self, picture: &Arc<CellPicture>) -> u32 {
+    fn push(&mut self, value: RichValue) -> u32 {
+        self.values.push(value);
+        self.values.len() as u32
+    }
+    pub fn picture(&mut self, picture: &Arc<CellPicture>) -> u32 {
         let key = Arc::as_ptr(picture);
-        if let Some(index) = self.indices.get(&key) {
+        if let Some(index) = self.pictures.get(&key) {
             return *index;
         }
-        let index = self.pictures.len().saturating_add(1) as u32;
-        self.pictures.push(picture.clone());
-        self.indices.insert(key, index);
+        let index = self.push(RichValue::Picture(picture.clone()));
+        self.pictures.insert(key, index);
         index
+    }
+    /// The one-based `vm` of an error saved as a rich value, or `None` for an error with a cell
+    /// error code of its own.
+    pub fn error(&mut self, error: CellError) -> Option<u32> {
+        error_type(error)?;
+        if let Some(index) = self.errors.get(&error) {
+            return Some(*index);
+        }
+        let index = self.push(RichValue::Error(error));
+        self.errors.insert(error, index);
+        Some(index)
     }
 }
 
+/// A Spill error must also carry the size of the result it could not show ([MS-XLSX]
+/// 2.3.6.1.3.7); the model does not keep it, so it is written as no extra rows or columns.
+const SPILL_STRUCTURE: &str = "<s t=\"_error\"><k n=\"colOffset\" t=\"i\"/><k n=\"errorType\" t=\"i\"/><k n=\"rwOffset\" t=\"i\"/></s>";
+const ERROR_STRUCTURE: &str = "<s t=\"_error\"><k n=\"errorType\" t=\"i\"/></s>";
+const IMAGE_STRUCTURE: &str =
+    "<s t=\"_localImage\"><k n=\"_rvRel:LocalImageIdentifier\" t=\"i\"/><k n=\"CalcOrigin\" t=\"i\"/><k n=\"Text\" t=\"s\"/></s>";
+
 pub fn write(out: &mut Out, workbook_rels: &mut Rels) -> Result<(), IoError> {
-    let pictures = std::mem::take(&mut out.cell_pictures).pictures;
-    if pictures.len() > MAX_RECORDS {
-        return Err(IoError::TooLarge("too many cell pictures".into()));
+    let values = std::mem::take(&mut out.rich_values).values;
+    if values.len() > MAX_RECORDS {
+        return Err(IoError::TooLarge("too many cell pictures and error values".into()));
     }
-    let count = pictures.len();
+    let count = values.len();
     let mut data = format!("{XML_DECL}<rvData xmlns=\"{NS_RICH}\" count=\"{count}\">");
     let mut rel_list = format!("{XML_DECL}<richValueRels xmlns=\"{NS_IMAGE_REL}\" xmlns:r=\"{NS_REL}\">");
     let mut image_rels = Rels::default();
+    // Structures are written in first-use order; each value names its own by index.
+    let mut structures: Vec<&str> = vec![];
+    let mut structure = |s: &'static str| match structures.iter().position(|x| *x == s) {
+        Some(i) => i,
+        None => {
+            structures.push(s);
+            structures.len() - 1
+        }
+    };
+    let mut images = 0usize;
     let mut total = 0usize;
-    for (i, picture) in pictures.iter().enumerate() {
+    for value in &values {
+        let picture = match value {
+            RichValue::Picture(picture) => picture,
+            RichValue::Error(error) => {
+                let error_type = error_type(*error).unwrap_or(0);
+                if *error == CellError::Spill {
+                    let s = structure(SPILL_STRUCTURE);
+                    let _ = write!(data, "<rv s=\"{s}\"><v>0</v><v>{error_type}</v><v>0</v></rv>");
+                } else {
+                    let s = structure(ERROR_STRUCTURE);
+                    let _ = write!(data, "<rv s=\"{s}\"><v>{error_type}</v></rv>");
+                }
+                continue;
+            }
+        };
         total = total.saturating_add(picture.data.len());
         if picture.data.len() as u64 > MAX_IMAGE || total > MAX_IMAGES_TOTAL {
             return Err(IoError::TooLarge("cell pictures exceed the 16 MiB image or 128 MiB workbook limit".into()));
         }
         let (mime, ext) = image_type(&picture.data)
             .ok_or_else(|| IoError::Format("cell pictures must be PNG/JPEG with at most 8192 pixels per side and 16 million pixels".into()))?;
+        let i = images;
+        images += 1;
         let image_name = format!("cellImage{}.{}", i + 1, ext);
         out.default_type(ext, mime);
         out.part(&format!("xl/media/{image_name}"), None, picture.data.clone());
         let rid = image_rels.add("image", &format!("../media/{image_name}"));
         let _ = write!(rel_list, "<rel r:id=\"{rid}\"/>");
-        let _ = write!(data, "<rv s=\"0\"><v>{i}</v><v>5</v><v>{}</v></rv>", esc(&picture.alt));
+        let s = structure(IMAGE_STRUCTURE);
+        let _ = write!(data, "<rv s=\"{s}\"><v>{i}</v><v>5</v><v>{}</v></rv>", esc(&picture.alt));
     }
     data.push_str("</rvData>");
     rel_list.push_str("</richValueRels>");
-    let structures = format!(
-        "{XML_DECL}<rvStructures xmlns=\"{NS_RICH}\" count=\"1\"><s t=\"_localImage\"><k n=\"_rvRel:LocalImageIdentifier\" t=\"i\"/><k n=\"CalcOrigin\" t=\"i\"/><k n=\"Text\" t=\"s\"/></s></rvStructures>"
-    );
-    for (name, content_type, relation, bytes) in [
+    let structures = format!("{XML_DECL}<rvStructures xmlns=\"{NS_RICH}\" count=\"{}\">{}</rvStructures>", structures.len(), structures.concat());
+    let mut parts = vec![
         (
             "rdrichvalue.xml",
             "application/vnd.ms-excel.rdRichValue+xml",
@@ -341,17 +458,21 @@ pub fn write(out: &mut Out, workbook_rels: &mut Rels) -> Result<(), IoError> {
             "http://schemas.microsoft.com/office/2017/06/relationships/rdRichValueStructure",
             structures.into_bytes(),
         ),
-        (
+    ];
+    // The image relationships exist only for pictures.
+    if images > 0 {
+        parts.push((
             "richValueRel.xml",
             "application/vnd.ms-excel.richvaluerel+xml",
             "http://schemas.microsoft.com/office/2022/10/relationships/richValueRel",
             rel_list.into_bytes(),
-        ),
-    ] {
+        ));
+        out.part("xl/richData/_rels/richValueRel.xml.rels", None, image_rels.xml().into_bytes());
+    }
+    for (name, content_type, relation, bytes) in parts {
         out.part(&format!("xl/richData/{name}"), Some(content_type), bytes);
         workbook_rels.add_uri(relation, &format!("richData/{name}"));
     }
-    out.part("xl/richData/_rels/richValueRel.xml.rels", None, image_rels.xml().into_bytes());
     out.part(
         "xl/metadata.xml",
         Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"),
