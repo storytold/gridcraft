@@ -6,7 +6,7 @@
 //! [`parse_input_in`] reads the decimal and thousands separators of any [`Region`].
 
 use crate::date::{DateSystem, MONTHS, serial_from_ymd, time_fraction};
-use crate::region::{EN_US, Grouping, Region};
+use crate::region::{DateOrder, EN_US, Grouping, Region};
 use crate::value::{CellError, Value};
 
 /// A parsed entry: its value and the number format Excel would apply automatically.
@@ -23,7 +23,8 @@ pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
 }
 
 /// Like [`parse_input`], reading numbers with the decimal and thousands separators of `region`
-/// (`1.769,41` is a number in `pt-BR`). Dates and fractions keep their en-US spelling.
+/// (`1.769,41` is a number in `pt-BR`) and numeric dates in its day, month and year order
+/// (`03/04/2026` is 3 April in `pt-BR`). Fractions keep their en-US spelling.
 pub fn parse_input_in(s: &str, sys: DateSystem, region: &Region) -> Parsed {
     if s.is_empty() {
         return Parsed { value: Value::Empty, format: None };
@@ -104,7 +105,7 @@ fn parse_unparenthesised(t: &str, sys: DateSystem, region: &Region) -> Option<(f
     if let Some(r) = parse_fraction(t) {
         return Some((r, Some("# ?/?")));
     }
-    if let Some(r) = parse_datetime(t, sys) {
+    if let Some(r) = parse_datetime(t, sys, region) {
         return Some(r);
     }
     None
@@ -276,7 +277,7 @@ fn month_from_name(s: &str) -> Option<u32> {
 }
 
 /// Time part: `h:mm`, `h:mm:ss`, `h:mm:ss.000`, `h AM`, with optional AM/PM.
-fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
+fn parse_time(t: &str, _region: &Region) -> Option<(f64, bool, bool)> {
     let t = t.trim();
     let lower = t.to_ascii_lowercase();
     let (body, ampm) = if let Some(b) = lower.strip_suffix("am").or_else(|| lower.strip_suffix('a')) {
@@ -315,7 +316,9 @@ fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
     Some((time_fraction(h, m, s), parts.len() == 3, ampm.is_some()))
 }
 
-fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
+/// A typed date. Numeric `a/b/c` and `a/b` follow `region.date_order`. The format returned stays
+/// the canonical `m/d/yyyy`, shown in the region's short date and saved as `numFmtId` 14.
+fn parse_date(t: &str, sys: DateSystem, region: &Region) -> Option<(f64, &'static str)> {
     let t = t.trim().trim_end_matches(',');
     let num = |s: &str| {
         let s = s.trim();
@@ -334,8 +337,13 @@ fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
         {
             return valid_ymd(sys, y, m, d).map(|s| (s, "yyyy-mm-dd"));
         }
-        if let (Some(m), Some(d), Some(y)) = (num(a), num(b), num(c)) {
-            let y = if c.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
+        let (ms, ds, ys) = match region.date_order {
+            DateOrder::Mdy => (a, b, c),
+            DateOrder::Dmy => (b, a, c),
+            DateOrder::Ymd => (b, c, a),
+        };
+        if let (Some(m), Some(d), Some(y)) = (num(ms), num(ds), num(ys)) {
+            let y = if ys.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
             return valid_ymd(sys, y, m, d).map(|s| (s, "m/d/yyyy"));
         }
         // 4-Mar-2026
@@ -348,14 +356,14 @@ fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
         let (a, b) = (parts[0].trim(), parts[1].trim());
         // m/d in the current year is ambiguous without a clock; use month/day of 2026? Excel uses
         // the current year. We accept d-mmm / mmm-d only with month names, and m/d → current year.
-        if let (Some(m), Some(d)) = (num(a), num(b)) {
-            let y = current_year();
+        if let (Some(x), Some(z)) = (num(a), num(b)) {
+            let (m, d) = if region.date_order == DateOrder::Dmy { (z, x) } else { (x, z) };
             if (1..=12).contains(&m) && (1..=31).contains(&d) {
-                return valid_ymd(sys, y, m, d).map(|s| (s, "d-mmm"));
+                return valid_ymd(sys, current_year(), m, d).map(|s| (s, "d-mmm"));
             }
             // m/yyyy
-            if (1..=12).contains(&m) && b.len() == 4 {
-                return valid_ymd(sys, d, m, 1).map(|s| (s, "mmm-yy"));
+            if (1..=12).contains(&x) && b.len() == 4 {
+                return valid_ymd(sys, z, x, 1).map(|s| (s, "mmm-yy"));
             }
         }
         if let (Some(d), Some(m)) = (num(a), month_from_name(b)) {
@@ -405,8 +413,8 @@ pub fn current_year() -> i64 {
     2026
 }
 
-fn parse_datetime(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
-    if let Some((tf, secs, ampm)) = parse_time(t) {
+fn parse_datetime(t: &str, sys: DateSystem, region: &Region) -> Option<(f64, Option<&'static str>)> {
+    if let Some((tf, secs, ampm)) = parse_time(t, region) {
         let f = match (secs, ampm) {
             // 24 hours or more: elapsed hours, so 25:00 shows as 25:00:00, not 1:00.
             _ if tf >= 1.0 => "[h]:mm:ss",
@@ -417,7 +425,7 @@ fn parse_datetime(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>
         };
         return Some((tf, Some(f)));
     }
-    if let Some((d, f)) = parse_date(t, sys) {
+    if let Some((d, f)) = parse_date(t, sys, region) {
         return Some((d, Some(f)));
     }
     // date + time: split at the last space(s) before a time-looking tail. Only splits where the
@@ -429,7 +437,8 @@ fn parse_datetime(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>
         if b.len() > 36 || !bytes.first().is_some_and(u8::is_ascii_digit) || !b.contains(':') {
             continue;
         }
-        if let (Some((d, _)), Some((tf, _, _))) = (t.get(..i).and_then(|a| parse_date(a, sys)), parse_time(b)) {
+        let date = t.get(..i).and_then(|a| parse_date(a, sys, region));
+        if let (Some((d, _)), Some((tf, _, _))) = (date, parse_time(b, region)) {
             return Some((d + tf, Some("m/d/yyyy h:mm")));
         }
     }

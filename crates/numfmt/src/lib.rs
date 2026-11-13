@@ -547,12 +547,18 @@ fn is_digit_placeholder(c: char) -> bool {
     matches!(c, '0' | '#' | '?')
 }
 
-/// Formats a cell value for display in `region`.
+/// Formats a cell value for display in `region`. The built-in short date `m/d/yyyy` (id 14) and
+/// date-time `m/d/yyyy h:mm` (id 22) are the en-US spellings of the region's own short date and
+/// date-time ([MS-OI29500]), so they are shown in `region.short_date` and `region.datetime`.
 pub fn format_value_in(v: &Value, fmt: &NumberFormat, sys: DateSystem, region: &Region) -> Formatted {
     match v {
         Value::Empty => Formatted::default(),
         Value::Number(n) if !n.is_finite() => Formatted { text: CellError::Num.as_str().into(), ..Formatted::default() },
-        Value::Number(n) => fmt.format_number(*n, sys, region).0,
+        Value::Number(n) => match fmt.code() {
+            "m/d/yyyy" => NumberFormat::parse_cached(region.short_date).format_number(*n, sys, region).0,
+            "m/d/yyyy h:mm" => NumberFormat::parse_cached(region.datetime).format_number(*n, sys, region).0,
+            _ => fmt.format_number(*n, sys, region).0,
+        },
         Value::Text(t) => fmt.format_text(t),
         Value::Bool(b) => Formatted { text: if *b { "TRUE" } else { "FALSE" }.into(), ..Formatted::default() },
         Value::Error(e) => Formatted { text: e.as_str().into(), ..Formatted::default() },
