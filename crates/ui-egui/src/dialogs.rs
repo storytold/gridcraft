@@ -609,6 +609,15 @@ impl Dialog {
                     }),
                 );
                 d.command = Some("data.monteCarlo");
+                if let Some(saved) = app.session.active().and_then(|doc| doc.wb.active()).and_then(monte_carlo::saved_configuration) {
+                    match saved.and_then(|config| monte_carlo::load_configuration(&mut d, config)) {
+                        Ok(()) => {}
+                        Err(message) => {
+                            app.message = Some(("Monte Carlo".into(), message.into()));
+                            return None;
+                        }
+                    }
+                }
                 d
             }
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),

@@ -1,6 +1,43 @@
 //! Thin editor for the engine's generic Monte Carlo command.
 use super::{Dialog, Json, Map, json};
 
+/// Reads the configuration only from a recognizable Monte Carlo report on the active sheet.
+/// Invalid or edited report data is left to the user rather than silently run as defaults.
+pub(super) fn saved_configuration(sheet: &gridcraft_engine::model::Sheet) -> Option<Result<Json, &'static str>> {
+    use gridcraft_engine::core::{CellRef, Value};
+    if !matches!(sheet.value(CellRef::new(0, 0)), Value::Text(ref t) if t.as_ref() == "Monte Carlo simulation")
+        || !matches!(sheet.value(CellRef::new(3, 0)), Value::Text(ref t) if t.as_ref() == "Reusable configuration (JSON)")
+    {
+        return None;
+    }
+    let Value::Text(text) = sheet.value(CellRef::new(3, 1)) else { return Some(Err("The saved Monte Carlo configuration is missing.")) };
+    Some(serde_json::from_str::<Json>(&text).ok().filter(Json::is_object).ok_or("The saved Monte Carlo configuration is invalid."))
+}
+
+/// Converts the stored output list to the dialog's line editor while retaining other settings.
+pub(super) fn load_configuration(dialog: &mut Dialog, config: Json) -> Result<(), &'static str> {
+    let mut values = config.as_object().cloned().ok_or("The saved Monte Carlo configuration is invalid.")?;
+    let outputs = values
+        .get("outputs")
+        .and_then(Json::as_array)
+        .filter(|outputs| !outputs.is_empty() && outputs.len() <= 64)
+        .ok_or("The saved Monte Carlo outputs are invalid.")?;
+    let lines = outputs.iter().map(Json::as_str).collect::<Option<Vec<_>>>().ok_or("The saved Monte Carlo outputs are invalid.")?;
+    if !values
+        .get("inputs")
+        .and_then(Json::as_array)
+        .is_some_and(|inputs| !inputs.is_empty() && inputs.len() <= 32 && inputs.iter().all(Json::is_object))
+    {
+        return Err("The saved Monte Carlo inputs are invalid.");
+    }
+    let outputs_text = lines.join("\n");
+    values.insert("outputs".into(), json!(outputs_text));
+    values.remove("newSheet");
+    dialog.values = values;
+    dialog.title = "Edit Monte Carlo Simulation".into();
+    Ok(())
+}
+
 /// Starts a uniform input without preloading parameters belonging to another distribution.
 /// The editor supplies those defaults only when that distribution is selected.
 pub(super) fn input_template(cell: &str) -> Json {
@@ -217,6 +254,39 @@ pub(super) fn params(d: &Dialog) -> Json {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A report can be reopened, edited and run again without overwriting the original report.
+    #[test]
+    fn monte_carlo_report_configuration_can_be_edited_and_rerun() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        session.execute("cell.set", json!({"cell":"A1","input":"2"})).unwrap();
+        session.execute("cell.set", json!({"cell":"B1","input":"=A1*2"})).unwrap();
+        let config =
+            json!({"inputs":[{"cell":"A1","distribution":"uniform","min":1,"max":3}],"outputs":["B1"],"iterations":32,"seed":42,"samples":false});
+        let original = session.execute("data.monteCarlo", config).unwrap();
+        let mut app = crate::SheetApp::new(session, Default::default());
+        let mut dialog = Dialog::open(&mut app, "monteCarlo", json!({})).unwrap();
+        assert_eq!(dialog.title, "Edit Monte Carlo Simulation");
+        assert!(dialog.values["outputs"].as_str().unwrap().contains('!'));
+        dialog.values.insert("iterations".into(), json!("48"));
+        let rerun = app.session.execute("data.monteCarlo", params(&dialog)).unwrap();
+        assert_eq!(rerun["iterations"], 48);
+        assert_ne!(original["sheet"], rerun["sheet"]);
+        assert!(app.session.active().unwrap().wb.sheet_index(original["sheet"].as_str().unwrap()).is_some());
+    }
+
+    /// Malformed reports cannot silently turn into an unrelated default simulation.
+    #[test]
+    fn monte_carlo_invalid_saved_configuration_is_rejected() {
+        let mut sheet = gridcraft_engine::model::Sheet::new("report");
+        use gridcraft_engine::core::{CellRef, Value};
+        assert!(saved_configuration(&sheet).is_none());
+        sheet.set_value(CellRef::new(0, 0), Value::text("Monte Carlo simulation"));
+        sheet.set_value(CellRef::new(3, 0), Value::text("Reusable configuration (JSON)"));
+        sheet.set_value(CellRef::new(3, 1), Value::text("not json"));
+        assert!(saved_configuration(&sheet).unwrap().is_err());
+    }
 
     /// Adding an input and then selecting a distribution supplies its own untouched defaults.
     #[test]
