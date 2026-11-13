@@ -46,9 +46,9 @@ fn spill_range_operator() {
     assert_eq!((t.num("C1"), t.num("C2")), (15.0, 5.0));
     t.set("A1", "2");
     assert_eq!((t.num("C1"), t.num("C2")), (3.0, 2.0));
-    // A blocked spill, or a cell that doesn't spill, gives #REF!.
+    // A blocked spill gives the anchor's #SPILL!, and a cell that doesn't spill gives #REF!.
     t.set("B2", "x");
-    assert_eq!(t.get("C1"), Value::Error(CellError::Ref));
+    assert_eq!(t.get("C1"), Value::Error(CellError::Spill));
     t.set("B2", "");
     assert_eq!(t.num("C1"), 3.0);
     t.set("D1", "=SUM(A1#)");
@@ -65,6 +65,25 @@ fn spill_range_operator() {
     assert_eq!(t.num("E1"), 30.0);
     t.set("A1", "4");
     assert_eq!(t.num("E1"), 100.0);
+}
+
+#[test]
+fn spill_reference_passes_on_an_anchor_error() {
+    let mut t = T::new();
+    t.set("A1", "=1/0");
+    t.set("B1", "=SUM(A1#)");
+    assert_eq!(t.get("B1"), Value::Error(CellError::Div0));
+    t.set("A1", "=NA()");
+    assert_eq!(t.get("B1"), Value::Error(CellError::NA));
+    // An anchor that is an ordinary value is still #REF!.
+    t.set("A1", "7");
+    assert_eq!(t.get("B1"), Value::Error(CellError::Ref));
+    // A blocked spill reads as #SPILL!, and an unblocked one still sums.
+    t.set("A2", "9");
+    t.set("A1", "=SEQUENCE(2)");
+    assert_eq!(t.get("B1"), Value::Error(CellError::Spill));
+    t.set("A2", "");
+    assert_eq!(t.num("B1"), 3.0);
 }
 
 #[test]
@@ -722,7 +741,7 @@ fn formulas_reading_an_array_that_loses_a_spill_conflict_read_spill_errors() {
     t.calc.recalc_all(&mut t.wb);
     let spill = Value::Error(CellError::Spill);
     assert_eq!((t.num("B2"), t.get("A2"), t.get("D2")), (2.0, spill.clone(), spill));
-    assert_eq!((t.get("C2"), t.num("E2"), t.get("F2"), t.num("G2")), (Value::Empty, 0.0, Value::Error(CellError::Ref), 0.0));
+    assert_eq!((t.get("C2"), t.num("E2"), t.get("F2"), t.num("G2")), (Value::Empty, 0.0, Value::Error(CellError::Spill), 0.0));
 }
 
 #[test]
