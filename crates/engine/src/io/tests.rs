@@ -881,3 +881,14 @@ fn the_merge_index_holds_a_bounded_number_of_cells() {
     sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(1_000_000, 0))];
     assert!(merge_index(&sh, rect).is_none());
 }
+
+#[test]
+fn text_named_xlsx_opens_with_a_warning_but_real_csv_does_not() {
+    // #3975: a ".xlsx" that isn't a ZIP package was read as a one-cell text file without a word.
+    let (wb, warnings) = open_bytes("broken.xlsx", b"kein zip\n").unwrap();
+    assert_eq!(wb.sheets.len(), 1);
+    assert!(warnings.iter().any(|w| w.contains("broken.xlsx") && w.contains("isn't a valid .xlsx package")), "{warnings:?}");
+    // Text under an honest name opens as before, with no warning.
+    let (_, warnings) = open_bytes("book.csv", b"a,b\n1,2\n").unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
