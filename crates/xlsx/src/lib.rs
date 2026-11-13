@@ -12,7 +12,6 @@
 #![forbid(unsafe_code)]
 
 mod array_formula;
-mod cfb;
 mod chart;
 mod chartex;
 mod controls;
@@ -52,7 +51,7 @@ pub use csv::{MAX_CSV_BYTES, decode_text, read_csv, read_csv_with_report, write_
 pub use ods::read_ods;
 pub use package::MAX_PART;
 pub use passthrough::rebase_links;
-pub use xls::read_xls;
+pub use xls::{read_xls, read_xls_with};
 pub use xlsb::read_xlsb;
 
 /// Errors from reading or writing files.
@@ -231,11 +230,14 @@ pub struct CsvOptions {
     pub date_system: DateSystem,
     /// Interpret fields like typed input (numbers, dates, booleans…); otherwise keep text.
     pub parse_values: bool,
+    /// Refuse (with [`IoError::TooLarge`], while reading) a file whose used range, from its first to
+    /// its last non-empty cell, would pass this many cells; `None` for no limit.
+    pub max_used_cells: Option<u64>,
 }
 
 impl Default for CsvOptions {
     fn default() -> Self {
-        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true }
+        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true, max_used_cells: None }
     }
 }
 
@@ -269,8 +271,8 @@ pub fn sniff(bytes: &[u8]) -> Format {
     // CFB/OLE2 compound file: a password-protected workbook when it holds an encryption
     // stream, an Excel 97-2003 workbook when it holds a workbook stream, otherwise another
     // legacy binary (.doc…).
-    if bytes.starts_with(&cfb::SIGNATURE) {
-        return if cfb::is_encrypted(bytes) {
+    if bytes.starts_with(&craft_cfb::SIGNATURE) {
+        return if crypto::is_encrypted(bytes) {
             Format::Encrypted
         } else if xls::is_xls(bytes) {
             Format::Xls
