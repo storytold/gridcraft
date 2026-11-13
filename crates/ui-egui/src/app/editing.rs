@@ -58,6 +58,11 @@ impl SheetApp {
             self.session.mode = gridcraft_engine::Mode::Edit;
             return;
         }
+        // A hidden formula's source isn't loaded into an edit (a blank edit would also write over
+        // it on commit): no edit starts. Typing still replaces the cell.
+        if text.is_none() && gridcraft_engine::display::formula_hidden(&d.wb, sh, at) {
+            return;
+        }
         let locale = self.ui.language.formula_locale();
         let current = if sh.cell_pictures.contains_key(&at) {
             String::new()
@@ -483,7 +488,11 @@ impl SheetApp {
 
     /// Enter/Tab move inside a multi-cell selection, otherwise to the next cell.
     pub fn move_after_enter(&mut self, dr: i64, dc: i64) {
-        let multi = self.session.active().is_some_and(|d| !d.selection.is_single_cell());
+        // A selection that is just one merged cell moves like one cell (Enter leaves it).
+        let multi = self
+            .session
+            .active()
+            .is_some_and(|d| !d.selection.is_single_cell() && !d.wb.active().is_some_and(|sh| d.selection.is_one_merged_cell(sh)));
         // Any other move (arrows, clicks, another sheet) leaves the selection off the cell the
         // last Tab landed on, which ends the run.
         let here = self.session.active().map(|d| (d.uid, d.wb.active_sheet(), d.selection.active));
@@ -828,5 +837,62 @@ mod fill_validation_tests {
         app.begin_edit(Some("5".into()), false);
         assert!(app.commit_edit(0, 0, false, false));
         assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Number(5.0), Value::Empty, Value::Empty]);
+    }
+}
+#[cfg(test)]
+mod merged_cell_enter_tests {
+    use super::*;
+    use gridcraft_engine::Session;
+
+    #[test]
+    fn enter_and_tab_leave_a_selected_merged_cell_and_keep_the_tab_run() {
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("selection.set", json!({"range": "B2:C3"})).unwrap();
+        app.run("home.mergeCells", json!({})).unwrap();
+        let sel = |app: &SheetApp| app.session.active().map(|d| d.selection.a1()).unwrap_or_default();
+        for ((dr, dc), want) in [((1, 0), "B4"), ((-1, 0), "B1"), ((0, 1), "D2"), ((0, -1), "A2")] {
+            app.run("selection.set", json!({"cell": "B2"})).unwrap();
+            assert_eq!(sel(&app), "B2:C3");
+            app.move_after_enter(dr, dc);
+            assert_eq!(sel(&app), want, "Enter/Tab ({dr},{dc}) from the merged cell B2:C3");
+        }
+        // A Tab run through the merged cell goes on past it: Enter then goes back to the column
+        // the run started in, on the next row.
+        app.tab_run = None; // the Shift+Tab above ended on A2 and started a run there
+        app.run("selection.set", json!({"cell": "A2"})).unwrap();
+        app.move_after_enter(0, 1);
+        assert_eq!(sel(&app), "B2:C3");
+        app.move_after_enter(0, 1);
+        assert_eq!(sel(&app), "D2");
+        app.move_after_enter(1, 0);
+        assert_eq!(sel(&app), "A3");
+        // Enter straight from the merged cell in a Tab run leaves it below its bottom edge and
+        // still goes back to the run's start column.
+        app.tab_run = None;
+        app.run("selection.set", json!({"cell": "A2"})).unwrap();
+        app.move_after_enter(0, 1);
+        assert_eq!(sel(&app), "B2:C3");
+        app.move_after_enter(1, 0);
+        assert_eq!(sel(&app), "A4");
+    }
+
+    #[test]
+    fn enter_from_a_merged_cell_in_a_tab_run_skips_a_hidden_row_and_keeps_the_column() {
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("selection.set", json!({"range": "D2:E3"})).unwrap();
+        app.run("home.mergeCells", json!({})).unwrap();
+        app.run("selection.set", json!({"range": "A4"})).unwrap();
+        app.run("home.hideRows", json!({})).unwrap();
+        let sel = |app: &SheetApp| app.session.active().map(|d| d.selection.a1()).unwrap_or_default();
+        app.run("selection.set", json!({"cell": "C2"})).unwrap();
+        app.move_after_enter(0, 1);
+        assert_eq!(sel(&app), "D2:E3");
+        // Row 4 is hidden: Enter lands on C5, the run's column, not B5.
+        app.move_after_enter(1, 0);
+        assert_eq!(sel(&app), "C5");
     }
 }
