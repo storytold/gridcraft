@@ -84,6 +84,7 @@ fn text_needs_quote_prefix(t: &str, sys: gridcraft_core::date::DateSystem, regio
 /// serial. When the formatted text would not read back as the same date (for example
 /// `dddd, mmmm d`), an ISO `yyyy-mm-dd` (with `hh:mm:ss` for a time of day; just `hh:mm:ss`
 /// for a time alone) is used instead, and if even that would not read back, the serial.
+/// A constant number is written with the region's decimal separator, so it reads back the same.
 pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let raw = sheet.input_text(c);
     let Some(cell) = sheet.cell(c) else { return raw };
@@ -95,8 +96,13 @@ pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
         return format!("'{raw}");
     }
     let Value::Number(n) = &cell.value else { return raw };
+    if cell.formula.is_some() {
+        return raw;
+    }
+    // `number_to_text` writes no group separator, so its only `.` is the decimal one.
+    let raw = if wb.region.decimal == '.' { raw } else { raw.replace('.', &wb.region.decimal.to_string()) };
     let code = wb.styles.get(cell.style).num_fmt.as_str();
-    if cell.formula.is_some() || !parsed(code).is_date() {
+    if !parsed(code).is_date() {
         return raw;
     }
     let reads_back =
