@@ -224,7 +224,6 @@ pub fn is_shaped(font: Font, text: &str) -> bool {
 /// and drawing that text causes [`PdfDoc::finish`] to return the rendering error.
 pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
     if arabic::shaped(font, text) {
-        // Drawing records the error and finish rejects the document; measuring never substitutes ?.
         return arabic::layout(font, text).map(|layout| layout.width * size / 1000.0).unwrap_or(0.0);
     }
     // u64: a u32 sum overflows for ~8 million characters.
@@ -1045,8 +1044,8 @@ impl PdfDoc {
         self.pages.get_mut(i)
     }
 
-    /// Whether some Arabic text was drawn with the standard fonts, as `?`, because no Arabic face
-    /// is bundled or installed.
+    /// Whether some Arabic text was set in the standard and CID fonts, which have no Arabic glyphs,
+    /// because no Arabic face was found for its weight.
     pub fn missing_arabic_font(&self) -> bool {
         self.pages.iter().any(|page| page.missing_arabic_font)
     }

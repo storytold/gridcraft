@@ -153,14 +153,14 @@ pub(crate) const PX_TO_PT: f32 = 0.75;
 /// Most pages one export produces.
 pub const MAX_PAGES: usize = 2000;
 
-/// A rendered PDF and whether its Arabic text fell back to `?` for lack of an Arabic font.
+/// A rendered PDF and whether some of its Arabic text was set without an Arabic face.
 pub struct RenderedPdf {
     pub bytes: Vec<u8>,
     pub pages: usize,
     pub missing_arabic_font: bool,
 }
 
-const MISSING_ARABIC_FONT: &str = "Arabic text was exported as ? because Noto Sans Arabic is not installed.";
+const MISSING_ARABIC_FONT: &str = "Some Arabic text could not be drawn in this PDF because no Noto Sans Arabic face was found for it.";
 
 /// Renders laid-out sheets to a PDF.
 pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> Result<RenderedPdf> {
