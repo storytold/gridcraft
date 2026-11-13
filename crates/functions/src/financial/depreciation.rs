@@ -151,15 +151,17 @@ pub(super) fn amordegrc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     };
     let r = rate * coef;
     let mut book = cost;
-    let mut dep = (year_frac(c.date_system(), purchased, first, basis)? * r * cost).round();
+    // Only the returned charge is rounded; the book value carries the unrounded charges,
+    // so rounding does not accumulate across periods (#3963).
+    let mut dep = year_frac(c.date_system(), purchased, first, basis)? * r * cost;
     if period == 0.0 {
-        return num_val(dep);
+        return num_val(dep.round());
     }
     book -= dep;
     let mut rest = book - salvage;
     let mut n = 1.0;
     while n <= period {
-        dep = (r * book).round();
+        dep = r * book;
         rest -= dep;
         if rest < 0.0 {
             // The two final periods split what remains; afterwards nothing is left.
@@ -169,5 +171,5 @@ pub(super) fn amordegrc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
         book -= dep;
         n += 1.0;
     }
-    num_val(dep)
+    num_val(dep.round())
 }
