@@ -333,11 +333,22 @@ fn implicit_intersection_metadata_respects_function_argument_context() {
             ("SUM(A1:A3)", false),
             ("SUMPRODUCT(A1:A3*B1:B3)", false),
             ("SUMPRODUCT(SQRT(A1:A3))", false),
-            // An explicit `@` is written as `_xlfn.SINGLE`, a dynamic-array formula. Dropping it
-            // instead would need the reader to put it back on legacy formulas.
-            ("SQRT(@A1:A3)", true),
-            ("@A1:A3*2", true),
+            // An `@` that legacy Excel implies is dropped (the reader puts it back), and so is one
+            // of a range an edit made one cell (`SQRT(@A1:A1)` after deleting rows under
+            // `SQRT(@A1:A3)`). An `@` of one value stays as `_xlfn.SINGLE` in a legacy formula, as
+            // Excel writes it; any other `@` makes the formula a dynamic-array one.
+            ("SQRT(@A1:A3)", false),
+            ("@A1:A3*2", false),
             ("@(A1:A3*2)", true),
+            ("SQRT(@A1)", false),
+            ("SQRT(@A1:A1)", false),
+            ("@SUM(A1:A3)", false),
+            ("SUMPRODUCT(@ROW(A1:A3))", true),
+            ("SUMPRODUCT(@SQRT(A1:A3))", true),
+            // Legacy Excel intersects IFERROR's and IFNA's arguments inside SUMPRODUCT; dynamic-array
+            // Excel evaluates them as arrays.
+            ("SUMPRODUCT(IFERROR(VALUE(A1:A3),0))", true),
+            ("SUMPRODUCT(IFNA(A1:A3,0))", true),
             ("SQRT(INDIRECT(\"A1\"))", false),
             ("SUM(INDIRECT(\"A1:A3\"))", false),
             ("SQRT(INDIRECT(\"A1:A3\"))", true),
@@ -481,6 +492,137 @@ fn legacy_formulas_into_linked_workbooks_stay_legacy_even_when_they_spill() {
     assert!(sheet.child("sheetData").unwrap().kids("row").flat_map(|r| r.kids("c")).all(|c| c.attr("r") != Some("D7")), "no spilled values");
     assert_dynamic(&sheet, "E6", "E6:E8");
     assert_eq!(cell(&sheet, "F6").attr("cm"), Some("1"));
+}
+/// How `export` saved a formula, as comparable text.
+fn export_text(wb: &Workbook, at: CellRef, text: &str, names: &mut crate::array_formula::NameCache) -> String {
+    use crate::array_formula::{Export, export};
+    match export(wb, 0, at, &Formula::new(text), crate::FunctionInfo::default(), names) {
+        Export::Unchanged => "unchanged".into(),
+        Export::Dynamic => "dynamic".into(),
+        Export::Legacy(e) => format!("legacy {}", gridcraft_formula::print(&e)),
+    }
+}
+
+#[test]
+fn defined_names_are_analysed_once_for_many_formulas() {
+    use crate::array_formula::NameCache;
+    let mut wb = Workbook::new();
+    // A large definition: many operations, ending in a range.
+    let big = (1..=500).map(|i| format!("Sheet1!$A${i}")).collect::<Vec<_>>().join("+");
+    for (name, text) in [("Big", format!("({big})*Sheet1!$B$1:$B$3")), ("Rng", "Sheet1!$A$1:$A$3".to_string()), ("Alias", "Rng".to_string())] {
+        wb.names.push(DefinedName { name: name.into(), scope: None, formula: text, comment: String::new(), hidden: false });
+    }
+    let texts = ["SUM(Big)", "SQRT(Big)", "Big*2", "SQRT(Alias)", "SUM(Alias)", "Alias", "SUM(Rng*2)", "Missing*2"];
+    let mut shared = NameCache::default();
+    for i in 0..400u32 {
+        for text in texts {
+            let at = CellRef::new(i + 10, 5);
+            let with_shared = export_text(&wb, at, text, &mut shared);
+            let fresh = export_text(&wb, at, text, &mut NameCache::default());
+            assert_eq!(with_shared, fresh, "{text}");
+        }
+    }
+    assert!(gridcraft_formula::parse(&wb.names[0].formula).is_ok(), "the large name must parse");
+    // 3 names, each analysed once for all 3200 formulas (a fresh cache analyses a name per formula).
+    assert_eq!(shared.analyses, 3);
+}
+
+#[test]
+fn shared_name_analysis_keeps_each_formulas_limits_and_position() {
+    use crate::array_formula::NameCache;
+    let mut wb = Workbook::new();
+    let terms = |n: usize| (1..=n).map(|i| format!("Sheet1!$A${i}")).collect::<Vec<_>>().join("+");
+    // Twenty names of about a thousand nodes each: a formula using all of them needs more than
+    // its 16,384-node budget, one using a few does not.
+    for i in 0..20 {
+        let text = format!("({})*Sheet1!$B$1:$B$3", terms(500));
+        wb.names.push(DefinedName { name: format!("Big_{i}"), scope: None, formula: text, comment: String::new(), hidden: false });
+    }
+    for (name, text) in [
+        ("Cyc1", "Cyc2".to_string()),
+        ("Cyc2", "Cyc1".to_string()),
+        ("Deep", format!("{}1{}", "(".repeat(100), ")".repeat(100))),
+        ("Tbl", "Table1[Col]".to_string()),
+    ] {
+        wb.names.push(DefinedName { name: name.into(), scope: None, formula: text, comment: String::new(), hidden: false });
+    }
+    assert!(wb.names.iter().all(|n| gridcraft_formula::parse(&n.formula).is_ok()), "every name must parse");
+    let uses = |n: usize| (0..n).map(|i| format!("SQRT(Big_{i})")).collect::<Vec<_>>().join("+");
+    let mut texts: Vec<String> = [1, 5, 10, 15, 17, 20].iter().map(|n| uses(*n)).collect();
+    texts.extend(["SQRT(Big_3)", "Cyc1", "SUM(Cyc1)", "SUM(Deep)", "SQRT(Tbl)", "((((((((SQRT(Deep))))))))"].map(String::from));
+    // The limit is really reached: a few uses analyse fully, all twenty stop at the budget.
+    let probe = |n: usize| export_text(&wb, CellRef::new(5, 5), &uses(n), &mut NameCache::default());
+    assert_eq!(probe(1), "dynamic");
+    assert_eq!(probe(20), "unchanged");
+    let mut shared = NameCache::default();
+    for round in 0..3 {
+        for text in &texts {
+            for at in [CellRef::new(5, 5), CellRef::new(7, 9)] {
+                let with_shared = export_text(&wb, at, text, &mut shared);
+                let fresh = export_text(&wb, at, text, &mut NameCache::default());
+                assert_eq!(with_shared, fresh, "round {round}: {}", &text[..text.len().min(60)]);
+            }
+        }
+    }
+}
+
+/// A name defined as another name reads the same from the shared cache in either order: after
+/// the other name (whose cost and uncertainty the formula already paid) and before it (a hit
+/// records the other name too, so the formula does not pay for it twice).
+#[test]
+fn shared_name_analysis_of_names_defined_by_names_matches_fresh_in_both_orders() {
+    use crate::array_formula::NameCache;
+    let mut wb = Workbook::new();
+    let terms = (1..=500).map(|i| format!("Sheet1!$A${i}")).collect::<Vec<_>>().join("+");
+    // `Unsure` is outside the established legacy semantics (ISOMITTED), and `Alias` is it by name.
+    let mut defs = vec![
+        ("Unsure".to_string(), "IF(ISOMITTED(Sheet1!$C$1),Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3)".to_string()),
+        ("Alias".to_string(), "Unsure".to_string()),
+    ];
+    for i in 0..10 {
+        defs.push((format!("Big_{i}"), format!("({terms})*Sheet1!$B$1:$B$3")));
+        defs.push((format!("Via_{i}"), format!("Big_{i}")));
+    }
+    for (name, formula) in defs {
+        wb.names.push(DefinedName { name, scope: None, formula, comment: String::new(), hidden: false });
+    }
+    // Ten names of about a thousand nodes, each reached twice: within the budget only if the
+    // second reference is free.
+    let both = |first: &str, second: &str| (0..10).map(|i| format!("SQRT({first}_{i})+SQRT({second}_{i})")).collect::<Vec<_>>().join("+");
+    let orders = [
+        ["Unsure+SQRT(Alias)", "SQRT(Alias)+Unsure", "SQRT(Alias)+SQRT(Sheet1!$A$1:$A$3)", "@SQRT(Alias)"].map(String::from).to_vec(),
+        ["SQRT(Alias)", "SQRT(Alias)+Unsure", "Unsure+SQRT(Alias)", "SQRT(Alias)+SQRT(Sheet1!$A$1:$A$3)", "@SQRT(Alias)"].map(String::from).to_vec(),
+        vec![both("Big", "Via"), both("Via", "Big"), "SQRT(Via_0)".to_string(), both("Via", "Big")],
+        vec!["SQRT(Via_0)".to_string(), both("Via", "Big"), both("Big", "Via"), both("Via", "Big")],
+    ];
+    let at = CellRef::new(5, 5);
+    assert_eq!(export_text(&wb, at, &both("Via", "Big"), &mut NameCache::default()), "dynamic", "fresh fits the budget");
+    for texts in orders {
+        let mut shared = NameCache::default();
+        for text in &texts {
+            let with_shared = export_text(&wb, at, text, &mut shared);
+            let fresh = export_text(&wb, at, text, &mut NameCache::default());
+            assert_eq!(with_shared, fresh, "{}", &text[..text.len().min(60)]);
+        }
+        // Reading: one pass over the formulas, one row each, against each formula read alone.
+        let read = |cells: &[(CellRef, &String)], one_pass: bool| -> Vec<String> {
+            let mut wb = wb.clone();
+            for (c, text) in cells {
+                Arc::make_mut(&mut wb.sheets[0]).cells.set(*c, Cell::formula(Formula::new(text)));
+            }
+            let all: Vec<CellRef> = cells.iter().map(|(c, _)| *c).collect();
+            if one_pass {
+                crate::array_formula::apply_legacy(&mut wb, vec![(0, all.clone())], crate::FunctionInfo::default());
+            } else {
+                for c in &all {
+                    crate::array_formula::apply_legacy(&mut wb, vec![(0, vec![*c])], crate::FunctionInfo::default());
+                }
+            }
+            all.iter().map(|c| gridcraft_formula::print(&wb.sheets[0].cells.get(*c).unwrap().formula.as_ref().unwrap().expr_arc().unwrap())).collect()
+        };
+        let cells: Vec<(CellRef, &String)> = texts.iter().enumerate().map(|(i, t)| (CellRef::new(i as u32 + 5, 5), t)).collect();
+        assert_eq!(read(&cells, true), read(&cells, false));
+    }
 }
 #[test]
 fn long_flat_chains_are_scalar_formulas() {

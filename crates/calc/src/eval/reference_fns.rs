@@ -122,11 +122,29 @@ impl<'h> Evaluator<'h> {
                 for c in 0..w {
                     let pos = (num(&Some(ra.get_broadcast(r, c))), num(&Some(ca.get_broadcast(r, c))));
                     let v = match pos {
+                        // A position that picks several cells is #CALC!. That is decided from the
+                        // shape: reading the block first, for every position, let a short formula
+                        // read one large range over and over only to discard it.
+                        (Ok(row), Ok(col)) if index_picks_several_values(&src, row, col, two) => Value::Error(CellError::Calc),
                         (Ok(row), Ok(col)) => {
                             let one = self.index_one(src.clone(), row, col, area_n, two);
-                            match self.deref(one) {
-                                Value::Array(a) if a.rows * a.cols > 1 => Value::Error(CellError::Calc),
-                                v => v.scalar(),
+                            let cells = match &one {
+                                Ev::R(areas) => match areas.as_slice() {
+                                    [a] => self.area_cells(a),
+                                    _ => 0,
+                                },
+                                _ => 0,
+                            };
+                            if cells > MAX_CELLS {
+                                // As reading it would answer.
+                                Value::Error(CellError::Num)
+                            } else if cells > 1 {
+                                Value::Error(CellError::Calc)
+                            } else {
+                                match self.deref(one) {
+                                    Value::Array(a) if a.rows * a.cols > 1 => Value::Error(CellError::Calc),
+                                    v => v.scalar(),
+                                }
                             }
                         }
                         (Err(e), _) | (_, Err(e)) => Value::Error(e),
@@ -141,6 +159,16 @@ impl<'h> Evaluator<'h> {
             (Err(e), _) | (_, Err(e)) => return err(e),
         };
         self.index_one(src, row, col, area_n, two)
+    }
+
+    /// Cells that reading `a` gives: its own size, or for a large block the part inside the
+    /// sheet's used range (what [`Evaluator::area_value`] reads).
+    fn area_cells(&mut self, a: &Area) -> u64 {
+        if a.range.is_single() {
+            return 1;
+        }
+        let r = self.read_range(a);
+        u64::from(r.height()) * u64::from(r.width())
     }
 
     /// INDEX for one row and column position (0 = the whole column or row).
@@ -207,7 +235,7 @@ impl<'h> Evaluator<'h> {
             let horizontal = l.range.height() == 1 && l.range.width() > 1;
             let same_len = if vertical { r.range.height() == l.range.height() } else { r.range.width() == l.range.width() };
             if !matches!(key, Value::Array(_)) && (vertical || horizontal) && same_len {
-                let mut xargs = vec![Arg { value: key, from_ref: false }, Arg { value: self.area_value(&l), from_ref: true }];
+                let mut xargs = vec![Arg::val(key), Arg::reference(self.area_value(&l))];
                 // An empty match_mode before a given search_mode is the default (0), not the end.
                 let given = |i: usize| args.get(i).is_some_and(|e| !matches!(e, Expr::Missing));
                 let last = if given(5) {
@@ -219,10 +247,11 @@ impl<'h> Evaluator<'h> {
                 };
                 for i in 4..=last {
                     match args.get(i) {
-                        Some(Expr::Missing) | None => xargs.push(Arg { value: Value::Number(0.0), from_ref: false }),
+                        Some(Expr::Missing) | None => xargs.push(Arg::val(Value::Number(0.0))),
                         Some(e) => {
                             let value = self.value(e);
-                            xargs.push(Arg { value, from_ref: false });
+                            let blank_value = value == Value::Empty;
+                            xargs.push(Arg { value, from_ref: false, blank_value });
                         }
                     }
                 }
@@ -409,5 +438,73 @@ impl<'h> Evaluator<'h> {
             return Ev::V(gridcraft_functions::aggregate_values_k(func, &values, &k));
         }
         Ev::V(gridcraft_functions::aggregate_values(func, &values))
+    }
+}
+
+/// Whether INDEX on an array picks a whole row or column of several values at position
+/// (`row`, `col`), which the array-of-positions form answers with #CALC!.
+fn index_picks_several_values(src: &Ev, row: i64, col: i64, two_args: bool) -> bool {
+    let Ev::V(Value::Array(arr)) = src else { return false };
+    let (row, col) = if two_args && arr.rows == 1 { (1, row) } else { (row, col) };
+    if row < 0 || col < 0 || row as u64 > arr.rows as u64 || col as u64 > arr.cols as u64 {
+        return false;
+    }
+    (row == 0 && arr.rows > 1) || (col == 0 && arr.cols > 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::Host;
+    use super::*;
+    use gridcraft_model::Workbook;
+
+    /// A sheet of blanks that counts the blocks it is asked for.
+    struct Counting {
+        wb: Workbook,
+        cells_read: usize,
+    }
+    impl Host for Counting {
+        fn workbook(&self) -> &Workbook {
+            &self.wb
+        }
+        fn cell_value(&mut self, _sheet: usize, _c: CellRef) -> Value {
+            Value::Empty
+        }
+        fn now_serial(&self) -> f64 {
+            0.0
+        }
+        fn random(&mut self) -> f64 {
+            0.0
+        }
+        fn range_values(&mut self, _sheet: usize, range: RangeRef) -> Vec<Value> {
+            self.cells_read += range.count() as usize;
+            vec![Value::Empty; range.count() as usize]
+        }
+    }
+
+    fn eval(src: &str) -> (Value, usize) {
+        let mut host = Counting { wb: Workbook::default(), cells_read: 0 };
+        let mut ev = Evaluator::new(&mut host, 0, CellRef::new(0, 0));
+        let v = ev.value(&gridcraft_formula::parser::parse(src).unwrap_or_else(|e| panic!("{e}")));
+        (v, host.cells_read)
+    }
+
+    fn all_calc(v: &Value, n: usize) -> bool {
+        matches!(v, Value::Array(a) if a.data.len() == n && a.data.iter().all(|x| *x == Value::Error(CellError::Calc)))
+    }
+
+    #[test]
+    fn index_positions_that_pick_several_cells_are_calc_without_reading_them() {
+        // Each zero row position picks the whole of A1:A50000: #CALC!, decided from the shape. It
+        // used to read the 50,000 cells once per position before discarding them.
+        let (v, read) = eval("=INDEX(A1:A50000,{0,0,0,0},1)");
+        assert!(all_calc(&v, 4), "{v:?}");
+        assert_eq!(read, 0);
+        // The same for an array source: a whole column of a 3x3 array.
+        let (v, _) = eval("=INDEX({1,2,3;4,5,6;7,8,9},{0,0},2)");
+        assert!(all_calc(&v, 2), "{v:?}");
+        // Single cells are still read.
+        let (v, _) = eval("=INDEX({1,2,3;4,5,6;7,8,9},{1,3},2)");
+        assert!(matches!(&v, Value::Array(a) if a.data == vec![Value::number(2.0), Value::number(8.0)]), "{v:?}");
     }
 }

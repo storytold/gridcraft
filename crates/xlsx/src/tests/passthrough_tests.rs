@@ -700,6 +700,32 @@ fn chartsheet_package() -> Vec<u8> {
     ])
 }
 
+/// Thousands of chart-sheet entries naming one chart sheet's relationship: its graph is walked
+/// and its charts parsed once when saving, not once per entry.
+#[test]
+fn chart_sheet_entries_sharing_a_graph_are_checked_once() {
+    let bytes = chartsheet_package();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut parts: Vec<(String, Vec<u8>)> = Vec::new();
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        let mut data = Vec::new();
+        f.read_to_end(&mut data).unwrap();
+        parts.push((f.name().to_string(), data));
+    }
+    let extra: String = (0..3_000).map(|i| format!(r#"<sheet name="Copy{i}" sheetId="{}" r:id="rId2"/>"#, 100 + i)).collect();
+    for (name, data) in &mut parts {
+        if name == "xl/workbook.xml" {
+            *data = String::from_utf8(data.clone()).unwrap().replace("</sheets>", &format!("{extra}</sheets>")).into_bytes();
+        }
+    }
+    let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    let (wb, _) = read_xlsx(&make_zip(&refs)).unwrap();
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    assert!(written_sheets(&u).iter().any(|(n, _)| n == "Chart1"));
+}
+
 /// The sheets of a written workbook: (name, state) in file order.
 fn written_sheets(u: &Unpacked) -> Vec<(String, String)> {
     let wb = xml::parse(u.parts.get("xl/workbook.xml").unwrap()).unwrap();
