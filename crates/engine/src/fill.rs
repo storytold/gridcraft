@@ -73,6 +73,12 @@ fn lists() -> Vec<Vec<String>> {
     ]
 }
 
+/// The month and day names of `region`, short and long, as series lists.
+fn region_lists(region: &gridcraft_core::Region) -> Vec<Vec<String>> {
+    let list = |names: &[&str]| names.iter().map(|s| s.to_string()).collect();
+    vec![list(&region.weekdays_abbr), list(&region.weekdays), list(&region.months_abbr), list(&region.months)]
+}
+
 /// The most cells one fill may write: the size cap the fill commands put on their ranges.
 pub const MAX_FILL_CELLS: u64 = 5_000_000;
 
@@ -99,7 +105,9 @@ pub fn fill_except(
     mode: FillMode,
     skip_rows: &std::collections::BTreeSet<u32>,
 ) -> Result<()> {
-    let custom = cx.wb.custom_lists.clone();
+    // The region's month and day names extend a series like the English ones do (`janeiro`,
+    // `seg` in pt-BR); the user's own lists come first.
+    let custom: Vec<Vec<String>> = cx.wb.custom_lists.iter().cloned().chain(region_lists(cx.wb.region)).collect();
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
     // Direction: down/up if target extends rows, else right/left.
     let vertical = target.height() != src.height() || target.width() == src.width();
@@ -362,8 +370,10 @@ impl Pattern {
         if !vals.is_empty() && vals.iter().all(|v| v.is_text()) {
             let texts: Vec<String> = vals.iter().filter_map(|v| v.as_text().map(str::to_string)).collect();
             let all_lists: Vec<Vec<String>> = custom.iter().cloned().chain(lists()).collect();
+            // Lowercased, not ASCII-folded: the region lists hold accented names (`MARÇO` is `março`).
+            let lowered: Vec<String> = texts.iter().map(|t| t.to_lowercase()).collect();
             for list in &all_lists {
-                let idx: Vec<Option<usize>> = texts.iter().map(|t| list.iter().position(|l| l.eq_ignore_ascii_case(t))).collect();
+                let idx: Vec<Option<usize>> = lowered.iter().map(|t| list.iter().position(|l| l.to_lowercase() == *t)).collect();
                 if idx.iter().all(Option::is_some) {
                     let idx: Vec<usize> = idx.into_iter().flatten().collect();
                     let first = idx.first().copied().unwrap_or(0);

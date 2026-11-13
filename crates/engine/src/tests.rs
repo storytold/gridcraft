@@ -6786,3 +6786,73 @@ fn command_criteria_read_numbers_in_the_workbook_region() {
     assert_eq!(r["status"], "optimal", "{r}");
     assert!((v(&s, "E1").as_f64().unwrap_or(f64::NAN) - 12.5).abs() < 1e-9, "{:?}", v(&s, "E1"));
 }
+
+/// A new workbook in the pt-BR region.
+fn pt_br() -> Session {
+    let mut s = s();
+    s.set_region(gridcraft_core::region::find("pt-BR").unwrap());
+    s
+}
+
+#[test]
+fn offered_formats_follow_the_workbook_region() {
+    let mut s = pt_br();
+    let pick = |s: &mut Session, name: &str| {
+        s.execute("home.numberFormat", json!({"range": "A1", "format": name})).unwrap();
+        fmt_of(s, "A1")
+    };
+    assert_eq!(pick(&mut s, "Currency"), "\"R$\" #,##0.00");
+    assert_eq!(pick(&mut s, "Long Date"), "[$-F800]dddd, d \"de\" mmmm \"de\" yyyy");
+    assert_eq!(pick(&mut s, "Time"), "[$-F400]hh:mm:ss");
+    assert!(pick(&mut s, "Accounting").contains("\"R$\""));
+    // Short Date stays built-in format 14, which each region shows as its own short date.
+    assert_eq!(pick(&mut s, "Short Date"), "m/d/yyyy");
+    s.execute("home.accounting", json!({"range": "B1"})).unwrap();
+    assert!(fmt_of(&s, "B1").contains("\"R$\""), "{}", fmt_of(&s, "B1"));
+    // en-US offers the same codes as before.
+    let mut s = self::s();
+    assert_eq!(pick(&mut s, "Currency"), "\"$\"#,##0.00");
+    assert_eq!(pick(&mut s, "Long Date"), "[$-F800]dddd, mmmm dd, yyyy");
+    assert_eq!(pick(&mut s, "Time"), "[$-F400]h:mm:ss AM/PM");
+    assert_eq!(pick(&mut s, "Accounting"), crate::cmd::format::format_code_for("Accounting"));
+}
+
+#[test]
+fn autofill_extends_the_region_month_and_day_names() {
+    let mut s = pt_br();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["janeiro", "seg", "dez"]]})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "A1:C1", "target": "A1:C3"})).unwrap();
+    assert_eq!([v(&s, "A2"), v(&s, "A3")], [Value::text("fevereiro"), Value::text("março")]);
+    assert_eq!([v(&s, "B2"), v(&s, "B3")], [Value::text("ter"), Value::text("qua")]);
+    assert_eq!([v(&s, "C2"), v(&s, "C3")], [Value::text("jan"), Value::text("fev")]);
+    // The English names still extend in pt-BR.
+    s.execute("range.setValues", json!({"range": "D1", "values": [["Monday"]]})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "D1", "target": "D1:D2"})).unwrap();
+    assert_eq!(v(&s, "D2"), Value::text("Tuesday"));
+}
+
+#[test]
+fn generated_text_uses_the_region_decimal_separator() {
+    let mut s = pt_br();
+    let set = |s: &mut Session, cell: &str, input: &str| s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    set(&mut s, "A1", "=COMPLEX(1.5,2)");
+    set(&mut s, "A2", "=IMREAL(\"2,5+3i\")");
+    set(&mut s, "A3", "=VALUETOTEXT(1.5)");
+    assert_eq!(v(&s, "A1"), Value::text("1,5+2i"));
+    assert_eq!(v(&s, "A2"), Value::Number(2.5));
+    assert_eq!(v(&s, "A3"), Value::text("1,5"));
+    // A database field named by a number is found by the label pt-BR writes for it.
+    s.execute("range.setValues", json!({"range": "C1", "values": [[1.5], [10], [20]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "D1", "values": [[1.5], [10]]})).unwrap();
+    set(&mut s, "A5", "=DSUM(C1:C3,\"1,5\",D1:D2)");
+    assert_eq!(v(&s, "A5"), Value::Number(10.0));
+    // The Solver's Answer Report writes a number bound the same way.
+    set(&mut s, "F1", "0");
+    set(&mut s, "G1", "=F1");
+    s.execute("data.solver", json!({"objective": "G1", "variables": "F1", "constraints": ["F1 <= 1.5"], "method": "simplex", "reports": ["answer"]}))
+        .unwrap();
+    let d = s.doc().unwrap();
+    let report = d.wb.sheet(d.wb.sheet_index("Answer Report 1").unwrap()).unwrap();
+    let texts: Vec<String> = (0..40).flat_map(|r| (0..8).map(move |c| (r, c))).map(|(r, c)| report.value(CellRef::new(r, c)).display()).collect();
+    assert!(texts.iter().any(|t| t == "$F$1<=1,5"), "{texts:?}");
+}

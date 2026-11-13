@@ -736,12 +736,13 @@ fn textsplit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     array_val(nrows, ncols, data)
 }
 
-fn value_text(v: &Value, strict: bool) -> String {
+/// A value as VALUETOTEXT and ARRAYTOTEXT write it: numbers with the region's decimal separator.
+fn value_text(v: &Value, strict: bool, decimal: char) -> String {
     match v {
         Value::Text(t) if strict => format!("\"{}\"", t.replace('"', "\"\"")),
         Value::Text(t) => t.to_string(),
         Value::Error(e) => e.as_str().to_string(),
-        Value::Number(n) => number_to_text(*n),
+        Value::Number(n) => number_to_text(*n).replace('.', decimal.encode_utf8(&mut [0; 4])),
         other => other.to_text().unwrap_or_default(),
     }
 }
@@ -754,13 +755,16 @@ fn format_arg(a: &[Arg], i: usize) -> R<bool> {
     }
 }
 
-fn valuetotext(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn valuetotext(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let strict = format_arg(a, 1)?;
-    check_len(value_text(&scalar(arg(a, 0)?), strict))
+    check_len(value_text(&scalar(arg(a, 0)?), strict, c.region().decimal))
 }
 
-fn arraytotext(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn arraytotext(a: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     let strict = format_arg(a, 1)?;
+    // Strict output is an array constant, whose elements are split by `,`: a region decimal comma
+    // would make `{1,5,2,5}` read as four numbers, so it keeps the formula language's `.`.
+    let decimal = if strict { '.' } else { ctx.region().decimal };
     let arr = as_array(&arg(a, 0)?.value);
     let mut out = String::new();
     if strict {
@@ -773,7 +777,7 @@ fn arraytotext(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
             } else if c > 0 {
                 out.push_str(if strict { "," } else { ", " });
             }
-            push_capped(&mut out, &value_text(arr.get(r, c).unwrap_or(&Value::Empty), strict))?;
+            push_capped(&mut out, &value_text(arr.get(r, c).unwrap_or(&Value::Empty), strict, decimal))?;
         }
     }
     if strict {

@@ -42,8 +42,6 @@ pub const MAX_AXIS_FIELDS: usize = 32;
 /// Most fields in the Values area.
 pub const MAX_VALUE_FIELDS: usize = 256;
 
-const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
 // ---------------------------------------------------------------- source
 
 /// The source list: header names, per-column number formats and the records.
