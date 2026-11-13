@@ -153,8 +153,11 @@ fn optimise(ev: &mut Evaluator, m: &Model, goal: Goal, x0: &[f64], bounds: Bound
                     Outcome::Infeasible
                 }
                 Err(_) => Outcome::Limit,
-                Ok(SimplexProgram { c, rows, mut work, .. }) => {
-                    let mut relax = |l: &[f64], h: &[f64]| solve_lp(&c, &rows, l, h, &mut work);
+                Ok(SimplexProgram { c, obj_offset, rows, mut work, .. }) => {
+                    let mut relax = |l: &[f64], h: &[f64]| match solve_lp(&c, &rows, l, h, &mut work) {
+                        Outcome::Solved(x, val, converged) => Outcome::Solved(x, val + obj_offset, converged),
+                        other => other,
+                    };
                     if any_int { branch_and_bound(lo, hi, integer, MAX_NODES_LP, gap, &mut relax).0 } else { relax(lo, hi) }
                 }
             },

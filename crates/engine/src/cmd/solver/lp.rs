@@ -501,10 +501,11 @@ pub(super) fn linear_program(goal: Goal, cf: &[f64], f_const: f64, lin: &[(Vec<f
 }
 
 /// The linear program Simplex LP solves: the model linearised at `x0`, its objective
-/// coefficients, the costs and rows for the goal, and the work limit for its size.
+/// coefficients, the costs, constant offset, and rows for the goal, and the work limit for its size.
 pub(super) struct SimplexProgram {
     pub(super) cf: Vec<f64>,
     pub(super) c: Vec<f64>,
+    pub(super) obj_offset: f64,
     pub(super) rows: Vec<LpRow>,
     pub(super) work: u64,
 }
@@ -516,8 +517,13 @@ pub(super) struct SimplexProgram {
 pub(super) fn simplex_program(ev: &mut Evaluator, goal: Goal, x0: &[f64]) -> std::result::Result<SimplexProgram, &'static str> {
     let ((cf, f_const), lin) = linearize(ev, x0)?;
     let (c, rows) = linear_program(goal, &cf, f_const, &lin, &ev.rows);
+    let obj_offset = match goal {
+        Goal::Max => -f_const,
+        Goal::Min => f_const,
+        Goal::Value(_) => 0.0,
+    };
     let size = (rows.len() as u64 + 2 * x0.len() as u64 + 1) * (4 * x0.len() as u64 + 2 * rows.len() as u64 + 1);
-    Ok(SimplexProgram { cf, c, rows, work: LP_WORK.max(size) })
+    Ok(SimplexProgram { cf, c, obj_offset, rows, work: LP_WORK.max(size) })
 }
 
 /// Linearises the model at `x0` (n + 1 evaluations) and checks it at one more point. Returns the
