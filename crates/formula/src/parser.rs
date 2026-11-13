@@ -157,9 +157,33 @@ fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool) -> Resu
     let mut p = Parser { toks, i: 0, depth: 0, input: locale == crate::FormulaLocale::Es };
     let e = p.expr(0, allow_union)?;
     match p.peek() {
+        Tok::Eof if wrapper_height(&e) > MAX_DEPTH => Err(ParseError { msg: "formula is nested too deeply".into(), pos: 0 }),
         Tok::Eof => Ok(e),
         t => Err(p.err(format!("unexpected {}", describe(t)))),
     }
+}
+
+/// The most unary operators, parentheses and invocations on one path of `e`. The parser bounds
+/// each level's postfix wrappers by its own depth, so levels inside levels can still stack them
+/// far past [`MAX_DEPTH`]; code that maps over the tree recurses once per wrapper.
+fn wrapper_height(e: &Expr) -> usize {
+    let mut most = 0;
+    let mut pending = vec![(e, 0usize)];
+    while let Some((e, h)) = pending.pop() {
+        most = most.max(h);
+        match e {
+            Expr::Unary(_, a) | Expr::Paren(a) => pending.push((a, h + 1)),
+            Expr::Invoke(callee, args) => {
+                pending.push((callee, h + 1));
+                pending.extend(args.iter().map(|a| (a, h + 1)));
+            }
+            Expr::Binary(_, a, b) => pending.extend([(&**a, h), (&**b, h)]),
+            Expr::Call(_, args) => pending.extend(args.iter().map(|a| (a, h))),
+            Expr::Array(rows) => pending.extend(rows.iter().flatten().map(|a| (a, h))),
+            _ => {}
+        }
+    }
+    most
 }
 
 fn describe(t: &Tok) -> String {
@@ -391,11 +415,15 @@ impl Parser {
                 {
                     return Ok(Expr::Unary(UnOp::Spill, Box::new(r)));
                 }
-                // Files write `@x` as `_xlfn.SINGLE(x)`.
+                // Files write `@x` as `_xlfn.SINGLE(x)`; `SINGLE(A1:A3*2)` is `@(A1:A3*2)`.
                 if name == "SINGLE"
                     && args.len() == 1
                     && let Some(x) = args.pop()
                 {
+                    let x = match x {
+                        Expr::Binary(..) | Expr::Unary(UnOp::Neg | UnOp::Plus | UnOp::Percent, _) => Expr::Paren(Box::new(x)),
+                        x => x,
+                    };
                     return Ok(Expr::Unary(UnOp::At, Box::new(x)));
                 }
                 // Files may spell a trim reference as a function call (`_xlfn._TRO_ALL(A1:E10)`).
