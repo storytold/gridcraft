@@ -573,6 +573,22 @@ pub fn series(cx: &mut Ctx, sheet: usize, options: SeriesOptions<'_>) -> Result<
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
     let lanes: Vec<u32> = if rows { (r.start.row..=r.end.row).collect() } else { (r.start.col..=r.end.col).collect() };
     let len = if rows { r.width() } else { r.height() };
+    if kind == "autofill" {
+        // Excel's xlAutoFill: the filled cells at the start of each lane are the seed, and the rest
+        // of the lane is filled as a drag of the fill handle would (2, 4 continues 6, 8, 10).
+        let mut jobs = Vec::new();
+        for lane in lanes {
+            let at = |i: u32| if rows { CellRef::new(lane, r.start.col + i) } else { CellRef::new(r.start.row + i, lane) };
+            let seed = (0..len).take_while(|&i| !matches!(sh.value(at(i)), Value::Empty)).count() as u32;
+            if seed > 0 && seed < len {
+                jobs.push((RangeRef::new(at(0), at(seed - 1)), RangeRef::new(at(0), at(len - 1))));
+            }
+        }
+        for (src, target) in jobs {
+            fill(cx, sheet, src, target, FillMode::Series)?;
+        }
+        return Ok(());
+    }
     let mut writes = Vec::new();
     for lane in lanes {
         let first_cell = if rows { CellRef::new(lane, r.start.col) } else { CellRef::new(r.start.row, lane) };

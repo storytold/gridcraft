@@ -6718,3 +6718,20 @@ fn history_charges_the_storage_of_empty_comment_replies() {
     // 500 replies of no text are still 500 elements.
     assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
 }
+
+#[test]
+fn fill_series_autofill_continues_the_seed_pattern() {
+    // Issue #3951: type "autofill" extends the seed as a drag would (2, 4 -> 6, 8, 10, 12), not step one.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "4"})).unwrap();
+    s.execute("edit.fillSeries", json!({"range": "A1:A6", "direction": "columns", "type": "autofill"})).unwrap();
+    let col: Vec<Value> = ["A1", "A2", "A3", "A4", "A5", "A6"].iter().map(|a| v(&s, a)).collect();
+    assert_eq!(col, [2.0, 4.0, 6.0, 8.0, 10.0, 12.0].map(Value::Number));
+    // A text seed continues too.
+    s.execute("cell.set", json!({"cell": "B1", "input": "Item 9"})).unwrap();
+    s.execute("edit.fillSeries", json!({"range": "B1:B3", "direction": "columns", "type": "autofill"})).unwrap();
+    assert_eq!(v(&s, "B3"), Value::from("Item 11"));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "B3"), Value::Empty);
+}
