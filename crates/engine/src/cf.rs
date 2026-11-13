@@ -39,6 +39,7 @@ const PAINT_CACHE_MS: f64 = 1000.0;
 /// Precomputed statistics per rule (min/max/percentiles/top-N thresholds/duplicates).
 pub struct CfCache {
     stats: HashMap<usize, RuleStats>,
+    stats_source: Option<(Weak<Workbook>, u64)>,
     frame_meter: crate::workload::Meter,
     results: Option<RenderCache>,
 }
@@ -301,7 +302,7 @@ impl CfCache {
 
     /// Uses a document-owned bank so constructing a fresh paint cache cannot reset allowance.
     pub fn with_budget(budget: crate::workload::AnalysisBudget) -> Self {
-        Self { stats: HashMap::new(), frame_meter: crate::workload::Meter::new(budget), results: None }
+        Self { stats: HashMap::new(), stats_source: None, frame_meter: crate::workload::Meter::new(budget), results: None }
     }
 
     /// Reuses results for one revision under a cache-wide one-second TTL for every look,
@@ -312,6 +313,11 @@ impl CfCache {
 
     /// Starts a new frame with the shared budget and TTL, keeping statistics for the same sheet.
     pub fn refresh(&mut self, budget: crate::workload::AnalysisBudget, results: RenderCache, wb: &Arc<Workbook>, revision: u64) {
+        let source = Arc::downgrade(wb);
+        if !self.stats_source.as_ref().is_some_and(|(prior, rev)| Weak::ptr_eq(prior, &source) && *rev == revision) {
+            self.stats.clear();
+        }
+        self.stats_source = Some((source, revision));
         let same_bank = self.frame_meter.uses_budget(&budget);
         let fresh = Self::with_cache(budget, results, wb, revision);
         // Keep prepaid credit across paints. A terminal refusal needs a new meter so a
@@ -341,7 +347,12 @@ impl CfCache {
         } else {
             false
         };
-        Self { stats: HashMap::new(), frame_meter: crate::workload::Meter::new(budget), results: usable.then_some(results) }
+        Self {
+            stats: HashMap::new(),
+            stats_source: Some((Arc::downgrade(wb), revision)),
+            frame_meter: crate::workload::Meter::new(budget),
+            results: usable.then_some(results),
+        }
     }
 
     /// Conditional look of `c`, or `None` when no rule applies.
@@ -595,6 +606,30 @@ mod tests {
         assert!(cache.frame_meter.charge(2_000_000).is_err());
         cache.refresh(bank.clone(), results, &d.wb, d.revision);
         assert!(cache.frame_meter.check().is_ok());
+    }
+
+    /// Reused statistics survive a frame but are invalidated for a changed workbook revision.
+    #[test]
+    fn refresh_discards_statistics_after_workbook_change() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1], [10]]})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range": "A1:A2", "rule": {"type": "top10", "rank": 1, "preset": "redBorder"}})).unwrap();
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::with_cache(d.render_budget.clone(), d.render_cache.clone(), &d.wb, d.revision);
+        let a1 = CellRef::parse("A1").unwrap();
+        let a2 = CellRef::parse("A2").unwrap();
+        assert!(cache.look(&d.wb, 0, a1).is_none());
+        assert!(cache.look(&d.wb, 0, a2).is_some());
+        assert_eq!(cache.stats.len(), 1);
+        cache.refresh(d.render_budget.clone(), d.render_cache.clone(), &d.wb, d.revision);
+        assert_eq!(cache.stats.len(), 1);
+        s.execute("cell.set", json!({"cell": "A1", "input": "100"})).unwrap();
+        let d = s.doc().unwrap();
+        cache.refresh(d.render_budget.clone(), d.render_cache.clone(), &d.wb, d.revision);
+        assert!(cache.stats.is_empty());
+        assert!(cache.look(&d.wb, 0, a1).is_some());
+        assert!(cache.look(&d.wb, 0, a2).is_none());
     }
 
     /// A frame shares prepaid credit across misses instead of reserving 4096 units per cell.
