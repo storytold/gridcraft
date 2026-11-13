@@ -16,6 +16,11 @@ fn pdf_of(s: &mut Session, p: Json) -> (Vec<u8>, u64) {
 fn contains(hay: &[u8], needle: &str) -> bool {
     hay.windows(needle.len()).any(|w| w == needle.as_bytes())
 }
+fn arabic_face_available() -> bool {
+    let mut doc = gridcraft_pdf::PdfDoc::new();
+    doc.add_page(100.0, 100.0).text(0.0, 50.0, 10.0, Font::Helvetica, [0, 0, 0], "مرحبا");
+    !doc.missing_arabic_font()
+}
 
 #[test]
 fn right_to_left_sheets_mirror_link_rectangles_and_targets() {
@@ -102,7 +107,7 @@ fn wrapping_keeps_combining_marks_with_their_letters() {
 
 #[test]
 fn arabic_cells_headers_and_charts_export_searchable_shaped_text() {
-    if gridcraft_pdf::text_width(Font::Helvetica, 10.0, "مرحبا") == 0.0 && std::env::var_os("CRAFT_FONTS_REQUIRED").is_none() {
+    if !arabic_face_available() && std::env::var_os("CRAFT_FONTS_REQUIRED").is_none() {
         return;
     }
     let mut s = s();
@@ -1020,7 +1025,7 @@ fn wrapping_a_long_word_in_a_narrow_box_stops_at_the_line_limit() {
 #[test]
 fn wrapping_a_long_arabic_word_measures_pieces_not_the_rest_of_the_word() {
     let word = "مرحبا".repeat(10_000);
-    if gridcraft_pdf::text_width(Font::Helvetica, 10.0, &word) == 0.0 {
+    if !arabic_face_available() {
         return;
     }
     let lines = wrapped_text(&word, Font::Helvetica, 10.0, 20.0);
