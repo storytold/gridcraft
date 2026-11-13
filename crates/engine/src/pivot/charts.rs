@@ -57,6 +57,10 @@ fn rows_ref(sheet: &str, origin: CellRef, col: u32, rows: &[u32]) -> Option<Stri
 /// Most category rows a PivotChart plots.
 const MAX_CHART_ROWS: usize = 10_000;
 
+/// Most series a PivotChart gets: the chart renderer reads at most 255 series, and each one owns
+/// reference text as long as its category rows, copied into every linked chart.
+const MAX_CHART_SERIES: usize = 255;
+
 /// A PivotChart's series for a report written at `origin`: categories are the innermost row
 /// items, one series per item column (column items × value fields); totals are left out.
 pub fn chart_series(sheet: &str, origin: CellRef, out: &Output) -> Vec<Series> {
@@ -68,6 +72,7 @@ fn chart_series_items<'a>(sheet: &str, origin: CellRef, out: &'a Output) -> Vec<
     let categories = out.label_col.and_then(|c| rows_ref(sheet, origin, c, &rows));
     out.chart_cols
         .iter()
+        .take(MAX_CHART_SERIES)
         .filter_map(|(c, items)| {
             let name = items.join(" - ");
             Some((
@@ -369,5 +374,25 @@ pub fn clear_output(wb: &mut Workbook, sheet: usize, idx: usize) {
     shm.take_cells(r);
     if let Some(p) = shm.pivots.get_mut(idx) {
         p.last_range = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pivot_chart_gets_at_most_the_series_the_renderer_reads() {
+        let out = Output {
+            grid: vec![],
+            row_kinds: vec![],
+            body_offset: 0,
+            width: 1000,
+            chart_rows: vec![1, 2, 3],
+            chart_cols: (1..1000).map(|c| (c, vec![format!("S{c}")])).collect(),
+            chart_value_item: false,
+            label_col: Some(0),
+        };
+        assert_eq!(chart_series("Sheet1", CellRef::new(0, 0), &out).len(), MAX_CHART_SERIES);
     }
 }
