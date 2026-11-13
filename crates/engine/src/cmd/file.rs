@@ -310,7 +310,7 @@ fn fixed_decimal(s: &mut Session, p: &Json) -> Result<Json> {
 
 /// A number of places as JSON gives it (`2` or `2.0`): a whole number within
 /// ±[`gridcraft_core::parse::MAX_FIXED_DECIMAL_PLACES`].
-fn places_value(v: &Json) -> Option<i32> {
+pub(crate) fn places_value(v: &Json) -> Option<i32> {
     let max = f64::from(gridcraft_core::parse::MAX_FIXED_DECIMAL_PLACES);
     v.as_f64().filter(|n| n.fract() == 0.0 && n.abs() <= max).map(|n| n as i32)
 }

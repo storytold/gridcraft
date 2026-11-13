@@ -56,7 +56,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Fill Range With Input",
             [],
             Some("Ctrl+Enter"),
-            "{range?, input}: enters the same input in every selected cell (relative formulas adjust)",
+            "{range?, input, fixedDecimal?: places (-100 to 100: Automatically insert a decimal point, applied in each cell whose format isn't Text or a percentage, as typing there would; the cell editor's Ctrl+Enter passes it while the option is on)}: enters the same input in every selected cell (relative formulas adjust)",
             has_doc,
             range_fill
         ),

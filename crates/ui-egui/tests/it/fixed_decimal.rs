@@ -88,6 +88,35 @@ fn typing_a_whole_number_gets_the_decimal_point_only_while_the_option_is_on() {
 }
 
 #[test]
+fn ctrl_enter_gives_each_cell_the_decimal_point_its_own_format_allows() {
+    // The active cell's format decides only for itself: a cell formatted as Text keeps the digits
+    // typed, a percentage reads them as a percent, and the others get the decimal point.
+    let mut h = crate::support::blank_harness(4);
+    h.state_mut().run("options.fixedDecimal", json!({"on": true})).unwrap();
+    for (range, format) in [("A2", "Text"), ("A3", "Percentage"), ("B1", "Text")] {
+        h.state_mut().run("home.numberFormat", json!({"range": range, "format": format})).unwrap();
+    }
+    let ctrl_enter = |h: &mut Harness, range: &str, typed: &str| {
+        select(h, range);
+        h.input_mut().events.push(Event::Text(typed.into()));
+        h.run_steps(2);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+        h.run_steps(2);
+    };
+    ctrl_enter(&mut h, "A1:A3", "2834");
+    assert_eq!(
+        [value(&h, "A1"), value(&h, "A2"), value(&h, "A3")],
+        [Value::Number(28.34), Value::from("2834"), Value::Number(28.34)],
+        "from a General cell: A2 is Text, A3 a percentage (2834%)"
+    );
+    ctrl_enter(&mut h, "B1:B2", "2834");
+    assert_eq!((value(&h, "B1"), value(&h, "B2")), (Value::from("2834"), Value::Number(28.34)), "from a Text cell");
+    // It is still one fill: one undo takes it back.
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!((value(&h, "B1"), value(&h, "B2")), (Value::Empty, Value::Empty));
+}
+
+#[test]
 fn an_interface_with_a_decimal_comma_keeps_a_typed_decimal_comma() {
     let mut h = crate::support::blank_harness(4);
     h.state_mut().run("options.fixedDecimal", json!({"on": true})).unwrap();

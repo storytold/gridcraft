@@ -106,6 +106,41 @@ fn a_typed_whole_number_gets_its_decimal_point_and_commands_keep_what_they_are_g
 }
 
 #[test]
+fn range_fill_with_a_fixed_decimal_decides_it_for_each_cell_by_its_format() {
+    // Ctrl+Enter passes `fixedDecimal` while the option is on: each cell of the selection takes
+    // the decimal point as typing into it would, whatever the active cell's format.
+    let mut s = book();
+    s.execute("home.numberFormat", json!({"range": "B1:B4", "format": "Text"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "C1:C4", "format": "Percentage"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "D1:D4", "format": "0.00"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:D1"})).unwrap();
+    s.execute("range.fill", json!({"input": "2834", "fixedDecimal": 2})).unwrap();
+    assert_eq!(value(&s, "A1"), Value::Number(28.34));
+    assert_eq!(value(&s, "B1"), Value::from("2834"), "Text keeps the digits");
+    assert_eq!(value(&s, "C1"), Value::Number(28.34), "a percentage reads the whole number as a percent: 2834%");
+    assert_eq!(value(&s, "D1"), Value::Number(28.34));
+    // From a Text cell, the others still take it.
+    s.execute("selection.set", json!({"range": "A2:D2", "active": "B2"})).unwrap();
+    s.execute("range.fill", json!({"input": "-25", "fixedDecimal": -2})).unwrap();
+    assert_eq!(
+        [value(&s, "A2"), value(&s, "B2"), value(&s, "C2"), value(&s, "D2")],
+        [Value::Number(-2500.0), Value::from("-25"), Value::Number(-0.25), Value::Number(-2500.0)]
+    );
+    // An entry that isn't a whole number is entered as typed; `null` is no fixed decimal.
+    s.execute("selection.set", json!({"range": "A3:D3"})).unwrap();
+    s.execute("range.fill", json!({"input": "1.5", "fixedDecimal": 2})).unwrap();
+    assert_eq!((value(&s, "A3"), value(&s, "B3")), (Value::Number(1.5), Value::from("1.5")));
+    s.execute("range.fill", json!({"input": "2834", "fixedDecimal": null})).unwrap();
+    assert_eq!((value(&s, "A3"), value(&s, "D3")), (Value::Number(2834.0), Value::Number(2834.0)));
+    // Places the option can't have are refused, and nothing is filled.
+    s.execute("selection.set", json!({"range": "A4:D4"})).unwrap();
+    for bad in [json!(101), json!(-101), json!(2.5), json!("2"), json!(true), json!([2])] {
+        assert!(s.execute("range.fill", json!({"input": "2834", "fixedDecimal": bad.clone()})).is_err(), "{bad}");
+        assert_eq!(value(&s, "A4"), Value::Empty, "{bad}");
+    }
+}
+
+#[test]
 fn prefs_json_keeps_the_setting_and_older_or_edited_files_still_load() {
     let prefs = Prefs { fixed_decimal: true, fixed_decimal_places: -3, ..Prefs::default() };
     let saved = serde_json::to_value(&prefs).unwrap();

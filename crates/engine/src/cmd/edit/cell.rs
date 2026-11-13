@@ -93,18 +93,25 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
 /// `input` typed into cell `at` of `sheet`: the entry with its decimal point
 /// ([`gridcraft_core::parse::fixed_decimal`]), or `None` to enter it as typed. The cell editor and
 /// the formula bar ask before they commit; `cell.set`, paste, fill and the other commands enter
-/// what they're given. A cell formatted as Text keeps the digits typed, and so does one formatted
+/// what they're given, except `range.fill` asked with `fixedDecimal` (Ctrl+Enter), which decides
+/// it cell by cell. A cell formatted as Text keeps the digits typed, and so does one formatted
 /// as a percentage, where automatic percent entry already reads a whole number (3 → 3%).
 pub fn fixed_decimal_entry(prefs: &crate::Prefs, wb: &gridcraft_model::Workbook, sheet: usize, at: CellRef, input: &str) -> Option<String> {
     if !prefs.fixed_decimal {
         return None;
     }
     let style = wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
+    fixed_decimal_for_style(wb, style, input, prefs.fixed_decimal_places)
+}
+
+/// [`fixed_decimal_entry`] for a cell of `style`: `None` where the style's number format is Text
+/// or a percentage.
+fn fixed_decimal_for_style(wb: &gridcraft_model::Workbook, style: StyleId, input: &str, places: i32) -> Option<String> {
     let code = wb.styles.get(style).num_fmt.as_str();
     if code == "@" || code.ends_with('%') {
         return None;
     }
-    gridcraft_core::parse::fixed_decimal(input, prefs.fixed_decimal_places)
+    gridcraft_core::parse::fixed_decimal(input, places)
 }
 
 /// Parses a formula as it is typed (without the `=`). Excel closes missing parentheses for you,
@@ -336,11 +343,21 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
     let input = str_param(p, "input").unwrap_or("").to_string();
+    // Automatically insert a decimal point, which the cell editor's Ctrl+Enter passes while the
+    // option is on: like typing, it applies in each cell as that cell's format allows.
+    let fixed_places = match p.get("fixedDecimal").filter(|v| !v.is_null()) {
+        Some(v) => Some(crate::cmd::file::places_value(v).ok_or_else(|| {
+            let max = gridcraft_core::parse::MAX_FIXED_DECIMAL_PLACES;
+            bad("range.fill", format!("`fixedDecimal` must be a whole number from -{max} to {max}"))
+        })?),
+        None => None,
+    };
     let origin = s.doc()?.selection.active;
     edit(s, |cx| {
         // Each cell gets what typing the input there gives: the automatic number format where
-        // it's General, its own format otherwise, text where it's Text. That depends only on
-        // the cell's style, so the input is parsed once per style.
+        // it's General, its own format otherwise, text where it's Text, and the fixed decimal
+        // point unless it's Text or a percentage. That depends only on the cell's style, so the
+        // input is parsed once per style.
         let mut by_style: std::collections::HashMap<StyleId, Option<Cell>> = std::collections::HashMap::new();
         for r in &ranges {
             if r.count() > 2_000_000 {
@@ -355,7 +372,8 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
                 let base = match by_style.get(&style) {
                     Some(c) => c.clone(),
                     None => {
-                        let c = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+                        let fixed = fixed_places.and_then(|places| fixed_decimal_for_style(&cx.wb, style, &input, places));
+                        let c = input_to_cell(fixed.as_deref().unwrap_or(&input), sheet, at, &mut cx.wb)?;
                         by_style.insert(style, c.clone());
                         c
                     }
