@@ -249,12 +249,7 @@ impl<'h> Evaluator<'h> {
                 }
                 ev => self.deref(ev),
             };
-            let evaluated = [
-                Arg { value: key, from_ref: false },
-                Arg { value: table_value, from_ref: false },
-                Arg { value: index, from_ref: false },
-                Arg { value: mode, from_ref: false },
-            ];
+            let evaluated = [Arg::val(key), Arg::val(table_value), Arg::val(index), Arg::val(mode)];
             let mut ctx = FnCtx { ev: self, criteria: None, lambda: None };
             return Ev::V(gridcraft_functions::call(spec, &evaluated, &mut ctx));
         };
@@ -289,11 +284,7 @@ impl<'h> Evaluator<'h> {
             if index > u64::from(limit) {
                 return Value::Error(CellError::Ref);
             }
-            let search_args = [
-                Arg { value: key, from_ref: false },
-                Arg { value: keys.clone(), from_ref: true },
-                Arg { value: Value::Number(if approximate { 1.0 } else { 0.0 }), from_ref: false },
-            ];
+            let search_args = [Arg::val(key), Arg::reference(keys.clone()), Arg::val(Value::Number(if approximate { 1.0 } else { 0.0 }))];
             let mut ctx = FnCtx { ev: self, criteria: None, lambda: None };
             match gridcraft_functions::call(search, &search_args, &mut ctx) {
                 Value::Number(p) if p >= 1.0 => {
@@ -304,10 +295,8 @@ impl<'h> Evaluator<'h> {
                     } else {
                         CellRef::new(area.range.start.row.saturating_add(index), area.range.start.col.saturating_add(offset))
                     };
-                    match self.host.cell_value(area.sheet, cell) {
-                        Value::Empty => Value::Number(0.0),
-                        v => v,
-                    }
+                    // Keep blanks for ISBLANK and concatenation; final-result coercion displays 0.
+                    self.host.cell_value(area.sheet, cell)
                 }
                 v => v,
             }
