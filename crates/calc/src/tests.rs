@@ -2919,7 +2919,9 @@ fn lookup_tables_do_not_read_unselected_results() {
 #[test]
 fn reference_lookups_match_array_lookup_semantics() {
     let mut t = T::new();
-    for (at, input) in [("A1", "1"), ("A2", "3"), ("A3", "5"), ("B1", "10"), ("B2", "30"), ("C1", "one"), ("C2", "three"), ("C3", "five")] {
+    for (at, input) in
+        [("A1", "1"), ("A2", "3"), ("A3", "5"), ("B1", "10"), ("B2", "30"), ("B3", "0"), ("C1", "one"), ("C2", "three"), ("C3", "five")]
+    {
         t.set(at, input);
     }
     for arguments in [
