@@ -120,6 +120,10 @@ fn load_prefs(app: &mut SheetApp) {
         let language = saved.unwrap_or(app.ui.language);
         app.ui = ui.at_startup();
         app.ui.language = language;
+        // A region chosen in File ▸ Options wins over the system region set at startup.
+        if let Some(region) = app.ui.region.as_deref().and_then(gridcraft_engine::core::region::find) {
+            app.session.set_region(region);
+        }
     }
     if let Ok(b) = std::fs::read(dir.join("prefs.json"))
         && let Ok(p) = serde_json::from_slice(&b)
