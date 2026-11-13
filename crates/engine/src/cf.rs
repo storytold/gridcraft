@@ -39,6 +39,7 @@ const PAINT_CACHE_MS: f64 = 1000.0;
 /// Precomputed statistics per rule (min/max/percentiles/top-N thresholds/duplicates).
 pub struct CfCache {
     stats: HashMap<usize, RuleStats>,
+    refused_stats: HashSet<(usize, usize)>,
     stats_source: Option<(Weak<Workbook>, u64)>,
     frame_meter: crate::workload::Meter,
     results: Option<RenderCache>,
@@ -318,7 +319,13 @@ impl CfCache {
 
     /// Uses a document-owned bank so constructing a fresh paint cache cannot reset allowance.
     pub fn with_budget(budget: crate::workload::AnalysisBudget) -> Self {
-        Self { stats: HashMap::new(), stats_source: None, frame_meter: crate::workload::Meter::new(budget), results: None }
+        Self {
+            stats: HashMap::new(),
+            refused_stats: HashSet::new(),
+            stats_source: None,
+            frame_meter: crate::workload::Meter::new(budget),
+            results: None,
+        }
     }
 
     /// Reuses results for one revision under a cache-wide one-second TTL for every look,
@@ -332,6 +339,7 @@ impl CfCache {
         let source = Arc::downgrade(wb);
         if !self.stats_source.as_ref().is_some_and(|(prior, rev)| Weak::ptr_eq(prior, &source) && *rev == revision) {
             self.stats.clear();
+            self.refused_stats.clear();
         }
         self.stats_source = Some((source, revision));
         let same_bank = self.frame_meter.uses_budget(&budget);
@@ -365,6 +373,7 @@ impl CfCache {
         };
         Self {
             stats: HashMap::new(),
+            refused_stats: HashSet::new(),
             stats_source: Some((Arc::downgrade(wb), revision)),
             frame_meter: crate::workload::Meter::new(budget),
             results: usable.then_some(results),
@@ -408,6 +417,7 @@ impl CfCache {
         // can reserve the document bank. A fresh hook keeps a local refusal cell-scoped.
         let local = crate::workload::Meter::ordinary();
         local.set_limit(100_000).ok()?;
+        let local_status = local.clone();
         let frame = self.frame_meter.clone();
         let parent = gridcraft_calc::WorkHook::current();
         let combined = gridcraft_calc::WorkHook::new(move |units| {
@@ -427,10 +437,29 @@ impl CfCache {
         for (idx, cf) in rules {
             let first = RangeRef::top_left(&cf.ranges).unwrap_or(c);
             let st: &RuleStats = match stats_need(&cf.rule) {
-                Some(need) => match self.stats.entry(idx) {
-                    std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                    std::collections::hash_map::Entry::Vacant(entry) => entry.insert(RuleStats::build(sh, &cf.ranges, need)?),
-                },
+                Some(need) => {
+                    if self.refused_stats.contains(&(sheet, idx)) {
+                        return None;
+                    }
+                    match self.stats.entry(idx) {
+                        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            let before = local_status.spent().ok()?;
+                            match RuleStats::build(sh, &cf.ranges, need) {
+                                Some(stats) => entry.insert(stats),
+                                None => {
+                                    // Only a local refusal starting with a fresh allowance proves
+                                    // this rule alone exceeds the limit. A shared or inherited
+                                    // refusal is transient and must never become a cached result.
+                                    if before == 0 && local_status.check().is_err() && self.stats_source.is_some() {
+                                        self.refused_stats.insert((sheet, idx));
+                                    }
+                                    return None;
+                                }
+                            }
+                        }
+                    }
+                }
                 None => &no_stats,
             };
             let text = v.display();
@@ -845,14 +874,44 @@ mod tests {
         s.execute("home.conditionalFormat", json!({"range":"A1:A7000","rule":{"type":"top10","rank":1,"preset":"redBorder"}})).unwrap();
         s.execute("home.conditionalFormat", json!({"range":"B1","rule":{"type":"noBlanks","preset":"lightRedFill"}})).unwrap();
         let d = s.doc().unwrap();
-        let mut cache = CfCache::with_budget(d.render_budget.clone());
+        let mut cache = CfCache::with_cache(d.render_budget.clone(), d.render_cache.clone(), &d.wb, d.revision);
         let parent = gridcraft_calc::WorkHook::new(|_| true);
         let _scope = parent.enter().unwrap();
         assert!(cache.look(&d.wb, 0, CellRef::parse("A1").unwrap()).is_none());
+        let charged = cache.frame_meter.spent().unwrap();
+        for row in 2..=200 {
+            assert!(cache.look(&d.wb, 0, CellRef::parse(&format!("A{row}")).unwrap()).is_none());
+        }
+        assert_eq!(cache.frame_meter.spent().unwrap(), charged, "refused rule must not rescan per cell");
+        cache.refresh(d.render_budget.clone(), d.render_cache.clone(), &d.wb, d.revision);
+        assert_eq!(cache.refused_stats.len(), 1, "the local refusal survives an unchanged frame");
         assert!(cache.stats.is_empty(), "refused statistics must never enter the cache");
         assert!(gridcraft_calc::WorkHook::allowed(), "local refusal must not poison the parent");
         assert!(cache.frame_meter.check().is_ok(), "local refusal must not poison the frame");
         assert!(cache.look(&d.wb, 0, CellRef::parse("B1").unwrap()).is_some());
+        drop(_scope);
+        s.execute("cell.set", json!({"cell":"A1","input":"10000"})).unwrap();
+        let d = s.doc().unwrap();
+        cache.refresh(d.render_budget.clone(), d.render_cache.clone(), &d.wb, d.revision);
+        assert!(cache.refused_stats.is_empty(), "a changed source must be reconsidered");
+    }
+
+    /// A parent refusal can recover and must not mark a rule as permanently too costly.
+    #[test]
+    fn transient_statistics_refusal_is_not_remembered() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range":"A1","values":[[1],[10]]})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range":"A1:A2","rule":{"type":"top10","rank":1,"preset":"redBorder"}})).unwrap();
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::with_cache(d.render_budget.clone(), d.render_cache.clone(), &d.wb, d.revision);
+        {
+            let parent = gridcraft_calc::WorkHook::new(|units| units == 0);
+            let _scope = parent.enter().unwrap();
+            assert!(cache.look(&d.wb, 0, CellRef::parse("A1").unwrap()).is_none());
+        }
+        assert!(cache.refused_stats.is_empty());
+        assert!(cache.look(&d.wb, 0, CellRef::parse("A2").unwrap()).is_some());
     }
 
     /// Workbook paint expressions are bounded without a command and cannot style a refused value.
