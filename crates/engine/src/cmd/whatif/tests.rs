@@ -266,6 +266,25 @@ fn advanced_filter_numeric_equality_hides_distinct_nearby_numbers() {
 }
 
 #[test]
+fn advanced_filter_plain_text_number_criterion_is_exact() {
+    for (target, near, far) in [(0.0, 5e-13, 5e-12), (1.0, 1.0 + 5e-13, 1.0 + 5e-12), (1e9, 1e9 + 0.0005, 1e9 + 0.005)] {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Amount"], [target], [near], [far]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "C1", "values": [["Amount"]]})).unwrap();
+        // A leading apostrophe stores the criterion as plain text, with no operator in front of the number.
+        s.execute("cell.set", json!({"cell": "C2", "input": format!("'{target}")})).unwrap();
+        assert_eq!(v(&s, "C2"), Value::from(format!("{target}")));
+        let result = s.execute("data.advancedFilter", json!({"range": "A1:A4", "criteria": "C1:C2"})).unwrap();
+        assert_eq!(result["matched"], 1, "target {target}");
+        let sheet = s.doc().unwrap().wb.active().unwrap();
+        assert!(!sheet.is_row_hidden(1), "target {target} stays visible");
+        assert!(sheet.is_row_hidden(2), "{near} is not {target}");
+        assert!(sheet.is_row_hidden(3), "{far} is not {target}");
+        assert_eq!(v(&s, "A3"), Value::Number(near));
+    }
+}
+
+#[test]
 fn advanced_filter_copy_preserves_cells_beyond_result() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["A", 1], ["B", 2], ["C", 3]]})).unwrap();
