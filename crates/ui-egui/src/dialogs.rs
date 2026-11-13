@@ -14,6 +14,8 @@ use crate::SheetApp;
 use crate::theme;
 
 mod about;
+mod actuarial;
+pub(crate) use actuarial::available as actuarial_available;
 mod analysis;
 mod charts;
 mod command_search;
@@ -22,6 +24,7 @@ mod data;
 mod find;
 mod format_cells;
 mod insert_function;
+mod monte_carlo;
 mod names;
 mod paste;
 mod ref_edit;
@@ -272,6 +275,8 @@ impl Dialog {
         }
     }
 
+    /// Builds a named dialog using the current workbook selection and command-specific defaults.
+    /// Returns None for unknown names; confirming a constructed dialog follows its command path.
     /// Opens the named dialog with defaults from the active workbook, including a cell's stored hyperlink.
     pub fn open(app: &mut SheetApp, name: &str, params: Json) -> Option<Dialog> {
         let sel = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
@@ -683,6 +688,32 @@ impl Dialog {
                 for key in ["action", "range", "criteria", "copyTo", "unique"] {
                     if let Some(value) = params.get(key) {
                         d.set_value(key, value.clone());
+                    }
+                }
+                d
+            }
+            "actuarial" => {
+                let mut d = Dialog::custom("actuarial", "Actuarial Report", json!({"function":"ACT.ANNUITY"}));
+                d.command = Some("data.actuarialReport");
+                d
+            }
+            "monteCarlo" => {
+                let mut d = Dialog::custom(
+                    "monteCarlo",
+                    "Monte Carlo Simulation",
+                    json!({
+                        "inputs": [monte_carlo::input_template(&active)],
+                        "outputs": "", "iterations": "1000", "seed": "0", "samples": true, "method": "latinHypercube", "replicates": "8", "correlation": "",
+                    }),
+                );
+                d.command = Some("data.monteCarlo");
+                if let Some(saved) = app.session.active().and_then(|doc| doc.wb.active()).and_then(monte_carlo::saved_configuration) {
+                    match saved.and_then(|config| monte_carlo::load_configuration(&mut d, config)) {
+                        Ok(()) => {}
+                        Err(message) => {
+                            app.message = Some(("Monte Carlo".into(), message.into()));
+                            return None;
+                        }
                     }
                 }
                 d

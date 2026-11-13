@@ -15,6 +15,7 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
     ..craft_update::suite::GRIDCRAFT
 };
 
+mod analysis_ui;
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
@@ -231,6 +232,8 @@ pub struct SheetApp {
     pub editor: Option<editor::EditState>,
     pub text_box_editor: Option<text_box::EditState>,
     pub dialog: Option<dialogs::Dialog>,
+    /// Dialog kept while its cooperative Monte Carlo job is pending.
+    pending_analysis_dialog: Option<(u64, Option<u64>, dialogs::Dialog)>,
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,
     pub message: Option<(String, String)>,

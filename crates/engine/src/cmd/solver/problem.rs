@@ -31,8 +31,9 @@ pub(super) fn as_num(v: &Value) -> f64 {
 }
 
 impl Evaluator {
+    /// Stops optimization on iteration/time limits or a latched trial work refusal.
     pub(super) fn exhausted(&self) -> bool {
-        self.evals >= self.budget
+        self.evals >= self.budget || self.trial.stopped()
     }
 
     /// Evaluates the model at `x`; `None` once the budget is spent.
@@ -50,7 +51,7 @@ impl Evaluator {
                 reads.push((self.sheet, c));
             }
         }
-        let vals = self.trial.run(&sets, &reads);
+        let vals = self.trial.run(&sets, &reads).ok()?;
         let mut it = vals.iter().map(as_num);
         let f = it.next().unwrap_or(f64::NAN);
         let f = match self.target {

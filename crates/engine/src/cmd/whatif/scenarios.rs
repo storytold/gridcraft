@@ -189,6 +189,7 @@ pub(super) fn scenario_delete(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"deleted": removed.name}))
 }
 
+/// Builds the scenario report from fallible isolated trials, preserving source assumptions.
 /// Most changing-cell-by-scenario cells one Scenario Summary writes.
 const MAX_SUMMARY_CELLS: usize = 1_000_000;
 
@@ -234,15 +235,18 @@ pub(super) fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let current: Vec<Value> = changing.iter().map(|c| sh.value(*c)).collect();
     let current_results: Vec<Value> = results.iter().map(|c| sh.value(*c)).collect();
-    let mut trial = Trial::new(d);
     let reads: Vec<(usize, CellRef)> = results.iter().map(|c| (si, *c)).collect();
-    let scenario_results: Vec<Vec<Value>> = per
-        .iter()
-        .map(|m| {
-            let sets: Vec<(usize, CellRef, Value)> = m.iter().map(|(c, v)| (si, *c, v.clone())).collect();
-            trial.run(&sets, &reads)
-        })
-        .collect();
+    let scenario_results: Vec<Vec<Value>> = if results.is_empty() {
+        vec![Vec::new(); per.len()]
+    } else {
+        let mut trial = Trial::new(d);
+        per.iter()
+            .map(|m| {
+                let sets: Vec<(usize, CellRef, Value)> = m.iter().map(|(c, v)| (si, *c, v.clone())).collect();
+                trial.run(&sets, &reads)
+            })
+            .collect::<Result<Vec<_>>>()?
+    };
     let fmt_of = |c: CellRef| d.wb.styles.get(sh.style_id(c)).num_fmt.clone();
     let changing_fmts: Vec<_> = changing.iter().map(|c| fmt_of(*c)).collect();
     let result_fmts: Vec<_> = results.iter().map(|c| fmt_of(*c)).collect();

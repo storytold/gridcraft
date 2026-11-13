@@ -122,6 +122,26 @@ fn call_cost(spec: &FnSpec, cell_args: &[Arg]) -> usize {
     parse.saturating_add(periods.saturating_mul(PERIOD_COST))
 }
 
+/// Estimates immediate argument storage without traversing or allocating nested input data.
+/// Units are operational estimates, not CPU-time or hard real-time guarantees.
+pub(crate) fn value_work(value: &Value) -> u64 {
+    match value {
+        Value::Array(array) => u64::try_from(array.data.len()).unwrap_or(u64::MAX).max(1),
+        Value::Text(text) => u64::try_from(text.len()).unwrap_or(u64::MAX).max(1),
+        _ => 1,
+    }
+}
+
+/// Charges before each kernel invocation, including every broadcast output position.
+fn native_call(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
+    let units = args.iter().fold(1u64, |units, arg| units.saturating_add(value_work(&arg.value)));
+    if !ctx.charge_work(units) {
+        return Value::Error(CellError::Num);
+    }
+    let value = (spec.imp)(args, ctx);
+    if ctx.charge_work(0) { value } else { Value::Error(CellError::Num) }
+}
+
 pub(crate) fn call_lifted(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
     call_lifted_within(spec, args, ctx, LIFTED_SCAN_BUDGET)
 }
@@ -158,7 +178,7 @@ fn call_lifted_within(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx, budget: us
         }
     }
     if !any {
-        return (spec.imp)(args, ctx);
+        return native_call(spec, args, ctx);
     }
     let needles = rows.saturating_mul(cols);
     // Every call is charged its repeated scan (at least 1), its own period loop, and the cells of
@@ -167,15 +187,21 @@ fn call_lifted_within(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx, budget: us
     // `COUNTIF(big_range, SEQUENCE(1e4))`, `CUMIPMT(0.1, 1e7, 1, 1, SEQUENCE(1e4,,1e7,0), 0)`,
     // `MUNIT(SEQUENCE(1e4,,3000,0))`.
     let per_call = scan_len(spec, args).max(1);
-    let mut cell_args: Vec<Arg> = args.to_vec();
     let mut spent = needles.saturating_mul(per_call);
     if needles > MAX_CELLS || spent > budget {
         return Value::Error(CellError::Num);
     }
+    if !ctx.charge_work((rows as u64).saturating_mul(cols as u64).saturating_add(args.len() as u64)) {
+        return Value::Error(CellError::Num);
+    }
+    let mut cell_args: Vec<Arg> = args.to_vec();
     // Period loops are known before any call runs, so a call over budget does none of them.
     if PERIOD_LOOPS.contains(&spec.name) {
         for r in 0..rows {
             for c in 0..cols {
+                if !ctx.charge_work(1) {
+                    return Value::Error(CellError::Num);
+                }
                 element_args(spec, args, r, c, &mut cell_args);
                 spent = spent.saturating_add(call_cost(spec, &cell_args));
                 if spent > budget {
@@ -188,7 +214,15 @@ fn call_lifted_within(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx, budget: us
     for r in 0..rows {
         for c in 0..cols {
             element_args(spec, args, r, c, &mut cell_args);
+            let units = cell_args.iter().fold(1u64, |units, arg| units.saturating_add(value_work(&arg.value)));
+            if !ctx.charge_work(units) {
+                return Value::Error(CellError::Num);
+            }
             let out = (spec.imp)(&cell_args, ctx);
+            // Observe a host-latched refusal inside the kernel, including the final position.
+            if !ctx.charge_work(0) {
+                return Value::Error(CellError::Num);
+            }
             data.push(match out {
                 Value::Array(a) => {
                     spent = spent.saturating_add(a.data.len());
@@ -221,6 +255,94 @@ mod tests {
 
     fn spec() -> FnSpec {
         f!("ADD2", 2, 2, MathTrig, &[true, true], "ADD2(a, b)", "Adds two numbers.", add)
+    }
+
+    /// A host-owned bank records real invocations without importing any engine types.
+    struct BudgetCtx {
+        remaining: u64,
+        kernels: usize,
+        rejected: bool,
+    }
+    impl Ctx for BudgetCtx {
+        fn charge_work(&mut self, units: u64) -> bool {
+            if self.rejected || units > self.remaining {
+                self.rejected = true;
+                return false;
+            }
+            self.remaining -= units;
+            true
+        }
+        fn date_system(&self) -> gridcraft_core::DateSystem {
+            gridcraft_core::DateSystem::default()
+        }
+        fn now_serial(&self) -> f64 {
+            0.0
+        }
+        fn random(&mut self) -> f64 {
+            self.kernels += 1;
+            0.0
+        }
+    }
+    fn counted_add(a: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
+        ctx.random();
+        add(a, ctx)
+    }
+
+    /// Impossible output shapes are catchable errors and never trip the host work latch.
+    #[test]
+    fn oversized_broadcast_is_rejected_before_host_reservation() {
+        let mut ctx = BudgetCtx { remaining: 0, kernels: 0, rejected: false };
+        let values = vec![1.0; 3163];
+        let result = super::call_lifted_within(&spec(), &[av(col(&values)), av(row(&values))], &mut ctx, usize::MAX);
+        assert_eq!(result, Value::Error(CellError::Num));
+        assert!(!ctx.rejected);
+        assert_eq!(ctx.kernels, 0);
+    }
+
+    #[test]
+    fn budgets_reject_before_kernels_and_stop_partway_through_broadcasts() {
+        let spec = FnSpec { imp: |a, c| crate::util::finish(counted_add(a, c)), ..spec() };
+        let mut denied = BudgetCtx { remaining: 0, kernels: 0, rejected: false };
+        assert_eq!(crate::call(&spec, &[n(1.0), n(2.0)], &mut denied), Value::Error(CellError::Num));
+        assert_eq!(denied.kernels, 0);
+        // Input work=5, output reservation=5, first kernel=3. The second is refused.
+        let mut partial = BudgetCtx { remaining: 13, kernels: 0, rejected: false };
+        assert_eq!(crate::call(&spec, &[av(row(&[1.0, 2.0, 3.0])), n(1.0)], &mut partial), Value::Error(CellError::Num));
+        assert_eq!(partial.kernels, 1);
+        assert!(partial.rejected);
+        assert_eq!(crate::call(&spec, &[n(1.0), n(2.0)], &mut partial), Value::Error(CellError::Num));
+        assert_eq!(partial.kernels, 1);
+    }
+
+    #[test]
+    fn output_reservation_and_shared_calls_consume_the_same_host_bank() {
+        let spec = FnSpec { imp: |a, c| crate::util::finish(counted_add(a, c)), ..spec() };
+        let mut ctx = BudgetCtx { remaining: 6, kernels: 0, rejected: false };
+        assert_eq!(crate::call(&spec, &[n(2.0), n(3.0)], &mut ctx), Value::Number(5.0));
+        assert_eq!(ctx.remaining, 0);
+        assert_eq!(crate::call(&spec, &[n(2.0), n(3.0)], &mut ctx), Value::Error(CellError::Num));
+        assert_eq!(ctx.kernels, 1);
+        let mut reserve = BudgetCtx { remaining: 5, kernels: 0, rejected: false };
+        assert_eq!(crate::call(&spec, &[av(row(&[1.0, 2.0, 3.0])), n(1.0)], &mut reserve), Value::Error(CellError::Num));
+        assert_eq!(reserve.kernels, 0);
+    }
+
+    #[test]
+    fn refusal_inside_the_final_broadcast_kernel_discards_the_whole_result() {
+        let spec = FnSpec {
+            imp: |args, ctx| {
+                ctx.random();
+                if !ctx.charge_work(1) {
+                    return Value::Error(CellError::Num);
+                }
+                crate::util::finish(add(args, ctx))
+            },
+            ..spec()
+        };
+        let mut ctx = BudgetCtx { remaining: 15, kernels: 0, rejected: false };
+        assert_eq!(crate::call(&spec, &[av(row(&[1.0, 2.0])), n(1.0)], &mut ctx), Value::Error(CellError::Num));
+        assert_eq!(ctx.kernels, 2);
+        assert!(ctx.rejected);
     }
 
     #[test]

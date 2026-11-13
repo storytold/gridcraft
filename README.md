@@ -182,6 +182,15 @@ The MCP server offers tools such as `read_range`, `write_range`, `set_cell`, `ev
 pointer and keyboard input, dialogs and screenshots. See [`docs/mcp.md`](docs/mcp.md),
 [`docs/cli.md`](docs/cli.md) and [`docs/control-protocol.md`](docs/control-protocol.md).
 
+Generic [Monte Carlo simulation and a sample-derived tornado](docs/monte-carlo.md) are available
+under Data → Monte Carlo and through `execute_command` → `data.monteCarlo`.
+
+The Rust-native [actuarial worksheet pack](docs/actuarial.md) adds 95 `ACT.*` functions for
+life/pensions, compound losses, reserves, pricing, capital and multi-state Markov models,
+with an [executable synthetic workbook](docs/examples/actuarial.jsonl). Its
+[scientific-method extensions](docs/actuarial-scientific.md) cover censored survival,
+Bayesian predictives, EVT/copulas, sensitivities, semi-Markov models and decision methods.
+
 ## Architecture
 
 GridCraft is an engine-first Cargo workspace with enforced layering (`cargo xtask layers`). The
@@ -198,6 +207,7 @@ egui frontend is a separate crate, so the UI can be swapped without touching the
 | L7 | `apps/gridcraft`, `apps/gridcraft-cli`, `apps/gridcraft-web` |
 
 - **Contributor and agent rules** (clean-room, asset policy, never-crash, quality gates): [`AGENTS.md`](AGENTS.md)
+- **Contribution workflow** (issues, pull requests and numerical evidence): [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - **Bundled assets:** each one is listed with its licence in [`ATTRIBUTION.md`](ATTRIBUTION.md)
 - **Releases:** signed macOS, Windows, Linux, BSD and web builds; see [`docs/releasing.md`](docs/releasing.md)
 

@@ -135,6 +135,24 @@ fn scenarios() {
     assert!(s.execute("data.scenarioSummary", json!({})).is_err());
 }
 
+/// A summary without result cells needs no simulated workbook recalculation.
+#[test]
+fn scenario_summary_without_results_does_not_run_trials() {
+    for scenarios in [1, 5] {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell":"A1","input":"1"})).unwrap();
+        s.execute("cell.set", json!({"cell":"B1","input":"=SUM(SEQUENCE(1000))"})).unwrap();
+        for i in 0..scenarios {
+            s.execute("data.scenarioAdd", json!({"name":format!("S{i}"),"changing":"A1","values":[2]})).unwrap();
+        }
+        let bank = s.doc().unwrap().analysis_budget.clone();
+        let before = bank.remaining().unwrap();
+        let result = s.execute("data.scenarioSummary", json!({})).unwrap();
+        assert_eq!(result["sheet"], "Scenario Summary");
+        assert_eq!(bank.remaining().unwrap(), before, "summary without outputs must not run trials");
+    }
+}
+
 #[test]
 fn data_tables() {
     let mut s = s();

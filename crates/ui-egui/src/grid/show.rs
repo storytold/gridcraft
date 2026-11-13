@@ -57,6 +57,9 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     app.grid.rect = Some(rect);
     let Some(d) = app.session.active() else { return };
     let wb: Arc<Workbook> = d.wb.clone();
+    let render_budget = d.render_budget.clone();
+    let render_cache = d.render_cache.clone();
+    let render_revision = d.revision;
     let si = wb.active_sheet();
     let Some(sh) = wb.sheet(si) else { return };
     let sel = d.selection.clone();
@@ -174,10 +177,9 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     painter.rect_filled(rect, 0.0, t.grid_bg);
     // Everything up to the headers is painted in logical (left-to-right) coordinates.
     let mirror_from = painter.add(egui::Shape::Noop);
-    // A rule over a whole column scans it for its statistics: done once per change of the sheet,
-    // not every frame.
     let cf_sheet = wb.sheets.get(si).map(Arc::downgrade);
     let mut cf = kept_cf(app, &wb, si);
+    cf.refresh(render_budget, render_cache, &wb, render_revision);
     let quads = if geo.paper.is_some() {
         crate::paper_view::paint_pages(
             crate::paper_view::PagePaintInput {

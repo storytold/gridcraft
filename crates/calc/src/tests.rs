@@ -7,6 +7,46 @@ fn c(s: &str) -> CellRef {
     CellRef::parse(s).unwrap()
 }
 
+/// A scoped name resolves its inputs in the defining sheet while sampling at its caller's cell.
+#[test]
+fn scoped_simulation_names_keep_physical_formula_sites() {
+    use std::sync::{Arc, Mutex};
+
+    let mut wb = Workbook::new();
+    wb.sheets.push(Arc::new(gridcraft_model::Sheet::new("Second")));
+    wb.names.push(gridcraft_model::DefinedName {
+        name: "Draw".into(),
+        scope: Some(0),
+        formula: "MC.POISSON($B$1,\"shared-id\")".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    for sheet in 0..2 {
+        let s = wb.sheet_mut(sheet).unwrap();
+        s.cells.set(c("B1"), Cell::value(Value::Number(if sheet == 0 { 10.0 } else { 99.0 })));
+        for at in ["A1", "A2"] {
+            s.cells.set(c(at), Cell::formula(Formula::new("=Sheet1!Draw")));
+        }
+    }
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let captured = seen.clone();
+    let hook = crate::SimulationHook::new(move |site, request| {
+        assert_eq!(request, crate::SimulationRequest::Poisson { mean: 10.0, stream: "shared-id" });
+        captured.lock().unwrap().push(site);
+        Value::Number((100 * site.sheet + site.cell.row as usize) as f64)
+    });
+    let _scope = hook.enter().unwrap();
+    Calc::new().recalc_all(&mut wb);
+    let seen = seen.lock().unwrap();
+    for sheet in 0..2 {
+        for at in ["A1", "A2"] {
+            let cell = c(at);
+            assert!(seen.contains(&crate::SimulationSite { sheet, cell }), "missing physical sheet {sheet} cell {at}: {seen:?}");
+            assert_eq!(wb.sheet(sheet).unwrap().value(cell), Value::Number((100 * sheet + cell.row as usize) as f64));
+        }
+    }
+}
+
 struct T {
     wb: Workbook,
     calc: Calc,
@@ -65,6 +105,63 @@ fn spill_range_operator() {
     assert_eq!(t.num("E1"), 30.0);
     t.set("A1", "4");
     assert_eq!(t.num("E1"), 100.0);
+}
+
+/// Repeated small aggregates pay for their range, not a large unrelated sheet spill.
+#[test]
+fn unrelated_spill_does_not_exhaust_small_sum_recalculation_budget() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+
+    let mut t = T::new();
+    t.set("A1", "2");
+    t.set("A2", "3");
+    t.set("Z1000", "=SEQUENCE(10000)");
+    for row in 1..=100 {
+        t.set(&format!("B{row}"), "=SUM($A$1:$A$2)");
+    }
+    assert!(t.wb.sheet(0).unwrap().spill.len() >= 9999);
+    let spent = Arc::new(AtomicU64::new(0));
+    let counter = spent.clone();
+    let hook = crate::WorkHook::new(move |units| counter.fetch_add(units, Ordering::Relaxed).saturating_add(units) <= 50_000);
+    let _scope = hook.enter().unwrap();
+    t.set("A1", "7");
+    assert!(hook.charge(0), "unrelated spill exhausted the range-work allowance");
+    for row in 1..=100 {
+        assert_eq!(t.num(&format!("B{row}")), 10.0);
+    }
+    assert!(spent.load(Ordering::Relaxed) < 50_000);
+}
+
+/// Dependents force the large array to be materialized during the same recalculation pass.
+#[test]
+fn dependent_same_pass_spill_keeps_small_sum_reads_within_budget() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+
+    let mut t = T::new();
+    t.set("A1", "2");
+    t.set("A2", "3");
+    t.set("Z1000", "=SEQUENCE(10000)+$A$1");
+    for row in 1..=100 {
+        t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("B{row}")), Cell::formula(Formula::new("=0*$Z$1000+SUM($A$1:$A$2)")));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    let spent = Arc::new(AtomicU64::new(0));
+    let counter = spent.clone();
+    let hook = crate::WorkHook::new(move |units| counter.fetch_add(units, Ordering::Relaxed).saturating_add(units) <= 500_000);
+    let _scope = hook.enter().unwrap();
+    t.set("A1", "7");
+    assert!(hook.charge(0));
+    assert_eq!(t.num("Z10999"), 10_007.0);
+    for row in 1..=100 {
+        assert_eq!(t.num(&format!("B{row}")), 10.0);
+    }
+    assert!(spent.load(Ordering::Relaxed) < 500_000);
 }
 
 #[test]
