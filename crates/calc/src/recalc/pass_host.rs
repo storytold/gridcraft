@@ -555,6 +555,26 @@ impl Host for PassHost<'_> {
     fn stack_exhausted(&mut self) {
         self.out_of_stack = true;
     }
+    fn is_cell_active(&self, sheet: usize, c: CellRef) -> bool {
+        let k = (sheet, c);
+        self.in_progress.contains(&k) || self.waiting.contains(&k)
+    }
+    fn is_cell_occupied(&self, sheet: usize, c: CellRef) -> bool {
+        let k = (sheet, c);
+        if let Some(v) = self.results.get(&k) {
+            return !v.is_empty();
+        }
+        let covering = match self.spill_index.covering(sheet, c) {
+            Cover::None => None,
+            Cover::One(a) => self.spills.get_key_value(&(sheet, a)),
+            Cover::Many => self.spills.iter().find(|(a, arr)| a.0 == sheet && spill_covers(a.1, arr, c)),
+        };
+        if let Some((anchor, arr)) = covering {
+            let (dr, dc) = ((c.row - anchor.1.row) as usize, (c.col - anchor.1.col) as usize);
+            return !arr.get(dr, dc).is_none_or(Value::is_empty);
+        }
+        self.wb.sheet(sheet).is_some_and(|s| s.cell(c).is_some_and(|cell| cell.formula.is_some() || cell.py.is_some()) || !s.value(c).is_empty())
+    }
     fn spill_range(&mut self, sheet: usize, anchor: CellRef) -> Option<RangeRef> {
         let k = (sheet, anchor);
         if !(self.pending.contains(&k) || self.results.contains_key(&k)) {

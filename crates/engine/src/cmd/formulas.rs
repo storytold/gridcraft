@@ -271,6 +271,7 @@ pub fn function_list() -> Vec<Json> {
         ("OFFSET", "Lookup", "OFFSET(reference, rows, cols, [height], [width])", "A reference shifted from a starting point."),
         ("INDIRECT", "Lookup", "INDIRECT(ref_text, [a1])", "The reference named by a text string."),
         ("INDEX", "Lookup", "INDEX(array, row_num, [column_num], [area_num])", "The value or reference at a position."),
+        ("GETPIVOTDATA", "Lookup", "GETPIVOTDATA(data_field, pivot_table, [field1, item1], ...)", "Returns data stored in a PivotTable report."),
         ("SUBTOTAL", "MathTrig", "SUBTOTAL(function_num, ref1, ...)", "A subtotal that can skip hidden rows."),
         ("AGGREGATE", "MathTrig", "AGGREGATE(function_num, options, ref1, ...)", "An aggregate that can skip hidden rows and errors."),
         ("TEXT", "Text", "TEXT(value, format_text)", "Formats a number as text."),
@@ -1187,5 +1188,25 @@ mod tests {
         empty.new_workbook();
         assert!(empty.execute("formulas.pasteName", json!({"list": true})).is_err());
         assert_eq!(empty.execute("formulas.pasteName", json!({})).unwrap()["names"], json!([]));
+    }
+
+    #[test]
+    fn trace_precedents_and_dependents_resolve_structured_table_references() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1:B2", "values": [["k", "v"], [1, 10]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:B2", "name": "T"})).unwrap();
+        s.execute("cell.set", json!({"cell": "D2", "input": "=T[@k]+VLOOKUP(1,T[],2,FALSE)"})).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "D2"})).unwrap()["value"], json!(11.0));
+        let precs = s.execute("formulas.tracePrecedents", json!({"cell": "D2"})).unwrap();
+        assert_eq!(
+            precs,
+            json!([
+                {"sheet": "Sheet1", "range": "A2"},
+                {"sheet": "Sheet1", "range": "A2:B2"}
+            ])
+        );
+        let deps = s.execute("formulas.traceDependents", json!({"cell": "A2"})).unwrap();
+        assert_eq!(deps, json!([{"sheet": "Sheet1", "cell": "D2"}]));
     }
 }
