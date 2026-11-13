@@ -148,6 +148,69 @@ fn paste_special_options_wait_for_enter_and_transpose_values() {
     assert!(sh.cell(CellRef::parse("D4").unwrap()).unwrap().formula.is_none());
 }
 
+/// Font's planned level on Home (`0` is the compact row, `1..` natural forms).
+fn font_level(h: &Harness) -> Option<u8> {
+    gridcraft_ui_egui::ribbon::RibbonSections::levels(&h.ctx, "Home").into_iter().find(|(name, _)| name == "Font").map(|(_, level)| level)
+}
+
+#[test]
+fn fresh_keytip_request_opens_a_compact_group_control() {
+    // Home has not drawn yet, so it has no plans when `begin` installs the keytip's forced
+    // layout. The fallback must name the requested group itself: an empty forced layout leaves
+    // Font compact at this width, and the compact row does not draw the size field that
+    // consumes the one-shot request.
+    let session = blank();
+    let mut app = crate::common::app(session);
+    // The builder draws once, so start on View: that frame plans View and leaves Home fresh.
+    app.ui.ribbon_tab = "View".into();
+    let mut h = crate::common::builder().with_size(egui::vec2(819.0, 614.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        app,
+    );
+    assert_eq!(font_level(&h), None, "Home has no plans before its first frame");
+    // One batch: switch to Home and deliver the Control request for its Font group.
+    h.state_mut().ui.ribbon_tab = "Home".into();
+    h.state_mut().ui.keytip_invoke_next = Some("home.fontSize");
+    h.run_steps(1);
+    assert!(h.state().ui.keytip_invoke.is_none(), "the size field consumes the one-shot request on the fresh tab's first frame");
+    assert_ne!(font_level(&h), Some(0), "the fresh tab's first frame draws Font natural for the request");
+    // The focused size field holds the forced layout, so later frames keep it natural too.
+    h.run_steps(2);
+    assert_ne!(font_level(&h), Some(0), "the forced layout holds while the size field has focus");
+}
+
+#[test]
+fn a_press_inside_the_focused_size_field_keeps_font_natural() {
+    // `begin` reads the field's response outside `ui.input`: both take the context write lock,
+    // and the lock is not reentrant, so a press inside the focused field deadlocked the UI
+    // thread (a debug build panicked after the lock timeout). The same press must not unpin
+    // the layout the keytip opened.
+    let session = blank();
+    let mut h = crate::common::builder().with_size(egui::vec2(819.0, 614.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        crate::common::app(session),
+    );
+    h.run_steps(4);
+    sequence(&mut h, &[Key::H, Key::F, Key::S], false);
+    assert!(h.state().ui.keytip_invoke.is_none(), "the size field consumes the Control request");
+    assert_ne!(font_level(&h), Some(0), "the keytip draws Font natural at 819 pt");
+    let field = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Font Size");
+    assert!(field.is_focused(), "the keytip focuses the size field");
+    // A press only, on a later frame: the release has not arrived yet.
+    let pos = field.rect().center();
+    h.input_mut()
+        .events
+        .extend([Event::PointerMoved(pos), Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
+    h.run_steps(1);
+    assert_ne!(font_level(&h), Some(0), "a press inside the focused size field keeps Font natural");
+}
+
 #[test]
 fn keyboard_opened_paste_menu_accepts_a_mouse_click_after_keytips_cancel() {
     let mut h = harness(copied_row());

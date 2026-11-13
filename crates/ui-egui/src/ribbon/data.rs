@@ -60,17 +60,15 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         // The measured three-row form stacks the four tools as small buttons; other levels
         // keep one row of four big buttons.
         if RibbonSections::level(ui, "Data Tools") == 3 {
-            // Three rows of two: the stacked columns of small buttons Excel's narrow form uses.
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
+            // Three control rows: two across on the first row, one per row after.
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
                     small_data_tool(app, ui, Icon::TextColumns, "Text to Columns", "dialog:textToColumns");
+                    ui.add_space(2.0);
                     small_data_tool(app, ui, Icon::FillDown, "Flash Fill", "edit.flashFill");
                 });
-                ui.add_space(2.0);
-                ui.vertical(|ui| {
-                    small_data_tool(app, ui, Icon::Duplicates, "Remove Duplicates", "dialog:removeDuplicates");
-                    small_data_validation(app, ui);
-                });
+                small_data_tool(app, ui, Icon::Duplicates, "Remove Duplicates", "dialog:removeDuplicates");
+                small_data_validation(app, ui);
             });
         } else {
             data_tool(app, ui, Icon::TextColumns, "Text to\nColumns", "Text to Columns", "dialog:textToColumns");

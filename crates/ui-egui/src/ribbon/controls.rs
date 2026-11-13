@@ -339,15 +339,13 @@ impl RibbonSections {
         // press inside the focused size field never ends it either: moving the caret must not
         // collapse the group out from under the editor.
         let any_popup = egui::Popup::is_any_open(ui.ctx());
-        // Read focus before `data_mut`: `ctx.memory` must not run inside that closure.
+        // Read focus and the field rect before `data_mut`: `ctx.memory` and `read_response`
+        // must not run inside that closure, and `input` and `read_response` both take the
+        // context write lock, so the response must be read outside `ui.input` too.
         let size_typing = ui.ctx().memory(|m| m.has_focus(super::home::font_size_field()));
-        let size_press = size_typing
-            && ui.input(|i| {
-                i.pointer.any_pressed()
-                    && i.pointer
-                        .interact_pos()
-                        .is_some_and(|p| ui.ctx().read_response(super::home::font_size_field()).is_some_and(|r| r.rect.contains(p)))
-            });
+        let size_rect = if size_typing { ui.ctx().read_response(super::home::font_size_field()).map(|r| r.rect) } else { None };
+        let size_press =
+            size_rect.is_some_and(|rect| ui.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))));
         let dismiss = ui.input(|i| i.key_pressed(egui::Key::Escape) || (i.pointer.any_pressed() && !any_popup && !size_press));
         ui.ctx().data_mut(|d| {
             d.insert_temp(current_sections_id(), id);
@@ -362,7 +360,13 @@ impl RibbonSections {
                 sections.forced = if sections.plans.iter().any(|plan| plan.label == group) {
                     Some(vec![(group.to_owned(), sections.natural_level(group))])
                 } else {
-                    Some(sections.natural_layout())
+                    // A fresh tab has planned nothing before its first frame, so the whole-tab
+                    // natural layout cannot name the requested group and would draw compact,
+                    // never reaching the control that consumes the one-shot request. Add the
+                    // group at its natural level after the groups already planned.
+                    let mut layout = sections.natural_layout();
+                    layout.push((group.to_owned(), sections.natural_level(group)));
+                    Some(layout)
                 };
                 sections.forced_used = false;
                 sections.forced_unpin_at = None;

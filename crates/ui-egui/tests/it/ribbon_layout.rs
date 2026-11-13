@@ -476,18 +476,17 @@ fn a_compact_menu_survives_a_resize_that_moves_its_button() {
 
 #[test]
 fn data_tools_stacks_three_rows_at_its_measured_width() {
-    // The registered level 3 must render: at 1040 pt Data Tools shows its four small buttons
-    // in two columns of two; one width below, the group is a single compact row.
+    // The registered level 3 must render: at 1040 pt Data Tools shows three control rows
+    // (two across, then one per row); one width below, the group is a single compact row.
     let wide = app_at_size(vec2(1040.0, 768.0), "Data");
     let level = RibbonSections::levels(&wide.ctx, "Data").into_iter().find(|(name, _)| name == "Data Tools").map(|(_, l)| l);
     assert_eq!(level, Some(3), "Data Tools plans level 3 at 1040 pt");
     let left = |label: &str| wide.get_by_role_and_label(egui::accesskit::Role::Button, label).rect().left();
     let top = |label: &str| wide.get_by_role_and_label(egui::accesskit::Role::Button, label).rect().top();
-    assert!((top("Text to Columns") - top("Flash Fill")).abs() > 10.0, "Text to Columns sits over Flash Fill");
-    assert!((top("Remove Duplicates") - top("Data Validation")).abs() > 10.0, "Remove Duplicates sits over Data Validation");
-    assert!((left("Text to Columns") - left("Flash Fill")).abs() < 1.0, "first column shares x");
-    assert!((left("Remove Duplicates") - left("Data Validation")).abs() < 1.0, "second column shares x");
-    assert!(left("Remove Duplicates") > left("Text to Columns") + 10.0, "the columns sit side by side");
+    assert!((left("Text to Columns") - left("Flash Fill")).abs() > 10.0, "Text to Columns sits left of Flash Fill");
+    assert!((top("Flash Fill") - top("Text to Columns")).abs() < 1.0, "first row shares y");
+    assert!(top("Remove Duplicates") > top("Text to Columns") + 10.0, "Remove Duplicates drops to row two");
+    assert!(top("Data Validation") > top("Remove Duplicates") + 10.0, "Data Validation drops to row three");
 
     let narrow = app_at_size(vec2(1027.0, 768.0), "Data");
     let level = RibbonSections::levels(&narrow.ctx, "Data").into_iter().find(|(name, _)| name == "Data Tools").map(|(_, l)| l);
