@@ -18,7 +18,10 @@ The editor translates to canonical English before engine commands, and translate
 for display. API, clipboard and XLSX syntax remain stable. Existing names override aliases.
 
 The revision is based directly on main after #31/#104 and Portuguese interface support (#82)
-merged. Those locales retain their existing formula fallback; this change adds only Spanish.
+merged. Português (Brasil) now selects the Portuguese function table the same way, with the
+Spanish separators, `VERDADEIRO`/`FALSO` and Portuguese table specifiers; the specifiers are
+translated only at the editor boundary, so files and the API keep `[#Headers]`. The other
+interface languages keep the English formula fallback.
 
 ## Preserve array evaluation when exporting formulas (#64)
 

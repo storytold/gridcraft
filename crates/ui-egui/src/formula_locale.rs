@@ -1,5 +1,6 @@
 //! UI formula syntax boundary. Engine commands, control/API callers and XLSX keep English.
 use crate::i18n::Language;
+use gridcraft_engine::core::{CellError, Value};
 use gridcraft_engine::formula::{self, FormulaLocale, ParseError};
 use gridcraft_engine::model::Workbook;
 
@@ -31,6 +32,12 @@ pub(crate) fn canonical(
         let expr = formula::parse_closing_parens(body, |text| formula::parse_input(text, locale, known));
         return Ok(format!("={}", formula::print(&expr?)));
     }
+    // Portuguese VERDADEIRO and FALSO are the logical values, as TRUE and FALSE are in English.
+    if locale == FormulaLocale::Pt
+        && let Some(value) = locale.boolean_alias(body.trim())
+    {
+        return Ok(FormulaLocale::En.boolean_name(value).to_string());
+    }
     // Decimal-comma number entry follows the same preference, without rewriting text or dates.
     let normalized = body.trim().replace(locale.decimal_separator(), ".");
     let number = normalized.strip_suffix('%').unwrap_or(&normalized);
@@ -52,6 +59,27 @@ pub(crate) fn display(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: u
         .map(|body| format!("={body}"))
         .unwrap_or_else(|_| text.to_string());
     hide_udf_prefix(&shown, locale)
+}
+
+/// How a constant logical or error value reads on screen in the formula language. Portuguese
+/// shows `VERDADEIRO` and `#N/D`; other syntaxes, and errors without a Portuguese name, keep the
+/// English. Only the screen changes: the stored value and formulas stay as they are.
+pub(crate) fn value_name(value: &Value, locale: FormulaLocale) -> Option<&'static str> {
+    if locale != FormulaLocale::Pt {
+        return None;
+    }
+    match value {
+        Value::Bool(b) => Some(locale.boolean_name(*b)),
+        Value::Error(CellError::Value) => Some("#VALOR!"),
+        Value::Error(CellError::Name) => Some("#NOME?"),
+        Value::Error(CellError::NA) => Some("#N/D"),
+        Value::Error(CellError::Div0) => Some("#DIV/0!"),
+        Value::Error(CellError::Ref) => Some("#REF!"),
+        Value::Error(CellError::Num) => Some("#NÚM!"),
+        Value::Error(CellError::Null) => Some("#NULO!"),
+        Value::Error(CellError::Spill) => Some("#DESPEJAR!"),
+        _ => None,
+    }
 }
 
 const UDF_PREFIX: &str = "_xludf.";
@@ -169,5 +197,14 @@ mod tests {
         assert!(sumifs.ends_with("(sum_range; criteria_range1; criteria1; ...)"), "{sumifs}");
         assert_eq!(description("SUMIFS", Es, Language::Es).as_deref(), Some("Adds the cells that meet every condition."));
         assert_eq!(sig("IF", En, Language::En), "IF(logical_test, [value_if_true], [value_if_false])");
+    }
+
+    /// The Portuguese interface shows Portuguese names, `;` and Portuguese help.
+    #[test]
+    fn portuguese_function_help() {
+        let pt = FormulaLocale::Pt;
+        assert_eq!(sig("se", pt, Language::PtBr), "SE(teste_lógico; [valor_se_verdadeiro]; [valor_se_falso])");
+        assert_eq!(sig("PROCV", pt, Language::PtBr), "PROCV(valor_procurado; matriz_tabela; núm_coluna; [procurar_intervalo])");
+        assert_eq!(description("SOMA", pt, Language::PtBr).as_deref(), Some("Soma todos os números informados."));
     }
 }
