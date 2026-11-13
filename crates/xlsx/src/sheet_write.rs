@@ -652,7 +652,7 @@ fn write_sheet_data(s: &mut String, data: SheetCellData<'_>, sid: &dyn Fn(gridcr
                 if f.dynamic {
                     return Some(RangeRef::cell(cell_ref));
                 }
-                match crate::array_formula::export(workbook, index, cell_ref, f, out.functions) {
+                match crate::array_formula::export(workbook, index, cell_ref, f, out.functions, &mut out.names) {
                     crate::array_formula::Export::Unchanged => None,
                     crate::array_formula::Export::Dynamic => Some(RangeRef::cell(cell_ref)),
                     // Every `@` is one Excel implies in a legacy formula: write it without them.
