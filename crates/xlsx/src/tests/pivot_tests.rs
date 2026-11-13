@@ -118,6 +118,7 @@ fn workbook() -> Workbook {
         calculated_fields: vec![],
         values_on_rows: false,
         values_position: None,
+        ..PivotTable::default()
     };
     // Pivot 2: table source, date grouping on two levels, show-values-as, multi-select page
     // filter and a hidden-items filter on a column field.
@@ -178,6 +179,7 @@ fn workbook() -> Workbook {
         calculated_fields: vec![],
         values_on_rows: false,
         values_position: None,
+        ..PivotTable::default()
     };
     // Pivot 3: defaults, defined-name source, compact.
     let p3 = PivotTable {
@@ -759,4 +761,52 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     let t = &one["xl/pivotTables/pivotTable1.xml"];
     assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
     assert!(!t.contains("hideValuesRow"), "{t}");
+}
+
+#[test]
+fn separate_imported_caches_and_sheet_relative_defined_names_do_not_merge_caches() {
+    let mut wb = Workbook::new();
+    wb.sheet_mut(0).unwrap().name = "S1".into();
+    for (c, v) in [("A1", Value::text("K")), ("B1", Value::text("V")), ("A2", Value::text("x")), ("B2", Value::number(10.0))] {
+        wb.sheet_mut(0).unwrap().cells.set(at(c), Cell::value(v));
+    }
+    let mut s2 = Sheet::new("S2");
+    for (c, v) in [("A1", Value::text("K")), ("B1", Value::text("V")), ("A2", Value::text("x")), ("B2", Value::number(99.0))] {
+        s2.cells.set(at(c), Cell::value(v));
+    }
+    wb.sheets.push(Arc::new(s2));
+    wb.names.push(DefinedName { name: "RelRange".into(), scope: None, formula: "A1:B2".into(), comment: String::new(), hidden: false });
+
+    let mk_pt = |id: u32, name: &str, cache_id: Option<u32>| PivotTable {
+        id,
+        name: name.into(),
+        source: "RelRange".into(),
+        anchor: at("D1"),
+        rows: vec![field("K")],
+        values: vec![PivotValue { source_col: "V".into(), name: "Sum of V".into(), ..PivotValue::default() }],
+        cache_id: gridcraft_model::PivotCacheId(cache_id),
+        ..PivotTable::default()
+    };
+    wb.sheet_mut(0).unwrap().pivots.push(mk_pt(1, "PT1", None));
+    wb.sheet_mut(1).unwrap().pivots.push(mk_pt(2, "PT2", None));
+
+    let parts = unzip(&write_xlsx(&wb).unwrap());
+    assert!(parts.contains_key("xl/pivotCache/pivotCacheDefinition1.xml"));
+    assert!(parts.contains_key("xl/pivotCache/pivotCacheDefinition2.xml"));
+    let r1 = String::from_utf8(parts["xl/pivotCache/pivotCacheRecords1.xml"].clone()).unwrap();
+    let r2 = String::from_utf8(parts["xl/pivotCache/pivotCacheRecords2.xml"].clone()).unwrap();
+    assert!(r1.contains("v=\"10\""), "{r1}");
+    assert!(r2.contains("v=\"99\""), "{r2}");
+
+    // Same sheet and source, but distinct imported cache ids stay separate while matching cache ids share one cache.
+    std::sync::Arc::make_mut(&mut wb.sheets[1]).pivots.clear();
+    wb.sheet_mut(0).unwrap().pivots = vec![
+        PivotTable { source: "S1!$A$1:$B$2".into(), ..mk_pt(1, "PT1", Some(1)) },
+        PivotTable { source: "S1!$A$1:$B$2".into(), anchor: at("G1"), ..mk_pt(2, "PT2", Some(2)) },
+        PivotTable { source: "S1!$A$1:$B$2".into(), anchor: at("J1"), ..mk_pt(3, "PT3", Some(1)) },
+    ];
+    let parts = unzip(&write_xlsx(&wb).unwrap());
+    assert!(parts.contains_key("xl/pivotCache/pivotCacheDefinition1.xml"));
+    assert!(parts.contains_key("xl/pivotCache/pivotCacheDefinition2.xml"));
+    assert!(!parts.contains_key("xl/pivotCache/pivotCacheDefinition3.xml"));
 }

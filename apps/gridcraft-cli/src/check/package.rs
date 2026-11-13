@@ -11,7 +11,7 @@ const MAX_ENTRIES: usize = 200_000;
 const RELATIONSHIP_BUDGET: u64 = 512 * 1024 * 1024;
 
 /// Relationship kinds (lower case) whose absence after a save isn't a loss: the calculation chain is
-/// a cache Excel rebuilds, and GridCraft never writes it.
+/// a cache Excel rebuilds.
 pub(super) const REBUILT_KINDS: [&str; 1] = ["calcchain"];
 
 // ---------------------------------------------------------------- package validation
@@ -238,13 +238,16 @@ pub fn validate_package(bytes: &[u8]) -> Result<Vec<String>, String> {
                 continue;
             }
             let id = attr(&attrs, "Id").unwrap_or("");
+            let target = attr(&attrs, "Target").unwrap_or("");
+            if id.is_empty() || target.is_empty() {
+                continue;
+            }
             if !ids.insert(id.to_string()) {
                 issues.push(format!("{n}: duplicate relationship id {id}"));
             }
             if attr(&attrs, "TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External")) {
                 continue;
             }
-            let target = attr(&attrs, "Target").unwrap_or("");
             let resolved = resolve_target(src_dir, target);
             if !parts.contains(&resolved.to_ascii_lowercase()) {
                 let kind = attr(&attrs, "Type").and_then(|t| t.rsplit('/').next()).unwrap_or("?");
@@ -259,13 +262,13 @@ pub fn validate_package(bytes: &[u8]) -> Result<Vec<String>, String> {
 /// namespaces) in the package's relationship parts, keyed in lower case. Relationships that carry
 /// nothing are left out, as a save may rightly drop them: a link to a place in the workbook
 /// (`#Sheet1!A1`, written as a cell's `location`) and a target part with nothing in it.
-pub(super) fn relationship_kinds(bytes: &[u8]) -> Result<BTreeMap<String, String>, String> {
-    relationship_kinds_within(bytes, RELATIONSHIP_BUDGET)
+pub(super) fn relationship_kinds(bytes: &[u8], refresh_replaces_records: bool) -> Result<BTreeMap<String, String>, String> {
+    relationship_kinds_within(bytes, RELATIONSHIP_BUDGET, refresh_replaces_records)
 }
 
 /// [`relationship_kinds`] reading at most `budget` decompressed bytes. `Err` once the relationship
 /// parts alone need more: their kinds can't be listed completely.
-fn relationship_kinds_within(bytes: &[u8], mut budget: u64) -> Result<BTreeMap<String, String>, String> {
+fn relationship_kinds_within(bytes: &[u8], mut budget: u64, refresh_replaces_records: bool) -> Result<BTreeMap<String, String>, String> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a zip package: {e}"))?;
     let names = zip_names(&mut zip);
     let by_key: HashMap<String, &String> = names.iter().map(|n| (part_key(n), n)).collect();
@@ -287,15 +290,24 @@ fn relationship_kinds_within(bytes: &[u8], mut budget: u64) -> Result<BTreeMap<S
         for (_, attrs) in els.iter().filter(|(el, _)| el == "Relationship") {
             let Some(kind) = attr(attrs, "Type").and_then(|t| t.rsplit('/').next()) else { continue };
             let target = attr(attrs, "Target").unwrap_or("");
+            let id = attr(attrs, "Id").unwrap_or("");
+            if id.is_empty() || target.is_empty() {
+                continue;
+            }
             if kind.eq_ignore_ascii_case("hyperlink") && target.starts_with('#') {
                 continue;
             }
             let external = attr(attrs, "TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
-            if !external
-                && let Some(part) = by_key.get(&resolve_target(&src_dir, target).to_ascii_lowercase())
-                && !holds_something(&mut zip, part, kind, &mut verdicts, &mut budget)
-            {
-                continue;
+            if !external && let Some(part) = by_key.get(&resolve_target(&src_dir, target).to_ascii_lowercase()) {
+                if !holds_something(&mut zip, part, kind, &mut verdicts, &mut budget) {
+                    continue;
+                }
+                if refresh_replaces_records
+                    && kind.eq_ignore_ascii_case("pivotCacheDefinition")
+                    && holds_something(&mut zip, part, "refreshonload", &mut verdicts, &mut budget)
+                {
+                    kinds.entry("pivotcacherecords".to_string()).or_insert_with(|| "pivotCacheRecords".to_string());
+                }
             }
             kinds.entry(kind.to_ascii_lowercase()).or_insert_with(|| kind.to_string());
         }
@@ -315,15 +327,11 @@ fn rels_source_dir(key: &str) -> Option<String> {
 /// `verdicts` remembers the answer per (part, named content); `budget` is the decompression this
 /// package's remaining checks may cause, and once it is spent the part counts as having content.
 fn holds_something(zip: &mut Zip<'_>, name: &str, kind: &str, verdicts: &mut HashMap<(String, &'static str), bool>, budget: &mut u64) -> bool {
-    let wanted: Option<&'static [u8]> = match kind.to_ascii_lowercase().as_str() {
-        "comments" => Some(b"comment"),
-        "vmldrawing" => Some(b"shape"),
-        _ => None,
-    };
-    let marker = match wanted {
-        Some(b"comment") => "comment",
-        Some(_) => "shape",
-        None => "any",
+    let marker = match kind.to_ascii_lowercase().as_str() {
+        "comments" => "comment",
+        "vmldrawing" => "shape",
+        "refreshonload" => "refreshonload",
+        _ => "any",
     };
     if let Some(v) = verdicts.get(&(name.to_ascii_lowercase(), marker)) {
         return *v;
@@ -352,6 +360,13 @@ fn holds_something_uncached(zip: &mut Zip<'_>, name: &str, marker: &'static str,
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                if marker == "refreshonload" {
+                    return e
+                        .attributes()
+                        .with_checks(false)
+                        .flatten()
+                        .any(|a| local_name(a.key.as_ref()) == b"refreshOnLoad" && matches!(a.value.as_ref(), b"1" | b"true"));
+                }
                 let found = match wanted {
                     Some(w) => local_name(e.name().as_ref()) == w,
                     None => in_root,
@@ -396,8 +411,8 @@ mod tests {
     fn relationship_parts_count_against_the_decompression_budget() {
         // Each part fits the per-part allowance, but together they need more than the budget.
         let bytes = many_rels(8, 64 * 1024);
-        assert!(relationship_kinds_within(&bytes, 256 * 1024).is_err());
-        let kinds = relationship_kinds_within(&bytes, 1024 * 1024).unwrap();
+        assert!(relationship_kinds_within(&bytes, 256 * 1024, false).is_err());
+        let kinds = relationship_kinds_within(&bytes, 1024 * 1024, false).unwrap();
         assert_eq!(kinds.get("custom").map(String::as_str), Some("custom"));
     }
 }

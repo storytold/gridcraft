@@ -6684,6 +6684,62 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
 }
 
 #[test]
+fn from_saved_refreshes_empty_pivot_targets_and_preserves_populated_ones() {
+    use gridcraft_model::{Cell, Formula, PivotField, PivotFunc, PivotTable, PivotValue, Workbook};
+
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_cell(CellRef::parse("A1").unwrap(), Cell::value(Value::Text("Region".into())));
+    sh.set_cell(CellRef::parse("B1").unwrap(), Cell::value(Value::Text("Sales".into())));
+    sh.set_cell(CellRef::parse("A2").unwrap(), Cell::value(Value::Text("North".into())));
+    sh.set_cell(CellRef::parse("B2").unwrap(), Cell::value(Value::Number(10.0)));
+    sh.set_cell(CellRef::parse("A3").unwrap(), Cell::value(Value::Text("South".into())));
+    sh.set_cell(CellRef::parse("B3").unwrap(), Cell::value(Value::Number(20.0)));
+
+    let make_pt = |id: u32, name: &str, source: &str, anchor: &str, last_range: Option<&str>| PivotTable {
+        id,
+        name: name.into(),
+        source: source.into(),
+        anchor: CellRef::parse(anchor).unwrap(),
+        rows: vec![PivotField { source_col: "Region".into(), ..Default::default() }],
+        values: vec![PivotValue { source_col: "Sales".into(), name: "Sum of Sales".into(), func: PivotFunc::Sum, ..Default::default() }],
+        last_range: last_range.and_then(gridcraft_core::RangeRef::parse),
+        ..Default::default()
+    };
+
+    // 1. Pivot with `last_range: None` and a formula referencing its grand total (`E4`).
+    sh.pivots.push(make_pt(1, "PT_None", "Sheet1!$A$1:$B$3", "D1", None));
+    // 2. Pivot with `last_range: Some(G1:G1)` whose target cells are completely empty.
+    sh.pivots.push(make_pt(2, "PT_EmptyRange", "Sheet1!$A$1:$B$3", "G1", Some("G1:G1")));
+    // 3. Pivot whose `last_range` already has cached cell content: must not be overwritten.
+    sh.pivots.push(make_pt(3, "PT_Populated", "Sheet1!$A$1:$B$3", "J1", Some("J1:K2")));
+    sh.set_cell(CellRef::parse("J1").unwrap(), Cell::value(Value::Text("CachedHeader".into())));
+    // 4. Pivot with an unresolvable source and `last_range: None`: refresh fails gracefully.
+    sh.pivots.push(make_pt(4, "PT_BadSource", "MissingSheet!$A$1:$B$3", "M1", None));
+    // Formula depending on the refreshed first PivotTable (`E4` = 30).
+    sh.set_cell(CellRef::parse("C1").unwrap(), Cell::formula(Formula::new("=E4*2")));
+    // Unrelated formula with a saved cached value that differs from a fresh evaluation: must stay as saved.
+    let mut unrelated = Cell::formula(Formula::new("=1+1"));
+    unrelated.value = Value::Number(99.0);
+    sh.set_cell(CellRef::parse("C2").unwrap(), unrelated);
+
+    let doc = crate::DocState::from_saved(wb.clone(), None, "Saved.xlsx".into(), crate::Trust::FromFile);
+    let sh = doc.wb.sheet(0).unwrap();
+    assert_eq!(sh.value(CellRef::parse("E4").unwrap()), Value::Number(30.0), "last_range=None pivot populated");
+    assert_eq!(sh.value(CellRef::parse("H4").unwrap()), Value::Number(30.0), "empty last_range pivot populated");
+    assert_eq!(sh.value(CellRef::parse("J1").unwrap()), Value::Text("CachedHeader".into()), "populated pivot preserved");
+    assert_eq!(sh.value(CellRef::parse("C1").unwrap()), Value::Number(60.0), "dependent formula recalculated after refresh");
+    assert_eq!(sh.value(CellRef::parse("C2").unwrap()), Value::Number(99.0), "unrelated saved formula value preserved");
+
+    // `DocState::new` (`file.open`) also populates empty pivot targets and recalculates everything.
+    let doc_new = crate::DocState::new(wb, None, "Opened.xlsx".into(), crate::Trust::FromFile);
+    let sh_new = doc_new.wb.sheet(0).unwrap();
+    assert_eq!(sh_new.value(CellRef::parse("E4").unwrap()), Value::Number(30.0), "DocState::new populates last_range=None pivot");
+    assert_eq!(sh_new.value(CellRef::parse("C1").unwrap()), Value::Number(60.0), "DocState::new recalculates dependent formula");
+    assert_eq!(sh_new.value(CellRef::parse("C2").unwrap()), Value::Number(2.0), "DocState::new recalculates all formulas");
+}
+
+#[test]
 fn circle_invalid_says_when_its_scan_allowance_ended_early() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [[-1]]})).unwrap();

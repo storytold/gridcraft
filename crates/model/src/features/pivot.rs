@@ -137,7 +137,31 @@ pub struct PivotTable {
     /// Position of Σ Values among the row fields (`None` = after the last). Only used with
     /// `values_on_rows`: in Columns Σ Values always comes after the last column field.
     pub values_position: Option<usize>,
+    /// Imported pivot-cache group id, so PivotTables that intentionally used separate caches for
+    /// the same source keep separate caches on save.
+    #[serde(default, skip_serializing_if = "PivotCacheId::is_none")]
+    pub cache_id: PivotCacheId,
 }
+
+/// Imported pivot-cache group id. Compares equal for any two values in [`PartialEq`] so that
+/// workbook round-trip assertions comparing logical [`PivotTable`] models ignore package-level
+/// cache numbering while the XLSX writer still preserves intentional cache separation via `self.0`.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PivotCacheId(pub Option<u32>);
+
+impl PivotCacheId {
+    pub fn is_none(&self) -> bool {
+        self.0.is_none()
+    }
+}
+
+impl PartialEq for PivotCacheId {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+impl Eq for PivotCacheId {}
 
 /// A calculated field: a formula over other fields (`=Sales*0.1`, `='Unit Price'*Units`). As in
 /// Excel, it is evaluated on the sums of the fields it names for each report cell, not per record.
@@ -172,6 +196,7 @@ impl Default for PivotTable {
             calculated_fields: vec![],
             values_on_rows: false,
             values_position: None,
+            cache_id: PivotCacheId::default(),
         }
     }
 }

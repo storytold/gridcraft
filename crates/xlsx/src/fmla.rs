@@ -204,6 +204,11 @@ fn dummy_function_inner(e: &Expr, known: &dyn Fn(&str) -> bool) -> Option<Expr> 
         return None;
     }
     let [Expr::Text(src)] = inner.as_slice() else { return None };
+    // COMPUTED_VALUE is a Google Sheets marker, not a formula that can be evaluated by Excel.
+    // Keep the wrapper so IFERROR evaluates to the cached fallback.
+    if src.eq_ignore_ascii_case("COMPUTED_VALUE") {
+        return None;
+    }
     // The text came out of a formula within the length limit, so it is within it too; check
     // anyway rather than rely on that.
     if src.len() > gridcraft_formula::MAX_FORMULA_LEN && src.chars().count() > gridcraft_formula::MAX_FORMULA_LEN {
@@ -211,11 +216,19 @@ fn dummy_function_inner(e: &Expr, known: &dyn Fn(&str) -> bool) -> Option<Expr> 
     }
     let parsed = gridcraft_formula::parse(src).ok()?;
     // A function GridCraft can't calculate would show `#NAME?` where Excel shows the cached
-    // value; a wrapper inside the text is one too, so only one level is ever unwrapped.
+    // value; a wrapper inside the text is one too, so only one level is ever unwrapped. Google
+    // Sheets' FILTER and SORT have variadic arguments whose meanings differ from Excel's, and
+    // its regex functions return capture groups rather than Excel's whole-match result.
     let mut all_known = true;
     parsed.walk(&mut |x| {
-        if let Expr::Call(n, _) = x {
-            all_known &= known(n);
+        if let Expr::Call(n, args) = x {
+            let plain_regex = args.get(1).is_some_and(|pattern| matches!(pattern, Expr::Text(s) if !s.contains('(')));
+            let plain_replace = args.get(2).is_some_and(|rep| matches!(rep, Expr::Text(s) if !s.contains('$') && !s.contains('\\')));
+            let incompatible = (n.eq_ignore_ascii_case("FILTER") && args.len() > 2)
+                || (n.eq_ignore_ascii_case("SORT") && args.len() > 4)
+                || (n.eq_ignore_ascii_case("REGEXEXTRACT") && !plain_regex)
+                || (n.eq_ignore_ascii_case("REGEXREPLACE") && !(plain_regex || plain_replace));
+            all_known &= !incompatible && known(n);
         }
     });
     all_known.then_some(parsed)
@@ -485,5 +498,33 @@ mod tests {
         // A LET-bound LAMBDA called by name.
         assert_eq!(to_file(&Formula::new("LET(f,LAMBDA(x,x*2),f(3))")), "_xlfn.LET(_xlpm.f,_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2),_xlpm.F(3))");
         assert_eq!(from_file("_xlfn.LET(_xlpm.f,_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2),_xlpm.f(3))"), "LET(f,LAMBDA(x,x*2),F(3))");
+    }
+}
+#[cfg(test)]
+mod google_wrapper_regressions {
+    use super::{from_file, test_known_function, unwrap_google_sheets};
+
+    fn read(file: &str) -> String {
+        let text = from_file(file);
+        unwrap_google_sheets(&text, &test_known_function).unwrap_or(text)
+    }
+    #[test]
+    fn computed_value_keeps_cached_wrapper() {
+        let file = "IFERROR(__xludf.DUMMYFUNCTION(\"COMPUTED_VALUE\"),632928)";
+        assert_eq!(read(file), "IFERROR(__XLUDF.DUMMYFUNCTION(\"COMPUTED_VALUE\"),632928)");
+    }
+
+    #[test]
+    fn sheets_incompatible_signatures_keep_cached_wrapper() {
+        for file in [
+            "IFERROR(__xludf.DUMMYFUNCTION(\"FILTER(A1:A3,B1:B3>0,C1:C3>0)\"),0)",
+            "IFERROR(__xludf.DUMMYFUNCTION(\"SORT(A1:A3,1,TRUE,2,TRUE)\"),0)",
+            "IFERROR(__xludf.DUMMYFUNCTION(\"REGEXEXTRACT(A1,\"\"(a)\"\")\"),0)",
+            "IFERROR(__xludf.DUMMYFUNCTION(\"REGEXEXTRACT(A1,B1)\"),0)",
+            "IFERROR(__xludf.DUMMYFUNCTION(\"REGEXREPLACE(A1,\"\"(a)\"\",\"\"$1\"\")\"),0)",
+        ] {
+            let text = read(file);
+            assert!(text.contains("DUMMYFUNCTION"), "{file} -> {text}");
+        }
     }
 }

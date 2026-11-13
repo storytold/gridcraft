@@ -29,6 +29,7 @@ impl FieldIn {
 
 #[derive(Clone, Debug, Default)]
 struct CacheIn {
+    id: u32,
     source: String,
     fields: Vec<FieldIn>,
 }
@@ -39,6 +40,7 @@ pub struct CachesIn {
     by_id: HashMap<u32, String>,
     parsed: HashMap<String, Option<CacheIn>>,
     next_id: u32,
+    next_cache_id: u32,
 }
 
 impl CachesIn {
@@ -53,7 +55,7 @@ impl CachesIn {
                 }
             }
         }
-        CachesIn { by_id, parsed: HashMap::new(), next_id: 1 }
+        CachesIn { by_id, parsed: HashMap::new(), next_id: 1, next_cache_id: 1 }
     }
 }
 
@@ -103,6 +105,8 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
     let sys = cx.date_system;
     let mut fields = Vec::new();
     if let Some(cf) = x.child("cacheFields") {
+        let mut taken = std::collections::HashSet::new();
+        let mut suffixes: HashMap<String, usize> = HashMap::new();
         for f in cf.kids("cacheField").take(MAX_FIELDS) {
             let items = f.child("sharedItems").map(|si| si.children.iter().map(|e| item_label_el(e, sys)).collect()).unwrap_or_default();
             let group = f.child("fieldGroup").map(|g| {
@@ -117,20 +121,26 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
                 let gi = g.child("groupItems").map(|gi| gi.children.iter().map(|e| item_label_el(e, sys)).collect()).unwrap_or_default();
                 (base, by, gi)
             });
-            fields.push(FieldIn {
-                name: f.attr("name").unwrap_or("").to_string(),
-                database: f.flag("databaseField", true),
-                items,
-                group,
-                formula: f.attr("formula").map(str::to_string),
-            });
+            // Excel disambiguates duplicate source column headers in a PivotCache by appending
+            // case-insensitive 2, 3, … suffixes (`Col`, `Col2`, `Col3`).
+            let raw_name = f.attr("name").unwrap_or("").trim().to_string();
+            let key = raw_name.to_ascii_lowercase();
+            let mut name = raw_name.clone();
+            let mut suffix = suffixes.get(&key).copied().unwrap_or(2);
+            while taken.contains(&name.to_ascii_lowercase()) {
+                name = format!("{raw_name}{suffix}");
+                suffix += 1;
+            }
+            suffixes.insert(key, suffix);
+            taken.insert(name.to_ascii_lowercase());
+            fields.push(FieldIn { name, database: f.flag("databaseField", true), items, group, formula: f.attr("formula").map(str::to_string) });
         }
     }
     if fields.is_empty() {
         cx.warn("a PivotTable's cache has no fields; kept as plain cells");
         return None;
     }
-    Some(CacheIn { source, fields })
+    Some(CacheIn { id: 0, source, fields })
 }
 
 /// Reads the PivotTables related to a worksheet part.
@@ -157,7 +167,12 @@ pub fn read_pivots(cx: &mut Ctx<'_>, caches: &mut CachesIn, sheet_part: &str, sh
         let cache = match caches.parsed.get(&cache_part) {
             Some(c) => c.clone(),
             None => {
-                let c = read_cache(cx, &cache_part, sheet_name);
+                let c = read_cache(cx, &cache_part, sheet_name).map(|mut c| {
+                    let cid = caches.next_cache_id;
+                    caches.next_cache_id = caches.next_cache_id.saturating_add(1);
+                    c.id = cid;
+                    c
+                });
                 caches.parsed.insert(cache_part.clone(), c.clone());
                 c
             }
@@ -204,7 +219,7 @@ fn field_ref(cx: &mut Ctx<'_>, cache: &CacheIn, i: usize) -> Option<(String, Piv
 }
 
 fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<PivotTable> {
-    let mut pt = PivotTable { id, ..PivotTable::default() };
+    let mut pt = PivotTable { id, cache_id: gridcraft_model::PivotCacheId(Some(cache.id)), ..PivotTable::default() };
     if let Some(n) = x.attr("name").filter(|n| !n.trim().is_empty()) {
         pt.name = n.to_string();
     } else {
