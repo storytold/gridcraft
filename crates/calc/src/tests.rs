@@ -2881,6 +2881,58 @@ fn formulas_read_a_dirty_python_cell_after_it_is_laid_out() {
     assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (5.0, 100.0, 111.0));
 }
 
+#[test]
+fn large_blocks_read_again_give_the_same_values() {
+    let mut t = T::new();
+    for r in 1..=1100 {
+        t.set(&format!("A{r}"), &format!("{}", r % 7));
+        t.set(&format!("B{r}"), &format!("=A{r}*2"));
+    }
+    for r in 1..=8 {
+        t.set(&format!("D{r}"), &format!("=COUNTIF(B1:B1100,{})", r * 2));
+    }
+    // 1100 / 7 per value, the first ones one more.
+    assert_eq!(t.num("D1"), 158.0);
+    assert_eq!(t.num("D6"), 157.0);
+    assert_eq!(t.num("D7"), 0.0);
+    // An edit starts a new pass: nothing read before it stays.
+    t.set("A1", "6");
+    assert_eq!(t.num("D1"), 157.0);
+    assert_eq!(t.num("D6"), 158.0);
+}
+
+#[test]
+fn a_large_block_with_a_later_spill_shows_the_spill_to_every_reader() {
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(1100)");
+    for r in 1..=6 {
+        t.set(&format!("C{r}"), "=SUM(A1:A1100)");
+        t.set(&format!("D{r}"), "=COUNT(A1:A1100)");
+    }
+    for r in 1..=6 {
+        assert_eq!(t.num(&format!("C{r}")), 605_550.0);
+        assert_eq!(t.num(&format!("D{r}")), 1100.0);
+    }
+}
+
+#[test]
+fn a_large_block_holding_a_cell_being_calculated_isnt_remembered() {
+    let mut t = T::new();
+    for r in 1..=1100 {
+        t.set(&format!("A{r}"), "1");
+    }
+    t.set("A1100", "=C1");
+    for r in 1..=5 {
+        t.set(&format!("C{r}"), "=COUNTIF(A1:A1100,1)");
+    }
+    t.calc.recalc_all(&mut t.wb);
+    // COUNTIF skips the #CIRC! it reads in A1100 while that cell is being calculated. That read must
+    // not be what later readers see: each counts the same, from the cell's final value.
+    for r in 1..=5 {
+        assert_eq!(t.num(&format!("C{r}")), 1099.0, "C{r}");
+    }
+}
+
 /// A computed criterion whose formula runs a database function over the same criteria counts as
 /// not met inside itself: before, each record's check ran the function again for every record, at
 /// every level, so the work grew exponentially with the nesting allowed.
