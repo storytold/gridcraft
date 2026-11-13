@@ -6697,6 +6697,7 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
 }
 
 #[test]
+
 fn circle_invalid_says_when_its_scan_allowance_ended_early() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [[-1]]})).unwrap();
@@ -6730,4 +6731,25 @@ fn history_charges_the_storage_of_empty_comment_replies() {
     let sheet = s.doc().unwrap().wb.sheet(0).unwrap().clone();
     // 500 replies of no text are still 500 elements.
     assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
+}
+
+#[test]
+fn a_typed_date_follows_the_region_order_and_keeps_the_canonical_short_date() {
+    let mut s = s();
+    s.set_region(gridcraft_core::region::lookup("pt-BR"));
+    s.execute("cell.set", json!({"cell": "A1", "input": "03/04/2026"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "25/09/2026"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(46115.0), "3 April 2026, day first");
+    assert_eq!(v(&s, "A2"), Value::Number(46290.0), "25 September 2026 is a date, not text");
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    let a1 = CellRef::parse("A1").unwrap();
+    assert_eq!(d.wb.styles.get(sh.style_id(a1)).num_fmt.as_str(), "m/d/yyyy", "saved as numFmtId 14");
+    assert_eq!(crate::display::cell_text(&d.wb, sh, a1), "03/04/2026");
+    // en-US keeps month first.
+    let mut us = self::s();
+    us.set_region(&gridcraft_core::region::EN_US);
+    us.execute("cell.set", json!({"cell": "A1", "input": "3/4/2026"})).unwrap();
+    assert_eq!(v(&us, "A1"), Value::Number(46085.0), "4 March 2026");
+
 }
