@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <!-- GridCraft PLACEHOLDER icon: a ledger page with a selected cell, on GridCraft green.
        Original work; temporary until the owner's engraved creature portrait replaces it
-       (craftrules standards/icon-design.md). Palette: ink #0b0b0c, paper #efe9dc,
+       Palette: ink #0b0b0c, paper #efe9dc,
        app colour #1f9d55 (proposed). -->
   <defs>
     <clipPath id="tile"><rect width="512" height="512" rx="112"/></clipPath>

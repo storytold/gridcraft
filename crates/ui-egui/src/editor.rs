@@ -13,7 +13,19 @@ pub struct EditState {
     /// The window it was typed in: switching to another window, even on the same workbook,
     /// commits it there first (`None` until the app sets it).
     pub window: Option<u64>,
+    /// The sheet's index when the draft was last resolved; [`EditState::sheet_in`] finds it again
+    /// by `sheet_uid` after sheets are inserted, deleted or moved.
     pub sheet: usize,
+    /// The sheet's identity while the app runs (`model::SheetUid`), recorded when the draft is
+    /// created ([`EditState::on_sheet`]); 0 (never given out) when none was.
+    pub sheet_uid: u64,
+    /// The draft began on a Python cell, with its code as the text. Kept so the code stays out of
+    /// view once the cell can't be looked at, its sheet gone.
+    pub py_cell: bool,
+    /// The order of the workbook's sheets ([`sheet_order`]) when the draft was last resolved: a
+    /// change after a command points the draft at its sheet again and lets go of
+    /// `point_anchor`, which holds a sheet index.
+    pub sheet_order: u64,
     /// Syntax of this edit, captured when it starts (prevents a language switch reinterpreting it).
     pub locale: gridcraft_engine::formula::FormulaLocale,
     pub cell: CellRef,
@@ -52,6 +64,9 @@ pub struct EditState {
     /// The user accepted the list's highlighted entry (Enter, Tab or a click on it). Any other
     /// commit (clicking elsewhere, a ribbon command, saving) keeps the typed text.
     pub list_accept: bool,
+    /// Python mode: the text is a Python cell's code, edited in the formula bar's code editor and
+    /// committed with Ctrl+Enter (Cmd+Enter on macOS) through `python.set`.
+    pub python: bool,
 }
 
 /// Entries of a list validation, searched as the user types (Excel's searchable dropdown).
@@ -87,6 +102,12 @@ impl ListSearch {
     }
 }
 
+/// A digest of the order of `wb`'s sheets by identity: it changes when a sheet is inserted,
+/// deleted or moved, not when one is renamed or edited.
+pub fn sheet_order(wb: &gridcraft_engine::model::Workbook) -> u64 {
+    wb.sheets.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, sh| (h ^ sh.uid.get()).wrapping_mul(0x0000_0100_0000_01b3))
+}
+
 impl EditState {
     pub fn new(doc: u64, sheet: usize, cell: CellRef, text: String, enter_mode: bool, from_formula_bar: bool) -> EditState {
         let caret = text.chars().count();
@@ -95,6 +116,9 @@ impl EditState {
             doc,
             window: None,
             sheet,
+            sheet_uid: 0,
+            py_cell: false,
+            sheet_order: 0,
             locale: Default::default(),
             cell,
             text,
@@ -115,6 +139,7 @@ impl EditState {
             original,
             list: None,
             list_accept: false,
+            python: false,
         }
     }
 
@@ -193,10 +218,76 @@ impl EditState {
         }
     }
 
+    /// An edit of a cell's Python code, in the formula bar.
+    pub fn python(doc: u64, sheet: usize, cell: CellRef, code: String) -> EditState {
+        let mut ed = EditState::new(doc, sheet, cell, code, false, true);
+        ed.python = true;
+        ed
+    }
+
+    /// Records the identity of the draft's sheet, from the workbook it is typed in.
+    pub fn on_sheet(mut self, wb: &gridcraft_engine::model::Workbook) -> EditState {
+        self.sheet_uid = wb.sheet(self.sheet).map_or(0, |sh| sh.uid.get());
+        self.sheet_order = sheet_order(wb);
+        self
+    }
+
+    /// The draft's sheet's index now, found by its identity, since commands insert, delete and
+    /// move sheets under an open draft; `None` once the sheet is gone (or none was recorded).
+    pub fn sheet_in(&self, wb: &gridcraft_engine::model::Workbook) -> Option<usize> {
+        if self.sheet_uid == 0 {
+            return None;
+        }
+        if wb.sheet(self.sheet).is_some_and(|sh| sh.uid.get() == self.sheet_uid) {
+            return Some(self.sheet);
+        }
+        wb.sheets.iter().position(|sh| sh.uid.get() == self.sheet_uid)
+    }
+
+    /// Whether the text is the `=PY` that Tab turns into Python mode, as in Excel (`=PY(` too,
+    /// in any letter case).
+    pub fn is_py_trigger(&self) -> bool {
+        let t = self.text.trim();
+        !self.python && (t.eq_ignore_ascii_case("=PY") || t.eq_ignore_ascii_case("=PY("))
+    }
+
+    /// Switches the edit to Python mode, in the formula bar. The `=PY` trigger becomes empty code;
+    /// other text is kept as the code, so the shortcut pressed mid-edit loses nothing.
+    pub fn enter_python(&mut self) {
+        if self.is_py_trigger() {
+            self.text.clear();
+        }
+        self.python = true;
+        self.from_formula_bar = true;
+        self.enter_mode = false;
+        self.point = None;
+        self.point_cell = None;
+        self.point_anchor = None;
+        self.autocomplete.clear();
+        self.completion = None;
+        self.list = None;
+        self.caret = self.text.chars().count();
+        self.anchor = self.caret;
+        self.caret_to_end = false;
+        self.request_focus = true;
+        self.sync_caret = true;
+    }
+
+    /// Leaves Python mode: the edit goes on as an ordinary entry of the same text.
+    pub fn leave_python(&mut self) {
+        self.python = false;
+        self.caret = self.text.chars().count();
+        self.anchor = self.caret;
+        self.request_focus = true;
+        self.sync_caret = true;
+    }
+
+    /// Whether the text is a formula (never in Python mode: there it is code).
     pub fn is_formula(&self) -> bool {
-        self.text.starts_with('=')
-            || (self.text.starts_with('+') && self.text.len() > 1)
-            || (self.text.starts_with('-') && self.text.len() > 1 && !self.text[1..].starts_with(|c: char| c.is_ascii_digit()))
+        !self.python
+            && (self.text.starts_with('=')
+                || (self.text.starts_with('+') && self.text.len() > 1)
+                || (self.text.starts_with('-') && self.text.len() > 1 && !self.text[1..].starts_with(|c: char| c.is_ascii_digit())))
     }
 
     fn byte_caret(&self) -> usize {
@@ -272,7 +363,7 @@ impl EditState {
     /// Updates function autocomplete for the word before the caret.
     pub fn update_autocomplete(&mut self, names: &[String]) {
         self.autocomplete.clear();
-        if !self.is_formula() {
+        if self.python || !self.is_formula() {
             return;
         }
         let before = self.text.get(..self.byte_caret()).unwrap_or("");
@@ -346,7 +437,7 @@ impl EditState {
 
     /// The function call the caret is inside and the argument index (for the hint tooltip).
     pub fn current_function(&self) -> Option<(String, usize)> {
-        if !self.is_formula() {
+        if self.python || !self.is_formula() {
             return None;
         }
         let before = self.text.get(..self.byte_caret())?;
@@ -400,7 +491,7 @@ pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, 
     let offset = text.len() - body.len();
     let Ok(toks) = gridcraft_engine::formula::lexer::tokenize(body) else { return vec![] };
     let mut out: Vec<(usize, usize, RangeRef, Option<String>, usize)> = Vec::new();
-    let mut seen: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut i = 0;
     while i < toks.len() {
         use gridcraft_engine::formula::lexer::Tok;
@@ -432,13 +523,8 @@ pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, 
                 continue;
             };
             let key = body.get(start..end).unwrap_or("").replace('$', "").to_ascii_uppercase();
-            let idx = match seen.iter().position(|k| *k == key) {
-                Some(k) => k,
-                None => {
-                    seen.push(key);
-                    seen.len() - 1
-                }
-            };
+            let next = seen.len();
+            let idx = *seen.entry(key).or_insert(next);
             out.push((start + offset, end + offset, range, sheet, idx % REF_COLOR_COUNT));
             continue;
         }

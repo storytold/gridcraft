@@ -151,3 +151,70 @@ fn each_workbook_keeps_its_own_tab_share() {
     assert!(track(&h).left() < 400.0, "a new workbook starts at the default share: {:?}", track(&h));
     assert_eq!(h.state().grid.tab_shares.len(), 1, "only the dragged workbook has a share");
 }
+
+/// The tab bar of a workbook whose window has `command` run with `{on: false}` first.
+fn harness_without(command: &str) -> Harness {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "Tab00"})).unwrap();
+    s.execute(command, json!({"on": false})).unwrap();
+    let mut h = crate::common::builder().with_step_dt(1.0 / 60.0).with_size(vec2(900.0, 120.0)).build_ui_state(
+        move |ui, app: &mut SheetApp| {
+            app.grid.cells_rect = Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(ui.max_rect().width(), 80.0)));
+            gridcraft_ui_egui::tabs::sheet_tabs(app, ui);
+        },
+        crate::common::app(s),
+    );
+    h.run_steps(20);
+    h
+}
+
+fn shows_tab_name(h: &Harness) -> bool {
+    h.output().shapes.iter().any(|s| matches!(&s.shape, Shape::Text(t) if t.galley.job.text == "Tab00"))
+}
+
+#[test]
+fn display_options_hide_the_sheet_tabs_and_the_horizontal_scroll_bar() {
+    // #3101: File › Options › Advanced, Display options for this workbook.
+    let h = harness_without("view.showSheetTabs");
+    assert!(!shows_tab_name(&h), "no sheet tabs");
+    assert!(h.state().grid.tab_split.is_none(), "nothing to split without tabs");
+    let bar = h.state().grid.hscroll.expect("the scroll bar stays");
+    assert!(bar.left() < 40.0, "the scroll bar takes the bar from its left edge: {bar:?}");
+
+    let h = harness_without("view.showHorizontalScrollBar");
+    assert!(shows_tab_name(&h), "the tabs stay");
+    assert!(h.state().grid.hscroll.is_none() && h.state().grid.tab_split.is_none(), "no scroll bar and no split handle");
+
+    // Both off: no bar at all.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("view.showSheetTabs", json!({"on": false})).unwrap();
+    s.execute("view.showHorizontalScrollBar", json!({"on": false})).unwrap();
+    let mut h = crate::common::builder()
+        .with_size(vec2(900.0, 120.0))
+        .build_ui_state(|ui, app: &mut SheetApp| gridcraft_ui_egui::tabs::sheet_tabs(app, ui), crate::common::app(s));
+    h.run_steps(5);
+    assert!(!shows_tab_name(&h) && h.state().grid.hscroll.is_none() && h.state().grid.tab_split.is_none(), "no bar at all");
+}
+
+#[test]
+fn hiding_the_controls_clears_their_cached_rectangles() {
+    // Turned off on a live window, the controls drop the rectangles of the frame that drew them.
+    let mut h = harness(900.0, 1);
+    assert!(h.state().grid.tab_split.is_some() && h.state().grid.hscroll.is_some(), "both controls drawn first");
+
+    h.state_mut().run("view.showSheetTabs", json!({"on": false})).unwrap();
+    h.run_steps(5);
+    assert!(h.state().grid.tab_split.is_none(), "no split handle once the tabs are hidden");
+    assert!(h.state().grid.hscroll.is_some(), "the scroll bar stays");
+
+    h.state_mut().run("view.showSheetTabs", json!({"on": true})).unwrap();
+    h.state_mut().run("view.showHorizontalScrollBar", json!({"on": false})).unwrap();
+    h.run_steps(5);
+    assert!(h.state().grid.hscroll.is_none() && h.state().grid.tab_split.is_none(), "no scroll bar and no split handle");
+
+    h.state_mut().run("view.showSheetTabs", json!({"on": false})).unwrap();
+    h.run_steps(5);
+    assert!(h.state().grid.hscroll.is_none() && h.state().grid.tab_split.is_none(), "no bar at all");
+}

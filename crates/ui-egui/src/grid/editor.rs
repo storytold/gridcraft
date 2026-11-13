@@ -110,7 +110,7 @@ const LIST_PICKER_CHROME: f32 = 8.0;
 
 /// The searched list of a list validation under the cell being typed into (from the cell or the
 /// formula bar): the matches of the typed text, the highlighted one is what Enter commits.
-pub(super) fn list_search(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook) {
+pub(super) fn list_search(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet) {
     let view = app.view_key();
     let Some(ed) = app.editor.as_mut() else { return };
     if view != Some((ed.doc, ed.sheet)) || !ed.list_open() || geo.hidden_under_frozen(sh, ed.cell) {
@@ -139,7 +139,7 @@ pub(super) fn list_search(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: 
     let reveal = std::mem::take(&mut list.reveal).then_some(list.top as f32 * row_h);
     let mut pick = None;
     let mut top = None;
-    egui::Area::new(egui::Id::new("dv_search")).fixed_pos(at).pivot(pivot).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+    egui::Area::new(egui::Id::unique("dv_search")).fixed_pos(at).pivot(pivot).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_width(width);
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
@@ -156,7 +156,7 @@ pub(super) fn list_search(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: 
                     }
                 }
             });
-            top = Some((out.state.offset().y / row_h).floor().max(0.0) as usize);
+            top = Some((out.state.clamped_offset().y / row_h).floor().max(0.0) as usize);
         });
     });
     if let Some(top) = top {
@@ -191,7 +191,7 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
         app.grid.list_picker = None;
         return;
     };
-    let items = gridcraft_engine::cmd::data::list_items(&wb, si, &dv);
+    let items = gridcraft_engine::cmd::data::list_items(&wb, si, c, &dv);
     let r = geo.cell_rect(sh, c);
     // Fit the popup to its rows (up to LIST_PICKER_MAX_ROWS); without a minimum the scroll area collapses to its 64 px default.
     let height = list_picker_height(items.len(), LIST_PICKER_ROW_H, ui.spacing().item_spacing.y);

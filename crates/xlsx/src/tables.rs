@@ -151,6 +151,7 @@ const FUTURE_FUNCTIONS: &[&str] = &[
     "CSCH",
     "DAYS",
     "DECIMAL",
+    "DETECTLANGUAGE",
     "DROP",
     "ENCODEURL",
     "ERF.PRECISE",
@@ -243,6 +244,7 @@ const FUTURE_FUNCTIONS: &[&str] = &[
     "SORTBY",
     "STDEV.P",
     "STDEV.S",
+    "STOCKHISTORY",
     "SWITCH",
     "T.DIST",
     "T.DIST.2T",
@@ -257,6 +259,7 @@ const FUTURE_FUNCTIONS: &[&str] = &[
     "TEXTSPLIT",
     "TOCOL",
     "TOROW",
+    "TRANSLATE",
     "TRIMRANGE",
     "UNICHAR",
     "UNICODE",
@@ -346,12 +349,42 @@ mod tests {
     }
 
     #[test]
+    fn builtin_format_ids() {
+        // The one table of built-in formats (gridcraft-numfmt has none: file formats do not depend on it).
+        assert_eq!((0..=60).filter(|&id| builtin_format(id).is_some()).count(), 36);
+        assert_eq!(builtin_format(0), Some("General"));
+        assert_eq!(builtin_format(22), Some("m/d/yyyy h:mm"));
+        assert_eq!(builtin_format(49), Some("@"));
+        // 23-36 are locale formats, above 49 is custom.
+        assert_eq!((23..=36).find_map(builtin_format), None);
+        assert_eq!(builtin_format(50), None);
+        // Writing: an exact (case-sensitive) code gives its id, except the locale-dependent currency and accounting formats 5-8, 42 and 44.
+        assert_eq!(builtin_id("General"), Some(0));
+        assert_eq!(builtin_id("GENERAL"), None);
+        assert_eq!(builtin_id("[H]:MM:SS"), None);
+        assert_eq!(builtin_id("[h]:mm:ss"), Some(46));
+        assert_eq!(builtin_id("#,##0.00_);(#,##0.00)"), None);
+        for id in 0..=60 {
+            let Some(code) = builtin_format(id) else { continue };
+            let expected = if matches!(id, 5..=8 | 42 | 44) { None } else { Some(id) };
+            assert_eq!(builtin_id(code), expected, "id {id}");
+        }
+    }
+
+    #[test]
     fn functions() {
         assert_eq!(file_function_name("xlookup").as_deref(), Some("_xlfn.XLOOKUP"));
         assert_eq!(file_function_name("forecast.ets.confint").as_deref(), Some("_xlfn.FORECAST.ETS.CONFINT"));
         assert_eq!(file_function_name("FILTER").as_deref(), Some("_xlfn._xlws.FILTER"));
         assert_eq!(file_function_name("PERCENTOF").as_deref(), Some("_xlfn.PERCENTOF"));
         assert_eq!(file_function_name("TRIMRANGE").as_deref(), Some("_xlfn.TRIMRANGE"));
+        assert_eq!(file_function_name("stockhistory").as_deref(), Some("_xlfn.STOCKHISTORY"));
+        assert_eq!(file_function_name("TRANSLATE").as_deref(), Some("_xlfn.TRANSLATE"));
+        assert_eq!(file_function_name("DETECTLANGUAGE").as_deref(), Some("_xlfn.DETECTLANGUAGE"));
+        assert_eq!(file_function_name("NETWORKDAYS.INTL").as_deref(), Some("_xlfn.NETWORKDAYS.INTL"));
+        assert_eq!(file_function_name("WORKDAY.INTL").as_deref(), Some("_xlfn.WORKDAY.INTL"));
+        // Excel 16.0 build 20527 saves COPILOT as plain `COPILOT(...)` (it does not know the name yet).
+        assert_eq!(file_function_name("COPILOT"), None);
         assert_eq!(file_function_name("SUM"), None);
         assert_eq!(builtin_format(14), Some("m/d/yyyy"));
         assert_eq!(builtin_id("0.00%"), Some(10));

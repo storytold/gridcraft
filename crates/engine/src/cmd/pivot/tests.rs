@@ -168,6 +168,19 @@ fn filters_and_report_filter_rows() {
     assert!(s.execute("pivot.filter", json!({"field": "Product", "selected": []})).is_err());
 }
 
+/// A selection of the most labels allowed (100,000) is looked up once per record, not scanned: the
+/// report still filters case-insensitively.
+#[test]
+fn a_huge_filter_selection_is_matched_through_a_set() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Product"], "values": ["Sales"], "filters": ["Region"]})).unwrap();
+    let mut selected: Vec<String> = (0..99_999).map(|i| format!("Region {i}")).collect();
+    selected.push("EAST".into());
+    s.execute("pivot.filter", json!({"field": "Region", "selected": selected})).unwrap();
+    let gt = find_row(&s, "Grand Total").unwrap();
+    assert_eq!(val(&s, &CellRef::new(gt, 1).a1()), Value::Number(415.0));
+}
+
 #[test]
 fn show_values_as() {
     let mut s = sales();
@@ -194,6 +207,41 @@ fn show_values_as() {
     assert!(s.execute("pivot.valueSettings", json!({"index": 0, "name": "Sales"})).is_err());
     s.execute("pivot.valueSettings", json!({"index": 0, "name": "Biggest sale"})).unwrap();
     assert_eq!(text(&s, "B3"), "Biggest sale");
+}
+
+/// Running Total over nested rows adds up each child's value across the top-level items, in the
+/// order they appear: the same value as summing the plain values of the earlier items' rows.
+#[test]
+fn running_total_over_nested_rows_adds_up_across_the_top_level_items() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region", "Product"], "values": ["Sales"]})).unwrap();
+    let r = pt(&s).last_range.unwrap();
+    let rows: Vec<u32> = (r.start.row + 1..r.end.row).collect();
+    let read = |s: &Session| -> Vec<(String, f64)> {
+        rows.iter().map(|row| (text(s, &CellRef::new(*row, 0).a1()), val(s, &CellRef::new(*row, 1).a1()).as_f64().unwrap_or(0.0))).collect()
+    };
+    let before = read(&s);
+    s.execute("pivot.valueSettings", json!({"index": 0, "showAs": "runningTotal"})).unwrap();
+    let after = read(&s);
+    // Region rows carry the report's top-level items (not indented); the others are products.
+    let indent = |s: &Session, row: u32| {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        d.wb.styles.get(sh.style_id(CellRef::new(row, 0))).align.indent
+    };
+    let (mut regions, mut products) = (0.0, std::collections::HashMap::<String, f64>::new());
+    for (i, row) in rows.iter().enumerate() {
+        let name = &before[i].0;
+        let total = if indent(&s, *row) == 0 {
+            regions += before[i].1;
+            regions
+        } else {
+            let t = products.entry(name.clone()).or_insert(0.0);
+            *t += before[i].1;
+            *t
+        };
+        assert!((after[i].1 - total).abs() < 1e-9, "row {name}: {} vs {total}", after[i].1);
+    }
 }
 
 #[test]
@@ -1012,4 +1060,37 @@ fn detail_cells_are_the_cells_show_details_takes() {
     let d = s.doc().unwrap();
     let pt = &d.wb.active().unwrap().pivots[0];
     assert!(crate::pivot::detail_cells(&d.wb, pt, d.wb.active_sheet()).unwrap_err().contains("out of date"));
+}
+
+#[test]
+fn rank_ties_are_dense_and_count_numbers_is_captioned_count_of() {
+    // #1448 items 10 and 12: Excel ranks 5, 4, 3, 3, 4 as 1, 2, 3, 3, 2 (GridCraft gave 1, 2, 4,
+    // 4, 2), and captions a Count Numbers field "Count of Val".
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([["Key", "Val"], ["A", 5], ["B", 4], ["C", 3], ["D", 3], ["E", 4]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("insert.pivotTable", json!({"source": "Sheet1!$A$1:$B$6", "destination": "Sheet1!D3", "rows": ["Key"], "values": ["Val"]})).unwrap();
+    s.execute("pivot.valueSettings", json!({"index": 0, "showAs": "rank"})).unwrap();
+    let ranks: Vec<Value> = ["E4", "E5", "E6", "E7", "E8"].iter().map(|a| val(&s, a)).collect();
+    assert_eq!(ranks, [1.0, 2.0, 3.0, 3.0, 2.0].map(Value::Number));
+    s.execute("pivot.valueSettings", json!({"index": 0, "showAs": "normal", "func": "countNumbers"})).unwrap();
+    assert_eq!(text(&s, "E3"), "Count of Val");
+}
+
+#[test]
+fn legacy_count_numbers_caption_follows_the_function() {
+    // Workbooks saved before Count Numbers was captioned "Count of" carry "Count Numbers of Val";
+    // that is still an automatic caption, so it follows a new function. A custom name stays.
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([["Key", "Val"], ["A", 5], ["B", 4]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("insert.pivotTable", json!({"source": "Sheet1!$A$1:$B$3", "destination": "Sheet1!D3", "rows": ["Key"], "values": ["Val"]})).unwrap();
+    for (legacy, after) in [("Count Numbers of Val", "Sum of Val"), ("Count Numbers of Val2", "Sum of Val"), ("Numbers counted", "Numbers counted")] {
+        s.execute("pivot.valueSettings", json!({"index": 0, "func": "countNumbers", "name": legacy})).unwrap();
+        assert_eq!(text(&s, "E3"), legacy);
+        s.execute("pivot.valueSettings", json!({"index": 0, "func": "sum"})).unwrap();
+        assert_eq!(text(&s, "E3"), after, "{legacy}");
+    }
 }
