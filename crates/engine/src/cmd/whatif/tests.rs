@@ -298,6 +298,15 @@ fn consolidate_by_position_and_label() {
     assert!(s.execute("data.consolidate", json!({"sources": ["A1"], "function": "median"})).is_err());
 }
 
+#[test]
+fn advanced_filter_refuses_a_list_times_criteria_product_over_the_work_limit() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["A"]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "H1", "values": [["Name"], ["A"]]})).unwrap();
+    // A sparse million-row list against 9,999 blank criteria rows would be ~10 billion tests.
+    assert!(s.execute("data.advancedFilter", json!({"range": "A2:A1048576", "criteria": "H1:H10000"})).is_err());
+}
+
 /// A hundred thousand positional rows take one key lookup each; a tall source and a wide one
 /// whose keys would meet in a table of 160 million cells are refused before it is built.
 #[test]
@@ -309,4 +318,26 @@ fn consolidate_keys_are_indexed_and_the_output_is_bounded() {
     assert_eq!(n(&s, "Sheet1!C2"), 2.0);
     let r = s.execute("data.consolidate", json!({"sources": ["A1:A10000", "A1:XFC1"], "destination": "A1"}));
     assert!(r.unwrap_err().to_string().contains("too large"));
+}
+
+#[test]
+fn scenario_summary_refuses_a_matrix_over_its_cell_limit() {
+    let mut s = s();
+    // 200 scenarios of 32 disjoint cells: 6,400 changing cells x 200 scenarios = 1.28 million cells.
+    for i in 0..200 {
+        let (a, b) = (i * 32 + 1, i * 32 + 32);
+        s.execute("data.scenarioAdd", json!({"name": format!("S{i}"), "changing": format!("A{a}:A{b}")})).unwrap();
+    }
+    assert!(s.execute("data.scenarioSummary", json!({})).is_err());
+}
+
+#[test]
+fn scenario_summary_counts_result_rows_in_its_cell_limit() {
+    let mut s = s();
+    // 900 scenarios of one distinct cell each are 810,000 cells; 255 result rows take it past the limit.
+    for i in 0..900 {
+        s.execute("data.scenarioAdd", json!({"name": format!("S{i}"), "changing": format!("A{}", i + 1)})).unwrap();
+    }
+    let err = s.execute("data.scenarioSummary", json!({"resultCells": "C1:C255"})).unwrap_err().to_string();
+    assert!(err.contains("too many cells"), "{err}");
 }
