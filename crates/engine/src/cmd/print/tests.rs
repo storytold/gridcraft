@@ -149,7 +149,7 @@ fn arabic_cells_headers_and_charts_export_searchable_shaped_text() {
 
 #[test]
 fn arabic_reading_order_export_artifact() {
-    if gridcraft_pdf::text_width(Font::Helvetica, 10.0, "مرحبا") == 0.0 && std::env::var_os("CRAFT_FONTS_REQUIRED").is_none() {
+    if !arabic_face_available() && std::env::var_os("CRAFT_FONTS_REQUIRED").is_none() {
         return;
     }
     let mut s = s();
