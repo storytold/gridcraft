@@ -1,5 +1,6 @@
 use super::graph::{HashMap, HashSet, Key};
 use super::{Evaluator, Host, Workbook, stack_position};
+use crate::spill_index::{Cover, SpillIndex};
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
 
@@ -15,6 +16,8 @@ const MAX_ITERATION_WORK: usize = 10_000_000;
 
 /// How often a block was read, and its values once they are final.
 type SharedBlock = (u32, Option<std::sync::Arc<Array>>);
+/// A block's results by last row: its sum and count, or `None` when it can't be summed from constants.
+type BlockSums = std::collections::BTreeMap<u32, Option<(f64, u64)>>;
 
 pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
@@ -30,6 +33,8 @@ pub(super) struct PassHost<'a> {
     block_cells: u64,
     /// What looking at unfinished formulas may still cost: the cells of the large blocks read so far.
     block_look_budget: u64,
+    /// Where the areas in `spills` are, so a read finds the ones it meets without scanning them all.
+    spill_index: SpillIndex,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
@@ -73,10 +78,17 @@ pub(super) struct PassHost<'a> {
     pub(super) tainted: HashSet<Key>,
     /// Whether the formula being evaluated has read a previous value.
     taint: bool,
+    /// "Set precision as displayed" is on: results are rounded to their cells' formats before
+    /// they are stored or read by other formulas.
+    precision: Option<crate::DisplayedPrecision>,
     /// `stack_position()` where the outermost formula being calculated started.
     stack_top: usize,
     /// Whether an evaluation ran past the stack budget since the innermost formula started.
     out_of_stack: bool,
+    /// Sum and count of blocks that hold only constants, for `range_sum`. Keyed by sheet, first
+    /// cell and last column; each value maps a last row to the block's result (`None`: the block
+    /// has a formula, a Python cell, an error value or a spilled value, so every longer one has too).
+    sums: HashMap<(usize, CellRef, u32), BlockSums>,
     /// The kept results of the Python cells in the pass: a Python cell isn't evaluated, its
     /// result is laid out (an array spills from the cell, as a formula's does). Each one is in
     /// `pending` until it is laid out, so a formula that reads it first gets its new value.
@@ -95,6 +107,7 @@ impl<'a> PassHost<'a> {
             pending: exprs.keys().copied().collect(),
             in_progress: HashSet::default(),
             spills: HashMap::default(),
+            spill_index: SpillIndex::default(),
             used: HashMap::default(),
             rng,
             now,
@@ -116,8 +129,10 @@ impl<'a> PassHost<'a> {
             members: HashSet::default(),
             tainted: HashSet::default(),
             taint: false,
+            precision: wb.calc.precision_as_displayed.then(crate::DisplayedPrecision::new),
             stack_top: 0,
             out_of_stack: false,
+            sums: HashMap::default(),
             python: HashMap::default(),
         }
     }
@@ -129,6 +144,30 @@ impl<'a> PassHost<'a> {
         self.python = python;
         self
     }
+}
+
+/// Most spill areas a range read meets before they are checked for overlapping one another by
+/// walking all of the pass's spills instead of comparing pairs.
+const MAX_UNORDERED_HITS: usize = 16;
+
+/// Whether an array at `anchor` covers `c`.
+fn spill_covers(anchor: CellRef, arr: &Array, c: CellRef) -> bool {
+    c.row >= anchor.row && c.col >= anchor.col && ((c.row - anchor.row) as usize) < arr.rows && ((c.col - anchor.col) as usize) < arr.cols
+}
+
+/// Whether two of the spill areas anchored at `hits` share a cell inside `range`.
+fn spill_hits_overlap(index: &SpillIndex, sheet: usize, hits: &[CellRef], range: RangeRef) -> bool {
+    let rects: Vec<RangeRef> = hits.iter().filter_map(|a| index.area(sheet, *a)).filter(|(_, empty)| !empty).map(|(r, _)| r).collect();
+    rects.iter().enumerate().any(|(i, a)| {
+        rects.iter().skip(i + 1).any(|b| {
+            a.intersects(b)
+                && RangeRef::new(
+                    CellRef::new(a.start.row.max(b.start.row), a.start.col.max(b.start.col)),
+                    CellRef::new(a.end.row.min(b.end.row), a.end.col.min(b.end.col)),
+                )
+                .intersects(&range)
+        })
+    })
 }
 
 /// Whether an array result at `k` can't spill: it is in a table, or its area runs off the sheet,
@@ -167,13 +206,6 @@ pub(super) fn spills_as_before(sheet: &gridcraft_model::Sheet, anchor: CellRef, 
             .iter()
             .enumerate()
             .all(|(i, c)| c == anchor || (!sheet.cells.has(c) && sheet.spill.get(&c) == Some(arr.data.get(i).unwrap_or(&Value::Empty))))
-}
-
-/// The area an array anchored at `anchor` covers.
-fn array_area(anchor: CellRef, a: &Array) -> RangeRef {
-    let end =
-        CellRef::new(anchor.row.saturating_add((a.rows as u32).saturating_sub(1)), anchor.col.saturating_add((a.cols as u32).saturating_sub(1)));
-    RangeRef::new(anchor, end)
 }
 
 /// The spilled values `sheet` stores inside `range`, passed to `f` until it returns false. Values
@@ -356,20 +388,43 @@ impl PassHost<'_> {
                     let data = a.data.iter().map(|x| if matches!(x, Value::Empty) { Value::Number(0.0) } else { x.clone() }).collect();
                     Array::new(a.rows, a.cols, data).map(std::sync::Arc::new).unwrap_or(a)
                 };
+                // Precision as displayed: each element takes the format of the cell it lands in.
+                let a = match self.precision.as_mut() {
+                    Some(p) if a.data.iter().any(|x| matches!(x, Value::Number(_))) => {
+                        let cols = a.cols.max(1);
+                        let data = a
+                            .data
+                            .iter()
+                            .enumerate()
+                            .map(|(i, x)| {
+                                let at = CellRef::new(k.1.row.saturating_add((i / cols) as u32), k.1.col.saturating_add((i % cols) as u32));
+                                p.round_value(self.wb, k.0, at, x.clone())
+                            })
+                            .collect();
+                        Array::new(a.rows, a.cols, data).map(std::sync::Arc::new).unwrap_or(a)
+                    }
+                    _ => a,
+                };
                 // A dynamic-array formula anchors a spill range even while its result is one
                 // value -- a FILTER matching one row, a SORT or UNIQUE over one item -- so `C1#`
                 // is the 1 x 1 range and `ROWS(C1#)` is 1, as in Excel (#1491). A formula that
                 // returns a scalar never reaches this arm, so it does not become an anchor.
+                self.spill_index.insert(k, a.rows, a.cols);
                 self.spills.insert(k, a.clone());
                 a.data.first().cloned().unwrap_or_default()
             }
             Value::Empty => Value::Number(0.0),
+            v @ Value::Number(_) => match self.precision.as_mut() {
+                Some(p) => p.round_value(self.wb, k.0, k.1, v),
+                None => v,
+            },
             v => v,
         };
         // An array that can't spill is #SPILL! for the formulas evaluated after it in this pass too.
         let v = match self.spills.get(&k) {
             Some(a) if spill_blocked(self, k, a) => {
                 self.spills.remove(&k);
+                self.spill_index.remove(k);
                 Value::Error(CellError::Spill)
             }
             _ => v,
@@ -389,6 +444,7 @@ impl PassHost<'_> {
                     && a.cols >= 1
                     && a.rows.checked_mul(a.cols).is_some_and(|n| n == a.data.len() && n <= gridcraft_model::python::MAX_RESULT_CELLS);
                 if sane {
+                    self.spill_index.insert(k, a.rows, a.cols);
                     self.spills.insert(k, a.clone());
                     a.data.first().cloned().unwrap_or_default()
                 } else {
@@ -400,6 +456,7 @@ impl PassHost<'_> {
         let v = match self.spills.get(&k) {
             Some(a) if spill_blocked(self, k, a) => {
                 self.spills.remove(&k);
+                self.spill_index.remove(k);
                 Value::Error(CellError::Spill)
             }
             _ => v,
@@ -446,7 +503,11 @@ impl PassHost<'_> {
         while passes < max_iterations.min(max_passes) && !self.converged(max_change) {
             self.prev = again.iter().filter_map(|k| self.results.remove(k).map(|v| (*k, v))).collect();
             self.pending = set.clone();
-            self.spills.retain(|a, _| !set.contains(a));
+            let gone: Vec<Key> = self.spills.keys().filter(|a| set.contains(a)).copied().collect();
+            for a in gone {
+                self.spills.remove(&a);
+                self.spill_index.remove(a);
+            }
             for k in &again {
                 self.calculate(*k);
             }
@@ -593,17 +654,19 @@ impl Host for PassHost<'_> {
         if self.pending.contains(&k) || self.results.contains_key(&k) {
             return self.compute(k);
         }
-        // A cell covered by a spill computed in this pass.
-        for (anchor, arr) in &self.spills {
-            if anchor.0 == sheet && c.row >= anchor.1.row && c.col >= anchor.1.col {
-                let (dr, dc) = ((c.row - anchor.1.row) as usize, (c.col - anchor.1.col) as usize);
-                if dr < arr.rows && dc < arr.cols {
-                    if self.iterate && self.tainted.contains(anchor) {
-                        self.taint = true;
-                    }
-                    return arr.get(dr, dc).cloned().unwrap_or_default();
-                }
+        // A cell covered by a spill computed in this pass. Where several overlap, the first in
+        // `spills`' iteration order counts, as it always has.
+        let covering = match self.spill_index.covering(sheet, c) {
+            Cover::None => None,
+            Cover::One(a) => self.spills.get_key_value(&(sheet, a)),
+            Cover::Many => self.spills.iter().find(|(a, arr)| a.0 == sheet && spill_covers(a.1, arr, c)),
+        };
+        if let Some((anchor, arr)) = covering {
+            let (dr, dc) = ((c.row - anchor.1.row) as usize, (c.col - anchor.1.col) as usize);
+            if self.iterate && self.tainted.contains(anchor) {
+                self.taint = true;
             }
+            return arr.get(dr, dc).cloned().unwrap_or_default();
         }
         self.wb.sheet(sheet).map(|s| s.value(c)).unwrap_or_default()
     }
@@ -642,46 +705,44 @@ impl Host for PassHost<'_> {
             }
         }
         if !self.spills.is_empty() {
-            // Only the part of each array inside the range is walked: a large array beside a small
-            // read costs nothing.
-            let mut new: Vec<(usize, Value)> = Vec::new();
-            for (a, arr) in self.spills.iter().filter(|(a, _)| a.0 == sheet) {
-                let area = array_area(a.1, arr);
-                if !area.intersects(&range) {
-                    continue;
-                }
-                let (r0, r1) = (area.start.row.max(range.start.row), area.end.row.min(range.end.row));
-                let (c0, c1) = (area.start.col.max(range.start.col), area.end.col.min(range.end.col));
-                for row in r0..=r1 {
-                    for col in c0..=c1 {
-                        let c = CellRef::new(row, col);
-                        if c == a.1 {
-                            continue;
-                        }
-                        let v = arr.get((row - a.1.row) as usize, (col - a.1.col) as usize).cloned().unwrap_or_default();
-                        new.push(((row - range.start.row) as usize * w + (col - range.start.col) as usize, v));
-                    }
-                }
-            }
-            #[cfg(test)]
-            {
-                self.spill_visits += new.len();
-            }
+            let mut hits = Vec::new();
+            self.spill_index.meeting(sheet, range, &mut hits);
             // Iterating: an array spilled by a formula that read a previous value.
-            if self.iterate
-                && self.spills.iter().any(|(a, arr)| {
-                    let end = CellRef::new(
-                        a.1.row.saturating_add((arr.rows as u32).saturating_sub(1)),
-                        a.1.col.saturating_add((arr.cols as u32).saturating_sub(1)),
-                    );
-                    a.0 == sheet && self.tainted.contains(a) && RangeRef::new(a.1, end).intersects(&range)
-                })
-            {
+            if self.iterate && hits.iter().any(|a| self.tainted.contains(&(sheet, *a))) {
                 self.taint = true;
             }
-            for (i, v) in new {
-                if let Some(slot) = out.get_mut(i) {
-                    *slot = v;
+            // Where areas overlap inside the range, the last in `spills`' iteration order wins,
+            // as it always has; otherwise the order doesn't matter.
+            let ordered = hits.len() > MAX_UNORDERED_HITS || spill_hits_overlap(&self.spill_index, sheet, &hits, range);
+            let mut put = |anchor: CellRef, arr: &Array| {
+                if arr.rows == 0 || arr.cols == 0 {
+                    return;
+                }
+                let (r0, c0) = (range.start.row.max(anchor.row), range.start.col.max(anchor.col));
+                let r1 = range.end.row.min(anchor.row.saturating_add((arr.rows as u32).saturating_sub(1)));
+                let c1 = range.end.col.min(anchor.col.saturating_add((arr.cols as u32).saturating_sub(1)));
+                for r in r0..=r1 {
+                    for cc in c0..=c1 {
+                        if (r, cc) != (anchor.row, anchor.col)
+                            && let Some(slot) = out.get_mut((r - range.start.row) as usize * w + (cc - range.start.col) as usize)
+                        {
+                            *slot = arr.get((r - anchor.row) as usize, (cc - anchor.col) as usize).cloned().unwrap_or_default();
+                        }
+                    }
+                }
+            };
+            if ordered {
+                let wanted: HashSet<Key> = hits.iter().map(|a| (sheet, *a)).collect();
+                for (a, arr) in &self.spills {
+                    if wanted.contains(a) {
+                        put(a.1, arr);
+                    }
+                }
+            } else {
+                for a in &hits {
+                    if let Some(arr) = self.spills.get(&(sheet, *a)) {
+                        put(*a, arr);
+                    }
                 }
             }
         }
@@ -700,7 +761,8 @@ impl Host for PassHost<'_> {
         }
         // Spilled values sit between the stored cells (and the formulas just calculated may have
         // produced some): leave such blocks to `range_values`.
-        let arrays = self.spills.iter().any(|(a, arr)| a.0 == sheet && array_area(a.1, arr).intersects(&range));
+        let mut arrays = Vec::new();
+        self.spill_index.meeting(sheet, range, &mut arrays);
         let mut stored = false;
         let _seen = stored_spill_in(sh, range, &mut |_, _| {
             stored = true;
@@ -710,7 +772,7 @@ impl Host for PassHost<'_> {
         {
             self.spill_visits += _seen;
         }
-        if arrays || stored {
+        if !arrays.is_empty() || stored {
             return false;
         }
         for (c, cell) in sh.cells.iter_range(range) {
@@ -720,6 +782,50 @@ impl Host for PassHost<'_> {
             }
         }
         true
+    }
+    fn range_sum(&mut self, sheet: usize, range: RangeRef) -> Option<(f64, u64)> {
+        // Constants can't change during a pass, so a block's result stays valid for it. Spills
+        // found in this pass (and iteration, which tracks what a read depends on) go the long way.
+        if self.iterate || self.spills.keys().any(|a| a.0 == sheet) {
+            return None;
+        }
+        let sh = self.wb.sheet(sheet)?;
+        let (key, last) = ((sheet, range.start, range.end.col), range.end.row);
+        let known = self.sums.entry(key).or_default();
+        if let Some(r) = known.get(&last) {
+            return *r;
+        }
+        // Start from the longest shorter block of the same rows from the top: summing row-major
+        // from there on is the same additions in the same order as one walk from the start.
+        let (from, mut sum, mut count) = match known.range(..last).next_back() {
+            Some((_, None)) => {
+                known.insert(last, None);
+                return None;
+            }
+            Some((&row, &Some((sum, count)))) => (row + 1, sum, count),
+            None => (range.start.row, 0.0, 0),
+        };
+        let rest = RangeRef::new(CellRef::new(from, range.start.col), range.end);
+        let mut plain = sh.spill.range(rest.start..=rest.end).all(|(c, _)| !rest.contains(*c));
+        if plain {
+            for (_, cell) in sh.cells.iter_range(rest) {
+                match &cell.value {
+                    _ if cell.formula.is_some() || cell.py.is_some() => plain = false,
+                    Value::Error(_) => plain = false,
+                    Value::Number(n) => {
+                        sum += n;
+                        count = u64::saturating_add(count, 1);
+                    }
+                    _ => {}
+                }
+                if !plain {
+                    break;
+                }
+            }
+        }
+        let result = plain.then_some((sum, count));
+        known.insert(last, result);
+        result
     }
     fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
         let wb = self.wb;
