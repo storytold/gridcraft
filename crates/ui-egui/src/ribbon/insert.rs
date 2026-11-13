@@ -225,6 +225,12 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
         if __k.clicked() {
             act(app, "insert.textBox", json!({}));
         }
+        // Two lines like its neighbours, so the Insert tab stays as wide as before; the translated label is split, the catalog key is one line.
+        let label = app.ui.language.tr("Decorative Text").replacen(' ', "\n", 1);
+        let wa = big_button(ui, Icon::WordArt, &label, "Decorative Text", true);
+        anchor_keytip(app, ui, &wa, &["insert.wordArt"]);
+        // Menu invocation shows the style gallery; the command itself never opens a dialog.
+        egui::Popup::menu(&wa).show(|ui| crate::wordart::gallery(app, ui));
         let __k = big_button(ui, Icon::PageLayout, "Header &\nFooter", "Header & Footer", false);
         control_keytip(app, ui, &__k, "dialog:headerFooter");
         if __k.clicked() {
