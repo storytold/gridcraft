@@ -23,9 +23,7 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
 - **Function help** (the argument hint, autocomplete, Insert Function and the Formulas-tab
   menus) follows the interface language through per-language tables keyed by the catalog's
   English text (`i18n/<lang>_functions.rs`): descriptions, and argument names from which the
-  hint is assembled with the formula syntax's function name and separator. Spanish translates
-  the 10 common functions it had help for (SUM, AVERAGE, IF…); other languages show the English
-  help.
+  hint is assembled with the formula syntax's function name and separator. Spanish now translates all 479 distinct function descriptions in the catalog and 282 argument names; argument names without a Spanish translation retain their English spelling. Other languages show the English help.
 - **A first catalog exists.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in #31, #104, #82; German
   added 10-11) adds an interface-language preference that defaults to the system language (closes
   #20) and a View-tab switcher, with English-keyed lookup tables: Simplified Chinese, Korean,
