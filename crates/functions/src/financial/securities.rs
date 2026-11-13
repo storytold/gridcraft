@@ -156,7 +156,8 @@ pub(super) fn tbilleq(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     if price <= 0.0 {
         return Err(CellError::Num);
     }
-    let t = dsm / 365.0;
+    let year_days = if dsm > 365.0 { 366.0 } else { 365.0 };
+    let t = dsm / year_days;
     let disc = t * t - (2.0 * t - 1.0) * (1.0 - 100.0 / price);
     if disc < 0.0 {
         return Err(CellError::Num);
