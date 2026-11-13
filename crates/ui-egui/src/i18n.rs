@@ -21,6 +21,7 @@ mod ko;
 mod nl;
 mod pl;
 mod pt;
+mod pt_pt;
 mod ro;
 mod ru;
 mod sr;
@@ -42,6 +43,8 @@ pub enum Language {
     Ru,
     #[serde(rename = "pt")]
     PtBr,
+    #[serde(rename = "pt-pt")]
+    PtPt,
     De,
     Cs,
     Fr,
@@ -56,7 +59,7 @@ pub enum Language {
 }
 
 impl Language {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::En,
         Self::Es,
         Self::El,
@@ -65,6 +68,7 @@ impl Language {
         Self::Ko,
         Self::Ru,
         Self::PtBr,
+        Self::PtPt,
         Self::De,
         Self::Cs,
         Self::Fr,
@@ -98,6 +102,7 @@ impl Language {
             Self::Ko => "한국어",
             Self::Ru => "Русский",
             Self::PtBr => "Português (Brasil)",
+            Self::PtPt => "Português (Portugal)",
             Self::De => "Deutsch",
             Self::Cs => "Čeština",
             Self::Fr => "Français",
@@ -123,6 +128,7 @@ impl Language {
             Self::Ko => "ko",
             Self::Ru => "ru",
             Self::PtBr => "pt",
+            Self::PtPt => "pt-pt",
             Self::De => "de",
             Self::Cs => "cs",
             Self::Fr => "fr",
@@ -148,7 +154,17 @@ impl Language {
     }
 
     fn from_tag(tag: &str) -> Option<Self> {
-        match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
+        // A POSIX or ICU tail (`pt_PT.UTF-8`, `pt-PT@euro`) says nothing of the region.
+        let base = tag.trim().split(['.', '@']).next().unwrap_or("");
+        let mut parts = base.split(['-', '_']);
+        let primary = parts.next()?.to_ascii_lowercase();
+        // `pt` alone and `pt-BR` are Brazil's (the code `pt` meant Brazil before `pt-pt` existed,
+        // so saved preferences keep working); an explicit Portugal region is Portugal's.
+        if primary == "pt" {
+            let portugal = parts.take_while(|p| !p.eq_ignore_ascii_case("x")).any(|p| p.eq_ignore_ascii_case("pt"));
+            return Some(if portugal { Self::PtPt } else { Self::PtBr });
+        }
+        match primary.as_str() {
             "en" => Some(Self::En),
             "es" => Some(Self::Es),
             "el" => Some(Self::El),
@@ -208,6 +224,7 @@ impl Language {
             Self::Ko => ko::translate(text),
             Self::Ru => ru::translate(text),
             Self::PtBr => pt::translate(text),
+            Self::PtPt => pt_pt::translate(text),
             Self::De => de::translate(text),
             Self::Cs => cs::translate(text),
             Self::Fr => fr::translate(text),
@@ -432,6 +449,23 @@ mod tests {
     }
 
     #[test]
+    fn saved_portuguese_keeps_brazil_and_selects_portugal() {
+        // `pt` meant Brazil before European Portuguese existed: saved files keep their meaning.
+        for saved in ["pt", "pt-BR", "pt-br", "pt_BR.UTF-8"] {
+            assert_eq!(saved_language(&serde_json::json!({"language": saved})), Some(Language::PtBr), "{saved}");
+        }
+        for saved in ["pt-pt", "pt-PT", "pt_PT.UTF-8"] {
+            assert_eq!(saved_language(&serde_json::json!({"language": saved})), Some(Language::PtPt), "{saved}");
+        }
+        assert_eq!(serde_json::to_string(&Language::PtBr).unwrap(), "\"pt\"");
+        assert_eq!(serde_json::to_string(&Language::PtPt).unwrap(), "\"pt-pt\"");
+        let ui: crate::UiState = serde_json::from_str(r#"{"language": "pt"}"#).unwrap();
+        assert_eq!(ui.language, Language::PtBr);
+        let ui: crate::UiState = serde_json::from_str(r#"{"language": "pt-pt"}"#).unwrap();
+        assert_eq!(ui.language, Language::PtPt);
+    }
+
+    #[test]
     fn unknown_saved_language_keeps_the_other_preferences() {
         let ui: crate::UiState = serde_json::from_str(r#"{"dark": true, "language": "xx"}"#).unwrap();
         assert!(ui.dark);
@@ -467,6 +501,15 @@ mod tests {
         assert_eq!(Language::from_tag("pt-BR"), Some(Language::PtBr));
         assert_eq!(Language::parse("pt"), Some(Language::PtBr));
         assert_eq!(Language::parse("pt-br"), Some(Language::PtBr));
+        // European Portuguese is its own language; `pt` alone and `pt-BR` stay Brazil's, and a
+        // POSIX/ICU tail does not hide the region.
+        assert_eq!(Language::parse("pt-pt"), Some(Language::PtPt));
+        assert_eq!(Language::from_tag("pt-PT"), Some(Language::PtPt));
+        assert_eq!(Language::from_tag("pt_PT.UTF-8"), Some(Language::PtPt));
+        assert_eq!(Language::from_tag("pt-PT@euro"), Some(Language::PtPt));
+        assert_eq!(Language::from_tag("PT-pt"), Some(Language::PtPt));
+        assert_eq!(Language::from_tag("pt-AO"), Some(Language::PtBr));
+        assert_eq!(Language::from_tag("pt-x-PT"), Some(Language::PtBr));
         assert_eq!(Language::from_tag("cs-CZ"), Some(Language::Cs));
         assert_eq!(Language::from_tag("cs_CZ.UTF-8"), Some(Language::Cs));
         assert_eq!(Language::parse("cs"), Some(Language::Cs));
