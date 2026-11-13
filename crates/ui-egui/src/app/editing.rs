@@ -214,7 +214,7 @@ impl SheetApp {
                         ErrorStyle::Stop => Some((title, a.message)),
                         ErrorStyle::Warning if accepted.as_deref() != Some(text.as_str()) => {
                             let checked_selection = self.session.active().map(|d| d.selection.a1());
-                            let ask = json!({"title": title, "message": a.message, "messageCustom": !a.rule.error_message.is_empty(), "text": text, "doc": ed.doc, "cell": ed.cell.a1(), "selection": checked_selection, "dr": dr, "dc": dc});
+                            let ask = json!({"title": title, "message": a.message, "messageCustom": !a.rule.error_message.is_empty(), "text": text, "doc": ed.doc, "sheetUid": ed.sheet_uid, "cell": ed.cell.a1(), "selection": checked_selection, "dr": dr, "dc": dc});
                             self.editor = Some(ed);
                             self.session.mode = gridcraft_engine::Mode::Edit;
                             self.open_dialog(FILL_WARNING_DIALOG, ask);
@@ -271,14 +271,17 @@ impl SheetApp {
     /// Answers the Warning alert a Ctrl+Enter fill raised ([`FILL_WARNING_DIALOG`]; `ask` is its
     /// values). No keeps the draft open and writes nothing. Yes fills the selection with the entry
     /// the question was about; it doesn't ask that question again, while a Stop is still refused.
-    /// The answer applies only to the draft it was asked for: another draft (or none) is left alone.
-    /// It also applies only to the selection the question checked: if the selection moved while
-    /// the question was open, the new selection is checked on its own rules (asked, refused, or
-    /// filled) instead of inheriting this answer. Returns whether the fill was written.
+    /// The answer applies only to the draft it was asked for: another draft (or none), and a
+    /// draft of the same cell on another sheet, is left alone.
+    /// It also applies only to the selection the question checked, in the window the draft
+    /// belongs to: if that selection moved while the question was open, the new selection is
+    /// checked on its own rules (asked, refused, or filled) instead of inheriting this answer.
+    /// Returns whether the fill was written.
     pub fn answer_fill_warning(&mut self, yes: bool, ask: &serde_json::Map<String, serde_json::Value>) -> bool {
         let text = ask.get("text").and_then(serde_json::Value::as_str);
         let same = |ed: &editor::EditState| {
             ask.get("doc").and_then(serde_json::Value::as_u64) == Some(ed.doc)
+                && ask.get("sheetUid").and_then(serde_json::Value::as_u64) == Some(ed.sheet_uid)
                 && ask.get("cell").and_then(serde_json::Value::as_str) == Some(ed.cell.a1().as_str())
         };
         let Some(ed) = self.editor.as_mut().filter(|ed| same(ed)) else { return false };
@@ -291,7 +294,12 @@ impl SheetApp {
         // the user has moved to since: a moved selection goes through the check again, so its
         // own Warning is asked and a Stop there is still refused.
         let checked = ask.get("selection").and_then(serde_json::Value::as_str);
-        let current = self.session.active().map(|d| d.selection.a1());
+        // The checked selection is the owning window's, not whichever window happens to be
+        // showing: another window on the same workbook keeps its own selection, and its
+        // showing the checked address must not grant this answer.
+        let owner = ed.window.filter(|w| self.session.window(*w).is_some()).or_else(|| self.session.doc_window(ed.doc));
+        let current =
+            owner.and_then(|w| self.session.window_selection(w)).map(|sel| sel.a1()).or_else(|| self.session.active().map(|d| d.selection.a1()));
         if checked != current.as_deref() {
             return self.commit_edit(step("dr"), step("dc"), false, true);
         }
@@ -620,6 +628,15 @@ mod fill_validation_tests {
         app.session.active().and_then(|d| d.wb.sheet(0)).map(|sh| sh.value(at)).unwrap_or_default()
     }
 
+    fn value_on(app: &SheetApp, sheet: usize, a1: &str) -> Value {
+        let at = CellRef::parse(a1).unwrap();
+        app.session.active().and_then(|d| d.wb.sheet(sheet)).map(|sh| sh.value(at)).unwrap_or_default()
+    }
+
+    fn column_on(app: &SheetApp, sheet: usize, cells: &[&str]) -> Vec<Value> {
+        cells.iter().map(|c| value_on(app, sheet, c)).collect()
+    }
+
     fn column(app: &SheetApp, cells: &[&str]) -> Vec<Value> {
         cells.iter().map(|c| value(app, c)).collect()
     }
@@ -746,6 +763,64 @@ mod fill_validation_tests {
         assert!(!app.answer_fill_warning(true, &ask), "the answer was for another draft");
         assert_eq!(column(&app, &["A1", "A2", "A3", "C1"]), vec![Value::Empty; 4]);
         assert_eq!(draft(&app), Some("other"));
+    }
+
+    #[test]
+    fn a_yes_answer_does_not_carry_over_to_a_draft_on_another_sheet() {
+        let mut app = book();
+        rule(&mut app, "A2", "warning");
+        assert!(!ctrl_enter(&mut app, "A1:A3", "A1", "5"));
+        let ask = warning_values(&app);
+        // The draft is cancelled and the same entry started on another sheet, at the same
+        // address over the same selection, before Yes arrives.
+        app.cancel_edit();
+        app.run("home.insertSheet", json!({})).unwrap();
+        rule(&mut app, "A2", "warning");
+        app.run("selection.set", json!({"range": "A1:A3", "active": "A1"})).unwrap();
+        app.begin_edit(Some("5".into()), false);
+        assert_eq!(draft(&app), Some("5"));
+
+        assert!(!app.answer_fill_warning(true, &ask), "the answer was for another sheet's draft");
+        assert_eq!(column_on(&app, 1, &["A1", "A2", "A3"]), vec![Value::Empty; 3], "nothing is written on the new sheet");
+        assert_eq!(draft(&app), Some("5"), "the new sheet's draft stays open");
+
+        // Its own fill is asked on its own sheet's rules, and Yes to that question fills it.
+        assert!(!app.commit_edit(0, 0, false, true), "the new sheet's own Warning is asked");
+        let ask = warning_values(&app);
+        assert!(app.answer_fill_warning(true, &ask), "Yes for the new sheet's question fills it");
+        assert_eq!(column_on(&app, 1, &["A1", "A2", "A3"]), vec![Value::Number(5.0); 3]);
+        assert_eq!(column_on(&app, 0, &["A1", "A2", "A3"]), vec![Value::Empty; 3], "the first sheet was never written");
+    }
+
+    #[test]
+    fn a_yes_checked_in_the_owning_window_is_not_granted_by_another_windows_selection() {
+        let mut app = book();
+        rule(&mut app, "A2", "warning");
+        rule(&mut app, "C2", "warning");
+        let undo = undo_len(&app);
+        assert!(!ctrl_enter(&mut app, "A1:A3", "A1", "5"));
+        let ask = warning_values(&app);
+
+        // The owning window's selection moves while the question is open, and another window
+        // on the same workbook comes forward showing the checked selection. The second
+        // window's selection is moved at engine level (as a script or the control channel
+        // moves it), so the draft stays in the fields of the window that answers.
+        app.run("selection.set", json!({"range": "C1:C3", "active": "C1"})).unwrap();
+        app.session.new_window().unwrap();
+        app.session.run("selection.set", json!({"range": "A1:A3", "active": "A1"})).unwrap();
+
+        assert!(!app.answer_fill_warning(true, &ask), "Yes was for the owning window's old selection: it asks again, writes nothing");
+        assert_eq!(column(&app, &["A1", "A2", "A3", "C1", "C2", "C3"]), vec![Value::Empty; 6]);
+        assert_eq!(undo_len(&app), undo, "no undo step");
+        assert_eq!(draft(&app), Some("5"), "the draft stays in the cell");
+
+        let ask = warning_values(&app);
+        assert_eq!(ask.get("message"), Some(&json!("warning at C2")), "the owning selection's own Warning is asked");
+        assert_eq!(ask.get("selection"), Some(&json!("C1:C3")), "the question names the checked selection");
+
+        assert!(app.answer_fill_warning(true, &ask), "Yes for the checked selection fills it");
+        assert_eq!(column(&app, &["C1", "C2", "C3"]), vec![Value::Number(5.0); 3]);
+        assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Empty; 3], "the first selection was never written");
     }
 
     #[test]
