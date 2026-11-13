@@ -30,6 +30,63 @@ fn t(code: &str, s: &str) -> String {
     format_value(&Value::from(s), &NumberFormat::parse(code), S).text
 }
 
+/// Portuguese Excel shows and reads the year as `a` (`dd/mm/aaaa`) and the file stores `yyyy`.
+/// `AM/PM`, `A/P`, `General`, quoted text, `[...]` tags and escapes keep their letters, and
+/// other regions keep `y`.
+#[test]
+fn portuguese_codes_write_the_year_as_a() {
+    let pt = gridcraft_core::region::lookup("pt-BR");
+    let fr = gridcraft_core::region::lookup("fr-FR");
+    assert_eq!(regional_code("dd/mm/yyyy", pt), "dd/mm/aaaa");
+    assert_eq!(regional_code("d mmm YY h AM/PM \"y\" \\y [$-416]", pt), "d mmm AA h AM/PM \"y\" \\y [$-416]");
+    assert_eq!(canonical_code("dd/mm/aaaa", pt), "dd/mm/yyyy");
+    assert_eq!(canonical_code("aa h:mm a/p \"ano\" \\a General", pt), "yy h:mm a/p \"ano\" \\a General");
+    assert_eq!(canonical_code("dd/mm/aaaa", gridcraft_core::region::lookup("pt-PT")), "dd/mm/yyyy");
+    assert_eq!(regional_code("dd/mm/yyyy", fr), "dd/mm/yyyy");
+    assert_eq!(canonical_code("dd/mm/aaaa", fr), "dd/mm/aaaa");
+    assert_eq!(format_value_in(&Value::Number(46337.0), &NumberFormat::parse_in("dd/mm/aaaa", pt), S, pt).text, "11/11/2026");
+}
+
+/// Formats `n` with `code` in the region tagged `tag`.
+fn in_region(tag: &str, code: &str, n: f64) -> String {
+    format_value_in(&Value::Number(n), &NumberFormat::parse(code), S, gridcraft_core::region::lookup(tag)).text
+}
+
+/// 11 November 2026, a Wednesday.
+const NOV_11_2026: f64 = 46337.0;
+
+/// Month and day names and AM/PM come from the workbook's region; a month shown with its day
+/// uses the genitive form where the region has one. en-US is unchanged.
+#[test]
+fn date_names_and_am_pm_come_from_the_region() {
+    assert_eq!(in_region("pt-BR", "dddd", NOV_11_2026), "quarta-feira");
+    assert_eq!(in_region("pt-BR", "ddd, d mmm yyyy", NOV_11_2026), "qua, 11 nov 2026");
+    assert_eq!(in_region("pt-BR", "mmmm mmmmm", NOV_11_2026), "novembro n");
+    assert_eq!(in_region("ru-RU", "mmmm", NOV_11_2026), "ноябрь");
+    assert_eq!(in_region("ru-RU", "d mmmm", NOV_11_2026), "11 ноября");
+    assert_eq!(in_region("es-ES", "h AM/PM", NOV_11_2026 + 0.75), "6 p. m.");
+    assert_eq!(in_region("ja-JP", "AM/PM h", NOV_11_2026 + 0.25), "午前 6");
+    assert_eq!(f("dddd, mmmm d, yyyy h AM/PM", NOV_11_2026 + 0.75), "Wednesday, November 11, 2026 6 PM");
+    assert_eq!(f("ddd mmm", NOV_11_2026), "Wed Nov");
+}
+
+/// `[$-F800]` and `[$-F400]` show the region's system long date and time (the rest of the
+/// section is ignored), and `[$-416]` names months and days in the region with that locale id.
+/// A currency tag keeps its symbol.
+#[test]
+fn locale_tags_pick_the_region_long_date_time_and_names() {
+    assert_eq!(in_region("pt-BR", "[$-F800]dddd, mmmm dd, yyyy", NOV_11_2026), "quarta-feira, 11 de novembro de 2026");
+    assert_eq!(in_region("en-US", "[$-F800]dddd, mmmm dd, yyyy", NOV_11_2026), "Wednesday, November 11, 2026");
+    assert_eq!(in_region("pt-BR", "[$-F400]h:mm:ss AM/PM", NOV_11_2026 + 0.75), "18:00:00");
+    assert_eq!(in_region("en-US", "[$-F400]h:mm:ss AM/PM", NOV_11_2026 + 0.75), "6:00:00 PM");
+    assert_eq!(in_region("en-US", "[$-416]dddd, d mmmm", NOV_11_2026), "quarta-feira, 11 novembro");
+    assert_eq!(in_region("pt-BR", "[$-409]dddd", NOV_11_2026), "Wednesday");
+    assert_eq!(in_region("pt-BR", "[$-1010409]mmmm", NOV_11_2026), "November");
+    // An id no region has keeps the workbook's names.
+    assert_eq!(in_region("pt-BR", "[$-999]dddd", NOV_11_2026), "quarta-feira");
+    assert_eq!(in_region("en-US", "[$R$-416] #,##0.00", 1234.5), "R$ 1,234.50");
+}
+
 #[test]
 fn the_separators_come_from_the_region_and_a_typed_code_is_read_with_them() {
     let pt = gridcraft_core::region::lookup("pt-BR");
@@ -1161,7 +1218,7 @@ fn b2_out_of_range_does_not_panic() {
     assert_eq!(f("B2dd/mm/yyyy", 2958466.0), f("dd/mm/yyyy", 2958466.0));
     // Before 1 Muharram 1 AH there is no Hijri date (no serial reaches it).
     let before_epoch = gridcraft_core::date::DateTime { year: 600, month: 3, day: 9, ..Default::default() };
-    assert!(calendar::Calendar::Hijri.date(&before_epoch).is_none());
+    assert!(calendar::Calendar::Hijri.date(&before_epoch, &gridcraft_core::region::EN_US, false).is_none());
 }
 
 /// "Set precision as displayed": the value each format stores. Expected values observed in Excel

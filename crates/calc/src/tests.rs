@@ -1277,6 +1277,20 @@ fn text_function() {
     assert_eq!(t.get("A1"), Value::from("1,234.50"));
 }
 
+/// In a pt-BR workbook TEXT reads the code and numeric text with pt-BR separators and shows
+/// pt-BR names, as Excel does in that region.
+#[test]
+fn text_uses_the_workbook_region() {
+    let mut t = T::new();
+    t.wb.region = gridcraft_core::region::lookup("pt-BR");
+    t.set("A1", "=TEXT(1234.5,\"#.##0,00\")");
+    t.set("A2", "=TEXT(DATE(2026,11,11),\"dddd\")");
+    t.set("A3", "=TEXT(\"1.234,5\",\"0,0\")");
+    assert_eq!(t.get("A1"), Value::from("1.234,50"));
+    assert_eq!(t.get("A2"), Value::from("quarta-feira"));
+    assert_eq!(t.get("A3"), Value::from("1234,5"));
+}
+
 #[test]
 fn long_operator_chains() {
     let mut t = T::new();
