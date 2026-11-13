@@ -53,6 +53,15 @@ impl Remote {
         self.conn = None;
         let mut last = std::io::Error::new(std::io::ErrorKind::NotFound, format!("cannot resolve {}", self.addr));
         for sa in self.addr.to_socket_addrs()? {
+            // The token goes over plain TCP, so only to this machine: a network peer could read it,
+            // and the app's control port listens on loopback only.
+            if !sa.ip().is_loopback() {
+                last = std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("{sa} is not a loopback address: the control token is sent only to 127.0.0.1 or ::1"),
+                );
+                continue;
+            }
             match TcpStream::connect_timeout(&sa, Duration::from_secs(2)) {
                 Ok(s) => {
                     s.set_nodelay(true).ok();
