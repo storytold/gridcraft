@@ -135,10 +135,16 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         app.open_dialog("analysisToolPak", json!({}));
     }
     sep(ui);
-    if big_button(ui, Icon::ChartBar, "Monte\nCarlo", "Monte Carlo", false).clicked() {
+    if big_button(ui, Icon::ChartScatter, "Monte\nCarlo", "Monte Carlo", false).clicked() {
         app.open_dialog("monteCarlo", json!({}));
     }
     sep(ui);
+    if crate::dialogs::actuarial_available() {
+        if big_button(ui, Icon::ChartLine, "Actuarial\nReport", "Actuarial Report", false).clicked() {
+            app.open_dialog("actuarial", json!({}));
+        }
+        sep(ui);
+    }
     if big_button(ui, Icon::Function, "Solver", "Solver", false).clicked() {
         app.open_dialog("solver", json!({}));
     }

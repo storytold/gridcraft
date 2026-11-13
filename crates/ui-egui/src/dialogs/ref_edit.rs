@@ -70,7 +70,8 @@ struct Home {
 /// Whether the dialog has reference boxes: Goal Seek, Solver, Data Analysis, and any form with a
 /// [`Field::Ref`].
 fn has_reference_boxes(d: &Dialog) -> bool {
-    matches!(d.name.as_str(), "goalSeek" | "solver" | "analysisToolPak" | "monteCarlo") || d.fields.iter().any(|f| matches!(f, Field::Ref { .. }))
+    matches!(d.name.as_str(), "goalSeek" | "solver" | "analysisToolPak" | "monteCarlo" | "actuarial")
+        || d.fields.iter().any(|f| matches!(f, Field::Ref { .. }))
 }
 
 /// Records the sheet shown as the dialog's own when a dialog with reference boxes opens, from the

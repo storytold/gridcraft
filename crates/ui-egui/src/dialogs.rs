@@ -14,6 +14,8 @@ use crate::SheetApp;
 use crate::theme;
 
 mod about;
+mod actuarial;
+pub(crate) use actuarial::available as actuarial_available;
 mod analysis;
 mod charts;
 mod command_search;
@@ -688,6 +690,11 @@ impl Dialog {
                         d.set_value(key, value.clone());
                     }
                 }
+                d
+            }
+            "actuarial" => {
+                let mut d = Dialog::custom("actuarial", "Actuarial Report", json!({"function":"ACT.ANNUITY"}));
+                d.command = Some("data.actuarialReport");
                 d
             }
             "monteCarlo" => {
