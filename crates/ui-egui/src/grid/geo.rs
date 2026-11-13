@@ -24,9 +24,11 @@ pub struct Geo {
     /// vertical centre line on screen: painted shapes by `mirror_painted`, widgets by
     /// `mirror_rect`/`mirror_pos`, and pointer input back by `mirror_pos` (an involution).
     pub rtl: bool,
-    /// Prefix sums over custom row heights / column widths, built once per frame.
+    /// Prefix sums over custom row heights / column widths, from [`SheetLines`].
     pub(super) ri: std::sync::Arc<LineIndex>,
     pub(super) ci: std::sync::Arc<LineIndex>,
+    /// The sheet's used range, from [`SheetLines`].
+    pub(super) used: Option<RangeRef>,
     /// Page Layout view: cells sit on pages (`scroll` is then in page-layout units).
     pub paper: Option<Arc<gridcraft_engine::paper::PageGrid>>,
 }
@@ -42,21 +44,51 @@ fn one_line(first: u32, partly_out: bool, forward: bool, frozen: u32, end: u32, 
     (frozen..first).rev().find(|l| shown(*l)).unwrap_or(frozen)
 }
 
+/// The parts of the grid's geometry that depend on the sheet alone: where each row and column
+/// starts, and the row and column outlines. Building them walks every row and column that has a
+/// size, a style or an outline level (a million rows in a file whose filter hides most of them),
+/// so the grid keeps them while the sheet stays the same (`show::sheet_lines`).
+#[derive(Clone)]
+pub struct SheetLines {
+    pub(super) ri: Arc<LineIndex>,
+    pub(super) ci: Arc<LineIndex>,
+    pub(super) row_outline: Arc<crate::outline::Axis>,
+    pub(super) col_outline: Arc<crate::outline::Axis>,
+    /// The sheet's used range (it walks every stored row): how far the scrollbars reach.
+    pub(super) used: Option<RangeRef>,
+}
+
+impl SheetLines {
+    pub fn of(sh: &Sheet) -> SheetLines {
+        SheetLines {
+            ri: Arc::new(LineIndex::new(&sh.rows, sh.default_row_height, MAX_ROWS)),
+            ci: Arc::new(LineIndex::new(&sh.cols, sh.default_col_width, MAX_COLS)),
+            row_outline: Arc::new(crate::outline::Axis::of(sh, true)),
+            col_outline: Arc::new(crate::outline::Axis::of(sh, false)),
+            used: sh.used_range(),
+        }
+    }
+}
+
 impl Geo {
     pub fn new(sh: &Sheet, rect: Rect, scroll: egui::Vec2) -> Geo {
+        Geo::with_lines(sh, rect, scroll, &SheetLines::of(sh))
+    }
+    /// [`Geo::new`] with the sheet's `lines` already built (`SheetLines::of(sh)`).
+    pub fn with_lines(sh: &Sheet, rect: Rect, scroll: egui::Vec2, lines: &SheetLines) -> Geo {
         let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
         let z = zoom * DISPLAY_SCALE;
         let header_h = if sh.show_headings { (COL_HEADER_H * zoom.max(0.75)).round() } else { 0.0 };
-        let ri = std::sync::Arc::new(LineIndex::new(&sh.rows, sh.default_row_height, MAX_ROWS));
-        let ci = std::sync::Arc::new(LineIndex::new(&sh.cols, sh.default_col_width, MAX_COLS));
+        let ri = lines.ri.clone();
+        let ci = lines.ci.clone();
         let last_row = ri.at((scroll.y + rect.height() / z) as f64 + 200.0) + 1;
         let digits = (last_row as f32).log10().floor() as i32 + 1;
         let header_w = if sh.show_headings { ((digits.max(2) as f32 * 7.0 + 14.0) * zoom.max(0.75)).round() } else { 0.0 };
         let (fr, fc) = sh.freeze.unwrap_or((0, 0));
         let frozen_w = (ci.start(fc) as f32) * z;
         let frozen_h = (ri.start(fr) as f32) * z;
-        let row_outline = Arc::new(crate::outline::Axis::of(sh, true));
-        let col_outline = Arc::new(crate::outline::Axis::of(sh, false));
+        let row_outline = lines.row_outline.clone();
+        let col_outline = lines.col_outline.clone();
         // Show Outline Symbols off: no bands (the outline's hidden lines stay hidden).
         let symbols = sh.show_outline_symbols;
         let mut band_w = if symbols { crate::outline::band(row_outline.levels, zoom) } else { 0.0 };
@@ -87,6 +119,7 @@ impl Geo {
             rtl: sh.right_to_left,
             ri,
             ci,
+            used: lines.used,
             paper: None,
         }
     }
@@ -101,7 +134,11 @@ impl Geo {
     /// Page Layout view geometry: `rect` excludes the rulers; cells are drawn at the print scale
     /// on pages laid out by `grid`; frozen panes don't apply (as in Excel).
     pub fn paged(sh: &Sheet, rect: Rect, scroll: egui::Vec2, grid: Arc<gridcraft_engine::paper::PageGrid>) -> Geo {
-        let mut g = Geo::new(sh, rect, scroll);
+        Geo::paged_with_lines(sh, rect, scroll, grid, &SheetLines::of(sh))
+    }
+    /// [`Geo::paged`] with the sheet's `lines` already built.
+    pub fn paged_with_lines(sh: &Sheet, rect: Rect, scroll: egui::Vec2, grid: Arc<gridcraft_engine::paper::PageGrid>, lines: &SheetLines) -> Geo {
+        let mut g = Geo::with_lines(sh, rect, scroll, lines);
         let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
         g.z = zoom * DISPLAY_SCALE * grid.scale.clamp(0.1, 4.0);
         (g.fr, g.fc, g.frozen_w, g.frozen_h) = (0, 0, 0.0, 0.0);
@@ -122,17 +159,17 @@ impl Geo {
         }
     }
     /// Scroll offset (in `scroll` units) at which `row` reaches the top of the scrolled area.
-    pub fn scroll_top_of(&self, sh: &Sheet, row: u32) -> f32 {
+    pub fn scroll_top_of(&self, _sh: &Sheet, row: u32) -> f32 {
         match &self.paper {
             Some(pg) => pg.row_y(row) as f32,
-            None => (sh.row_top(row) - sh.row_top(self.fr)) as f32,
+            None => (self.ri.start(row) - self.ri.start(self.fr)) as f32,
         }
     }
     /// Scroll offset (in `scroll` units) at which `col` reaches the left of the scrolled area.
-    pub fn scroll_left_of(&self, sh: &Sheet, col: u32) -> f32 {
+    pub fn scroll_left_of(&self, _sh: &Sheet, col: u32) -> f32 {
         match &self.paper {
             Some(pg) => pg.col_x(col) as f32,
-            None => (sh.col_left(col) - sh.col_left(self.fc)) as f32,
+            None => (self.ci.start(col) - self.ci.start(self.fc)) as f32,
         }
     }
     /// The scroll that brings the next column to the left of the scrolled area, or back to the start
@@ -233,6 +270,16 @@ impl Geo {
     }
     pub fn cell_at(&self, sh: &Sheet, p: Pos2) -> CellRef {
         CellRef::new(self.row_at(sh, p.y), self.col_at(sh, p.x))
+    }
+    /// The rows from `r0` to `r1` (inclusive) with a height above zero, in order. A run of
+    /// hidden rows costs one O(log n) step, so a filter that hides a million rows doesn't make
+    /// every frame walk them.
+    pub(super) fn shown_rows(&self, r0: u32, r1: u32) -> impl Iterator<Item = u32> + '_ {
+        self.ri.visible(r0, r1)
+    }
+    /// The columns from `c0` to `c1` (inclusive) with a width above zero (see `shown_rows`).
+    pub(super) fn shown_cols(&self, c0: u32, c1: u32) -> impl Iterator<Item = u32> + '_ {
+        self.ci.visible(c0, c1)
     }
     /// Visible scrolled rows (from the first visible row after the frozen ones).
     pub(super) fn scroll_rows(&self, _sh: &Sheet) -> (u32, u32) {
