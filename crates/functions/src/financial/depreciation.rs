@@ -153,7 +153,8 @@ pub(super) fn amordegrc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let mut book = cost;
     let mut dep = (year_frac(c.date_system(), purchased, first, basis)? * r * cost).round();
     if period == 0.0 {
-        return num_val(dep);
+        // The first charge stops at salvage, as AMORLINC's does (#3964).
+        return num_val(dep.min(cost - salvage));
     }
     book -= dep;
     let mut rest = book - salvage;
