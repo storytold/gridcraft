@@ -6403,6 +6403,51 @@ fn a_saved_workbook_keeps_its_values_until_an_edit_reaches_them() {
     assert_eq!(v(&saved, "C1"), Value::Number(7.0));
 }
 
+/// `CELL` without a reference reads the active cell when it calculates, as observed in Excel:
+/// entered with B3 selected it gives 3; moving to E9 changes nothing until a recalculation, which
+/// gives 9; and a workbook saved with D7 active opens with 7.
+#[test]
+fn cell_without_a_reference_reads_the_active_cell_when_it_calculates() {
+    let mut s = s();
+    s.execute("selection.set", json!({"cell": "B3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=CELL(\"row\")"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(3.0), "entered with B3 selected");
+    s.execute("selection.set", json!({"cell": "E9"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(3.0), "a new selection alone doesn't recalculate");
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(9.0), "recalculated with E9 selected");
+    s.execute("cell.set", json!({"cell": "C12", "input": "5"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(9.0));
+    // With a reference it is that cell's row, as before.
+    s.execute("cell.set", json!({"cell": "A2", "input": "=CELL(\"row\",B7)"})).unwrap();
+    assert_eq!(v(&s, "A2"), Value::Number(7.0));
+    // Opened with D7 active.
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).view_active = CellRef::parse("D7").unwrap();
+    let mut opened = Session::new();
+    opened.add_document(crate::DocState::new(wb, None, "saved".into(), crate::Trust::FromFile));
+    assert_eq!(v(&opened, "A1"), Value::Number(7.0));
+}
+
+/// The usual "highlight the active row" rule, `CELL("row")=CELL("row",A1)`, marks only the active
+/// cell's row: without a reference `CELL` is the active cell, not the cell being formatted.
+#[test]
+fn a_rule_comparing_cell_row_marks_only_the_active_row() {
+    use gridcraft_model::{CfRule, CondFormat, Style};
+    let mut wb = gridcraft_model::Workbook::new();
+    let sh = std::sync::Arc::make_mut(&mut wb.sheets[0]);
+    sh.view_active = CellRef::parse("D7").unwrap();
+    sh.cond_formats.push(CondFormat {
+        ranges: vec![gridcraft_core::RangeRef::parse("A1:J20").unwrap()],
+        rule: CfRule::Expression { formula: "CELL(\"row\")=CELL(\"row\",A1)".into(), style: Box::new(Style::default()) },
+        priority: 1,
+        stop_if_true: false,
+    });
+    let mut cf = crate::cf::CfCache::new();
+    let marked: Vec<u32> = (0..20).filter(|r| cf.look(&wb, 0, CellRef::new(*r, 2)).is_some()).collect();
+    assert_eq!(marked, vec![6], "row 7 only");
+}
+
 /// A per-test unique suffix for temp dir names.
 #[cfg(not(target_arch = "wasm32"))]
 fn unique_nonce() -> u64 {
