@@ -1064,8 +1064,8 @@ fn the_windows_cancel_with_an_unsavable_draft_closes_the_dialog_and_says_why() {
     assert_eq!(draft_text(&h).as_deref(), Some("Picked note"), "the draft is kept");
     assert_eq!(selection(&h).0, 2, "the selection stays where it is");
     let wb = &h.state().session.active().unwrap().wb;
-    for sheet in 0..3 {
-        assert!(wb.sheets[sheet].value(CellRef::parse("H1").unwrap()).is_empty(), "nothing ran on sheet {sheet}");
+    for (sheet, s) in wb.sheets.iter().enumerate().take(3) {
+        assert!(s.value(CellRef::parse("H1").unwrap()).is_empty(), "nothing ran on sheet {sheet}");
     }
 }
 
