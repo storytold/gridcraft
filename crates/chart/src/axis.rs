@@ -115,13 +115,15 @@ pub(crate) struct Fmt {
     fmt: NumberFormat,
     /// The region whose decimal and thousands separators the label is written with.
     region: &'static Region,
+    /// The workbook's date system: a date label reads serial numbers from 1900 or 1904.
+    dates: DateSystem,
 }
 
 impl Fmt {
-    pub fn new(code: &str, region: &'static Region) -> Fmt {
+    pub fn new(code: &str, region: &'static Region, dates: DateSystem) -> Fmt {
         let t = code.trim();
         let general = t.is_empty() || t.eq_ignore_ascii_case("general");
-        Fmt { general, fmt: NumberFormat::parse_cached(if general { "General" } else { t }), region }
+        Fmt { general, fmt: NumberFormat::parse_cached(if general { "General" } else { t }), region, dates }
     }
     /// Formats `v`; `step` (axis labels) fixes the decimals for General.
     pub fn format(&self, v: f64, step: Option<f64>) -> String {
@@ -133,9 +135,9 @@ impl Fmt {
             v = 0.0;
         }
         if self.general {
-            return general_text(v, step);
+            return general_text(v, step, self.region.decimal);
         }
-        let mut t = format_value_in(&Value::Number(v), &self.fmt, DateSystem::D1900, self.region).text;
+        let mut t = format_value_in(&Value::Number(v), &self.fmt, self.dates, self.region).text;
         if t.chars().count() > 40 {
             t = t.chars().take(40).collect();
         }
@@ -143,21 +145,26 @@ impl Fmt {
     }
 }
 
-fn general_text(v: f64, step: Option<f64>) -> String {
+/// General text for `v`, written with the region's `decimal` separator.
+fn general_text(v: f64, step: Option<f64>, decimal: char) -> String {
     if v == 0.0 {
         return "0".into();
     }
-    match step {
+    let t = match step {
         Some(s) if s.is_finite() && s > 0.0 && v.abs() < 1e11 && v.abs() >= 1e-9 => {
             let d = (-s.log10().floor()).clamp(0.0, 10.0) as usize;
             let t = format!("{:.*}", d, v);
-            if t.trim_start_matches('-').chars().all(|c| c == '0' || c == '.') { "0".into() } else { t }
+            if t.trim_start_matches('-').chars().all(|c| c == '0' || c == '.') {
+                return "0".into();
+            }
+            t
         }
         _ => number_to_text(v),
-    }
+    };
+    if decimal == '.' { t } else { t.replace('.', &decimal.to_string()) }
 }
 
 /// Formats a number with a format code (General shows up to the precision implied by `step`).
 pub fn format_number(v: f64, code: &str, step: Option<f64>) -> String {
-    Fmt::new(code, &gridcraft_core::region::EN_US).format(v, step)
+    Fmt::new(code, &gridcraft_core::region::EN_US, DateSystem::D1900).format(v, step)
 }
