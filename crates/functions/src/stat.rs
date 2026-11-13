@@ -45,8 +45,8 @@ const S_TTEST: &[bool] = &[false, false, true, true];
 
 pub(crate) fn specs() -> Vec<FnSpec> {
     vec![
-        f!("AVERAGE", 1, VAR, Statistical, A, "AVERAGE(number1, [number2], ...)", "Arithmetic mean of the numbers.", |a: &[Arg], _c: C| num_val(
-            mean(&numbers(a)?)?
+        f!("AVERAGE", 1, VAR, Statistical, A, "AVERAGE(number1, [number2], ...)", "Arithmetic mean of the numbers.", |a: &[Arg], c: C| num_val(
+            mean(&numbers(a, c)?)?
         )),
         f!(
             "AVERAGEA",
@@ -56,10 +56,10 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "AVERAGEA(value1, [value2], ...)",
             "Mean counting text as 0 and logical values as 1 or 0.",
-            |a: &[Arg], _c: C| num_val(mean(&numbers_a(a)?)?)
+            |a: &[Arg], c: C| num_val(mean(&numbers_a(a, c)?)?)
         ),
-        f!("MEDIAN", 1, VAR, Statistical, A, "MEDIAN(number1, [number2], ...)", "Middle value of the numbers.", |a: &[Arg], _c: C| num_val(median(
-            numbers(a)?
+        f!("MEDIAN", 1, VAR, Statistical, A, "MEDIAN(number1, [number2], ...)", "Middle value of the numbers.", |a: &[Arg], c: C| num_val(median(
+            numbers(a, c)?
         )?)),
         f!("MODE", 1, VAR, Compatibility, A, "MODE(number1, [number2], ...)", "Most frequently occurring number.", |a: &[Arg], _c: C| num_val(
             mode_sngl(&mode_numbers(a)?)?
@@ -68,17 +68,17 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             num_val(mode_sngl(&mode_numbers(a)?)?)
         }),
         f!("MODE.MULT", 1, VAR, Statistical, A, "MODE.MULT(number1, [number2], ...)", "Vertical array of all the most frequent numbers.", mode_mult),
-        f!("STDEV", 1, VAR, Compatibility, A, "STDEV(number1, [number2], ...)", "Sample standard deviation.", |a: &[Arg], _c: C| num_val(
-            var_s(&numbers(a)?)?.sqrt()
+        f!("STDEV", 1, VAR, Compatibility, A, "STDEV(number1, [number2], ...)", "Sample standard deviation.", |a: &[Arg], c: C| num_val(
+            var_s(&numbers(a, c)?)?.sqrt()
         )),
-        f!("STDEV.S", 1, VAR, Statistical, A, "STDEV.S(number1, [number2], ...)", "Sample standard deviation.", |a: &[Arg], _c: C| num_val(
-            var_s(&numbers(a)?)?.sqrt()
+        f!("STDEV.S", 1, VAR, Statistical, A, "STDEV.S(number1, [number2], ...)", "Sample standard deviation.", |a: &[Arg], c: C| num_val(
+            var_s(&numbers(a, c)?)?.sqrt()
         )),
-        f!("STDEV.P", 1, VAR, Statistical, A, "STDEV.P(number1, [number2], ...)", "Population standard deviation.", |a: &[Arg], _c: C| num_val(
-            var_p(&numbers(a)?)?.sqrt()
+        f!("STDEV.P", 1, VAR, Statistical, A, "STDEV.P(number1, [number2], ...)", "Population standard deviation.", |a: &[Arg], c: C| num_val(
+            var_p(&numbers(a, c)?)?.sqrt()
         )),
-        f!("STDEVP", 1, VAR, Compatibility, A, "STDEVP(number1, [number2], ...)", "Population standard deviation.", |a: &[Arg], _c: C| num_val(
-            var_p(&numbers(a)?)?.sqrt()
+        f!("STDEVP", 1, VAR, Compatibility, A, "STDEVP(number1, [number2], ...)", "Population standard deviation.", |a: &[Arg], c: C| num_val(
+            var_p(&numbers(a, c)?)?.sqrt()
         )),
         f!(
             "STDEVA",
@@ -88,7 +88,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "STDEVA(value1, [value2], ...)",
             "Sample standard deviation counting text as 0 and logicals as 1/0.",
-            |a: &[Arg], _c: C| { num_val(var_s(&numbers_a(a)?)?.sqrt()) }
+            |a: &[Arg], c: C| { num_val(var_s(&numbers_a(a, c)?)?.sqrt()) }
         ),
         f!(
             "STDEVPA",
@@ -98,15 +98,15 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "STDEVPA(value1, [value2], ...)",
             "Population standard deviation counting text as 0 and logicals as 1/0.",
-            |a: &[Arg], _c: C| { num_val(var_p(&numbers_a(a)?)?.sqrt()) }
+            |a: &[Arg], c: C| { num_val(var_p(&numbers_a(a, c)?)?.sqrt()) }
         ),
-        f!("VAR", 1, VAR, Compatibility, A, "VAR(number1, [number2], ...)", "Sample variance.", |a: &[Arg], _c: C| num_val(var_s(&numbers(a)?)?)),
-        f!("VAR.S", 1, VAR, Statistical, A, "VAR.S(number1, [number2], ...)", "Sample variance.", |a: &[Arg], _c: C| num_val(var_s(&numbers(a)?)?)),
-        f!("VAR.P", 1, VAR, Statistical, A, "VAR.P(number1, [number2], ...)", "Population variance.", |a: &[Arg], _c: C| num_val(var_p(&numbers(
-            a
+        f!("VAR", 1, VAR, Compatibility, A, "VAR(number1, [number2], ...)", "Sample variance.", |a: &[Arg], c: C| num_val(var_s(&numbers(a, c)?)?)),
+        f!("VAR.S", 1, VAR, Statistical, A, "VAR.S(number1, [number2], ...)", "Sample variance.", |a: &[Arg], c: C| num_val(var_s(&numbers(a, c)?)?)),
+        f!("VAR.P", 1, VAR, Statistical, A, "VAR.P(number1, [number2], ...)", "Population variance.", |a: &[Arg], c: C| num_val(var_p(&numbers(
+            a, c
         )?)?)),
-        f!("VARP", 1, VAR, Compatibility, A, "VARP(number1, [number2], ...)", "Population variance.", |a: &[Arg], _c: C| num_val(var_p(&numbers(
-            a
+        f!("VARP", 1, VAR, Compatibility, A, "VARP(number1, [number2], ...)", "Population variance.", |a: &[Arg], c: C| num_val(var_p(&numbers(
+            a, c
         )?)?)),
         f!(
             "VARA",
@@ -116,7 +116,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "VARA(value1, [value2], ...)",
             "Sample variance counting text as 0 and logicals as 1/0.",
-            |a: &[Arg], _c: C| num_val(var_s(&numbers_a(a)?)?)
+            |a: &[Arg], c: C| num_val(var_s(&numbers_a(a, c)?)?)
         ),
         f!(
             "VARPA",
@@ -126,10 +126,10 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "VARPA(value1, [value2], ...)",
             "Population variance counting text as 0 and logicals as 1/0.",
-            |a: &[Arg], _c: C| num_val(var_p(&numbers_a(a)?)?)
+            |a: &[Arg], c: C| num_val(var_p(&numbers_a(a, c)?)?)
         ),
-        f!("MIN", 0, VAR, Statistical, A, "MIN(number1, [number2], ...)", "Smallest number (0 when there are none).", |a: &[Arg], _c: C| num_val(
-            min_of(&numbers(a)?)
+        f!("MIN", 0, VAR, Statistical, A, "MIN(number1, [number2], ...)", "Smallest number (0 when there are none).", |a: &[Arg], c: C| num_val(
+            min_of(&numbers(a, c)?)
         )),
         f!(
             "MINA",
@@ -139,10 +139,10 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "MINA(value1, [value2], ...)",
             "Smallest value counting text as 0 and logicals as 1/0.",
-            |a: &[Arg], _c: C| num_val(min_of(&numbers_a(a)?))
+            |a: &[Arg], c: C| num_val(min_of(&numbers_a(a, c)?))
         ),
-        f!("MAX", 1, VAR, Statistical, A, "MAX(number1, [number2], ...)", "Largest number (0 when there are none).", |a: &[Arg], _c: C| num_val(
-            max_of(&numbers(a)?)
+        f!("MAX", 1, VAR, Statistical, A, "MAX(number1, [number2], ...)", "Largest number (0 when there are none).", |a: &[Arg], c: C| num_val(
+            max_of(&numbers(a, c)?)
         )),
         f!(
             "MAXA",
@@ -152,12 +152,12 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "MAXA(value1, [value2], ...)",
             "Largest value counting text as 0 and logicals as 1/0.",
-            |a: &[Arg], _c: C| num_val(max_of(&numbers_a(a)?))
+            |a: &[Arg], c: C| num_val(max_of(&numbers_a(a, c)?))
         ),
         f!("LARGE", 2, 2, Statistical, S_ARR_K, "LARGE(array, k)", "The k-th largest number in a data set.", large),
         f!("SMALL", 2, 2, Statistical, S_ARR_K, "SMALL(array, k)", "The k-th smallest number in a data set.", small),
-        f!("RANK", 2, 3, Compatibility, S_RANK, "RANK(number, ref, [order])", "Rank of a number within a list.", |a: &[Arg], _c: C| rank_impl(
-            a, false
+        f!("RANK", 2, 3, Compatibility, S_RANK, "RANK(number, ref, [order])", "Rank of a number within a list.", |a: &[Arg], c: C| rank_impl(
+            a, false, c
         )),
         f!(
             "RANK.EQ",
@@ -167,7 +167,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_RANK,
             "RANK.EQ(number, ref, [order])",
             "Rank of a number within a list; ties share the top rank.",
-            |a: &[Arg], _c: C| rank_impl(a, false)
+            |a: &[Arg], c: C| rank_impl(a, false, c)
         ),
         f!(
             "RANK.AVG",
@@ -177,10 +177,10 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_RANK,
             "RANK.AVG(number, ref, [order])",
             "Rank of a number within a list; ties get the average rank.",
-            |a: &[Arg], _c: C| { rank_impl(a, true) }
+            |a: &[Arg], c: C| { rank_impl(a, true, c) }
         ),
-        f!("PERCENTILE", 2, 2, Compatibility, S_ARR_K, "PERCENTILE(array, k)", "k-th percentile, k from 0 to 1 inclusive.", |a: &[Arg], _c: C| {
-            num_val(percentile_inc(arg_nums(a, 0)?, num(a, 1)?)?)
+        f!("PERCENTILE", 2, 2, Compatibility, S_ARR_K, "PERCENTILE(array, k)", "k-th percentile, k from 0 to 1 inclusive.", |a: &[Arg], c: C| {
+            num_val(percentile_inc(arg_nums(a, 0, c)?, num(a, 1, c)?)?)
         }),
         f!(
             "PERCENTILE.INC",
@@ -190,7 +190,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_ARR_K,
             "PERCENTILE.INC(array, k)",
             "k-th percentile, k from 0 to 1 inclusive.",
-            |a: &[Arg], _c: C| num_val(percentile_inc(arg_nums(a, 0)?, num(a, 1)?)?)
+            |a: &[Arg], c: C| num_val(percentile_inc(arg_nums(a, 0, c)?, num(a, 1, c)?)?)
         ),
         f!(
             "PERCENTILE.EXC",
@@ -200,10 +200,10 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_ARR_K,
             "PERCENTILE.EXC(array, k)",
             "k-th percentile, k strictly between 0 and 1.",
-            |a: &[Arg], _c: C| num_val(percentile_exc(arg_nums(a, 0)?, num(a, 1)?)?)
+            |a: &[Arg], c: C| num_val(percentile_exc(arg_nums(a, 0, c)?, num(a, 1, c)?)?)
         ),
-        f!("QUARTILE", 2, 2, Compatibility, S_ARR_K, "QUARTILE(array, quart)", "Quartile (0–4) of a data set.", |a: &[Arg], _c: C| num_val(
-            quartile_inc(arg_nums(a, 0)?, num(a, 1)?)?
+        f!("QUARTILE", 2, 2, Compatibility, S_ARR_K, "QUARTILE(array, quart)", "Quartile (0–4) of a data set.", |a: &[Arg], c: C| num_val(
+            quartile_inc(arg_nums(a, 0, c)?, num(a, 1, c)?)?
         )),
         f!(
             "QUARTILE.INC",
@@ -213,7 +213,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_ARR_K,
             "QUARTILE.INC(array, quart)",
             "Quartile (0–4) of a data set, inclusive method.",
-            |a: &[Arg], _c: C| num_val(quartile_inc(arg_nums(a, 0)?, num(a, 1)?)?)
+            |a: &[Arg], c: C| num_val(quartile_inc(arg_nums(a, 0, c)?, num(a, 1, c)?)?)
         ),
         f!(
             "QUARTILE.EXC",
@@ -223,7 +223,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_ARR_K,
             "QUARTILE.EXC(array, quart)",
             "Quartile (1–3) of a data set, exclusive method.",
-            |a: &[Arg], _c: C| num_val(quartile_exc(arg_nums(a, 0)?, num(a, 1)?)?)
+            |a: &[Arg], c: C| num_val(quartile_exc(arg_nums(a, 0, c)?, num(a, 1, c)?)?)
         ),
         f!(
             "PERCENTRANK",
@@ -233,7 +233,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_PRANK,
             "PERCENTRANK(array, x, [significance])",
             "Relative standing of a value as a fraction of the data set.",
-            |a: &[Arg], _c: C| { percentrank_impl(a, false) }
+            |a: &[Arg], c: C| { percentrank_impl(a, false, c) }
         ),
         f!(
             "PERCENTRANK.INC",
@@ -243,7 +243,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_PRANK,
             "PERCENTRANK.INC(array, x, [significance])",
             "Relative standing of a value from 0 to 1 inclusive.",
-            |a: &[Arg], _c: C| percentrank_impl(a, false)
+            |a: &[Arg], c: C| percentrank_impl(a, false, c)
         ),
         f!(
             "PERCENTRANK.EXC",
@@ -253,7 +253,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_PRANK,
             "PERCENTRANK.EXC(array, x, [significance])",
             "Relative standing of a value strictly between 0 and 1.",
-            |a: &[Arg], _c: C| percentrank_impl(a, true)
+            |a: &[Arg], c: C| percentrank_impl(a, true, c)
         ),
         f!("COUNT", 1, VAR, Statistical, A, "COUNT(value1, [value2], ...)", "Counts the numbers.", |a: &[Arg], c: C| num_val(count_impl(
             a,
@@ -360,29 +360,29 @@ pub(crate) fn specs() -> Vec<FnSpec> {
         f!("COVAR", 2, 2, Compatibility, A, "COVAR(array1, array2)", "Population covariance of paired values.", |a: &[Arg], _c: C| covariance(
             a, false
         )),
-        f!("DEVSQ", 1, VAR, Statistical, A, "DEVSQ(number1, [number2], ...)", "Sum of squared deviations from the mean.", |a: &[Arg], _c: C| {
-            let v = numbers(a)?;
+        f!("DEVSQ", 1, VAR, Statistical, A, "DEVSQ(number1, [number2], ...)", "Sum of squared deviations from the mean.", |a: &[Arg], c: C| {
+            let v = numbers(a, c)?;
             if v.is_empty() {
                 return Err(CellError::Num);
             }
             num_val(devsq(&v))
         }),
-        f!("AVEDEV", 1, VAR, Statistical, A, "AVEDEV(number1, [number2], ...)", "Average absolute deviation from the mean.", |a: &[Arg], _c: C| {
-            num_val(avedev(&numbers(a)?)?)
+        f!("AVEDEV", 1, VAR, Statistical, A, "AVEDEV(number1, [number2], ...)", "Average absolute deviation from the mean.", |a: &[Arg], c: C| {
+            num_val(avedev(&numbers(a, c)?)?)
         }),
-        f!("GEOMEAN", 1, VAR, Statistical, A, "GEOMEAN(number1, [number2], ...)", "Geometric mean of positive numbers.", |a: &[Arg], _c: C| num_val(
-            geomean(&numbers(a)?)?
+        f!("GEOMEAN", 1, VAR, Statistical, A, "GEOMEAN(number1, [number2], ...)", "Geometric mean of positive numbers.", |a: &[Arg], c: C| num_val(
+            geomean(&numbers(a, c)?)?
         )),
-        f!("HARMEAN", 1, VAR, Statistical, A, "HARMEAN(number1, [number2], ...)", "Harmonic mean of positive numbers.", |a: &[Arg], _c: C| num_val(
-            harmean(&numbers(a)?)?
+        f!("HARMEAN", 1, VAR, Statistical, A, "HARMEAN(number1, [number2], ...)", "Harmonic mean of positive numbers.", |a: &[Arg], c: C| num_val(
+            harmean(&numbers(a, c)?)?
         )),
         f!("TRIMMEAN", 2, 2, Statistical, S_ARR_K, "TRIMMEAN(array, percent)", "Mean after trimming a fraction of points from both ends.", trimmean),
-        f!("KURT", 1, VAR, Statistical, A, "KURT(number1, [number2], ...)", "Excess kurtosis of a sample.", |a: &[Arg], _c: C| num_val(kurt(
-            &numbers(a)?
+        f!("KURT", 1, VAR, Statistical, A, "KURT(number1, [number2], ...)", "Excess kurtosis of a sample.", |a: &[Arg], c: C| num_val(kurt(
+            &numbers(a, c)?
         )?)),
-        f!("SKEW", 1, VAR, Statistical, A, "SKEW(number1, [number2], ...)", "Sample skewness.", |a: &[Arg], _c: C| num_val(skew(&numbers(a)?)?)),
-        f!("SKEW.P", 1, VAR, Statistical, A, "SKEW.P(number1, [number2], ...)", "Population skewness.", |a: &[Arg], _c: C| num_val(skew_p(
-            &numbers(a)?
+        f!("SKEW", 1, VAR, Statistical, A, "SKEW(number1, [number2], ...)", "Sample skewness.", |a: &[Arg], c: C| num_val(skew(&numbers(a, c)?)?)),
+        f!("SKEW.P", 1, VAR, Statistical, A, "SKEW.P(number1, [number2], ...)", "Population skewness.", |a: &[Arg], c: C| num_val(skew_p(
+            &numbers(a, c)?
         )?)),
         f!("STANDARDIZE", 3, 3, Statistical, S, "STANDARDIZE(x, mean, standard_dev)", "Z-score of a value.", standardize),
         f!(
@@ -708,8 +708,10 @@ pub(crate) fn specs() -> Vec<FnSpec> {
         f!("Z.TEST", 2, 3, Statistical, S_PRANK, "Z.TEST(array, x, [sigma])", "One-tailed probability of a z-test.", z_test),
         f!("ZTEST", 2, 3, Compatibility, S_PRANK, "ZTEST(array, x, [sigma])", "One-tailed probability of a z-test.", z_test),
         f!("FISHER", 1, 1, Statistical, S, "FISHER(x)", "Fisher transformation.", fisher),
-        f!("FISHERINV", 1, 1, Statistical, S, "FISHERINV(y)", "Inverse of the Fisher transformation.", |a: &[Arg], _c: C| num_val(num(a, 0)?.tanh())),
-        f!("PHI", 1, 1, Statistical, S, "PHI(x)", "Standard normal density.", |a: &[Arg], _c: C| num_val(norm_pdf(num(a, 0)?))),
+        f!("FISHERINV", 1, 1, Statistical, S, "FISHERINV(y)", "Inverse of the Fisher transformation.", |a: &[Arg], c: C| num_val(
+            num(a, 0, c)?.tanh()
+        )),
+        f!("PHI", 1, 1, Statistical, S, "PHI(x)", "Standard normal density.", |a: &[Arg], c: C| num_val(norm_pdf(num(a, 0, c)?))),
         f!("GAUSS", 1, 1, Statistical, S, "GAUSS(z)", "Probability that a standard normal value falls between the mean and z.", gauss),
     ]
 }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use gridcraft_core::{Array, CellError, Value};
 
-use crate::Arg;
+use crate::{Arg, Ctx};
 
 pub(crate) type R<T> = Result<T, CellError>;
 
@@ -54,31 +54,35 @@ pub(crate) fn has(args: &[Arg], i: usize) -> bool {
     matches!(args.get(i), Some(a) if !matches!(a.value, Value::Empty) || a.from_ref || a.blank_value)
 }
 
+/// Number coercion as arithmetic does it, with numeric text read in the workbook's region and
+/// date system: `"1,5"` is 1.5 in `pt-BR`.
+pub(crate) fn to_num(v: &Value, c: &dyn Ctx) -> R<f64> {
+    v.to_number_region(c.date_system(), c.region())
+}
+
 /// Number coercion for a scalar parameter: empty = 0, TRUE = 1, numeric text parses.
-#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: text arguments ignore the region
-pub(crate) fn num(args: &[Arg], i: usize) -> R<f64> {
+pub(crate) fn num(args: &[Arg], i: usize, c: &dyn Ctx) -> R<f64> {
     let a = arg(args, i)?;
-    scalar(a).to_number()
+    to_num(&scalar(a), c)
 }
 
 /// Optional number: `default` when missing, otherwise coerced (an explicit empty is 0).
-#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: text arguments ignore the region
-pub(crate) fn opt_num(args: &[Arg], i: usize, default: f64) -> R<f64> {
+pub(crate) fn opt_num(args: &[Arg], i: usize, default: f64, c: &dyn Ctx) -> R<f64> {
     match args.get(i) {
         None => Ok(default),
-        Some(a) => scalar(a).to_number(),
+        Some(a) => to_num(&scalar(a), c),
     }
 }
 
 /// Integer coercion (truncates toward zero). Values beyond ±2^53 give `#NUM!`.
-pub(crate) fn int(args: &[Arg], i: usize) -> R<i64> {
-    to_int(num(args, i)?)
+pub(crate) fn int(args: &[Arg], i: usize, c: &dyn Ctx) -> R<i64> {
+    to_int(num(args, i, c)?)
 }
 
-pub(crate) fn opt_int(args: &[Arg], i: usize, default: i64) -> R<i64> {
+pub(crate) fn opt_int(args: &[Arg], i: usize, default: i64, c: &dyn Ctx) -> R<i64> {
     match args.get(i) {
         None => Ok(default),
-        Some(_) => int(args, i),
+        Some(_) => int(args, i, c),
     }
 }
 
@@ -151,8 +155,7 @@ pub(crate) fn flatten(args: &[Arg]) -> Vec<Value> {
 /// Numbers for aggregate functions (SUM, AVERAGE, MIN, STDEV…): inside references and arrays
 /// only numbers count (text, booleans and blanks are skipped); direct scalar arguments are
 /// coerced ("3" → 3, TRUE → 1, other text → `#VALUE!`). Errors propagate.
-#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: text arguments ignore the region
-pub(crate) fn numbers(args: &[Arg]) -> R<Vec<f64>> {
+pub(crate) fn numbers(args: &[Arg], c: &dyn Ctx) -> R<Vec<f64>> {
     let mut out = Vec::new();
     for a in args {
         match &a.value {
@@ -169,7 +172,7 @@ pub(crate) fn numbers(args: &[Arg]) -> R<Vec<f64>> {
             Value::Number(n) => out.push(*n),
             _ if a.from_ref => {}
             Value::Empty => {}
-            v => out.push(v.to_number()?),
+            v => out.push(to_num(v, c)?),
         }
     }
     Ok(out)
@@ -178,8 +181,7 @@ pub(crate) fn numbers(args: &[Arg]) -> R<Vec<f64>> {
 /// Numbers for the "A" aggregates (AVERAGEA, MAXA, STDEVA…): inside references and arrays text
 /// counts as 0 and booleans as 1/0, blanks are skipped; direct arguments coerce as in
 /// [`numbers`].
-#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: text arguments ignore the region
-pub(crate) fn numbers_a(args: &[Arg]) -> R<Vec<f64>> {
+pub(crate) fn numbers_a(args: &[Arg], c: &dyn Ctx) -> R<Vec<f64>> {
     let mut out = Vec::new();
     for a in args {
         match &a.value {
@@ -197,7 +199,7 @@ pub(crate) fn numbers_a(args: &[Arg]) -> R<Vec<f64>> {
             Value::Error(e) => return Err(*e),
             Value::Empty => {}
             Value::Text(_) if a.from_ref => out.push(0.0),
-            v => out.push(v.to_number()?),
+            v => out.push(to_num(v, c)?),
         }
     }
     Ok(out)
@@ -205,8 +207,7 @@ pub(crate) fn numbers_a(args: &[Arg]) -> R<Vec<f64>> {
 
 /// Numbers of a single array-like argument where only numbers count (text, booleans, blanks
 /// skipped), errors propagate. Used for data arrays of statistical functions.
-#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: text array items ignore the region
-pub(crate) fn array_numbers(v: &Value) -> R<Vec<f64>> {
+pub(crate) fn array_numbers(v: &Value, c: &dyn Ctx) -> R<Vec<f64>> {
     let mut out = Vec::new();
     match v {
         Value::Array(arr) => {
@@ -221,7 +222,7 @@ pub(crate) fn array_numbers(v: &Value) -> R<Vec<f64>> {
         Value::Number(n) => out.push(*n),
         Value::Error(e) => return Err(*e),
         Value::Empty => {}
-        other => out.push(other.to_number()?),
+        other => out.push(to_num(other, c)?),
     }
     Ok(out)
 }
@@ -429,11 +430,12 @@ mod tests {
 
     #[test]
     fn aggregate_numbers() {
+        let c = &super::testutil::TestCtx::default();
         let arr = Value::from(Array::new(1, 4, vec![Value::Number(1.0), Value::from("2"), Value::Bool(true), Value::Empty]).unwrap());
-        assert_eq!(numbers(&[Arg::reference(arr.clone())]).unwrap(), vec![1.0]);
-        assert_eq!(numbers_a(&[Arg::reference(arr)]).unwrap(), vec![1.0, 0.0, 1.0]);
-        assert_eq!(numbers(&[Arg::val("3"), Arg::val(true)]).unwrap(), vec![3.0, 1.0]);
-        assert_eq!(numbers(&[Arg::val("x")]), Err(CellError::Value));
-        assert_eq!(numbers(&[Arg::reference("x")]).unwrap(), Vec::<f64>::new());
+        assert_eq!(numbers(&[Arg::reference(arr.clone())], c).unwrap(), vec![1.0]);
+        assert_eq!(numbers_a(&[Arg::reference(arr)], c).unwrap(), vec![1.0, 0.0, 1.0]);
+        assert_eq!(numbers(&[Arg::val("3"), Arg::val(true)], c).unwrap(), vec![3.0, 1.0]);
+        assert_eq!(numbers(&[Arg::val("x")], c), Err(CellError::Value));
+        assert_eq!(numbers(&[Arg::reference("x")], c).unwrap(), Vec::<f64>::new());
     }
 }

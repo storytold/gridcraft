@@ -178,8 +178,8 @@ fn clean(x: f64) -> f64 {
 }
 
 pub(super) fn complex(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let re = num(a, 0)?;
-    let im = num(a, 1)?;
+    let re = num(a, 0, c)?;
+    let im = num(a, 1, c)?;
     let sfx = if has(a, 2) { text(a, 2)? } else { "i".into() };
     let sfx = match sfx.as_str() {
         "i" | "" => 'i',
@@ -233,7 +233,7 @@ pub(super) fn imsub(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 pub(super) fn impower(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let decimal = c.region().decimal;
     let (z, s) = cx_arg(a, 0, decimal)?;
-    let n = num(a, 1)?;
+    let n = num(a, 1, c)?;
     // Integer powers by repeated multiplication are exact for small Gaussian integers.
     let r = if n == n.trunc() && n.abs() <= 64.0 && !(z.re == 0.0 && z.im == 0.0) {
         let mut acc = ONE;

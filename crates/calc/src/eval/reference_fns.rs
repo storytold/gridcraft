@@ -431,10 +431,11 @@ impl<'h> Evaluator<'h> {
                 Input::Values(v) => values.push(v),
             }
         }
+        let ctx = FnCtx { ev: self, criteria: None, lambda: None };
         if let Some(k) = k {
-            return Ev::V(gridcraft_functions::aggregate_values_k(func, &values, &k));
+            return Ev::V(gridcraft_functions::aggregate_values_k(func, &values, &k, &ctx));
         }
-        Ev::V(gridcraft_functions::aggregate_values(func, &values))
+        Ev::V(gridcraft_functions::aggregate_values(func, &values, &ctx))
     }
 }
 

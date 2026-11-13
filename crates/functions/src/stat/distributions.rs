@@ -1,6 +1,6 @@
 use super::descriptive::{arg_nums, arg_pairs, mean, var_s};
 use super::{
-    Arg, C, CellError, R, Value, arg, as_array, boolean, erf, gamma, has, invert, ln_beta, ln_gamma, norm_cdf, norm_inv, norm_pdf, num, num_val,
+    Arg, C, CellError, Ctx, R, Value, arg, as_array, boolean, erf, gamma, has, invert, ln_beta, ln_gamma, norm_cdf, norm_inv, norm_pdf, num, num_val,
     reg_gamma_p, reg_gamma_q, reg_gamma_q_front, reg_inc_beta, reg_inc_beta_front,
 };
 
@@ -320,8 +320,8 @@ fn poisson_cdf(x: f64, m: f64) -> f64 {
     reg_gamma_q_front(x + 1.0, m, m * poisson_pmf(x, m))
 }
 
-pub(super) fn norm_dist(a: &[Arg], _: C) -> R<Value> {
-    let (x, m, sd, cum) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, boolean(a, 3)?);
+pub(super) fn norm_dist(a: &[Arg], c: C) -> R<Value> {
+    let (x, m, sd, cum) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?, boolean(a, 3)?);
     if sd <= 0.0 {
         return Err(CellError::Num);
     }
@@ -329,39 +329,39 @@ pub(super) fn norm_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(if cum { norm_cdf(z) } else { norm_pdf(z) / sd })
 }
 
-pub(super) fn norm_inv_fn(a: &[Arg], _: C) -> R<Value> {
-    let (p, m, sd) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
+pub(super) fn norm_inv_fn(a: &[Arg], c: C) -> R<Value> {
+    let (p, m, sd) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
     if !(p > 0.0 && p < 1.0) || sd <= 0.0 {
         return Err(CellError::Num);
     }
     num_val(m + sd * norm_inv(p))
 }
 
-pub(super) fn norm_s_dist(a: &[Arg], _: C) -> R<Value> {
-    let z = num(a, 0)?;
+pub(super) fn norm_s_dist(a: &[Arg], c: C) -> R<Value> {
+    let z = num(a, 0, c)?;
     let cum = if a.len() > 1 { boolean(a, 1)? } else { true };
     num_val(if cum { norm_cdf(z) } else { norm_pdf(z) })
 }
 
-pub(super) fn norm_s_inv(a: &[Arg], _: C) -> R<Value> {
-    let p = num(a, 0)?;
+pub(super) fn norm_s_inv(a: &[Arg], c: C) -> R<Value> {
+    let p = num(a, 0, c)?;
     if !(p > 0.0 && p < 1.0) {
         return Err(CellError::Num);
     }
     num_val(norm_inv(p))
 }
 
-fn df_arg(a: &[Arg], i: usize) -> R<f64> {
-    let v = num(a, i)?.trunc();
+fn df_arg(a: &[Arg], i: usize, c: &dyn Ctx) -> R<f64> {
+    let v = num(a, i, c)?.trunc();
     if v < 1.0 {
         return Err(CellError::Num);
     }
     Ok(v)
 }
 
-pub(super) fn t_dist(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
-    let v = num(a, 1)?.trunc();
+pub(super) fn t_dist(a: &[Arg], c: C) -> R<Value> {
+    let x = num(a, 0, c)?;
+    let v = num(a, 1, c)?.trunc();
     let cum = boolean(a, 2)?;
     if v == 0.0 {
         return Err(if cum { CellError::Num } else { CellError::Div0 });
@@ -372,34 +372,34 @@ pub(super) fn t_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(if cum { t_cdf(x, v) } else { t_pdf(x, v) })
 }
 
-pub(super) fn t_dist_2t(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+pub(super) fn t_dist_2t(a: &[Arg], c: C) -> R<Value> {
+    let x = num(a, 0, c)?;
+    let v = df_arg(a, 1, c)?;
     if x < 0.0 {
         return Err(CellError::Num);
     }
     num_val(2.0 * t_upper(x, v))
 }
 
-pub(super) fn t_dist_rt(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+pub(super) fn t_dist_rt(a: &[Arg], c: C) -> R<Value> {
+    let x = num(a, 0, c)?;
+    let v = df_arg(a, 1, c)?;
     num_val(1.0 - t_cdf(x, v))
 }
 
-pub(super) fn tdist_legacy(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
-    let v = df_arg(a, 1)?;
-    let tails = num(a, 2)?.trunc();
+pub(super) fn tdist_legacy(a: &[Arg], c: C) -> R<Value> {
+    let x = num(a, 0, c)?;
+    let v = df_arg(a, 1, c)?;
+    let tails = num(a, 2, c)?.trunc();
     if x < 0.0 || !(tails == 1.0 || tails == 2.0) {
         return Err(CellError::Num);
     }
     num_val(tails * t_upper(x, v))
 }
 
-pub(super) fn t_inv(a: &[Arg], _: C) -> R<Value> {
-    let p = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+pub(super) fn t_inv(a: &[Arg], c: C) -> R<Value> {
+    let p = num(a, 0, c)?;
+    let v = df_arg(a, 1, c)?;
     if p == 0.0 {
         return Err(CellError::Div0);
     }
@@ -409,18 +409,18 @@ pub(super) fn t_inv(a: &[Arg], _: C) -> R<Value> {
     num_val(if p < 0.5 { -t_inv_upper(p, v) } else { t_inv_upper(1.0 - p, v) })
 }
 
-pub(super) fn t_inv_2t(a: &[Arg], _: C) -> R<Value> {
-    let p = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+pub(super) fn t_inv_2t(a: &[Arg], c: C) -> R<Value> {
+    let p = num(a, 0, c)?;
+    let v = df_arg(a, 1, c)?;
     if !(p > 0.0 && p <= 1.0) {
         return Err(CellError::Num);
     }
     num_val(t_inv_upper(p / 2.0, v))
 }
 
-pub(super) fn t_test(a: &[Arg], _: C) -> R<Value> {
-    let tails = num(a, 2)?.trunc();
-    let ty = num(a, 3)?.trunc();
+pub(super) fn t_test(a: &[Arg], c: C) -> R<Value> {
+    let tails = num(a, 2, c)?.trunc();
+    let ty = num(a, 3, c)?.trunc();
     if !(tails == 1.0 || tails == 2.0) || !(1.0..=3.0).contains(&ty) {
         return Err(CellError::Num);
     }
@@ -434,8 +434,8 @@ pub(super) fn t_test(a: &[Arg], _: C) -> R<Value> {
         }
         (mean(&d)? / (sd / n.sqrt()), n - 1.0)
     } else {
-        let x = arg_nums(a, 0)?;
-        let y = arg_nums(a, 1)?;
+        let x = arg_nums(a, 0, c)?;
+        let y = arg_nums(a, 1, c)?;
         let (n1, n2) = (x.len() as f64, y.len() as f64);
         let (v1, v2) = (var_s(&x)?, var_s(&y)?);
         let diff = mean(&x)? - mean(&y)?;
@@ -460,9 +460,9 @@ pub(super) fn t_test(a: &[Arg], _: C) -> R<Value> {
     num_val(tails * t_upper(t.abs(), v))
 }
 
-pub(super) fn chisq_dist(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+pub(super) fn chisq_dist(a: &[Arg], c: C) -> R<Value> {
+    let x = num(a, 0, c)?;
+    let v = df_arg(a, 1, c)?;
     let cum = boolean(a, 2)?;
     if x < 0.0 || v > 1e10 {
         return Err(CellError::Num);
@@ -482,27 +482,27 @@ pub(super) fn chisq_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(((v / 2.0 - 1.0) * x.ln() - x / 2.0 - (v / 2.0) * 2f64.ln() - ln_gamma(v / 2.0)).exp())
 }
 
-pub(super) fn chisq_dist_rt(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+pub(super) fn chisq_dist_rt(a: &[Arg], c: C) -> R<Value> {
+    let x = num(a, 0, c)?;
+    let v = df_arg(a, 1, c)?;
     if x < 0.0 || v > 1e10 {
         return Err(CellError::Num);
     }
     num_val(reg_gamma_q(v / 2.0, x / 2.0))
 }
 
-pub(super) fn chisq_inv(a: &[Arg], _: C) -> R<Value> {
-    let p = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+pub(super) fn chisq_inv(a: &[Arg], c: C) -> R<Value> {
+    let p = num(a, 0, c)?;
+    let v = df_arg(a, 1, c)?;
     if !(0.0..1.0).contains(&p) || v > 1e10 {
         return Err(CellError::Num);
     }
     num_val(chi_inv(p, v))
 }
 
-pub(super) fn chisq_inv_rt(a: &[Arg], _: C) -> R<Value> {
-    let p = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+pub(super) fn chisq_inv_rt(a: &[Arg], c: C) -> R<Value> {
+    let p = num(a, 0, c)?;
+    let v = df_arg(a, 1, c)?;
     if !(p > 0.0 && p <= 1.0) || v > 1e10 {
         return Err(CellError::Num);
     }
@@ -537,18 +537,18 @@ pub(super) fn chisq_test(a: &[Arg], _: C) -> R<Value> {
     num_val(reg_gamma_q(df / 2.0, x2 / 2.0))
 }
 
-fn f_args(a: &[Arg]) -> R<(f64, f64, f64)> {
-    let x = num(a, 0)?;
-    let d1 = num(a, 1)?.trunc();
-    let d2 = num(a, 2)?.trunc();
+fn f_args(a: &[Arg], c: &dyn Ctx) -> R<(f64, f64, f64)> {
+    let x = num(a, 0, c)?;
+    let d1 = num(a, 1, c)?.trunc();
+    let d2 = num(a, 2, c)?.trunc();
     if d1 < 1.0 || d2 < 1.0 || d1 > 1e10 || d2 > 1e10 {
         return Err(CellError::Num);
     }
     Ok((x, d1, d2))
 }
 
-pub(super) fn f_dist(a: &[Arg], _: C) -> R<Value> {
-    let (x, d1, d2) = f_args(a)?;
+pub(super) fn f_dist(a: &[Arg], c: C) -> R<Value> {
+    let (x, d1, d2) = f_args(a, c)?;
     let cum = boolean(a, 3)?;
     if x < 0.0 {
         return Err(CellError::Num);
@@ -556,16 +556,16 @@ pub(super) fn f_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(if cum { f_cdf(x, d1, d2) } else { f_pdf(x, d1, d2) })
 }
 
-pub(super) fn f_dist_rt(a: &[Arg], _: C) -> R<Value> {
-    let (x, d1, d2) = f_args(a)?;
+pub(super) fn f_dist_rt(a: &[Arg], c: C) -> R<Value> {
+    let (x, d1, d2) = f_args(a, c)?;
     if x < 0.0 {
         return Err(CellError::Num);
     }
     num_val(f_upper(x, d1, d2))
 }
 
-pub(super) fn f_inv(a: &[Arg], _: C) -> R<Value> {
-    let (p, d1, d2) = f_args(a)?;
+pub(super) fn f_inv(a: &[Arg], c: C) -> R<Value> {
+    let (p, d1, d2) = f_args(a, c)?;
     if !(0.0..1.0).contains(&p) {
         return Err(CellError::Num);
     }
@@ -576,8 +576,8 @@ pub(super) fn f_inv(a: &[Arg], _: C) -> R<Value> {
     num_val(value)
 }
 
-pub(super) fn f_inv_rt(a: &[Arg], _: C) -> R<Value> {
-    let (p, d1, d2) = f_args(a)?;
+pub(super) fn f_inv_rt(a: &[Arg], c: C) -> R<Value> {
+    let (p, d1, d2) = f_args(a, c)?;
     if !(p > 0.0 && p <= 1.0) {
         return Err(CellError::Num);
     }
@@ -587,9 +587,9 @@ pub(super) fn f_inv_rt(a: &[Arg], _: C) -> R<Value> {
     num_val(invert(|x| f_upper(x, d1, d2), p, 0.0, 1.0, 1e60))
 }
 
-pub(super) fn f_test(a: &[Arg], _: C) -> R<Value> {
-    let x = arg_nums(a, 0)?;
-    let y = arg_nums(a, 1)?;
+pub(super) fn f_test(a: &[Arg], c: C) -> R<Value> {
+    let x = arg_nums(a, 0, c)?;
+    let y = arg_nums(a, 1, c)?;
     let (v1, v2) = (var_s(&x)?, var_s(&y)?);
     if v1 == 0.0 || v2 == 0.0 {
         return Err(CellError::Div0);
@@ -600,10 +600,10 @@ pub(super) fn f_test(a: &[Arg], _: C) -> R<Value> {
     num_val((2.0 * c.min(1.0 - c)).min(1.0))
 }
 
-pub(super) fn binom_dist(a: &[Arg], _: C) -> R<Value> {
-    let k = num(a, 0)?.trunc();
-    let n = num(a, 1)?.trunc();
-    let p = num(a, 2)?;
+pub(super) fn binom_dist(a: &[Arg], c: C) -> R<Value> {
+    let k = num(a, 0, c)?.trunc();
+    let n = num(a, 1, c)?.trunc();
+    let p = num(a, 2, c)?;
     let cum = boolean(a, 3)?;
     if k < 0.0 || n > MAX_BINOM_TRIALS || k > n || !(0.0..=1.0).contains(&p) {
         return Err(CellError::Num);
@@ -611,11 +611,11 @@ pub(super) fn binom_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(if cum { binom_cdf(k, n, p) } else { binom_pmf(k, n, p) })
 }
 
-pub(super) fn binom_dist_range(a: &[Arg], _: C) -> R<Value> {
-    let n = num(a, 0)?.trunc();
-    let p = num(a, 1)?;
-    let s1 = num(a, 2)?.trunc();
-    let s2 = if has(a, 3) { num(a, 3)?.trunc() } else { s1 };
+pub(super) fn binom_dist_range(a: &[Arg], c: C) -> R<Value> {
+    let n = num(a, 0, c)?.trunc();
+    let p = num(a, 1, c)?;
+    let s1 = num(a, 2, c)?.trunc();
+    let s2 = if has(a, 3) { num(a, 3, c)?.trunc() } else { s1 };
     if !(0.0..=MAX_BINOM_TRIALS).contains(&n) || !(0.0..=1.0).contains(&p) || s1 < 0.0 || s1 > n || s2 < s1 || s2 > n {
         return Err(CellError::Num);
     }
@@ -631,10 +631,10 @@ pub(super) fn binom_dist_range(a: &[Arg], _: C) -> R<Value> {
     num_val(s)
 }
 
-pub(super) fn binom_inv(a: &[Arg], _: C) -> R<Value> {
-    let n = num(a, 0)?.trunc();
-    let p = num(a, 1)?;
-    let alpha = num(a, 2)?;
+pub(super) fn binom_inv(a: &[Arg], c: C) -> R<Value> {
+    let n = num(a, 0, c)?.trunc();
+    let p = num(a, 1, c)?;
+    let alpha = num(a, 2, c)?;
     if n < 0.0 || !(0.0..=1.0).contains(&p) || !(0.0..=1.0).contains(&alpha) {
         return Err(CellError::Num);
     }
@@ -658,9 +658,9 @@ pub(super) fn binom_inv(a: &[Arg], _: C) -> R<Value> {
     num_val(hi)
 }
 
-pub(super) fn poisson_dist(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?.trunc();
-    let m = num(a, 1)?;
+pub(super) fn poisson_dist(a: &[Arg], c: C) -> R<Value> {
+    let x = num(a, 0, c)?.trunc();
+    let m = num(a, 1, c)?;
     let cum = boolean(a, 2)?;
     if x < 0.0 || m < 0.0 {
         return Err(CellError::Num);
@@ -668,16 +668,16 @@ pub(super) fn poisson_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(if cum { poisson_cdf(x, m) } else { poisson_pmf(x, m) })
 }
 
-pub(super) fn expon_dist(a: &[Arg], _: C) -> R<Value> {
-    let (x, l, cum) = (num(a, 0)?, num(a, 1)?, boolean(a, 2)?);
+pub(super) fn expon_dist(a: &[Arg], c: C) -> R<Value> {
+    let (x, l, cum) = (num(a, 0, c)?, num(a, 1, c)?, boolean(a, 2)?);
     if x < 0.0 || l <= 0.0 {
         return Err(CellError::Num);
     }
     num_val(if cum { -(-l * x).exp_m1() } else { l * (-l * x).exp() })
 }
 
-pub(super) fn gamma_fn(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
+pub(super) fn gamma_fn(a: &[Arg], c: C) -> R<Value> {
+    let x = num(a, 0, c)?;
     let g = gamma(x);
     if !g.is_finite() {
         return Err(CellError::Num);
@@ -685,8 +685,8 @@ pub(super) fn gamma_fn(a: &[Arg], _: C) -> R<Value> {
     num_val(g)
 }
 
-pub(super) fn gamma_dist(a: &[Arg], _: C) -> R<Value> {
-    let (x, al, be, cum) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, boolean(a, 3)?);
+pub(super) fn gamma_dist(a: &[Arg], c: C) -> R<Value> {
+    let (x, al, be, cum) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?, boolean(a, 3)?);
     if x < 0.0 || al <= 0.0 || be <= 0.0 {
         return Err(CellError::Num);
     }
@@ -699,8 +699,8 @@ pub(super) fn gamma_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(((al - 1.0) * x.ln() - x / be - al * be.ln() - ln_gamma(al)).exp())
 }
 
-pub(super) fn gamma_inv(a: &[Arg], _: C) -> R<Value> {
-    let (p, al, be) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
+pub(super) fn gamma_inv(a: &[Arg], c: C) -> R<Value> {
+    let (p, al, be) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
     if !(0.0..1.0).contains(&p) || al <= 0.0 || be <= 0.0 {
         return Err(CellError::Num);
     }
@@ -710,26 +710,26 @@ pub(super) fn gamma_inv(a: &[Arg], _: C) -> R<Value> {
     num_val(invert(|x| reg_gamma_p(al, x / be), p, 0.0, (al * be).max(1e-3), 1e60))
 }
 
-pub(super) fn gammaln(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
+pub(super) fn gammaln(a: &[Arg], c: C) -> R<Value> {
+    let x = num(a, 0, c)?;
     if x <= 0.0 {
         return Err(CellError::Num);
     }
     num_val(ln_gamma(x))
 }
 
-fn beta_bounds(a: &[Arg], i: usize) -> R<(f64, f64)> {
-    let lo = if has(a, i) { num(a, i)? } else { 0.0 };
-    let hi = if has(a, i + 1) { num(a, i + 1)? } else { 1.0 };
+fn beta_bounds(a: &[Arg], i: usize, c: &dyn Ctx) -> R<(f64, f64)> {
+    let lo = if has(a, i) { num(a, i, c)? } else { 0.0 };
+    let hi = if has(a, i + 1) { num(a, i + 1, c)? } else { 1.0 };
     if lo >= hi {
         return Err(CellError::Num);
     }
     Ok((lo, hi))
 }
 
-pub(super) fn beta_dist(a: &[Arg], _: C) -> R<Value> {
-    let (x, al, be, cum) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, boolean(a, 3)?);
-    let (lo, hi) = beta_bounds(a, 4)?;
+pub(super) fn beta_dist(a: &[Arg], c: C) -> R<Value> {
+    let (x, al, be, cum) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?, boolean(a, 3)?);
+    let (lo, hi) = beta_bounds(a, 4, c)?;
     if al <= 0.0 || be <= 0.0 || x < lo || x > hi {
         return Err(CellError::Num);
     }
@@ -749,18 +749,18 @@ pub(super) fn beta_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(lp.exp() / (hi - lo))
 }
 
-pub(super) fn betadist_legacy(a: &[Arg], _: C) -> R<Value> {
-    let (x, al, be) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
-    let (lo, hi) = beta_bounds(a, 3)?;
+pub(super) fn betadist_legacy(a: &[Arg], c: C) -> R<Value> {
+    let (x, al, be) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
+    let (lo, hi) = beta_bounds(a, 3, c)?;
     if al <= 0.0 || be <= 0.0 || x < lo || x > hi {
         return Err(CellError::Num);
     }
     num_val(reg_inc_beta((x - lo) / (hi - lo), al, be))
 }
 
-pub(super) fn beta_inv(a: &[Arg], _: C) -> R<Value> {
-    let (p, al, be) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
-    let (lo, hi) = beta_bounds(a, 3)?;
+pub(super) fn beta_inv(a: &[Arg], c: C) -> R<Value> {
+    let (p, al, be) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
+    let (lo, hi) = beta_bounds(a, 3, c)?;
     if al <= 0.0 || be <= 0.0 || !(0.0..=1.0).contains(&p) {
         return Err(CellError::Num);
     }
@@ -774,8 +774,8 @@ pub(super) fn beta_inv(a: &[Arg], _: C) -> R<Value> {
     num_val(lo + z * (hi - lo))
 }
 
-pub(super) fn lognorm_dist(a: &[Arg], _: C) -> R<Value> {
-    let (x, m, sd) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
+pub(super) fn lognorm_dist(a: &[Arg], c: C) -> R<Value> {
+    let (x, m, sd) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
     let cum = if a.len() > 3 { boolean(a, 3)? } else { true };
     if x <= 0.0 || sd <= 0.0 {
         return Err(CellError::Num);
@@ -784,16 +784,16 @@ pub(super) fn lognorm_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(if cum { norm_cdf(z) } else { norm_pdf(z) / (x * sd) })
 }
 
-pub(super) fn lognorm_inv(a: &[Arg], _: C) -> R<Value> {
-    let (p, m, sd) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
+pub(super) fn lognorm_inv(a: &[Arg], c: C) -> R<Value> {
+    let (p, m, sd) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
     if !(p > 0.0 && p < 1.0) || sd <= 0.0 {
         return Err(CellError::Num);
     }
     num_val((m + sd * norm_inv(p)).exp())
 }
 
-pub(super) fn weibull_dist(a: &[Arg], _: C) -> R<Value> {
-    let (x, al, be, cum) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, boolean(a, 3)?);
+pub(super) fn weibull_dist(a: &[Arg], c: C) -> R<Value> {
+    let (x, al, be, cum) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?, boolean(a, 3)?);
     if x < 0.0 || al <= 0.0 || be <= 0.0 {
         return Err(CellError::Num);
     }
@@ -804,11 +804,11 @@ pub(super) fn weibull_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(if cum { -(-t).exp_m1() } else { al / be.powf(al) * x.powf(al - 1.0) * (-t).exp() })
 }
 
-pub(super) fn hypgeom_dist(a: &[Arg], _: C) -> R<Value> {
-    let k = num(a, 0)?.trunc();
-    let n = num(a, 1)?.trunc();
-    let kk = num(a, 2)?.trunc();
-    let nn = num(a, 3)?.trunc();
+pub(super) fn hypgeom_dist(a: &[Arg], c: C) -> R<Value> {
+    let k = num(a, 0, c)?.trunc();
+    let n = num(a, 1, c)?.trunc();
+    let kk = num(a, 2, c)?.trunc();
+    let nn = num(a, 3, c)?.trunc();
     let cum = if a.len() > 4 { boolean(a, 4)? } else { false };
     if k < 0.0 || n <= 0.0 || kk <= 0.0 || nn <= 0.0 || n > nn || kk > nn || k > n.min(kk) || k < (n - nn + kk).max(0.0) {
         return Err(CellError::Num);
@@ -829,10 +829,10 @@ pub(super) fn hypgeom_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(s.min(1.0))
 }
 
-pub(super) fn negbinom_dist(a: &[Arg], _: C) -> R<Value> {
-    let f = num(a, 0)?.trunc();
-    let s = num(a, 1)?.trunc();
-    let p = num(a, 2)?;
+pub(super) fn negbinom_dist(a: &[Arg], c: C) -> R<Value> {
+    let f = num(a, 0, c)?.trunc();
+    let s = num(a, 1, c)?.trunc();
+    let p = num(a, 2, c)?;
     let cum = if a.len() > 3 { boolean(a, 3)? } else { false };
     if f < 0.0 || s < 1.0 || !(0.0..=1.0).contains(&p) {
         return Err(CellError::Num);
@@ -849,16 +849,16 @@ pub(super) fn negbinom_dist(a: &[Arg], _: C) -> R<Value> {
     num_val((ln_comb(f + s - 1.0, s - 1.0) + s * p.ln() + f * (1.0 - p).ln()).exp())
 }
 
-pub(super) fn confidence_norm(a: &[Arg], _: C) -> R<Value> {
-    let (al, sd, n) = (num(a, 0)?, num(a, 1)?, num(a, 2)?.trunc());
+pub(super) fn confidence_norm(a: &[Arg], c: C) -> R<Value> {
+    let (al, sd, n) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?.trunc());
     if !(al > 0.0 && al < 1.0) || sd <= 0.0 || n < 1.0 {
         return Err(CellError::Num);
     }
     num_val(norm_inv(1.0 - al / 2.0) * sd / n.sqrt())
 }
 
-pub(super) fn confidence_t(a: &[Arg], _: C) -> R<Value> {
-    let (al, sd, n) = (num(a, 0)?, num(a, 1)?, num(a, 2)?.trunc());
+pub(super) fn confidence_t(a: &[Arg], c: C) -> R<Value> {
+    let (al, sd, n) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?.trunc());
     if !(al > 0.0 && al < 1.0) || sd <= 0.0 || n < 1.0 {
         return Err(CellError::Num);
     }
@@ -868,13 +868,13 @@ pub(super) fn confidence_t(a: &[Arg], _: C) -> R<Value> {
     num_val(t_inv_upper(al / 2.0, n - 1.0) * sd / n.sqrt())
 }
 
-pub(super) fn z_test(a: &[Arg], _: C) -> R<Value> {
-    let v = arg_nums(a, 0)?;
-    let x = num(a, 1)?;
+pub(super) fn z_test(a: &[Arg], c: C) -> R<Value> {
+    let v = arg_nums(a, 0, c)?;
+    let x = num(a, 1, c)?;
     if v.is_empty() {
         return Err(CellError::NA);
     }
-    let sd = if has(a, 2) { num(a, 2)? } else { var_s(&v)?.sqrt() };
+    let sd = if has(a, 2) { num(a, 2, c)? } else { var_s(&v)?.sqrt() };
     if sd <= 0.0 {
         return Err(if has(a, 2) { CellError::Num } else { CellError::Div0 });
     }
@@ -882,16 +882,16 @@ pub(super) fn z_test(a: &[Arg], _: C) -> R<Value> {
     num_val(1.0 - norm_cdf(z))
 }
 
-pub(super) fn fisher(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
+pub(super) fn fisher(a: &[Arg], c: C) -> R<Value> {
+    let x = num(a, 0, c)?;
     if x <= -1.0 || x >= 1.0 {
         return Err(CellError::Num);
     }
     num_val(0.5 * ((1.0 + x) / (1.0 - x)).ln())
 }
 
-pub(super) fn gauss(a: &[Arg], _: C) -> R<Value> {
-    let z = num(a, 0)?;
+pub(super) fn gauss(a: &[Arg], c: C) -> R<Value> {
+    let z = num(a, 0, c)?;
     // Φ(z) − 0.5 = erf(z/√2)/2, accurate near zero.
     num_val(0.5 * erf(z / std::f64::consts::SQRT_2))
 }

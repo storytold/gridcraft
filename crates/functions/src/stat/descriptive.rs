@@ -1,4 +1,4 @@
-use super::{Arg, C, CellError, R, Value, arg, array_numbers, array_val, as_array, has, num, num_val, opt_num};
+use super::{Arg, C, CellError, Ctx, R, Value, arg, array_numbers, array_val, as_array, has, num, num_val, opt_num};
 
 // ---------------------------------------------------------------------------------------------
 // Basic helpers over number lists
@@ -225,8 +225,8 @@ pub(super) fn quartile_exc(v: Vec<f64>, q: f64) -> R<f64> {
     percentile_exc(v, q / 4.0)
 }
 
-pub(super) fn arg_nums(a: &[Arg], i: usize) -> R<Vec<f64>> {
-    array_numbers(&arg(a, i)?.value)
+pub(super) fn arg_nums(a: &[Arg], i: usize, c: &dyn Ctx) -> R<Vec<f64>> {
+    array_numbers(&arg(a, i)?.value, c)
 }
 
 /// Pairs of numbers at matching positions of two arrays (pairs with a non-number skipped).
@@ -364,18 +364,18 @@ pub(super) fn mode_mult(a: &[Arg], _: C) -> R<Value> {
     col_value(m)
 }
 
-pub(super) fn large(a: &[Arg], _: C) -> R<Value> {
-    num_val(kth(arg_nums(a, 0)?, num(a, 1)?, true)?)
+pub(super) fn large(a: &[Arg], c: C) -> R<Value> {
+    num_val(kth(arg_nums(a, 0, c)?, num(a, 1, c)?, true)?)
 }
 
-pub(super) fn small(a: &[Arg], _: C) -> R<Value> {
-    num_val(kth(arg_nums(a, 0)?, num(a, 1)?, false)?)
+pub(super) fn small(a: &[Arg], c: C) -> R<Value> {
+    num_val(kth(arg_nums(a, 0, c)?, num(a, 1, c)?, false)?)
 }
 
-pub(super) fn rank_impl(a: &[Arg], avg: bool) -> R<Value> {
-    let x = num(a, 0)?;
-    let v = arg_nums(a, 1)?;
-    let asc = opt_num(a, 2, 0.0)? != 0.0;
+pub(super) fn rank_impl(a: &[Arg], avg: bool, c: &dyn Ctx) -> R<Value> {
+    let x = num(a, 0, c)?;
+    let v = arg_nums(a, 1, c)?;
+    let asc = opt_num(a, 2, 0.0, c)? != 0.0;
     let eq = v.iter().filter(|&&y| y == x).count();
     if eq == 0 {
         return Err(CellError::NA);
@@ -385,10 +385,10 @@ pub(super) fn rank_impl(a: &[Arg], avg: bool) -> R<Value> {
     num_val(if avg { r + (eq as f64 - 1.0) / 2.0 } else { r })
 }
 
-pub(super) fn percentrank_impl(a: &[Arg], exc: bool) -> R<Value> {
-    let s = sorted(arg_nums(a, 0)?);
-    let x = num(a, 1)?;
-    let sig = opt_num(a, 2, 3.0)?.trunc();
+pub(super) fn percentrank_impl(a: &[Arg], exc: bool, c: &dyn Ctx) -> R<Value> {
+    let s = sorted(arg_nums(a, 0, c)?);
+    let x = num(a, 1, c)?;
+    let sig = opt_num(a, 2, 3.0, c)?.trunc();
     if sig < 1.0 || s.is_empty() {
         return Err(CellError::Num);
     }
@@ -426,9 +426,9 @@ pub(super) fn percentrank_impl(a: &[Arg], exc: bool) -> R<Value> {
     num_val(trunc_digits(r, sig))
 }
 
-pub(super) fn trimmean(a: &[Arg], _: C) -> R<Value> {
-    let v = arg_nums(a, 0)?;
-    let p = num(a, 1)?;
+pub(super) fn trimmean(a: &[Arg], c: C) -> R<Value> {
+    let v = arg_nums(a, 0, c)?;
+    let p = num(a, 1, c)?;
     if !(0.0..1.0).contains(&p) || v.is_empty() {
         return Err(CellError::Num);
     }
@@ -501,9 +501,9 @@ pub(super) fn avedev(v: &[f64]) -> R<f64> {
     Ok(v.iter().map(|x| (x - m).abs()).sum::<f64>() / v.len() as f64)
 }
 
-pub(super) fn frequency(a: &[Arg], _: C) -> R<Value> {
-    let data = arg_nums(a, 0)?;
-    let bins = arg_nums(a, 1)?;
+pub(super) fn frequency(a: &[Arg], c: C) -> R<Value> {
+    let data = arg_nums(a, 0, c)?;
+    let bins = arg_nums(a, 1, c)?;
     if bins.is_empty() {
         return col_value(vec![data.len() as f64]);
     }
@@ -523,10 +523,10 @@ pub(super) fn frequency(a: &[Arg], _: C) -> R<Value> {
     col_value(counts)
 }
 
-pub(super) fn prob(a: &[Arg], _: C) -> R<Value> {
+pub(super) fn prob(a: &[Arg], c: C) -> R<Value> {
     let (xs, ps) = arg_pairs(a, 0, 1)?;
-    let lo = num(a, 2)?;
-    let hi = if has(a, 3) { num(a, 3)? } else { lo };
+    let lo = num(a, 2, c)?;
+    let hi = if has(a, 3) { num(a, 3, c)? } else { lo };
     if ps.iter().any(|&p| p <= 0.0 || p > 1.0) {
         return Err(CellError::Num);
     }
@@ -537,8 +537,8 @@ pub(super) fn prob(a: &[Arg], _: C) -> R<Value> {
     num_val(xs.iter().zip(&ps).filter(|(x, _)| **x >= lo && **x <= hi).map(|(_, p)| p).sum())
 }
 
-pub(super) fn standardize(a: &[Arg], _: C) -> R<Value> {
-    let (x, m, sd) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
+pub(super) fn standardize(a: &[Arg], c: C) -> R<Value> {
+    let (x, m, sd) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
     if sd <= 0.0 {
         return Err(CellError::Num);
     }
@@ -555,19 +555,18 @@ pub(super) fn standardize(a: &[Arg], _: C) -> R<Value> {
 /// SUM, VAR.S, VAR.P; 12 = MEDIAN, 13 = MODE.SNGL. Codes 14–19 need `k`: use
 /// [`aggregate_values_k`] (they give `#VALUE!` here). Values that are not numbers are ignored
 /// (COUNTA counts non-empty values); the first error value present is returned.
-pub fn aggregate_values(function_num: u32, values: &[Value]) -> Value {
-    crate::util::finish(aggregate_impl(function_num, values, None))
+pub fn aggregate_values(function_num: u32, values: &[Value], c: &dyn Ctx) -> Value {
+    crate::util::finish(aggregate_impl(function_num, values, None, c))
 }
 
 /// AGGREGATE codes 14 = LARGE, 15 = SMALL, 16 = PERCENTILE.INC, 17 = QUARTILE.INC,
 /// 18 = PERCENTILE.EXC, 19 = QUARTILE.EXC with their `k` argument; codes 1–13 delegate to
 /// [`aggregate_values`].
-pub fn aggregate_values_k(function_num: u32, values: &[Value], k: &Value) -> Value {
-    crate::util::finish(aggregate_impl(function_num, values, Some(k)))
+pub fn aggregate_values_k(function_num: u32, values: &[Value], k: &Value, c: &dyn Ctx) -> Value {
+    crate::util::finish(aggregate_impl(function_num, values, Some(k), c))
 }
 
-#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: a text AGGREGATE k ignores the region
-fn aggregate_impl(function_num: u32, values: &[Value], k: Option<&Value>) -> R<Value> {
+fn aggregate_impl(function_num: u32, values: &[Value], k: Option<&Value>, c: &dyn Ctx) -> R<Value> {
     let code = if (101..=111).contains(&function_num) { function_num - 100 } else { function_num };
     let mut xs = Vec::new();
     let mut nonempty = 0usize;
@@ -589,7 +588,7 @@ fn aggregate_impl(function_num: u32, values: &[Value], k: Option<&Value>) -> R<V
         }
     }
     let k = match (code, k) {
-        (14..=19, Some(k)) => k.scalar().to_number()?,
+        (14..=19, Some(k)) => crate::util::to_num(&k.scalar(), c)?,
         (14..=19, None) => return Err(CellError::Value),
         _ => 0.0,
     };

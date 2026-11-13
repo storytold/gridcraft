@@ -6,7 +6,9 @@
 use gridcraft_core::date::{datetime_from_serial, days_in_month, is_leap, max_serial, serial_from_ymd};
 use gridcraft_core::{CellError, DateSystem, Value};
 
-use crate::util::{R, S, array_numbers, as_array, flatten, has, num, num_val, numbers, opt_bool, opt_num, round_half_away, text, to_sig_digits};
+use crate::util::{
+    R, S, array_numbers, as_array, flatten, has, num, num_val, numbers, opt_bool, opt_num, round_half_away, text, to_num, to_sig_digits,
+};
 use crate::{Arg, Ctx, FnSpec, VAR};
 
 mod day_count;
@@ -26,8 +28,8 @@ use tvm::{
     xirr, xnpv,
 };
 
-fn type_arg(args: &[Arg], i: usize) -> R<f64> {
-    Ok(if opt_num(args, i, 0.0)? != 0.0 { 1.0 } else { 0.0 })
+fn type_arg(args: &[Arg], i: usize, c: &dyn Ctx) -> R<f64> {
+    Ok(if opt_num(args, i, 0.0, c)? != 0.0 { 1.0 } else { 0.0 })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -60,13 +62,13 @@ fn euro_currency(a: &[Arg], i: usize) -> R<(&'static str, f64, i32)> {
 }
 
 /// EUROCONVERT(number, source, target, [full_precision], [triangulation_precision]).
-fn euroconvert(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
+fn euroconvert(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(a, 0, c)?;
     let (src, src_rate, _) = euro_currency(a, 1)?;
     let (tgt, tgt_rate, tgt_prec) = euro_currency(a, 2)?;
     let full = opt_bool(a, 3, false)?;
     let triangulation = if has(a, 4) {
-        let t = num(a, 4)?.trunc();
+        let t = num(a, 4, c)?.trunc();
         if t < 3.0 {
             return Err(CellError::Value);
         }

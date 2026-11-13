@@ -61,6 +61,7 @@ fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+#[allow(clippy::disallowed_methods)] // en-US on purpose: criteria are stored with the separators XLSX writes
 pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = s.doc()?.wb.active_sheet();
     crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
@@ -133,6 +134,7 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 /// Does a value pass a custom comparison (`>`, `=*abc*`, `<>x`…)?
+#[allow(clippy::disallowed_methods)] // en-US on purpose: criteria are stored with the separators XLSX writes
 fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
     let num = gridcraft_core::parse::parse_number_text(crit);
     let cmp = match (v.as_f64(), num) {

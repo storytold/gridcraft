@@ -7,10 +7,10 @@ use super::{Arg, CellError, Ctx, DateSystem, R, Value, days_in_month, has, num, 
 
 pub(super) fn accrint(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let (issue, first, settle, rate) = (date(a, 0)?, date(a, 1)?, date(a, 2)?, num(a, 3)?);
-    let par = if has(a, 4) { num(a, 4)? } else { 1000.0 };
-    let freq = freq_arg(a, 5)?;
-    let basis = basis_arg(a, 6)?;
+    let (issue, first, settle, rate) = (date(a, 0, c)?, date(a, 1, c)?, date(a, 2, c)?, num(a, 3, c)?);
+    let par = if has(a, 4) { num(a, 4, c)? } else { 1000.0 };
+    let freq = freq_arg(a, 5, c)?;
+    let basis = basis_arg(a, 6, c)?;
     let calc_method = opt_bool(a, 7, true)?;
     if issue >= settle || rate <= 0.0 || par <= 0.0 {
         return Err(CellError::Num);
@@ -68,9 +68,9 @@ pub(super) fn accrint(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 }
 
 pub(super) fn accrintm(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (issue, settle, rate) = (date(a, 0)?, date(a, 1)?, num(a, 2)?);
-    let par = if has(a, 3) { num(a, 3)? } else { 1000.0 };
-    let basis = basis_arg(a, 4)?;
+    let (issue, settle, rate) = (date(a, 0, c)?, date(a, 1, c)?, num(a, 2, c)?);
+    let par = if has(a, 3) { num(a, 3, c)? } else { 1000.0 };
+    let basis = basis_arg(a, 4, c)?;
     if issue >= settle || rate <= 0.0 || par <= 0.0 {
         return Err(CellError::Num);
     }
@@ -78,8 +78,8 @@ pub(super) fn accrintm(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 }
 
 /// settlement, maturity, value, value, [basis] for discount securities.
-fn disc_args(a: &[Arg]) -> R<(f64, f64, f64, f64, u32)> {
-    let (s, m, x, y, b) = (date(a, 0)?, date(a, 1)?, num(a, 2)?, num(a, 3)?, basis_arg(a, 4)?);
+fn disc_args(a: &[Arg], c: &dyn Ctx) -> R<(f64, f64, f64, f64, u32)> {
+    let (s, m, x, y, b) = (date(a, 0, c)?, date(a, 1, c)?, num(a, 2, c)?, num(a, 3, c)?, basis_arg(a, 4, c)?);
     if s >= m || x <= 0.0 || y <= 0.0 {
         return Err(CellError::Num);
     }
@@ -91,27 +91,27 @@ fn disc_frac(sys: DateSystem, s: f64, m: f64, b: u32) -> R<f64> {
 }
 
 pub(super) fn disc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (s, m, pr, red, b) = disc_args(a)?;
+    let (s, m, pr, red, b) = disc_args(a, c)?;
     num_val((1.0 - pr / red) / disc_frac(c.date_system(), s, m, b)?)
 }
 
 pub(super) fn pricedisc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (s, m, d, red, b) = disc_args(a)?;
+    let (s, m, d, red, b) = disc_args(a, c)?;
     num_val(red - d * red * disc_frac(c.date_system(), s, m, b)?)
 }
 
 pub(super) fn yielddisc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (s, m, pr, red, b) = disc_args(a)?;
+    let (s, m, pr, red, b) = disc_args(a, c)?;
     num_val((red / pr - 1.0) / disc_frac(c.date_system(), s, m, b)?)
 }
 
 pub(super) fn intrate(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (s, m, inv, red, b) = disc_args(a)?;
+    let (s, m, inv, red, b) = disc_args(a, c)?;
     num_val((red - inv) / inv / disc_frac(c.date_system(), s, m, b)?)
 }
 
 pub(super) fn received(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (s, m, inv, d, b) = disc_args(a)?;
+    let (s, m, inv, d, b) = disc_args(a, c)?;
     let denom = 1.0 - d * disc_frac(c.date_system(), s, m, b)?;
     if denom <= 0.0 {
         return Err(CellError::Num);
@@ -119,8 +119,9 @@ pub(super) fn received(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     num_val(inv / denom)
 }
 
-fn tbill_args(a: &[Arg], sys: DateSystem) -> R<(f64, f64)> {
-    let (s, m, x) = (date(a, 0)?, date(a, 1)?, num(a, 2)?);
+fn tbill_args(a: &[Arg], c: &dyn Ctx) -> R<(f64, f64)> {
+    let sys = c.date_system();
+    let (s, m, x) = (date(a, 0, c)?, date(a, 1, c)?, num(a, 2, c)?);
     if s >= m || x <= 0.0 {
         return Err(CellError::Num);
     }
@@ -134,7 +135,7 @@ fn tbill_args(a: &[Arg], sys: DateSystem) -> R<(f64, f64)> {
 }
 
 pub(super) fn tbillprice(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (dsm, d) = tbill_args(a, c.date_system())?;
+    let (dsm, d) = tbill_args(a, c)?;
     let p = 100.0 * (1.0 - d * dsm / 360.0);
     if p <= 0.0 {
         return Err(CellError::Num);
@@ -143,12 +144,12 @@ pub(super) fn tbillprice(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 }
 
 pub(super) fn tbillyield(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (dsm, pr) = tbill_args(a, c.date_system())?;
+    let (dsm, pr) = tbill_args(a, c)?;
     num_val((100.0 - pr) / pr * 360.0 / dsm)
 }
 
 pub(super) fn tbilleq(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (dsm, d) = tbill_args(a, c.date_system())?;
+    let (dsm, d) = tbill_args(a, c)?;
     if dsm <= 182.0 {
         return num_val(365.0 * d / (360.0 - d * dsm));
     }
@@ -165,8 +166,9 @@ pub(super) fn tbilleq(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 }
 
 /// settlement, maturity, issue, rate, value, [basis].
-fn mat_terms(a: &[Arg], sys: DateSystem) -> R<(f64, f64, f64, f64, f64)> {
-    let (s, m, issue, rate, x, b) = (date(a, 0)?, date(a, 1)?, date(a, 2)?, num(a, 3)?, num(a, 4)?, basis_arg(a, 5)?);
+fn mat_terms(a: &[Arg], c: &dyn Ctx) -> R<(f64, f64, f64, f64, f64)> {
+    let sys = c.date_system();
+    let (s, m, issue, rate, x, b) = (date(a, 0, c)?, date(a, 1, c)?, date(a, 2, c)?, num(a, 3, c)?, num(a, 4, c)?, basis_arg(a, 5, c)?);
     if s >= m || issue >= s || rate < 0.0 || x < 0.0 {
         return Err(CellError::Num);
     }
@@ -177,12 +179,12 @@ fn mat_terms(a: &[Arg], sys: DateSystem) -> R<(f64, f64, f64, f64, f64)> {
 }
 
 pub(super) fn pricemat(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (dim, dsm, ai, rate, yld) = mat_terms(a, c.date_system())?;
+    let (dim, dsm, ai, rate, yld) = mat_terms(a, c)?;
     num_val((100.0 + dim * rate * 100.0) / (1.0 + dsm * yld) - ai * rate * 100.0)
 }
 
 pub(super) fn yieldmat(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (dim, dsm, ai, rate, pr) = mat_terms(a, c.date_system())?;
+    let (dim, dsm, ai, rate, pr) = mat_terms(a, c)?;
     if pr <= 0.0 || dsm == 0.0 {
         return Err(CellError::Num);
     }
@@ -228,8 +230,8 @@ fn bond_price(b: &Bond, rate: f64, yld: f64, red: f64) -> f64 {
 }
 
 pub(super) fn price(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (s, m, rate, yld, red) = (date(a, 0)?, date(a, 1)?, num(a, 2)?, num(a, 3)?, num(a, 4)?);
-    let (f, basis) = (freq_arg(a, 5)?, basis_arg(a, 6)?);
+    let (s, m, rate, yld, red) = (date(a, 0, c)?, date(a, 1, c)?, num(a, 2, c)?, num(a, 3, c)?, num(a, 4, c)?);
+    let (f, basis) = (freq_arg(a, 5, c)?, basis_arg(a, 6, c)?);
     if rate < 0.0 || yld < 0.0 || red <= 0.0 {
         return Err(CellError::Num);
     }
@@ -238,8 +240,8 @@ pub(super) fn price(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 }
 
 pub(super) fn yield_(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (s, m, rate, pr, red) = (date(a, 0)?, date(a, 1)?, num(a, 2)?, num(a, 3)?, num(a, 4)?);
-    let (f, basis) = (freq_arg(a, 5)?, basis_arg(a, 6)?);
+    let (s, m, rate, pr, red) = (date(a, 0, c)?, date(a, 1, c)?, num(a, 2, c)?, num(a, 3, c)?, num(a, 4, c)?);
+    let (f, basis) = (freq_arg(a, 5, c)?, basis_arg(a, 6, c)?);
     if rate < 0.0 || pr <= 0.0 || red <= 0.0 {
         return Err(CellError::Num);
     }
@@ -270,9 +272,10 @@ pub(super) fn yield_(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     num_val(0.5 * (lo + hi))
 }
 
-fn duration_calc(a: &[Arg], sys: DateSystem) -> R<(f64, f64, f64)> {
-    let (s, m, coupon, yld) = (date(a, 0)?, date(a, 1)?, num(a, 2)?, num(a, 3)?);
-    let (f, basis) = (freq_arg(a, 4)?, basis_arg(a, 5)?);
+fn duration_calc(a: &[Arg], c: &dyn Ctx) -> R<(f64, f64, f64)> {
+    let sys = c.date_system();
+    let (s, m, coupon, yld) = (date(a, 0, c)?, date(a, 1, c)?, num(a, 2, c)?, num(a, 3, c)?);
+    let (f, basis) = (freq_arg(a, 4, c)?, basis_arg(a, 5, c)?);
     if coupon < 0.0 || yld < 0.0 {
         return Err(CellError::Num);
     }
@@ -297,11 +300,11 @@ fn duration_calc(a: &[Arg], sys: DateSystem) -> R<(f64, f64, f64)> {
 }
 
 pub(super) fn duration(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    num_val(duration_calc(a, c.date_system())?.0)
+    num_val(duration_calc(a, c)?.0)
 }
 
 pub(super) fn mduration(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (d, y, f) = duration_calc(a, c.date_system())?;
+    let (d, y, f) = duration_calc(a, c)?;
     num_val(d / (1.0 + y / f))
 }
 
@@ -398,10 +401,11 @@ fn odd_first_price(t: &OddFirst, rate: f64, yld: f64, red: f64) -> f64 {
 }
 
 /// settlement, maturity, issue, first_coupon, rate, yld/pr, redemption, frequency, [basis].
-fn odd_first_args(a: &[Arg], sys: DateSystem) -> R<(OddFirst, f64, f64, f64)> {
-    let (s, m, issue, first) = (date(a, 0)?, date(a, 1)?, date(a, 2)?, date(a, 3)?);
-    let (rate, x, red) = (num(a, 4)?, num(a, 5)?, num(a, 6)?);
-    let (f, basis) = (freq_arg(a, 7)?, basis_arg(a, 8)?);
+fn odd_first_args(a: &[Arg], c: &dyn Ctx) -> R<(OddFirst, f64, f64, f64)> {
+    let sys = c.date_system();
+    let (s, m, issue, first) = (date(a, 0, c)?, date(a, 1, c)?, date(a, 2, c)?, date(a, 3, c)?);
+    let (rate, x, red) = (num(a, 4, c)?, num(a, 5, c)?, num(a, 6, c)?);
+    let (f, basis) = (freq_arg(a, 7, c)?, basis_arg(a, 8, c)?);
     if rate < 0.0 || red <= 0.0 {
         return Err(CellError::Num);
     }
@@ -409,7 +413,7 @@ fn odd_first_args(a: &[Arg], sys: DateSystem) -> R<(OddFirst, f64, f64, f64)> {
 }
 
 pub(super) fn oddfprice(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (t, rate, yld, red) = odd_first_args(a, c.date_system())?;
+    let (t, rate, yld, red) = odd_first_args(a, c)?;
     if yld < 0.0 {
         return Err(CellError::Num);
     }
@@ -417,7 +421,7 @@ pub(super) fn oddfprice(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 }
 
 pub(super) fn oddfyield(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (t, rate, pr, red) = odd_first_args(a, c.date_system())?;
+    let (t, rate, pr, red) = odd_first_args(a, c)?;
     if pr <= 0.0 {
         return Err(CellError::Num);
     }
@@ -482,10 +486,11 @@ fn odd_last(sys: DateSystem, settle: f64, mat: f64, last: f64, freq: f64, basis:
 /// `((dc, acc, dsc), rate, yield-or-price, redemption, frequency)` of an odd-last-period call.
 type OddLastArgs = ((f64, f64, f64), f64, f64, f64, f64);
 
-fn odd_last_args(a: &[Arg], sys: DateSystem) -> R<OddLastArgs> {
-    let (s, m, last) = (date(a, 0)?, date(a, 1)?, date(a, 2)?);
-    let (rate, x, red) = (num(a, 3)?, num(a, 4)?, num(a, 5)?);
-    let (f, basis) = (freq_arg(a, 6)?, basis_arg(a, 7)?);
+fn odd_last_args(a: &[Arg], c: &dyn Ctx) -> R<OddLastArgs> {
+    let sys = c.date_system();
+    let (s, m, last) = (date(a, 0, c)?, date(a, 1, c)?, date(a, 2, c)?);
+    let (rate, x, red) = (num(a, 3, c)?, num(a, 4, c)?, num(a, 5, c)?);
+    let (f, basis) = (freq_arg(a, 6, c)?, basis_arg(a, 7, c)?);
     if rate < 0.0 || red <= 0.0 {
         return Err(CellError::Num);
     }
@@ -493,7 +498,7 @@ fn odd_last_args(a: &[Arg], sys: DateSystem) -> R<OddLastArgs> {
 }
 
 pub(super) fn oddlprice(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let ((dc, acc, dsc), rate, yld, red, f) = odd_last_args(a, c.date_system())?;
+    let ((dc, acc, dsc), rate, yld, red, f) = odd_last_args(a, c)?;
     if yld < 0.0 {
         return Err(CellError::Num);
     }
@@ -502,7 +507,7 @@ pub(super) fn oddlprice(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 }
 
 pub(super) fn oddlyield(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let ((dc, acc, dsc), rate, pr, red, f) = odd_last_args(a, c.date_system())?;
+    let ((dc, acc, dsc), rate, pr, red, f) = odd_last_args(a, c)?;
     if pr <= 0.0 {
         return Err(CellError::Num);
     }

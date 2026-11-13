@@ -1,4 +1,4 @@
-use super::{Arg, CellError, Ctx, R, Value, array_numbers, as_array, flatten, num, num_val, numbers, opt_num, type_arg};
+use super::{Arg, CellError, Ctx, R, Value, array_numbers, as_array, flatten, num, num_val, numbers, opt_num, to_num, type_arg};
 
 // ---------------------------------------------------------------------------------------------
 // Time value of money
@@ -48,28 +48,28 @@ fn pv_calc(rate: f64, nper: f64, pmt: f64, fv: f64, typ: f64) -> f64 {
     -(fv + pmt * (1.0 + rate * typ) * (p - 1.0) / rate) / p
 }
 
-pub(super) fn pmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (rate, nper, pv) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
-    let (fv, typ) = (opt_num(a, 3, 0.0)?, type_arg(a, 4)?);
+pub(super) fn pmt(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (rate, nper, pv) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
+    let (fv, typ) = (opt_num(a, 3, 0.0, c)?, type_arg(a, 4, c)?);
     if nper == 0.0 {
         return Err(CellError::Num);
     }
     num_val(pmt_calc(rate, nper, pv, fv, typ))
 }
 
-pub(super) fn fv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (rate, nper, pmt) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
-    num_val(fv_calc(rate, nper, pmt, opt_num(a, 3, 0.0)?, type_arg(a, 4)?))
+pub(super) fn fv(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (rate, nper, pmt) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
+    num_val(fv_calc(rate, nper, pmt, opt_num(a, 3, 0.0, c)?, type_arg(a, 4, c)?))
 }
 
-pub(super) fn pv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (rate, nper, pmt) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
-    num_val(pv_calc(rate, nper, pmt, opt_num(a, 3, 0.0)?, type_arg(a, 4)?))
+pub(super) fn pv(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (rate, nper, pmt) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
+    num_val(pv_calc(rate, nper, pmt, opt_num(a, 3, 0.0, c)?, type_arg(a, 4, c)?))
 }
 
-pub(super) fn nper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (rate, pmt, pv) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
-    let (fv, typ) = (opt_num(a, 3, 0.0)?, type_arg(a, 4)?);
+pub(super) fn nper(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (rate, pmt, pv) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
+    let (fv, typ) = (opt_num(a, 3, 0.0, c)?, type_arg(a, 4, c)?);
     if rate == 0.0 {
         if pmt == 0.0 {
             return Err(CellError::Num);
@@ -98,18 +98,18 @@ fn ipmt_calc(rate: f64, per: f64, nper: f64, pv: f64, fv: f64, typ: f64) -> f64 
     if typ == 1.0 { i / (1.0 + rate) } else { i }
 }
 
-pub(super) fn ipmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (rate, per, np, pv) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, num(a, 3)?);
-    let (fv, typ) = (opt_num(a, 4, 0.0)?, type_arg(a, 5)?);
+pub(super) fn ipmt(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (rate, per, np, pv) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?, num(a, 3, c)?);
+    let (fv, typ) = (opt_num(a, 4, 0.0, c)?, type_arg(a, 5, c)?);
     if per < 1.0 || per > np || np == 0.0 {
         return Err(CellError::Num);
     }
     num_val(ipmt_calc(rate, per, np, pv, fv, typ))
 }
 
-pub(super) fn ppmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (rate, per, np, pv) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, num(a, 3)?);
-    let (fv, typ) = (opt_num(a, 4, 0.0)?, type_arg(a, 5)?);
+pub(super) fn ppmt(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (rate, per, np, pv) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?, num(a, 3, c)?);
+    let (fv, typ) = (opt_num(a, 4, 0.0, c)?, type_arg(a, 5, c)?);
     if per < 1.0 || per > np || np == 0.0 {
         return Err(CellError::Num);
     }
@@ -118,9 +118,9 @@ pub(super) fn ppmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 
 /// The validated (rate, periods, pv, start, end, type) of CUMIPMT/CUMPRINC: every check that
 /// refuses a call before its period loop, shared with the lifted-call work preflight.
-pub(crate) fn cumulative_args(a: &[Arg]) -> R<(f64, f64, f64, f64, f64, f64)> {
-    let (rate, np, pv) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
-    let (start, end, typ) = (num(a, 3)?.trunc(), num(a, 4)?.trunc(), num(a, 5)?);
+pub(crate) fn cumulative_args(a: &[Arg], c: &dyn Ctx) -> R<(f64, f64, f64, f64, f64, f64)> {
+    let (rate, np, pv) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
+    let (start, end, typ) = (num(a, 3, c)?.trunc(), num(a, 4, c)?.trunc(), num(a, 5, c)?);
     let np_i = np.trunc();
     if rate <= 0.0 || np_i <= 0.0 || pv <= 0.0 || start < 1.0 || end < start || end > np_i || (typ != 0.0 && typ != 1.0) {
         return Err(CellError::Num);
@@ -131,8 +131,8 @@ pub(crate) fn cumulative_args(a: &[Arg]) -> R<(f64, f64, f64, f64, f64, f64)> {
     Ok((rate, np_i, pv, start, end, typ))
 }
 
-fn cumulative(a: &[Arg], principal: bool) -> R<Value> {
-    let (rate, np_i, pv, start, end, typ) = cumulative_args(a)?;
+fn cumulative(a: &[Arg], principal: bool, c: &dyn Ctx) -> R<Value> {
+    let (rate, np_i, pv, start, end, typ) = cumulative_args(a, c)?;
     let p = pmt_calc(rate, np_i, pv, 0.0, typ);
     let mut sum = 0.0;
     let mut per = start;
@@ -144,12 +144,12 @@ fn cumulative(a: &[Arg], principal: bool) -> R<Value> {
     num_val(sum)
 }
 
-pub(super) fn cumipmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    cumulative(a, false)
+pub(super) fn cumipmt(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    cumulative(a, false, c)
 }
 
-pub(super) fn cumprinc(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    cumulative(a, true)
+pub(super) fn cumprinc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    cumulative(a, true, c)
 }
 
 /// Newton iteration with a numeric derivative, keeping the rate above -1.
@@ -218,9 +218,9 @@ fn solve_rate(f: impl Fn(f64) -> f64, guess: f64) -> R<f64> {
     Err(CellError::Num)
 }
 
-pub(super) fn rate(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (np, pmt, pv) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
-    let (fv, typ, guess) = (opt_num(a, 3, 0.0)?, type_arg(a, 4)?, opt_num(a, 5, 0.1)?);
+pub(super) fn rate(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (np, pmt, pv) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
+    let (fv, typ, guess) = (opt_num(a, 3, 0.0, c)?, type_arg(a, 4, c)?, opt_num(a, 5, 0.1, c)?);
     if np <= 0.0 {
         return Err(CellError::Num);
     }
@@ -235,12 +235,12 @@ pub(super) fn rate(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(solve_rate(f, guess)?)
 }
 
-pub(super) fn npv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let rate = num(a, 0)?;
+pub(super) fn npv(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let rate = num(a, 0, c)?;
     if rate == -1.0 {
         return Err(CellError::Div0);
     }
-    let vals = numbers(a.get(1..).unwrap_or(&[]))?;
+    let vals = numbers(a.get(1..).unwrap_or(&[]), c)?;
     let mut sum = 0.0;
     let mut d = 1.0;
     for v in vals {
@@ -251,8 +251,7 @@ pub(super) fn npv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 /// Values and dates for XNPV/XIRR: both must be numeric and of equal length.
-#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: date text reads month first in every region
-fn dated_flows(values: &Value, dates: &Value) -> R<(Vec<f64>, Vec<f64>)> {
+fn dated_flows(values: &Value, dates: &Value, c: &dyn Ctx) -> R<(Vec<f64>, Vec<f64>)> {
     let va = as_array(values);
     let da = as_array(dates);
     if va.data.len() != da.data.len() {
@@ -269,7 +268,7 @@ fn dated_flows(values: &Value, dates: &Value) -> R<(Vec<f64>, Vec<f64>)> {
         match y {
             Value::Number(n) => d.push(n.trunc()),
             Value::Error(e) => return Err(*e),
-            Value::Text(_) => d.push(y.to_number()?.trunc()),
+            Value::Text(_) => d.push(to_num(y, c)?.trunc()),
             _ => return Err(CellError::Value),
         }
     }
@@ -285,27 +284,27 @@ fn xnpv_calc(rate: f64, v: &[f64], d: &[f64]) -> f64 {
     v.iter().zip(d).map(|(x, t)| x / (1.0 + rate).powf((t - d0) / 365.0)).sum()
 }
 
-pub(super) fn xnpv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let rate = num(a, 0)?;
+pub(super) fn xnpv(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let rate = num(a, 0, c)?;
     if rate <= -1.0 {
         return Err(CellError::Num);
     }
-    let (v, d) = dated_flows(&a.get(1).ok_or(CellError::Value)?.value, &a.get(2).ok_or(CellError::Value)?.value)?;
+    let (v, d) = dated_flows(&a.get(1).ok_or(CellError::Value)?.value, &a.get(2).ok_or(CellError::Value)?.value, c)?;
     num_val(xnpv_calc(rate, &v, &d))
 }
 
-pub(super) fn xirr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (v, d) = dated_flows(&a.first().ok_or(CellError::Value)?.value, &a.get(1).ok_or(CellError::Value)?.value)?;
-    let guess = opt_num(a, 2, 0.1)?;
+pub(super) fn xirr(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (v, d) = dated_flows(&a.first().ok_or(CellError::Value)?.value, &a.get(1).ok_or(CellError::Value)?.value, c)?;
+    let guess = opt_num(a, 2, 0.1, c)?;
     if !v.iter().any(|x| *x > 0.0) || !v.iter().any(|x| *x < 0.0) {
         return Err(CellError::Num);
     }
     num_val(solve_rate(|r| xnpv_calc(r, &v, &d), guess)?)
 }
 
-pub(super) fn irr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = array_numbers(&a.first().ok_or(CellError::Value)?.value)?;
-    let guess = opt_num(a, 1, 0.1)?;
+pub(super) fn irr(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = array_numbers(&a.first().ok_or(CellError::Value)?.value, c)?;
+    let guess = opt_num(a, 1, 0.1, c)?;
     if !v.iter().any(|x| *x > 0.0) || !v.iter().any(|x| *x < 0.0) {
         return Err(CellError::Num);
     }
@@ -321,9 +320,9 @@ pub(super) fn irr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(solve_rate(f, guess)?)
 }
 
-pub(super) fn mirr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = array_numbers(&a.first().ok_or(CellError::Value)?.value)?;
-    let (fr, rr) = (num(a, 1)?, num(a, 2)?);
+pub(super) fn mirr(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = array_numbers(&a.first().ok_or(CellError::Value)?.value, c)?;
+    let (fr, rr) = (num(a, 1, c)?, num(a, 2, c)?);
     let n = v.len() as f64;
     if v.len() < 2 {
         return Err(CellError::Div0);
@@ -344,8 +343,8 @@ pub(super) fn mirr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(r)
 }
 
-pub(super) fn fvschedule(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let mut p = num(a, 0)?;
+pub(super) fn fvschedule(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let mut p = num(a, 0, c)?;
     for v in flatten(a.get(1..2).unwrap_or(&[])) {
         let r = match v {
             Value::Number(n) => n,
@@ -358,40 +357,40 @@ pub(super) fn fvschedule(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(p)
 }
 
-pub(super) fn effect(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (nom, n) = (num(a, 0)?, num(a, 1)?.trunc());
+pub(super) fn effect(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (nom, n) = (num(a, 0, c)?, num(a, 1, c)?.trunc());
     if nom <= 0.0 || n < 1.0 {
         return Err(CellError::Num);
     }
     num_val((1.0 + nom / n).powf(n) - 1.0)
 }
 
-pub(super) fn nominal(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (eff, n) = (num(a, 0)?, num(a, 1)?.trunc());
+pub(super) fn nominal(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (eff, n) = (num(a, 0, c)?, num(a, 1, c)?.trunc());
     if eff <= 0.0 || n < 1.0 {
         return Err(CellError::Num);
     }
     num_val(n * ((1.0 + eff).powf(1.0 / n) - 1.0))
 }
 
-pub(super) fn ispmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (rate, per, np, pv) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, num(a, 3)?);
+pub(super) fn ispmt(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (rate, per, np, pv) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?, num(a, 3, c)?);
     if np == 0.0 {
         return Err(CellError::Div0);
     }
     num_val(pv * rate * (per / np - 1.0))
 }
 
-pub(super) fn pduration(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (rate, pv, fv) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
+pub(super) fn pduration(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (rate, pv, fv) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
     if rate <= 0.0 || pv <= 0.0 || fv <= 0.0 {
         return Err(CellError::Num);
     }
     num_val((fv.ln() - pv.ln()) / (1.0 + rate).ln())
 }
 
-pub(super) fn rri(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (np, pv, fv) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
+pub(super) fn rri(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (np, pv, fv) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
     if np <= 0.0 || pv == 0.0 {
         return Err(CellError::Num);
     }
@@ -408,15 +407,15 @@ fn dollar_digits(fraction: f64) -> R<f64> {
     Ok(10f64.powf(fraction.log10().ceil()))
 }
 
-pub(super) fn dollarde(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, f) = (num(a, 0)?, num(a, 1)?.trunc());
+pub(super) fn dollarde(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, f) = (num(a, 0, c)?, num(a, 1, c)?.trunc());
     let p = dollar_digits(f)?;
     let int = x.trunc();
     num_val(int + (x - int) * p / f)
 }
 
-pub(super) fn dollarfr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, f) = (num(a, 0)?, num(a, 1)?.trunc());
+pub(super) fn dollarfr(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, f) = (num(a, 0, c)?, num(a, 1, c)?.trunc());
     let p = dollar_digits(f)?;
     let int = x.trunc();
     num_val(int + (x - int) * f / p)
