@@ -48,17 +48,21 @@ impl SheetApp {
 
     pub(super) fn submit_print(&mut self, params: Json) -> Result<Json, String> {
         if self.services.print_native.is_some() && !self.printing.ready() {
-            // Fix: If no printer is selected (e.g. via Quick Print without opening File > Print),
-            // attempt to discover and select the system default printer automatically.
-            if let Some(discover) = &self.services.printers {
-                if self.printing.printers.is_empty() && !self.printing.discovering() {
-                    self.printing.refresh(discover);
-                    return Err("Discovering printers... Please try again in a moment.".into());
-                }
+            if let Some(discover) = &self.services.printers
+                && self.printing.printers.is_empty()
+                && !self.printing.discovering()
+            {
+                // Actionable recovery guidance as requested by CodeRabbit:
+                // Restart discovery if it failed previously, or start it for the first time.
+                let msg = match self.printing.message.as_ref() {
+                    Some(printing::Feedback::DiscoveryFailed) => "Printer discovery failed. Retrying... Please wait.",
+                    Some(printing::Feedback::NoPrinters) => "No printers found. Searching again...",
+                    _ => "Discovering printers... Please try again in a moment.",
+                };
+                self.printing.refresh(discover);
+                return Err(msg.into());
             }
-            if !self.printing.ready() {
-                return Err("Select an available printer in File > Print before submitting.".into());
-            }
+            return Err("Select an available printer in File > Print before submitting.".into());
         }
         let pdf = self.run("file.print", params)?;
         let encoded = pdf.get("base64").and_then(Json::as_str).ok_or("The print command did not produce a PDF.")?;
@@ -97,4 +101,5 @@ impl SheetApp {
         }
     }
 }
+
 
