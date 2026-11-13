@@ -6887,3 +6887,35 @@ fn typing_validation_and_paste_special_read_numeric_text_in_the_workbook_region(
     s.execute("edit.pasteSpecial", json!({"what": "values", "at": "C1", "operation": "multiply"})).unwrap();
     assert_eq!(v(&s, "C1"), Value::Number(3.0));
 }
+
+#[test]
+fn currency_cell_style_takes_the_region_currency() {
+    let mut s = pt_br();
+    s.execute("home.cellStyle", json!({"range": "A1", "name": "Currency"})).unwrap();
+    assert!(fmt_of(&s, "A1").contains("\"R$\""), "{}", fmt_of(&s, "A1"));
+    let mut s = self::s();
+    s.execute("home.cellStyle", json!({"range": "A1", "name": "Currency"})).unwrap();
+    assert_eq!(fmt_of(&s, "A1"), crate::cmd::format::format_code_for("Accounting"));
+}
+
+#[test]
+fn arraytotext_separates_items_with_the_region_list_separator() {
+    let mut s = pt_br();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=ARRAYTOTEXT({1.5,2})"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("1,5; 2"));
+    let mut s = self::s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=ARRAYTOTEXT({1.5,2})"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("1.5, 2"));
+}
+
+#[test]
+fn text_import_without_a_delimiter_uses_the_region_list_separator() {
+    let mut s = pt_br();
+    let r = s.execute("data.fromTextCsv", json!({"text": "a;b\n1,5;2"})).unwrap();
+    assert_eq!(r["cols"], 2, "{r}");
+    assert_eq!([v(&s, "A2"), v(&s, "B2")], [Value::Number(1.5), Value::Number(2.0)]);
+    let mut s = self::s();
+    let r = s.execute("data.fromTextCsv", json!({"text": "a,b\n1.5,2"})).unwrap();
+    assert_eq!(r["cols"], 2, "{r}");
+    assert_eq!([v(&s, "A2"), v(&s, "B2")], [Value::Number(1.5), Value::Number(2.0)]);
+}

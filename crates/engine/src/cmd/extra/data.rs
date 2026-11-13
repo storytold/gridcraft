@@ -93,9 +93,12 @@ pub(super) fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
             }
             out
         } else {
+            // Without a delimiter, a tab in the first line means TSV; otherwise the region's list
+            // separator, as the CSV export writes it (`;` where the decimal is `,`, as in pt-BR).
+            let fallback = if s.region().decimal == ',' { ';' } else { ',' };
             let delim = str_param(p, "delimiter")
                 .and_then(|d| d.chars().next())
-                .unwrap_or(if text.lines().next().is_some_and(|l| l.contains('\t')) { '\t' } else { ',' });
+                .unwrap_or(if text.lines().next().is_some_and(|l| l.contains('\t')) { '\t' } else { fallback });
             let region = s.region();
             let opts = gridcraft_xlsx::CsvOptions { delimiter: delim as u8, max_used_cells: Some(MAX_IMPORT_CELLS), region, ..Default::default() };
             // The cell limit is enforced while parsing, before an oversized file is stored.

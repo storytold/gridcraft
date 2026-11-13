@@ -88,9 +88,7 @@ fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> R<Vec<usize>
     let columns: Vec<Option<usize>> = (0..crit.cols)
         .map(|c| match crit.get(0, c) {
             Some(Value::Text(t)) => find_column(db, t, decimal),
-            Some(Value::Number(n)) => {
-                find_column(db, &gridcraft_core::number_to_text(*n).replace('.', decimal.encode_utf8(&mut [0; 4])), decimal)
-            }
+            Some(Value::Number(n)) => find_column(db, &gridcraft_core::number_to_text(*n).replace('.', decimal.encode_utf8(&mut [0; 4])), decimal),
             _ => None,
         })
         .collect();

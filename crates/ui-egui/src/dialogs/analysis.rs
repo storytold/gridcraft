@@ -37,12 +37,19 @@ pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, c
         // is not a number is refused: a target of 0 would overwrite the changing cell for nothing.
         match super::parse_in_region(&to, d.region) {
             Some(to) => match app.run("data.goalSeek", json!({"set": set, "to": to, "changing": changing})) {
-                Ok(r) => app.toast = Some((format!("Goal Seeking found a solution: {}", r["value"]), crate::now_ms())),
+                Ok(r) => app.toast = Some((goal_seek_message(&r["value"], d.region), crate::now_ms())),
                 Err(e) => app.message = Some(("Goal Seek".into(), crate::clean_error(&e))),
             },
             None => app.message = Some(("Goal Seek".into(), "To value must be a number.".into())),
         }
     }
+}
+
+/// The toast after Goal Seek: the solution with the workbook region's decimal separator
+/// ("7,16" in pt-BR).
+fn goal_seek_message(value: &Json, region: &gridcraft_engine::core::Region) -> String {
+    let value = value.to_string().replace('.', &region.decimal.to_string());
+    format!("Goal Seeking found a solution: {value}")
 }
 
 /// The fields of one Analysis ToolPak tool's form (input and options; output is drawn apart).
@@ -742,5 +749,18 @@ pub(super) fn solver_results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
             }
         }
         *open = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gridcraft_engine::core::region::{default_region, find};
+
+    #[test]
+    fn goal_seek_message_uses_the_region_decimal_separator() {
+        let Some(pt) = find("pt-BR") else { panic!("pt-BR region") };
+        assert_eq!(goal_seek_message(&json!(7.16), pt), "Goal Seeking found a solution: 7,16");
+        assert_eq!(goal_seek_message(&json!(7.16), default_region()), "Goal Seeking found a solution: 7.16");
     }
 }

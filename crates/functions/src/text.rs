@@ -766,6 +766,8 @@ fn arraytotext(a: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     // Strict output is an array constant, whose elements are split by `,`: a region decimal comma
     // would make `{1,5,2,5}` read as four numbers, so it keeps the formula language's `.`.
     let decimal = if strict { '.' } else { ctx.region().decimal };
+    // Concise items are separated as the region lists them: `1,5; 2` where the decimal is `,`.
+    let separator = if decimal == ',' { "; " } else { ", " };
     let arr = as_array(&arg(a, 0)?.value);
     let mut out = String::new();
     if strict {
@@ -774,9 +776,9 @@ fn arraytotext(a: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     for r in 0..arr.rows {
         for c in 0..arr.cols {
             if r > 0 && c == 0 {
-                out.push_str(if strict { ";" } else { ", " });
+                out.push_str(if strict { ";" } else { separator });
             } else if c > 0 {
-                out.push_str(if strict { "," } else { ", " });
+                out.push_str(if strict { "," } else { separator });
             }
             push_capped(&mut out, &value_text(arr.get(r, c).unwrap_or(&Value::Empty), strict, decimal))?;
         }

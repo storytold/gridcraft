@@ -688,8 +688,7 @@ fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let items: Vec<(&str, String)> = names
         .iter()
         .map(|n| {
-            let code = gridcraft_engine::cmd::format::format_code_for(n);
-            let preview = app.session.active().map(|d| gridcraft_engine::display::format(&sample, code, &d.wb).text).unwrap_or_default();
+            let preview = app.session.active().map(|d| format_preview(&sample, n, &d.wb)).unwrap_or_default();
             (*n, format!("{:<12}   {preview}", lang.tr(n)))
         })
         .chain(std::iter::once(("__more", format!("{:>12}", lang.tr("More Number Formats…")))))
@@ -700,6 +699,13 @@ fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
             n => act(app, "home.numberFormat", json!({"format": n})),
         }
     }
+}
+
+/// The sample cell shown in the format `name` the workbook's region offers, as the command
+/// applies it (`R$ 1.234,50` for Currency in pt-BR).
+fn format_preview(sample: &gridcraft_engine::core::Value, name: &str, wb: &gridcraft_engine::model::Workbook) -> String {
+    let code = gridcraft_engine::cmd::format::format_code_in(name, wb.region);
+    gridcraft_engine::display::format(sample, &code, wb).text
 }
 
 fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
@@ -816,5 +822,15 @@ mod accounting_symbol_tests {
             let symbol = tag.trim_start_matches("[$").split('-').next().unwrap_or_default();
             assert_eq!(out.fill.map(|(c, at)| (c, out.text[..at].trim_start())), Some((' ', symbol)), "{label}");
         }
+    }
+
+    #[test]
+    fn format_preview_uses_the_region_codes() {
+        let mut wb = gridcraft_engine::model::Workbook::new();
+        let sample = Value::Number(1234.5);
+        assert_eq!(format_preview(&sample, "Currency", &wb), "$1,234.50");
+        let Some(pt) = gridcraft_engine::core::region::find("pt-BR") else { panic!("pt-BR region") };
+        wb.region = pt;
+        assert_eq!(format_preview(&sample, "Currency", &wb), "R$ 1.234,50");
     }
 }
