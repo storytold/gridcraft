@@ -139,6 +139,23 @@ fn depreciation() {
 }
 
 #[test]
+fn amor_functions_have_no_basis_2() {
+    // Excel answers basis 2 (Actual/360) with #NUM! for both, and takes 0, 1, 3 and 4 (#4055).
+    let args = |b: f64| vec![n(1000.0), d(2023, 1, 1), d(2023, 7, 1), n(100.0), n(1.0), n(0.2), n(b)];
+    for f in ["AMORLINC", "AMORDEGRC"] {
+        is_err(ev(f, args(2.0)), CellError::Num);
+        is_err(ev(f, args(2.9)), CellError::Num);
+        for b in [0.0, 1.0, 3.0, 4.0] {
+            assert!(matches!(ev(f, args(b)), Value::Number(_)), "{f} basis {b}");
+        }
+    }
+    close(ev("AMORLINC", args(0.0)), 200.0);
+    close(ev("AMORDEGRC", args(0.0)), 320.0);
+    // Omitted, the basis is 0.
+    close(ev("AMORLINC", args(0.0)[..6].to_vec()), 200.0);
+}
+
+#[test]
 fn coupons() {
     let args = |f: &str| ev(f, vec![d(2011, 1, 25), d(2011, 11, 15), n(2.0), n(1.0)]);
     close(args("COUPDAYBS"), 71.0);
