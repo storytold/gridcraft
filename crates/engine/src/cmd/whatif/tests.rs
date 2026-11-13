@@ -341,3 +341,41 @@ fn scenario_summary_counts_result_rows_in_its_cell_limit() {
     let err = s.execute("data.scenarioSummary", json!({"resultCells": "C1:C255"})).unwrap_err().to_string();
     assert!(err.contains("too many cells"), "{err}");
 }
+
+#[test]
+fn consolidate_propagates_source_errors_in_arithmetic_modes() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=NA()"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "10"})).unwrap();
+    for func in ["sum", "average", "max", "min", "product"] {
+        s.execute(
+            "data.consolidate",
+            json!({"sources": ["Sheet1!A1", "Sheet1!B1"], "destination": "D1", "function": func, "topRow": false, "leftColumn": false}),
+        )
+        .unwrap();
+        assert_eq!(v(&s, "D1"), Value::Error(gridcraft_core::CellError::NA), "function {func} should propagate #N/A");
+    }
+    s.execute(
+        "data.consolidate",
+        json!({"sources": ["Sheet1!A1", "Sheet1!B1"], "destination": "D1", "function": "count", "topRow": false, "leftColumn": false}),
+    )
+    .unwrap();
+    assert_eq!(n(&s, "D1"), 2.0);
+    s.execute(
+        "data.consolidate",
+        json!({"sources": ["Sheet1!A1", "Sheet1!B1"], "destination": "D1", "function": "countNums", "topRow": false, "leftColumn": false}),
+    )
+    .unwrap();
+    assert_eq!(n(&s, "D1"), 1.0);
+
+    s.execute("cell.set", json!({"cell": "A2", "input": "=1/0"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "0"})).unwrap();
+    for func in ["sum", "average", "max", "min", "product"] {
+        s.execute(
+            "data.consolidate",
+            json!({"sources": ["Sheet1!A2", "Sheet1!B2"], "destination": "D2", "function": func, "topRow": false, "leftColumn": false}),
+        )
+        .unwrap();
+        assert_eq!(v(&s, "D2"), Value::Error(gridcraft_core::CellError::Div0), "function {func} should propagate #DIV/0!");
+    }
+}

@@ -12,6 +12,7 @@ struct Agg {
     product: f64,
     min: f64,
     max: f64,
+    error: Option<gridcraft_core::CellError>,
 }
 
 impl Agg {
@@ -20,23 +21,34 @@ impl Agg {
             return;
         }
         self.count += 1;
-        if let Value::Number(n) = v {
-            if self.nums == 0 {
-                self.min = *n;
-                self.max = *n;
-                self.product = 1.0;
+        match v {
+            Value::Number(n) => {
+                if self.nums == 0 {
+                    self.min = *n;
+                    self.max = *n;
+                    self.product = 1.0;
+                }
+                self.nums += 1;
+                self.sum += n;
+                self.product *= n;
+                self.min = self.min.min(*n);
+                self.max = self.max.max(*n);
             }
-            self.nums += 1;
-            self.sum += n;
-            self.product *= n;
-            self.min = self.min.min(*n);
-            self.max = self.max.max(*n);
+            Value::Error(e) if self.error.is_none() => self.error = Some(*e),
+            _ => {}
         }
     }
     fn result(&self, func: &str) -> Value {
+        if func == "count" {
+            return Value::number(self.count as f64);
+        }
+        if matches!(func, "countNums" | "countnums") {
+            return Value::number(self.nums as f64);
+        }
+        if let Some(e) = self.error {
+            return Value::Error(e);
+        }
         match func {
-            "count" => Value::number(self.count as f64),
-            "countNums" | "countnums" => Value::number(self.nums as f64),
             "average" => {
                 if self.nums == 0 {
                     Value::Error(gridcraft_core::CellError::Div0)
