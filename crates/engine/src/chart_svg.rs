@@ -30,7 +30,7 @@ pub(crate) fn chart_svg(wb: &Workbook, sheet: usize, chart: &Chart, style: &str,
         return Ok(None);
     }
     let data = gridcraft_chart::resolve(wb, sheet, chart);
-    let prims = gridcraft_chart::render_in(chart, &data, w, h, &HelveticaMeasure, wb.region);
+    let prims = gridcraft_chart::render_in(chart, &data, w, h, &HelveticaMeasure, wb.region, wb.date_system);
     match prims_svg_within(&prims, w, h, style, budget) {
         Some(svg) => Ok(Some(svg)),
         None => Err(crate::EngineError::Other(format!(

@@ -298,14 +298,16 @@ fn ref_format(wb: &Workbook, sheet: usize, formula: &str) -> String {
         .unwrap_or_else(|| "General".into())
 }
 
-fn value_text(v: &Value) -> String {
+/// A category cell as text; a number is written with the region's `decimal` separator.
+fn value_text(v: &Value, decimal: char) -> String {
     match v {
         Value::Empty => String::new(),
+        Value::Number(n) if decimal != '.' => number_to_text(*n).replace('.', &decimal.to_string()),
         Value::Number(n) => number_to_text(*n),
         Value::Text(t) => t.to_string(),
         Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.into(),
         Value::Error(e) => e.as_str().into(),
-        Value::Array(a) => a.get(0, 0).map(value_text).unwrap_or_default(),
+        Value::Array(a) => a.get(0, 0).map(|v| value_text(v, decimal)).unwrap_or_default(),
     }
 }
 
@@ -352,7 +354,7 @@ fn category_label(wb: &Workbook, src: Option<(&gridcraft_model::Sheet, RangeRef)
     }
     match v {
         Value::Text(t) => clip_label(t, room),
-        _ => clip_label(&value_text(v), room),
+        _ => clip_label(&value_text(v, wb.region.decimal), room),
     }
 }
 
@@ -442,7 +444,7 @@ fn series_name(wb: &Workbook, sheet: usize, name: &str) -> String {
     }
     if t.starts_with('=') || parse_ref(wb, sheet, t).is_some() && t.contains('!') || is_defined_name(wb, sheet, t) {
         let vals = eval_list(wb, sheet, t);
-        let parts: Vec<String> = vals.iter().map(value_text).filter(|s| !s.is_empty()).take(8).collect();
+        let parts: Vec<String> = vals.iter().map(|v| value_text(v, wb.region.decimal)).filter(|s| !s.is_empty()).take(8).collect();
         return parts.join(" ");
     }
     t.to_string()
