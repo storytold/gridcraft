@@ -95,8 +95,9 @@ pub(crate) fn render_general(sec: &Section, v: f64, width: usize, decimal: char)
     out
 }
 
-/// Renders a date/time. `None` when the serial is outside the supported range.
-pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out> {
+/// Renders a date/time with the month and day names and AM/PM of `region`. `None` when the
+/// serial is outside the supported range.
+pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem, region: &Region) -> Option<Out> {
     if !v.is_finite() || !(0.0..max_serial(sys) as f64 + 1.0).contains(&v) {
         return None;
     }
@@ -124,7 +125,8 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out>
     let second = (ms / 1000) % 60;
     let milli = ms % 1000;
     // No date in the section's calendar (serial 60 under `B2`): shown like an out-of-range date.
-    let date = sec.calendar.date(&dt)?;
+    let with_day = sec.toks.iter().any(|t| matches!(t, Tok::Date(DatePart::Day(1 | 2))));
+    let date = sec.calendar.date(&dt, region, with_day)?;
     let mut out = Out::default();
     for t in &sec.toks {
         match t {
@@ -172,7 +174,7 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out>
                     DatePart::ElapsedH(n) => push_padded(text, total_ms / 3_600_000, n),
                     DatePart::ElapsedM(n) => push_padded(text, total_ms / 60_000, n),
                     DatePart::ElapsedS(n) => push_padded(text, total_ms / 1000, n),
-                    DatePart::AmPm => text.push_str(if hour >= 12 { "PM" } else { "AM" }),
+                    DatePart::AmPm => text.push_str(region.am_pm.get(usize::from(hour >= 12)).copied().unwrap_or("")),
                     DatePart::AP(a, p) => text.push(if hour >= 12 { p } else { a }),
                 }
             }
