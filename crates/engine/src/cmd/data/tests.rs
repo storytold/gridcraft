@@ -257,6 +257,26 @@ fn validation_circles_move_with_inserted_and_deleted_rows_and_go_with_their_shee
 }
 
 #[test]
+fn validation_circles_follow_their_cells_through_cut_and_paste() {
+    let mut s = qty_sheet();
+    s.execute("data.circleInvalid", json!({})).unwrap();
+    s.execute("edit.cut", json!({"range": "A3:A4"})).unwrap();
+    s.execute("edit.paste", json!({"at": "C1"})).unwrap();
+    assert_eq!(circles(&s, "Sheet1"), ["C1", "C2", "A5"], "the moved cells take their circles along");
+    // Dragging the selection's border moves them as Cut and Paste does.
+    s.execute("range.move", json!({"range": "C1:C2", "to": "E5"})).unwrap();
+    assert_eq!(circles(&s, "Sheet1"), ["E5", "E6", "A5"]);
+    // Cut and pasted onto another sheet, a cell loses its circle: each sheet keeps its own.
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A5"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Two"})).unwrap();
+    s.execute("edit.paste", json!({"at": "B2"})).unwrap();
+    assert_eq!(circles(&s, "Sheet1"), ["E5", "E6"]);
+    assert!(circles(&s, "Two").is_empty());
+}
+
+#[test]
 fn validation_circles_are_not_saved_and_stay_on_the_open_sheet_after_a_save() {
     let mut s = qty_sheet();
     s.execute("data.circleInvalid", json!({})).unwrap();

@@ -374,6 +374,8 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                 gridcraft_formula::adjust::Edit::MoveToSheet { from: src, to_sheet: dest_name.clone(), to_row: at.row, to_col: at.col }
             };
             rewrite_all_formulas(&mut cx.wb, &src_sheet_name, &e)?;
+            // Recorded like every structural edit, so what follows cells follows the moved block.
+            cx.edits.push((src_sheet_name.clone(), e));
             cx.structural = true;
         }
         let end = at.offset_clamped((tiles_r * h) as i64 - 1, (tiles_c * w) as i64 - 1);

@@ -228,7 +228,8 @@ pub struct DocState {
     /// the grid until the command runs again on that sheet or Clear Validation Circles
     /// (`data.clearValidationCircles`) removes them. Session-only, like the Go To list: never
     /// saved and no undo step. They move with their cells when rows, columns or cells are
-    /// inserted or deleted; a sheet that is renamed or deleted loses its circles.
+    /// inserted or deleted, or the cells are cut and pasted (onto another sheet, a cell loses its
+    /// circle); a sheet that is renamed or deleted loses its circles.
     pub validation_circles: Vec<(String, Vec<CellRef>)>,
 }
 
