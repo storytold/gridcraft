@@ -914,6 +914,23 @@ mod tests {
         assert!(cache.look(&d.wb, 0, CellRef::parse("A2").unwrap()).is_some());
     }
 
+    /// A temporarily exhausted shared bank must not make a rule permanently unrenderable.
+    #[test]
+    fn exhausted_shared_bank_does_not_remember_statistics_refusal() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range":"A1","values":[[1],[10]]})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range":"A1:A2","rule":{"type":"top10","rank":1,"preset":"redBorder"}})).unwrap();
+        let d = s.doc().unwrap();
+        let bank = crate::workload::AnalysisBudget::rendering();
+        crate::workload::Meter::new(bank.clone()).charge(1_000_000).unwrap();
+        let mut cache = CfCache::with_cache(bank, d.render_cache.clone(), &d.wb, d.revision);
+        assert!(cache.look(&d.wb, 0, CellRef::parse("A1").unwrap()).is_none());
+        assert!(cache.refused_stats.is_empty());
+        cache.refresh(crate::workload::AnalysisBudget::rendering(), d.render_cache.clone(), &d.wb, d.revision);
+        assert!(cache.look(&d.wb, 0, CellRef::parse("A2").unwrap()).is_some());
+    }
+
     /// Workbook paint expressions are bounded without a command and cannot style a refused value.
     #[test]
     fn rendering_native_broadcast_refusal_has_safe_fallback_even_with_iferror() {
