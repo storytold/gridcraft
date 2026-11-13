@@ -20,7 +20,7 @@ fn rr(a: &str) -> RangeRef {
 fn sample() -> Workbook {
     let mut wb = Workbook::new();
     wb.date_system = DateSystem::D1904;
-    wb.calc = CalcSettings { mode: CalcMode::Manual, iterative: true, max_iterations: 42, max_change: 0.5, precision_as_displayed: true };
+    wb.calc = CalcSettings { mode: CalcMode::Manual, iterative: true, max_iterations: 42, max_change: 0.5, precision_as_displayed: true, r1c1: true };
     wb.protected_structure = true;
     wb.structure_password = Some(gridcraft_model::PasswordHash::new_sha512("s3cret", b"0123456789abcdef"));
     wb.props = DocProps {
@@ -40,7 +40,15 @@ fn sample() -> Workbook {
         s.fill = Fill::solid(Color::Rgb(0xFFEE00));
         s.borders.bottom = BorderLine { style: BorderStyle::Double, color: Color::Rgb(0xFF0000) };
         s.borders.diag_down = BorderLine::thin();
-        s.align = Alignment { h: HAlign::Center, v: VAlign::Top, wrap: true, shrink: false, indent: 1, rotation: -30 };
+        s.align = Alignment {
+            h: HAlign::Center,
+            v: VAlign::Top,
+            wrap: true,
+            shrink: false,
+            indent: 1,
+            rotation: -30,
+            reading_order: Some(ReadingOrder::RightToLeft),
+        };
         s.protection.locked = false;
     });
     let money = wb.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new("#,##0.00 \"€\""));
@@ -64,7 +72,7 @@ fn sample() -> Workbook {
     };
 
     let mut s = Sheet::new("Data & Stuff");
-    let set = |s: &mut Sheet, a: &str, v: Value, style: StyleId| s.cells.set(at(a), Cell { value: v, formula: None, style });
+    let set = |s: &mut Sheet, a: &str, v: Value, style: StyleId| s.cells.set(at(a), Cell { value: v, formula: None, style, py: None });
     set(&mut s, "A1", Value::text("Region"), bold);
     set(&mut s, "B1", Value::text("Amount"), bold);
     set(&mut s, "C1", Value::text("  spaced\nline _x0041_ \u{1} "), StyleId::DEFAULT);
@@ -301,6 +309,7 @@ fn sample() -> Workbook {
         even_footer: "&R&A".into(),
         hf_scale_with_doc: false,
         hf_align_with_margins: true,
+        page_order: PageOrder::OverThenDown,
     };
     s.sparklines.push(Sparkline { cell: at("J2"), source: "B2:B3".into(), kind: SparklineKind::WinLoss, color: Color::Rgb(0x112233), markers: true });
     s.tables.push(Table {
@@ -351,6 +360,7 @@ fn sample() -> Workbook {
         alt: "Logo \"x\"".into(),
     });
     s.shapes.push(Shape {
+        math: Default::default(),
         id: 11,
         kind: ShapeKind::Ellipse,
         anchor: Anchor { cell: at("E10"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0, mode: AnchorMode::Absolute },
@@ -360,6 +370,7 @@ fn sample() -> Workbook {
         format: Default::default(),
     });
     s.shapes.push(Shape {
+        math: Default::default(),
         id: 12,
         kind: ShapeKind::Arrow,
         anchor: Anchor { cell: at("E14"), dx: 0.0, dy: 0.0, width: 64.0, height: 0.0, ..Default::default() },
@@ -369,6 +380,7 @@ fn sample() -> Workbook {
         format: Default::default(),
     });
     s.shapes.push(Shape {
+        math: Default::default(),
         id: 13,
         kind: ShapeKind::TextBox,
         anchor: Anchor { cell: at("E16"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0, ..Default::default() },
@@ -383,6 +395,7 @@ fn sample() -> Workbook {
             font: Some("Arial".into()),
             text_color: Some(Color::Rgb(0x112233)),
             text_outline: Some((Color::Rgb(0xFF0000), 1.5)),
+            text_shadow: Some(Color::Rgb(0x445566)),
             align: Some(ShapeTextAlign::Right),
             anchor: Some(ShapeTextAnchor::Bottom),
             rtl: true,
@@ -407,8 +420,11 @@ fn sample() -> Workbook {
         }],
         legend: LegendPos::Bottom,
         data_labels: true,
+        data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: Some("Region".into()),
         y_title: Some("Amount".into()),
         source: None,
@@ -448,6 +464,9 @@ fn sample() -> Workbook {
     });
     s.charts.push(combo);
     s.charts.push(Chart { kind: ChartKind::Waterfall, legend: LegendPos::None, title: None, ..base_chart.clone() });
+    let mut doughnut = Chart { kind: ChartKind::Doughnut, hole_size: 25, first_slice_angle: 180, legend: LegendPos::Right, ..base_chart.clone() };
+    doughnut.series.push(base_chart.series[0].clone());
+    s.charts.push(doughnut);
 
     wb.sheets = vec![Arc::new(s)];
     let mut s2 = Sheet::new("Hidden");
@@ -589,6 +608,7 @@ fn assert_drawing_and_chart_roundtrip(a: &Sheet, b: &Sheet) {
         assert_eq!(y.title, x.title);
         assert_eq!(y.legend, x.legend);
         assert_eq!(y.data_labels, x.data_labels);
+        assert_eq!((y.hole_size, y.first_slice_angle), (x.hole_size, x.first_slice_angle));
         if !matches!(x.kind, ChartKind::Pie | ChartKind::Doughnut) {
             assert_eq!(y.gridlines, x.gridlines);
             assert_eq!((&y.x_title, &y.y_title), (&x.x_title, &x.y_title));
@@ -854,7 +874,7 @@ fn writing_repairs_invalid_models() {
         table_type: None,
         connection_id: None,
     });
-    s.cells.set(at("B2"), Cell { value: Value::Number(1.0), formula: None, style: StyleId(9999) });
+    s.cells.set(at("B2"), Cell { value: Value::Number(1.0), formula: None, style: StyleId(9999), py: None });
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     let s = back.sheet(0).unwrap();
     assert_eq!(s.visibility, Visibility::Visible, "at least one sheet stays visible");
@@ -993,10 +1013,11 @@ fn icon_sets_always_write_one_cfvo_per_icon() {
     assert_eq!(rules, [3, 4, 5]);
 }
 
-/// Files have no `@` operator: Excel writes `@x` as `_xlfn.SINGLE(x)` in a dynamic-array
-/// formula, and reads it back as `@x`.
+/// Files have no `@` operator. An `@` that legacy Excel implies is written without it in a
+/// legacy formula (no dynamic-array metadata); any other `@x` is written as `_xlfn.SINGLE(x)`
+/// in a dynamic-array formula. Both read back as written in the model.
 #[test]
-fn implicit_intersection_is_written_as_single() {
+fn implicit_intersection_is_written_as_legacy_or_single() {
     let mut wb = Workbook::new();
     let s = wb.sheet_mut(0).unwrap();
     for (r, n) in [(0, 1.0), (1, 3.0), (2, 5.0)] {
@@ -1004,16 +1025,258 @@ fn implicit_intersection_is_written_as_single() {
     }
     s.cells.set(at("D3"), Cell { value: Value::Number(10.0), ..Cell::formula(Formula::new("@A1:A3*2")) });
     s.cells.set(at("D4"), Cell { value: Value::Number(2.0), ..Cell::formula(Formula::new("A1*2")) });
+    s.cells.set(at("D5"), Cell { value: Value::Number(2.0), ..Cell::formula(Formula::new("@(A1:A3*2)")) });
     let bytes = write_xlsx(&wb).unwrap();
     let (xml, metadata) = sheet1_xml(&bytes);
-    assert!(xml.contains("<c r=\"D3\" cm=\"1\"><f t=\"array\" ref=\"D3\">_xlfn.SINGLE(A1:A3)*2</f><v>10</v>"), "{xml}");
+    assert!(xml.contains("<c r=\"D3\"><f>A1:A3*2</f><v>10</v>"), "{xml}");
     assert!(xml.contains("<c r=\"D4\"><f>A1*2</f>"), "{xml}");
+    assert!(xml.contains("<c r=\"D5\" cm=\"1\"><f t=\"array\" ref=\"D5\">_xlfn.SINGLE(A1:A3*2)</f><v>2</v>"), "{xml}");
     assert!(!xml.contains('@'), "{xml}");
     assert!(metadata);
     let (back, _) = read_xlsx(&bytes).unwrap();
     let sh = back.sheet(0).unwrap();
-    assert_eq!(sh.cell(at("D3")).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("@A1:A3*2"));
-    assert_eq!(sh.cell(at("D3")).and_then(|c| c.formula.as_ref()).and_then(|f| f.array), None);
+    let text = |a: &str| sh.cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone());
+    assert_eq!(text("D3").as_deref(), Some("@A1:A3*2"));
+    assert_eq!(text("D4").as_deref(), Some("A1*2"));
+    assert_eq!(text("D5").as_deref(), Some("@(A1:A3*2)"));
+    assert_eq!(sh.cell(at("D5")).and_then(|c| c.formula.as_ref()).and_then(|f| f.array), None);
+}
+
+/// A legacy formula read from a file (shown with Excel's implicit `@`) is saved as it was read,
+/// without dynamic-array metadata; a dynamic-array formula keeps its metadata.
+#[test]
+fn legacy_and_dynamic_formulas_keep_their_kind() {
+    let body = r#"<sheetData>
+      <row r="1"><c r="A1"><v>1</v></c></row>
+      <row r="2"><c r="A2"><v>2</v></c><c r="B2"><f>TANH(A1:A3)+A1:A3</f><v>4</v></c><c r="C2" cm="1"><f t="array" ref="C2:C4">TANH(A1:A3)</f><v>0.76</v></c><c r="D2"><f t="array" ref="D2:D4">TANH(A1:A3)</f><v>0.76</v></c></row>
+      <row r="3"><c r="A3"><v>3</v></c><c r="B3"><f>SUM(A1:A3)</f><v>6</v></c></row>
+    </sheetData>"#;
+    let (wb, _) = read_xlsx(&super::minimal(body, &[], "", "")).unwrap();
+    let text = |wb: &Workbook, a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| (f.text.clone(), f.array)).unwrap();
+    assert_eq!(text(&wb, "B2"), ("TANH(@A1:A3)+@A1:A3".to_string(), None));
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    assert!(xml.contains("<c r=\"B2\"><f>TANH(A1:A3)+A1:A3</f>"), "{xml}");
+    assert!(xml.contains("<c r=\"B3\"><f>SUM(A1:A3)</f>"), "{xml}");
+    // Uncalculated, the spill range is not known yet; the formula stays dynamic.
+    assert!(xml.contains("<c r=\"C2\" cm=\"1\"><f t=\"array\" ref=\"C2\">TANH(A1:A3)</f>"), "{xml}");
+    assert!(xml.contains("<c r=\"D2\"><f t=\"array\" ref=\"D2:D4\">TANH(A1:A3)</f>"), "{xml}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    for a in ["B2", "B3", "C2", "D2"] {
+        assert_eq!(text(&back, a), text(&wb, a), "{a}");
+    }
+}
+
+/// The `<f>` text and `cm` attribute of a cell in a written package's first sheet.
+fn written_formula(bytes: &[u8], a: &str) -> (Option<String>, Option<String>) {
+    let mut pkg = Package::open(bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    let c = sheet.child("sheetData").unwrap().kids("row").flat_map(|r| r.kids("c")).find(|c| c.attr("r") == Some(a)).unwrap();
+    (c.child("f").map(|f| f.text.clone()), c.attr("cm").map(str::to_string))
+}
+
+/// A long operator chain is analysed in full (its ranges are intersected), and so are 64 nested
+/// functions with parenthesised arguments (128 levels), 200 nested functions and a long name used
+/// several times. A legacy formula the analysis cannot finish (names too large to analyse) reads
+/// with one whole-formula `@`, so it shows one value as in legacy Excel, and saves as read.
+/// Saving writes none of them as `_xlfn.SINGLE`, which pre-dynamic-array Excel shows as #NAME?,
+/// nor with `cm`. (`legacy_array_functions.rs` in the engine checks the same on a calculated
+/// workbook.)
+#[test]
+fn long_and_deeply_nested_legacy_formulas_never_gain_single() {
+    let chain = (1..=70).map(|r| format!("B{r}")).collect::<Vec<_>>().join("+");
+    let nested = |depth: usize, inner: &str| format!("{}{inner}{}", "ABS(".repeat(depth), ")".repeat(depth));
+    let parens = |depth: usize, inner: &str| format!("{}{inner}{}", "ABS((".repeat(depth), "))".repeat(depth));
+    let big = vec!["Data!$B$1"; 399].join("+");
+    let uses = format!("{}A1:A3", "Big+".repeat(6));
+    let parts = (1..=30).map(|i| format!("Part_{i}")).collect::<Vec<_>>().join("+");
+    let body = format!(
+        r#"<sheetData>
+      <row r="1"><c r="A1"><v>1</v></c></row>
+      <row r="2"><c r="A2"><v>2</v></c><c r="D2"><f>{chain}</f></c></row>
+      <row r="3"><c r="A3"><v>3</v></c><c r="D3"><f>A1:A3+{chain}</f></c></row>
+      <row r="4"><c r="D4"><f>{}</f></c></row>
+      <row r="5"><c r="D5"><f>{uses}</f></c></row>
+      <row r="6"><c r="D6"><f>{}</f></c></row>
+      <row r="7"><c r="D7"><f>{}</f></c></row>
+      <row r="8"><c r="D8"><f>{parts}</f></c></row>
+    </sheetData>"#,
+        nested(64, "A1:A3"),
+        nested(200, "A1:A3"),
+        parens(64, "A1:A3"),
+    );
+    let part = format!("Data!$A$1:$A$3+{}", vec!["Data!$B$1"; 599].join("+"));
+    let defs: String = (1..=30).map(|i| format!(r#"<definedName name="Part_{i}">{part}</definedName>"#)).collect();
+    let names = format!(r#"<definedNames><definedName name="Big">{big}</definedName>{defs}</definedNames>"#);
+    let (wb, _) = read_xlsx(&super::minimal(&body, &[], "", &names)).unwrap();
+    let text = |wb: &Workbook, a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap();
+    assert_eq!(text(&wb, "D2"), chain);
+    assert_eq!(text(&wb, "D3"), format!("@A1:A3+{chain}"));
+    assert_eq!(text(&wb, "D4"), nested(64, "@A1:A3"));
+    assert_eq!(text(&wb, "D5"), format!("{}@A1:A3", "Big+".repeat(6)));
+    assert_eq!(text(&wb, "D6"), nested(200, "@A1:A3"));
+    assert_eq!(text(&wb, "D7"), parens(64, "@A1:A3"));
+    assert_eq!(text(&wb, "D8"), format!("@({parts})"));
+    let bytes = write_xlsx(&wb).unwrap();
+    assert_eq!(written_formula(&bytes, "D2"), (Some(chain.clone()), None));
+    assert_eq!(written_formula(&bytes, "D3"), (Some(format!("A1:A3+{chain}")), None));
+    assert_eq!(written_formula(&bytes, "D4"), (Some(nested(64, "A1:A3")), None));
+    assert_eq!(written_formula(&bytes, "D5"), (Some(uses), None));
+    assert_eq!(written_formula(&bytes, "D6"), (Some(nested(200, "A1:A3")), None));
+    assert_eq!(written_formula(&bytes, "D7"), (Some(parens(64, "A1:A3")), None));
+    assert_eq!(written_formula(&bytes, "D8"), (Some(parts), None));
+    let (xml, _) = sheet1_xml(&bytes);
+    assert!(!xml.contains("SINGLE") && !xml.contains("t=\"array\""), "{xml}");
+}
+
+/// `@` of a union keeps the union's parentheses when saved, with or without `_xlfn.SINGLE`:
+/// without them the comma separates function arguments or the text does not parse. Redundant
+/// parentheses under `@` survive too, as only those the reader adds back are dropped.
+#[test]
+fn implicit_intersection_keeps_its_parentheses() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    let formulas = [
+        "@(A1:A2,C1:C2)+1",
+        "SQRT(@(A1:A2,C1:C2))",
+        "@(A1:A2,C1:C2)+A1:A3",
+        "@((A1:A2,C1:C2))",
+        "SQRT(@((A1:A2,C1:C2)))",
+        "@(((A1:A2,C1:C2)))",
+        "@((A1:A3*2))",
+        "@(A1:A3)",
+        "@(A1:A3*2)",
+        "@(-A1:A3)",
+    ];
+    for (i, f) in formulas.iter().enumerate() {
+        s.cells.set(CellRef::new(4 + i as u32, 4), Cell::formula(Formula::new(f)));
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    for (i, f) in formulas.iter().enumerate() {
+        let cell = back.sheet(0).unwrap().cell(CellRef::new(4 + i as u32, 4)).and_then(|c| c.formula.as_ref());
+        assert_eq!(cell.map(|c| (c.text.as_str(), c.expr().is_some())), Some((*f, true)), "{f}");
+    }
+}
+
+/// A legacy formula read from a file saves back exactly as it was read, without `cm` or
+/// `_xlfn.SINGLE`: a union already in parentheses where one value is expected, a name whose
+/// definition holds IF of a range (legacy Excel evaluates a name's definition as an array), and a
+/// multi-valued result in the file's own parentheses. A union given to a function is intersected
+/// (`SQRT((@(A1:A2,C1:C2)))`), as the function would otherwise spill it; one under an operator is
+/// shown as Excel shows it. The engine's `legacy_array_functions.rs` checks the same formulas on a
+/// calculated workbook, where nothing spills.
+#[test]
+fn legacy_unions_in_parentheses_and_names_with_if_save_as_read() {
+    let body = r#"<sheetData>
+      <row r="1"><c r="A1"><v>1</v></c><c r="C1"><v>4</v></c><c r="E1"><f>SQRT((A1:A2,C1:C2))</f></c></row>
+      <row r="2"><c r="A2"><v>2</v></c><c r="C2"><v>9</v></c><c r="E2"><f>(A1:A2,C1:C2)+1</f></c></row>
+      <row r="3"><c r="A3"><v>3</v></c><c r="E3"><f>SUM(Flag)</f></c><c r="F3"><f>SQRT(Flag)</f></c></row>
+      <row r="4"><c r="E4"><f>({1,2}+1)</f></c><c r="F4"><f>{1,2}+1</f></c><c r="G4"><f>(((MYUDF(A1)*2)))</f></c></row>
+    </sheetData>"#;
+    let names = r#"<definedNames><definedName name="Flag">IF(Data!$A$1:$A$3&gt;1,1,0)</definedName></definedNames>"#;
+    let (wb, _) = read_xlsx(&super::minimal(body, &[], "", names)).unwrap();
+    let text = |a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap();
+    let bytes = write_xlsx(&wb).unwrap();
+    let cases = [
+        ("E1", "SQRT((A1:A2,C1:C2))"),
+        ("E2", "(A1:A2,C1:C2)+1"),
+        ("E3", "SUM(Flag)"),
+        ("F3", "SQRT(Flag)"),
+        ("E4", "({1,2}+1)"),
+        ("F4", "{1,2}+1"),
+        ("G4", "(((MYUDF(A1)*2)))"),
+    ];
+    let wrong: Vec<_> =
+        cases.iter().map(|(a, f)| (*a, *f, written_formula(&bytes, a))).filter(|(_, f, w)| *w != (Some(f.to_string()), None)).collect();
+    assert!(wrong.is_empty(), "{wrong:?}");
+    assert_eq!(text("E1"), "SQRT((@(A1:A2,C1:C2)))");
+    assert_eq!(text("E2"), "(A1:A2,C1:C2)+1");
+    assert_eq!(text("F3"), "@SQRT(Flag)");
+    let (xml, _) = sheet1_xml(&bytes);
+    assert!(!xml.contains("SINGLE") && !xml.contains("cm=") && !xml.contains("t=\"array\""), "{xml}");
+}
+
+/// An implied `@` whose operand an edit has made a single cell (deleting rows under
+/// `SQRT(@A1:A3)` leaves `A1:A1`, and a name's `$A$1:$A$3` becomes `$A$1:$A$1`) is the one legacy
+/// Excel implies for that range: the formula still saves as a legacy one, without
+/// `_xlfn.SINGLE` or `cm`.
+#[test]
+fn implied_intersection_made_redundant_by_an_edit_saves_legacy() {
+    let body = r#"<sheetData>
+      <row r="5"><c r="B5"><f>SQRT(A1:A3)</f></c><c r="C5"><f>SQRT(Rng)</f></c></row>
+    </sheetData>"#;
+    let names = r#"<definedNames><definedName name="Rng">Data!$A$1:$A$3</definedName></definedNames>"#;
+    let (mut wb, _) = read_xlsx(&super::minimal(body, &[], "", names)).unwrap();
+    let text = |wb: &Workbook, a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap();
+    assert_eq!(text(&wb, "B5"), "SQRT(@A1:A3)");
+    assert_eq!(text(&wb, "C5"), "SQRT(@Rng)");
+    // What deleting rows 2:3 leaves.
+    wb.sheet_mut(0).unwrap().cells.set(at("B5"), Cell::formula(Formula::new("SQRT(@A1:A1)")));
+    wb.names.iter_mut().find(|n| n.name == "Rng").unwrap().formula = "Data!$A$1:$A$1".into();
+    let bytes = write_xlsx(&wb).unwrap();
+    assert_eq!(written_formula(&bytes, "B5"), (Some("SQRT(A1:A1)".into()), None));
+    assert_eq!(written_formula(&bytes, "C5"), (Some("SQRT(Rng)".into()), None));
+    let (xml, _) = sheet1_xml(&bytes);
+    assert!(!xml.contains("SINGLE") && !xml.contains("t=\"array\""), "{xml}");
+}
+
+/// Excel keeps an `@` that legacy evaluation does not imply as `_xlfn.SINGLE` inside a legacy
+/// formula (Excel Online's UnionSpillIntersectionOperatorTest.xlsx, EPPlus's
+/// DefinedNameRelative.xlsx): such formulas save back with it, without `cm`. The reader shows the
+/// implied intersection of a union that is an operator's operand as Excel does, without `@`, and a
+/// spill reference's `@` without parentheses. A typed `@` of a single value saves the same way.
+#[test]
+fn single_in_a_legacy_formula_saves_as_read() {
+    let body = r#"<sheetData>
+      <row r="5"><c r="F5"><v>1</v></c><c r="O6"><f>_xlfn.SINGLE(SUM(_xlfn.ANCHORARRAY(F5)))</f></c><c r="J6"><f>_xlfn.ANCHORARRAY(F5)%</f></c><c r="K6"><f>_xlfn.ANCHORARRAY($F$5)</f></c></row>
+      <row r="25"><c r="F25"><v>1</v></c><c r="G25"><f>(F25,F26)%</f></c><c r="H25"><f>SUM((F25,F26)%)</f></c></row>
+      <row r="83"><c r="F83"><f>_xlfn.SINGLE(5)</f></c><c r="G83"><f>_xlfn.SINGLE(RelativeRow)</f></c><c r="H83"><f>_xlfn.SINGLE(H12)</f></c></row>
+      <row r="85"><c r="F85"><f>_xlfn.SINGLE(SUM(F25:F26))</f></c></row>
+      <row r="102"><c r="F102"><f>(F25, _xlfn.SINGLE(F26))</f></c></row>
+    </sheetData>"#;
+    let names = r#"<definedNames><definedName name="RelativeRow">Data!$H1</definedName></definedNames>"#;
+    let (mut wb, _) = read_xlsx(&super::minimal(body, &[], "", names)).unwrap();
+    let text = |wb: &Workbook, a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap();
+    let shown = [
+        ("O6", "@SUM(F5#)"),
+        ("J6", "@F5#%"),
+        ("K6", "@$F$5#"),
+        ("G25", "(F25,F26)%"),
+        ("H25", "SUM((F25,F26)%)"),
+        ("F83", "@5"),
+        ("G83", "@RelativeRow"),
+        ("H83", "@H12"),
+        ("F85", "@SUM(F25:F26)"),
+        ("F102", "(F25,@F26)"),
+    ];
+    let wrong: Vec<_> = shown.iter().map(|(a, f)| (*a, *f, text(&wb, a))).filter(|(_, f, t)| t != f).collect();
+    assert!(wrong.is_empty(), "{wrong:?}");
+    let s = wb.sheet_mut(0).unwrap();
+    s.cells.set(at("B1"), Cell::formula(Formula::new("@SQRT(A1)")));
+    s.cells.set(at("B2"), Cell::formula(Formula::new("@MUNIT(3)")));
+    let bytes = write_xlsx(&wb).unwrap();
+    let saved = [
+        ("O6", "_xlfn.SINGLE(SUM(_xlfn.ANCHORARRAY(F5)))"),
+        ("J6", "_xlfn.ANCHORARRAY(F5)%"),
+        ("K6", "_xlfn.ANCHORARRAY($F$5)"),
+        ("G25", "(F25,F26)%"),
+        ("H25", "SUM((F25,F26)%)"),
+        ("F83", "_xlfn.SINGLE(5)"),
+        ("G83", "_xlfn.SINGLE(RelativeRow)"),
+        ("H83", "_xlfn.SINGLE(H12)"),
+        ("F85", "_xlfn.SINGLE(SUM(F25:F26))"),
+        ("F102", "(F25,_xlfn.SINGLE(F26))"),
+        ("B1", "_xlfn.SINGLE(SQRT(A1))"),
+        ("B2", "_xlfn.MUNIT(3)"),
+    ];
+    let wrong: Vec<_> =
+        saved.iter().map(|(a, f)| (*a, *f, written_formula(&bytes, a))).filter(|(_, f, w)| *w != (Some(f.to_string()), None)).collect();
+    assert!(wrong.is_empty(), "{wrong:?}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    for (a, _) in saved {
+        assert_eq!(text(&back, a), text(&wb, a), "{a}");
+    }
 }
 
 #[test]
@@ -1498,4 +1761,241 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
     let t = b.tables.first().expect("the table survived");
     assert!(t.filter.is_empty(), "the criteria landed on the wrong table column: {:?}", t.filter);
     assert!(b.autofilter.is_none(), "a sheet filter inside a table would be invalid");
+}
+
+#[test]
+fn workbook_view_settings_survive_a_round_trip() {
+    // #3057: a workbook Excel saved with the sheet tabs and both scroll bars hidden
+    // (and a non-default tab split) must open with those settings in the model and
+    // save with them still in the file.
+    let bytes = super::minimal(
+        "",
+        &[],
+        "",
+        "<bookViews><workbookView activeTab=\"0\" showSheetTabs=\"0\" showHorizontalScroll=\"0\" showVerticalScroll=\"0\" tabRatio=\"250\"/></bookViews>",
+    );
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(
+        wb.view,
+        WorkbookView { show_sheet_tabs: false, show_horizontal_scroll: false, show_vertical_scroll: false, tab_ratio: 250 },
+        "the reader takes the view settings from <workbookView>"
+    );
+
+    let out = write_xlsx(&wb).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(out)).unwrap();
+    let mut xml = String::new();
+    z.by_name("xl/workbook.xml").unwrap().read_to_string(&mut xml).unwrap();
+    for attr in ["showSheetTabs=\"0\"", "showHorizontalScroll=\"0\"", "showVerticalScroll=\"0\"", "tabRatio=\"250\""] {
+        assert!(xml.contains(attr), "the writer keeps {attr} in {xml}");
+    }
+
+    // A workbook with the format's defaults writes the bare element it always has.
+    let plain = write_xlsx(&Workbook::new()).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(plain)).unwrap();
+    let mut xml = String::new();
+    z.by_name("xl/workbook.xml").unwrap().read_to_string(&mut xml).unwrap();
+    assert!(xml.contains("<workbookView activeTab=\"0\"/>"), "defaults stay unwritten: {xml}");
+}
+
+/// Three original empty worksheets let view selection be checked through `activeTab`,
+/// independently of the flags and ratio carried by the same window.
+fn workbook_with_window_views(views: &str) -> Vec<u8> {
+    let workbook = format!(
+        r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews>{views}</bookViews><sheets><sheet name="First" sheetId="1" r:id="rId1"/><sheet name="Second" sheetId="2" r:id="rId2"/><sheet name="Third" sheetId="3" r:id="rId3"/></sheets></workbook>"#
+    );
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/></Relationships>"#;
+    let sheet = br#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#;
+    super::make_zip(&[
+        ("[Content_Types].xml", super::CT.as_bytes()),
+        ("_rels/.rels", super::ROOT_RELS.as_bytes()),
+        ("xl/workbook.xml", workbook.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet),
+        ("xl/worksheets/sheet2.xml", sheet),
+        ("xl/worksheets/sheet3.xml", sheet),
+    ])
+}
+
+fn saved_workbook_view_xml(wb: &Workbook) -> String {
+    let bytes = write_xlsx(wb).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut xml = String::new();
+    zip.by_name("xl/workbook.xml").unwrap().read_to_string(&mut xml).unwrap();
+    xml
+}
+
+#[test]
+fn workbook_view_attributes_round_trip_independently() {
+    for (attribute, value, expected) in [
+        ("showSheetTabs", "0", WorkbookView { show_sheet_tabs: false, ..Default::default() }),
+        ("showSheetTabs", "1", WorkbookView::default()),
+        ("showHorizontalScroll", "0", WorkbookView { show_horizontal_scroll: false, ..Default::default() }),
+        ("showHorizontalScroll", "1", WorkbookView::default()),
+        ("showVerticalScroll", "0", WorkbookView { show_vertical_scroll: false, ..Default::default() }),
+        ("showVerticalScroll", "1", WorkbookView::default()),
+        ("tabRatio", "250", WorkbookView { tab_ratio: 250, ..Default::default() }),
+        ("tabRatio", "600", WorkbookView::default()),
+    ] {
+        let view = format!("<workbookView {attribute}=\"{value}\"/>");
+        let (wb, _) = read_xlsx(&workbook_with_window_views(&view)).unwrap();
+        assert_eq!(wb.view, expected, "only {attribute} is supplied");
+        let xml = saved_workbook_view_xml(&wb);
+        assert_eq!(xml.contains(&format!("{attribute}=\"{value}\"")), expected != WorkbookView::default(), "{xml}");
+        for other in ["showSheetTabs", "showHorizontalScroll", "showVerticalScroll", "tabRatio"] {
+            if other != attribute {
+                assert!(!xml.contains(&format!("{other}=")), "unrelated defaults stay omitted: {xml}");
+            }
+        }
+        let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+        assert_eq!(back.view, expected, "{attribute}={value} survives a round trip");
+    }
+}
+
+#[test]
+fn workbook_view_selects_first_visible_window_consistently() {
+    let cases = [
+        (
+            r#"<workbookView visibility="hidden" activeTab="0" showSheetTabs="0" showHorizontalScroll="0" showVerticalScroll="0" tabRatio="111"/><workbookView visibility="veryHidden" activeTab="1" tabRatio="222"/><workbookView visibility="visible" activeTab="2" showSheetTabs="1" showHorizontalScroll="0" showVerticalScroll="1" tabRatio="750"/><workbookView visibility="visible" activeTab="0" tabRatio="250"/>"#,
+            2,
+            WorkbookView { show_sheet_tabs: true, show_horizontal_scroll: false, show_vertical_scroll: true, tab_ratio: 750 },
+        ),
+        // Visibility defaults to visible, so this view takes precedence over a later explicit one.
+        (
+            r#"<workbookView visibility="hidden" activeTab="0" showSheetTabs="0" tabRatio="111"/><workbookView activeTab="1" showVerticalScroll="0" tabRatio="350"/><workbookView visibility="visible" activeTab="2" tabRatio="900"/>"#,
+            1,
+            WorkbookView { show_vertical_scroll: false, tab_ratio: 350, ..Default::default() },
+        ),
+        // No visible window: retain the first window's settings and active sheet as one unit.
+        (
+            r#"<workbookView visibility="hidden" activeTab="1" showSheetTabs="0" tabRatio="100"/><workbookView visibility="veryHidden" activeTab="2" tabRatio="900"/>"#,
+            1,
+            WorkbookView { show_sheet_tabs: false, tab_ratio: 100, ..Default::default() },
+        ),
+    ];
+    for (views, active, view) in cases {
+        let (wb, _) = read_xlsx(&workbook_with_window_views(views)).unwrap();
+        assert_eq!(wb.active_sheet(), active, "activeTab must come from the selected view: {views}");
+        assert_eq!(wb.view, view, "all settings must come from the selected view: {views}");
+        let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+        assert_eq!(back.active_sheet(), active);
+        assert_eq!(back.view, view);
+    }
+}
+
+#[test]
+fn workbook_view_without_a_window_uses_defaults() {
+    for bytes in [super::minimal("", &[], "", ""), workbook_with_window_views("")] {
+        let (wb, _) = read_xlsx(&bytes).unwrap();
+        assert_eq!(wb.active_sheet(), 0);
+        assert_eq!(wb.view, WorkbookView::default());
+        let xml = saved_workbook_view_xml(&wb);
+        assert!(xml.contains("<workbookView activeTab=\"0\"/>"), "missing views keep defaults omitted: {xml}");
+        let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+        assert_eq!(back.active_sheet(), 0);
+        assert_eq!(back.view, WorkbookView::default());
+    }
+}
+
+#[test]
+fn workbook_view_tab_ratio_normalizes_imported_values() {
+    for (raw, expected) in [
+        (None, 600),
+        (Some("0"), 0),
+        (Some("600"), 600),
+        (Some("1000"), 1000),
+        (Some("1001"), 1000),
+        (Some("4294967295"), 1000),
+        (Some("4294967296"), 600),
+        (Some("-1"), 600),
+        (Some("invalid"), 600),
+        (Some(""), 600),
+    ] {
+        let attr = raw.map(|value| format!(" tabRatio=\"{value}\"")).unwrap_or_default();
+        let views = format!("<workbookView{attr}/>");
+        let (wb, _) = read_xlsx(&workbook_with_window_views(&views)).unwrap();
+        assert_eq!(wb.view.tab_ratio, expected, "tabRatio={raw:?}");
+        let xml = saved_workbook_view_xml(&wb);
+        if expected == 600 {
+            assert!(!xml.contains("tabRatio="), "the default is omitted: {xml}");
+        } else {
+            assert!(xml.contains(&format!("tabRatio=\"{expected}\"")), "{xml}");
+        }
+        let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+        assert_eq!(back.view.tab_ratio, expected);
+    }
+}
+
+#[test]
+fn workbook_view_writer_clamps_out_of_range_model_values() {
+    for raw in [1001, u32::MAX] {
+        let mut wb = Workbook::new();
+        wb.view.tab_ratio = raw;
+        let xml = saved_workbook_view_xml(&wb);
+        assert!(xml.contains("tabRatio=\"1000\""), "an out-of-range model value is bounded on write: {xml}");
+        let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+        assert_eq!(back.view.tab_ratio, 1000);
+    }
+}
+
+#[test]
+fn generated_rule_formulas_use_the_top_left_cell_of_every_area() {
+    // Issue #3152: the areas aren't in top-to-bottom order; the formula is written for C2, not C5.
+    let mut wb = Workbook::new();
+    let red = Box::new(Style::default());
+    wb.sheet_mut(0).unwrap().cond_formats.push(CondFormat {
+        ranges: vec![rr("C5:C6"), rr("C2:C3")],
+        rule: CfRule::ContainsText { text: "x".into(), style: red },
+        priority: 1,
+        stop_if_true: false,
+    });
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut xml = String::new();
+    z.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut xml).unwrap();
+    assert!(xml.contains("<formula>NOT(ISERROR(SEARCH(\"x\",C2)))</formula>"), "{xml}");
+}
+
+#[test]
+fn r1c1_reference_style_is_kept() {
+    // #2809: `<calcPr refMode="R1C1"/>` was dropped on open, so a workbook saved by Excel in R1C1
+    // style came back in A1 style.
+    let bytes = super::minimal("<sheetData/>", &[], "", r#"<calcPr calcId="191029" refMode="R1C1"/>"#);
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    assert!(wb.calc.r1c1);
+    let saved = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+    assert_eq!(book.child("calcPr").and_then(|c| c.attr("refMode")), Some("R1C1"));
+    // A1 is the default and isn't written.
+    let saved = write_xlsx(&Workbook::new()).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+    assert_eq!(book.child("calcPr").and_then(|c| c.attr("refMode")), None);
+}
+
+#[test]
+fn remove_personal_information_is_kept_and_honoured() {
+    // #3089: `<workbookPr filterPrivacy="1"/>` was dropped, so a workbook cleaned of personal
+    // information came back with it switched off, and GridCraft wrote the author and company back.
+    let bytes = super::minimal("<sheetData/>", &[], "", r#"<workbookPr filterPrivacy="1"/>"#);
+    let (mut wb, _) = read_xlsx(&bytes).unwrap();
+    assert!(wb.remove_personal_info);
+    wb.props.author = "Jane Example".into();
+    wb.props.company = "Example Co".into();
+    wb.props.title = "Budget".into();
+    let saved = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+    assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), Some("1"));
+    let core = String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap();
+    let app = String::from_utf8(pkg.read("docProps/app.xml").unwrap().unwrap()).unwrap();
+    assert!(!core.contains("Jane Example") && !app.contains("Example Co"), "{core}\n{app}");
+    assert!(core.contains("<dc:title>Budget</dc:title>"), "other properties stay: {core}");
+    // Off (the default), nothing changes.
+    wb.remove_personal_info = false;
+    let saved = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+    assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), None);
+    assert!(String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap().contains("Jane Example"));
 }

@@ -282,6 +282,22 @@ fn save_and_open_roundtrip() {
     let _ = std::fs::remove_file(path);
 }
 
+/// #2255: `parse: false` on `write_range` stores strings as the text they are, so a dd.mm.yyyy
+/// date or a thousands separator survives, and the result names the strings the default read.
+#[test]
+fn write_range_can_store_strings_as_text() {
+    let mut s = server();
+    let row = json!([["05.04.2026", "2.500", "4.25 %", "=1+1"]]);
+    let stored = ok(&mut s, "write_range", json!({"range": "A1", "parse": false, "values": row}));
+    assert_eq!(stored["convertedCount"], 0, "nothing was read: {stored}");
+    let v = ok(&mut s, "read_range", json!({"range": "A1:D1"}));
+    assert_eq!(v["values"], json!([["05.04.2026", "2.500", "4.25 %", 2.0]]), "{v}");
+    // Without it the strings are read like typed input, and the result says which.
+    let read = ok(&mut s, "write_range", json!({"range": "A3", "values": row}));
+    assert_eq!(read["convertedCount"], 3, "{read}");
+    assert_eq!(read["converted"][0], json!({"cell": "A3", "input": "05.04.2026", "stored": "5/4/2026"}), "{read}");
+}
+
 /// An agent builds a small monthly budget through MCP tool calls only.
 #[test]
 fn agent_builds_a_budget() {
@@ -373,6 +389,71 @@ fn serve_loop_over_buffers() {
     assert!(lines[2]["result"]["content"][0]["text"].as_str().unwrap().contains("42"));
 }
 
+/// Streams `len` bytes of `a` from one reused buffer, then `tail`: a huge line costs no memory to
+/// produce, so only the server can make it expensive.
+struct HugeLine {
+    left: u64,
+    tail: &'static [u8],
+    chunk: Vec<u8>,
+}
+
+impl std::io::Read for HugeLine {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let buf = std::io::BufRead::fill_buf(self)?;
+        let n = buf.len().min(out.len());
+        out[..n].copy_from_slice(&buf[..n]);
+        std::io::BufRead::consume(self, n);
+        Ok(n)
+    }
+}
+
+impl std::io::BufRead for HugeLine {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        if self.left > 0 {
+            let n = self.chunk.len().min(usize::try_from(self.left).unwrap_or(usize::MAX));
+            return Ok(&self.chunk[..n]);
+        }
+        Ok(self.tail)
+    }
+    fn consume(&mut self, n: usize) {
+        if self.left > 0 {
+            self.left -= n as u64;
+        } else {
+            self.tail = &self.tail[n..];
+        }
+    }
+}
+
+#[test]
+fn a_line_without_newline_keeps_at_most_the_limit_in_memory() {
+    // #2164: the whole line was buffered before its size was checked (4 GiB here; any size a
+    // client cares to send).
+    let mut input =
+        HugeLine { left: 4 << 30, tail: concat!("\n", r#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#, "\n").as_bytes(), chunk: vec![b'a'; 1 << 20] };
+    let mut buf = Vec::new();
+    assert_eq!(crate::server::read_message(&mut input, &mut buf).unwrap(), Some(false));
+    assert!(buf.capacity() <= 2 * (16 << 20) + 1, "kept {} bytes", buf.capacity());
+    assert_eq!(crate::server::read_message(&mut input, &mut buf).unwrap(), Some(true));
+    assert!(buf.starts_with(br#"{"jsonrpc""#));
+    assert_eq!(crate::server::read_message(&mut input, &mut buf).unwrap(), None);
+}
+
+#[test]
+fn serve_loop_bounds_a_line_without_newline() {
+    // #2164: a 4 GiB line was read whole before its size was checked. Now the server keeps at
+    // most 16 MB of it, answers that it is too large, and reads the next message normally.
+    let input =
+        HugeLine { left: 4 << 30, tail: concat!("\n", r#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#, "\n").as_bytes(), chunk: vec![b'a'; 1 << 20] };
+    let mut out = Vec::new();
+    server().serve(input, &mut out).unwrap();
+    let lines: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["error"]["code"], -32600);
+    assert!(lines[0]["error"]["message"].as_str().unwrap().contains("too large"));
+    assert_eq!(lines[1]["id"], 7);
+    assert!(lines[1].get("result").is_some(), "{}", lines[1]);
+}
+
 #[test]
 fn cell_set_without_input_is_error() {
     let mut s = server();
@@ -431,6 +512,9 @@ fn remote_backend_over_tcp() {
     drop(s);
     handle.join().unwrap();
     assert!(Remote::connect_with_token("127.0.0.1:1", "x".into()).is_err());
+    // A network address is refused before anything, the token included, is sent.
+    let err = Remote::connect_with_token("192.0.2.1:7979", "x".into()).err().unwrap();
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
 }
 
 #[test]

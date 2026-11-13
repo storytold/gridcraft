@@ -2,8 +2,8 @@ use super::layout::{DENSE_BLOCK, SheetLayout};
 use super::objects::draw_cell_picture;
 use super::text::{TextPlacement, draw_text};
 use super::{
-    BorderLine, BorderStyle, Borders, CellRef, Color, Font, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, Underline, Workbook,
-    split_sheet,
+    BorderLine, BorderStyle, Borders, CellRef, Color, Font, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, Underline, Value,
+    Workbook, split_sheet,
 };
 
 // ---------------------------------------------------------------- drawing
@@ -228,6 +228,82 @@ fn draw_border(pg: &mut Page, b: &BorderLine, wb: &Workbook, start: Point, end: 
     pg.stroke_line_dashed(Point::new(x0, y0), Point::new(x1, y1), lw, color, &border_dash(b.style, k));
 }
 
+/// Merged areas active at one row of a downward sweep, kept disjoint: by first column, their last
+/// column and last row. Adding, dropping and looking up a merge costs log(active merges).
+#[derive(Default)]
+struct MergeSweep {
+    cols: std::collections::BTreeMap<u32, (u32, u32)>,
+    /// (last row, first column) of the active merges, soonest ending first.
+    ends: std::collections::BinaryHeap<std::cmp::Reverse<(u32, u32)>>,
+}
+
+impl MergeSweep {
+    /// Moves down to `row` (rows never decrease), dropping the merges that end above it.
+    fn advance(&mut self, row: u32) {
+        while let Some(std::cmp::Reverse((end, col))) = self.ends.peek().copied() {
+            if end >= row {
+                break;
+            }
+            self.ends.pop();
+            self.cols.remove(&col);
+        }
+    }
+
+    /// Does an active merge meet columns `c0..=c1`? The intervals are disjoint, so only the last
+    /// one starting at or before `c1` can.
+    fn meets(&self, c0: u32, c1: u32) -> bool {
+        self.cols.range(..=c1).next_back().is_some_and(|(_, (end, _))| *end >= c0)
+    }
+
+    /// Adds merge `m`, at row `row`, unless it overlaps an active one.
+    fn add(&mut self, m: RangeRef, row: u32) -> bool {
+        self.advance(row);
+        if self.meets(m.start.col, m.end.col) {
+            return false;
+        }
+        self.cols.insert(m.start.col, (m.end.col, m.end.row));
+        self.ends.push(std::cmp::Reverse((m.end.row, m.start.col)));
+        true
+    }
+}
+
+/// The merged areas that meet `block`, ordered by the row where they enter it, then by column,
+/// leaving out any that overlaps one kept before it (only a damaged file has overlapping merges;
+/// Excel drops them when it repairs one). One sweep down the rows instead of a scan of every
+/// merge per cell.
+fn block_merges(sh: &Sheet, block: RangeRef) -> Vec<RangeRef> {
+    let top = |m: &RangeRef| m.start.row.max(block.start.row);
+    let mut merges: Vec<RangeRef> = sh.merges.iter().filter(|m| m.intersects(&block)).copied().collect();
+    merges.sort_by_key(|m| (top(m), m.start.col));
+    let mut sweep = MergeSweep::default();
+    merges.retain(|m| sweep.add(*m, top(m)));
+    merges
+}
+
+/// Answers "is this cell inside a merge?" for cells asked in row-major order, from the merges of
+/// [`block_merges`].
+struct Covered<'a> {
+    merges: &'a [RangeRef],
+    top: u32,
+    next: usize,
+    sweep: MergeSweep,
+}
+
+impl<'a> Covered<'a> {
+    fn new(merges: &'a [RangeRef], block: RangeRef) -> Self {
+        Self { merges, top: block.start.row, next: 0, sweep: MergeSweep::default() }
+    }
+
+    fn covers(&mut self, c: CellRef) -> bool {
+        while let Some(m) = self.merges.get(self.next).filter(|m| m.start.row.max(self.top) <= c.row) {
+            self.sweep.add(*m, m.start.row.max(self.top));
+            self.next += 1;
+        }
+        self.sweep.advance(c.row);
+        self.sweep.meets(c.col, c.col)
+    }
+}
+
 /// Draws the cells of a block: fills, gridlines, data bars, borders and text.
 pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::cf::CfCache>) {
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
@@ -237,17 +313,18 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
     }
     let block = b.range();
     let sh = b.sh;
-    let merges: Vec<RangeRef> = sh.merges.iter().filter(|m| m.intersects(&block)).copied().collect();
-    let covered = |c: CellRef| merges.iter().any(|m| m.contains(c));
-    // Cells worth visiting.
+    let merges = block_merges(sh, block);
+    let by_start: std::collections::HashMap<CellRef, RangeRef> = merges.iter().map(|m| (m.start, *m)).collect();
+    // Cells worth visiting, in row-major order (which `Covered` needs).
+    let mut covered = Covered::new(&merges, block);
     let cells: Vec<CellRef> = if block.count() <= DENSE_BLOCK {
-        block.iter().filter(|c| !covered(*c)).collect()
+        block.iter().filter(|c| !covered.covers(*c)).collect()
     } else {
         let mut set: Vec<CellRef> = sh.cells.iter_range(block).map(|(c, _)| c).collect();
         set.extend(sh.spill.range(block.start..=block.end).map(|(c, _)| *c).filter(|c| block.contains(*c)));
         set.sort_unstable();
         set.dedup();
-        set.retain(|c| !covered(*c));
+        set.retain(|c| !covered.covers(*c));
         set
     };
     pg.save();
@@ -277,13 +354,14 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
         .filter(|(c, l)| {
             l.fill.is_some()
                 || l.cf.is_some()
-                || merges.iter().any(|m| m.start == *c)
+                || by_start.contains_key(c)
                 || !sh.value(*c).is_empty()
                 || l.style.borders != Borders::default()
+                || l.style.num_fmt.as_str() == "checkbox"
         })
         .collect();
     let rect_of = |c: CellRef| -> (f32, f32, f32, f32, bool) {
-        match merges.iter().find(|m| m.start == c) {
+        match by_start.get(&c) {
             Some(m) => {
                 let (x, y, w, h) = b.rect(*m);
                 (x, y, w, h, true)
@@ -321,7 +399,7 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
             continue;
         }
         let bd = &l.style.borders;
-        let (right, bottom) = match merges.iter().find(|m| m.start == *c).filter(|_| merged) {
+        let (right, bottom) = match by_start.get(c).filter(|_| merged) {
             Some(m) => (
                 b.wb.styles.get(sh.style_id(CellRef::new(m.start.row, m.end.col))).borders.right,
                 b.wb.styles.get(sh.style_id(CellRef::new(m.end.row, m.start.col))).borders.bottom,
@@ -343,11 +421,44 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
         }
         if let Some(picture) = sh.cell_pictures.get(c) {
             draw_cell_picture(pg, &picture.data, (x, y, w, h), b.k);
+        } else if let Some(on) = checkbox_state(l, &sh.value(*c)) {
+            draw_checkbox(pg, (x, y, w, h), b.k, on);
         } else {
             draw_text(pg, b, TextPlacement { cell: *c, look: l, rect: (x, y, w, h), merged, merges: &merges, limits: (bx, bx + bw) });
         }
     }
     pg.restore();
+}
+
+/// A checkbox cell prints TRUE/FALSE (and empty) as a box, as on screen (#2972); other values
+/// print as text.
+fn checkbox_state(l: &Look, v: &Value) -> Option<bool> {
+    if l.style.num_fmt.as_str() != "checkbox" || l.cf.as_ref().is_some_and(|cf| cf.hide_value) {
+        return None;
+    }
+    match v {
+        Value::Bool(on) => Some(*on),
+        Value::Empty => Some(false),
+        _ => None,
+    }
+}
+
+/// A checkbox centred in the cell: white with a grey outline, or green with a white tick.
+fn draw_checkbox(pg: &mut Page, (x, y, w, h): (f32, f32, f32, f32), k: f32, on: bool) {
+    let s = (13.2 * k).min(w - 2.0 * k).min(h - 2.0 * k);
+    if s <= 0.0 {
+        return;
+    }
+    let (bx, by) = (x + (w - s) / 2.0, y + (h - s) / 2.0);
+    let corners = [[bx, by], [bx + s, by], [bx + s, by + s], [bx, by + s]];
+    if on {
+        let green = [0x10, 0x7C, 0x41];
+        pg.polygon(&corners, Some(green), Some((green, 0.75 * k)));
+        let tick = [[bx + 0.22 * s, by + 0.52 * s], [bx + 0.42 * s, by + 0.72 * s], [bx + 0.78 * s, by + 0.30 * s]];
+        pg.polyline(&tick, 0.14 * s, [0xFF, 0xFF, 0xFF], &[]);
+    } else {
+        pg.polygon(&corners, Some([0xFF, 0xFF, 0xFF]), Some(([110, 110, 110], 0.75 * k)));
+    }
 }
 
 pub(super) struct PendingPdfLink {
@@ -373,11 +484,12 @@ pub(super) struct PrintedBlock {
 pub(super) fn draw_block_links(pg: &mut Page, b: &Block, page: usize, pending: &mut Vec<PendingPdfLink>) {
     let range = b.range();
     let (Some(&bx), Some(&by), Some(&right), Some(&bottom)) = (b.xs.first(), b.ys.first(), b.xs.last(), b.ys.last()) else { return };
+    let by_start: std::collections::HashMap<CellRef, RangeRef> = block_merges(b.sh, range).into_iter().map(|m| (m.start, m)).collect();
     for (cell, link) in b.sh.hyperlinks.range(range.start..=range.end) {
         if !range.contains(*cell) {
             continue;
         }
-        let cell_range = b.sh.merges.iter().find(|m| m.start == *cell).copied().unwrap_or(RangeRef::cell(*cell));
+        let cell_range = by_start.get(cell).copied().unwrap_or(RangeRef::cell(*cell));
         let (x, y, w, h) = b.rect(cell_range);
         let (x0, y0, x1, y1) = (x.max(bx), y.max(by), (x + w).min(right), (y + h).min(bottom));
         if x1 <= x0 || y1 <= y0 {
@@ -468,4 +580,45 @@ pub(super) fn make_block<'a>(
         ys.push(acc);
     }
     Block { wb, si, sh, rows, cols, xs, ys, k, scale: lay.scale }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::{CellRef, Covered, RangeRef, Sheet, block_merges};
+
+    fn r(a: &str) -> RangeRef {
+        RangeRef::parse(a).unwrap()
+    }
+
+    #[test]
+    fn block_merges_drop_overlaps_and_cover_like_a_scan() {
+        let mut sh = Sheet::new("S");
+        sh.merges = vec![r("B2:C3"), r("E1:F8"), r("B2:B5"), r("A10:D10"), r("H3:H4"), r("Z1:Z2"), r("C3:D4"), r("A1:A1048576")];
+        let block = r("B1:H12");
+        let merges = block_merges(&sh, block);
+        // B2:B5 and C3:D4 overlap B2:C3, which comes first; Z1:Z2 is outside the block.
+        assert_eq!(merges, vec![r("E1:F8"), r("B2:C3"), r("H3:H4"), r("A10:D10")]);
+        let mut covered = Covered::new(&merges, block);
+        for c in block.iter() {
+            assert_eq!(covered.covers(c), merges.iter().any(|m| m.contains(c)), "{}", c.a1());
+        }
+        // Cells asked sparsely, still in order.
+        let mut covered = Covered::new(&merges, block);
+        for (a, want) in [("C1", false), ("F5", true), ("G5", false), ("D10", true), ("H12", false)] {
+            assert_eq!(covered.covers(CellRef::parse(a).unwrap()), want, "{a}");
+        }
+    }
+
+    #[test]
+    fn many_stacked_merges_are_swept_once() {
+        // 50,000 merges over the same cells: one is kept, and the block is checked against it
+        // without comparing every cell with every merge.
+        let mut sh = Sheet::new("S");
+        sh.merges = (0..50_000u32).map(|i| RangeRef::new(CellRef::new(0, 0), CellRef::new(199, 1 + i % 50))).collect();
+        let block = r("A1:AZ200");
+        let merges = block_merges(&sh, block);
+        assert_eq!(merges, vec![r("A1:B200")]);
+        let mut covered = Covered::new(&merges, block);
+        assert_eq!(block.iter().filter(|c| covered.covers(*c)).count(), 400);
+    }
 }

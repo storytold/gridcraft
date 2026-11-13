@@ -40,7 +40,9 @@ fn prefix_sum_work_measurement_and_bulk_policy_cover_the_large_model_shape() {
         let actual = measured(rows);
         let n = u64::from(rows);
         let triangular = n * (n + 1) / 2;
-        assert!(actual >= triangular);
+        // The upstream prefix cache reuses shorter sums, so actual traversal can be
+        // subquadratic; every source value must still be charged at least once.
+        assert!(actual >= n);
         assert!(actual <= triangular + 16 * n, "real SUM charge exceeded the conservative fixture: {rows}/{actual}");
     }
     let rows = 50_000u64;
@@ -77,6 +79,7 @@ fn query_dispatch_caps_local_and_imported_books_and_nested_bulk_calls() {
         label: "query budget probe",
         menu: &[],
         shortcut: None,
+        shortcut_mac: None,
         params: "{}",
         enabled: |_| Ok(()),
         run: bounded,

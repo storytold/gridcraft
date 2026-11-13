@@ -2,6 +2,7 @@
 //! offers the new release: Update and Restart (direct self-update), Download or Later. The flow
 //! itself is `craft_update::updater::Updater`.
 
+use craft_update::CheckResultResponse;
 use craft_update::updater::{Action, Status, Updater};
 
 use crate::SheetApp;
@@ -39,20 +40,22 @@ pub(crate) fn tick(app: &mut SheetApp, ctx: &egui::Context) {
         rt.updater.check_at_start(ctx);
     }
     rt.updater.tick(ctx);
-    let lang = app.ui.language;
-    let outcome = match rt.updater.status() {
-        Status::UpToDate => Some(lang.tr("GridCraft {version} is up to date.").replace("{version}", VERSION)),
-        Status::Failed(e) => Some(lang.tr("Could not check for updates: {error}").replace("{error}", e)),
-        Status::Idle | Status::Checking => None,
-    };
-    if let Some(message) = outcome {
-        rt.updater.dismiss_status();
-        app.message = Some(("GridCraft".into(), message));
-    }
+}
+
+/// Starts the helper of a ready update; it installs once the process has exited.
+pub(crate) fn start_pending_update(app: &mut SheetApp) {
+    app.updates_rt.updater.start_pending_update();
+}
+
+/// Whether the check result window shows: for every status but idle (a requested check, and the
+/// first start after an update, which reports that it installed or why it failed), and never
+/// over the startup prompt.
+fn result_window_shows(status: &Status, prompt_open: bool) -> bool {
+    !prompt_open && !matches!(status, Status::Idle)
 }
 
 pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
-    // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
+    // The close for a ready update waits until no workbook holds unsaved work.
     let clean = !app.session.documents().iter().any(|d| d.is_dirty());
     match app.updates_rt.updater.show_if(ctx, clean) {
         Action::OpenUrl(url) => {
@@ -60,9 +63,42 @@ pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 open(&url);
             }
         }
-        // The guarded close path asks about unsaved work; the restart helper relaunches once the
-        // process has exited.
-        Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        // Quit closes every workbook window. The install helper starts once the app exits.
+        Action::Close => app.request_quit(ctx),
         Action::None => {}
+    }
+    let rt = &mut app.updates_rt;
+    if result_window_shows(rt.updater.status(), rt.updater.prompt_open()) {
+        match craft_update::CheckResultDialog::new(&crate::UPDATE_APP, VERSION).show(ctx, rt.updater.status()) {
+            CheckResultResponse::Close => rt.updater.dismiss_status(),
+            CheckResultResponse::CheckAgain => rt.updater.check_now(ctx),
+            // The next `show_if` asks the window to close once nothing is unsaved.
+            CheckResultResponse::RestartToUpdate => rt.updater.restart_to_update(),
+            CheckResultResponse::None => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_window_shows_every_status_but_idle() {
+        let shown = [
+            Status::Checking,
+            Status::UpToDate,
+            Status::Failed("no network".into()),
+            Status::Installing,
+            Status::Ready,
+            Status::Managed,
+            Status::Updated("0.2.0".into()),
+            Status::InstallFailed("disk full".into()),
+        ];
+        for status in &shown {
+            assert!(result_window_shows(status, false), "{status:?}");
+            assert!(!result_window_shows(status, true), "{status:?} over the prompt");
+        }
+        assert!(!result_window_shows(&Status::Idle, false));
     }
 }
