@@ -391,3 +391,63 @@ fn rejects_spill_child_even_if_output_hides_spill_error() {
     assert!(s.execute(CMD, p).is_err());
     assert!(std::sync::Arc::ptr_eq(&before, &s.doc().unwrap().wb));
 }
+
+/// Stale precedents in a manual workbook are refreshed only in the private trial baseline.
+#[test]
+fn monte_carlo_refreshes_stale_manual_precedents() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range":"A1","values":[[1,2]]})).unwrap();
+    s.execute("cell.set", json!({"cell":"C1","input":"=B1*2"})).unwrap();
+    s.execute("cell.set", json!({"cell":"D1","input":"=A1+C1"})).unwrap();
+    s.execute("formulas.calculationOptions", json!({"mode":"manual"})).unwrap();
+    s.execute("cell.set", json!({"cell":"B1","input":"3"})).unwrap();
+    assert_eq!(value(&s, 0, "C1"), Value::Number(4.0));
+    let p = json!({"inputs":[{"cell":"A1","min":10,"max":10}],"outputs":["D1"],"iterations":2,"samples":false});
+    let job = Job::prepare(&s, &p).unwrap();
+    assert_eq!(value(&s, 0, "C1"), Value::Number(4.0));
+    drop(job);
+    let result = s.execute(CMD, p).unwrap();
+    assert_eq!(result["outputs"][0]["mean"], 16.0);
+    assert_eq!(value(&s, 0, "B1"), Value::Number(3.0));
+}
+
+/// Spill maps count against estimated and charged trial work even when unrelated to outputs.
+#[test]
+fn monte_carlo_bounds_spill_copy_work() {
+    let mut s = model();
+    s.execute("cell.set", json!({"cell":"D1","input":"=SEQUENCE(500)"})).unwrap();
+    let p = json!({"inputs":[{"cell":"A1","min":0,"max":1}],"outputs":["C1"],"iterations":100,"samples":false,"maxWork":10000});
+    let error = s.execute(CMD, p).unwrap_err().to_string();
+    assert!(error.contains("estimated analysis work"), "{error}");
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+}
+
+/// Replay remembers the report name while its reusable parameters stay name-independent.
+#[test]
+fn monte_carlo_journal_configuration_retains_report_name() {
+    let s = model();
+    let mut p = params();
+    p["newSheet"] = json!("Risk");
+    let job = Job::prepare(&s, &p).unwrap();
+    assert_eq!(job.configuration()["newSheet"], "Risk");
+    assert!(job.config.get("newSheet").is_none());
+}
+
+/// Report charts get distinct IDs even when an imported object occupies the top of the ID space.
+#[test]
+fn monte_carlo_chart_ids_remain_distinct_at_u32_boundary() {
+    let mut s = model();
+    let mut p = params();
+    p["iterations"] = json!(2);
+    s.execute(CMD, p.clone()).unwrap();
+    let wb = Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    wb.sheet_mut(1).unwrap().charts[0].id = u32::MAX - 1;
+    s.execute("sheet.activate", json!({"sheet":0})).unwrap();
+    s.execute(CMD, p).unwrap();
+    let charts = &s.doc().unwrap().wb.sheet(2).unwrap().charts;
+    assert_eq!(charts.len(), 2);
+    assert_ne!(charts[0].id, charts[1].id);
+    assert_ne!(charts[0].id, u32::MAX - 1);
+    assert_ne!(charts[1].id, u32::MAX - 1);
+}

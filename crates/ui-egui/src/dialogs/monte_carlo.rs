@@ -1,5 +1,6 @@
 //! Thin editor for the engine's generic Monte Carlo command.
-use super::{Dialog, Json, Map, json};
+use super::ref_edit::{RefLabel, ref_edit};
+use super::{Dialog, Json, Map, SheetApp, json};
 
 /// Reads the configuration only from a recognizable Monte Carlo report on the active sheet.
 /// Invalid or edited report data is left to the user rather than silently run as defaults.
@@ -104,7 +105,7 @@ fn input_parameters(ui: &mut egui::Ui, values: &mut Map<String, Json>) {
 
 /// Draws the bounded input editor, sampling settings, matrix and outputs without evaluating
 /// formulas. Replica settings apply only to LHS; confirmation delegates validation to the engine.
-pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+pub(super) fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     ui.label(
         "Choose numeric input cells and formula outputs. Source values are kept unchanged; optional correlation is on latent Gaussian variables.",
     );
@@ -117,7 +118,15 @@ pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: 
                 ui.group(|ui| {
                     if let Some(values) = item.as_object_mut() {
                         ui.horizontal(|ui| {
-                            text(ui, values, "cell", "Cell:");
+                            let key = format!("monteCarloInput{index}");
+                            if d.refs.target.as_deref() != Some(&key) {
+                                d.values.insert(key.clone(), values.get("cell").cloned().unwrap_or(json!("")));
+                            }
+                            let label = ui.label("Cell:");
+                            ref_edit(app, ui, d, &key, RefLabel::By(label.id), 140.0);
+                            if let Some(value) = d.values.get(&key) {
+                                values.insert("cell".into(), value.clone());
+                            }
                             let mut kind = values.get("distribution").and_then(Json::as_str).unwrap_or("uniform").to_string();
                             let label = ui.label("Distribution:");
                             craft_ui::ComboBox::from_id_salt("distribution")
@@ -142,6 +151,8 @@ pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: 
     });
     if let Some(i) = remove {
         inputs.remove(i);
+        d.refs.target = None;
+        d.refs.collapsed = None;
     }
     if inputs.len() < 32 && ui.button("Add input").clicked() {
         inputs.push(input_template(""));
@@ -206,6 +217,7 @@ pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: 
 /// output references stay line-delimited and correlation rows preserve invalid numeric tokens.
 pub(super) fn params(d: &Dialog) -> Json {
     let mut values = d.values.clone();
+    values.retain(|key, _| !key.starts_with("monteCarloInput"));
     if values.get("method").and_then(Json::as_str) != Some("latinHypercube") {
         values.remove("replicates");
     }
@@ -308,10 +320,13 @@ mod tests {
     fn monte_carlo_added_inputs_use_distribution_defaults_without_overwriting_edits() {
         use egui_kittest::kittest::Queryable as _;
         for (kind, mean) in [("lognormal", 1.0), ("poisson", 10.0)] {
+            let mut session = gridcraft_engine::Session::new();
+            session.new_workbook();
+            let app = SheetApp::new(session, Default::default());
             let d = Dialog::custom("monteCarlo", "Monte Carlo", json!({"inputs":[input_template("A1")],"method":"random"}));
             let mut h = egui_kittest::Harness::builder()
                 .with_size(egui::vec2(1000.0, 1000.0))
-                .build_ui_state(|ui, d: &mut Dialog| form(ui, d, &mut false, &mut true), d);
+                .build_ui_state(|ui, d: &mut Dialog| form(&app, ui, d, &mut false, &mut true), d);
             h.run_steps(2);
             h.get_by_label("Add input").click();
             h.run_steps(2);

@@ -187,14 +187,14 @@ fn call_lifted_within(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx, budget: us
     // `COUNTIF(big_range, SEQUENCE(1e4))`, `CUMIPMT(0.1, 1e7, 1, 1, SEQUENCE(1e4,,1e7,0), 0)`,
     // `MUNIT(SEQUENCE(1e4,,3000,0))`.
     let per_call = scan_len(spec, args).max(1);
-    if !ctx.charge_work((rows as u64).saturating_mul(cols as u64).saturating_add(args.len() as u64)) {
-        return Value::Error(CellError::Num);
-    }
-    let mut cell_args: Vec<Arg> = args.to_vec();
     let mut spent = needles.saturating_mul(per_call);
     if needles > MAX_CELLS || spent > budget {
         return Value::Error(CellError::Num);
     }
+    if !ctx.charge_work((rows as u64).saturating_mul(cols as u64).saturating_add(args.len() as u64)) {
+        return Value::Error(CellError::Num);
+    }
+    let mut cell_args: Vec<Arg> = args.to_vec();
     // Period loops are known before any call runs, so a call over budget does none of them.
     if PERIOD_LOOPS.contains(&spec.name) {
         for r in 0..rows {
@@ -286,6 +286,17 @@ mod tests {
     fn counted_add(a: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
         ctx.random();
         add(a, ctx)
+    }
+
+    /// Impossible output shapes are catchable errors and never trip the host work latch.
+    #[test]
+    fn oversized_broadcast_is_rejected_before_host_reservation() {
+        let mut ctx = BudgetCtx { remaining: 0, kernels: 0, rejected: false };
+        let values = vec![1.0; 3163];
+        let result = super::call_lifted_within(&spec(), &[av(col(&values)), av(row(&values))], &mut ctx, usize::MAX);
+        assert_eq!(result, Value::Error(CellError::Num));
+        assert!(!ctx.rejected);
+        assert_eq!(ctx.kernels, 0);
     }
 
     #[test]
