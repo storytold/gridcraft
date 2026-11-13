@@ -344,9 +344,12 @@ impl RibbonSections {
         // context write lock, so the response must be read outside `ui.input` too.
         let size_typing = ui.ctx().memory(|m| m.has_focus(super::home::font_size_field()));
         let size_rect = if size_typing { ui.ctx().read_response(super::home::font_size_field()).map(|r| r.rect) } else { None };
-        let size_press =
-            size_rect.is_some_and(|rect| ui.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))));
-        let dismiss = ui.input(|i| i.key_pressed(egui::Key::Escape) || (i.pointer.any_pressed() && !any_popup && !size_press));
+        // Dismiss on release, not press: a press on the size combo's arrow arrives one frame
+        // before the release that opens its list, and unpinning on the press would compact
+        // Font before the arrow could open. A press inside the focused field never ends it.
+        let clicking_size_field = size_rect.is_some_and(|rect| ui.input(|i| i.pointer.interact_pos().is_some_and(|p| rect.contains(p))));
+        let pointer_released = ui.input(|i| i.pointer.any_released());
+        let dismiss = ui.input(|i| i.key_pressed(egui::Key::Escape)) || (pointer_released && !any_popup && !clicking_size_field);
         ui.ctx().data_mut(|d| {
             d.insert_temp(current_sections_id(), id);
             let sections = d.get_temp_mut_or_default::<TabSections>(id);
@@ -354,18 +357,16 @@ impl RibbonSections {
             sections.client = client;
             sections.used = 0.0;
             if let Some(group) = keytip_group {
-                // Draw the target group in a natural form (and keep it until its popup closes):
-                // a control's id, and so its popup's anchor, must not move between frames. When
-                // the request cannot name the group, the whole tab takes its natural forms.
-                sections.forced = if sections.plans.iter().any(|plan| plan.label == group) {
-                    Some(vec![(group.to_owned(), sections.natural_level(group))])
-                } else {
-                    // A fresh tab has planned nothing before its first frame, so the whole-tab
-                    // natural layout cannot name the requested group and would draw compact,
-                    // never reaching the control that consumes the one-shot request. Add the
-                    // group at its natural level after the groups already planned.
+                // Draw the whole tab in its natural forms (and keep it until the popup closes):
+                // a control's id, and so its popup's anchor, must not move between frames. A
+                // resize that compacts a preceding group would otherwise shift the requested
+                // group's controls and close the open popup. On a fresh tab no group has planned
+                // yet, so add the requested group itself; without it the request is never drawn.
+                sections.forced = {
                     let mut layout = sections.natural_layout();
-                    layout.push((group.to_owned(), sections.natural_level(group)));
+                    if !layout.iter().any(|(name, _)| name == group) {
+                        layout.push((group.to_owned(), sections.natural_level(group)));
+                    }
                     Some(layout)
                 };
                 sections.forced_used = false;
@@ -377,7 +378,10 @@ impl RibbonSections {
                 // focused size field still counts as the interaction running: the fontSize
                 // keytip opens no popup, and the layout must stay until the field loses focus.
                 let popup_gone = sections.forced_used && !any_popup && !size_typing;
-                let stale = switched || popup_gone || sections.forced_unpin_at.is_some_and(|at| frame > at);
+                // The frame after a dismissal is only a fallback: an open popup (the release that
+                // just opened the size list, or a keytip-opened menu) keeps the layout.
+                let unpin_due = sections.forced_unpin_at.is_some_and(|at| frame > at);
+                let stale = switched || popup_gone || (unpin_due && !any_popup && !size_typing);
                 if stale {
                     sections.forced = None;
                     sections.forced_unpin_at = None;

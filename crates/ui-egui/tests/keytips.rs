@@ -212,6 +212,58 @@ fn a_press_inside_the_focused_size_field_keeps_font_natural() {
 }
 
 #[test]
+fn a_size_arrow_press_in_one_frame_keeps_the_forced_layout_for_the_release() {
+    // The size combo's arrow is outside the text field's rect, and egui clicks on release. A
+    // press that arrives one frame before its release must not schedule the unpin: the next
+    // frame would compact Font before the arrow could open the size list.
+    let mut h = crate::common::builder().with_size(egui::vec2(819.0, 614.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        crate::common::app(blank()),
+    );
+    h.run_steps(4);
+    sequence(&mut h, &[Key::H, Key::F, Key::S], false);
+    assert_ne!(font_level(&h), Some(0), "the keytip draws Font natural at 819 pt");
+    let arrow = h.get_by_role_and_label(egui::accesskit::Role::Button, "Font Size");
+    let pos = arrow.rect().center();
+    let press = |pressed: bool| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.input_mut().events.extend([Event::PointerMoved(pos), press(true)]);
+    h.run_steps(1);
+    // A frame with no release: a press that scheduled the unpin would compact Font here, before
+    // the release arrives on the next frame.
+    h.run_steps(1);
+    assert_ne!(font_level(&h), Some(0), "the press alone keeps Font natural for the release");
+    assert!(!egui::Popup::is_any_open(&h.ctx), "the press alone has not opened the size list");
+    h.input_mut().events.push(press(false));
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the release opens the size list");
+    assert_ne!(font_level(&h), Some(0), "the open size list holds Font natural");
+}
+
+#[test]
+fn a_keytip_font_popup_survives_a_resize_that_would_compact_clipboard() {
+    // At 819 pt Clipboard is natural and Font is natural. A keytip-opened Font Name popup pins
+    // the whole tab's natural layout, so resizing to 806 pt cannot compact Clipboard and shift
+    // Font's control ids out from under the open list.
+    let mut h = crate::common::builder().with_size(egui::vec2(819.0, 614.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        crate::common::app(blank()),
+    );
+    h.run_steps(4);
+    sequence(&mut h, &[Key::H, Key::F, Key::F], false);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the Font name list is open at 819 pt");
+    h.set_size(egui::vec2(806.0, 614.0));
+    h.run_steps(3);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the list survives the resize that would compact Clipboard");
+    assert_ne!(font_level(&h), Some(0), "Font stays natural while its list is open");
+}
+
+#[test]
 fn keyboard_opened_paste_menu_accepts_a_mouse_click_after_keytips_cancel() {
     let mut h = harness(copied_row());
     sequence(&mut h, &[Key::H, Key::V], false);
