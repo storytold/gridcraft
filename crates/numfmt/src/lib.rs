@@ -431,10 +431,12 @@ pub fn canonical_code(code: &str, region: &Region) -> String {
 }
 
 /// `code` with `from_decimal`/`from_group` written as `to_decimal`/`to_group`. A decimal counts
-/// only between two digit placeholders (`0`, `#`, `?`) and a grouping separator also right after
-/// them, where it scales the value, so the `.` of `dd.mm.yyyy` and of `hh:mm:ss.000` stays a date
+/// next to a digit placeholder (`0`, `#`, `?`): between two of them, and in a number section also
+/// at its edges (`0.` and `.00`). A grouping separator also counts right after them, where it
+/// scales the value. A section with date or time parts keeps an edge `.`, so the `.` of
+/// `dd.mm.yyyy` and of `hh:mm:ss.000` stays a date
 /// separator. Quoted text, `[...]` tags and `\` escapes are copied untouched because theirs belong
-/// to the text, not to the format.
+/// to the text, not to the format, and so is the character after `*` (fill) and `_` (space).
 fn remap_separators(code: &str, from_decimal: char, to_decimal: char, from_group: char, to_group: char) -> String {
     if from_decimal == to_decimal && from_group == to_group {
         return code.to_string();
@@ -444,6 +446,10 @@ fn remap_separators(code: &str, from_decimal: char, to_decimal: char, from_group
     let mut quoted = false;
     let mut bracketed = false;
     let mut escaped = false;
+    // The text of the `[...]` tag being copied, to tell `[h]`, `[mm]` and `[ss]` from a colour.
+    let mut tag = String::new();
+    // The current section has a date or time part (`d`, `m`, `y`, `h`, `s`, `[h]`).
+    let mut date = false;
     // The last character copied outside quoted text, a `[...]` tag or an escape.
     let mut prev: Option<char> = None;
     // The previous character is a digit placeholder or a grouping separator already converted.
@@ -471,19 +477,36 @@ fn remap_separators(code: &str, from_decimal: char, to_decimal: char, from_group
             }
             '[' if !quoted => {
                 bracketed = true;
+                tag.clear();
                 out.push(c);
                 prev = None;
                 scaling = false;
             }
             ']' if !quoted => {
                 bracketed = false;
+                date |= !tag.is_empty() && tag.chars().all(|t| matches!(t.to_ascii_lowercase(), 'h' | 'm' | 's'));
                 out.push(c);
                 prev = None;
                 scaling = false;
             }
             _ if quoted || bracketed => {
+                if bracketed {
+                    tag.push(c);
+                }
                 out.push(c);
                 prev = None;
+                scaling = false;
+            }
+            '*' | '_' => {
+                escaped = true;
+                out.push(c);
+                prev = None;
+                scaling = false;
+            }
+            ';' => {
+                date = false;
+                out.push(c);
+                prev = Some(c);
                 scaling = false;
             }
             _ if (c == from_decimal || c == from_group) && prev.is_some_and(is_digit_placeholder) && next.is_some_and(is_digit_placeholder) => {
@@ -500,7 +523,15 @@ fn remap_separators(code: &str, from_decimal: char, to_decimal: char, from_group
                 prev = Some(c);
                 scaling = true;
             }
+            // A decimal point at the edge of the digits (`0.` shows `1234.`, `.00` shows `.50`).
+            // Left alone, `0.` in it-IT would read back as a scaling separator.
+            _ if c == from_decimal && !date && (prev.is_some_and(is_digit_placeholder) || next.is_some_and(is_digit_placeholder)) => {
+                out.push(to_decimal);
+                prev = Some(c);
+                scaling = false;
+            }
             _ => {
+                date |= matches!(c.to_ascii_lowercase(), 'd' | 'm' | 'y' | 'h' | 's');
                 out.push(c);
                 prev = Some(c);
                 scaling = false;
