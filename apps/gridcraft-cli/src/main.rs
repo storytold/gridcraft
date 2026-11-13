@@ -175,8 +175,10 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
     r
 }
 
-fn open(path: &str) -> Result<Session, String> {
+/// Opens `path` in `region`, set before the file is read so its text (CSV, HTML) is read in it.
+fn open(path: &str, region: &'static gridcraft_engine::core::Region) -> Result<Session, String> {
     let mut s = Session::new();
+    s.set_region(region);
     exec(&mut s, "file.open", json!({"path": path}))?;
     Ok(s)
 }
@@ -187,18 +189,20 @@ fn blank() -> Session {
     s
 }
 
-/// Applies `--region`, or the system locale without it, to the session and its open document;
-/// an unknown tag is an error.
-fn apply_region(s: &mut Session, a: &Args) -> Result<(), String> {
+/// The region `--region` names, or the system locale without it; an unknown tag is an error.
+fn region_arg(a: &Args) -> Result<&'static gridcraft_engine::core::Region, String> {
     let Some(tag) = a.opt("region") else {
-        s.set_region(gridcraft_engine::core::region::system());
-        return Ok(());
+        return Ok(gridcraft_engine::core::region::system());
     };
-    let region = gridcraft_engine::core::region::find(tag).ok_or_else(|| {
+    gridcraft_engine::core::region::find(tag).ok_or_else(|| {
         let known: Vec<&str> = gridcraft_engine::core::region::all().iter().map(|r| r.tag).collect();
         format!("unknown region {tag:?} (use one of {})", known.join(", "))
-    })?;
-    s.set_region(region);
+    })
+}
+
+/// Applies `--region`, or the system locale without it, to the session and its open document.
+fn apply_region(s: &mut Session, a: &Args) -> Result<(), String> {
+    s.set_region(region_arg(a)?);
     Ok(())
 }
 
@@ -267,7 +271,7 @@ fn info(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &[], &["json"])?;
     let path = a.pos(0, "<file>")?;
     a.no_extra(1)?;
-    let mut s = open(path)?;
+    let mut s = open(path, gridcraft_engine::core::region::default_region())?;
     let v = exec(&mut s, "document.inspect", json!({}))?;
     if a.has("json") {
         outln!("{}", pretty(&v));
@@ -313,7 +317,7 @@ fn convert(args: &[String]) -> Result<(), String> {
     if !pdf && gridcraft_engine::io::FileKind::from_path(out).is_none() {
         return Err(format!("{out}: unknown output format (use .xlsx, .csv, .tsv, .json, .html or .pdf)"));
     }
-    let mut s = open(input)?;
+    let mut s = open(input, gridcraft_engine::core::region::default_region())?;
     activate_sheet(&mut s, a.opt("sheet"))?;
     if pdf {
         let result = exec(&mut s, "file.exportPdf", json!({"path": out}))?;
@@ -332,7 +336,7 @@ fn eval(args: &[String]) -> Result<(), String> {
     let formula = a.pos(0, "<formula>")?;
     a.no_extra(1)?;
     let mut s = match a.opt("in") {
-        Some(p) => open(p)?,
+        Some(p) => open(p, region_arg(&a)?)?,
         None => blank(),
     };
     apply_region(&mut s, &a)?;
@@ -402,7 +406,7 @@ fn cat(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["range", "sheet"], &["formulas", "csv"])?;
     let path = a.pos(0, "<file>")?;
     a.no_extra(1)?;
-    let mut s = open(path)?;
+    let mut s = open(path, gridcraft_engine::core::region::default_region())?;
     print_range(&mut s, a.opt("range"), a.opt("sheet"), a.has("formulas"), a.has("csv"))
 }
 
@@ -442,7 +446,7 @@ fn run(args: &[String]) -> Result<(), String> {
     a.no_extra(0)?;
     let mut s = match (a.opt("in"), a.opt("sample")) {
         (Some(_), Some(_)) => return Err("give --in or --sample, not both".into()),
-        (Some(p), None) => open(p)?,
+        (Some(p), None) => open(p, region_arg(&a)?)?,
         (None, Some(name)) => {
             let mut s = Session::new();
             exec(&mut s, "file.new", json!({"sample": name}))?;
@@ -565,7 +569,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
         }
         None => {
             let session = match (a.opt("in"), a.opt("sample")) {
-                (Some(p), _) => open(p)?,
+                (Some(p), _) => open(p, gridcraft_engine::core::region::default_region())?,
                 (None, Some(name)) => {
                     let mut s = Session::new();
                     exec(&mut s, "file.new", json!({"sample": name}))?;
@@ -638,6 +642,21 @@ mod tests {
             parse_command(r#"{"command":"home.insertSheet","params":{"name":"R"}}"#).unwrap(),
             Some(("home.insertSheet".into(), json!({"name": "R"})))
         );
+    }
+
+    /// The region is set before the file is read, so a CSV's numbers are read in it.
+    #[test]
+    fn a_file_opens_in_the_requested_region() {
+        let dir = std::env::temp_dir().join(format!("gc-cli-region-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("br.csv");
+        std::fs::write(&path, "valor;data\n1.234,56;25/09/2026\n").unwrap();
+        let pt = gridcraft_engine::core::region::find("pt-BR").unwrap();
+        let s = open(path.to_str().unwrap(), pt).unwrap();
+        let wb = &s.active().unwrap().wb;
+        let a2 = wb.sheets[0].value(gridcraft_engine::core::CellRef::parse("A2").unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(a2, gridcraft_engine::core::Value::Number(1234.56));
     }
 
     #[test]
