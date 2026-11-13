@@ -1327,6 +1327,8 @@ fn set_anchor_mode(s: &mut Session, p: &Json) -> Result<Json> {
 fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let at = cell_param_on(s, p, "cell", sheet)?.unwrap_or(s.doc()?.selection.active);
+    // Excel's "Insert hyperlinks" permission, which applies to unlocked cells too.
+    crate::cmd::refuse_unless_allowed(s, sheet, "Inserting hyperlinks", |p| p.insert_hyperlinks)?;
     if bool_param(p, "remove").unwrap_or(false) {
         return edit(s, |cx| {
             cx.sheet_mut(sheet)?.hyperlinks.remove(&at);
