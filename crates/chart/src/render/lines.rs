@@ -136,7 +136,13 @@ pub(super) fn decimate_area(top: Vec<[f32; 2]>, base: Vec<[f32; 2]>, max: usize)
 
 /// Draws a polyline split at gaps (`None`), decimated when long. With `smooth` (the plot box),
 /// each run is interpolated with a Catmull-Rom spline so the line curves through the data points.
+///
+/// The points of the smoothed runs (data points included) are budgeted across all the runs of the line, not per run:
+/// short runs between gaps escape decimation, and 100 sub-segments each would turn a
+/// 100,000-point series of three-point runs into millions of points. Past the budget the
+/// remaining runs are drawn through their data points only.
 pub(super) fn draw_runs(ctx: &mut Ctx, pts: &[Option<[f32; 2]>], color: Rgba, width: f32, smooth: Option<Bx>) {
+    let mut budget = MAX_LINE_PTS * 2;
     let mut run: Vec<[f32; 2]> = Vec::new();
     for p in pts.iter().chain(std::iter::once(&None)) {
         match p {
@@ -145,7 +151,11 @@ pub(super) fn draw_runs(ctx: &mut Ctx, pts: &[Option<[f32; 2]>], color: Rgba, wi
                 if run.len() >= 2 {
                     let r = decimate(std::mem::take(&mut run), MAX_LINE_PTS);
                     let r = match smooth {
-                        Some(plot) => smooth_run(r, plot),
+                        Some(plot) => {
+                            let r = smooth_run(r, plot, budget);
+                            budget = budget.saturating_sub(r.len());
+                            r
+                        }
                         None => r,
                     };
                     ctx.line(r, color, width);
@@ -158,15 +168,15 @@ pub(super) fn draw_runs(ctx: &mut Ctx, pts: &[Option<[f32; 2]>], color: Rgba, wi
 }
 
 /// Catmull-Rom spline through `pts`: every segment gets the same number of sub-segments (up to
-/// 100), chosen so the whole curve stays within `MAX_LINE_PTS * 2` points. Endpoints are
+/// 100), chosen so the whole curve stays within `cap` points (one per data point when `cap` is
+/// smaller than that). Endpoints are
 /// duplicated so the curve passes through the first and last points, and the curve is clamped
 /// to the `plot` box (a spline overshoots its data near sharp turns).
-fn smooth_run(pts: Vec<[f32; 2]>, plot: Bx) -> Vec<[f32; 2]> {
+fn smooth_run(pts: Vec<[f32; 2]>, plot: Bx, cap: usize) -> Vec<[f32; 2]> {
     let n = pts.len();
     if n < 3 {
         return pts;
     }
-    let cap = MAX_LINE_PTS * 2;
     let steps = (cap / n).clamp(1, 100);
     let mut out: Vec<[f32; 2]> = Vec::with_capacity(n.saturating_mul(steps).min(cap) + 1);
     let at = |i: isize| -> [f32; 2] {
@@ -219,7 +229,7 @@ mod smooth_tests {
     fn long_runs_are_smoothed_uniformly_within_the_cap() {
         let plot = Bx { x: 0.0, y: 0.0, w: 3000.0, h: 100.0 };
         let pts: Vec<[f32; 2]> = (0..1500).map(|i| [i as f32 * 2.0, if i % 2 == 0 { 20.0 } else { 80.0 }]).collect();
-        let out = smooth_run(pts, plot);
+        let out = smooth_run(pts, plot, MAX_LINE_PTS * 2);
         assert!(out.len() <= MAX_LINE_PTS * 2 + 1, "{}", out.len());
         // Two sub-segments per segment all the way to the end, not 100 each and then a straight tail.
         assert_eq!(out.len(), 1499 * 2 + 1);
@@ -231,9 +241,27 @@ mod smooth_tests {
         let plot = Bx { x: 0.0, y: 10.0, w: 300.0, h: 100.0 };
         // A step right at the plot edges: Catmull-Rom overshoots past both.
         let pts = vec![[0.0, 110.0], [100.0, 110.0], [110.0, 10.0], [200.0, 10.0], [300.0, 10.0]];
-        let out = smooth_run(pts, plot);
+        let out = smooth_run(pts, plot, MAX_LINE_PTS * 2);
         assert!(out.len() > 5);
         assert!(out.iter().all(|p| (0.0..=300.0).contains(&p[0]) && (10.0..=110.0).contains(&p[1])));
+    }
+
+    /// Security: smoothing budgets its added points across every run of a line. A series of
+    /// three-point runs between gaps used to get 100 sub-segments per run, 67 times its data.
+    #[test]
+    fn gap_separated_runs_share_one_smoothing_budget() {
+        let plot = Bx { x: 0.0, y: 0.0, w: 1e6, h: 100.0 };
+        let pts: Vec<Option<[f32; 2]>> =
+            (0..100_000).map(|i| if i % 4 == 3 { None } else { Some([i as f32, if i % 2 == 0 { 20.0 } else { 80.0 }]) }).collect();
+        let m = crate::ApproxMeasure;
+        let mut ctx = Ctx { out: Vec::new(), m: &m, zero_filled: vec![] };
+        draw_runs(&mut ctx, &pts, WHITE, 1.0, Some(plot));
+        let total: usize = ctx.out.iter().map(|p| if let Prim::Line { pts, .. } = p { pts.len() } else { 0 }).sum();
+        // 75,000 data points, plus at most the budget added by interpolation.
+        assert!(total <= 75_000 + MAX_LINE_PTS * 2, "{total}");
+        assert_eq!(ctx.out.len(), 25_000);
+        // The first runs are still smoothed.
+        assert!(matches!(ctx.out.first(), Some(Prim::Line { pts, .. }) if pts.len() > 3));
     }
 
     #[test]
