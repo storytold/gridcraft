@@ -47,11 +47,13 @@ pub(super) fn merge_styles(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, co
         d.values.remove("clash");
     }
     d.values.insert("from".into(), json!(from));
-    let source = others.iter().find(|(uid, _)| Some(*uid) == from).map(|(_, name)| name.as_str());
+    let name_of = |from: Option<u64>| others.iter().find(|(uid, _)| Some(*uid) == from).map(|(_, name)| name.as_str());
     // The command names the workbook as its title bar does, so a recorded macro runs again in
     // another session; of two open workbooks with one name, the id tells which.
     let unique = |name: &str| app.session.documents().iter().filter(|d| d.display_title().to_lowercase() == name.to_lowercase()).count() == 1;
-    d.values.insert("source".into(), source.filter(|n| unique(n)).map_or(json!(from), |n| json!(n)));
+    let source_of = |from: Option<u64>| name_of(from).filter(|n| unique(n)).map_or(json!(from), |n| json!(n));
+    let source = name_of(from);
+    d.values.insert("source".into(), source_of(from));
     if let (Some(names), Some(source)) = (d.values.get("clash").and_then(Json::as_array).cloned(), source) {
         ui.label(lang.tr("{name} has styles with the same names as this workbook:").replace("{name}", source));
         let names: Vec<&str> = names.iter().filter_map(Json::as_str).collect();
@@ -105,6 +107,9 @@ pub(super) fn merge_styles(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, co
     if (ok || chosen)
         && let Some(from) = d.values.get("from").and_then(Json::as_u64)
     {
+        // A click on another workbook and the double-click can come in one frame: the command
+        // gets the workbook chosen now.
+        d.values.insert("source".into(), source_of(Some(from)));
         let names = same_names(app, from);
         if names.is_empty() {
             *confirm = true;

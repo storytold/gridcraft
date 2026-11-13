@@ -74,6 +74,33 @@ fn merge_styles_lists_the_other_workbook_and_ok_merges_its_styles() {
 }
 
 #[test]
+/// The click on another workbook and the double-click can come in one frame: the command gets
+/// the workbook double-clicked, not the one chosen before.
+fn a_double_click_merges_from_the_workbook_it_chooses() {
+    use egui::{Event, Modifiers, PointerButton};
+    let mut s = Session::new();
+    for (name, cmd) in [("One", "home.bold"), ("Two", "home.italic")] {
+        s.new_workbook();
+        s.execute(cmd, json!({"range": "A1"})).unwrap();
+        s.execute("home.newCellStyle", json!({"name": name, "fromCell": "A1"})).unwrap();
+    }
+    s.new_workbook();
+    let mut h = crate::support::harness(s, 6);
+    h.state_mut().open_dialog("mergeStyles", json!({}));
+    h.run_steps(3);
+    // Book1 is chosen; Book2 is double-clicked.
+    let pos = h.get_by_role_and_label(Role::Button, "Book2").rect().center();
+    let press = |pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.input_mut().events.extend([Event::PointerMoved(pos), press(true), press(false), press(true), press(false)]);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "the double-click merges at once");
+    let merges: Vec<_> = h.state().session.journal.iter().filter(|(id, _)| id == "home.mergeStyles").map(|(_, p)| p["from"].clone()).collect();
+    assert_eq!(merges, [json!("Book2")]);
+    let names: Vec<String> = styles(&h).into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names, ["Two"]);
+}
+
+#[test]
 fn styles_with_the_same_names_ask_whether_to_replace_them() {
     let mut h = two_books(true);
     let ask = |h: &mut Harness| {
