@@ -200,6 +200,7 @@ impl<'h> Evaluator<'h> {
         }
     }
 
+    #[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: a text CHOOSE index ignores the region
     fn choose_call(&mut self, args: &[Expr]) -> Ev {
         if args.len() < 2 {
             return err(CellError::Value);

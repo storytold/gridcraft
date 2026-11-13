@@ -60,6 +60,7 @@ impl Evaluator<'_> {
         }
     }
 
+    #[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: a text TRIMRANGE mode ignores the region
     fn trim_mode(&mut self, args: &[Expr], i: usize) -> Result<(bool, bool), CellError> {
         match args.get(i) {
             None | Some(Expr::Missing) => Ok((true, true)),

@@ -85,6 +85,7 @@ impl<'h> Evaluator<'h> {
         }
     }
 
+    #[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: text INDEX rows and columns ignore the region
     pub(super) fn index(&mut self, args: &[Expr]) -> Ev {
         if args.is_empty() || args.len() > 4 {
             return err(CellError::Value);

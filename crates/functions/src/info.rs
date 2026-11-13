@@ -39,6 +39,7 @@ fn is_logical(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     Ok(Value::Bool(matches!(first(a), Value::Bool(_))))
 }
 
+#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: a text number ignores the region
 fn parity(a: &[Arg]) -> R<f64> {
     match first(a) {
         Value::Bool(_) => Err(CellError::Value),
@@ -286,6 +287,7 @@ fn switch(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     })
 }
 
+#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: a text CHOOSE index ignores the region
 fn choose(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     drive(a, &|i| i == 0, &|v| {
         let idx = v.first().cloned().unwrap_or(Value::Empty).to_number()?.trunc();

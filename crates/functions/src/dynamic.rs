@@ -154,6 +154,7 @@ fn cmp_keys(a: &[Value], b: &[Value], orders: &[i64]) -> Ordering {
     Ordering::Equal
 }
 
+#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: text items ignore the region
 fn int_list(v: &Value) -> R<Vec<i64>> {
     let a = as_array(v);
     a.data

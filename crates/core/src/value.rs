@@ -246,6 +246,7 @@ impl Value {
 
     /// Coercion to a number as arithmetic does it: empty = 0, TRUE = 1, numeric text parses
     /// (including dates, times, percentages and currency), other text = `#VALUE!`.
+    #[allow(clippy::disallowed_methods)] // en-US on purpose: the en-US entry point delegating to its date-system form
     pub fn to_number(&self) -> Result<f64, CellError> {
         self.to_number_in(crate::DateSystem::D1900)
     }
@@ -491,6 +492,7 @@ pub fn sci_text(n: f64, sig: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::disallowed_methods)] // en-US on purpose: tests pin the en-US entry points
     use super::*;
 
     #[test]

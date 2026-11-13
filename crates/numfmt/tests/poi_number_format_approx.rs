@@ -2,6 +2,8 @@
 //! `test-data/spreadsheet/NumberFormatApproxTests.xlsx` (sheet `Tests`: B = format, C = value,
 //! A = `=TEXT(C, B)`). The workbook is not committed; its rows are copied here as data.
 
+#![allow(clippy::disallowed_methods)] // en-US on purpose: Excel's cached results are en-US
+
 use gridcraft_core::{DateSystem, Value};
 use gridcraft_numfmt::text_function;
 

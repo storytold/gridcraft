@@ -55,12 +55,14 @@ pub(crate) fn has(args: &[Arg], i: usize) -> bool {
 }
 
 /// Number coercion for a scalar parameter: empty = 0, TRUE = 1, numeric text parses.
+#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: text arguments ignore the region
 pub(crate) fn num(args: &[Arg], i: usize) -> R<f64> {
     let a = arg(args, i)?;
     scalar(a).to_number()
 }
 
 /// Optional number: `default` when missing, otherwise coerced (an explicit empty is 0).
+#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: text arguments ignore the region
 pub(crate) fn opt_num(args: &[Arg], i: usize, default: f64) -> R<f64> {
     match args.get(i) {
         None => Ok(default),
@@ -149,6 +151,7 @@ pub(crate) fn flatten(args: &[Arg]) -> Vec<Value> {
 /// Numbers for aggregate functions (SUM, AVERAGE, MIN, STDEV…): inside references and arrays
 /// only numbers count (text, booleans and blanks are skipped); direct scalar arguments are
 /// coerced ("3" → 3, TRUE → 1, other text → `#VALUE!`). Errors propagate.
+#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: text arguments ignore the region
 pub(crate) fn numbers(args: &[Arg]) -> R<Vec<f64>> {
     let mut out = Vec::new();
     for a in args {
@@ -175,6 +178,7 @@ pub(crate) fn numbers(args: &[Arg]) -> R<Vec<f64>> {
 /// Numbers for the "A" aggregates (AVERAGEA, MAXA, STDEVA…): inside references and arrays text
 /// counts as 0 and booleans as 1/0, blanks are skipped; direct arguments coerce as in
 /// [`numbers`].
+#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: text arguments ignore the region
 pub(crate) fn numbers_a(args: &[Arg]) -> R<Vec<f64>> {
     let mut out = Vec::new();
     for a in args {
@@ -201,6 +205,7 @@ pub(crate) fn numbers_a(args: &[Arg]) -> R<Vec<f64>> {
 
 /// Numbers of a single array-like argument where only numbers count (text, booleans, blanks
 /// skipped), errors propagate. Used for data arrays of statistical functions.
+#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: text array items ignore the region
 pub(crate) fn array_numbers(v: &Value) -> R<Vec<f64>> {
     let mut out = Vec::new();
     match v {

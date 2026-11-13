@@ -10,6 +10,7 @@ pub(crate) const PY_FORMULA: &str = "Python cells are made with the python.set c
 
 /// Whether typing `input` into a cell enters a formula: `=…`, or `+…`/`-…` followed by a name or
 /// a parenthesis (not a number), as Excel takes `+SUM(1)`.
+#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: `-R$ 10` typed in pt-BR reads as a formula
 pub(crate) fn is_formula_input(input: &str) -> bool {
     input.starts_with('=')
         || (input.len() > 1

@@ -251,6 +251,7 @@ pub(super) fn npv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 /// Values and dates for XNPV/XIRR: both must be numeric and of equal length.
+#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: date text reads month first in every region
 fn dated_flows(values: &Value, dates: &Value) -> R<(Vec<f64>, Vec<f64>)> {
     let va = as_array(values);
     let da = as_array(dates);

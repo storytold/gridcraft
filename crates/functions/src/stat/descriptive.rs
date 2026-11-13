@@ -566,6 +566,7 @@ pub fn aggregate_values_k(function_num: u32, values: &[Value], k: &Value) -> Val
     crate::util::finish(aggregate_impl(function_num, values, Some(k)))
 }
 
+#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: a text AGGREGATE k ignores the region
 fn aggregate_impl(function_num: u32, values: &[Value], k: Option<&Value>) -> R<Value> {
     let code = if (101..=111).contains(&function_num) { function_num - 100 } else { function_num };
     let mut xs = Vec::new();

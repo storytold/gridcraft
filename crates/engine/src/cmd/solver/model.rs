@@ -162,6 +162,7 @@ fn cells_of(wb: &Workbook, t: &str, default_sheet: usize, cap: usize) -> Result<
     Ok((sheet.unwrap_or(default_sheet), out))
 }
 
+#[allow(clippy::disallowed_methods)] // en-US on purpose: command params and the stored solver_* names are canonical
 fn num_text(t: &str) -> Option<f64> {
     gridcraft_core::parse::parse_number_text(t.trim()).filter(|v| v.is_finite())
 }

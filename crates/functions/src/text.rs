@@ -394,6 +394,7 @@ fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
             out.push(c);
         }
     }
+    #[allow(clippy::disallowed_methods)] // en-US on purpose: NUMBERVALUE already rewrote the text with en-US separators
     let mut n = parse_number_text_in(&out, c.date_system()).ok_or(CellError::Value)?;
     for _ in 0..pct {
         n /= 100.0;

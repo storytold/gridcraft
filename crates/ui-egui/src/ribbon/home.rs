@@ -792,6 +792,7 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
 
 #[cfg(test)]
 mod accounting_symbol_tests {
+    #![allow(clippy::disallowed_methods)] // en-US on purpose: test pins the en-US samples of the dropdown
     use super::*;
     use gridcraft_engine::core::{DateSystem, Value};
     use gridcraft_engine::numfmt::{NumberFormat, format_value};

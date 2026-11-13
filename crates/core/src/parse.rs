@@ -49,6 +49,7 @@ pub fn parse_input_in(s: &str, sys: DateSystem, region: &Region) -> Parsed {
 }
 
 /// Numeric text as arithmetic coerces it ("1,000", "50%", "$3", "1/2/2020", "10:00").
+#[allow(clippy::disallowed_methods)] // en-US on purpose: the en-US entry point delegating to its date-system form
 pub fn parse_number_text(s: &str) -> Option<f64> {
     parse_number_text_in(s, DateSystem::D1900)
 }
@@ -67,6 +68,7 @@ pub fn parse_number_text_in_region(s: &str, sys: DateSystem, region: &Region) ->
 /// A number in a command's text parameter or criterion. The en-US `.` the API sends is read
 /// first when the text has no `,` (`12.5`, which `pt-BR` would read as a date, 12 May), then the
 /// region's typed form (`12,5`, `R$ 10` in `pt-BR`), then the en-US typed forms.
+#[allow(clippy::disallowed_methods)] // en-US on purpose: the API's canonical en-US forms are the last fallback
 pub fn parse_number_param(s: &str, sys: DateSystem, region: &Region) -> Option<f64> {
     let t = s.trim();
     if !t.contains(',')
@@ -503,6 +505,7 @@ fn parse_datetime(t: &str, sys: DateSystem, region: &Region) -> Option<(f64, Opt
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::disallowed_methods)] // en-US on purpose: tests pin the en-US entry points
     use super::*;
 
     fn p(s: &str) -> Parsed {

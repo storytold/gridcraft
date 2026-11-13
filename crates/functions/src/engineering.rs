@@ -120,6 +120,7 @@ fn convert_base(a: &[Arg], from: u32, to: u32) -> R<Value> {
     format_base(v, to, places)
 }
 
+#[allow(clippy::disallowed_methods)] // en-US region bug, reported and not fixed here: a text number ignores the region
 fn dec_to(a: &[Arg], to: u32) -> R<Value> {
     let v = a.first().map(scalar).unwrap_or(Value::Empty);
     if matches!(v, Value::Bool(_)) {

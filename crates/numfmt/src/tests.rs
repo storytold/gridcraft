@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)] // en-US on purpose: tests pin the en-US entry points
+
 use super::*;
 
 #[test]

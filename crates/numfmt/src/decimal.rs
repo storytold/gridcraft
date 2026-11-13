@@ -292,6 +292,7 @@ pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::disallowed_methods)] // en-US on purpose: tests pin the en-US entry points
     use super::*;
 
     #[test]
