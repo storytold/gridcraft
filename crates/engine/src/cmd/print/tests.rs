@@ -574,15 +574,20 @@ fn picture_copies_across_pages_stay_within_the_image_budget() {
 
     let (full, pages) = render_pdf(&d.wb, &lays, "t", "");
     assert!(pages >= 15, "{pages} pages");
-    // Within the default budget every page keeps its own copy (64×64 RGB is 12,288 bytes).
-    let full_bytes = image_bytes(&full);
-    assert!(full_bytes >= (pages as u64 - 1) * 12_288, "{full_bytes} bytes of images on {pages} pages");
+    // Within the default budget every page draws (and holds while the PDF is built) its own copy.
+    // Identical copies are written to the file once, so the draws are what to count.
+    let draws = |pdf: &[u8]| String::from_utf8_lossy(pdf).matches(" Do Q").count();
+    let full_draws = draws(&full);
+    assert!(full_draws >= pages - 1, "{full_draws} picture draws on {pages} pages");
 
+    // 64×64 RGB is 12,288 bytes: a 64 KiB budget holds a handful of page copies, not one per page.
     let budget = 64 * 1024;
     let (capped, capped_pages) = render_pdf_with_image_budget(&d.wb, &lays, "t", "", budget);
     assert_eq!(capped_pages, pages, "pages past the budget still print, without the pictures");
+    let capped_draws = draws(&capped);
+    assert!((1..full_draws / 2).contains(&capped_draws), "{capped_draws} of {full_draws} picture draws kept with a {budget}-byte budget");
     let kept = image_bytes(&capped);
-    assert!((12_288..=budget).contains(&kept), "{kept} bytes of images kept with a {budget}-byte budget");
+    assert!((1..=budget).contains(&kept), "{kept} bytes of images kept with a {budget}-byte budget");
     assert!(contains(&capped, "%%EOF"));
 }
 
