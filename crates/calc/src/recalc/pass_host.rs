@@ -19,8 +19,8 @@ type BlockSums = std::collections::BTreeMap<u32, Option<(f64, u64)>>;
 
 /// Maximum cells in a single range array kept in [`PassHost::range_cache`], and total cells cached
 /// across all ranges before the cache is evicted to bound pass memory.
-const MAX_SINGLE_CACHE_CELLS: usize = 2_097_152;
-const MAX_RANGE_CACHE_CELLS: usize = 4_000_000;
+const MAX_SINGLE_CACHE_CELLS: usize = 524_288;
+const MAX_RANGE_CACHE_CELLS: usize = 1_500_000;
 pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
     exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
@@ -243,6 +243,7 @@ impl PassHost<'_> {
         self.range_cache.clear();
         self.range_cache_cells = 0;
         self.range_cache_spills = self.spills.len();
+        self.used.clear();
     }
     /// Calculates `k` (and the formulas it reads) with bounded stack: when [`Self::compute`] would
     /// go deeper than [`MAX_NESTED`], it suspends what is in progress, the formula it needed is
@@ -701,7 +702,12 @@ impl Host for PassHost<'_> {
         if !self.iterate
             && let Some(arr) = self.range_cache.get(&(sheet, range))
         {
-            return Some(std::sync::Arc::clone(arr));
+            let arr = std::sync::Arc::clone(arr);
+            if arr.has_lookup_index() && self.range_cache_cells.saturating_add(arr.data.len()) > MAX_RANGE_CACHE_CELLS {
+                self.range_cache.clear();
+                self.range_cache_cells = 0;
+            }
+            return Some(arr);
         }
         let (h, w) = (range.height() as usize, range.width() as usize);
         let cells = h.saturating_mul(w);
@@ -806,7 +812,22 @@ impl Host for PassHost<'_> {
     }
     fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
         let wb = self.wb;
-        *self.used.entry(sheet).or_insert_with(|| wb.sheet(sheet).and_then(|s| s.used_range()))
+        let base = *self.used.entry(sheet).or_insert_with(|| wb.sheet(sheet).and_then(|s| s.used_range()));
+        if self.spills.is_empty() {
+            return base;
+        }
+        let mut u = base;
+        for (&(s, anchor), arr) in &self.spills {
+            if s == sheet && arr.rows >= 1 && arr.cols >= 1 {
+                let end = CellRef::new(
+                    anchor.row.saturating_add((arr.rows as u32).saturating_sub(1)),
+                    anchor.col.saturating_add((arr.cols as u32).saturating_sub(1)),
+                );
+                let r = RangeRef::new(anchor, end);
+                u = Some(u.map_or(r, |prev| prev.union(&r)));
+            }
+        }
+        u
     }
     fn now_serial(&self) -> f64 {
         self.now

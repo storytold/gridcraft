@@ -221,58 +221,65 @@ impl<'h> Evaluator<'h> {
     /// lookup values, array arguments, errors) goes to the library function.
     pub(super) fn xlookup(&mut self, args: &[Expr]) -> Ev {
         if (3..=6).contains(&args.len())
-            && let (Ev::R(look), Ev::R(ret)) = (self.eval(&args[1]), self.eval(&args[2]))
-            && let ([l], [r]) = (look.as_slice(), ret.as_slice())
             && let Some(spec) = gridcraft_functions::lookup("XMATCH")
         {
-            let key = self.value(&args[0]);
-            let (l, r) = (*l, *r);
-            let vertical = l.range.width() == 1 && l.range.height() > 1;
-            let horizontal = l.range.height() == 1 && l.range.width() > 1;
-            let same_len = if vertical { r.range.height() == l.range.height() } else { r.range.width() == l.range.width() };
-            if !matches!(key, Value::Array(_)) && (vertical || horizontal) && same_len {
-                let mut xargs = vec![Arg::val(key), Arg::reference(self.area_value(&l))];
-                // An empty match_mode before a given search_mode is the default (0), not the end.
-                let given = |i: usize| args.get(i).is_some_and(|e| !matches!(e, Expr::Missing));
-                let last = if given(5) {
-                    5
-                } else if given(4) {
-                    4
-                } else {
-                    3
-                };
-                for i in 4..=last {
-                    match args.get(i) {
-                        Some(Expr::Missing) | None => xargs.push(Arg::val(Value::Number(0.0))),
-                        Some(e) => {
-                            let value = self.value(e);
-                            let blank_value = value == Value::Empty;
-                            xargs.push(Arg { value, from_ref: false, blank_value });
+            let ev0 = self.eval(&args[0]);
+            let ev1 = self.eval(&args[1]);
+            let ev2 = self.eval(&args[2]);
+            if let (Ev::R(look), Ev::R(ret)) = (&ev1, &ev2)
+                && let ([l], [r]) = (look.as_slice(), ret.as_slice())
+            {
+                let (l, r) = (*l, *r);
+                let key = self.deref(ev0);
+                let vertical = l.range.width() == 1 && l.range.height() > 1;
+                let horizontal = l.range.height() == 1 && l.range.width() > 1;
+                let same_len = if vertical { r.range.height() == l.range.height() } else { r.range.width() == l.range.width() };
+                if !matches!(key, Value::Array(_)) && (vertical || horizontal) && same_len {
+                    let mut xargs = vec![Arg::val(key), Arg::reference(self.area_value(&l))];
+                    // An empty match_mode before a given search_mode is the default (0), not the end.
+                    let given = |i: usize| args.get(i).is_some_and(|e| !matches!(e, Expr::Missing));
+                    let last = if given(5) {
+                        5
+                    } else if given(4) {
+                        4
+                    } else {
+                        3
+                    };
+                    for i in 4..=last {
+                        match args.get(i) {
+                            Some(Expr::Missing) | None => xargs.push(Arg::val(Value::Number(0.0))),
+                            Some(e) => {
+                                let value = self.value(e);
+                                let blank_value = value == Value::Empty;
+                                xargs.push(Arg { value, from_ref: false, blank_value });
+                            }
                         }
                     }
+                    let mut ctx = FnCtx { ev: self, criteria: None, lambda: None };
+                    return match gridcraft_functions::call(spec, &xargs, &mut ctx) {
+                        Value::Number(p) if p >= 1.0 => {
+                            let k = p as u32 - 1;
+                            let range = if vertical {
+                                RangeRef::new(
+                                    CellRef::new(r.range.start.row + k, r.range.start.col),
+                                    CellRef::new(r.range.start.row + k, r.range.end.col),
+                                )
+                            } else {
+                                RangeRef::new(
+                                    CellRef::new(r.range.start.row, r.range.start.col + k),
+                                    CellRef::new(r.range.end.row, r.range.start.col + k),
+                                )
+                            };
+                            Ev::R(vec![Area { sheet: r.sheet, range }])
+                        }
+                        Value::Error(CellError::NA) if args.get(3).is_some_and(|e| !matches!(e, Expr::Missing)) => self.eval(&args[3]),
+                        Value::Error(e) => err(e),
+                        _ => err(CellError::Value),
+                    };
                 }
-                let mut ctx = FnCtx { ev: self, criteria: None, lambda: None };
-                return match gridcraft_functions::call(spec, &xargs, &mut ctx) {
-                    Value::Number(p) if p >= 1.0 => {
-                        let k = p as u32 - 1;
-                        let range = if vertical {
-                            RangeRef::new(
-                                CellRef::new(r.range.start.row + k, r.range.start.col),
-                                CellRef::new(r.range.start.row + k, r.range.end.col),
-                            )
-                        } else {
-                            RangeRef::new(
-                                CellRef::new(r.range.start.row, r.range.start.col + k),
-                                CellRef::new(r.range.end.row, r.range.start.col + k),
-                            )
-                        };
-                        Ev::R(vec![Area { sheet: r.sheet, range }])
-                    }
-                    Value::Error(CellError::NA) if args.get(3).is_some_and(|e| !matches!(e, Expr::Missing)) => self.eval(&args[3]),
-                    Value::Error(e) => err(e),
-                    _ => err(CellError::Value),
-                };
+                return self.builtin_with_pre("XLOOKUP", args, vec![(0, Ev::V(key)), (1, ev1), (2, ev2)]);
             }
+            return self.builtin_with_pre("XLOOKUP", args, vec![(0, ev0), (1, ev1), (2, ev2)]);
         }
         self.builtin("XLOOKUP", args)
     }
@@ -282,70 +289,74 @@ impl<'h> Evaluator<'h> {
     /// `table_array`. This avoids both O(rows * cols) array copies on wide tables and false
     /// `#CIRC!` cycles through columns `col_index_num` never reads.
     pub(super) fn vh_lookup(&mut self, vertical: bool, args: &[Expr]) -> Ev {
-        if (3..=4).contains(&args.len())
-            && let Ev::R(areas) = self.eval(&args[1])
-            && let [area] = areas.as_slice()
-        {
-            let area = *area;
-            let v0 = self.value(&args[0]);
-            let v2 = self.value(&args[2]);
-            let v3 = args.get(3).map(|e| self.value(e));
-            let max_len = if vertical { area.range.width() } else { area.range.height() } as usize;
-            let eff = self.read_range(&area);
-            let key_area = Area {
-                sheet: area.sheet,
-                range: if vertical {
-                    RangeRef::new(eff.start, CellRef::new(eff.end.row, eff.start.col))
-                } else {
-                    RangeRef::new(eff.start, CellRef::new(eff.start.row, eff.end.col))
-                },
-            };
-            let keys_val = self.area_value(&key_area);
-            let read_hit = |this: &mut Self, pos: usize, idx: usize| -> Value {
-                let c = if vertical {
-                    CellRef::new(area.range.start.row + pos as u32, area.range.start.col + idx as u32)
-                } else {
-                    CellRef::new(area.range.start.row + idx as u32, area.range.start.col + pos as u32)
+        if (3..=4).contains(&args.len()) {
+            let ev0 = self.eval(&args[0]);
+            let ev1 = self.eval(&args[1]);
+            if let Ev::R(areas) = &ev1
+                && let [area] = areas.as_slice()
+            {
+                let area = *area;
+                let v0 = self.deref(ev0);
+                let v2 = self.value(&args[2]);
+                let v3 = args.get(3).map(|e| self.value(e));
+                let max_len = if vertical { area.range.width() } else { area.range.height() } as usize;
+                let eff = self.read_range(&area);
+                let key_area = Area {
+                    sheet: area.sheet,
+                    range: if vertical {
+                        RangeRef::new(eff.start, CellRef::new(eff.end.row, eff.start.col))
+                    } else {
+                        RangeRef::new(eff.start, CellRef::new(eff.start.row, eff.end.col))
+                    },
                 };
-                this.host.cell_value(area.sheet, c)
-            };
-            let lifted = matches!(v0, Value::Array(_)) || matches!(v2, Value::Array(_)) || matches!(v3, Some(Value::Array(_)));
-            if !lifted {
-                return Ev::V(match gridcraft_functions::vh_lookup_pos(&v0, &keys_val, &v2, v3.as_ref(), max_len) {
-                    Ok((pos, idx)) => read_hit(self, pos, idx),
-                    Err(e) => Value::Error(e),
-                });
-            }
-            let as_arr = |v: &Value| match v {
-                Value::Array(a) => Arc::clone(a),
-                v => Arc::new(Array::scalar(v.clone())),
-            };
-            let a0 = as_arr(&v0);
-            let a2 = as_arr(&v2);
-            let a3 = v3.as_ref().map(as_arr);
-            let mut h = a0.rows.max(a2.rows);
-            let mut w = a0.cols.max(a2.cols);
-            if let Some(a) = &a3 {
-                h = h.max(a.rows);
-                w = w.max(a.cols);
-            }
-            if (h as u64).saturating_mul(w as u64) > MAX_CELLS {
-                return err(CellError::Num);
-            }
-            let mut out = Vec::with_capacity(h * w);
-            for r in 0..h {
-                for c in 0..w {
-                    let n0 = a0.get_broadcast(r, c);
-                    let n2 = a2.get_broadcast(r, c);
-                    let n3 = a3.as_ref().map(|a| a.get_broadcast(r, c));
-                    let v = match gridcraft_functions::vh_lookup_pos(&n0, &keys_val, &n2, n3.as_ref(), max_len) {
+                let keys_val = self.area_value(&key_area);
+                let read_hit = |this: &mut Self, pos: usize, idx: usize| -> Value {
+                    let c = if vertical {
+                        CellRef::new(area.range.start.row + pos as u32, area.range.start.col + idx as u32)
+                    } else {
+                        CellRef::new(area.range.start.row + idx as u32, area.range.start.col + pos as u32)
+                    };
+                    this.host.cell_value(area.sheet, c)
+                };
+                let lifted = matches!(v0, Value::Array(_)) || matches!(v2, Value::Array(_)) || matches!(v3, Some(Value::Array(_)));
+                if !lifted {
+                    return Ev::V(match gridcraft_functions::vh_lookup_pos(&v0, &keys_val, &v2, v3.as_ref(), max_len) {
                         Ok((pos, idx)) => read_hit(self, pos, idx),
                         Err(e) => Value::Error(e),
-                    };
-                    out.push(v);
+                    });
                 }
+                let as_arr = |v: &Value| match v {
+                    Value::Array(a) => Arc::clone(a),
+                    v => Arc::new(Array::scalar(v.clone())),
+                };
+                let a0 = as_arr(&v0);
+                let a2 = as_arr(&v2);
+                let a3 = v3.as_ref().map(as_arr);
+                let mut h = a0.rows.max(a2.rows);
+                let mut w = a0.cols.max(a2.cols);
+                if let Some(a) = &a3 {
+                    h = h.max(a.rows);
+                    w = w.max(a.cols);
+                }
+                if (h as u64).saturating_mul(w as u64) > MAX_CELLS {
+                    return err(CellError::Num);
+                }
+                let mut out = Vec::with_capacity(h * w);
+                for r in 0..h {
+                    for c in 0..w {
+                        let n0 = a0.get_broadcast(r, c);
+                        let n2 = a2.get_broadcast(r, c);
+                        let n3 = a3.as_ref().map(|a| a.get_broadcast(r, c));
+                        let v = match gridcraft_functions::vh_lookup_pos(&n0, &keys_val, &n2, n3.as_ref(), max_len) {
+                            Ok((pos, idx)) => read_hit(self, pos, idx),
+                            Err(e) => Value::Error(e),
+                        };
+                        out.push(v);
+                    }
+                }
+                return Ev::V(Array::new(h, w, out).map(Value::from).unwrap_or(Value::Error(CellError::Value)));
             }
-            return Ev::V(Array::new(h, w, out).map(Value::from).unwrap_or(Value::Error(CellError::Value)));
+            return self.builtin_with_pre(if vertical { "VLOOKUP" } else { "HLOOKUP" }, args, vec![(0, ev0), (1, ev1)]);
         }
         self.builtin(if vertical { "VLOOKUP" } else { "HLOOKUP" }, args)
     }
@@ -353,68 +364,79 @@ impl<'h> Evaluator<'h> {
     /// `LOOKUP` over reference vector/array arguments: evaluates only the search vector and the
     /// single matched result cell.
     pub(super) fn lookup_call(&mut self, args: &[Expr]) -> Ev {
-        if args.len() == 2
-            && let Ev::R(areas) = self.eval(&args[1])
-            && let [area] = areas.as_slice()
-        {
-            let area = *area;
-            let v0 = self.value(&args[0]);
-            if !matches!(v0, Value::Array(_)) {
-                let eff = self.read_range(&area);
-                let wide = area.range.width() > area.range.height();
-                let key_area = Area {
-                    sheet: area.sheet,
-                    range: if wide {
-                        RangeRef::new(eff.start, CellRef::new(eff.start.row, eff.end.col))
-                    } else {
-                        RangeRef::new(eff.start, CellRef::new(eff.end.row, eff.start.col))
-                    },
-                };
-                let keys_val = self.area_value(&key_area);
-                return Ev::V(match gridcraft_functions::lookup_vec_pos(&v0, &keys_val) {
-                    Ok(pos) => {
-                        let c = if wide {
-                            CellRef::new(area.range.end.row, area.range.start.col + pos as u32)
+        if args.len() == 2 {
+            let ev0 = self.eval(&args[0]);
+            let ev1 = self.eval(&args[1]);
+            if let Ev::R(areas) = &ev1
+                && let [area] = areas.as_slice()
+            {
+                let area = *area;
+                let v0 = self.deref(ev0);
+                if !matches!(v0, Value::Array(_)) {
+                    let eff = self.read_range(&area);
+                    let wide = area.range.width() > area.range.height();
+                    let key_area = Area {
+                        sheet: area.sheet,
+                        range: if wide {
+                            RangeRef::new(eff.start, CellRef::new(eff.start.row, eff.end.col))
                         } else {
-                            CellRef::new(area.range.start.row + pos as u32, area.range.end.col)
-                        };
-                        self.host.cell_value(area.sheet, c)
-                    }
-                    Err(e) => Value::Error(e),
-                });
-            }
-        } else if args.len() == 3
-            && let (Ev::R(la), Ev::R(ra)) = (self.eval(&args[1]), self.eval(&args[2]))
-            && let ([l], [r]) = (la.as_slice(), ra.as_slice())
-        {
-            let (l, r) = (*l, *r);
-            let v0 = self.value(&args[0]);
-            if !matches!(v0, Value::Array(_)) {
-                let eff_l = self.read_range(&l);
-                let key_range = if l.range.height() == 1 || l.range.width() == 1 {
-                    eff_l
-                } else {
-                    RangeRef::new(eff_l.start, CellRef::new(eff_l.end.row, eff_l.start.col))
-                };
-                let key_len = key_range.count() as usize;
-                let keys_val = self.area_value(&Area { sheet: l.sheet, range: key_range });
-                return Ev::V(match gridcraft_functions::lookup_vec_pos(&v0, &keys_val) {
-                    Ok(pos) => {
-                        let target = if r.range.height() == 1 {
-                            (pos < r.range.width() as usize).then(|| CellRef::new(r.range.start.row, r.range.start.col + pos as u32))
-                        } else if r.range.width() == 1 || r.range.height() as usize >= key_len {
-                            (pos < r.range.height() as usize).then(|| CellRef::new(r.range.start.row + pos as u32, r.range.start.col))
-                        } else {
-                            None
-                        };
-                        match target {
-                            Some(c) => self.host.cell_value(r.sheet, c),
-                            None => Value::Error(CellError::NA),
+                            RangeRef::new(eff.start, CellRef::new(eff.end.row, eff.start.col))
+                        },
+                    };
+                    let keys_val = self.area_value(&key_area);
+                    return Ev::V(match gridcraft_functions::lookup_vec_pos(&v0, &keys_val) {
+                        Ok(pos) => {
+                            let c = if wide {
+                                CellRef::new(area.range.end.row, area.range.start.col + pos as u32)
+                            } else {
+                                CellRef::new(area.range.start.row + pos as u32, area.range.end.col)
+                            };
+                            self.host.cell_value(area.sheet, c)
                         }
-                    }
-                    Err(e) => Value::Error(e),
-                });
+                        Err(e) => Value::Error(e),
+                    });
+                }
+                return self.builtin_with_pre("LOOKUP", args, vec![(0, Ev::V(v0)), (1, ev1)]);
             }
+            return self.builtin_with_pre("LOOKUP", args, vec![(0, ev0), (1, ev1)]);
+        } else if args.len() == 3 {
+            let ev0 = self.eval(&args[0]);
+            let ev1 = self.eval(&args[1]);
+            let ev2 = self.eval(&args[2]);
+            if let (Ev::R(la), Ev::R(ra)) = (&ev1, &ev2)
+                && let ([l], [r]) = (la.as_slice(), ra.as_slice())
+            {
+                let (l, r) = (*l, *r);
+                let v0 = self.deref(ev0);
+                if !matches!(v0, Value::Array(_)) {
+                    let eff_l = self.read_range(&l);
+                    let key_range = if l.range.height() == 1 || l.range.width() == 1 {
+                        eff_l
+                    } else {
+                        RangeRef::new(eff_l.start, CellRef::new(eff_l.end.row, eff_l.start.col))
+                    };
+                    let key_len = key_range.count() as usize;
+                    let keys_val = self.area_value(&Area { sheet: l.sheet, range: key_range });
+                    return Ev::V(match gridcraft_functions::lookup_vec_pos(&v0, &keys_val) {
+                        Ok(pos) => {
+                            let target = if r.range.height() == 1 {
+                                (pos < r.range.width() as usize).then(|| CellRef::new(r.range.start.row, r.range.start.col + pos as u32))
+                            } else if r.range.width() == 1 || r.range.height() as usize >= key_len {
+                                (pos < r.range.height() as usize).then(|| CellRef::new(r.range.start.row + pos as u32, r.range.start.col))
+                            } else {
+                                None
+                            };
+                            match target {
+                                Some(c) => self.host.cell_value(r.sheet, c),
+                                None => Value::Error(CellError::NA),
+                            }
+                        }
+                        Err(e) => Value::Error(e),
+                    });
+                }
+                return self.builtin_with_pre("LOOKUP", args, vec![(0, Ev::V(v0)), (1, ev1), (2, ev2)]);
+            }
+            return self.builtin_with_pre("LOOKUP", args, vec![(0, ev0), (1, ev1), (2, ev2)]);
         }
         self.builtin("LOOKUP", args)
     }
@@ -516,18 +538,22 @@ impl<'h> Evaluator<'h> {
         }
         let mut inputs = Vec::new();
         let mut budget = MAX_CELLS;
-        let saved_trim = std::mem::replace(&mut self.trim_refs, name == "AGGREGATE" && skip_errors);
         for e in refs {
-            match self.eval(e) {
+            let v = if name == "AGGREGATE"
+                && skip_errors
+                && let Some(v) = self.eval_aggregate_filtered_div(e)
+            {
+                Ev::V(v)
+            } else {
+                self.eval(e)
+            };
+            match v {
                 Ev::R(areas) => {
                     for a in areas {
                         let range = self.trim(&a);
                         budget = match budget.checked_sub(range.count()) {
                             Some(left) => left,
-                            None => {
-                                self.trim_refs = saved_trim;
-                                return err(CellError::Num);
-                            }
+                            None => return err(CellError::Num),
                         };
                         inputs.push(Input::Cells(a.sheet, range));
                     }
@@ -539,20 +565,13 @@ impl<'h> Evaluator<'h> {
                     };
                     budget = match budget.checked_sub(n) {
                         Some(left) => left,
-                        None => {
-                            self.trim_refs = saved_trim;
-                            return err(CellError::Num);
-                        }
+                        None => return err(CellError::Num),
                     };
                     inputs.push(Input::Values(v));
                 }
-                Ev::L(_) => {
-                    self.trim_refs = saved_trim;
-                    return err(CellError::Value);
-                }
+                Ev::L(_) => return err(CellError::Value),
             }
         }
-        self.trim_refs = saved_trim;
         for input in inputs {
             match input {
                 Input::Cells(sheet, range) => {
@@ -587,6 +606,159 @@ impl<'h> Evaluator<'h> {
             return Ev::V(gridcraft_functions::aggregate_values_k(func, &values, &k));
         }
         Ev::V(gridcraft_functions::aggregate_values(func, &values))
+    }
+
+    /// Evaluates `num / (cond_lhs <cmp> cond_rhs)` inside `AGGREGATE` with `skip_errors` when
+    /// `num` and one side of the comparison are single-column or single-row references of identical
+    /// shape and the comparison is `FALSE` on `Value::Empty` (so every trailing blank cell beyond
+    /// the sheets' used ranges divides by `FALSE` = `0`, producing `#DIV/0!` which `skip_errors`
+    /// discards). Only matched positions inside the used range are read from `num`, avoiding
+    /// intermediate array allocations and suffix-range cache churn.
+    fn eval_aggregate_filtered_div(&mut self, e: &Expr) -> Option<Value> {
+        use gridcraft_formula::BinOp;
+        let Expr::Binary(BinOp::Div, num_expr, den_expr) = e else { return None };
+        let mut inner = den_expr.as_ref();
+        while let Expr::Paren(p) = inner {
+            inner = p.as_ref();
+        }
+        let Expr::Binary(cmp_op @ (BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge), lhs, rhs) = inner else {
+            return None;
+        };
+        let Expr::Ref(num_ref) = num_expr.as_ref() else { return None };
+        let num_areas = self.reference_areas(num_ref).ok()?;
+        let [num_area] = num_areas.as_slice() else { return None };
+        let num_area = *num_area;
+        let (nh, nw) = (num_area.range.height(), num_area.range.width());
+        if nh > 1 && nw > 1 {
+            return None;
+        }
+        let match_cond = |this: &Self, e: &Expr| -> Option<Area> {
+            let Expr::Ref(r) = e else { return None };
+            let areas = this.reference_areas(r).ok()?;
+            let [a] = areas.as_slice() else { return None };
+            ((a.range.height(), a.range.width()) == (nh, nw)).then_some(*a)
+        };
+        let (cond_area, key_expr, ref_on_left) =
+            if let Some(a) = match_cond(self, lhs) { (a, rhs.as_ref(), true) } else { (match_cond(self, rhs)?, lhs.as_ref(), false) };
+        let cells = u64::from(nh) * u64::from(nw);
+        if cells > MAX_CELLS {
+            return Some(Value::Error(CellError::Num));
+        }
+        let key = self.value(key_expr);
+        if matches!(key, Value::Array(_)) {
+            return None;
+        }
+        if let Value::Error(err) = key {
+            return Some(Value::Error(err));
+        }
+        let eval_cmp = |v: &Value| -> bool {
+            let ord = if ref_on_left { super::compare(v, &key) } else { super::compare(&key, v) };
+            use std::cmp::Ordering::*;
+            match cmp_op {
+                BinOp::Eq => ord == Equal,
+                BinOp::Ne => ord != Equal,
+                BinOp::Lt => ord == Less,
+                BinOp::Gt => ord == Greater,
+                BinOp::Le => ord != Greater,
+                BinOp::Ge => ord != Less,
+                _ => false,
+            }
+        };
+        // Trailing cells beyond the sheet's used range are Value::Empty. Only trim when Empty
+        // fails the comparison (producing 0 in the denominator -> #DIV/0!, skipped by AGGREGATE).
+        if eval_cmp(&Value::Empty) {
+            return None;
+        }
+        let vertical = nw == 1;
+        let Some(u) = self.host.used_range(cond_area.sheet) else {
+            return Some(Value::Error(CellError::Div0));
+        };
+        let cond_max = if vertical {
+            if u.end.col < cond_area.range.start.col || u.start.col > cond_area.range.start.col || u.end.row < cond_area.range.start.row {
+                return Some(Value::Error(CellError::Div0));
+            }
+            u.end.row.min(cond_area.range.end.row) - cond_area.range.start.row
+        } else {
+            if u.end.row < cond_area.range.start.row || u.start.row > cond_area.range.start.row || u.end.col < cond_area.range.start.col {
+                return Some(Value::Error(CellError::Div0));
+            }
+            u.end.col.min(cond_area.range.end.col) - cond_area.range.start.col
+        };
+        let len = cond_max + 1;
+        let sys = self.host.workbook().date_system;
+        if *cmp_op == BinOp::Eq
+            && matches!(key, Value::Text(_) | Value::Number(_))
+            && u64::from(len) <= MAX_CELLS
+            && let (full_range, base_off) = if vertical {
+                let r0 = u.start.row.min(cond_area.range.start.row);
+                let r1 = u.end.row.min(cond_area.range.end.row);
+                (
+                    RangeRef::new(CellRef::new(r0, cond_area.range.start.col), CellRef::new(r1, cond_area.range.start.col)),
+                    cond_area.range.start.row - r0,
+                )
+            } else {
+                let c0 = u.start.col.min(cond_area.range.start.col);
+                let c1 = u.end.col.min(cond_area.range.end.col);
+                (
+                    RangeRef::new(CellRef::new(cond_area.range.start.row, c0), CellRef::new(cond_area.range.start.row, c1)),
+                    cond_area.range.start.col - c0,
+                )
+            }
+            && (64..=MAX_CELLS).contains(&full_range.count())
+            && let Some(cond_arr) = self.host.range_array(cond_area.sheet, full_range)
+            && let Some(positions) = match &key {
+                Value::Text(t) => cond_arr.text_positions(t),
+                Value::Number(n) => cond_arr.number_positions(*n),
+                _ => None,
+            }
+        {
+            let end_pos = base_off + len;
+            let start_idx = positions.partition_point(|&p| p < base_off);
+            let end_idx = positions.partition_point(|&p| p < end_pos);
+            let slice = &positions[start_idx..end_idx];
+            if !self.spend((slice.len() as u64).saturating_add(1)) {
+                return Some(Value::Error(CellError::Calc));
+            }
+            let mut matched = Vec::with_capacity(slice.len());
+            for &p in slice {
+                let i = p - base_off;
+                let nc = if vertical {
+                    CellRef::new(num_area.range.start.row + i, num_area.range.start.col)
+                } else {
+                    CellRef::new(num_area.range.start.row, num_area.range.start.col + i)
+                };
+                if let Ok(n) = self.host.cell_value(num_area.sheet, nc).to_number_in(sys) {
+                    matched.push(Value::number(n));
+                }
+            }
+            return if matched.is_empty() { Some(Value::Error(CellError::Div0)) } else { Some(Value::from(Array::column(matched))) };
+        }
+        if !self.spend(u64::from(len) * 2) {
+            return Some(Value::Error(CellError::Calc));
+        }
+        let mut matched = Vec::new();
+        for i in 0..len {
+            let cc = if vertical {
+                CellRef::new(cond_area.range.start.row + i, cond_area.range.start.col)
+            } else {
+                CellRef::new(cond_area.range.start.row, cond_area.range.start.col + i)
+            };
+            let cv = self.host.cell_value(cond_area.sheet, cc);
+            if cv.is_error() {
+                continue;
+            }
+            if eval_cmp(&cv) {
+                let nc = if vertical {
+                    CellRef::new(num_area.range.start.row + i, num_area.range.start.col)
+                } else {
+                    CellRef::new(num_area.range.start.row, num_area.range.start.col + i)
+                };
+                if let Ok(n) = self.host.cell_value(num_area.sheet, nc).to_number_in(sys) {
+                    matched.push(Value::number(n));
+                }
+            }
+        }
+        if matched.is_empty() { Some(Value::Error(CellError::Div0)) } else { Some(Value::from(Array::column(matched))) }
     }
 }
 
@@ -672,6 +844,6 @@ mod tests {
         let expr = gridcraft_formula::parser::parse("=AGGREGATE(15,6,B3:$B$100000/(A3:$A$100000=A2),1)").unwrap_or_else(|e| panic!("{e}"));
         let v = ev.value(&expr);
         assert_eq!(v, Value::Number(42.0));
-        assert_eq!(host.cells_read, 4);
+        assert_eq!(host.cells_read, 0);
     }
 }

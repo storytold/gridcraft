@@ -2982,6 +2982,36 @@ fn aggregate_skip_errors_over_large_bounded_range_expression_trims_to_used_range
     assert_eq!(t.get("C4"), Value::from(""));
 }
 
+#[test]
+fn aggregate_skip_errors_preserves_nested_countif_and_empty_matching_ranges() {
+    let mut t = T::new();
+    t.set("A1", "10");
+    t.set("A2", "");
+    t.set("B3", "7");
+    t.set("C1", "=AGGREGATE(9,6,COUNTIF(A1:A100000,\"\"))");
+    t.set("C2", "=AGGREGATE(15,6,B3:$B$20000/(A3:$A$20000=A2),1)");
+    assert_eq!(t.get("C1"), Value::Number(99_999.0));
+    assert_eq!(t.get("C2"), Value::Number(0.0));
+}
+
+#[test]
+fn aggregate_filtered_div_sees_current_pass_spill_extent() {
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(5)");
+    t.set("B1", "=SEQUENCE(5,1,10,10)");
+    t.set("C1", "=AGGREGATE(15,6,B1:$B$100000/(A1:$A$100000=4),1)");
+    assert_eq!(t.get("C1"), Value::Number(40.0));
+}
+
+#[test]
+fn vlookup_array_fallback_evaluates_table_expression_once() {
+    let mut t = T::new();
+    // With calc.rng seeded to 1, the first xorshift64* draw is < 0.5 and the second is >= 0.5.
+    // Evaluating the table argument twice would pick the second branch instead of the first.
+    t.set("A1", "=VLOOKUP(1,IF(RAND()<0.5,{1,10},{1,20}),2,0)");
+    assert_eq!(t.get("A1"), Value::Number(10.0));
+}
+
 /// A computed criterion whose formula runs a database function over the same criteria counts as
 /// not met inside itself: before, each record's check ran the function again for every record, at
 /// every level, so the work grew exponentially with the nesting allowed.
