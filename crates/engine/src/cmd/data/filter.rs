@@ -161,6 +161,12 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
 /// cell's day: 31 March at 14:24 equals 31 March and is on or before it, also when the criterion
 /// has a second condition or came from a file. `None` leaves the comparison exact: a value with
 /// a time, a number that isn't shown as a date, or anything not a number.
+/// Does this format show `n` as a calendar date (with or without a time)? A time of day (`hh:mm`)
+/// or a duration (`[h]:mm`) is not one: it is filtered by its exact value, as a number.
+fn shows_calendar_date(num_fmt: &str, n: f64) -> bool {
+    crate::display::number_format(num_fmt).date_shape(n).is_some_and(|(date, _)| date)
+}
+
 fn by_day(v: &Value, crit: &str, shown_as_date: impl Fn() -> bool) -> Option<Value> {
     let n = v.as_f64().filter(|n| n.is_finite())?;
     let day = gridcraft_core::parse::parse_number_text(crit).filter(|d| d.is_finite() && d.fract() == 0.0)?;
@@ -338,9 +344,9 @@ pub fn filter_column(wb: &Workbook, sheet: usize, col: u32) -> Option<FilterColu
         add(&mut fills, fill);
         add(&mut fonts, font);
         match sh.value(c) {
-            Value::Number(_) => {
+            Value::Number(n) => {
                 numbers += 1;
-                if crate::display::number_format(st.num_fmt.as_str()).is_date() {
+                if shows_calendar_date(st.num_fmt.as_str(), n) {
                     dates += 1;
                 }
             }
@@ -425,7 +431,7 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
                     }
                 }
                 FilterCriterion::Custom { a, b, and } => {
-                    let shown_as_date = || crate::display::number_format(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).is_date();
+                    let shown_as_date = || v.as_f64().is_some_and(|n| shows_calendar_date(wb.styles.get(sh.style_id(c)).num_fmt.as_str(), n));
                     let ok = |op: &str, crit: &str| match by_day(&v, crit, shown_as_date) {
                         Some(day) => custom_ok(&day, &text, op, crit),
                         None => custom_ok(&v, &text, op, crit),

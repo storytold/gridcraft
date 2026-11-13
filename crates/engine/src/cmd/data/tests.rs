@@ -789,3 +789,24 @@ fn custom_filter_compares_dates_by_day() {
     by(&mut s, "B", json!({"op": "=", "value": "5"}));
     assert_eq!(hidden(&s), vec![1, 3, 4], "5.5 is not 5 when it isn't a date");
 }
+
+/// A time of day (`hh:mm`) or a duration (`[h]:mm`) is not a calendar date: its column is not a
+/// date column, and a whole number does not match every time on "day 0".
+#[test]
+fn times_and_durations_are_not_filtered_by_day() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["At", "Took"], [0.5, 1.25], [0, 1], [0.75, 2]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A2:A4", "code": "hh:mm"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "B2:B4", "code": "[h]:mm"})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:B4"})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    assert_eq!(filter_column(&wb, 0, 0).unwrap().kind, FilterKind::Number, "hh:mm");
+    assert_eq!(filter_column(&wb, 0, 1).unwrap().kind, FilterKind::Number, "[h]:mm");
+    let hidden = |s: &Session| -> Vec<u32> { (1..=3).filter(|r| s.doc().unwrap().wb.sheet(0).unwrap().is_row_hidden(*r)).collect() };
+    s.execute("data.filterBy", json!({"column": "A", "custom": {"op": "=", "value": "0"}})).unwrap();
+    assert_eq!(hidden(&s), vec![1, 3], "only 00:00 is 0, not 12:00 or 18:00");
+    s.execute("data.filterBy", json!({"column": "A", "clear": true})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "custom": {"op": "=", "value": "1"}})).unwrap();
+    assert_eq!(hidden(&s), vec![1, 3], "only 24:00 is 1, not 30:00");
+}
