@@ -64,6 +64,9 @@ impl eframe::App for App {
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
         save_prefs(&self.0);
+        // A ready update installs once the process has exited. The macOS exit below skips
+        // dropping the app, so the helper is started here.
+        self.0.start_pending_update();
         // macOS (#117): end the process here, before eframe tears the window down. AccessKit's
         // macOS adapter subclasses the window's content view and restores its class on teardown;
         // AppKit's Touch Bar support observes that view (KVO), so in the next display cycle
@@ -244,6 +247,12 @@ fn icon() -> Option<egui::IconData> {
 }
 
 fn main() -> eframe::Result<()> {
+    // A confined launcher run (`gridcraft_sandbox::launch_command`) comes before everything else:
+    // it opens no window, writes no log, and becomes the program it confines.
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if let Some(code) = gridcraft_sandbox::handle_args(&raw) {
+        std::process::exit(code);
+    }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     // Commands catch their panics (`Session::execute`), but the default hook only prints to
