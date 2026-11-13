@@ -184,6 +184,27 @@ pub enum Mode {
     Point,
 }
 
+/// The password a workbook was opened with. Kept only in memory, so Save can encrypt the file
+/// again; it is never serialized, and `Debug` never prints it.
+#[derive(Clone)]
+pub struct WorkbookPassword(String);
+
+impl WorkbookPassword {
+    pub fn new(password: &str) -> WorkbookPassword {
+        WorkbookPassword(password.to_string())
+    }
+    /// The password itself, for the encryptor.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for WorkbookPassword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WorkbookPassword(<redacted>)")
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DocState {
     pub wb: Arc<Workbook>,
@@ -205,6 +226,8 @@ pub struct DocState {
     /// The format `path`'s content was recognised as when its extension doesn't name one (an
     /// XLSX called `budget.dat`): Save writes it back in that format.
     pub content_kind: Option<io::FileKind>,
+    /// The password the workbook was opened with: saving it as an XLSX encrypts it again.
+    pub password: Option<WorkbookPassword>,
     /// Whether the scripts stored in this workbook may run (`automate.runScript`). A workbook
     /// that arrives already carrying scripts (opened from a file) starts untrusted until the
     /// user trusts it in this session (`automate.trustScripts`); one with no scripts starts
@@ -342,6 +365,7 @@ impl DocState {
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
+            password: None,
             scripts_trusted,
             trust,
             touched: None,
