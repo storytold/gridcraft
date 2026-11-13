@@ -116,6 +116,11 @@ pub trait Ctx {
     fn computed_criterion(&mut self, _row: usize, _col: usize, _db: &Array, _record: usize) -> Option<bool> {
         None
     }
+    /// Whether the cell's work budget has run out: the database functions stop asking for computed
+    /// criteria then, as every one would fail at once.
+    fn exhausted(&self) -> bool {
+        false
+    }
     /// For GROUPBY/PIVOTBY: whether their function argument is a LAMBDA (its value is then not used).
     fn has_lambda(&self) -> bool {
         false

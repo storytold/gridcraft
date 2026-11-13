@@ -52,13 +52,16 @@ impl<'h> Evaluator<'h> {
             "ISFORMULA" | "FORMULATEXT" => {
                 let Some(Ev::R(a)) = args.first().map(|a| self.eval(a)) else { return err(CellError::NA) };
                 let Some(a) = a.first() else { return err(CellError::NA) };
-                let f = self.host.workbook().sheet(a.sheet).and_then(|s| s.cell(a.range.start)).and_then(|c| c.formula.clone());
+                let wb = self.host.workbook();
+                let f = wb.sheet(a.sheet).and_then(|s| s.cell(a.range.start)).and_then(|c| c.formula.clone());
+                // A formula formatted Hidden on a protected sheet stays hidden from FORMULATEXT too.
+                let hidden = wb.sheet(a.sheet).is_some_and(|s| s.is_protected() && wb.styles.get(s.style_id(a.range.start)).protection.hidden);
                 if name == "ISFORMULA" {
                     Ev::V(Value::Bool(f.is_some()))
                 } else {
                     match f {
-                        Some(f) => Ev::V(Value::text(format!("={}", f.text))),
-                        None => err(CellError::NA),
+                        Some(f) if !hidden => Ev::V(Value::text(format!("={}", f.text))),
+                        _ => err(CellError::NA),
                     }
                 }
             }
@@ -355,8 +358,21 @@ impl<'h> Evaluator<'h> {
             let blank_value = !from_ref && value == Value::Empty && lambda_at != Some(i) && !matches!(a, Expr::Missing);
             evaluated.push(Arg { value, from_ref, blank_value });
         }
+        // The function may go through every value it is given (a SUM inside each call of a
+        // LAMBDA over a large array): the values count against the cell's work.
+        let values = evaluated.iter().fold(0u64, |n, a| n.saturating_add(if let Value::Array(x) = &a.value { x.data.len() as u64 } else { 1 }));
+        if !self.spend(values) {
+            return err(CellError::Calc);
+        }
+        let database = criteria.is_some();
         let mut ctx = FnCtx { ev: self, criteria, lambda };
-        gridcraft_functions::call(spec, &evaluated, &mut ctx).pipe(Ev::V)
+        let v = gridcraft_functions::call(spec, &evaluated, &mut ctx);
+        // A computed criterion that ran out of work counted as not met: the result leaves
+        // records out.
+        if database && self.exhausted {
+            return err(CellError::Calc);
+        }
+        Ev::V(v)
     }
 
     /// Performs aggregation operations without copying its ranges: blocks are folded over the stored
@@ -394,6 +410,12 @@ impl<'h> Evaluator<'h> {
                 acc.count = acc.count.saturating_add(count);
                 return Ok(());
             }
+            // Folded without building an array, but still walked: the part inside the used
+            // range counts against the cell's work.
+            let r = self.read_range(a);
+            if !self.spend(u64::from(r.height()) * u64::from(r.width())) {
+                return Err(err(CellError::Calc));
+            }
             let mut error = None;
             let walked = self.host.visit_range(a.sheet, a.range, &mut |v| match acc.add_cell(kind, v) {
                 Ok(()) => true,
@@ -413,6 +435,9 @@ impl<'h> Evaluator<'h> {
     /// Adds one argument's value by calling `SUM` and `COUNT` on it, so coercion and error rules
     /// stay in one place (`AVERAGE` of an argument is its `SUM` over its `COUNT`).
     fn aggregate_value(&mut self, kind: Agg, value: Value, from_ref: bool, acc: &mut Acc) -> Result<(), Ev> {
+        if !from_ref && !self.spend_on(&value) {
+            return Err(err(CellError::Calc));
+        }
         let (Some(sum), Some(count)) = (gridcraft_functions::lookup("SUM"), gridcraft_functions::lookup("COUNT")) else {
             return Err(err(CellError::Name));
         };
