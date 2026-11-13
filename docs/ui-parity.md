@@ -83,7 +83,6 @@ this logic, with one undo step.
 
 | Area | Excel | GridCraft |
 |---|---|---|
-| 2026-11-07 | minor | File › Options › Formulas: Recalculate workbook before saving under the calculation modes, checked by default and live only while Manual is chosen (`formulas.calculationOptions` `{recalculateBeforeSave}`, saved with the workbook) (#3539) |
 | Shortcuts bound to commands | 200+ documented shortcuts per platform | 59 command shortcuts plus grid and editor keys (55 distinct keys handled in `ui-egui`) |
 | Ctrl+arrow, Ctrl+Shift+arrow, Ctrl+Home/End, Page Up/Down, Alt+Page | yes | done |
 | Ctrl+1, Ctrl+; and Ctrl+Shift+; , Ctrl+D/R, Ctrl+E, Ctrl+T, Ctrl+K, Ctrl+Shift+L | yes | most done; audit pending |
@@ -268,6 +267,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | File › Options › Formulas: Recalculate workbook before saving under the calculation modes, checked by default and live only while Manual is chosen (`formulas.calculationOptions` `{recalculateBeforeSave}`, saved with the workbook) (#3539) |
 | 2026-11-05 | minor | Reconcile upstream form-control coverage with the CJK baseline and cell-alignment updates |
 | 2026-11-04 | minor | Keep centered emoji and symbol fallback placement when a row starts with a fallback or contains only fallbacks; use primary or baseline-aligned glyphs to anchor cell alignment |
 | 2026-11-04 | minor | Preserve leading and trailing blank lines in wrapped cells when calculating vertical alignment; regression covers single, multiple and all-empty lines |
