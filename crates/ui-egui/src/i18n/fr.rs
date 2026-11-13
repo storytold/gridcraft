@@ -445,6 +445,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable AutoComplete for cell values" => "Activer la saisie semi-automatique des valeurs de cellule",
         "Save .xlsx workbooks automatically after every change" => "Enregistrer automatiquement les classeurs .xlsx après chaque modification",
         "Workbook calculation" => "Calcul du classeur",
+        "Recalculate workbook before saving" => "Recalculer le classeur avant de l'enregistrer",
         "Enable iterative calculation" => "Activer le calcul itératif",
         "Maximum Iterations:" => "Nombre maximal d'itérations :",
         "Maximum Change:" => "Écart maximal :",

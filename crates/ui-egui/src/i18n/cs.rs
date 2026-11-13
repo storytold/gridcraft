@@ -360,6 +360,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable AutoComplete for cell values" => "Povolit automatické dokončování hodnot buněk",
         "Save .xlsx workbooks automatically after every change" => "Automaticky ukládat sešity .xlsx po každé změně",
         "Workbook calculation" => "Výpočet sešitu",
+        "Recalculate workbook before saving" => "Před uložením přepočítat sešit",
         "Enable iterative calculation" => "Povolit iterativní výpočet",
         "Maximum Iterations:" => "Maximální počet iterací:",
         "Maximum Change:" => "Maximální změna:",

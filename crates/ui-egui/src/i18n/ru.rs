@@ -455,6 +455,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable AutoComplete for cell values" => "Включить автозавершение значений ячеек",
         "Save .xlsx workbooks automatically after every change" => "Автоматически сохранять книги .xlsx после каждого изменения",
         "Workbook calculation" => "Вычисления в книге",
+        "Recalculate workbook before saving" => "Пересчитывать книгу перед сохранением",
         "Enable iterative calculation" => "Включить итеративные вычисления",
         "Maximum Iterations:" => "Предельное число итераций:",
         "Maximum Change:" => "Максимальное изменение:",

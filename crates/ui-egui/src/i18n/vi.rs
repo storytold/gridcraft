@@ -433,6 +433,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable AutoComplete for cell values" => "Bật tự động hoàn thành giá trị ô",
         "Save .xlsx workbooks automatically after every change" => "Tự động lưu sổ làm việc .xlsx sau mỗi thay đổi",
         "Workbook calculation" => "Tính toán sổ làm việc",
+        "Recalculate workbook before saving" => "Tính toán lại sổ làm việc trước khi lưu",
         "Enable iterative calculation" => "Bật tính toán lặp",
         "Calculation settings are saved with the workbook." => "Thiết lập tính toán được lưu cùng sổ làm việc.",
         "Text Box" => "Hộp văn bản",

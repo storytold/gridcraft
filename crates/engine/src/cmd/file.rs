@@ -21,7 +21,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Options",
             ["File"],
             None,
-            "{} → {calculation: {mode, iterative, maxIterations, maxChange, precisionAsDisplayed}} for the active workbook (the interface opens File › Options; change settings with their own commands, e.g. formulas.calculationOptions, view.theme, app.language.set)",
+            "{} → {calculation: {mode, iterative, maxIterations, maxChange, precisionAsDisplayed, recalculateBeforeSave}} for the active workbook (the interface opens File › Options; change settings with their own commands, e.g. formulas.calculationOptions, view.theme, app.language.set)",
             always,
             options
         ),
@@ -106,6 +106,22 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     )
 }
 
+/// Recalculate workbook before saving: in manual mode, while the setting is on, the workbook is
+/// recalculated before it is written (as Calculate Now does), so the document and the file hold
+/// the same current results. It is part of the save, not an undo step of its own; a recalculation
+/// that changes nothing leaves the workbook as it was, so a clean workbook stays clean.
+fn recalculate_before_save(s: &mut Session) -> Result<()> {
+    let d = s.doc_mut()?;
+    if d.wb.calc.recalculates_on_save() {
+        let mut wb = (*d.wb).clone();
+        d.calc.recalc_all(&mut wb);
+        if wb != *d.wb {
+            d.wb = std::sync::Arc::new(wb);
+        }
+    }
+    Ok(())
+}
+
 fn save(s: &mut Session, p: &Json) -> Result<Json> {
     let path = match str_param(p, "path").map(str::to_string).or_else(|| s.active().and_then(|d| d.path.clone())) {
         Some(p) => p,
@@ -119,6 +135,7 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     if std::path::Path::new(&path).extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
         return super::print::export_pdf(s, &json!({"path": path}));
     }
+    recalculate_before_save(s)?;
     let d = s.doc_mut()?;
     // The document's own file keeps the format its content had when opened; any other path
     // goes by its extension. Relative paths to linked workbooks are rewritten for the new folder.
@@ -155,6 +172,7 @@ fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     let fmt = str_param(p, "format").unwrap_or("xlsx");
+    recalculate_before_save(s)?;
     let d = s.doc()?;
     let name = format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or("Book"));
     // The file name goes into a PivotChart's link to its PivotTable.
@@ -185,6 +203,7 @@ fn close(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
     let path = str_param(p, "path").ok_or_else(|| bad("file.export", "missing `path`"))?.to_string();
+    recalculate_before_save(s)?;
     let d = s.doc()?;
     let wb = (*d.wb).clone();
     if p.get("sheet").is_some() {
@@ -230,7 +249,7 @@ fn options(s: &mut Session, _: &Json) -> Result<Json> {
             gridcraft_model::CalcMode::AutomaticExceptTables => "automaticExceptTables",
             gridcraft_model::CalcMode::Manual => "manual",
         };
-        json!({"mode": mode, "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change, "precisionAsDisplayed": c.precision_as_displayed})
+        json!({"mode": mode, "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change, "precisionAsDisplayed": c.precision_as_displayed, "recalculateBeforeSave": c.recalculate_before_save})
     });
     Ok(json!({"calculation": calculation}))
 }

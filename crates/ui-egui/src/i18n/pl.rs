@@ -423,6 +423,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable AutoComplete for cell values" => "Włącz Autouzupełnianie dla wartości komórek",
         "Save .xlsx workbooks automatically after every change" => "Automatycznie zapisuj skoroszyty .xlsx po każdej zmianie",
         "Workbook calculation" => "Obliczenia w skoroszycie",
+        "Recalculate workbook before saving" => "Przelicz skoroszyt przed zapisaniem",
         "Enable iterative calculation" => "Włącz obliczenia iteracyjne",
         "Calculation settings are saved with the workbook." => "Ustawienia obliczeń są zapisywane razem ze skoroszytem.",
         "OK" => "OK",

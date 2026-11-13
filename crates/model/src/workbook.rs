@@ -99,6 +99,10 @@ pub struct CalcSettings {
     /// GridCraft itself shows and takes A1 references.
     #[serde(default)]
     pub r1c1: bool,
+    /// Recalculate workbook before saving (`<calcPr calcOnSave>`), on by default: in manual mode a
+    /// save recalculates first, so the file holds current results.
+    #[serde(default = "yes")]
+    pub recalculate_before_save: bool,
 }
 
 impl Default for CalcSettings {
@@ -110,6 +114,7 @@ impl Default for CalcSettings {
             max_change: Self::DEFAULT_CHANGE,
             precision_as_displayed: false,
             r1c1: false,
+            recalculate_before_save: true,
         }
     }
 }
@@ -130,6 +135,12 @@ impl CalcSettings {
         if d.is_finite() {
             self.max_change = d.abs();
         }
+    }
+
+    /// Whether a save recalculates the workbook first: in manual mode, while Recalculate workbook
+    /// before saving is on. In the automatic modes the results are current already.
+    pub fn recalculates_on_save(&self) -> bool {
+        self.mode == CalcMode::Manual && self.recalculate_before_save
     }
 }
 

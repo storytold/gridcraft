@@ -433,6 +433,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Enable AutoComplete for cell values", "セルの値にオートコンプリートを使用する"),
     ("Save .xlsx workbooks automatically after every change", "変更のたびに .xlsx ブックを自動的に保存する"),
     ("Workbook calculation", "ブックの計算"),
+    ("Recalculate workbook before saving", "ブックの保存前に再計算を行う"),
     ("Enable iterative calculation", "反復計算を行う"),
     ("Maximum Iterations:", "最大反復回数:"),
     ("Maximum Change:", "変化の最大値:"),

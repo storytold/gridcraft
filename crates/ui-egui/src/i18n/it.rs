@@ -432,6 +432,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable AutoComplete for cell values" => "Abilita Completamento automatico per i valori delle celle",
         "Save .xlsx workbooks automatically after every change" => "Salva automaticamente le cartelle di lavoro .xlsx dopo ogni modifica",
         "Workbook calculation" => "Calcolo della cartella di lavoro",
+        "Recalculate workbook before saving" => "Ricalcola la cartella di lavoro prima di salvarla",
         "Enable iterative calculation" => "Abilita calcolo iterativo",
         "Calculation settings are saved with the workbook." => "Le impostazioni di calcolo vengono salvate con la cartella di lavoro.",
         "OK" => "OK",

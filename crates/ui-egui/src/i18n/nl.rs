@@ -430,6 +430,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable AutoComplete for cell values" => "Automatisch aanvullen van celwaarden inschakelen",
         "Save .xlsx workbooks automatically after every change" => ".xlsx-werkmappen na elke wijziging automatisch opslaan",
         "Workbook calculation" => "Werkmapberekening",
+        "Recalculate workbook before saving" => "Werkmap opnieuw berekenen voor opslaan",
         "Enable iterative calculation" => "Iteratieve berekening inschakelen",
         "Calculation settings are saved with the workbook." => "Berekeningsinstellingen worden bij de werkmap opgeslagen.",
         "Cut" => "Knippen",

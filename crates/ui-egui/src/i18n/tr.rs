@@ -343,6 +343,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable AutoComplete for cell values" => "Hücre değerleri için Otomatik Tamamla'yı etkinleştir",
         "Save .xlsx workbooks automatically after every change" => ".xlsx çalışma kitaplarını her değişiklikten sonra otomatik olarak kaydet",
         "Workbook calculation" => "Çalışma kitabı hesaplaması",
+        "Recalculate workbook before saving" => "Kaydetmeden önce çalışma kitabını yeniden hesapla",
         "Enable iterative calculation" => "Yinelemeli hesaplamayı etkinleştir",
         "Calculation settings are saved with the workbook." => "Hesaplama ayarları çalışma kitabıyla birlikte kaydedilir.",
         "Interface size" => "Arayüz boyutu",

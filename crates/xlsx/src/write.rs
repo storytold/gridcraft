@@ -249,6 +249,44 @@ fn workbook_view_attrs(wb: &Workbook) -> String {
     attrs
 }
 
+/// The `<calcPr>` element: the workbook's calculation settings, each written only when it differs
+/// from the format's default. `needs_calc` (a formula without a cached value) asks for a full
+/// calculation on load.
+fn calc_pr(calc: &CalcSettings, needs_calc: bool) -> String {
+    let mut w = String::from("<calcPr calcId=\"191029\"");
+    match calc.mode {
+        CalcMode::Automatic => {}
+        CalcMode::Manual => w.push_str(" calcMode=\"manual\""),
+        CalcMode::AutomaticExceptTables => w.push_str(" calcMode=\"autoNoTable\""),
+    }
+    // CT_CalcPr defaults: iterate off, 100 iterations, 0.001 maximum change. The limits are kept
+    // while iteration is off, as Options keeps them.
+    if calc.iterative {
+        w.push_str(" iterate=\"1\"");
+    }
+    if calc.iterative || calc.max_iterations != CalcSettings::DEFAULT_ITERATIONS {
+        let _ = write!(w, " iterateCount=\"{}\"", calc.max_iterations);
+    }
+    if calc.iterative || calc.max_change != CalcSettings::DEFAULT_CHANGE {
+        let _ = write!(w, " iterateDelta=\"{}\"", crate::xml::num(calc.max_change));
+    }
+    if calc.precision_as_displayed {
+        w.push_str(" fullPrecision=\"0\"");
+    }
+    if calc.r1c1 {
+        w.push_str(" refMode=\"R1C1\"");
+    }
+    // Written only when off, in any calculation mode, as Excel does.
+    if !calc.recalculate_before_save {
+        w.push_str(" calcOnSave=\"0\"");
+    }
+    if needs_calc {
+        w.push_str(" fullCalcOnLoad=\"1\"");
+    }
+    w.push_str("/>");
+    w
+}
+
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
 pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
@@ -331,34 +369,7 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
     if !names.is_empty() {
         let _ = write!(w, "<definedNames>{names}</definedNames>");
     }
-    w.push_str("<calcPr calcId=\"191029\"");
-    match wb.calc.mode {
-        CalcMode::Automatic => {}
-        CalcMode::Manual => w.push_str(" calcMode=\"manual\""),
-        CalcMode::AutomaticExceptTables => w.push_str(" calcMode=\"autoNoTable\""),
-    }
-    // CT_CalcPr defaults: iterate off, 100 iterations, 0.001 maximum change. The limits are kept
-    // while iteration is off, as Options keeps them.
-    let calc = &wb.calc;
-    if calc.iterative {
-        w.push_str(" iterate=\"1\"");
-    }
-    if calc.iterative || calc.max_iterations != CalcSettings::DEFAULT_ITERATIONS {
-        let _ = write!(w, " iterateCount=\"{}\"", calc.max_iterations);
-    }
-    if calc.iterative || calc.max_change != CalcSettings::DEFAULT_CHANGE {
-        let _ = write!(w, " iterateDelta=\"{}\"", crate::xml::num(calc.max_change));
-    }
-    if wb.calc.precision_as_displayed {
-        w.push_str(" fullPrecision=\"0\"");
-    }
-    if wb.calc.r1c1 {
-        w.push_str(" refMode=\"R1C1\"");
-    }
-    if out.needs_calc {
-        w.push_str(" fullCalcOnLoad=\"1\"");
-    }
-    w.push_str("/>");
+    w.push_str(&calc_pr(&wb.calc, out.needs_calc));
     w.push_str(&pivots.workbook_xml(&mut wb_rels));
     let exts = crate::passthrough::workbook_elements(wb, "ext");
     if !exts.is_empty() {

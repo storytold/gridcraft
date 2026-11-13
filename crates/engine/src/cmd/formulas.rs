@@ -101,7 +101,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Calculation Options",
             ["Formulas", "Calculation"],
             None,
-            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001), precisionAsDisplayed?: bool (Set precision as displayed: numbers are stored as their format shows them; turning it on rounds every number constant permanently)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
+            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001), precisionAsDisplayed?: bool (Set precision as displayed: numbers are stored as their format shows them; turning it on rounds every number constant permanently), recalculateBeforeSave?: bool (Recalculate workbook before saving, on by default: in manual mode a save, a Save As, file.saveBytes and the CSV and web page exports recalculate the workbook first)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
             has_doc,
             calc_options
         ),
@@ -951,6 +951,9 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(v) = f64_param(p, "maxChange") {
             cx.wb.calc.set_max_change(v);
         }
+        if let Some(v) = bool_param(p, "recalculateBeforeSave") {
+            cx.wb.calc.recalculate_before_save = v;
+        }
         let precision = bool_param(p, "precisionAsDisplayed");
         if let Some(v) = precision {
             cx.wb.calc.precision_as_displayed = v;
@@ -973,6 +976,7 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
             "iterative": c.iterative,
             "maxIterations": c.max_iterations,
             "maxChange": c.max_change,
+            "recalculateBeforeSave": c.recalculate_before_save,
             "precisionAsDisplayed": c.precision_as_displayed,
         }))
     })
