@@ -103,6 +103,17 @@ fn input_parameters(ui: &mut egui::Ui, values: &mut Map<String, Json>) {
     });
 }
 
+/// Keeps the nested input in sync while its reference box is drawn in collapsed mode.
+pub(super) fn sync_collapsed_input(d: &mut Dialog, key: &str) {
+    let Some(index) = key.strip_prefix("monteCarloInput").and_then(|n| n.parse::<usize>().ok()) else { return };
+    let Some(cell) = d.values.get(key).cloned() else { return };
+    if let Some(input) =
+        d.values.get_mut("inputs").and_then(Json::as_array_mut).and_then(|inputs| inputs.get_mut(index)).and_then(Json::as_object_mut)
+    {
+        input.insert("cell".into(), cell);
+    }
+}
+
 /// Draws the bounded input editor, sampling settings, matrix and outputs without evaluating
 /// formulas. Replica settings apply only to LHS; confirmation delegates validation to the engine.
 pub(super) fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
