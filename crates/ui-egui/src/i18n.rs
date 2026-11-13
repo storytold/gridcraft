@@ -471,8 +471,11 @@ mod tests {
     }
 
     #[test]
-    fn hungarian_merge_commands_have_distinct_labels() {
+    fn hungarian_contextual_labels_are_distinct_and_translated() {
         assert_ne!(Language::Hu.tr("Merge & Center"), Language::Hu.tr("Merge Cells"));
+        assert_eq!(Language::Hu.tr("Shape|Line"), "Vonal");
+        assert_eq!(Language::Hu.tr("Sparkline|Line"), "Vonal");
+        assert_eq!(Language::Hu.tr("Sparkline|Column"), "Oszlop");
     }
 
     #[test]

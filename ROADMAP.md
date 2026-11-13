@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-13 · **Last updated:** 2026-11-13 · **Change:** minor (Hungarian UI localization: 1,554 catalog entries and selected interface areas; earlier: CJK fallback text shares the Latin baseline; earlier: form controls: buttons, sliders and spin buttons; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-13 · **Last updated:** 2026-11-13 · **Change:** minor (Hungarian UI localization: 1,559 catalog entries and selected interface areas, including Insert dropdowns; earlier: CJK fallback text shares the Latin baseline; earlier: form controls: buttons, sliders and spin buttons; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -91,7 +91,7 @@ collaboration, mobile, AI).
 
 The ribbon is translated in part into Japanese, Simplified Chinese, Korean, Brazilian Portuguese,
 Russian, German and Hungarian. The first six languages have 266–268 ribbon labels each (~12% of
-~2,200 strings; merged 10-10 in #31, #104, #82, German added 10-11). Hungarian has 1,554 catalog
+~2,200 strings; merged 10-10 in #31, #104, #82, German added 10-11). Hungarian has 1,559 catalog
 entries (~71%), including selected ribbon, dialog, macro, control, analysis, chart, status-bar and
 dynamic UI text; the interface is not fully localized. The interface follows the system language,
 and CJK, Thai and Hebrew text falls back to system fonts (#38). Japanese (10-17) and Brazilian
@@ -137,7 +137,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
-| 2026-11-13 | Hungarian UI localization: 1,554 catalog entries (~71%), all 1,197 shared catalog keys, with selected macro, control, analysis, chart, dialog, ribbon, status-bar and dynamic UI strings; untranslated UI areas and native-speaker review remain outstanding |
+| 2026-11-13 | Hungarian UI localization: 1,559 catalog entries (~71%), all 1,197 shared catalog keys, with selected macro, control, analysis, chart, dialog, ribbon, status-bar and dynamic UI strings; picture placement, shape and sparkline Insert dropdowns use translated labels; other untranslated UI areas and native-speaker review remain outstanding |
 | 2026-11-06 | A sheet keeps its own scroll position when sheets are inserted, deleted or moved before it: a new PivotTable or inserted sheet opens at the top instead of where its neighbour was scrolled; a closed window's positions are let go (#3485) |
 | 2026-11-02 | Form controls: Insert › Controls places buttons, sliders (scroll bars) and spin buttons on the sheet. A slider or spin button holds a whole number from 0 to 30000 in a linked cell (a drag or a held arrow is one undo step, and editing the cell moves the control); a button runs a macro or one command through the macro policy, asking first in a workbook opened from a file; Assign Action and Format Control edit them, and XLSX files read and write them (control properties, `<controls>` and VML), alongside the form controls GridCraft keeps unchanged |
 | 2026-11-02 | Dialogs take ranges by selection on the grid: reference boxes (RefEdit) with a collapse button that shrinks the dialog while the person selects, in Goal Seek, Solver (including the Model Range of Load/Save) and Data Analysis; while collapsed, the arrow keys move the selection and Shift+arrow extends it, and F4 cycles a reference's anchors |
@@ -274,7 +274,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-13 | minor | Hungarian UI localization: 1,554 catalog entries, all shared catalog keys, and selected translated interface areas |
+| 2026-11-13 | minor | Hungarian UI localization: 1,559 catalog entries, all shared catalog keys, and translated picture-placement, shape and sparkline Insert dropdowns |
 | 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |
 | 2026-11-05 | minor | Reconcile upstream form-control progress with the CJK baseline update |
 | 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |
