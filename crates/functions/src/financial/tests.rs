@@ -317,3 +317,12 @@ fn securities_read_dates_in_the_1904_system() {
     let odd = vec![d4(2008, 11, 11), d4(2021, 3, 1), d4(2008, 10, 15), d4(2009, 3, 1), n(0.0785), n(0.0625), n(100.0), n(2.0), n(1.0)];
     close_tol(ev4("ODDFPRICE", odd), 113.597717474079, 1e-9);
 }
+
+/// Issue #3955: with calc_method FALSE and settlement after the first interest date, Excel still
+/// accrues from issue (75, the same as TRUE), not just from the coupon date before settlement (25).
+#[test]
+fn accrint_calc_method_false_keeps_accrual_before_the_last_coupon() {
+    let args = |m: bool| vec![d(2023, 1, 1), d(2023, 7, 1), d(2023, 10, 1), n(0.1), n(1000.0), n(2.0), n(0.0), b(m)];
+    close_tol(ev("ACCRINT", args(true)), 75.0, 1e-9);
+    close_tol(ev("ACCRINT", args(false)), 75.0, 1e-9);
+}
