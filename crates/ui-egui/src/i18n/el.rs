@@ -5,6 +5,8 @@
 /// Returns the Greek translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Διάγραμμα",
+        "Decorative Text" => "Διακοσμητικό κείμενο",
         "Paste" => "Επικόλληση",
         "Paste Values" => "Επικόλληση τιμών",
         "Paste Formulas" => "Επικόλληση τύπων",
@@ -56,6 +58,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Παράθυρο\nμορφοποίησης",
         "Format" => "Μορφοποίηση",
         "Insert" => "Εισαγωγή",
+        "Header Menu|Insert" => "Εισαγωγή",
         "Insert Cells…" => "Εισαγωγή κελιών…",
         "Delete" => "Διαγραφή",
         "Delete Cells…" => "Διαγραφή κελιών…",
@@ -239,6 +242,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Convert to Comments" => "Μετατροπή σε σχόλια",
         "Checkbox" => "Πλαίσιο ελέγχου",
         "Insert checkboxes in the selected cells" => "Εισαγωγή πλαισίων ελέγχου στα επιλεγμένα κελιά",
+        "Button" => "Κουμπί",
+        "Slider" => "Ρυθμιστικό",
+        "Spin Button" => "Κουμπί περιστροφής",
+        "Draw a button that runs a macro or a command" => "Σχεδίαση κουμπιού που εκτελεί μια μακροεντολή ή μια εντολή",
+        "Draw a slider that sets a whole number in a linked cell" => "Σχεδίαση ρυθμιστικού που ορίζει έναν ακέραιο αριθμό σε ένα συνδεδεμένο κελί",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Σχεδίαση κουμπιού περιστροφής που αλλάζει κατά βήματα έναν ακέραιο αριθμό σε ένα συνδεδεμένο κελί"
+        }
+        "Edit Text" => "Επεξεργασία κειμένου",
+        "Assign Action…" => "Αντιστοίχιση ενέργειας…",
+        "Format Control…" => "Μορφοποίηση στοιχείου ελέγχου…",
         "Sheet\nRight-to-Left" => "Φύλλο από\nδεξιά προς αριστερά",
         "Sheet Right-to-Left" => "Φύλλο από δεξιά προς αριστερά",
         "Data\nAnalysis" => "Ανάλυση\nδεδομένων",
@@ -342,6 +356,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Υπόμνημα: κάτω",
         "Legend: Top" => "Υπόμνημα: επάνω",
         "Legend: Right" => "Υπόμνημα: δεξιά",
+        "First slice angle" => "Γωνία πρώτης φέτας",
+        "Doughnut hole size" => "Μέγεθος οπής ντόνατ",
         "Gridlines: None" => "Γραμμές πλέγματος: καμία",
         "Gridlines: Show" => "Γραμμές πλέγματος: εμφάνιση",
         "Chart\nTitle" => "Τίτλος\nγραφήματος",
