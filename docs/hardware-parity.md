@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-06 · **Change:** trivial (100% sheet zoom is 1:1) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-13 · **Change:** trivial (top and bottom glyph gaps match at 100% zoom) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 The hardware Excel uses, per platform, against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Hardware: ~40% ready, 25–40 h** (estimated).
@@ -20,6 +20,7 @@ The hardware Excel uses, per platform, against GridCraft. Part of
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | trivial | Top-aligned text keeps a 1.5 sheet-pixel gap. Bottom alignment uses that same gap to the painted pixels, so the font's unused descent no longer makes the bottom gap about twice the top gap. Middle centres the painted pixels. 100% zoom stays 1:1. |
 | 2026-11-06 | trivial | 100% sheet zoom draws one 96-dpi sheet pixel as one egui point. The old 0.8 factor made 100% look like 80%. Interface size is unchanged. |
 | 2026-10-31 | trivial | macOS: Intel Macs skip wgpu's indirect-call validation shaders, so they no longer exit on Metal's compiler error there (#2812). Macs run with OpenCore Legacy Patcher on macOS 15 can still fail earlier, on the MSL version (#1116). |
 | 2026-10-22 | minor | View › Arrange All over the main window's monitor. |

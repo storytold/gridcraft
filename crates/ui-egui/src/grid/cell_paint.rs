@@ -132,12 +132,76 @@ pub(super) fn display_text(
     (f.text, f.color.map(numfmt_color), f.numeric, f.fill)
 }
 
-pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
-    let pad_v = 1.5 * z;
-    let y_top = rect.top() + pad_v;
-    // Not clamped to `y_top`: text taller than the row overflows upward (Bottom) or both ways
-    // (Center), and the cell's clip rect trims it, so Middle and Bottom stay distinct from Top.
-    let y_bottom = rect.bottom() - gh - pad_v;
+/// Bounds of the primary font's line boxes, excluding extra row height added only for fallbacks.
+/// Centered fallbacks do not identify that baseline; empty or centered-only rows use their layout bounds.
+pub(crate) fn galley_baseline_bounds(galley: &egui::Galley) -> (f32, f32) {
+    let row_bounds = |row: &egui::epaint::text::PlacedRow| {
+        row.glyphs
+            .iter()
+            .find(|glyph| {
+                glyph.font_face_align == egui::epaint::text::FallbackAlign::Baseline
+                    || (glyph.font_face_ascent == glyph.font_ascent && glyph.font_face_height == glyph.font_height)
+            })
+            .map_or((row.rect().top(), row.rect().bottom()), |glyph| {
+                let top = row.pos.y + glyph.pos.y - glyph.font_ascent;
+                (top, top + glyph.font_height)
+            })
+    };
+    let first = galley.rows.first().map(|row| row_bounds(row).0);
+    let last = galley.rows.last().map(|row| row_bounds(row).1);
+    first.zip(last).unwrap_or((0.0, galley.size().y))
+}
+
+/// Inset of the line box from the cell edge, in sheet pixels at 100% zoom.
+/// Top alignment keeps this gap. Bottom alignment keeps the same gap to the painted pixels,
+/// so the font's unused descent does not make the bottom gap larger than the top gap.
+pub(crate) const GLYPH_EDGE_INSET: f32 = 1.5;
+
+/// Unpainted space inside the line box, in galley pixels.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GlyphSlack {
+    /// Line-box top down to the first painted pixel.
+    pub above: f32,
+    /// Last painted pixel down to the line-box bottom.
+    pub below: f32,
+}
+
+impl GlyphSlack {
+    pub(crate) const NONE: Self = Self { above: 0.0, below: 0.0 };
+}
+
+/// Painted-pixel bounds in galley coordinates. Whitespace and an empty mesh contribute nothing.
+pub(crate) fn galley_ink_bounds(galley: &egui::Galley) -> Option<Rect> {
+    let mut ink: Option<Rect> = None;
+    for row in &galley.rows {
+        let bounds = row.visuals.mesh_bounds;
+        if !(bounds.width() > 0.0 && bounds.height() > 0.0) {
+            continue;
+        }
+        let shifted = bounds.translate(row.pos.to_vec2());
+        ink = Some(match ink {
+            Some(acc) => acc.union(shifted),
+            None => shifted,
+        });
+    }
+    ink
+}
+
+pub(crate) fn glyph_slack(galley: &egui::Galley) -> GlyphSlack {
+    let Some(ink) = galley_ink_bounds(galley) else {
+        return GlyphSlack::NONE;
+    };
+    let (em_top, em_bottom) = galley_baseline_bounds(galley);
+    GlyphSlack { above: (ink.top() - em_top).max(0.0), below: (em_bottom - ink.bottom()).max(0.0) }
+}
+
+/// Where the line box starts. `clamp` holds a single line that is taller than the row at the top
+/// inset. Wrapped text passes `false`, so a block that does not fit still overflows upward.
+pub(crate) fn aligned_line_top(valign: VAlign, rect: Rect, gh: f32, z: f32, slack: GlyphSlack, clamp: bool) -> f32 {
+    let inset = GLYPH_EDGE_INSET * z;
+    let y_top = rect.top() + inset;
+    let y_bottom = rect.bottom() - gh - inset - slack.above + slack.below;
+    let y_bottom = if clamp { y_bottom.max(y_top) } else { y_bottom };
     match valign {
         VAlign::Top => y_top,
         VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,
@@ -145,22 +209,20 @@ pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -
     }
 }
 
-/// Inset of single-line top- and bottom-aligned text from the cell edge, in sheet pixels
-/// at 100% zoom. The same on both edges, so Top stays at the top (it is not centred) with
-/// a gap of the size Bottom already had. Callers multiply by the sheet zoom.
-pub(crate) const LINE_EDGE_INSET: f32 = 0.5;
+pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
+    aligned_line_top(valign, rect, gh, z, GlyphSlack::NONE, false)
+}
+
+pub(crate) fn wrapped_cell_text_y_slack(valign: VAlign, rect: Rect, gh: f32, z: f32, slack: GlyphSlack) -> f32 {
+    aligned_line_top(valign, rect, gh, z, slack, false)
+}
 
 pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
-    let inset = LINE_EDGE_INSET * z;
-    let y_top = rect.top() + inset;
-    // Clamped so a line taller than the row cannot start above the top inset. The cell's
-    // clip rect still trims whatever does not fit.
-    let y_bottom = (rect.bottom() - gh - inset).max(y_top);
-    match valign {
-        VAlign::Top => y_top,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,
-        VAlign::Bottom => y_bottom,
-    }
+    aligned_line_top(valign, rect, gh, z, GlyphSlack::NONE, true)
+}
+
+pub(crate) fn cell_text_y_slack(valign: VAlign, rect: Rect, gh: f32, z: f32, slack: GlyphSlack) -> f32 {
+    aligned_line_top(valign, rect, gh, z, slack, true)
 }
 
 /// Where to put a `TextShape` holding a galley of `size` turned by `angle` (egui radians, so

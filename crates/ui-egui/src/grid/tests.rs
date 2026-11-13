@@ -227,9 +227,62 @@ fn german_context_menus_have_no_two_items_alike() {
 }
 
 #[test]
-fn cell_text_y_moves_monotonically_in_standard_and_tall_rows() {
+fn galley_baseline_bounds_preserves_empty_edge_rows() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    for text in ["\nHello", "Hello\n", "\n\nHello\n\n", "\n\n"] {
+        let galley = ctx.fonts_mut(|fonts| fonts.layout(text.to_string(), egui::FontId::proportional(16.0), Color32::BLACK, 200.0));
+        assert_eq!(galley.rows.len(), text.matches('\n').count() + 1);
+        let (top, bottom) = super::cell_paint::galley_baseline_bounds(&galley);
+        let first = galley.rows.first().expect("layout has a first row");
+        let last = galley.rows.last().expect("layout has a last row");
+        if first.glyphs.is_empty() {
+            assert_eq!(top, first.rect().top(), "leading blank rows contribute to the top bound: {text:?}");
+        }
+        if last.glyphs.is_empty() {
+            assert_eq!(bottom, last.rect().bottom(), "trailing blank rows contribute to the bottom bound: {text:?}");
+        }
+    }
+}
+
+#[test]
+fn galley_baseline_bounds_ignores_centered_fallback_glyphs() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    for text in ["\u{e618}Hello", "Hello\n\u{e618}Hello", "\u{e618}Hello\nHello", "😀Hello", "Hello\n😀Hello", "😀Hello\nHello"] {
+        let galley = ctx.fonts_mut(|fonts| fonts.layout(text.to_string(), egui::FontId::monospace(16.0), Color32::BLACK, 200.0));
+        let fallback =
+            galley.rows.iter().flat_map(|row| &row.glyphs).find(|glyph| matches!(glyph.chr, '\u{e618}' | '😀')).expect("fallback is laid out");
+        assert_eq!(fallback.font_face_align, egui::epaint::text::FallbackAlign::Center);
+        assert_ne!(fallback.font_face_ascent, fallback.font_ascent, "test must exercise a fallback with different metrics");
+        let (top, bottom) = super::cell_paint::galley_baseline_bounds(&galley);
+        for (row, bound, lower) in [(galley.rows.first().unwrap(), top, false), (galley.rows.last().unwrap(), bottom, true)] {
+            let primary = row.glyphs.iter().find(|glyph| glyph.chr == 'H').expect("primary-font text is present");
+            let expected = row.pos.y + primary.pos.y - primary.font_ascent + if lower { primary.font_height } else { 0.0 };
+            assert_eq!(bound, expected, "a centered fallback must not shift the primary text: {text:?}");
+        }
+    }
+}
+
+#[test]
+fn galley_baseline_bounds_keeps_centered_only_rows() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    for text in ["\u{e618}", "\u{e618}\n\u{e618}", "😀", "😀\n😀"] {
+        let galley = ctx.fonts_mut(|fonts| fonts.layout(text.to_string(), egui::FontId::monospace(16.0), Color32::BLACK, 200.0));
+        let (top, bottom) = super::cell_paint::galley_baseline_bounds(&galley);
+        assert_eq!(top, galley.rows.first().unwrap().rect().top(), "centered-only rows keep their logical top");
+        assert_eq!(bottom, galley.rows.last().unwrap().rect().bottom(), "centered-only rows keep their logical bottom");
+    }
+}
+
+#[test]
+fn cell_text_y_moves_monotonically_when_the_text_fits() {
     let rect_std = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 20.0));
-    let gh = 18.5;
+    let gh = 16.0;
     let z = 1.0;
 
     let y_top_std = cell_text_y(VAlign::Top, rect_std, gh, z);
@@ -262,10 +315,10 @@ fn wrapped_cell_text_y_positions_correctly_and_safeguards_overflow() {
     assert!(y_top < y_center);
     assert!(y_center < y_bottom);
 
-    // Overflow case: gh exceeds rect height; Top still starts inside the cell.
+    // Overflow keeps the same top inset as fitting text; the cell clips the excess.
     let gh_overflow = 60.0;
     let y_top_ovf = wrapped_cell_text_y(VAlign::Top, rect, gh_overflow, z);
-    assert!(y_top_ovf >= rect.top());
+    assert_eq!(y_top_ovf, y_top);
 }
 
 #[test]
@@ -277,10 +330,27 @@ fn wrapped_cell_text_y_keeps_vertical_alignment_when_text_is_taller_than_the_row
     let y_center = wrapped_cell_text_y(VAlign::Center, rect, gh, z);
     let y_bottom = wrapped_cell_text_y(VAlign::Bottom, rect, gh, z);
     // Taller text overflows upward for Bottom and both ways for Center (the cell clips it).
-    // Top and Bottom share the same 1.5·zoom inset; Middle stays on the cell centre.
-    assert!((y_top - (rect.top() + 1.5)).abs() < 0.01, "Top starts at the inset, got {y_top}");
+    // With no unpainted descent, Top and Bottom share the same inset and Middle stays centred.
+    assert!((y_top - (rect.top() + GLYPH_EDGE_INSET * z)).abs() < 0.01, "Top starts at the inset, got {y_top}");
     assert!((y_center + gh / 2.0 - rect.center().y).abs() < 0.01, "Center is centred, got {y_center}");
-    assert!((y_bottom + gh - (rect.bottom() - 1.5)).abs() < 0.01, "Bottom ends one inset above the bottom edge, got {y_bottom}");
+    assert!((y_bottom + gh - (rect.bottom() - GLYPH_EDGE_INSET * z)).abs() < 0.01, "Bottom ends one inset above the bottom edge, got {y_bottom}");
+}
+
+#[test]
+fn bottom_align_keeps_the_same_painted_gap_as_top_align() {
+    let rect = Rect::from_min_max(pos2(0.0, 10.0), pos2(100.0, 90.0));
+    let (gh, z) = (18.0, 2.0);
+    // Calibri leaves much more unpainted room under the baseline than above the capitals.
+    let slack = GlyphSlack { above: 1.0, below: 6.0 };
+    let top = cell_text_y_slack(VAlign::Top, rect, gh, z, slack);
+    let bottom = cell_text_y_slack(VAlign::Bottom, rect, gh, z, slack);
+    let center = cell_text_y_slack(VAlign::Center, rect, gh, z, slack);
+    let ink_top_gap = top + slack.above - rect.top();
+    let ink_bottom_gap = rect.bottom() - (bottom + gh - slack.below);
+    assert!((ink_top_gap - ink_bottom_gap).abs() < 0.01, "painted gaps differ: top {ink_top_gap}, bottom {ink_bottom_gap}");
+    assert!((ink_top_gap - (GLYPH_EDGE_INSET * z + slack.above)).abs() < 0.01, "{ink_top_gap}");
+    let ink_mid = center + (slack.above + gh - slack.below) / 2.0;
+    assert!((ink_mid - rect.center().y).abs() < 0.01, "painted middle is off centre, got {ink_mid}");
 }
 
 /// The screen box of a galley of `size` drawn at `pos` turned by `angle` about `pos`, as egui
@@ -380,7 +450,7 @@ fn zoom_100_is_one_to_one_and_top_align_keeps_an_inset() {
         assert!((mid_row.height() - 40.0).abs() < 0.05, "{mid_row:?}");
         assert!((short.height() - 24.0).abs() < 0.05, "{short:?}");
         let gh = 16.0;
-        let inset = LINE_EDGE_INSET * geo.z;
+        let inset = GLYPH_EDGE_INSET * geo.z;
         let top = cell_text_y(VAlign::Top, tall, gh, geo.z);
         let middle = cell_text_y(VAlign::Center, tall, gh, geo.z);
         let bottom = cell_text_y(VAlign::Bottom, tall, gh, geo.z);
@@ -390,10 +460,10 @@ fn zoom_100_is_one_to_one_and_top_align_keeps_an_inset() {
         assert!(top + 8.0 < middle && middle < bottom, "top stays at the top of a tall row");
         // The inset tracks the sheet zoom: twice as large at 200%, and at 50% it does not eat the row.
         let at_200 = cell_text_y(VAlign::Top, tall, gh, 2.0);
-        assert!((at_200 - (tall.top() + LINE_EDGE_INSET * 2.0)).abs() < 0.01, "{at_200}");
+        assert!((at_200 - (tall.top() + GLYPH_EDGE_INSET * 2.0)).abs() < 0.01, "{at_200}");
         let half_rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(80.0, 20.0));
         let at_50 = cell_text_y(VAlign::Top, half_rect, gh, 0.5);
-        assert!((at_50 - LINE_EDGE_INSET * 0.5).abs() < 0.01, "{at_50}");
+        assert!((at_50 - GLYPH_EDGE_INSET * 0.5).abs() < 0.01, "{at_50}");
         assert!(at_50 + gh < half_rect.bottom(), "50% inset must not eat the row");
         // A single line taller than the row is clamped to the top inset (`y_bottom.max(y_top)`).
         let gh_over = short.height() + 8.0;
