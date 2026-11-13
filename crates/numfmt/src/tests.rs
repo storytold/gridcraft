@@ -1280,3 +1280,17 @@ fn round_as_displayed_matches_excel() {
     assert_eq!(r("0", f64::MAX), f64::MAX);
     assert_eq!(r("0.0E+0", f64::MIN_POSITIVE), 2.2e-308);
 }
+
+#[test]
+fn the_built_in_short_date_and_date_time_show_in_the_region_format() {
+    let pt = gridcraft_core::region::lookup("pt-BR");
+    let n = Value::Number(46115.5);
+    let short = NumberFormat::parse("m/d/yyyy");
+    let datetime = NumberFormat::parse("m/d/yyyy h:mm");
+    assert_eq!(format_value_in(&n, &short, S, pt).text, "03/04/2026");
+    assert_eq!(format_value_in(&n, &datetime, S, pt).text, "03/04/2026 12:00");
+    assert_eq!(format_value(&n, &short, S).text, "4/3/2026");
+    assert_eq!(format_value(&n, &datetime, S).text, "4/3/2026 12:00");
+    // Any other date code is shown as written.
+    assert_eq!(format_value_in(&n, &NumberFormat::parse("m/d/yy"), S, pt).text, "4/3/26");
+}
