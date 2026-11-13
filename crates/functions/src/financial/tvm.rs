@@ -250,8 +250,10 @@ pub(super) fn npv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(sum)
 }
 
-/// Values and dates for XNPV/XIRR: both must be numeric and of equal length.
-fn dated_flows(values: &Value, dates: &Value) -> R<(Vec<f64>, Vec<f64>)> {
+/// Values and dates for XNPV/XIRR: both must be numeric and of equal length. Dates may be numeric
+/// text, and so may values when `text_values` is set: XIRR reads a cash flow of `'110` or `="110"` as
+/// the number, as Excel does (#4046).
+fn dated_flows(values: &Value, dates: &Value, text_values: bool) -> R<(Vec<f64>, Vec<f64>)> {
     let va = as_array(values);
     let da = as_array(dates);
     if va.data.len() != da.data.len() {
@@ -263,6 +265,7 @@ fn dated_flows(values: &Value, dates: &Value) -> R<(Vec<f64>, Vec<f64>)> {
         match x {
             Value::Number(n) => v.push(*n),
             Value::Error(e) => return Err(*e),
+            Value::Text(_) if text_values => v.push(x.to_number()?),
             _ => return Err(CellError::Value),
         }
         match y {
@@ -289,12 +292,12 @@ pub(super) fn xnpv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if rate <= -1.0 {
         return Err(CellError::Num);
     }
-    let (v, d) = dated_flows(&a.get(1).ok_or(CellError::Value)?.value, &a.get(2).ok_or(CellError::Value)?.value)?;
+    let (v, d) = dated_flows(&a.get(1).ok_or(CellError::Value)?.value, &a.get(2).ok_or(CellError::Value)?.value, false)?;
     num_val(xnpv_calc(rate, &v, &d))
 }
 
 pub(super) fn xirr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (v, d) = dated_flows(&a.first().ok_or(CellError::Value)?.value, &a.get(1).ok_or(CellError::Value)?.value)?;
+    let (v, d) = dated_flows(&a.first().ok_or(CellError::Value)?.value, &a.get(1).ok_or(CellError::Value)?.value, true)?;
     let guess = opt_num(a, 2, 0.1)?;
     if !v.iter().any(|x| *x > 0.0) || !v.iter().any(|x| *x < 0.0) {
         return Err(CellError::Num);

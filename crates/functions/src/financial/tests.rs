@@ -139,6 +139,20 @@ fn depreciation() {
 }
 
 #[test]
+fn xirr_reads_numeric_text_cash_flows() {
+    // A cash flow typed as '-100 or returned by ="110" is the number, as in Excel (#4046).
+    let dates = col(&[1.0, 366.0]);
+    let numbers = ev("XIRR", vec![rf(col(&[-100.0, 110.0])), rf(dates.clone()), n(0.1)]);
+    close_tol(numbers.clone(), 0.1, 1e-9);
+    for flows in [arr(vec![vec![tv("-100")], vec![Value::Number(110.0)]]), arr(vec![vec![Value::Number(-100.0)], vec![tv("110")]])] {
+        assert_eq!(ev("XIRR", vec![rf(flows), rf(dates.clone()), n(0.1)]), numbers);
+    }
+    // Text that is not a number is still #VALUE!, and a blank cash flow too.
+    is_err(ev("XIRR", vec![rf(arr(vec![vec![tv("-100")], vec![tv("abc")]])), rf(dates.clone()), n(0.1)]), CellError::Value);
+    is_err(ev("XIRR", vec![rf(arr(vec![vec![tv("-100")], vec![Value::Empty]])), rf(dates), n(0.1)]), CellError::Value);
+}
+
+#[test]
 fn coupons() {
     let args = |f: &str| ev(f, vec![d(2011, 1, 25), d(2011, 11, 15), n(2.0), n(1.0)]);
     close(args("COUPDAYBS"), 71.0);
