@@ -1,4 +1,4 @@
-use super::ref_edit::{RefLabel, SHEET_DELETED, end_pick, home_sheet_deleted, ref_edit};
+use super::ref_edit::{RefLabel, SHEET_DELETED, current_area_ref, end_pick, home_sheet_deleted, ref_edit};
 use super::show::{build_params, form_fields, ok_cancel};
 use super::{Dialog, Field, Json, Map, SheetApp, json, vec2};
 
@@ -261,7 +261,9 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
         ok_cancel(ui, &mut ok, open);
         let pick = d.values.get("pick").and_then(Json::as_str).unwrap_or("").to_string();
         if (ok || chosen) && TOOLS.iter().any(|(id, _)| *id == pick) {
-            let sel = app.session.active().map(|doc| doc.selection.current().a1()).unwrap_or_default();
+            // The selection becomes the input range, with its sheet's name when another sheet
+            // than the dialog's own is shown.
+            let sel = current_area_ref(app, d);
             d.values = toolpak_defaults(&sel, &pick);
         }
         return;
