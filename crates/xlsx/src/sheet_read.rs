@@ -314,6 +314,8 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
                     delete_rows: !e.flag("deleteRows", true),
                     sort: !e.flag("sort", true),
                     autofilter: !e.flag("autoFilter", true),
+                    edit_objects: !e.flag("objects", false),
+                    edit_scenarios: !e.flag("scenarios", false),
                 });
             }
             "drawing" => {

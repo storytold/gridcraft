@@ -212,6 +212,12 @@ pub struct SheetProtection {
     pub delete_rows: bool,
     pub sort: bool,
     pub autofilter: bool,
+    /// Edit objects (XLSX `objects="0"`): shapes, charts and notes stay editable.
+    #[serde(default)]
+    pub edit_objects: bool,
+    /// Edit scenarios (XLSX `scenarios="0"`).
+    #[serde(default)]
+    pub edit_scenarios: bool,
 }
 
 /// Review › Allow Edit Ranges: cells that stay editable on a protected sheet, with or without a
