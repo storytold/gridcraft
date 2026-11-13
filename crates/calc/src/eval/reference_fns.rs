@@ -516,6 +516,7 @@ impl<'h> Evaluator<'h> {
         }
         let mut inputs = Vec::new();
         let mut budget = MAX_CELLS;
+        let saved_trim = std::mem::replace(&mut self.trim_refs, name == "AGGREGATE" && skip_errors);
         for e in refs {
             match self.eval(e) {
                 Ev::R(areas) => {
@@ -523,7 +524,10 @@ impl<'h> Evaluator<'h> {
                         let range = self.trim(&a);
                         budget = match budget.checked_sub(range.count()) {
                             Some(left) => left,
-                            None => return err(CellError::Num),
+                            None => {
+                                self.trim_refs = saved_trim;
+                                return err(CellError::Num);
+                            }
                         };
                         inputs.push(Input::Cells(a.sheet, range));
                     }
@@ -535,13 +539,20 @@ impl<'h> Evaluator<'h> {
                     };
                     budget = match budget.checked_sub(n) {
                         Some(left) => left,
-                        None => return err(CellError::Num),
+                        None => {
+                            self.trim_refs = saved_trim;
+                            return err(CellError::Num);
+                        }
                     };
                     inputs.push(Input::Values(v));
                 }
-                Ev::L(_) => return err(CellError::Value),
+                Ev::L(_) => {
+                    self.trim_refs = saved_trim;
+                    return err(CellError::Value);
+                }
             }
         }
+        self.trim_refs = saved_trim;
         for input in inputs {
             match input {
                 Input::Cells(sheet, range) => {
@@ -605,8 +616,8 @@ mod tests {
         fn workbook(&self) -> &Workbook {
             &self.wb
         }
-        fn cell_value(&mut self, _sheet: usize, _c: CellRef) -> Value {
-            Value::Empty
+        fn cell_value(&mut self, sheet: usize, c: CellRef) -> Value {
+            self.wb.sheet(sheet).map_or(Value::Empty, |s| s.value(c))
         }
         fn now_serial(&self) -> f64 {
             0.0
@@ -614,9 +625,9 @@ mod tests {
         fn random(&mut self) -> f64 {
             0.0
         }
-        fn range_values(&mut self, _sheet: usize, range: RangeRef) -> Vec<Value> {
+        fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
             self.cells_read += range.count() as usize;
-            vec![Value::Empty; range.count() as usize]
+            range.iter().map(|c| self.cell_value(sheet, c)).collect()
         }
     }
 
@@ -644,5 +655,23 @@ mod tests {
         // Single cells are still read.
         let (v, _) = eval("=INDEX({1,2,3;4,5,6;7,8,9},{1,3},2)");
         assert!(matches!(&v, Value::Array(a) if a.data == vec![Value::number(2.0), Value::number(8.0)]), "{v:?}");
+    }
+
+    #[test]
+    fn aggregate_with_skip_errors_trims_bounded_references_past_used_range() {
+        let mut wb = Workbook::default();
+        let sh = wb.sheet_mut(0).unwrap_or_else(|| panic!("sheet"));
+        sh.set_value(CellRef::new(1, 0), Value::from("k"));
+        sh.set_value(CellRef::new(1, 1), Value::Number(10.0));
+        sh.set_value(CellRef::new(2, 0), Value::from("other"));
+        sh.set_value(CellRef::new(2, 1), Value::Number(20.0));
+        sh.set_value(CellRef::new(3, 0), Value::from("k"));
+        sh.set_value(CellRef::new(3, 1), Value::Number(42.0));
+        let mut host = Counting { wb, cells_read: 0 };
+        let mut ev = Evaluator::new(&mut host, 0, CellRef::new(1, 3));
+        let expr = gridcraft_formula::parser::parse("=AGGREGATE(15,6,B3:$B$100000/(A3:$A$100000=A2),1)").unwrap_or_else(|e| panic!("{e}"));
+        let v = ev.value(&expr);
+        assert_eq!(v, Value::Number(42.0));
+        assert_eq!(host.cells_read, 4);
     }
 }

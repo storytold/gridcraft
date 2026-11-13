@@ -170,6 +170,9 @@ pub struct Evaluator<'h> {
     /// Computed criteria being evaluated, outermost first: one that is reached again from inside
     /// itself counts as not met instead of repeating its work at every level.
     active_criteria: Vec<(usize, CellRef)>,
+    /// Evaluating an `AGGREGATE` argument with `skip_errors` on: bounded references above
+    /// `FULL_SIZE_CELLS` trim to the sheet's used range so trailing blanks are not allocated.
+    pub(super) trim_refs: bool,
 }
 
 struct FnCtx<'a, 'h> {
@@ -224,6 +227,7 @@ impl Ctx for FnCtx<'_, '_> {
             work: self.ev.work,
             exhausted: false,
             active_criteria: std::mem::take(&mut self.ev.active_criteria),
+            trim_refs: false,
         };
         ev.active_criteria.push((area.sheet, at));
         let v = matches!(ev.value(&shifted).scalar().to_bool(), Ok(true));
@@ -268,6 +272,7 @@ impl<'h> Evaluator<'h> {
             work: EVAL_WORK,
             exhausted: false,
             active_criteria: Vec::new(),
+            trim_refs: false,
         }
     }
 
@@ -359,7 +364,7 @@ impl<'h> Evaluator<'h> {
         // `A:A`, `1:1` and `A2:A1048576` run to the edge of the sheet: they stand for "the rest of
         // the column", not for a block of a chosen size.
         let to_edge = a.range.end.row == MAX_ROWS - 1 || a.range.end.col == MAX_COLS - 1;
-        let full_size = cells <= FULL_SIZE_CELLS || (!to_edge && cells <= FULL_SIZE_BOUNDED_CELLS);
+        let full_size = cells <= FULL_SIZE_CELLS || (!self.trim_refs && !to_edge && cells <= FULL_SIZE_BOUNDED_CELLS);
         if full_size { a.range } else { self.trim(a) }
     }
 

@@ -2966,6 +2966,22 @@ fn wide_table_vlookup_text_and_numeric_keys_and_unused_columns() {
     assert_eq!(rep.value(CellRef::new(3_999, 3)), Value::Number(3_999.0 * 3.0));
 }
 
+#[test]
+fn aggregate_skip_errors_over_large_bounded_range_expression_trims_to_used_range() {
+    let mut t = T::new();
+    for (r, (k, v)) in [("K1", 10.0), ("K2", 20.0), ("K1", 35.0), ("K2", 50.0)].into_iter().enumerate() {
+        let row1 = r + 2;
+        t.set(&format!("A{row1}"), k);
+        t.set(&format!("B{row1}"), &v.to_string());
+    }
+    t.set("C2", "=IFERROR(AGGREGATE(15,6,B3:$B$100000/(A3:$A$100000=A2),1),\"\")");
+    t.set("C3", "=IFERROR(AGGREGATE(15,6,B4:$B$100000/(A4:$A$100000=A3),1),\"\")");
+    t.set("C4", "=IFERROR(AGGREGATE(15,6,B5:$B$100000/(A5:$A$100000=A4),1),\"\")");
+    assert_eq!(t.get("C2"), Value::Number(35.0));
+    assert_eq!(t.get("C3"), Value::Number(50.0));
+    assert_eq!(t.get("C4"), Value::from(""));
+}
+
 /// A computed criterion whose formula runs a database function over the same criteria counts as
 /// not met inside itself: before, each record's check ran the function again for every record, at
 /// every level, so the work grew exponentially with the nesting allowed.
