@@ -211,13 +211,16 @@ impl StyleMerge {
 /// the source's definition, or keeps the target's with `keep_same`; styles only the target defines
 /// stay. Each workbook has every built-in style, so the source's version of each built-in
 /// replaces the target's: one the source changed comes over, and one the target changed but the
-/// source didn't goes back to the built-in definition, as Excel does it. A style whose definition
-/// is the same in both counts as neither replaced nor kept.
+/// source didn't goes back to the built-in definition, as Excel does it. With `keep_same` the
+/// target's built-ins stay as they are, like any other style both have. A style whose definition
+/// is the same in both counts as neither replaced nor kept. The Normal style isn't merged: the
+/// target keeps its own, because Normal is the workbook's default cell format.
 ///
 /// `theme` is the target's, for the built-in definitions. The target's styles keep their order,
 /// and the ones it gains follow in the source's.
 pub fn merge_cell_styles(target: &[(String, Style)], source: &[(String, Style)], theme: &Theme, keep_same: bool) -> StyleMerge {
     let key = |name: &str| name.to_ascii_lowercase();
+    let normal = |name: &str| name.eq_ignore_ascii_case("Normal");
     // The first of several styles with the same name is the one the workbook uses.
     let index = |list: &[(String, Style)]| {
         let mut map = std::collections::HashMap::with_capacity(list.len());
@@ -232,6 +235,11 @@ pub fn merge_cell_styles(target: &[(String, Style)], source: &[(String, Style)],
     for (i, (name, style)) in target.iter().enumerate() {
         let k = key(name);
         if in_target.get(&k) != Some(&i) {
+            continue;
+        }
+        if normal(name) {
+            // Normal isn't merged.
+            m.styles.push((name.clone(), style.clone()));
             continue;
         }
         let theirs = in_source.get(&k).and_then(|&j| source.get(j));
@@ -253,7 +261,7 @@ pub fn merge_cell_styles(target: &[(String, Style)], source: &[(String, Style)],
     }
     for (j, (name, style)) in source.iter().enumerate() {
         let k = key(name);
-        if in_source.get(&k) != Some(&j) || in_target.contains_key(&k) {
+        if in_source.get(&k) != Some(&j) || in_target.contains_key(&k) || normal(name) {
             continue;
         }
         match builtin(name) {

@@ -231,11 +231,11 @@ with New Cell Style… (a name for a style made from the active cell's formats) 
 Merge Styles lists the other open workbooks; OK copies the chosen one's cell styles into the
 active workbook as one undo step, or none when nothing changes (`home.mergeStyles`). Where both
 have a style of the same name and the two differ, it asks first: Yes takes the chosen workbook's,
-No keeps this workbook's and merges the rest, Cancel goes back to the list. Built-in styles take
-the chosen workbook's version, changed or not, as in Excel. Not like Excel: cells formatted with a
-style keep their look after the merge, because a GridCraft cell doesn't remember its style, and
-the Normal format of cells without a format of their own is not merged. With no other workbook
-open, the dialog says so.
+No keeps this workbook's and merges the rest, Cancel goes back to the list. With Yes, built-in
+styles take the chosen workbook's version, changed or not, as in Excel; with No, this workbook's
+stay. Not like Excel: cells formatted with a style keep their look after the merge, because a
+GridCraft cell doesn't remember its style, and the Normal style is not merged. With no other
+workbook open, the dialog says so.
 
 ## Accessibility
 

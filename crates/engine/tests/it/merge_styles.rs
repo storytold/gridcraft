@@ -162,6 +162,33 @@ fn merging_from_an_untouched_workbook_resets_the_built_ins_and_keeps_the_custom_
 }
 
 #[test]
+/// Normal is the workbook's default cell format, so it isn't merged, also when a workbook has a
+/// Normal of its own (made with New Cell Style).
+fn the_normal_style_is_not_merged() {
+    let mut s = Session::new();
+    let target = s.new_workbook();
+    s.new_workbook();
+    make_style(&mut s, "Normal", "A1", &[("home.bold", json!({}))]);
+    s.new_workbook();
+    s.set_active(target);
+    let nothing = |from: &str| json!({"from": from, "added": [], "replaced": [], "kept": []});
+    // The source's Normal stays behind.
+    assert_eq!(run(&mut s, "home.mergeStyles", json!({"from": "Book2"})), nothing("Book2"));
+    assert!(names(&s).is_empty());
+    assert!(!named_cell_style(&s.doc().unwrap().wb, "Normal").unwrap().font.bold);
+    // The target's own Normal stays, whether the source has one or not.
+    make_style(&mut s, "normal", "A1", &[("home.italic", json!({}))]);
+    for from in ["Book2", "Book3"] {
+        for same_names in ["replace", "keep"] {
+            assert_eq!(run(&mut s, "home.mergeStyles", json!({"from": from, "sameNames": same_names})), nothing(from));
+        }
+    }
+    assert_eq!(names(&s), ["normal"]);
+    let normal = named_cell_style(&s.doc().unwrap().wb, "Normal").unwrap();
+    assert!(normal.font.italic && !normal.font.bold);
+}
+
+#[test]
 fn a_merge_that_changes_nothing_is_no_undo_step() {
     let mut s = Session::new();
     let target = s.new_workbook();
