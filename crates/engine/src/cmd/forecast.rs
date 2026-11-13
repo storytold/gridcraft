@@ -36,13 +36,28 @@ fn max_periods(history: usize) -> u32 {
     u32::try_from(MAX_WORK / h).unwrap_or(u32::MAX).clamp(1, MAX_PERIODS)
 }
 
+/// Most forecast rows when the model is fit to the first `fit` of `history` rows, which span
+/// `slots` timeline slots once their gaps are filled. With a Forecast Start inside the history,
+/// every row after it is forecast too (a hindcast row holds the same ETS formulas, each refitting
+/// the model over the `slots` slots), so those rows (counted from the raw rows) count against
+/// [`MAX_WORK`] before any forecast row does. `None` when the hindcast alone exceeds it.
+fn max_periods_from(history: usize, fit: usize, slots: usize) -> Option<u32> {
+    if fit >= history {
+        return Some(max_periods(history));
+    }
+    let f = u64::try_from(slots.max(fit)).unwrap_or(u64::MAX).max(1);
+    let hindcast = u64::try_from(history - fit).unwrap_or(u64::MAX);
+    let rest = (MAX_WORK / f).checked_sub(hindcast).filter(|r| *r >= 1)?;
+    Some(u32::try_from(rest).unwrap_or(u32::MAX).min(MAX_PERIODS))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![cmd!(
         "data.forecastSheet",
         "Forecast Sheet",
         ["Data", "Forecast"],
         None,
-        "{timeline?: \"A2:A25\", values?: \"B2:B25\" (default: the first two columns of `range`, the selection or the current region; a text first cell is the header), end?: timeline value or date text | periods?: n (default: a third of the history, at least 1; ≤10,000 and history × periods ≤ 500,000; history ≤ 10,000 rows), forecastStart?: a timeline value or date text on the history, before its last point (hindcast: the model is fit to the points before it, the forecast columns start there and run over the actuals; default and the last point: forecast after the history), confidenceInterval?: bool (default true), confidence?: 0.95 or 95, seasonality?: \"auto\" | 0 (none) | 2–8,760, fillMissing?: interpolate|zeros, aggregate?: average|count|counta|max|median|min|sum, statistics?: bool, chart?: line|column} → {sheet, table, chart, history, periods}. Inserts a sheet before the active one: timeline, values, Forecast (FORECAST.ETS), Lower/Upper Confidence Bound (FORECAST.ETS.CONFINT), optional FORECAST.ETS.STAT table, and a chart.",
+        "{timeline?: \"A2:A25\", values?: \"B2:B25\" (default: the first two columns of `range`, the selection or the current region; a text first cell is the header), end?: timeline value or date text | periods?: n (default: a third of the history, at least 1; ≤10,000 and history × periods ≤ 500,000, or with a forecastStart inside the history (hindcast rows are forecast too) (the greater of the fitted rows and fitted slots × (periods + rows from forecastStart on, that row included)) ≤ 500,000; history ≤ 10,000 rows), forecastStart?: a timeline value or date text on the history, before its last point (hindcast: the model is fit to the points before it, the forecast columns start there and run over the actuals; default and the last point: forecast after the history), confidenceInterval?: bool (default true), confidence?: 0.95 or 95, seasonality?: \"auto\" | 0 (none) | 2–8,760, fillMissing?: interpolate|zeros, aggregate?: average|count|counta|max|median|min|sum, statistics?: bool, chart?: line|column} → {sheet, table, chart, history, periods}. Inserts a sheet before the active one: timeline, values, Forecast (FORECAST.ETS), Lower/Upper Confidence Bound (FORECAST.ETS.CONFINT), optional FORECAST.ETS.STAT table, and a chart.",
         has_doc,
         forecast_sheet
     )]
@@ -257,13 +272,23 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
     };
-    let cap = max_periods(rows.len());
+    // The slots the model is fit over: the fit rows' span of the timeline, gaps included.
+    let slots = match (fit < rows.len(), times.get(fit.wrapping_sub(1)), times.first()) {
+        (true, Some(last_fit), Some(first)) => match (timeline.steps_after_last(*last_fit), timeline.steps_after_last(*first)) {
+            (Some(b), Some(a)) => ((b - a).round() + 1.0).clamp(0.0, 1e9) as usize,
+            _ => fit,
+        },
+        _ => fit,
+    };
+    let cap = max_periods_from(rows.len(), fit, slots).ok_or_else(|| {
+        EngineError::Other("The forecast start is too early for this much history: choose a later forecast start or less history.".into())
+    })?;
     let periods = match end {
         Some(end) => steps_to(&timeline, end, cap)?,
         None => match number(p, "periods")? {
             Some(n) if n >= 1.0 && n.ceil() <= f64::from(cap) => n.ceil() as u32,
             Some(_) => return Err(bad(CMD, format!("`periods` is from 1 to {cap} for {} rows of history", rows.len()))),
-            None => default_periods(rows.len()),
+            None => default_periods(rows.len()).min(cap),
         },
     };
     let future: Vec<f64> =
@@ -532,6 +557,51 @@ mod tests {
         let sheets = s.doc().unwrap().wb.sheets.len();
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(s.doc().unwrap().wb.sheets.len(), sheets - 1);
+    }
+
+    #[test]
+    fn hindcast_rows_count_against_the_work_limit() {
+        use super::{MAX_WORK, max_periods, max_periods_from};
+        assert_eq!(max_periods_from(1_300, 1_300, 1_300), Some(max_periods(1_300)));
+        // 2,000 rows fit to the first 1,899: 101 hindcast rows, then 162 forecast rows.
+        assert_eq!(max_periods_from(2_000, 1_899, 1_899), Some(162));
+        // Fit to the first 1,000: the 1,000 hindcast rows alone are twice the limit.
+        assert_eq!(max_periods_from(2_000, 1_000, 1_000), None);
+        // 800 rows fit to the first 400, which span 571 slots (gaps filled): each formula refits
+        // 571 slots, so 475 forecast rows after the 400 hindcast rows, not 850.
+        assert_eq!(max_periods_from(800, 400, 571), Some(475));
+        assert!((475 + 400) * 571 <= MAX_WORK as usize);
+        for (h, f) in [(2_000usize, 1_899usize), (10_000, 9_990), (100, 2), (60, 50)] {
+            if let Some(p) = max_periods_from(h, f, f) {
+                assert!((u64::from(p) + (h - f) as u64) * f as u64 <= MAX_WORK, "{h} {f}");
+            }
+        }
+        let mut s = Session::new();
+        s.new_workbook();
+        let mut rows = vec![json!(["t", "y"])];
+        rows.extend((1..=2_000).map(|t| json!([t, (t % 7) as f64 + t as f64 * 0.5])));
+        s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+        let sheets = s.doc().unwrap().wb.sheets.len();
+        let err = s.execute("data.forecastSheet", json!({"range": "A1:B2001", "forecastStart": 1_001})).expect_err("hindcast too long");
+        assert!(err.to_string().contains("forecast start is too early"), "{err}");
+        let err = s.execute("data.forecastSheet", json!({"range": "A1:B2001", "forecastStart": 1_900, "periods": 163})).expect_err("past the cap");
+        assert!(err.to_string().contains("from 1 to 162"), "{err}");
+        assert_eq!(s.doc().unwrap().wb.sheets.len(), sheets);
+    }
+
+    #[test]
+    fn the_hindcast_cap_follows_the_slots_the_fit_spans_not_its_rows() {
+        // 800 rows, 20% of the slots missing: the first 400 rows span 500 slots, so each ETS
+        // formula refits 500 slots and the cap is 1,000 - 400 = 600 (it was 850 by rows).
+        let mut s = Session::new();
+        s.new_workbook();
+        let times: Vec<u32> = (1u32..).filter(|t| !matches!(t % 10, 3 | 6)).take(800).collect();
+        let mut rows = vec![json!(["t", "y"])];
+        rows.extend(times.iter().map(|t| json!([t, (t % 7) as f64 + f64::from(*t) * 0.5])));
+        s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+        let start = times[400];
+        let err = s.execute("data.forecastSheet", json!({"range": "A1:B801", "forecastStart": start, "periods": 601})).expect_err("past the cap");
+        assert!(err.to_string().contains("from 1 to 600"), "{err}");
     }
 
     #[test]
