@@ -142,9 +142,9 @@ pub fn classify_link(target: &str, external: bool) -> LinkKind {
 
 /// A path as a link stores it. Excel writes a file link as a URI reference, so a space is `%20`
 /// (`My%20Files/a.xlsx`); the escapes are decoded before the checks. A `%` that starts no escape
-/// (`100%.txt`) leaves the path as it is.
+/// (`100%.txt`) stays in the name, and the escapes after it are still decoded.
 fn local_escaped(path: &str) -> LinkKind {
-    match percent_decode(path) {
+    match percent_decode(path, false) {
         Some(p) if p.chars().any(char::is_control) => LinkKind::Refused("The link contains control characters.".into()),
         Some(p) => local(&p),
         None => local(path),
@@ -152,8 +152,9 @@ fn local_escaped(path: &str) -> LinkKind {
 }
 
 /// The text of a path that is plainly one: a drive (`C:\x`), an absolute, home or `.`/`..`
-/// relative path, or anything with a separator that is not a `Sheet!A1` reference. Sheet and
-/// defined names can't hold `/` or `\`, so those are never mistaken for references.
+/// relative path, or anything with a separator. Sheet and defined names can't hold `/` or `\`, so
+/// those are never mistaken for references, and a `!` in a file name (`reports/v2!final.pdf`) is
+/// part of the name.
 fn path_like(t: &str) -> Option<&str> {
     let b = t.as_bytes();
     let drive = b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'/' | b'\\');
@@ -166,7 +167,7 @@ fn path_like(t: &str) -> Option<&str> {
             && s.starts_with(|c: char| c.is_ascii_alphabetic())
             && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
     });
-    let separated = t.contains(['/', '\\']) && !t.contains('!') && !has_scheme;
+    let separated = t.contains(['/', '\\']) && !has_scheme;
     (drive || rooted || separated).then(|| t.split('#').next().unwrap_or(t))
 }
 
@@ -184,7 +185,7 @@ fn file_url_path(rest: &str) -> Result<String, String> {
         }
         None => rest,
     };
-    let decoded = percent_decode(path).ok_or_else(|| "The link isn't a valid file address.".to_string())?;
+    let decoded = percent_decode(path, true).ok_or_else(|| "The link isn't a valid file address.".to_string())?;
     // `file:///C:/x` carries the drive after a slash.
     let b = decoded.as_bytes();
     let decoded = if b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':' { decoded[1..].to_string() } else { decoded };
@@ -194,16 +195,26 @@ fn file_url_path(rest: &str) -> Result<String, String> {
     Ok(decoded)
 }
 
-/// Decodes `%xx` escapes as UTF-8; `None` when a `%` starts no valid escape or the bytes aren't UTF-8.
-fn percent_decode(s: &str) -> Option<String> {
+/// Decodes `%xx` escapes as UTF-8; `None` when the bytes aren't UTF-8, or, when `strict`, when a `%`
+/// starts no valid escape (otherwise such a `%` is kept as it is).
+fn percent_decode(s: &str, strict: bool) -> Option<String> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while let Some(&c) = b.get(i) {
         if c == b'%' {
-            let hex = s.get(i + 1..i + 3)?;
-            out.push(u8::from_str_radix(hex, 16).ok()?);
-            i += 3;
+            let escape = s.get(i + 1..i + 3).filter(|h| h.bytes().all(|d| d.is_ascii_hexdigit())).and_then(|h| u8::from_str_radix(h, 16).ok());
+            match escape {
+                Some(byte) => {
+                    out.push(byte);
+                    i += 3;
+                }
+                None if strict => return None,
+                None => {
+                    out.push(c);
+                    i += 1;
+                }
+            }
         } else {
             out.push(c);
             i += 1;
@@ -348,6 +359,11 @@ pub fn resolve_full_path(path: &str) -> Result<PathBuf, String> {
 /// Refuses what doesn't exist, programs and scripts (by name, by what a link resolves to, and on
 /// Unix by the executable bit), so a confirmed click can only open documents and folders.
 pub fn resolve_local(base: Option<&Path>, target: &str) -> Result<PathBuf, String> {
+    // A name with a line break would split the path the confirmation shows, and links never carry
+    // one ([`classify`]): a full path gets the same check.
+    if target.chars().any(char::is_control) {
+        return Err("The link contains control characters.".into());
+    }
     // Before anything touches the file system: resolving a share would contact it.
     if is_unc_prefix(target) {
         return Err("Links to network locations aren't opened.".into());
@@ -505,6 +521,14 @@ mod tests {
             ("My%20Files/Q1%20costs.xlsx", "My Files/Q1 costs.xlsx"),
             ("C:\\Docs\\a%20b.pdf", "C:\\Docs\\a b.pdf"),
             ("docs/100%.txt", "docs/100%.txt"),
+            // A literal `%` keeps its place and the escapes after it still decode.
+            ("docs/100%/My%20Files/a.txt", "docs/100%/My Files/a.txt"),
+            ("docs/%zz%20a.txt", "docs/%zz a.txt"),
+            ("docs/50%", "docs/50%"),
+            // A `!` in a file name is part of the name, not a sheet reference.
+            ("reports/v2!final.pdf", "reports/v2!final.pdf"),
+            ("/tmp/v2!final.pdf", "/tmp/v2!final.pdf"),
+            ("C:\\Docs\\a!b.pdf", "C:\\Docs\\a!b.pdf"),
         ] {
             let kind = classify(target);
             if target == "Book.xlsx#Sheet1!A2" {
@@ -520,7 +544,19 @@ mod tests {
         assert!(matches!(classify_link("notes.txt", false), LinkKind::Internal(_)));
         assert!(matches!(classify_link("Total", false), LinkKind::Internal(_)));
         assert!(matches!(classify_link("Sheet2!A1", true), LinkKind::Internal(_)));
+        assert_eq!(classify_link("reports/v2!final.pdf", true), LinkKind::Local("reports/v2!final.pdf".into()));
+        // A `file:` address is stricter: a `%` that starts no escape is not a valid address.
+        assert!(matches!(classify("file:///tmp/100%/a.txt"), LinkKind::Refused(_)));
         assert!(matches!(classify_link("B2", true), LinkKind::Internal(_)));
+    }
+
+    #[test]
+    /// A full path with a control character is refused before the file system is asked about it.
+    fn a_path_with_a_control_character_is_not_resolved() {
+        for bad in ["/tmp/a\nb.txt", "/tmp/a\tb.txt", "C:\\x\\a\u{7}b.txt"] {
+            assert!(resolve_full_path(bad).is_err_and(|why| why.contains("control characters")), "{bad:?}");
+        }
+        assert!(resolve_local(Some(Path::new("/tmp")), "a\nb.txt").is_err_and(|why| why.contains("control characters")));
     }
 
     #[test]
