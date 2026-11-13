@@ -354,13 +354,19 @@ impl DocState {
     }
     /// Applies `region` to this workbook without making it dirty. The region belongs to the
     /// window, not to the file, so a clean workbook stays clean (`saved` moves with it); and a
-    /// workbook another window shares is cloned only when the region really changes.
+    /// workbook another window shares is cloned only when the region really changes. Formulas
+    /// are calculated again unless calculation is manual, because `TEXT`, `VALUETOTEXT` and the
+    /// criteria of `COUNTIF` read the region.
     pub(crate) fn adopt_region(&mut self, region: &'static gridcraft_core::Region) {
         if self.wb.region.tag == region.tag {
             return;
         }
         let dirty = self.is_dirty();
-        Arc::make_mut(&mut self.wb).region = region;
+        let wb = Arc::make_mut(&mut self.wb);
+        wb.region = region;
+        if wb.calc.mode != gridcraft_model::CalcMode::Manual {
+            self.calc.recalc_all(wb);
+        }
         if !dirty {
             self.saved = self.wb.clone();
         }
@@ -1067,8 +1073,11 @@ impl Session {
         let g = self.take_group(&token)?;
         let Some(d) = self.docs.iter_mut().find(|d| d.uid == g.doc) else { return Ok(()) };
         if !Arc::ptr_eq(&d.wb, &g.wb) {
+            // The snapshot keeps the region of its time; the window's current one stays.
+            let region = d.wb.region;
             d.wb = g.wb;
             d.calc.rebuild(&d.wb);
+            d.adopt_region(region);
         }
         d.selection = g.selection;
         d.undo.truncate(g.start);

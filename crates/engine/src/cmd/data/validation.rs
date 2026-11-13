@@ -214,9 +214,15 @@ pub fn list_items(wb: &Workbook, sheet: usize, at: CellRef, dv: &Validation) -> 
         return items.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
     }
     let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
+    // A number is listed with the region's decimal (`1,5` in pt-BR): the dropdown enters the item
+    // as typed input, which is read in the region, and typed input is matched against the list.
+    let item = |v: &Value| match v {
+        Value::Number(_) if wb.region.decimal != '.' => v.display().replace('.', wb.region.decimal.encode_utf8(&mut [0u8; 4])),
+        _ => v.display(),
+    };
     match gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at)) {
-        Value::Array(a) => a.data.iter().filter(|v| !v.is_empty()).map(Value::display).collect(),
-        v if !v.is_empty() && !v.is_error() => vec![v.display()],
+        Value::Array(a) => a.data.iter().filter(|v| !v.is_empty()).map(item).collect(),
+        v if !v.is_empty() && !v.is_error() => vec![item(&v)],
         _ => vec![],
     }
 }

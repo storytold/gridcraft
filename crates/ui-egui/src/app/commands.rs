@@ -261,8 +261,11 @@ impl SheetApp {
                 let tag = p.get("region").or_else(|| p.get("tag")).and_then(Json::as_str).unwrap_or("");
                 match gridcraft_engine::core::region::find(tag) {
                     Some(region) => {
-                        self.session.set_region(region);
-                        Ok(json!({"region": region.tag}))
+                        // An open draft is read in the region it was typed in.
+                        self.settle_drafts().map(|()| {
+                            self.session.set_region(region);
+                            json!({"region": region.tag})
+                        })
                     }
                     None => {
                         let known: Vec<&str> = gridcraft_engine::core::region::all().iter().map(|r| r.tag).collect();

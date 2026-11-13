@@ -643,8 +643,9 @@ pub fn default_region() -> &'static Region {
 }
 
 /// The region the operating system or browser reports: `LC_ALL`, `LC_NUMERIC` and `LANG` in
-/// POSIX precedence order, `navigator.languages` on wasm. An unset, empty or `C`/`POSIX` locale
-/// is English (United States).
+/// POSIX precedence order, `navigator.languages` on wasm. The first variable that is set and not
+/// empty decides, so `LC_ALL=C` wins over `LANG`. A `C`/`POSIX` locale, or none at all, is
+/// English (United States).
 pub fn system() -> &'static Region {
     #[cfg(target_arch = "wasm32")]
     if let Some(tag) = web_locale() {
@@ -661,12 +662,16 @@ pub fn system() -> &'static Region {
     default_region()
 }
 
-/// A locale as the environment writes it (`pt_BR.UTF-8`), unless it names no region (`C`, `POSIX`).
+/// A locale as the environment writes it (`pt_BR.UTF-8`); `C` and `POSIX` (`C.UTF-8` too) are
+/// English (United States). None when the value is empty, so the next variable decides.
 #[cfg(not(target_arch = "wasm32"))]
 fn from_locale(tag: &str) -> Option<&'static Region> {
     let base = tag.split(['.', '@']).next().unwrap_or("").trim();
-    if base.is_empty() || base.eq_ignore_ascii_case("C") || base.eq_ignore_ascii_case("POSIX") {
+    if base.is_empty() {
         return None;
+    }
+    if base.eq_ignore_ascii_case("C") || base.eq_ignore_ascii_case("POSIX") {
+        return Some(default_region());
     }
     Some(lookup(base))
 }

@@ -1,6 +1,9 @@
 use super::show::ok_cancel;
 use super::{Dialog, SheetApp, json, theme};
 
+/// The `d.values` key of the Number tab's code as the region writes it (`#.##0,00` in pt-BR).
+const REGIONAL_CODE: &str = "regional_num_fmt";
+
 /// Draws the six-tab Format Cells editor (number, alignment, font, border, fill, protection); the Number tab shows a sample preview, and the style draft updates.
 pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     // `d.tab` stays the English name (it is what `open_dialog` and tests pass); only the drawn
@@ -24,10 +27,16 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
     ui.separator();
     let mut st: gridcraft_engine::model::Style = d.values.get("style").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     let sample = app.session.active().and_then(|doc| doc.wb.active().map(|s| s.value(doc.selection.active))).unwrap_or_default();
+    // The style draft keeps the canonical code; the Number tab edits the code in the region's
+    // separators in its own draft, converted once from the style when the tab first shows.
+    let region = app.session.active().map(|doc| doc.wb.region).unwrap_or_else(gridcraft_engine::core::region::default_region);
     match d.tab.as_str() {
         "Number" => {
-            let region = app.session.active().map(|doc| doc.wb.region).unwrap_or_else(gridcraft_engine::core::region::default_region);
-            let mut code = gridcraft_engine::display::regional_code(st.num_fmt.as_str(), region);
+            let mut code = d
+                .values
+                .get(REGIONAL_CODE)
+                .and_then(serde_json::Value::as_str)
+                .map_or_else(|| gridcraft_engine::display::regional_code(st.num_fmt.as_str(), region), str::to_string);
             ui.columns(2, |cols| {
                 cols[0].label(egui::RichText::new(lang.tr("Category:")).strong());
                 for name in
@@ -68,9 +77,8 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     }
                 }
             });
-            // The engine stores the code it receives in its canonical spelling; the dialog sends
-            // what the user sees, in the region's separators.
-            st.num_fmt = gridcraft_engine::model::NumFmt::new(&code);
+            st.num_fmt = gridcraft_engine::model::NumFmt::new(&gridcraft_engine::display::canonical_code(&code, region));
+            d.values.insert(REGIONAL_CODE.into(), serde_json::Value::String(code));
         }
         "Alignment" => {
             use gridcraft_engine::model::{HAlign, ReadingOrder, VAlign};
@@ -232,7 +240,16 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
     }
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
-    if *confirm && let Some(style) = d.values.get("style").cloned() {
+    if *confirm && let Some(mut style) = d.values.get("style").cloned() {
+        // `home.formatCells` reads a code in the region's separators and stores it canonical, so
+        // the code goes out once in that spelling: the Number tab's draft, or the stored code.
+        if let Some(serde_json::Value::String(num_fmt)) = style.get_mut("num_fmt") {
+            *num_fmt = d
+                .values
+                .get(REGIONAL_CODE)
+                .and_then(serde_json::Value::as_str)
+                .map_or_else(|| gridcraft_engine::display::regional_code(num_fmt, region), str::to_string);
+        }
         app.run_or_alert("home.formatCells", json!({"style": style}));
     }
     if !open {

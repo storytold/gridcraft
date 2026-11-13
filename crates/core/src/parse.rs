@@ -6,7 +6,7 @@
 //! [`parse_input_in`] reads the decimal and thousands separators of any [`Region`].
 
 use crate::date::{DateSystem, MONTHS, serial_from_ymd, time_fraction};
-use crate::region::{EN_US, Region};
+use crate::region::{EN_US, Grouping, Region};
 use crate::value::{CellError, Value};
 
 /// A parsed entry: its value and the number format Excel would apply automatically.
@@ -178,11 +178,19 @@ fn parse_plain(t: &str, region: &Region) -> Option<(f64, Option<&'static str>)> 
     let s = s.as_ref();
     let has_sep = s.contains(',');
     let digits: String = if has_sep {
-        // Thousands separators must be in groups of three before the decimal point.
+        // Thousands separators must be in groups of three before the decimal point, or in the
+        // Indian system a last group of three after groups of two (`12,34,567`).
         let (int, frac) = s.split_once('.').map_or((s, None), |(a, b)| (a, Some(b)));
         let groups: Vec<&str> = int.split(',').collect();
-        let first = groups.first()?;
-        if first.is_empty() || first.len() > 3 || groups.iter().skip(1).any(|g| g.len() != 3) {
+        let (first, rest) = groups.split_first()?;
+        let grouped = match region.grouping {
+            Grouping::Thousands => first.len() <= 3 && rest.iter().all(|g| g.len() == 3),
+            Grouping::Indian => {
+                let (last, middle) = rest.split_last()?;
+                first.len() <= 2 && last.len() == 3 && middle.iter().all(|g| g.len() == 2)
+            }
+        };
+        if first.is_empty() || !grouped {
             return None;
         }
         let mut d = groups.concat();
