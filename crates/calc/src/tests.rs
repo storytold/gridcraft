@@ -3017,3 +3017,13 @@ fn lookup_single_error_key_vector_matches_array_semantics() {
         }
     }
 }
+
+/// Reference lookup lifting must reject excessive scans before evaluating individual needles.
+#[test]
+fn lifted_reference_lookups_share_the_scan_limit() {
+    let wb = Workbook::new();
+    // Error needles make this regression cheap even without the guard: none starts a scan.
+    for formula in ["=VLOOKUP(SEQUENCE(501)/0,A1:A1000000,1,FALSE)", "=HLOOKUP(SEQUENCE(40000)/0,A1:XFD1,1,FALSE)"] {
+        assert_eq!(crate::evaluate(&wb, 0, c("E1"), formula), Value::Error(CellError::Num), "{formula}");
+    }
+}

@@ -363,8 +363,7 @@ impl<'h> Evaluator<'h> {
         }
         // The function may go through every value it is given (a SUM inside each call of a
         // LAMBDA over a large array): the values count against the cell's work.
-        let values = evaluated.iter().fold(0u64, |n, a| n.saturating_add(if let Value::Array(x) = &a.value { x.data.len() as u64 } else { 1 }));
-        if !self.spend(values) {
+        if !self.spend_args(&evaluated) {
             return err(CellError::Calc);
         }
         let database = criteria.is_some();

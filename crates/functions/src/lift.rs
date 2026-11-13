@@ -68,6 +68,17 @@ const SCANS: &[&str] = &["VLOOKUP", "HLOOKUP", "LOOKUP", "MATCH", "XLOOKUP", "XM
 /// aggregates rescanning their ranges, period loops, and array results built per element.
 const LIFTED_SCAN_BUDGET: usize = 500_000_000;
 
+/// Initial work of a lifted call, or `None` when its output or repeated scans exceed the
+/// function library's limits. Reference-aware hosts use this before their scalar search loop.
+pub fn lifted_scan_cost(outputs: usize, scan_len: usize) -> Option<usize> {
+    lifted_scan_cost_within(outputs, scan_len, LIFTED_SCAN_BUDGET)
+}
+
+fn lifted_scan_cost_within(outputs: usize, scan_len: usize, budget: usize) -> Option<usize> {
+    let cost = outputs.checked_mul(scan_len.max(1))?;
+    (outputs <= MAX_CELLS && cost <= budget).then_some(cost)
+}
+
 /// Criteria aggregates: every call tests each cell of its ranges against its criteria, so a call
 /// lifted over `n` criteria does `n` x (range cells) work, like the [`SCANS`] lookups.
 const CRITERIA: &[&str] = &["COUNTIF", "COUNTIFS", "SUMIF", "SUMIFS", "AVERAGEIF", "AVERAGEIFS", "MAXIFS", "MINIFS"];
@@ -168,10 +179,9 @@ fn call_lifted_within(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx, budget: us
     // `MUNIT(SEQUENCE(1e4,,3000,0))`.
     let per_call = scan_len(spec, args).max(1);
     let mut cell_args: Vec<Arg> = args.to_vec();
-    let mut spent = needles.saturating_mul(per_call);
-    if needles > MAX_CELLS || spent > budget {
+    let Some(mut spent) = lifted_scan_cost_within(needles, per_call, budget) else {
         return Value::Error(CellError::Num);
-    }
+    };
     // Period loops are known before any call runs, so a call over budget does none of them.
     if PERIOD_LOOPS.contains(&spec.name) {
         for r in 0..rows {
@@ -263,6 +273,9 @@ mod tests {
         is_err(ev("XMATCH", vec![tall(1_048_576), tall(1_048_576)]), CellError::Num);
         // Just past the budget, for every lookup: 501 needles over 1,000,000 entries.
         assert_eq!(super::LIFTED_SCAN_BUDGET, 500 * 1_000_000);
+        assert_eq!(super::lifted_scan_cost(500, 1_000_000), Some(500_000_000));
+        assert_eq!(super::lifted_scan_cost(501, 1_000_000), None);
+        assert_eq!(super::lifted_scan_cost(usize::MAX, 2), None);
         is_err(ev("XMATCH", vec![tall(501), tall(1_000_000)]), CellError::Num);
         is_err(ev("MATCH", vec![tall(501), tall(1_000_000), n(0.0)]), CellError::Num);
         is_err(ev("XLOOKUP", vec![tall(501), tall(1_000_000), tall(1_000_000)]), CellError::Num);
