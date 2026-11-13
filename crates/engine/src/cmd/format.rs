@@ -892,6 +892,21 @@ mod tests {
     }
 
     #[test]
+    fn autofit_of_many_separate_columns_fits_only_the_selected_ones() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let long = "a much longer text than the others";
+        // Columns A, C, E, G, I, K are selected (six runs), the ones between hold long text too.
+        let row: Vec<_> = (0..11).map(|c| if c % 2 == 0 { json!("x") } else { json!(long) }).collect();
+        s.execute("range.setValues", json!({"range": "A1", "values": [row]})).unwrap();
+        s.execute("home.autofitColumnWidth", json!({"cols": "A:A,C:C,E:E,G:G,I:I,K:K"})).unwrap();
+        let doc = s.doc().unwrap();
+        let size = |c: u32| doc.wb.active().and_then(|sh| sh.cols.get(&c)).and_then(|e| e.size);
+        assert!([0, 2, 4, 6, 8, 10].iter().all(|&c| size(c).is_some()));
+        assert!([1, 3, 5, 7, 9].iter().all(|&c| size(c).is_none()));
+    }
+
+    #[test]
     fn arabic_word_ligatures_are_wider_than_letters() {
         let em = |t: &str| approx_text_width(t, 72.0, false) / 96.0;
         assert!(em("\u{FDFD}") > 8.0);
