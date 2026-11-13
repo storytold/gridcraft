@@ -300,22 +300,33 @@ pub fn committed_text(ui: &mut Ui, id: egui::Id, current: &str, width: Option<f3
     committed_text_with_hint(ui, id, current, width, "")
 }
 
+#[derive(Clone)]
+struct CommittedTextDraft {
+    text: String,
+    original: String,
+}
+
 /// [`committed_text`] with placeholder text for an empty field.
 pub fn committed_text_with_hint(ui: &mut Ui, id: egui::Id, current: &str, width: Option<f32>, hint: &str) -> Option<String> {
     let width = width.unwrap_or(ui.spacing().text_edit_width);
     let draft = id.with("draft");
-    let was_focused = ui.memory(|memory| memory.has_focus(id));
-    let mut text =
-        if was_focused { ui.data_mut(|data| data.get_temp::<String>(draft)).unwrap_or_else(|| current.to_string()) } else { current.to_string() };
+    let buffered = ui.data_mut(|data| data.get_temp::<CommittedTextDraft>(draft));
+    let had_draft = buffered.is_some();
+    let original = buffered.as_ref().map_or(current, |state| state.original.as_str());
+    let saved_value_unchanged = original == current;
+    let mut text = buffered.as_ref().map_or_else(|| current.to_string(), |state| state.text.clone());
     let r = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(width).hint_text(hint));
-    if was_focused && r.lost_focus() {
-        ui.data_mut(|d| d.remove::<String>(draft));
-        return (!ui.input(|i| i.key_pressed(egui::Key::Escape))).then_some(text);
+    // Shift+Tab can transfer memory focus before this response reports the loss, so the saved
+    // draft—not `memory.has_focus`—identifies an edit that must be completed. A concurrently
+    // changed saved value is newer than that draft and must not be overwritten.
+    if had_draft && r.lost_focus() {
+        ui.data_mut(|d| d.remove::<CommittedTextDraft>(draft));
+        return (!ui.input(|i| i.key_pressed(egui::Key::Escape)) && saved_value_unchanged).then_some(text);
     }
     if r.has_focus() {
-        ui.data_mut(|d| d.insert_temp(draft, text));
+        ui.data_mut(|d| d.insert_temp(draft, CommittedTextDraft { text, original: original.to_string() }));
     } else {
-        ui.data_mut(|d| d.remove::<String>(draft));
+        ui.data_mut(|d| d.remove::<CommittedTextDraft>(draft));
     }
     None
 }
@@ -726,7 +737,10 @@ mod committed_text_tests {
 
     fn run(ctx: &egui::Context, raw: egui::RawInput, id: egui::Id, current: &str) -> Option<String> {
         let mut committed = None;
-        let mut output = ctx.run_ui(raw, |ui| committed = committed_text(ui, id, current, None));
+        let mut output = ctx.run_ui(raw, |ui| {
+            let _ = ui.button("Previous field");
+            committed = committed_text(ui, id, current, None);
+        });
         output.textures_delta.clear();
         committed
     }
@@ -737,18 +751,42 @@ mod committed_text_tests {
         let id = egui::Id::unique("committed-text-test");
         let draft = id.with("draft");
 
-        ctx.data_mut(|data| data.insert_temp(draft, "draft".to_string()));
         ctx.memory_mut(|memory| memory.request_focus(id));
         assert_eq!(run(&ctx, egui::RawInput::default(), id, "saved"), None);
+        ctx.data_mut(|data| {
+            data.insert_temp(draft, CommittedTextDraft { text: "draft".to_string(), original: "saved".to_string() });
+        });
 
         let escape = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
         assert_eq!(run(&ctx, egui::RawInput { events: vec![escape], ..Default::default() }, id, "saved"), None);
-        assert!(ctx.data_mut(|data| data.get_temp::<String>(draft)).is_none());
+        assert!(ctx.data_mut(|data| data.get_temp::<CommittedTextDraft>(draft)).is_none());
 
-        ctx.data_mut(|data| data.insert_temp(draft, "stale".to_string()));
+        ctx.data_mut(|data| {
+            data.insert_temp(draft, CommittedTextDraft { text: "stale".to_string(), original: "saved".to_string() });
+        });
         ctx.memory_mut(|memory| memory.surrender_focus(id));
         assert_eq!(run(&ctx, egui::RawInput::default(), id, "new saved value"), None);
-        assert!(ctx.data_mut(|data| data.get_temp::<String>(draft)).is_none());
+        assert!(ctx.data_mut(|data| data.get_temp::<CommittedTextDraft>(draft)).is_none());
+    }
+
+    #[test]
+    fn shift_tab_commits_a_draft_after_deferred_focus_loss() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::unique("committed-text-shift-tab-test");
+        let draft = id.with("draft");
+
+        ctx.memory_mut(|memory| memory.request_focus(id));
+        assert_eq!(run(&ctx, egui::RawInput::default(), id, "saved"), None);
+        ctx.data_mut(|data| {
+            data.insert_temp(draft, CommittedTextDraft { text: "edited".to_string(), original: "saved".to_string() });
+        });
+
+        let shift_tab = egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::SHIFT };
+        let first = run(&ctx, egui::RawInput { events: vec![shift_tab], ..Default::default() }, id, "saved");
+        let committed = first.or_else(|| run(&ctx, egui::RawInput::default(), id, "saved"));
+
+        assert_eq!(committed.as_deref(), Some("edited"));
+        assert!(ctx.data_mut(|data| data.get_temp::<CommittedTextDraft>(draft)).is_none());
     }
 }
 
