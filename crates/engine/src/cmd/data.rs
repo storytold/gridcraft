@@ -103,7 +103,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Circle Invalid Data",
             ["Data", "Data Tools", "Data Validation"],
             None,
-            "{} → {invalid: cells}; circles them on the active sheet, replacing its circles, until it runs again or data.clearValidationCircles (document.inspect: sheets[].validationCircles; not saved, no undo step)",
+            "{} → {invalid: [cell], truncated: bool (true when the 100,000-cell scan allowance ended before every range was checked)}; circles the listed cells on the active sheet, replacing its circles, until it runs again or data.clearValidationCircles (document.inspect: sheets[].validationCircles; not saved, no undo step)",
             has_doc,
             circle_invalid
         ),

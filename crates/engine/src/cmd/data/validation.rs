@@ -18,21 +18,71 @@ fn op_param(s: Option<&str>) -> CfOperator {
     }
 }
 
-/// `r` minus `cut`, as up to four non-overlapping rectangles.
-fn subtract_range(r: RangeRef, cut: &RangeRef) -> Vec<RangeRef> {
-    let Some(i) = r.intersection(cut) else { return vec![r] };
-    let mut out = Vec::new();
-    if i.start.row > r.start.row {
-        out.push(RangeRef::new(r.start, CellRef::new(i.start.row - 1, r.end.col)));
+/// Removes a set of cuts from one validation range in a row sweep, updating the result once
+/// instead of fragmenting it again for every cut.
+fn subtract_ranges(r: RangeRef, cuts: &[RangeRef]) -> Vec<RangeRef> {
+    let mut events = std::collections::BTreeMap::<u64, Vec<((u32, u32), bool)>>::new();
+    for cut in cuts {
+        let Some(i) = r.intersection(cut) else { continue };
+        let columns = (i.start.col, i.end.col);
+        events.entry(u64::from(i.start.row)).or_default().push((columns, true));
+        events.entry(u64::from(i.end.row) + 1).or_default().push((columns, false));
     }
-    if i.end.row < r.end.row {
-        out.push(RangeRef::new(CellRef::new(i.end.row + 1, r.start.col), r.end));
+    if events.is_empty() {
+        return vec![r];
     }
-    if i.start.col > r.start.col {
-        out.push(RangeRef::new(CellRef::new(i.start.row, r.start.col), CellRef::new(i.end.row, i.start.col - 1)));
-    }
-    if i.end.col < r.end.col {
-        out.push(RangeRef::new(CellRef::new(i.start.row, i.end.col + 1), CellRef::new(i.end.row, r.end.col)));
+    events.entry(u64::from(r.end.row) + 1).or_default();
+
+    let mut active = std::collections::BTreeMap::<(u32, u32), usize>::new();
+    let mut out: Vec<RangeRef> = Vec::new();
+    let mut last_by_columns = std::collections::BTreeMap::<(u32, u32), usize>::new();
+    let mut previous_row = u64::from(r.start.row);
+    for (row, changes) in events {
+        if previous_row < row {
+            let start_row = previous_row as u32;
+            let end_row = (row - 1).min(u64::from(r.end.row)) as u32;
+            let mut covered = Vec::<(u32, u32)>::new();
+            for &(start, end) in active.keys() {
+                match covered.last_mut() {
+                    Some(last) if start <= last.1.saturating_add(1) => last.1 = last.1.max(end),
+                    _ => covered.push((start, end)),
+                }
+            }
+            let mut next_col = u64::from(r.start.col);
+            let mut remaining = Vec::new();
+            for (start, end) in covered {
+                if next_col < u64::from(start) {
+                    remaining.push((next_col as u32, start - 1));
+                }
+                next_col = u64::from(end) + 1;
+            }
+            if next_col <= u64::from(r.end.col) {
+                remaining.push((next_col as u32, r.end.col));
+            }
+            for (start_col, end_col) in remaining {
+                let columns = (start_col, end_col);
+                if let Some(&index) = last_by_columns.get(&columns)
+                    && out[index].end.row.saturating_add(1) == start_row
+                {
+                    out[index].end.row = end_row;
+                } else {
+                    let index = out.len();
+                    out.push(RangeRef::new(CellRef::new(start_row, start_col), CellRef::new(end_row, end_col)));
+                    last_by_columns.insert(columns, index);
+                }
+            }
+        }
+        for (columns, add) in changes {
+            if add {
+                *active.entry(columns).or_default() += 1;
+            } else if let Some(count) = active.get_mut(&columns) {
+                *count -= 1;
+                if *count == 0 {
+                    active.remove(&columns);
+                }
+            }
+        }
+        previous_row = row;
     }
     out
 }
@@ -43,9 +93,7 @@ fn subtract_range(r: RangeRef, cut: &RangeRef) -> Vec<RangeRef> {
 pub(in super::super) fn remove_validation_cells(validations: &mut Vec<Validation>, cuts: &[RangeRef]) {
     for dv in validations.iter_mut() {
         let before = RangeRef::top_left(&dv.ranges);
-        for cut in cuts {
-            dv.ranges = dv.ranges.iter().flat_map(|r| subtract_range(*r, cut)).collect();
-        }
+        dv.ranges = dv.ranges.iter().flat_map(|r| subtract_ranges(*r, cuts)).collect();
         if let (Some(from), Some(to)) = (before, RangeRef::top_left(&dv.ranges)) {
             dv.f1 = move_rule_formula(&dv.f1, from, to);
             dv.f2 = dv.f2.take().map(|f| move_rule_formula(&f, from, to));
@@ -291,11 +339,17 @@ pub(super) fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
     let sheet = d.wb.active_sheet();
     let Some(sh) = d.wb.sheet(sheet) else { return Err(EngineError::NoDocument) };
     let mut bad_cells = Vec::new();
+    // One scan allowance for the whole command: duplicate or overlapping ranges don't multiply it.
+    let mut budget = 100_000usize;
+    // Cells were left unchecked because the allowance ran out: said in the result.
+    let mut truncated = false;
     for dv in &sh.validations {
         for r in &dv.ranges {
             let r = sh.used_range().and_then(|u| r.intersection(&u));
             let Some(r) = r else { continue };
-            for c in r.iter().take(100_000) {
+            truncated |= r.count() > budget as u64;
+            for c in r.iter().take(budget) {
+                budget -= 1;
                 let text = sh.input_text(c);
                 if !text.is_empty() && check_validation(&d.wb, sheet, c, &text).is_some() {
                     bad_cells.push(c.a1());
@@ -307,7 +361,7 @@ pub(super) fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
     let mut seen = std::collections::HashSet::new();
     let circles = bad_cells.iter().filter_map(|a| CellRef::parse(a)).filter(|c| seen.insert(*c)).collect();
     s.doc_mut()?.set_validation_circles(&name, circles);
-    Ok(json!({"invalid": bad_cells}))
+    Ok(json!({"invalid": bad_cells, "truncated": truncated}))
 }
 
 /// Clear Validation Circles: removes the active sheet's circles and leaves every rule alone.
