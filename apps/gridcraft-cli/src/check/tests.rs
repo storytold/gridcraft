@@ -11,8 +11,8 @@ fn discovery_reports_a_directory_read_error() {
     let path = std::env::temp_dir().join(format!("gridcraft-check-not-a-directory-{}", std::process::id()));
     std::fs::write(&path, "not a directory").unwrap();
     let mut discovery = Discovery::default();
-    let mut seen = std::collections::HashSet::new();
-    assert!(walk(&path, 0, &mut discovery, &mut seen));
+    let mut seen = std::collections::HashMap::new();
+    assert!(walk(&path, 0, false, &mut discovery, &mut seen));
     assert!(discovery.files.is_empty());
     assert_eq!(discovery.failures.len(), 1);
     assert_eq!(discovery.failures[0].path, path.to_string_lossy());
@@ -29,6 +29,47 @@ fn discovery_reports_omissions_only_after_the_file_limit() {
     assert_eq!(discovery.files.len(), MAX_FILES);
     assert_eq!(discovery.failures[0].path, "omitted.xlsx");
     assert!(discovery.failures[0].error.as_ref().unwrap().contains("file limit"));
+}
+
+/// A new directory under the temp dir: `create_dir` fails on a name somebody else made first.
+#[cfg(unix)]
+fn fresh_dir(tag: &str) -> PathBuf {
+    let mut n = 0u32;
+    loop {
+        let dir = std::env::temp_dir().join(format!("gridcraft-check-{tag}-{}-{n}", std::process::id()));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return dir,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => panic!("{e}"),
+        }
+    }
+}
+
+/// A directory named again by a deeper path, or by a link back to a parent, lists each workbook once.
+#[cfg(unix)]
+#[test]
+fn discovery_lists_each_workbook_once_whatever_path_reaches_it() {
+    let dir = fresh_dir("once");
+    let sub = dir.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(dir.join("a.xlsx"), b"x").unwrap();
+    std::fs::write(sub.join("b.xlsx"), b"x").unwrap();
+    std::os::unix::fs::symlink(&dir, sub.join("loop")).unwrap();
+    let names = |d: &Discovery| {
+        let mut v: Vec<String> = d.files.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        v.sort();
+        v
+    };
+    // The link back to the top is one directory, not another branch of the scan.
+    let found = collect_inputs(&[dir.to_string_lossy().into_owned()]);
+    assert_eq!(names(&found), ["a.xlsx", "b.xlsx"]);
+    // `sub` named after its parent is reached from a shallower depth: scanned again, nothing listed twice.
+    let found = collect_inputs(&[dir.to_string_lossy().into_owned(), sub.to_string_lossy().into_owned()]);
+    assert_eq!(names(&found), ["a.xlsx", "b.xlsx"]);
+    // Named first, the same `sub` is the shallowest path and the parent's scan skips it.
+    let found = collect_inputs(&[sub.to_string_lossy().into_owned(), dir.to_string_lossy().into_owned()]);
+    assert_eq!(names(&found), ["a.xlsx", "b.xlsx"]);
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 fn at(a1: &str) -> CellRef {
@@ -176,6 +217,28 @@ fn volatile_names_propagate() {
     });
     assert!(volatile_names(&wb).contains("STAMP"));
     assert_eq!(check(&wb, &Options::default()).calc.volatile, 1);
+}
+
+#[test]
+fn volatile_names_propagate_through_a_long_chain_in_one_walk() {
+    // Chain0 uses Chain1, Chain1 uses Chain2, ... and only the last is volatile: listed in this order, a rescan
+    // until nothing changes marked one name per pass (quadratic). Every name in the chain is
+    // volatile; a name off the chain is not.
+    const LEN: usize = 5_000;
+    let mut wb = book(&[("A1", "=1", n(1.0))]);
+    let name =
+        |name: String, formula: String| gridcraft_engine::model::DefinedName { name, scope: None, formula, comment: String::new(), hidden: false };
+    for i in 0..LEN {
+        let formula = if i + 1 == LEN { "NOW()".to_string() } else { format!("Chain{}+1", i + 1) };
+        wb.names.push(name(format!("Chain{i}"), formula));
+    }
+    wb.names.push(name("Plain".into(), "Chain0*0+Other".into()));
+    wb.names.push(name("Other".into(), "1".into()));
+    let set = volatile_names(&wb);
+    assert!((0..LEN).all(|i| set.contains(&format!("CHAIN{i}"))));
+    assert!(set.contains("PLAIN"));
+    assert!(!set.contains("OTHER"));
+    assert_eq!(set.len(), LEN + 1);
 }
 
 #[test]

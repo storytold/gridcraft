@@ -36,20 +36,25 @@ use gridcraft_core::split_sheet;
 mod evolutionary;
 mod lp;
 mod model;
+mod model_range;
 mod nlp;
 mod problem;
 mod reports;
+mod sensitivity;
 
 use evolutionary::{EvoEnd, evolutionary};
-use lp::{Outcome, Sense, branch_and_bound, linearize, solve_lp};
-pub use model::saved_model;
+use lp::{Outcome, SimplexProgram, branch_and_bound, simplex_program, solve_lp};
 use model::{Goal, Method, Model, model_params, parse_model, save_model};
+pub use model::{saved_model, sensitivity_applies, sensitivity_status};
+use model_range::{load_model_cells, reset_model, save_model_cells};
 use nlp::{nlp, project};
 use problem::{Evaluator, as_num, build_problem};
-use reports::{ReportInput, insert_report_selections, prepare_reports, report, report_kinds, write_reports};
+use reports::{NotOptimal, ReportInput, insert_report_selections, prepare_reports, report, report_kinds, write_reports};
 
 const CMD: &str = "data.solver";
 const REPORT_CMD: &str = "data.solverReport";
+const SAVE_CMD: &str = "data.solverSaveModel";
+const LOAD_CMD: &str = "data.solverLoadModel";
 /// Excel's limit on decision variables.
 const MAX_VARS: usize = 200;
 /// Most scalar constraints (after expanding ranges).
@@ -74,7 +79,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Solver…",
             ["Data", "Analysis"],
             None,
-            "{objective: \"B10\" (formula cell), goal?: max|min|value (default max), value?: number (for goal value), variables: \"B2:B4,D1\" (≤200 constant cells, same sheet), constraints?: [\"B5 <= 10\", \"B2:B4 >= C2:C4\", \"B2 int\", \"B3 bin\", {lhs: \"B6\", op: \"=\", rhs: 3 | \"C6\"}], nonNegative?: bool (default true: variables without a lower bound get 0), method?: grg|simplex|evolutionary (default grg), populationSize?: 100, mutationRate?: 0.075, randomSeed?: 0 (a fixed seed, so runs repeat), convergence?: 0.0001, generationsWithoutImprovement?: 50, requireBounds?: bool (default true: every variable needs both bounds; false searches within ±100 of the start) (Evolutionary options), keep?: bool (default true; false restores the original values), saveModel?: bool (default true: hidden solver_* names), maxEvaluations?: 20000, integerOptimality?: percent (default 0), saved?: bool (solve the sheet's saved model; other params override), reports?: [answer|limits] (written on new sheets when a solution is found)} → {status: optimal|converged|cannotImprove|iterationLimit|infeasible|unbounded|notLinear, message, objective, values: {cell: value}, original: {cell: value}, model: the model as params, evaluations, changed, reports?: [sheet names]}. No `objective` → {model: the saved model} (the menu opens the dialog).",
+            "{objective: \"B10\" (formula cell), goal?: max|min|value (default max), value?: number (for goal value), variables: \"B2:B4,D1\" (≤200 constant cells, same sheet), constraints?: [\"B5 <= 10\", \"B2:B4 >= C2:C4\", \"B2 int\", \"B3 bin\", {lhs: \"B6\", op: \"=\", rhs: 3 | \"C6\"}], nonNegative?: bool (default true: variables without a lower bound get 0), method?: grg|simplex|evolutionary (default grg), populationSize?: 100, mutationRate?: 0.075, randomSeed?: 0 (a fixed seed, so runs repeat), convergence?: 0.0001, generationsWithoutImprovement?: 50, requireBounds?: bool (default true: every variable needs both bounds; false searches within ±100 of the start) (Evolutionary options), keep?: bool (default true; false restores the original values), saveModel?: bool (default true: hidden names, solver_* as Excel names them, with the options; the evaluation limit and generations without improvement, which Excel lacks, as gridcraft_solver_evals and gridcraft_solver_stall), maxEvaluations?: 20000 (at most 200000), integerOptimality?: percent (default 0), saved?: bool (solve the sheet's saved model; other params override), reports?: [answer|sensitivity|limits] (written on new sheets when a solution is found)} → {status: optimal|converged|cannotImprove|iterationLimit|infeasible|unbounded|notLinear, message, objective, values: {cell: value}, original: {cell: value}, model: the model as params, evaluations, changed, reports?: [sheet names], skippedReports?: [{report: \"sensitivity\", reason}] (a Sensitivity report left out because the run did not reach an optimum or the values are not one; the solve and the other reports still apply)}. No `objective` → {model: the saved model} (the menu opens the dialog).",
             has_doc,
             run
         ),
@@ -83,9 +88,36 @@ pub fn specs() -> Vec<CommandSpec> {
             "Solver Reports",
             [],
             None,
-            "{reports: [answer|limits], values?: {cell: number} (the solution; default the variable cells' current values), original?: {cell: number} (the values before solving; default `values`), message?: text (the result line), model?: data.solver params (default the sheet's saved model, with any data.solver params given here over it)} → {sheets: [names]}. Writes Answer and Limits reports on new sheets before the model's sheet; Limits needs Simplex LP or GRG Nonlinear and no integer constraints. data.solver's result can be passed as is.",
+            "{reports: [answer|sensitivity|limits], values?: {cell: number} (the solution; default the variable cells' current values), original?: {cell: number} (the values before solving; default `values`), message?: text (the result line), skipNotOptimal?: bool (default false: a Sensitivity report for values that are not optimal refuses the call; true leaves it out and writes the others), model?: data.solver params (default the sheet's saved model, with any data.solver params given here over it)} → {sheets: [names], skippedReports?: [{report, reason}]}. Writes Answer, Sensitivity and Limits reports on new sheets before the model's sheet; Sensitivity and Limits need Simplex LP or GRG Nonlinear and no integer constraints, and Sensitivity a Max or Min objective. data.solver's result can be passed as is.",
             has_doc,
             report
+        ),
+        cmd!(
+            "data.solverSaveModel",
+            "Save Model",
+            [],
+            None,
+            "{to: \"H1\" (the first cell, on the model's sheet), model?: data.solver params (default the sheet's saved model), overwrite?: false} → {range}. Writes the model down a column as formulas: =MAX(objective), =MIN(objective) or =objective=value; =COUNT(variables); one =AND(relation) per constraint (=AND(x=INT(x)) for integer, =AND((x=0)+(x=1)) for binary), which shows TRUE while it holds; and the options as an array constant {method (1 GRG Nonlinear, 2 Simplex LP, 3 Evolutionary), non-negative (1 yes, 2 no), population size, mutation rate, random seed, require bounds (1 yes, 2 no), convergence, generations without improvement, maximum evaluations, integer optimality %}, which spills into the cells to its right. Refused, with the sheet unchanged, when the model's cells, content, another formula's spilled values, merged cells or a table are in the way of the options' spill, or it would run off the sheet, and when the column would cover another formula's spilled values. A column that holds a value or a formula (a model saved there before included) is replaced only with overwrite: true; without it the command is refused (\"already holds data\"), as Excel asks first. One undo step.",
+            has_doc,
+            save_model_cells
+        ),
+        cmd!(
+            "data.solverLoadModel",
+            "Load Model",
+            [],
+            None,
+            "{from: \"H1:H6\" (a range on the active sheet; one cell reads down to the first cell without a formula; a range needs a formula in every cell up to its last formula, and may end in empty cells)} → {model}. Reads a model written by Save Model and makes it the sheet's Solver model. The model must end with its options row ({…}), which Save Model writes last; a model cut short (a cell before the options row without a formula, or the options row cleared) is refused and the sheet's model stays as it was.",
+            has_doc,
+            load_model_cells
+        ),
+        cmd!(
+            "data.solverReset",
+            "Reset All",
+            [],
+            None,
+            "{} → {removed, masked}. Removes the active sheet's Solver model. A model read from workbook-level names stays for the other sheets and is masked on this one by an empty sheet-level solver_opt (masked: true).",
+            has_doc,
+            reset_model
         ),
     ]
 }
@@ -115,24 +147,13 @@ fn optimise(ev: &mut Evaluator, m: &Model, goal: Goal, x0: &[f64], bounds: Bound
         Outcome::Infeasible
     } else {
         match m.method {
-            Method::Simplex => match linearize(ev, x0) {
+            Method::Simplex => match simplex_program(ev, goal, x0) {
                 Err("nonlinear") | Err("error") => {
                     not_linear = true;
                     Outcome::Infeasible
                 }
                 Err(_) => Outcome::Limit,
-                Ok(((cf, f_const), lin)) => {
-                    let mut rows: Vec<(Vec<f64>, Sense, f64)> = lin.iter().zip(&ev.rows).map(|((a, k), r)| (a.clone(), r.sense, -k)).collect();
-                    let c: Vec<f64> = match goal {
-                        Goal::Max => cf.iter().map(|v| -v).collect(),
-                        Goal::Min => cf.clone(),
-                        Goal::Value(v) => {
-                            rows.push((cf.clone(), Sense::Eq, v - f_const));
-                            vec![0.0; cf.len()]
-                        }
-                    };
-                    let size = (rows.len() as u64 + 2 * x0.len() as u64 + 1) * (4 * x0.len() as u64 + 2 * rows.len() as u64 + 1);
-                    let mut work = LP_WORK.max(size);
+                Ok(SimplexProgram { c, rows, mut work, .. }) => {
                     let mut relax = |l: &[f64], h: &[f64]| solve_lp(&c, &rows, l, h, &mut work);
                     if any_int { branch_and_bound(lo, hi, integer, MAX_NODES_LP, gap, &mut relax).0 } else { relax(lo, hi) }
                 }
@@ -183,16 +204,19 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
         return Ok(json!({"model": model}));
     }
     let model = parse_model(s, &params)?;
-    let budget = params
-        .get("maxEvaluations")
-        .and_then(Json::as_f64)
-        .filter(|v| v.is_finite() && *v >= 1.0)
-        .map_or(DEFAULT_EVALS, |v| (v as u64).min(MAX_EVALS));
-    let gap = params.get("integerOptimality").and_then(Json::as_f64).filter(|v| v.is_finite()).map_or(0.0, |v| v.clamp(0.0, 100.0) / 100.0);
+    let (budget, gap) = (model.max_evals, model.gap);
     let keep = bool_param(&params, "keep").unwrap_or(true);
     let save = bool_param(&params, "saveModel").unwrap_or(true);
     let reports = report_kinds(CMD, &params)?;
     let prob = build_problem(&model);
+    // A Sensitivity report the model has none of (integer, Evolutionary, Value Of) fails the
+    // call, so it is refused before the solve runs rather than after it.
+    if let Some(kinds) = &reports
+        && kinds.contains(&reports::ReportKind::Sensitivity)
+        && let Some(why) = sensitivity::sensitivity_refusal(&model, &prob)
+    {
+        return Err(EngineError::Other(why.into()));
+    }
     let d = s.doc()?;
     let sh = d.wb.sheet(model.sheet).ok_or(EngineError::NoDocument)?;
     let x0: Vec<f64> = model.vars.iter().map(|c| as_num(&sh.value(*c))).map(|v| if v.is_finite() { v } else { 0.0 }).collect();
@@ -254,12 +278,14 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let original: serde_json::Map<String, Json> = model.vars.iter().zip(&x0).map(|(c, v)| (c.a1(), json!(v))).collect();
     let changed = keep && solution.is_some();
-    let built = match (&reports, &solution) {
+    // A Sensitivity report the solution doesn't support is left out (with its reason), so the
+    // solve and the other reports still apply.
+    let (built, skipped) = match (&reports, &solution) {
         (Some(kinds), Some(x)) => {
             let inp = ReportInput { model: &model, prob: &prob, original: x0, solution: x.clone(), message: message.to_string(), budget };
-            prepare_reports(s.doc()?, kinds, &inp)?
+            prepare_reports(s.doc()?, kinds, &inp, NotOptimal::Skip { optimum: sensitivity_status(status) })?
         }
-        _ => Vec::new(),
+        _ => (Vec::new(), Vec::new()),
     };
     let count = built.len();
     let before = s.doc()?.wb.clone();
@@ -280,7 +306,7 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
                 let sh = cx.sheet_mut(sheet)?;
                 for (c, v) in model.vars.iter().zip(x) {
                     let style = sh.style_id(*c);
-                    sh.set_cell(*c, Cell { value: Value::number(*v), formula: None, style });
+                    sh.set_cell(*c, Cell { value: Value::number(*v), formula: None, style, py: None });
                 }
                 for c in &model.vars {
                     cx.touch(sheet + count, *c);
@@ -301,6 +327,9 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
     insert_report_selections(s, model.sheet, count);
     if reports.is_some() && solution.is_some() {
         out["reports"] = json!(names);
+    }
+    if !skipped.is_empty() {
+        out["skippedReports"] = json!(skipped);
     }
     Ok(out)
 }

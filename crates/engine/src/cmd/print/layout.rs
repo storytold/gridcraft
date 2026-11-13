@@ -1,7 +1,7 @@
 use super::header_footer::HF_FIXED_SIDE_MARGIN;
 use super::{
-    Anchor, CellRef, Json, MAX_COLS, MAX_PAGES, MAX_ROWS, Orientation, PX_TO_PT, PrintSettings, RangeRef, Result, Sheet, Visibility, Workbook, bad,
-    bool_param, split_sheet, str_param,
+    Anchor, CellRef, Json, MAX_COLS, MAX_PAGES, MAX_ROWS, Orientation, PX_TO_PT, PageOrder, PrintSettings, RangeRef, Result, Sheet, Visibility,
+    Workbook, bad, bool_param, split_sheet, str_param,
 };
 
 /// Cells in a page block above which only stored cells are visited (not every grid position).
@@ -224,6 +224,12 @@ pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_overrid
         Some(r) => trim_full(sh, r),
         None => print_range(sh).unwrap_or(RangeRef::cell(CellRef::new(0, 0))),
     };
+    // A print area from a file or JSON can name coordinates past the grid; pagination walks every
+    // line of the area (zero-height rows never fill a band), so it is held to the grid first.
+    let area = RangeRef::new(
+        CellRef::new(area.start.row.min(MAX_ROWS - 1), area.start.col.min(MAX_COLS - 1)),
+        CellRef::new(area.end.row.min(MAX_ROWS - 1), area.end.col.min(MAX_COLS - 1)),
+    );
     let title_rows = title_span(st.title_rows, MAX_ROWS);
     let title_cols = title_span(st.title_cols, MAX_COLS);
     let digits = format!("{}", area.end.row + 1).len() as f32;
@@ -253,15 +259,7 @@ pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_overrid
     let paginate = |lay: &mut SheetLayout, manual: bool| {
         lay.manual_breaks = manual;
         (lay.row_bands, lay.col_bands) = split_bands(sh, lay, MAX_PAGES);
-        lay.pages.clear();
-        'outer: for ci in 0..lay.col_bands.len() {
-            for ri in 0..lay.row_bands.len() {
-                if lay.pages.len() >= MAX_PAGES {
-                    break 'outer;
-                }
-                lay.pages.push((ri, ci));
-            }
-        }
+        lay.pages = page_sequence(lay.row_bands.len(), lay.col_bands.len(), lay.settings.page_order, MAX_PAGES);
     };
     match fit {
         Some((fw, fh)) => {
@@ -288,6 +286,25 @@ pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_overrid
         None => paginate(&mut lay, true),
     }
     Some(lay)
+}
+
+/// The pages of a sheet `rows` pages tall and `cols` pages wide as (row band, column band), in
+/// print order, at most `cap` of them: down each column of pages, then over to the next (Excel's
+/// default), or over each row of pages, then down to the next.
+pub(crate) fn page_sequence(rows: usize, cols: usize, order: PageOrder, cap: usize) -> Vec<(usize, usize)> {
+    let (outer, inner) = match order {
+        PageOrder::DownThenOver => (cols, rows),
+        PageOrder::OverThenDown => (rows, cols),
+    };
+    (0..outer)
+        .flat_map(|o| {
+            (0..inner).map(move |i| match order {
+                PageOrder::DownThenOver => (i, o),
+                PageOrder::OverThenDown => (o, i),
+            })
+        })
+        .take(cap)
+        .collect()
 }
 
 /// Inclusive-start/end index spans of the pages along one axis.
@@ -367,4 +384,20 @@ pub(super) fn segments(titles: Option<(u32, u32)>, band: (u32, u32)) -> Vec<(u32
 
 pub(super) fn seg_size(sh: &Sheet, seg: (u32, u32), rows: bool) -> f32 {
     if rows { (seg.0..=seg.1).map(|r| sh.row_height(r)).sum() } else { (seg.0..=seg.1).map(|c| sh.col_width(c)).sum() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_print_area_past_the_grid_is_held_to_the_grid() {
+        let mut wb = Workbook::new();
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.default_row_height = 0.0;
+        sh.print.print_area = Some(RangeRef { start: CellRef::new(0, 0), end: CellRef::new(u32::MAX, u32::MAX) });
+        let lay = layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
+        assert_eq!((lay.area.end.row, lay.area.end.col), (MAX_ROWS - 1, MAX_COLS - 1));
+        assert!(lay.pages.len() <= MAX_PAGES);
+    }
 }

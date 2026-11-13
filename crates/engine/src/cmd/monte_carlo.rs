@@ -416,7 +416,10 @@ impl Job {
                 return Err(bad(CMD, "input cells must be unique"));
             }
             let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
-            if sh.cell(cell).is_some_and(|c| c.formula.is_some()) || !matches!(sh.value(cell),Value::Number(n) if n.is_finite()) {
+            if sh.spill_anchor(cell).is_some()
+                || sh.cell(cell).is_some_and(|c| c.formula.is_some() || c.py.is_some())
+                || !matches!(sh.value(cell),Value::Number(n) if n.is_finite())
+            {
                 return Err(bad(CMD, format!("input `{label}` must be a numeric constant")));
             }
             inputs.push(Input { sheet, cell, label, distribution: Distribution::parse(item)? });
@@ -735,7 +738,7 @@ fn write_report(s: &mut Session, report: Report<'_>) -> Result<()> {
         let mut sheet = Sheet::new(name.to_string());
         let bold = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.font.bold = true);
         let mut put = |r: u32, c: u32, v: Value, style: StyleId| {
-            sheet.set_cell(CellRef::new(r, c), Cell { value: v, formula: None, style });
+            sheet.set_cell(CellRef::new(r, c), Cell { value: v, formula: None, style, py: None });
         };
         put(0, 0, Value::text("Monte Carlo simulation"), bold);
         put(
@@ -843,6 +846,9 @@ fn write_report(s: &mut Session, report: Report<'_>) -> Result<()> {
             source: None,
             by_rows: false,
             pivot: None,
+            data_table: None,
+            hole_size: 75,
+            first_slice_angle: 0,
         });
         let trace_series = [(2, "Mean"), (4, "Mean CI95 lower"), (5, "Mean CI95 upper")]
             .into_iter()
@@ -871,6 +877,9 @@ fn write_report(s: &mut Session, report: Report<'_>) -> Result<()> {
             source: None,
             by_rows: false,
             pivot: None,
+            data_table: None,
+            hole_size: 75,
+            first_slice_angle: 0,
         });
         for col in 0..15 {
             sheet.cols.insert(col, gridcraft_model::LineInfo { size: Some(if col == 0 || col == 12 { 180.0 } else { 140.0 }), ..Default::default() });

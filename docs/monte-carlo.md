@@ -41,6 +41,11 @@ It also stores the canonical JSON configuration, with sheet-qualified references
 can be run again after reopening the workbook. This is not a live recalculating report: rerun
 after changing the model or the distributions.
 
+To edit a previous run, select its report sheet and open **Data → Monte Carlo**. The dialog
+loads the saved inputs, outputs and sampling settings; change them and run again to create a
+new report. The previous report remains unchanged. If the configuration in the report has
+been damaged, the dialog reports the problem instead of silently using new defaults.
+
 ## Programmatic example
 
 Create a synthetic model, then run the command:
