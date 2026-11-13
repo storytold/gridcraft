@@ -196,7 +196,8 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
 /// holds other data. Returns the written area.
 pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Result<RangeRef, String> {
     let pt = wb.sheet(sheet).and_then(|s| s.pivots.get(idx)).cloned().ok_or("There's no such PivotTable.")?;
-    let out = compute(wb, &pt, sheet)?;
+    let src = read_source(wb, &pt.source, sheet)?;
+    let out = compute_from(wb, &pt, &src, None)?;
     let h = out.height().max(1);
     let w = out.width.max(1);
     let k = out.body_offset;
@@ -311,6 +312,7 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
     }
     if let Some(p) = shm.pivots.get_mut(idx) {
         p.last_range = Some(area);
+        p.cache_fields = src.headers;
     }
     let sheet_name = shm.name.clone();
     rebind_charts(wb, &sheet_name, &pt.name, origin, &out);
