@@ -10,7 +10,7 @@ use skrifa::{
 };
 use unicode_bidi::BidiInfo;
 
-use crate::{CID_FONT, Error, Font, TextDirection, n, needs_cid, pdf_string, pdf_utf16_string};
+use crate::{CID_FONT, Error, Font, TextDirection, dict_obj, n, needs_cid, pdf_string, pdf_utf16_string, stream_obj};
 
 include!(concat!(env!("OUT_DIR"), "/arabic_fonts.rs"));
 
@@ -494,7 +494,8 @@ impl Subset {
         Ok(out)
     }
 
-    pub(crate) fn objects(&self, next: &mut u32, objects: &mut Vec<(u32, Vec<u8>)>) -> String {
+    /// Writes the subset fonts into `out` and returns their page resource entries.
+    pub(crate) fn write_objects(&self, next: &mut u32, out: &mut Vec<u8>, offsets: &mut Vec<usize>) -> String {
         let mut resources = String::new();
         for (batch, glyphs) in self.glyphs.chunks(255).enumerate() {
             let id = *next;
@@ -511,7 +512,7 @@ impl Subset {
                 let _ = write!(names, "/g{code} ");
                 let _ = write!(widths, "{} ", n(glyph.width));
                 let body = glyph_procedure(glyph);
-                objects.push((*next, stream(&body)));
+                stream_obj(out, offsets, *next, "", body.as_bytes());
                 *next += 1;
                 bounds[0] = bounds[0].min(glyph.bounds[0]);
                 bounds[1] = bounds[1].min(glyph.bounds[1]);
@@ -530,16 +531,24 @@ impl Subset {
                 cmap.push_str("endbfchar\n");
             }
             cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
-            objects.push((cmap_id, stream(&cmap)));
-            objects.push((id, format!("<< /Type /Font /Subtype /Type3 /Name /GridCraftArabic /FontBBox [{} {} {} {}] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << {procs}>> /Encoding << /Type /Encoding /Differences [1 {names}] >> /FirstChar 1 /LastChar {} /Widths [{widths}] /Resources << >> /ToUnicode {cmap_id} 0 R >>", n(bounds[0]), n(bounds[1]), n(bounds[2]), n(bounds[3]), glyphs.len()).into_bytes()));
+            stream_obj(out, offsets, cmap_id, "", cmap.as_bytes());
+            dict_obj(
+                out,
+                offsets,
+                id,
+                &format!(
+                    "<< /Type /Font /Subtype /Type3 /Name /GridCraftArabic /FontBBox [{} {} {} {}] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << {procs}>> /Encoding << /Type /Encoding /Differences [1 {names}] >> /FirstChar 1 /LastChar {} /Widths [{widths}] /Resources << >> /ToUnicode {cmap_id} 0 R >>",
+                    n(bounds[0]),
+                    n(bounds[1]),
+                    n(bounds[2]),
+                    n(bounds[3]),
+                    glyphs.len()
+                ),
+            );
             let _ = write!(resources, "/A{} {id} 0 R ", batch + 1);
         }
         resources
     }
-}
-
-fn stream(body: &str) -> Vec<u8> {
-    format!("<< /Length {} >>\nstream\n{body}endstream", body.len()).into_bytes()
 }
 
 pub(crate) fn unicode_string(text: &str, bom: bool) -> String {

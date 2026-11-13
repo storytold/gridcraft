@@ -189,6 +189,9 @@ pub(super) fn scenario_delete(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"deleted": removed.name}))
 }
 
+/// Most changing-cell-by-scenario cells one Scenario Summary writes.
+const MAX_SUMMARY_CELLS: usize = 1_000_000;
+
 pub(super) fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "data.scenarioSummary";
     let d = s.doc()?;
@@ -211,16 +214,23 @@ pub(super) fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
     // Changing cells of every scenario, first-seen order; per scenario its values.
     let mut changing: Vec<CellRef> = Vec::new();
     let mut per: Vec<HashMap<CellRef, Value>> = Vec::new();
+    let mut seen: std::collections::HashSet<CellRef> = Default::default();
     for sc in &scenarios {
         let (_, cells) = cell_list(&d.wb, &sc.changing, CMD, MAX_SCENARIO_CELLS)?;
         let mut m = HashMap::new();
         for (c, v) in cells.iter().zip(sc.values.iter()) {
-            if !changing.contains(c) {
+            if seen.insert(*c) {
                 changing.push(*c);
             }
             m.insert(*c, json_value(v, &d.wb));
         }
         per.push(m);
+    }
+    // The summary has a cell for every changing cell in every scenario, filled from the current
+    // value where a scenario doesn't set it, so small disjoint scenarios multiply.
+    // Each result cell is a row of the summary too, with a cell per scenario.
+    if changing.len().saturating_add(results.len()).saturating_mul(per.len()) > MAX_SUMMARY_CELLS {
+        return Err(bad(CMD, "the scenarios together change too many cells for a summary"));
     }
     let current: Vec<Value> = changing.iter().map(|c| sh.value(*c)).collect();
     let current_results: Vec<Value> = results.iter().map(|c| sh.value(*c)).collect();
