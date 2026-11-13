@@ -174,7 +174,7 @@ fn circle_invalid_data_circles_the_cells_it_lists_and_replaces_them_when_run_aga
     assert!(circles(&s, "Sheet1").is_empty());
     let (wb, undo) = (s.doc().unwrap().wb.clone(), s.doc().unwrap().undo.len());
     let r = s.execute("data.circleInvalid", json!({})).unwrap();
-    assert_eq!(r, json!({"invalid": ["A3", "A4", "A5"]}));
+    assert_eq!(r, json!({"invalid": ["A3", "A4", "A5"], "truncated": false}));
     assert_eq!(circles(&s, "Sheet1"), ["A3", "A4", "A5"]);
     let d = s.doc().unwrap();
     assert!(Arc::ptr_eq(&d.wb, &wb), "the circles are not part of the workbook");
@@ -216,7 +216,7 @@ fn clear_validation_circles_removes_the_circles_and_keeps_the_rules() {
     blank.new_workbook();
     blank.execute("data.clearValidationCircles", json!({})).unwrap();
     assert!(blank.doc().unwrap().validation_circles.is_empty());
-    assert_eq!(blank.execute("data.circleInvalid", json!({})).unwrap(), json!({"invalid": []}));
+    assert_eq!(blank.execute("data.circleInvalid", json!({})).unwrap(), json!({"invalid": [], "truncated": false}));
 }
 
 #[test]
