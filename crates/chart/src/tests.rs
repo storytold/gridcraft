@@ -5,6 +5,7 @@ use gridcraft_model::{Anchor, Chart, ChartKind, Color, LegendPos, Series, Sparkl
 
 use crate::*;
 
+mod budget;
 mod data_table;
 
 const ALL_KINDS: [ChartKind; 26] = [
@@ -1458,6 +1459,38 @@ fn area_charts_draw_source_value_labels_only_when_enabled() {
 }
 
 #[test]
+fn drawing_and_resolving_agree_on_the_combo_plot_kind() {
+    // Resolved series carry `effective_kind`; drawing re-derives the kind from it. Both paths
+    // must give the same kind for every chart kind, series kind (or none) and series index.
+    let series_kinds = std::iter::once(None).chain(ALL_KINDS.iter().map(|k| Some(*k)));
+    for ck in ALL_KINDS {
+        for sk in series_kinds.clone() {
+            for i in 0..3 {
+                let mut c = chart(ck);
+                c.series = (0..3).map(|j| Series { kind: if j == i { sk } else { None }, ..Default::default() }).collect();
+                let from_chart = series_plot_kind(&c, i);
+                let resolved = crate::resolve::effective_kind(ck, sk, i);
+                assert_eq!(crate::resolve::plot_kind(ck, Some(resolved), i), from_chart, "{ck:?} {sk:?} {i}");
+                if ck != ChartKind::Combo {
+                    assert_eq!(from_chart, ck);
+                } else {
+                    assert_ne!(from_chart, ChartKind::Combo);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn ticks_of_a_scale_off_the_step_grid_start_at_its_min() {
+    let s = Scale { min: 3.0, max: 7.0, step: 4.0 };
+    assert_eq!(s.ticks(), vec![3.0, 7.0]);
+    // Aligned scales still snap float error away.
+    let s = Scale { min: 0.0, max: 1.0, step: 0.1 };
+    assert!((s.ticks()[3] - 0.3).abs() < 1e-12 && s.ticks()[0] == 0.0);
+}
+
+#[test]
 fn hundred_percent_stacked_areas_fill_each_category_to_its_total() {
     let d = ChartData {
         category_levels: vec![],
@@ -1856,4 +1889,97 @@ fn series_lines_are_only_for_stacks() {
     d.series_lines = Some((ink, 0.75));
     let prims = render(&chart(ChartKind::ColumnClustered), &d, 640.0, 400.0, &ApproxMeasure);
     assert!(!prims.iter().any(|p| matches!(p, Prim::Line { color, .. } if *color == ink)));
+}
+
+#[test]
+fn volatile_series_formulas_are_detected() {
+    let wb = Workbook::new();
+    let with = |values: &str, name: Option<&str>| {
+        let mut c = chart(ChartKind::Line);
+        c.series.push(Series {
+            name: name.map(Into::into),
+            categories: None,
+            values: values.into(),
+            bubble_sizes: None,
+            color: None,
+            secondary: false,
+            kind: None,
+            smooth: false,
+            quartiles: Default::default(),
+            trendlines: vec![],
+        });
+        c
+    };
+    assert!(has_volatile_series(&wb, 0, &with("=NOW()", None)));
+    assert!(has_volatile_series(&wb, 0, &with("=SUM(A1:A3)*rand ()", None)));
+    assert!(has_volatile_series(&wb, 0, &with("Sheet1!$B$2:$B$9", Some("=TODAY()"))));
+    assert!(has_volatile_series(&wb, 0, &with("=RANDARRAY(5)", None)));
+    assert!(has_volatile_series(&wb, 0, &with("=_xlfn.RANDARRAY(5)", None)));
+    assert!(!has_volatile_series(&wb, 0, &with("Sheet1!$B$2:$B$9", Some("Sheet1!$B$1"))));
+    assert!(!has_volatile_series(&wb, 0, &with("=MYRAND(A1)", None)));
+    assert!(!has_volatile_series(&wb, 0, &with("=Sheet1!$NOW", None)));
+    assert!(!has_volatile_series(&wb, 0, &chart(ChartKind::Line)));
+}
+
+#[test]
+fn volatile_defined_names_are_followed() {
+    let with = |values: &str| {
+        let mut c = chart(ChartKind::Line);
+        c.series.push(Series {
+            name: None,
+            categories: None,
+            values: values.into(),
+            bubble_sizes: None,
+            color: None,
+            secondary: false,
+            kind: None,
+            smooth: false,
+            quartiles: Default::default(),
+            trendlines: vec![],
+        });
+        c
+    };
+    let name = |name: &str, scope: Option<usize>, formula: &str| gridcraft_model::DefinedName {
+        name: name.into(),
+        scope,
+        formula: formula.into(),
+        comment: String::new(),
+        hidden: false,
+    };
+    let mut wb = Workbook::new();
+    wb.sheet_mut(0).unwrap().name = "Bob's".into();
+    wb.names.push(name("FreshClock", None, "NOW()"));
+    wb.names.push(name("Later", None, "FreshClock+1"));
+    wb.names.push(name("Dice", Some(0), "RANDBETWEEN(1,6)"));
+    wb.names.push(name("Rates", None, "'Bob''s'!$A$1:$A$3"));
+    wb.names.push(name("Loop", None, "Loop+1"));
+    wb.names.push(name("Spin", None, "Spin+NOW()"));
+    wb.names.push(name("Roll", None, "LAMBDA(n,n*RAND())"));
+    // A workbook-scoped name, a name used inside another, and a sheet-scoped one, bare or qualified.
+    assert!(has_volatile_series(&wb, 0, &with("=FreshClock")));
+    assert!(has_volatile_series(&wb, 0, &with("=SUM(Later, 1)")));
+    assert!(has_volatile_series(&wb, 0, &with("=Dice*2")));
+    assert!(has_volatile_series(&wb, 0, &with("='Bob''s'!Dice")));
+    assert!(has_volatile_series(&wb, 0, &with("=Roll(3)")));
+    // A self-referencing name ends (it evaluates to an error, not a changing value); one that
+    // also calls NOW is volatile.
+    assert!(!has_volatile_series(&wb, 0, &with("=Loop")));
+    assert!(has_volatile_series(&wb, 0, &with("=Spin")));
+    // Many series over the same stable name stay cacheable: each name is followed once.
+    let mut many = with("=Rates");
+    let first = many.series[0].clone();
+    many.series.extend(std::iter::repeat_n(first, 100));
+    assert!(!has_volatile_series(&wb, 0, &many));
+    // Names nested deeper than the limit are not known to be stable.
+    for i in 0..10 {
+        wb.names.push(name(&format!("Deep{i}"), None, &format!("Deep{}", i + 1)));
+    }
+    assert!(has_volatile_series(&wb, 0, &with("=Deep0")));
+    // A name that refers to cells, a name inside a string and a name of another scope are stable.
+    assert!(!has_volatile_series(&wb, 0, &with("=Rates")));
+    assert!(!has_volatile_series(&wb, 0, &with("=\"FreshClock\"")));
+    // Dice belongs to sheet 0: seen from another sheet it isn't defined.
+    wb.sheets.push(Arc::new(gridcraft_model::Sheet::new("Other")));
+    assert!(!has_volatile_series(&wb, 1, &with("=Dice")));
+    assert!(has_volatile_series(&wb, 1, &with("=FreshClock")));
 }
