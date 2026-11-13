@@ -528,18 +528,41 @@ fn charts_and_images_are_drawn() {
     }
 }
 
-/// Bytes of pixel data in a PDF's image XObjects: 3 per RGB pixel, 1 per soft-mask pixel.
+/// Bytes of pixel data the pages of a PDF hold: 3 per RGB pixel plus 1 per soft-mask pixel, for
+/// every image each page references. The writer shares identical images across pages, but each
+/// page kept its own copy while the document was built, so a shared image counts once per page.
 fn image_bytes(pdf: &[u8]) -> u64 {
     let text = String::from_utf8_lossy(pdf);
-    text.split("/Subtype /Image")
-        .skip(1)
-        .map(|obj| {
-            let dict = &obj[..obj.find(">>").unwrap()];
-            let num = |key: &str| -> u64 {
-                let at = dict.find(key).unwrap() + key.len();
-                dict[at..].split_whitespace().next().unwrap().parse().unwrap()
-            };
-            num("/Width ") * num("/Height ") * if dict.contains("/DeviceRGB") { 3 } else { 1 }
+    let num_after = |s: &str, key: &str| -> u64 {
+        let at = s.find(key).unwrap() + key.len();
+        s[at..].split_whitespace().next().unwrap().parse().unwrap()
+    };
+    // Object id → (pixel bytes, soft mask id).
+    let mut images = std::collections::HashMap::new();
+    let mut pages = vec![];
+    for obj in text.split("endobj").filter(|o| o.contains(" 0 obj")) {
+        let head = &obj[..obj.find(" 0 obj").unwrap()];
+        let id: u64 = head.split_whitespace().last().unwrap().parse().unwrap();
+        let dict = &obj[..obj.find(">>").unwrap_or(obj.len())];
+        if dict.contains("/Subtype /Image") {
+            let bytes = num_after(dict, "/Width ") * num_after(dict, "/Height ") * if dict.contains("/DeviceRGB") { 3 } else { 1 };
+            let smask = dict.contains("/SMask ").then(|| num_after(dict, "/SMask "));
+            images.insert(id, (bytes, smask));
+        } else if obj.contains("/Type /Page /Parent") {
+            pages.push(obj);
+        }
+    }
+    let with_mask = |id: u64| -> u64 {
+        let (bytes, smask) = images[&id];
+        bytes + smask.map_or(0, |m| images[&m].0)
+    };
+    pages
+        .iter()
+        .filter_map(|page| page.find("/XObject << ").map(|at| &page[at + "/XObject << ".len()..]))
+        .map(|refs| {
+            let refs = &refs[..refs.find(">>").unwrap()];
+            let tokens: Vec<&str> = refs.split_whitespace().collect();
+            tokens.chunks(4).map(|c| with_mask(c[1].parse().unwrap())).sum::<u64>()
         })
         .sum()
 }

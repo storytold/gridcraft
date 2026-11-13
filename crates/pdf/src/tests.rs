@@ -920,9 +920,13 @@ fn image_bytes_are_bounded_across_pages() -> Result<(), Box<dyn Error>> {
     // A page reopened later sees what the whole document already holds.
     let p = d.page_mut(0).ok_or_else(|| io::Error::other("missing page"))?;
     assert_eq!(p.image_room(), 10_000 - 2 * 3072);
+    // The copy page 0 already holds is drawn again past the budget; a new picture of the same
+    // size is refused; a small one still fits.
     p.image_rgba(Rect::new(0.0, 0.0, 50.0, 50.0), &px, [32, 32]);
+    p.image_rgba(Rect::new(0.0, 0.0, 50.0, 50.0), &[100u8, 100, 100, 255].repeat(32 * 32), [32, 32]);
     p.image_rgba(Rect::new(0.0, 0.0, 10.0, 10.0), &[255; 4 * 4 * 4], [4, 4]);
-    assert_eq!(d.pages[0].images.len(), 2, "the big copy is refused, the small one still fits");
+    assert_eq!(d.pages[0].images.len(), 2, "the new big picture is refused, the small one still fits");
+    assert_eq!(d.pages[0].content.matches(" Do Q").count(), 3, "the held copy is drawn twice, the small one once");
     // The running per-page counts match the images each page holds, and a page handed out next
     // sees what the reopened page added.
     assert!(d.pages.iter().all(|p| p.image_kept == p.image_bytes()));
@@ -933,6 +937,23 @@ fn image_bytes_are_bounded_across_pages() -> Result<(), Box<dyn Error>> {
     check_xref(&pdf)?;
     // The identical 32×32 copies on pages 0 and 1 are written once; the 4×4 picture is the other.
     assert_eq!(String::from_utf8_lossy(&pdf).matches("/Subtype /Image").count(), 2);
+    Ok(())
+}
+
+#[test]
+fn a_picture_the_page_holds_is_drawn_again_after_the_budget_is_spent() -> Result<(), Box<dyn Error>> {
+    let mut d = PdfDoc::new();
+    // Room for exactly one translucent 1×1 picture (3 bytes of RGB plus 1 of alpha).
+    d.set_image_budget(4);
+    let p = d.add_page(100.0, 100.0);
+    let pixel = [10u8, 20, 30, 128];
+    p.image_rgba(Rect::new(0.0, 0.0, 10.0, 10.0), &pixel, [1, 1]);
+    assert_eq!(p.image_room(), 0);
+    p.image_rgba(Rect::new(20.0, 0.0, 10.0, 10.0), &pixel, [1, 1]);
+    p.image_rgba(Rect::new(40.0, 0.0, 10.0, 10.0), &[10u8, 20, 30, 64], [1, 1]);
+    assert_eq!(p.images.len(), 1, "a new picture past the budget is refused");
+    assert_eq!(p.content.matches("/Im1 Do Q").count(), 2, "the picture the page holds is drawn both times");
+    check_xref(&d.finish())?;
     Ok(())
 }
 

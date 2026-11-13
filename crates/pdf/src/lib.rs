@@ -803,10 +803,17 @@ impl Page {
         if pw == 0 || ph == 0 || px > MAX_IMAGE_PIXELS || (rgba.len() as u64) < px * 4 || !(extent(w) && extent(h) && finite(&[x, y])) {
             return;
         }
-        // Room for the worst case (RGB plus an alpha plane) is checked before anything is
-        // allocated, so the document's image bytes stay bounded however many pages it has.
         // The image is drawn inside its own q/Q, which counts towards the nesting limit.
-        if px * 4 > self.image_room || self.saved.len() >= MAX_SAVE_DEPTH {
+        if self.saved.len() >= MAX_SAVE_DEPTH {
+            return;
+        }
+        // Room for the worst case (RGB plus an alpha plane) is checked before anything is
+        // allocated, so the document's image bytes stay bounded however many pages it has. Past
+        // the budget, a picture this page already holds can still be drawn again: it is only
+        // built for the lookup when the page holds one of the same size, so the copy made to
+        // compare is never bigger than an image the page already kept.
+        let over_budget = px * 4 > self.image_room;
+        if over_budget && !self.images.iter().any(|o| o.width == pw && o.height == ph) {
             return;
         }
         let px = px as usize;
@@ -840,6 +847,7 @@ impl Page {
         });
         let idx = match known {
             Some(i) => i,
+            None if over_budget => return,
             None => {
                 // Only a picture this page doesn't hold yet spends the document's image budget.
                 let kept = (img.rgb.len() as u64).saturating_add(img.alpha.as_ref().map_or(0, |a| a.len() as u64));
