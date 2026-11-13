@@ -237,6 +237,22 @@ const JOURNAL_MAX_ENTRIES: usize = 10_000;
 pub(crate) const JOURNAL_MAX_BYTES: usize = 64 * 1024 * 1024;
 const UNDO_BYTES_LIMIT: usize = 128 * 1024 * 1024;
 
+/// Comment and hyperlink text of a sheet: a changed sheet's snapshot keeps its own copy of these
+/// strings (an edit deep-copies them), so they count against the history budget with the cells.
+fn sheet_text_bytes(sheet: &gridcraft_model::Sheet) -> usize {
+    let comments = sheet.comments.values().fold(0usize, |sum, c| {
+        // The vectors' own storage counts too: an empty reply still takes an element.
+        let replies = c.replies.iter().fold(0usize, |n, (a, t)| n.saturating_add(a.len()).saturating_add(t.len()));
+        let replies = replies.saturating_add(c.replies.capacity().saturating_mul(std::mem::size_of::<(String, String)>()));
+        let dates = c.dates.iter().fold(0usize, |n, d| n.saturating_add(d.len()));
+        let dates = dates.saturating_add(c.dates.capacity().saturating_mul(std::mem::size_of::<String>()));
+        sum.saturating_add(std::mem::size_of::<gridcraft_model::Comment>() + c.author.len() + c.text.len() + replies + dates)
+    });
+    sheet.hyperlinks.values().fold(comments, |sum, h| {
+        sum.saturating_add(std::mem::size_of::<gridcraft_model::Hyperlink>() + h.target.len() + h.tooltip.as_ref().map_or(0, String::len))
+    })
+}
+
 fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
     let mut bytes = std::mem::size_of::<Workbook>();
     for (index, sheet) in older.sheets.iter().enumerate() {
@@ -248,6 +264,7 @@ fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
         let empty = gridcraft_model::CellStore::new();
         let next = newer.sheets.get(index).map_or(&empty, |next| &next.cells);
         bytes = bytes.saturating_add(sheet.cells.retained_bytes_against(next));
+        bytes = bytes.saturating_add(sheet_text_bytes(sheet));
     }
     // Snapshots share the macro list until a change to it; a snapshot with its own list keeps it.
     if !older.macros.shares(&newer.macros) {

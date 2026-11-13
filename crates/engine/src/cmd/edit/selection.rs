@@ -65,29 +65,50 @@ pub(super) fn selection_move(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc_mut()?;
     let Some(sheet) = d.wb.active() else { return Err(EngineError::NoDocument) };
     let sel = &mut d.selection;
+    if extend && !jmp {
+        // Shift+arrows move the edge the anchor doesn't hold, keeping merged cells whole.
+        sel.extend_by(sheet, dr, dc);
+        return Ok(json!({"selection": sel.a1(), "active": sel.active.a1()}));
+    }
     // Extension moves the far corner, not the active cell.
     let from = if extend { sel.moving_end() } else { sel.active };
     // Skip hidden rows/columns and step over merged areas.
-    let mut to = if jmp {
+    let mut to = if jmp && extend && (dr == 0) != (dc == 0) {
+        // Excel: Ctrl+Shift+arrow searches the active cell's column (or row) from the moving
+        // edge, so a header row selected with Ctrl+Shift+Right extends down to the end of the
+        // active column's data.
+        let probe = if dr != 0 { CellRef::new(from.row, sel.active.col) } else { CellRef::new(sel.active.row, from.col) };
+        let edge = jump(sheet, probe, dr.signum(), dc.signum());
+        if dr != 0 { CellRef::new(edge.row, from.col) } else { CellRef::new(from.row, edge.col) }
+    } else if jmp {
         jump(sheet, from, dr.signum(), dc.signum())
     } else {
         let mut t = from.offset_clamped(dr, dc);
+        if !extend && let Some(m) = sheet.merge_at(from) {
+            // Leaving a merged cell moves from its edge.
+            if dr > 0 {
+                t = CellRef::new(m.end.offset_clamped(dr, 0).row, t.col);
+            } else if dc > 0 {
+                t = CellRef::new(t.row, m.end.offset_clamped(0, dc).col);
+            }
+        }
         let mut guard = 0;
         while (sheet.is_row_hidden(t.row) || sheet.is_col_hidden(t.col)) && guard < 100_000 {
-            let n = t.offset_clamped(dr.signum(), dc.signum());
+            // Step each hidden axis along its own direction, so a diagonal exit from a merge
+            // (Tab-run return column) keeps its column while skipping hidden rows.
+            let mut n = CellRef::new(
+                if sheet.is_row_hidden(t.row) { t.offset_clamped(dr.signum(), 0).row } else { t.row },
+                if sheet.is_col_hidden(t.col) { t.offset_clamped(0, dc.signum()).col } else { t.col },
+            );
+            if n == t {
+                // The hidden axis has no direction (a move along the other axis): walk as before.
+                n = t.offset_clamped(dr.signum(), dc.signum());
+            }
             if n == t {
                 break;
             }
             t = n;
             guard += 1;
-        }
-        if !extend && let Some(m) = sheet.merge_at(from) {
-            // Leaving a merged cell moves from its edge.
-            if dr > 0 {
-                t = CellRef::new(m.end.offset_clamped(dr, 0).row, from.col);
-            } else if dc > 0 {
-                t = CellRef::new(from.row, m.end.offset_clamped(0, dc).col);
-            }
         }
         t
     };
@@ -135,7 +156,29 @@ pub(super) fn selection_next(s: &mut Session, p: &Json) -> Result<Json> {
     let fwd = bool_param(p, "forward").unwrap_or(true);
     let by_row = bool_param(p, "byRow").unwrap_or(false);
     let d = s.doc_mut()?;
-    d.selection.cycle(fwd, by_row);
+    let Some(sheet) = d.wb.active() else { return Err(EngineError::NoDocument) };
+    let sel = &d.selection;
+    if sel.is_one_merged_cell(sheet) {
+        // A selection that is just one merged cell is one cell, as in Excel: Enter and Tab leave
+        // it for the next cell instead of walking the cells it covers.
+        let step = if fwd { 1 } else { -1 };
+        let (dr, dc) = if by_row { (0, step) } else { (step, 0) };
+        selection_move(s, &json!({"dr": dr, "dc": dc}))?;
+        return Ok(json!({"active": s.doc()?.selection.active.a1()}));
+    }
+    // Inside a larger selection the cells a merged cell covers are skipped: it is visited once,
+    // at its top-left cell.
+    let area = sel.current();
+    let cells =
+        (u64::from(area.end.row.saturating_sub(area.start.row)) + 1).saturating_mul(u64::from(area.end.col.saturating_sub(area.start.col)) + 1);
+    let mut next = sel.clone();
+    for _ in 0..cells.min(1 << 20) {
+        next.cycle(fwd, by_row);
+        if sheet.merge_at(next.active).is_none_or(|m| m.start == next.active) {
+            break;
+        }
+    }
+    d.selection = next;
     Ok(json!({"active": d.selection.active.a1()}))
 }
 
