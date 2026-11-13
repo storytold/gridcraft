@@ -264,6 +264,8 @@ impl SheetApp {
                         // An open draft is read in the region it was typed in.
                         self.settle_drafts().map(|()| {
                             self.session.set_region(region);
+                            // Kept in ui.json, so the next launch starts in it instead of the system region.
+                            self.ui.region = Some(region.tag.to_string());
                             json!({"region": region.tag})
                         })
                     }

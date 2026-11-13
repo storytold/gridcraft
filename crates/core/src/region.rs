@@ -643,9 +643,10 @@ pub fn default_region() -> &'static Region {
 }
 
 /// The region the operating system or browser reports: `LC_ALL`, `LC_NUMERIC` and `LANG` in
-/// POSIX precedence order, `navigator.languages` on wasm. The first variable that is set and not
-/// empty decides, so `LC_ALL=C` wins over `LANG`. A `C`/`POSIX` locale, or none at all, is
-/// English (United States).
+/// POSIX precedence order, then the user's format setting on macOS (`NSLocale.currentLocale`)
+/// and Windows (`Control Panel\International` `LocaleName`), `navigator.languages` on wasm. The
+/// first variable that is set and not empty decides, so `LC_ALL=C` wins over `LANG`. A
+/// `C`/`POSIX` locale, or none at all, is English (United States).
 pub fn system() -> &'static Region {
     #[cfg(target_arch = "wasm32")]
     if let Some(tag) = web_locale() {
@@ -659,7 +660,24 @@ pub fn system() -> &'static Region {
             return region;
         }
     }
+    #[cfg(any(target_os = "macos", windows))]
+    if let Some(region) = os_locale().as_deref().and_then(from_locale) {
+        return region;
+    }
     default_region()
+}
+
+/// The format locale chosen in System Settings › General › Language & Region (`pt_BR`).
+#[cfg(target_os = "macos")]
+fn os_locale() -> Option<String> {
+    Some(objc2_foundation::NSLocale::currentLocale().localeIdentifier().to_string())
+}
+
+/// The format locale chosen in Settings › Time & language › Region (`pt-BR`).
+#[cfg(windows)]
+fn os_locale() -> Option<String> {
+    let key = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER).open_subkey("Control Panel\\International").ok()?;
+    key.get_value("LocaleName").ok()
 }
 
 /// A locale as the environment writes it (`pt_BR.UTF-8`); `C` and `POSIX` (`C.UTF-8` too) are
