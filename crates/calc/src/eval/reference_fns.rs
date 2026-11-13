@@ -250,6 +250,10 @@ impl<'h> Evaluator<'h> {
                 ev => self.deref(ev),
             };
             let evaluated = [Arg::val(key), Arg::val(table_value), Arg::val(index), Arg::val(mode)];
+            // Reusing a captured array must still charge its elements on every lookup call.
+            if !self.spend_args(&evaluated) {
+                return err(CellError::Calc);
+            }
             let mut ctx = FnCtx { ev: self, criteria: None, lambda: None };
             return Ev::V(gridcraft_functions::call(spec, &evaluated, &mut ctx));
         };
@@ -309,7 +313,13 @@ impl<'h> Evaluator<'h> {
                 cols = cols.max(a.cols);
             }
         }
-        if (rows as u64).saturating_mul(cols as u64) > MAX_CELLS {
+        let outputs = rows.saturating_mul(cols);
+        let scan_len = match &keys {
+            Value::Array(a) => a.rows.max(a.cols),
+            _ => 1,
+        };
+        // Each lifted result repeats the search; an output-only cap permits trillions of scans.
+        if gridcraft_functions::lifted_scan_cost(outputs, scan_len).is_none() {
             return err(CellError::Num);
         }
         let at = |v: &Value, r, c| match v {

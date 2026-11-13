@@ -306,6 +306,11 @@ impl<'h> Evaluator<'h> {
         }
     }
 
+    /// Charges all arguments on every call, including arrays reused from LET bindings.
+    pub(super) fn spend_args(&mut self, args: &[Arg]) -> bool {
+        args.iter().all(|a| self.spend_on(&a.value))
+    }
+
     pub fn reference_areas(&self, r: &Reference) -> Result<Vec<Area>, CellError> {
         let range = r.range();
         Ok(self.resolve_sheet(&r.sheet)?.into_iter().map(|sheet| Area { sheet, range }).collect())
@@ -785,6 +790,18 @@ mod fuel_tests {
         ev.work = work;
         let v = ev.value(&gridcraft_formula::parser::parse(src).unwrap_or_else(|e| panic!("{e}")));
         (v, ev.work)
+    }
+
+    #[test]
+    fn reused_lookup_array_spends_work_on_every_call() {
+        for (name, table) in [("VLOOKUP", "SEQUENCE(1000)"), ("HLOOKUP", "SEQUENCE(1,1000)")] {
+            let src = format!("=LET(tbl,{table},SUM(MAP(SEQUENCE(100),LAMBDA(k,{name}(1,tbl,1,FALSE)))))");
+            let (v, _) = eval_work(Workbook::default(), 200_000, &src);
+            assert_eq!(v, Value::Number(100.0), "{src}");
+            let (v, left) = eval_work(Workbook::default(), 10_000, &src);
+            assert_eq!(v, Value::Error(CellError::Calc), "{src}");
+            assert_eq!(left, 0);
+        }
     }
 
     fn is_calc(v: &Value) -> bool {
