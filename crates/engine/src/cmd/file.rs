@@ -91,6 +91,8 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
+    // Saving as an XLSX encrypts the workbook again with the password it was opened with.
+    doc.password = str_param(p, "password").filter(|_| encrypted).map(crate::WorkbookPassword::new);
     let i = s.add_document(doc);
     // The decrypted-workbook notice is for the info bar, not a message box.
     let shown: Vec<&str> = warnings.iter().map(String::as_str).filter(|w| *w != crate::io::DECRYPTED_NOTICE).collect();
@@ -126,10 +128,13 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     let kind = crate::io::FileKind::from_path(&path).or(d.content_kind.filter(|_| d.path.as_deref() == Some(path.as_str())));
     let rebased = crate::io::source_dir(&path).and_then(|f| gridcraft_xlsx::rebase_links(&d.wb, &f));
     let wb = rebased.as_ref().unwrap_or(&d.wb);
-    let bytes = match kind {
+    let mut bytes = match kind {
         Some(kind) => crate::io::save_bytes_as(wb, &path, kind)?,
         None => crate::io::save_bytes(wb, &path)?,
     };
+    if let Some(password) = d.password.as_ref().filter(|_| kind == Some(crate::io::FileKind::Xlsx)) {
+        bytes = gridcraft_xlsx::encrypt(&bytes, password.expose()).map_err(|e| crate::EngineError::Other(e.to_string()))?;
+    }
     crate::io::write_file(&path, &bytes)?;
     // Only a full-fidelity format clears the dirty flag and becomes the document's file.
     if matches!(kind, Some(crate::io::FileKind::Xlsx | crate::io::FileKind::Json)) {
