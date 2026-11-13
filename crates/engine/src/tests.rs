@@ -6295,6 +6295,34 @@ fn format_cells_permission_on_a_protected_sheet_cannot_unlock_cells() {
 }
 
 #[test]
+fn conditional_formats_cannot_change_when_a_protected_sheet_disallows_formatting() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "B1", "input": "8"})).unwrap();
+    let rule = |op: &str| json!({"range": "B1", "rule": {"type": "cellIs", "operator": op, "value": 4, "preset": "lightRedFill"}});
+    s.execute("home.conditionalFormat", rule("greater")).unwrap();
+    s.execute("review.protectSheet", json!({"formatCells": false})).unwrap();
+    let count = |s: &Session| s.doc().unwrap().wb.sheets[0].cond_formats.len();
+    for (cmd, params) in [
+        ("home.manageRules", json!({"delete": 0})),
+        ("home.manageRules", json!({"moveUp": 0})),
+        ("home.conditionalFormat", rule("less")),
+        ("home.clearRules", json!({"sheet": true})),
+    ] {
+        let err = s.execute(cmd, params).expect_err(cmd);
+        assert!(err.to_string().contains("protected"), "{cmd}: {err}");
+        assert_eq!(count(&s), 1, "{cmd} left the rules alone");
+    }
+    // Listing the rules still works, and with Format cells allowed the rules can change.
+    s.execute("home.manageRules", json!({})).unwrap();
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("review.protectSheet", json!({"formatCells": true})).unwrap();
+    s.execute("home.conditionalFormat", rule("less")).unwrap();
+    assert_eq!(count(&s), 2);
+    s.execute("home.manageRules", json!({"delete": 0})).unwrap();
+    assert_eq!(count(&s), 1);
+}
+
+#[test]
 fn move_columns_checks_the_protection_of_the_named_sheet() {
     // The move's protection checks must authorize the sheet it modifies, not whichever sheet
     // happens to be active while the command names another one.

@@ -1736,6 +1736,7 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
         other => return Err(bad("home.conditionalFormat", format!("unknown rule type `{other}`"))),
     };
     check_cf_rule(&rule)?;
+    crate::cmd::refuse_unless_allowed(s, sheet, "Changing conditional formatting", |p| p.format_cells)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         let priority = sh.cond_formats.iter().map(|c| c.priority).max().unwrap_or(0) + 1;
@@ -1753,6 +1754,7 @@ fn clear_cf(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let whole = bool_param(p, "sheet").unwrap_or(false);
     let ranges = target_ranges(s, p)?;
+    crate::cmd::refuse_unless_allowed(s, sheet, "Changing conditional formatting", |p| p.format_cells)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         if whole {
@@ -1799,6 +1801,7 @@ fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
             .unwrap_or_default();
         return Ok(json!({"rules": list}));
     }
+    crate::cmd::refuse_unless_allowed(s, sheet, "Changing conditional formatting", |p| p.format_cells)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         // The count is taken again after each step: a delete shortens the list.
