@@ -583,7 +583,9 @@ impl LineIndex {
         let mut prev = 0u32;
         for (&line, info) in custom {
             pos += (line - prev) as f64 * default;
-            let size = if info.hidden { 0.0 } else { info.size.map_or(default, |s| s as f64) };
+            // A negative size (only a malformed file has one) counts as zero, so positions only
+            // grow and the searches below stay valid.
+            let size = if info.hidden { 0.0 } else { info.size.map_or(default, |s| s as f64).max(0.0) };
             lines.push((line, pos, size));
             pos += size;
             prev = line + 1;
@@ -600,6 +602,44 @@ impl LineIndex {
                 None => line as f64 * self.default,
             },
         }
+    }
+    /// The first line at or after `line` (and before the axis end) with a size above zero, or
+    /// `None` when every line from there on is hidden or zero-sized. O(log n): a run of hidden
+    /// lines all start where the next shown line starts, so one search steps over the whole run.
+    pub fn next_visible(&self, line: u32) -> Option<u32> {
+        if line >= self.max {
+            return None;
+        }
+        let i = self.lines.partition_point(|e| e.0 < line);
+        let custom = self.lines.get(i).is_some_and(|e| e.0 == line);
+        if !custom && self.default > 0.0 {
+            return Some(line);
+        }
+        // Every line from `line` up to the answer is zero-sized, so they all start at `p`; the
+        // last custom line starting at `p` either has a size (the answer) or is the end of the run.
+        let p = self.start(line);
+        let k = self.lines.partition_point(|e| e.1 <= p);
+        let &(last, _, size) = self.lines.get(k.checked_sub(1)?)?;
+        if last < line {
+            return None;
+        }
+        if size > 0.0 {
+            return Some(last).filter(|l| *l < self.max);
+        }
+        // The line after the run has no custom line (a custom one would start at `p` too and be
+        // part of the run): it is shown when the default size is.
+        let next = last.checked_add(1).filter(|n| *n < self.max)?;
+        (self.default > 0.0).then_some(next)
+    }
+    /// The lines from `first` to `last` (inclusive) with a size above zero, in order. Runs of
+    /// hidden lines cost one O(log n) step each, not one per line.
+    pub fn visible(&self, first: u32, last: u32) -> impl Iterator<Item = u32> + '_ {
+        let mut next = self.next_visible(first);
+        std::iter::from_fn(move || {
+            let line = next.filter(|l| *l <= last)?;
+            next = line.checked_add(1).and_then(|n| self.next_visible(n));
+            Some(line)
+        })
     }
     /// The line containing `pos`.
     pub fn at(&self, pos: f64) -> u32 {
@@ -660,6 +700,63 @@ fn line_at(pos: f64, default: f64, custom: &BTreeMap<u32, LineInfo>, max: u32) -
 mod tests {
     use super::*;
     use crate::cell::Formula;
+
+    /// `LineIndex::visible` lists exactly the lines a line-by-line size check shows, for hidden
+    /// runs at the start, in the middle and up to the end of the axis, custom sizes (zero and
+    /// negative included), lines with only a style, and a zero default size.
+    #[test]
+    fn visible_lines_match_a_line_by_line_check() {
+        let max = 400u32;
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut rnd = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        for case in 0..300 {
+            let mut custom = BTreeMap::new();
+            let runs = rnd(6);
+            for _ in 0..runs {
+                let start = rnd(u64::from(max)) as u32;
+                let len = rnd(if case % 3 == 0 { 400 } else { 30 }) as u32;
+                for l in start..(start + len).min(max) {
+                    custom.insert(l, LineInfo { hidden: true, ..Default::default() });
+                }
+            }
+            // Runs that start at the first line or end at the last one.
+            if case % 5 == 0 {
+                for l in 0..rnd(20) as u32 {
+                    custom.insert(l, LineInfo { hidden: true, ..Default::default() });
+                }
+            }
+            if case % 5 == 1 {
+                for l in max - rnd(20) as u32 - 1..max {
+                    custom.insert(l, LineInfo { hidden: true, ..Default::default() });
+                }
+            }
+            for _ in 0..rnd(8) {
+                let size = [Some(0.0), Some(3.0), Some(20.0), Some(-5.0), None][rnd(5) as usize];
+                custom.insert(rnd(u64::from(max)) as u32, LineInfo { size, ..Default::default() });
+            }
+            let default = if case % 7 == 0 { 0.0 } else { 15.0 };
+            let size = |l: u32| match custom.get(&l) {
+                Some(i) if i.hidden => 0.0,
+                Some(LineInfo { size: Some(s), .. }) => s.max(0.0),
+                _ => default,
+            };
+            let index = LineIndex::new(&custom, default, max);
+            for (first, last) in [(0, max - 1), (rnd(u64::from(max)) as u32, max - 1), (5, 5), (max - 1, max - 1)] {
+                let want: Vec<u32> = (first..=last).filter(|&l| size(l) > 0.0).collect();
+                assert_eq!(index.visible(first, last).collect::<Vec<_>>(), want, "case {case}, {first}..={last}");
+            }
+            assert_eq!(index.next_visible(max), None);
+        }
+        // The row after a million hidden rows comes straight after the last shown one.
+        let custom: BTreeMap<u32, LineInfo> = (47..1_048_422).map(|r| (r, LineInfo { hidden: true, ..Default::default() })).collect();
+        let index = LineIndex::new(&custom, 15.0, 1_048_576);
+        assert_eq!(index.visible(40, 1_048_424).collect::<Vec<_>>(), [40, 41, 42, 43, 44, 45, 46, 1_048_422, 1_048_423, 1_048_424]);
+    }
 
     #[test]
     fn a_sheet_keeps_its_identity_through_clones_and_a_new_sheet_gets_its_own() {

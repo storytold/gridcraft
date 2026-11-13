@@ -128,7 +128,9 @@ pub fn open_action(sh: &Sheet, o: ObjRef) -> OpenAction {
     match o.kind {
         ObjKind::Chart => OpenAction::FormatChart(o.id),
         ObjKind::Equation => OpenAction::EditEquation(o.id),
-        ObjKind::Shape if sh.shapes.iter().any(|s| s.id == o.id && s.kind == ShapeKind::TextBox) => OpenAction::EditText(o.id),
+        ObjKind::Shape if sh.shapes.iter().any(|s| s.id == o.id && matches!(s.kind, ShapeKind::TextBox | ShapeKind::WordArt)) => {
+            OpenAction::EditText(o.id)
+        }
         ObjKind::Control => OpenAction::EditControl(o.id),
         ObjKind::Shape | ObjKind::Image | ObjKind::Slicer | ObjKind::Group => OpenAction::Select,
     }
