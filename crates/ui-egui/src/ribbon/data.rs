@@ -140,7 +140,7 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
     }
     sep(ui);
     if crate::dialogs::actuarial_available() {
-        if big_button(ui, Icon::ChartLine, "Actuarial\nReport", "Actuarial Report", false).clicked() {
+        if big_button(ui, Icon::ChartPie, "Actuarial\nReport", "Actuarial Report", false).clicked() {
             app.open_dialog("actuarial", json!({}));
         }
         sep(ui);
