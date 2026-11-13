@@ -1,5 +1,6 @@
 //! UI formula syntax boundary. Engine commands, control/API callers and XLSX keep English.
 use crate::i18n::Language;
+use gridcraft_engine::core::{CellError, Value};
 use gridcraft_engine::formula::{self, FormulaLocale, ParseError};
 use gridcraft_engine::model::Workbook;
 
@@ -58,6 +59,27 @@ pub(crate) fn display(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: u
         .map(|body| format!("={body}"))
         .unwrap_or_else(|_| text.to_string());
     hide_udf_prefix(&shown, locale)
+}
+
+/// How a constant logical or error value reads on screen in the formula language. Portuguese
+/// shows `VERDADEIRO` and `#N/D`; other syntaxes, and errors without a Portuguese name, keep the
+/// English. Only the screen changes: the stored value and formulas stay as they are.
+pub(crate) fn value_name(value: &Value, locale: FormulaLocale) -> Option<&'static str> {
+    if locale != FormulaLocale::Pt {
+        return None;
+    }
+    match value {
+        Value::Bool(b) => Some(locale.boolean_name(*b)),
+        Value::Error(CellError::Value) => Some("#VALOR!"),
+        Value::Error(CellError::Name) => Some("#NOME?"),
+        Value::Error(CellError::NA) => Some("#N/D"),
+        Value::Error(CellError::Div0) => Some("#DIV/0!"),
+        Value::Error(CellError::Ref) => Some("#REF!"),
+        Value::Error(CellError::Num) => Some("#NÚM!"),
+        Value::Error(CellError::Null) => Some("#NULO!"),
+        Value::Error(CellError::Spill) => Some("#DESPEJAR!"),
+        _ => None,
+    }
 }
 
 const UDF_PREFIX: &str = "_xludf.";

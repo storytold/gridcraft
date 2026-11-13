@@ -96,7 +96,9 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
     (Look { style, fill, text_color }, cfl)
 }
 
-/// Text for a value with General narrowing to the available width.
+/// Text for a value with General narrowing to the available width. Logical and error values
+/// read in the formula language (`VERDADEIRO`, `#N/D` in Portuguese).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn display_text(
     wb: &Workbook,
     sh: &Sheet,
@@ -105,6 +107,7 @@ pub(super) fn display_text(
     st: &Style,
     width_px: f32,
     char_w: f32,
+    locale: gridcraft_engine::formula::FormulaLocale,
 ) -> (String, Option<Color32>, bool, Option<(char, usize)>) {
     if sh.show_formulas
         && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref())
@@ -118,6 +121,9 @@ pub(super) fn display_text(
     // A checkbox cell draws TRUE/FALSE (and empty) as a box; other values show as General.
     if code == "checkbox" && matches!(v, Value::Bool(_) | Value::Empty) {
         return (String::new(), None, false, None);
+    }
+    if let Some(name) = crate::formula_locale::value_name(v, locale) {
+        return (name.to_string(), None, false, None);
     }
     if code == "General"
         && let Value::Number(n) = v
