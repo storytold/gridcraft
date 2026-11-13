@@ -32,6 +32,22 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad("data.removeDuplicates", "the range is too large"));
     }
     let start = r.start.row + header as u32;
+    // If the range covers a table's columns, exclude its totals row from duplicate comparison and
+    // shrink the table (moving its totals row up) when trailing data rows are removed.
+    let table_match = sh.tables.iter().enumerate().find_map(|(ti, t)| {
+        if r.start.col == t.range.start.col
+            && r.end.col == t.range.end.col
+            && r.start.row >= t.range.start.row
+            && r.end.row <= t.range.end.row
+        {
+            let data_end = if t.totals_row { t.range.end.row.saturating_sub(1) } else { t.range.end.row };
+            let dedup_end = if t.totals_row && r.end.row == t.range.end.row { data_end } else { r.end.row };
+            Some((ti, dedup_end == data_end, dedup_end))
+        } else {
+            None
+        }
+    });
+    let dedup_end = table_match.map_or(r.end.row, |(_, _, end)| end);
     let mut removed = 0;
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
@@ -40,7 +56,7 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         // Cells are compared by the text they show, as in Excel: the same date in two formats
         // isn't a duplicate, while 1.01 and 1.02 shown as 1.0 are.
         let shown = |c: CellRef| crate::display::format(&sh.value(c), cx.wb.styles.get(sh.style_id(c)).num_fmt.as_str(), &cx.wb).text;
-        for row in start..=r.end.row {
+        for row in start..=dedup_end {
             let key: Vec<String> = cols.iter().map(|c| shown(CellRef::new(row, *c)).to_lowercase()).collect();
             if seen.insert(key) {
                 keep.push(row);
@@ -77,12 +93,12 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         let rows: Vec<Vec<Option<Cell>>> =
             keep.iter().map(|row| (r.start.col..=r.end.col).map(|c| sh.cell(CellRef::new(*row, c)).cloned()).collect()).collect();
         let shm = cx.sheet_mut(sheet)?;
-        for row in start..=r.end.row {
+        for row in start..=dedup_end {
             for c in r.start.col..=r.end.col {
                 shm.remove_cell(CellRef::new(row, c));
             }
         }
-        for row in start..=r.end.row {
+        for row in start..=dedup_end {
             for c in r.start.col..=r.end.col {
                 let at = CellRef::new(row, c);
                 shm.comments.remove(&at);
@@ -103,12 +119,53 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         for (at, h) in links {
             shm.hyperlinks.insert(at, h);
         }
-        for c in RangeRef::new(CellRef::new(start, r.start.col), r.end).iter() {
+        let mut extra_changed = Vec::new();
+        if removed > 0
+            && let Some((ti, true, _)) = table_match
+            && let Some((totals_row, old_end, c0, c1)) = shm.tables.get(ti).map(|t| (t.totals_row, t.range.end.row, t.range.start.col, t.range.end.col))
+        {
+            let new_end = old_end.saturating_sub(removed as u32);
+            if totals_row && new_end < old_end {
+                for col in c0..=c1 {
+                    let src = CellRef::new(old_end, col);
+                    let dst = CellRef::new(new_end, col);
+                    let cell = shm.cell(src).cloned();
+                    let pic = shm.cell_pictures.remove(&src);
+                    let note = shm.comments.remove(&src);
+                    let link = shm.hyperlinks.remove(&src);
+                    shm.remove_cell(src);
+                    if let Some(cell) = cell {
+                        shm.set_cell(dst, cell);
+                    } else {
+                        shm.remove_cell(dst);
+                    }
+                    if let Some(p) = pic {
+                        shm.cell_pictures.insert(dst, p);
+                    }
+                    if let Some(n) = note {
+                        shm.comments.insert(dst, n);
+                    }
+                    if let Some(l) = link {
+                        shm.hyperlinks.insert(dst, l);
+                    }
+                    extra_changed.push(src);
+                    extra_changed.push(dst);
+                }
+            }
+            if let Some(t) = shm.tables.get_mut(ti) {
+                t.range.end.row = new_end;
+            }
+            cx.structural = true;
+        }
+        for c in RangeRef::new(CellRef::new(start, r.start.col), CellRef::new(dedup_end, r.end.col)).iter() {
+            cx.changed.push((sheet, c));
+        }
+        for c in extra_changed {
             cx.changed.push((sheet, c));
         }
         Ok(())
     })?;
-    let remaining = (r.end.row + 1 - start) as usize - removed;
+    let remaining = (dedup_end + 1).saturating_sub(start) as usize - removed;
     Ok(json!({"removed": removed, "remaining": remaining}))
 }
 

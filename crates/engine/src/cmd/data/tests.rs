@@ -557,3 +557,28 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+#[test]
+fn remove_duplicates_with_table_totals_row_shrinks_table_and_updates_refs() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute(
+        "range.setValues",
+        json!({"range": "A1", "values": [["Key", "Amount", "ID"], ["a", 10, "R01"], ["a", 99, "R02"], ["b", 20, "R03"], ["b", 77, "R04"]]}),
+    )
+    .unwrap();
+    s.execute("insert.table", json!({"range": "A1:C5", "header": true, "name": "Orders"})).unwrap();
+    s.execute("table.totalRow", json!({"table": "Orders", "on": true})).unwrap();
+    s.execute("table.totalFunction", json!({"table": "Orders", "column": "Amount", "function": "sum"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E2", "input": "=ROWS(Orders[Amount])"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F2", "input": "=Orders[[#Totals],[Amount]]"})).unwrap();
+    s.execute("data.removeDuplicates", json!({"range": "A1:C6", "columns": ["A"], "header": true})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.tables[0].range.a1(), "A1:C4");
+    assert_eq!(sh.value(CellRef::parse("C2").unwrap()), Value::text("R01"));
+    assert_eq!(sh.value(CellRef::parse("C3").unwrap()), Value::text("R03"));
+    assert_eq!(sh.value(CellRef::parse("B4").unwrap()), Value::Number(30.0));
+    assert_eq!(sh.value(CellRef::parse("B6").unwrap()), Value::Empty);
+    assert_eq!(sh.value(CellRef::parse("E2").unwrap()), Value::Number(2.0));
+    assert_eq!(sh.value(CellRef::parse("F2").unwrap()), Value::Number(30.0));
+}
