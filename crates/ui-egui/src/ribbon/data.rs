@@ -139,6 +139,12 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         app.open_dialog("monteCarlo", json!({}));
     }
     sep(ui);
+    if crate::dialogs::actuarial_available() {
+        if big_button(ui, Icon::ChartBar, "Actuarial\nReport", "Actuarial Report", false).clicked() {
+            app.open_dialog("actuarial", json!({}));
+        }
+        sep(ui);
+    }
     if big_button(ui, Icon::Function, "Solver", "Solver", false).clicked() {
         app.open_dialog("solver", json!({}));
     }

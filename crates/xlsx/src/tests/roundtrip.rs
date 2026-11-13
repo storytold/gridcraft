@@ -2004,13 +2004,7 @@ fn remove_personal_information_is_kept_and_honoured() {
 /// dynamic-array metadata; scalar ACT functions are not changed.
 #[test]
 fn legacy_actuarial_array_functions_retain_single_value() {
-    let calls = [
-        "ACT.PREMIUM.SENSITIVITY(1)",
-        "ACT.GPD.FIT.MLE(1)",
-        "ACT.GPD.THRESHOLDS(1,2)",
-        "ACT.COPULA.TAIL(1,2)",
-        "ACT.COPULA.FIT(1,2,3)",
-    ];
+    let calls = ["ACT.PREMIUM.SENSITIVITY(1)", "ACT.GPD.FIT.MLE(1)", "ACT.GPD.THRESHOLDS(1,2)", "ACT.COPULA.TAIL(1,2)", "ACT.COPULA.FIT(1,2,3)"];
     let rows = calls
         .iter()
         .enumerate()

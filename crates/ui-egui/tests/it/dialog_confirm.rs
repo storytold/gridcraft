@@ -125,3 +125,23 @@ fn monte_carlo_progress_cancel_preserves_the_workbook() {
     assert_eq!(d.undo.len(), undo);
     assert_eq!(d.wb.sheets.len(), 1);
 }
+
+/// The actuarial dialog writes a live report from references selected in the workbook.
+#[test]
+fn actuarial_dialog_creates_a_formula_report() {
+    if !gridcraft_engine::cmd::formulas::function_list().iter().any(|f| f["name"] == "ACT.ANNUITY") {
+        return;
+    }
+    let mut h = harness();
+    h.state_mut().run("range.setValues", json!({"range":"A1","values":[[0.1,0.05,1],[0.1,null,null]]})).unwrap();
+    control(&mut h, "ui.dialog", json!({"name":"actuarial"}));
+    for (key, value) in [("argument0", "A1:A2"), ("argument1", "B1"), ("argument2", "C1")] {
+        control(&mut h, "ui.dialog.set", json!({"field":key,"value":value}));
+    }
+    let result = control(&mut h, "ui.dialog.confirm", json!({}));
+    assert_eq!(result["ok"], true, "{result}");
+    let report = h.state().session.doc().unwrap().wb.sheet(1).unwrap();
+    let cell = report.cell(gridcraft_engine::core::CellRef::new(4, 0)).unwrap();
+    assert!(cell.formula.is_some());
+    assert_eq!(cell.value.as_f64(), Some(1.0));
+}

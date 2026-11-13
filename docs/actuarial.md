@@ -16,6 +16,12 @@ This page specifies the 52 foundational functions. The [scientific-methods guide
 specifies the other 43: censored survival and Bayesian calibration, extreme-value inference,
 tail dependence, sensitivities, decision methods, semi-Markov models and treaty reinstatements.
 
+## Create a report in the interface
+
+Open **Data → Actuarial Report**, search the 95 registered `ACT.*` functions, and choose a function. The dialog shows its signature and description. Enter each argument as a number, quoted text, array constant, or a cell/range reference; use the reference picker to select cells on the sheet. Leave optional arguments blank to use their defaults. The report is a new worksheet with a live formula in A5, linked to the original inputs and recalculated when they change. The report is one undoable action.
+
+To study uncertainty, use the report's A5 cell as an output in **Data → Monte Carlo**, and select numeric source inputs and distributions. Simulation describes the supplied assumptions; it does not calibrate them or certify regulatory compliance. Check model domains, data provenance, units and validation against independent references before using results for decisions.
+
 ## Start with an executable workbook
 
 ```sh
