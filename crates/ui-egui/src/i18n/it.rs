@@ -2,8 +2,11 @@
 //! wording (sentence case, «Blocca riquadri», «Unisci e allinea al centro»); anything absent falls
 //! back to English.
 
+/// Returns the Italian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Diagramma",
+        "Decorative Text" => "Testo decorativo",
         "Paste" => "Incolla",
         "Paste Values" => "Incolla valori",
         "Paste Formulas" => "Incolla formule",
@@ -59,6 +62,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Riquadro\nFormato",
         "Format" => "Formato",
         "Insert" => "Inserisci",
+        "Header Menu|Insert" => "Inserisci",
         "Insert Cells…" => "Inserisci celle…",
         "Delete" => "Elimina",
         "Delete Cells…" => "Elimina celle…",
@@ -107,9 +111,24 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Testo in\ncolonne",
         "Link" => "Collegamento",
         "Symbol" => "Simbolo",
+        "Equation" => "Equazione",
+        "Insert New Equation..." => "Inserisci nuova equazione",
         "Sparklines" => "Sparkline",
         "Checkbox" => "Casella di controllo",
         "Insert checkboxes in the selected cells" => "Inserisci caselle di controllo nelle celle selezionate",
+        "Button" => "Pulsante",
+        "Slider" => "Dispositivo di scorrimento",
+        "Spin Button" => "Pulsante di selezione",
+        "Draw a button that runs a macro or a command" => "Disegna un pulsante che esegue una macro o un comando",
+        "Draw a slider that sets a whole number in a linked cell" => {
+            "Disegna un dispositivo di scorrimento che imposta un numero intero in una cella collegata"
+        }
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Disegna un pulsante di selezione che modifica a passi un numero intero in una cella collegata"
+        }
+        "Edit Text" => "Modifica testo",
+        "Assign Action…" => "Assegna azione…",
+        "Format Control…" => "Formato controllo…",
         "Header & Footer" => "Intestazione e piè di pagina",
         "Draw with ink" => "Disegna a mano libera",
         "Eraser" => "Gomma",
@@ -149,6 +168,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Rimuovi frecce",
         "Show Formulas" => "Mostra formule",
         "Error Checking" => "Controllo errori",
+        "Trace Error" => "Individua errore",
+        "Circular References" => "Riferimenti circolari",
+        "Python Mode" => "Modalità Python",
         "Evaluate Formula" => "Valuta formula",
         "Watch Window" => "Finestra controlli",
         "Calculation\nOptions" => "Opzioni di\ncalcolo",
@@ -204,6 +226,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Anteprima interruzioni\ndi pagina",
         "Page\nLayout" => "Layout\ndi pagina",
         "Formula Bar" => "Barra della formula",
+        "Name Box" => "Casella nome",
+        "Cell Editor" => "Editor di cella",
+        "Font Size" => "Dimensione carattere",
         "Gridlines" => "Griglia",
         "Headings" => "Intestazioni",
         "Zoom" => "Zoom",
@@ -235,6 +260,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legenda: in basso",
         "Legend: Top" => "Legenda: in alto",
         "Legend: Right" => "Legenda: a destra",
+        "First slice angle" => "Angolo della prima fetta",
+        "Doughnut hole size" => "Dimensione del foro della ciambella",
         "Gridlines: None" => "Griglia: nessuna",
         "Gridlines: Show" => "Griglia: mostra",
         "Chart\nTitle" => "Titolo\ndel grafico",
@@ -286,10 +313,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More Number Formats…" => "Altri formati numero…",
         "Financial" => "Finanziarie",
         "Logical" => "Logiche",
-        "Date &\nTime" => "Data e\nora",
-        "Lookup &\nReference" => "Ricerca e\nriferimento",
-        "Math &\nTrig" => "Matematiche e\ntrigonometriche",
-        "More\nFunctions" => "Altre\nfunzioni",
+        "More Functions" => "Altre funzioni",
         "Page Layout|Orientation" => "Orientamento",
         "Display theme" => "Tema di visualizzazione",
         "Animations" => "Animazioni",
@@ -301,6 +325,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Scuro",
         "Sheet Options|View" => "Visualizza",
         "Print" => "Stampa",
+        "Print What" => "Cosa stampare",
         // Page Layout view and the Header & Footer tab.
         "Click to add data" => "Fai clic per aggiungere dati",
         "Add header" => "Aggiungi intestazione",
@@ -327,6 +352,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Vai a intestazione",
         "Different First Page" => "Prima pagina diversa",
         "Different Odd & Even Pages" => "Pagine pari e dispari diverse",
+        "Scale with Document" => "Ridimensiona con il documento",
+        "Align with Page Margins" => "Allinea ai margini della pagina",
         "Go to Footer" => "Vai a piè di pagina",
         "Ruler" => "Righello",
         // File › Backstage view.
@@ -401,6 +428,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Options|Save" => "Salvataggio",
         "Options|Editing" => "Modifica",
         "Show formula bar" => "Mostra barra della formula",
+        "Highlight the active cell's row" => "Evidenzia la riga della cella attiva",
         "Enable AutoComplete for cell values" => "Abilita Completamento automatico per i valori delle celle",
         "Save .xlsx workbooks automatically after every change" => "Salva automaticamente le cartelle di lavoro .xlsx dopo ogni modifica",
         "Workbook calculation" => "Calcolo della cartella di lavoro",
@@ -448,7 +476,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit Name" => "Modifica nome",
         "New Name" => "Nuovo nome",
         "Format Cells" => "Formato celle",
-        "Formula Builder" => "Generatore di formule",
         "Find and Replace" => "Trova e sostituisci",
         "Go To" => "Vai a",
         "Insert Calculated Field" => "Inserisci campo calcolato",
@@ -552,6 +579,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bottom margin (in):" => "Margine inferiore (poll.):",
         "Header (in):" => "Intestazione (poll.):",
         "Footer (in):" => "Piè di pagina (poll.):",
+        "Page order" => "Ordine pagine",
+        "Down, then over" => "Prima in basso, poi a destra",
+        "Over, then down" => "Prima a destra, poi in basso",
         "Tab" => "Tabulazione",
         "Semicolon" => "Punto e virgola",
         "Comma" => "Virgola",
@@ -761,6 +791,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Doughnut" => "Anello",
         "Area" => "Area",
         "Stacked Area" => "Area in pila",
+        "100% Stacked Area" => "Area in pila 100%",
         "Scatter" => "Dispersione",
         "Scatter with Lines" => "Dispersione con linee",
         "Radar" => "Radar",
@@ -977,6 +1008,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Report Layout" => "Layout rapporto",
         "Compact" => "Compatto",
         "Tabular" => "Tabulare",
+        "Record Macro" => "Registra macro",
+        "Stop Recording" => "Interrompi registrazione",
+        "Use Relative References" => "Usa riferimenti relativi",
+        "Run\nMacro" => "Esegui macro",
+        "Macros…" => "Macro…",
+        "Recording" => "Registrazione",
+        "New Macro" => "Nuova macro",
+        "Show" => "Mostra",
+        "Collapse dialog" => "Comprimi finestra di dialogo",
+        "Expand dialog" => "Espandi finestra di dialogo",
         _ => return None,
     })
 }

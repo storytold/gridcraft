@@ -6,6 +6,7 @@ use serde_json::json;
 use std::{cell::RefCell, rc::Rc};
 
 #[test]
+/// Opening settings and exporting do not spool; a configured native print submits its settings, and a spool error is reported.
 fn native_print_uses_selected_settings_and_reports_spool_errors() {
     let mut session = Session::new();
     session.new_workbook();
@@ -24,7 +25,7 @@ fn native_print_uses_selected_settings_and_reports_spool_errors() {
     let pdf = app.run("file.print", json!({"sheets":"active"})).unwrap();
     assert!(pdf["base64"].as_str().is_some(), "the engine still returns PDF bytes without submitting");
     assert!(jobs.borrow().is_empty(), "opening settings/exporting does not spool");
-    app.printing.printers.push(Printer { name: "Chosen queue".into(), default: false });
+    app.printing.printers.push(Printer { name: "Chosen queue".into(), label: String::new(), default: false });
     let configured = app.run("ui.printSettings", json!({"printer":"Chosen queue", "copies":3,"duplex":"shortEdge","grayscale":true})).unwrap();
     assert_eq!(configured["ready"], true);
     assert_eq!(configured["printers"][0]["name"], "Chosen queue");
@@ -43,15 +44,16 @@ fn native_print_uses_selected_settings_and_reports_spool_errors() {
 }
 
 #[test]
+/// Print settings stay visible and accessible in an 800x700 window; toggling Grayscale updates the settings and readiness.
 fn print_settings_are_visible_in_a_narrow_window() {
     use egui_kittest::kittest::{NodeT, Queryable};
     let mut session = Session::new();
     session.new_workbook();
-    let mut app = SheetApp::new(session, Services::default());
+    let mut app = crate::common::prepare(SheetApp::new(session, Services::default()));
     app.run("cell.set", json!({"cell":"A1", "input":"A sheet to print"})).unwrap();
     app.services.printers = Some(Box::new(|| {
         let (sender, receiver) = std::sync::mpsc::channel();
-        sender.send(vec![Printer { name: "Test queue".into(), default: true }]).unwrap();
+        sender.send(vec![Printer { name: "Test queue".into(), label: String::new(), default: true }]).unwrap();
         receiver
     }));
     app.services.print_native = Some(Box::new(|_, _| {
@@ -60,7 +62,7 @@ fn print_settings_are_visible_in_a_narrow_window() {
         receiver
     }));
     app.run("ui.backstage", json!({"page":"print"})).unwrap();
-    let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 700.0)).build_ui_state(
+    let mut harness = crate::common::builder().with_size(egui::vec2(800.0, 700.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
@@ -77,11 +79,12 @@ fn print_settings_are_visible_in_a_narrow_window() {
 }
 
 #[test]
+/// Every malformed print-settings request errors and leaves the prior settings unchanged.
 fn invalid_print_settings_are_rejected_without_partial_changes() {
     let mut session = Session::new();
     session.new_workbook();
     let mut app = SheetApp::new(session, Services::default());
-    app.printing.printers.push(Printer { name: "Queue".into(), default: true });
+    app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
     let before = app.run("ui.printSettings", json!({})).unwrap();
     for params in [
         json!({"printer":"Missing"}),
@@ -102,11 +105,12 @@ fn invalid_print_settings_are_rejected_without_partial_changes() {
 }
 
 #[test]
+/// Two fast jobs each surface the same receipt exactly once.
 fn repeated_fast_jobs_each_surface_an_identical_receipt() {
     let mut session = Session::new();
     session.new_workbook();
     let mut app = SheetApp::new(session, Services::default());
-    app.printing.printers.push(Printer { name: "Queue".into(), default: true });
+    app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
     app.run("ui.printSettings", json!({"printer":"Queue"})).unwrap();
     app.services.print_native = Some(Box::new(|_, _| {
         let (sender, receiver) = std::sync::mpsc::channel();

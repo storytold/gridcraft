@@ -1,5 +1,6 @@
 //! After a left-drag of the fill handle, the Auto Fill Options button redoes the fill as Copy Cells,
-//! Fill Series, Fill Formatting Only or Fill Without Formatting (#1403).
+//! Fill Series, Fill Formatting Only or Fill Without Formatting (#1403), and from a date as Fill
+//! Days, Fill Weekdays, Fill Months or Fill Years.
 
 use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::kittest::Queryable;
@@ -14,15 +15,7 @@ fn harness(setup: impl FnOnce(&mut Session)) -> Harness {
     let mut session = Session::new();
     session.new_workbook();
     setup(&mut session);
-    let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::stepped_harness(session)
 }
 
 /// B1:B2 holds 1, 2 and is selected.
@@ -137,6 +130,33 @@ fn a_lone_number_copies_on_drag_and_counts_up_with_fill_series() {
     h.run_steps(3);
 
     assert_eq!(values(&h, &["B2", "B3", "B4"]), [n(6.0), n(7.0), n(8.0)]);
+}
+
+#[test]
+fn fill_months_redoes_a_date_drag_by_months() {
+    let mut h = harness(|s| {
+        // 1/31/2026 is serial 46053.
+        s.execute("cell.set", json!({"cell": "B1", "input": "1/31/2026"})).unwrap();
+        s.execute("selection.set", json!({"cell": "B1"})).unwrap();
+    });
+    drag_handle(&mut h, "B1", "B3", PointerButton::Primary);
+    assert_eq!(values(&h, &["B2", "B3"]), [n(46054.0), n(46055.0)], "a plain drag steps by days");
+    h.get_by_label("Auto Fill Options").click();
+    h.run_steps(3);
+    h.get_by_label("Fill Months").click();
+    h.run_steps(3);
+
+    assert_eq!(values(&h, &["B2", "B3"]), [n(46081.0), n(46112.0)], "Feb 28 and Mar 31");
+}
+
+#[test]
+fn a_number_drag_offers_no_date_fills() {
+    let mut h = harness(one_two);
+    drag_handle(&mut h, "B2", "B6", PointerButton::Primary);
+    h.get_by_label("Auto Fill Options").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Copy Cells").is_some());
+    assert!(h.query_by_label("Fill Days").is_none());
 }
 
 fn formatted(s: &mut Session) {

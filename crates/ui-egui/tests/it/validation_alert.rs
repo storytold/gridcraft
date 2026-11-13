@@ -20,9 +20,9 @@ fn harness() -> Harness {
     s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
     s.execute("data.validation", json!({"range": "A1", "type": "whole", "operator": "between", "formula1": "1", "formula2": "10"})).unwrap();
     s.execute("selection.set", json!({"range": "A1"})).unwrap();
-    let mut app = SheetApp::new(s, Default::default());
+    let mut app = crate::common::app(s);
     app.ui.language = Language::En;
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

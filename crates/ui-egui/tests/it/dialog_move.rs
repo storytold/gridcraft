@@ -10,19 +10,20 @@ type Harness = egui_kittest::Harness<'static, SheetApp>;
 fn harness() -> Harness {
     let mut session = Session::new();
     session.new_workbook();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(&ui.ctx().clone());
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(6);
     h
 }
 
+/// Returns the remembered egui area rect for a named dialog.
 fn dialog_rect(h: &Harness, name: &str) -> egui::Rect {
-    h.ctx.memory(|m| m.area_rect(egui::Id::new("dialog").with(name))).unwrap()
+    h.ctx.memory(|m| m.area_rect(egui::Id::unique("dialog").with(name))).unwrap()
 }
 
 fn button(h: &mut Harness, pos: egui::Pos2, pressed: bool) {

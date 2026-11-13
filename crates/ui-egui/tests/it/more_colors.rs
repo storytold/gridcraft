@@ -10,12 +10,12 @@ type Harness = egui_kittest::Harness<'static, SheetApp>;
 fn harness() -> Harness {
     let mut s = Session::new();
     s.new_workbook();
-    let mut h = egui_kittest::Harness::builder().with_os(OperatingSystem::Nix).with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_os(OperatingSystem::Nix).with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(s, Default::default()),
+        crate::common::app(s),
     );
     h.run_steps(4);
     h
@@ -63,6 +63,7 @@ fn more_colors_applies_the_typed_colour_and_remembers_it() {
 }
 
 #[test]
+/// A short hex value applies no fill, and Cancel applies nothing and remembers no color.
 fn a_colour_that_is_not_hex_does_not_apply_and_cancel_applies_nothing() {
     let mut h = harness();
     open_fill_palette(&mut h);
@@ -73,7 +74,9 @@ fn a_colour_that_is_not_hex_does_not_apply_and_cancel_applies_nothing() {
     press(&mut h, Key::Enter, Modifiers::NONE);
     assert!(h.state().session.journal.iter().all(|(id, _)| id != "home.fillColor"));
     h.get_by_label("Hex");
-    h.get_by_label("Cancel").click();
+    // The formula bar's icon-only Cancel also carries that tooltip name (role Unknown); the
+    // palette's own Cancel is the button here.
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Cancel").click();
     h.run_steps(3);
     assert!(h.state().session.journal.iter().all(|(id, _)| id != "home.fillColor"));
     assert!(h.query_by_label("Hex").is_none());

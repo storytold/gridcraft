@@ -1,6 +1,7 @@
 //! Format code parsing: sections, bracket tags and tokens.
 
 use crate::FormatColor;
+use crate::calendar::Calendar;
 
 /// At most this many sections are honoured (`pos;neg;zero;text`); extra ones are ignored.
 const MAX_SECTIONS: usize = 4;
@@ -24,6 +25,11 @@ pub(crate) enum DatePart {
 }
 
 impl DatePart {
+    /// `[h]`, `[m]` or `[s]`.
+    pub(crate) fn is_elapsed(self) -> bool {
+        matches!(self, DatePart::ElapsedH(_) | DatePart::ElapsedM(_) | DatePart::ElapsedS(_))
+    }
+
     pub(crate) fn is_calendar(self) -> bool {
         matches!(self, DatePart::Year(_) | DatePart::Month(_) | DatePart::Day(_))
     }
@@ -54,18 +60,28 @@ pub(crate) enum Tok {
 }
 
 impl Tok {
+    /// Appends the text this token shows when it has no special meaning in its section.
+    pub(crate) fn push_literal(&self, out: &mut String) {
+        match self {
+            Tok::Lit(s) | Tok::FixedDenom(s) => out.push_str(s),
+            Tok::Digit(c) => out.push(*c),
+            Tok::Point => out.push('.'),
+            Tok::Comma => out.push(','),
+            Tok::Percent => out.push('%'),
+            Tok::Exp { upper, plus } => {
+                out.push(if *upper { 'E' } else { 'e' });
+                out.push(if *plus { '+' } else { '-' });
+            }
+            Tok::Slash => out.push('/'),
+            Tok::Fill(_) | Tok::At | Tok::General | Tok::Date(_) => {}
+        }
+    }
+
     /// The text this token shows when it has no special meaning in its section.
     pub(crate) fn literal_text(&self) -> String {
-        match self {
-            Tok::Lit(s) | Tok::FixedDenom(s) => s.clone(),
-            Tok::Digit(c) => c.to_string(),
-            Tok::Point => ".".into(),
-            Tok::Comma => ",".into(),
-            Tok::Percent => "%".into(),
-            Tok::Exp { upper, plus } => format!("{}{}", if *upper { 'E' } else { 'e' }, if *plus { '+' } else { '-' }),
-            Tok::Slash => "/".into(),
-            Tok::Fill(_) | Tok::At | Tok::General | Tok::Date(_) => String::new(),
-        }
+        let mut s = String::new();
+        self.push_literal(&mut s);
+        s
     }
 }
 
@@ -122,6 +138,17 @@ pub(crate) struct Section {
     pub fraction: bool,
     pub currency: bool,
     pub fill: bool,
+    /// Date sections: the most digits of any `.0`/`.00`/`.000` part (at most 3), which decides how
+    /// the time of day is rounded.
+    pub sub_digits: u8,
+    /// Date sections: has a year, month or day part, so the serial's date is needed.
+    pub needs_date: bool,
+    /// Date sections: has `AM/PM` or `A/P`, so hours show on the 12-hour clock.
+    pub ampm: bool,
+    pub calendar: Calendar,
+    /// Excel rejects the whole code because of this section: a `B` and digit that is not a
+    /// calendar prefix, or a prefix before a number format (`B20.00`).
+    pub invalid: bool,
 }
 
 /// Splits a code into sections at unquoted, unescaped, unbracketed semicolons.
@@ -251,17 +278,60 @@ struct Raw {
     color: Option<FormatColor>,
     cond: Option<Cond>,
     currency: bool,
+    calendar: Calendar,
+    /// The section's calendar prefix as written, `'1'` or `'2'` (whether or not a locale tag
+    /// cancels it).
+    prefix: Option<char>,
+    /// An unquoted `B` and digit that is not a calendar prefix: Excel rejects the code.
+    invalid: bool,
+}
+
+/// Where a section's body starts: after its leading `[...]` tags, read as `tokenize` reads them.
+/// Also whether one of those tags is a `[$...]` locale tag.
+fn after_leading_brackets(cs: &[char]) -> (usize, bool) {
+    let mut i = 0usize;
+    let mut locale = false;
+    while cs.get(i) == Some(&'[') {
+        match cs.get(i + 1..).and_then(|r| r.iter().position(|&d| d == ']')) {
+            Some(p) => {
+                locale |= cs.get(i + 1) == Some(&'$');
+                i += p + 2;
+            }
+            None => break,
+        }
+    }
+    (i, locale)
 }
 
 fn tokenize(src: &str) -> Raw {
     let cs: Vec<char> = src.chars().collect();
-    let mut raw = Raw { toks: Vec::new(), color: None, cond: None, currency: false };
+    let mut raw = Raw { toks: Vec::new(), color: None, cond: None, currency: false, calendar: Calendar::Gregorian, prefix: None, invalid: false };
     let toks = &mut raw.toks;
     // With no `]` at or after a `[`, that `[` is a literal; checking this once keeps the scan linear.
     let last_close = cs.iter().rposition(|&c| c == ']');
+    let (body_start, locale_first) = after_leading_brackets(&cs);
+    // Where the next calendar prefix may stand: the body's start, or right after another prefix.
+    let mut prefix_at = body_start;
     let mut i = 0usize;
     while let Some(&c) = cs.get(i) {
         match c {
+            // A calendar prefix, never shown: `B1` or `B2`, any case, which Excel accepts repeated
+            // (`B2B2`) but not mixed (`B2B1`) or with more digits (`B12`, `B02`).
+            'B' | 'b' if i == prefix_at && cs.get(i + 1).is_some_and(char::is_ascii_digit) => {
+                let d = cs.get(i + 1).copied();
+                let ok = matches!(d, Some('1' | '2')) && !cs.get(i + 2).is_some_and(char::is_ascii_digit) && raw.prefix.is_none_or(|p| Some(p) == d);
+                raw.invalid |= !ok;
+                raw.prefix = d;
+                i += 2;
+                prefix_at = i;
+                continue;
+            }
+            // Any other `B` and digit (`B3dd`, `dd/mm/yyyyB2`, `dd B2 mm`, `B2[Red]B2`) makes Excel
+            // reject the code.
+            'B' | 'b' if cs.get(i + 1).is_some_and(char::is_ascii_digit) => {
+                raw.invalid = true;
+                push_lit(toks, c.encode_utf8(&mut [0; 4]));
+            }
             '"' => {
                 let mut s = String::new();
                 i += 1;
@@ -283,6 +353,8 @@ fn tokenize(src: &str) -> Raw {
                     if is_currency_char(d) {
                         raw.currency = true;
                     }
+                    // Excel rejects an escaped `\B2` as well.
+                    raw.invalid |= matches!(d, 'B' | 'b') && cs.get(i + 2).is_some_and(char::is_ascii_digit);
                     push_lit(toks, d.encode_utf8(&mut [0; 4]));
                 }
                 i += 2;
@@ -383,6 +455,11 @@ fn tokenize(src: &str) -> Raw {
         }
         i += 1;
     }
+    // Excel keeps the date Gregorian when a `[$-401]`-style locale or currency tag comes before
+    // `B2` (`B2[$-401]` is still Hijri).
+    if raw.prefix == Some('2') && !locale_first {
+        raw.calendar = Calendar::Hijri;
+    }
     raw
 }
 
@@ -438,7 +515,7 @@ fn date_part(t: &Tok) -> Option<DatePart> {
 }
 
 fn analyze(raw: Raw) -> Section {
-    let Raw { mut toks, color, cond, currency } = raw;
+    let Raw { toks, color, cond, currency, calendar, prefix, invalid } = raw;
     let is_date = toks.iter().any(|t| matches!(t, Tok::Date(_)));
     let has_general = toks.iter().any(|t| matches!(t, Tok::General));
     let mut sec = Section {
@@ -455,72 +532,99 @@ fn analyze(raw: Raw) -> Section {
         fraction: false,
         currency,
         fill: toks.iter().any(|t| matches!(t, Tok::Fill(_))),
+        sub_digits: 0,
+        needs_date: false,
+        ampm: false,
+        calendar,
+        invalid,
     };
     if is_date {
         sec.kind = SecKind::Date;
-        // m/mm after hours or before seconds means minutes.
-        for i in 0..toks.len() {
-            let Some(Tok::Date(DatePart::Month(n))) = toks.get(i) else { continue };
-            let n = *n;
-            if n > 2 {
-                continue;
-            }
-            let prev = toks.get(..i).and_then(|s| s.iter().rev().find_map(date_part));
-            let next = toks.get(i + 1..).and_then(|s| s.iter().find_map(date_part));
-            let after_h = matches!(prev, Some(DatePart::Hour(_) | DatePart::ElapsedH(_)));
-            let before_s = matches!(next, Some(DatePart::Second(_) | DatePart::ElapsedS(_)));
-            if (after_h || before_s)
-                && let Some(t) = toks.get_mut(i)
-            {
-                *t = Tok::Date(DatePart::Minute(n));
-            }
-        }
-        let mut out = Vec::with_capacity(toks.len());
-        let mut i = 0;
-        while let Some(t) = toks.get(i) {
-            if matches!(t, Tok::Point) && toks.get(i + 1) == Some(&Tok::Digit('0')) {
-                let mut n = 0usize;
-                while toks.get(i + 1 + n) == Some(&Tok::Digit('0')) {
-                    n += 1;
-                }
-                out.push(Tok::Date(DatePart::SubSec(n.min(255) as u8)));
-                i += 1 + n;
-                continue;
-            }
-            match t {
-                Tok::Date(_) | Tok::Fill(_) => out.push(t.clone()),
-                other => push_lit(&mut out, &other.literal_text()),
-            }
-            i += 1;
-        }
-        sec.toks = out;
-        return sec;
+        return analyze_date(toks, sec);
     }
     if has_general {
         sec.kind = SecKind::General;
-        let mut out = Vec::with_capacity(toks.len());
-        for t in &toks {
-            match t {
-                Tok::General | Tok::Fill(_) => out.push(t.clone()),
-                other => push_lit(&mut out, &other.literal_text()),
-            }
-        }
-        sec.toks = out;
-        return sec;
+        return analyze_general(toks, sec);
     }
     sec.has_digits = toks.iter().any(|t| matches!(t, Tok::Digit(_)));
     if sec.has_at && !sec.has_digits {
         sec.kind = SecKind::Text;
-        let mut out = Vec::with_capacity(toks.len());
-        for t in &toks {
-            match t {
-                Tok::At | Tok::Fill(_) => out.push(t.clone()),
-                other => push_lit(&mut out, &other.literal_text()),
-            }
-        }
-        sec.toks = out;
-        return sec;
+        return analyze_text(toks, sec);
     }
+    // Number section. Excel rejects a calendar prefix before digits (`B20.00`, `B1#,##0`);
+    // `B2General`, `B2@` and `B2"x"` show as without the prefix.
+    sec.invalid |= prefix.is_some() && sec.has_digits;
+    analyze_number(toks, sec)
+}
+
+fn analyze_date(mut toks: Vec<Tok>, mut sec: Section) -> Section {
+    // m/mm after hours or before seconds means minutes.
+    for i in 0..toks.len() {
+        let Some(Tok::Date(DatePart::Month(n))) = toks.get(i) else { continue };
+        let n = *n;
+        if n > 2 {
+            continue;
+        }
+        let prev = toks.get(..i).and_then(|s| s.iter().rev().find_map(date_part));
+        let next = toks.get(i + 1..).and_then(|s| s.iter().find_map(date_part));
+        let after_h = matches!(prev, Some(DatePart::Hour(_) | DatePart::ElapsedH(_)));
+        let before_s = matches!(next, Some(DatePart::Second(_) | DatePart::ElapsedS(_)));
+        if (after_h || before_s)
+            && let Some(t) = toks.get_mut(i)
+        {
+            *t = Tok::Date(DatePart::Minute(n));
+        }
+    }
+    let mut out = Vec::with_capacity(toks.len());
+    let mut i = 0;
+    while let Some(t) = toks.get(i) {
+        if matches!(t, Tok::Point) && toks.get(i + 1) == Some(&Tok::Digit('0')) {
+            let mut n = 0usize;
+            while toks.get(i + 1 + n) == Some(&Tok::Digit('0')) {
+                n += 1;
+            }
+            out.push(Tok::Date(DatePart::SubSec(n.min(255) as u8)));
+            i += 1 + n;
+            continue;
+        }
+        match t {
+            Tok::Date(_) | Tok::Fill(_) => out.push(t.clone()),
+            other => push_lit(&mut out, &other.literal_text()),
+        }
+        i += 1;
+    }
+    sec.sub_digits = out.iter().filter_map(|t| if let Tok::Date(DatePart::SubSec(n)) = t { Some(*n) } else { None }).max().unwrap_or(0).min(3);
+    sec.needs_date = out.iter().any(|t| matches!(t, Tok::Date(d) if d.is_calendar()));
+    sec.ampm = out.iter().any(|t| matches!(t, Tok::Date(DatePart::AmPm | DatePart::AP(..))));
+    sec.toks = out;
+    sec
+}
+
+fn analyze_general(toks: Vec<Tok>, mut sec: Section) -> Section {
+    let mut out = Vec::with_capacity(toks.len());
+    for t in &toks {
+        match t {
+            Tok::General | Tok::Fill(_) => out.push(t.clone()),
+            other => push_lit(&mut out, &other.literal_text()),
+        }
+    }
+    sec.toks = out;
+    sec
+}
+
+fn analyze_text(toks: Vec<Tok>, mut sec: Section) -> Section {
+    let mut out = Vec::with_capacity(toks.len());
+    for t in &toks {
+        match t {
+            Tok::At | Tok::Fill(_) => out.push(t.clone()),
+            other => push_lit(&mut out, &other.literal_text()),
+        }
+    }
+    sec.toks = out;
+    sec
+}
+
+fn analyze_number(mut toks: Vec<Tok>, mut sec: Section) -> Section {
     // Number section.
     let mut seen_point = false;
     let mut seen_exp = false;

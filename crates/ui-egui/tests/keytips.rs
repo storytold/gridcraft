@@ -1,5 +1,8 @@
 //! Ribbon access keys through the complete egui input and UI path.
 
+#[path = "common/mod.rs"]
+mod common;
+
 use egui::{Event, Key, Modifiers, PointerButton, os::OperatingSystem};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
@@ -15,15 +18,7 @@ fn harness(session: Session) -> Harness {
 }
 
 fn harness_on(session: Session, os: OperatingSystem) -> Harness {
-    let mut h = egui_kittest::Harness::builder().with_os(os).with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::common::os_harness(session, os)
 }
 
 fn blank() -> Session {
@@ -500,7 +495,7 @@ fn vertical_alignment_keytips_run_their_commands() {
 fn pending_sequences_are_silent_no_ops() {
     let mut h = harness(blank());
     let journal = h.state().session.journal.len();
-    sequence(&mut h, &[Key::N, Key::W], false); // NW -> insert.wordArt (missing)
+    sequence(&mut h, &[Key::N, Key::S, Key::C], false); // NSC -> insert.screenshot (missing)
     assert!(h.state().dialog.is_none(), "no dialog for a pending sequence");
     assert!(h.state().message.is_none(), "no message box for a pending sequence");
     assert!(h.state().toast.is_none(), "no toast for a pending sequence");
@@ -512,15 +507,15 @@ fn pending_sequences_are_silent_no_ops() {
 fn pending_sequences_go_live_when_the_command_lands() {
     // The command lands in the catalog (here: a test-registered stand-in).
     // The sequence must run it with no table edit.
-    gridcraft_engine::register_test_command("insert.equation", |s, _| {
+    gridcraft_engine::register_test_command("insert.object", |s, _| {
         s.execute("cell.set", json!({"cell": "Z9", "input": "live"}))?;
         Ok(json!({}))
     });
     let mut h = harness(blank());
-    sequence(&mut h, &[Key::N, Key::E], false); // NE -> insert.equation
+    sequence(&mut h, &[Key::N, Key::J], false); // NJ -> insert.object
     assert_eq!(value(&h, "Z9"), Value::from("live"), "the pending sequence ran the landed command");
     assert_eq!(
-        h.state().session.journal.iter().filter(|(id, _)| id == "insert.equation").count(),
+        h.state().session.journal.iter().filter(|(id, _)| id == "insert.object").count(),
         1,
         "the landed command is journaled like any live command"
     );
@@ -772,4 +767,39 @@ fn border_keytips_without_a_command_stay_silent() {
         assert!(!h.state().session.journal.iter().any(|(id, _)| id.starts_with("home.")), "H,B,{k:?} must not run a command");
         assert_eq!(borders(&h, "A1"), Default::default(), "H,B,{k:?} must not draw a border");
     }
+}
+
+/// #2964: Alt, H, B opens the Borders menu (Excel shows it with each item's letter) instead of
+/// leaving nothing on screen; a letter then picks its item and the menu closes, and Esc backs out.
+#[test]
+fn borders_keytip_opens_the_borders_menu() {
+    let mut h = harness(selected("A1:B2"));
+    sequence(&mut h, &[Key::H, Key::B], false);
+    h.run_steps(2);
+    assert_eq!(h.state().keytips.prefix(), Some("HB"));
+    assert!(egui::Popup::is_any_open(&h.ctx), "Alt, H, B opens the Borders menu");
+    assert!(h.query_by_label("All Borders").is_some(), "the menu's items show");
+    letter(&mut h, Key::A, false);
+    h.run_steps(2);
+    assert!(!egui::Popup::is_any_open(&h.ctx), "picking an item closes the menu");
+    assert_eq!(h.state().keytips.prefix(), None);
+    assert!(sides(&h, "B2").iter().all(|s| *s != gridcraft_engine::model::BorderStyle::None), "A applied All Borders");
+
+    // Inside Borders, GridCraft's own item, has a letter too (J): only the inner edges.
+    let mut h = harness(selected("A1:B2"));
+    sequence(&mut h, &[Key::H, Key::B, Key::J], false);
+    h.run_steps(2);
+    let (a1, b2) = (sides(&h, "A1"), sides(&h, "B2"));
+    use gridcraft_engine::model::BorderStyle::{None as N, Thin};
+    assert_eq!(a1, [N, Thin, N, Thin], "A1: right and bottom only");
+    assert_eq!(b2, [Thin, N, Thin, N], "B2: left and top only");
+
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::H, Key::B], false);
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx));
+    key(&mut h, Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().keytips.prefix(), Some("H"), "Esc backs out to the Home letters");
+    assert!(!egui::Popup::is_any_open(&h.ctx), "and closes the menu");
 }

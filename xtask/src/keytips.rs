@@ -83,6 +83,8 @@ fn probe_live_commands(calls: &[(String, String)]) -> Probe {
         let params = if params.is_empty() { serde_json::json!({}) } else { serde_json::from_str(params).unwrap_or_default() };
         let mut s = Session::new();
         s.new_workbook();
+        // The JSON picks the commands and their params: none of them may touch the file system.
+        let _sandbox = gridcraft_engine::io::ScriptSandbox::enter();
         let status = match s.execute(id, params.clone()) {
             Ok(_) => {
                 if s.journal.iter().any(|(jid, _)| jid == id) {
@@ -187,15 +189,16 @@ fn parse_and_probe(source: &str) -> Result<(Vec<Entry>, Probe), String> {
                 }
             }
         }
-        entries.push(Entry {
-            seq,
-            kind,
-            target,
-            pending,
-            params,
-            excel: e.get("excel").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            note: e.get("note").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        });
+        let excel = e.get("excel").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let note = e.get("note").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        // These are written into generated Rust: a target inside string literals and format
+        // strings, the annotations after `//`. Refuse anything that could end either.
+        for (field, text) in [("target", &target), ("excel", &excel), ("note", &note)] {
+            if text.chars().any(|c| c.is_control() || matches!(c, '"' | '\\' | '{' | '}')) {
+                return Err(format!("{at}: `{field}` must not hold quotes, backslashes, braces or control characters: {text:?}"));
+            }
+        }
+        entries.push(Entry { seq, kind, target, pending, params, excel, note });
     }
     // JSON order is authoritative and curated: the first entry for a tab is its canonical
     // badge (legacy aliases come later), and groups stay together. Do not sort.
@@ -329,6 +332,11 @@ fn render_tests(entries: &[Entry], probe: &Probe) -> String {
                     id = e.target,
                 ),
             },
+            // Options is a Backstage page rather than a dialog box.
+            "dialog" if e.target == "options" => format!(
+                "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().backstage.is_some(), \"{seq} must open the Options page\");",
+                seq = e.seq,
+            ),
             "dialog" => format!(
                 "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().dialog.is_some(), \"{seq} must open the {dialog} dialog\");",
                 seq = e.seq,
@@ -371,18 +379,7 @@ use gridcraft_ui_egui::SheetApp;
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn harness(session: Session) -> Harness {
-    let mut h = egui_kittest::Harness::builder()
-        .with_os(OperatingSystem::Nix)
-        .with_size(egui::vec2(1200.0, 800.0))
-        .build_ui_state(
-            |ui, app: &mut SheetApp| {
-                app.logic(ui.ctx());
-                app.ui(ui);
-            },
-            SheetApp::new(session, Default::default()),
-        );
-    h.run_steps(4);
-    h
+    crate::common::os_harness(session, OperatingSystem::Nix)
 }
 
 fn blank() -> Session {
@@ -455,6 +452,34 @@ fn reset(h: &mut Harness) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Text that would end a comment or string literal in the generated Rust is refused.
+    #[cfg(feature = "engine")]
+    #[test]
+    fn annotations_and_targets_cannot_escape_generated_code() {
+        for entry in [
+            r#"{"seq": "Q", "kind": "command", "target": "edit.copy", "note": "x\nfn evil() {}"}"#,
+            r#"{"seq": "Q", "kind": "command", "target": "edit.copy", "excel": "a\rb"}"#,
+            r#"{"seq": "Q", "kind": "dialog", "target": "x\"); evil(); (\""}"#,
+            r#"{"seq": "Q", "kind": "control", "target": "{0}"}"#,
+        ] {
+            let doc = format!(r#"{{"sequences": [{entry}]}}"#);
+            assert!(parse_and_probe(&doc).is_err(), "{entry}");
+        }
+        assert!(parse_and_probe(r#"{"sequences": [{"seq": "Q", "kind": "control", "target": "fontSize", "note": "Font Size box"}]}"#).is_ok());
+    }
+
+    /// A probed command may not write files, whatever its params say.
+    #[cfg(feature = "engine")]
+    #[test]
+    fn probes_cannot_touch_the_file_system() {
+        let path = std::env::temp_dir().join(format!("keytips-probe-{}.pdf", std::process::id()));
+        let _ = fs::remove_file(&path);
+        let calls = vec![("file.exportPdf".to_string(), serde_json::json!({ "path": path.to_string_lossy() }).to_string())];
+        let probe = probe_live_commands(&calls);
+        assert_eq!(probe.values().copied().collect::<Vec<_>>(), [2]);
+        assert!(!path.exists());
+    }
 
     fn command(seq: &str, target: &str) -> Entry {
         Entry {

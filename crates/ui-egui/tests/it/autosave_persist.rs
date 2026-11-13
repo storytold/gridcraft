@@ -1,11 +1,11 @@
 //! #1901: AutoSave is a preference — it must survive a restart like the other UI settings.
 
 use gridcraft_engine::Session;
-use gridcraft_ui_egui::SheetApp;
 
 #[test]
+/// AutoSave defaults off, toggles on and off, and survives `UiState` serialization.
 fn autosave_survives_a_restart() {
-    let mut app = SheetApp::new(Session::new(), Default::default());
+    let mut app = crate::common::app(Session::new());
     assert!(!app.ui.autosave, "off by default");
     app.toggle_autosave();
     assert!(app.ui.autosave, "the toggle flips the persisted flag");

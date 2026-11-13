@@ -4,7 +4,8 @@
 //! - `engine.execute {command, params}` — run any engine or UI command
 //! - `engine.commands {search?}` — every command with enablement and params docs
 //! - `document.inspect`, `sheet.read {range?}`, `cell.get {cell?}` — read state
-//! - `ui.inspect` — UI state (ribbon tab, editor, dialog, grid geometry, perf)
+//! - `ui.inspect` — UI state (ribbon tab, editor, dialog, selected object, grid geometry, perf)
+//! - `ui.object.select {id?, kind?}` — select a floating object; replies with its rect
 //! - `ui.click {x, y, button?, count?, shift?, cmd?, alt?}`, `ui.drag {x, y, toX, toY}`,
 //!   `ui.move {x, y}` — real pointer input in window points
 //! - `ui.cell.click {cell}`, `ui.cell.drag {from, to}` — pointer input on a cell's centre
@@ -18,10 +19,26 @@
 
 use std::sync::mpsc::Sender;
 
+use craft_ui::capture::CaptureSlot;
 use gridcraft_engine::core::CellRef;
 use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
+
+mod screenshots;
+mod synthetic;
+
+pub use screenshots::{
+    CaptureGeometry, SCREENSHOT_DOCUMENT_CHANGED, SCREENSHOT_MAX_AGGREGATE_BYTES, SCREENSHOT_MAX_BASE64_BYTES, SCREENSHOT_MAX_ENCODING_BYTES,
+    SCREENSHOT_MAX_IMAGE_BYTES, SCREENSHOT_MAX_PEAK_BYTES, SCREENSHOT_MAX_REQUESTS, SCREENSHOT_MAX_RETRIES, SCREENSHOT_VIEWPORT_CHANGED, Shots,
+    UNKNOWN_CAPTURE_BYTES, drain_screenshots, encoding_working_bytes, issue_screenshots, save_image,
+};
+use screenshots::{Shot, check_encoding_budget, check_peak_budget, reject_shot};
+#[cfg(test)]
+use screenshots::{base64_len, png_worst_bytes, validate_image};
+pub(crate) use screenshots::{current_capture_geometry, note_capture_geometry};
+pub use synthetic::{MAX_QUEUED_SYNTHETIC_BYTES, MAX_QUEUED_SYNTHETIC_EVENTS, MAX_SYNTHETIC_TEXT_BYTES};
+use synthetic::{cell_center, key_from, modifiers, push_click, push_drag, push_key, push_move, push_text};
 
 pub type ControlResponse = Json;
 
@@ -66,21 +83,6 @@ pub enum Outcome {
     Screenshot { path: Option<String> },
 }
 
-#[derive(Default)]
-pub struct Shots {
-    token: u64,
-    queued: Vec<(u64, f64, u32)>,
-    pending: Vec<(u64, Option<String>, Sender<ControlResponse>, f64)>,
-}
-
-impl Shots {
-    /// A screenshot was asked for and hasn't been delivered yet: animations hold still, so the
-    /// picture shows the settled state.
-    pub(crate) fn in_flight(&self) -> bool {
-        !self.queued.is_empty() || !self.pending.is_empty()
-    }
-}
-
 fn ok(v: Json) -> Outcome {
     Outcome::Done(json!({"ok": true, "result": v}))
 }
@@ -104,6 +106,38 @@ fn run(app: &mut SheetApp, id: &str, params: Json) -> Result<Json, String> {
     r
 }
 
+/// [`run`] in another window (`window` or `doc` from the request), bringing back the active
+/// window afterwards unless the command itself switched windows.
+fn run_in(app: &mut SheetApp, target: gridcraft_engine::Target, id: &str, params: Json) -> Result<Json, String> {
+    let guard = app.session.enter_target(target).map_err(|e| e.to_string())?;
+    let r = run(app, id, params);
+    app.session.leave_target(guard);
+    r
+}
+
+/// A command called by its id as the method. Its params may name a `window` or `doc` to act in,
+/// except for the window commands, whose own params those are.
+fn direct(app: &mut SheetApp, id: &str, p: &Json, via_app: bool) -> Result<Json, String> {
+    let mut params = p.clone();
+    let target = if gridcraft_engine::windows::is_window_command(id) {
+        gridcraft_engine::Target::Active
+    } else {
+        let t = gridcraft_engine::Target::from_json(p).map_err(|e| e.to_string())?;
+        if let Some(o) = params.as_object_mut() {
+            o.remove("window");
+            o.remove("doc");
+        }
+        t
+    };
+    if via_app {
+        return run_in(app, target, id, params);
+    }
+    let guard = app.session.enter_target(target).map_err(|e| e.to_string())?;
+    let r = app.session.run(id, params);
+    app.session.leave_target(guard);
+    r
+}
+
 pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
     let r = ctx.content_rect();
     let v = app.view();
@@ -112,96 +146,89 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "window": [r.width(), r.height()],
         "grid": app.grid.cells_rect.map(|c| json!([c.left(), c.top(), c.width(), c.height()])),
         "scroll": [v.scroll.x, v.scroll.y],
-        "editor": app.editor.as_ref().map(|e| json!({"cell": e.cell.a1(), "text": e.text, "formulaBar": e.from_formula_bar, "point": e.can_point()})),
+        "editor": app.editor.as_ref().map(|e| editor_json(app, e)),
         "dialog": app.dialog.as_ref().map(|d| json!({"name": d.name, "title": d.title, "values": d.values, "tab": d.tab})),
         "backstage": app.backstage.as_ref().map(|b| b.page.id()),
         "message": app.message.as_ref().map(|(t, m)| json!({"title": t, "text": m})),
-        "selectedChart": app.selected_chart,
+        "selectedObject": app.selected_object,
+        // The id when the selection is a chart, as before `selectedObject`.
+        "selectedChart": app.selected_chart(),
         "mode": format!("{:?}", app.session.mode),
         "documents": app.session.documents().iter().map(|d| json!({"title": d.display_title(), "dirty": d.is_dirty()})).collect::<Vec<_>>(),
         "activeDocument": app.session.active_index(),
+        "windows": app.session.window_list(),
+        "activeWindow": app.session.active_window(),
         "perf": {"frameMs": app.perf.frame_ms, "gridMs": app.perf.grid_ms, "fps": app.perf.fps},
     })
 }
 
-fn key_from(name: &str) -> Option<egui::Key> {
-    egui::Key::from_name(name).or(match name.to_ascii_lowercase().as_str() {
-        "enter" | "return" => Some(egui::Key::Enter),
-        "esc" | "escape" => Some(egui::Key::Escape),
-        "delete" | "del" => Some(egui::Key::Delete),
-        "backspace" => Some(egui::Key::Backspace),
-        "left" => Some(egui::Key::ArrowLeft),
-        "right" => Some(egui::Key::ArrowRight),
-        "up" => Some(egui::Key::ArrowUp),
-        "down" => Some(egui::Key::ArrowDown),
-        "space" => Some(egui::Key::Space),
-        "tab" => Some(egui::Key::Tab),
-        "pageup" => Some(egui::Key::PageUp),
-        "pagedown" => Some(egui::Key::PageDown),
-        "home" => Some(egui::Key::Home),
-        "end" => Some(egui::Key::End),
-        "f2" => Some(egui::Key::F2),
-        "f4" => Some(egui::Key::F4),
-        "f9" => Some(egui::Key::F9),
-        _ => None,
-    })
+/// The open edit, for `ui.inspect`. The draft is left out (`text` is null, `hidden` true) while
+/// its cell's code is hidden on a protected sheet, checked now: a protection command earlier in
+/// the same batch runs before the next frame. That holds for a draft in Python mode, and for a
+/// draft that began on a Python cell's code, since leaving Python mode keeps the code as an
+/// ordinary draft; a draft typed over a Python cell holds only what was typed. The sheet is the
+/// draft's own, found by identity: a sheet inserted, deleted or moved in the same batch puts
+/// another at its index. With its sheet gone, such a draft is left out too.
+fn editor_json(app: &SheetApp, e: &crate::editor::EditState) -> Json {
+    let code = e.python || e.py_cell;
+    let hidden = code
+        && app.session.documents().iter().find(|d| d.uid == e.doc).is_some_and(|d| match e.sheet_in(&d.wb).and_then(|i| d.wb.sheet(i)) {
+            Some(sh) => gridcraft_engine::display::formula_hidden(&d.wb, sh, e.cell),
+            None => true,
+        });
+    let text = if hidden { Json::Null } else { json!(e.text) };
+    json!({"cell": e.cell.a1(), "text": text, "hidden": hidden, "formulaBar": e.from_formula_bar, "point": e.can_point(), "python": e.python})
 }
 
-fn modifiers(p: &Json) -> egui::Modifiers {
-    let b = |n: &str| p.get(n).and_then(Json::as_bool).unwrap_or(false);
-    egui::Modifiers {
-        alt: b("alt"),
-        ctrl: b("ctrl"),
-        shift: b("shift"),
-        mac_cmd: b("cmd") && cfg!(target_os = "macos"),
-        command: b("cmd") || (b("ctrl") && !cfg!(target_os = "macos")),
+/// `ui.dialog.cancel`: closes the open dialog as its Cancel button does, going back to the sheet
+/// and selection from before a reference box picked.
+fn dialog_cancel(app: &mut SheetApp) -> Outcome {
+    // The macro step editor's draft, overlays and debug run go with its own close.
+    if app.dialog.as_ref().is_some_and(|d| d.name == "macroEditor") {
+        return match crate::macro_editor::close_now(app) {
+            Ok(()) => ok(Json::Null),
+            Err(e) => err(e),
+        };
     }
-}
-
-fn cell_center(app: &SheetApp, c: CellRef) -> Option<egui::Pos2> {
-    let d = app.session.active()?;
-    let sh = d.wb.active()?;
-    let rect = app.grid.rect?;
-    let geo = crate::grid::Geo::new(sh, rect, app.view().scroll);
-    Some(geo.screen_cell_rect(sh, c).center())
-}
-
-/// Most synthetic pointer events a control client may keep queued at once (the queue drains one batch per frame).
-const MAX_QUEUED_POINTER_EVENTS: usize = 10_000;
-
-/// Refuses a request that would push the queued pointer events past [`MAX_QUEUED_POINTER_EVENTS`]; the queue is left unchanged.
-fn pointer_budget(app: &SheetApp, extra: usize) -> Result<(), String> {
-    let queued: usize = app.synthetic.iter().map(Vec::len).sum();
-    if queued.saturating_add(extra) > MAX_QUEUED_POINTER_EVENTS {
-        return Err(format!("too many pointer events (limit {MAX_QUEUED_POINTER_EVENTS} queued at once)"));
+    // Back to the sheet and selection from before a reference box picked, as Cancel does.
+    // When the dialog's sheet can't be shown again (a text-box draft on the picked sheet
+    // could not be saved), the dialog stays and the script gets the reason; the window's
+    // Cancel closes it and shows the reason, since a person can see the message.
+    // A dialog whose own sheet was deleted (found by identity, so a new sheet given its
+    // name does not count) replies `{"sheetDeleted": true}`: the sheet shown is not the
+    // dialog's, and a script stops before running the dialog's command itself.
+    let mut deleted = false;
+    if let Some(mut d) = app.dialog.take() {
+        deleted = d.home_sheet_deleted(app);
+        if let Err(e) = d.end_pick(app) {
+            app.dialog = Some(d);
+            return err(e);
+        }
     }
-    Ok(())
+    ok(if deleted { json!({"sheetDeleted": true}) } else { Json::Null })
 }
 
-fn push_click(app: &mut SheetApp, pos: egui::Pos2, button: egui::PointerButton, count: u32, m: egui::Modifiers) -> Result<(), String> {
-    let count = count.max(1) as usize;
-    pointer_budget(app, count.saturating_mul(2).saturating_add(1))?;
-    app.synthetic.push_back(vec![egui::Event::PointerMoved(pos)]);
-    let mut batch = Vec::with_capacity(count * 2);
-    for _ in 0..count {
-        batch.push(egui::Event::PointerButton { pos, button, pressed: true, modifiers: m });
-        batch.push(egui::Event::PointerButton { pos, button, pressed: false, modifiers: m });
-    }
-    app.synthetic.push_back(batch);
-    Ok(())
-}
-
-fn push_drag(app: &mut SheetApp, a: egui::Pos2, b: egui::Pos2, steps: usize, m: egui::Modifiers) -> Result<(), String> {
-    let steps = steps.max(1);
-    pointer_budget(app, steps.saturating_add(3))?;
-    app.synthetic.push_back(vec![egui::Event::PointerMoved(a)]);
-    app.synthetic.push_back(vec![egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: m }]);
-    for i in 1..=steps {
-        let t = i as f32 / steps as f32;
-        app.synthetic.push_back(vec![egui::Event::PointerMoved(a + (b - a) * t)]);
-    }
-    app.synthetic.push_back(vec![egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: m }]);
-    Ok(())
+/// `ui.object.select {id?, kind?}`: selects the object with that id on the active sheet (its kind
+/// is found from the id when left out, and must match when given); no `id` clears the selection.
+/// Replies with the object and its rect in window points, for `ui.click` and `ui.drag`.
+fn select_object(app: &mut SheetApp, p: &Json) -> Outcome {
+    use gridcraft_engine::model::{ObjKind, ObjRef};
+    let Some(id) = p.get("id").and_then(Json::as_u64) else {
+        app.selected_object = None;
+        return ok(Json::Null);
+    };
+    let Some(sh) = app.session.active().and_then(|d| d.wb.active()) else { return err("no document") };
+    let found = u32::try_from(id).ok().and_then(|id| match p.get("kind").and_then(Json::as_str) {
+        Some(k) => ObjKind::parse(k).map(|k| ObjRef::new(k, id)).filter(|o| sh.has_object(*o)),
+        None => sh.object_ref(id),
+    });
+    let Some(o) = found else { return err("no such object on the active sheet") };
+    let rect = app.grid.rect.and_then(|r| {
+        let geo = crate::grid::Geo::new(sh, r, app.view().scroll);
+        crate::chartview::object_rect(&geo, sh, o).map(|r| geo.mirror_rect(r))
+    });
+    app.selected_object = Some(o);
+    ok(json!({"selected": o, "rect": rect.map(|r| [r.left(), r.top(), r.width(), r.height()])}))
 }
 
 /// Keeps the commands whose id, label or ribbon path contains `search` (case-insensitive); `None` keeps all.
@@ -215,6 +242,7 @@ fn filter_commands(commands: Vec<Json>, search: Option<&str>) -> Vec<Json> {
     commands.into_iter().filter(|c| has(c, "id") || has(c, "label") || in_menu(c)).collect()
 }
 
+/// Dispatches one control request: commands, inspection, UI state, dialogs, editing, synthetic input, open/save/quit and screenshots. Unknown methods (and unknown command ids) return an error. Immediate answers request a repaint; `ui.screenshot` is admitted asynchronously instead of being answered here.
 pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -> Outcome {
     let s = |k: &str| p.get(k).and_then(Json::as_str);
     let f = |k: &str| p.get(k).and_then(Json::as_f64).unwrap_or(0.0) as f32;
@@ -222,18 +250,30 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         "engine.execute" | "command" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().unwrap_or(json!({}));
-            wrap(run(app, id, if params.is_null() { json!({}) } else { params }))
+            let target = match gridcraft_engine::Target::from_json(p) {
+                Ok(t) => t,
+                Err(e) => return err(e),
+            };
+            wrap(run_in(app, target, id, if params.is_null() { json!({}) } else { params }))
         }
         "engine.commands" => {
             let mut v: Vec<Json> = app.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
             let language_params = format!("{{language: {}}} (alias: code)", crate::i18n::Language::code_list("|"));
             for (id, label, params) in [
                 ("ui.ribbonTab", "Ribbon Tab", ""),
+                ("app.checkForUpdates", "Check for Updates…", ""),
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
+                (
+                    "view.expandFormulaBar",
+                    "Expand Formula Bar",
+                    "{on?: bool} (toggles without it) → {on}; {lines: int} sets the expanded height (1 collapses) → {on, lines}",
+                ),
+                ("ui.pythonMode", "Python Mode", "{on?: bool} (toggles without it) → {on}; a refused start is an error"),
                 ("view.darkMode", "Dark Mode", ""),
                 ("view.theme", "Display Theme", ""),
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
                 ("options.autoComplete", "Enable AutoComplete for cell values", "{on?: bool} (toggles without it) → {on}"),
+                ("options.highlightActiveRow", "Highlight the active cell's row", "{on?: bool} (toggles without it) → {on}"),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
                 ("ui.dialog", "Open Dialog", ""),
                 ("ui.backstage", "File (Backstage view)", "{page?: home|new|open|info|saveAs|print|export|options|account|close}"),
@@ -256,7 +296,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             ok(Json::Array(filter_commands(v, s("search"))))
         }
         "engine.journal" => ok(json!(app.session.journal.iter().map(|(id, p)| json!({"command": id, "params": p})).collect::<Vec<_>>())),
-        "document.inspect" | "sheet.read" | "cell.get" | "selection.stats" => wrap(app.session.run(method, p.clone())),
+        "document.inspect" | "sheet.read" | "cell.get" | "selection.stats" => wrap(direct(app, method, p, false)),
         "ui.inspect" => ok(inspect(app, ctx)),
         "ui.ribbon" => {
             app.ui.ribbon_tab = s("tab").unwrap_or("Home").to_string();
@@ -302,12 +342,26 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             None => err("no dialog is open"),
         },
         "ui.dialog.confirm" => match app.dialog.take() {
-            Some(d) => match d.command {
+            Some(mut d) => match d.command {
                 Some(cmd) => {
+                    // References without a sheet name mean the sheet the dialog was opened on,
+                    // as OK in the window has it: refused once that sheet is deleted, else shown
+                    // again before the command runs.
+                    if d.home_sheet_deleted(app) {
+                        app.dialog = Some(d);
+                        return err(crate::dialogs::SHEET_DELETED);
+                    }
+                    if let Err(e) = d.end_pick(app) {
+                        // The dialog's sheet can't be shown again (a text-box draft on the picked
+                        // sheet could not be saved): the command stays unrun, the dialog open.
+                        app.dialog = Some(d);
+                        return err(e);
+                    }
                     let params = crate::dialogs::build_params(&d);
+                    let home = app.ui_window();
                     let r = app.run(cmd, params);
                     if r.is_err() {
-                        app.dialog = Some(d);
+                        app.return_dialog(home, d);
                     }
                     wrap(r)
                 }
@@ -318,10 +372,8 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             },
             None => err("no dialog is open"),
         },
-        "ui.dialog.cancel" => {
-            app.dialog = None;
-            ok(Json::Null)
-        }
+        "ui.dialog.cancel" => dialog_cancel(app),
+        "ui.object.select" => select_object(app, p),
         "ui.message.dismiss" => {
             app.message = None;
             ok(Json::Null)
@@ -358,21 +410,27 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         }
         "ui.key" => {
             let Some(k) = s("key").and_then(key_from) else { return err("unknown or missing `key`") };
-            let m = modifiers(p);
-            app.synthetic.push_back(vec![
-                egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: m },
-                egui::Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: m },
-            ]);
-            ok(Json::Null)
+            match push_key(app, k, modifiers(p)) {
+                Ok(()) => ok(Json::Null),
+                Err(e) => err(e),
+            }
         }
         "ui.text" => {
-            app.synthetic.push_back(vec![egui::Event::Text(s("text").unwrap_or("").to_string())]);
-            ok(Json::Null)
+            let text = s("text").unwrap_or("");
+            // Check the borrowed payload first: do not make a second, potentially large copy
+            // before the per-event bound is known to hold.
+            if text.len() > MAX_SYNTHETIC_TEXT_BYTES {
+                return err(format!("text input is {} bytes, over the {MAX_SYNTHETIC_TEXT_BYTES}-byte limit for one event", text.len()));
+            }
+            match push_text(app, text.to_string()) {
+                Ok(()) => ok(Json::Null),
+                Err(e) => err(e),
+            }
         }
-        "ui.move" => {
-            app.synthetic.push_back(vec![egui::Event::PointerMoved(egui::pos2(f("x"), f("y")))]);
-            ok(Json::Null)
-        }
+        "ui.move" => match push_move(app, egui::pos2(f("x"), f("y"))) {
+            Ok(()) => ok(Json::Null),
+            Err(e) => err(e),
+        },
         "ui.click" => {
             let button = if s("button") == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
             let count = p.get("count").and_then(Json::as_u64).unwrap_or(1).min(u64::from(u32::MAX)) as u32;
@@ -440,13 +498,14 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             ok(Json::Null)
         }
         // Anything else that names a command runs it.
-        other if gridcraft_engine::find_command(other).is_some() => wrap(run(app, other, p.clone())),
+        other if gridcraft_engine::find_command(other).is_some() => wrap(direct(app, other, p, true)),
         other => err(format!("unknown method `{other}`")),
     };
     ctx.request_repaint();
     out
 }
 
+/// Drains queued control requests, drops requests whose client stopped waiting, handles immediate outcomes and admits screenshots, then requests a repaint while synthetic input remains.
 pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(rx) = app.control_rx.take() else { return };
     while let Ok(req) = rx.try_recv() {
@@ -460,12 +519,7 @@ pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
             Outcome::Done(v) => {
                 let _ = req.reply.send(v);
             }
-            Outcome::Screenshot { path } => {
-                app.shots.token += 1;
-                let token = app.shots.token;
-                app.shots.queued.push((token, crate::now_ms() + 100.0, 0));
-                app.shots.pending.push((token, path, req.reply, crate::now_ms() + 8000.0));
-            }
+            Outcome::Screenshot { path } => admit(app, ctx, path, req.reply),
         }
     }
     app.control_rx = Some(rx);
@@ -474,166 +528,117 @@ pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
-pub fn issue_screenshots(app: &mut SheetApp, ctx: &egui::Context) {
-    let now = crate::now_ms();
-    app.shots.queued.retain_mut(|(token, at, frames)| {
-        *frames += 1;
-        if now >= *at && *frames >= 3 {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(*token)));
-            false
-        } else {
-            true
-        }
-    });
-    if !app.shots.queued.is_empty() || !app.shots.pending.is_empty() {
-        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+/// Put the request token on every screenshot reply (success, rejection, timeout), so a client can
+/// correlate an asynchronous capture even when the reply order differs from the request order.
+fn with_token(mut reply: Json, token: u64) -> Json {
+    if let Some(object) = reply.as_object_mut() {
+        object.insert("request".into(), json!(token));
     }
+    reply
 }
 
-pub fn collect_screenshots(app: &mut SheetApp, ctx: &egui::Context) {
-    if app.shots.pending.is_empty() {
+/// Returns the next screenshot token, wrapping and skipping zero.
+fn next_token(app: &mut SheetApp) -> u64 {
+    let mut token = app.shots.token.wrapping_add(1);
+    if token == 0 {
+        token = 1;
+    }
+    app.shots.token = token;
+    token
+}
+
+/// Admit one screenshot request against the count and byte budgets **before** any capture is
+/// issued. A rejected request gets one error reply and never evicts an earlier request.
+fn admit(app: &mut SheetApp, ctx: &egui::Context, path: Option<String>, reply: Sender<ControlResponse>) {
+    let token = next_token(app);
+    let geometry = current_capture_geometry(app, ctx);
+    let expected = geometry.expected_size();
+    let base64 = path.is_none();
+    // A minimized or not-yet-laid-out window has no size: reserve the largest image the
+    // per-image limit allows and keep the request queued. Issuance waits for a real size, and the
+    // deadline reports a timeout if none arrives.
+    let bytes = match expected {
+        Some(size) => {
+            let Some(bytes) = geometry.retained_bytes() else {
+                reject_shot(reply, token, "screenshot failed: the window size overflows the screenshot budget");
+                return;
+            };
+            if bytes > SCREENSHOT_MAX_IMAGE_BYTES {
+                reject_shot(
+                    reply,
+                    token,
+                    format!(
+                        "screenshot budget exceeded: {bytes} bytes for one {}×{} image, over the {SCREENSHOT_MAX_IMAGE_BYTES}-byte per-image limit",
+                        size[0], size[1]
+                    ),
+                );
+                return;
+            }
+            if let Err(message) = check_encoding_budget(size, base64) {
+                reject_shot(reply, token, message);
+                return;
+            }
+            bytes
+        }
+        None => UNKNOWN_CAPTURE_BYTES,
+    };
+    if app.shots.requests.len() >= SCREENSHOT_MAX_REQUESTS {
+        reject_shot(
+            reply,
+            token,
+            format!("screenshot budget exceeded: {} requests are already outstanding (limit {SCREENSHOT_MAX_REQUESTS})", app.shots.requests.len()),
+        );
         return;
     }
-    let events: Vec<(u64, std::sync::Arc<egui::ColorImage>)> = ctx.input(|i| {
-        i.raw
-            .events
-            .iter()
-            .filter_map(|e| match e {
-                egui::Event::Screenshot { user_data, image, .. } => {
-                    let token = user_data.data.as_ref().and_then(|d| d.downcast_ref::<u64>()).copied()?;
-                    Some((token, image.clone()))
-                }
-                _ => None,
-            })
-            .collect()
-    });
-    for (token, image) in events {
-        if let Some(i) = app.shots.pending.iter().position(|(t, ..)| *t == token) {
-            let (_, path, reply, _) = app.shots.pending.remove(i);
-            let _ = reply.send(save_image(&image, path.as_deref()));
-        }
+    let reserved = app.shots.reserved().saturating_add(bytes);
+    if reserved > SCREENSHOT_MAX_AGGREGATE_BYTES {
+        reject_shot(
+            reply,
+            token,
+            format!(
+                "screenshot budget exceeded: {reserved} bytes reserved by outstanding requests, over the {SCREENSHOT_MAX_AGGREGATE_BYTES}-byte aggregate limit"
+            ),
+        );
+        return;
     }
-    let now = crate::now_ms();
-    app.shots.pending.retain(|(_, _, reply, deadline)| {
-        if now < *deadline {
-            return true;
-        }
-        let _ = reply.send(json!({"ok": false, "error": "no frame was presented before the screenshot timeout; make the window visible, use `ui.focus`, then retry `ui.screenshot`"}));
-        false
+    if let Some(size) = expected
+        && let Err(message) = check_peak_budget(reserved, size, base64)
+    {
+        reject_shot(reply, token, message);
+        return;
+    }
+    let now = crate::monotonic_ms();
+    let document = app.session.active().map(|d| d.uid);
+    let epoch = note_capture_geometry(app, geometry);
+    app.shots.requests.push(Shot {
+        token,
+        path,
+        reply,
+        deadline: now + 8000.0,
+        ready_at: now + 100.0,
+        frames: 0,
+        settle_pass: None,
+        issued: false,
+        retries: 0,
+        geometry,
+        viewport_id: geometry.viewport_id,
+        document,
+        epoch,
+        expected,
+        bytes,
+        // Issued only from `ui`, so the slot is created there against the geometry in force.
+        slot: None,
     });
+    // A queued request with a capturable size has not issued a paint-requesting command yet;
+    // `logic` keeps asking for hidden paints until `issue_screenshots` runs. A size-less request
+    // asks for none (see `Shots::needs_hidden_paint`).
+    ctx.request_repaint();
 }
 
-/// Encodes a screenshot as PNG to `path`, or returns it as base64.
-pub fn save_image(image: &egui::ColorImage, path: Option<&str>) -> Json {
-    let [w, h] = image.size;
-    let mut rgba = Vec::with_capacity(w * h * 4);
-    for p in &image.pixels {
-        rgba.extend_from_slice(&p.to_array());
-    }
-    let Some(img) = image::RgbaImage::from_raw(w as u32, h as u32, rgba) else { return json!({"ok": false, "error": "bad image"}) };
-    let mut png = Vec::new();
-    if let Err(e) = image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png) {
-        return json!({"ok": false, "error": e.to_string()});
-    }
-    match path {
-        Some(p) => match std::fs::write(p, &png) {
-            Ok(()) => json!({"ok": true, "result": {"path": p, "width": w, "height": h}}),
-            Err(e) => json!({"ok": false, "error": e.to_string()}),
-        },
-        None => json!({"ok": true, "result": {"base64": gridcraft_engine::io::base64_encode(&png), "width": w, "height": h}}),
-    }
+/// Builds the standard token-carrying timeout reply for a screenshot request.
+fn timeout_reply(message: &str, token: u64) -> Json {
+    json!({"ok": false, "error": message, "request": token})
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sample() -> Vec<Json> {
-        vec![
-            json!({"id": "home.borders", "label": "Borders", "menu": ["Home", "Font"]}),
-            json!({"id": "home.bold", "label": "Bold", "menu": ["Home", "Font"]}),
-            json!({"id": "ui.ribbonTab", "label": "Ribbon Tab", "enabled": true, "ui": true}),
-        ]
-    }
-
-    fn ids(v: &[Json]) -> Vec<&str> {
-        v.iter().filter_map(|c| c.get("id").and_then(Json::as_str)).collect()
-    }
-
-    #[test]
-    fn search_filters_case_insensitively() {
-        assert_eq!(ids(&filter_commands(sample(), Some("border"))), ["home.borders"]);
-        assert_eq!(filter_commands(sample(), Some("BORDER")), filter_commands(sample(), Some("border")));
-        assert_eq!(ids(&filter_commands(sample(), Some("ribbon"))), ["ui.ribbonTab"]);
-        assert_eq!(ids(&filter_commands(sample(), Some("font"))), ["home.borders", "home.bold"]);
-        assert!(filter_commands(sample(), Some("catalog_no_match_7391")).is_empty());
-        assert_eq!(filter_commands(sample(), None).len(), 3);
-    }
-
-    fn test_app() -> SheetApp {
-        let mut session = gridcraft_engine::Session::new();
-        session.new_workbook();
-        SheetApp::new(session, crate::Services::default())
-    }
-
-    #[test]
-    fn oversized_pointer_requests_are_refused_and_leave_the_queue_alone() {
-        let mut app = test_app();
-        let p = egui::pos2(20.0, 20.0);
-        let m = egui::Modifiers::NONE;
-        let btn = egui::PointerButton::Primary;
-        assert!(push_click(&mut app, p, btn, 2, m).is_ok());
-        assert_eq!(app.synthetic.iter().map(Vec::len).sum::<usize>(), 5);
-        assert!(push_click(&mut app, p, btn, u32::MAX, m).is_err());
-        assert!(push_drag(&mut app, p, p, usize::MAX, m).is_err());
-        assert!(push_drag(&mut app, p, p, MAX_QUEUED_POINTER_EVENTS, m).is_err());
-        assert_eq!(app.synthetic.len(), 2);
-        assert_eq!(app.synthetic.iter().map(Vec::len).sum::<usize>(), 5);
-        // Already queued input counts toward the budget.
-        assert!(push_click(&mut app, p, btn, (MAX_QUEUED_POINTER_EVENTS / 2) as u32, m).is_err());
-        assert_eq!(app.synthetic.len(), 2);
-        // Normal requests still queue in full.
-        assert!(push_drag(&mut app, p, p + egui::vec2(40.0, 40.0), 3, m).is_ok());
-        assert_eq!(app.synthetic.len(), 8);
-    }
-
-    #[test]
-    fn print_command_discovery_documents_settings_and_submission() {
-        let mut session = gridcraft_engine::Session::new();
-        session.new_workbook();
-        let mut app = SheetApp::new(session, crate::Services::default());
-        let Outcome::Done(reply) = handle(&mut app, &egui::Context::default(), "engine.commands", &json!({"search":"print"})) else {
-            panic!("command discovery must return immediately");
-        };
-        assert_eq!(reply["ok"], true);
-        let commands = reply["result"].as_array().unwrap();
-        for (id, expected_docs) in [
-            ("ui.printSettings", &["copies", "duplex", "refresh", "discovering", "status", "detail"][..]),
-            ("ui.printSubmit", &["file.print", "pagination", "pending", "without opening a dialog"][..]),
-        ] {
-            let command = commands.iter().find(|command| command["id"] == id).unwrap();
-            assert_eq!(command["ui"], true);
-            let docs = command["params"].as_str().unwrap();
-            for expected in expected_docs {
-                assert!(docs.contains(expected), "{id}: missing {expected}");
-            }
-        }
-        assert!(!app.printing.busy(), "discovery must not submit a job");
-        assert!(app.backstage.is_none(), "discovery must not open settings");
-    }
-
-    #[test]
-    fn language_command_docs_list_every_language() {
-        let mut session = gridcraft_engine::Session::new();
-        session.new_workbook();
-        let mut app = SheetApp::new(session, crate::Services::default());
-        let Outcome::Done(reply) = handle(&mut app, &egui::Context::default(), "engine.commands", &json!({"search":"language"})) else {
-            panic!("command discovery must return immediately");
-        };
-        let commands = reply["result"].as_array().unwrap();
-        let docs = commands.iter().find(|c| c["id"] == "app.language.set").unwrap()["params"].as_str().unwrap();
-        for l in crate::i18n::Language::ALL {
-            assert!(docs.contains(&format!("\"{}\"", l.code())), "app.language.set docs miss {:?}: {docs}", l.code());
-        }
-    }
-}
+mod tests;

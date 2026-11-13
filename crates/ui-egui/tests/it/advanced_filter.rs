@@ -1,24 +1,12 @@
 //! Advanced Filter's dialog must route both actions to the same engine command.
 
-use egui::vec2;
 use egui_kittest::kittest::Queryable;
-use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
 use gridcraft_ui_egui::control::{Outcome, handle};
 use serde_json::{Value as Json, json};
 
 fn harness() -> egui_kittest::Harness<'static, SheetApp> {
-    let mut session = Session::new();
-    session.new_workbook();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(6);
-    h
+    crate::support::blank_harness(6)
 }
 
 fn control(h: &mut egui_kittest::Harness<'static, SheetApp>, method: &str, params: Json) -> Json {
@@ -30,6 +18,7 @@ fn control(h: &mut egui_kittest::Harness<'static, SheetApp>, method: &str, param
 }
 
 #[test]
+/// Checks that the copy destination field appears and that a unique extract writes `B` to C3, closing the dialog without a message.
 fn dialog_offers_copy_action_and_runs_unique_extract() {
     let mut h = harness();
     h.state_mut().run("range.setValues", json!({"range": "A1", "values": [["Name"], ["A"], ["A"], ["B"]]})).unwrap();
@@ -37,7 +26,7 @@ fn dialog_offers_copy_action_and_runs_unique_extract() {
     h.run_steps(6);
     h.get_by_label("Copy matching rows elsewhere").click();
     h.run_steps(6);
-    let rect = h.ctx.memory(|m| m.area_rect(egui::Id::new("dialog").with("advancedFilter"))).unwrap();
+    let rect = h.ctx.memory(|m| m.area_rect(egui::Id::unique("dialog").with("advancedFilter"))).unwrap();
     assert!(rect.width() < 500.0 && rect.height() < 400.0, "dialog must fit its controls: {rect:?}");
     assert!(
         h.state()

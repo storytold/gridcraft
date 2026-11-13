@@ -1,6 +1,5 @@
 //! The Zoom dialog stores the Magnification the user picks.
 
-use egui::vec2;
 use egui_kittest::kittest::Queryable;
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -8,17 +7,7 @@ use gridcraft_ui_egui::control::{Outcome, handle};
 use serde_json::{Value as Json, json};
 
 fn harness() -> egui_kittest::Harness<'static, SheetApp> {
-    let mut session = Session::new();
-    session.new_workbook();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(6);
-    h
+    crate::support::blank_harness(6)
 }
 
 fn zoom(h: &egui_kittest::Harness<'static, SheetApp>) -> u16 {

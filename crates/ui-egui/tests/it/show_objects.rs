@@ -20,13 +20,13 @@ fn fixture() -> (Harness, u32) {
     let shape = session.execute("insert.shape", json!({"kind": "rectangle", "at": "D3", "fill": "123456"})).unwrap();
     let id = shape["shape"].as_u64().unwrap() as u32;
     session.execute("selection.set", json!({"range": "A1"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
     (h, id)
@@ -86,11 +86,11 @@ fn hidden_objects_do_not_take_clicks() {
     let (mut h, id) = fixture();
     let at = inside(&h);
     click(&mut h, at);
-    assert_eq!(h.state().selected_chart, Some(id), "the click lands on the rectangle while it shows");
+    assert_eq!(h.state().selected_object.map(|o| o.id), Some(id), "the click lands on the rectangle while it shows");
     assert_eq!(active_cell(&h), CellRef::parse("A1").unwrap());
     ctrl_6(&mut h);
-    assert_eq!(h.state().selected_chart, None, "hiding objects drops the selection on one");
+    assert_eq!(h.state().selected_object, None, "hiding objects drops the selection on one");
     click(&mut h, at);
-    assert_eq!(h.state().selected_chart, None);
+    assert_eq!(h.state().selected_object, None);
     assert_eq!(active_cell(&h), CellRef::parse("E4").unwrap(), "the click selects the cell under the hidden rectangle");
 }

@@ -29,7 +29,7 @@ fn editing(text: &str) -> (Context, SheetApp) {
     let ctx = Context::default();
     let mut session = Session::new();
     session.new_workbook();
-    let mut app = SheetApp::new(session, Default::default());
+    let mut app = crate::common::app(session);
     for t in 0..4 {
         frame(&ctx, &mut app, f64::from(t) * 0.01, vec![]);
     }

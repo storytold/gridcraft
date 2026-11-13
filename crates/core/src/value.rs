@@ -21,10 +21,18 @@ pub enum CellError {
     Calc,
     /// Circular reference that could not be resolved (shown as 0 by Excel; we keep it explicit).
     Circ,
+    /// A Python cell's code raised an error, or Python stopped.
+    Python,
+    /// A Python cell is waiting to run.
+    Busy,
+    /// A Python cell ran longer than the time limit.
+    Timeout,
+    /// Python can't run here: the workbook's content isn't enabled, or this build has no Python.
+    Blocked,
 }
 
 impl CellError {
-    pub const ALL: [CellError; 10] = [
+    pub const ALL: [CellError; 14] = [
         CellError::Null,
         CellError::Div0,
         CellError::Value,
@@ -35,6 +43,10 @@ impl CellError {
         CellError::GettingData,
         CellError::Spill,
         CellError::Calc,
+        CellError::Python,
+        CellError::Busy,
+        CellError::Timeout,
+        CellError::Blocked,
     ];
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -49,9 +61,16 @@ impl CellError {
             CellError::Spill => "#SPILL!",
             CellError::Calc => "#CALC!",
             CellError::Circ => "#CIRC!",
+            CellError::Python => "#PYTHON!",
+            CellError::Busy => "#BUSY!",
+            CellError::Timeout => "#TIMEOUT!",
+            CellError::Blocked => "#BLOCKED!",
         }
     }
-    /// `ERROR.TYPE` number.
+    /// `ERROR.TYPE` number. Microsoft documents 1 to 8; 9 (#SPILL!), 11 (#BLOCKED!) and 14 (#CALC!)
+    /// are the numbers Excel returns. Microsoft documents no number for #PYTHON!, #BUSY! or
+    /// #TIMEOUT!: 19, 20 and 21 are GridCraft's own choice, after the numbers Excel is known to use,
+    /// and may change if Excel's numbers become known.
     pub fn code(&self) -> u32 {
         match self {
             CellError::Null => 1,
@@ -65,6 +84,10 @@ impl CellError {
             CellError::Spill => 9,
             CellError::Calc => 14,
             CellError::Circ => 15,
+            CellError::Blocked => 11,
+            CellError::Python => 19,
+            CellError::Busy => 20,
+            CellError::Timeout => 21,
         }
     }
     pub fn parse(s: &str) -> Option<CellError> {
@@ -245,7 +268,7 @@ impl Value {
             Value::Bool(b) => Ok(if *b { "TRUE".into() } else { "FALSE".into() }),
             Value::Text(t) => Ok(t.to_string()),
             Value::Error(e) => Err(*e),
-            Value::Array(a) => a.data.first().map(|v| v.to_text()).unwrap_or(Ok(String::new())),
+            Value::Array(a) => a.data.first().map(Value::to_text).unwrap_or(Ok(String::new())),
         }
     }
     /// Coercion to a boolean as `IF` does it.
@@ -264,7 +287,7 @@ impl Value {
                 }
             }
             Value::Error(e) => Err(*e),
-            Value::Array(a) => a.data.first().map(|v| v.to_bool()).unwrap_or(Ok(false)),
+            Value::Array(a) => a.data.first().map(Value::to_bool).unwrap_or(Ok(false)),
         }
     }
     /// Display text with General formatting (for logs, CSV and tests).
@@ -323,19 +346,91 @@ pub fn compare_numbers(a: f64, b: f64) -> Ordering {
     round15(a).partial_cmp(&round15(b)).unwrap_or(Ordering::Equal)
 }
 
-/// Case-insensitive text order (Unicode lowercase).
+/// Case-insensitive text order in three levels, as Excel's collation sorts: first by letters and
+/// digits alone (Arabic marks, tatweel and invisible format characters skipped, Arabic-Indic digits
+/// read as digits); then, letter by letter, by the marks on each letter (none first, then in
+/// Excel's mark order) and the digit script (ASCII, Arabic-Indic, Extended Arabic-Indic); then, to
+/// break a remaining tie, by every character (Unicode lowercase). Only text that is equal at the
+/// last level compares equal.
 pub fn compare_text(a: &str, b: &str) -> Ordering {
-    let mut ai = a.chars().flat_map(char::to_lowercase);
-    let mut bi = b.chars().flat_map(char::to_lowercase);
-    loop {
-        match (ai.next(), bi.next()) {
-            (None, None) => return Ordering::Equal,
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (Some(x), Some(y)) if x != y => return x.cmp(&y),
-            _ => {}
+    if !(a.is_ascii() && b.is_ascii()) {
+        let primary = primary_chars(a).cmp(primary_chars(b));
+        if primary != Ordering::Equal {
+            return primary;
+        }
+        let secondary = secondary_weights(a).cmp(secondary_weights(b));
+        if secondary != Ordering::Equal {
+            return secondary;
         }
     }
+    lowercase_chars(a).cmp(lowercase_chars(b))
+}
+
+fn lowercase_chars(s: &str) -> impl Iterator<Item = char> + '_ {
+    s.chars().flat_map(char::to_lowercase)
+}
+
+/// Characters Excel's text order skips entirely: tatweel and invisible format characters (soft
+/// hyphen, combining grapheme joiner, zero-width (non-)joiner, bidi marks, embeddings, overrides
+/// and isolates, word joiner, byte order mark). The zero-width space is not one.
+fn ignorable(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{061C}'
+            | '\u{0640}'
+            | '\u{200C}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
+}
+
+/// Arabic combining marks in the order Excel sorts a letter carrying them; an unmarked letter
+/// sorts before all of them. Measured in Excel 16.0 (build 20527, en-US) with one mark on a letter.
+/// U+06D6 and U+06D7 sort as letters in Excel, so they are not listed.
+const ARABIC_MARK_ORDER: [char; 48] = [
+    '\u{06EC}', '\u{0611}', '\u{0612}', '\u{0613}', '\u{0614}', '\u{06DB}', '\u{0656}', '\u{0657}', '\u{0610}', '\u{06EB}', '\u{0615}', '\u{06D9}',
+    '\u{06E4}', '\u{06E1}', '\u{06DA}', '\u{06DC}', '\u{06EA}', '\u{06E3}', '\u{06D8}', '\u{0655}', '\u{065F}', '\u{0654}', '\u{06E7}', '\u{0653}',
+    '\u{06E8}', '\u{06ED}', '\u{06E2}', '\u{0658}', '\u{064B}', '\u{064C}', '\u{064D}', '\u{064E}', '\u{064F}', '\u{0650}', '\u{0652}', '\u{0651}',
+    '\u{0670}', '\u{0659}', '\u{065A}', '\u{065B}', '\u{065C}', '\u{065D}', '\u{065E}', '\u{0616}', '\u{0617}', '\u{0618}', '\u{0619}', '\u{061A}',
+];
+
+/// Rank of an Arabic mark that letter order skips (its index in `ARABIC_MARK_ORDER`).
+fn arabic_mark_rank(c: char) -> Option<u16> {
+    ARABIC_MARK_ORDER.iter().position(|&m| m == c).and_then(|i| u16::try_from(i).ok())
+}
+
+/// Digit script of `c` (0 ASCII, 1 Arabic-Indic, 2 Extended Arabic-Indic) and its ASCII digit.
+fn digit(c: char) -> Option<(u16, char)> {
+    let (script, zero) = match c {
+        '0'..='9' => return Some((0, c)),
+        '\u{0660}'..='\u{0669}' => (1, 0x0660),
+        '\u{06F0}'..='\u{06F9}' => (2, 0x06F0),
+        _ => return None,
+    };
+    char::from_u32(u32::from(c) - zero + u32::from('0')).map(|d| (script, d))
+}
+
+/// The characters that decide text order before any tie-break.
+fn primary_chars(s: &str) -> impl Iterator<Item = char> + '_ {
+    lowercase_chars(s).filter_map(|c| if ignorable(c) || arabic_mark_rank(c).is_some() { None } else { Some(digit(c).map_or(c, |(_, d)| d)) })
+}
+
+/// The second level, for text whose primary characters are equal: per letter, its digit script and
+/// then its marks, the letters' lists closed by 0 so that an unmarked letter sorts first. Marks
+/// before the first letter form a list of their own.
+fn secondary_weights(s: &str) -> impl Iterator<Item = u16> + '_ {
+    lowercase_chars(s)
+        .filter(|&c| !ignorable(c))
+        .flat_map(|c| match arabic_mark_rank(c) {
+            Some(rank) => [Some(rank.saturating_add(1)), None],
+            None => [Some(0), Some(digit(c).map_or(0, |(script, _)| script))],
+        })
+        .flatten()
+        .chain(std::iter::once(0))
 }
 
 /// Sorting order used by Sort (ascending): numbers, text, booleans, errors, then blanks last.
@@ -435,6 +530,182 @@ mod tests {
     }
 
     #[test]
+    fn arabic_diacritics_sort_with_their_base_letter() {
+        assert_eq!(compare_text("بَاب", "بيت"), Ordering::Less);
+        assert_eq!(compare_text("بيت", "بَاب"), Ordering::Greater);
+        assert_eq!(compare_text("كِتاب", "كتب"), Ordering::Less);
+        assert_eq!(compare_text("رحمٰن", "رحمي"), Ordering::Less);
+        assert_eq!(compare(&Value::from("بَاب"), &Value::from("بيت")), Ordering::Less);
+    }
+
+    #[test]
+    fn arabic_indic_digits_sort_with_digits() {
+        assert_eq!(compare_text("١٢", "ب"), Ordering::Less);
+        assert_eq!(compare_text("۱۲", "ب"), Ordering::Less);
+        assert_eq!(compare_text("١", "a"), Ordering::Less);
+        assert_eq!(compare_text("١٢", "13"), Ordering::Less);
+        assert_eq!(compare_text("۱۴", "13"), Ordering::Greater);
+    }
+
+    #[test]
+    fn tatweel_and_bidi_marks_do_not_move_sort_order() {
+        assert_eq!(compare_text("بـاب", "بت"), Ordering::Less);
+        assert_eq!(compare_text("\u{200F}apple", "banana"), Ordering::Less);
+        assert_eq!(compare_text("\u{200E}zebra", "apple"), Ordering::Greater);
+        assert_eq!(compare_text("\u{061C}a", "b"), Ordering::Less);
+        assert_eq!(compare_text("a\u{200C}b", "ac"), Ordering::Less);
+        assert_eq!(compare_text("a\u{200D}b", "ac"), Ordering::Less);
+    }
+
+    #[test]
+    fn primary_ties_keep_equality_unchanged() {
+        assert_eq!(compare_text("ABC", "abc"), Ordering::Equal);
+        assert_eq!(compare_text("باب", "بَاب"), Ordering::Less);
+        assert_eq!(compare_text("12", "١٢"), Ordering::Less);
+        assert_eq!(compare_text("a", "\u{200F}a"), Ordering::Less);
+        let samples = [
+            "",
+            "abc",
+            "ABC",
+            "abd",
+            "ab",
+            "باب",
+            "بَاب",
+            "بِاب",
+            "بـاب",
+            "بيت",
+            "١٢",
+            "۱۲",
+            "12",
+            "\u{200F}12",
+            "\u{200F}a",
+            "a",
+            "A\u{200C}",
+            "a\u{200F}",
+            "b",
+            "Straße",
+            "STRASSE",
+            "ΣΑΣ",
+            "σας",
+            "İ",
+            "i̇",
+        ];
+        let lowered = |s: &str| s.chars().flat_map(char::to_lowercase).collect::<String>();
+        for a in samples {
+            for b in samples {
+                let order = compare_text(a, b);
+                assert_eq!(order.is_eq(), lowered(a) == lowered(b), "{a:?} vs {b:?}");
+                assert_eq!(order, compare_text(b, a).reverse(), "{a:?} vs {b:?}");
+                for c in samples {
+                    if order.is_le() && compare_text(b, c).is_le() {
+                        assert!(compare_text(a, c).is_le(), "{a:?} <= {b:?} <= {c:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sorts `expected` from reversed and rotated starts and checks each comes back as `expected`.
+    #[track_caller]
+    fn assert_sorts_to(expected: &[&str]) {
+        let mut reversed: Vec<&str> = expected.iter().rev().copied().collect();
+        reversed.sort_by(|a, b| compare_text(a, b));
+        assert_eq!(reversed, expected);
+        let mut rotated: Vec<&str> = expected.to_vec();
+        rotated.rotate_left(expected.len() / 2);
+        rotated.sort_by(|a, b| compare_text(a, b));
+        assert_eq!(rotated, expected);
+    }
+
+    // The expected orders below are Excel's, observed with Range.Sort, =SORT() and the `<`
+    // operator in Excel 16.0 (build 20527, en-US). Strings Excel ranks equal are left out.
+
+    #[test]
+    fn excel_orders_a_letter_by_its_mark() {
+        assert_sorts_to(&[
+            "باب",
+            "ب\u{0611}اب",
+            "ب\u{0610}اب",
+            "ب\u{0654}اب",
+            "ب\u{064B}اب",
+            "ب\u{064C}اب",
+            "ب\u{064D}اب",
+            "ب\u{064E}اب",
+            "ب\u{064F}اب",
+            "ب\u{0650}اب",
+            "ب\u{0652}اب",
+            "ب\u{0651}اب",
+            "ب\u{0670}اب",
+            "ب\u{065E}اب",
+            "ب\u{061A}اب",
+        ]);
+        // Quranic marks are skipped by letter order like harakat (hamza sorts before alef).
+        assert_eq!(compare_text("ب\u{0610}ء", "باب"), Ordering::Less);
+        assert_eq!(compare_text("ب\u{06E1}ء", "باب"), Ordering::Less);
+    }
+
+    #[test]
+    fn excel_compares_marks_letter_by_letter() {
+        assert_sorts_to(&[
+            "بت",
+            "بت\u{064E}",
+            "بت\u{064F}",
+            "بت\u{0650}",
+            "ب\u{064E}ت",
+            "ب\u{064E}ت\u{064E}",
+            "ب\u{064E}ت\u{064F}",
+            "ب\u{064F}ت",
+            "ب\u{064F}ت\u{064E}",
+            "ب\u{0650}ت\u{0650}",
+        ]);
+        assert_sorts_to(&["مـحـمـد", "محم\u{0651}د", "م\u{064E}حمد", "م\u{064F}ح\u{064E}م\u{064E}\u{0651}د", "محمدي"]);
+    }
+
+    #[test]
+    fn excel_weighs_marks_and_digit_scripts_by_position() {
+        // A mark on an earlier letter outranks the digit script or letter after it, whatever the
+        // code point of that next character.
+        assert_sorts_to(&[
+            "ب",
+            "ب\u{064E}",
+            "ب1",
+            "ب١",
+            "ب۱",
+            "ب\u{064E}1",
+            "ب\u{064E}١",
+            "ب\u{064E}۱",
+            "بa",
+            "ب\u{064E}a",
+            "با",
+            "ب\u{064E}ا",
+            "ب\u{067E}",
+            "ب\u{064E}\u{067E}",
+            "ب\u{06CC}",
+            "ب\u{064E}\u{06CC}",
+        ]);
+        // And an earlier digit script outranks a later mark.
+        assert_sorts_to(&["12", "1٢", "١2", "١٢", "1ب", "1ب\u{064E}", "1ب\u{0650}", "١ب", "١ب\u{064E}", "١ب\u{0650}", "۱ب", "۱ب\u{064E}"]);
+        assert_sorts_to(&["ب1ب", "ب1ب\u{064E}", "ب١ب", "ب\u{064E}ب", "بب1", "بب١", "ب\u{064E}ب1"]);
+    }
+
+    #[test]
+    fn excel_skips_invisible_format_characters() {
+        for c in ['\u{00AD}', '\u{034F}', '\u{061C}', '\u{200C}', '\u{200D}', '\u{200E}', '\u{200F}', '\u{202A}', '\u{202B}']
+            .into_iter()
+            .chain(['\u{202C}', '\u{202D}', '\u{202E}', '\u{2060}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{FEFF}'])
+        {
+            let s = format!("{c}b");
+            assert_eq!(compare_text(&s, "a"), Ordering::Greater, "{s:?}");
+            assert_eq!(compare_text(&s, "ba"), Ordering::Less, "{s:?}");
+            assert_eq!(compare_text(&format!("ب{c}\u{064E}اب"), "باب\u{064B}"), Ordering::Greater, "{c:?}");
+        }
+        // Not even as a tie-break: a leading mark doesn't push text past marked or other-script forms.
+        assert_sorts_to(&["\u{200F}باب", "ب\u{064B}اب", "ب\u{064E}اب", "ب\u{0670}اب"]);
+        assert_sorts_to(&["\u{200F}12", "١٢", "۱۲"]);
+        assert_sorts_to(&["ب\u{200F}ب\u{064E}", "\u{200F}ب\u{064E}ب"]);
+    }
+
+    #[test]
     fn errors() {
         for e in CellError::ALL {
             assert_eq!(CellError::parse(e.as_str()), Some(e));
@@ -454,11 +725,12 @@ mod tests {
     }
 
     #[test]
-    fn arrays() {
-        let a = Array::new(2, 2, vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()]).unwrap();
+    fn arrays() -> Result<(), std::io::Error> {
+        let a = Array::new(2, 2, vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()]).ok_or_else(|| std::io::Error::other("valid array"))?;
         assert_eq!(a.transpose().get(0, 1), Some(&Value::Number(3.0)));
         assert!(Array::new(2, 2, vec![]).is_none());
         let row = Array::row(vec![1.0.into(), 2.0.into()]);
         assert_eq!(row.get_broadcast(5, 1), Value::Number(2.0));
+        Ok(())
     }
 }

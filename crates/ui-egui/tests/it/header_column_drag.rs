@@ -10,12 +10,12 @@ fn harness() -> egui_kittest::Harness<'static, SheetApp> {
     session.new_workbook();
     session.execute("range.setValues", json!({"range": "A1", "values": [["A", "B", "C", "D", "E"]]})).unwrap();
     session.execute("selection.set", json!({"range": "B:C"})).unwrap();
-    let mut harness = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
+    let mut harness = crate::common::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     harness.run_steps(4);
     harness.state_mut().session.active_mut().unwrap().undo.clear();

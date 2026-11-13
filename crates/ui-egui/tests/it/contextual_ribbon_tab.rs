@@ -2,7 +2,6 @@
 //! The tab remembered in the saved UI state, or left behind when the selection moves away, must
 //! not leave the ribbon blank: it falls back to Home.
 
-use egui::vec2;
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
@@ -10,16 +9,7 @@ use serde_json::json;
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn harness(session: Session) -> Harness {
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::harness(session, 4)
 }
 
 fn session_with_table() -> Session {
@@ -31,19 +21,11 @@ fn session_with_table() -> Session {
     session
 }
 
+/// Sets a saved ribbon tab on a fresh app and builds the stepped harness, for unavailable-tab cases.
 fn app_restored_on(tab: &str, session: Session) -> Harness {
-    let mut app = SheetApp::new(session, Default::default());
+    let mut app = crate::common::app(session);
     app.ui.ribbon_tab = tab.into();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        app,
-    );
-    h.run_steps(4);
-    h
+    crate::support::app_harness(app, 4)
 }
 
 #[test]
@@ -91,4 +73,50 @@ fn an_ordinary_tab_stays_put_in_a_session() {
     h.state_mut().ui.ribbon_tab = "Data".into();
     h.run_steps(3);
     assert_eq!(h.state().ui.ribbon_tab, "Data");
+}
+
+#[test]
+fn a_second_window_does_not_reset_the_first_windows_table_design_tab() {
+    use egui::{Event, PointerButton, Shape};
+
+    let mut h = harness(session_with_table());
+    let first = h.state().session.active_window().unwrap();
+    // A second window on the same workbook, with its active cell outside the table.
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    let second = h.state().session.active_window().unwrap();
+    h.state_mut().run("selection.set", json!({"cell": "D10"})).unwrap();
+    h.state_mut().run("window.activate", json!({"window": first})).unwrap();
+    h.run_steps(2);
+    let tab_center = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            Shape::Text(t) if t.galley.job.text == "Table Design" => Some(t.pos + t.galley.size() / 2.0),
+            _ => None,
+        })
+        .expect("the Table Design tab is painted while a cell is in the table");
+    for pressed in [true, false] {
+        h.input_mut().events.push(Event::PointerButton {
+            pos: tab_center,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().ui.ribbon_tab, "Table Design");
+    // DocWindows draws every window each frame. The second window's cell is outside the table,
+    // so its frame falls back to Home; the first window's Table Design tab must survive it.
+    h.state_mut().show_window(second);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.ribbon_tab, "Home", "the second window shows Home for its own selection");
+    h.state_mut().enter_window(first);
+    h.run_steps(2);
+    assert_eq!(h.state().session.active_window(), Some(first));
+    assert_eq!(h.state().ui.ribbon_tab, "Table Design", "the first window's tab survives the second window's frame");
+    let d = h.state().session.active().unwrap();
+    assert_eq!(d.selection.active.a1(), "A2", "the first window still selects a cell in the table");
+    assert!(d.wb.active().unwrap().table_at(d.selection.active).is_some(), "the table is still there");
 }
