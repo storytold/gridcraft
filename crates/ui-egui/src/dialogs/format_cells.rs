@@ -42,7 +42,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                 for name in
                     ["General", "Number", "Currency", "Accounting", "Short Date", "Long Date", "Time", "Percentage", "Fraction", "Scientific", "Text"]
                 {
-                    let c = gridcraft_engine::display::regional_code(gridcraft_engine::cmd::format::format_code_for(name), region);
+                    let c = gridcraft_engine::display::regional_code(&gridcraft_engine::cmd::format::format_code_in(name, region), region);
                     if cols[0].selectable_label(code == c, lang.tr(name)).clicked() {
                         code = c;
                     }
@@ -54,6 +54,9 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                 cols[1].add_space(8.0);
                 let label = cols[1].label(lang.tr("Type (custom format code):"));
                 cols[1].text_edit_singleline(&mut code).labelled_by(label.id);
+                // The long date and the time are offered as the region writes them. en-US keeps
+                // its shorter `mmmm d, yyyy`; its short time is already `h:mm AM/PM`.
+                let long_date = if region.tag == "en-US" { "mmmm d, yyyy" } else { region.long_date };
                 for c in [
                     "0",
                     "0.00",
@@ -66,8 +69,8 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     "# ?/?",
                     "m/d/yyyy",
                     "d-mmm-yy",
-                    "mmmm d, yyyy",
-                    "h:mm AM/PM",
+                    long_date,
+                    region.short_time,
                     "h:mm:ss",
                     "[h]:mm:ss",
                     "@",
