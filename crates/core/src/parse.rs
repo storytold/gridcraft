@@ -5,7 +5,7 @@
 //! (`10:30`, `10:30:15 PM`) and date-times. The default region is English (United States);
 //! [`parse_input_in`] reads the decimal and thousands separators of any [`Region`].
 
-use crate::date::{DateSystem, MONTHS, serial_from_ymd, time_fraction};
+use crate::date::{DateSystem, serial_from_ymd, time_fraction};
 use crate::region::{EN_US, Grouping, Region};
 use crate::value::{CellError, Value};
 
@@ -63,6 +63,19 @@ pub fn parse_number_text_in_region(s: &str, sys: DateSystem, region: &Region) ->
     parse_numeric(s.trim(), sys, region).map(|(n, _)| n)
 }
 
+/// A number in a command's text parameter or criterion. The en-US `.` the API sends is read
+/// first when the text has no `,` (`12.5`, which `pt-BR` would read as a date, 12 May), then the
+/// region's typed form (`12,5`, `R$ 10` in `pt-BR`), then the en-US typed forms.
+pub fn parse_number_param(s: &str, sys: DateSystem, region: &Region) -> Option<f64> {
+    let t = s.trim();
+    if !t.contains(',')
+        && let Some((n, _)) = parse_plain(t, &EN_US)
+    {
+        return Some(n);
+    }
+    parse_number_text_in_region(t, sys, region).or_else(|| parse_number_text_in(t, sys))
+}
+
 /// Text that Excel's "Number Stored as Text" check flags: it would be a number if typed (signs,
 /// thousands separators, currency, percent, exponent, a parenthesised negative). Dates, times and
 /// fractions kept as text are not flagged, as in Excel.
@@ -74,8 +87,8 @@ pub fn number_stored_as_text(s: &str) -> Option<f64> {
 pub fn number_stored_as_text_in(s: &str, region: &Region) -> Option<f64> {
     let t = s.trim();
     // The same parentheses typed entry reads, accounting forms included: `$(5)`, `(5)%`.
-    match parenthesized(t) {
-        Some(inner) if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) => None,
+    match parenthesized(t, region) {
+        Some(inner) if after_leading_currency(&inner, region).starts_with(['-', '+', '(']) => None,
         Some(inner) => parse_plain(&inner, region).map(|(n, _)| -n),
         None => parse_plain(t, region).map(|(n, _)| n),
     }
@@ -83,9 +96,9 @@ pub fn number_stored_as_text_in(s: &str, region: &Region) -> Option<f64> {
 
 fn parse_numeric(t: &str, sys: DateSystem, region: &Region) -> Option<(f64, Option<&'static str>)> {
     // Parenthesised negatives: (100) = -100, and the accounting forms `$(100)` and `(5)%`.
-    if let Some(inner) = parenthesized(t) {
+    if let Some(inner) = parenthesized(t, region) {
         // Excel reads no sign and no nested parentheses inside: `(-5)`, `($-5)`, `((5))`.
-        if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) {
+        if after_leading_currency(&inner, region).starts_with(['-', '+', '(']) {
             return None;
         }
         let r = parse_plain(&inner, region).or_else(|| parse_fraction(&inner).map(|n| (n, Some("# ?/?"))));
@@ -104,20 +117,18 @@ fn parse_unparenthesised(t: &str, sys: DateSystem, region: &Region) -> Option<(f
     if let Some(r) = parse_fraction(t) {
         return Some((r, Some("# ?/?")));
     }
-    if let Some(r) = parse_datetime(t, sys) {
+    if let Some(r) = parse_datetime(t, sys, region) {
         return Some(r);
     }
     None
 }
 
-/// The number inside accounting parentheses, as plain text: `(5)` gives `5`. A dollar sign may
-/// stand before them (`$(5)` reads as `($5)`) and a percent sign after them (`(5)%` reads as
-/// `(5%)`), with spaces around either. The caller reads only a plain number or a fraction from it.
-fn parenthesized(t: &str) -> Option<String> {
-    let (currency, rest) = match t.strip_prefix('$') {
-        Some(r) => ("$", r.trim_start()),
-        None => ("", t),
-    };
+/// The number inside accounting parentheses, as plain text: `(5)` gives `5`. A leading currency
+/// symbol may stand before them (`$(5)` reads as `($5)`, `R$ (5)` as `(R$ 5)` in `pt-BR`) and a
+/// percent sign after them (`(5)%` reads as `(5%)`), with spaces around either. The caller reads
+/// only a plain number or a fraction from it.
+fn parenthesized(t: &str, region: &Region) -> Option<String> {
+    let (currency, rest) = leading_currency(t, region).unwrap_or(("", t));
     let rest = rest.strip_prefix('(')?;
     let (body, percent) = match rest.strip_suffix(')') {
         Some(b) => (b, ""),
@@ -145,12 +156,47 @@ fn canonical_separators<'a>(s: &'a str, region: &Region) -> std::borrow::Cow<'a,
     std::borrow::Cow::Owned(out)
 }
 
-/// Signs, currency, thousands separators, percent, exponent. The separators are `region`'s:
-/// `1.769,41` reads in `pt-BR` and `1,769.41` in `en-US`, and the format returned is canonical.
+/// The currency formats of an amount typed with the en-US `$`, which every region reads.
+const DOLLAR_FORMATS: (&str, &str) = ("\"$\"#,##0.00", "\"$\"#,##0");
+
+/// The currency symbol at the start of `s` and the text after it, trimmed: the region's own
+/// symbol where it comes before the number (`R$ 10` in `pt-BR`), or the `$` every region reads.
+fn leading_currency<'a>(s: &'a str, region: &Region) -> Option<(&'static str, &'a str)> {
+    if region.currency_first()
+        && !region.currency.is_empty()
+        && let Some(r) = s.strip_prefix(region.currency)
+    {
+        return Some((region.currency, r.trim_start()));
+    }
+    s.strip_prefix('$').map(|r| ("$", r.trim_start()))
+}
+
+/// `s` without a leading currency symbol.
+fn after_leading_currency<'a>(s: &'a str, region: &Region) -> &'a str {
+    leading_currency(s, region).map_or(s, |(_, r)| r)
+}
+
+/// `s` without the region's currency symbol where it comes after the number (`10 €` in
+/// `de-DE`), trimmed.
+fn before_trailing_currency<'a>(s: &'a str, region: &Region) -> Option<&'a str> {
+    if region.currency_first() || region.currency.is_empty() {
+        return None;
+    }
+    s.strip_suffix(region.currency).map(str::trim_end)
+}
+
+/// The formats (with decimals, whole) an amount typed with `symbol` gets.
+fn currency_formats(symbol: &str, region: &Region) -> (&'static str, &'static str) {
+    if symbol == region.currency { (region.currency_format, region.currency_format_int) } else { DOLLAR_FORMATS }
+}
+
+/// Signs, currency, thousands separators, percent, exponent. The separators and the currency are
+/// `region`'s: `1.769,41` reads in `pt-BR` and `1,769.41` in `en-US`, `R$ 10` in `pt-BR` and `$10`
+/// everywhere. The format returned is canonical.
 fn parse_plain(t: &str, region: &Region) -> Option<(f64, Option<&'static str>)> {
     let mut s = t;
     let mut neg = false;
-    let mut currency = false;
+    let mut currency: Option<(&'static str, &'static str)> = None;
     let mut percent = false;
     if let Some(r) = s.strip_prefix('-') {
         neg = true;
@@ -158,20 +204,23 @@ fn parse_plain(t: &str, region: &Region) -> Option<(f64, Option<&'static str>)> 
     } else if let Some(r) = s.strip_prefix('+') {
         s = r.trim_start();
     }
-    if let Some(r) = s.strip_prefix('$') {
-        currency = true;
-        s = r.trim_start();
+    if let Some((symbol, r)) = leading_currency(s, region) {
+        currency = Some(currency_formats(symbol, region));
+        s = r;
         if !neg && let Some(r2) = s.strip_prefix('-') {
             neg = true;
             s = r2;
         }
+    } else if let Some(r) = before_trailing_currency(s, region) {
+        currency = Some((region.currency_format, region.currency_format_int));
+        s = r;
     }
     if let Some(r) = s.strip_suffix('%') {
         percent = true;
         s = r.trim_end();
     }
     // Excel reads `$5` and `5%` but not `$5%`.
-    if s.is_empty() || currency && percent {
+    if s.is_empty() || currency.is_some() && percent {
         return None;
     }
     let s = canonical_separators(s, region);
@@ -220,8 +269,8 @@ fn parse_plain(t: &str, region: &Region) -> Option<(f64, Option<&'static str>)> 
     if neg {
         n = -n;
     }
-    let fmt = if currency {
-        Some(if digits.contains('.') { "\"$\"#,##0.00" } else { "\"$\"#,##0" })
+    let fmt = if let Some((decimals, whole)) = currency {
+        Some(if digits.contains('.') { decimals } else { whole })
     } else if percent {
         Some(if digits.contains('.') { "0.00%" } else { "0%" })
     } else if sci {
@@ -267,22 +316,29 @@ fn parse_fraction(t: &str) -> Option<f64> {
     Some(if neg { -v } else { v })
 }
 
-fn month_from_name(s: &str) -> Option<u32> {
-    let l = s.to_ascii_lowercase();
-    if l.len() < 3 {
-        return None;
-    }
-    MONTHS.iter().position(|m| m.to_ascii_lowercase().starts_with(&l)).map(|i| i as u32 + 1)
+/// Month number for a month name in `region`, or in English, which every region reads.
+fn month_from_name(s: &str, region: &Region) -> Option<u32> {
+    region.month_from_name(s).or_else(|| EN_US.month_from_name(s))
 }
 
-/// Time part: `h:mm`, `h:mm:ss`, `h:mm:ss.000`, `h AM`, with optional AM/PM.
-fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
+/// Time part: `h:mm`, `h:mm:ss`, `h:mm:ss.000`, `h AM`, with optional AM/PM: the region's markers
+/// (`p. m.` in `es-ES`) or the English `am`/`pm`/`a`/`p`.
+fn parse_time(t: &str, region: &Region) -> Option<(f64, bool, bool)> {
     let t = t.trim();
-    let lower = t.to_ascii_lowercase();
-    let (body, ampm) = if let Some(b) = lower.strip_suffix("am").or_else(|| lower.strip_suffix('a')) {
-        (b.trim().to_string(), Some(false))
-    } else if let Some(b) = lower.strip_suffix("pm").or_else(|| lower.strip_suffix('p')) {
-        (b.trim().to_string(), Some(true))
+    let lower = t.to_lowercase();
+    let [am, pm] = region.am_pm.map(str::to_lowercase);
+    let cut = |local: &str, en: &str, short: char| {
+        Some(local)
+            .filter(|m| !m.is_empty())
+            .and_then(|m| lower.strip_suffix(m))
+            .or_else(|| lower.strip_suffix(en))
+            .or_else(|| lower.strip_suffix(short))
+            .map(|b| b.trim().to_string())
+    };
+    let (body, ampm) = if let Some(b) = cut(&am, "am", 'a') {
+        (b, Some(false))
+    } else if let Some(b) = cut(&pm, "pm", 'p') {
+        (b, Some(true))
     } else {
         (lower.clone(), None)
     };
@@ -315,7 +371,7 @@ fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
     Some((time_fraction(h, m, s), parts.len() == 3, ampm.is_some()))
 }
 
-fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
+fn parse_date(t: &str, sys: DateSystem, region: &Region) -> Option<(f64, &'static str)> {
     let t = t.trim().trim_end_matches(',');
     let num = |s: &str| {
         let s = s.trim();
@@ -339,7 +395,7 @@ fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
             return valid_ymd(sys, y, m, d).map(|s| (s, "m/d/yyyy"));
         }
         // 4-Mar-2026
-        if let (Some(d), Some(m), Some(y)) = (num(a), month_from_name(b), num(c)) {
+        if let (Some(d), Some(m), Some(y)) = (num(a), month_from_name(b, region), num(c)) {
             let y = if c.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
             return valid_ymd(sys, y, m as i64, d).map(|s| (s, "d-mmm-yy"));
         }
@@ -358,10 +414,10 @@ fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
                 return valid_ymd(sys, d, m, 1).map(|s| (s, "mmm-yy"));
             }
         }
-        if let (Some(d), Some(m)) = (num(a), month_from_name(b)) {
+        if let (Some(d), Some(m)) = (num(a), month_from_name(b, region)) {
             return valid_ymd(sys, current_year(), m as i64, d).map(|s| (s, "d-mmm"));
         }
-        if let (Some(m), Some(y)) = (month_from_name(a), num(b)) {
+        if let (Some(m), Some(y)) = (month_from_name(a, region), num(b)) {
             let y = if b.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
             return valid_ymd(sys, y, m as i64, 1).map(|s| (s, "mmm-yy"));
         }
@@ -371,11 +427,11 @@ fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
     if words.len() == 3 {
         // Two-digit years follow the same 2029 rule as the dashed forms above.
         let expand = |w: &str, y: i64| if w.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
-        if let (Some(m), Some(d), Some(y)) = (month_from_name(words[0]), num(words[1]), num(words[2])) {
+        if let (Some(m), Some(d), Some(y)) = (month_from_name(words[0], region), num(words[1]), num(words[2])) {
             let y = expand(words[2], y);
             return valid_ymd(sys, y, m as i64, d).map(|s| (s, "d-mmm-yy"));
         }
-        if let (Some(d), Some(m), Some(y)) = (num(words[0]), month_from_name(words[1]), num(words[2])) {
+        if let (Some(d), Some(m), Some(y)) = (num(words[0]), month_from_name(words[1], region), num(words[2])) {
             let y = expand(words[2], y);
             return valid_ymd(sys, y, m as i64, d).map(|s| (s, "d-mmm-yy"));
         }
@@ -405,8 +461,8 @@ pub fn current_year() -> i64 {
     2026
 }
 
-fn parse_datetime(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
-    if let Some((tf, secs, ampm)) = parse_time(t) {
+fn parse_datetime(t: &str, sys: DateSystem, region: &Region) -> Option<(f64, Option<&'static str>)> {
+    if let Some((tf, secs, ampm)) = parse_time(t, region) {
         let f = match (secs, ampm) {
             // 24 hours or more: elapsed hours, so 25:00 shows as 25:00:00, not 1:00.
             _ if tf >= 1.0 => "[h]:mm:ss",
@@ -417,7 +473,7 @@ fn parse_datetime(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>
         };
         return Some((tf, Some(f)));
     }
-    if let Some((d, f)) = parse_date(t, sys) {
+    if let Some((d, f)) = parse_date(t, sys, region) {
         return Some((d, Some(f)));
     }
     // date + time: split at the last space(s) before a time-looking tail. Only splits where the
@@ -429,7 +485,7 @@ fn parse_datetime(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>
         if b.len() > 36 || !bytes.first().is_some_and(u8::is_ascii_digit) || !b.contains(':') {
             continue;
         }
-        if let (Some((d, _)), Some((tf, _, _))) = (t.get(..i).and_then(|a| parse_date(a, sys)), parse_time(b)) {
+        if let (Some((d, _)), Some((tf, _, _))) = (t.get(..i).and_then(|a| parse_date(a, sys, region)), parse_time(b, region)) {
             return Some((d + tf, Some("m/d/yyyy h:mm")));
         }
     }
@@ -681,5 +737,28 @@ mod tests {
         for text in ["3/4/2026", "10:30", "1 1/2", "abc", "12abc", "", "  ", "TRUE", "#N/A", "((1))", "(-5)", "$(5)%", "(1/2)"] {
             assert_eq!(number_stored_as_text(text), None, "{text}");
         }
+    }
+
+    /// B6: an amount typed with the region's currency symbol, before or after the number as the
+    /// region writes it, is a number with the region's currency format. `$` still reads.
+    #[test]
+    fn typed_currency_reads_in_the_region() {
+        let br = crate::region::lookup("pt-BR");
+        let de = crate::region::lookup("de-DE");
+        let typed = |s: &str, r: &Region| parse_input_in(s, DateSystem::D1900, r);
+        let num = |n: f64, f: &'static str| Parsed { value: Value::number(n), format: Some(f) };
+        assert_eq!(typed("R$ 10", br), num(10.0, "\"R$\" #,##0"));
+        assert_eq!(typed("R$10,50", br), num(10.5, "\"R$\" #,##0.00"));
+        assert_eq!(typed("-R$ 1.200,00", br), num(-1200.0, "\"R$\" #,##0.00"));
+        assert_eq!(typed("(R$ 5)", br), num(-5.0, "\"R$\" #,##0"));
+        assert_eq!(typed("10 €", de), num(10.0, "#,##0 \"€\""));
+        assert_eq!(typed("1.234,5€", de), num(1234.5, "#,##0.00 \"€\""));
+        assert_eq!(typed("$5", br), num(5.0, "\"$\"#,##0"));
+        assert_eq!(typed("R$ 5%", br).value, Value::text("R$ 5%"));
+        assert_eq!(parse_number_text_in_region("R$ 1.200,00", DateSystem::D1900, br), Some(1200.0));
+        // en-US: unchanged.
+        assert_eq!(p("$1,200.50"), num(1200.5, "\"$\"#,##0.00"));
+        assert_eq!(p("R$ 10").value, Value::text("R$ 10"));
+        assert_eq!(p("10 €").value, Value::text("10 €"));
     }
 }

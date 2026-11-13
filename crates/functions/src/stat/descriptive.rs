@@ -317,7 +317,7 @@ fn col_value(v: Vec<f64>) -> R<Value> {
 // Aggregates
 // ---------------------------------------------------------------------------------------------
 
-pub(super) fn count_impl(a: &[Arg]) -> f64 {
+pub(super) fn count_impl(a: &[Arg], sys: gridcraft_core::DateSystem, region: &gridcraft_core::Region) -> f64 {
     let mut c = 0usize;
     for x in a {
         match &x.value {
@@ -325,7 +325,8 @@ pub(super) fn count_impl(a: &[Arg]) -> f64 {
             Value::Number(_) => c += 1,
             _ if x.from_ref => {}
             Value::Bool(_) => c += 1,
-            Value::Text(t) if gridcraft_core::parse::parse_number_text(t).is_some() => c += 1,
+            // Literal text counts when it reads as a number in the workbook region: "1,5" in pt-BR.
+            Value::Text(t) if gridcraft_core::parse::parse_number_text_in_region(t, sys, region).is_some() => c += 1,
             _ => {}
         }
     }

@@ -22,6 +22,7 @@ mod scenarios;
 
 use advanced_filter::advanced_filter;
 #[cfg(test)]
+#[cfg(test)]
 pub(crate) use advanced_filter::criterion_matches;
 use consolidate::consolidate;
 #[cfg(test)]
@@ -320,11 +321,12 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "data.goalSeek";
     let (ssi, set) = cell_arg(s, p, "set", CMD)?;
     let (csi, chg) = cell_arg(s, p, "changing", CMD)?;
+    let d = s.doc()?;
+    // Text is the en-US `.` the API sends, or the workbook region's typed form (`12,5` in pt-BR).
     let target = f64_param(p, "to")
-        .or_else(|| str_param(p, "to").and_then(gridcraft_core::parse::parse_number_text))
+        .or_else(|| str_param(p, "to").and_then(|t| gridcraft_core::parse::parse_number_param(t, d.wb.date_system, d.wb.region)))
         .filter(|v| v.is_finite())
         .ok_or_else(|| bad(CMD, "`to` must be a number"))?;
-    let d = s.doc()?;
     let has_formula = |si: usize, c: CellRef| d.wb.sheet(si).and_then(|sh| sh.cell(c)).is_some_and(|c| c.formula.is_some());
     if !has_formula(ssi, set) {
         return Err(EngineError::Other("Cell must contain a formula.".into()));

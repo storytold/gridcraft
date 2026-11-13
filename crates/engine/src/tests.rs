@@ -6718,3 +6718,37 @@ fn history_charges_the_storage_of_empty_comment_replies() {
     // 500 replies of no text are still 500 elements.
     assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
 }
+
+/// A6: a number typed as text in a command's criterion (`12,5`) is read in the workbook's region
+/// by conditional formatting, Advanced Filter, Goal Seek and Solver; the en-US `.` the API sends
+/// still reads.
+#[test]
+fn command_criteria_read_numbers_in_the_workbook_region() {
+    let mut s = s();
+    s.set_region(gridcraft_core::region::lookup("pt-BR"));
+    // Conditional formatting writes the number canonical in the rule's formula.
+    for (at, value, want) in [("J1", "12,5", "12.5"), ("J2", "12.5", "12.5"), ("J3", "1.200,5", "1200.5")] {
+        s.execute("home.conditionalFormat", json!({"range": at, "rule": {"type": "cellIs", "operator": "greater", "value": value}})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        let rule = sh.cond_formats.iter().find(|c| c.ranges.first().is_some_and(|r| r.a1() == at)).map(|c| c.rule.clone());
+        assert!(matches!(&rule, Some(gridcraft_model::CfRule::CellIs { a, .. }) if a == want), "{value}: {rule:?}");
+    }
+    // Advanced Filter: `>12,5` keeps 13 and 20.
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Qty"], [10], [13], [20]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "H1", "values": [["Qty"], [">12,5"]]})).unwrap();
+    let r = s.execute("data.advancedFilter", json!({"range": "A1:A4", "criteria": "H1:H2"})).unwrap();
+    assert_eq!(r["matched"], 2, "{r}");
+    // Goal Seek to 12,5.
+    s.execute("cell.set", json!({"cell": "C1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=C1*2"})).unwrap();
+    s.execute("data.goalSeek", json!({"set": "D1", "to": "12,5", "changing": "C1"})).unwrap();
+    assert!((v(&s, "D1").as_f64().unwrap_or(f64::NAN) - 12.5).abs() < 1e-6, "{:?}", v(&s, "D1"));
+    // Solver: maximise E1 with E1 <= 12,5.
+    s.execute("cell.set", json!({"cell": "E1", "input": "0"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F1", "input": "=E1"})).unwrap();
+    let r = s
+        .execute("data.solver", json!({"objective": "F1", "goal": "max", "variables": "E1", "constraints": ["E1 <= 12,5"], "method": "simplex"}))
+        .unwrap();
+    assert_eq!(r["status"], "optimal", "{r}");
+    assert!((v(&s, "E1").as_f64().unwrap_or(f64::NAN) - 12.5).abs() < 1e-9, "{:?}", v(&s, "E1"));
+}
