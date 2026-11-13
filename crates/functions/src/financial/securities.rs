@@ -1,4 +1,4 @@
-use super::day_count::{basis_arg, coup_daybs, coup_days, coup_daysnc, coupons, date, day_count, freq_arg, shift_months, year_basis, year_frac, ymd};
+use super::day_count::{basis_arg, coup_daybs, coup_days, coup_daysnc, coupons, date, day_count, freq_arg, shift_months, year_frac, ymd};
 use super::{Arg, CellError, Ctx, DateSystem, R, Value, days_in_month, has, num, num_val, opt_bool};
 
 // ---------------------------------------------------------------------------------------------
@@ -86,33 +86,29 @@ fn disc_args(a: &[Arg]) -> R<(f64, f64, f64, f64, u32)> {
     Ok((s, m, x, y, b))
 }
 
-fn disc_frac(sys: DateSystem, s: f64, m: f64, b: u32) -> R<f64> {
-    Ok(day_count(sys, s, m, b)? / year_basis(sys, b, s)?)
-}
-
 pub(super) fn disc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (s, m, pr, red, b) = disc_args(a)?;
-    num_val((1.0 - pr / red) / disc_frac(c.date_system(), s, m, b)?)
+    num_val((1.0 - pr / red) / year_frac(c.date_system(), s, m, b)?)
 }
 
 pub(super) fn pricedisc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (s, m, d, red, b) = disc_args(a)?;
-    num_val(red - d * red * disc_frac(c.date_system(), s, m, b)?)
+    num_val(red - d * red * year_frac(c.date_system(), s, m, b)?)
 }
 
 pub(super) fn yielddisc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (s, m, pr, red, b) = disc_args(a)?;
-    num_val((red / pr - 1.0) / disc_frac(c.date_system(), s, m, b)?)
+    num_val((red / pr - 1.0) / year_frac(c.date_system(), s, m, b)?)
 }
 
 pub(super) fn intrate(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (s, m, inv, red, b) = disc_args(a)?;
-    num_val((red - inv) / inv / disc_frac(c.date_system(), s, m, b)?)
+    num_val((red - inv) / inv / year_frac(c.date_system(), s, m, b)?)
 }
 
 pub(super) fn received(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (s, m, inv, d, b) = disc_args(a)?;
-    let denom = 1.0 - d * disc_frac(c.date_system(), s, m, b)?;
+    let denom = 1.0 - d * year_frac(c.date_system(), s, m, b)?;
     if denom <= 0.0 {
         return Err(CellError::Num);
     }

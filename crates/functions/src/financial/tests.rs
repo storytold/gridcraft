@@ -317,3 +317,18 @@ fn securities_read_dates_in_the_1904_system() {
     let odd = vec![d4(2008, 11, 11), d4(2021, 3, 1), d4(2008, 10, 15), d4(2009, 3, 1), n(0.0785), n(0.0625), n(100.0), n(2.0), n(1.0)];
     close_tol(ev4("ODDFPRICE", odd), 113.597717474079, 1e-9);
 }
+
+#[test]
+fn disc_basis_1_across_years_matches_excel() {
+    let (s, m) = (d(2024, 3, 1), d(2025, 3, 1));
+    close_tol(ev("DISC", vec![s.clone(), m.clone(), n(95.0), n(100.0), n(1.0)]), 0.05, 1e-12);
+    close_tol(ev("INTRATE", vec![s.clone(), m.clone(), n(95.0), n(100.0), n(1.0)]), 0.05263157894736842, 1e-12);
+    close_tol(ev("PRICEDISC", vec![s.clone(), m.clone(), n(0.05), n(100.0), n(1.0)]), 95.0, 1e-12);
+    close_tol(ev("RECEIVED", vec![s.clone(), m.clone(), n(1000.0), n(0.05), n(1.0)]), 1052.6315789473684, 1e-10);
+    close_tol(ev("YIELDDISC", vec![s, m, n(95.0), n(100.0), n(1.0)]), 0.05263157894736842, 1e-12);
+
+    // Multi-year span (2023-01-31 to 2024-03-31): 425 actual days, average year 365.5.
+    let (s2, m2) = (d(2023, 1, 31), d(2024, 3, 31));
+    close_tol(ev("DISC", vec![s2.clone(), m2.clone(), n(95.0), n(100.0), n(1.0)]), 0.043, 1e-12);
+    close_tol(ev("PRICEDISC", vec![s2, m2, n(0.05), n(100.0), n(1.0)]), 100.0 - 5.0 * (425.0 / 365.5), 1e-12);
+}
