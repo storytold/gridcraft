@@ -609,7 +609,9 @@ pub const FONTS: &[&str] = &[
 fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let t = Tokens::get(ui.ctx());
     let size = st.font.size;
-    let current = if size.fract() == 0.0 { format!("{}", size as i32) } else { format!("{size}") };
+    // Sizes are shown and typed with the workbook region's decimal separator ("10,5" in pt-BR).
+    let region = crate::dialogs::workbook_region(app);
+    let current = if size.fract() == 0.0 { format!("{}", size as i32) } else { format!("{size}").replace('.', &region.decimal.to_string()) };
     let field = egui::Id::unique("gridcraft.font_size_box");
     let draft = field.with("draft");
     let mut text = ui.data_mut(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| current.clone());
@@ -647,7 +649,7 @@ fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
         ui.data_mut(|d| d.remove::<String>(draft));
         // Consume the Enter so the grid behind does not also move the active cell down.
         if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter))
-            && let Some(v) = text.trim().parse::<f64>().ok().filter(|v| v.is_finite())
+            && let Some(v) = crate::dialogs::parse_in_region(text.trim(), region)
         {
             act(app, "home.fontSize", json!({"size": v}));
         }
