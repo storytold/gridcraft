@@ -161,7 +161,9 @@ impl Language {
         // `pt` alone and `pt-BR` are Brazil's (the code `pt` meant Brazil before `pt-pt` existed,
         // so saved preferences keep working); an explicit Portugal region is Portugal's.
         if primary == "pt" {
-            let portugal = parts.take_while(|p| !p.eq_ignore_ascii_case("x")).any(|p| p.eq_ignore_ascii_case("pt"));
+            // A singleton subtag (`x` private use, or an extension like `t-pt`) ends the region
+            // section, so its subtags can't select Portugal.
+            let portugal = parts.take_while(|p| p.len() > 1).any(|p| p.eq_ignore_ascii_case("pt"));
             return Some(if portugal { Self::PtPt } else { Self::PtBr });
         }
         match primary.as_str() {
@@ -509,7 +511,11 @@ mod tests {
         assert_eq!(Language::from_tag("pt-PT@euro"), Some(Language::PtPt));
         assert_eq!(Language::from_tag("PT-pt"), Some(Language::PtPt));
         assert_eq!(Language::from_tag("pt-AO"), Some(Language::PtBr));
+        // A private-use or extension section starts at any singleton subtag, not only `x`, so a
+        // region inside it is not Portugal's. Script and region subtags outside it still count.
         assert_eq!(Language::from_tag("pt-x-PT"), Some(Language::PtBr));
+        assert_eq!(Language::from_tag("pt-BR-t-pt"), Some(Language::PtBr));
+        assert_eq!(Language::from_tag("pt-Latn-PT"), Some(Language::PtPt));
         assert_eq!(Language::from_tag("cs-CZ"), Some(Language::Cs));
         assert_eq!(Language::from_tag("cs_CZ.UTF-8"), Some(Language::Cs));
         assert_eq!(Language::parse("cs"), Some(Language::Cs));
