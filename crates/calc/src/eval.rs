@@ -804,6 +804,29 @@ mod fuel_tests {
         }
     }
 
+    /// INDEX keeps only one result, so outer functions cannot account for the discarded array.
+    #[test]
+    fn reused_reference_lookup_arguments_spend_work_on_every_call() {
+        for name in ["VLOOKUP", "HLOOKUP"] {
+            for arguments in ["arg,A1,1,FALSE", "1,A1,arg,FALSE", "1,A1,1,arg"] {
+                let src = format!("=LET(arg,SEQUENCE(1000,,1,0),SUM(MAP(SEQUENCE(100),LAMBDA(k,INDEX({name}({arguments}),1,1)))))");
+                let run = |work| {
+                    let mut wb = Workbook::default();
+                    wb.sheet_mut(0).unwrap().cells.set(CellRef::new(0, 0), gridcraft_model::Cell::value(Value::Number(1.0)));
+                    let mut host = Stored { wb };
+                    let mut ev = Evaluator::new(&mut host, 0, CellRef::new(0, 4));
+                    ev.work = work;
+                    let value = ev.value(&gridcraft_formula::parser::parse(&src).unwrap());
+                    (value, ev.work)
+                };
+                assert_eq!(run(300_000).0, Value::Number(100.0), "{src}");
+                let (value, left) = run(10_000);
+                assert_eq!(value, Value::Error(CellError::Calc), "{src}");
+                assert_eq!(left, 0);
+            }
+        }
+    }
+
     fn is_calc(v: &Value) -> bool {
         matches!(v, Value::Error(CellError::Calc))
     }

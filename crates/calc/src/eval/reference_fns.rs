@@ -257,6 +257,11 @@ impl<'h> Evaluator<'h> {
             let mut ctx = FnCtx { ev: self, criteria: None, lambda: None };
             return Ev::V(gridcraft_functions::call(spec, &evaluated, &mut ctx));
         };
+        // Captured argument arrays are reused without evaluation, even when INDEX discards
+        // most results. Charge them on every call so repeated lookups exhaust shared work.
+        if !self.spend_on(&key) || !self.spend_on(&index) || !self.spend_on(&mode) {
+            return err(CellError::Calc);
+        }
         let vertical = name == "VLOOKUP";
         let end =
             if vertical { CellRef::new(area.range.end.row, area.range.start.col) } else { CellRef::new(area.range.start.row, area.range.end.col) };
