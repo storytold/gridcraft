@@ -618,6 +618,7 @@ impl<'h> Evaluator<'h> {
             },
             op == UnOp::Plus,
             sys,
+            self.host.workbook().region,
         ))
     }
 
@@ -718,7 +719,8 @@ impl<'h> Evaluator<'h> {
                 let mut acc = self.value(left);
                 while let Some((o, r)) = rest.pop() {
                     let y = self.value(r);
-                    acc = binary_values(o, &acc, &y, self.host.workbook().date_system);
+                    let wb = self.host.workbook();
+                    acc = binary_values(o, &acc, &y, wb.date_system, wb.region);
                 }
                 Ev::V(acc)
             }
