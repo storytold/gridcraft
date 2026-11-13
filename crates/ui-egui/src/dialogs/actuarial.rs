@@ -24,26 +24,35 @@ fn labels(signature: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Searches both the registered function name and its description, without case sensitivity.
+fn matches_query(function: &Json, query: &str) -> bool {
+    let query = query.trim().to_ascii_lowercase();
+    query.is_empty()
+        || function["name"].as_str().unwrap_or("").to_ascii_lowercase().contains(&query)
+        || function["description"].as_str().unwrap_or("").to_ascii_lowercase().contains(&query)
+}
+
 /// Draws a searchable function selector, argument reference pickers and a report action.
 pub(super) fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     ui.label("Select an actuarial function and enter a cell, range or literal for each argument.");
-    ui.horizontal(|ui| {
-        let label = ui.label("Search:");
-        ui.text_edit_singleline(&mut d.search).labelled_by(label.id);
-    });
+    let search = ui
+        .horizontal(|ui| {
+            let label = ui.label("Search:");
+            ui.text_edit_singleline(&mut d.search).labelled_by(label.id)
+        })
+        .inner;
+    let search_enter = search.has_focus() || (search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
     let selected = d.values.get("function").and_then(Json::as_str).unwrap_or("ACT.ANNUITY").to_string();
     let mut name = selected.clone();
-    let query = d.search.trim().to_ascii_lowercase();
+    let hits = functions().iter().filter(|f| matches_query(f, &d.search)).collect::<Vec<_>>();
+    ui.label(format!("{} matching functions — open the list to choose.", hits.len()));
     let function_label = ui.label("Actuarial function:");
-    craft_ui::ComboBox::from_id_salt("actuarialFunction")
+    let menu_was_open = egui::Popup::is_any_open(ui.ctx());
+    let picker = craft_ui::ComboBox::from_id_salt("actuarialFunction")
         .selected_text(&name)
         .width(350.0)
         .show_ui(ui, |ui| {
-            for f in functions().iter().filter(|f| {
-                query.is_empty()
-                    || f["name"].as_str().unwrap_or("").to_ascii_lowercase().contains(&query)
-                    || f["description"].as_str().unwrap_or("").to_ascii_lowercase().contains(&query)
-            }) {
+            for f in &hits {
                 if let Some(n) = f["name"].as_str() {
                     ui.selectable_value(&mut name, n.to_string(), n);
                 }
@@ -51,6 +60,9 @@ pub(super) fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &
         })
         .response
         .labelled_by(function_label.id);
+    if menu_was_open || picker.has_focus() || craft_ui::ComboBox::is_open(ui.ctx(), picker.id) {
+        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+    }
     if name != selected {
         d.values.retain(|key, _| !key.starts_with("argument"));
         d.refs.target = None;
@@ -75,7 +87,7 @@ pub(super) fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &
     }
     ui.label("Values remain linked to the source cells. For text, use quotes, e.g. \"poisson\".");
     ui.label("The report can be used as an output in Data → Monte Carlo.");
-    super::show::ok_cancel(ui, confirm, open);
+    super::show::ok_cancel_with_enter(ui, confirm, open, !search_enter);
 }
 
 /// Builds ordered arguments without losing skipped optional positions.
@@ -106,6 +118,20 @@ mod tests {
         for f in all {
             assert!(!labels(f["signature"].as_str().unwrap()).is_empty(), "{f}");
         }
+    }
+
+    /// Search matches names and descriptions, case-insensitively, and reports no false hits.
+    #[test]
+    fn actuarial_search_filters_names_and_descriptions() {
+        if !available() {
+            return;
+        }
+        let names = functions().iter().filter(|f| matches_query(f, "  vAr ")).filter_map(|f| f["name"].as_str()).collect::<Vec<_>>();
+        assert!(names.contains(&"ACT.VAR"));
+        assert!(names.contains(&"ACT.TVAR"));
+        assert!(!names.contains(&"ACT.ANNUITY"));
+        assert!(functions().iter().any(|f| f["name"] == "ACT.ANNUITY" && matches_query(f, "terminal")));
+        assert!(!functions().iter().any(|f| matches_query(f, "no-such-actuarial-function")));
     }
 
     /// Optional blanks retain their positions rather than shifting subsequent values.

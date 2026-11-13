@@ -29,6 +29,10 @@ fn argument(wb: &gridcraft_model::Workbook, text: &str) -> Result<String> {
     if text.is_empty() {
         return Ok(String::new());
     }
+    let text = text.strip_prefix('=').unwrap_or(text).trim();
+    if text.is_empty() {
+        return Err(bad(CMD, "invalid argument syntax"));
+    }
     if text.len() > 4096 {
         return Err(bad(CMD, "argument is too long"));
     }
@@ -135,6 +139,17 @@ mod tests {
         s.execute("sheet.activate", json!({"sheet":0})).unwrap();
         s.execute("cell.set", json!({"cell":"C1","input":"2"})).unwrap();
         assert!(s.doc().unwrap().wb.sheet(1).unwrap().value(CellRef::new(4, 0)).as_f64().unwrap() > 1.0);
+    }
+
+    /// Leading equals signs are accepted for references and literal values alike.
+    #[test]
+    fn actuarial_report_arguments_accept_leading_equals() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let wb = &s.doc().unwrap().wb;
+        assert_eq!(argument(wb, " =A1 ").unwrap(), "Sheet1!A1");
+        assert_eq!(argument(wb, " =0.05 ").unwrap(), "0.05");
+        assert!(argument(wb, "=").is_err());
     }
 
     /// Invalid functions and incomplete inputs must not create a sheet.
