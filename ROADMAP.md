@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-02 · **Change:** minor (form controls: buttons, sliders and spin buttons; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-05 · **Change:** minor (CJK fallback text shares the Latin baseline; earlier: form controls: buttons, sliders and spin buttons; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -148,6 +148,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | CSV and text open detects each column's date order: a value that reads only day first (`31/05/2026`) makes the column day first, a value that reads only month first (`12/31/2026`) makes it month first, an all-ambiguous column keeps month first with a warning, and a column with both kinds stays text with a warning (#2765) |
 | 2026-10-31 | Recently Used lists the functions most recently entered in a formula from any source (ribbon, control channel, MCP, scripts), kept with the preferences and returned by `formulas.recentlyUsed`; the Insert Function dialog takes Excel's title and a working category list (Most Recently Used, All, each category) |
 | 2026-10-31 | Formulas › Function Library as a big Insert Function button, the AutoSum split button and three columns of labelled small buttons, each category book in its own colour; category menus end with Insert Function… on that category; More Functions cascades into the remaining categories; Home › Editing shares the AutoSum menu; the MR key tip opens Recently Used |
+| 2026-10-31 | System and embedded CJK fallback text shares the Latin baseline in cells, editors and window titles (#1265, #2621). Symbol and emoji alignment, manual row heights and clipping are unchanged |
 | 2026-10-26 | Arabic PDF export shapes licensed glyph outlines and preserves searchable logical text; characters the font lacks, or a missing Arabic font, fall back to the standard fonts instead of failing the export |
 | 2026-10-26 | Arabic bidi display/editing preserve logical source text; per-cell reading direction is editable and survives undo, XLSX and conditional-format priority |
 | 2026-10-26 | Arabic text shows in cells and the interface through a system, fontconfig or craft-fonts Arabic face; workbook fonts keep their script fallbacks |
@@ -198,8 +199,13 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | XLSX export writes a picture used on several sheets once, as one `xl/media` part every drawing points to (it wrote a copy per drawing: a 16-sheet workbook with one 112 KB logo grew from 0.4 to 1.9 MB) (#985) |
 | 2026-10-13 | XLSX: `[Content_Types].xml`, `_rels/.rels`, the workbook rels and `xl/workbook.xml` are the first zip entries (document properties last), so libmagic and PHP `finfo` detect the file type even with large properties (#1090) |
 | 2026-10-13 | Conditional formatting: a rule gathers range statistics only when it reads them (top/bottom, above average, duplicates, scales, bars, icons) and borrows them instead of copying them per cell, so the per-frame lookup of an expression or cell-value rule no longer visits its whole range (#1098, part 1) |
+| 2026-10-13 | Grid: resizing several selected columns or rows previews on the dragged one and applies the size to all on release; Esc cancels (#1082) |
 | 2026-10-12 | Next/previous sheet navigation stops at the first/last visible worksheet instead of activating a hidden boundary sheet; the current selection is retained |
+| 2026-10-12 | PDF writer: objects are written straight to the output, identical pictures are stored once, style operators are emitted only when they change, `q` nesting is limited to 28 and polyline joins no longer leak into later strokes (#816) |
+| 2026-10-12 | Insert › Text › WordArt (`insert.wordArt`, `wordArt.set`): floating decorative text with 10 original styles, outline and shadow, in-place editing, XLSX and print (#784) |
+| 2026-10-12 | Number formatting: one table of built-in formats (xlsx); numbers, dates and General render with one scratch buffer instead of per-token strings; output unchanged, checked against digests recorded from the old code (#817) |
 | 2026-10-21 | Macro engine ([macros.md](docs/macros.md)): typed, declarative macros saved in the workbook (a JSON field; hidden names in xlsx); declared inputs checked with messages that name the cells; tokens (`Input.col(2)`, `Row`, `Output`, `Name:Total`, `{{…}}` in formulas); one undo step with full rollback; a footprint dry run with ask, fail, overwrite, shift down or shift right; a policy that keeps macros away from files and the app, with approval for macros in opened files; Repeat, If and Stop steps; a debugger; a relative recorder; `macro.*` commands beside the unchanged Automate scripts |
+| 2026-10-13 | Performance: a chart is resolved and rendered once per change of its workbook, zoom or fonts instead of on every frame; idle frames, hovering and scrolling reuse it (#1139, part of #1098) |
 | 2026-10-13 | Charts: work and memory are bounded by series x points (2,000,000 per chart: every series keeps its first points; 16 trendlines per chart), hairline columns and bars are merged per pixel column, series ranges are clipped before they are evaluated, the moving average is linear and rendering clean data no longer copies it (#1147) |
 | 2026-10-13 | Charts: one combo plot-kind rule for resolving and drawing; ticks of a scale off the step grid keep their own values (#1146) |
 | 2026-10-12 | Security: the `--control` server requires an auth token (random, kept in a 0600 file or chosen with `GRIDCRAFT_CONTROL_TOKEN`) on each connection's first line and closes bad connections (#777) |
@@ -266,6 +272,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |
+| 2026-11-05 | minor | Reconcile upstream form-control progress with the CJK baseline update |
 | 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |
 | 2026-11-02 | minor | Progress log: RefEdit reference boxes in dialogs |
 | 2026-11-02 | minor | Progress log: Python mode in the formula bar |
@@ -278,6 +285,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | minor | File-page text fields keep the view open when Esc cancels an edit (#3035) |
 | 2026-10-31 | minor | Progress log: Recently Used and Insert Function categories |
 | 2026-10-31 | minor | Progress log: Function Library |
+| 2026-10-31 | minor | Progress log: shared CJK/Latin baselines in cells, editors and window titles |
 | 2026-10-26 | minor | Progress log: Arabic PDF text |
 | 2026-10-26 | minor | Progress log: Arabic bidi display and editing |
 | 2026-10-26 | minor | Progress log: Arabic font fallback |
@@ -311,6 +319,10 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | trivial | Progress log: shared pictures written once on XLSX export (#985) |
 | 2026-10-13 | minor | Progress log: conditional-format lookups no longer scan the range for rules without statistics (#1098) |
 | 2026-10-12 | minor | Progress log: hidden-sheet navigation at workbook boundaries |
+| 2026-10-13 | trivial | Progress log: charts cached between frames (#1139) |
+| 2026-10-12 | minor | Progress log: PDF writer cleanup (#816) |
+| 2026-10-12 | minor | Catalog 276 → 277 / 292: Insert › WordArt (#784) |
+| 2026-10-12 | minor | Numfmt cleanup: one built-in format table (gridcraft-xlsx), fewer allocations rendering numbers, dates and General, equality test against the previous output (#817); progress log row |
 | 2026-10-12 | minor | The control server requires an auth token and closes bad connections (#777); progress log row |
 | 2026-10-12 | minor | Rows auto-fit oversized fonts on open and whole-row/column formatting (#833); progress log row |
 | 2026-10-12 | minor | Progress log: multi-area row/column delete (#758) |
