@@ -88,9 +88,14 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         let (x, y, w, h) = place(r);
         // About 150 dpi is plenty for print.
         let (mw, mh) = (((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32);
-        let decoded = pics.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));
+        let decoded = pics.decoded.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));
         if let Some((px, pw, ph)) = decoded.as_ref() {
-            pg.image_rgba(Rect::new(x, y, w, h), px, [*pw, *ph]);
+            // Every page the picture touches embeds its own copy: past the budget it is left out.
+            let bytes = px.len();
+            if pics.image_bytes.saturating_add(bytes) <= super::MAX_EMBEDDED_IMAGE_BYTES {
+                pics.image_bytes += bytes;
+                pg.image_rgba(Rect::new(x, y, w, h), px, [*pw, *ph]);
+            }
         }
     }
     for shp in &sh.shapes {
@@ -120,15 +125,20 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         }
         draw_shape(pg, wb, shp, b, (x, y, w, h));
     }
-    for ch in &sh.charts {
+    for (chi, ch) in sh.charts.iter().enumerate() {
         let r = anchor_rect(sh, &ch.anchor);
         if !visible(r) {
             continue;
         }
         let (x, y, _, _) = place(r);
-        let data = gridcraft_chart::resolve(wb, si, ch);
-        let prims = gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure);
-        draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
+        // As for pictures, each page gets its own copy of the drawing commands.
+        let prims = pics.chart((si, chi), || {
+            let data = gridcraft_chart::resolve(wb, si, ch);
+            gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure)
+        });
+        if let Some(prims) = prims {
+            draw_prims(pg, prims, Xf { ox: x, oy: y, k: b.k });
+        }
     }
     pg.restore();
 }
@@ -203,6 +213,21 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
             ShapeTextAlign::Center => x + (w - lw) / 2.0,
             ShapeTextAlign::Right => x + w - 2.0 * b.k - lw,
         };
+        // WordArt's drop shadow: the line again, offset, in the shadow colour (under the text).
+        if let Some(sc) = fm.text_shadow.and_then(|c| rgb_of(c, wb)) {
+            let off = (size * 0.06).max(0.5);
+            pg.text(lx + off, yy + off, size, font, sc, l);
+        }
+        // WordArt's text outline, as on screen: the line in the outline colour, offset in eight
+        // directions by half the outline width, under the filled text.
+        if let Some((c, ow)) = fm.text_outline
+            && let Some(oc) = rgb_of(c, wb)
+        {
+            let d = (ow * b.scale / 2.0).clamp(0.25, 20.0);
+            for (dx, dy) in [(-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (-1.0, 0.0), (1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0)] {
+                pg.text(lx + dx * d, yy + dy * d, size, font, oc, l);
+            }
+        }
         pg.text(lx, yy, size, font, color, l);
         yy += size * 1.2;
     }
