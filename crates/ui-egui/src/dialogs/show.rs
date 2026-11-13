@@ -181,6 +181,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             if let Some(key) = &collapsed {
                 let title = d.title.clone();
                 ref_edit(app, ui, &mut d, key, RefLabel::Named(&title), (width - 40.0).min(380.0));
+                if d.name == "monteCarlo" {
+                    super::monte_carlo::sync_collapsed_input(&mut d, key);
+                }
                 return;
             }
             ui.set_min_width(width - 20.0);

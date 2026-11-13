@@ -1898,3 +1898,23 @@ fn monte_carlo_input_can_be_picked_from_grid() {
     let input = &h.state().dialog.as_ref().unwrap().values["inputs"][0]["cell"];
     assert_eq!(input, "$B$2");
 }
+
+/// A control-channel confirmation while collapsed uses the picked cell, not its previous value.
+#[test]
+fn monte_carlo_collapsed_pick_is_used_by_control_confirmation() {
+    let mut h = harness(workbook());
+    h.state_mut().run("cell.set", json!({"cell":"A1","input":"10"})).unwrap();
+    control(&mut h, "ui.dialog", json!({"name":"monteCarlo"}));
+    control(&mut h, "ui.dialog.set", json!({"field":"inputs","value":[{"cell":"A1","distribution":"uniform","min":1,"max":1}]}));
+    control(&mut h, "ui.dialog.set", json!({"field":"outputs","value":"B5"}));
+    control(&mut h, "ui.dialog.set", json!({"field":"iterations","value":"16"}));
+    click_button(&mut h, "Collapse dialog", 0);
+    drag(&mut h, "B2", "B2");
+    assert_eq!(collapsed(&h).as_deref(), Some("monteCarloInput0"));
+    let result = control(&mut h, "ui.dialog.confirm", json!({}));
+    assert_eq!(result["ok"], true, "{result}");
+    h.run_steps(8);
+    let report = h.state().session.doc().unwrap().wb.sheet(1).unwrap();
+    let config: serde_json::Value = serde_json::from_str(report.value(CellRef::new(3, 1)).as_text().unwrap()).unwrap();
+    assert!(config["inputs"][0]["cell"].as_str().unwrap().ends_with("!B2"), "{config}");
+}
