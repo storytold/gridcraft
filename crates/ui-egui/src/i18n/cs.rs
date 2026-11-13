@@ -48,7 +48,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "a histogram, waterfall, treemap… chart without its chart part was skipped" => {
             "Histogram, vodopádový nebo stromový graf… bez příslušné části grafu byl přeskočen."
         }
-        "an embedded object (SmartArt, OLE…) was skipped" => "Vložený objekt (SmartArt, OLE…) byl přeskočen.",
+        "an embedded object (diagram, OLE…) was skipped" => "Vložený objekt (diagram, OLE…) byl přeskočen.",
         "grouped shapes are not supported and were skipped" => "Seskupené obrazce nejsou podporovány a byly přeskočeny.",
         "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
             "Import XLSB pouze s daty: vzorce se změní na uložené výsledky a nebudou se přepočítávat. Formátování, grafy, obrázky, makra a další funkce se neimportují; data, měna a procenta se mohou zobrazit jako čísla. Uložte nový soubor .xlsx; ukládání do XLSB není podporováno."

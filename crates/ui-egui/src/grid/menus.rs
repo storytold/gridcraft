@@ -4,6 +4,30 @@ use super::tables::filter_table_range;
 use super::{Arc, Drag, FillTag, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke, Tokens, col_to_letters, json, pos2, vec2};
 use gridcraft_engine::cmd::data::FilterValue;
 
+/// Connected caption and command-value groups share one checkbox selection.
+fn filter_selection_groups(checks: &[FilterValue], labels: &[String]) -> Vec<usize> {
+    /// Finds the representative while shortening the path for subsequent entries.
+    fn root(parents: &mut [usize], mut at: usize) -> usize {
+        while parents[at] != at {
+            parents[at] = parents[parents[at]];
+            at = parents[at];
+        }
+        at
+    }
+    let mut parents: Vec<usize> = (0..checks.len()).collect();
+    let mut captions = std::collections::HashMap::new();
+    let mut commands = std::collections::HashMap::new();
+    for (index, (entry, caption)) in checks.iter().zip(labels).enumerate() {
+        let key = (entry.value == gridcraft_engine::core::Value::Empty, entry.label.to_ascii_lowercase());
+        for previous in [captions.insert(caption, index), commands.insert(key, index)].into_iter().flatten() {
+            let a = root(&mut parents, previous);
+            let b = root(&mut parents, index);
+            parents[a] = b;
+        }
+    }
+    (0..checks.len()).map(|index| root(&mut parents, index)).collect()
+}
+
 /// Draws the filter-header popup: sort, search/select-all, apply/clear, a lazily installed table autofilter, new-open search focus and dismissal.
 pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
     let lang = app.ui.language;
@@ -68,17 +92,18 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             }
             let needle = search.trim().to_lowercase();
             let label_for = |entry: &FilterValue| filter_value_label(entry, lang, &wb, si);
+            let labels: Vec<String> = checks.iter().map(label_for).collect();
+            let components = filter_selection_groups(&checks, &labels);
             let matches = |entry: &FilterValue| needle.is_empty() || label_for(entry).to_lowercase().contains(&needle);
             let all = checks.iter().filter(|entry| matches(entry)).all(|entry| entry.selected);
             let mut all_new = all;
             let label = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
             // Different displayed captions can select the same case-insensitive engine value.
-            let command_key = |entry: &FilterValue| (entry.value == gridcraft_engine::core::Value::Empty, entry.label.to_ascii_lowercase());
             let mut changed = std::collections::HashMap::new();
             if ui.checkbox(&mut all_new, lang.tr(label)).changed() {
-                for entry in checks.iter_mut().filter(|entry| matches(entry)) {
+                for (index, entry) in checks.iter_mut().enumerate().filter(|(_, entry)| matches(entry)) {
                     entry.selected = all_new;
-                    changed.insert(command_key(entry), all_new);
+                    changed.insert(components[index], all_new);
                 }
             }
             // Full width: shrunk to the longest value, the scroll bar sat mid-menu and the wheel only
@@ -99,14 +124,14 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                     if ui.checkbox(&mut selected, label).changed() {
                         for index in indices {
                             checks[index].selected = selected;
-                            changed.insert(command_key(&checks[index]), selected);
+                            changed.insert(components[index], selected);
                         }
                     }
                 }
             });
             if !changed.is_empty() {
-                for entry in &mut checks {
-                    if let Some(on) = changed.get(&command_key(entry)) {
+                for (index, entry) in checks.iter_mut().enumerate() {
+                    if let Some(on) = changed.get(&components[index]) {
                         entry.selected = *on;
                     }
                 }

@@ -163,14 +163,20 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             }
             let sh = cx.sheet_mut(sheet)?;
             // The array takes the whole range: other cells in it lose their contents.
+            let mut cleared = Vec::new();
             for c in range.iter().skip(1).take(1_000_000) {
                 if let Some(old) = sh.cells.get(c).filter(|x| x.has_content()) {
                     let style = old.style;
                     sh.set_cell(c, Cell { style, ..Cell::default() });
+                    cleared.push(c);
                 }
             }
             sh.set_cell(range.start, cell);
             cx.touch(sheet, range.start);
+            // Dependents of cleared neighbours must see the completed array write too.
+            for at in cleared {
+                cx.touch(sheet, at);
+            }
             return Ok(Json::Null);
         }
         let cell = if literal { Some(literal_cell(&input, sheet, at, &mut cx.wb)) } else { input_to_cell(&input, sheet, at, &mut cx.wb)? };

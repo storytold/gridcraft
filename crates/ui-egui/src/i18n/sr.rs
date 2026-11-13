@@ -48,7 +48,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "a histogram, waterfall, treemap… chart without its chart part was skipped" => {
             "Histogram, vodopadni ili treemap grafikon… bez svog dela grafikona je preskočen."
         }
-        "an embedded object (SmartArt, OLE…) was skipped" => "Ugrađeni objekat (SmartArt, OLE…) je preskočen.",
+        "an embedded object (diagram, OLE…) was skipped" => "Ugrađeni objekat (dijagram, OLE…) je preskočen.",
         "grouped shapes are not supported and were skipped" => "Grupisani oblici nisu podržani i preskočeni su.",
         "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
             "XLSB uvoz samo podataka: formule postaju sačuvani rezultati i neće se ponovo izračunavati. Formatiranje, grafikoni, slike, makroi i druge funkcije nisu uvezeni; datumi, valuta i procenti mogu biti prikazani kao brojevi. Sačuvajte novu .xlsx datoteku; čuvanje u XLSB formatu nije podržano."

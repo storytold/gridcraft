@@ -423,7 +423,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
         "a histogram, waterfall, treemap… chart without its chart part was skipped",
         "グラフパーツがないヒストグラム、ウォーターフォール、ツリーマップなどのグラフはスキップされました。",
     ),
-    ("an embedded object (SmartArt, OLE…) was skipped", "埋め込みオブジェクト（SmartArt、OLE など）はスキップされました。"),
+    ("an embedded object (diagram, OLE…) was skipped", "埋め込みオブジェクト（図解、OLE など）はスキップされました。"),
     ("grouped shapes are not supported and were skipped", "グループ化された図形はサポートされていないため、スキップされました。"),
     (
         "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported.",

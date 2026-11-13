@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (Ukrainian `Chart` is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from `Diagram` (`Схема`); retain Diagram and Decorative Text labels in the non-English catalogs; merge current main's CJK fallback baseline alignment updates (#1265, #2621) while retaining localized formula and catalog changes; earlier: reconcile the language counts and Languages table with shipped catalogs; correct catalog, native menu and regional-format review findings; Arabic bidi display, editing and cell reading direction; Arabic font fallback; number formats honour the `B1`/`B2` calendar prefixes) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-13 · **Change:** minor (retain localized series names with main's chart cache and refresh cached captions on language switches; validate literal arrays against completed cells and synchronize connected filter choices; earlier: Ukrainian terminology, Diagram and Decorative Text labels, CJK baseline alignment, Arabic bidi and regional formats) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -26,7 +26,7 @@ codes in storage. The grid and format previews use the workbook region for numbe
 
 ## Czech catalog audit (2026-11-05)
 
-The Czech interface catalog explicitly covers the 2,427 keys in the current audited
+The Czech interface catalog explicitly covers the 2,426 keys in the current audited
 inventory, including diagnostic templates, generated names, macro controls, chart and
 filter dialogs, printing and update prompts. A regression checks this inventory.
 This is catalog coverage; connecting every remaining UI literal is a separate audit.
@@ -208,6 +208,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | Merge main's chart cache and WordArt while retaining localized series names; invalidate cached labels on language changes; validate literal-array anchors against the completed range, recalculate dependents of cleared array cells and synchronize filter choices linked by captions or canonical command values; use neutral diagram terminology in localized import warnings |
 | 2026-11-10 | minor | Merge current main's CJK fallback baseline alignment updates (#1265, #2621) while retaining localized formula and catalog changes |
 | 2026-11-06 | minor | Correct Greek argument and Options labels, Ukrainian contextual/shared labels, and the Danish linked-cell caption; retain the established Danish Paste Link term and context-appropriate permission infinitives |
 | 2026-11-06 | minor | Preserve regional output alongside main display-precision helpers; align Czech logical tokens with its formula syntax, correct Chinese help labels and Traditional Chinese terms, and repair the Languages table |

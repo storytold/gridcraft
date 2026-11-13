@@ -140,7 +140,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "missing picture {target}" => "缺少图片 {target}。",
         "chart {target} has no supported plot and was skipped" => "图表 {target} 不包含受支持的图表类型，已跳过。",
         "a histogram, waterfall, treemap… chart without its chart part was skipped" => "没有对应图表部件的直方图、瀑布图、树状图…已跳过。",
-        "an embedded object (SmartArt, OLE…) was skipped" => "已跳过嵌入对象（SmartArt、OLE…）。",
+        "an embedded object (diagram, OLE…) was skipped" => "已跳过嵌入对象（图示、OLE…）。",
         "grouped shapes are not supported and were skipped" => "不支持组合形状，已跳过。",
         "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
             "XLSB 仅导入数据：公式将变为已保存的结果，且不会重新计算。不导入格式、图表、图片、宏及其他功能；日期、货币和百分比可能显示为数字。请另存为新的 .xlsx 文件；不支持保存为 XLSB。"

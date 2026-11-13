@@ -231,6 +231,32 @@ pub fn check_literal_validation(wb: &Workbook, sheet: usize, at: CellRef, input:
     check_entry(wb, sheet, at, input, true, &mut None, None)
 }
 
+/// Checks the array anchor against the completed write, including the cells the command clears.
+/// List validation still reads its choices from the original workbook, as for ordinary entries.
+pub fn check_literal_array_validation(wb: &Workbook, sheet: usize, range: RangeRef, input: &str) -> Option<(Validation, String)> {
+    let sh = wb.sheet(sheet)?;
+    let dv = sh.validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(range.start)))?;
+    if dv.kind == ValidationKind::Any || !dv.show_error {
+        return None;
+    }
+    let mut entered = wb.clone();
+    let target = entered.sheet_mut(sheet)?;
+    let mut changed = vec![(sheet, range.start)];
+    // Match cell.set's bounded legacy-array clearing, retaining destination formatting.
+    for at in range.iter().skip(1).take(1_000_000) {
+        if let Some(old) = target.cells.get(at).filter(|cell| cell.has_content()) {
+            let style = old.style;
+            target.set_cell(at, Cell { style, ..Default::default() });
+            changed.push((sheet, at));
+        }
+    }
+    target.set_cell(range.start, Cell { value: Value::text(input), style: sh.style_id(range.start), ..Default::default() });
+    let mut calc = gridcraft_calc::Calc::new();
+    calc.rebuild(&entered);
+    calc.cells_changed(&mut entered, &changed);
+    check_entry(wb, sheet, range.start, input, true, &mut None, Some(&entered))
+}
+
 /// Checks a literal fill against the original sheet, reusing one scratch workbook for formulas.
 pub fn check_literal_fill_validation(wb: &Workbook, sheet: usize, ranges: &[RangeRef], input: &str) -> Option<(Validation, String)> {
     if ranges.iter().any(|range| range.count() > 2_000_000) || wb.sheet(sheet)?.validations.is_empty() {

@@ -604,6 +604,25 @@ fn prepending_a_builtin_keeps_the_existing_udf() {
     assert_eq!(formula(&app), "SUM(1)+_xludf.SUM(2)");
 }
 
+/// Literal array validation sees both the new anchor value and cleared neighbours.
+#[test]
+fn unchanged_literal_array_validation_uses_completed_cells() {
+    for (rule, accepted) in [("=B1=\"keep\"", false), ("=AND(A1=\"keep\",ISBLANK(B1),C1=\"cleared\")", true)] {
+        let mut app = app();
+        app.run("range.setValues", json!({"range":"A1","values":[["old","keep"]],"parse":false})).unwrap();
+        app.run("cell.set", json!({"cell":"C1","input":"=IF(ISBLANK(B1),\"cleared\",B1)"})).unwrap();
+        app.run("data.validation", json!({"range":"A1","type":"custom","formula1":rule})).unwrap();
+        app.run("selection.set", json!({"range":"A1:B1","active":"B1"})).unwrap();
+        app.begin_edit(None, false);
+        assert_eq!(app.commit_edit(0, 0, true, false), accepted, "{rule}");
+        let sh = app.session.active().unwrap().wb.active().unwrap();
+        assert_eq!(sh.value(CellRef::new(0, 0)), Value::from(if accepted { "keep" } else { "old" }));
+        assert_eq!(sh.value(CellRef::new(0, 1)), if accepted { Value::Empty } else { Value::from("keep") });
+        assert_eq!(sh.value(CellRef::new(0, 2)), Value::from(if accepted { "cleared" } else { "keep" }));
+        assert_eq!(app.editor.is_none(), accepted);
+    }
+}
+
 #[test]
 fn whitespace_around_localized_constants_matches_engine_entry() {
     let mut app = app();

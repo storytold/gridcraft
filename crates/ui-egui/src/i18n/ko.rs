@@ -48,7 +48,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "a histogram, waterfall, treemap… chart without its chart part was skipped" => {
             "차트 부분이 없는 히스토그램, 폭포형, 트리맵… 차트를 건너뛰었습니다."
         }
-        "an embedded object (SmartArt, OLE…) was skipped" => "포함된 개체(SmartArt, OLE…)를 건너뛰었습니다.",
+        "an embedded object (diagram, OLE…) was skipped" => "포함된 개체(다이어그램, OLE…)를 건너뛰었습니다.",
         "grouped shapes are not supported and were skipped" => "그룹화된 도형은 지원되지 않아 건너뛰었습니다.",
         "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
             "XLSB 데이터만 가져옵니다. 수식은 저장된 결과로 바뀌며 다시 계산되지 않습니다. 서식, 차트, 그림, 매크로 및 기타 기능은 가져오지 않으며 날짜, 통화 및 백분율이 숫자로 표시될 수 있습니다. 새 .xlsx 파일로 저장하세요. XLSB 저장은 지원되지 않습니다."

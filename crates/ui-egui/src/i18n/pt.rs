@@ -28,7 +28,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "a histogram, waterfall, treemap… chart without its chart part was skipped" => {
             "O gráfico de histograma, cascata, mapa de árvore… sem a parte de gráfico foi ignorado."
         }
-        "an embedded object (SmartArt, OLE…) was skipped" => "O objeto incorporado (SmartArt, OLE…) foi ignorado.",
+        "an embedded object (diagram, OLE…) was skipped" => "O objeto incorporado (diagrama, OLE…) foi ignorado.",
         "grouped shapes are not supported and were skipped" => "Formas agrupadas não têm suporte e foram ignoradas.",
         "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
             "Importação XLSB somente dos dados: as fórmulas se tornam os resultados salvos e não serão recalculadas. A formatação, os gráficos, as imagens, as macros e outros recursos não são importados; datas, moeda e porcentagens podem ser exibidas como números. Salve um novo arquivo .xlsx; não há suporte para salvar como XLSB."

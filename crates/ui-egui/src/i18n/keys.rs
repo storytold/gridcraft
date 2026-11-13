@@ -2121,7 +2121,7 @@ pub(super) const INTERFACE: &[&str] = &[
     "all cells of a reference must be on one sheet",
     "alpha",
     "alpha must be between 0 and 1",
-    "an embedded object (SmartArt, OLE…) was skipped",
+    "an embedded object (diagram, OLE…) was skipped",
     "and",
     "and:",
     "anything",

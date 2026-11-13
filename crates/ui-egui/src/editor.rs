@@ -38,7 +38,7 @@ pub struct EditState {
     /// The other end of the selected text (char index), mirrored like `caret`; equal to `caret`
     /// when nothing is selected.
     pub anchor: usize,
-    /// The reference most recently inserted by point mode (byte range) вЂ” arrows/clicks replace it.
+    /// The reference most recently inserted by point mode (byte range) — arrows/clicks replace it.
     pub point: Option<(usize, usize)>,
     /// Where point mode's keyboard cursor is.
     pub point_cell: Option<CellRef>,
@@ -260,7 +260,7 @@ impl EditState {
             return;
         }
         let u = self.locale.fold_alias(&word);
-        // Not after a column letter of a reference like A1 (digits follow) вЂ“ fine either way.
+        // Not after a column letter of a reference like A1 (digits follow) – fine either way.
         self.autocomplete = names.iter().filter(|n| self.locale.fold_alias(n).starts_with(&u)).take(12).cloned().collect();
         if self.autocomplete.len() == 1 && self.locale.fold_alias(&self.autocomplete[0]) == u {
             self.autocomplete.clear();

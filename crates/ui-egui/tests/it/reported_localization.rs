@@ -433,3 +433,27 @@ fn matching_localized_filter_captions_share_one_selection() {
     assert!(sheet.is_row_hidden(2));
     assert!(!sheet.is_row_hidden(3));
 }
+
+/// Caption equality and case-insensitive command equality propagate transitively.
+#[test]
+fn connected_localized_filter_captions_stay_synchronized() {
+    use egui::{Key, Modifiers, accesskit::Role};
+    let mut h = harness();
+    h.state_mut().run("range.setValues", json!({"range":"A1","values":[["Header"],[true],["ИСТИНА"],["true"]],"parse":false})).unwrap();
+    h.state_mut().run("data.filter", json!({"range":"A1:A4"})).unwrap();
+    h.state_mut().run("selection.set", json!({"cell":"A1"})).unwrap();
+    press(&mut h, Key::ArrowDown, Modifiers::ALT);
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::CheckBox, "ИСТИНА").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::CheckBox, "true").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::CheckBox, "ИСТИНА").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "Применить").click();
+    h.run_steps(3);
+    let sheet = h.state().session.active().unwrap().wb.active().unwrap();
+    for row in 1..=3 {
+        assert!(sheet.is_row_hidden(row), "row {row}");
+    }
+}

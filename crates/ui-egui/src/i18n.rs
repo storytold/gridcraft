@@ -326,7 +326,7 @@ impl Language {
         }
         const DRAWING_WARNINGS: [&str; 3] = [
             "a histogram, waterfall, treemap… chart without its chart part was skipped",
-            "an embedded object (SmartArt, OLE…) was skipped",
+            "an embedded object (diagram, OLE…) was skipped",
             "grouped shapes are not supported and were skipped",
         ];
         for base in DRAWING_WARNINGS {
@@ -495,7 +495,7 @@ mod tests {
                 "a histogram, waterfall, treemap… chart without its chart part was skipped",
                 "Histogram, vodopádový nebo stromový graf… bez příslušné části grafu byl přeskočen.",
             ),
-            ("an embedded object (SmartArt, OLE…) was skipped", "Vložený objekt (SmartArt, OLE…) byl přeskočen."),
+            ("an embedded object (diagram, OLE…) was skipped", "Vložený objekt (diagram, OLE…) byl přeskočen."),
             ("grouped shapes are not supported and were skipped", "Seskupené obrazce nejsou podporovány a byly přeskočeny."),
         ];
 

@@ -68,7 +68,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "a histogram, waterfall, treemap… chart without its chart part was skipped" => {
             "Гистограмма, каскадная диаграмма, древовидная карта… без своей части диаграммы пропущена."
         }
-        "an embedded object (SmartArt, OLE…) was skipped" => "Встроенный объект (SmartArt, OLE…) пропущен.",
+        "an embedded object (diagram, OLE…) was skipped" => "Встроенный объект (схема, OLE…) пропущен.",
         "grouped shapes are not supported and were skipped" => "Группировка фигур не поддерживается; фигуры пропущены.",
         "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
             "Импорт XLSB только с данными: формулы заменяются сохранёнными результатами и не пересчитываются. Форматирование, диаграммы, изображения, макросы и другие функции не импортируются; даты, денежные значения и проценты могут отображаться как числа. Сохраните новый файл .xlsx; сохранение в XLSB не поддерживается."
