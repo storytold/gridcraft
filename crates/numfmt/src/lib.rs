@@ -1,7 +1,7 @@
 //! GridCraft number formats: Excel format codes (`#,##0.00;[Red](#,##0.00)`, dates, fractions,
 //! scientific…), the General display format and the `TEXT()` worksheet function. The decimal
-//! point and the thousands separator come from a [`gridcraft_core::Region`]; [`format_value`]
-//! uses en-US.
+//! point, the thousands separator, month and day names, AM/PM and the system long date and time
+//! come from a [`gridcraft_core::Region`]; [`format_value`] uses en-US.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -16,7 +16,7 @@ use gridcraft_core::{CellError, DateSystem, Region, Value};
 
 pub use decimal::{format_general_fit, format_general_fit_in};
 
-use parse::{DatePart, SecKind, Section, Tok};
+use parse::{DatePart, LocaleTag, SecKind, Section, Tok};
 use render::Out;
 
 /// Width (in characters) of General output in a cell.
@@ -315,6 +315,25 @@ impl NumberFormat {
             return (general(n), false);
         }
         let Some((sec, drop_sign)) = self.select(n) else { return (general(n), false) };
+        // `[$-F800]` and `[$-F400]` show the region's long date or time instead of the section.
+        // The region's own codes carry no such tag, so this recurses once at most. A section
+        // that drops the sign (`0;[$-F800]` for a negative) hands over the absolute value.
+        let system_code = match sec.locale {
+            LocaleTag::LongDate => Some(region.long_date),
+            LocaleTag::LongTime => Some(region.long_time),
+            LocaleTag::None | LocaleTag::Lcid(_) => None,
+        };
+        if let Some(code) = system_code {
+            let shown = if drop_sign { n.abs() } else { n };
+            let (mut f, overflow) = NumberFormat::parse_cached(code).format_number(shown, sys, region);
+            f.color = sec.color.or(f.color);
+            return (f, overflow);
+        }
+        // `[$-416]` names months and days in the region with that locale id, or in `region`.
+        let names = match sec.locale {
+            LocaleTag::Lcid(id) => gridcraft_core::region::all().iter().copied().find(|r| r.lcid == id).unwrap_or(region),
+            _ => region,
+        };
         let minus = n < 0.0 && !drop_sign;
         let out: Option<Out> = match sec.kind {
             SecKind::Text => Some(render::render_text(sec, &format_general_fit_in(n, GENERAL_WIDTH, region.decimal).unwrap_or_default())),
@@ -326,7 +345,7 @@ impl NumberFormat {
                 if minus {
                     None
                 } else {
-                    render::render_date(sec, n.abs(), sys)
+                    render::render_date(sec, n.abs(), sys, names)
                 }
             }
             SecKind::Number => Some(render::render_number(sec, n.abs(), region)),
@@ -640,21 +659,29 @@ impl NumberFormat {
     }
 }
 
-/// The `TEXT()` worksheet function: formats a value with a format code. Numeric text is
-/// converted to a number first; other text and booleans (as `TRUE`/`FALSE`) go through the text
-/// section, or are returned as is.
 /// Longest text a cell holds, in UTF-16 code units (Excel's 32,767 characters, which XLSB also
 /// stores that way), and so the longest `TEXT` result.
 const MAX_CELL_TEXT_CHARS: usize = 32_767;
 
+/// The `TEXT()` worksheet function: formats a value with a format code. Numeric text is
+/// converted to a number first; other text and booleans (as `TRUE`/`FALSE`) go through the text
+/// section, or are returned as is. en-US: [`text_function_in`] with [`gridcraft_core::region::EN_US`].
 pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellError> {
+    text_function_in(v, code, sys, &gridcraft_core::region::EN_US)
+}
+
+/// `TEXT()` in a workbook's region, as Excel evaluates it there: the code is written with the
+/// region's separators (`#.##0,00` in pt-BR, translated with [`canonical_code`]), numeric text
+/// is read as the region writes numbers, and the result uses the region's separators, month
+/// and day names and AM/PM.
+pub fn text_function_in(v: &Value, code: &str, sys: DateSystem, region: &Region) -> Result<String, CellError> {
     if code.is_empty() {
         return Ok(String::new());
     }
     if too_long(code) {
         return Err(CellError::Value);
     }
-    let fmt = NumberFormat::parse_cached(code);
+    let fmt = NumberFormat::parse_cached(&canonical_code(code, region));
     if fmt.inner.invalid {
         return Err(CellError::Value);
     }
@@ -663,7 +690,7 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
         Value::Empty => 0.0,
         Value::Number(n) => n,
         Value::Bool(b) => return Ok(fmt.format_text(if b { "TRUE" } else { "FALSE" }).text),
-        Value::Text(t) => match gridcraft_core::parse::parse_number_text(&t) {
+        Value::Text(t) => match gridcraft_core::parse::parse_number_text_in_region(&t, sys, region) {
             Some(n) => n,
             // Every `@` repeats the text: a result past a cell's limit is `#VALUE!`, so nested
             // TEXT calls can't multiply it further.
@@ -674,7 +701,7 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys, &gridcraft_core::region::EN_US);
+    let (f, overflow) = fmt.format_number(n, sys, region);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 
