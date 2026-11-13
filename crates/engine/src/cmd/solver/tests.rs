@@ -804,6 +804,27 @@ fn solver_report_can_skip_a_sensitivity_report_the_values_do_not_support() {
     assert_eq!((d.undo.len(), d.redo.len()), (before.undo.len(), before.redo.len()));
 }
 
+/// Exhausted analysis credit is terminal even when a non-optimal sensitivity report may be skipped.
+#[test]
+fn solver_report_skip_not_optimal_does_not_swallow_analysis_work_refusal() {
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("B1", "=A1^2")]);
+    let bank = s.doc().unwrap().analysis_budget.clone();
+    for _ in 0..3 {
+        crate::workload::Meter::new(bank.clone()).charge(crate::workload::MAX_RUN_WORK).unwrap();
+    }
+    assert_eq!(bank.remaining().unwrap(), 0);
+    let before = s.doc().unwrap().clone();
+    let result = s.execute(
+        "data.solverReport",
+        json!({"reports":["answer","sensitivity"],"model":{"objective":"B1","goal":"min","variables":"A1"},"values":{"A1":0},"skipNotOptimal":true}),
+    );
+    assert!(result.is_err(), "work refusal must not become a skipped report: {result:?}");
+    let after = s.doc().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&before.wb, &after.wb));
+    assert_eq!((before.undo.len(), before.redo.len()), (after.undo.len(), after.redo.len()));
+}
+
 #[test]
 fn a_sensitivity_refusal_of_the_model_comes_before_any_report_is_built() {
     // The refusals that apply to the model (integer or binary constraints, the Evolutionary

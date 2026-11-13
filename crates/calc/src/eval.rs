@@ -79,6 +79,26 @@ fn err(e: CellError) -> Ev {
     Ev::V(Value::Error(e))
 }
 
+/// Work performed by a binary array operation; oversized broadcasts are ordinary #NUM! errors.
+fn binary_array_work(x: &Value, y: &Value) -> Option<u64> {
+    match (x, y) {
+        (Value::Array(a), Value::Array(b)) => {
+            let dim = |a: usize, b: usize| {
+                if a == 1 {
+                    b
+                } else if b == 1 {
+                    a
+                } else {
+                    a.max(b)
+                }
+            };
+            array::broadcast_len(dim(a.rows, b.rows), dim(a.cols, b.cols)).map(|n| n as u64)
+        }
+        (Value::Array(a), _) | (_, Value::Array(a)) => Some(a.data.len() as u64),
+        _ => Some(0),
+    }
+}
+
 /// LAMBDA calls that one formula may have in progress at once, counted the same way on every build.
 /// The next call answers `#NUM!`. A countdown from 131, the deepest that `MAX_DEPTH` allows, has 132
 /// calls in progress, so it still runs.
@@ -750,6 +770,11 @@ impl<'h> Evaluator<'h> {
                 let mut acc = self.value(left);
                 while let Some((o, r)) = rest.pop() {
                     let y = self.value(r);
+                    let Some(units) = binary_array_work(&acc, &y) else { return err(CellError::Num) };
+                    // Reserve the complete broadcast before allocating or visiting any result cell.
+                    if units > 0 && !self.host.charge_work(units) {
+                        return err(CellError::Num);
+                    }
                     acc = binary_values(o, &acc, &y, self.host.workbook().date_system);
                 }
                 Ev::V(acc)
@@ -804,6 +829,63 @@ mod fuel_tests {
         fn random(&mut self) -> f64 {
             0.0
         }
+    }
+
+    /// Records host charges and can reject one complete broadcast reservation.
+    struct Metered {
+        wb: Workbook,
+        charges: Vec<u64>,
+        reject: Option<u64>,
+    }
+    impl Host for Metered {
+        fn workbook(&self) -> &Workbook {
+            &self.wb
+        }
+        fn cell_value(&mut self, _: usize, _: CellRef) -> Value {
+            Value::Empty
+        }
+        fn now_serial(&self) -> f64 {
+            0.0
+        }
+        fn random(&mut self) -> f64 {
+            0.0
+        }
+        fn charge_work(&mut self, units: u64) -> bool {
+            self.charges.push(units);
+            Some(units) != self.reject
+        }
+    }
+
+    /// A rejected broadcast returns before producing any cells; scalar operations keep their node charges.
+    #[test]
+    fn binary_broadcast_reserves_work_before_materializing() {
+        let mut host = Metered { wb: Workbook::new(), charges: Vec::new(), reject: Some(6) };
+        let expr = gridcraft_formula::parser::parse("={1;2}+{10,20,30}").unwrap();
+        let result = Evaluator::new(&mut host, 0, CellRef::new(0, 0)).value(&expr);
+        assert_eq!(result, Value::Error(CellError::Num));
+        assert_eq!(host.charges.last(), Some(&6));
+
+        let mut host = Metered { wb: Workbook::new(), charges: Vec::new(), reject: None };
+        let result = Evaluator::new(&mut host, 0, CellRef::new(0, 0)).value(&expr);
+        let Value::Array(result) = result else { panic!("expected broadcast array") };
+        assert_eq!((result.rows, result.cols), (2, 3));
+        assert_eq!(result.data, [11., 21., 31., 12., 22., 32.].map(Value::number));
+        assert!(host.charges.contains(&6));
+
+        host.charges.clear();
+        let scalar = gridcraft_formula::parser::parse("=1+2").unwrap();
+        assert_eq!(Evaluator::new(&mut host, 0, CellRef::new(0, 0)).value(&scalar), Value::number(3.));
+        assert!(host.charges.iter().all(|units| *units == 1));
+    }
+
+    /// An impossible broadcast keeps its regular catchable size error without reserving host work.
+    #[test]
+    fn binary_oversized_broadcast_has_no_work_reservation() {
+        let a = Value::from(Array::new(4001, 1, vec![Value::number(1.); 4001]).unwrap());
+        let b = Value::from(Array::new(1, 4001, vec![Value::number(1.); 4001]).unwrap());
+        assert_eq!(binary_array_work(&a, &b), None);
+        assert_eq!(binary_array_work(&a, &Value::number(1.)), Some(4001));
+        assert_eq!(binary_array_work(&Value::number(1.), &Value::number(2.)), Some(0));
     }
 
     fn eval_with(fuel: u64, src: &str) -> Value {

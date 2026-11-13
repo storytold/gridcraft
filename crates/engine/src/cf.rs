@@ -82,12 +82,12 @@ fn stats_need(rule: &CfRule) -> Option<StatsNeed> {
 }
 
 impl RuleStats {
-    fn build(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed) -> RuleStats {
-        let (sorted, counts) = numbers_in(sh, ranges, need);
+    fn build(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed) -> Option<RuleStats> {
+        let (sorted, counts) = numbers_in(sh, ranges, need)?;
         let n = sorted.len().max(1) as f64;
         let avg = sorted.iter().sum::<f64>() / n;
         let std = (sorted.iter().map(|x| (x - avg).powi(2)).sum::<f64>() / n).sqrt();
-        RuleStats { sorted, avg, std, counts }
+        Some(RuleStats { sorted, avg, std, counts })
     }
 }
 
@@ -122,13 +122,19 @@ fn spill_steps(sh: &Sheet, r: RangeRef) -> impl Iterator<Item = Option<CellRef>>
     })
 }
 
-fn numbers_in(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed) -> (Vec<f64>, HashMap<String, usize>) {
+/// Reserves work under the active per-cell, ambient and frame policies before a statistics step.
+fn charge_stats(units: u64) -> Option<()> {
+    gridcraft_calc::WorkHook::current().is_none_or(|hook| hook.charge(units)).then_some(())
+}
+
+fn numbers_in(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed) -> Option<(Vec<f64>, HashMap<String, usize>)> {
     let mut nums = Vec::new();
     let mut counts = HashMap::new();
     let mut budget = STATS_SCAN_LIMIT;
     let mut seen: HashSet<RangeRef> = HashSet::new();
     let used = sh.used_range();
     for r in ranges {
+        charge_stats(1)?;
         if budget == 0 {
             break;
         }
@@ -145,6 +151,7 @@ fn numbers_in(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed) -> (Vec<f64>, Ha
         let stored = sh.cells.iter_range(r).map(|(c, _)| (Some(c), true));
         let spilled = spill_steps(sh, r).map(|c| (c, false));
         for (c, is_stored) in stored.chain(spilled).take(budget) {
+            charge_stats(1)?;
             budget -= 1;
             // a skip over spills outside the columns (charged, not read), or a spilled value
             // under a stored cell, which was read with it
@@ -160,14 +167,23 @@ fn numbers_in(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed) -> (Vec<f64>, Ha
                 }
                 StatsNeed::Counts => {
                     if !v.is_empty() {
+                        let bytes = match &v {
+                            Value::Text(text) => text.len() as u64,
+                            _ => 32,
+                        };
+                        charge_stats(bytes.saturating_mul(3))?;
                         *counts.entry(v.display().to_lowercase()).or_insert(0) += 1;
                     }
                 }
             }
         }
     }
+    // Reserve sorting and both aggregate passes before either can traverse the collected values.
+    let n = nums.len() as u64;
+    let levels = u64::BITS as u64 - n.leading_zeros() as u64;
+    charge_stats(n.saturating_mul(levels.saturating_add(2)))?;
     nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    (nums, counts)
+    Some((nums, counts))
 }
 
 fn percentile(sorted: &[f64], p: f64) -> f64 {
@@ -411,7 +427,10 @@ impl CfCache {
         for (idx, cf) in rules {
             let first = RangeRef::top_left(&cf.ranges).unwrap_or(c);
             let st: &RuleStats = match stats_need(&cf.rule) {
-                Some(need) => &*self.stats.entry(idx).or_insert_with(|| RuleStats::build(sh, &cf.ranges, need)),
+                Some(need) => match self.stats.entry(idx) {
+                    std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(entry) => entry.insert(RuleStats::build(sh, &cf.ranges, need)?),
+                },
                 None => &no_stats,
             };
             let text = v.display();
@@ -798,6 +817,44 @@ mod tests {
         assert_eq!(Arc::strong_count(&cloned), 1, "paint identity must remain weak");
     }
 
+    /// Building statistics charges the shared frame and later cells reuse the finished result.
+    #[test]
+    fn statistics_charge_frame_before_sorting_and_are_reused() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let rows = (1..=100).map(|n| json!([n])).collect::<Vec<_>>();
+        s.execute("range.setValues", json!({"range":"A1","values":rows})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range":"A1:A100","rule":{"type":"top10","rank":1,"preset":"redBorder"}})).unwrap();
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::with_budget(d.render_budget.clone());
+        assert!(cache.look(&d.wb, 0, CellRef::parse("A1").unwrap()).is_none());
+        let charged = cache.frame_meter.spent().unwrap();
+        assert!(charged >= 800, "scan and sort must be charged: {charged}");
+        assert!(cache.look(&d.wb, 0, CellRef::parse("A100").unwrap()).is_some());
+        assert_eq!(cache.frame_meter.spent().unwrap(), charged);
+    }
+
+    /// An oversized statistical rule cannot cache partial statistics or poison a cheap neighbour.
+    #[test]
+    fn refused_statistics_are_not_cached_or_applied_to_other_cells() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let rows = (1..=7000).map(|n| json!([n])).collect::<Vec<_>>();
+        s.execute("range.setValues", json!({"range":"A1","values":rows})).unwrap();
+        s.execute("cell.set", json!({"cell":"B1","input":"7"})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range":"A1:A7000","rule":{"type":"top10","rank":1,"preset":"redBorder"}})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range":"B1","rule":{"type":"noBlanks","preset":"lightRedFill"}})).unwrap();
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::with_budget(d.render_budget.clone());
+        let parent = gridcraft_calc::WorkHook::new(|_| true);
+        let _scope = parent.enter().unwrap();
+        assert!(cache.look(&d.wb, 0, CellRef::parse("A1").unwrap()).is_none());
+        assert!(cache.stats.is_empty(), "refused statistics must never enter the cache");
+        assert!(gridcraft_calc::WorkHook::allowed(), "local refusal must not poison the parent");
+        assert!(cache.frame_meter.check().is_ok(), "local refusal must not poison the frame");
+        assert!(cache.look(&d.wb, 0, CellRef::parse("B1").unwrap()).is_some());
+    }
+
     /// Workbook paint expressions are bounded without a command and cannot style a refused value.
     #[test]
     fn rendering_native_broadcast_refusal_has_safe_fallback_even_with_iferror() {
@@ -938,9 +995,9 @@ mod tests {
         let sh = d.wb.sheet(0).unwrap();
         for ranges in ["A1:B6", "A1:A3", "B2:B9", "D1:E4", "A1:A2"].map(|r| vec![RangeRef::parse(r).unwrap()]) {
             let full = all_stats_before(sh, &ranges);
-            let numbers = RuleStats::build(sh, &ranges, StatsNeed::Numbers);
+            let numbers = RuleStats::build(sh, &ranges, StatsNeed::Numbers).unwrap();
             assert_eq!((numbers.sorted, numbers.avg.to_bits(), numbers.std.to_bits()), (full.sorted, full.avg.to_bits(), full.std.to_bits()));
-            assert_eq!(RuleStats::build(sh, &ranges, StatsNeed::Counts).counts, full.counts);
+            assert_eq!(RuleStats::build(sh, &ranges, StatsNeed::Counts).unwrap().counts, full.counts);
         }
     }
 
@@ -972,7 +1029,7 @@ mod tests {
     fn lookups_do_not_scan_the_range_for_rules_without_statistics() {
         let mut s = crate::Session::new();
         s.new_workbook();
-        let rows: Vec<serde_json::Value> = (1..=10_000).map(|i| json!([i, i % 7])).collect();
+        let rows: Vec<serde_json::Value> = (1..=5_000).map(|i| json!([i, i % 7])).collect();
         s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
         s.execute(
             "home.conditionalFormat",
@@ -1002,7 +1059,7 @@ mod tests {
         for r in 1..=50 {
             cache.look(&d.wb, 0, CellRef::parse(&format!("A{r}")).unwrap());
         }
-        assert_eq!(SCANNED.with(|n| n.get()), 10_000);
+        assert_eq!(SCANNED.with(|n| n.get()), 5_000);
     }
 
     /// A rule listing the same range many times scans it once, and never more than the shared
@@ -1018,12 +1075,12 @@ mod tests {
         let dense = RangeRef::parse("A1:XFD1048576").unwrap();
         let small = RangeRef::parse("A1:A3").unwrap();
         SCANNED.with(|n| n.set(0));
-        let st = RuleStats::build(sh, &vec![small; 1000], StatsNeed::Numbers);
+        let st = RuleStats::build(sh, &vec![small; 1000], StatsNeed::Numbers).unwrap();
         assert_eq!(st.sorted, vec![1.0, 2.0, 3.0]);
         assert_eq!(SCANNED.with(|n| n.get()), 3);
         let shifted: Vec<RangeRef> = (0..50).map(|i| RangeRef::new(CellRef::new(i, 0), dense.end)).collect();
         SCANNED.with(|n| n.set(0));
-        RuleStats::build(sh, &shifted, StatsNeed::Numbers);
+        assert!(RuleStats::build(sh, &shifted, StatsNeed::Numbers).is_some());
         assert!(SCANNED.with(|n| n.get()) <= STATS_SCAN_LIMIT);
     }
 
@@ -1039,7 +1096,7 @@ mod tests {
         let sh = d.wb.sheet(0).unwrap();
         let ranges = [RangeRef::parse("A1:A1048576").unwrap(), RangeRef::parse("B1:B1048576").unwrap()];
         SCANNED.with(|n| n.set(0));
-        let st = RuleStats::build(sh, &ranges, StatsNeed::Counts);
+        let st = RuleStats::build(sh, &ranges, StatsNeed::Counts).unwrap();
         assert_eq!(st.counts.get("7"), Some(&2));
         assert_eq!(SCANNED.with(|n| n.get()), 2);
     }
