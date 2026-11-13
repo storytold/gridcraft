@@ -139,6 +139,33 @@ fn depreciation() {
 }
 
 #[test]
+fn db_takes_a_period_below_one_as_the_first() {
+    // Excel checks that the period is positive before truncating it (#3966).
+    close(ev("DB", vec![n(1000.0), n(100.0), n(5.0), n(0.5), n(12.0)]), 369.0);
+    close(ev("DB", vec![n(1000.0), n(100.0), n(5.0), n(0.5), n(6.0)]), 184.5);
+    close(ev("DB", vec![n(1000.0), n(100.0), n(2.5), n(0.5), n(12.0)]), 602.0);
+    close(ev("DB", vec![n(1000.0), n(100.0), n(5.0), n(1.0), n(12.0)]), 369.0);
+    for period in [0.0, -0.5, -1.0] {
+        is_err(ev("DB", vec![n(1000.0), n(100.0), n(5.0), n(period), n(12.0)]), CellError::Num);
+    }
+}
+
+#[test]
+fn db_with_a_life_under_a_year_has_one_partial_period() {
+    // Period 1 is also the last, partial period: Excel answers it as the last (#4047).
+    close_tol(ev("DB", vec![n(1000.0), n(100.0), n(0.5), n(1.0), n(6.0)]), 249.975, 1e-9);
+    close_tol(ev("DB", vec![n(1000.0), n(100.0), n(0.5), n(1.5), n(6.0)]), 249.975, 1e-9);
+    is_err(ev("DB", vec![n(1000.0), n(100.0), n(0.5), n(2.0), n(6.0)]), CellError::Num);
+    // A full first year leaves no period for a life under a year.
+    is_err(ev("DB", vec![n(1000.0), n(100.0), n(0.5), n(1.0), n(12.0)]), CellError::Num);
+    is_err(ev("DB", vec![n(1000.0), n(100.0), n(0.5), n(1.0)]), CellError::Num);
+    // A life of a year or more is as before.
+    close(ev("DB", vec![n(1000.0), n(100.0), n(1.0), n(1.0), n(6.0)]), 450.0);
+    close(ev("DB", vec![n(1000.0), n(100.0), n(1.0), n(1.0), n(12.0)]), 900.0);
+    close(ev("DB", vec![n(1000.0), n(100.0), n(5.0), n(1.0), n(12.0)]), 369.0);
+}
+
+#[test]
 fn coupons() {
     let args = |f: &str| ev(f, vec![d(2011, 1, 25), d(2011, 11, 15), n(2.0), n(1.0)]);
     close(args("COUPDAYBS"), 71.0);
