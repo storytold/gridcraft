@@ -301,7 +301,8 @@ pub fn read_chart(root: &El) -> Option<Chart> {
             })
             .or(y_ax.as_ref())
             .is_some_and(|a| bool_val(a, "delete")),
-        series_lines: bars.and_then(|g| g.child("serLines")).map(|lines| {
+        // From whichever bar group has them: a combo chart's first group may be a clustered one.
+        series_lines: plot.kids("barChart").chain(plot.kids("bar3DChart")).find_map(|g| g.child("serLines")).map(|lines| {
             let ln = lines.path(&["spPr", "ln"]);
             gridcraft_model::ChartSeriesLines {
                 color: ln.and_then(|l| l.child("solidFill")).and_then(dml_color),

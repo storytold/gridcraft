@@ -67,3 +67,24 @@ fn the_hidden_value_axis_is_the_first_groups() {
     assert!(combo(&format!("{}{}", secondary(0), primary(1))));
     assert!(combo(&format!("{}{}", primary(1), secondary(0))));
 }
+
+/// A combo chart can hold a clustered bar group before the stacked one that has the lines.
+#[test]
+fn series_lines_come_from_the_bar_group_that_has_them() {
+    let group = |grouping: &str, axes: &str, extra: &str| {
+        format!(
+            "<c:barChart><c:barDir val=\"col\"/><c:grouping val=\"{grouping}\"/>\
+            <c:ser><c:idx val=\"0\"/><c:order val=\"0\"/><c:val><c:numLit><c:ptCount val=\"1\"/><c:pt idx=\"0\"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser>\
+            {extra}{axes}</c:barChart>"
+        )
+    };
+    let xml = format!(
+        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>{}{}\
+        <c:catAx/><c:valAx/></c:plotArea></c:chart></c:chartSpace>",
+        group("clustered", "<c:axId val=\"1\"/><c:axId val=\"2\"/>", "<c:gapWidth val=\"80\"/>"),
+        group("stacked", "<c:axId val=\"3\"/><c:axId val=\"4\"/>", "<c:overlap val=\"100\"/><c:serLines/>"),
+    );
+    let chart = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    assert_eq!(chart.series_lines, Some(Default::default()));
+    assert_eq!(chart.gap_width, Some(80), "spacing still comes from the first group");
+}
