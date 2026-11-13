@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
 use super::{CommandSpec, DocState, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, split_sheet, str_param};
+use super::{SpillReplacement, check_spill_targets};
 
 mod advanced_filter;
 mod consolidate;
@@ -333,6 +334,8 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
     if has_formula(csi, chg) || d.wb.sheet(csi).and_then(|sh| sh.cell(chg)).is_some_and(|c| c.py.is_some()) {
         return Err(EngineError::Other("Cell must contain a value.".into()));
     }
+    let changing_sheet = d.wb.sheet(csi).ok_or(EngineError::NoDocument)?;
+    check_spill_targets(changing_sheet, &[RangeRef::cell(chg)], SpillReplacement::Whole)?;
     let x0 = d.wb.sheet(csi).map(|sh| sh.value(chg)).and_then(|v| v.as_f64()).unwrap_or(0.0);
     let (max_iter, tol) = (d.wb.calc.max_iterations, d.wb.calc.max_change);
     let mut trial = Trial::new(d);
@@ -378,6 +381,7 @@ fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let d = s.doc()?;
     let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
+    check_spill_targets(sh, &[body], SpillReplacement::Whole)?;
     let (r0, c0) = (r.start.row, r.start.col);
     let mut trial = Trial::new(d);
     let mut out: Vec<(CellRef, Value)> = Vec::with_capacity(body.count() as usize);

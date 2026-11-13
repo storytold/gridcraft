@@ -1,4 +1,5 @@
 use super::{Cell, CellRef, EngineError, HashSet, Json, RangeRef, Result, Session, Value, bad, bool_param, edit, json, parse_range, str_param};
+use crate::cmd::{SpillReplacement, check_spill_targets};
 
 // ---------------------------------------------------------------- advanced filter
 
@@ -184,6 +185,12 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
         if dsi == si && out_range.intersects(&list) {
             return Err(EngineError::Other("The extract range can't overlap the list range.".into()));
         }
+        let destination = wb.sheet(dsi).ok_or(EngineError::NoDocument)?;
+        let headers = RangeRef::new(dest, CellRef::new(dest.row, end.col));
+        // Excel writes headers before refusing an intersecting body. Keep engine refusal
+        // atomic, while allowing a body write that replaces the spill's formula cell.
+        check_spill_targets(destination, &[headers], SpillReplacement::Whole)?;
+        check_spill_targets(destination, &[out_range], SpillReplacement::Anchor)?;
         let cells: Vec<(CellRef, Cell)> = rows_out
             .iter()
             .enumerate()

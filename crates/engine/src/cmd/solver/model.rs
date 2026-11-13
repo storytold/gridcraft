@@ -1,3 +1,4 @@
+use crate::cmd::{SpillReplacement, check_spill_targets};
 use gridcraft_core::split_areas;
 
 use super::{
@@ -286,6 +287,8 @@ pub(super) fn parse_model(s: &Session, p: &Json) -> Result<Model> {
     if vars.iter().any(|c| sh.cell(*c).is_some_and(|c| c.formula.is_some() || c.py.is_some())) {
         return Err(EngineError::Other("Variable cells must hold constants, not formulas.".into()));
     }
+    let targets: Vec<RangeRef> = vars.iter().copied().map(RangeRef::cell).collect();
+    check_spill_targets(sh, &targets, SpillReplacement::Whole)?;
     let mut cons = Vec::new();
     let mut scalar = 0usize;
     if let Some(list) = p.get("constraints") {
