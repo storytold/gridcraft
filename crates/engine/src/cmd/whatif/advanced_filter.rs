@@ -75,9 +75,10 @@ pub(crate) fn criterion_matches(v: &Value, text: &str, crit: &Value) -> bool {
         ">=" => matches!(cmp, Some(Ordering::Greater | Ordering::Equal)),
         "<=" => matches!(cmp, Some(Ordering::Less | Ordering::Equal)),
         _ => {
-            // Plain text criterion: begins with (wildcards allowed); a plain number equals.
+            // Plain text criterion: begins with (wildcards allowed); a plain number equals exactly, as with an
+            // explicit `=` and a numeric criteria cell.
             match (v, num) {
-                (Value::Number(a), Some(b)) => (a - b).abs() <= 1e-12 * b.abs().max(1.0),
+                (Value::Number(a), Some(b)) => *a == b,
                 _ => !v.is_empty() && wild(&format!("{lower_op}*")),
             }
         }
