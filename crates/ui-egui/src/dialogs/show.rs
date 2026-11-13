@@ -436,6 +436,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         let params = build_params(&d);
         match app.run_dialog_command(cmd, params) {
             Ok(r) => {
+                crate::analysis_ui::retain_dialog(app, home, &d, &r);
                 open = false;
                 if d.name == "solver" {
                     app.open_dialog("solverResults", r);

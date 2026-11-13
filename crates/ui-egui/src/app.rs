@@ -37,6 +37,7 @@ impl SheetApp {
             editor: None,
             text_box_editor: None,
             dialog: None,
+            pending_analysis_dialog: None,
             backstage: None,
             message: None,
             toast: None,

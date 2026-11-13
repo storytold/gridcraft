@@ -312,8 +312,13 @@ impl CfCache {
 
     /// Starts a new frame with the shared budget and TTL, keeping statistics for the same sheet.
     pub fn refresh(&mut self, budget: crate::workload::AnalysisBudget, results: RenderCache, wb: &Arc<Workbook>, revision: u64) {
+        let same_bank = self.frame_meter.uses_budget(&budget);
         let fresh = Self::with_cache(budget, results, wb, revision);
-        self.frame_meter = fresh.frame_meter;
+        // Keep prepaid credit across paints. A terminal refusal needs a new meter so a
+        // later shared-budget window can recover; unused credit is otherwise retained.
+        if !same_bank || self.frame_meter.check().is_err() {
+            self.frame_meter = fresh.frame_meter;
+        }
         self.results = fresh.results;
     }
 
@@ -572,6 +577,25 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// Repainting new cells spends prepaid credit rather than reserving a block every frame.
+    #[test]
+    fn refresh_retains_prepaid_credit_and_recovers_after_refusal() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let d = s.doc().unwrap();
+        let bank = d.render_budget.clone();
+        let results = d.render_cache.clone();
+        let mut cache = CfCache::with_cache(bank.clone(), results.clone(), &d.wb, d.revision);
+        for _ in 0..300 {
+            cache.refresh(bank.clone(), results.clone(), &d.wb, d.revision);
+            cache.frame_meter.charge(1).unwrap();
+        }
+        assert!(bank.remaining().unwrap() >= 995_000);
+        assert!(cache.frame_meter.charge(2_000_000).is_err());
+        cache.refresh(bank.clone(), results, &d.wb, d.revision);
+        assert!(cache.frame_meter.check().is_ok());
+    }
 
     /// A frame shares prepaid credit across misses instead of reserving 4096 units per cell.
     #[test]

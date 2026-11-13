@@ -416,7 +416,10 @@ impl Job {
                 return Err(bad(CMD, "input cells must be unique"));
             }
             let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
-            if sh.cell(cell).is_some_and(|c| c.formula.is_some()) || !matches!(sh.value(cell),Value::Number(n) if n.is_finite()) {
+            if sh.spill_anchor(cell).is_some()
+                || sh.cell(cell).is_some_and(|c| c.formula.is_some() || c.py.is_some())
+                || !matches!(sh.value(cell),Value::Number(n) if n.is_finite())
+            {
                 return Err(bad(CMD, format!("input `{label}` must be a numeric constant")));
             }
             inputs.push(Input { sheet, cell, label, distribution: Distribution::parse(item)? });

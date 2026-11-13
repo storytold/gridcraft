@@ -135,6 +135,36 @@ fn scenarios() {
     assert!(s.execute("data.scenarioSummary", json!({})).is_err());
 }
 
+/// A summary without result cells needs no simulated workbook recalculation.
+#[test]
+fn scenario_summary_without_results_does_not_run_trials() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+    let measured = |scenarios| {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell":"A1","input":"1"})).unwrap();
+        s.execute("cell.set", json!({"cell":"B1","input":"=SUM(SEQUENCE(1000))"})).unwrap();
+        for i in 0..scenarios {
+            s.execute("data.scenarioAdd", json!({"name":format!("S{i}"),"changing":"A1","values":[2]})).unwrap();
+        }
+        let charged = Arc::new(AtomicU64::new(0));
+        let seen = charged.clone();
+        let hook = gridcraft_calc::WorkHook::new(move |units| {
+            seen.fetch_add(units, Ordering::Relaxed);
+            true
+        });
+        let _scope = hook.enter().unwrap();
+        let result = s.execute("data.scenarioSummary", json!({})).unwrap();
+        assert_eq!(result["sheet"], "Scenario Summary");
+        charged.load(Ordering::Relaxed)
+    };
+    let one = measured(1);
+    let five = measured(5);
+    assert!(five < one.saturating_mul(2), "one={one}, five={five}");
+}
+
 #[test]
 fn data_tables() {
     let mut s = s();

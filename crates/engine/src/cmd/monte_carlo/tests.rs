@@ -379,3 +379,15 @@ fn native_discrete_and_lognormal_marginals_are_reusable_and_validated() {
         assert!(Distribution::parse(&distribution).is_err());
     }
 }
+
+/// Spill children are calculated values, not independent constants that trials may replace.
+#[test]
+fn rejects_spill_child_even_if_output_hides_spill_error() {
+    let mut s = model();
+    s.execute("cell.set", json!({"cell":"A1","input":"=SEQUENCE(2)"})).unwrap();
+    s.execute("cell.set", json!({"cell":"C1","input":"=IFERROR(A1,0)"})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let p = json!({"inputs":[{"cell":"A2","min":1,"max":2}],"outputs":["C1"],"iterations":2});
+    assert!(s.execute(CMD, p).is_err());
+    assert!(std::sync::Arc::ptr_eq(&before, &s.doc().unwrap().wb));
+}

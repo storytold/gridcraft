@@ -120,7 +120,9 @@ impl<'a> PassHost<'a> {
         }
         let mut hits = Vec::new();
         self.spill_index.meeting(sheet, range, &mut hits);
-        if self.work.as_ref().is_some_and(|hook| !hook.charge((hits.len() as u64).saturating_mul(hits.len() as u64))) {
+        if hits.len() <= MAX_UNORDERED_HITS
+            && self.work.as_ref().is_some_and(|hook| !hook.charge((hits.len() as u64).saturating_mul(hits.len() as u64)))
+        {
             return false;
         }
         let ordered = hits.len() > MAX_UNORDERED_HITS || spill_hits_overlap(&self.spill_index, sheet, &hits, range);
@@ -958,5 +960,25 @@ mod spill_work_tests {
         host.spills.insert(anchor, Arc::new(Array::column(vec![Value::Number(7.0); 10_000])));
         assert_eq!(host.range_values(0, RangeRef::new(CellRef::new(0, 0), CellRef::new(1, 0))), vec![Value::Error(CellError::Num)]);
         assert!(!hook.charge(0));
+    }
+
+    /// The ordered fallback scans linearly; it must not pay for skipped pairwise checks.
+    #[test]
+    fn many_spills_do_not_charge_quadratic_overlap_checks() {
+        let hook = WorkHook::new(|units| units <= 100);
+        let _scope = hook.enter().unwrap();
+        let wb = Workbook::new();
+        let exprs = HashMap::default();
+        let mut rng = 1;
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        for col in 0..40 {
+            let anchor = (0, CellRef::new(0, col));
+            host.spill_index.insert(anchor, 2, 1);
+            host.spills.insert(anchor, Arc::new(Array::column(vec![Value::Number(1.0), Value::Number(2.0)])));
+        }
+        let values = host.range_values(0, RangeRef::new(CellRef::new(0, 0), CellRef::new(1, 39)));
+        assert_eq!(values.len(), 80);
+        assert_eq!(values[40], Value::Number(2.0));
+        assert!(hook.charge(0));
     }
 }

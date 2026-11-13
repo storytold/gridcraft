@@ -188,6 +188,10 @@ pub(crate) struct Meter {
     state: Arc<RunState>,
 }
 impl Meter {
+    /// Whether this meter draws from the same document-owned bank.
+    pub(crate) fn uses_budget(&self, budget: &AnalysisBudget) -> bool {
+        self.state.budget.as_ref().is_some_and(|current| Arc::ptr_eq(&current.0, &budget.0))
+    }
     /// Starts analysis with a persistent run limit and the open workbook reservation bank.
     pub fn new(budget: AnalysisBudget) -> Self {
         Self::with_bank(Some(budget), MAX_RUN_WORK)

@@ -288,6 +288,21 @@ mod tests {
         assert!(saved_configuration(&sheet).unwrap().is_err());
     }
 
+    /// Unqualified inputs stay tied to the sheet where the dialog was opened.
+    #[test]
+    fn monte_carlo_dialog_returns_to_its_opening_sheet() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        session.execute("home.insertSheet", json!({})).unwrap();
+        session.execute("sheet.activate", json!({"sheet":0})).unwrap();
+        let mut app = crate::SheetApp::new(session, Default::default());
+        let original = app.session.active().unwrap().wb.active_sheet();
+        let mut dialog = Dialog::open(&mut app, "monteCarlo", json!({})).unwrap();
+        app.session.execute("sheet.activate", json!({"sheet":1})).unwrap();
+        dialog.end_pick(&mut app).unwrap();
+        assert_eq!(app.session.active().unwrap().wb.active_sheet(), original);
+    }
+
     /// Adding an input and then selecting a distribution supplies its own untouched defaults.
     #[test]
     fn monte_carlo_added_inputs_use_distribution_defaults_without_overwriting_edits() {

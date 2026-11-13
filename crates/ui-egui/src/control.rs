@@ -360,6 +360,9 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                     let params = crate::dialogs::build_params(&d);
                     let home = app.ui_window();
                     let r = app.run_dialog_command(cmd, params);
+                    if let Ok(result) = &r {
+                        crate::analysis_ui::retain_dialog(app, home, &d, result);
+                    }
                     if r.is_err() {
                         app.return_dialog(home, d);
                     }
