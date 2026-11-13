@@ -1079,8 +1079,13 @@ impl Dialog {
                 d
             }
             "spelling" => {
+                // The proofing dictionary follows the interface language: a Portuguese interface
+                // checks Portuguese text, and an English one keeps checking English.
+                let language = app.ui.language.code();
                 let mut d = Dialog::custom("spelling", "Spelling", json!({}));
-                d.result = Some(app.session.run("review.spelling", json!({})).unwrap_or_else(|e| json!({"error": e})));
+                d.result = Some(
+                    app.session.run("review.spelling", json!({"language": language})).unwrap_or_else(|e| json!({"error": e, "language": language})),
+                );
                 d
             }
             "chartTitle" => Dialog::form(
@@ -1245,5 +1250,21 @@ mod tests {
         let d = Dialog::open(&mut app, "dataValidation", json!({})).unwrap();
         assert_eq!(d.values["type"], "list");
         assert!(d.values.get("formula1").is_none());
+    }
+
+    /// The spelling dialog checks text in the interface language, not always English. The engine
+    /// echoes the tag it checked, whether it found a list or reported one missing.
+    #[test]
+    fn spelling_dialog_checks_the_interface_language() {
+        for (language, expected) in [(crate::i18n::Language::En, "en"), (crate::i18n::Language::PtBr, "pt")] {
+            let mut session = gridcraft_engine::Session::default();
+            session.new_workbook();
+            session.execute("cell.set", json!({"cell": "A1", "input": "trabalho relatório"})).unwrap();
+            let mut app = SheetApp::new(session, Default::default());
+            app.ui.language = language;
+            let d = Dialog::open(&mut app, "spelling", json!({})).unwrap();
+            let result = d.result.expect("the dialog runs the check when it opens");
+            assert_eq!(result["language"], expected, "{result}");
+        }
     }
 }
