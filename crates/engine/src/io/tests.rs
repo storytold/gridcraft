@@ -661,7 +661,7 @@ fn a_web_page_saved_as_xls_opens_its_table() {
     assert!(style("A1").font.bold && style("A1").align.h == gridcraft_model::HAlign::Center);
     assert!(!style("A2").font.bold);
     // Opened as text, codes keep their zeros; a page named .html gets no warning.
-    let (wb, warnings) = open_bytes_with("orders.html", page.as_bytes(), None, true).unwrap();
+    let (wb, warnings) = open_bytes_with("orders.html", page.as_bytes(), None, true, gridcraft_core::region::default_region()).unwrap();
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("C2").unwrap()), gridcraft_core::Value::text("007"));
     // Plain text that merely starts with a tag-like word is still read as CSV.
@@ -685,7 +685,7 @@ fn a_web_page_table_keeps_its_characters_text_and_header_formats() {
     assert_ne!(b1.num_fmt.as_str(), "General", "the date keeps its date format");
     assert_eq!(sh.value(CellRef::parse("B2").unwrap()), gridcraft_core::Value::number(4.5));
     // Opened as text, a cell keeps the text it shows, not the number the page recorded for it.
-    let (wb, _) = open_bytes_with("menu.xls", &page, None, true).unwrap();
+    let (wb, _) = open_bytes_with("menu.xls", &page, None, true, gridcraft_core::region::default_region()).unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("B2").unwrap()), gridcraft_core::Value::text("4,50"));
 }
 
@@ -880,4 +880,23 @@ fn the_merge_index_holds_a_bounded_number_of_cells() {
     assert_eq!(merge_index(&sh, rect).map(|m| m.len()), Some(1_000_000));
     sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(1_000_000, 0))];
     assert!(merge_index(&sh, rect).is_none());
+}
+
+/// Save As CSV in a region whose decimal is a comma (pt-BR) separates with `;` and writes the
+/// comma decimal, as Excel does, and a pt-BR CSV opened in pt-BR reads its numbers.
+#[test]
+fn csv_save_in_a_comma_decimal_region_uses_semicolons() {
+    let pt_br = gridcraft_core::region::find("pt-BR").unwrap();
+    let mut wb = Workbook::new();
+    wb.region = pt_br;
+    if let Some(sh) = wb.sheet_mut(0) {
+        sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::text("a"));
+        sh.set_value(CellRef::new(0, 1), gridcraft_core::Value::Number(1234.5));
+        sh.set_value(CellRef::new(0, 2), gridcraft_core::Value::Number(-0.25));
+    }
+    assert_eq!(String::from_utf8(save_bytes(&wb, "novo.csv").unwrap()).unwrap(), "a;1234,5;-0,25\r\n");
+    let (read, _) = open_bytes_with("valores.csv", b"a;1234,5\r\n", None, false, pt_br).unwrap();
+    assert_eq!(read.sheet(0).unwrap().value(CellRef::new(0, 1)), gridcraft_core::Value::Number(1234.5));
+    assert_eq!(read.region.tag, "pt-BR");
+    assert_eq!(String::from_utf8(save_bytes(&read, "valores.csv").unwrap()).unwrap(), "a;1234,5\r\n");
 }
