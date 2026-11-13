@@ -368,7 +368,10 @@ fn odd_first(sys: DateSystem, settle: f64, mat: f64, issue: f64, first: f64, fre
             return Err(CellError::Num);
         }
         let from = start.max(issue);
-        dc += span(sys, from, end, basis)? / nl;
+        // Under actual/360 and actual/365 Excel counts a whole quasi-coupon period after the
+        // one holding the issue date as NL days, i.e. exactly one period (#3959).
+        let days = if start > issue && matches!(basis, 2 | 3) { nl } else { span(sys, from, end, basis)? };
+        dc += days / nl;
         acc += span(sys, from, settle.min(end), basis)? / nl;
         if start <= settle && settle < end {
             nq = Some(k as f64);
@@ -461,7 +464,9 @@ fn odd_last(sys: DateSystem, settle: f64, mat: f64, last: f64, freq: f64, basis:
             return Err(CellError::Num);
         }
         let end = shift_months(sys, anchor, k * step, eom)?;
-        let nl = normal_length(start, end, freq, basis);
+        // Excel measures an odd last period's quasi-coupon periods by their actual length under
+        // every actual-day basis, not 360/frequency or 365/frequency (#3959).
+        let nl = if matches!(basis, 2 | 3) { end - start } else { normal_length(start, end, freq, basis) };
         if nl <= 0.0 {
             return Err(CellError::Num);
         }
