@@ -85,7 +85,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Format Cells…",
             ["Home", "Cells", "Format"],
             Some("Cmd+1"),
-            "{range?, style: {font?, fill?, borders?, align?, numFmt?, protection?}} (partial Style JSON merged in)",
+            "{range?, style: {font?, fill?, borders?, align?: {reading_order?: Context|LeftToRight|RightToLeft|null, ...}, numFmt?, protection?}} (partial Style JSON merged in; null clears reading_order)",
             has_doc,
             format_cells
         ),
@@ -656,8 +656,7 @@ fn merge(s: &mut Session, p: &Json, how: &str) -> Result<Json> {
                             let others: Vec<CellRef> = sh.cells.iter_range(m).map(|(c, _)| c).filter(|c| *c != m.start).collect();
                             for c in others {
                                 if let Some(mut cell) = sh.cells.get(c).cloned() {
-                                    cell.value = gridcraft_core::Value::Empty;
-                                    cell.formula = None;
+                                    cell.clear_content();
                                     sh.set_cell(c, cell);
                                 }
                                 touched.push((sheet, c));
@@ -674,8 +673,7 @@ fn merge(s: &mut Session, p: &Json, how: &str) -> Result<Json> {
                         let others: Vec<CellRef> = sh.cells.iter_range(*r).map(|(c, _)| c).filter(|c| *c != r.start).collect();
                         for c in others {
                             if let Some(mut cell) = sh.cells.get(c).cloned() {
-                                cell.value = gridcraft_core::Value::Empty;
-                                cell.formula = None;
+                                cell.clear_content();
                                 sh.set_cell(c, cell);
                             }
                             touched.push((sheet, c));
@@ -692,7 +690,10 @@ fn merge(s: &mut Session, p: &Json, how: &str) -> Result<Json> {
             let blocked = sh
                 .cells
                 .iter_range(reach)
-                .filter(|(_, x)| x.formula.is_some() && x.value == gridcraft_core::Value::Error(gridcraft_core::CellError::Spill));
+                // A Python cell's result is blocked and unblocked like a formula's.
+                .filter(|(_, x)| {
+                    (x.formula.is_some() || x.py.is_some()) && x.value == gridcraft_core::Value::Error(gridcraft_core::CellError::Spill)
+                });
             touched.extend(blocked.map(|(c, _)| (sheet, c)));
         }
         cx.changed.extend(touched);
@@ -867,6 +868,67 @@ mod tests {
         // The style's own snake_case keys keep working.
         s.execute("home.formatCells", json!({"range": "A1", "style": {"num_fmt": "0.00"}})).unwrap();
         assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["num_fmt"], "0.00");
+    }
+
+    #[test]
+    fn arabic_vowel_and_direction_marks_add_no_width() {
+        let plain = approx_text_width("محمد يدرس في المدرسة", 11.0, false);
+        assert_eq!(approx_text_width("مُحَمَّد يَدْرُسُ فِي الْمَدْرَسَةِ", 11.0, false), plain);
+        assert_eq!(approx_text_width("\u{200F}محمد يدرس في المدرسة\u{200C}", 11.0, false), plain);
+        assert_eq!(approx_text_width("ب\u{0897}\u{0898}\u{089F}", 11.0, false), approx_text_width("ب", 11.0, false));
+        assert!(approx_text_width("\u{08E2}", 11.0, false) > 0.0, "the disputed end of ayah is a visible sign");
+    }
+
+    #[test]
+    fn arabic_text_fits_a_column_about_as_wide_as_latin_text_of_the_same_length() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["مُحَمَّد يَدْرُسُ فِي الْمَدْرَسَةِ", "Hello there in school"]]})).unwrap();
+        s.execute("home.autofitColumnWidth", json!({"cols": "A:B"})).unwrap();
+        let doc = s.doc().unwrap();
+        let width = |c: u32| doc.wb.active().and_then(|sh| sh.cols.get(&c)).and_then(|e| e.size).unwrap();
+        let ratio = width(0) / width(1);
+        assert!((0.75..=1.15).contains(&ratio), "Arabic {} vs Latin {}", width(0), width(1));
+    }
+
+    #[test]
+    fn autofit_of_many_separate_columns_fits_only_the_selected_ones() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let long = "a much longer text than the others";
+        // Columns A, C, E, G, I, K are selected (six runs), the ones between hold long text too.
+        let row: Vec<_> = (0..11).map(|c| if c % 2 == 0 { json!("x") } else { json!(long) }).collect();
+        s.execute("range.setValues", json!({"range": "A1", "values": [row]})).unwrap();
+        s.execute("home.autofitColumnWidth", json!({"cols": "A:A,C:C,E:E,G:G,I:I,K:K"})).unwrap();
+        let doc = s.doc().unwrap();
+        let size = |c: u32| doc.wb.active().and_then(|sh| sh.cols.get(&c)).and_then(|e| e.size);
+        assert!([0, 2, 4, 6, 8, 10].iter().all(|&c| size(c).is_some()));
+        assert!([1, 3, 5, 7, 9].iter().all(|&c| size(c).is_none()));
+    }
+
+    #[test]
+    fn arabic_word_ligatures_are_wider_than_letters() {
+        let em = |t: &str| approx_text_width(t, 72.0, false) / 96.0;
+        assert!(em("\u{FDFD}") > 8.0);
+        assert!(em("\u{FDFA}") > 1.0);
+        let honorifics = ['\u{FD40}', '\u{FD4B}', '\u{FD4C}', '\u{FD4F}', '\u{FDC8}', '\u{FDCF}', '\u{FDFE}', '\u{FDFF}'];
+        for honorific in honorifics.into_iter().chain(['\u{FBC3}', '\u{FBD2}', '\u{FD90}', '\u{FD91}']) {
+            assert!(em(&honorific.to_string()) > 1.0, "U+{:04X}", u32::from(honorific));
+        }
+        assert!(em("ب") < 0.6);
+    }
+
+    #[test]
+    fn arabic_digits_are_as_wide_as_ascii_digits_and_punctuation_as_a_letter() {
+        let width = |t: &str| approx_text_width(t, 11.0, false);
+        assert_eq!(width("١٢٣"), width("123"));
+        assert_eq!(width("۴۵۶"), width("456"));
+        assert_eq!(width("،؟"), width("بب"));
+    }
+
+    #[test]
+    fn cjk_text_keeps_a_full_em_per_character() {
+        assert_eq!(approx_text_width("中文", 12.0, false), 2.0 * 12.0 * 96.0 / 72.0);
     }
 
     #[test]

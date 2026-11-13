@@ -142,13 +142,22 @@ pub fn read(cx: &mut Ctx<'_>, workbook_rels: &[Rel]) -> Result<Vec<Option<Arc<Ce
     let Some(image_rel_list) = read_xml(cx, &image_rels_path, "richValueRels")? else { return Ok(vec![]) };
     let image_rels = cx.pkg.rels(&image_rels_path)?;
     let structures = entries(cx, &structures, "s")?;
+    // Each structure's key layout, worked out once: every value would otherwise walk its
+    // structure's keys again. Only local-image structures matter here.
+    let layouts: Vec<Option<Layout>> = structures.iter().map(|s| Layout::of(s)).collect();
     let image_rel_list = entries(cx, &image_rel_list, "rel")?;
+    // Relationships by id, a repeated id recorded as invalid (`None`), so a value's lookup is
+    // one probe rather than a scan of the whole table for duplicates.
+    let mut rels_by_id: HashMap<&str, Option<&Rel>> = HashMap::new();
+    for rel in &image_rels {
+        rels_by_id.entry(rel.id.as_str()).and_modify(|r| *r = None).or_insert(Some(rel));
+    }
     let values = entries(cx, &data, "rv")?;
     let mut pictures = Vec::with_capacity(values.len());
     let mut cache = HashMap::new();
     let mut total = 0usize;
     for value in values {
-        let picture = read_value(cx, value, &structures, &image_rel_list, &image_rels, &mut cache, &mut total)?;
+        let picture = read_value(cx, value, &layouts, &image_rel_list, &rels_by_id, &mut cache, &mut total)?;
         if picture.is_none() {
             cx.warn("some rich values are unsupported or malformed; their scalar fallbacks were retained (cell pictures may be missing)");
         }
@@ -188,43 +197,56 @@ pub fn read(cx: &mut Ctx<'_>, workbook_rels: &[Rel]) -> Result<Vec<Option<Arc<Ce
         .collect())
 }
 
+/// Where a `_localImage` structure keeps the values a picture needs.
+struct Layout {
+    keys: usize,
+    /// Index of the one `_rvRel:LocalImageIdentifier` key of type `i`, if exactly one.
+    image: Option<usize>,
+    /// Index of the one `Text` key of type `s`, if exactly one.
+    text: Option<usize>,
+}
+
+impl Layout {
+    fn of(structure: &El) -> Option<Layout> {
+        if structure.attr("t") != Some("_localImage") {
+            return None;
+        }
+        let keys: Vec<&El> = structure.kids("k").collect();
+        let one = |name: &str, ty: &str| {
+            let mut matches = keys.iter().enumerate().filter(|(_, k)| k.attr("n") == Some(name));
+            let (i, key) = matches.next()?;
+            (matches.next().is_none() && key.attr("t") == Some(ty)).then_some(i)
+        };
+        Some(Layout { keys: keys.len(), image: one("_rvRel:LocalImageIdentifier", "i"), text: one("Text", "s") })
+    }
+}
+
 fn read_value(
     cx: &mut Ctx<'_>,
     value: &El,
-    structures: &[&El],
+    layouts: &[Option<Layout>],
     image_rel_list: &[&El],
-    image_rels: &[Rel],
+    rels_by_id: &HashMap<&str, Option<&Rel>>,
     cache: &mut HashMap<(String, String), Arc<CellPicture>>,
     total: &mut usize,
 ) -> Result<Option<Arc<CellPicture>>, IoError> {
-    let Some(structure) = value.attr_u32("s").and_then(|n| structures.get(n as usize)) else { return Ok(None) };
-    if structure.attr("t") != Some("_localImage") {
-        return Ok(None);
-    }
-    let keys: Vec<_> = structure.kids("k").collect();
+    let Some(Some(layout)) = value.attr_u32("s").and_then(|n| layouts.get(n as usize)) else { return Ok(None) };
     let values: Vec<_> = value.kids("v").collect();
-    if keys.len() != values.len() {
+    if layout.keys != values.len() {
         return Ok(None);
     }
-    let lookup = |name: &str, ty: &str| {
-        let mut matches = keys.iter().zip(&values).filter(|(k, _)| k.attr("n") == Some(name));
-        let (key, value) = matches.next()?;
-        (matches.next().is_none() && key.attr("t") == Some(ty)).then_some(value.text.as_str())
-    };
-    let Some(rel_id) = lookup("_rvRel:LocalImageIdentifier", "i")
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .and_then(|n| image_rel_list.get(n))
-        .and_then(|rel| rel.attr("id"))
+    let lookup = |slot: Option<usize>| slot.and_then(|i| values.get(i)).map(|v| v.text.as_str());
+    let Some(rel_id) =
+        lookup(layout.image).and_then(|v| v.trim().parse::<usize>().ok()).and_then(|n| image_rel_list.get(n)).and_then(|rel| rel.attr("id"))
     else {
         return Ok(None);
     };
-    let mut matches = image_rels.iter().filter(|rel| rel.id == rel_id);
-    let Some(rel) = matches.next() else { return Ok(None) };
-    if matches.next().is_some() || rel.kind != "image" || rel.external {
+    let Some(found) = rels_by_id.get(rel_id) else { return Ok(None) };
+    let Some(rel) = found.filter(|rel| rel.kind == "image" && !rel.external) else {
         cx.warn("a cell picture has an external or invalid image relationship; kept its scalar fallback");
         return Ok(None);
-    }
-    let alt = lookup("Text", "s").unwrap_or("").to_string();
+    };
+    let alt = lookup(layout.text).unwrap_or("").to_string();
     let key = (normalize(&rel.target), alt.clone());
     if let Some(picture) = cache.get(&key) {
         return Ok(Some(picture.clone()));
@@ -349,7 +371,9 @@ fn metadata(count: usize, dynamic: bool) -> String {
     }
     xml.push_str("<metadataType name=\"XLRICHVALUE\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" cellMeta=\"0\"/></metadataTypes>");
     if dynamic {
-        xml.push_str("<futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext uri=\"{BDBB8CDC-FA1E-496E-A857-3C3F30C029C3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/></ext></extLst></bk></futureMetadata>");
+        // Lower case, as the dynamic-array-only metadata in `write.rs` spells it: Excel refuses
+        // a workbook whose XLDAPR extension URI is in upper case (#2339).
+        xml.push_str("<futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext uri=\"{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/></ext></extLst></bk></futureMetadata>");
     }
     let _ = write!(xml, "<futureMetadata name=\"XLRICHVALUE\" count=\"{count}\">");
     for i in 0..count {

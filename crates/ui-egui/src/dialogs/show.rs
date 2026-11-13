@@ -9,6 +9,7 @@ use super::format_cells::format_cells;
 use super::insert_function::insert_function;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
+use super::ref_edit::{RefLabel, SHEET_DELETED, end_pick, home_sheet_deleted, place_window, ref_edit, window_shown};
 use super::spelling::spelling;
 use super::zoom::zoom;
 use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
@@ -147,18 +148,20 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let mut confirm = false;
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
-        "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
+        "about" => 820.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "equation" => 520.0,
         "macros" => 480.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        "assignAction" => 440.0,
         "zoom" => 220.0,
         "pasteSpecial" => 480.0,
         _ => 380.0,
     };
+    let window_id = egui::Id::unique("dialog").with(&d.name);
     let window = egui::Window::new(app.ui.language.tr(&d.title))
-        .id(egui::Id::unique("dialog").with(&d.name))
+        .id(window_id)
         .collapsible(false)
         .resizable(false)
         .default_width(width)
@@ -171,12 +174,18 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "advancedFilter" => window.default_height(0.0),
         _ => window,
     };
-    window.show(ctx, |ui| {
+    let (window, collapsed) = place_window(app, ctx, &mut d, window, window_id);
+    let shown = window.show(ctx, |ui| {
+            if let Some(key) = &collapsed {
+                let title = d.title.clone();
+                ref_edit(app, ui, &mut d, key, RefLabel::Named(&title), (width - 40.0).min(380.0));
+                return;
+            }
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
-                "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
-                "advancedFilter" => advanced_filter_form(ui, &mut d, &mut confirm, &mut open),
+                "dataValidation" => data_validation_form(app, ui, &mut d, &mut confirm, &mut open),
+                "advancedFilter" => advanced_filter_form(app, ui, &mut d, &mut confirm, &mut open),
                 "insertFunction" => insert_function(app, ui, &mut d, &mut confirm),
                 "find" => find(app, ui, &mut d),
                 "goTo" => go_to(app, ui, &mut d, &mut confirm),
@@ -188,12 +197,16 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
-                "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
+                "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm, &mut open),
+                "equation" => crate::equation::editor(app, ui, &mut d, &mut confirm, &mut open),
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
                 "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
+                "assignAction" => crate::control_ui::assign_dialog(app, ui, &mut d, &mut open),
+                "formatControl" => crate::control_ui::format_dialog(app, ui, &mut d, &mut open),
+                "controlQuestion" => crate::control_ui::question_dialog(app, ui, &mut d, &mut open),
                 "agents" => {
                     ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");
                     ui.add_space(4.0);
@@ -364,9 +377,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         open = false;
                     }
                 }
-                _ => form(ui, &mut d, &mut confirm, &mut open),
+                _ => form(app, ui, &mut d, &mut confirm, &mut open),
             }
         });
+    window_shown(ctx, &mut d, collapsed.is_some(), shown.map(|r| r.response.rect));
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
     if let Some(open_url) = &app.services.open_url {
@@ -397,6 +411,24 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
         confirm = false;
     }
+    if confirm && d.name == "openLink" {
+        confirm = false;
+        if confirm_open_link(app, &d) {
+            open = false;
+        }
+    }
+    if confirm && d.command.is_some() && home_sheet_deleted(app, &mut d) {
+        // References without a sheet name would land on whichever sheet is shown now.
+        app.message = Some((d.title.clone(), SHEET_DELETED.into()));
+        confirm = false;
+    }
+    if confirm && let Err(e) = end_pick(app, &mut d) {
+        // References without a sheet name mean the sheet the dialog was opened on: when it can't
+        // be shown again (a text-box draft on the picked sheet could not be saved), the command
+        // would read them against the wrong sheet, so it doesn't run and the dialog stays.
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+        confirm = false;
+    }
     if confirm && let Some(cmd) = d.command {
         let params = build_params(&d);
         match app.run(cmd, params) {
@@ -422,6 +454,19 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         }
     } else if confirm {
         open = false;
+    }
+    if !open
+        && !confirm
+        && let Err(e) = end_pick(app, &mut d)
+    {
+        // Cancelled or closed: back to the sheet and selection from before picking. A confirmed
+        // OK went back before its command ran, and stays where the command left things (Data
+        // Analysis shows the report sheet it added). When the dialog's sheet can't be shown
+        // again (a text-box draft on the picked sheet could not be saved), Cancel still closes
+        // the dialog, since there is no command left to protect: the reason is shown, and the
+        // draft and the selection stay where they are for the person to deal with. A script's
+        // `ui.dialog.cancel` gets the error instead and keeps the dialog, so it can act on it.
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
     }
     if app.ui_window() != home {
         // A command run from the dialog switched windows: whatever it opened shows in the new
@@ -450,6 +495,33 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
+/// OK in Open Hyperlink; returns whether the prompt closes. A pass that carries control-channel
+/// input (`ui.key`, `ui.click`, `ui.drag`) can't say yes for the user (#2181): the link stays
+/// unopened and the prompt open, with a message. Real input in that same pass is refused too, so
+/// the user just presses OK again.
+pub(super) fn confirm_open_link(app: &mut SheetApp, d: &Dialog) -> bool {
+    if app.synthetic_pending {
+        app.message = Some((d.title.clone(), SYNTHETIC_LINK_CONFIRM.into()));
+        return false;
+    }
+    if let Err(e) = open_confirmed_link(app, d) {
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+    }
+    true
+}
+
+/// Why Open Hyperlink ignored an OK that arrived with synthetic control-channel input.
+pub(super) const SYNTHETIC_LINK_CONFIRM: &str = "Synthetic input from the control channel can't open a link: press OK yourself to open it.";
+
+/// The user pressed OK in Open Hyperlink: opens the address the prompt showed (`d.link`), never
+/// one a caller edited into its values afterwards.
+pub(super) fn open_confirmed_link(app: &mut SheetApp, d: &Dialog) -> Result<(), String> {
+    let url = d.link.as_deref().unwrap_or_default();
+    let r = app.session.open_confirmed_link(url).map(|_| ()).map_err(|e| e.to_string());
+    app.after_engine();
+    r
+}
+
 pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
     ui.add_space(8.0);
     // A row as tall as the buttons: a right-to-left layout straight in the window takes all the
@@ -469,8 +541,8 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
     });
 }
 
-fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
-    form_fields(ui, d);
+fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    form_fields(app, ui, d);
     ok_cancel(ui, confirm, open);
 }
 
@@ -516,7 +588,7 @@ fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
 }
 
 /// Draws a dialog's `fields`, editing its values.
-pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
+pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     // Field labels, choices and notes are English source strings, translated as they are drawn.
     let lang = crate::i18n::current(ui.ctx());
     egui::Grid::new("form").num_columns(1).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
@@ -543,6 +615,12 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         if let Some(pick) = d.pick.as_mut().filter(|pick| pick.key == key) {
                             track_pick(pick, &r, r.changed());
                         }
+                    });
+                }
+                Field::Ref { key, label } => {
+                    ui.vertical(|ui| {
+                        let l = ui.label(lang.tr(label));
+                        ref_edit(app, ui, d, key, RefLabel::By(l.id), 320.0);
                     });
                 }
                 Field::Password { key, label } => {

@@ -182,7 +182,7 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
     for (n, a) in numeric.iter_mut().zip(any.iter()) {
         *n = *n && *a;
     }
-    let dates = numeric.iter().zip(formats.iter()).map(|(n, f)| *n && crate::display::number_format(f).is_date()).collect();
+    let dates = numeric.iter().zip(formats.iter()).map(|(n, f)| *n && crate::display::parsed(f).is_date()).collect();
     Ok(Source { sheet: si, range: r, headers, formats, numeric, dates, rows })
 }
 
@@ -228,7 +228,7 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
     }
     if !replace {
         for (c, cell) in sh.cells.iter_range(area) {
-            if (!cell.value.is_empty() || cell.formula.is_some()) && !pt.last_range.is_some_and(|r| r.contains(c)) {
+            if cell.has_content() && !pt.last_range.is_some_and(|r| r.contains(c)) {
                 return Err(format!(
                     "There's already data in {}!{}. Do you want to replace it? (Run again with replace: true to overwrite.)",
                     quote_sheet(&sh.name),
@@ -278,7 +278,10 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
             if oc.value.is_empty() && id == StyleId::default() {
                 continue;
             }
-            cells.push((CellRef::new(origin.row + ri as u32, origin.col + ci as u32), Cell { value: oc.value.clone(), formula: None, style: id }));
+            cells.push((
+                CellRef::new(origin.row + ri as u32, origin.col + ci as u32),
+                Cell { value: oc.value.clone(), formula: None, style: id, py: None },
+            ));
         }
     }
     // Column widths that fit the labels.

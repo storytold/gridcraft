@@ -303,7 +303,7 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
                 let sh = cx.sheet_mut(sheet)?;
                 for (c, v) in model.vars.iter().zip(x) {
                     let style = sh.style_id(*c);
-                    sh.set_cell(*c, Cell { value: Value::number(*v), formula: None, style });
+                    sh.set_cell(*c, Cell { value: Value::number(*v), formula: None, style, py: None });
                 }
                 for c in &model.vars {
                     cx.touch(sheet + count, *c);

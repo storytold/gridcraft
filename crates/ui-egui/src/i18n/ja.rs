@@ -8,6 +8,8 @@
 
 /// English label → Japanese, the shared reference set.
 pub(super) const CORE: &[(&str, &str)] = &[
+    ("Diagram", "図解"),
+    ("Decorative Text", "装飾文字"),
     ("Paste", "貼り付け"),
     ("Paste Values", "値の貼り付け"),
     ("Paste Formulas", "数式の貼り付け"),
@@ -64,6 +66,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Format\nPane", "書式ウィンドウ"),
     ("Format", "書式"),
     ("Insert", "挿入"),
+    ("Header Menu|Insert", "挿入"),
     ("Insert Cells…", "セルの挿入…"),
     ("Delete", "削除"),
     ("Delete Cells…", "セルの削除…"),
@@ -112,9 +115,20 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Text to\nColumns", "区切り位置"),
     ("Link", "リンク"),
     ("Symbol", "記号"),
+    ("Equation", "数式"),
+    ("Insert New Equation...", "新しい数式の挿入"),
     ("Sparklines", "スパークライン"),
     ("Checkbox", "チェックボックス"),
     ("Insert checkboxes in the selected cells", "選択したセルにチェックボックスを挿入"),
+    ("Button", "ボタン"),
+    ("Slider", "スライダー"),
+    ("Spin Button", "スピン ボタン"),
+    ("Draw a button that runs a macro or a command", "マクロまたはコマンドを実行するボタンを描画"),
+    ("Draw a slider that sets a whole number in a linked cell", "リンクされたセルに整数を設定するスライダーを描画"),
+    ("Draw a spin button that steps a whole number in a linked cell", "リンクされたセルの整数を増減するスピン ボタンを描画"),
+    ("Edit Text", "テキストの編集"),
+    ("Assign Action…", "動作の登録…"),
+    ("Format Control…", "コントロールの書式設定…"),
     ("Header & Footer", "ヘッダーとフッター"),
     ("Draw with ink", "インクで描画"),
     ("Eraser", "消しゴム"),
@@ -156,6 +170,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Error Checking", "エラーチェック"),
     ("Trace Error", "エラーのトレース"),
     ("Circular References", "循環参照"),
+    ("Python Mode", "Python モード"),
     ("Evaluate Formula", "数式の検証"),
     ("Watch Window", "ウォッチ ウィンドウ"),
     ("Calculation\nOptions", "計算方法の設定"),
@@ -254,6 +269,8 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Legend: Bottom", "凡例: 下"),
     ("Legend: Top", "凡例: 上"),
     ("Legend: Right", "凡例: 右"),
+    ("First slice angle", "最初の扇形の角度"),
+    ("Doughnut hole size", "ドーナツの穴のサイズ"),
     ("Gridlines: None", "目盛線: なし"),
     ("Gridlines: Show", "目盛線: 表示"),
     ("Chart\nTitle", "グラフ タイトル"),
@@ -999,6 +1016,8 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Tab Color", "シートの見出しの色"),
     ("Unhide…", "再表示…"),
     ("Unprotect Sheet…", "シート保護の解除…"),
+    ("Collapse dialog", "ダイアログを折りたたむ"),
+    ("Expand dialog", "ダイアログを展開する"),
 ];
 
 /// Labels of the ribbon menus, pop-ups and palettes that the reference catalog does not cover (the
