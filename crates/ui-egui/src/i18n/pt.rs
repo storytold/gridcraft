@@ -453,6 +453,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Maximum Iterations must be a whole number from 1 to 32767." => "O número máximo de iterações deve ser um número inteiro de 1 a 32767.",
         "Maximum Change must be a number of 0 or more." => "A alteração máxima deve ser um número maior ou igual a 0.",
         "Calculation settings are saved with the workbook." => "As configurações de cálculo são salvas com a pasta de trabalho.",
+        "Use 1904 date system" => "Usar sistema de data 1904",
         "OK" => "OK",
         "Cancel" => "Cancelar",
         "Don't Save" => "Não Salvar",

@@ -1,6 +1,6 @@
 //! Formulas tab: AutoSum, Insert Function, names, auditing, calculation.
 
-use gridcraft_core::{CellError, CellRef, RangeRef, Value};
+use gridcraft_core::{CellError, CellRef, DateSystem, RangeRef, Value};
 use gridcraft_model::{CalcMode, Cell, DefinedName, Formula, Workbook};
 use serde_json::{Value as Json, json};
 
@@ -101,7 +101,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Calculation Options",
             ["Formulas", "Calculation"],
             None,
-            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001), precisionAsDisplayed?: bool (Set precision as displayed: numbers are stored as their format shows them; turning it on rounds every number constant permanently)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
+            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001), precisionAsDisplayed?: bool (Set precision as displayed: numbers are stored as their format shows them; turning it on rounds every number constant permanently), date1904?: bool (Use 1904 date system: dates count from 1 January 1904; stored numbers are kept, so a date constant shows a date 1462 days later, and formulas are recalculated in the new system)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
             has_doc,
             calc_options
         ),
@@ -939,6 +939,7 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
     };
     edit(s, |cx| {
         let before = cx.wb.calc.clone();
+        let date_system = cx.wb.date_system;
         if let Some(m) = mode {
             cx.wb.calc.mode = m;
         }
@@ -958,6 +959,11 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
                 crate::cmd::round_all_constants_as_displayed(&mut cx.wb);
             }
         }
+        // Use 1904 date system: stored numbers stay as they are, as in Excel, so the same serial
+        // shows another date; formulas are recalculated in the new system below.
+        if let Some(v) = bool_param(p, "date1904") {
+            cx.wb.date_system = if v { DateSystem::D1904 } else { DateSystem::D1900 };
+        }
         let c = &cx.wb.calc;
         // Switching to automatic, or changing how circular references are calculated outside
         // manual mode, recalculates the workbook.
@@ -965,7 +971,10 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
         // Switching precision as displayed recalculates the workbook, in manual mode too, so the
         // values change as soon as it is switched on or off.
         let precision_changed = c.precision_as_displayed != before.precision_as_displayed;
-        if mode == Some(CalcMode::Automatic) || (iteration_changed && c.mode != CalcMode::Manual) || precision_changed {
+        // So does switching the date system: a result left from the other system would be wrong,
+        // not just out of date.
+        let date_changed = cx.wb.date_system != date_system;
+        if mode == Some(CalcMode::Automatic) || (iteration_changed && c.mode != CalcMode::Manual) || precision_changed || date_changed {
             cx.structural = true;
         }
         Ok(json!({
@@ -973,6 +982,7 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
             "iterative": c.iterative,
             "maxIterations": c.max_iterations,
             "maxChange": c.max_change,
+            "date1904": cx.wb.date_system == DateSystem::D1904,
             "precisionAsDisplayed": c.precision_as_displayed,
         }))
     })

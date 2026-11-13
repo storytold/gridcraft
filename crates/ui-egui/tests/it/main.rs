@@ -79,6 +79,7 @@ mod nowrap_line_breaks;
 mod number_stored_as_text;
 mod objects;
 mod open_encrypted;
+mod options_date_system;
 mod outline;
 mod page_layout_view;
 mod page_setup_margins;

@@ -425,6 +425,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Obliczenia w skoroszycie",
         "Enable iterative calculation" => "Włącz obliczenia iteracyjne",
         "Calculation settings are saved with the workbook." => "Ustawienia obliczeń są zapisywane razem ze skoroszytem.",
+        "Use 1904 date system" => "Użyj systemu daty 1904",
         "OK" => "OK",
         "Cancel" => "Anuluj",
         "Don't Save" => "Nie zapisuj",

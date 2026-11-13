@@ -366,6 +366,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Maximum Iterations must be a whole number from 1 to 32767." => "Maximální počet iterací musí být celé číslo od 1 do 32767.",
         "Maximum Change must be a number of 0 or more." => "Maximální změna musí být číslo 0 nebo větší.",
         "Calculation settings are saved with the workbook." => "Nastavení výpočtů se ukládá se sešitem.",
+        "Use 1904 date system" => "Použít kalendář 1904",
         "100%" => "100 %",
         "Zoom to\nSelection" => "Přiblížit\nna výběr",
         "Freeze\nPanes" => "Ukotvit\npříčky",

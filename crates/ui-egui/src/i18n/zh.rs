@@ -451,6 +451,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Maximum Iterations must be a whole number from 1 to 32767." => "最多迭代次数必须是 1 到 32767 之间的整数。",
         "Maximum Change must be a number of 0 or more." => "最大误差必须是大于或等于 0 的数字。",
         "Calculation settings are saved with the workbook." => "计算设置随工作簿一起保存。",
+        "Use 1904 date system" => "使用 1904 日期系统",
         "Insert Sheet" => "插入工作表",
         "Rename" => "重命名",
         "Move or Copy…" => "移动或复制…",

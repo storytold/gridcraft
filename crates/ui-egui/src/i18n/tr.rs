@@ -345,6 +345,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Çalışma kitabı hesaplaması",
         "Enable iterative calculation" => "Yinelemeli hesaplamayı etkinleştir",
         "Calculation settings are saved with the workbook." => "Hesaplama ayarları çalışma kitabıyla birlikte kaydedilir.",
+        "Use 1904 date system" => "1904 tarih sistemini kullan",
         "Interface size" => "Arayüz boyutu",
         "Auto" => "Otomatik",
         "100%" => "%100",

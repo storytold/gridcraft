@@ -459,6 +459,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Maximum Iterations must be a whole number from 1 to 32767." => "최대 반복 횟수는 1에서 32767 사이의 정수여야 합니다.",
         "Maximum Change must be a number of 0 or more." => "변화 한도는 0 이상의 숫자여야 합니다.",
         "Calculation settings are saved with the workbook." => "계산 설정은 통합 문서와 함께 저장됩니다.",
+        "Use 1904 date system" => "1904 날짜 체계 사용",
         "Insert Sheet" => "시트 삽입",
         "Rename" => "이름 바꾸기",
         "Move or Copy…" => "이동 또는 복사…",

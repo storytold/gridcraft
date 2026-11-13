@@ -442,6 +442,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Maximum Iterations must be a whole number from 1 to 32767." => "Maksimalan broj iteracija mora biti ceo broj od 1 do 32767.",
         "Maximum Change must be a number of 0 or more." => "Maksimalna promena mora biti broj veći ili jednak 0.",
         "Calculation settings are saved with the workbook." => "Podešavanja izračunavanja se čuvaju sa radnom sveskom.",
+        "Use 1904 date system" => "Koristi sistem datuma 1904",
         "Left Margin" => "Leva margina",
         "Right Margin" => "Desna margina",
         "Top Margin" => "Gornja margina",

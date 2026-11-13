@@ -431,6 +431,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Calculul registrului",
         "Enable iterative calculation" => "Activare calcul iterativ",
         "Calculation settings are saved with the workbook." => "Setările de calcul se salvează împreună cu registrul.",
+        "Use 1904 date system" => "Utilizare sistem de dată 1904",
         "OK" => "OK",
         "Cancel" => "Anulare",
         "Don't Save" => "Nu salva",

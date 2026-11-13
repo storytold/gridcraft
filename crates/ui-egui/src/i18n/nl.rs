@@ -432,6 +432,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Werkmapberekening",
         "Enable iterative calculation" => "Iteratieve berekening inschakelen",
         "Calculation settings are saved with the workbook." => "Berekeningsinstellingen worden bij de werkmap opgeslagen.",
+        "Use 1904 date system" => "1904-datumsysteem gebruiken",
         "Cut" => "Knippen",
         "Copy" => "Kopiëren",
         "Insert…" => "Invoegen…",

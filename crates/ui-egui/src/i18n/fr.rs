@@ -453,6 +453,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Maximum Change must be a number of 0 or more." => "L'écart maximal doit être un nombre supérieur ou égal à 0.",
         "Calculation settings are saved with the workbook." => "Les paramètres de calcul sont enregistrés avec le classeur.",
+        "Use 1904 date system" => "Utiliser le calendrier depuis 1904",
         "Insert Sheet" => "Insérer une feuille",
         "Rename" => "Renommer",
         "Move or Copy…" => "Déplacer ou copier…",
