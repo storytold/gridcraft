@@ -78,7 +78,9 @@ impl SheetApp {
             .iter()
             .find(|v| v.kind == gridcraft_engine::model::ValidationKind::List && v.in_cell_dropdown && v.ranges.iter().any(|r| r.contains(at)));
         if let Some(dv) = list {
-            ed.set_list_items(gridcraft_engine::cmd::data::list_items(&d.wb, d.wb.active_sheet(), at, dv), replace);
+            // Read within a budget: a list from a huge range must not stall the edit it opens.
+            let budget = gridcraft_engine::cmd::data::LIST_SOURCE_BUDGET;
+            ed.set_list_source(gridcraft_engine::cmd::data::list_search_source(&d.wb, d.wb.active_sheet(), at, dv, budget), replace);
         } else if replace && self.ui.autocomplete && !ed.is_formula() {
             ed.completion = editor::column_completion(sh, at, &ed.text);
         }

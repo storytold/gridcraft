@@ -31,7 +31,10 @@ use sort::{quick_sort, sort};
 #[cfg(test)]
 use tools::split_delimited;
 use tools::{remove_duplicates, text_to_columns};
-pub use validation::{LIST_MATCH_CAP, check_validation, filter_list_items, list_items, search_fold, search_matches, search_term};
+pub use validation::{
+    LIST_MATCH_CAP, LIST_SOURCE_BUDGET, ListSource, check_validation, filter_list_items, list_items, list_search_source, search_fold, search_matches,
+    search_term,
+};
 use validation::{circle_invalid, validate_cmd, validation, validation_list_cmd};
 pub(super) use validation::{move_rule_formula, remove_validation_cells};
 
@@ -103,7 +106,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Validation List Items",
             [],
             None,
-            "{cell?, search?} → {items: [..], truncated} (the cell's list validation entries; `search` keeps those with a word starting with it, ignoring case and the accents of Latin letters)",
+            "{cell?, search?} → {items: [..], truncated} (the cell's list validation entries; `search` keeps those with a word starting with it, ignoring case and the accents of Latin letters; at most 10,000 entries, read from at most 200,000 cells of the source; `truncated`: more may exist)",
             has_doc,
             validation_list_cmd
         ),

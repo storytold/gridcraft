@@ -224,6 +224,96 @@ pub fn list_items(wb: &Workbook, sheet: usize, at: CellRef, dv: &Validation) -> 
 /// Most entries a searched validation list returns (lists can come from huge ranges).
 pub const LIST_MATCH_CAP: usize = 10_000;
 
+/// Source work a searched validation list may do: cells of its range read (or entries of a literal
+/// list, or units of formula work for a computed source). A list from a huge range (`$B:$B` on a
+/// sheet used to row 1,048,576) stops here instead of reading every cell, whatever is typed.
+pub const LIST_SOURCE_BUDGET: usize = 200_000;
+
+/// The entries of a list validation read for search, within a source-work budget.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ListSource {
+    /// Nonempty entries in list order, up to where the budget ran out.
+    pub items: Vec<String>,
+    /// The budget ran out before the whole source was read: `items` is only its beginning.
+    pub truncated: bool,
+}
+
+/// The entries of a list validation for the cell `at`, as [`list_items`] gives them, but reading at
+/// most `budget` units of the source (see [`LIST_SOURCE_BUDGET`]). A range source is walked cell by
+/// cell, within the sheet's used range, rather than evaluated into an array first.
+pub fn list_search_source(wb: &Workbook, sheet: usize, at: CellRef, dv: &Validation, budget: usize) -> ListSource {
+    let f = dv.f1.trim();
+    if is_literal_list(f) {
+        // A literal list is bounded by the rule's text; the budget still caps the entries kept.
+        let mut items = list_items(wb, sheet, at, dv);
+        let truncated = items.len() > budget;
+        items.truncate(budget);
+        return ListSource { items, truncated };
+    }
+    let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
+    let work = u64::try_from(budget).unwrap_or(u64::MAX);
+    match gridcraft_calc::evaluate_bounded(wb, sheet, at, &formula_at(f, first, at), work) {
+        // One area is read as the evaluator would (several areas or sheets are `#VALUE!`: no list).
+        gridcraft_calc::Bounded::Areas(areas) => match areas.as_slice() {
+            [a] => walk_area(wb, a.sheet, a.range, budget),
+            _ => ListSource::default(),
+        },
+        gridcraft_calc::Bounded::Value(Value::Array(a)) => {
+            let mut out = ListSource::default();
+            for (n, v) in a.data.iter().enumerate() {
+                if n >= budget {
+                    out.truncated = true;
+                    break;
+                }
+                if !v.is_empty() {
+                    out.items.push(v.display());
+                }
+            }
+            out
+        }
+        gridcraft_calc::Bounded::Value(v) if !v.is_empty() && !v.is_error() => ListSource { items: vec![v.display()], truncated: false },
+        gridcraft_calc::Bounded::Value(_) => ListSource::default(),
+        gridcraft_calc::Bounded::Exhausted => ListSource { items: vec![], truncated: true },
+    }
+}
+
+/// The nonempty values of `range` on `sheet`, row-major, reading at most `budget` cells. Without
+/// spilled values in the range only stored cells are visited; with them, every cell inside the
+/// sheet's used range (and the spills) is. Each visited cell counts against the budget.
+fn walk_area(wb: &Workbook, sheet: usize, range: RangeRef, budget: usize) -> ListSource {
+    let mut out = ListSource::default();
+    let Some(sh) = wb.sheet(sheet) else { return out };
+    let spilled = sh.spill_ranges.values().filter_map(|r| r.intersection(&range)).collect::<Vec<_>>();
+    let mut seen = 0usize;
+    let mut take = |v: &Value, out: &mut ListSource| {
+        if seen >= budget {
+            out.truncated = true;
+            return false;
+        }
+        seen += 1;
+        if !v.is_empty() {
+            out.items.push(v.display());
+        }
+        true
+    };
+    if spilled.is_empty() {
+        for (_, cell) in sh.cells.iter_range(range) {
+            if !take(&cell.value, &mut out) {
+                break;
+            }
+        }
+    } else {
+        let extent = spilled.iter().fold(sh.used_range(), |u, r| Some(u.map_or(*r, |u| u.union(r))));
+        let Some(range) = extent.and_then(|u| u.intersection(&range)) else { return out };
+        for c in range.iter() {
+            if !take(&sh.value(c), &mut out) {
+                break;
+            }
+        }
+    }
+    out
+}
+
 /// Text folded for list search: lower case, with the accents of Latin letters removed
 /// (`É` → `e`, `ß` → `ss`, `Œ` → `oe`, `Ộ` → `o`) and combining marks dropped. Covers Latin-1,
 /// Latin Extended-A and -B and Latin Extended Additional; other scripts keep their marks.
@@ -331,7 +421,8 @@ pub fn filter_list_items(items: &[String], typed: &str, cap: usize) -> Vec<usize
 }
 
 /// `data.validationList`: a cell's list validation entries, searched like the in-cell dropdown,
-/// at most [`LIST_MATCH_CAP`] of them.
+/// at most [`LIST_MATCH_CAP`] of them, from at most [`LIST_SOURCE_BUDGET`] of source work.
+/// `truncated` says that more entries may exist (past the match cap, or past the source budget).
 pub(super) fn validation_list_cmd(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
@@ -340,12 +431,12 @@ pub(super) fn validation_list_cmd(s: &mut Session, p: &Json) -> Result<Json> {
         d.wb.sheet(sheet)
             .and_then(|sh| sh.validations.iter().find(|v| v.kind == ValidationKind::List && v.ranges.iter().any(|r| r.contains(at))))
             .ok_or_else(|| EngineError::Other(format!("{} has no list validation", at.a1())))?;
-    let items = list_items(&d.wb, sheet, at, dv);
+    let ListSource { items, truncated: source_truncated } = list_search_source(&d.wb, sheet, at, dv, LIST_SOURCE_BUDGET);
     let picked: Vec<usize> = match str_param(p, "search") {
         Some(term) => filter_list_items(&items, term, LIST_MATCH_CAP.saturating_add(1)),
         None => (0..items.len().min(LIST_MATCH_CAP.saturating_add(1))).collect(),
     };
-    let truncated = picked.len() > LIST_MATCH_CAP;
+    let truncated = source_truncated || picked.len() > LIST_MATCH_CAP;
     let out: Vec<&String> = picked.iter().take(LIST_MATCH_CAP).filter_map(|&i| items.get(i)).collect();
     Ok(json!({"items": out, "truncated": truncated}))
 }

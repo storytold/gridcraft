@@ -85,6 +85,8 @@ pub struct ListSearch {
     pub top: usize,
     /// The highlight moved: scroll the popup so it shows.
     pub reveal: bool,
+    /// The list's source was longer than its read budget: `items` holds only its beginning.
+    pub truncated: bool,
 }
 
 impl ListSearch {
@@ -151,6 +153,15 @@ impl EditState {
         self.list = Some(ListSearch { items, folded, ..Default::default() });
         if search_now {
             self.update_list();
+        }
+    }
+
+    /// Gives this edit a list read within the source budget
+    /// ([`gridcraft_engine::cmd::data::list_search_source`]), remembering whether it was cut short.
+    pub fn set_list_source(&mut self, source: gridcraft_engine::cmd::data::ListSource, search_now: bool) {
+        self.set_list_items(source.items, search_now);
+        if let Some(l) = self.list.as_mut() {
+            l.truncated = source.truncated;
         }
     }
 

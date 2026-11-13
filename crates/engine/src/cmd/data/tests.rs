@@ -635,3 +635,66 @@ fn validation_list_command_returns_filtered_items() {
     let lit = s.execute("data.validationList", json!({"cell": "C1", "search": "ete"})).unwrap();
     assert_eq!(lit["items"], json!(["Été"]));
 }
+
+#[test]
+fn validation_list_search_reads_a_huge_source_within_its_budget() {
+    // A list from a whole column used far past the source budget: a search with no match must
+    // stop at the budget (and say so) rather than read and fold every cell first.
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = LIST_SOURCE_BUDGET + 5_000;
+    {
+        let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        for r in 0..rows {
+            sh.cells.set(CellRef::new(r as u32, 4), Cell::value(Value::Text(format!("Item {r}").into())));
+        }
+    }
+    s.execute("data.validation", json!({"range": "B2", "type": "list", "formula1": "=$E:$E"})).unwrap();
+    let none = s.execute("data.validationList", json!({"cell": "B2", "search": "zzz"})).unwrap();
+    assert_eq!(none["items"], json!([]));
+    assert_eq!(none["truncated"], json!(true), "the source was not read to its end");
+    let first = s.execute("data.validationList", json!({"cell": "B2", "search": "item 1"})).unwrap();
+    assert_eq!(first["items"][0], json!("Item 1"));
+
+    let wb = s.doc().unwrap().wb.clone();
+    let dv = wb.active().unwrap().validations[0].clone();
+    let src = list_search_source(&wb, 0, CellRef::new(1, 1), &dv, LIST_SOURCE_BUDGET);
+    assert!(src.truncated);
+    assert_eq!(src.items.len(), LIST_SOURCE_BUDGET, "exactly the budget's worth of cells read");
+    // The membership check still sees the whole column.
+    let last = format!("Item {}", rows - 1);
+    assert!(check_validation(&wb, 0, CellRef::new(1, 1), &last).is_none(), "{last} is in the list");
+    // A computed source (a name for a formula) over the same column runs out of formula work instead.
+    s.execute("formulas.defineName", json!({"name": "Sorted", "refersTo": "=SORT(Sheet1!$E:$E)"})).unwrap();
+    s.execute("data.validation", json!({"range": "C2", "type": "list", "formula1": "=Sorted"})).unwrap();
+    let sorted = s.execute("data.validationList", json!({"cell": "C2", "search": "zzz"})).unwrap();
+    assert_eq!(sorted["truncated"], json!(true));
+}
+
+#[test]
+fn list_search_source_matches_list_items_within_budget() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "B1:B5", "values": [["a"], [null], ["c"], ["d"], ["e"]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SEQUENCE(4)"})).unwrap();
+    s.execute("data.validation", json!({"range": "A1:A2", "type": "list", "formula1": "=$B1:$B4"})).unwrap();
+    s.execute("data.validation", json!({"range": "C1", "type": "list", "formula1": "=$D$1:$D$9"})).unwrap();
+    s.execute("data.validation", json!({"range": "F1", "type": "list", "formula1": "\"x,y,z\""})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Upper", "refersTo": "=UPPER(Sheet1!$B$1:$B$5)"})).unwrap();
+    s.execute("data.validation", json!({"range": "G1", "type": "list", "formula1": "=Upper"})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let rules = wb.active().unwrap().validations.clone();
+    for (dv, cell) in rules.iter().zip(["A2", "C1", "F1", "G1"]) {
+        let at = CellRef::parse(cell).unwrap();
+        let full = list_items(&wb, 0, at, dv);
+        assert!(!full.is_empty(), "{cell}");
+        let src = list_search_source(&wb, 0, at, dv, LIST_SOURCE_BUDGET);
+        assert_eq!(src, ListSource { items: full.clone(), truncated: false }, "{cell}");
+        // A tiny budget keeps the beginning and says the rest was not read.
+        let cut = list_search_source(&wb, 0, at, dv, 1);
+        assert!(cut.truncated, "{cell}: {cut:?}");
+        assert!(full.starts_with(&cut.items), "{cell}: {cut:?}");
+    }
+    // The spilled SEQUENCE is read cell by cell like stored values.
+    assert_eq!(list_search_source(&wb, 0, CellRef::new(0, 2), &rules[1], 100).items, ["1", "2", "3", "4"]);
+}

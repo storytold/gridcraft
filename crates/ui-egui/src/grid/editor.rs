@@ -157,6 +157,11 @@ pub(super) fn list_search(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: 
                 }
             });
             top = Some((out.state.clamped_offset().y / row_h).floor().max(0.0) as usize);
+            // Not every entry was searched (a huge source) or shown (past the match cap).
+            if list.truncated || list.matches.len() >= gridcraft_engine::cmd::data::LIST_MATCH_CAP {
+                ui.add_space(2.0);
+                ui.weak("More entries not shown");
+            }
         });
     });
     if let Some(top) = top {

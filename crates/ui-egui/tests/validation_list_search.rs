@@ -270,3 +270,27 @@ fn the_formula_bar_enter_button_takes_the_highlighted_entry() {
     assert_eq!(value(&h, "B2"), "Boston - United States of America");
     assert_eq!(active(&h), "B2", "the Enter button doesn't move the selection");
 }
+
+#[test]
+fn a_list_from_a_huge_column_is_read_within_the_source_budget() {
+    // Typing into a cell whose list is a whole column used far past the budget reads only the
+    // budget's worth of it, and the edit knows the list was cut short.
+    let budget = gridcraft_engine::cmd::data::LIST_SOURCE_BUDGET;
+    let rows: Vec<Vec<String>> = (0..budget + 1_000).map(|r| vec![format!("Item {r}")]).collect();
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("range.setValues", json!({"range": "H1", "values": rows})).unwrap();
+    session.execute("data.validation", json!({"range": "B2", "type": "list", "formula1": "=$H:$H"})).unwrap();
+    session.execute("selection.set", json!({"cell": "B2"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        SheetApp::new(session, Default::default()),
+    );
+    h.run_steps(4);
+    text(&mut h, "zzz");
+    let list = h.state().editor.as_ref().and_then(|e| e.list.as_ref()).map(|l| (l.items.len(), l.truncated, l.matches.len()));
+    assert_eq!(list, Some((budget, true, 0)));
+}
