@@ -199,7 +199,11 @@ pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
         let mut total = 0usize;
         for si in sheets {
             let cells: Vec<(CellRef, String)> =
-                cx.wb.sheet(si).map(|sh| sh.cells.iter().map(|(c, _)| (c, sh.input_text(c))).collect()).unwrap_or_default();
+                // A hidden formula's source is not searched: a count or error would reveal its text.
+                cx.wb
+                    .sheet(si)
+                    .map(|sh| sh.cells.iter().filter(|(c, cell)| cell.formula.is_none() && cell.py.is_none() || !crate::display::formula_hidden(&cx.wb, sh, *c)).map(|(c, _)| (c, sh.input_text(c))).collect())
+                    .unwrap_or_default();
             for (c, text) in cells {
                 if (!all && c != active) || selection.as_ref().is_some_and(|sel| !sel.contains(c)) {
                     continue;

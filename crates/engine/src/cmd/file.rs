@@ -92,6 +92,8 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         && !encrypted
         && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx
         && matches!(crate::io::FileKind::from_path(&name), Some(crate::io::FileKind::Xlsx) | None)
+        && gridcraft_xlsx::XlsxKind::from_path(&name) == gridcraft_xlsx::XlsxKind::Workbook
+        && doc.wb.vba_project.is_none()
     {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
