@@ -1046,6 +1046,13 @@
    "note": ""
   },
   {
+   "seq": "NBU",
+   "kind": "command",
+   "target": "insert.button",
+   "excel": "Button (Form Control)",
+   "note": ""
+  },
+  {
    "seq": "NC1",
    "kind": "control",
    "target": "insert.chart.column",
@@ -1232,6 +1239,13 @@
    "note": "Statistical chart (kind TBD)"
   },
   {
+   "seq": "NSB",
+   "kind": "command",
+   "target": "insert.spinButton",
+   "excel": "Spin Button (Form Control)",
+   "note": ""
+  },
+  {
    "seq": "NSC",
    "kind": "command",
    "target": "insert.screenshot",
@@ -1259,6 +1273,13 @@
    "kind": "command",
    "target": "insert.shape",
    "excel": "Shapes",
+   "note": ""
+  },
+  {
+   "seq": "NSL",
+   "kind": "command",
+   "target": "insert.slider",
+   "excel": "Scroll Bar (Form Control)",
    "note": ""
   },
   {
@@ -1315,9 +1336,7 @@
    "seq": "NW",
    "kind": "command",
    "target": "insert.wordArt",
-   "pending": true,
-   "excel": "WordArt",
-   "note": "WordArt; reserved until the command lands"
+   "excel": "WordArt"
   },
   {
    "seq": "NX",
@@ -2581,6 +2600,307 @@
    "target": "file.print",
    "excel": "Print page",
    "note": "containment(Print)"
+  },
+  {
+   "seq": "IR",
+   "kind": "command",
+   "target": "home.insertRows",
+   "excel": "Insert > Rows",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "IC",
+   "kind": "command",
+   "target": "home.insertColumns",
+   "excel": "Insert > Columns",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "IE",
+   "kind": "dialog",
+   "target": "insertCells",
+   "excel": "Insert > Cells",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "IW",
+   "kind": "command",
+   "target": "home.insertSheet",
+   "excel": "Insert > Worksheet",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "IF",
+   "kind": "dialog",
+   "target": "insertFunction",
+   "excel": "Insert > Function",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "IND",
+   "kind": "dialog",
+   "target": "defineName",
+   "excel": "Insert > Name > Define",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "IS",
+   "kind": "control",
+   "target": "insert.symbol",
+   "excel": "Insert > Symbol",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "ED",
+   "kind": "dialog",
+   "target": "deleteCells",
+   "excel": "Edit > Delete",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "EM",
+   "kind": "dialog",
+   "target": "moveSheet",
+   "excel": "Edit > Move or Copy Sheet",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "EL",
+   "kind": "command",
+   "target": "home.deleteSheet",
+   "excel": "Edit > Delete Sheet",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "EAA",
+   "kind": "command",
+   "target": "edit.clearAll",
+   "excel": "Edit > Clear > All",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "EAC",
+   "kind": "command",
+   "target": "edit.clearContents",
+   "excel": "Edit > Clear > Contents",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "EAM",
+   "kind": "command",
+   "target": "edit.clearComments",
+   "excel": "Edit > Clear > Comments",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "EF",
+   "kind": "dialog",
+   "target": "find",
+   "excel": "Edit > Find",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "EG",
+   "kind": "dialog",
+   "target": "goTo",
+   "excel": "Edit > Go To",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "ORA",
+   "kind": "command",
+   "target": "home.autofitRowHeight",
+   "excel": "Format > Row > AutoFit",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "ORE",
+   "kind": "dialog",
+   "target": "rowHeight",
+   "excel": "Format > Row > Height",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "ORH",
+   "kind": "command",
+   "target": "home.hideRows",
+   "excel": "Format > Row > Hide",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "ORU",
+   "kind": "command",
+   "target": "home.unhideRows",
+   "excel": "Format > Row > Unhide",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "OCW",
+   "kind": "dialog",
+   "target": "columnWidth",
+   "excel": "Format > Column > Width",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "OCH",
+   "kind": "command",
+   "target": "home.hideColumns",
+   "excel": "Format > Column > Hide",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "OCU",
+   "kind": "command",
+   "target": "home.unhideColumns",
+   "excel": "Format > Column > Unhide",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "OHR",
+   "kind": "dialog",
+   "target": "renameSheet",
+   "excel": "Format > Sheet > Rename",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "OHH",
+   "kind": "command",
+   "target": "sheet.hide",
+   "excel": "Format > Sheet > Hide",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "OHU",
+   "kind": "command",
+   "target": "sheet.unhide",
+   "excel": "Format > Sheet > Unhide",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "OE",
+   "kind": "command",
+   "target": "home.formatCells",
+   "excel": "Format > Cells",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "OD",
+   "kind": "command",
+   "target": "home.conditionalFormat",
+   "excel": "Format > Conditional Formatting",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "DFF",
+   "kind": "command",
+   "target": "data.filter",
+   "excel": "Data > Filter > AutoFilter",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "DS",
+   "kind": "dialog",
+   "target": "sort",
+   "excel": "Data > Sort",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "DGG",
+   "kind": "command",
+   "target": "data.group",
+   "excel": "Data > Group and Outline > Group",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "DGU",
+   "kind": "command",
+   "target": "data.ungroup",
+   "excel": "Data > Group and Outline > Ungroup",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "DGS",
+   "kind": "command",
+   "target": "data.showDetail",
+   "excel": "Data > Group and Outline > Show Detail",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "DGH",
+   "kind": "command",
+   "target": "data.hideDetail",
+   "excel": "Data > Group and Outline > Hide Detail",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "DL",
+   "kind": "command",
+   "target": "data.validation",
+   "excel": "Data > Validation",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "DT",
+   "kind": "command",
+   "target": "data.dataTable",
+   "excel": "Data > Table (what-if data table)",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "VN",
+   "kind": "command",
+   "target": "view.normal",
+   "excel": "View > Normal",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "VP",
+   "kind": "command",
+   "target": "view.pageBreakPreview",
+   "excel": "View > Page Break Preview",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "VZ",
+   "kind": "dialog",
+   "target": "zoom",
+   "excel": "View > Zoom",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "TO",
+   "kind": "dialog",
+   "target": "options",
+   "excel": "Tools > Options",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "TUA",
+   "kind": "command",
+   "target": "formulas.removeArrows",
+   "excel": "Tools > Formula Auditing > Remove All Arrows",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "TUD",
+   "kind": "command",
+   "target": "formulas.traceDependents",
+   "excel": "Tools > Formula Auditing > Trace Dependents",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "TUT",
+   "kind": "command",
+   "target": "formulas.tracePrecedents",
+   "excel": "Tools > Formula Auditing > Trace Precedents",
+   "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "FU",
+   "kind": "dialog",
+   "target": "pageSetup",
+   "excel": "File > Page Setup",
+   "note": "Legacy Excel 2003 menu path (#941)."
   },
   {
    "seq": "Q",
