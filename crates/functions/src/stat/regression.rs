@@ -55,12 +55,12 @@ fn strict_num(v: &Value) -> R<f64> {
     }
 }
 
-/// Most predictor columns LINEST, LOGEST, TREND and GROWTH accept. The normal equations are a
-/// k×k matrix inverted in O(k³), so an unbounded k (one `SEQUENCE(1,16384)` argument) allocated
+/// Most predictor columns LINEST, LOGEST, TREND and GROWTH accept. The fit works on a k×k
+/// triangle in O(k³), so an unbounded k (one `SEQUENCE(1,16384)` argument) allocated
 /// gigabytes and could abort the process.
 pub(super) const MAX_REGRESSORS: usize = 255;
 
-/// Most multiply-adds (rows × k²) a regression may spend building its normal equations.
+/// Most multiply-adds (rows × k²) a regression may spend on its factorisation.
 const MAX_REGRESSION_WORK: usize = 1_000_000_000;
 
 /// Rejects regressions too large to fit: more than [`MAX_REGRESSORS`] predictors is `#VALUE!`,
@@ -121,59 +121,136 @@ struct Fit {
     ssresid: f64,
 }
 
-/// Inverts a symmetric positive semi-definite matrix by Gauss–Jordan on the diagonal, dropping
-/// (zeroing) collinear variables. Returns the inverse and the dropped flags.
-fn sym_inverse(m: &[Vec<f64>]) -> (Vec<Vec<f64>>, Vec<bool>) {
-    let p = m.len();
-    let mut a: Vec<Vec<f64>> = m.to_vec();
-    let mut inv: Vec<Vec<f64>> = (0..p).map(|i| (0..p).map(|j| if i == j { 1.0 } else { 0.0 }).collect()).collect();
-    let mut dropped = vec![false; p];
-    let diag: Vec<f64> = (0..p).map(|i| m.get(i).and_then(|r| r.get(i)).copied().unwrap_or(0.0).abs()).collect();
-    for j in 0..p {
-        let piv = a.get(j).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
-        let scale = diag.get(j).copied().unwrap_or(0.0);
-        if piv.abs() <= 1e-12 * scale || piv.abs() < 1e-300 {
-            if let Some(d) = dropped.get_mut(j) {
-                *d = true;
-            }
-            for row in a.iter_mut() {
-                if let Some(v) = row.get_mut(j) {
-                    *v = 0.0;
-                }
-            }
-            if let Some(r) = a.get_mut(j) {
-                r.iter_mut().for_each(|v| *v = 0.0);
-            }
-            if let Some(r) = inv.get_mut(j) {
-                r.iter_mut().for_each(|v| *v = 0.0);
-            }
+/// Euclidean norm without intermediate overflow or underflow.
+fn norm2(v: &[f64]) -> f64 {
+    let m = v.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+    if m == 0.0 || !m.is_finite() {
+        return m;
+    }
+    m * v.iter().map(|x| (x / m) * (x / m)).sum::<f64>().sqrt()
+}
+
+/// Result of [`qr_solve`]: the least-squares solution on the kept columns, in the caller's
+/// column scale, and what the standard errors need.
+struct QrFit {
+    coef: Vec<f64>,
+    dropped: Vec<bool>,
+    /// Residual sum of squares of the fit.
+    ssresid: f64,
+    /// Diagonal of `(X'X)^-1` over the kept columns (0 for dropped ones).
+    diag: Vec<f64>,
+    /// `xm' (X'X)^-1 xm` over the kept columns.
+    quad: f64,
+}
+
+/// Least squares by Householder QR on unit-norm columns, instead of the normal equations, whose
+/// condition number is the square of the data's. Columns are taken left to right; one whose part
+/// outside the span of the kept columns is under 1e-6 of its own length (the 1e-12 relative
+/// pivot of the earlier normal-equation solver, on squares) is collinear: it is dropped, with
+/// coefficient and standard error 0, as Excel does.
+///
+/// `constant[j]` says column `j` was constant before centring. Centring it leaves rounding
+/// residue, not 0 (`[0.1; 3]` centres to about -1.4e-17): it is collinear with the intercept, so
+/// it is dropped instead of being scaled up to unit length. Whether a column is constant is
+/// decided on its raw values, not by comparing the centred length with the offset: a predictor
+/// like `[1e13, 1e13 + 1, 1e13 + 2]` is far smaller than its offset and still varies.
+fn qr_solve(mut cols: Vec<Vec<f64>>, mut y: Vec<f64>, xm: &[f64], constant: &[bool]) -> QrFit {
+    let n = y.len();
+    let k = cols.len();
+    let mut scale = vec![1.0; k];
+    let mut dropped = vec![false; k];
+    // Householder vectors (unit norm, acting on rows `at..n`) and the columns of R.
+    let mut refl: Vec<(usize, Vec<f64>)> = Vec::new();
+    let mut r_cols: Vec<Vec<f64>> = Vec::new();
+    let mut kept: Vec<usize> = Vec::new();
+    for (j, col) in cols.iter_mut().enumerate() {
+        let len = norm2(col);
+        if constant.get(j).copied().unwrap_or(false) || !(len > 1e-300 && len.is_finite()) {
+            dropped[j] = true;
             continue;
         }
-        let arow: Vec<f64> = a.get(j).map(|r| r.iter().map(|v| v / piv).collect()).unwrap_or_default();
-        let irow: Vec<f64> = inv.get(j).map(|r| r.iter().map(|v| v / piv).collect()).unwrap_or_default();
-        for i in 0..p {
-            if i == j {
-                continue;
-            }
-            let f = a.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
-            if f == 0.0 {
-                continue;
-            }
-            if let Some(r) = a.get_mut(i) {
-                r.iter_mut().zip(&arow).for_each(|(v, w)| *v -= f * w);
-            }
-            if let Some(r) = inv.get_mut(i) {
-                r.iter_mut().zip(&irow).for_each(|(v, w)| *v -= f * w);
-            }
+        col.iter_mut().for_each(|v| *v /= len);
+        scale[j] = len;
+        for (at, v) in &refl {
+            apply_reflector(*at, v, col);
         }
-        if let Some(r) = a.get_mut(j) {
-            *r = arow;
+        let at = refl.len();
+        let tail = col.get(at..).unwrap_or(&[]);
+        let alpha = norm2(tail);
+        if alpha * alpha <= 1e-12 {
+            dropped[j] = true;
+            continue;
         }
-        if let Some(r) = inv.get_mut(j) {
-            *r = irow;
+        let sign = if tail.first().is_some_and(|t| *t < 0.0) { -1.0 } else { 1.0 };
+        let mut v: Vec<f64> = tail.to_vec();
+        if let Some(h) = v.first_mut() {
+            *h += sign * alpha;
+        }
+        let vn = norm2(&v);
+        v.iter_mut().for_each(|x| *x /= vn);
+        let mut rc: Vec<f64> = col.get(..at).unwrap_or(&[]).to_vec();
+        rc.push(-sign * alpha);
+        r_cols.push(rc);
+        refl.push((at, v));
+        kept.push(j);
+    }
+    for (at, v) in &refl {
+        apply_reflector(*at, v, &mut y);
+    }
+    let r = kept.len();
+    // Back substitution R c = (Q'y)[..r], then undo the column scaling.
+    let mut c = vec![0.0; r];
+    for i in (0..r).rev() {
+        let mut t = y.get(i).copied().unwrap_or(0.0);
+        for jj in i + 1..r {
+            t -= r_cols.get(jj).and_then(|rc| rc.get(i)).copied().unwrap_or(0.0) * c.get(jj).copied().unwrap_or(0.0);
+        }
+        if let Some(ci) = c.get_mut(i) {
+            *ci = t / r_cols.get(i).and_then(|rc| rc.get(i)).copied().unwrap_or(f64::NAN);
         }
     }
-    (inv, dropped)
+    let ssresid = y.get(r..n).unwrap_or(&[]).iter().map(|v| v * v).sum::<f64>();
+    // R^-1 (upper triangular), row i of the inverse at rinv[i].
+    let rij = |i: usize, j: usize| r_cols.get(j).and_then(|rc| rc.get(i)).copied().unwrap_or(0.0);
+    let mut rinv = vec![vec![0.0; r]; r];
+    for t in 0..r {
+        for i in (0..=t).rev() {
+            let mut v = if i == t { 1.0 } else { 0.0 };
+            for jj in i + 1..=t {
+                v -= rij(i, jj) * rinv.get(jj).and_then(|row| row.get(t)).copied().unwrap_or(0.0);
+            }
+            if let Some(cell) = rinv.get_mut(i).and_then(|row| row.get_mut(t)) {
+                *cell = v / rij(i, i);
+            }
+        }
+    }
+    let mut coef = vec![0.0; k];
+    let mut diag = vec![0.0; k];
+    for (i, &j) in kept.iter().enumerate() {
+        let s = scale.get(j).copied().unwrap_or(1.0);
+        if let Some(v) = coef.get_mut(j) {
+            *v = c.get(i).copied().unwrap_or(0.0) / s;
+        }
+        let row = rinv.get(i);
+        if let Some(v) = diag.get_mut(j) {
+            *v = row.map_or(0.0, |rw| rw.iter().map(|x| x * x).sum::<f64>()) / (s * s);
+        }
+    }
+    // xm' (S R'R S)^-1 xm = |R^-T S^-1 xm|².
+    let w: Vec<f64> = kept.iter().map(|&j| xm.get(j).copied().unwrap_or(0.0) / scale.get(j).copied().unwrap_or(1.0)).collect();
+    let quad = (0..r)
+        .map(|t| {
+            (0..=t).map(|i| rinv.get(i).and_then(|row| row.get(t)).copied().unwrap_or(0.0) * w.get(i).copied().unwrap_or(0.0)).sum::<f64>().powi(2)
+        })
+        .sum::<f64>();
+    QrFit { coef, dropped, ssresid, diag, quad }
+}
+
+/// Applies the Householder reflection `I - 2vv'` on rows `at..` of `x`.
+fn apply_reflector(at: usize, v: &[f64], x: &mut [f64]) {
+    let Some(tail) = x.get_mut(at..) else { return };
+    let dot: f64 = v.iter().zip(tail.iter()).map(|(a, b)| a * b).sum();
+    tail.iter_mut().zip(v).for_each(|(t, a)| *t -= 2.0 * dot * a);
 }
 
 fn regress(y: &[f64], x: &[Vec<f64>], k: usize, constant: bool) -> R<Fit> {
@@ -189,35 +266,22 @@ fn regress(y: &[f64], x: &[Vec<f64>], k: usize, constant: bool) -> R<Fit> {
     } else {
         (vec![0.0; k], 0.0)
     };
-    // Normal equations on (centred) data.
-    let mut xtx = vec![vec![0.0; k]; k];
-    let mut xty = vec![0.0; k];
-    for (row, yv) in x.iter().zip(y) {
-        let d: Vec<f64> = (0..k).map(|j| row.get(j).copied().unwrap_or(0.0) - xm.get(j).copied().unwrap_or(0.0)).collect();
-        let yd = yv - ym;
-        for (i, di) in d.iter().enumerate() {
-            if let Some(t) = xty.get_mut(i) {
-                *t += di * yd;
-            }
-            if let Some(r) = xtx.get_mut(i) {
-                for (j, dj) in d.iter().enumerate() {
-                    if let Some(v) = r.get_mut(j) {
-                        *v += di * dj;
-                    }
-                }
-            }
-        }
-    }
-    let (inv, dropped) = sym_inverse(&xtx);
-    let coef: Vec<f64> = (0..k).map(|i| inv.get(i).map(|r| r.iter().zip(&xty).map(|(a, b)| a * b).sum()).unwrap_or(0.0)).collect();
+    // (Centred) predictor columns and response.
+    let cols: Vec<Vec<f64>> =
+        (0..k).map(|j| x.iter().map(|r| r.get(j).copied().unwrap_or(0.0) - xm.get(j).copied().unwrap_or(0.0)).collect()).collect();
+    let yc: Vec<f64> = y.iter().map(|v| v - ym).collect();
+    let sstot: f64 = if constant { yc.iter().map(|v| v * v).sum() } else { y.iter().map(|v| v * v).sum() };
+    // Only centring leaves rounding residue behind; without an intercept a constant column is data.
+    // Constant means every raw value is the same double: distinct values, however close, vary.
+    let constant_cols: Vec<bool> = (0..k)
+        .map(|j| {
+            let mut col = x.iter().map(|r| r.get(j).copied().unwrap_or(0.0));
+            let first = col.next();
+            constant && first.is_some_and(|f| col.all(|v| v == f))
+        })
+        .collect();
+    let QrFit { coef, dropped, ssresid, diag, quad } = qr_solve(cols, yc, &xm, &constant_cols);
     let b = if constant { ym - coef.iter().zip(&xm).map(|(c, m)| c * m).sum::<f64>() } else { 0.0 };
-    let mut ssresid = 0.0;
-    let mut sstot = 0.0;
-    for (row, yv) in x.iter().zip(y) {
-        let pred = b + coef.iter().zip(row).map(|(c, v)| c * v).sum::<f64>();
-        ssresid += (yv - pred).powi(2);
-        sstot += if constant { (yv - ym).powi(2) } else { yv * yv };
-    }
     let used = dropped.iter().filter(|d| !**d).count() + usize::from(constant);
     let df = nf - used as f64;
     let ssreg = sstot - ssresid;
@@ -230,20 +294,9 @@ fn regress(y: &[f64], x: &[Vec<f64>], k: usize, constant: bool) -> R<Fit> {
         _ => Err(CellError::Num),
     };
     let s2 = sey2.unwrap_or(f64::NAN);
-    let se: Vec<f64> = (0..k)
-        .map(|i| if dropped.get(i).copied().unwrap_or(true) { 0.0 } else { (inv.get(i).and_then(|r| r.get(i)).copied().unwrap_or(0.0) * s2).sqrt() })
-        .collect();
-    let se_b = if constant {
-        let mut q = 0.0;
-        for (i, mi) in xm.iter().enumerate() {
-            for (j, mj) in xm.iter().enumerate() {
-                q += mi * mj * inv.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
-            }
-        }
-        Some((s2 * (1.0 / nf + q)).sqrt())
-    } else {
-        None
-    };
+    let se: Vec<f64> =
+        (0..k).map(|i| if dropped.get(i).copied().unwrap_or(true) { 0.0 } else { (diag.get(i).copied().unwrap_or(0.0) * s2).sqrt() }).collect();
+    let se_b = if constant { Some((s2 * (1.0 / nf + quad)).sqrt()) } else { None };
     Ok(Fit { coef, b, se, se_b, r2, sey, f, df, ssreg, ssresid })
 }
 
