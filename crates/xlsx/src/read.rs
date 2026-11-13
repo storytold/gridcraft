@@ -576,8 +576,13 @@ fn read_slicer_caches(cx: &mut Ctx<'_>, wb_rels: &[crate::package::Rel]) -> Resu
         if let Some(x) = cx.optional_xml(&r.target)?
             && let Some(name) = x.attr("name").filter(|s| !s.is_empty())
         {
-            let source_name = xml::decode_xstring(x.attr("sourceName").unwrap_or(""));
             let tsc = x.child("extLst").and_then(|el| el.kids("ext").find_map(|e| e.child("tableSlicerCache")));
+            let is_pivot_cache =
+                x.child("pivotTables").is_some() || x.child("data").is_some_and(|d| d.child("tabular").is_some() || d.child("olap").is_some());
+            if tsc.is_none() && is_pivot_cache {
+                continue;
+            }
+            let source_name = xml::decode_xstring(x.attr("sourceName").unwrap_or(""));
             let table_id = tsc.and_then(|t| t.attr_u32("tableId"));
             let col_id = tsc.and_then(|t| t.attr_u32("column"));
             cx.slicer_caches.insert(name.to_string(), (table_id, col_id, source_name));
@@ -623,11 +628,38 @@ fn attach_pending_slicers(cx: &mut Ctx<'_>, wb: &mut Workbook) {
         if let Some((table, column)) = resolved
             && !table.is_empty()
             && !column.is_empty()
-            && let Some(sh) = wb.sheets.get_mut(sheet_idx)
+            && let Some(sh) = wb.sheets.get(sheet_idx)
         {
-            let id = cx.next_object_id();
-            let caption = if caption.is_empty() { column.clone() } else { caption };
-            Arc::make_mut(sh).slicers.push(gridcraft_model::Slicer { id, table, column, caption, anchor, selected: None, columns });
+            let selected = saved_table_column_selection(wb, sheet_idx, &table, &column);
+            let _ = sh;
+            if let Some(sh) = wb.sheets.get_mut(sheet_idx) {
+                let id = cx.next_object_id();
+                let caption = if caption.is_empty() { column.clone() } else { caption };
+                Arc::make_mut(sh).slicers.push(gridcraft_model::Slicer { id, table, column, caption, anchor, selected, columns });
+            }
         }
     }
+}
+
+/// Restores a table slicer's selected values from the resolved table column's saved AutoFilter.
+fn saved_table_column_selection(wb: &Workbook, slicer_sheet: usize, table: &str, column: &str) -> Option<Vec<String>> {
+    let (target_sheet, t) = wb
+        .sheets
+        .get(slicer_sheet)
+        .and_then(|sh| sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(table)).map(|t| (sh.as_ref(), t)))
+        .or_else(|| wb.sheets.iter().find_map(|sh| sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(table)).map(|t| (sh.as_ref(), t))))?;
+    let ci = t.column_index(column)? as u32;
+    if let Some((_, gridcraft_model::FilterCriterion::Values { values, .. })) = t.filter.iter().find(|(col, _)| *col == ci) {
+        return Some(values.clone());
+    }
+    let af = target_sheet.autofilter.as_ref()?;
+    let abs_col = t.range.start.col + ci;
+    if abs_col < af.range.start.col || abs_col > af.range.end.col {
+        return None;
+    }
+    let off = abs_col - af.range.start.col;
+    af.criteria.iter().find_map(|(col, crit)| match crit {
+        gridcraft_model::FilterCriterion::Values { values, .. } if *col == off => Some(values.clone()),
+        _ => None,
+    })
 }

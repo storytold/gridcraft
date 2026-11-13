@@ -88,9 +88,9 @@ fn cross_sheet_table_slicer_imports_without_skipped_object_warning() {
     let drawing1 = r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:sle="http://schemas.microsoft.com/office/drawing/2010/slicer"><xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>10</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="10" name="Date for Slicer_1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/drawing/2010/slicer"><sle:slicer name="Date for Slicer_1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#;
     let slicer1 = r#"<?xml version="1.0"?><slicers xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><slicer name="Date for Slicer_1" cache="SlicerCache_Table_3_Col_36" caption="Date for Slicer" columnCount="2"/></slicers>"#;
     let slicer_cache1 = r#"<?xml version="1.0"?><slicerCacheDefinition xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main" name="SlicerCache_Table_3_Col_36" sourceName="Date for Slicer"><extLst><ext uri="{2F2917AC-EB37-4324-AD4E-5DD8C200BD13}"><x15:tableSlicerCache tableId="3" column="36"/></ext></extLst></slicerCacheDefinition>"#;
-    let sheet2 = r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Date for Slicer</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>2026-Q1</t></is></c></row></sheetData><tableParts count="1"><tablePart r:id="rId1"/></tableParts></worksheet>"#;
+    let sheet2 = r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Date for Slicer</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>2026-Q1</t></is></c></row><row r="3" hidden="1"><c r="A3" t="inlineStr"><is><t>2026-Q2</t></is></c></row></sheetData><tableParts count="1"><tablePart r:id="rId1"/></tableParts></worksheet>"#;
     let sheet2_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table3.xml"/></Relationships>"#;
-    let table3 = r#"<?xml version="1.0"?><table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="3" name="Table_3" displayName="Table_3" ref="A1:A2"><tableColumns count="1"><tableColumn id="36" name="Date for Slicer"/></tableColumns></table>"#;
+    let table3 = r#"<?xml version="1.0"?><table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="3" name="Table_3" displayName="Table_3" ref="A1:A3"><autoFilter ref="A1:A3"><filterColumn colId="0"><filters><filter val="2026-Q1"/></filters></filterColumn></autoFilter><tableColumns count="1"><tableColumn id="36" name="Date for Slicer"/></tableColumns></table>"#;
     let zip = make_zip(&[
         ("[Content_Types].xml", CT.as_bytes()),
         ("_rels/.rels", ROOT_RELS.as_bytes()),
@@ -113,6 +113,7 @@ fn cross_sheet_table_slicer_imports_without_skipped_object_warning() {
     assert_eq!(sl.column, "Date for Slicer");
     assert_eq!(sl.caption, "Date for Slicer");
     assert_eq!(sl.columns, 2);
+    assert_eq!(sl.selected.as_deref(), Some(&["2026-Q1".to_string()][..]));
     assert_eq!(sl.anchor.cell, gridcraft_core::CellRef::new(2, 1));
     assert!(sl.anchor.width > 0.0 && sl.anchor.height > 0.0);
 
@@ -147,6 +148,10 @@ fn cross_sheet_table_slicer_imports_without_skipped_object_warning() {
         (
             slicer1,
             r#"<?xml version="1.0"?><slicerCacheDefinition xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" name="SlicerCache_Table_3_Col_36" sourceName="MissingCol"/>"#,
+        ),
+        (
+            slicer1,
+            r#"<?xml version="1.0"?><slicerCacheDefinition xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" name="SlicerCache_Table_3_Col_36" sourceName="Date for Slicer"><pivotTables><pivotTable tabId="1" name="PivotTable1"/></pivotTables><data><tabular data="1"/></data></slicerCacheDefinition>"#,
         ),
     ] {
         let zip_neg = make_zip(&[
