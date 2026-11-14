@@ -352,6 +352,25 @@ impl DocState {
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved)
     }
+    /// Applies `region` to this workbook without making it dirty. The region belongs to the
+    /// window, not to the file, so a clean workbook stays clean (`saved` moves with it); and a
+    /// workbook another window shares is cloned only when the region really changes. Formulas
+    /// are calculated again unless calculation is manual, because `TEXT`, `VALUETOTEXT` and the
+    /// criteria of `COUNTIF` read the region.
+    pub(crate) fn adopt_region(&mut self, region: &'static gridcraft_core::Region) {
+        if self.wb.region.tag == region.tag {
+            return;
+        }
+        let dirty = self.is_dirty();
+        let wb = Arc::make_mut(&mut self.wb);
+        wb.region = region;
+        if wb.calc.mode != gridcraft_model::CalcMode::Manual {
+            self.calc.recalc_all(wb);
+        }
+        if !dirty {
+            self.saved = self.wb.clone();
+        }
+    }
     pub fn sheet_index(&self) -> usize {
         self.wb.active_sheet()
     }
@@ -489,6 +508,10 @@ pub struct Session {
     pub clipboard: Option<Clipboard>,
     pub prefs: Prefs,
     pub mode: Mode,
+    /// The region new documents are opened in, and that the active document reads typed input
+    /// and writes displayed numbers in: the system's regional settings unless a command, the
+    /// CLI or a front end sets another.
+    region: Option<&'static gridcraft_core::Region>,
     /// Commands run so far, without their passwords ([`cmd::journal_params`]).
     pub journal: Vec<(String, Json)>,
     /// Serialized size of each journal entry, measured once when it is pushed, and their sum.
@@ -554,6 +577,17 @@ impl Session {
     pub fn new() -> Session {
         Session::default()
     }
+    /// The region typed input is read in and displayed values are written in.
+    pub fn region(&self) -> &'static gridcraft_core::Region {
+        self.region.unwrap_or_else(gridcraft_core::region::default_region)
+    }
+    /// Sets the region, applies it to every open document, and opens the next documents in it.
+    pub fn set_region(&mut self, region: &'static gridcraft_core::Region) {
+        self.region = Some(region);
+        for d in &mut self.docs {
+            d.adopt_region(region);
+        }
+    }
     pub fn documents(&self) -> &[DocState] {
         &self.docs
     }
@@ -599,7 +633,10 @@ impl Session {
         cmd::locked_cell_error(sh, at, &d.unlocked_ranges)
     }
     /// Opens a workbook in a new window, which becomes the active one.
-    pub fn add_document(&mut self, d: DocState) -> usize {
+    pub fn add_document(&mut self, mut d: DocState) -> usize {
+        // Only when the regimes differ: `make_mut` clones a workbook another window still
+        // shares, and a new window must keep sharing the same `Arc` as the one it came from.
+        d.adopt_region(self.region());
         let uid = d.uid;
         self.docs.push(d);
         let w = self.push_window(uid);
@@ -1036,8 +1073,11 @@ impl Session {
         let g = self.take_group(&token)?;
         let Some(d) = self.docs.iter_mut().find(|d| d.uid == g.doc) else { return Ok(()) };
         if !Arc::ptr_eq(&d.wb, &g.wb) {
+            // The snapshot keeps the region of its time; the window's current one stays.
+            let region = d.wb.region;
             d.wb = g.wb;
             d.calc.rebuild(&d.wb);
+            d.adopt_region(region);
         }
         d.selection = g.selection;
         d.undo.truncate(g.start);

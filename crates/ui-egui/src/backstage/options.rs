@@ -53,7 +53,7 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
 }
 
-/// The display theme and interface language controls of the General section.
+/// The display theme, interface language and regional format controls of the General section.
 fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
     egui::Grid::new("backstage_options_general").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         let label = ui.label(lang.tr("Display theme"));
@@ -84,6 +84,21 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
                 for l in i18n::Language::for_picker() {
                     if ui.selectable_label(l == lang, l.name()).clicked() {
                         app.run_or_alert("app.language.set", json!({"language": l.code()}));
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
+        ui.end_row();
+        let label = ui.label(lang.tr("Regional format"));
+        let current = app.session.region();
+        craft_ui::ComboBox::from_id_salt("backstage_region")
+            .width(160.0)
+            .selected_text(current.name)
+            .show_ui(ui, |ui| {
+                for r in gridcraft_engine::core::region::all() {
+                    if ui.selectable_label(r.tag == current.tag, r.name).clicked() {
+                        app.run_or_alert("app.region.set", json!({"region": r.tag}));
                     }
                 }
             })

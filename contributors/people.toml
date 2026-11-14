@@ -113,3 +113,7 @@ sync_github_name = true
 
 [people.RockerHX]
 sync_github_name = true
+
+[people.danilo-aguiar-br]
+display_name = "daniloaguiarbr"
+sync_github_name = false
