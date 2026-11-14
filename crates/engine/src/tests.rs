@@ -6420,6 +6420,97 @@ fn unique_nonce() -> u64 {
     N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Protect Sheet's Delete Rows and Delete Columns delete a line only when every cell in it is
+/// unlocked, as Excel does ("You are trying to delete a row that contains a locked cell"). The
+/// line-level check read a line without a format of its own as carrying the default style, which
+/// is locked, so every delete was refused however the permission was set; a cell the sheet does
+/// not store is judged by the format it shows, its row's, then its column's, then the default.
+#[test]
+fn a_protected_sheet_deletes_lines_when_it_says_so() {
+    fn grant(sess: &mut Session) {
+        let d = sess.doc_mut().unwrap();
+        let mut wb = (*d.wb).clone();
+        if let Some(p) = wb.sheet_mut(0).and_then(|sh| sh.protection.as_mut()) {
+            p.delete_rows = true;
+            p.delete_columns = true;
+        }
+        d.wb = std::sync::Arc::new(wb);
+    }
+    // Values in A1:A3, the given ranges unlocked (or locked again) in order, then protected.
+    let book = |locks: &[(&str, bool)], granted: bool| {
+        let mut sess = s();
+        for (c, v) in [("A1", "1"), ("A2", "2"), ("A3", "3")] {
+            sess.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+        }
+        for (range, on) in locks {
+            sess.execute("home.lockCell", json!({"range": range, "on": on})).unwrap();
+        }
+        sess.execute("review.protectSheet", json!({})).unwrap();
+        if granted {
+            grant(&mut sess);
+        }
+        sess
+    };
+    let delete = |sess: &mut Session, what: &str, at: &str| {
+        sess.execute("selection.set", json!({"range": format!("{at}:{at}")})).unwrap();
+        sess.execute(what, json!({})).is_ok()
+    };
+    let (rows, cols) = ("home.deleteRows", "home.deleteColumns");
+    const SHEET: &str = "A1:XFD1048576";
+
+    // Granted, over whole rows the user unlocked: the row goes, and the rows below move up.
+    let mut sess = book(&[("A1:XFD10", false)], true);
+    assert!(delete(&mut sess, rows, "A1"), "an unlocked row is deleted");
+    assert_eq!((v(&sess, "A1"), v(&sess, "A2")), (Value::Number(2.0), Value::Number(3.0)));
+    // Its columns still have locked cells below row 10, so a column is not deleted.
+    assert!(!delete(&mut sess, cols, "A1"), "a column with locked cells stays");
+
+    // Granted, over a whole column the user unlocked: the column goes.
+    let mut sess = book(&[("A1:A1048576", false)], true);
+    assert!(delete(&mut sess, cols, "A1"), "an unlocked column is deleted");
+    assert_eq!(v(&sess, "A1"), Value::Empty);
+
+    // Granted, with the whole sheet unlocked: blank lines go too, judged by their columns' format.
+    let mut sess = book(&[(SHEET, false)], true);
+    assert!(delete(&mut sess, rows, "A7"), "a blank row under unlocked columns");
+    assert!(delete(&mut sess, cols, "F1"), "a blank unlocked column");
+
+    // Not granted: refused, and the rows stay.
+    let mut sess = book(&[(SHEET, false)], false);
+    assert!(!delete(&mut sess, rows, "A1"), "Delete rows is off");
+    assert!(!delete(&mut sess, cols, "A1"), "Delete columns is off");
+    assert_eq!(v(&sess, "A1"), Value::Number(1.0));
+
+    // Granted, but only a block of cells is unlocked: the rest of each line is locked by default,
+    // so neither its rows nor its columns are deleted.
+    let mut sess = book(&[("A1:D10", false)], true);
+    assert!(!delete(&mut sess, rows, "A1"), "E1 onwards are locked");
+    assert!(!delete(&mut sess, cols, "A1"), "A11 onwards are locked");
+    assert_eq!(v(&sess, "A1"), Value::Number(1.0));
+
+    // Granted, nothing unlocked: a blank line is locked by the default like any other, and a line
+    // with a locked value in it is refused by that cell.
+    let mut sess = book(&[], true);
+    assert!(!delete(&mut sess, rows, "A7"), "a blank row of default cells is locked");
+    assert!(!delete(&mut sess, cols, "F1"), "a blank column of default cells is locked");
+    assert!(!delete(&mut sess, rows, "A1"), "locked cells are not deleted");
+    assert_eq!(v(&sess, "A1"), Value::Number(1.0));
+
+    // Granted, the sheet unlocked but row 5 locked again by a format of its own: row 5 is refused,
+    // and so is every column, since row 5's format comes before a column's in each cell it crosses.
+    // The format has to go on before the sheet is protected, since changing a format on a
+    // protected sheet is itself refused.
+    let mut sess = book(&[(SHEET, false), ("A5:XFD5", true)], true);
+    assert!(!delete(&mut sess, rows, "A5"), "a locked row format refuses");
+    assert!(!delete(&mut sess, cols, "B1"), "B5 is locked by its row");
+    assert!(delete(&mut sess, rows, "A6"), "the rows beside it are not");
+
+    // An unprotected sheet is untouched by any of this.
+    let mut sess = s();
+    sess.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    sess.execute("home.deleteRows", json!({})).unwrap();
+}
+
 /// Normal, Page Layout and Page Break Preview are not undo steps (as in Excel), so undoing or
 /// redoing an edit keeps each sheet in the view it is in now, instead of putting back the view
 /// of the snapshot it swaps in. Found through the command-sequence fuzz (seed 177).
