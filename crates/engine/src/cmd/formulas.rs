@@ -81,7 +81,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "formulas.selectPrecedents", "Select Precedents", ["Formulas", "Formula Auditing"], Some("Ctrl+["), "{cell?, all?: true = every level (Ctrl+Shift+[)} → selects the precedent cells", has_doc, select_precedents),
         cmd!(noundo "formulas.selectDependents", "Select Dependents", ["Formulas", "Formula Auditing"], Some("Ctrl+]"), "{cell?, all?: true = every level (Ctrl+Shift+])}", has_doc, select_dependents),
         cmd!(noundo "formulas.removeArrows", "Remove Arrows", ["Formulas", "Formula Auditing"], None, "{}", has_doc, |_, _| ok()),
-        cmd!("formulas.showFormulas", "Show Formulas", ["Formulas", "Formula Auditing"], Some("Ctrl+`"), "{on?}", has_doc, show_formulas),
+        cmd!("formulas.showFormulas", "Show Formulas", ["Formulas", "Formula Auditing"], Some("Ctrl+`"), "{sheet?, on?}", has_doc, show_formulas),
         cmd!(
             "formulas.convertToNumber",
             "Convert to Number",
@@ -809,7 +809,7 @@ fn select_dependents(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn show_formulas(s: &mut Session, p: &Json) -> Result<Json> {
-    let sheet = s.doc()?.wb.active_sheet();
+    let sheet = target_sheet(s, p)?;
     let cur = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.show_formulas);
     let on = bool_param(p, "on").unwrap_or(!cur);
     edit(s, |cx| {

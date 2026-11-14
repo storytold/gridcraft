@@ -6508,6 +6508,94 @@ fn workbook_display_options_are_commands() {
     assert_eq!(s.execute("view.showSheetTabs", json!({})).unwrap()["on"], json!(true), "toggles back");
 }
 
+#[test]
+fn gridline_color_is_a_command_for_one_sheet() {
+    // #3100: Display options for this worksheet › Gridline color. Undoable and saved with the
+    // file; an RGB colour snaps to the palette as Excel's does; empty params only report.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    s.doc_mut().unwrap().saved = wb;
+    let steps = s.doc().unwrap().undo.len();
+    s.take_ui_requests();
+    let colors = |s: &Session| s.doc().unwrap().wb.sheets.iter().map(|sh| sh.gridline_color).collect::<Vec<_>>();
+    let automatic = json!({"colorIndex": "automatic", "color": null});
+    let set = |s: &mut Session, p: serde_json::Value| s.execute("view.gridlineColor", p);
+
+    assert_eq!(set(&mut s, json!({})).unwrap(), automatic, "empty params report");
+    assert_eq!(set(&mut s, json!([1, 2])).unwrap(), automatic);
+    assert!(!s.doc().unwrap().is_dirty() && s.doc().unwrap().undo.len() == steps, "a report changes nothing");
+    assert!(s.take_ui_requests().is_empty(), "and opens no dialog");
+
+    assert_eq!(set(&mut s, json!({"colorIndex": 3})).unwrap(), json!({"colorIndex": 3, "color": "#FF0000"}));
+    assert_eq!(colors(&s), [Some(3), None], "the active sheet only");
+    assert!(s.doc().unwrap().is_dirty());
+    assert_eq!(set(&mut s, json!({})).unwrap()["colorIndex"], 3);
+    // Measured: RGB 123456 becomes ColorIndex 49 (003366), FF0100 becomes 3.
+    assert_eq!(set(&mut s, json!({"color": "#123456"})).unwrap(), json!({"colorIndex": 49, "color": "#003366"}));
+    assert_eq!(set(&mut s, json!({"color": "FF0100"})).unwrap(), json!({"colorIndex": 3, "color": "#FF0000"}));
+    assert_eq!(set(&mut s, json!({"sheet": "Two", "colorIndex": 56})).unwrap(), json!({"colorIndex": 56, "color": "#333333"}));
+    assert_eq!(colors(&s), [Some(3), Some(56)]);
+
+    // 57, negative and other values are refused and change nothing.
+    let before = s.doc().unwrap().wb.clone();
+    for bad in [
+        json!({"colorIndex": 57}),
+        json!({"colorIndex": -1}),
+        json!({"colorIndex": -4105}),
+        json!({"colorIndex": -4142}),
+        json!({"colorIndex": 3.5}),
+        json!({"colorIndex": "3"}),
+        json!({"colorIndex": true}),
+        json!({"color": "#12345"}),
+        json!({"color": 255}),
+        json!({"colorIndex": 3, "color": "#FF0000"}),
+        json!({"sheet": 9, "colorIndex": 3}),
+    ] {
+        assert!(matches!(set(&mut s, bad.clone()), Err(crate::EngineError::BadParams { .. })), "{bad}");
+        assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before), "{bad} changed the workbook");
+    }
+
+    // A file keeps each sheet's colour; the gridlines can go and the colour stays.
+    s.execute("view.gridlines", json!({"sheet": 1, "on": false})).unwrap();
+    let book = s.doc().unwrap().wb.clone();
+    assert!(book.sheet(0).unwrap().show_gridlines && !book.sheet(1).unwrap().show_gridlines, "`sheet` names the sheet");
+    let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&book).unwrap()).unwrap();
+    assert_eq!(back.sheets.iter().map(|sh| sh.gridline_color).collect::<Vec<_>>(), [Some(3), Some(56)]);
+
+    // 0 and "automatic" are Automatic; undo brings the colour back.
+    assert_eq!(set(&mut s, json!({"colorIndex": 0})).unwrap(), automatic);
+    assert_eq!(set(&mut s, json!({"sheet": 1, "colorIndex": "Automatic"})).unwrap(), automatic);
+    assert_eq!(colors(&s), [None, None]);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(colors(&s), [None, Some(56)]);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(colors(&s), [Some(3), Some(56)]);
+    // Setting the colour a sheet has is no step of its own.
+    let steps = s.doc().unwrap().undo.len();
+    set(&mut s, json!({"colorIndex": 3})).unwrap();
+    assert_eq!(s.doc().unwrap().undo.len(), steps);
+}
+
+#[test]
+fn sheet_display_flags_take_a_sheet() {
+    // File › Options › Display options for this worksheet acts on the sheet chosen in its list.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    for id in ["view.headings", "formulas.showFormulas", "view.showZeros", "view.showOutlineSymbols", "view.gridlines"] {
+        s.execute(id, json!({"sheet": "Two"})).unwrap();
+    }
+    let flags = |sh: &gridcraft_model::Sheet| (sh.show_headings, sh.show_formulas, sh.show_zeros, sh.show_outline_symbols, sh.show_gridlines);
+    let wb = &s.doc().unwrap().wb;
+    assert_eq!(flags(wb.sheet(0).unwrap()), (true, false, true, true, true), "the active sheet is left alone");
+    assert_eq!(flags(wb.sheet(1).unwrap()), (false, true, false, false, false));
+    assert_eq!(wb.active_sheet(), 0);
+}
+
 /// A link from a file can sit on a cell with nothing stored in it, past the used range (or on a
 /// sheet with no cells at all). Clear Hyperlinks, and Remove Hyperlink in the cell menu, must
 /// still remove it.
