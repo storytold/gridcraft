@@ -743,3 +743,76 @@ fn find_and_replace_within_the_selection() {
     let all = s.execute("edit.find", json!({"what": "pear", "all": true})).unwrap();
     assert_eq!(all["count"], 3, "A1, A3 and A4 on the whole sheet");
 }
+
+#[test]
+fn paste_special_transpose_preserves_merged_cells() {
+    let merge_of = |s: &mut Session, cell: &str| s.execute("cell.get", json!({"cell": cell})).unwrap()["merge"].clone();
+    let val_of = |s: &mut Session, cell: &str| s.execute("cell.get", json!({"cell": cell})).unwrap()["value"].clone();
+
+    // Horizontal A1:B1 merge, All + Transpose -> D1:D2 merged, value 10.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:B1"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true})).unwrap();
+    assert_eq!(val_of(&mut s, "D1"), json!(10.0));
+    assert_eq!(merge_of(&mut s, "D1"), json!("D1:D2"));
+    assert_eq!(merge_of(&mut s, "D2"), json!("D1:D2"));
+
+    // Vertical A1:A2 merge, All + Transpose -> D1:E1 merged, value 10.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:A2"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A2"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true})).unwrap();
+    assert_eq!(val_of(&mut s, "D1"), json!(10.0));
+    assert_eq!(merge_of(&mut s, "D1"), json!("D1:E1"));
+    assert_eq!(merge_of(&mut s, "E1"), json!("D1:E1"));
+
+    // Horizontal merge, Formats + Transpose over destination value 777 -> D1:D2 merged, value 777 preserved.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "777"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:B1"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "formats", "transpose": true})).unwrap();
+    assert_eq!(val_of(&mut s, "D1"), json!(777.0));
+    assert_eq!(merge_of(&mut s, "D1"), json!("D1:D2"));
+    assert_eq!(merge_of(&mut s, "D2"), json!("D1:D2"));
+
+    // 2x2 source with A1:B1 merged (10) and A2=30, B2=40 -> D1:D2 merged, E1=30, E2=40.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "30"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "40"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:B2"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true})).unwrap();
+    assert_eq!(val_of(&mut s, "D1"), json!(10.0));
+    assert_eq!(val_of(&mut s, "E1"), json!(30.0));
+    assert_eq!(val_of(&mut s, "E2"), json!(40.0));
+    assert_eq!(merge_of(&mut s, "D1"), json!("D1:D2"));
+    assert_eq!(merge_of(&mut s, "D2"), json!("D1:D2"));
+    assert_eq!(merge_of(&mut s, "E1"), json!(null));
+    assert_eq!(merge_of(&mut s, "E2"), json!(null));
+
+    // Tiled: a vertical A1:A2 merge pasted transposed over D1:G1 merges both tiles.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:A2"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A2"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1:G1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true})).unwrap();
+    assert_eq!(merge_of(&mut s, "E1"), json!("D1:E1"));
+    assert_eq!(merge_of(&mut s, "F1"), json!("F1:G1"));
+    assert_eq!(merge_of(&mut s, "G1"), json!("F1:G1"));
+}
