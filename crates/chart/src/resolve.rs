@@ -534,7 +534,14 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
     let categories = categories.unwrap_or_else(|| (1..=n).map(|i| i.to_string()).collect());
     let palette = default_palette(&wb.theme, n.min(PALETTE_CYCLE));
-    ChartData { categories, category_levels, series, palette }
+    let border = match &chart.border {
+        gridcraft_model::ChartBorder::Auto => crate::Border::Auto,
+        gridcraft_model::ChartBorder::None => crate::Border::None,
+        gridcraft_model::ChartBorder::Line { color, width } => {
+            crate::Border::Line { color: color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]), width: *width }
+        }
+    };
+    ChartData { categories, category_levels, series, palette, border }
 }
 
 #[cfg(test)]

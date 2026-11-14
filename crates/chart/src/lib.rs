@@ -132,6 +132,23 @@ pub struct ChartData {
     /// Workbook-theme colours for the points of pie-like charts, repeating (point `j` uses entry `j % len`); empty uses the default theme.
     #[serde(default)]
     pub palette: Vec<Rgba>,
+    /// The chart area's border, its colour resolved against the theme.
+    #[serde(default)]
+    pub border: Border,
+}
+
+/// The border drawn around the chart area.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum Border {
+    /// Excel's automatic border.
+    #[default]
+    Auto,
+    None,
+    /// A colour (`None`: the automatic one) and width in points (`None`: the automatic one).
+    Line {
+        color: Option<Rgba>,
+        width: Option<f32>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

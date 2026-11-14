@@ -425,6 +425,7 @@ fn sample() -> Workbook {
         style: 2,
         hole_size: 75,
         first_slice_angle: 0,
+        border: Default::default(),
         x_title: Some("Region".into()),
         y_title: Some("Amount".into()),
         source: None,

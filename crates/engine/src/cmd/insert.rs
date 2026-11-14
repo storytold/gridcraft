@@ -852,6 +852,7 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         style: 1,
         hole_size: 75,
         first_slice_angle: 0,
+        border: Default::default(),
         x_title: None,
         y_title: None,
         source: (areas.len() == 1).then(|| format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), bounds.a1())),

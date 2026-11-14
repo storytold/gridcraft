@@ -606,6 +606,9 @@ pub struct Chart {
     /// Pie/doughnut first slice angle in degrees clockwise from 12 o'clock (0–359).
     #[serde(default)]
     pub first_slice_angle: u16,
+    /// The chart area's border (`c:chartSpace/c:spPr/a:ln`).
+    #[serde(default)]
+    pub border: ChartBorder,
     pub x_title: Option<String>,
     pub y_title: Option<String>,
     /// Source range when created from a selection (for Switch Row/Column).
@@ -615,6 +618,18 @@ pub struct Chart {
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]
     pub pivot: Option<String>,
+}
+
+/// The border around a chart's area, as the file sets it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum ChartBorder {
+    /// None set: Excel's automatic border.
+    #[default]
+    Auto,
+    /// No border (`a:noFill`).
+    None,
+    /// A line, with its colour (`None`: the automatic one) and width in points (`None`: the default).
+    Line { color: Option<Color>, width: Option<f32> },
 }
 
 impl Chart {
@@ -1149,6 +1164,7 @@ mod tests {
             style: 1,
             hole_size: 75,
             first_slice_angle: 0,
+            border: Default::default(),
             x_title: None,
             y_title: None,
             source: None,
