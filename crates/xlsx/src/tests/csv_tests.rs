@@ -1,8 +1,8 @@
 use gridcraft_core::{CellRef, DateSystem, MAX_COLS, Value};
 use gridcraft_model::{Sheet, Workbook};
 
-use crate::csv::{decode_text, parse_records, sniff_delimiter};
-use crate::{CsvOptions, Format, IoError, read_csv, sniff, write_csv, write_csv_limited};
+use crate::{CsvOptions, Format, IoError, read_csv, read_csv_with_report, sniff, write_csv, write_csv_limited};
+use craft_csv::{decode_text, parse_records, sniff_delimiter};
 
 fn v(wb: &Workbook, r: u32, c: u32) -> Value {
     wb.sheet(0).unwrap().value(CellRef::new(r, c))
@@ -21,6 +21,86 @@ fn quoting_and_newlines() {
     assert_eq!(v(&wb, 1, 2), Value::Number(3.0));
     assert_eq!(v(&wb, 2, 0), Value::Empty);
     assert_eq!(v(&wb, 3, 0), Value::text("last"));
+}
+
+fn date(y: i64, m: i64, d: i64) -> Value {
+    Value::Number(gridcraft_core::date::serial_from_ymd(DateSystem::D1900, y, m, d).unwrap())
+}
+
+#[test]
+fn day_first_columns_read_ambiguous_dates_day_first() {
+    let src = "CustomerID,Name,City,SignupDate,RenewalDate,CardNumber,Balance\n\
+        00123,Zoë Ångström,Malmö,03/04/2026,25/12/2026,4111111111111111,1234.50\n\
+        00456,José Núñez,São Paulo,12/01/2026,01/02/2027,5500005555555559,99.90\n\
+        00789,Françoise Lefèvre,Besançon,31/05/2026,30/11/2026,4012888888881881,0.00\n\
+        01000,Jürgen Weiß,Köln,07/08/2026,13/09/2026,3530111333300000,-15.25\n";
+    let (wb, report) = read_csv_with_report(src.as_bytes(), &CsvOptions::default()).unwrap();
+    // A value that reads only day first (31/05, 25/12) makes the whole column day first.
+    assert_eq!(v(&wb, 1, 3), date(2026, 4, 3));
+    assert_eq!(v(&wb, 2, 3), date(2026, 1, 12));
+    assert_eq!(v(&wb, 3, 3), date(2026, 5, 31));
+    assert_eq!(v(&wb, 4, 3), date(2026, 8, 7));
+    assert_eq!(v(&wb, 1, 4), date(2026, 12, 25));
+    assert_eq!(v(&wb, 2, 4), date(2027, 2, 1));
+    assert_eq!(v(&wb, 3, 4), date(2026, 11, 30));
+    assert_eq!(v(&wb, 4, 4), date(2026, 9, 13));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
+#[test]
+fn month_first_columns_keep_month_first_without_a_warning() {
+    let (wb, report) = read_csv_with_report(b"When\n12/31/2026\n01/02/2027\n", &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 1, 0), date(2026, 12, 31));
+    assert_eq!(v(&wb, 2, 0), date(2027, 1, 2));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
+#[test]
+fn an_all_ambiguous_date_column_keeps_month_first_and_warns() {
+    let (wb, report) = read_csv_with_report(b"When\n03/04/2026\n12/01/2026\n", &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 1, 0), date(2026, 3, 4));
+    assert_eq!(v(&wb, 2, 0), date(2026, 12, 1));
+    assert!(report.warnings.iter().any(|w| w.contains("column A") && w.contains("ambiguous")), "{:?}", report.warnings);
+    // Keeping every field as text reads no dates, so there is no order to guess.
+    let (_, report) = read_csv_with_report(b"When\n03/04/2026\n12/01/2026\n", &CsvOptions { parse_values: false, ..Default::default() }).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
+#[test]
+fn a_column_with_both_orders_keeps_its_dates_as_text_and_warns() {
+    let (wb, report) = read_csv_with_report(b"When\n31/05/2026\n12/31/2026\n", &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 1, 0), Value::text("31/05/2026"));
+    assert_eq!(v(&wb, 2, 0), Value::text("12/31/2026"));
+    assert!(report.warnings.iter().any(|w| w.contains("column A") && w.contains("both day-first and month-first")), "{:?}", report.warnings);
+}
+
+#[test]
+fn dashes_and_two_digit_years_follow_the_column_order() {
+    let (wb, report) = read_csv_with_report(b"When\n31-05-26\n03-04-26\n", &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 1, 0), date(2026, 5, 31));
+    assert_eq!(v(&wb, 2, 0), date(2026, 4, 3));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+
+    let (wb, report) = read_csv_with_report(b"When\n12-31-26\n01-02-27\n", &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 1, 0), date(2026, 12, 31));
+    assert_eq!(v(&wb, 2, 0), date(2027, 1, 2));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
+#[test]
+fn a_day_first_date_and_time_is_read_day_first() {
+    let (wb, report) = read_csv_with_report(b"When\n31/05/2026 10:30\n03/04/2026 10:30\n", &CsvOptions::default()).unwrap();
+    let at = |y, m, d| Value::Number(gridcraft_core::date::serial_from_ymd(DateSystem::D1900, y, m, d).unwrap() + 10.5 / 24.0);
+    assert_eq!(v(&wb, 1, 0), at(2026, 5, 31));
+    assert_eq!(v(&wb, 2, 0), at(2026, 4, 3));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
+#[test]
+fn iso_dates_are_not_reordered_by_their_column() {
+    let wb = read_csv(b"When\n31/05/2026\n2026-03-04\n", &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 1, 0), date(2026, 5, 31));
+    assert_eq!(v(&wb, 2, 0), date(2026, 3, 4));
 }
 
 #[test]
@@ -66,33 +146,6 @@ fn encodings() {
     let wb = read_csv(&le, &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
     assert_eq!(v(&wb, 0, 0), Value::text("ü"));
     assert_eq!(v(&wb, 0, 1), Value::Number(1.0));
-}
-
-#[test]
-fn windows_1256_table_matches_the_unicode_mapping() {
-    let at = |b: u8| crate::csv::CP1256.get(usize::from(b - 0x80)).and_then(|&c| char::from_u32(c));
-    let expected = [
-        (0x80, '€'),
-        (0x81, 'پ'),
-        (0x8D, 'چ'),
-        (0x98, 'ک'),
-        (0x9D, '\u{200C}'),
-        (0xA1, '،'),
-        (0xBA, '؛'),
-        (0xBF, '؟'),
-        (0xC7, 'ا'),
-        (0xC8, 'ب'),
-        (0xDC, 'ـ'),
-        (0xE1, 'ل'),
-        (0xE3, 'م'),
-        (0xE9, 'é'),
-        (0xFD, '\u{200E}'),
-        (0xFE, '\u{200F}'),
-        (0xFF, 'ے'),
-    ];
-    for (b, c) in expected {
-        assert_eq!(at(b), Some(c), "0x{b:02X}");
-    }
 }
 
 #[test]
@@ -222,8 +275,9 @@ fn sniffing_formats() {
     assert_eq!(sniff(b"a,b\n1,2"), Format::Csv);
     // An Excel password-protected file is a CFB/OLE2 compound file with an EncryptedPackage
     // stream; any other compound file is a legacy binary (.xls), not an encrypted workbook.
-    assert_eq!(sniff(&crate::cfb::tests::build(&["EncryptionInfo", "EncryptedPackage"])), Format::Encrypted);
-    assert_eq!(sniff(&crate::cfb::tests::build(&["Workbook"])), Format::LegacyBinary);
+    let compound = crate::testing::compound_file;
+    assert_eq!(sniff(&compound(&[("EncryptionInfo", b"x"), ("EncryptedPackage", b"x")])), Format::Encrypted);
+    assert_eq!(sniff(&compound(&[("WordDocument", b"x")])), Format::LegacyBinary);
     assert_eq!(sniff(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0, 0]), Format::LegacyBinary);
     assert_eq!(sniff(&[0xD0, 0xCF, 0x11, 0xE0, 0, 0, 1, 2]), Format::Unknown);
     assert_eq!(sniff(b""), Format::Unknown);
@@ -313,16 +367,31 @@ fn parser_stops_collecting_fields_at_max_cols() {
     let mut text = ",".repeat((MAX_COLS + extra) as usize - 1);
     text.push_str("end\nx,y\n");
     let mut lens = vec![];
-    parse_records(&text, ',', '"', |rec| {
+    parse_records(&text, ',', '"', MAX_COLS as usize, |rec| {
         lens.push(rec.len());
         true
     });
     assert_eq!(lens, vec![MAX_COLS as usize, 2]);
     // An unterminated last row is capped the same way.
     let mut lens = vec![];
-    parse_records(&",".repeat(MAX_COLS as usize + extra as usize), ',', '"', |rec| {
+    parse_records(&",".repeat(MAX_COLS as usize + extra as usize), ',', '"', MAX_COLS as usize, |rec| {
         lens.push(rec.len());
         true
     });
     assert_eq!(lens, vec![MAX_COLS as usize]);
+}
+
+#[test]
+fn csv_used_range_limit_is_enforced_while_reading() {
+    let opts = |max| CsvOptions { max_used_cells: Some(max), ..Default::default() };
+    // 3 rows x 3 columns: exactly at the limit reads, one cell over is refused.
+    let dense = b"1,2,3\n4,5,6\n7,8,9\n";
+    assert!(read_csv(dense, &opts(9)).is_ok());
+    assert!(matches!(read_csv(dense, &opts(8)), Err(IoError::TooLarge(_))));
+    // The limit is on the used range: empty leading rows, columns and trailing lines are free.
+    assert!(read_csv(b"\n\n,,x,y\n,,z,w\n\n\n", &opts(4)).is_ok());
+    // A wide sparse row against a tall one: refused once the box passes the limit.
+    assert!(matches!(read_csv(b"a\nb\nc\n,,,,d\n", &opts(10)), Err(IoError::TooLarge(_))));
+    // No limit by default.
+    assert!(read_csv(dense, &CsvOptions::default()).is_ok());
 }

@@ -17,11 +17,13 @@ pub(in super::super) fn go_to(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let Some(reference) = str_param(p, "reference").or_else(|| str_param(p, "range")) else { return Err(bad("edit.goTo", "missing `reference`")) };
     let d = s.doc()?;
+    let mut names = Resolver::new(&d.wb);
     let mut target: Option<usize> = None;
     let mut areas: Vec<RangeRef> = Vec::new();
     let mut named = false;
     for part in reference_parts(reference) {
-        let Some((sheet, found, by_name)) = go_to_target(&d.wb, d.wb.active_sheet(), part, 0) else {
+        let mut found = Vec::new();
+        let Some((sheet, _, by_name)) = names.target(d.wb.active_sheet(), part, 0, Some(&mut found)) else {
             return Err(EngineError::Other("Reference isn't valid.".into()));
         };
         // One selection holds the areas of one sheet.
@@ -77,57 +79,114 @@ pub(super) fn reference_parts(text: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-/// Where one part of a Go To reference points, seen from sheet `sheet`: the sheet, its areas,
-/// and whether a defined name or a table gave them. `Sheet2!Name` is the name scoped to Sheet2.
-/// A name counts when what it refers to is a reference; a constant or a formula is not one.
-fn go_to_target(wb: &gridcraft_model::Workbook, sheet: usize, part: &str, depth: usize) -> Option<(usize, Vec<RangeRef>, bool)> {
-    if part.is_empty() || depth > GO_TO_NAME_DEPTH {
-        return None;
-    }
-    let (prefix, body) = split_sheet(part);
-    let on = match &prefix {
-        Some(n) => wb.sheet_index(n)?,
-        None => sheet,
-    };
-    if let Some(r) = RangeRef::parse(&body.replace('$', "")) {
-        return Some((on, vec![r], false));
-    }
-    let name = match prefix {
-        Some(_) => wb.names.iter().find(|n| n.scope == Some(on) && gridcraft_formula::same_name(&n.name, body)),
-        None => wb.name(body, sheet),
-    };
-    if let Some(n) = name {
-        return name_areas(wb, n, sheet, depth).map(|(t, areas)| (t, areas, true));
-    }
-    if prefix.is_none()
-        && let Some((si, ti)) = wb.table(body)
-    {
-        // As in Excel, a table's name stands for its data, without the header and totals rows.
-        let t = wb.sheet(si)?.tables.get(ti)?;
-        return Some((si, vec![t.data_range().unwrap_or(t.range)], true));
-    }
-    None
+/// Resolves Go To references against one workbook. Defined names are found through an index
+/// built once, and whether a name refers to a reference is remembered: listing the names of a
+/// workbook full of names that alias other names would otherwise scan every name for every alias
+/// of every name.
+struct Resolver<'a> {
+    wb: &'a gridcraft_model::Workbook,
+    /// Indexes into `wb.names` by scope and folded name, in workbook order.
+    by_name: std::collections::HashMap<(Option<usize>, String), Vec<usize>>,
+    /// [`Resolver::name_areas`] without areas, by name index, sheet and depth: the target sheet
+    /// and the number of areas.
+    memo: std::collections::HashMap<(usize, usize, usize), Option<(usize, usize)>>,
 }
 
-/// The sheet and areas defined name `n` refers to, seen from sheet `sheet`, when that is a
-/// reference.
-fn name_areas(wb: &gridcraft_model::Workbook, n: &gridcraft_model::DefinedName, sheet: usize, depth: usize) -> Option<(usize, Vec<RangeRef>)> {
-    let from = n.scope.unwrap_or(sheet);
-    let formula = n.formula.trim().trim_start_matches('=');
-    let mut target: Option<usize> = None;
-    let mut areas = Vec::new();
-    for p in reference_parts(formula) {
-        let (s, found, _) = go_to_target(wb, from, p, depth + 1)?;
-        if target.is_some_and(|t| t != s) {
-            return None;
+impl<'a> Resolver<'a> {
+    fn new(wb: &'a gridcraft_model::Workbook) -> Self {
+        let mut by_name: std::collections::HashMap<(Option<usize>, String), Vec<usize>> = std::collections::HashMap::new();
+        for (i, n) in wb.names.iter().enumerate() {
+            by_name.entry((n.scope, gridcraft_formula::fold_name(&n.name))).or_default().push(i);
         }
-        target = Some(s);
-        areas.extend(found);
-        if areas.len() > GO_TO_MAX_AREAS {
-            return None;
-        }
+        Self { wb, by_name, memo: std::collections::HashMap::new() }
     }
-    target.map(|t| (t, areas))
+
+    /// The first name of scope `scope` that `same` accepts, as a scan of `wb.names` finds it.
+    /// Names `same` accepts fold alike, so only that bucket is checked.
+    fn find(&self, scope: Option<usize>, body: &str, same: impl Fn(&str, &str) -> bool) -> Option<usize> {
+        self.by_name
+            .get(&(scope, gridcraft_formula::fold_name(body)))?
+            .iter()
+            .copied()
+            .find(|&i| self.wb.names.get(i).is_some_and(|n| same(&n.name, body)))
+    }
+
+    /// Where one part of a Go To reference points, seen from sheet `sheet`: the sheet, how many
+    /// areas (appended to `areas` when given), and whether a defined name or a table gave them.
+    /// `Sheet2!Name` is the name scoped to Sheet2. A name counts when what it refers to is a
+    /// reference; a constant or a formula is not one.
+    fn target(&mut self, sheet: usize, part: &str, depth: usize, areas: Option<&mut Vec<RangeRef>>) -> Option<(usize, usize, bool)> {
+        let wb = self.wb;
+        if part.is_empty() || depth > GO_TO_NAME_DEPTH {
+            return None;
+        }
+        let (prefix, body) = split_sheet(part);
+        let on = match &prefix {
+            Some(n) => wb.sheet_index(n)?,
+            None => sheet,
+        };
+        if let Some(r) = RangeRef::parse(&body.replace('$', "")) {
+            if let Some(a) = areas {
+                a.push(r);
+            }
+            return Some((on, 1, false));
+        }
+        // As `Workbook::name`: the sheet's own name, else the workbook's.
+        let name = match prefix {
+            Some(_) => self.find(Some(on), body, gridcraft_formula::same_name),
+            None => self.find(Some(sheet), body, str::eq_ignore_ascii_case).or_else(|| self.find(None, body, str::eq_ignore_ascii_case)),
+        };
+        if let Some(i) = name {
+            return self.name_areas(i, sheet, depth, areas).map(|(t, n)| (t, n, true));
+        }
+        if prefix.is_none()
+            && let Some((si, ti)) = wb.table(body)
+        {
+            // As in Excel, a table's name stands for its data, without the header and totals rows.
+            let t = wb.sheet(si)?.tables.get(ti)?;
+            if let Some(a) = areas {
+                a.push(t.data_range().unwrap_or(t.range));
+            }
+            return Some((si, 1, true));
+        }
+        None
+    }
+
+    /// The sheet and number of areas defined name `wb.names[i]` refers to, seen from sheet
+    /// `sheet`, when that is a reference; the areas are appended to `areas` when given.
+    fn name_areas(&mut self, i: usize, sheet: usize, depth: usize, mut areas: Option<&mut Vec<RangeRef>>) -> Option<(usize, usize)> {
+        let key = (i, sheet, depth);
+        if areas.is_none()
+            && let Some(known) = self.memo.get(&key)
+        {
+            return *known;
+        }
+        let out = self.name_areas_uncached(i, sheet, depth, areas.as_deref_mut());
+        if areas.is_none() {
+            self.memo.insert(key, out);
+        }
+        out
+    }
+
+    fn name_areas_uncached(&mut self, i: usize, sheet: usize, depth: usize, mut areas: Option<&mut Vec<RangeRef>>) -> Option<(usize, usize)> {
+        let n = self.wb.names.get(i)?;
+        let from = n.scope.unwrap_or(sheet);
+        let formula = n.formula.trim().trim_start_matches('=');
+        let mut target: Option<usize> = None;
+        let mut count = 0usize;
+        for p in reference_parts(formula) {
+            let (s, found, _) = self.target(from, p, depth + 1, areas.as_deref_mut())?;
+            if target.is_some_and(|t| t != s) {
+                return None;
+            }
+            target = Some(s);
+            count += found;
+            if count > GO_TO_MAX_AREAS {
+                return None;
+            }
+        }
+        target.map(|t| (t, count))
+    }
 }
 
 /// The names the Go To dialog lists, seen from sheet `sheet`: the named ranges of the workbook and
@@ -137,11 +196,13 @@ fn name_areas(wb: &gridcraft_model::Workbook, n: &gridcraft_model::DefinedName, 
 pub fn go_to_names(wb: &gridcraft_model::Workbook, sheet: usize) -> Vec<String> {
     let own: std::collections::HashSet<String> =
         wb.names.iter().filter(|n| n.scope == Some(sheet)).map(|n| gridcraft_formula::fold_name(&n.name)).collect();
+    let mut names = Resolver::new(wb);
     let mut out: Vec<String> = wb
         .names
         .iter()
-        .filter(|n| !n.hidden && name_areas(wb, n, sheet, 0).is_some())
-        .filter_map(|n| match n.scope {
+        .enumerate()
+        .filter(|(i, n)| !n.hidden && names.name_areas(*i, sheet, 0, None).is_some())
+        .filter_map(|(_, n)| match n.scope {
             None if own.contains(&gridcraft_formula::fold_name(&n.name)) => None,
             None => Some(n.name.clone()),
             Some(s) if s == sheet => Some(n.name.clone()),
@@ -174,8 +235,8 @@ pub(super) fn go_to_special(s: &mut Session, p: &Json) -> Result<Json> {
         let v = sheet.value(c);
         let ok = match kind {
             "blanks" => v.is_empty(),
-            "constants" => cell.is_some_and(|x| x.formula.is_none() && !x.value.is_empty()),
-            "formulas" => cell.is_some_and(|x| x.formula.is_some()),
+            "constants" => cell.is_some_and(|x| x.formula.is_none() && x.py.is_none() && !x.value.is_empty()),
+            "formulas" => cell.is_some_and(|x| x.formula.is_some() || x.py.is_some()),
             "comments" | "notes" => sheet.comments.contains_key(&c),
             "errors" => v.is_error(),
             "numbers" => v.is_number(),

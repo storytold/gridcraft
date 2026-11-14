@@ -10,7 +10,7 @@ mod pivot;
 mod print;
 
 pub use pivot::{PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue};
-pub use print::{EditRange, HfPage, LineInfo, Orientation, PrintSettings, SheetProtection, password_hash};
+pub use print::{EditRange, HfPage, LineInfo, Orientation, PageOrder, PrintSettings, SheetProtection, password_hash};
 
 // ---------------------------------------------------------------- tables
 
@@ -228,6 +228,30 @@ pub enum CfRule {
         reverse: bool,
         show_value: bool,
     },
+}
+
+impl CfRule {
+    /// The differential style a matching rule applies; colour scales, data bars and icon sets have none.
+    pub fn style(&self) -> Option<&Style> {
+        match self {
+            CfRule::CellIs { style, .. }
+            | CfRule::Expression { style, .. }
+            | CfRule::ContainsText { style, .. }
+            | CfRule::NotContainsText { style, .. }
+            | CfRule::BeginsWith { style, .. }
+            | CfRule::EndsWith { style, .. }
+            | CfRule::Blanks { style }
+            | CfRule::NoBlanks { style }
+            | CfRule::Errors { style }
+            | CfRule::NoErrors { style }
+            | CfRule::Duplicate { style }
+            | CfRule::Unique { style }
+            | CfRule::Top10 { style, .. }
+            | CfRule::AboveAverage { style, .. }
+            | CfRule::TimePeriod { style, .. } => Some(style),
+            CfRule::ColorScale { .. } | CfRule::DataBar { .. } | CfRule::IconSet { .. } => None,
+        }
+    }
 }
 
 /// Number of icons in an icon set (`3Arrows` → 3, `5Quarters` → 5), always 3 to 5.
@@ -540,6 +564,28 @@ impl Trendline {
     }
 }
 
+/// Charts saved before `hole_size` existed were drawn with a 50% hole. New charts and charts read
+/// from XLSX set 75 explicitly (Excel's default), so only a missing JSON field keeps the old look.
+fn default_hole_size() -> u8 {
+    50
+}
+
+/// A chart's data table (`c:dTable`), independent of the chart legend.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartDataTable {
+    pub show_keys: bool,
+    pub horizontal_border: bool,
+    pub vertical_border: bool,
+    pub outline: bool,
+}
+
+impl Default for ChartDataTable {
+    fn default() -> Self {
+        Self { show_keys: true, horizontal_border: true, vertical_border: true, outline: true }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Chart {
     pub id: u32,
@@ -549,8 +595,17 @@ pub struct Chart {
     pub series: Vec<Series>,
     pub legend: LegendPos,
     pub data_labels: bool,
+    #[serde(default)]
+    pub data_table: Option<ChartDataTable>,
     pub gridlines: bool,
     pub style: u32,
+    /// Doughnut hole size as a percentage of the plot radius (Excel's 10–90 range). New charts and
+    /// XLSX imports use Excel's 75; a document saved before this field existed reads as 50.
+    #[serde(default = "default_hole_size")]
+    pub hole_size: u8,
+    /// Pie/doughnut first slice angle in degrees clockwise from 12 o'clock (0–359).
+    #[serde(default)]
+    pub first_slice_angle: u16,
     pub x_title: Option<String>,
     pub y_title: Option<String>,
     /// Source range when created from a selection (for Switch Row/Column).
@@ -560,6 +615,30 @@ pub struct Chart {
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]
     pub pivot: Option<String>,
+}
+
+impl Chart {
+    /// Data tables belong to category-axis column, bar, line and area charts.
+    pub fn supports_data_table(&self) -> bool {
+        let eligible = |kind| {
+            matches!(
+                kind,
+                ChartKind::ColumnClustered
+                    | ChartKind::ColumnStacked
+                    | ChartKind::ColumnStacked100
+                    | ChartKind::BarClustered
+                    | ChartKind::BarStacked
+                    | ChartKind::BarStacked100
+                    | ChartKind::Line
+                    | ChartKind::LineMarkers
+                    | ChartKind::LineStacked
+                    | ChartKind::Area
+                    | ChartKind::AreaStacked
+                    | ChartKind::AreaStacked100
+            )
+        };
+        eligible(self.kind) || (self.kind == ChartKind::Combo && self.series.iter().all(|s| eligible(s.kind.unwrap_or(ChartKind::Line))))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -589,6 +668,12 @@ pub enum ShapeKind {
     /// A freehand ink stroke; `Shape::text` holds the points as `x,y;x,y;…` relative to the
     /// anchor (sheet points), `Shape::line` the ink colour and `fill` unused.
     Ink,
+    /// Decorative text (`insert.wordArt`): a transparent shape whose `Shape::text` is drawn with
+    /// the large, filled/outlined/shadowed text properties of `Shape::format`.
+    WordArt,
+    /// An equation: `Shape::text` holds its LaTeX source, `Shape::line` its ink colour
+    /// (`Color::Auto` for the sheet's text colour) and `Shape::math` its cached layout.
+    Equation,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -602,6 +687,311 @@ pub struct Shape {
     /// Outline visibility and text formatting (DrawingML `a:ln`, `a:bodyPr`, `a:pPr`, `a:rPr`).
     #[serde(default)]
     pub format: ShapeFormat,
+    /// An equation's layout, rebuilt from `text` and never saved.
+    #[serde(skip)]
+    pub math: EquationCache,
+}
+
+/// The laid-out form of an equation's LaTeX source. It is derived data: rebuilt by
+/// [`EquationCache::refresh`] whenever the source changes, never saved, and ignored when shapes
+/// are compared. Painters read it and never lay equations out themselves, so nothing in a paint
+/// path can reach the layout engine.
+///
+/// An entry answers only for the source it was built from, compared in full: a hash match alone
+/// is not enough, so two sources whose hashes collide never share a layout. A source over
+/// [`gridcraft_math::MAX_SOURCE_BYTES`] never lays out, so [`EquationCache::get`] answers for it
+/// by its length alone, with [`gridcraft_math::SOURCE_TOO_LONG`], and an entry built from one holds
+/// neither the source nor its hash: a painter asking every frame about a source of megabytes read
+/// from a file does no work on it.
+#[derive(Clone, Debug, Default)]
+pub struct EquationCache {
+    /// A hash of the source the entry was built from (a quick first check).
+    key: u64,
+    /// The source's length in bytes.
+    len: usize,
+    /// The source itself, when it is within the length cap.
+    source: Option<std::sync::Arc<str>>,
+    layout: Option<Result<std::sync::Arc<gridcraft_math::MathList>, gridcraft_math::MathError>>,
+}
+
+impl PartialEq for EquationCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+fn source_key(src: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    #[cfg(test)]
+    equation_cache_tests::HASHES.with(|h| h.set(h.get() + 1));
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    h.finish()
+}
+
+impl EquationCache {
+    /// Whether this entry was built from `src`. Over the cap the length is the match (an entry for
+    /// such a source is always the same error); within it, the hash and then the source itself.
+    fn holds(&self, src: &str) -> bool {
+        if self.layout.is_none() || self.len != src.len() {
+            return false;
+        }
+        if src.len() > gridcraft_math::MAX_SOURCE_BYTES {
+            return self.source.is_none();
+        }
+        self.key == source_key(src) && self.source.as_deref() == Some(src)
+    }
+
+    /// Makes this the entry for `src`, with `layout`. A source over the cap is neither copied nor
+    /// hashed.
+    fn store(&mut self, src: &str, layout: Result<std::sync::Arc<gridcraft_math::MathList>, gridcraft_math::MathError>) {
+        let within = src.len() <= gridcraft_math::MAX_SOURCE_BYTES;
+        self.key = if within { source_key(src) } else { 0 };
+        self.len = src.len();
+        self.source = within.then(|| std::sync::Arc::from(src));
+        self.layout = Some(layout);
+    }
+
+    /// The layout of `src`, or why it has none; `None` until [`EquationCache::refresh`] has run
+    /// for this source. A source over [`gridcraft_math::MAX_SOURCE_BYTES`] is answered at once,
+    /// whatever the entry holds, by its length alone.
+    pub fn get(&self, src: &str) -> Option<Result<&gridcraft_math::MathList, &gridcraft_math::MathError>> {
+        if src.len() > gridcraft_math::MAX_SOURCE_BYTES {
+            return Some(Err(&*gridcraft_math::SOURCE_TOO_LONG));
+        }
+        if !self.holds(src) {
+            return None;
+        }
+        self.layout.as_ref().map(|r| r.as_ref().map(|l| l.as_ref()))
+    }
+
+    /// Lays `src` out again unless the cache already holds its layout. True when it did.
+    pub fn refresh(&mut self, src: &str) -> bool {
+        if self.holds(src) {
+            return false;
+        }
+        self.store(src, gridcraft_math::layout(src).map(std::sync::Arc::new));
+        true
+    }
+
+    /// Records that `src` was not laid out, and why, without running the layout engine.
+    pub fn refuse(&mut self, src: &str, message: &str) {
+        self.store(src, Err(gridcraft_math::MathError { span: None, message: message.to_string() }));
+    }
+}
+
+/// What a form control on the sheet is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ControlKind {
+    #[default]
+    Button,
+    Slider,
+    Spin,
+}
+
+impl ControlKind {
+    /// The kind's name in the window: Button, Slider, Spin Button.
+    pub fn label(self) -> &'static str {
+        match self {
+            ControlKind::Button => "Button",
+            ControlKind::Slider => "Slider",
+            ControlKind::Spin => "Spin Button",
+        }
+    }
+}
+
+/// The largest value a slider or spin button takes (Excel's scroll bar limit). Values are whole
+/// numbers from 0 to this.
+pub const CONTROL_MAX: u32 = 30_000;
+
+/// What a button runs when it is pressed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ControlAction {
+    /// Runs a macro of the workbook on `input`, optionally sending its output to `output`.
+    Macro {
+        name: String,
+        #[serde(default)]
+        input: MacroInput,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
+    /// Runs one GridCraft command with fixed parameters.
+    Command {
+        id: String,
+        #[serde(default)]
+        params: serde_json::Value,
+    },
+}
+
+/// The range a button's macro runs on.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MacroInput {
+    /// The selection when the button is pressed.
+    #[default]
+    Selection,
+    /// Always this range (`B2:D9` or `Data!B2:D9`).
+    Fixed(String),
+}
+
+/// A form control (button, slider, spin button) floating over the sheet.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FormControl {
+    pub id: u32,
+    pub kind: ControlKind,
+    pub anchor: Anchor,
+    /// The name shown in the Selection Pane (`Button 3`); empty means the kind and id.
+    pub name: String,
+    /// The caption of a button.
+    pub text: String,
+    /// The linked cell as reference text: `$B$2` on the control's own sheet, or `Sheet2!$B$2`.
+    /// Structural edits rewrite it like a formula reference.
+    pub link: Option<String>,
+    /// The current value of a slider or spin button (the linked cell holds it too).
+    pub value: u32,
+    pub min: u32,
+    pub max: u32,
+    /// Incremental change: one arrow click or arrow key.
+    pub step: u32,
+    /// Page change (sliders): a click on the track, or Page Up / Page Down.
+    pub page: u32,
+    /// A slider lies horizontally (false: vertically).
+    pub horizontal: bool,
+    /// What a button runs.
+    pub action: Option<ControlAction>,
+    /// Printed with the sheet.
+    pub print: bool,
+    /// Locked when the sheet is protected.
+    pub locked: bool,
+}
+
+impl Default for FormControl {
+    fn default() -> Self {
+        FormControl {
+            id: 0,
+            kind: ControlKind::default(),
+            anchor: Anchor::default(),
+            name: String::new(),
+            text: String::new(),
+            link: None,
+            value: 0,
+            min: 0,
+            max: 100,
+            step: 1,
+            page: 10,
+            horizontal: true,
+            action: None,
+            print: true,
+            locked: true,
+        }
+    }
+}
+
+impl FormControl {
+    /// The name shown for the control: its own, else `Button 3`, `Slider 4`, `Spin Button 5`.
+    pub fn display_name(&self) -> String {
+        if self.name.trim().is_empty() { format!("{} {}", self.kind.label(), self.id) } else { self.name.clone() }
+    }
+
+    /// Checks the numbers of a slider or spin button: 0 ≤ min < max ≤ 30000, 1 ≤ step ≤ max − min,
+    /// and (sliders) page ≥ step. Each rule has its own message.
+    pub fn check_numbers(&self) -> Result<(), String> {
+        if self.kind == ControlKind::Button {
+            return Ok(());
+        }
+        if self.max > CONTROL_MAX {
+            return Err(format!("Maximum value can be at most {CONTROL_MAX}."));
+        }
+        if self.min > CONTROL_MAX {
+            return Err(format!("Minimum value must be a whole number from 0 to {CONTROL_MAX}."));
+        }
+        if self.min >= self.max {
+            return Err(format!("Maximum value ({}) must be greater than Minimum value ({}).", self.max, self.min));
+        }
+        if self.step < 1 {
+            return Err("Incremental change must be at least 1.".into());
+        }
+        let span = self.max - self.min;
+        if self.step > span {
+            return Err(format!("Incremental change ({}) can be at most Maximum minus Minimum ({span}).", self.step));
+        }
+        if self.kind == ControlKind::Slider {
+            if self.page < self.step {
+                return Err(format!("Page change ({}) must be at least the incremental change ({}).", self.page, self.step));
+            }
+            if self.page > CONTROL_MAX {
+                return Err(format!("Page change can be at most {CONTROL_MAX}."));
+            }
+        }
+        Ok(())
+    }
+
+    /// `v` clamped to min..max and snapped to the nearest step from min (max stays reachable).
+    pub fn snap(&self, v: f64) -> u32 {
+        let (min, max) = (self.min.min(CONTROL_MAX), self.max.min(CONTROL_MAX).max(self.min.min(CONTROL_MAX)));
+        if !v.is_finite() || v <= min as f64 {
+            return min;
+        }
+        if v >= max as f64 {
+            return max;
+        }
+        let step = self.step.max(1) as f64;
+        let snapped = (min as f64 + ((v - min as f64) / step).round() * step).clamp(min as f64, max as f64);
+        // When the step doesn't divide the range, the maximum is a stop of its own.
+        if (max as f64 - v).abs() < (snapped - v).abs() { max } else { snapped as u32 }
+    }
+}
+
+/// The kinds of floating object a sheet holds. Commands name an object by kind and
+/// workbook-unique id (`{kind: "chart", id}`); [`ObjKind::name`] is that parameter's spelling.
+/// Equations are stored as shapes ([`ShapeKind::Equation`]) but select, open and delete as their
+/// own kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ObjKind {
+    Chart,
+    Image,
+    Shape,
+    Slicer,
+    Equation,
+    Control,
+}
+
+impl ObjKind {
+    pub const ALL: [ObjKind; 6] = [ObjKind::Chart, ObjKind::Image, ObjKind::Shape, ObjKind::Slicer, ObjKind::Equation, ObjKind::Control];
+
+    /// The name used in command parameters.
+    pub fn name(self) -> &'static str {
+        match self {
+            ObjKind::Chart => "chart",
+            ObjKind::Image => "image",
+            ObjKind::Shape => "shape",
+            ObjKind::Slicer => "slicer",
+            ObjKind::Equation => "equation",
+            ObjKind::Control => "control",
+        }
+    }
+
+    /// The kind named `s` (any letter case).
+    pub fn parse(s: &str) -> Option<ObjKind> {
+        ObjKind::ALL.into_iter().find(|k| k.name().eq_ignore_ascii_case(s))
+    }
+}
+
+/// One floating object on a sheet: its kind and its workbook-unique id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ObjRef {
+    pub kind: ObjKind,
+    pub id: u32,
+}
+
+impl ObjRef {
+    pub fn new(kind: ObjKind, id: u32) -> ObjRef {
+        ObjRef { kind, id }
+    }
 }
 
 /// Horizontal alignment of a shape's text (`a:pPr algn`).
@@ -639,6 +1029,8 @@ pub struct ShapeFormat {
     pub text_color: Option<Color>,
     /// Text outline (`a:rPr/a:ln`): colour and width in points.
     pub text_outline: Option<(Color, f32)>,
+    /// Text drop shadow colour (`a:rPr/a:effectLst/a:outerShdw`); `None` is no shadow.
+    pub text_shadow: Option<Color>,
     /// `None`: the shape's default (left for text boxes, centred for other shapes).
     pub align: Option<ShapeTextAlign>,
     /// `None`: the shape's default (top for text boxes, middle for other shapes).
@@ -735,5 +1127,110 @@ mod trendline_forecast_tests {
         assert_eq!(Trendline::clamp_forecast(f64::INFINITY), 0.0);
         assert_eq!(Trendline::clamp_forecast(f64::NEG_INFINITY), 0.0);
         assert_eq!(Trendline::clamp_forecast(1e300), Trendline::MAX_FORECAST);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chart_without_hole_size_keeps_the_legacy_hole() {
+        let chart = Chart {
+            id: 1,
+            kind: ChartKind::Doughnut,
+            anchor: Anchor::default(),
+            title: None,
+            series: vec![],
+            legend: LegendPos::Right,
+            data_labels: false,
+            data_table: None,
+            gridlines: false,
+            style: 1,
+            hole_size: 75,
+            first_slice_angle: 0,
+            x_title: None,
+            y_title: None,
+            source: None,
+            by_rows: false,
+            pivot: None,
+        };
+        let mut json = serde_json::to_value(&chart).expect("serialize chart");
+        json.as_object_mut().expect("chart object").remove("hole_size");
+        let legacy: Chart = serde_json::from_value(json).expect("deserialize legacy chart");
+        assert_eq!(legacy.hole_size, 50, "documents saved before hole_size existed keep the old 50% hole");
+        assert_eq!(chart.hole_size, 75, "new charts keep Excel's 75% default");
+    }
+}
+
+#[cfg(test)]
+mod equation_cache_tests {
+    use super::{EquationCache, source_key};
+
+    thread_local! {
+        /// How many sources `source_key` has hashed on this thread.
+        pub(super) static HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    fn glyphs(c: &EquationCache, src: &str) -> Option<String> {
+        let list = c.get(src)?.ok()?;
+        Some(list.items.iter().filter_map(|i| if let gridcraft_math::Item::Glyph(g) = i { Some(g.ch) } else { None }).collect())
+    }
+
+    #[test]
+    fn a_hash_collision_never_returns_another_sources_layout() {
+        let (a, b) = ("x^2", "y^3");
+        let mut c = EquationCache::default();
+        assert!(c.refresh(a));
+        assert_eq!(glyphs(&c, a).as_deref(), Some("x2"));
+        // Forge a collision: the entry claims `b`'s hash; `b` has `a`'s length, so only the
+        // full comparison tells them apart.
+        c.key = source_key(b);
+        assert!(c.get(b).is_none(), "`b` is a miss, not `a`'s layout");
+        assert!(c.refresh(b), "`b` is laid out afresh");
+        assert_eq!(glyphs(&c, b).as_deref(), Some("y3"));
+        assert!(c.get(a).is_none(), "the entry is `b`'s now");
+        // A refusal does not answer for a colliding source either.
+        c.refuse(a, "not laid out");
+        c.key = source_key(b);
+        assert!(c.get(b).is_none());
+    }
+
+    #[test]
+    fn sources_over_the_cap_are_not_copied_hashed_or_laid_out() {
+        let long = "x".repeat(gridcraft_math::MAX_SOURCE_BYTES + 1);
+        let mut c = EquationCache::default();
+        HASHES.with(|h| h.set(0));
+        assert!(matches!(c.get(&long), Some(Err(e)) if e.message.contains("4096")), "answered before any refresh");
+        assert!(c.refresh(&long));
+        assert!(c.source.is_none(), "an over-cap source is not kept");
+        assert_eq!(c.key, 0, "nor hashed");
+        assert!(matches!(c.get(&long), Some(Err(_))));
+        assert!(!c.refresh(&long), "still cached");
+        let other = "y".repeat(gridcraft_math::MAX_SOURCE_BYTES + 1);
+        assert!(matches!(c.get(&other), Some(Err(_))), "another over-cap source gets the same answer");
+        assert_eq!(HASHES.with(|h| h.get()), 0, "nothing over the cap is hashed");
+        // Within the cap the lookup is unchanged: a hash, then the source compared in full.
+        assert!(c.refresh("x"));
+        assert!(c.get("x").is_some_and(|r| r.is_ok()));
+        assert!(HASHES.with(|h| h.get()) >= 2);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // tests run only off wasm, where the clock exists
+    fn a_source_of_a_megabyte_is_looked_up_without_being_read() {
+        // The sheet painter asks the cache every frame and the PDF export every draw; a source
+        // read from a file can be megabytes, and the lookup must not scan it each time.
+        let big = "l".repeat(1 << 20);
+        let mut c = EquationCache::default();
+        c.refuse(&big, "budget");
+        HASHES.with(|h| h.set(0));
+        let start = std::time::Instant::now();
+        for _ in 0..1000 {
+            assert!(matches!(c.get(&big), Some(Err(_))));
+        }
+        let took = start.elapsed();
+        assert_eq!(HASHES.with(|h| h.get()), 0, "a thousand lookups read nothing");
+        assert!(took < std::time::Duration::from_millis(500), "{took:?}");
     }
 }
