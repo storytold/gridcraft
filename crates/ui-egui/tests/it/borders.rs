@@ -236,3 +236,87 @@ fn format_cells_number_change_on_a_range_keeps_each_cells_borders_and_fill() {
         assert_eq!(&style(&h, cell), old, "undo restores {cell}");
     }
 }
+
+/// Format Cells > Fill > No Color on a selection whose active cell is unfilled still clears the
+/// fill of the other selected cells.
+#[test]
+fn format_cells_no_color_clears_the_fill_of_other_cells_when_the_active_cell_is_unfilled() {
+    let mut h = harness();
+    h.state_mut().run("home.formatCells", json!({"range": "B1", "style": {"fill": {"pattern": "Solid", "fg": {"Rgb": 0xffcc00}}}})).unwrap();
+    h.state_mut().run("selection.set", json!({"range": "A1:B1"})).unwrap();
+    h.run_steps(6);
+    let fill_of = |h: &egui_kittest::Harness<'static, SheetApp>, cell: &str| {
+        let doc = h.state().session.active().unwrap();
+        let sheet = doc.wb.active().unwrap();
+        doc.wb.styles.get(sheet.style_id(CellRef::parse(cell).unwrap())).fill
+    };
+    assert_eq!(fill_of(&h, "A1"), Default::default());
+    assert_ne!(fill_of(&h, "B1"), Default::default());
+    h.state_mut().open_dialog("formatCells", json!({"tab": "Fill"}));
+    h.run_steps(6);
+    h.get_by_label("No Color").click();
+    h.run_steps(6);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(6);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(fill_of(&h, "A1"), Default::default());
+    assert_eq!(fill_of(&h, "B1"), Default::default(), "B1 loses its fill");
+}
+
+/// Format Cells > Border > None on a selection whose active cell has no border still removes the
+/// borders of the other selected cells.
+#[test]
+fn format_cells_border_none_removes_borders_of_other_cells_when_the_active_cell_has_none() {
+    let mut h = harness();
+    h.state_mut()
+        .run("home.formatCells", json!({"range": "B1", "style": {"borders": {"top": {"style": "Thin"}, "bottom": {"style": "Thin"}}}}))
+        .unwrap();
+    h.state_mut().run("selection.set", json!({"range": "A1:B1"})).unwrap();
+    h.run_steps(6);
+    assert_eq!(borders(&h, "A1"), Borders::default());
+    assert_ne!(borders(&h, "B1"), Borders::default());
+    h.state_mut().open_dialog("formatCells", json!({"tab": "Border"}));
+    h.run_steps(6);
+    h.get_by_label("None").click();
+    h.run_steps(6);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(6);
+    assert!(h.state().dialog.is_none());
+    for cell in ["A1", "B1"] {
+        assert_eq!(borders(&h, cell), Borders::default(), "{cell} has no borders");
+    }
+}
+
+/// Format Cells > Border > an edge set to none on a mixed selection clears exactly that edge on
+/// every selected cell (diagonals included) and leaves the other edges alone.
+#[test]
+fn format_cells_single_edge_none_clears_only_that_edge_on_every_selected_cell() {
+    for (label, edge) in [("Top none", "top"), ("Diagonal ↘ none", "diag_down"), ("Diagonal ↗ none", "diag_up")] {
+        let mut h = harness();
+        let thin = json!({"style": "Thin"});
+        let all = json!({"top": thin, "bottom": thin, "left": thin, "right": thin, "diag_down": thin, "diag_up": thin});
+        h.state_mut().run("home.formatCells", json!({"range": "B1", "style": {"borders": all}})).unwrap();
+        h.state_mut().run("selection.set", json!({"range": "A1:B1"})).unwrap();
+        h.run_steps(6);
+        let before = borders(&h, "B1");
+        assert_ne!(before.top, BorderLine::default());
+        assert_ne!(before.diag_down, BorderLine::default());
+        assert_ne!(before.diag_up, BorderLine::default());
+        assert_eq!(borders(&h, "A1"), Borders::default());
+        h.state_mut().open_dialog("formatCells", json!({"tab": "Border"}));
+        h.run_steps(6);
+        h.get_by_label(label).click();
+        h.run_steps(6);
+        h.get_by_label("   OK   ").click();
+        h.run_steps(6);
+        assert!(h.state().dialog.is_none());
+        let mut want = before;
+        match edge {
+            "top" => want.top = BorderLine::default(),
+            "diag_down" => want.diag_down = BorderLine::default(),
+            _ => want.diag_up = BorderLine::default(),
+        }
+        assert_eq!(borders(&h, "B1"), want, "{label}: only that edge of B1 is cleared");
+        assert_eq!(borders(&h, "A1"), Borders::default(), "{label}: A1 is unchanged");
+    }
+}
