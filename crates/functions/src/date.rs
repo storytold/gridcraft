@@ -477,7 +477,11 @@ pub(crate) fn yearfrac_core(sys: DateSystem, s: i64, e: i64, basis: i64) -> R<f6
                 days / year_len
             } else {
                 let years = (d2.year - d1.year + 1) as f64;
-                let span = ymd_serial(sys, d2.year as i64 + 1, 1, 1).unwrap_or(e + 1) - ymd_serial(sys, d1.year as i64, 1, 1).unwrap_or(s);
+                // January 1 after the last supported year has no serial; count the final year's length instead.
+                let end = ymd_serial(sys, d2.year as i64 + 1, 1, 1)
+                    .or_else(|_| ymd_serial(sys, d2.year as i64, 1, 1).map(|jan1| jan1 + if is_leap(d2.year) { 366 } else { 365 }))
+                    .unwrap_or(e + 1);
+                let span = end - ymd_serial(sys, d1.year as i64, 1, 1).unwrap_or(s);
                 days / (span as f64 / years)
             }
         }
@@ -836,6 +840,14 @@ mod tests {
         close(ev("YEARFRAC", vec![n(d(2011.0, 2.0, 28.0)), n(d(2012.0, 2.0, 29.0)), n(0.0)]), 1.0);
         close(ev("YEARFRAC", vec![n(d(2011.0, 3.0, 1.0)), n(d(2012.0, 2.0, 29.0)), n(1.0)]), 365.0 / 366.0);
         close(ev("YEARFRAC", vec![s, n(d(2012.0, 1.0, 1.0))]), 0.0);
+    }
+
+    #[test]
+    fn yearfrac_basis1_final_supported_year_counts_whole_year() {
+        // Issue #4100: January 1 of year 10000 has no serial; 9997..=9999 each have 365 days.
+        close(ev("YEARFRAC", vec![n(d(9997.0, 3.0, 1.0)), n(d(9999.0, 3.0, 1.0)), n(1.0)]), 2.0);
+        close(ev("YEARFRAC", vec![n(d(9997.0, 3.0, 1.0)), n(d(9999.0, 12.0, 31.0)), n(1.0)]), 1035.0 / 365.0);
+        close(ev("YEARFRAC", vec![n(d(9996.0, 3.0, 1.0)), n(d(9999.0, 3.0, 1.0)), n(1.0)]), 1095.0 / (1461.0 / 4.0));
     }
 
     #[test]
