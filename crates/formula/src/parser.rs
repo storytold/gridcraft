@@ -69,8 +69,11 @@ pub fn parse_closing_parens<T>(src: &str, parse: impl Fn(&str) -> Result<T, Pars
 /// same tree, so these are refused: a number that is negative (a minus is [`Tok::Op`]) or not
 /// finite; a sheet name that is empty or holds `:`; a [`Tok::Word`] or [`Tok::Func`] the A1
 /// tokenizer would not read from its text (an empty one, `A!1`, or a row number such as the `1`
-/// of `1:3`: pass rows as a [`Tok::Ref`]); a word directly before `(`; and [`Tok::Trim`], which
-/// only Excel's syntax has.
+/// of `1:3`: pass rows as a [`Tok::Ref`]); a word directly before `(`; [`Tok::Trim`], which
+/// only Excel's syntax has; and any other tree whose printed text reads back differently (an
+/// operand next to `:` that would regroup or read as rows: put it in parentheses). A number
+/// longer than the 15 significant digits text keeps is accepted as it is. The printed text is
+/// bounded as typed text is, so a string that only fits without its quotes is refused.
 ///
 /// Only this grammar's operators are read: OpenFormula's `~` union is not handled here, so a
 /// tokenizer for that syntax translates it itself.
@@ -114,7 +117,24 @@ pub fn parse_tokens(toks: Vec<Token>) -> Result<Expr, ParseError> {
     let toks = significant_spaces(toks);
     let mut p = Parser { toks, i: 0, depth: 0, input: false };
     let e = p.expr(0, false)?;
-    finish(&mut p, e)
+    let e = finish(&mut p, e)?;
+    prints_back(e)
+}
+
+/// Refuses a tree whose printed text reads back as a different tree. The checks above refuse
+/// the token shapes known to have no text form with a precise message; this catches the rest
+/// (an operand next to `:` that regroups, such as `A1` `:` `B2:C3` printed as `A1:B2:C3`, or
+/// numbers either side of `:` read back as rows). A number is compared as it prints: text keeps
+/// 15 significant digits, so a longer literal still reads back as the same formula.
+fn prints_back(e: Expr) -> Result<Expr, ParseError> {
+    let as_printed = e.clone().map(&mut |n| match n {
+        Expr::Number(v) => Expr::Number(crate::printer::number(v).parse().unwrap_or(v)),
+        other => other,
+    });
+    match parse_syntax(&crate::printer::print(&e), crate::FormulaLocale::En) {
+        Ok(back) if back == as_printed => Ok(e),
+        _ => Err(ParseError { msg: "tokens with no formula text that reads back the same".into(), pos: 0 }),
+    }
 }
 
 const BAD_SHEET: &str = "sheet name empty or holding `:`";

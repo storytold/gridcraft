@@ -628,8 +628,11 @@ fn parse_tokens_refuses_hostile_tokens() -> Result<(), ParseError> {
     assert!(one(Tok::Word(long.clone())).is_err());
     let sheet = Tok::Ref(Reference { sheet: SheetSel::Named(long), kind: RefKind::Cell(anchor(0, 0)) });
     assert!(one(sheet).is_err());
-    let fits = "x".repeat(crate::MAX_FORMULA_LEN);
+    // A string whose formula text, quotes included, fits the limit is read; one more is not, as
+    // that text would not parse.
+    let fits = "x".repeat(crate::MAX_FORMULA_LEN - 2);
     assert_eq!(one(Tok::Text(fits.clone()))?, Expr::Text(fits.into()));
+    assert!(one(Tok::Text("x".repeat(crate::MAX_FORMULA_LEN - 1))).is_err());
     // Many tokens that each fit still add up past the limit.
     let half = "x".repeat(crate::MAX_FORMULA_LEN / 2 + 1);
     let toks = [Tok::Text(half.clone()), Tok::Op("&"), Tok::Text(half)].into_iter().map(|tok| Token { tok, start: 0, end: 0 }).collect();
@@ -708,7 +711,24 @@ fn parse_tokens_accepts_only_what_prints_back() -> Result<(), ParseError> {
     assert!(read(vec![a1.clone(), Tok::Trim(TrimMode::All), Tok::Word("B2".into())]).is_err());
     // A name directly before `(` is a function name to the A1 tokenizer.
     assert!(read(vec![Tok::Word("_x".into()), Tok::LParen, Tok::RParen]).is_err());
-    assert_eq!(read(vec![Tok::Word("_x".into()), Tok::Space, Tok::LParen, a1, Tok::RParen])?, parse("_x (A1)")?);
+    assert_eq!(read(vec![Tok::Word("_x".into()), Tok::Space, Tok::LParen, a1.clone(), Tok::RParen])?, parse("_x (A1)")?);
+    // Operands of `:` that print as text which regroups, or reads as rows or a sheet span.
+    let cell = |row, col| Anchor { row, col, row_abs: false, col_abs: false };
+    let range = Tok::Ref(Reference { sheet: SheetSel::Current, kind: RefKind::Range(cell(1, 1), cell(2, 2)) });
+    let rows = Tok::Ref(Reference { sheet: SheetSel::Current, kind: RefKind::Rows(0, false, 2, false) });
+    for toks in [
+        vec![Tok::Number(1.0), Tok::Colon, Tok::Number(3.0)],
+        vec![a1.clone(), Tok::Colon, range.clone()],
+        vec![a1.clone(), Tok::Colon, at(SheetSel::Named("S".into()))],
+        vec![rows, Tok::Space, Tok::Word("A1".into())],
+    ] {
+        assert!(read(toks.clone()).is_err(), "{toks:?}");
+    }
+    // In parentheses they keep their shape.
+    let e = read(vec![a1.clone(), Tok::Colon, Tok::LParen, range, Tok::RParen])?;
+    assert_eq!(e, parse("A1:(B2:C3)")?);
+    // A number with more digits than text keeps is read as given, not refused.
+    assert_eq!(read(vec![Tok::Number(std::f64::consts::PI)])?, Expr::Number(std::f64::consts::PI));
     Ok(())
 }
 
