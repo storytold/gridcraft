@@ -171,6 +171,12 @@ fn packed_cell(cell: &NumbersCell<'_>, lists: &mut Lists, next_id: &mut u64, ext
 /// A Numbers package built in code: `sheets` are `(sheet name, tables)`. Rows past 256 start a
 /// new tile, as Numbers does, and tile objects go in a second index part.
 pub fn numbers_document(sheets: &[(&str, Vec<NumbersTable<'_>>)]) -> Vec<u8> {
+    numbers_document_with(sheets, false, false)
+}
+
+/// [`numbers_document`] with options: `wide_offsets` stores each cell offset in four-byte units and
+/// sets the row's wide-offsets flag; `corrupt_tiles` ends every tile with a truncated field.
+pub fn numbers_document_with(sheets: &[(&str, Vec<NumbersTable<'_>>)], wide_offsets: bool, corrupt_tiles: bool) -> Vec<u8> {
     let mut main = Vec::new();
     let mut tiles_part = Vec::new();
     let mut next_id = 100u64;
@@ -190,7 +196,7 @@ pub fn numbers_document(sheets: &[(&str, Vec<NumbersTable<'_>>)]) -> Vec<u8> {
                             offsets.extend_from_slice(&0xFFFFu16.to_le_bytes());
                             continue;
                         }
-                        offsets.extend_from_slice(&(buffer.len() as u16).to_le_bytes());
+                        offsets.extend_from_slice(&((buffer.len() / if wide_offsets { 4 } else { 1 }) as u16).to_le_bytes());
                         let packed = packed_cell(cell, &mut lists, &mut next_id, &mut main);
                         buffer.extend_from_slice(&packed);
                     }
@@ -200,7 +206,13 @@ pub fn numbers_document(sheets: &[(&str, Vec<NumbersTable<'_>>)]) -> Vec<u8> {
                     pb_field_varint(5, 5, &mut info);
                     pb_field_bytes(6, &buffer, &mut info);
                     pb_field_bytes(7, &offsets, &mut info);
+                    if wide_offsets {
+                        pb_field_varint(8, 1, &mut info);
+                    }
                     pb_field_bytes(5, &info, &mut tile);
+                }
+                if corrupt_tiles {
+                    tile.extend_from_slice(&[0x0A, 0xFF]);
                 }
                 let tile_id = next_id;
                 next_id += 1;

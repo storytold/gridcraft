@@ -2,7 +2,7 @@
 
 use gridcraft_core::{CellError, CellRef, Value};
 
-use crate::testing::{NumbersCell as N, numbers_document, numbers_package, snappy_literals};
+use crate::testing::{NumbersCell as N, numbers_document, numbers_document_with, numbers_package, snappy_literals};
 use crate::{Format, IoError, read_numbers, read_xlsx, sniff, write_xlsx};
 
 fn text(s: &str) -> Value {
@@ -115,4 +115,29 @@ fn malformed_numbers_packages_are_errors_not_panics() {
     }
     // A package without the document index is not a Numbers document.
     assert!(matches!(read_numbers(&numbers_package(&[("other.txt", b"x")])), Err(IoError::Zip(_) | IoError::Format(_))));
+}
+
+#[test]
+fn numbers_wide_offsets_are_scaled_by_four() {
+    let rows = vec![vec![N::Text("a"), N::Number(2.0), N::Empty, N::Bool(true), N::Rich("r"), N::Date(86_400.0)]];
+    let sheets = [("S", vec![("T", rows)])];
+    let (wide, _) = read_numbers(&numbers_document_with(&sheets, true, false)).unwrap();
+    let (narrow, _) = read_numbers(&numbers_document(&sheets)).unwrap();
+    for col in 0..6 {
+        assert_eq!(at(&wide, 0, 0, col), at(&narrow, 0, 0, col), "column {col}");
+    }
+    assert_eq!(at(&wide, 0, 0, 1), Value::Number(2.0));
+    assert_eq!(at(&wide, 0, 0, 3), Value::Bool(true));
+    assert_eq!(at(&wide, 0, 0, 4), text("r"));
+}
+
+#[test]
+fn numbers_truncated_tiles_import_what_they_can_and_warn() {
+    let rows = vec![vec![N::Number(1.0), N::Text("kept")], vec![N::Number(2.0)]];
+    let (wb, report) = read_numbers(&numbers_document_with(&[("S", vec![("T", rows)])], false, true)).unwrap();
+    assert_eq!(at(&wb, 0, 0, 1), text("kept"));
+    assert_eq!(at(&wb, 0, 1, 0), Value::Number(2.0));
+    assert!(report.warnings.iter().any(|w| w.contains("truncated or malformed")), "{:?}", report.warnings);
+    let (_, clean) = read_numbers(&numbers_document(&[("S", vec![("T", vec![vec![N::Number(1.0)]])])])).unwrap();
+    assert!(!clean.warnings.iter().any(|w| w.contains("truncated or malformed")));
 }

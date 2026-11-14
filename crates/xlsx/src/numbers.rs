@@ -8,7 +8,7 @@
 //! <https://protobuf.dev/programming-guides/encoding/>. Only the few message fields the import
 //! needs are read, by number; everything else is skipped. All fixtures are authored in Rust.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -203,46 +203,73 @@ enum Val<'a> {
     Bytes(&'a [u8]),
 }
 
-/// Iterates the fields of one message; malformed trailing bytes end the iteration.
+/// Iterates the fields of one message. Malformed bytes (a bad varint, a length running past the
+/// end, an unsupported wire type) end the iteration and set `malformed`, so callers can tell that
+/// from the normal end of the message.
 struct Fields<'a> {
     buf: &'a [u8],
+    malformed: bool,
+}
+
+impl<'a> Fields<'a> {
+    /// `Some(Some(field))` for a field, `Some(None)` for a skipped fixed-width one, `None` when malformed.
+    fn step(&mut self) -> Option<Option<(u32, Val<'a>)>> {
+        let (key, n) = read_varint(self.buf)?;
+        self.buf = self.buf.get(n..)?;
+        let number = u32::try_from(key >> 3).ok()?;
+        match key & 7 {
+            0 => {
+                let (v, n) = read_varint(self.buf)?;
+                self.buf = self.buf.get(n..)?;
+                Some(Some((number, Val::Varint(v))))
+            }
+            1 => {
+                self.buf = self.buf.get(8..)?;
+                Some(None)
+            }
+            2 => {
+                let (len, n) = read_varint(self.buf)?;
+                let end = n.checked_add(usize::try_from(len).ok()?)?;
+                let value = self.buf.get(n..end)?;
+                self.buf = self.buf.get(end..)?;
+                Some(Some((number, Val::Bytes(value))))
+            }
+            5 => {
+                self.buf = self.buf.get(4..)?;
+                Some(None)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl<'a> Iterator for Fields<'a> {
     type Item = (u32, Val<'a>);
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let (key, n) = read_varint(self.buf)?;
-            self.buf = self.buf.get(n..)?;
-            let number = u32::try_from(key >> 3).ok()?;
-            match key & 7 {
-                0 => {
-                    let (v, n) = read_varint(self.buf)?;
-                    self.buf = self.buf.get(n..)?;
-                    return Some((number, Val::Varint(v)));
-                }
-                1 => self.buf = self.buf.get(8..)?,
-                2 => {
-                    let (len, n) = read_varint(self.buf)?;
-                    let start = n;
-                    let end = start.checked_add(usize::try_from(len).ok()?)?;
-                    let value = self.buf.get(start..end)?;
-                    self.buf = self.buf.get(end..)?;
-                    return Some((number, Val::Bytes(value)));
-                }
-                5 => self.buf = self.buf.get(4..)?,
-                _ => {
+        while !self.buf.is_empty() {
+            match self.step() {
+                Some(Some(field)) => return Some(field),
+                Some(None) => {}
+                None => {
+                    self.malformed = true;
                     self.buf = &[];
-                    return None;
                 }
             }
         }
+        None
     }
 }
 
 fn fields(buf: &[u8]) -> Fields<'_> {
-    Fields { buf }
+    Fields { buf, malformed: false }
+}
+
+/// True when `buf` is a complete message: every field decodes up to the end.
+fn well_formed(buf: &[u8]) -> bool {
+    let mut f = fields(buf);
+    f.by_ref().for_each(drop);
+    !f.malformed
 }
 
 fn varint_field(buf: &[u8], number: u32) -> Option<u64> {
@@ -338,17 +365,74 @@ fn read_records(data: &[u8], items: &mut HashMap<u64, (u32, Vec<u8>)>) -> Result
 // ---------------------------------------------------------------- Import
 
 struct Import {
-    objects: Objects,
+    objects: Arc<Objects>,
     wb: Workbook,
     report: ReadReport,
     cells: u64,
     formats: Vec<(&'static str, StyleId)>,
 }
 
-/// One table's lookup lists.
+const MALFORMED: &str = "Some Numbers data was truncated or malformed; what could be read was imported and the rest was skipped.";
+
+/// One table's lookup lists. Text is decoded once and shared by every cell that uses it.
 struct Lists {
-    strings: HashMap<u32, String>,
+    objects: Arc<Objects>,
+    strings: HashMap<u32, Arc<str>>,
     rich: HashMap<u32, u64>,
+    rich_text: HashMap<u64, Option<Arc<str>>>,
+    clipped: bool,
+}
+
+impl Lists {
+    fn rich(&mut self, key: u32) -> Option<Arc<str>> {
+        let payload = *self.rich.get(&key)?;
+        if let Some(text) = self.rich_text.get(&payload) {
+            return text.clone();
+        }
+        let text = rich_text(&self.objects, payload).map(|t| clip_text(&t, &mut self.clipped));
+        self.rich_text.insert(payload, text.clone());
+        text
+    }
+}
+
+fn clip_text(text: &str, clipped: &mut bool) -> Arc<str> {
+    match text.char_indices().nth(MAX_CELL_TEXT) {
+        Some((end, _)) => {
+            *clipped = true;
+            Arc::from(text.get(..end).unwrap_or(text))
+        }
+        None => Arc::from(text),
+    }
+}
+
+fn rich_text(objects: &Objects, payload: u64) -> Option<String> {
+    let storage = reference_field(objects.get(payload, T_RICH_PAYLOAD)?, 1)?;
+    let parts: Vec<String> = bytes_fields(objects.get(storage, T_STORAGE)?, 3).map(|b| String::from_utf8_lossy(b).into_owned()).collect();
+    Some(parts.concat())
+}
+
+fn build_lists(objects: &Arc<Objects>, store: &[u8], report: &mut ReadReport) -> Lists {
+    let mut lists = Lists { objects: Arc::clone(objects), strings: HashMap::new(), rich: HashMap::new(), rich_text: HashMap::new(), clipped: false };
+    let key = |entry: &[u8]| varint_field(entry, 1).and_then(|k| u32::try_from(k).ok());
+    if let Some(list) = reference_field(store, 4).and_then(|id| objects.get(id, T_DATA_LIST)) {
+        if !well_formed(list) {
+            report.warn(MALFORMED);
+        }
+        for entry in bytes_fields(list, 3) {
+            if let (Some(key), Some(text)) = (key(entry), bytes_field(entry, 3)) {
+                let text = clip_text(&String::from_utf8_lossy(text), &mut lists.clipped);
+                lists.strings.insert(key, text);
+            }
+        }
+    }
+    if let Some(list) = reference_field(store, 17).and_then(|id| objects.get(id, T_DATA_LIST)) {
+        for entry in bytes_fields(list, 3) {
+            if let (Some(key), Some(payload)) = (key(entry), reference_field(entry, 9)) {
+                lists.rich.insert(key, payload);
+            }
+        }
+    }
+    lists
 }
 
 /// The decoded optional fields of one packed cell.
@@ -368,28 +452,34 @@ impl Import {
         wb.sheets.clear();
         let mut report = ReadReport::default();
         report.warn("Numbers data-only import: formulas become their saved results and will not recalculate. Source formatting, merged cells, charts, images and other features are not imported. Save a new .xlsx file; Numbers saving is not supported.");
-        Self { objects, wb, report, cells: 0, formats: vec![] }
+        Self { objects: Arc::new(objects), wb, report, cells: 0, formats: vec![] }
     }
 
     fn run(&mut self) -> Result<(), IoError> {
-        let Some(document) = self.objects.document().map(<[u8]>::to_vec) else {
+        // Payloads are borrowed from the shared objects, never copied; each sheet and table is
+        // visited once however often it is referenced, and the table limit is checked first.
+        let objects = Arc::clone(&self.objects);
+        let Some(document) = objects.document() else {
             return Err(IoError::Format("the Numbers document has no document object".into()));
         };
         let mut names = crate::read::SheetNames::of(&self.wb);
-        for sheet_id in bytes_fields(&document, 1).filter_map(reference).collect::<Vec<_>>() {
-            let Some(sheet) = self.objects.get(sheet_id, T_SHEET).map(<[u8]>::to_vec) else { continue };
-            let sheet_name = bytes_field(&sheet, 1).map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
-            let models: Vec<Vec<u8>> = bytes_fields(&sheet, 2)
+        let (mut seen_sheets, mut seen_tables) = (HashSet::new(), HashSet::new());
+        for sheet_id in bytes_fields(document, 1).filter_map(reference) {
+            let Some(sheet) = objects.get(sheet_id, T_SHEET).filter(|_| seen_sheets.insert(sheet_id)) else { continue };
+            let sheet_name = bytes_field(sheet, 1).map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+            let models: Vec<&[u8]> = bytes_fields(sheet, 2)
                 .filter_map(reference)
-                .filter_map(|id| self.objects.get(id, T_TABLE_INFO))
+                .filter_map(|id| objects.get(id, T_TABLE_INFO))
                 .filter_map(|info| reference_field(info, 2))
-                .filter_map(|id| self.objects.get(id, T_TABLE_MODEL).map(<[u8]>::to_vec))
+                .filter(|id| seen_tables.insert(*id))
+                .filter_map(|id| objects.get(id, T_TABLE_MODEL))
+                .take(MAX_SHEETS + 1)
                 .collect();
             if models.is_empty() {
                 self.report.warn("Numbers sheets without tables were skipped.");
             }
             let several = models.len() > 1;
-            for model in &models {
+            for model in models {
                 if self.wb.sheets.len() >= MAX_SHEETS {
                     return Err(IoError::TooLarge("Numbers document contains more than 1024 tables".into()));
                 }
@@ -403,74 +493,56 @@ impl Import {
                     self.report.warn("Some Numbers sheet names were shortened or renamed to valid, unique XLSX sheet names.");
                 }
                 let mut sheet = Sheet::new(name);
-                self.read_table(model, &mut sheet)?;
+                self.read_table(&objects, model, &mut sheet)?;
                 self.wb.sheets.push(Arc::new(sheet));
             }
         }
         Ok(())
     }
 
-    fn lists(&self, store: &[u8]) -> Lists {
-        let mut lists = Lists { strings: HashMap::new(), rich: HashMap::new() };
-        if let Some(list) = reference_field(store, 4).and_then(|id| self.objects.get(id, T_DATA_LIST)) {
-            for entry in bytes_fields(list, 3) {
-                if let (Some(key), Some(text)) = (varint_field(entry, 1).and_then(|k| u32::try_from(k).ok()), bytes_field(entry, 3)) {
-                    lists.strings.insert(key, String::from_utf8_lossy(text).into_owned());
-                }
-            }
-        }
-        if let Some(list) = reference_field(store, 17).and_then(|id| self.objects.get(id, T_DATA_LIST)) {
-            for entry in bytes_fields(list, 3) {
-                if let (Some(key), Some(payload)) = (varint_field(entry, 1).and_then(|k| u32::try_from(k).ok()), reference_field(entry, 9)) {
-                    lists.rich.insert(key, payload);
-                }
-            }
-        }
-        lists
-    }
-
-    fn rich_text(&self, payload: u64) -> Option<String> {
-        let storage = reference_field(self.objects.get(payload, T_RICH_PAYLOAD)?, 1)?;
-        let parts: Vec<String> = bytes_fields(self.objects.get(storage, T_STORAGE)?, 3).map(|b| String::from_utf8_lossy(b).into_owned()).collect();
-        Some(parts.concat())
-    }
-
-    fn read_table(&mut self, model: &[u8], sheet: &mut Sheet) -> Result<(), IoError> {
+    fn read_table(&mut self, objects: &Arc<Objects>, model: &[u8], sheet: &mut Sheet) -> Result<(), IoError> {
         let Some(store) = bytes_field(model, 4) else { return Ok(()) };
-        let lists = self.lists(store);
+        let mut lists = build_lists(objects, store, &mut self.report);
         let Some(tiles) = bytes_field(store, 3) else { return Ok(()) };
         let height = varint_field(tiles, 2).and_then(|h| u32::try_from(h).ok()).filter(|h| (1..=65_536).contains(h)).unwrap_or(256);
-        let tile_payloads: Vec<(u32, Vec<u8>)> = bytes_fields(tiles, 1)
-            .filter_map(|entry| {
-                let index = u32::try_from(varint_field(entry, 1)?).ok()?;
-                let tile = self.objects.get(reference_field(entry, 2)?, T_TILE)?;
-                Some((index, tile.to_vec()))
-            })
-            .collect();
-        for (index, tile) in tile_payloads {
-            for info in bytes_fields(&tile, 5) {
-                self.read_row(info, index, height, &lists, sheet)?;
+        let mut seen = HashSet::new();
+        for entry in bytes_fields(tiles, 1) {
+            let (Some(index), Some(id)) = (varint_field(entry, 1).and_then(|i| u32::try_from(i).ok()), reference_field(entry, 2)) else { continue };
+            let Some(tile) = objects.get(id, T_TILE).filter(|_| seen.insert(id)) else { continue };
+            if !well_formed(tile) {
+                self.report.warn(MALFORMED);
             }
+            for info in bytes_fields(tile, 5) {
+                self.read_row(info, index, height, &mut lists, sheet)?;
+            }
+        }
+        if lists.clipped {
+            self.report.warn("Some Numbers text was longer than 32,767 characters and was shortened.");
         }
         Ok(())
     }
 
-    fn read_row(&mut self, info: &[u8], tile: u32, height: u32, lists: &Lists, sheet: &mut Sheet) -> Result<(), IoError> {
+    fn read_row(&mut self, info: &[u8], tile: u32, height: u32, lists: &mut Lists, sheet: &mut Sheet) -> Result<(), IoError> {
         if varint_field(info, 5) != Some(5) {
             self.report.warn("Some Numbers rows use an older cell storage layout and were skipped.");
             return Ok(());
+        }
+        if !well_formed(info) {
+            self.report.warn(MALFORMED);
         }
         let in_tile = varint_field(info, 1).and_then(|r| u32::try_from(r).ok()).unwrap_or(0);
         let Some(row) = tile.checked_mul(height).and_then(|base| base.checked_add(in_tile)).filter(|r| *r < MAX_ROWS) else {
             return Err(IoError::TooLarge("Numbers table exceeds worksheet height".into()));
         };
         let (Some(buffer), Some(offsets)) = (bytes_field(info, 6), bytes_field(info, 7)) else { return Ok(()) };
+        // With wide offsets each stored offset counts four bytes; 0xFFFF still marks an empty cell.
+        let scale = if varint_field(info, 8).is_some_and(|wide| wide != 0) { 4 } else { 1 };
         for (col, pair) in offsets.as_chunks::<2>().0.iter().enumerate() {
-            let offset = usize::from(u16::from_le_bytes(*pair));
-            if offset == 0xFFFF {
+            let stored = u16::from_le_bytes(*pair);
+            if stored == 0xFFFF {
                 continue;
             }
-            let Some(packed) = buffer.get(offset..).and_then(unpack) else { continue };
+            let Some(packed) = buffer.get(usize::from(stored) * scale..).and_then(unpack) else { continue };
             let col =
                 u32::try_from(col).ok().filter(|c| *c < MAX_COLS).ok_or_else(|| IoError::TooLarge("Numbers table exceeds worksheet width".into()))?;
             if let Some(cell) = self.convert(&packed, lists) {
@@ -484,7 +556,7 @@ impl Import {
         Ok(())
     }
 
-    fn convert(&mut self, p: &Packed, lists: &Lists) -> Option<Cell> {
+    fn convert(&mut self, p: &Packed, lists: &mut Lists) -> Option<Cell> {
         let number = p.decimal.map(decimal_to_f64).or(p.double);
         let mut format = None;
         let value = match p.kind {
@@ -501,11 +573,8 @@ impl Import {
                 Value::Number(number? / SECONDS_PER_DAY)
             }
             K_ERROR => Value::Error(CellError::Value),
-            K_TEXT => Value::Text(Arc::from(self.clip(lists.strings.get(&p.string?)?))),
-            K_RICH => {
-                let text = lists.rich.get(&p.rich?).and_then(|id| self.rich_text(*id))?;
-                Value::Text(Arc::from(self.clip(&text)))
-            }
+            K_TEXT => Value::Text(Arc::clone(lists.strings.get(&p.string?)?)),
+            K_RICH => Value::Text(lists.rich(p.rich?)?),
             _ => {
                 self.report.warn("Some Numbers cells have a type that is not supported and were skipped.");
                 return None;
@@ -517,16 +586,6 @@ impl Import {
             return None;
         }
         Some(Cell { style: self.style(format), ..Cell::value(value) })
-    }
-
-    fn clip<'a>(&mut self, text: &'a str) -> &'a str {
-        match text.char_indices().nth(MAX_CELL_TEXT) {
-            Some((end, _)) => {
-                self.report.warn("Some Numbers text was longer than 32,767 characters and was shortened.");
-                text.get(..end).unwrap_or(text)
-            }
-            None => text,
-        }
     }
 
     fn style(&mut self, format: Option<&'static str>) -> StyleId {
@@ -602,6 +661,16 @@ mod tests {
         assert!(snappy_decode(&[4, 0, b'a'], 64).is_err());
         assert!(snappy_decode(&[100, 0, b'a'], 10).is_err());
         assert!(snappy_decode(&[], 64).is_err());
+    }
+
+    #[test]
+    fn truncated_messages_are_reported_not_mistaken_for_the_end() {
+        // field 1 = 5, then field 2 claiming 9 bytes with only 1 present.
+        assert!(well_formed(&[0x08, 5, 0x12, 1, 7]));
+        assert!(!well_formed(&[0x08, 5, 0x12, 9, 7]));
+        assert!(!well_formed(&[0x08]));
+        assert!(!well_formed(&[0x0B]));
+        assert_eq!(varint_field(&[0x08, 5, 0x12, 9, 7], 1), Some(5));
     }
 
     #[test]
