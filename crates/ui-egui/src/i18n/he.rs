@@ -1127,6 +1127,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Expand dialog" => "הרחב דו-שיח",
         "Diagram" => "דיאגרמה",
         "Decorative Text" => "טקסט דקורטיבי",
+        "Sort Ascending" => "מיין בסדר עולה",
+        "Sort Descending" => "מיין בסדר יורד",
+        "Search" => "חפש",
+        "(Select All)" => "(בחר הכל)",
+        "(Select All Search Results)" => "(בחר את כל תוצאות החיפוש)",
+        "(Blanks)" => "(ריקים)",
+        "Apply" => "החל",
         _ => return None,
     })
 }   

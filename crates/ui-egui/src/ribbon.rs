@@ -147,7 +147,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
                 let tab = app.ui.ribbon_tab.clone();
                 let mut area = egui::ScrollArea::horizontal()
-                    .id_salt(("ribbon_scroll", tab.as_str()))
+                    .id_salt(("ribbon_scroll", tab.as_str(), is_rtl))
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
 
                 let rtl_init_id = egui::Id::unique(("ribbon_rtl_scroll_init", tab.as_str(), is_rtl));

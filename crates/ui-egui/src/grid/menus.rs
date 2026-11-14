@@ -85,7 +85,13 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                 field.request_focus();
             }
             let needle = search.trim().to_lowercase();
-            let matches = |v: &str| needle.is_empty() || v.to_lowercase().contains(&needle);
+            let matches = |v: &str| {
+                if needle.is_empty() {
+                    return true;
+                }
+                let display = if v == "(Blanks)" { lang.tr("(Blanks)") } else { v };
+                v.to_lowercase().contains(&needle) || display.to_lowercase().contains(&needle)
+            };
             let all = checks.iter().filter(|(v, _)| matches(v)).all(|(_, b)| *b);
             let mut all_new = all;
             let label_key = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
