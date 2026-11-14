@@ -27,11 +27,11 @@ This page is the summary. The detail is in:
 | **Mainstream practitioner** | **~50%** | estimated: typical analyst/finance user, weekly features, × 0.90 interaction × 0.92 stability × 0.88 file exchange; [method](docs/target-app-parity.md#mainstream-practitioner) |
 | **Essentials user** | **~63%** | estimated: core features only, × 0.92 launch/stability × 0.95 clarity × 0.90 opening sent files; [method](docs/target-app-parity.md#essentials-user) |
 | Remaining to **beta** | **~160–240 Opus 5.5 agent-hours** | estimated; itemized in [roadmap.md](docs/roadmap.md#beta-gates) |
-| Remaining to **full parity** | **~700–1,100 Opus 5.5 agent-hours** | estimated; sum of the dimension rows below |
+| **Remaining to** **full parity** | **~700–1,100 Opus 5.5 agent-hours** | provisional historical estimate; not recalculated after the localization estimate was withdrawn; no longer the sum of the current dimension rows |
 
 | Audience | Ready % | Opus 5.5 agent wall-clock hours to ~95% | Work that dominates |
 |---|---|---|---|
-| Full target (ready for real work) | ~50% | ~650–1,050 | Get & Transform and the data model, localization (twelve languages), charts depth, file fidelity (`.xls`, corpus, pass-through), PivotTables, collaboration, mobile |
+| Full target (ready for real work) | ~50% | ~650–1,050 | Get & Transform and the data model, localization (18 interface catalogs; coverage varies), charts depth, file fidelity (`.xls`, corpus, pass-through), PivotTables, collaboration, mobile |
 | Mainstream practitioner | ~50% | ~200–310 | File exchange with Excel users (corpus and Excel verification, pass-through, large files, `.xls`, encryption: 63–97 h), common-chart depth (30–45 h), PivotTables (20–30 h), keyboard and interaction (18–28 h), calc correctness and functions (20–33 h) |
 | Essentials user | ~63% | ~60–100 | Opening files people send (`.xls` import and saving with a password 24–36 h; macOS Finder open 2–4 h), launch stability (6–10 h), basic chart resize and polish (6–10 h), print and Page Layout (8–12 h), small editing and UI fixes (10–16 h) |
 
@@ -62,12 +62,12 @@ collaboration, mobile, AI).
 | File formats | ~50% | 80–120 | [file-format-parity.md](docs/file-format-parity.md) |
 | Performance | ~35% | 35–55 | [target-app-parity.md](docs/target-app-parity.md#performance) |
 | Stability | ~60% | 15–25 | [gaps.md](docs/gaps.md) |
-| Localization | ~10% (ribbon in 6 languages) | 100–165 | [localization-parity.md](docs/localization-parity.md) |
+| Localization | 18 interface catalogs; coverage varies | not re-estimated | [localization-parity.md](docs/localization-parity.md) |
 | Hardware (multi-core calc, GPU, pen, multi-window) | ~40% | 25–40 | [hardware-parity.md](docs/hardware-parity.md) |
 | Platforms | ~80% (no iOS/Android; ahead on Linux, BSD, RISC-V) | 30–60 | [target-app-parity.md](docs/target-app-parity.md#platforms) |
 | Ecosystem / add-ins | ~10% (VBA out of scope; own scripts, MCP, CLI) | 25–40 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
 | AI features | ~15% (agent control strong; no in-app assistant) | 30–50 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
-| **Total** | **~50%** | **~700–1,100** | |
+| **Total** | **~50%** | **~700–1,100 (provisional)** | |
 
 ## Features
 
@@ -89,31 +89,48 @@ collaboration, mobile, AI).
 
 ## Languages
 
-The ribbon is translated into Japanese, Simplified Chinese, Korean, Brazilian Portuguese, Russian
-and German (266–268 labels each, ~12% of ~2,200 strings; merged 10-10 in #31, #104, #82, German
-added 10-11), the
-interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
-(#38). Japanese (10-17) and Brazilian Portuguese also translate the dialog titles and labels,
-message boxes, Backstage/File-view items, template names and native menus: 943 strings each, ~43%.
-The remaining dialogs, menus and messages are English; formulas and number formats are en-US only.
-Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
+GridCraft registers 19 interface languages in `Language` (including English as
+the source/fallback language). There are 18 translated UI catalogs. The figures
+below come from `cargo xtask i18n-report`: 1,199 is the union of keys found
+across those 18 catalogs, not a complete inventory of every user-visible string.
+The report measures key presence, not translation quality, correctness or
+whether a value differs from the English source. Missing keys fall back to
+English; the report is informational and does not fail CI.
 
-| Language | Code | Status | UI strings |
-|---|---|---|---|
-| English | en | full (source language) | 100% |
-| Simplified Chinese | zh-Hans | menus only | ~12% |
-| Spanish | es | none | 0% |
-| Hindi | hi | none | 0% |
-| Arabic | ar | catalog pending; shared shaping/bidi works | 0% |
-| French | fr | none | 0% |
-| Portuguese | pt-BR | menus, File view, dialogs | ~43% |
-| Indonesian | id | none | 0% |
-| Japanese | ja | menus, File view, dialogs, messages | ~43% |
-| German | de | menus only | ~12% |
-| Korean | ko | menus only | ~12% |
-| Vietnamese | vi | none | 0% |
+| Language | Code | Keys present | Keys missing |
+|---|---:|---:|---:|
+| Czech | cs | 579 | 620 |
+| German | de | 496 | 703 |
+| Greek | el | 995 | 204 |
+| Spanish | es | 504 | 695 |
+| French | fr | 464 | 735 |
+| Italian | it | 996 | 203 |
+| Japanese | ja | 1,138 | 61 |
+| Korean | ko | 474 | 725 |
+| Dutch | nl | 545 | 654 |
+| Polish | pl | 995 | 204 |
+| Portuguese (Brazil) | pt | 1,004 | 195 |
+| Romanian | ro | 1,040 | 159 |
+| Russian | ru | 474 | 725 |
+| Serbian | sr | 463 | 736 |
+| Turkish | tr | 434 | 765 |
+| Ukrainian | uk | 995 | 204 |
+| Vietnamese | vi | 434 | 765 |
+| Simplified Chinese | zh | 474 | 725 |
 
-Other shipped languages: 3 (Russian and German, menus only, ~12%; Dutch, menus, File view and dialog titles, ~24%).
+The internal codes are `pt` and `zh`; they are not `pt-BR` or `zh-Hans`,
+although regional/script locale tags may be accepted as aliases. English is
+the source language and has no separate translated catalog. Hindi (`hi`),
+Arabic (`ar`) and Indonesian (`id`) are not registered interface languages.
+
+Spanish function help is tracked separately from UI catalogs:
+`es_functions.rs` contains 761 entries — 479 function descriptions and
+282 argument names. The current report finds zero entries keyed by English
+text that the function catalog no longer contains.
+
+These counts do not measure locale-aware formula names, argument separators,
+number/date formats, script shaping, font coverage, native-speaker review or
+overall Excel localization parity. See [localization-parity.md](docs/localization-parity.md).
 
 ## Upcoming
 
@@ -128,7 +145,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 4. **Charts depth**: kinds and options round-trip, axes, trendlines, error bars: 25–35 h.
 5. **Text in every script** (CJK, Thai, Arabic, Devanagari) in cells and PDF: 12–20 h.
 6. **Legacy `.xls` import and password-protected workbooks**: 20–30 h.
-7. **Localization**: extend the catalog past the ribbon, then the twelve languages: 100–165 h.
+7. **Localization**: expand the translated UI catalogs, improve locale-aware formulas and number/date formats, and verify text rendering and input across scripts. Effort not yet re-estimated.
 
 ## Progress log
 
