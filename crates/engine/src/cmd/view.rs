@@ -63,6 +63,15 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("view.rightToLeft", "Sheet Right-to-Left", ["Page Layout", "Sheet Options"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "rtl")),
         cmd!("view.zoom", "Zoom", ["View", "Zoom"], None, "{percent: 10..400}", has_doc, zoom),
+        cmd!(
+            query "view.defaultZoom",
+            "Default Zoom for New Workbooks",
+            ["File", "Options", "General"],
+            None,
+            "{percent?: 10..400} → {percent} (application preference for new blank workbooks)",
+            always,
+            default_zoom
+        ),
         cmd!("view.zoom100", "100%", ["View", "Zoom"], None, "{}", has_doc, |s, _| zoom(s, &json!({"percent": 100}))),
         cmd!(query "view.formulaBar", "Formula Bar", ["View", "Show"], None, "{on?: bool}", always, |s, p| {
             s.prefs.formula_bar = bool_param(p, "on").unwrap_or(!s.prefs.formula_bar);
@@ -257,6 +266,16 @@ fn status_bar(s: &mut Session, p: &Json) -> Result<Json> {
         "maximum": st.maximum,
         "sum": st.sum,
     }))
+}
+
+/// Read or change the default zoom without modifying an open workbook.
+fn default_zoom(s: &mut Session, p: &Json) -> Result<Json> {
+    if let Some(value) = p.get("percent") {
+        let percent =
+            value.as_u64().filter(|n| (10..=400).contains(n)).ok_or_else(|| bad("view.defaultZoom", "percent must be an integer from 10 to 400"))?;
+        s.prefs.default_zoom = percent as u16;
+    }
+    Ok(json!({"percent": s.prefs.default_zoom}))
 }
 
 fn zoom(s: &mut Session, p: &Json) -> Result<Json> {
@@ -554,6 +573,64 @@ mod tests {
         // A prefs.json saved before the option existed keeps the formula bar shown.
         let old: crate::Prefs = serde_json::from_str(r#"{"userName": "Ann"}"#).unwrap();
         assert!(old.formula_bar);
+    }
+
+    /// New workbooks use the configured default without changing open workbooks.
+    #[test]
+    fn default_zoom_applies_only_to_new_workbooks() {
+        let mut s = Session::new();
+        s.new_workbook();
+
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().zoom, 100);
+
+        let result = s.execute("view.defaultZoom", json!({"percent": 175})).unwrap();
+        assert_eq!(result["percent"], 175);
+
+        // Changing the preference must not alter the current workbook.
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().zoom, 100);
+
+        s.prefs.sheets_in_new_workbook = 3;
+        s.execute("file.new", json!({})).unwrap();
+
+        let wb = &s.doc().unwrap().wb;
+        assert_eq!(wb.sheets.len(), 3);
+        assert!(wb.sheets.iter().all(|sh| sh.zoom == 175));
+
+        // A sheet-specific zoom must not overwrite the default preference.
+        s.execute("view.zoom", json!({"percent": 80})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().zoom, 80);
+        assert_eq!(s.prefs.default_zoom, 175);
+
+        // Another new workbook still uses the preference.
+        s.execute("file.new", json!({})).unwrap();
+        assert!(s.doc().unwrap().wb.sheets.iter().all(|sh| sh.zoom == 175));
+    }
+
+    /// Validate the supported zoom range and compatibility with older preferences.
+    #[test]
+    fn default_zoom_validates_values_and_persists_with_old_prefs_compatibility() {
+        let mut s = Session::new();
+
+        assert_eq!(s.execute("view.defaultZoom", json!({})).unwrap()["percent"], 100);
+
+        for invalid in [json!(9), json!(401), json!(-1), json!(125.5), json!("150"), Json::Null] {
+            assert!(s.execute("view.defaultZoom", json!({"percent": invalid})).is_err());
+            assert_eq!(s.prefs.default_zoom, 100);
+        }
+
+        for valid in [10, 150, 400] {
+            assert_eq!(s.execute("view.defaultZoom", json!({"percent": valid})).unwrap()["percent"], valid);
+        }
+
+        let saved = serde_json::to_value(&s.prefs).unwrap();
+        assert_eq!(saved["defaultZoom"], 400);
+
+        let restored: crate::Prefs = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.default_zoom, 400);
+
+        // Settings files created before this preference existed remain valid.
+        let old: crate::Prefs = serde_json::from_str(r#"{"userName":"Legacy User"}"#).unwrap();
+        assert_eq!(old.default_zoom, 100);
     }
 
     #[test]

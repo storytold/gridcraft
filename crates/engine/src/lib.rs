@@ -416,6 +416,9 @@ pub struct Prefs {
     pub user_name: String,
     pub default_font: String,
     pub default_font_size: f32,
+    /// Zoom percentage for sheets in a newly created blank workbook.
+    /// This application preference is not applied to workbooks opened from files.
+    pub default_zoom: u16,
     pub sheets_in_new_workbook: usize,
     pub r1c1: bool,
     /// Words added with Add to Dictionary.
@@ -457,6 +460,7 @@ impl Default for Prefs {
             user_name: "GridCraft User".into(),
             default_font: gridcraft_model::DEFAULT_FONT.into(),
             default_font_size: gridcraft_model::DEFAULT_FONT_SIZE,
+            default_zoom: 100,
             sheets_in_new_workbook: 1,
             r1c1: false,
             user_dictionary: vec![],
@@ -625,8 +629,10 @@ impl Session {
             let d = self.docs.remove(i);
             self.groups.retain(|g| g.doc != d.uid);
             // A macro being debugged in this workbook ends with it; its group just went.
-            if self.macro_debug.as_ref().is_some_and(|m| m.doc == d.uid) {
-                self.macro_debug = None;
+            if self.macro_debug.as_ref().is_some_and(|m| m.doc == d.uid)
+                && let Some(dbg) = self.macro_debug.take()
+            {
+                self.prefs.default_zoom = dbg.rollback_default_zoom();
             }
             self.windows.retain(|w| w.doc_uid != d.uid);
             if self.active_window.is_some_and(|w| self.window(w).is_none()) {
@@ -644,6 +650,12 @@ impl Session {
         for _ in 1..self.prefs.sheets_in_new_workbook.clamp(1, 255) {
             let name = wb.next_sheet_name();
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
+        }
+        // Apply the preference only when creating a blank workbook.
+        // Opening an existing workbook must preserve its saved sheet zooms.
+        let zoom = self.prefs.default_zoom.clamp(10, 400);
+        for sheet in &mut wb.sheets {
+            Arc::make_mut(sheet).zoom = zoom;
         }
         self.add_document(DocState::new(wb, None, format!("Book{n}"), Trust::Local))
     }
@@ -721,6 +733,10 @@ impl Session {
         if locked && !macros::debug::runs_while_locked(id, query) {
             return Err(EngineError::Disabled(id.to_string(), macros::debug::BUSY.into()));
         }
+        // Independent preference commands during a paused debug run must survive
+        // a later macro rollback. Steps execute with the debugger's machine out.
+        let external_zoom =
+            (self.depth == 0 && id != "macro.debug" && self.macro_debug.as_ref().is_some_and(|d| !d.stepping())).then_some(self.prefs.default_zoom);
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
         // A dry run inside this command that a panic cuts short leaves journaling paused and its
         // touch log open; the panic branch puts both back.
@@ -916,6 +932,9 @@ impl Session {
             self.group_step = None;
         } else if let Some(uid) = doc_uid {
             self.bound_tail(uid);
+        }
+        if let Some(before_zoom) = external_zoom {
+            macros::debug::note_external_zoom(self, before_zoom, id, &params, result.is_ok());
         }
         result
     }

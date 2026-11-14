@@ -90,6 +90,12 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             .response
             .labelled_by(label.id);
         ui.end_row();
+        let label = ui.label(lang.tr("Default zoom for new workbooks"));
+        let mut zoom = app.session.prefs.default_zoom.clamp(10, 400);
+        if ui.add(egui::DragValue::new(&mut zoom).range(10..=400).suffix("%")).labelled_by(label.id).changed() {
+            app.run_or_alert("view.defaultZoom", json!({"percent": zoom}));
+        }
+        ui.end_row();
     });
 }
 

@@ -70,6 +70,8 @@ pub struct Debugger {
     pub only_listed: bool,
     /// The workbook when the run started, for "changed so far".
     start: Arc<Workbook>,
+    /// Default zoom captured before debugging; updated by independent user commands.
+    default_zoom: u16,
     /// Every step path in the macro, for checking `runTo` targets and breakpoints.
     paths: BTreeSet<String>,
     /// The workbooks the run has touched (by uid). Steps run on the macro's own workbook and the
@@ -104,9 +106,35 @@ impl Debugger {
         self.machine.is_none()
     }
 
+    /// The default zoom to use if the run is discarded.
+    pub(crate) fn rollback_default_zoom(&self) -> u16 {
+        self.default_zoom
+    }
+
     /// The run's own steps so far.
     fn executed(&self) -> u64 {
         self.machine.as_ref().map_or(0, |m| m.executed.saturating_sub(self.base))
+    }
+}
+
+/// Records an explicit default-zoom choice by a completed independent macro.
+/// The caller must have verified that the top-level macro succeeded.
+pub(crate) fn preserve_external_macro_zoom(s: &mut Session) {
+    let zoom = s.prefs.default_zoom;
+    if let Some(d) = s.macro_debug.as_mut().filter(|d| !d.stepping()) {
+        d.default_zoom = zoom;
+    }
+}
+
+/// Preserves an independent default-zoom change after a completed top-level command.
+/// Failed commands and nested macro steps must not update the debugger's rollback target.
+pub(crate) fn note_external_zoom(s: &mut Session, before: u16, id: &str, params: &Json, succeeded: bool) {
+    let now = s.prefs.default_zoom;
+    if succeeded
+        && (before != now || (id == "view.defaultZoom" && params.get("percent").is_some()))
+        && let Some(d) = s.macro_debug.as_mut().filter(|d| !d.stepping())
+    {
+        d.default_zoom = now;
     }
 }
 
@@ -170,6 +198,7 @@ pub(crate) fn end_stopped(s: &mut Session, doc: u64) -> Option<(String, Vec<Stri
         return None;
     }
     let d = s.macro_debug.take()?;
+    s.prefs.default_zoom = d.default_zoom;
     Some((d.name, d.machine.map(|m| m.wrote_files).unwrap_or_default()))
 }
 
@@ -304,12 +333,15 @@ fn start(s: &mut Session, p: &Json, only_listed: bool) -> Result<Json> {
         None => BTreeSet::new(),
     };
     let start_wb = s.doc()?.wb.clone();
+    let default_zoom = s.prefs.default_zoom;
     let token = s.group_begin(&format!("Run Macro: {}", b.mac.name))?;
     // The run's machine: unless the rule is overwrite, it checks each step for writes over data.
     let (mut machine, shifted) = match super::run::make_way(s, &b) {
         Ok(made) => made,
         Err(e) => {
-            let _ = s.group_rollback(token);
+            if s.group_rollback(token).is_ok() {
+                s.prefs.default_zoom = default_zoom;
+            }
             return Err(e);
         }
     };
@@ -324,6 +356,7 @@ fn start(s: &mut Session, p: &Json, only_listed: bool) -> Result<Json> {
         breakpoints,
         only_listed,
         start: start_wb,
+        default_zoom,
         paths,
         touched: BTreeSet::from([b.prepared.doc]),
         base,
@@ -443,6 +476,9 @@ fn finish(s: &mut Session, error: Option<StepError>) -> Result<Json> {
         let step = error.map(|e| format!("{} ", e.describe())).unwrap_or_default();
         return Err(EngineError::Other(format!("{step}{}", already_ended(&d.name))));
     }
+    if rollback {
+        s.prefs.default_zoom = d.default_zoom;
+    }
     if let Some(e) = &error {
         return Ok(failed(&d.name, executed, e));
     }
@@ -492,6 +528,9 @@ fn stop(s: &mut Session, keep: bool) -> Result<Json> {
     };
     if !ended {
         return Err(EngineError::Other(already_ended(&d.name)));
+    }
+    if !keep {
+        s.prefs.default_zoom = d.default_zoom;
     }
     let wrote = d.machine.as_ref().map(|m| m.wrote_files.clone()).unwrap_or_default();
     let mut out = json!({"state": "stopped", "macro": d.name, "kept": keep, "executed": d.executed()});
@@ -564,8 +603,9 @@ pub(crate) fn recover(s: &mut Session) {
     if s.macro_debug.as_ref().is_some_and(Debugger::stepping)
         && let Some(mut d) = s.macro_debug.take()
         && let Some(token) = d.token.take()
+        && s.group_rollback(token).is_ok()
     {
-        let _ = s.group_rollback(token);
+        s.prefs.default_zoom = d.default_zoom;
     }
 }
 
@@ -574,6 +614,325 @@ mod tests {
     use serde_json::json;
 
     use crate::Session;
+
+    /// Creates a workbook containing a macro that changes the default zoom.
+    fn zoom_debug_session(steps: serde_json::Value) -> Session {
+        let mut s = Session::new();
+        s.new_workbook();
+
+        s.execute(
+            "macro.save",
+            json!({
+                "macro": {
+                    "name": "ZoomDebug",
+                    "output": {"onConflict": "overwrite"},
+                    "steps": steps
+                }
+            }),
+        )
+        .unwrap();
+
+        s
+    }
+
+    /// Discarding a debug run, including Stop Action, restores the preference.
+    #[test]
+    fn debug_stop_and_stop_action_restore_default_zoom() {
+        for via_stop_action in [false, true] {
+            let mut s = zoom_debug_session(json!([
+                {"command": "view.defaultZoom", "params": {"percent": 175}},
+                {"command": "cell.set", "params": {"cell": "A1", "input": "next"}}
+            ]));
+
+            s.execute("macro.debug", json!({"name": "ZoomDebug"})).unwrap();
+
+            let paused = s.execute("macro.debug", json!({"action": "step"})).unwrap();
+            assert_eq!(paused["state"], "paused");
+            assert_eq!(s.prefs.default_zoom, 175);
+
+            if via_stop_action {
+                let stopped = s.execute("automate.stopAction", json!({})).unwrap();
+                assert_eq!(stopped["stopped"], true);
+            } else {
+                let stopped = s.execute("macro.debug", json!({"action": "stop", "keep": false})).unwrap();
+                assert_eq!(stopped["kept"], false);
+            }
+
+            assert_eq!(s.prefs.default_zoom, 100);
+            assert!(s.macro_debug.is_none());
+        }
+    }
+
+    /// Stop steps, execution errors and debugger recovery restore the preference.
+    #[test]
+    fn debug_failed_finish_and_recover_restore_default_zoom() {
+        for failing_command in [false, true] {
+            let second = if failing_command {
+                json!({"command": "view.defaultZoom", "params": {"percent": 5}})
+            } else {
+                json!({"type": "stop", "message": "cancel", "rollback": true})
+            };
+
+            let mut s = zoom_debug_session(json!([
+                {"command": "view.defaultZoom", "params": {"percent": 175}},
+                second
+            ]));
+
+            s.execute("macro.debug", json!({"name": "ZoomDebug"})).unwrap();
+
+            let outcome = s.execute("macro.debug", json!({"action": "continue"})).unwrap();
+
+            if failing_command {
+                assert_eq!(outcome["state"], "failed");
+            } else {
+                assert_eq!(outcome["state"], "stopped");
+                assert_eq!(outcome["kept"], false);
+            }
+
+            assert_eq!(s.prefs.default_zoom, 100);
+            assert!(s.macro_debug.is_none());
+        }
+
+        let mut s = zoom_debug_session(json!([
+            {"command": "view.defaultZoom", "params": {"percent": 175}},
+            {"command": "cell.set", "params": {"cell": "A1", "input": "next"}}
+        ]));
+
+        s.execute("macro.debug", json!({"name": "ZoomDebug"})).unwrap();
+        s.execute("macro.debug", json!({"action": "step"})).unwrap();
+
+        assert_eq!(s.prefs.default_zoom, 175);
+
+        // Simulate recovery while the machine is out of the session.
+        s.macro_debug.as_mut().unwrap().machine = None;
+        super::recover(&mut s);
+
+        assert_eq!(s.prefs.default_zoom, 100);
+        assert!(s.macro_debug.is_none());
+    }
+
+    /// Successful completion and an explicit keep preserve the preference.
+    #[test]
+    fn debug_success_and_keep_preserve_default_zoom() {
+        for keep_early in [false, true] {
+            let mut s = zoom_debug_session(json!([
+                {"command": "view.defaultZoom", "params": {"percent": 225}},
+                {"command": "cell.set", "params": {"cell": "A1", "input": "saved"}}
+            ]));
+
+            s.execute("macro.debug", json!({"name": "ZoomDebug"})).unwrap();
+
+            if keep_early {
+                s.execute("macro.debug", json!({"action": "step"})).unwrap();
+
+                let stopped = s.execute("macro.debug", json!({"action": "stop", "keep": true})).unwrap();
+
+                assert_eq!(stopped["kept"], true);
+            } else {
+                let finished = s.execute("macro.debug", json!({"action": "continue"})).unwrap();
+
+                assert_eq!(finished["state"], "finished");
+            }
+
+            assert_eq!(s.prefs.default_zoom, 225);
+            assert!(s.macro_debug.is_none());
+
+            s.new_workbook();
+            assert_eq!(s.doc().unwrap().wb.active().unwrap().zoom, 225);
+        }
+    }
+
+    /// User preference changes during a pause survive both kinds of discard.
+    #[test]
+    fn debug_external_preferences_survive_discard() {
+        for stop_action in [false, true] {
+            let mut s = zoom_debug_session(json!([
+                {"command": "view.defaultZoom", "params": {"percent": 175}},
+                {"command": "cell.set", "params": {"cell": "A1", "input": "next"}}
+            ]));
+
+            s.execute("macro.debug", json!({"name": "ZoomDebug"})).unwrap();
+            s.execute("macro.debug", json!({"action": "step"})).unwrap();
+
+            assert_eq!(s.prefs.default_zoom, 175);
+
+            // This preference change is made by the user, not by the macro.
+            s.execute("view.defaultZoom", json!({"percent": 150})).unwrap();
+
+            if stop_action {
+                s.execute("automate.stopAction", json!({})).unwrap();
+            } else {
+                s.execute("macro.debug", json!({"action": "stop", "keep": false})).unwrap();
+            }
+
+            assert_eq!(s.prefs.default_zoom, 150);
+            assert!(s.macro_debug.is_none());
+
+            s.new_workbook();
+            assert_eq!(s.doc().unwrap().wb.active().unwrap().zoom, 150);
+        }
+    }
+
+    /// A user zoom choice takes precedence over multiple preceding macro zoom steps.
+    #[test]
+    fn debug_rollback_preserves_explicit_zoom_choice() {
+        let mut s = zoom_debug_session(json!([
+            {"command": "view.defaultZoom", "params": {"percent": 175}},
+            {"command": "view.defaultZoom", "params": {"percent": 225}},
+            {"command": "cell.set", "params": {"cell": "A1", "input": "next"}}
+        ]));
+
+        s.execute("macro.debug", json!({"name": "ZoomDebug"})).unwrap();
+        s.execute("macro.debug", json!({"action": "step"})).unwrap();
+        s.execute("macro.debug", json!({"action": "step"})).unwrap();
+
+        assert_eq!(s.prefs.default_zoom, 225);
+
+        // Only the zoom is independently changed by the user.
+        s.execute("view.defaultZoom", json!({"percent": 150})).unwrap();
+
+        s.execute("macro.debug", json!({"action": "stop", "keep": false})).unwrap();
+
+        assert_eq!(s.prefs.default_zoom, 150);
+        assert!(s.macro_debug.is_none());
+    }
+
+    /// Explicitly choosing the same zoom during a pause is still a user choice.
+    #[test]
+    fn debug_explicit_same_value_zoom_survives_discard() {
+        let mut s = zoom_debug_session(json!([
+            {"command": "view.defaultZoom", "params": {"percent": 175}},
+            {"command": "cell.set", "params": {"cell": "A1", "input": "next"}}
+        ]));
+
+        s.execute("macro.debug", json!({"name": "ZoomDebug"})).unwrap();
+        s.execute("macro.debug", json!({"action": "step"})).unwrap();
+
+        s.execute("view.defaultZoom", json!({"percent": 175})).unwrap();
+        s.execute("macro.debug", json!({"action": "stop", "keep": false})).unwrap();
+
+        assert_eq!(s.prefs.default_zoom, 175);
+    }
+
+    /// A failed macro on another workbook must not corrupt the paused debugger's rollback zoom.
+    #[test]
+    fn debug_nested_failed_macro_does_not_capture_rolled_back_zoom() {
+        let mut s = zoom_debug_session(json!([
+            {"command": "view.defaultZoom", "params": {"percent": 175}},
+            {"command": "cell.set", "params": {"cell": "A1", "input": "next"}}
+        ]));
+        s.new_workbook();
+        s.execute(
+            "macro.save",
+            json!({"macro": {"name": "Other", "steps": [
+                {"command": "view.defaultZoom", "params": {"percent": 260}},
+                {"type": "stop", "message": "cancel other macro", "rollback": true}
+            ]}}),
+        )
+        .unwrap();
+
+        s.set_active(0);
+        s.execute("macro.debug", json!({"name": "ZoomDebug"})).unwrap();
+        s.execute("macro.debug", json!({"action": "step"})).unwrap();
+        assert_eq!(s.prefs.default_zoom, 175);
+
+        s.set_active(1);
+        let failed = s.execute("macro.run", json!({"name": "Other", "onConflict": "overwrite"}));
+        assert!(failed.is_err(), "{failed:?}");
+        assert_eq!(s.prefs.default_zoom, 175);
+
+        s.set_active(0);
+        s.execute("macro.debug", json!({"action": "stop", "keep": false})).unwrap();
+        assert_eq!(s.prefs.default_zoom, 100);
+    }
+
+    /// A completed independent macro on another workbook retains its new default zoom.
+    #[test]
+    fn debug_nested_successful_macro_preserves_zoom() {
+        let mut s = zoom_debug_session(json!([
+            {"command": "view.defaultZoom", "params": {"percent": 175}},
+            {"command": "cell.set", "params": {"cell": "A1", "input": "next"}}
+        ]));
+        s.new_workbook();
+        s.execute(
+            "macro.save",
+            json!({"macro": {"name": "Other", "steps": [
+                {"command": "view.defaultZoom", "params": {"percent": 260}}
+            ]}}),
+        )
+        .unwrap();
+
+        s.set_active(0);
+        s.execute("macro.debug", json!({"name": "ZoomDebug"})).unwrap();
+        s.execute("macro.debug", json!({"action": "step"})).unwrap();
+
+        s.set_active(1);
+        s.execute("macro.run", json!({"name": "Other", "onConflict": "overwrite"})).unwrap();
+        assert_eq!(s.prefs.default_zoom, 260);
+
+        s.set_active(0);
+        s.execute("macro.debug", json!({"action": "stop", "keep": false})).unwrap();
+        assert_eq!(s.prefs.default_zoom, 260);
+    }
+
+    /// A completed independent macro must preserve an explicit same-value zoom choice.
+    /// A rolled-back macro must not update the paused debugger's rollback target.
+    #[test]
+    fn debug_independent_macro_same_value_zoom_respects_outcome() {
+        for fail in [false, true] {
+            let mut s = zoom_debug_session(json!([
+                {"command": "view.defaultZoom", "params": {"percent": 175}},
+                {"command": "cell.set", "params": {"cell": "A1", "input": "next"}}
+            ]));
+            s.new_workbook();
+            let steps = if fail {
+                json!([
+                    {"command": "view.defaultZoom", "params": {"percent": 175}},
+                    {"type": "stop", "message": "rollback", "rollback": true}
+                ])
+            } else {
+                json!([{"command": "view.defaultZoom", "params": {"percent": 175}}])
+            };
+            s.execute("macro.save", json!({"macro": {"name": "Other", "steps": steps}})).unwrap();
+
+            s.set_active(0);
+            s.execute("macro.debug", json!({"name": "ZoomDebug"})).unwrap();
+            s.execute("macro.debug", json!({"action": "step"})).unwrap();
+            assert_eq!(s.prefs.default_zoom, 175);
+
+            s.set_active(1);
+            let outcome = s.execute("macro.run", json!({"name": "Other", "onConflict": "overwrite"}));
+            assert_eq!(outcome.is_err(), fail, "{outcome:?}");
+            assert_eq!(s.prefs.default_zoom, 175);
+
+            s.set_active(0);
+            s.execute("macro.debug", json!({"action": "stop", "keep": false})).unwrap();
+            assert_eq!(s.prefs.default_zoom, if fail { 100 } else { 175 });
+            assert!(s.macro_debug.is_none());
+        }
+    }
+
+    /// Closing the debugged workbook discards only macro-owned default zoom changes.
+    #[test]
+    fn debug_closing_workbook_restores_default_zoom() {
+        for external in [false, true] {
+            let mut s = zoom_debug_session(json!([
+                {"command": "view.defaultZoom", "params": {"percent": 175}},
+                {"command": "cell.set", "params": {"cell": "A1", "input": "next"}}
+            ]));
+
+            s.execute("macro.debug", json!({"name": "ZoomDebug"})).unwrap();
+            s.execute("macro.debug", json!({"action": "step"})).unwrap();
+            assert_eq!(s.prefs.default_zoom, 175);
+            if external {
+                s.execute("view.defaultZoom", json!({"percent": 150})).unwrap();
+            }
+            let out = s.execute("file.close", json!({"force": true})).unwrap();
+            assert_eq!(out["closed"], true);
+            assert!(s.macro_debug.is_none());
+            assert_eq!(s.prefs.default_zoom, if external { 150 } else { 100 });
+        }
+    }
 
     #[test]
     fn a_run_that_lost_its_place_is_rolled_back() {
