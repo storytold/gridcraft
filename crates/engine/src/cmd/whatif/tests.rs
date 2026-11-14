@@ -207,6 +207,22 @@ fn advanced_filter_in_place_and_copy() {
 }
 
 #[test]
+fn advanced_filter_copy_selects_destination_headers_and_deduplicates_selected_fields() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Key", "Amount"], ["a", 10], ["a", 20]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "G1", "input": "Key"})).unwrap();
+    s.execute("cell.set", json!({"cell": "H2", "input": "guard"})).unwrap();
+
+    let r = s.execute("data.advancedFilter", json!({"range": "A1:B3", "copyTo": "G1", "unique": true})).unwrap();
+
+    assert_eq!(r["matched"], 1);
+    assert_eq!(r["range"], "G1:G2");
+    assert_eq!(v(&s, "G1"), Value::from("Key"));
+    assert_eq!(v(&s, "G2"), Value::from("a"));
+    assert_eq!(v(&s, "H2"), Value::from("guard"));
+}
+
+#[test]
 fn advanced_filter_copy_preserves_cells_beyond_result() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["A", 1], ["B", 2], ["C", 3]]})).unwrap();
