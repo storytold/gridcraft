@@ -2896,3 +2896,41 @@ fn computed_criterion_that_reenters_itself_is_not_met() {
     t.set("B60", "=DCOUNT($F$2:$G$7,\"age\",N46:N47)");
     assert_eq!(t.num("B60"), 0.0);
 }
+
+/// A4: numeric text inside a formula is read in the workbook's region, by the operators and by
+/// VALUE. In en-US the same text is not a number, as before.
+#[test]
+fn numeric_text_in_formulas_reads_in_the_workbook_region() {
+    let mut t = T::new();
+    t.wb.region = gridcraft_core::region::lookup("pt-BR");
+    t.set("A1", "=\"1.200,00\"+0");
+    t.set("A2", "=-\"1,5\"");
+    t.set("A3", "=VALUE(\"1,5\")");
+    t.set("A4", "=\"2,5\"*{1,2}");
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3"), t.num("A4")), (1200.0, -1.5, 1.5, 2.5));
+    let mut t = T::new();
+    t.set("A1", "=\"1.200,00\"+0");
+    t.set("A2", "=VALUE(\"1,5\")");
+    t.set("A3", "=\"1,200.00\"+0");
+    assert_eq!((t.get("A1"), t.get("A2"), t.num("A3")), (Value::Error(CellError::Value), Value::Error(CellError::Value), 1200.0));
+}
+
+/// A7: DATEVALUE and TIMEVALUE read the text in the workbook's region: its month names and its
+/// AM/PM markers, with the English ones still read.
+#[test]
+fn datevalue_and_timevalue_read_in_the_workbook_region() {
+    let mut t = T::new();
+    t.wb.region = gridcraft_core::region::lookup("pt-BR");
+    t.set("A1", "=DATEVALUE(\"4-mai-2026\")");
+    t.set("A2", "=DATE(2026,5,4)");
+    t.set("A3", "=DATEVALUE(\"4-May-2026\")");
+    assert_eq!((t.num("A1"), t.num("A3")), (t.num("A2"), t.num("A2")));
+    // COUNT counts literal text that is a number in the region; en-US keeps "1,5" as text.
+    t.set("A4", "=COUNT(\"1,5\")");
+    assert_eq!(t.num("A4"), 1.0);
+    let mut t = T::new();
+    t.wb.region = gridcraft_core::region::lookup("es-ES");
+    t.set("A1", "=TIMEVALUE(\"10:30 p. m.\")");
+    t.set("A2", "=TIMEVALUE(\"10:30 PM\")");
+    assert_eq!((t.num("A1"), t.num("A2")), (0.9375, 0.9375));
+}
