@@ -6696,6 +6696,20 @@ fn sheet_rename_renames_every_reference() {
     s.execute("pivot.refresh", json!({})).unwrap();
 }
 
+/// A defined name's references are on no sheet, whatever a sheet is called: inserting rows on
+/// a sheet named with a control character leaves a name's unqualified reference alone.
+#[test]
+fn names_are_on_no_sheet_whatever_the_sheet_is_called() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "Nm", "refersTo": "=$A$1"})).unwrap();
+    let before = s.doc().unwrap().wb.names.iter().find(|n| n.name == "Nm").map(|n| n.formula.clone());
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "\u{0}"})).unwrap();
+    s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+    let after = s.doc().unwrap().wb.names.iter().find(|n| n.name == "Nm").map(|n| n.formula.clone());
+    assert!(before.is_some());
+    assert_eq!(before, after);
+}
+
 /// Renaming a sheet copies only the sheets whose references change: a sheet that doesn't name
 /// it stays shared with the undo snapshot.
 #[test]

@@ -210,7 +210,7 @@ cell formulas (keeping their legacy-array range and spill kind), defined names, 
 formats, data validation, chart series and source blocks, sparklines, PivotTable sources and form
 controls' linked cells. It hands the rewrite a `RefHost` (the holding sheet or a name's scope, and
 the sheet name unqualified references are on). A formula whose tree the rewrite leaves alone keeps
-its stored text. Table calculated-column and totals formulas are not visited. The engine's
+its stored text. Not visited: table calculated-column and totals formulas, a PivotChart's link to its PivotTable (a sheet rename moves it itself) and a slicer's table. The engine's
 reference-moving edits go through it: renaming and deleting
 sheets, renaming defined names and tables, inserting and deleting rows, columns and cells, and
 cut-and-paste (`engine::cmd::edit::rewrite_all_formulas`, plus Python `xl()` literals); a legacy

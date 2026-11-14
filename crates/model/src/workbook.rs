@@ -348,10 +348,14 @@ impl std::fmt::Debug for ActiveSheet {
 pub struct RefHost<'a> {
     /// The sheet holding it, or a defined name's scope (`None`: the workbook).
     pub sheet: Option<usize>,
-    /// The name unqualified references in it are on: its sheet's, or `"\u{0}"` for a defined
-    /// name (which has none).
+    /// The name unqualified references in it are on: its sheet's, or [`NAME_HOST`] for a
+    /// defined name (which has none).
     pub name: &'a str,
 }
+
+/// [`RefHost::name`] for a defined name: `[` and `]` can't be in a sheet's name, so no sheet's
+/// references are taken for a name's.
+pub const NAME_HOST: &str = "[]";
 
 /// Formula text with `f` applied to its references; text that isn't a formula, or that `f`
 /// doesn't change, stays as it is (a leading `=` is kept). Whether it changed.
@@ -379,22 +383,25 @@ impl Workbook {
     /// that no longer exists is dropped), sparklines, PivotTable sources and form controls'
     /// linked cells. The engine's reference-moving edits (renaming sheets and names, deleting sheets,
     /// renaming tables, inserting and deleting lines and cells, cut-moves) go through it. Not
-    /// visited: table calculated-column and totals formulas, and Python cells' `xl()`
-    /// references (the engine rewrites those itself). A legacy array's own range is the
+    /// visited: table calculated-column and totals formulas, a PivotChart's link to its
+    /// PivotTable, a slicer's table, and Python cells' `xl()` references (the engine rewrites
+    /// the last itself, and a PivotChart's link on a sheet rename). A legacy array's own range is the
     /// caller's to move. Internal
     /// hyperlinks keep the place they name as typed, as Excel's do. A sheet nothing changes on
     /// stays shared.
     pub fn rewrite_references(&mut self, f: &dyn Fn(RefHost<'_>, Expr) -> Expr) {
         for n in &mut self.names {
-            let host = RefHost { sheet: n.scope, name: "\u{0}" };
+            let host = RefHost { sheet: n.scope, name: NAME_HOST };
             rewrite_with(&mut n.formula, &|e| f(host, e), gridcraft_formula::parse_name);
         }
-        // A series name that is a bare word is a label unless it is a defined name (as a chart
-        // reads it): a table's name or any other word there is text, not a reference.
-        let names: Vec<String> = self.names.iter().map(|n| n.name.to_lowercase()).collect();
-        let label = |t: &str| {
+        // A series name is read by the chart as a reference when it starts with `=`, names a
+        // sheet (`!`) or is a defined name its sheet sees; anything else (a word, a table's
+        // name, `Q1`) is a label and is left as written.
+        let names: Vec<(String, Option<usize>)> = self.names.iter().map(|n| (n.name.to_lowercase(), n.scope)).collect();
+        let label = |t: &str, si: usize| {
             let t = t.trim();
-            !t.starts_with('=') && matches!(gridcraft_formula::parse(t), Ok(Expr::Name(n)) if !names.contains(&n.to_lowercase()))
+            let defined = || names.iter().any(|(n, scope)| scope.is_none_or(|s| s == si) && *n == t.to_lowercase());
+            !t.starts_with('=') && !t.contains('!') && !defined()
         };
         for (si, shared) in self.sheets.iter_mut().enumerate() {
             // Worked out on the shared sheet; a list is copied only when something in it
@@ -429,7 +436,14 @@ impl Workbook {
                 v
             });
             // A chart's source block that no longer exists is dropped.
-            let dead = |src: Option<&str>| src.is_some_and(|s| s.contains("#REF!"));
+            // (Read from the tree: a sheet may be named `#REF!`.)
+            let dead = |src: Option<&str>| {
+                src.and_then(|s| gridcraft_formula::parse(s.trim_start_matches('=')).ok()).is_some_and(|e| {
+                    let mut hit = false;
+                    e.walk(&mut |x| hit |= matches!(x, Expr::Error(gridcraft_core::CellError::Ref)));
+                    hit
+                })
+            };
             let charts = sh
                 .charts
                 .iter()
@@ -439,7 +453,7 @@ impl Workbook {
                         || ch.series.iter().any(|se| {
                             changes(&se.values)
                                 || [&se.categories, &se.bubble_sizes].into_iter().flatten().any(|t| changes(t))
-                                || se.name.as_deref().is_some_and(|t| !label(t) && changes(t))
+                                || se.name.as_deref().is_some_and(|t| !label(t, si) && changes(t))
                         })
                 })
                 .then(|| {
@@ -450,7 +464,7 @@ impl Workbook {
                             for t in [&mut se.categories, &mut se.bubble_sizes].into_iter().flatten() {
                                 rewrite_text(t, &f);
                             }
-                            if let Some(t) = se.name.as_mut().filter(|t| !label(t)) {
+                            if let Some(t) = se.name.as_mut().filter(|t| !label(t, si)) {
                                 rewrite_text(t, &f);
                             }
                         }
