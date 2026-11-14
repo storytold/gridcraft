@@ -501,6 +501,7 @@ fn canonical(wb: &Workbook) -> Workbook {
     for sh in wb.sheets.iter_mut() {
         let sh = Arc::make_mut(sh);
         sh.view_active = CellRef::default();
+        sh.view_ranges.clear();
         sh.view_top_left = CellRef::default();
         sh.view = SheetViewMode::Normal;
     }

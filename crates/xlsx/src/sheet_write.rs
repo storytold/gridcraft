@@ -718,6 +718,13 @@ fn write_sheet_views(s: &mut String, sheet: &Sheet, selected: bool) {
     }
     s.push_str(" workbookViewId=\"0\">");
     let active = sheet.view_active.a1();
+    let ranges = selected_ranges(sheet);
+    let sqref = ranges.map(|r| r.iter().map(|r| r.a1()).collect::<Vec<_>>().join(" ")).unwrap_or_else(|| active.clone());
+    // The active cell's area is last: point at it when it is not the first.
+    let active_id = match ranges {
+        Some(r) if r.len() > 1 => format!(" activeCellId=\"{}\"", r.len() - 1),
+        _ => String::new(),
+    };
     match sheet.freeze {
         Some((rows, cols)) if rows > 0 || cols > 0 => {
             let pane = match (rows > 0, cols > 0) {
@@ -741,13 +748,20 @@ fn write_sheet_views(s: &mut String, sheet: &Sheet, selected: bool) {
                 )
                 .a1()
             );
-            let _ = write!(s, "<selection pane=\"{pane}\" activeCell=\"{active}\" sqref=\"{active}\"/>");
+            let _ = write!(s, "<selection pane=\"{pane}\" activeCell=\"{active}\"{active_id} sqref=\"{sqref}\"/>");
         }
         _ => {
-            let _ = write!(s, "<selection activeCell=\"{active}\" sqref=\"{active}\"/>");
+            let _ = write!(s, "<selection activeCell=\"{active}\"{active_id} sqref=\"{sqref}\"/>");
         }
     }
     s.push_str("</sheetView></sheetViews>");
+}
+
+/// The saved selected areas, when they hold the active cell in the last one as the model keeps
+/// them; otherwise the active cell alone is written, which Excel always opens.
+fn selected_ranges(sheet: &Sheet) -> Option<&[gridcraft_core::RangeRef]> {
+    let r = sheet.view_ranges.as_slice();
+    r.last().is_some_and(|last| last.contains(sheet.view_active)).then_some(r)
 }
 
 fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_model::StyleId) -> u32, out: &mut Out) {
