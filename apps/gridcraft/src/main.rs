@@ -1,6 +1,14 @@
 //! GridCraft desktop app.
 //!
-//! Usage: `gridcraft [--control <port> [--control-token <token>]] [--sample <name>] [files…]`
+//! Usage: `gridcraft [--control <port> [--control-token <token>]] [--sample <name>] [--embedded] [--no-ribbon] [files…]`
+//!
+//! `--embedded` is for a host program that shows GridCraft's window inside its own: every
+//! workbook stays in that one window (switch with View › Switch Windows) and the title bar is
+//! left out, as the web app's `?chrome=notitlebar` does.
+//!
+//! `--no-ribbon` leaves the ribbon out, for a host with commands of its own (`?chrome=noribbon`
+//! on the web). Keyboard shortcuts, the formula bar and Backstage (`ui.backstage`) stay; the
+//! control channel's `ui.set {"ribbon": true}` brings it back.
 //!
 //! `--control <port>` (or `GRIDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control
 //! server: `{"id":1,"method":"ui.inspect","params":{}}` → `{"id":1,"ok":true,"result":…}`.
@@ -27,8 +35,14 @@ use gridcraft_ui_egui::doc_windows::DocWindows;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
-/// The app, its native window per workbook window, and (macOS) the menu bar and Finder events.
-struct App(SheetApp, DocWindows, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
+/// The app, its native window per workbook window (none when `--embedded`: one window shows the
+/// active workbook window), and (macOS) the menu bar and Finder events.
+struct App(
+    SheetApp,
+    Option<DocWindows>,
+    #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>,
+    #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -38,18 +52,21 @@ impl eframe::App for App {
                 self.2 = Some(native_menu::NativeMenu::install(ctx));
             }
             if let Some(m) = &mut self.2 {
-                m.poll(&mut self.0, ctx, self.1.focused_viewport());
+                m.poll(&mut self.0, ctx, self.1.as_ref().map_or(egui::ViewportId::ROOT, DocWindows::focused_viewport));
             }
             apple_events::poll(&self.3, &mut self.0, ctx);
         }
         self.0.logic(ctx);
-        self.1.logic(&mut self.0, ctx);
+        if let Some(windows) = &mut self.1 {
+            windows.logic(&mut self.0, ctx);
+        }
         if ctx.input(|input| input.viewport().close_requested()) && self.0.printing.busy() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
     }
     /// Forwards raw input to the shared app, then opens every non-empty dropped file path as a workbook.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        host_owns_focus(raw, self.1.is_none());
         self.0.raw_input_hook(ctx, raw);
         // Files dropped on the window open as workbooks.
         for f in std::mem::take(&mut raw.dropped_files) {
@@ -59,7 +76,10 @@ impl eframe::App for App {
         }
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.1.show(&mut self.0, ui);
+        match &mut self.1 {
+            Some(windows) => windows.show(&mut self.0, ui),
+            None => self.0.ui(ui),
+        }
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
@@ -240,6 +260,56 @@ fn icon() -> Option<egui::IconData> {
     Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
 }
 
+/// Embedded, our window is a child of the host's, and the host decides where keyboard focus goes:
+/// the focus our window reports flickers or stays off while the user works in it, and popups
+/// that close when the window loses focus (the filter menu, list pickers) closed as they opened.
+/// The window counts as focused; popups still close on Escape or a click elsewhere.
+fn host_owns_focus(raw: &mut egui::RawInput, embedded: bool) {
+    if embedded {
+        raw.focused = true;
+    }
+}
+
+/// What the command line asks for (see the usage in the crate docs).
+#[derive(Debug, Default, PartialEq)]
+struct Launch {
+    control_port: Option<u16>,
+    control_token: Option<String>,
+    sample: Option<String>,
+    files: Vec<String>,
+    embedded: bool,
+    no_ribbon: bool,
+}
+
+/// Reads the arguments after the program name. `control_port` and `control_token` are the
+/// environment's values, which `--control` and `--control-token` override.
+fn parse_args(args: &[String], control_port: Option<u16>, control_token: Option<String>) -> Launch {
+    let mut launch = Launch { control_port, control_token, ..Launch::default() };
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--control" => {
+                i += 1;
+                launch.control_port = args.get(i).and_then(|p| p.parse().ok());
+            }
+            "--control-token" => {
+                i += 1;
+                launch.control_token = args.get(i).cloned();
+            }
+            "--sample" => {
+                i += 1;
+                launch.sample = Some(args.get(i).cloned().unwrap_or_else(|| "sales".into()));
+            }
+            "--embedded" => launch.embedded = true,
+            "--no-ribbon" => launch.no_ribbon = true,
+            a if a.starts_with("-psn_") => {}
+            a => launch.files.push(a.to_string()),
+        }
+        i += 1;
+    }
+    launch
+}
+
 fn main() -> eframe::Result<()> {
     // A confined launcher run (`gridcraft_sandbox::launch_command`) comes before everything else:
     // it opens no window, writes no log, and becomes the program it confines.
@@ -280,30 +350,8 @@ fn main() -> eframe::Result<()> {
         println!("GridCraft {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
-    let mut control_port: Option<u16> = std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
-    let mut control_token: Option<String> = std::env::var("GRIDCRAFT_CONTROL_TOKEN").ok();
-    let mut sample: Option<String> = None;
-    let mut files: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--control" => {
-                i += 1;
-                control_port = args.get(i).and_then(|p| p.parse().ok());
-            }
-            "--control-token" => {
-                i += 1;
-                control_token = args.get(i).cloned();
-            }
-            "--sample" => {
-                i += 1;
-                sample = Some(args.get(i).cloned().unwrap_or_else(|| "sales".into()));
-            }
-            a if a.starts_with("-psn_") => {}
-            a => files.push(a.to_string()),
-        }
-        i += 1;
-    }
+    let Launch { control_port, control_token, sample, files, embedded, no_ribbon } =
+        parse_args(&args, std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok()), std::env::var("GRIDCRAFT_CONTROL_TOKEN").ok());
     // The log file lives in the settings folder, next to the preferences; opened after the
     // arguments, so `--version` leaves no file behind. Records logged until now are written to it
     // first. Runs without preferences (agents' test runs) log to standard error only, so they
@@ -327,8 +375,15 @@ fn main() -> eframe::Result<()> {
     let mut app = SheetApp::new(session, services());
     app.watch_desktop_theme();
     app.start_update_check();
-    let control_port = control_port;
     load_prefs(&mut app);
+    if embedded {
+        // The host's window has its own title bar; ours would only repeat it and drag the window.
+        app.chrome.title_bar = false;
+    }
+    if no_ribbon {
+        // The host's own commands stand in for it (SARS-Logbook's ribbon, for one).
+        app.chrome.ribbon = false;
+    }
     // Stamp the startup workbook's author from the persisted user name.
     if app.session.documents().is_empty() {
         app.session.new_workbook();
@@ -405,7 +460,8 @@ fn main() -> eframe::Result<()> {
                         Err(e) => log::error!("control channel on port {port}: {e}"),
                     }
                 }
-                let windows = DocWindows::new(&mut app, window_builder.clone(), DocWindows::platform_quits_with_last_window());
+                // Embedded, a new workbook window would open outside the host's window: keep them all in ours.
+                let windows = (!embedded).then(|| DocWindows::new(&mut app, window_builder.clone(), DocWindows::platform_quits_with_last_window()));
                 Ok(Box::new(App(
                     app,
                     windows,
@@ -432,6 +488,62 @@ fn main() -> eframe::Result<()> {
         return run(options);
     }
     result
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::{Launch, parse_args};
+
+    fn parse(args: &[&str]) -> Launch {
+        parse_args(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>(), None, None)
+    }
+
+    /// `--embedded` was not an option before, so it opened as a file named "--embedded".
+    #[test]
+    fn embedded_is_an_option_not_a_file() {
+        let l = parse(&["--embedded", "--control", "7979", "--sample", "sales", "book.xlsx"]);
+        assert!(l.embedded);
+        assert_eq!(l.files, vec!["book.xlsx".to_string()]);
+        assert_eq!(l.control_port, Some(7979));
+        assert_eq!(l.sample.as_deref(), Some("sales"));
+    }
+
+    /// Embedded, an unfocused window still counts as focused, so its popups stay open.
+    #[test]
+    fn embedded_windows_count_as_focused() {
+        let mut raw = egui::RawInput { focused: false, ..Default::default() };
+        super::host_owns_focus(&mut raw, true);
+        assert!(raw.focused);
+        let mut raw = egui::RawInput { focused: false, ..Default::default() };
+        super::host_owns_focus(&mut raw, false);
+        assert!(!raw.focused, "a top-level window keeps the focus it reports");
+    }
+
+    /// `--no-ribbon` was not an option before, so it opened as a file named "--no-ribbon".
+    #[test]
+    fn no_ribbon_is_an_option_not_a_file() {
+        let l = parse(&["--embedded", "--no-ribbon", "book.xlsx"]);
+        assert!(l.no_ribbon && l.embedded);
+        assert_eq!(l.files, vec!["book.xlsx".to_string()]);
+        assert!(!parse(&["--embedded"]).no_ribbon, "embedding alone keeps the ribbon");
+    }
+
+    #[test]
+    fn a_plain_launch_is_not_embedded() {
+        let l = parse(&["book.xlsx"]);
+        assert!(!l.embedded);
+        assert!(!l.no_ribbon);
+        assert_eq!(l.files, vec!["book.xlsx".to_string()]);
+    }
+
+    #[test]
+    fn the_command_line_overrides_the_environment() {
+        let args: Vec<String> = ["--control", "8000", "--control-token", "from-args-0123456789"].iter().map(|a| a.to_string()).collect();
+        let l = parse_args(&args, Some(7979), Some("from-env".into()));
+        assert_eq!(l.control_port, Some(8000));
+        assert_eq!(l.control_token.as_deref(), Some("from-args-0123456789"));
+        assert_eq!(parse_args(&[], Some(7979), Some("from-env".into())).control_port, Some(7979));
+    }
 }
 
 #[cfg(test)]

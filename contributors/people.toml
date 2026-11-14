@@ -113,3 +113,8 @@ sync_github_name = true
 
 [people.RockerHX]
 sync_github_name = true
+
+[people.louis-ironware-co-za]
+real_name = "Louis Jacobs"
+display_name = "Louis Jacobs"
+sync_github_name = false
