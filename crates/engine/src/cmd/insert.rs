@@ -179,7 +179,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open Hyperlink",
             [],
             None,
-            "{url?: \"https://…\" | \"mailto:…\" | \"Sheet2!A1\", cell?} (default: the cell's link); a reference selects; a web or e-mail address is an error unless the host allows it: the user opens those by clicking the link and confirming; any scheme but http, https and mailto is always an error",
+            "{url?: \"https://…\" | \"mailto:…\" | \"Sheet2!A1\", target? (alias of url), cell?} (default: the cell's link); references select; http, https and mailto are handed to the host, and the UI asks before opening a link; other schemes are errors",
             has_doc,
             open_link
         ),
