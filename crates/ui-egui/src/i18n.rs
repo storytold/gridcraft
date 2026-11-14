@@ -16,6 +16,7 @@ mod es;
 mod es_functions;
 mod fr;
 mod hu;
+mod hu_functions;
 mod it;
 mod ja;
 mod ko;
@@ -250,6 +251,7 @@ impl Language {
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            Self::Hu => Some((hu_functions::DESCRIPTIONS, hu_functions::ARGUMENTS)),
             _ => None,
         }
     }
@@ -361,6 +363,11 @@ mod tests {
         assert_eq!(Language::parse("xx"), None);
     }
 
+    #[test]
+    fn hungarian_recommended_chart_error_is_translated() {
+        assert_eq!(Language::Hu.tr_error("Select data for the chart first."), "Először jelöljön ki adatokat a diagramhoz.");
+    }
+
     /// A catalog whose translations slip onto their neighbours' keys still covers every key, so
     /// check the shape of each translation against its English: placeholders survive, and a
     /// one-line label (a menu item, a tooltip) doesn't turn into a two-line ribbon label.
@@ -394,6 +401,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn hungarian_insert_icon_tooltips_are_translated() {
+        for (name, _) in crate::icons::LIBRARY {
+            assert_ne!(Language::Hu.tr(name), *name, "Hungarian icon tooltip falls back to English: {name}");
+        }
+    }
+
+    #[test]
+    fn hungarian_insert_function_category_and_sum_help_are_translated() {
+        assert_eq!(Language::Hu.tr("Most Recently Used"), "Legutóbb használt");
+        assert_eq!(
+            Language::Hu.function_description("Adds all the numbers in the arguments."),
+            Some("Összeadja az argumentumokban szereplő összes számot.")
+        );
+    }
+
+    #[test]
+    fn hungarian_function_help_covers_the_catalog() {
+        let mut missing: Vec<&str> = crate::function_library::all()
+            .iter()
+            .map(|function| function.description.as_str())
+            .filter(|description| Language::Hu.function_description(description).is_none())
+            .collect();
+        missing.sort_unstable();
+        missing.dedup();
+        assert!(missing.is_empty(), "Missing Hungarian function descriptions: {missing:#?}");
     }
 
     #[test]
@@ -438,6 +473,14 @@ mod tests {
         assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));
         assert_eq!(Language::from_tag("de-DE"), Some(Language::De));
         assert_eq!(Language::from_tag("de_AT"), Some(Language::De));
+    }
+
+    #[test]
+    fn hungarian_contextual_labels_are_distinct_and_translated() {
+        assert_ne!(Language::Hu.tr("Merge & Center"), Language::Hu.tr("Merge Cells"));
+        assert_eq!(Language::Hu.tr("Shape|Line"), "Vonal");
+        assert_eq!(Language::Hu.tr("Sparkline|Line"), "Vonal");
+        assert_eq!(Language::Hu.tr("Sparkline|Column"), "Oszlop");
     }
 
     #[test]

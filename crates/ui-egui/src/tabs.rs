@@ -475,7 +475,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                             ui.painter().rect_filled(r, 3.0, t.hover);
                         }
                         icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.text_dim);
-                        if resp.on_hover_text(tip).clicked() {
+                        if resp.on_hover_text(view_mode_tooltip(app.ui.language, tip)).clicked() {
                             app.run_or_alert(cmd, json!({}));
                         }
                     }
@@ -544,6 +544,10 @@ pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
     parts
 }
 
+fn view_mode_tooltip(language: crate::i18n::Language, english: &'static str) -> &'static str {
+    language.tr(english)
+}
+
 /// The status bar's context menu: a check item for each statistic, each one running `view.statusBar`.
 fn status_bar_menu(app: &mut SheetApp, ui: &mut Ui) {
     ui.set_min_width(180.0);
@@ -566,9 +570,10 @@ fn status_bar_menu(app: &mut SheetApp, ui: &mut Ui) {
 mod tests {
     use super::{
         MIN_TRACK, NEW_SHEET_WIDTH, SPLIT_WIDTH, activate_sheet, dragged_share, drop_copies_sheet, edge_sheet, navigator_items, rename_needs_focus,
-        tab_drop,
+        tab_drop, view_mode_tooltip,
     };
     use crate::SheetApp;
+    use crate::i18n::Language;
     use egui::Modifiers;
     use gridcraft_engine::model::{Sheet, Visibility};
     use serde_json::json;
@@ -624,6 +629,14 @@ mod tests {
         app.run("cell.set", json!({"cell": "A2", "input": "8"})).unwrap();
         app.run("selection.set", json!({"range": "A1:A2"})).unwrap();
         assert_eq!(super::selection_statistics(&app), ["Átlag: 6", "Darab: 2", "Összeg: 12"]);
+    }
+
+    #[test]
+    fn status_bar_view_mode_tooltips_use_the_interface_language() {
+        let language = Language::Hu;
+        for (english, hungarian) in [("Normal", "Normál"), ("Page Break Preview", "Oldaltöréses előnézet"), ("Page Layout", "Lapelrendezés")] {
+            assert_eq!(view_mode_tooltip(language, english), hungarian);
+        }
     }
 
     #[test]
