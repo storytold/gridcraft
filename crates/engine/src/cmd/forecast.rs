@@ -451,7 +451,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             data_labels: false,
             data_table: None,
             gridlines: true,
-            style: 1,
+            style: 2,
             hole_size: 75,
             first_slice_angle: 0,
             x_title: None,
@@ -459,6 +459,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             source: None,
             by_rows: false,
             pivot: None,
+            format: Default::default(),
         });
         cx.wb.sheets.insert(at, Arc::new(sheet));
         for nm in cx.wb.names.iter_mut() {
