@@ -31,10 +31,10 @@ pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
     ui.add_space(4.0);
     egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
         egui::Grid::new("names").striped(true).num_columns(4).show(ui, |ui| {
-            ui.strong("Name");
-            ui.strong("Value");
-            ui.strong("Refers To");
-            ui.strong("Scope");
+            ui.strong(lang.tr("Name"));
+            ui.strong(lang.tr("Value"));
+            ui.strong(lang.tr("Refers To"));
+            ui.strong(lang.tr("Scope"));
             ui.end_row();
             if names.is_empty() {
                 ui.label(egui::RichText::new(lang.tr("No names defined")).italics());
