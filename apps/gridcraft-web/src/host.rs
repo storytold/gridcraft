@@ -14,8 +14,8 @@
 //!   copied.
 //! - `gridcraft:save` (to the host): `{ name, saveAs, bytes }` for every file GridCraft would
 //!   otherwise download: Save and Save As (an .xlsx workbook) and Export as PDF. The host stores
-//!   it and reports failures itself. GridCraft doesn't tell the host which saves make a file the
-//!   document, so `saveAs` is always `false`.
+//!   it and reports failures itself. `saveAs` is `true` for Save As and `false` for Save and
+//!   exports.
 //! - `gridcraft:dirty` whenever unsaved changes appear or go away, `gridcraft:failed` when the
 //!   app couldn't start.
 //!
@@ -29,14 +29,10 @@ use std::rc::Rc;
 use craft_web_host::web::{FileData, Host, Message};
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
 
-use crate::hostmode::open_name;
+use crate::hostmode::{apply_saved, open_name, wire_save_services};
 
 /// The app id in the host messages (`gridcraft:ready`).
 const APP: &str = "gridcraft";
-
-/// Saved files that count as a workbook: the document is then clean under the name it was saved as.
-const WORKBOOK_EXTS: &[&str] = &["xlsx"];
-
 /// The largest workbook taken from the host page, refused before it is copied.
 const MAX_OPEN_BYTES: u64 = 512 << 20;
 
@@ -62,12 +58,8 @@ impl Bridge {
     /// from it.
     pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
         self.listen(inbox, ctx);
-        let bridge = self.clone();
-        services.download = Some(Box::new(move |name: &str, bytes: &[u8]| {
-            if let Err(e) = bridge.post_save(name, bytes) {
-                log::error!("couldn't hand {name} to the page: {e}");
-            }
-        }));
+        let host = self.host.clone();
+        wire_save_services(services, self.saved.clone(), move |name, bytes, save_as| host.post_save(name, bytes, None, save_as));
     }
 
     /// `?author=`: the host's name for the user signs new notes and comments.
@@ -90,23 +82,8 @@ impl Bridge {
     /// name it was saved as, and the host hears when unsaved changes appear or go away (the
     /// crate does not repeat a state it already reported).
     pub fn sync(&self, app: &mut SheetApp) {
-        let saved = std::mem::take(&mut *self.saved.borrow_mut());
-        if let Some(name) = saved.iter().rev().find(|name| is_workbook(name))
-            && let Some(doc) = app.session.active_mut()
-        {
-            doc.saved = doc.wb.clone();
-            if doc.path.is_none() {
-                doc.title = name.clone();
-            }
-        }
+        apply_saved(app, &self.saved);
         self.host.post_dirty(app.session.documents().iter().any(|d| d.is_dirty()));
-    }
-
-    fn post_save(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
-        let name = file_name(path);
-        self.host.post_save(&name, bytes, None, false)?;
-        self.saved.borrow_mut().push(name);
-        Ok(())
     }
 
     fn listen(&self, inbox: Inbox, ctx: egui::Context) {
@@ -132,12 +109,4 @@ fn deliver_open(inbox: &Inbox, ctx: &egui::Context, name: &str, data: &FileData)
     }
     inbox.lock().unwrap_or_else(|e| e.into_inner()).push((open_name(name), array.to_vec()));
     ctx.request_repaint();
-}
-
-fn is_workbook(name: &str) -> bool {
-    name.rsplit_once('.').is_some_and(|(_, ext)| WORKBOOK_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
-}
-
-fn file_name(path: &str) -> String {
-    std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string())
 }

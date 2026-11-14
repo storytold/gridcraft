@@ -5,6 +5,14 @@ type OpenUrl = Box<dyn Fn(&str)>;
 type CopyHtml = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 type Download = Box<dyn Fn(&str, &[u8])>;
 type PrintPdf = Box<dyn Fn(&[u8])>;
+/// [`Services::host_save`]: `(file name, bytes, save_as)`.
+///
+/// Called for `.xlsx` workbook saves (`save_as = false` for Save in place, `save_as = true` for
+/// Save As) with precedence over [`Services::download`]. Returning `Ok(())` means the host
+/// accepted the workbook, and [`crate::SheetApp::save_as_xlsx`] marks the active workbook clean
+/// under the saved file name; returning `Err(msg)` leaves the workbook dirty, preserves its
+/// existing `source_path`/`title`, keeps Backstage open, and displays the error message.
+pub type HostSaveFn = Box<dyn Fn(&str, &[u8], bool) -> Result<(), String>>;
 
 /// Host services the platform shell provides (file pickers, opening URLs).
 #[derive(Default)]
@@ -35,7 +43,13 @@ pub struct Services {
     /// Read the picture on the system clipboard for the ribbon and menu Paste commands when it
     /// holds no text (Cmd/Ctrl+V gets it from egui's `Event::PasteImage`).
     pub paste_image: Option<Box<dyn FnMut() -> Option<image::RgbaImage>>>,
-    /// Web: deliver a file to the user (name, bytes).
+    /// Web inside a page that keeps the files (`?host=parent`, `data-host="page"`): hand the
+    /// saved `.xlsx` workbook to the page with whether the save came from Save As (`save_as`).
+    /// Takes precedence over [`Self::download`] for `.xlsx` saves and marks the workbook clean
+    /// inline on `Ok(())`.
+    pub host_save: Option<HostSaveFn>,
+    /// Web: deliver a file to the user `(name, bytes)`. Used for exports (`.pdf`, `.csv`, `.html`)
+    /// and for `.xlsx` downloads when [`Self::host_save`] is `None`.
     pub download: Option<Download>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.
     pub open_async: Option<Box<dyn Fn()>>,
