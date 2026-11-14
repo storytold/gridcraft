@@ -209,6 +209,7 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
+    d.adopt_region(now.region);
     d.calc.rebuild(&d.wb);
     d.revision += 1;
     Ok(json!({"undone": label}))
@@ -230,6 +231,7 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         crate::push_history(&mut d.undo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
+    d.adopt_region(now.region);
     d.calc.rebuild(&d.wb);
     d.revision += 1;
     Ok(json!({"redone": label}))
