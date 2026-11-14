@@ -827,6 +827,19 @@ pub fn number_stored_as_text(cell: &gridcraft_model::Cell) -> Option<f64> {
     }
 }
 
+/// The error a formula's result shows when Excel's background check flags it as a formula that
+/// evaluates to an error. Every error is flagged, also one passed on from another cell, except
+/// `#N/A`, which formulas return on purpose (observed in Excel). Constants are never flagged, nor
+/// are GridCraft's own circular-reference and waiting states.
+pub fn formula_evaluates_to_error(cell: &Cell) -> Option<CellError> {
+    match &cell.value {
+        Value::Error(e) if cell.formula.is_some() => {
+            (!matches!(e, CellError::NA | CellError::Circ | CellError::Busy | CellError::GettingData)).then_some(*e)
+        }
+        _ => None,
+    }
+}
+
 /// Convert to Number: each number stored as text in the range becomes that number, keeping the
 /// cell's format.
 fn convert_to_number(s: &mut Session, p: &Json) -> Result<Json> {
