@@ -419,6 +419,7 @@ struct PanesInput<'a> {
     tokens: &'a Tokens,
 }
 
+/// Paints the scrolling and frozen panes under one shared Thai layout budget.
 fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
     let PanesInput { app, painter, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel, outline, tokens: t } = input;
     crate::thai_layout::begin_frame_budget(painter.ctx());
