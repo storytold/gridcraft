@@ -221,6 +221,226 @@ pub fn list_items(wb: &Workbook, sheet: usize, at: CellRef, dv: &Validation) -> 
     }
 }
 
+/// Most entries a searched validation list returns (lists can come from huge ranges).
+pub const LIST_MATCH_CAP: usize = 10_000;
+
+/// Source work a searched validation list may do: cells of its range read (or entries of a literal
+/// list, or units of formula work for a computed source). A list from a huge range (`$B:$B` on a
+/// sheet used to row 1,048,576) stops here instead of reading every cell, whatever is typed.
+pub const LIST_SOURCE_BUDGET: usize = 200_000;
+
+/// The entries of a list validation read for search, within a source-work budget.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ListSource {
+    /// Nonempty entries in list order, up to where the budget ran out.
+    pub items: Vec<String>,
+    /// The budget ran out before the whole source was read: `items` is only its beginning.
+    pub truncated: bool,
+}
+
+/// The entries of a list validation for the cell `at`, as [`list_items`] gives them, but reading at
+/// most `budget` units of the source (see [`LIST_SOURCE_BUDGET`]). A range source is walked cell by
+/// cell, within the sheet's used range, rather than evaluated into an array first.
+pub fn list_search_source(wb: &Workbook, sheet: usize, at: CellRef, dv: &Validation, budget: usize) -> ListSource {
+    let f = dv.f1.trim();
+    if is_literal_list(f) {
+        // A literal list is bounded by the rule's text; the budget still caps the entries kept.
+        let mut items = list_items(wb, sheet, at, dv);
+        let truncated = items.len() > budget;
+        items.truncate(budget);
+        return ListSource { items, truncated };
+    }
+    let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
+    let work = u64::try_from(budget).unwrap_or(u64::MAX);
+    match gridcraft_calc::evaluate_bounded(wb, sheet, at, &formula_at(f, first, at), work) {
+        // One area is read as the evaluator would (several areas or sheets are `#VALUE!`: no list).
+        gridcraft_calc::Bounded::Areas(areas) => match areas.as_slice() {
+            [a] => walk_area(wb, a.sheet, a.range, budget),
+            _ => ListSource::default(),
+        },
+        gridcraft_calc::Bounded::Value(Value::Array(a)) => {
+            let mut out = ListSource::default();
+            for (n, v) in a.data.iter().enumerate() {
+                if n >= budget {
+                    out.truncated = true;
+                    break;
+                }
+                if !v.is_empty() {
+                    out.items.push(v.display());
+                }
+            }
+            out
+        }
+        gridcraft_calc::Bounded::Value(v) if !v.is_empty() && !v.is_error() => ListSource { items: vec![v.display()], truncated: false },
+        gridcraft_calc::Bounded::Value(_) => ListSource::default(),
+        gridcraft_calc::Bounded::Exhausted => ListSource { items: vec![], truncated: true },
+    }
+}
+
+/// The nonempty values of `range` on `sheet`, row-major, reading at most `budget` cells. Without
+/// spilled values in the range only stored cells are visited; with them, every cell inside the
+/// sheet's used range (and the spills) is. Each visited cell counts against the budget.
+fn walk_area(wb: &Workbook, sheet: usize, range: RangeRef, budget: usize) -> ListSource {
+    let mut out = ListSource::default();
+    let Some(sh) = wb.sheet(sheet) else { return out };
+    let spilled = sh.spill_ranges.values().filter_map(|r| r.intersection(&range)).collect::<Vec<_>>();
+    let mut seen = 0usize;
+    let mut take = |v: &Value, out: &mut ListSource| {
+        if seen >= budget {
+            out.truncated = true;
+            return false;
+        }
+        seen += 1;
+        if !v.is_empty() {
+            out.items.push(v.display());
+        }
+        true
+    };
+    if spilled.is_empty() {
+        for (_, cell) in sh.cells.iter_range(range) {
+            if !take(&cell.value, &mut out) {
+                break;
+            }
+        }
+    } else {
+        let extent = spilled.iter().fold(sh.used_range(), |u, r| Some(u.map_or(*r, |u| u.union(r))));
+        let Some(range) = extent.and_then(|u| u.intersection(&range)) else { return out };
+        for c in range.iter() {
+            if !take(&sh.value(c), &mut out) {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Text folded for list search: lower case, with the accents of Latin letters removed
+/// (`É` → `e`, `ß` → `ss`, `Œ` → `oe`, `Ộ` → `o`) and combining marks dropped. Covers Latin-1,
+/// Latin Extended-A and -B and Latin Extended Additional; other scripts keep their marks.
+pub fn search_fold(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars().flat_map(char::to_lowercase) {
+        match fold_latin(ch) {
+            Some(f) => out.push_str(f),
+            None => out.push(ch),
+        }
+    }
+    out
+}
+
+/// The unaccented spelling of a lower-case Latin letter (`é` → `e`, `ß` → `ss`, `ộ` → `o`);
+/// combining marks fold to nothing. `None` leaves the character as it is.
+fn fold_latin(c: char) -> Option<&'static str> {
+    Some(match c {
+        '\u{300}'..='\u{36f}' => "",
+        'à'..='å' | 'ā' | 'ă' | 'ą' => "a",
+        'æ' => "ae",
+        'ç' | 'ć' | 'ĉ' | 'ċ' | 'č' => "c",
+        'ð' | 'ď' | 'đ' => "d",
+        'è'..='ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' => "e",
+        'ĝ' | 'ğ' | 'ġ' | 'ģ' => "g",
+        'ĥ' | 'ħ' => "h",
+        'ì'..='ï' | 'ĩ' | 'ī' | 'ĭ' | 'į' | 'ı' => "i",
+        'ĵ' => "j",
+        'ķ' => "k",
+        'ĺ' | 'ļ' | 'ľ' | 'ŀ' | 'ł' => "l",
+        'ñ' | 'ń' | 'ņ' | 'ň' => "n",
+        'ò'..='ö' | 'ø' | 'ō' | 'ŏ' | 'ő' => "o",
+        'œ' => "oe",
+        'ŕ' | 'ŗ' | 'ř' => "r",
+        'ś' | 'ŝ' | 'ş' | 'š' | 'ș' => "s",
+        'ß' => "ss",
+        'ţ' | 'ť' | 'ŧ' | 'ț' => "t",
+        'þ' => "th",
+        'ù'..='ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' => "u",
+        'ŵ' => "w",
+        'ý' | 'ÿ' | 'ŷ' => "y",
+        'ź' | 'ż' | 'ž' => "z",
+        // Latin Extended-B and Latin Extended Additional (Vietnamese, pinyin tones, …): the base
+        // letter of each canonical decomposition (Unicode 15).
+        'ǎ' | 'ǟ' | 'ǡ' | 'ǻ' | 'ȁ' | 'ȃ' | 'ȧ' | 'ḁ' | 'ạ' | 'ả' | 'ấ' | 'ầ' | 'ẩ' | 'ẫ' | 'ậ' | 'ắ' | 'ằ' | 'ẳ' | 'ẵ' | 'ặ' => {
+            "a"
+        }
+        'ḃ' | 'ḅ' | 'ḇ' => "b",
+        'ḉ' => "c",
+        'ḋ' | 'ḍ' | 'ḏ' | 'ḑ' | 'ḓ' => "d",
+        'ȅ' | 'ȇ' | 'ȩ' | 'ḕ' | 'ḗ' | 'ḙ' | 'ḛ' | 'ḝ' | 'ẹ' | 'ẻ' | 'ẽ' | 'ế' | 'ề' | 'ể' | 'ễ' | 'ệ' => "e",
+        'ḟ' => "f",
+        'ǧ' | 'ǵ' | 'ḡ' => "g",
+        'ȟ' | 'ḣ' | 'ḥ' | 'ḧ' | 'ḩ' | 'ḫ' | 'ẖ' => "h",
+        'ǐ' | 'ȉ' | 'ȋ' | 'ḭ' | 'ḯ' | 'ỉ' | 'ị' => "i",
+        'ǰ' => "j",
+        'ǩ' | 'ḱ' | 'ḳ' | 'ḵ' => "k",
+        'ḷ' | 'ḹ' | 'ḻ' | 'ḽ' => "l",
+        'ḿ' | 'ṁ' | 'ṃ' => "m",
+        'ǹ' | 'ṅ' | 'ṇ' | 'ṉ' | 'ṋ' => "n",
+        'ơ' | 'ǒ' | 'ǫ' | 'ǭ' | 'ȍ' | 'ȏ' | 'ȫ' | 'ȭ' | 'ȯ' | 'ȱ' | 'ṍ' | 'ṏ' | 'ṑ' | 'ṓ' | 'ọ' | 'ỏ' | 'ố' | 'ồ' | 'ổ' | 'ỗ' | 'ộ' | 'ớ' | 'ờ'
+        | 'ở' | 'ỡ' | 'ợ' => "o",
+        'ṕ' | 'ṗ' => "p",
+        'ȑ' | 'ȓ' | 'ṙ' | 'ṛ' | 'ṝ' | 'ṟ' => "r",
+        'ṡ' | 'ṣ' | 'ṥ' | 'ṧ' | 'ṩ' => "s",
+        'ṫ' | 'ṭ' | 'ṯ' | 'ṱ' | 'ẗ' => "t",
+        'ư' | 'ǔ' | 'ǖ' | 'ǘ' | 'ǚ' | 'ǜ' | 'ȕ' | 'ȗ' | 'ṳ' | 'ṵ' | 'ṷ' | 'ṹ' | 'ṻ' | 'ụ' | 'ủ' | 'ứ' | 'ừ' | 'ử' | 'ữ' | 'ự' => {
+            "u"
+        }
+        'ṽ' | 'ṿ' => "v",
+        'ẁ' | 'ẃ' | 'ẅ' | 'ẇ' | 'ẉ' | 'ẘ' => "w",
+        'ẋ' | 'ẍ' => "x",
+        'ȳ' | 'ẏ' | 'ẙ' | 'ỳ' | 'ỵ' | 'ỷ' | 'ỹ' => "y",
+        'ẑ' | 'ẓ' | 'ẕ' => "z",
+        _ => return None,
+    })
+}
+
+/// The search term as typed, folded for [`search_matches`]. Leading spaces are ignored.
+pub fn search_term(typed: &str) -> String {
+    search_fold(typed.trim_start())
+}
+
+/// Whether a folded list entry matches a folded search term, as Excel's in-cell list search:
+/// the term appears as one piece that starts at the beginning of a word ("United St" finds
+/// "Los Angeles - United States", "geles" and "United Amer" don't).
+pub fn search_matches(folded_item: &str, folded_term: &str) -> bool {
+    if folded_term.is_empty() {
+        return true;
+    }
+    let mut prev: Option<char> = None;
+    for (i, ch) in folded_item.char_indices() {
+        if prev.is_none_or(|p| !p.is_alphanumeric()) && folded_item.get(i..).is_some_and(|rest| rest.starts_with(folded_term)) {
+            return true;
+        }
+        prev = Some(ch);
+    }
+    false
+}
+
+/// Indices of the list entries matching `typed`, in list order, at most `cap` of them.
+pub fn filter_list_items(items: &[String], typed: &str, cap: usize) -> Vec<usize> {
+    let term = search_term(typed);
+    items.iter().enumerate().filter(|(_, it)| search_matches(&search_fold(it), &term)).map(|(i, _)| i).take(cap).collect()
+}
+
+/// `data.validationList`: a cell's list validation entries, searched like the in-cell dropdown,
+/// at most [`LIST_MATCH_CAP`] of them, from at most [`LIST_SOURCE_BUDGET`] of source work.
+/// `truncated` says that more entries may exist (past the match cap, or past the source budget).
+pub(super) fn validation_list_cmd(s: &mut Session, p: &Json) -> Result<Json> {
+    let d = s.doc()?;
+    let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
+    let sheet = d.wb.active_sheet();
+    let dv =
+        d.wb.sheet(sheet)
+            .and_then(|sh| sh.validations.iter().find(|v| v.kind == ValidationKind::List && v.ranges.iter().any(|r| r.contains(at))))
+            .ok_or_else(|| EngineError::Other(format!("{} has no list validation", at.a1())))?;
+    let ListSource { items, truncated: source_truncated } = list_search_source(&d.wb, sheet, at, dv, LIST_SOURCE_BUDGET);
+    let picked: Vec<usize> = match str_param(p, "search") {
+        Some(term) => filter_list_items(&items, term, LIST_MATCH_CAP.saturating_add(1)),
+        None => (0..items.len().min(LIST_MATCH_CAP.saturating_add(1))).collect(),
+    };
+    let truncated = source_truncated || picked.len() > LIST_MATCH_CAP;
+    let out: Vec<&String> = picked.iter().take(LIST_MATCH_CAP).filter_map(|&i| items.get(i)).collect();
+    Ok(json!({"items": out, "truncated": truncated}))
+}
+
 /// Checks typed input against the validation of a cell. `Ok(None)` = valid.
 pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
     let sh = wb.sheet(sheet)?;

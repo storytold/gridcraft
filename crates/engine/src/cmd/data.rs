@@ -31,8 +31,11 @@ use sort::{quick_sort, sort};
 #[cfg(test)]
 use tools::split_delimited;
 use tools::{remove_duplicates, text_to_columns};
-pub use validation::{check_validation, list_items};
-use validation::{circle_invalid, validate_cmd, validation};
+pub use validation::{
+    LIST_MATCH_CAP, LIST_SOURCE_BUDGET, ListSource, check_validation, filter_list_items, list_items, list_search_source, search_fold, search_matches,
+    search_term,
+};
+use validation::{circle_invalid, validate_cmd, validation, validation_list_cmd};
 pub(super) use validation::{move_rule_formula, remove_validation_cells};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -98,6 +101,15 @@ pub fn specs() -> Vec<CommandSpec> {
             validation
         ),
         cmd!(query "data.validate", "Check Value Against Validation", [], None, "{cell?, input} → {ok, message?}", has_doc, validate_cmd),
+        cmd!(
+            query "data.validationList",
+            "Validation List Items",
+            [],
+            None,
+            "{cell?, search?} → {items: [..], truncated} (the cell's list validation entries; `search` keeps those with a word starting with it, ignoring case and the accents of Latin letters; at most 10,000 entries, read from at most 200,000 cells of the source; `truncated`: more may exist)",
+            has_doc,
+            validation_list_cmd
+        ),
         cmd!(noundo "data.circleInvalid", "Circle Invalid Data", ["Data", "Data Tools", "Data Validation"], None, "{} → {invalid: [cell], truncated: bool (true when the 100,000-cell scan allowance ended before every range was checked)}", has_doc, circle_invalid),
         CommandSpec {
             shortcut_mac: Some("Cmd+Shift+K"),

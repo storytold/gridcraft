@@ -1,6 +1,8 @@
 use super::cell_paint::ink_on;
 use super::geo::Geo;
-use super::{Align2, CellRef, Color32, FontId, PatternType, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, Workbook, json, pos2, theme, vec2};
+use super::{
+    Align2, Arc, CellRef, Color32, FontId, PatternType, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, Workbook, json, pos2, theme, vec2,
+};
 
 /// Room the in-cell editor keeps right of its text. It is sized from the text of the last frame, so
 /// the next typed character must still fit: a fixed 14 px was less than one glyph at high zoom,
@@ -108,6 +110,106 @@ const LIST_PICKER_ROW_H: f32 = 18.0;
 /// Popup frame around the rows: 2 px inner margin and the window stroke on each side, rounded up.
 const LIST_PICKER_CHROME: f32 = 8.0;
 
+/// Shown under a validation list that was cut short (source budget or match cap).
+const LIST_MORE_NOTE: &str = "More entries not shown";
+
+/// Height of one row of a validation list popup: its button's real height (text plus padding), at
+/// least `LIST_PICKER_ROW_H`. `show_rows` needs the height the rows are drawn at: with a smaller
+/// one the popup shows fewer rows than it scrolls by and the last entries can't be reached.
+fn list_row_height(ui: &egui::Ui) -> f32 {
+    LIST_PICKER_ROW_H.max(ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y)
+}
+
+/// The searched list of a list validation under the cell being typed into (from the cell or the
+/// formula bar): the matches of the typed text, the highlighted one is what Enter commits.
+pub(super) fn list_search(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet) {
+    let view = app.view_key();
+    let Some(ed) = app.editor.as_mut() else { return };
+    if view != Some((ed.doc, ed.sheet)) || !ed.list_open() || geo.hidden_under_frozen(sh, ed.cell) {
+        return;
+    }
+    let r = match sh.merge_at(ed.cell) {
+        Some(m) => geo.range_rect(sh, m),
+        None => geo.cell_rect(sh, ed.cell),
+    };
+    if !geo.cells.intersects(r) {
+        return;
+    }
+    let Some(list) = ed.list.as_mut() else { return };
+    // Rows are as tall as their buttons really are, so `show_rows` places them where they are
+    // drawn: the popup shows `ListSearch::VISIBLE` of them and the highlighted one stays in view.
+    let row_h = list_row_height(ui);
+    // Wide enough for the longest of the first matches, within reason. Measured once per search:
+    // `update_list` clears it when the matches change.
+    let longest = match list.text_width {
+        Some(w) => w,
+        None => {
+            let font = egui::TextStyle::Button.resolve(ui.style());
+            let w = list
+                .matches
+                .iter()
+                .take(200)
+                .filter_map(|&i| list.items.get(i))
+                .map(|t| ui.painter().layout_no_wrap(t.clone(), font.clone(), Color32::BLACK).size().x)
+                .fold(0.0_f32, f32::max);
+            list.text_width = Some(w);
+            w
+        }
+    };
+    let width = r.width().max(100.0).max((longest + 16.0).min(480.0));
+    // Not every entry was searched (a huge source) or shown (past the match cap).
+    let more = list.truncated || list.matches.len() >= gridcraft_engine::cmd::data::LIST_MATCH_CAP;
+    let height = row_h * list.matches.len().clamp(1, crate::editor::ListSearch::VISIBLE) as f32;
+    let note = if more { row_h } else { 0.0 };
+    // Below the cell, or above it when the rows would run past the bottom of the window (as the
+    // dropdown arrow's list does).
+    let screen = ui.ctx().content_rect();
+    let outer = height + note + LIST_PICKER_CHROME;
+    let above = r.bottom() + outer > screen.bottom() && r.top() - outer >= screen.top();
+    let (at, pivot) = match (above, geo.rtl) {
+        (false, false) => (geo.mirror_pos(r.left_bottom()), Align2::LEFT_TOP),
+        (false, true) => (geo.mirror_pos(r.left_bottom()), Align2::RIGHT_TOP),
+        (true, false) => (geo.mirror_pos(r.left_top()), Align2::LEFT_BOTTOM),
+        (true, true) => (geo.mirror_pos(r.left_top()), Align2::RIGHT_BOTTOM),
+    };
+    let reveal = std::mem::take(&mut list.reveal).then_some(list.top as f32 * row_h);
+    let lang = crate::i18n::current(ui.ctx());
+    let mut pick = None;
+    let mut top = None;
+    egui::Area::new(egui::Id::unique("dv_search")).fixed_pos(at).pivot(pivot).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).inner_margin(2.0).show(ui, |ui| {
+            ui.set_min_width(width);
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let mut area = egui::ScrollArea::vertical().max_height(height).auto_shrink([false, true]);
+            if let Some(y) = reveal {
+                area = area.vertical_scroll_offset(y);
+            }
+            let out = area.show_rows(ui, row_h, list.matches.len(), |ui, rows| {
+                for row in rows {
+                    let Some(text) = list.matches.get(row).and_then(|&i| list.items.get(i)) else { continue };
+                    if ui.add(egui::Button::selectable(row == list.index, text.as_str()).min_size(vec2(width, row_h))).clicked() {
+                        pick = Some(row);
+                    }
+                }
+            });
+            top = Some((out.state.clamped_offset().y / row_h).floor().max(0.0) as usize);
+            if more {
+                ui.add_space(2.0);
+                ui.weak(lang.tr(LIST_MORE_NOTE));
+            }
+        });
+    });
+    if let Some(top) = top {
+        list.top = top;
+    }
+    if let Some(row) = pick {
+        list.index = row;
+        ed.list_accept = true;
+        app.commit_edit(0, 0, false, false);
+    }
+}
+
 /// Popup height for `n` items: every item up to `LIST_PICKER_MAX_ROWS`, then a scrollbar.
 pub(super) fn list_picker_height(n: usize, row_h: f32, gap: f32) -> f32 {
     let rows = n.clamp(1, LIST_PICKER_MAX_ROWS) as f32;
@@ -117,45 +219,72 @@ pub(super) fn list_picker_height(n: usize, row_h: f32, gap: f32) -> f32 {
 /// Draws the validation list popup, choosing above/below and left/right placement for RTL, and applies the clicked item with `cell.set`.
 pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
     let Some(c) = app.grid.list_picker else { return };
+    // An edit shows its own searched list; two lists would stack.
+    if app.editor.is_some() {
+        app.grid.list_picker = None;
+        app.grid.list_picker_items = None;
+        return;
+    }
     let Some(d) = app.session.active() else { return };
     let wb = d.wb.clone();
     let si = wb.active_sheet();
     let Some(sh) = wb.sheet(si) else { return };
-    let Some(dv) = sh.validations.iter().find(|x| x.ranges.iter().any(|r| r.contains(c))).cloned() else {
+    let Some(dv) = sh.validations.iter().find(|x| x.ranges.iter().any(|r| r.contains(c))) else {
         app.grid.list_picker = None;
+        app.grid.list_picker_items = None;
         return;
     };
-    let items = gridcraft_engine::cmd::data::list_items(&wb, si, c, &dv);
+    // Read the list once while it stays open on the same cell of the same workbook version, and
+    // within the search budget, so a list over a huge column can't stall every frame.
+    // Taken out while the popup draws (a click runs a command on `app`), put back below.
+    let list = match app.grid.list_picker_items.take() {
+        Some(l) if Arc::ptr_eq(&l.wb, &wb) && l.sheet == si && l.cell == c => l,
+        _ => {
+            let budget = gridcraft_engine::cmd::data::LIST_SOURCE_BUDGET;
+            let source = gridcraft_engine::cmd::data::list_search_source(&wb, si, c, dv, budget);
+            super::ListPickerItems { wb: wb.clone(), sheet: si, cell: c, source }
+        }
+    };
+    let (items, truncated) = (&list.source.items, list.source.truncated);
     let r = geo.cell_rect(sh, c);
     // Fit the popup to its rows (up to LIST_PICKER_MAX_ROWS); without a minimum the scroll area collapses to its 64 px default.
-    let height = list_picker_height(items.len(), LIST_PICKER_ROW_H, ui.spacing().item_spacing.y);
+    let gap = ui.spacing().item_spacing.y;
+    // A row is as tall as its button really is, so the popup shows LIST_PICKER_MAX_ROWS of them.
+    let row_h = list_row_height(ui);
+    let height = list_picker_height(items.len(), row_h, gap);
+    let note = if truncated { row_h + gap } else { 0.0 };
     // Open below the cell, or above it when the rows would run past the bottom of the window (as Excel does).
     let screen = ui.ctx().content_rect();
-    let above = r.bottom() + height + LIST_PICKER_CHROME > screen.bottom() && r.top() - height - LIST_PICKER_CHROME >= screen.top();
+    let (outer, top_room) = (height + note + LIST_PICKER_CHROME, r.top() - height - note - LIST_PICKER_CHROME);
+    let above = r.bottom() + outer > screen.bottom() && top_room >= screen.top();
     let (at, pivot) = match (above, geo.rtl) {
         (false, false) => (geo.mirror_pos(r.left_bottom()), Align2::LEFT_TOP),
         (false, true) => (geo.mirror_pos(r.left_bottom()), Align2::RIGHT_TOP),
         (true, false) => (geo.mirror_pos(r.left_top()), Align2::LEFT_BOTTOM),
         (true, true) => (geo.mirror_pos(r.left_top()), Align2::RIGHT_BOTTOM),
     };
+    let lang = crate::i18n::current(ui.ctx());
     let mut close = false;
     let response = egui::Area::new(egui::Id::unique("dv_list")).fixed_pos(at).pivot(pivot).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_width(r.width().max(100.0));
-            egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).show(ui, |ui| {
-                for it in &items {
-                    if ui
-                        .add(egui::Button::new(it.as_str()).frame_when_inactive(false).min_size(vec2(r.width().max(100.0), LIST_PICKER_ROW_H)))
-                        .clicked()
-                    {
+            // Only the rows in view are drawn: a long list costs what eight rows cost.
+            egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).show_rows(ui, row_h, items.len(), |ui, rows| {
+                for it in rows.filter_map(|i| items.get(i)) {
+                    if ui.add(egui::Button::new(it.as_str()).frame_when_inactive(false).min_size(vec2(r.width().max(100.0), row_h))).clicked() {
                         app.run_or_alert("cell.set", json!({"cell": c.a1(), "input": it}));
                         close = true;
                     }
                 }
             });
+            if truncated {
+                ui.weak(lang.tr(LIST_MORE_NOTE));
+            }
         });
     });
     if close || popup_dismissed(&response.response, was_open) {
         app.grid.list_picker = None;
+    } else {
+        app.grid.list_picker_items = Some(list);
     }
 }

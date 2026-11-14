@@ -668,6 +668,38 @@ pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> V
     ev.value(expr)
 }
 
+/// What [`evaluate_bounded`] found: the formula's reference (not read), its value, or that it ran
+/// out of work.
+#[derive(Clone, Debug)]
+pub enum Bounded {
+    /// The formula is a reference (`$B$1:$B$9`, a name for one, `OFFSET(…)`): its areas, unread.
+    Areas(Vec<crate::eval::Area>),
+    Value(Value),
+    /// The formula needed more than the work it was given.
+    Exhausted,
+}
+
+/// Evaluates a formula in the context of a cell with at most `work` units of work (one per
+/// expression evaluated, per cell read, …), keeping a reference result as its areas so the caller
+/// can read as much of them as it needs (a validation list's search source).
+pub fn evaluate_bounded(wb: &Workbook, sheet: usize, at: CellRef, formula: &str, work: u64) -> Bounded {
+    let body = formula.strip_prefix('=').unwrap_or(formula);
+    let Ok(expr) = gridcraft_formula::parse(body) else { return Bounded::Value(Value::Error(CellError::Name)) };
+    let exprs = HashMap::default();
+    let mut rng = 0x1234_5678_9ABC_DEF0u64;
+    let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
+    let mut ev = Evaluator::new(&mut host, sheet, at).with_work(work);
+    let r = ev.eval(&expr);
+    if ev.is_exhausted() {
+        return Bounded::Exhausted;
+    }
+    match r {
+        crate::eval::Ev::R(areas) => Bounded::Areas(areas),
+        crate::eval::Ev::V(v) => Bounded::Value(v),
+        crate::eval::Ev::L(_) => Bounded::Value(Value::Error(CellError::Calc)),
+    }
+}
+
 fn prof_now() -> f64 {
     gridcraft_core::date::unix_now_ms().unwrap_or(0.0)
 }

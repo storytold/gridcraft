@@ -116,6 +116,10 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                     app.cancel_edit();
                 }
                 if crate::widgets::icon_button(ui, Icon::Check, c, "Enter", vec2(22.0, 24.0)).clicked() && editing {
+                    // The Enter button is Enter: it takes the searched list's highlighted entry.
+                    if let Some(ed) = app.editor.as_mut() {
+                        ed.list_accept = true;
+                    }
                     app.commit_edit(0, 0, false, false);
                 }
                 let fx = crate::widgets::icon_button(ui, Icon::Fx, t.text, "Insert Function", vec2(26.0, 24.0));
@@ -589,8 +593,10 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     }
     if resp.changed() {
         ed.completion = None;
+        ed.update_list();
         // Python code is never completed from the column's text values.
         if app.ui.autocomplete
+            && ed.list.is_none()
             && !ed.is_formula()
             && !ed.python
             && !entry_shrank(chars_before, &ed.text)
@@ -714,10 +720,17 @@ fn editor_confirm_keys(ui: &mut egui::Ui, ed: &mut crate::editor::EditState) -> 
     if cmd_enter {
         action = Some((0, 0, false, true));
     }
+    // Enter, Tab and Ctrl+Enter accept the searched list's highlighted entry.
+    if action.is_some() {
+        ed.list_accept = true;
+    }
     if ctrl_shift_enter {
         action = Some((0, 0, true, false));
     }
     let cancel = if !esc {
+        false
+    } else if ed.list_open() {
+        ed.close_list();
         false
     } else if !ed.autocomplete.is_empty() {
         ed.autocomplete.clear();
@@ -754,6 +767,15 @@ fn editor_arrow_keys(
         arrow.is_some_and(|(k, _)| k == Key::ArrowRight),
     );
     let (shift, jump) = arrow.map_or((false, false), |(_, m)| (m.shift, m.command));
+    if (up || down) && !shift && ed.list_open() {
+        // The searched validation list takes Up/Down, even in Enter mode.
+        ui.input_mut(|i| {
+            i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
+            i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
+        });
+        ed.list_step(down);
+        return (action, false);
+    }
     if (up || down) && !ed.autocomplete.is_empty() {
         ui.input_mut(|i| {
             i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
