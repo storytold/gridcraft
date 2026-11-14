@@ -21,6 +21,15 @@ use gridcraft_engine::model::PageOrder;
 pub(crate) fn build_params(d: &Dialog) -> Json {
     let mut v = Json::Object(d.values.clone());
     match d.name.as_str() {
+        "moveSheet" => {
+            if v["targetWorkbook"] == v["sourceWorkbook"] && !v["copy"].as_bool().unwrap_or(false) {
+                let before = v["to"].as_u64().unwrap_or(0);
+                let sheet = v["sourceSheetIndex"].as_u64().unwrap_or(0);
+                if before > sheet {
+                    v["to"] = json!(before - 1);
+                }
+            }
+        }
         "insertLink" => {
             if d.original_link_text.as_deref().is_some_and(|text| d.values.get("text").and_then(Json::as_str) == Some(text))
                 && let Some(m) = v.as_object_mut()
@@ -183,6 +192,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             }
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
+                "moveSheet" => move_sheet_dialog(app, ui, &mut d, &mut confirm, &mut open),
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
                 "dataValidation" => data_validation_form(app, ui, &mut d, &mut confirm, &mut open),
                 "advancedFilter" => advanced_filter_form(app, ui, &mut d, &mut confirm, &mut open),
@@ -538,6 +548,67 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
                 *open = false;
             }
         })
+    });
+}
+
+fn move_sheet_dialog(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    let lang = app.ui.language;
+    ui.label(lang.tr("To book:"));
+    let target = d.values.get("targetWorkbook").cloned().unwrap_or(Json::Null);
+    let title = if target.as_str() == Some("new") {
+        lang.tr("(new book)").to_string()
+    } else {
+        app.session
+            .documents()
+            .iter()
+            .find(|doc| Some(doc.uid) == target.as_u64())
+            .map(|doc| doc.display_title())
+            .unwrap_or_else(|| lang.tr("Workbook closed").to_string())
+    };
+    craft_ui::ComboBox::from_id_salt("moveSheet.workbook").selected_text(title).width(310.0).show_ui(ui, |ui| {
+        if ui.selectable_label(target.as_str() == Some("new"), lang.tr("(new book)")).clicked() {
+            d.set_value("targetWorkbook", json!("new"));
+            d.set_value("to", json!(0));
+        }
+        for doc in app.session.documents() {
+            if ui.selectable_label(target.as_u64() == Some(doc.uid), doc.display_title()).clicked() {
+                if target.as_u64() != Some(doc.uid) {
+                    d.set_value("to", json!(0));
+                }
+                d.set_value("targetWorkbook", json!(doc.uid));
+            }
+        }
+    });
+    let target = d.values.get("targetWorkbook").and_then(Json::as_u64);
+    if let Some(doc) = app.session.documents().iter().find(|doc| Some(doc.uid) == target) {
+        ui.add_space(8.0);
+        ui.label(lang.tr("Before sheet:"));
+        let before = d.values.get("to").and_then(Json::as_u64).unwrap_or(0) as usize;
+        egui::ScrollArea::vertical().id_salt("moveSheet.position").max_height(200.0).show(ui, |ui| {
+            ui.set_min_width(310.0);
+            for (index, sheet) in doc.wb.sheets.iter().enumerate() {
+                if ui.selectable_label(index == before, &sheet.name).clicked() {
+                    d.set_value("to", json!(index));
+                }
+            }
+            if ui.selectable_label(before == doc.wb.sheets.len(), lang.tr("(move to end)")).clicked() {
+                d.set_value("to", json!(doc.wb.sheets.len()));
+            }
+        });
+    }
+    ui.add_space(8.0);
+    let mut copy = d.values.get("copy").and_then(Json::as_bool).unwrap_or(false);
+    if ui.checkbox(&mut copy, lang.tr("Create a copy")).changed() {
+        d.set_value("copy", json!(copy));
+    }
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        if ui.button(lang.tr("OK")).clicked() {
+            *confirm = true;
+        }
+        if ui.button(lang.tr("Cancel")).clicked() {
+            *open = false;
+        }
     });
 }
 

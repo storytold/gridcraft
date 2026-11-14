@@ -128,10 +128,10 @@ fn chart_names_are_written_qualified() {
         [
             (Some("Title"), Some("Items"), "Amounts"),
             (Some("Data!$B$1"), Some("Items"), "Data!Local"),
-            (Some("Plain"), Some("Items"), "Data!$B$2:$B$4"),
+            (Some("\"Plain\""), Some("Items"), "Data!$B$2:$B$4"),
             (Some("'My Data'!Other"), Some("Items"), "'My Data'!Other"),
-            (Some("Literal"), Some("Items"), "NoSuchName"),
-            (Some("Gone!Thing"), Some("Items"), "Gone!Thing"),
+            (Some("\"Literal\""), Some("Items"), "NoSuchName"),
+            (Some("\"Gone!Thing\""), Some("Items"), "Gone!Thing"),
         ]
     );
     // A second save writes the same references.
@@ -180,4 +180,25 @@ fn chart_names_keep_spaces_around_a_quoted_sheet_name() {
     zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap().by_name("xl/charts/chart1.xml").unwrap().read_to_string(&mut xml).unwrap();
     assert!(xml.contains("<c:val><c:numRef><c:f>' Sales '!Data</c:f>"), "{xml}");
     assert!(xml.contains("<c:tx><c:strRef><c:f>' Sales '!Label</c:f>"), "{xml}");
+}
+
+#[test]
+fn literal_series_names_keep_their_identity_and_quotes_on_save() {
+    for label in ["Title", "Missing!A1", "=1+1", "say \"hi\" & more", "  padded  "] {
+        let xml = format!(
+            "<c:chartSpace xmlns:c=\"urn:c\"><c:chart><c:plotArea><c:lineChart><c:ser><c:tx><c:v>{}</c:v></c:tx></c:ser></c:lineChart></c:plotArea></c:chart></c:chartSpace>",
+            crate::xml::esc(label)
+        );
+        let chart = crate::chart::read_chart(&crate::xml::parse(xml.as_bytes()).unwrap()).unwrap();
+        let expected = format!("\"{}\"", label.replace('"', "\"\""));
+        assert_eq!(chart.series[0].name.as_deref(), Some(expected.as_str()));
+        let mut wb = Workbook::new();
+        Arc::make_mut(&mut wb.sheets[0]).charts.push(chart);
+        let bytes = write_xlsx(&wb).unwrap();
+        let mut saved = String::new();
+        zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap().by_name("xl/charts/chart1.xml").unwrap().read_to_string(&mut saved).unwrap();
+        assert!(saved.contains(&format!("<c:tx><c:v>{}</c:v></c:tx>", crate::xml::esc(label))), "{saved}");
+        let (back, _) = read_xlsx(&bytes).unwrap();
+        assert_eq!(back.sheets[0].charts[0].series[0].name.as_deref(), Some(expected.as_str()));
+    }
 }

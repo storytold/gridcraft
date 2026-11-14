@@ -58,6 +58,6 @@ fn literal_category_with_separators_survives_save() {
     let saved = &back.sheets[0].charts[0].series;
     for (i, (_, want)) in cats.iter().enumerate() {
         assert_eq!(saved[i].categories.as_deref(), Some(*want));
-        assert_eq!(saved[i].name.as_deref(), Some("North, South"));
+        assert_eq!(saved[i].name.as_deref(), Some("\"North, South\""));
     }
 }

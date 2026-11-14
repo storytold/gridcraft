@@ -110,9 +110,18 @@ fn a_launch_whose_check_fails_runs_nothing() {
     // On macOS that is the second stage started without `sandbox-exec`; on Linux the launcher never
     // uses that flag, and the same refusal must hold.
     let canary = scratch("canary");
-    let echo = if Path::new("/bin/echo").exists() { "/bin/echo" } else { "/usr/bin/echo" };
+    // Unix echo paths are not absolute executable paths on Windows. Use the built
+    // CLI's harmless string evaluation there, retaining the same output sentinel.
+    let echo = if cfg!(windows) {
+        env!("CARGO_BIN_EXE_gridcraft-cli")
+    } else if Path::new("/bin/echo").exists() {
+        "/bin/echo"
+    } else {
+        "/usr/bin/echo"
+    };
+    let child_args: &[&str] = if cfg!(windows) { &["eval", "\"the program ran\""] } else { &["the program ran"] };
     let probe = canary.join("allowed.txt").to_string_lossy().into_owned();
-    // A dynamically linked `echo` needs the system's shared libraries and its loader.
+    // A dynamically linked child needs the system's shared libraries and its loader.
     // The second stage takes the process the first looked at: here, the parent of what `cli` starts.
     let mut launch = vec![
         "--sandbox-confined".to_string(),
@@ -125,7 +134,8 @@ fn a_launch_whose_check_fails_runs_nothing() {
     for lib in ["/lib", "/lib64", "/usr/lib", "/usr/lib64"].into_iter().filter(|d| Path::new(d).exists()) {
         launch.extend(["--exec".to_string(), lib.into()]);
     }
-    launch.extend(["--probe".to_string(), probe.clone(), "--".into(), echo.into(), "the program ran".into()]);
+    launch.extend(["--probe".to_string(), probe.clone(), "--".into(), echo.into()]);
+    launch.extend(child_args.iter().map(|arg| (*arg).to_string()));
     let o = cli(&launch.iter().map(String::as_str).collect::<Vec<_>>());
     let out = text(&o);
     assert_eq!(o.status.code(), Some(97), "{out}");
@@ -152,7 +162,9 @@ fn a_launch_whose_check_fails_runs_nothing() {
     }
     // A canary inside an allowed path is refused before anything runs, everywhere.
     let dir = canary.to_string_lossy().into_owned();
-    let o = cli(&["--sandbox-launch", "--read", &dir, "--exec", echo, "--probe", &probe, "--", echo, "the program ran"]);
+    let mut inside = vec!["--sandbox-launch", "--read", &dir, "--exec", echo, "--probe", &probe, "--", echo];
+    inside.extend_from_slice(child_args);
+    let o = cli(&inside);
     assert_eq!(o.status.code(), Some(97), "{}", text(&o));
     assert!(!text(&o).contains("the program ran"));
     std::fs::remove_dir_all(canary).unwrap();

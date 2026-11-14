@@ -24,6 +24,7 @@ pub mod recent;
 pub mod record;
 pub mod sample;
 pub mod selection;
+mod sheet_transfer;
 pub mod tables;
 pub mod windows;
 
@@ -74,8 +75,43 @@ pub struct HistoryEntry {
     pub label: String,
     pub wb: Arc<Workbook>,
     pub selection: Selection,
+    /// Both sides of a cross-workbook move are restored together.
+    pub group: Option<Arc<HistoryGroup>>,
     /// Estimate of storage this snapshot retains beyond the next workbook version.
     pub retained_bytes: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct HistoryGroup {
+    pub documents: Vec<u64>,
+}
+
+type TransferDocument = (u64, Arc<Workbook>, Selection, Vec<HistoryEntry>, Vec<HistoryEntry>, Trust);
+
+struct TransferState {
+    existing: Vec<u64>,
+    before: Vec<TransferDocument>,
+    active_window: Option<u64>,
+}
+
+impl TransferState {
+    fn capture(s: &Session, id: &str, params: &Json, source: Option<u64>) -> Option<Self> {
+        let target = params.get("targetWorkbook")?;
+        if id != "sheet.move" || target.as_u64() == source {
+            return None;
+        }
+        let target = target.as_u64();
+        Some(Self {
+            existing: s.docs.iter().map(|d| d.uid).collect(),
+            before: s
+                .docs
+                .iter()
+                .filter(|d| Some(d.uid) == source || Some(d.uid) == target)
+                .map(|d| (d.uid, d.wb.clone(), d.selection.clone(), d.undo.clone(), d.redo.clone(), d.trust))
+                .collect(),
+            active_window: s.active_window,
+        })
+    }
 }
 
 /// An undo group opened with [`Session::group_begin`]. Hand it back to [`Session::group_end`]
@@ -293,7 +329,7 @@ fn push_history_with_budget(
 /// command to collapse its steps (see [`Session::trim_history`]).
 fn push_entry(history: &mut Vec<HistoryEntry>, label: String, wb: Arc<Workbook>, next: &Workbook, selection: Selection) {
     let retained_bytes = history_retained_bytes(&wb, next);
-    history.push(HistoryEntry { label, wb, selection, retained_bytes });
+    history.push(HistoryEntry { label, wb, selection, retained_bytes, group: None });
 }
 
 /// Drops the oldest steps past [`UNDO_LIMIT`] or `byte_budget`, always keeping the latest one
@@ -705,6 +741,7 @@ impl Session {
             return Err(EngineError::Disabled(id.to_string(), macros::debug::BUSY.into()));
         }
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
+        let transfer = TransferState::capture(self, id, &params, before.as_ref().map(|(uid, ..)| *uid));
         // A dry run inside this command that a panic cuts short leaves journaling paused and its
         // touch log open; the panic branch puts both back.
         let paused_before = self.journal_paused;
@@ -755,6 +792,9 @@ impl Session {
                 // Restore the workbook and its history as they were, and drop the undo groups the
                 // command opened.
                 self.groups.retain(|g| g.id < first_group);
+                if let Some(saved) = &transfer {
+                    self.rollback_failed_sheet_transfer(saved);
+                }
                 let group_open = before.as_ref().is_some_and(|(uid, ..)| self.groups.iter().any(|g| g.doc == *uid));
                 if let Some((uid, wb, sel)) = &before
                     && let Some(d) = self.docs.iter_mut().find(|d| d.uid == *uid)
@@ -833,6 +873,9 @@ impl Session {
                 recent::note(&mut self.prefs.recent_functions, id, &params);
             }
         }
+        if let Some(saved) = transfer.as_ref().filter(|_| result.is_ok()) {
+            self.record_sheet_transfer(saved, spec.label.trim_end_matches('…'));
+        }
         // Inside an undo group the group owns the step. A command that ended a group open before
         // it leaves the group its step and makes one of its own for what it changed after the end.
         // A command that opened and closed its own groups makes one step of its own, which
@@ -841,6 +884,7 @@ impl Session {
         let in_group_now = before.as_ref().is_some_and(|(uid, ..)| self.in_group(*uid));
         let was_open = start.is_some_and(|(was_open, _)| was_open);
         if spec.undoable
+            && transfer.is_none()
             && let Some((uid, wb, sel)) = before
             && let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid)
             && !Arc::ptr_eq(&d.wb, &wb)
@@ -1108,6 +1152,98 @@ impl Session {
         self.groups.extend(later.filter(|o| o.doc != g.doc));
         self.group_epoch = self.group_epoch.wrapping_add(1);
         Ok(g)
+    }
+
+    fn rollback_failed_sheet_transfer(&mut self, transfer: &TransferState) {
+        let added: Vec<_> = self.docs.iter().filter(|d| !transfer.existing.contains(&d.uid)).map(|d| d.uid).collect();
+        for uid in added {
+            if let Some(index) = self.document_index(uid) {
+                self.close_document(index);
+            }
+        }
+        for (uid, wb, selection, undo, redo, trust) in &transfer.before {
+            if let Some(d) = self.docs.iter_mut().find(|d| d.uid == *uid) {
+                d.wb = wb.clone();
+                d.selection = selection.clone();
+                d.undo = undo.clone();
+                d.redo = redo.clone();
+                d.trust = *trust;
+                d.calc.rebuild(&d.wb);
+            }
+        }
+        if let Some(window) = transfer.active_window {
+            self.activate_window(window);
+        }
+    }
+
+    fn record_sheet_transfer(&mut self, transfer: &TransferState, label: &str) {
+        // The command validated and published both workbooks. Record one linked step so
+        // neither side can be undone alone; a new book restores to its initial blank state.
+        let mut saved = transfer.before.clone();
+        saved.extend(
+            self.docs
+                .iter()
+                .filter(|d| !transfer.existing.contains(&d.uid))
+                .map(|d| (d.uid, d.saved.clone(), Selection::default(), Vec::new(), Vec::new(), d.trust)),
+        );
+        let changed: Vec<_> = saved.into_iter().filter(|(uid, wb, ..)| self.docs.iter().any(|d| d.uid == *uid && !Arc::ptr_eq(&d.wb, wb))).collect();
+        let group = (changed.len() > 1).then(|| Arc::new(HistoryGroup { documents: changed.iter().map(|(uid, ..)| *uid).collect() }));
+        for (uid, wb, selection, ..) in changed {
+            if let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid) {
+                push_entry(&mut d.undo, label.to_string(), wb, &d.wb, selection);
+                if let Some(last) = d.undo.last_mut() {
+                    last.group = group.clone();
+                }
+                d.redo.clear();
+                d.revision += 1;
+            }
+        }
+    }
+
+    /// Restore a cross-workbook move only when it is the next operation in every participant.
+    /// Validate all participants before changing any workbook.
+    pub(crate) fn restore_linked_history(&mut self, redo: bool) -> Result<Option<String>> {
+        let current = self.doc()?;
+        let entry = if redo { current.redo.last() } else { current.undo.last() };
+        let Some(entry) = entry else { return Ok(None) };
+        let Some(group) = entry.group.clone() else { return Ok(None) };
+        let label = entry.label.clone();
+        let mut indices = Vec::new();
+        for uid in &group.documents {
+            let index = self
+                .document_index(*uid)
+                .ok_or_else(|| EngineError::Other("This sheet move cannot be undone after one of its workbooks was closed.".into()))?;
+            let d = &self.docs[index];
+            let next = if redo { d.redo.last() } else { d.undo.last() };
+            if !next.is_some_and(|e| e.group.as_ref().is_some_and(|g| Arc::ptr_eq(g, &group))) {
+                return Err(EngineError::Other("Undo or redo the more recent changes in the other workbook first.".into()));
+            }
+            if self.in_group(*uid) {
+                return Err(EngineError::Other("Finish the open undo group before restoring this sheet move.".into()));
+            }
+            indices.push(index);
+        }
+        for index in indices {
+            let d = &mut self.docs[index];
+            let Some(e) = (if redo { d.redo.pop() } else { d.undo.pop() }) else {
+                return Err(EngineError::Other("The linked history changed while restoring it.".into()));
+            };
+            let old = d.wb.clone();
+            let selection = if redo { d.selection.clone() } else { e.selection.clone() };
+            d.wb = e.wb;
+            d.selection = e.selection;
+            let destination = if redo { &mut d.undo } else { &mut d.redo };
+            push_history(destination, e.label, old.clone(), &d.wb, selection);
+            if let Some(last) = destination.last_mut() {
+                last.group = Some(group.clone());
+            }
+            cmd::extra::keep_view_modes(d, &old);
+            cmd::extra::keep_watch_list(&old, &mut d.wb);
+            d.sheet_selections.clear();
+            d.calc.rebuild(&d.wb);
+            d.revision += 1;
+        }
+        Ok(Some(label))
     }
 
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {

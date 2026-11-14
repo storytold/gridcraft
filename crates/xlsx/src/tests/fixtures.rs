@@ -473,7 +473,7 @@ fn drawing_with_picture_and_chart() {
     assert_eq!(ch.series[0].name.as_deref(), Some("Data!$B$1"));
     assert_eq!(ch.series[0].categories.as_deref(), Some("Data!$A$2:$A$5"));
     assert_eq!(ch.series[0].color, Some(Color::Rgb(0xFF0000)));
-    assert_eq!(ch.series[1].name.as_deref(), Some("Lit"));
+    assert_eq!(ch.series[1].name.as_deref(), Some("\"Lit\""));
     assert!(ch.series[1].secondary);
     assert_eq!(ch.series[1].kind, Some(gridcraft_model::ChartKind::LineMarkers));
     assert!(ch.data_labels && ch.gridlines);
