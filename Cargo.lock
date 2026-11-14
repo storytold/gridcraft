@@ -2237,6 +2237,7 @@ name = "gridcraft-functions"
 version = "0.19.1"
 dependencies = [
  "gridcraft-core",
+ "quick-xml 0.41.0",
  "regex",
 ]
 
