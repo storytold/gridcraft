@@ -61,6 +61,7 @@ fn chart(kind: ChartKind) -> Chart {
 
 fn series(name: &str, values: &[f64], color: Rgba, kind: ChartKind) -> SeriesData {
     SeriesData {
+        labels: None,
         name: name.into(),
         values: values.iter().map(|v| Some(*v)).collect(),
         x: Some(values.iter().enumerate().map(|(i, _)| Some(i as f64 * 1.5 + 2.0)).collect()),
@@ -539,6 +540,7 @@ fn resolve_from_workbook() {
     let mut c = chart(ChartKind::ColumnClustered);
     c.series = vec![
         Series {
+            labels: None,
             name: Some("Sales!$B$1".into()),
             categories: Some("Sales!$A$2:$A$4".into()),
             values: "Sales!$B$2:$B$4".into(),
@@ -551,6 +553,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
         },
         Series {
+            labels: None,
             name: None,
             categories: None,
             values: "=Sales!$C$2:$C$4".into(),
@@ -563,6 +566,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
         },
         Series {
+            labels: None,
             name: Some("Literal".into()),
             categories: None,
             values: "{1,2,3,4}".into(),
@@ -602,6 +606,7 @@ fn resolve_from_workbook() {
     let mut c = chart(ChartKind::Combo);
     c.series = vec![
         Series {
+            labels: None,
             name: None,
             categories: None,
             values: "Sales!B2:B4".into(),
@@ -614,6 +619,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
         },
         Series {
+            labels: None,
             name: None,
             categories: None,
             values: "Sales!B2:B4".into(),
@@ -631,6 +637,7 @@ fn resolve_from_workbook() {
     assert_eq!(d.series[1].kind, ChartKind::Line);
     let mut c = chart(ChartKind::Bubble);
     c.series = vec![Series {
+        labels: None,
         name: None,
         categories: Some("Sales!B2:B4".into()),
         values: "Sales!B2:B4".into(),
@@ -649,6 +656,7 @@ fn resolve_from_workbook() {
     // Bad formulas never panic.
     let mut c = chart(ChartKind::Line);
     c.series = vec![Series {
+        labels: None,
         name: Some("=Nope!A1".into()),
         categories: Some("((".into()),
         values: "Missing!A1:A3".into(),
@@ -942,6 +950,7 @@ fn fuzz_random_data_and_sizes() {
         };
         let series: Vec<SeriesData> = (0..nser)
             .map(|i| SeriesData {
+                labels: None,
                 name: format!("S{i}"),
                 values: (0..npts).map(|_| val(&mut r)).collect(),
                 x: if r.next().is_multiple_of(2) { Some((0..npts).map(|_| val(&mut r)).collect()) } else { None },
@@ -1354,6 +1363,7 @@ fn pie_points_follow_workbook_theme() {
     wb.theme.colors[5] = 0x8AA1B8;
     let mut c = chart(ChartKind::Pie);
     c.series = vec![Series {
+        labels: None,
         name: None,
         categories: None,
         values: "{5,3}".into(),
@@ -1630,6 +1640,7 @@ fn a_series_named_by_a_name_on_a_sheet_with_an_apostrophe_resolves() {
     });
     let mut c = chart(ChartKind::ColumnClustered);
     c.series = vec![Series {
+        labels: None,
         name: Some("'Bob''s'!Title".into()),
         categories: None,
         values: "'Bob''s'!$A$2:$A$3".into(),
@@ -1666,6 +1677,7 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     });
     let mut c = chart(ChartKind::ColumnClustered);
     c.series = vec![Series {
+        labels: None,
         name: Some("'a!b'!Title".into()),
         categories: None,
         values: "'a!b'!$A$2:$A$3".into(),
@@ -1679,6 +1691,74 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
+}
+
+/// A series' own labels over the chart's: deleted, they hide the chart's values; showing the
+/// series name inside the base of each column, rotated to read bottom to top, as a workbook from
+/// Excel draws them.
+#[test]
+fn series_labels_override_the_charts() {
+    use gridcraft_model::{LabelPosition, SeriesLabels};
+    let texts = |c: &Chart, d: &ChartData| -> Vec<(String, f32, f32, f32)> {
+        render(c, d, 640.0, 400.0, &ApproxMeasure)
+            .into_iter()
+            .filter_map(|p| match p {
+                Prim::Text { text, x, y, rotation, .. } => Some((text, x, y, rotation)),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.legend = LegendPos::None;
+    c.data_labels = true;
+    let mut d = sample(ChartKind::ColumnClustered);
+    let unlabelled = texts(&Chart { data_labels: false, ..c.clone() }, &d).len();
+    assert!(texts(&c, &d).len() > unlabelled, "the chart's value labels");
+    for s in &mut d.series {
+        s.labels = Some(SeriesLabels::default());
+    }
+    assert_eq!(texts(&c, &d).len(), unlabelled, "every series deletes its labels");
+    // The first series' name inside each column's base, rotated.
+    d.series[0].labels = Some(SeriesLabels { series_name: true, position: Some(LabelPosition::InsideBase), rotation: 90.0, ..Default::default() });
+    let name = d.series[0].name.clone();
+    let named: Vec<_> = texts(&c, &d).into_iter().filter(|t| t.0 == name).collect();
+    assert_eq!(named.len(), d.categories.len(), "{named:?}");
+    assert!(named.iter().all(|t| (t.3 + std::f32::consts::FRAC_PI_2).abs() < 1e-4), "reads bottom to top");
+    // Anchored near the base: below the axis labels' midline, in the plot's lower part.
+    assert!(named.iter().all(|t| t.2 > 200.0), "{named:?}");
+}
+
+/// A pie labels its values as its series says: shown there though the chart's are off, hidden
+/// there though the chart's are on.
+#[test]
+fn a_pie_follows_its_series_labels() {
+    use gridcraft_model::SeriesLabels;
+    let count = |chart_labels: bool, series: Option<SeriesLabels>| {
+        let mut c = chart(ChartKind::Pie);
+        c.legend = LegendPos::None;
+        c.title = None;
+        c.data_labels = chart_labels;
+        let mut d = sample(ChartKind::Pie);
+        d.series[0].labels = series;
+        render(&c, &d, 640.0, 400.0, &ApproxMeasure).iter().filter(|p| matches!(p, Prim::Text { .. })).count()
+    };
+    let none = count(false, None);
+    assert!(count(false, Some(SeriesLabels { value: true, ..Default::default() })) > none);
+    assert_eq!(count(true, Some(SeriesLabels::default())), none);
+    // Category names when the series asks for them, not values.
+    let mut c = chart(ChartKind::Pie);
+    c.legend = LegendPos::None;
+    c.title = None;
+    let mut d = sample(ChartKind::Pie);
+    d.series[0].labels = Some(SeriesLabels { category_name: true, ..Default::default() });
+    let texts: Vec<String> = render(&c, &d, 640.0, 400.0, &ApproxMeasure)
+        .into_iter()
+        .filter_map(|p| match p {
+            Prim::Text { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.iter().any(|t| d.categories.contains(t)), "{texts:?}");
 }
 
 #[test]
@@ -1697,6 +1777,7 @@ fn volatile_series_formulas_are_detected() {
             smooth: false,
             quartiles: Default::default(),
             trendlines: vec![],
+            labels: None,
         });
         c
     };
@@ -1726,6 +1807,7 @@ fn volatile_defined_names_are_followed() {
             smooth: false,
             quartiles: Default::default(),
             trendlines: vec![],
+            labels: None,
         });
         c
     };

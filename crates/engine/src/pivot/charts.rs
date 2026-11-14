@@ -71,6 +71,7 @@ pub fn chart_series(sheet: &str, origin: CellRef, out: &Output) -> Vec<Series> {
         .take(MAX_CHART_SERIES)
         .filter_map(|(c, name)| {
             Some(Series {
+                labels: None,
                 name: Some(format!("\"{}\"", name.replace('"', "\"\""))),
                 categories: categories.clone(),
                 values: rows_ref(sheet, origin, *c, &rows)?,

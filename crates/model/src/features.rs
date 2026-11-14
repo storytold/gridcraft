@@ -494,6 +494,63 @@ pub struct Series {
     /// Trendlines fitted to this series (Excel allows several per series).
     #[serde(default)]
     pub trendlines: Vec<Trendline>,
+    /// This series' own data labels (`c:ser/c:dLbls`), over the chart's; `None` follows the chart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<SeriesLabels>,
+}
+
+/// A series' data labels: what each shows, where, and at what angle. All flags off is a series
+/// whose labels are deleted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SeriesLabels {
+    pub value: bool,
+    pub series_name: bool,
+    pub category_name: bool,
+    /// `None` is the chart kind's default place.
+    pub position: Option<LabelPosition>,
+    /// Text angle in degrees, counter-clockwise; 90 reads bottom to top.
+    pub rotation: f32,
+}
+
+impl SeriesLabels {
+    pub fn shows_anything(&self) -> bool {
+        self.value || self.series_name || self.category_name
+    }
+}
+
+/// Where a data label sits (`c:dLblPos`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LabelPosition {
+    Center,
+    InsideEnd,
+    InsideBase,
+    OutsideEnd,
+    Above,
+    Below,
+    Left,
+    Right,
+    BestFit,
+}
+
+impl LabelPosition {
+    pub const ALL: [(LabelPosition, &'static str); 9] = [
+        (LabelPosition::Center, "ctr"),
+        (LabelPosition::InsideEnd, "inEnd"),
+        (LabelPosition::InsideBase, "inBase"),
+        (LabelPosition::OutsideEnd, "outEnd"),
+        (LabelPosition::Above, "t"),
+        (LabelPosition::Below, "b"),
+        (LabelPosition::Left, "l"),
+        (LabelPosition::Right, "r"),
+        (LabelPosition::BestFit, "bestFit"),
+    ];
+    pub fn parse(s: &str) -> Option<LabelPosition> {
+        Self::ALL.iter().find(|(_, n)| *n == s).map(|(p, _)| *p)
+    }
+    pub fn as_str(self) -> &'static str {
+        Self::ALL.iter().find(|(p, _)| *p == self).map_or("ctr", |(_, n)| n)
+    }
 }
 
 /// Regression a trendline fits (`c:trendlineType`).

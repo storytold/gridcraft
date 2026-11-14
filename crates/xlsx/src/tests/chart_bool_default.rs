@@ -14,7 +14,8 @@ fn flags(ser: &str, group: &str) -> (bool, bool) {
     );
     let root = parse(xml.as_bytes()).unwrap();
     let ch = read_chart(&root).unwrap();
-    (ch.series[0].smooth, ch.data_labels)
+    // Value labels on the chart's group, or on the series itself (kept on the series).
+    (ch.series[0].smooth, ch.data_labels || ch.series[0].labels.is_some_and(|l| l.value))
 }
 
 #[test]

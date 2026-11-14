@@ -49,7 +49,7 @@ pub(super) fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         let top = plot.bottom() - ys.frac(*c as f64) * plot.h;
         let x = plot.x + b as f32 * cw;
         ctx.rect(x, top, cw, plot.bottom() - top, s.color, Some((WHITE, 0.75)));
-        if chart.data_labels {
+        if values_labelled(chart, s) {
             ctx.text(x + cw / 2.0, top - 2.0, &c.to_string(), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
         }
     }
@@ -111,7 +111,7 @@ pub(super) fn waterfall(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         if j + 1 < bars.len() && ncat <= 500 {
             ctx.out.push(Prim::Line { pts: vec![[x + bw, yt], [x + cw, yt]], color: AXIS, width: 0.75, dash: true });
         }
-        if chart.data_labels && ncat <= MAX_LABELS {
+        if values_labelled(chart, s) && ncat <= MAX_LABELS {
             let v = if *kind == 0 { *t } else { t - b };
             ctx.text(x + bw / 2.0, yb.min(yt) - 2.0, &f.format(v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
         }
@@ -150,7 +150,7 @@ pub(super) fn funnel(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         }
         if show {
             let yc = y + bh / 2.0;
-            if chart.data_labels {
+            if values_labelled(chart, s) {
                 let t = f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None);
                 let color = if ctx.tw(&t, LABEL_SIZE) + 4.0 <= bw { on(s.color) } else { TEXT };
                 ctx.text(plot.cx(), yc, &t, LABEL_SIZE, color, (HAlign::Center, VAlign::Middle));
@@ -245,8 +245,9 @@ pub(super) fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inne
         if sweep > 1e-4 {
             let fill = point_color(data, j);
             wedge(ctx, &ring, a, sweep, fill);
-            if (chart.data_labels || names) && vals.len() <= MAX_LABELS {
-                let t = if names { cat_label(data, j) } else { f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None) };
+            let value = || f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None);
+            let text = if names { Some(cat_label(data, j)) } else { point_label(chart, s, &cat_label(data, j), &value()) };
+            if let Some(t) = text.filter(|_| vals.len() <= MAX_LABELS) {
                 let mid = a + sweep / 2.0;
                 let rr = if ri > 0.0 { (r + ri) / 2.0 } else { r * 0.65 };
                 let room = sweep * rr;
@@ -321,8 +322,8 @@ pub(super) fn doughnut(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx)
             if sweep > 1e-4 {
                 let fill = point_color(data, j);
                 wedge(ctx, &ring, a, sweep, fill);
-                if chart.data_labels && n <= MAX_LABELS {
-                    let t = f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None);
+                let value = f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None);
+                if let Some(t) = point_label(chart, s, &cat_label(data, j), &value).filter(|_| n <= MAX_LABELS) {
                     let mid = a + sweep / 2.0;
                     let rr = (outer + inner) / 2.0;
                     if ctx.tw(&t, LABEL_SIZE) <= (sweep * rr).max(outer - inner) && sweep * rr >= LABEL_SIZE {
@@ -425,7 +426,7 @@ pub(super) fn treemap(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         if b.w > 24.0 && b.h > LABEL_SIZE * 1.6 {
             let name = ctx.fit(&cat_label(data, j), LABEL_SIZE, b.w - 8.0);
             ctx.text(b.x + 4.0, b.y + 4.0, &name, LABEL_SIZE, on(fill), (HAlign::Left, VAlign::Top));
-            if chart.data_labels && b.h > LABEL_SIZE * 3.2 {
+            if values_labelled(chart, s) && b.h > LABEL_SIZE * 3.2 {
                 let t = ctx.fit(&f.format(v, None), LABEL_SIZE, b.w - 8.0);
                 ctx.text(b.x + 4.0, b.y + 4.0 + LABEL_SIZE * 1.4, &t, LABEL_SIZE, on(fill), (HAlign::Left, VAlign::Top));
             }
@@ -613,6 +614,25 @@ pub(super) fn stock(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
             _ => {}
         }
     }
+}
+
+/// A pie slice's or ring segment's label: what its series' own labels show (series name, category
+/// name, value, comma-separated as Excel orders them), else the value when the chart shows values.
+fn point_label(chart: &Chart, s: &SeriesData, category: &str, value: &str) -> Option<String> {
+    match s.labels {
+        Some(l) => {
+            let parts = [(l.series_name, s.name.as_str()), (l.category_name, category), (l.value, value)];
+            let t = parts.iter().filter(|(on, t)| *on && !t.is_empty()).map(|(_, t)| *t).collect::<Vec<_>>().join(", ");
+            (!t.is_empty()).then_some(t)
+        }
+        None => chart.data_labels.then(|| value.to_string()),
+    }
+}
+
+/// Whether this series labels its values: its own setting (Excel often keeps a pie's labels on its
+/// series, or deletes them there), else the chart's.
+fn values_labelled(chart: &Chart, s: &SeriesData) -> bool {
+    s.labels.map_or(chart.data_labels, |l| l.value)
 }
 
 #[cfg(test)]
