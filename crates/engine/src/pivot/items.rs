@@ -21,7 +21,7 @@ pub(super) struct FieldItems {
 }
 
 fn cmp_items(a: &Item, b: &Item) -> Ordering {
-    a.class.cmp(&b.class).then(a.num.total_cmp(&b.num)).then_with(|| a.text.cmp(&b.text))
+    a.class.cmp(&b.class).then(a.num.total_cmp(&b.num)).then_with(|| gridcraft_core::compare_text(&a.text, &b.text))
 }
 
 /// (identity key, item) for a source value under a field's date grouping.
@@ -197,7 +197,8 @@ impl Acc {
     }
 }
 
-/// Excel's caption verb for a function ("Sum of Sales").
+/// Excel's caption verb for a function ("Sum of Sales"). Count Numbers is captioned "Count of
+/// Sales", as Excel names it and as the XLSX reader names a value field saved without a name.
 pub fn func_caption(f: PivotFunc) -> &'static str {
     match f {
         PivotFunc::Sum => "Sum",
@@ -206,7 +207,7 @@ pub fn func_caption(f: PivotFunc) -> &'static str {
         PivotFunc::Max => "Max",
         PivotFunc::Min => "Min",
         PivotFunc::Product => "Product",
-        PivotFunc::CountNumbers => "Count Numbers",
+        PivotFunc::CountNumbers => "Count",
         PivotFunc::StdDev => "StdDev",
         PivotFunc::StdDevP => "StdDevp",
         PivotFunc::Var => "Var",

@@ -31,6 +31,8 @@ pub struct WindowUi {
     ribbon_tab: String,
     /// The status bar's Ready/Enter/Edit, which follows the window's cell draft.
     mode: gridcraft_engine::Mode,
+    /// A key tip's control request waiting for the frame that draws this window's ribbon.
+    keytip_invoke_next: Option<&'static str>,
 }
 
 impl WindowUi {
@@ -70,6 +72,7 @@ impl SheetApp {
             open_switch_windows,
             ribbon_tab,
             mode,
+            keytip_invoke_next,
         } = w;
         std::mem::swap(&mut self.editor, editor);
         std::mem::swap(&mut self.text_box_editor, text_box_editor);
@@ -86,6 +89,7 @@ impl SheetApp {
         std::mem::swap(&mut self.open_switch_windows, open_switch_windows);
         std::mem::swap(&mut self.ui.ribbon_tab, ribbon_tab);
         std::mem::swap(&mut self.session.mode, mode);
+        std::mem::swap(&mut self.ui.keytip_invoke_next, keytip_invoke_next);
     }
 
     /// The window whose interface state is in the per-window fields.
@@ -98,6 +102,14 @@ impl SheetApp {
     /// in (a window never seen before starts fresh). A closed window's state is dropped.
     pub fn follow_active_window(&mut self) {
         let active = self.session.active_window();
+        // A window hidden while parked (from another window's View › Hide) isn't drawn either:
+        // its waiting key tip request goes, as it does for a window hidden as it is left.
+        let session = &self.session;
+        for (id, parked) in &mut self.parked {
+            if session.window(*id).is_some_and(|w| w.hidden) {
+                parked.keytip_invoke_next = None;
+            }
+        }
         if active == self.ui_window {
             return;
         }
@@ -108,7 +120,12 @@ impl SheetApp {
         };
         let mut outgoing = WindowUi::fresh(&self.grid, &self.ui.ribbon_tab);
         self.swap_window_ui(&mut outgoing);
-        if self.session.window(previous).is_some() {
+        if let Some(window) = self.session.window(previous) {
+            // A hidden window isn't drawn: a key tip request waiting for its next frame would
+            // fire whenever it is shown again, so it goes.
+            if window.hidden {
+                outgoing.keytip_invoke_next = None;
+            }
             self.parked.insert(previous, outgoing);
         }
         if let Some(mut incoming) = active.and_then(|w| self.parked.remove(&w)) {

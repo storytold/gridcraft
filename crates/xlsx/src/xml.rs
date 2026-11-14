@@ -213,8 +213,33 @@ pub fn parse(xml: &[u8]) -> Result<El, IoError> {
     parse_streaming(xml, &[], &mut |_| Ok(()))
 }
 
-/// Parses a part; complete elements named in `split` (below the root) are handed to `cb` and not
-/// kept in the returned tree.
+/// The first element named `local_name` (namespace prefix dropped) in `xml`, read from its start tag
+/// alone: no children, and nothing after the tag is read, so unbalanced markup around it (a VML
+/// caption's unclosed `<br>`) neither hides nor moves it. `None` when there is none, or when the
+/// markup before it is malformed.
+pub fn first_start(xml: &[u8], local_name: &str) -> Option<El> {
+    let mut reader = Reader::from_reader(xml);
+    {
+        let cfg = reader.config_mut();
+        cfg.check_end_names = false;
+        cfg.allow_unmatched_ends = true;
+        cfg.allow_dangling_amp = true;
+    }
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf).ok()? {
+            Event::Start(e) | Event::Empty(e) if local(e.name().as_ref()) == local_name => return Some(start_el(&e)),
+            Event::Eof => return None,
+            _ => {}
+        }
+        buf.clear();
+    }
+}
+
+/// Parses a part; complete elements named in `split` that are children or grandchildren of the
+/// root (`sst/si`, `worksheet/sheetData/row`) are handed to `cb` and not kept in the returned
+/// tree. Deeper elements of the same name (the `xdr:row` of a form control's anchor) stay in the
+/// tree.
 pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
     let data = to_utf8(xml);
     let mut reader = Reader::from_reader(data.as_ref());
@@ -230,8 +255,11 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
     let mut root: Option<El> = None;
     let mut buf = Vec::new();
     // Elements kept in the tree so far, so a pathological part that passes the byte limits can
-    // still be refused before the tree itself outgrows memory.
+    // still be refused before the tree itself outgrows memory. Elements inside a `split` element
+    // are handed out with it and do not stay in the tree, so a streamed worksheet or shared-string
+    // table of any size passes: `kept_at_start` remembers the count when each open element began.
     let mut kept = 0usize;
+    let mut kept_at_start: Vec<usize> = Vec::new();
     // Attach a finished element to its parent (or emit it / make it the root).
     fn finish(
         stack: &mut [El],
@@ -240,11 +268,17 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
         split: &[&str],
         cb: &mut dyn FnMut(El) -> Result<(), IoError>,
         kept: &mut usize,
+        kept_at_start: Option<usize>,
     ) -> Result<(), IoError> {
+        let shallow = stack.len() <= 2;
         match stack.last_mut() {
             Some(parent) => {
-                if split.contains(&el.name.as_str()) {
+                if shallow && split.contains(&el.name.as_str()) {
                     cb(el)?;
+                    // The element and everything parsed inside it have left the tree.
+                    if let Some(k) = kept_at_start {
+                        *kept = k;
+                    }
                 } else {
                     *kept = kept.saturating_add(1);
                     if *kept > MAX_XML_NODES {
@@ -269,14 +303,16 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
                     return Err(IoError::Xml("XML nested too deeply".into()));
                 }
                 stack.push(start_el(&e));
+                kept_at_start.push(kept);
             }
             Event::Empty(e) => {
                 let el = start_el(&e);
-                finish(&mut stack, &mut root, el, split, cb, &mut kept)?;
+                finish(&mut stack, &mut root, el, split, cb, &mut kept, None)?;
             }
             Event::End(_) => {
                 if let Some(el) = stack.pop() {
-                    finish(&mut stack, &mut root, el, split, cb, &mut kept)?;
+                    let at_start = kept_at_start.pop();
+                    finish(&mut stack, &mut root, el, split, cb, &mut kept, at_start)?;
                 }
             }
             Event::Text(t) => {
@@ -315,7 +351,8 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
     }
     // Unclosed elements (truncated part): close them so we keep what we have.
     while let Some(el) = stack.pop() {
-        finish(&mut stack, &mut root, el, split, cb, &mut kept)?;
+        let at_start = kept_at_start.pop();
+        finish(&mut stack, &mut root, el, split, cb, &mut kept, at_start)?;
     }
     root.ok_or_else(|| IoError::Xml("no root element".into()))
 }
@@ -557,6 +594,26 @@ mod tests {
         for s in ["plain", " leading ", "a & <b>", "line\nbreak", "日本語", "x_x0041_"] {
             assert_eq!(si_body(s, None), t_el(s));
         }
+    }
+
+    #[test]
+    fn a_streamed_part_may_hold_more_elements_than_the_cap() {
+        // A worksheet of ordinary size: 5001 rows of 100 cells is 1,000,200 `c` and `v` elements,
+        // more than the cap, but the rows are streamed out one by one and never pile up in the
+        // tree, so the part is read whole. Kept in a tree (no split), the same part is refused.
+        let row = format!("<row>{}</row>", "<c><v>1</v></c>".repeat(100));
+        let xml = format!("<sheetData>{}</sheetData>", row.repeat(5001));
+        let mut rows = 0usize;
+        let root = parse_streaming(xml.as_bytes(), &["row"], &mut |r| {
+            assert_eq!(r.children.len(), 100);
+            rows += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(rows, 5001);
+        assert!(root.children.is_empty());
+        let err = parse(xml.as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("elements"), "{err}");
     }
 
     #[test]
