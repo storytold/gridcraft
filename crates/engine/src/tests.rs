@@ -1008,6 +1008,24 @@ fn inserting_or_deleting_cells_cancels_copy_mode() {
 }
 
 #[test]
+fn autofill_refuses_an_invalid_source_instead_of_using_the_selection() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:A2", "values": [[1], [3]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:A2"})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let selection = s.doc().unwrap().selection.clone();
+    let history = s.execute("history.list", json!({})).unwrap();
+    let err = s.execute("edit.autoFill", json!({"source": "A0", "target": "A1:A4"})).unwrap_err();
+    assert!(err.to_string().contains("`source`"), "{err}");
+    assert!(std::sync::Arc::ptr_eq(&before, &s.doc().unwrap().wb));
+    assert_eq!(s.doc().unwrap().selection, selection);
+    assert_eq!(s.execute("history.list", json!({})).unwrap(), history);
+    assert_eq!(v(&s, "A3"), Value::Empty);
+    s.execute("edit.autoFill", json!({"target": "A1:A4"})).unwrap();
+    assert_eq!(v(&s, "A4"), Value::Number(7.0), "omitting source still uses the selection");
+}
+
+#[test]
 fn fill_series() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [[1], [3]]})).unwrap();
