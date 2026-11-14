@@ -477,6 +477,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Long Date" => "Hosszú dátum",
         "More Number Formats…" => "További számformátumok…",
         "Financial" => "Pénzügyi",
+        "Most Recently Used" => "Legutóbb használt",
         "Recently Used" => "Legutóbbiak",
         "Logical" => "Logikai",
         "Date & Time" => "Dátum és idő",

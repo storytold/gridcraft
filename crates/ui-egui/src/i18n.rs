@@ -16,6 +16,7 @@ mod es;
 mod es_functions;
 mod fr;
 mod hu;
+mod hu_functions;
 mod it;
 mod ja;
 mod ko;
@@ -254,6 +255,7 @@ impl Language {
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            Self::Hu => Some((hu_functions::DESCRIPTIONS, hu_functions::ARGUMENTS)),
             _ => None,
         }
     }
@@ -430,6 +432,15 @@ mod tests {
         for (name, _) in crate::icons::LIBRARY {
             assert_ne!(Language::Hu.tr(name), *name, "Hungarian icon tooltip falls back to English: {name}");
         }
+    }
+
+    #[test]
+    fn hungarian_insert_function_category_and_sum_help_are_translated() {
+        assert_eq!(Language::Hu.tr("Most Recently Used"), "Legutóbb használt");
+        assert_eq!(
+            Language::Hu.function_description("Adds all the numbers in the arguments."),
+            Some("Összeadja az argumentumokban szereplő összes számot.")
+        );
     }
 
     #[test]
