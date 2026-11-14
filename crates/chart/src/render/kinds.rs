@@ -8,6 +8,7 @@ use super::{
 // ---------------------------------------------------------------- histogram
 
 pub(super) fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
+    let dl = ctx.labels();
     let Some(s) = data.series.first() else { return };
     let vals: Vec<f64> = s.values.iter().flatten().copied().collect();
     let Some((lo, hi)) = value_range(vals.iter().copied()) else { return };
@@ -50,7 +51,7 @@ pub(super) fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         let x = plot.x + b as f32 * cw;
         ctx.rect(x, top, cw, plot.bottom() - top, s.color, Some((WHITE, 0.75)));
         if chart.data_labels {
-            ctx.text(x + cw / 2.0, top - 2.0, &c.to_string(), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+            ctx.styled(x + cw / 2.0, top - 2.0, &c.to_string(), dl, TEXT, (HAlign::Center, VAlign::Bottom));
         }
     }
 }
@@ -58,6 +59,7 @@ pub(super) fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
 // ---------------------------------------------------------------- waterfall
 
 pub(super) fn waterfall(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
+    let dl = ctx.labels();
     let Some(s) = data.series.first() else { return };
     let mut ncat = data.categories.len().max(s.values.len()).min(MAX_CATS);
     if ncat == 0 {
@@ -113,7 +115,7 @@ pub(super) fn waterfall(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         }
         if chart.data_labels && ncat <= MAX_LABELS {
             let v = if *kind == 0 { *t } else { t - b };
-            ctx.text(x + bw / 2.0, yb.min(yt) - 2.0, &f.format(v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+            ctx.styled(x + bw / 2.0, yb.min(yt) - 2.0, &f.format(v, None), dl, TEXT, (HAlign::Center, VAlign::Bottom));
         }
     }
 }
@@ -121,6 +123,7 @@ pub(super) fn waterfall(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
 // ---------------------------------------------------------------- funnel
 
 pub(super) fn funnel(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
+    let dl = ctx.labels();
     let Some(s) = data.series.first() else { return };
     let n = data.categories.len().max(s.values.len()).min(MAX_CATS);
     if n == 0 {
@@ -152,8 +155,8 @@ pub(super) fn funnel(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
             let yc = y + bh / 2.0;
             if chart.data_labels {
                 let t = f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None);
-                let color = if ctx.tw(&t, LABEL_SIZE) + 4.0 <= bw { on(s.color) } else { TEXT };
-                ctx.text(plot.cx(), yc, &t, LABEL_SIZE, color, (HAlign::Center, VAlign::Middle));
+                let color = if ctx.look_tw(&t, dl) + 4.0 <= bw { on(s.color) } else { TEXT };
+                ctx.styled(plot.cx(), yc, &t, dl, color, (HAlign::Center, VAlign::Middle));
             }
             let l = ctx.fit(labels.get(j).map(String::as_str).unwrap_or(""), LABEL_SIZE, lw - 8.0);
             ctx.text(plot.x - 6.0, yc, &l, LABEL_SIZE, TEXT, (HAlign::Right, VAlign::Middle));
@@ -224,6 +227,7 @@ fn wedge(ctx: &mut Ctx, ring: &Ring, a0: f32, sweep: f32, fill: Rgba) {
 }
 
 pub(super) fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inner: f32, names: bool) {
+    let dl = ctx.labels();
     let Some(s) = data.series.first() else { return };
     let vals: Vec<f64> = s.values.iter().take(MAX_CATS).map(|v| v.map(f64::abs).unwrap_or(0.0)).collect();
     let total: f64 = vals.iter().sum();
@@ -250,7 +254,7 @@ pub(super) fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inne
                 let mid = a + sweep / 2.0;
                 let rr = if ri > 0.0 { (r + ri) / 2.0 } else { r * 0.65 };
                 let room = sweep * rr;
-                if ctx.tw(&t, LABEL_SIZE) <= room.max(r - ri) && room >= LABEL_SIZE {
+                if ctx.look_tw(&t, dl) <= room.max(r - ri) && room >= dl.size {
                     labels.push((cx + rr * mid.sin(), cy - rr * mid.cos(), t, on(fill)));
                 }
             }
@@ -258,7 +262,7 @@ pub(super) fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inne
         a += sweep;
     }
     for (x, y, t, c) in labels {
-        ctx.text(x, y, &t, LABEL_SIZE, c, (HAlign::Center, VAlign::Middle));
+        ctx.styled(x, y, &t, dl, c, (HAlign::Center, VAlign::Middle));
     }
 }
 
@@ -266,6 +270,7 @@ pub(super) fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inne
 /// Excel: ring outer radii ≈0.83, 0.92 and 1.0 of the plot radius for series 1, 2 and 3). The hole
 /// size and first slice angle come from the chart; each ring is scaled to its own total.
 pub(super) fn doughnut(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
+    let dl = ctx.labels();
     let nser = data.series.len().min(MAX_SERIES);
     if nser == 0 {
         return;
@@ -325,7 +330,7 @@ pub(super) fn doughnut(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx)
                     let t = f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None);
                     let mid = a + sweep / 2.0;
                     let rr = (outer + inner) / 2.0;
-                    if ctx.tw(&t, LABEL_SIZE) <= (sweep * rr).max(outer - inner) && sweep * rr >= LABEL_SIZE {
+                    if ctx.look_tw(&t, dl) <= (sweep * rr).max(outer - inner) && sweep * rr >= dl.size {
                         labels.push((cx + rr * mid.sin(), cy - rr * mid.cos(), t, on(fill)));
                     }
                 }
@@ -334,7 +339,7 @@ pub(super) fn doughnut(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx)
         }
     }
     for (x, y, t, c) in labels {
-        ctx.text(x, y, &t, LABEL_SIZE, c, (HAlign::Center, VAlign::Middle));
+        ctx.styled(x, y, &t, dl, c, (HAlign::Center, VAlign::Middle));
     }
 }
 

@@ -56,6 +56,7 @@ fn chart(kind: ChartKind) -> Chart {
         source: None,
         by_rows: false,
         pivot: None,
+        text: Default::default(),
     }
 }
 
@@ -81,6 +82,7 @@ fn sample(kind: ChartKind) -> ChartData {
     let mut b = series("East", &[38000.0, 30000.0, 45000.0, 61870.0, 52000.0, 41000.0], [200, 80, 40, 255], k2);
     b.secondary = kind == ChartKind::Combo;
     ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: cats.iter().map(ToString::to_string).collect(),
@@ -161,6 +163,7 @@ fn doughnut_draws_each_series_as_a_ring() {
     c.hole_size = 25;
     c.first_slice_angle = 0;
     let d = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: ["A", "B", "C"].iter().map(|s| s.to_string()).collect(),
@@ -194,12 +197,14 @@ fn doughnut_with_many_series_still_draws_the_outer_rings() {
     // The annulus is a few dozen pixels tall and there are far more series than pixels, so every
     // ring is thinner than 1 px. The chart used to draw nothing at all.
     let many = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
         series: (0..255).map(|i| series(&format!("S{i}"), &[1.0, 1.0], [20, 96, 130, 255], ChartKind::Doughnut)).collect(),
     };
     let single = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
@@ -242,6 +247,7 @@ fn doughnut_one_pixel_rings_skip_the_separator_stroke() {
     // 255 series over a 46-pixel annulus: every drawn ring is one pixel tall, narrower than the
     // 1.5-pixel white separator, which would otherwise paint over both neighbouring rings.
     let thin = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
@@ -259,6 +265,7 @@ fn doughnut_one_pixel_rings_skip_the_separator_stroke() {
 
     // A ring with room for the separator keeps it.
     let thick = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
@@ -291,6 +298,7 @@ fn doughnut_wedge_budget_bounds_many_series_and_categories() {
     let cats = 20_000usize;
     let values: Vec<f64> = (0..cats).map(|j| if j < 10 { 1000.0 } else { 1.0 }).collect();
     let d = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: (0..cats).map(|j| format!("C{j}")).collect(),
@@ -329,6 +337,7 @@ fn doughnut_first_slice_angle_rotates_the_start() {
     c.legend = LegendPos::None;
     c.first_slice_angle = 90;
     let d = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
@@ -355,6 +364,7 @@ fn rotated_wedges_cover_each_slice_once_without_overlap() {
             c.data_labels = false;
             c.first_slice_angle = angle;
             let d = ChartData {
+                text_colors: Default::default(),
                 category_levels: vec![],
                 palette: vec![[230, 126, 34, 255], [39, 174, 96, 255], [142, 68, 173, 255]],
                 categories: ["A", "B", "C", "D"].iter().map(|s| s.to_string()).collect(),
@@ -397,6 +407,7 @@ fn slice_crossing_twelve_has_no_internal_seam() {
     let a = [230, 126, 34, 255];
     let b = [39, 174, 96, 255];
     let d = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![a, b],
         categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
@@ -437,6 +448,7 @@ fn doughnut_legend_names_categories_and_matches_every_ring() {
     c.legend = LegendPos::Right;
     c.first_slice_angle = 180;
     let d = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![[230, 126, 34, 255], [39, 174, 96, 255], [142, 68, 173, 255]],
         categories: ["A", "B", "C", "D"].iter().map(|s| s.to_string()).collect(),
@@ -689,8 +701,13 @@ fn scatter_with_text_x_values_numbers_the_points() {
         let d = resolve(&wb, 0, &c);
         assert_eq!(d.series[0].x, None, "{kind:?}");
         let prims = render(&c, &d, 400.0, 300.0, &ApproxMeasure);
-        let empty =
-            render(&c, &ChartData { category_levels: vec![], palette: vec![], categories: vec![], series: vec![] }, 400.0, 300.0, &ApproxMeasure);
+        let empty = render(
+            &c,
+            &ChartData { text_colors: Default::default(), category_levels: vec![], palette: vec![], categories: vec![], series: vec![] },
+            400.0,
+            300.0,
+            &ApproxMeasure,
+        );
         assert!(prims.len() > empty.len() + 2, "{kind:?} draws its points");
         // Numeric X values are kept.
         c.series[0].categories = Some("Sheet1!$C$1:$C$3".into());
@@ -788,6 +805,7 @@ fn pie_starts_at_twelve_clockwise() {
 fn negative_values_put_axis_below_zero() {
     let c = chart(ChartKind::ColumnClustered);
     let d = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: vec![],
@@ -804,12 +822,14 @@ fn edge_cases_never_panic() {
     let m = ApproxMeasure;
     let empty = ChartData::default();
     let zeros = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: vec!["a".into(), "b".into()],
         series: vec![series("z", &[0.0, 0.0], [0, 0, 0, 255], ChartKind::Line)],
     };
     let weird = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: vec![String::new(); 3],
@@ -843,6 +863,7 @@ fn thousands_of_points_are_decimated() {
     let mut c = chart(ChartKind::Line);
     c.data_labels = true;
     let d = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: vec![],
@@ -872,7 +893,7 @@ fn smooth_line_adds_interpolated_points_and_keeps_endpoints() {
     let line_pts = |smooth: bool, m: &ApproxMeasure| -> usize {
         let mut s = series("L", &[1.0, 5.0, 2.0, 6.0], [10, 20, 30, 255], ChartKind::Line);
         s.smooth = smooth;
-        let d = ChartData { category_levels: vec![], palette: vec![], categories: cats.clone(), series: vec![s] };
+        let d = ChartData { text_colors: Default::default(), category_levels: vec![], palette: vec![], categories: cats.clone(), series: vec![s] };
         render(&chart(ChartKind::Line), &d, 600.0, 400.0, m)
             .iter()
             .filter_map(|p| match p {
@@ -889,7 +910,7 @@ fn smooth_line_adds_interpolated_points_and_keeps_endpoints() {
     // Rendering either way must stay finite and inside the canvas.
     let mut s = series("L", &[1.0, 5.0, 2.0, 6.0], [10, 20, 30, 255], ChartKind::Line);
     s.smooth = true;
-    let d = ChartData { category_levels: vec![], palette: vec![], categories: cats, series: vec![s] };
+    let d = ChartData { text_colors: Default::default(), category_levels: vec![], palette: vec![], categories: cats, series: vec![s] };
     assert_sane(&render(&chart(ChartKind::Line), &d, 600.0, 400.0, &m), 600.0, 400.0);
 }
 
@@ -899,7 +920,13 @@ fn smooth_line_splits_at_gaps() {
     let mut s = series("L", &[1.0, 5.0, 2.0, 6.0], [10, 20, 30, 255], ChartKind::Line);
     s.smooth = true;
     s.values[1] = None; // gap between two data points
-    let d = ChartData { category_levels: vec![], palette: vec![], categories: vec!["a".into(), "b".into(), "c".into(), "d".into()], series: vec![s] };
+    let d = ChartData {
+        text_colors: Default::default(),
+        category_levels: vec![],
+        palette: vec![],
+        categories: vec!["a".into(), "b".into(), "c".into(), "d".into()],
+        series: vec![s],
+    };
     let prims = render(&chart(ChartKind::Line), &d, 600.0, 400.0, &m);
     // Two separate runs (before/after the gap) → at least two line primitives.
     let lines = prims.iter().filter(|p| matches!(p, Prim::Line { .. })).count();
@@ -977,6 +1004,7 @@ fn fuzz_random_data_and_sizes() {
             .collect();
         let ncat = (r.next() % 50) as usize;
         let d = ChartData {
+            text_colors: Default::default(),
             category_levels: vec![],
             palette: vec![],
             categories: (0..ncat).map(|i| "c".repeat(i % 7) + &i.to_string()).collect(),
@@ -1156,8 +1184,13 @@ fn line_chart_draws_trendline_forecast_and_labels() {
     let mut s = series("Sales", &[9.0, 7.0, 5.0, 3.0], [10, 20, 30, 255], ChartKind::Line);
     s.trendlines =
         vec![TrendlineData { spec: Trendline { forward: 1.0, display_equation: true, display_r_squared: true, ..Trendline::default() }, color: tc }];
-    let d =
-        ChartData { category_levels: vec![], palette: vec![], categories: ["a", "b", "c", "d"].map(String::from).to_vec(), series: vec![s.clone()] };
+    let d = ChartData {
+        text_colors: Default::default(),
+        category_levels: vec![],
+        palette: vec![],
+        categories: ["a", "b", "c", "d"].map(String::from).to_vec(),
+        series: vec![s.clone()],
+    };
     let mut c = chart(ChartKind::Line);
     c.legend = LegendPos::None; // keeps legend swatches out of the line counts
     let prims = render(&c, &d, 600.0, 400.0, &m);
@@ -1181,7 +1214,7 @@ fn line_chart_draws_trendline_forecast_and_labels() {
     assert!(lines_of(&pie, tc).is_empty());
     // One point: nothing to fit, nothing drawn.
     s.values.truncate(1);
-    let one = ChartData { category_levels: vec![], palette: vec![], categories: vec!["a".into()], series: vec![s] };
+    let one = ChartData { text_colors: Default::default(), category_levels: vec![], palette: vec![], categories: vec!["a".into()], series: vec![s] };
     assert!(lines_of(&render(&c, &one, 600.0, 400.0, &m), tc).is_empty());
 }
 
@@ -1201,7 +1234,7 @@ fn scatter_trendlines_use_x_values_and_stay_in_the_plot() {
         TrendlineData { spec: Trendline { kind: TrendlineKind::Exponential, forward: 30.0, ..Trendline::default() }, color: colors[1] },
         TrendlineData { spec: Trendline { kind: TrendlineKind::MovingAverage(2), ..Trendline::default() }, color: colors[2] },
     ];
-    let d = ChartData { category_levels: vec![], palette: vec![], categories: vec![], series: vec![s] };
+    let d = ChartData { text_colors: Default::default(), category_levels: vec![], palette: vec![], categories: vec![], series: vec![s] };
     let mut c = chart(ChartKind::Scatter);
     c.legend = LegendPos::None;
     let prims = render(&c, &d, 600.0, 400.0, &m);
@@ -1216,6 +1249,7 @@ fn scatter_trendlines_use_x_values_and_stay_in_the_plot() {
 #[test]
 fn treemap_and_histogram_shapes() {
     let d = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: vec!["a".into(), "b".into(), "c".into(), "d".into()],
@@ -1239,6 +1273,7 @@ fn treemap_and_histogram_shapes() {
 
     let vals: Vec<f64> = (0..100).map(|i| i as f64).collect();
     let d = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: vec![],
@@ -1253,6 +1288,7 @@ fn treemap_and_histogram_shapes() {
 fn histogram_boundary_values_match_interval_labels() {
     let heights = |vals: &[f64]| -> Vec<f32> {
         let d = ChartData {
+            text_colors: Default::default(),
             category_levels: vec![],
             palette: vec![],
             categories: vec![],
@@ -1326,6 +1362,7 @@ fn box_and_stock_charts_honour_the_gridlines_flag() {
 #[test]
 fn funnel_value_labels_follow_the_data_labels_flag() {
     let data = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: vec!["a".into(), "b".into(), "c".into()],
@@ -1454,6 +1491,7 @@ fn ticks_of_a_scale_off_the_step_grid_start_at_its_min() {
 #[test]
 fn hundred_percent_stacked_areas_fill_each_category_to_its_total() {
     let d = ChartData {
+        text_colors: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: ["Q1", "Q2", "Q3", "Q4"].iter().map(|s| s.to_string()).collect(),
@@ -1571,7 +1609,13 @@ fn a_huge_trendline_forecast_does_not_collapse_the_columns() {
     let col: Rgba = [10, 20, 30, 255];
     let mut s = series("Sales", &[1.0, 3.0, 2.0, 5.0, 4.0], col, ChartKind::ColumnClustered);
     s.trendlines = vec![TrendlineData { spec: Trendline { forward: 1e6, backward: 1e6, ..Trendline::default() }, color: tc }];
-    let d = ChartData { palette: vec![], category_levels: vec![], categories: ["a", "b", "c", "d", "e"].map(String::from).to_vec(), series: vec![s] };
+    let d = ChartData {
+        text_colors: Default::default(),
+        palette: vec![],
+        category_levels: vec![],
+        categories: ["a", "b", "c", "d", "e"].map(String::from).to_vec(),
+        series: vec![s],
+    };
     let mut c = chart(ChartKind::ColumnClustered);
     c.legend = LegendPos::None;
     let prims = render(&c, &d, 600.0, 400.0, &m);
@@ -1679,6 +1723,167 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
+}
+
+/// A bar chart with three outer category levels on a narrow chart, in the default size, still draws
+/// its bars: the labels and levels share at most 60% of the width.
+#[test]
+fn three_outer_levels_leave_bars_room() {
+    let mut d = sample(ChartKind::BarClustered);
+    let level = |a: &str, b: &str| -> Vec<String> { vec![a.to_string(); 3].into_iter().chain(vec![b.to_string(); 3]).collect() };
+    d.category_levels = vec![
+        level("A long outer group", "Another outer group"),
+        level("Middle level one", "Middle level two"),
+        level("Top level name", "Top level other"),
+    ];
+    d.categories = (1..=6).map(|i| format!("A long category name {i}")).collect();
+    // Wide value labels: the right margin reaches its cap too.
+    for s in &mut d.series {
+        s.number_format = "#,##0.00\" units of something\"".into();
+    }
+    let colors: Vec<_> = d.series.iter().map(|s| s.color).collect();
+    let mut c = chart(ChartKind::BarClustered);
+    c.legend = LegendPos::None;
+    let p = render(&c, &d, 320.0, 300.0, &ApproxMeasure);
+    let bars = p.iter().filter(|p| matches!(p, Prim::Rect { fill: Some(f), w, h, .. } if colors.contains(f) && *w > 0.5 && *h > 0.5)).count();
+    assert!(bars >= d.series.len() * 2, "{bars} bars drawn");
+}
+
+/// The cap on axis and legend sizes never shrinks the default size, even on a small chart.
+#[test]
+fn the_default_label_size_is_kept_on_small_charts() {
+    let d = sample(ChartKind::ColumnClustered);
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.legend = LegendPos::Bottom;
+    let p = render(&c, &d, 160.0, 90.0, &ApproxMeasure);
+    let sizes: Vec<f32> = p
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Text { size, rotation, .. } if *rotation == 0.0 => Some(*size),
+            _ => None,
+        })
+        .collect();
+    assert!(!sizes.is_empty());
+    assert!(sizes.iter().all(|s| *s >= 9.0 - 1e-3), "{sizes:?}");
+}
+
+/// Axis labels in a huge size (the file allows up to 400 pt) still leave the plot its room, with
+/// outer category levels too: every series is drawn, on column and bar charts.
+#[test]
+fn huge_axis_sizes_leave_room_for_the_plot() {
+    use gridcraft_model::ChartTextStyle;
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered] {
+        let mut d = sample(kind);
+        d.category_levels = vec![vec!["Group one".into(); 3].into_iter().chain(vec!["Group two".into(); 3]).collect()];
+        let colors: Vec<_> = d.series.iter().map(|s| s.color).collect();
+        let mut c = chart(kind);
+        c.legend = LegendPos::None;
+        let huge = ChartTextStyle { size: Some(400.0), ..Default::default() };
+        c.text.category_axis = huge;
+        c.text.value_axis = huge;
+        let p = render(&c, &d, 600.0, 400.0, &ApproxMeasure);
+        let bars = p.iter().filter(|p| matches!(p, Prim::Rect { fill: Some(f), w, h, .. } if colors.contains(f) && *w > 0.5 && *h > 0.5)).count();
+        assert!(bars >= d.series.len() * 2, "{kind:?}: {bars} bars drawn");
+    }
+}
+
+/// A chart's own text styles: legend, data labels and axis labels in the size, weight and capitals
+/// its file gives; what it leaves out keeps the usual look.
+/// A legend in a huge size (the file allows up to 400 pt) still leaves the plot its room: the
+/// series are drawn, top or bottom, and the legend's text fits the chart.
+#[test]
+fn a_huge_legend_size_leaves_room_for_the_plot() {
+    use gridcraft_model::ChartTextStyle;
+    let d = sample(ChartKind::ColumnClustered);
+    let colors: Vec<_> = d.series.iter().map(|s| s.color).collect();
+    for pos in [LegendPos::Bottom, LegendPos::Top, LegendPos::Right] {
+        let mut c = chart(ChartKind::ColumnClustered);
+        c.legend = pos;
+        c.text.legend = ChartTextStyle { size: Some(400.0), ..Default::default() };
+        let p = render(&c, &d, 600.0, 400.0, &ApproxMeasure);
+        let bars = p.iter().filter(|p| matches!(p, Prim::Rect { fill: Some(f), w, h, .. } if colors.contains(f) && *w > 2.0 && *h > 2.0)).count();
+        assert!(bars >= d.series.len() * 2, "{pos:?}: {bars} bars drawn");
+        let legend = p.iter().find_map(|p| match p {
+            Prim::Text { text, size, .. }
+                if text == &d.series[0].name || (text.ends_with('…') && d.series[0].name.starts_with(text.trim_end_matches('…'))) =>
+            {
+                Some(*size)
+            }
+            _ => None,
+        });
+        assert!(legend.is_some_and(|s| s * 1.6 <= 400.0 * 0.3 + 0.01), "{pos:?}: legend size {legend:?}");
+    }
+}
+
+#[test]
+fn text_takes_the_charts_own_styles() {
+    use gridcraft_model::{ChartTextStyle, ChartTextStyles};
+    let d = sample(ChartKind::ColumnClustered);
+    let texts = |c: &Chart| -> Vec<(String, f32, bool)> {
+        render(c, &d, 640.0, 400.0, &ApproxMeasure)
+            .into_iter()
+            .filter_map(|p| match p {
+                Prim::Text { text, size, bold, .. } => Some((text, size, bold)),
+                _ => None,
+            })
+            .collect()
+    };
+    let plain = texts(&chart(ChartKind::ColumnClustered));
+    let find = |all: &[(String, f32, bool)], t: &str| all.iter().find(|(s, ..)| s == t).cloned();
+    assert_eq!(find(&plain, "North").map(|(_, s, b)| (s, b)), Some((9.0, false)), "the legend as before");
+    assert!(find(&plain, "Q1").is_some() && find(&plain, "$12,000").is_some_and(|(_, s, b)| s == 9.0 && !b));
+
+    let mut c = chart(ChartKind::ColumnClustered);
+    let style = |size: f32, bold: bool, caps: bool| ChartTextStyle { size: Some(size), bold: Some(bold), caps, color: None };
+    c.text = ChartTextStyles {
+        title: style(18.0, true, false),
+        legend: style(10.5, true, false),
+        data_labels: style(8.0, true, false),
+        category_axis: style(8.0, false, true),
+        value_axis: ChartTextStyle::default(),
+    };
+    let styled = texts(&c);
+    // The file's sizes are points, drawn in the chart's pixels.
+    let px = |pt: f32| pt * 96.0 / 72.0;
+    assert_eq!(find(&styled, "Quarterly Sales").map(|(_, s, b)| (s, b)), Some((px(18.0), true)));
+    assert_eq!(find(&styled, "North").map(|(_, s, b)| (s, b)), Some((px(10.5), true)));
+    assert_eq!(find(&styled, "$12,000").map(|(_, s, b)| (s, b)), Some((px(8.0), true)));
+    // Categories in capitals when the file asks for them.
+    let mut lower = sample(ChartKind::ColumnClustered);
+    lower.categories = (1..=6).map(|i| format!("wk {i}")).collect();
+    let caps: Vec<(String, f32, bool)> = render(&c, &lower, 640.0, 400.0, &ApproxMeasure)
+        .into_iter()
+        .filter_map(|p| match p {
+            Prim::Text { text, size, bold, .. } => Some((text, size, bold)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(find(&caps, "WK 1").map(|(_, s, b)| (s, b)), Some((px(8.0), false)), "{caps:?}");
+    assert!(find(&caps, "wk 1").is_none());
+}
+
+/// Text takes its part's colour where the chart has one, else GridCraft's grey.
+#[test]
+fn text_takes_its_parts_colour() {
+    let colors = |d: &ChartData| -> Vec<(String, Rgba)> {
+        render(&chart(ChartKind::ColumnClustered), d, 640.0, 400.0, &ApproxMeasure)
+            .into_iter()
+            .filter_map(|p| match p {
+                Prim::Text { text, color, .. } => Some((text, color)),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut d = sample(ChartKind::ColumnClustered);
+    let find = |all: &[(String, Rgba)], t: &str| all.iter().find(|(s, _)| s == t).map(|(_, c)| *c);
+    let plain = colors(&d);
+    assert_eq!(find(&plain, "Q1"), Some([0x59, 0x59, 0x59, 0xFF]));
+    let (red, blue) = ([0xFF, 0, 0, 0xFF], [0, 0, 0xFF, 0xFF]);
+    d.text_colors = crate::TextColors { category_axis: Some(red), legend: Some(blue), ..Default::default() };
+    let set = colors(&d);
+    assert_eq!(find(&set, "Q1"), Some(red), "category labels");
+    assert_eq!(find(&set, "North"), Some(blue), "legend");
+    assert_eq!(find(&set, "$12,000"), Some([0x59, 0x59, 0x59, 0xFF]), "data labels keep GridCraft's");
 }
 
 #[test]

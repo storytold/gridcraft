@@ -570,6 +570,31 @@ fn default_hole_size() -> u8 {
     50
 }
 
+/// How one kind of chart text is drawn, as the file's `c:txPr` (or a title's rich text) gives it.
+/// What the file leaves out is drawn as GridCraft always has.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartTextStyle {
+    /// Size in points.
+    pub size: Option<f32>,
+    pub bold: Option<bool>,
+    /// Drawn in capitals (`cap="all"`).
+    pub caps: bool,
+    /// Text colour.
+    pub color: Option<Color>,
+}
+
+/// The text styles of a chart's parts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartTextStyles {
+    pub title: ChartTextStyle,
+    pub legend: ChartTextStyle,
+    pub data_labels: ChartTextStyle,
+    pub category_axis: ChartTextStyle,
+    pub value_axis: ChartTextStyle,
+}
+
 /// A chart's data table (`c:dTable`), independent of the chart legend.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -615,6 +640,9 @@ pub struct Chart {
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]
     pub pivot: Option<String>,
+    /// Sizes, weights and capitals of the chart's text, as the file gives them.
+    #[serde(default)]
+    pub text: ChartTextStyles,
 }
 
 impl Chart {
@@ -1154,6 +1182,7 @@ mod tests {
             source: None,
             by_rows: false,
             pivot: None,
+            text: Default::default(),
         };
         let mut json = serde_json::to_value(&chart).expect("serialize chart");
         json.as_object_mut().expect("chart object").remove("hole_size");
