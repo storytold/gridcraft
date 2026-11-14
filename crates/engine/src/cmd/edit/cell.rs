@@ -92,6 +92,9 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
 /// Parses a formula as it is typed (without the `=`). Excel closes missing parentheses for you,
 /// and refuses a formula that still doesn't parse.
 pub(crate) fn parse_typed_formula(body: &str) -> Result<gridcraft_formula::Expr> {
+    // Excel refuses a formula longer than 8,192 characters when it's entered (its file form,
+    // with `_xlfn.`/`_xlpm.` prefixes, may be longer: files aren't held to this).
+    gridcraft_formula::check_entered_length(body).map_err(|e| EngineError::Other(format!("There's a problem with this formula: {e}")))?;
     // Excel closes missing parentheses for you.
     let parsed = gridcraft_formula::parse_closing_parens(body, gridcraft_formula::parse);
     parsed.map_err(|e| EngineError::Other(format!("There's a problem with this formula: {e}")))
