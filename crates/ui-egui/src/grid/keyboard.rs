@@ -67,8 +67,10 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
+                let before = painter_moves(app, key, m).then(|| selection_now(app)).flatten();
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
                     shortcut_ran = true;
+                    paint_after_move(app, before);
                     continue;
                 }
                 let cmd = m.command;
@@ -150,6 +152,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                     }
                     _ => {}
                 }
+                paint_after_move(app, before);
             }
             _ => {}
         }
@@ -185,5 +188,45 @@ fn form_control_event(app: &mut SheetApp, sh: &Sheet, ev: &egui::Event) -> bool 
             false
         }
         _ => false,
+    }
+}
+
+/// Keys that move or extend the selection: with the Format Painter armed, Excel pastes the
+/// format onto the cells the keyboard lands on, as a click would (arrows, Shift and Ctrl/Cmd
+/// arrows, Page Up/Down, Home/End, Shift+Space, Ctrl+Space).
+fn painter_moves(app: &SheetApp, key: egui::Key, m: egui::Modifiers) -> bool {
+    use egui::Key;
+    app.session.format_painter.is_some()
+        && match key {
+            Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight | Key::PageUp | Key::PageDown | Key::Home | Key::End => true,
+            // Shift+Space selects the row and Ctrl+Space the column; plain Space types a space.
+            // Ctrl/Cmd+Shift+Space selects all, which doesn't paint (below).
+            Key::Space => m.shift != (m.ctrl || m.command),
+            // Select all doesn't paint: like a click on the corner, which only selects, the
+            // whole sheet would need a sheet-wide format rather than per-cell styles.
+            _ => false,
+        }
+}
+
+/// The active sheet and its selection, to tell whether a key moved the selection.
+fn selection_now(app: &SheetApp) -> Option<(usize, super::RangeRef)> {
+    app.session.active().map(|d| (d.wb.active_sheet(), d.selection.current()))
+}
+
+/// Pastes the armed format once the key moved the selection on the same sheet (switching
+/// sheets with the keyboard only moves there).
+fn paint_after_move(app: &mut SheetApp, before: Option<(usize, super::RangeRef)>) {
+    let Some((sheet, range)) = before else { return };
+    if selection_now(app).is_some_and(|(s, r)| s == sheet && r != range) {
+        // Painting resets the selection to the painted range; keep the anchor and active cell
+        // so the next Shift+arrow goes on extending from the same corner.
+        let kept = app.session.active().map(|d| d.selection.clone());
+        super::interact::format_painter_apply(app);
+        if let (Some(kept), Some(d)) = (kept, app.session.active_mut())
+            && d.wb.active_sheet() == sheet
+            && d.selection.current() == kept.current()
+        {
+            d.selection = kept;
+        }
     }
 }

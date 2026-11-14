@@ -113,3 +113,7 @@ sync_github_name = true
 
 [people.RockerHX]
 sync_github_name = true
+
+[people.pedrocormann]
+real_name = "Pedro Cormann"
+sync_github_name = true
