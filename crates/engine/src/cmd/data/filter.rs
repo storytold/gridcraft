@@ -317,7 +317,8 @@ pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
 pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
     let Some(sh) = wb.sheet(sheet) else { return };
     let Some(af) = sh.autofilter.clone() else { return };
-    let r = af.range;
+    // An imported range can name rows past the grid; none of those exist to hide.
+    let r = RangeRef::new(af.range.start, CellRef::new(af.range.end.row.min(gridcraft_core::MAX_ROWS - 1), af.range.end.col));
     let mut hide = Vec::new();
     // Precompute per-criterion top10 threshold and average once, not per row.
     let mut col_stats: std::collections::HashMap<usize, (Option<f64>, f64)> = std::collections::HashMap::new();
