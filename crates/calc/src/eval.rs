@@ -581,6 +581,18 @@ impl<'h> Evaluator<'h> {
                 Ev::R(areas) => match areas.as_slice() {
                     [a] if a.range.is_single() => match self.host.spill_range(a.sheet, a.range.start) {
                         Some(range) => Ev::R(vec![Area { sheet: a.sheet, range }]),
+                        // An errored formula anchor remains a one-cell reference, unlike an
+                        // error constant. Keep its error for value readers and its shape/type.
+                        None if self
+                            .host
+                            .workbook()
+                            .sheet(a.sheet)
+                            .and_then(|sh| sh.cell(a.range.start))
+                            .is_some_and(|cell| cell.formula.is_some())
+                            && matches!(self.host.cell_value(a.sheet, a.range.start), Value::Error(_)) =>
+                        {
+                            Ev::R(vec![*a])
+                        }
                         None => err(CellError::Ref),
                     },
                     _ => err(CellError::Ref),
