@@ -345,6 +345,73 @@ fn delete_areas(s: &Session, p: &Json, axis: Axis) -> Result<Vec<(u32, u32)>> {
     Ok(merged.into_iter().rev().map(|(a, b)| (a, b - a + 1)).collect())
 }
 
+fn invalidate_deleted_table_columns(cx: &mut Ctx, sheet: usize, at: u32, count: u32) {
+    let deleted: Vec<(String, String)> = cx
+        .wb
+        .sheet(sheet)
+        .into_iter()
+        .flat_map(|sh| sh.tables.iter())
+        .flat_map(|table| {
+            let start = at.max(table.range.start.col);
+            let end = at.saturating_add(count).min(table.range.end.col.saturating_add(1));
+            (start..end)
+                .filter_map(|col| table.columns.get((col - table.range.start.col) as usize).map(|column| (table.name.clone(), column.name.clone())))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    if deleted.is_empty() {
+        return;
+    }
+
+    let invalidate = |expr: gridcraft_formula::Expr| {
+        expr.map(&mut |node| match node {
+            gridcraft_formula::Expr::Struct(mut reference) => {
+                if let Some(name) = &reference.col_start
+                    && deleted.iter().any(|(table, column)| reference.table.eq_ignore_ascii_case(table) && name.eq_ignore_ascii_case(column))
+                {
+                    reference.col_start = Some("#REF!".into());
+                }
+                if let Some(name) = &reference.col_end
+                    && deleted.iter().any(|(table, column)| reference.table.eq_ignore_ascii_case(table) && name.eq_ignore_ascii_case(column))
+                {
+                    reference.col_end = Some("#REF!".into());
+                }
+                gridcraft_formula::Expr::Struct(reference)
+            }
+            other => other,
+        })
+    };
+
+    for name in &mut cx.wb.names {
+        if let Ok(expr) = gridcraft_formula::parse_name(&name.formula) {
+            name.formula = gridcraft_formula::print(&invalidate(expr));
+        }
+    }
+    for si in 0..cx.wb.sheets.len() {
+        let Some(sh) = cx.wb.sheet_mut(si) else { continue };
+        for table in &mut sh.tables {
+            for column in &mut table.columns {
+                if let Some(formula) = &mut column.formula
+                    && let Ok(expr) = gridcraft_formula::parse_name(formula)
+                {
+                    *formula = gridcraft_formula::print(&invalidate(expr));
+                }
+            }
+        }
+        let formulas: Vec<_> = sh.cells.iter().filter_map(|(cell, value)| value.formula.clone().map(|formula| (cell, formula))).collect();
+        for (cell, formula) in formulas {
+            let Some(expr) = formula.expr() else { continue };
+            let rewritten = invalidate(expr);
+            if let Some(value) = sh.cells.get_mut(cell) {
+                value.formula = Some(std::sync::Arc::new(gridcraft_model::Formula {
+                    array: formula.array,
+                    dynamic: formula.dynamic,
+                    ..gridcraft_model::Formula::from_expr(rewritten)
+                }));
+            }
+        }
+    }
+}
 fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
     let areas = delete_areas(s, p, axis)?;
     for &(at, count) in &areas {
@@ -356,6 +423,9 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
         cx.protection_checked = true;
         // Last area first, so the earlier ones keep their positions.
         for (at, count) in areas {
+            if axis == Axis::Cols {
+                invalidate_deleted_table_columns(cx, sheet, at, count);
+            }
             {
                 let sh = cx.sheet_mut(sheet)?;
                 let block = match axis {

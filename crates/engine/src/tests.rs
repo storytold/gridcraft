@@ -1966,6 +1966,47 @@ fn tables_and_structured_refs() {
 }
 
 #[test]
+fn deleted_table_column_reference_stays_broken_after_recreation_and_xlsx_roundtrip() {
+    let mut s = s();
+    s.execute("sheet.rename", json!({"name": "Source"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Key", "Amount", "Bonus"], ["a", 10, 100], ["b", 20, 200]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:C3", "name": "Orders"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Report"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SUM(Orders[Amount])"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "OldAmount", "refersTo": "Orders[Amount]"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A3", "input": "=SUM(OldAmount)"})).unwrap();
+
+    s.execute("sheet.activate", json!({"sheet": "Source"})).unwrap();
+    s.execute("home.deleteColumns", json!({"cols": "B:B"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Report"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Error(gridcraft_core::CellError::Ref));
+    assert_eq!(formula_at(&s, "A1").as_deref(), Some("SUM(Orders['#REF!])"));
+    assert_eq!(v(&s, "A3"), Value::Error(gridcraft_core::CellError::Ref));
+    assert_eq!(formula_at(&s, "A3").as_deref(), Some("SUM(OldAmount)"));
+    assert_eq!(s.doc().unwrap().wb.names.iter().find(|name| name.name == "OldAmount").unwrap().formula, "Orders['#REF!]");
+    let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let (reopened, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+    let bytes = gridcraft_xlsx::write_xlsx(&reopened).unwrap();
+    s.execute("file.open", json!({"name": "deleted.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+
+    s.execute("sheet.activate", json!({"sheet": "Source"})).unwrap();
+    s.execute("home.insertColumns", json!({"cols": "B:B"})).unwrap();
+    s.execute("range.setValues", json!({"range": "B1", "values": [["Amount"], [1000], [2000]]})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Report"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=SUM(Orders[Amount])"})).unwrap();
+
+    assert_eq!(v(&s, "A1"), Value::Error(gridcraft_core::CellError::Ref));
+    assert_eq!(v(&s, "A2"), Value::Number(3000.0));
+    assert_eq!(v(&s, "A3"), Value::Error(gridcraft_core::CellError::Ref));
+    let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let (reopened, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+    let report = reopened.sheet(1).unwrap();
+    assert_eq!(report.value(CellRef::new(0, 0)), Value::Error(gridcraft_core::CellError::Ref));
+    assert_eq!(report.value(CellRef::new(1, 0)), Value::Number(3000.0));
+    assert_eq!(report.value(CellRef::new(2, 0)), Value::Error(gridcraft_core::CellError::Ref));
+}
+
+#[test]
 fn structured_refs_to_columns_with_edge_spaces() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Qty "], ["a", 2], ["b", 3]]})).unwrap();
