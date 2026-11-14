@@ -7,7 +7,8 @@
 //! drawn into a PDF with `gridcraft-pdf`: fills, gridlines, borders, formatted text (fonts mapped
 //! to the standard 14 PDF fonts), merged cells, wrapping, overflow into empty neighbours,
 //! conditional formats, table styles, charts, images, shapes and sparklines. Headers and footers
-//! support `&L`/`&C`/`&R` sections and the `&P &N &D &T &A &F &Z` codes.
+//! support `&L`/`&C`/`&R` sections, the `&P &N &D &T &A &F &Z` codes and the pictures (`&G`) a
+//! workbook read from a file keeps.
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 #[cfg(test)]
@@ -164,11 +165,21 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
     // Decoded pictures are reused across the pages their anchor covers: a floating picture
     // spanning 40 pages was decoded (and pushed into the PDF) 40 times (#2389).
     let mut pics = PicCache::default();
+    let mut hf_cache = header_footer::HfImageCache::new();
     for lay in layouts {
         let Some(sh) = wb.sheet(lay.sheet) else { continue };
         let mut cf = if sh.cond_formats.is_empty() { None } else { Some(crate::cf::CfCache::new()) };
         let k = lay.k();
         let (aw, ah) = lay.avail();
+        // The kinds of page (odd, first, even) this sheet's printed pages use.
+        let mut kinds = vec![];
+        for pi in 0..lay.pages.len() {
+            let kind = lay.settings.hf_page(pi == 0, page_no.saturating_add(pi).saturating_add(1));
+            if !kinds.contains(&kind) {
+                kinds.push(kind);
+            }
+        }
+        let hf_pics = header_footer::hf_images(sh, lay.hf_text_scale(), &kinds, &mut doc, &mut hf_cache);
         for (pi, (ri, ci)) in lay.pages.iter().enumerate() {
             page_no += 1;
             let (Some(rband), Some(cband)) = (lay.row_bands.get(*ri).copied(), lay.col_bands.get(*ci).copied()) else { continue };
@@ -216,7 +227,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
                 date: date.clone(),
                 time: time.clone(),
             };
-            draw_header_footer(pg, lay, lay.settings.hf_page(pi == 0, page_no), &cx);
+            draw_header_footer(pg, lay, lay.settings.hf_page(pi == 0, page_no), &cx, &hf_pics);
         }
     }
     for link in pending_links {
