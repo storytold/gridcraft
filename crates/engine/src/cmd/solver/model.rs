@@ -286,6 +286,11 @@ pub(super) fn parse_model(s: &Session, p: &Json) -> Result<Model> {
     if vars.iter().any(|c| sh.cell(*c).is_some_and(|c| c.formula.is_some() || c.py.is_some())) {
         return Err(EngineError::Other("Variable cells must hold constants, not formulas.".into()));
     }
+    // A solution written under a merge (anchor or covered cell) would be hidden or lost, so the
+    // model is refused, as Excel does.
+    if vars.iter().any(|c| sh.merges.iter().any(|m| !m.is_single() && m.contains(*c))) {
+        return Err(EngineError::Other("Variable cells cannot be part of a merged cell.".into()));
+    }
     let mut cons = Vec::new();
     let mut scalar = 0usize;
     if let Some(list) = p.get("constraints") {
