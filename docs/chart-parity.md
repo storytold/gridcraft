@@ -27,10 +27,8 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Radar | radar, with markers, filled | 1 of 3 | |
 | Treemap, Sunburst | 1 each | 2 of 2 | |
 | Histogram, Pareto | 2 | 1 of 2 | no Pareto |
-| Box & Whisker | 1 | 1 of 1 | exclusive (default) and inclusive quartiles per series; XLSX round-trip; `chart.set {quartiles}` changes all series |
-| Waterfall, Funnel | 2 | 2 of 2 | lose their kind in XLSX (PR #161) |
-| Box & Whisker | 1 | 1 of 1 | |
-| Waterfall, Funnel | 2 | 2 of 2 | |
+| Box & Whisker | 1 | 1 of 1 | exclusive (default) and inclusive quartiles per series; `chart.set {quartiles}` changes all series; XLSX round-trip preserves the chartex kind and quartile method |
+| Waterfall, Funnel | 2 | 2 of 2 | XLSX round-trip preserves the chartex kind (PR #161) |
 | Filled map | 1 | 0 | needs geographic boundary data (licensing decision) |
 | Combo | custom combinations, secondary axis | yes (line on secondary axis) | |
 | **Total** | ~60 subtypes | **26 (~43%)** | usage-weighted breadth higher (~65%): column, bar, line, pie and scatter dominate |
@@ -43,9 +41,9 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Selected chart source-data outline | visible on uncovered cells, beneath floating objects | painted above cells and below charts, shapes, pictures and slicers; retains pane clipping and right-to-left cell geometry (#2861) |
 | Chart title, axis titles | text, linked to cells, full formatting | text only |
 | Legend | position, overlay, formatting, per-entry delete | position only |
-| Data labels | value, category, series, percentage, from cells, callouts, position | one on/off flag |
+| Data labels | value, category, series, percentage, from cells, callouts, position | one on/off flag; a typed number format per series (`c:dLbls/c:numFmt` with `sourceLinked="0"`) is read, drawn and saved, except on labels that show percentages, bubble sizes or scatter X values but not the values (the format was typed for those) |
 | Gridlines | major/minor per axis, formatting | one on/off flag |
-| Axis options | min/max/units, log scale, reverse order, crossing point, display units, date axis, number format | **missing** (auto only) |
+| Axis options | min/max/units, log scale, reverse order, crossing point, display units, date axis, number format | number format only: a typed format on the value axis, the secondary value axis and a scatter/bubble X axis is read, drawn and saved ("Linked to source" follows the source cells; a category axis's or a deleted axis's typed format isn't kept, nor the value axis format of a 100% stacked line or area group, which is read as plain stacked); everything else **missing** (auto only) |
 | Multi-level category axis (a category range two or more columns wide beside the values: year beside month) | the outer levels grouped under the labels with separators | read (`multiLvlStrRef`), drawn (rows under the labels; columns beside them in bar charts; up to three outer levels), written back with Excel's level caches |
 | Doughnut hole size, first slice angle | 10–90% hole (Excel default 75%), 0–359° first slice | Format Chart pane sliders; read from and written to `c:holeSize` / `c:firstSliceAng`; documents saved before the setting existed keep their old 50% hole |
 | Secondary axis | any series | line series in combo charts |
@@ -82,7 +80,7 @@ Format reference: [Microsoft's DrawingML data table documentation](https://learn
 ## XLSX round-trip
 
 Charts are read from and written to DrawingML chart parts, but only the fields the model holds
-survive: anything else (axis scaling, label options, error bars, per-point formats, chartex
+survive: anything else (axis scaling, label options other than number formats, error bars, per-point formats, chartex
 extensions) is lost when GridCraft saves a workbook it opened. That is the main reason charts are
 **~30% ready**: a user who opens an Excel workbook with charts and saves it gets simpler charts
 back.
@@ -116,6 +114,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 | 2026-10-18 | minor | Doughnut charts: every series is a ring (first series innermost), hole size and first slice angle modelled, editable and round-tripped; rotated slices split at 12 o'clock without overlap; legend names categories like Excel's default (#1823) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |
 | 2026-10-16 | minor | Box & whisker quartiles default to exclusive, honor each series on draw and XLSX round-trip; `chart.set {quartiles}` changes the method (#1453) |
+| 2026-10-13 | minor | Typed number formats (`sourceLinked="0"`) on value axes (primary, secondary, scatter/bubble X) and on data labels (per series, or the group's) are read, drawn and saved; PivotChart refresh keeps label formats by the series' pivot items (read from Excel's header-cell names below the "Column Labels" caption; by position only if no name matches, the series count is unchanged, and the names show no row or column item of the pivot and aren't only value field names), also for series a refresh dropped and brought back |
 | 2026-10-13 | minor | Multi-level category axes: read, drawn (outer levels under or beside the labels), written back with level caches |
 | 2026-10-12 | trivial | chart sheets are kept on save, still not editable (#727) |
 | 2026-10-11 | minor | Trendlines: all six types modelled, round-tripped through `c:trendline`, drawn with forecast and equation/R² labels; `chart.addElement` `trendline` |

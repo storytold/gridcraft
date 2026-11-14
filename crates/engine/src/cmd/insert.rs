@@ -672,6 +672,7 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                label_number_format: None,
             });
         }
     } else {
@@ -688,6 +689,7 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                label_number_format: None,
             });
         }
     }
@@ -857,6 +859,8 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         source: (areas.len() == 1).then(|| format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), bounds.a1())),
         by_rows,
         pivot: None,
+        axis_number_formats: Default::default(),
+        pivot_label_formats: Vec::new(),
     };
     Ok((sheet, chart))
 }

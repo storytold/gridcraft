@@ -652,6 +652,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             body_offset,
             chart_rows: vec![],
             chart_cols: vec![],
+            chart_value_item: false,
             label_col: None,
         });
     }
@@ -700,7 +701,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     let lookup = ValueLookup { wb, source: src, calc: &calc, vals: &vals, extra: &extra, aggs: &aggs, value_count: k };
     let show_cache = ShowCache::default();
     let mut chart_rows: Vec<u32> = Vec::new();
-    let chart_cols: Vec<(u32, String)> = data_cols
+    let chart_cols: Vec<(u32, Vec<String>)> = data_cols
         .iter()
         .enumerate()
         .filter_map(|(j, (si, vi))| {
@@ -717,7 +718,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             } else if parts.is_empty() {
                 parts.push("Total".into());
             }
-            Some(((l + j) as u32, parts.join(" - ")))
+            Some(((l + j) as u32, parts))
         })
         .filter(|_| k > 0)
         .collect();
@@ -769,5 +770,6 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             g.set(r, l + j, shown, ck.1, 0, data_fmt.get(*vi).cloned().flatten());
         }
     }
-    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col })
+    let chart_value_item = !on_rows && k > 1;
+    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, chart_value_item, label_col })
 }
