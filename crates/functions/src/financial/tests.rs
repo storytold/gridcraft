@@ -236,6 +236,29 @@ fn odd_periods() {
     );
 }
 
+/// Actual/360 and actual/365 odd periods (#3959). Excel measures an odd last period's quasi-coupon
+/// periods by their actual length, and counts each whole quasi-coupon period of a long odd first
+/// period as one period. Expected values are Excel's, from the issue.
+#[test]
+fn odd_periods_on_actual_day_bases_follow_excel() {
+    let last = |basis: f64| vec![d(2023, 2, 1), d(2023, 4, 1), d(2023, 1, 1), n(0.05), n(0.04), n(100.0), n(1.0), n(basis)];
+    for basis in [1.0, 2.0, 3.0] {
+        close_tol(ev("ODDLPRICE", last(basis)), 100.157877308959, 1e-12);
+    }
+    let first = |basis: f64| vec![d(2023, 2, 1), d(2025, 7, 1), d(2022, 1, 1), d(2023, 7, 1), n(0.05), n(0.04), n(100.0), n(2.0), n(basis)];
+    close_tol(ev("ODDFPRICE", first(2.0)), 102.126937578431, 1e-12);
+    // The basis-1 control already matched Excel and stays put.
+    close_tol(ev("ODDFPRICE", first(1.0)), 102.194911009281, 1e-12);
+    // The yields invert the corrected prices.
+    let p = number(ev("ODDFPRICE", first(2.0)));
+    let mut fy = first(2.0);
+    fy[5] = n(p);
+    close_tol(ev("ODDFYIELD", fy), 0.04, 1e-9);
+    let mut ly = last(2.0);
+    ly[4] = n(100.157877308959);
+    close_tol(ev("ODDLYIELD", ly), 0.04, 1e-9);
+}
+
 #[test]
 fn odd_periods_survive_hostile_input() {
     // Quarterly quasi-periods across the whole date range, huge rates and yields: a value or
