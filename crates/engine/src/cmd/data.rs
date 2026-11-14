@@ -31,9 +31,9 @@ use sort::{quick_sort, sort};
 #[cfg(test)]
 use tools::split_delimited;
 use tools::{remove_duplicates, text_to_columns};
-pub(super) use validation::{Rule, move_rule_formula, moved_rule_parts, remove_rule_cells, remove_validation_cells};
 pub use validation::{check_validation, list_items};
 use validation::{circle_invalid, validate_cmd, validation};
+pub(super) use validation::{move_rule_formula, moved_rule_parts, remove_rule_cells, remove_validation_cells};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![

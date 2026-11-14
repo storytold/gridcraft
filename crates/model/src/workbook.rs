@@ -377,7 +377,7 @@ impl Workbook {
     /// formats and data validation (written for their range's top-left cell, so they move as
     /// a cell formula there does), chart series (a chart's source block
     /// that no longer exists is dropped), sparklines, PivotTable sources and form controls'
-    /// linked cells. The engine's reference-moving edits (renaming and deleting sheets and names,
+    /// linked cells. The engine's reference-moving edits (renaming sheets and names, deleting sheets,
     /// renaming tables, inserting and deleting lines and cells, cut-moves) go through it. Not
     /// visited: table calculated-column and totals formulas, and Python cells' `xl()`
     /// references (the engine rewrites those itself). A legacy array's own range is the
@@ -389,6 +389,13 @@ impl Workbook {
             let host = RefHost { sheet: n.scope, name: "\u{0}" };
             rewrite_with(&mut n.formula, &|e| f(host, e), gridcraft_formula::parse_name);
         }
+        // A series name that is a bare word is a label unless it is a defined name (as a chart
+        // reads it): a table's name or any other word there is text, not a reference.
+        let names: Vec<String> = self.names.iter().map(|n| n.name.to_lowercase()).collect();
+        let label = |t: &str| {
+            let t = t.trim();
+            !t.starts_with('=') && matches!(gridcraft_formula::parse(t), Ok(Expr::Name(n)) if !names.contains(&n.to_lowercase()))
+        };
         for (si, shared) in self.sheets.iter_mut().enumerate() {
             // Worked out on the shared sheet; a list is copied only when something in it
             // changes, and a sheet nothing changes on stays shared with undo snapshots.
@@ -423,34 +430,39 @@ impl Workbook {
             });
             // A chart's source block that no longer exists is dropped.
             let dead = |src: Option<&str>| src.is_some_and(|s| s.contains("#REF!"));
-            let charts =
-                sh.charts
-                    .iter()
-                    .any(|ch| {
-                        dead(ch.source.as_deref())
-                            || ch.source.as_deref().is_some_and(changes)
-                            || ch.series.iter().any(|se| {
-                                changes(&se.values) || [&se.categories, &se.name, &se.bubble_sizes].into_iter().flatten().any(|t| changes(t))
-                            })
-                    })
-                    .then(|| {
-                        let mut v = sh.charts.clone();
-                        for ch in &mut v {
-                            for se in &mut ch.series {
-                                rewrite_text(&mut se.values, &f);
-                                for t in [&mut se.categories, &mut se.name, &mut se.bubble_sizes].into_iter().flatten() {
-                                    rewrite_text(t, &f);
-                                }
+            let charts = sh
+                .charts
+                .iter()
+                .any(|ch| {
+                    dead(ch.source.as_deref())
+                        || ch.source.as_deref().is_some_and(changes)
+                        || ch.series.iter().any(|se| {
+                            changes(&se.values)
+                                || [&se.categories, &se.bubble_sizes].into_iter().flatten().any(|t| changes(t))
+                                || se.name.as_deref().is_some_and(|t| !label(t) && changes(t))
+                        })
+                })
+                .then(|| {
+                    let mut v = sh.charts.clone();
+                    for ch in &mut v {
+                        for se in &mut ch.series {
+                            rewrite_text(&mut se.values, &f);
+                            for t in [&mut se.categories, &mut se.bubble_sizes].into_iter().flatten() {
+                                rewrite_text(t, &f);
                             }
-                            if let Some(src) = &mut ch.source {
-                                rewrite_text(src, &f);
-                            }
-                            if dead(ch.source.as_deref()) {
-                                ch.source = None;
+                            if let Some(t) = se.name.as_mut().filter(|t| !label(t)) {
+                                rewrite_text(t, &f);
                             }
                         }
-                        v
-                    });
+                        if let Some(src) = &mut ch.source {
+                            rewrite_text(src, &f);
+                        }
+                        if dead(ch.source.as_deref()) {
+                            ch.source = None;
+                        }
+                    }
+                    v
+                });
             let sparklines = sh.sparklines.iter().any(|sp| changes(&sp.source)).then(|| {
                 let mut v = sh.sparklines.clone();
                 v.iter_mut().for_each(|sp| {

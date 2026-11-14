@@ -564,7 +564,6 @@ fn paste_validations(
 /// their references to it named), so the reference rewrite for the move shifts those into the
 /// block once. `snapshot` is the source sheet as it was cut.
 fn move_cut_rules(cx: &mut crate::cmd::Ctx, snapshot: &gridcraft_model::Sheet, (from, to): (usize, usize), src: RangeRef, at: CellRef) -> Result<()> {
-    use crate::cmd::data::Rule;
     let mut cfs = crate::cmd::data::moved_rule_parts(&snapshot.cond_formats, src, at);
     let mut dvs = crate::cmd::data::moved_rule_parts(&snapshot.validations, src, at);
     if from != to {
@@ -580,8 +579,9 @@ fn move_cut_rules(cx: &mut crate::cmd::Ctx, snapshot: &gridcraft_model::Sheet, (
                 *t = format!("{}{}", if t.starts_with('=') { "=" } else { "" }, gridcraft_formula::print(&e));
             }
         };
-        cfs.iter_mut().flat_map(|r| r.parts().1).for_each(name);
-        dvs.iter_mut().flat_map(|r| r.parts().1).for_each(name);
+        // Every formula, thresholds included: an unnamed reference would read the destination sheet.
+        cfs.iter_mut().flat_map(|r| r.rule.formulas_mut()).for_each(name);
+        dvs.iter_mut().flat_map(|r| r.formulas_mut()).for_each(name);
     }
     let source = cx.sheet_mut(from)?;
     crate::cmd::data::remove_rule_cells(&mut source.cond_formats, &[src]);

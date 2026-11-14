@@ -6683,8 +6683,7 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
 }
 
-/// Renaming a sheet renames every reference to it: a PivotTable's source, a conditional
-/// format's formula and a validation's list follow it.
+/// Renaming a sheet renames a PivotTable's source to it, and the PivotTable still refreshes.
 #[test]
 fn sheet_rename_renames_every_reference() {
     let mut s = s();
@@ -6887,6 +6886,17 @@ fn rules_moved_whole_or_left_in_place_keep_their_formulas() {
     s.execute("sheet.activate", json!({"sheet": two})).unwrap();
     s.execute("edit.paste", json!({"at": "F2"})).unwrap();
     assert_eq!(cf(&s, two), vec!["Sheet1!B2>0@F2:F4".to_string()]);
+    // A data bar's threshold goes along too: its cells into the block, the others on Sheet1.
+    s.execute("sheet.activate", json!({"sheet": one})).unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "Sheet1!H1:H10", "rule": {"type": "dataBar", "min": {"type": "formula", "value": "MIN(H1:H10,C1:C10)"}}}),
+    )
+    .unwrap();
+    s.execute("edit.cut", json!({"range": "Sheet1!H1:H10"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": two})).unwrap();
+    s.execute("edit.paste", json!({"at": "K1"})).unwrap();
+    assert_eq!(cf(&s, two).last().map(String::as_str), Some("bar MIN(Two!K1:K10,Sheet1!C1:C10)"));
 }
 
 /// A rule's formulas are written for the top-left of all its ranges: when an edit removes the

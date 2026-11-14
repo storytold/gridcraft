@@ -252,6 +252,33 @@ fn chart_series_follow_cut_moves_renames_and_sheet_deletes() {
     assert_eq!(values(&s), "Inputs!$A$1:$A$3");
 }
 
+/// A series name that is a bare word is a label, as a chart reads it: renaming a table of that
+/// name leaves it be, while a series named by a defined name follows the name's rename.
+#[test]
+fn chart_series_names_follow_names_but_not_labels() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["v"], [5], [2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A3", "name": "Sales"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Title", "refersTo": "=Sheet1!$A$1"})).unwrap();
+    let chart = id_of(&s.execute("insert.chart", json!({"range": "A2:A3", "type": "column"})).unwrap(), "chart");
+    let set = |s: &mut Session, label: &str, named: &str| {
+        let ch = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().charts.iter_mut().find(|c| c.id == chart).unwrap();
+        ch.series.truncate(1);
+        let mut second = ch.series[0].clone();
+        ch.series[0].name = Some(label.into());
+        second.name = Some(named.into());
+        ch.series.push(second);
+    };
+    let names = |s: &Session| -> Vec<String> {
+        sheet(s, 0).charts.iter().find(|c| c.id == chart).map(|c| c.series.iter().filter_map(|se| se.name.clone()).collect()).unwrap_or_default()
+    };
+    set(&mut s, "Sales", "Title");
+    s.execute("table.rename", json!({"table": "Sales", "name": "Revenue"})).unwrap();
+    assert_eq!(names(&s), ["Sales", "Title"], "a label isn't the table");
+    s.execute("formulas.defineName", json!({"name": "Heading", "refersTo": "=Sheet1!$A$1", "oldName": "Title"})).unwrap();
+    assert_eq!(names(&s), ["Sales", "Heading"], "a defined name follows its rename");
+}
+
 #[test]
 fn a_copied_sheet_gives_its_objects_fresh_ids() {
     let mut s = s();

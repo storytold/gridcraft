@@ -402,10 +402,12 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
     };
     edit(s, |cx| {
         if let Some((old_name, old_scope)) = &old {
-            cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(old_name) && n.scope == *old_scope));
+            // Formulas are renamed while the old name is still defined, so a chart series named
+            // by it is still read as a reference.
             if !old_name.eq_ignore_ascii_case(&name) {
                 rename_name_in_formulas(&mut cx.wb, old_name, *old_scope, &name)?;
             }
+            cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(old_name) && n.scope == *old_scope));
         }
         cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(&name) && n.scope == scope));
         cx.wb.names.push(DefinedName { name: name.clone(), scope, formula: refers.clone(), comment: comment.clone(), hidden: false });
