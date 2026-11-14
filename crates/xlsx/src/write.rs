@@ -249,6 +249,40 @@ fn workbook_view_attrs(wb: &Workbook) -> String {
     attrs
 }
 
+/// `docProps/core.xml` for `wb`, and the company `docProps/app.xml` names: with Remove personal
+/// information on, the author, the last author and the company are left out (#3089).
+fn core_properties(wb: &Workbook) -> (String, String) {
+    let p = &wb.props;
+    // "Remove personal information on save": the author and company are not saved (#3089).
+    let private = |v: &String| if wb.remove_personal_info { String::new() } else { v.clone() };
+    let (author, company, last_by) = (private(&p.author), private(&p.company), private(&p.last_modified_by));
+    let mut core = format!(
+        "{XML_DECL}<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:dcmitype=\"http://purl.org/dc/dcmitype/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">"
+    );
+    for (tag, v) in [
+        ("dc:title", &p.title),
+        ("dc:subject", &p.subject),
+        ("dc:creator", &author),
+        ("cp:keywords", &p.keywords),
+        ("dc:description", &p.description),
+        ("cp:category", &p.category),
+        ("cp:lastModifiedBy", &last_by),
+        ("cp:lastPrinted", &p.last_printed),
+    ] {
+        if !v.is_empty() {
+            let _ = write!(core, "<{tag}>{}</{tag}>", esc(v));
+        }
+    }
+    // The dates Excel shows in File › Info (ECMA-376 Part 2, 7.2: dcterms dates typed W3CDTF).
+    for (tag, v) in [("dcterms:created", &p.created), ("dcterms:modified", &p.modified)] {
+        if !v.is_empty() {
+            let _ = write!(core, "<{tag} xsi:type=\"dcterms:W3CDTF\">{}</{tag}>", esc(v));
+        }
+    }
+    core.push_str("</cp:coreProperties>");
+    (core, company)
+}
+
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
 pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
@@ -427,25 +461,7 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
     out.part("xl/_rels/workbook.xml.rels", None, wb_rels.xml().into_bytes());
 
     // Document properties.
-    let p = &wb.props;
-    // "Remove personal information on save": the author and company are not saved (#3089).
-    let private = |v: &String| if wb.remove_personal_info { String::new() } else { v.clone() };
-    let (author, company) = (private(&p.author), private(&p.company));
-    let mut core = format!(
-        "{XML_DECL}<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:dcmitype=\"http://purl.org/dc/dcmitype/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">"
-    );
-    for (tag, v) in [
-        ("dc:title", &p.title),
-        ("dc:subject", &p.subject),
-        ("dc:creator", &author),
-        ("cp:keywords", &p.keywords),
-        ("dc:description", &p.description),
-    ] {
-        if !v.is_empty() {
-            let _ = write!(core, "<{tag}>{}</{tag}>", esc(v));
-        }
-    }
-    core.push_str("</cp:coreProperties>");
+    let (core, company) = core_properties(wb);
     out.part("docProps/core.xml", Some("application/vnd.openxmlformats-package.core-properties+xml"), core.into_bytes());
     let mut app = String::from(XML_DECL);
     app.push_str("<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\" xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes\"><Application>GridCraft</Application>");
