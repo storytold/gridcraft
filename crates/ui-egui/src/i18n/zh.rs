@@ -482,6 +482,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "显示",
         "Collapse dialog" => "折叠对话框",
         "Expand dialog" => "展开对话框",
+
+        "Picture" => "图片",
+        "Format\nPicture" => "设置图片\n格式",
+        "Format Picture" => "设置图片格式",
+        "Height:" => "高度:",
+        "Width:" => "宽度:",
+        "Lock aspect ratio" => "锁定纵横比",
         _ => return None,
     })
 }

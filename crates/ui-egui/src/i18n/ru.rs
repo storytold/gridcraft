@@ -494,6 +494,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Показать",
         "Collapse dialog" => "Свернуть диалоговое окно",
         "Expand dialog" => "Развернуть диалоговое окно",
+
+        "Picture" => "Изображение",
+        "Format\nPicture" => "Формат\nизображения",
+        "Format Picture" => "Формат изображения",
+        "Height:" => "Высота:",
+        "Width:" => "Ширина:",
+        "Lock aspect ratio" => "Сохранять пропорции",
         _ => return None,
     })
 }
