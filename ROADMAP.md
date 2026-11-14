@@ -132,6 +132,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 ## Progress log
 
+- 2026-11-02: macOS disk images preserve signed bundle metadata: create from the staged folder, clear extended attributes before signing, and strictly verify both the mounted app and an installed copy before notarizing the DMG.
+
 | Date | What landed |
 |---|---|
 | 2026-11-06 | A sheet keeps its own scroll position when sheets are inserted, deleted or moved before it: a new PivotTable or inserted sheet opens at the top instead of where its neighbour was scrolled; a closed window's positions are let go (#3485) |
