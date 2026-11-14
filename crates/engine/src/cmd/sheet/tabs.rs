@@ -86,10 +86,15 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         cx.sheet_mut(i)?.name = name.clone();
         // Every reference the workbook holds follows the sheet.
         cx.wb.rewrite_references(&|_, e| gridcraft_formula::adjust::rename_sheet(e, &old, &name));
+        // A PivotChart follows its PivotTable's sheet. Only a sheet holding such a chart is
+        // copied, so the others stay shared with undo snapshots.
+        let on_old = |link: Option<&str>| link.and_then(crate::pivot::parse_chart_link).is_some_and(|(sheet, _)| sheet.eq_ignore_ascii_case(&old));
         for si in 0..cx.wb.sheets.len() {
+            if !cx.wb.sheets.get(si).is_some_and(|sh| sh.charts.iter().any(|ch| on_old(ch.pivot.as_deref()))) {
+                continue;
+            }
             let Some(sh) = cx.wb.sheet_mut(si) else { continue };
             for ch in sh.charts.iter_mut() {
-                // A PivotChart follows its PivotTable's sheet.
                 if let Some((sheet, pivot)) = ch.pivot.as_deref().and_then(crate::pivot::parse_chart_link)
                     && sheet.eq_ignore_ascii_case(&old)
                 {
@@ -148,7 +153,7 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             // Object ids are unique across the workbook (selection and the `{kind, id}` commands
             // rely on it), so the copied objects get fresh ones (free ones, even when a file used
             // the largest id).
-            let count = sh.charts.len() + sh.images.len() + sh.shapes.len() + sh.slicers.len();
+            let count = sh.charts.len() + sh.images.len() + sh.shapes.len() + sh.slicers.len() + sh.controls.len();
             let ids = cx.wb.free_object_ids(count);
             if ids.len() < count {
                 return Err(bad("sheet.move", "no free object ids are left for the copied objects"));
@@ -159,6 +164,7 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             sh.images.iter_mut().for_each(|o| o.id = fresh());
             sh.shapes.iter_mut().for_each(|o| o.id = fresh());
             sh.slicers.iter_mut().for_each(|o| o.id = fresh());
+            sh.controls.iter_mut().for_each(|o| o.id = fresh());
             let at = to.min(n);
             // The copy gets its own copies of the sheet's names, referring to the copy.
             let copies: Vec<gridcraft_model::DefinedName> = cx

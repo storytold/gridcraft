@@ -268,6 +268,11 @@ pub struct Workbook {
     /// `preserved` are relative to. Saving into another folder rewrites them from there. Not in JSON.
     #[serde(skip)]
     pub source_dir: Option<std::path::PathBuf>,
+    /// The region whose formats this workbook is typed and shown in (Options › Region). A runtime
+    /// setting of the application, not of the file: it is not saved, and the engine session sets
+    /// it on every document it holds. en-US until then.
+    #[serde(skip, default = "gridcraft_core::region::default_region")]
+    pub region: &'static gridcraft_core::Region,
     /// The file this workbook reports as its own, which is what `CELL("filename")` returns.
     /// `None` = no file yet, which Excel reports as an empty string until the workbook has been
     /// saved once. Deliberately separate from `source_dir`: that one names the folder relative
@@ -371,10 +376,12 @@ impl Workbook {
     /// place: cell formulas (keeping their array and spill kind), defined names, conditional
     /// formats and data validation (written for their range's top-left cell, so they move as
     /// a cell formula there does), chart series (a chart's source block
-    /// that no longer exists is dropped), sparklines and PivotTable sources. Every edit that
-    /// moves references (renaming and deleting sheets and names, inserting and deleting lines
-    /// and cells, cut-moves, the names a file reader settles on) goes through it, so no holder
-    /// of a reference is left out. A legacy array's own range is the caller's to move. Internal
+    /// that no longer exists is dropped), sparklines, PivotTable sources and form controls'
+    /// linked cells. The engine's reference-moving edits (renaming and deleting sheets and names,
+    /// renaming tables, inserting and deleting lines and cells, cut-moves) go through it. Not
+    /// visited: table calculated-column and totals formulas, and Python cells' `xl()`
+    /// references (the engine rewrites those itself). A legacy array's own range is the
+    /// caller's to move. Internal
     /// hyperlinks keep the place they name as typed, as Excel's do. A sheet nothing changes on
     /// stays shared.
     pub fn rewrite_references(&mut self, f: &dyn Fn(RefHost<'_>, Expr) -> Expr) {
@@ -393,9 +400,11 @@ impl Workbook {
                 .cells
                 .iter()
                 .filter_map(|(c, cell)| {
+                    // Trees are compared, not printed text: a formula the edit leaves alone keeps
+                    // its stored text, even text that isn't canonical, and isn't printed.
                     let old = cell.formula.as_ref()?;
-                    let new = Formula::from_expr(f(old.expr()?));
-                    (new.text != old.text).then(|| (c, Formula { array: old.array, dynamic: old.dynamic, ..new }))
+                    let new = old.with_expr(|e| Some(f(e.clone())).filter(|n| n != e))??;
+                    Some((c, Formula { array: old.array, dynamic: old.dynamic, ..Formula::from_expr(new) }))
                 })
                 .collect();
             let cond_formats = sh.cond_formats.iter().any(|cf| cf.rule.formulas().into_iter().any(|t| changes(t))).then(|| {
@@ -456,7 +465,22 @@ impl Workbook {
                 });
                 v
             });
-            if cells.is_empty() && cond_formats.is_none() && validations.is_none() && charts.is_none() && sparklines.is_none() && pivots.is_none() {
+            // A form control's linked cell.
+            let controls = sh.controls.iter().any(|c| c.link.as_deref().is_some_and(changes)).then(|| {
+                let mut v = sh.controls.clone();
+                v.iter_mut().flat_map(|c| c.link.as_mut()).for_each(|t| {
+                    rewrite_text(t, &f);
+                });
+                v
+            });
+            if cells.is_empty()
+                && cond_formats.is_none()
+                && validations.is_none()
+                && charts.is_none()
+                && sparklines.is_none()
+                && pivots.is_none()
+                && controls.is_none()
+            {
                 continue;
             }
             let sh = Arc::make_mut(shared);
@@ -479,6 +503,9 @@ impl Workbook {
             }
             if let Some(v) = pivots {
                 sh.pivots = v;
+            }
+            if let Some(v) = controls {
+                sh.controls = v;
             }
         }
     }
@@ -509,6 +536,7 @@ impl Workbook {
             macros_unread: Arc::default(),
             preserved: None,
             source_dir: None,
+            region: gridcraft_core::region::default_region(),
             source_path: None,
         }
     }
@@ -650,7 +678,7 @@ impl Workbook {
         }
     }
 
-    /// A free id for a new chart, picture, shape, table or slicer: one more than the largest in
+    /// A free id for a new chart, picture, shape, table, slicer or form control: one more than the largest in
     /// use, or, when that is `u32::MAX` (a file can carry any id), the lowest free one.
     pub fn next_object_id(&self) -> u32 {
         self.free_object_ids(1).first().copied().unwrap_or(u32::MAX)
@@ -671,6 +699,7 @@ impl Workbook {
                     .chain(s.shapes.iter().map(|o| o.id))
                     .chain(s.tables.iter().map(|o| o.id))
                     .chain(s.slicers.iter().map(|o| o.id))
+                    .chain(s.controls.iter().map(|o| o.id))
             })
             .collect();
         used.sort_unstable();
@@ -788,6 +817,10 @@ mod tests {
         }
         assert_eq!(wb.next_object_id(), 8);
         if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(crate::FormControl { id: 12, ..Default::default() });
+        }
+        assert_eq!(wb.next_object_id(), 13, "form controls take ids from the same sequence");
+        if let Some(sh) = wb.sheet_mut(0) {
             sh.images.push(image(u32::MAX));
         }
         // An id read from a file at the maximum: the lowest free id, not the maximum again.
@@ -803,6 +836,19 @@ mod tests {
             sh.images.push(image(u32::MAX - 1));
         }
         assert_eq!(wb.free_object_ids(3), vec![1, 2, u32::MAX], "the top first, then from 1");
+    }
+
+    /// A form control's id is in use like any object's: the free ids skip it, also when it is the
+    /// largest id a file could carry.
+    #[test]
+    fn free_object_ids_skip_a_form_controls_id() {
+        let mut wb = Workbook::new();
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(crate::FormControl { id: 3, ..Default::default() });
+            sh.controls.push(crate::FormControl { id: u32::MAX, ..Default::default() });
+        }
+        assert_eq!(wb.free_object_ids(4), vec![1, 2, 4, 5], "3 and the largest id are taken");
+        assert_eq!(wb.next_object_id(), 1);
     }
 
     /// A file can use the largest id and the one below it: nothing is free above them, so the free
