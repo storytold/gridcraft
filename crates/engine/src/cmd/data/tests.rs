@@ -135,6 +135,24 @@ fn list_validation_without_formula1_is_an_error() {
 }
 
 #[test]
+fn protected_sheet_refuses_adding_or_replacing_validation() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let rule = |lo: &str, hi: &str| json!({"range": "A1", "type": "whole", "operator": "between", "formula1": lo, "formula2": hi});
+    s.execute("data.validation", rule("1", "10")).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+
+    let add = s.execute("data.validation", json!({"range": "B1", "type": "whole", "operator": "between", "formula1": "1", "formula2": "10"}));
+    assert!(add.is_err(), "adding validation on a protected sheet must be refused");
+    let replace = s.execute("data.validation", rule("1", "1000"));
+    assert!(replace.is_err(), "replacing validation on a protected sheet must be refused");
+
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.validations.len(), 1);
+    assert_eq!((sh.validations[0].f1.as_str(), sh.validations[0].f2.as_deref()), ("1", Some("10")));
+}
+
+#[test]
 fn partial_validation_edits_keep_the_rest_of_the_old_rule() {
     let mut s = Session::new();
     s.new_workbook();
