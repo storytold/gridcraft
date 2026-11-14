@@ -159,6 +159,15 @@ fn coupons() {
 }
 
 #[test]
+fn accrintm_scales_before_par_times_rate_overflows() {
+    // #4097: par * rate (1.8E308) overflows, but the one-day accrual is finite.
+    let (issue, settle) = (d(2025, 1, 15), d(2025, 1, 16));
+    close(ev("ACCRINTM", vec![issue.clone(), settle.clone(), n(90.0), n(2e306), n(2.0)]), 5e305);
+    close(ev("ACCRINTM", vec![issue.clone(), settle.clone(), n(90.0), n(2e306), n(3.0)]), 2e306 * (90.0 / 365.0));
+    close(ev("ACCRINTM", vec![issue, settle, n(90.0), n(1e306), n(2.0)]), 2.5e305);
+}
+
+#[test]
 fn securities() {
     close_tol(ev("DISC", vec![d(2007, 1, 25), d(2007, 6, 15), n(97.975), n(100.0), n(1.0)]), 0.052420213, 1e-8);
     close_tol(ev("PRICEDISC", vec![d(2008, 2, 16), d(2008, 3, 1), n(0.0525), n(100.0), n(2.0)]), 99.79583333, 1e-9);

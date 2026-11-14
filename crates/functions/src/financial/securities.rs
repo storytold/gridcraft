@@ -74,7 +74,11 @@ pub(super) fn accrintm(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     if issue >= settle || rate <= 0.0 || par <= 0.0 {
         return Err(CellError::Num);
     }
-    num_val(par * rate * year_frac(c.date_system(), issue, settle, basis)?)
+    let frac = year_frac(c.date_system(), issue, settle, basis)?;
+    let accrued = par * rate * frac;
+    // par * rate can overflow even when a sub-year fraction brings the accrual back in range
+    // (#4097); scale the rate first then. Finite results keep the original evaluation order.
+    num_val(if accrued.is_finite() { accrued } else { par * (rate * frac) })
 }
 
 /// settlement, maturity, value, value, [basis] for discount securities.
