@@ -1,6 +1,10 @@
 //! GridCraft desktop app.
 //!
-//! Usage: `gridcraft [--control <port> [--control-token <token>]] [--sample <name>] [files…]`
+//! Usage: `gridcraft [--control <port> [--control-token <token>]] [--sample <name>] [--region <tag>] [files…]`
+//!
+//! `--region <tag>` (or `--region=<tag>`) overrides the saved region for date/time
+//! formula arguments for this launch before the first workbook recalculation. The default is en-US; this choice
+//! is independent of interface language and does not change canonical command input.
 //!
 //! `--control <port>` (or `GRIDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control
 //! server: `{"id":1,"method":"ui.inspect","params":{}}` → `{"id":1,"ok":true,"result":…}`.
@@ -104,6 +108,7 @@ fn log_dir() -> Option<std::path::PathBuf> {
     Some(config_dir()?.join("logs"))
 }
 
+/// Load saved interface and engine preferences, canonicalizing unsupported legacy region tags.
 fn load_prefs(app: &mut SheetApp) {
     if !prefs_enabled() {
         return;
@@ -122,12 +127,15 @@ fn load_prefs(app: &mut SheetApp) {
         app.ui.language = language;
     }
     if let Ok(b) = std::fs::read(dir.join("prefs.json"))
-        && let Ok(p) = serde_json::from_slice(&b)
+        && let Ok(p) = serde_json::from_slice::<gridcraft_engine::Prefs>(&b)
     {
         app.session.prefs = p;
+        // Preference files may predate regions or contain an unsupported tag.
+        app.session.prefs.region = app.session.region().tag.into();
     }
 }
 
+/// Persist interface preferences and deliberate engine choices; session-only overrides are excluded.
 fn save_prefs(app: &SheetApp) {
     if !prefs_enabled() {
         return;
@@ -240,6 +248,39 @@ fn icon() -> Option<egui::IconData> {
     Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
 }
 
+/// Removes and validates the region override before any workbook is created or opened.
+/// Other startup arguments retain their existing interpretation, including opaque option values.
+/// Region tags use canonical spelling.
+fn region_args(args: &[String]) -> Result<(Vec<String>, Option<&'static gridcraft_engine::core::Region>), String> {
+    let mut remaining = Vec::new();
+    let mut region = None;
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        // A token or sample name may itself look like a Region flag. Keep option values
+        // opaque so the native argument parser receives exactly the payload it was given.
+        if matches!(arg.as_str(), "--control" | "--control-token" | "--sample") {
+            remaining.push(arg.clone());
+            if let Some(value) = it.next() {
+                remaining.push(value.clone());
+            }
+            continue;
+        }
+        let value = if arg == "--region" {
+            Some(it.next().ok_or("--region needs a tag such as en-GB or it-IT")?.as_str())
+        } else {
+            arg.strip_prefix("--region=")
+        };
+        if let Some(value) = value {
+            let found = gridcraft_engine::find_region(value).map_err(|e| format!("--region: {e}"))?;
+            region = Some(found);
+        } else {
+            remaining.push(arg.clone());
+        }
+    }
+    Ok((remaining, region))
+}
+
+/// Configure logging, preferences and the launch region before opening native workbook windows.
 fn main() -> eframe::Result<()> {
     // A confined launcher run (`gridcraft_sandbox::launch_command`) comes before everything else:
     // it opens no window, writes no log, and becomes the program it confines.
@@ -280,6 +321,13 @@ fn main() -> eframe::Result<()> {
         println!("GridCraft {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    let (args, region) = match region_args(&args) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            eprintln!("gridcraft: {e}");
+            std::process::exit(2);
+        }
+    };
     let mut control_port: Option<u16> = std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut control_token: Option<String> = std::env::var("GRIDCRAFT_CONTROL_TOKEN").ok();
     let mut sample: Option<String> = None;
@@ -318,22 +366,25 @@ fn main() -> eframe::Result<()> {
             None => logger.no_file(),
         }
     }
-    let mut session = Session::new();
+    let mut app = SheetApp::new(Session::new(), services());
+    app.watch_desktop_theme();
+    // Load the saved region and then the explicit override before a sample, blank workbook
+    // or command-line file can perform its first recalculation.
+    load_prefs(&mut app);
+    if let Some(region) = region {
+        app.session.set_region_override(region);
+    }
     if let Some(s) = &sample
-        && let Err(e) = session.execute("file.new", json!({"sample": s}))
+        && let Err(e) = app.session.execute("file.new", json!({"sample": s}))
     {
         log::warn!("sample {s}: {e}");
     }
-    let mut app = SheetApp::new(session, services());
-    app.watch_desktop_theme();
-    app.start_update_check();
-    let control_port = control_port;
-    load_prefs(&mut app);
-    // Stamp the startup workbook's author from the persisted user name.
     if app.session.documents().is_empty() {
         app.session.new_workbook();
     }
     app.after_engine(); // Show warnings from the sample.
+    app.start_update_check();
+    let control_port = control_port;
     // Files named on the command line (a double-click on Windows and Linux) open as File › Open
     // opens them: a password-protected one asks for its password, and errors are shown, not
     // only logged. Each replaces the untouched blank Book1, as a file opened from Finder does.
@@ -432,6 +483,107 @@ fn main() -> eframe::Result<()> {
         return run(options);
     }
     result
+}
+
+#[cfg(test)]
+mod region_tests {
+    use super::region_args;
+
+    /// Build owned startup arguments for synthetic parser tests.
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    /// Remove the region flag while retaining control-channel, sample and file arguments.
+    fn region_override_preserves_other_startup_arguments() {
+        let (remaining, region) = region_args(&args(&[
+            "--control",
+            "7979",
+            "--control-token",
+            "fictional-test-token",
+            "--region",
+            "it-IT",
+            "--sample",
+            "sales",
+            "book.xlsx",
+        ]))
+        .unwrap();
+        assert_eq!(remaining, args(&["--control", "7979", "--control-token", "fictional-test-token", "--sample", "sales", "book.xlsx"]));
+        assert_eq!(region.map(|r| r.tag), Some("it-IT"));
+        assert_eq!(region_args(&args(&["book.xlsx"])).unwrap(), (args(&["book.xlsx"]), None));
+    }
+
+    /// Keep region-looking payloads of existing native options intact while parsing the override.
+    #[test]
+    fn region_override_preserves_other_option_values() {
+        for option in ["--control", "--control-token", "--sample"] {
+            for payload in ["--region=it-IT", "--region"] {
+                let (remaining, region) = region_args(&args(&[option, payload, "--region", "en-GB", "book.xlsx"])).unwrap();
+                assert_eq!(remaining, args(&[option, payload, "book.xlsx"]));
+                assert_eq!(region.map(|r| r.tag), Some("en-GB"));
+            }
+        }
+    }
+
+    #[test]
+    /// Resolve separate and equals-style flags to the same canonical region registry entries.
+    fn region_override_accepts_both_forms_and_canonicalizes_tags() {
+        assert_eq!(region_args(&args(&["--region=en_gb"])).unwrap(), (vec![], Some(gridcraft_engine::find_region("en-GB").unwrap())));
+        assert_eq!(region_args(&args(&["--region", "IT_it"])).unwrap(), (vec![], Some(gridcraft_engine::find_region("it-IT").unwrap())));
+        assert_eq!(region_args(&args(&["--region=ja-JP"])).unwrap(), (vec![], Some(gridcraft_engine::find_region("ja-JP").unwrap())));
+    }
+
+    /// A launch override affects the first workbook while serialized preferences retain their value.
+    #[test]
+    fn native_region_override_does_not_persist_across_launches() {
+        for saved in ["en-US", "en-GB"] {
+            let mut s = gridcraft_engine::Session::new();
+            s.prefs = serde_json::from_value(serde_json::json!({"region": saved})).unwrap();
+            let (_, region) = region_args(&args(&["--region=it_IT"])).unwrap();
+            s.set_region_override(region.unwrap());
+            s.new_workbook();
+            s.execute("cell.set", serde_json::json!({"cell":"A1", "input":"=DATEVALUE(\"13/01/2026\")"})).unwrap();
+            assert_eq!(s.region().tag, "it-IT");
+            assert_eq!(s.doc().unwrap().wb.region.tag, "it-IT");
+            assert_eq!(
+                s.doc().unwrap().wb.active().unwrap().value(gridcraft_engine::core::CellRef::new(0, 0)),
+                gridcraft_engine::core::Value::Number(46035.0)
+            );
+            let bytes = serde_json::to_vec(&s.prefs).unwrap();
+            let mut restarted = gridcraft_engine::Session::new();
+            restarted.prefs = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(restarted.region().tag, saved);
+        }
+    }
+
+    /// Explicit app.region choices replace the transient override, even when selecting its current tag.
+    #[test]
+    fn native_region_override_preserves_deliberate_preference_changes() {
+        for chosen in ["it-IT", "ja-JP", "en-US"] {
+            let mut s = gridcraft_engine::Session::new();
+            let (_, region) = region_args(&args(&["--region", "it-IT"])).unwrap();
+            s.set_region_override(region.unwrap());
+            assert!(s.execute("app.region", serde_json::json!({"region":"unsupported"})).is_err());
+            assert_eq!(s.region().tag, "it-IT");
+            assert_eq!(s.prefs.region, "en-US");
+            s.execute("app.region", serde_json::json!({"region": chosen})).unwrap();
+            s.new_workbook();
+            assert_eq!(s.region().tag, chosen);
+            assert_eq!(s.doc().unwrap().wb.region.tag, chosen);
+            let mut restarted = gridcraft_engine::Session::new();
+            restarted.prefs = serde_json::from_slice(&serde_json::to_vec(&s.prefs).unwrap()).unwrap();
+            assert_eq!(restarted.region().tag, chosen);
+        }
+    }
+
+    #[test]
+    /// Reject missing values and unsupported tags before any workbook is opened.
+    fn region_override_rejects_missing_and_unsupported_tags() {
+        for values in [&["--region"][..], &["--region", "--sample"], &["--region="], &["--region=unknown"], &["--region=42"]] {
+            assert!(region_args(&args(values)).is_err(), "{values:?}");
+        }
+    }
 }
 
 #[cfg(test)]

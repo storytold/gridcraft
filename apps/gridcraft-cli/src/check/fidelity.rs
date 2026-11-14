@@ -23,10 +23,11 @@ pub fn round_trip(wb: &Workbook, source: &[u8], opts: &Options) -> RoundTrip {
             }
         }
     }
-    let back = match gridcraft_engine::io::open_bytes("roundtrip.xlsx", &bytes) {
+    let mut back = match gridcraft_engine::io::open_bytes("roundtrip.xlsx", &bytes) {
         Ok((b, _)) => b,
         Err(e) => return RoundTrip { error: Some(format!("reading the written file failed: {e}")), categories: vec![package.done()] },
     };
+    back.region = opts.region;
     let mut categories = diff_workbooks(wb, &back, opts);
     categories.push(package.done());
     RoundTrip { error: None, categories }
