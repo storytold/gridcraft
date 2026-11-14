@@ -160,6 +160,9 @@ pub(super) fn amordegrc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     // The asset life fixes the schedule: periods 0 to `last`, then nothing.
     // The small tolerance keeps a life such as 1/0.2 from rounding up a period.
     let last = (life - 1e-9).ceil() - 1.0;
+    if period > last {
+        return num_val(0.0);
+    }
     let mut n = 1.0;
     while n <= period {
         if n >= last - 1.0 {

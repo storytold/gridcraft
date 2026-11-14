@@ -146,6 +146,9 @@ fn amordegrc_stops_at_the_end_of_the_asset_life() {
     close(p(1.0), 321.0);
     close(p(5.0), 0.0);
     close(p(6.0), 0.0);
+    // A two-year asset (rate 0.5) ends at period 1; period 2 is past the schedule.
+    let short = |period: f64| ev("AMORDEGRC", vec![n(1000.0), d(2023, 1, 1), d(2023, 1, 1), n(0.0), n(period), n(0.5), n(1.0)]);
+    close(short(2.0), 0.0);
 }
 
 #[test]
