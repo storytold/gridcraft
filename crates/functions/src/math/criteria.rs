@@ -60,7 +60,8 @@ fn ifs_numbers(a: &[Arg]) -> R<Vec<f64>> {
 }
 
 pub(super) fn sumifs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(ifs_numbers(a)?.iter().sum())
+    let v = ifs_numbers(a)?;
+    num_val(super::sum_dropping_noise(&v))
 }
 
 pub(super) fn averageifs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -116,7 +117,8 @@ fn if_numbers(a: &[Arg]) -> R<Vec<f64>> {
 }
 
 pub(super) fn sumif(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(if_numbers(a)?.iter().sum())
+    let v = if_numbers(a)?;
+    num_val(super::sum_dropping_noise(&v))
 }
 
 pub(super) fn averageif(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
