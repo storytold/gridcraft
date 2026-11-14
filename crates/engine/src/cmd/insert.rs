@@ -833,6 +833,8 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         }
     });
     let chart = Chart {
+        gridline_width: None,
+        gridline_color: None,
         id,
         kind,
         anchor: Anchor {

@@ -28,6 +28,16 @@ pub use trend::supports_trendline;
 pub(crate) const TEXT: Rgba = [0x59, 0x59, 0x59, 0xFF];
 const DARK_TEXT: Rgba = [0x26, 0x26, 0x26, 0xFF];
 const GRID: Rgba = [0xD9, 0xD9, 0xD9, 0xFF];
+/// Chart units (pixels at 100%) per point.
+const PX_PER_PT: f32 = 96.0 / 72.0;
+
+/// A chart's gridline colour and width: the file's (the width in points, bounded), else
+/// GridCraft's light grey hairline.
+fn gridline(chart: &Chart, data: &ChartData) -> (Rgba, f32) {
+    let color = data.gridline_color.unwrap_or(GRID);
+    let width = chart.gridline_width.filter(|w| w.is_finite()).map_or(0.75, |w| w.clamp(0.25, 20.0) * PX_PER_PT);
+    (color, width)
+}
 const AXIS: Rgba = [0xBF, 0xBF, 0xBF, 0xFF];
 const WHITE: Rgba = [0xFF, 0xFF, 0xFF, 0xFF];
 const STOCK: Rgba = [0x40, 0x40, 0x40, 0xFF];
@@ -56,6 +66,8 @@ pub(crate) const MAX_WEDGES: usize = 2_048;
 struct Ctx<'a> {
     out: Vec<Prim>,
     m: &'a dyn Measure,
+    /// Gridline colour and width.
+    grid: (Rgba, f32),
 }
 
 #[cfg(test)]
@@ -135,6 +147,7 @@ fn sanitize_vals(v: &[Option<f64>]) -> Vec<Option<f64>> {
 pub(crate) fn sanitize(d: &ChartData) -> ChartData {
     ChartData {
         palette: d.palette.iter().take(MAX_POINTS).copied().collect(),
+        gridline_color: d.gridline_color,
         categories: d.categories.iter().take(MAX_POINTS).cloned().collect(),
         category_levels: d.category_levels.iter().take(3).map(|l| l.iter().take(MAX_POINTS).cloned().collect()).collect(),
         series: d
@@ -213,7 +226,7 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
         return vec![];
     }
     let data = sanitized(data);
-    let mut ctx = Ctx { out: Vec::new(), m };
+    let mut ctx = Ctx { out: Vec::new(), m, grid: gridline(chart, &data) };
     ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
     let mut area = Bx { x: pad, y: pad, w: w - 2.0 * pad, h: h - 2.0 * pad };

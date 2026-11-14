@@ -442,6 +442,8 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             })
             .collect();
         sheet.charts.push(Chart {
+            gridline_width: None,
+            gridline_color: None,
             id: chart_id,
             kind: if opts.column_chart { ChartKind::ColumnClustered } else { ChartKind::Line },
             anchor: Anchor { cell: CellRef::new(1, chart_col), dx: 0.0, dy: 0.0, width: 480.0, height: 288.0, mode: Default::default() },

@@ -34,6 +34,8 @@ fn literal_category_with_separators_survives_save() {
         })
         .collect();
     s.charts.push(Chart {
+        gridline_width: None,
+        gridline_color: None,
         id: 1,
         kind: ChartKind::ColumnClustered,
         anchor: Anchor { cell: gridcraft_core::CellRef::new(0, 3), width: 480.0, height: 300.0, ..Anchor::default() },

@@ -23,6 +23,8 @@ fn workbook(categories: &str, values: &str) -> Workbook {
         s.set_value(CellRef::new(r, 2), Value::Number(i as f64 + 1.0));
     }
     s.charts.push(Chart {
+        gridline_width: None,
+        gridline_color: None,
         id: 1,
         kind: ChartKind::Line,
         anchor: Anchor { cell: CellRef::new(0, 4), width: 480.0, height: 300.0, ..Anchor::default() },
