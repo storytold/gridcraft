@@ -1,4 +1,6 @@
-use super::day_count::{basis_arg, coup_daybs, coup_days, coup_daysnc, coupons, date, day_count, freq_arg, shift_months, year_basis, year_frac, ymd};
+use super::day_count::{
+    basis_arg, coup_daybs, coup_days, coup_daysnc, coupons, date, date_in, day_count, freq_arg, shift_months, year_basis, year_frac, ymd,
+};
 use super::{Arg, CellError, Ctx, DateSystem, R, Value, days_in_month, has, num, num_val, opt_bool};
 
 // ---------------------------------------------------------------------------------------------
@@ -78,8 +80,8 @@ pub(super) fn accrintm(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 }
 
 /// settlement, maturity, value, value, [basis] for discount securities.
-fn disc_args(a: &[Arg]) -> R<(f64, f64, f64, f64, u32)> {
-    let (s, m, x, y, b) = (date(a, 0)?, date(a, 1)?, num(a, 2)?, num(a, 3)?, basis_arg(a, 4)?);
+fn disc_args(a: &[Arg], sys: DateSystem) -> R<(f64, f64, f64, f64, u32)> {
+    let (s, m, x, y, b) = (date_in(a, 0, sys)?, date_in(a, 1, sys)?, num(a, 2)?, num(a, 3)?, basis_arg(a, 4)?);
     if s >= m || x <= 0.0 || y <= 0.0 {
         return Err(CellError::Num);
     }
@@ -91,27 +93,27 @@ fn disc_frac(sys: DateSystem, s: f64, m: f64, b: u32) -> R<f64> {
 }
 
 pub(super) fn disc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (s, m, pr, red, b) = disc_args(a)?;
+    let (s, m, pr, red, b) = disc_args(a, c.date_system())?;
     num_val((1.0 - pr / red) / disc_frac(c.date_system(), s, m, b)?)
 }
 
 pub(super) fn pricedisc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (s, m, d, red, b) = disc_args(a)?;
+    let (s, m, d, red, b) = disc_args(a, c.date_system())?;
     num_val(red - d * red * disc_frac(c.date_system(), s, m, b)?)
 }
 
 pub(super) fn yielddisc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (s, m, pr, red, b) = disc_args(a)?;
+    let (s, m, pr, red, b) = disc_args(a, c.date_system())?;
     num_val((red / pr - 1.0) / disc_frac(c.date_system(), s, m, b)?)
 }
 
 pub(super) fn intrate(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (s, m, inv, red, b) = disc_args(a)?;
+    let (s, m, inv, red, b) = disc_args(a, c.date_system())?;
     num_val((red - inv) / inv / disc_frac(c.date_system(), s, m, b)?)
 }
 
 pub(super) fn received(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (s, m, inv, d, b) = disc_args(a)?;
+    let (s, m, inv, d, b) = disc_args(a, c.date_system())?;
     let denom = 1.0 - d * disc_frac(c.date_system(), s, m, b)?;
     if denom <= 0.0 {
         return Err(CellError::Num);
