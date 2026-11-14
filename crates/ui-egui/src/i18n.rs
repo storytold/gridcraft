@@ -392,6 +392,11 @@ mod tests {
         assert_eq!(Language::parse("xx"), None);
     }
 
+    #[test]
+    fn hungarian_recommended_chart_error_is_translated() {
+        assert_eq!(Language::Hu.tr_error("Select data for the chart first."), "Először jelöljön ki adatokat a diagramhoz.");
+    }
+
     /// A catalog whose translations slip onto their neighbours' keys still covers every key, so
     /// check the shape of each translation against its English: placeholders survive, and a
     /// one-line label (a menu item, a tooltip) doesn't turn into a two-line ribbon label.

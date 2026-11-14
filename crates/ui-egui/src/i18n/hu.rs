@@ -650,6 +650,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Do you want to save the changes you made to {title}?" => "Szeretné menteni a(z) {title} fájlban végzett módosításokat?",
         "Save a copy as .{format}" => "Másolat mentése .{format} formátumban",
         "Select a chart first." => "Először válasszon ki egy diagramot.",
+        "Select data for the chart first." => "Először jelöljön ki adatokat a diagramhoz.",
         "Row Height" => "Sormagasság",
         "Column Width" => "Oszlopszélesség",
         "Standard Width" => "Alapértelmezett szélesség",

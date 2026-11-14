@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-11-13 · **Last updated:** 2026-11-14 · **Change:** minor (Hungarian has 1,590 catalog entries and all 479 worksheet function descriptions; selected dialog, ribbon, macro, control, analysis, chart and status-bar strings use the catalog, including picture placement, shape and sparkline Insert dropdowns, translated Insert › Icons picker tooltips and localized status-bar view-mode tooltips; Insert Function's recently used category is translated; visible ribbon labels were compared with Hungarian Excel; other dropdowns and File/contextual tabs remain unchecked; native-speaker and full terminology review remain outstanding); previously minor (Ukrainian Chart is Діаграма; Diagram and Decorative Text labels; CJK fallback baselines; Arabic bidi and number/date work) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-11-13 · **Last updated:** 2026-11-14 · **Change:** minor (Hungarian has 1,591 catalog entries and all 479 worksheet function descriptions; selected dialog, ribbon, macro, control, analysis, chart and status-bar strings use the catalog, including picture placement, shape and sparkline Insert dropdowns, translated Insert › Icons picker tooltips, localized status-bar view-mode tooltips and the Recommended Charts selection error; Insert Function's recently used category is translated; visible ribbon labels were compared with Hungarian Excel; other dropdowns and File/contextual tabs remain unchecked; native-speaker and full terminology review remain outstanding); previously minor (Ukrainian Chart is Діаграма; Diagram and Decorative Text labels; CJK fallback baselines; Arabic bidi and number/date work) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -134,6 +134,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | trivial | Hungarian Recommended Charts selection error is translated in the shared message box |
 | 2026-11-14 | trivial | The three status-bar view-mode tooltips use the active interface language |
 | 2026-11-14 | minor | Hungarian function help translates all 479 distinct worksheet-function descriptions; a regression test checks coverage of the live function catalog |
 | 2026-11-14 | minor | Hungarian Insert Function dialog translates the Most Recently Used category and common function descriptions |
