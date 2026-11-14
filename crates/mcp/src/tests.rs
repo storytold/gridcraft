@@ -123,6 +123,26 @@ fn tools_list_has_schemas() {
 }
 
 #[test]
+fn invalid_jsonrpc_versions_do_not_execute_or_initialize() {
+    for version in [None, Some(Value::Null), Some(json!("1.0")), Some(json!(2.0)), Some(json!(true))] {
+        let mut s = server();
+        ok(&mut s, "set_cell", json!({"cell": "A1", "input": "original"}));
+        let mut msg = json!({"id": 1, "method": "tools/call", "params": {"name": "set_cell", "arguments": {"cell": "A1", "input": "changed"}}});
+        if let Some(version) = version {
+            msg["jsonrpc"] = version;
+        }
+        let reply = s.handle(msg.clone()).expect("invalid requests get an error");
+        assert_eq!(err_code(&reply), -32600, "{msg}: {reply}");
+        assert_eq!(reply["id"], Value::Null);
+        assert_eq!(ok(&mut s, "get_cell", json!({"cell": "A1"}))["input"], "original");
+        msg.as_object_mut().unwrap().remove("id");
+        msg["method"] = json!("notifications/initialized");
+        assert_eq!(s.handle(msg), None, "messages without an ID still get no reply");
+        assert!(!s.is_initialized(), "an invalid envelope must not initialize the server");
+    }
+}
+
+#[test]
 fn malformed_input_never_panics() {
     let mut s = server();
     assert_eq!(s.handle_line("   "), None);
