@@ -3443,7 +3443,9 @@ fn chart_set_doughnut_hole_and_angle() {
     s.execute("chart.set", json!({"holeSize": 200})).unwrap();
     let c = s.doc().unwrap().wb.active().unwrap().charts[0].clone();
     assert_eq!((c.hole_size, c.first_slice_angle), (90, 40));
-    s.execute("chart.set", json!({"holeSize": 25, "firstSliceAngle": 180})).unwrap();
+    s.execute("chart.set", json!({"holeSize": 25, "firstSliceAngle": 180, "gapWidth": 900, "overlap": -300})).unwrap();
+    let c = &s.doc().unwrap().wb.active().unwrap().charts[0];
+    assert_eq!((c.gap_width, c.overlap), (Some(500), Some(-100)));
     reopen(&mut s);
     let c = &s.doc().unwrap().wb.active().unwrap().charts[0];
     assert_eq!((c.kind, c.hole_size, c.first_slice_angle), (gridcraft_model::ChartKind::Doughnut, 25, 180));
