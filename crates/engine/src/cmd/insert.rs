@@ -72,7 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Insert Chart",
             ["Insert", "Charts"],
             None,
-            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers, title?, at?: \"H2\", width?, height?}",
+            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers, title?, at?: \"H2\" or \"Dashboard!H2\" (default: the active sheet, right of the data), width?, height?}",
             has_doc,
             insert_chart
         ),
@@ -800,6 +800,20 @@ pub fn recommend_charts(s: &Session, p: &Json) -> Result<Vec<(&'static str, &'st
     Ok(out)
 }
 
+/// The sheet `insert.chart` puts the chart on, and the anchor cell `at` gives. As in Excel, a
+/// chart goes on the active sheet wherever its data is, so a dashboard sheet can chart another
+/// sheet's data (#3512). A sheet-qualified `at` (`Dashboard!A60`) puts it on that sheet, and an
+/// explicit `sheet` parameter keeps naming the sheet the command works on.
+fn chart_place(s: &Session, p: &Json) -> Result<(usize, Option<CellRef>)> {
+    let d = s.doc()?;
+    let host = match str_param(p, "at").map(split_sheet) {
+        Some((Some(name), _)) => d.wb.sheet_index(&name).ok_or_else(|| bad("at", format!("no sheet named `{name}`")))?,
+        _ if p.get("sheet").is_some() => target_sheet(s, p)?,
+        _ => d.wb.active_sheet(),
+    };
+    Ok((host, cell_param_on(s, p, "at", host)?))
+}
+
 /// The chart `insert.chart` would insert for these params, without inserting it: the sheet it
 /// goes on and the chart (previews in the Recommended Charts dialog).
 pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
@@ -824,7 +838,8 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
     }
     scatter_x_from_first(kind, &mut series);
     let id = d.wb.next_object_id();
-    let at = cell_param_on(s, p, "at", sheet)?.unwrap_or_else(|| CellRef::new(bounds.start.row, bounds.end.col + 2));
+    let (host, at) = chart_place(s, p)?;
+    let at = at.unwrap_or_else(|| CellRef::new(bounds.start.row, bounds.end.col + 2));
     let title = str_param(p, "title").map(str::to_string).or_else(|| {
         if series.len() == 1 {
             series[0].name.as_ref().map(|n| gridcraft_calc::evaluate(&d.wb, sheet, at, n).display())
@@ -858,7 +873,7 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         by_rows,
         pivot: None,
     };
-    Ok((sheet, chart))
+    Ok((host, chart))
 }
 
 fn insert_chart(s: &mut Session, p: &Json) -> Result<Json> {
@@ -1852,6 +1867,90 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gridcraft_core::Value;
+
+    /// The charts on the sheet `name`: (anchor cell, title, every series' name, categories and values).
+    fn charts_on(s: &Session, name: &str) -> Vec<(String, Option<String>, Vec<[String; 3]>)> {
+        let d = s.doc().unwrap();
+        let sh = d.wb.sheet(d.wb.sheet_index(name).unwrap()).unwrap();
+        sh.charts
+            .iter()
+            .map(|c| {
+                let series = c
+                    .series
+                    .iter()
+                    .map(|x| [x.name.clone().unwrap_or_default(), x.categories.clone().unwrap_or_default(), x.values.clone()])
+                    .collect();
+                (c.anchor.cell.a1(), c.title.clone(), series)
+            })
+            .collect()
+    }
+
+    /// #3512: a chart of another sheet's data went on the data's sheet, and a sheet-qualified
+    /// `at` was refused, so a dashboard sheet could not chart other sheets.
+    #[test]
+    fn chart_goes_on_the_active_sheet_or_the_sheet_at_names() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("sheet.rename", json!({"name": "Summary"})).unwrap();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Month", "Sales"], ["Jan", 3], ["Feb", 5]]})).unwrap();
+        s.execute("home.insertSheet", json!({"name": "My Board"})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().name, "My Board");
+        let series = vec![["Summary!$B$1".to_string(), "Summary!$A$2:$A$3".to_string(), "Summary!$B$2:$B$3".to_string()]];
+
+        // Another sheet's data, no sheet on `at`: the chart goes on the active sheet.
+        let id = s.execute("insert.chart", json!({"range": "Summary!A1:B3", "type": "line", "at": "I40"})).unwrap()["chart"].as_u64().unwrap();
+        assert_eq!(charts_on(&s, "Summary"), vec![]);
+        assert_eq!(charts_on(&s, "My Board"), vec![("I40".to_string(), Some("Sales".to_string()), series.clone())]);
+        let d = s.doc().unwrap();
+        let board = d.wb.active_sheet();
+        let chart = &d.wb.sheet(board).unwrap().charts[0];
+        assert_eq!(chart.id as u64, id);
+        assert_eq!(chart.source.as_deref(), Some("Summary!A1:B3"));
+        // Its series read the data's sheet from the chart's sheet.
+        let values = gridcraft_calc::evaluate(&d.wb, board, CellRef::new(0, 0), &chart.series[0].values);
+        let Value::Array(values) = values else { panic!("not an array: {values:?}") };
+        assert_eq!(values.data, vec![Value::Number(3.0), Value::Number(5.0)]);
+
+        // Without `at`, the default anchor is right of the data, on the active sheet.
+        s.execute("insert.chart", json!({"range": "Summary!A1:B3", "type": "column"})).unwrap();
+        assert_eq!(charts_on(&s, "My Board").last().map(|c| c.0.as_str()), Some("D1"));
+
+        // A sheet-qualified `at` puts the chart on that sheet; the active sheet stays.
+        s.execute("insert.chart", json!({"range": "Summary!A1:B3", "type": "pie", "at": "Summary!E2"})).unwrap();
+        assert_eq!(charts_on(&s, "Summary"), vec![("E2".to_string(), Some("Sales".to_string()), series.clone())]);
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().name, "My Board");
+        // A quoted sheet name works too, from the data's sheet with a range that has no sheet.
+        s.execute("sheet.activate", json!({"sheet": "Summary"})).unwrap();
+        s.execute("insert.chart", json!({"range": "A1:B3", "type": "bar", "at": "'My Board'!K2"})).unwrap();
+        assert_eq!(charts_on(&s, "My Board").last().map(|c| (c.0.as_str(), c.2.clone())), Some(("K2", series.clone())));
+        assert_eq!(charts_on(&s, "Summary").len(), 1);
+
+        // An unknown sheet or a malformed cell on `at` is refused and adds nothing.
+        for at in ["Nowhere!A1", "Summary!", "My Board!ZZZZ1", "!A1"] {
+            assert!(s.execute("insert.chart", json!({"range": "A1:B3", "type": "line", "at": at})).is_err(), "{at}");
+        }
+        assert_eq!((charts_on(&s, "Summary").len(), charts_on(&s, "My Board").len()), (1, 3));
+
+        // An explicit `sheet` still names the sheet the command works on, for the data and the chart.
+        s.execute("sheet.activate", json!({"sheet": "My Board"})).unwrap();
+        s.execute("insert.chart", json!({"sheet": "Summary", "range": "A1:B3", "type": "line"})).unwrap();
+        assert_eq!(charts_on(&s, "Summary").last(), Some(&("D1".to_string(), Some("Sales".to_string()), series.clone())));
+        assert_eq!(charts_on(&s, "My Board").len(), 3);
+
+        // Undo takes the chart off the sheet it went on.
+        s.execute("edit.undo", json!({})).unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!((charts_on(&s, "Summary").len(), charts_on(&s, "My Board").len()), (1, 2));
+
+        // The charts and the sheets they read survive an XLSX round trip.
+        let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+        s.execute("file.open", json!({"name": "board.xlsx", "base64": saved["base64"]})).unwrap();
+        let board = charts_on(&s, "My Board");
+        assert_eq!(board.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["I40", "D1"]);
+        assert!(board.iter().all(|c| c.2 == series), "{board:?}");
+        assert_eq!(charts_on(&s, "Summary").iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["E2"]);
+    }
 
     #[test]
     fn chart_from_whole_columns_uses_the_rows_in_use() {

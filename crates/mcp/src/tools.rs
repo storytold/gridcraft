@@ -125,6 +125,7 @@ pub fn tool_definitions() -> Vec<Value> {
     tools
 }
 
+/// Every tool with its JSON input schema, before [`tool_definitions`] adds the `window`/`doc` target.
 fn base_tool_definitions() -> Vec<Value> {
     let empty = || obj(json!({}), &[]);
     vec![
@@ -286,11 +287,11 @@ fn base_tool_definitions() -> Vec<Value> {
             "Insert a chart from a data range (first row/column used as series names and categories, like Excel). Returns the chart id.",
             obj(
                 json!({
-                    "range": string("Source data range including headers, e.g. \"A1:C6\""),
+                    "range": string("Source data range including headers, e.g. \"A1:C6\" or \"Data!A1:C6\""),
                     "type": enumeration("Chart type", CHART_TYPES),
                     "subtype": enumeration("Variant (optional)", &["clustered", "stacked", "stacked100", "markers"]),
                     "title": string("Chart title"),
-                    "at": string("Top-left anchor cell (default: right of the data)"),
+                    "at": string("Top-left anchor cell; \"Dashboard!H2\" puts the chart on that sheet (default: the active sheet, right of the data)"),
                 }),
                 &["range", "type"],
             ),
