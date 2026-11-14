@@ -18,23 +18,58 @@ fn copied(wb: &Workbook, range: &str) -> String {
     range_html(wb, 0, r, &crate::display::range_text(wb, 0, r)).unwrap()
 }
 
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+#[test]
+fn save_preserves_a_preexisting_legacy_temp_symlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let victim = dir.path().join("victim.txt");
+    std::fs::write(&victim, b"original").unwrap();
+    let dest = dir.path().join("book.xlsx");
+    let temp = dir.path().join("book.xlsx.sctmp");
+    std::os::unix::fs::symlink(&victim, &temp).unwrap();
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(std::fs::read(&victim).unwrap(), b"original");
+    assert!(std::fs::symlink_metadata(&temp).unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(unix)]
 #[test]
-fn save_fails_upfront_when_the_temp_name_is_taken() {
-    // Another local user who can write the directory must not be able to point the
-    // save's predictable temporary name at their own file: creation is exclusive.
-    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-temp-name-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let victim = dir.join("victim.txt");
-    std::fs::write(&victim, b"original").unwrap();
-    let dest = dir.join("book.xlsx");
-    std::os::unix::fs::symlink(&victim, dir.join("book.xlsx.sctmp")).unwrap();
-    let err = write_file(dest.to_str().unwrap(), b"new").unwrap_err();
-    assert_eq!(std::fs::read(&victim).unwrap(), b"original");
-    assert!(!dir.join("book.xlsx").exists(), "{err}");
-    let _ = std::fs::remove_dir_all(&dir);
+fn save_preserves_a_preexisting_legacy_temp_file_and_can_save_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let temp = dir.path().join("book.xlsx.sctmp");
+    std::fs::write(&temp, b"original").unwrap();
+    let dest = dir.path().join("book.xlsx");
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(std::fs::read(&temp).unwrap(), b"original");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+    write_file(dest.to_str().unwrap(), b"newer").unwrap();
+    assert_eq!(std::fs::read(&temp).unwrap(), b"original");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"newer");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2, "successful saves leave no new temp files");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn save_ignores_an_abandoned_unique_temp_and_cleans_failed_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("book.xlsx");
+    let abandoned = create_save_temp(&dest, None).unwrap();
+    assert_eq!(abandoned.path().parent(), Some(dir.path()));
+    let (mut file, abandoned_path) = abandoned.keep().unwrap();
+    use std::io::Write;
+    file.write_all(b"abandoned").unwrap();
+    drop(file);
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(std::fs::read(&abandoned_path).unwrap(), b"abandoned");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+    let blocked = dir.path().join("directory.xlsx");
+    std::fs::create_dir(&blocked).unwrap();
+    std::fs::write(blocked.join("marker"), b"original").unwrap();
+    assert!(write_file(blocked.to_str().unwrap(), b"new").is_err());
+    assert_eq!(std::fs::read(blocked.join("marker")).unwrap(), b"original");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3, "failed persist cleans only its owned temp");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -42,15 +77,22 @@ fn save_fails_upfront_when_the_temp_name_is_taken() {
 #[test]
 fn save_keeps_the_destination_access_restrictions() {
     use std::os::unix::fs::PermissionsExt;
-    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-permissions-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let dest = dir.join("private.xlsx");
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("private.xlsx");
     std::fs::write(&dest, b"v1").unwrap();
     std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600)).unwrap();
     write_file(dest.to_str().unwrap(), b"v2").unwrap();
     let mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
+
+    // A common 022 umask would strip group-write if applied while creating the temp file.
+    let shared = dir.path().join("shared.xlsx");
+    std::fs::write(&shared, b"v1").unwrap();
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o664)).unwrap();
+    write_file(shared.to_str().unwrap(), b"v2").unwrap();
+    let mode = std::fs::metadata(&shared).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o664);
+
     // The mode is set outright from the old file's, not through the umask: group and other access
     // it had stay as they were.
     for old in [0o640, 0o664] {
@@ -60,11 +102,10 @@ fn save_keeps_the_destination_access_restrictions() {
     }
     assert!(!dir.join("private.xlsx.sctmp").exists());
     // And a brand-new file is created with the restrictive, not permissive, default.
-    let fresh = dir.join("new.xlsx");
+    let fresh = dir.path().join("new.xlsx");
     write_file(fresh.to_str().unwrap(), b"v").unwrap();
     let mode = std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
     assert!(mode & 0o022 == 0, "mode {mode:o}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Without the old group, a saved file keeps the old owner and other bits and nothing for a group.
@@ -81,12 +122,9 @@ fn restored_mode_drops_the_group_and_special_bits_when_the_group_is_lost() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn open_refuses_directories_and_unknowable_lengths() {
-    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-open-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    assert!(read_file(dir.to_str().unwrap()).is_err(), "a directory is not a regular file");
-    assert!(read_file(dir.join("missing").to_str().unwrap()).is_err());
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = tempfile::tempdir().unwrap();
+    assert!(read_file(dir.path().to_str().unwrap()).is_err(), "a directory is not a regular file");
+    assert!(read_file(dir.path().join("missing").to_str().unwrap()).is_err());
 }
 
 #[test]
@@ -325,23 +363,20 @@ fn csv_and_text_open_read_day_first_dates_and_report_a_guessed_order() {
 }
 
 /// A save that can't be put in place (here a folder already has the workbook's name, as
-/// with a file another app holds locked) fails without leaving `<name>.sctmp` behind.
+/// with a file another app holds locked) fails without leaving any unique temporary file behind.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn failed_save_leaves_no_temporary_file() {
-    let dir = std::env::temp_dir().join(format!("gridcraft-write-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let blocked = dir.join("Book1.xlsx");
+    let dir = tempfile::tempdir().unwrap();
+    let blocked = dir.path().join("Book1.xlsx");
     std::fs::create_dir(&blocked).unwrap();
     assert!(write_file(blocked.to_str().unwrap(), b"workbook").is_err());
-    assert!(!dir.join("Book1.xlsx.sctmp").exists(), "the temporary file is removed");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1, "the temporary file is removed");
     // An ordinary save still works and leaves only the workbook.
-    let ok = dir.join("Book2.xlsx");
+    let ok = dir.path().join("Book2.xlsx");
     write_file(ok.to_str().unwrap(), b"workbook").unwrap();
     assert_eq!(std::fs::read(&ok).unwrap(), b"workbook");
-    assert!(!dir.join("Book2.xlsx.sctmp").exists());
-    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
 }
 
 /// While a script runs (#2178), file reads and writes are refused whatever command or
@@ -349,12 +384,10 @@ fn failed_save_leaves_no_temporary_file() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn script_sandbox_refuses_file_access_until_dropped() {
-    let dir = std::env::temp_dir().join(format!("gridcraft-sandbox-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let existing = dir.join("in.csv");
+    let dir = tempfile::tempdir().unwrap();
+    let existing = dir.path().join("in.csv");
     std::fs::write(&existing, b"a,b\n").unwrap();
-    let (existing, out) = (existing.to_string_lossy().to_string(), dir.join("out.xlsx").to_string_lossy().to_string());
+    let (existing, out) = (existing.to_string_lossy().to_string(), dir.path().join("out.xlsx").to_string_lossy().to_string());
     {
         let _outer = ScriptSandbox::enter();
         {
@@ -367,7 +400,6 @@ fn script_sandbox_refuses_file_access_until_dropped() {
     }
     assert_eq!(read_file(&existing).unwrap(), b"a,b\n");
     write_file(&out, b"ok").unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The guard's drop lowers the counter of the thread it runs on, so it must not move between threads:
