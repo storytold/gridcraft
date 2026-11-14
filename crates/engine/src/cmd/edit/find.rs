@@ -13,14 +13,9 @@ fn matches(hay: &str, what: &str, case: bool, whole: bool) -> bool {
     if whole { h == w } else { h.contains(&w) }
 }
 
-/// `*`/`?` wildcard match with `~` escapes.
-///
-/// The pattern runs as a bit-parallel automaton over the text: one pass, each character costing
-/// one step per 64 pattern positions. Backtracking to the last `*` after a mismatch rescans the
-/// text and costs text × pattern comparisons on a long, repetitive cell, for every cell a
-/// filter or Find visits.
-pub(crate) fn wildcard(text: &str, pat: &str) -> bool {
-    // The pattern as (character, escaped) items, runs of `*` folded into one.
+/// A pattern's items: each character flagged when a `~` escaped it (a trailing `~` is dropped),
+/// runs of `*` folded into one.
+fn wildcard_tokens(pat: &str) -> Vec<(char, bool)> {
     let mut p: Vec<(char, bool)> = Vec::new();
     let mut it = pat.chars();
     while let Some(c) = it.next() {
@@ -32,6 +27,17 @@ pub(crate) fn wildcard(text: &str, pat: &str) -> bool {
             p.push((c, false));
         }
     }
+    p
+}
+
+/// `*`/`?` wildcard match with `~` escapes.
+///
+/// The pattern runs as a bit-parallel automaton over the text: one pass, each character costing
+/// one step per 64 pattern positions. Backtracking to the last `*` after a mismatch rescans the
+/// text and costs text × pattern comparisons on a long, repetitive cell, for every cell a
+/// filter or Find visits.
+pub(crate) fn wildcard(text: &str, pat: &str) -> bool {
+    let p = wildcard_tokens(pat);
     let words = (p.len() + 1).div_ceil(64);
     let bit = |set: &mut [u64], i: usize| set[i / 64] |= 1 << (i % 64);
     // Positions holding a `*` and a `?`, and where each literal character sits in the pattern.
@@ -107,6 +113,95 @@ pub(crate) fn wildcard(text: &str, pat: &str) -> bool {
         close(&mut state);
     }
     state[p.len() / 64] & (1 << (p.len() % 64)) != 0
+}
+
+/// Length of the shortest prefix of `t` that the pattern matches: each `*` takes as few
+/// characters as it can. `Err(true)` when it fails after reaching a `*`: whatever follows the
+/// star can't be placed in `t`, so no later start can match either.
+fn shortest_prefix(p: &[(char, bool)], t: &[char]) -> std::result::Result<usize, bool> {
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let mut star: Option<(usize, usize)> = None;
+    loop {
+        if pi == p.len() {
+            return Ok(ti);
+        }
+        match (p.get(pi), t.get(ti)) {
+            (Some(&('*', false)), _) => {
+                star = Some((pi, ti));
+                pi += 1;
+                continue;
+            }
+            (Some(&(c, esc)), Some(&x)) if (c == '?' && !esc) || c == x => {
+                pi += 1;
+                ti += 1;
+                continue;
+            }
+            _ => {}
+        }
+        match star {
+            Some((sp, st)) if st < t.len() => {
+                star = Some((sp, st + 1));
+                pi = sp + 1;
+                ti = st + 1;
+            }
+            _ => return Err(star.is_some()),
+        }
+    }
+}
+
+/// [`replace_wildcard_within`] without a limit: `None` when nothing matches.
+#[cfg(test)]
+pub(super) fn replace_wildcard(text: &str, what: &str, with: &str, case: bool) -> Option<String> {
+    replace_wildcard_within(text, what, with, case, usize::MAX).flatten()
+}
+
+/// Replace every match of a `*`/`?` pattern, left to right and without overlaps, as Excel does:
+/// a `*` takes as few characters as it can, except a trailing `*`, which takes the rest of the
+/// text. Case folds as `matches` does (a final Σ is ς) while that keeps one char per char, else
+/// one char to its first lowercase char, so match positions stay those of `text`. `None` once
+/// the result passes `limit` bytes (checked before each copy of `with`), `Some(None)` when
+/// nothing matches.
+pub(super) fn replace_wildcard_within(text: &str, what: &str, with: &str, case: bool, limit: usize) -> Option<Option<String>> {
+    let t: Vec<char> = text.chars().collect();
+    let (folded, mut p) = if case {
+        (t.clone(), wildcard_tokens(what))
+    } else {
+        let lower: Vec<char> = text.to_lowercase().chars().collect();
+        if lower.len() == t.len() {
+            (lower, wildcard_tokens(&what.to_lowercase()))
+        } else {
+            let fold = |c: char| c.to_lowercase().next().unwrap_or(c);
+            (t.iter().map(|&c| fold(c)).collect(), wildcard_tokens(what).into_iter().map(|(c, esc)| (fold(c), esc)).collect())
+        }
+    };
+    let mut to_end = false;
+    while p.last() == Some(&('*', false)) {
+        p.pop();
+        to_end = true;
+    }
+    let mut out = String::new();
+    let (mut i, mut last, mut hit) = (0usize, 0usize, false);
+    while i < t.len() {
+        let len = match shortest_prefix(&p, folded.get(i..).unwrap_or_default()) {
+            Ok(len) => len,
+            Err(true) => break,
+            Err(false) => {
+                i += 1;
+                continue;
+            }
+        };
+        let end = if to_end { t.len() } else { i + len };
+        out.extend(t.get(last..i).unwrap_or_default());
+        if out.len() + with.len() > limit {
+            return None;
+        }
+        out.push_str(with);
+        hit = true;
+        last = end;
+        i = end.max(i + 1);
+    }
+    out.extend(t.get(last..).unwrap_or_default());
+    (out.len() <= limit).then(|| hit.then_some(out))
 }
 
 pub(super) fn find(s: &mut Session, p: &Json) -> Result<Json> {
@@ -213,6 +308,11 @@ pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
                 }
                 let new = if whole {
                     (with.len() <= REPLACE_CELL_MAX_BYTES).then(|| with.to_string())
+                } else if what.contains(['*', '?']) {
+                    match replace_wildcard_within(&text, &what, with, case, REPLACE_CELL_MAX_BYTES) {
+                        Some(None) => continue,
+                        new => new.flatten(),
+                    }
                 } else if case {
                     replace_cs_within(&text, &what, with, REPLACE_CELL_MAX_BYTES)
                 } else {

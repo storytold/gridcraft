@@ -606,6 +606,83 @@ fn replace_case_insensitive_keeps_text_when_folding_moves_boundaries() {
     assert_eq!(sh.value(CellRef::new(0, 0)), Value::text(text));
 }
 
+fn replace_a1(text: &str, params: Json) -> (Json, Value) {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": text})).unwrap();
+    let r = s.execute("edit.replace", params).unwrap();
+    (r, s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)))
+}
+
+#[test]
+fn replace_with_wildcards_folds_case_as_find_does() {
+    // Find lowercases the whole text, where a final Σ becomes ς. Replace folded char by char
+    // (Σ to σ), so it skipped a cell Find had found.
+    let (r, v) = replace_a1("ΚΑΛΟΣ", json!({"what": "λ?ς", "with": "X"}));
+    assert_eq!(r["replaced"], json!(1));
+    assert_eq!(v, Value::text("ΚΑX"));
+}
+
+#[test]
+fn replace_with_wildcards_replaces_the_matched_text() {
+    // #2108: Replace counted a wildcard match, then replaced the pattern text literally, so
+    // the cell kept its text. The expected results are Excel 365's, measured in #1455: a `*`
+    // takes as few characters as it can, except a trailing `*`, which takes the rest.
+    for (text, what, with, want) in [
+        ("hello world", "h*o", "X", "X world"),
+        ("hello world", "l*", "X", "heX"),
+        ("xaxbyazb", "a?b", "X", "xXyX"),
+        ("a*b*c", "~*", "+", "a+b+c"),
+        ("\u{130}stanbul", "?", "_", "________"),
+        ("10.0.0.1, fe80::1", ",*", "", "10.0.0.1"),
+    ] {
+        let (r, v) = replace_a1(text, json!({"what": what, "with": with}));
+        assert_eq!(r["replaced"], json!(1), "{what} in {text}");
+        assert_eq!(v, Value::text(want), "{what} in {text}");
+    }
+}
+
+#[test]
+fn wildcard_replace_scans_past_a_start_that_fails_before_its_star() {
+    // `a` at 0 fails on `b` before the star is reached, so the scan goes on; `a*b` at 2 finds
+    // no `b` after its star, so no later start can match and the scan stops.
+    assert_eq!(replace_wildcard("ac abc", "ab*c", "X", false).as_deref(), Some("ac X"));
+    assert_eq!(replace_wildcard("ab a a", "a*b", "X", false).as_deref(), Some("X a a"));
+    assert_eq!(replace_wildcard("aaaa", "a*b", "X", false), None);
+}
+
+#[test]
+fn wildcard_replace_follows_match_case() {
+    let (_, v) = replace_a1("Hello hello", json!({"what": "h?llo", "with": "X"}));
+    assert_eq!(v, Value::text("X X"));
+    let (_, v) = replace_a1("Hello hello", json!({"what": "h?llo", "with": "X", "matchCase": true}));
+    assert_eq!(v, Value::text("Hello X"));
+}
+
+#[test]
+fn wildcard_replace_refuses_text_that_would_grow_past_a_cell() {
+    // As with a literal pattern: past a cell's limit the command fails and changes nothing, and
+    // the new text stops at the limit instead of being built whole first.
+    let mut s = Session::new();
+    s.new_workbook();
+    let long = "ab".repeat(5_000);
+    s.execute("range.setValues", json!({"range": "A1", "values": [[long.clone()], ["abc"]]})).unwrap();
+    for case in [false, true] {
+        let err = s.execute("edit.replace", json!({"what": "a?", "with": "x".repeat(1_000), "matchCase": case})).expect_err("too long");
+        assert!(err.to_string().contains("too long"), "{err}");
+        assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["value"], json!(long));
+        assert_eq!(s.execute("cell.get", json!({"cell": "A2"})).unwrap()["value"], json!("abc"));
+    }
+    let err = s.execute("edit.replace", json!({"what": "?c", "with": "x".repeat(32_767)})).expect_err("32,768 characters");
+    assert!(err.to_string().contains("too long"), "{err}");
+    s.execute("edit.replace", json!({"what": "?c", "with": "x".repeat(100)})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell": "A2"})).unwrap()["value"], json!(format!("a{}", "x".repeat(100))));
+    use super::find::replace_wildcard_within;
+    assert_eq!(replace_wildcard_within("abab", "a?", "xy", false, 4), Some(Some("xyxy".into())));
+    assert_eq!(replace_wildcard_within("abab", "a?", "xy", false, 3), None);
+    assert_eq!(replace_wildcard_within("abab", "z?", "xy", false, 4), Some(None));
+}
+
 #[test]
 fn next_corner_of_selection_goes_clockwise_and_anchors_there() {
     // #1442, as Excel does it: B2 → D2 → D4 → B4 → B2, the area stays selected, and Shift+arrows
