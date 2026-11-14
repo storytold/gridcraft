@@ -286,6 +286,8 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
         act(app, "draw.eraser", json!({}));
     }
     sep(ui);
+    super::draw_brush::controls(app, ui);
+    sep(ui);
     let __k = big_button(ui, Icon::Shapes, "Ink to\nShape", "Convert the last ink stroke to a shape", false);
     control_keytip(app, ui, &__k, "draw.inkToShape");
     if __k.clicked() {

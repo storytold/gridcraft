@@ -51,6 +51,10 @@ impl InteractionInput<'_> {
 pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     // Text selection and editing must not also move the object or edit worksheet cells.
     if app.text_box_editor.is_some() || app.grid.hf_edit.is_some() {
+        app.grid.brush = None;
+        return;
+    }
+    if super::brush::interact(app, ui, resp, geo, sh) {
         return;
     }
     let ctx = ui.ctx().clone();
@@ -255,10 +259,17 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
         }
         if app.session.draw_tool == "eraser" && (primary_clicked || resp.dragged()) {
             if let Some(p) = pos
-                && let Some((ObjRef { kind: ObjKind::Shape, id }, _)) = crate::chartview::hit(app, geo, sh, p)
-                && sh.shapes.iter().any(|s| s.id == id && s.kind == gridcraft_engine::model::ShapeKind::Ink)
+                && let Some((object, _)) = crate::chartview::hit(app, geo, sh, p)
             {
-                let _ = app.run("object.delete", json!({"kind": "shape", "id": id}));
+                let id = object.id;
+                let kind = match object.kind {
+                    ObjKind::Shape if sh.shapes.iter().any(|s| s.id == id && s.kind == gridcraft_engine::model::ShapeKind::Ink) => Some("shape"),
+                    ObjKind::Image if sh.images.iter().any(|im| im.id == id && gridcraft_engine::brush::has_source(&im.data)) => Some("image"),
+                    _ => None,
+                };
+                if let Some(kind) = kind {
+                    let _ = app.run("object.delete", json!({"kind": kind, "id": id}));
+                }
             }
             return true;
         }

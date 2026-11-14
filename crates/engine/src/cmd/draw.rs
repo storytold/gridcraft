@@ -1,5 +1,7 @@
 //! Draw tab: pen and eraser tools, ink strokes, Ink to Shape.
 
+mod brush;
+
 use gridcraft_core::CellRef;
 use gridcraft_model::{Anchor, Color, Shape, ShapeKind};
 use serde_json::{Value as Json, json};
@@ -7,7 +9,7 @@ use serde_json::{Value as Json, json};
 use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, ok, str_param, u32_param};
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![
+    let mut specs = vec![
         cmd!(noundo "draw.pen", "Pen", ["Draw", "Tools"], None, "{on?: bool, color?: hex, width?: 2}", has_doc, pen),
         cmd!(noundo "draw.eraser", "Eraser", ["Draw", "Tools"], None, "{on?: bool}", has_doc, eraser),
         cmd!(noundo "draw.lasso", "Lasso Select", ["Draw", "Tools"], None, "{} (selects ink by dragging; same as Select Objects)", has_doc, |s, _| {
@@ -24,7 +26,9 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             ink_to_shape
         ),
-    ]
+    ];
+    specs.extend(brush::specs());
+    specs
 }
 
 fn pen(s: &mut Session, p: &Json) -> Result<Json> {
