@@ -262,6 +262,15 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     };
     let doughnut = plot.child("doughnutChart");
     let hole_size = doughnut.and_then(|g| g.child_val("holeSize")).and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(75).clamp(10, 90);
+    let bars = plot.child("barChart").or_else(|| plot.child("bar3DChart"));
+    // Strict files write these as percentages (`219%`).
+    let percent = |v: &str| v.trim().trim_end_matches('%').trim().parse::<f64>().ok();
+    let gap_width = bars.and_then(|g| g.child_val("gapWidth")).and_then(percent).map(|v| v.clamp(0.0, 500.0) as u16);
+    // Stacked series share a slot, so the 100 written for them means nothing to keep. Any other value
+    // is the file's own.
+    let stacked = bars.is_some_and(|g| matches!(g.child_val("grouping"), Some("stacked" | "percentStacked")));
+    let overlap =
+        bars.and_then(|g| g.child_val("overlap")).and_then(percent).map(|v| v.clamp(-100.0, 100.0) as i16).filter(|v| !(stacked && *v == 100));
     let first_slice_angle =
         plot.child("pieChart").or(doughnut).and_then(|g| g.child_val("firstSliceAng")).and_then(|v| v.trim().parse::<u16>().ok()).unwrap_or(0) % 360;
     Some(Chart {
@@ -282,6 +291,24 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         style: root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2),
         hole_size,
         first_slice_angle,
+        gap_width,
+        overlap,
+        // The axis of the first group: a combo chart may list its secondary axis first.
+        value_axis_hidden: val_axes
+            .iter()
+            .find(|a| {
+                a.child_val("axId").is_some_and(|id| first_axes.iter().any(|f| f == id)) && (!scatter || y_ax.is_some_and(|y| std::ptr::eq(y, **a)))
+            })
+            .or(y_ax.as_ref())
+            .is_some_and(|a| bool_val(a, "delete")),
+        // From whichever bar group has them: a combo chart's first group may be a clustered one.
+        series_lines: plot.kids("barChart").chain(plot.kids("bar3DChart")).find_map(|g| g.child("serLines")).map(|lines| {
+            let ln = lines.path(&["spPr", "ln"]);
+            gridcraft_model::ChartSeriesLines {
+                color: ln.and_then(|l| l.child("solidFill")).and_then(dml_color),
+                width: ln.and_then(|l| l.attr_f64("w")).map(|w| (w / EMU_PER_PT) as f32).filter(|w| w.is_finite() && *w > 0.0),
+            }
+        }),
         x_title: x_ax.and_then(|a| a.child("title")).and_then(rich_title),
         y_title: y_ax.and_then(|a| a.child("title")).and_then(rich_title),
         source: None,
@@ -668,15 +695,31 @@ fn dlbls(show: bool) -> String {
     )
 }
 
+fn series_lines_xml(ch: &Chart, wb: &Workbook) -> String {
+    let Some(lines) = &ch.series_lines else { return String::new() };
+    let width = lines.width.map_or(String::new(), |w| format!(" w=\"{}\"", (f64::from(w) * EMU_PER_PT).round().clamp(0.0, 20_116_800.0) as u64));
+    let fill = lines.color.as_ref().and_then(|c| srgb(c, &wb.theme)).map_or(String::new(), |c| format!("<a:solidFill>{c}</a:solidFill>"));
+    if width.is_empty() && fill.is_empty() {
+        return "<c:serLines/>".into();
+    }
+    format!("<c:serLines><c:spPr><a:ln{width}>{fill}</a:ln></c:spPr></c:serLines>")
+}
+
 fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb: &Workbook, si: usize) -> String {
     let sers: String = series.iter().map(|(i, s)| series_xml(s, *i, g, wb, si)).collect();
     let dl = dlbls(ch.data_labels);
     let ax = format!("<c:axId val=\"{}\"/><c:axId val=\"{}\"/>", axes.0, axes.1);
     match g {
         G::Bar { bar, grouping } => {
-            let overlap = if grouping == "clustered" { String::new() } else { "<c:overlap val=\"100\"/>".into() };
+            let overlap = match ch.overlap {
+                Some(o) => format!("<c:overlap val=\"{o}\"/>"),
+                None if grouping == "clustered" => String::new(),
+                None => "<c:overlap val=\"100\"/>".into(),
+            };
+            let gap = ch.gap_width.unwrap_or(150);
+            let lines = series_lines_xml(ch, wb);
             format!(
-                "<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:gapWidth val=\"150\"/>{overlap}{ax}</c:barChart>",
+                "<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:gapWidth val=\"{gap}\"/>{overlap}{lines}{ax}</c:barChart>",
                 if bar { "bar" } else { "col" }
             )
         }
@@ -827,7 +870,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 id: 2,
                 cross: 1,
                 pos: "l",
-                delete: false,
+                delete: ch.value_axis_hidden,
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
                 crosses_max: false,
@@ -849,7 +892,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 id: 2,
                 cross: 1,
                 pos: "b",
-                delete: false,
+                delete: ch.value_axis_hidden,
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
                 crosses_max: false,
@@ -871,7 +914,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 id: 2,
                 cross: 1,
                 pos: "l",
-                delete: false,
+                delete: ch.value_axis_hidden,
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
                 crosses_max: false,

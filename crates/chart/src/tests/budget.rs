@@ -24,6 +24,7 @@ fn data_of(series: usize, points: usize) -> ChartData {
                 ..SeriesData::default()
             })
             .collect(),
+        series_lines: None,
     }
 }
 
