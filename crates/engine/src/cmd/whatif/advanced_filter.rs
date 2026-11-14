@@ -83,6 +83,9 @@ pub(crate) fn criterion_matches(v: &Value, text: &str, crit: &Value) -> bool {
     }
 }
 
+/// Most (list row, criteria row) pairs one Advanced Filter tests.
+const MAX_FILTER_TESTS: u64 = 50_000_000;
+
 pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "data.advancedFilter";
     let d = s.doc()?;
@@ -132,6 +135,10 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
             }
             rows.push(conds);
         }
+    }
+    // Each list row is tried against every criteria row, so bound their product too.
+    if u64::from(list.height()) * rows.len() as u64 > MAX_FILTER_TESTS {
+        return Err(bad(CMD, "the list and criteria ranges together are too large"));
     }
     let matches_row = |row: u32| -> bool {
         if rows.is_empty() {

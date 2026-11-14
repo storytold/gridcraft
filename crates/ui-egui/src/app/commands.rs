@@ -1,5 +1,5 @@
 use super::{
-    INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, NoticeKind, SheetApp, UiRequest, backstage, clamp_interface_scale, clean_error, dialogs,
+    INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, NoticeKind, SheetApp, UiRequest, backstage, clamp_interface_scale, clean_error, dialogs,
     formula_locale, i18n, json, now_ms, printing,
 };
 
@@ -96,6 +96,21 @@ impl SheetApp {
         {
             self.deliver_pdf(r);
         }
+        // The scan stopped at its cell allowance: say that some cells were not checked.
+        if id == "data.circleInvalid"
+            && let Ok(r) = &r
+            && r.get("truncated").and_then(Json::as_bool) == Some(true)
+        {
+            let scan = "The scan stopped after 100,000 cell visits; some validated cells were not checked for invalid data.";
+            // An open-time warning that is still shown keeps its text and action; the scan note joins it.
+            match self.notice.as_mut() {
+                Some(n) => {
+                    n.text = format!("{} {scan}", n.text);
+                    n.kind = NoticeKind::Warning;
+                }
+                None => self.notice = Some(Notice { text: scan.into(), kind: NoticeKind::Warning, action: None }),
+            }
+        }
         r
     }
 
@@ -159,6 +174,26 @@ impl SheetApp {
                 let save_as = p.get("saveAs").and_then(Json::as_bool).unwrap_or(false);
                 let handled = self.session.active().is_some() && self.choose_provider_save(save_as);
                 Ok(json!({"handled":handled}))
+            }
+            "ui.window.minimize" => {
+                self.viewport_commands.push(egui::ViewportCommand::Minimized(true));
+                Ok(Json::Null)
+            }
+            "ui.window.maximize" => {
+                let on = p.get("on").and_then(Json::as_bool).unwrap_or(true);
+                self.viewport_commands.push(egui::ViewportCommand::Maximized(on));
+                Ok(Json::Null)
+            }
+            "ui.window.close" => {
+                self.viewport_commands.push(egui::ViewportCommand::Close);
+                Ok(Json::Null)
+            }
+            "ui.window.beginResize" => {
+                let Some(direction) = p.get("direction").and_then(Json::as_str).and_then(crate::parse_resize_direction) else {
+                    return Some(Err("direction must be north, south, east, west, northeast, northwest, southeast, or southwest".into()));
+                };
+                self.viewport_commands.push(egui::ViewportCommand::BeginResize(direction));
+                Ok(Json::Null)
             }
             "app.checkForUpdates" | "help.checkForUpdates" => {
                 self.check_for_updates();
