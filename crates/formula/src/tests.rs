@@ -578,6 +578,94 @@ fn column_starting_with_at_round_trips() {
 }
 
 #[test]
+fn reorder_preserves_row_and_column_sheet_edges() -> Result<(), Box<dyn std::error::Error>> {
+    let rows = Edit::Reorder { axis: Axis::Rows, from: 1, count: 2, before: 9 };
+    let e = parse("SUM(A5:A1048576)+A1048575+A1048576+$A$1048576+A$1048576+$A1048576+SUM(5:1048576)")?;
+    assert_eq!(print(&adjust(e, "S", "S", &rows)), "SUM(A3:A1048576)+A1048575+A1048576+$A$1048576+A$1048576+$A1048576+SUM(3:1048576)");
+
+    let cols = Edit::Reorder { axis: Axis::Cols, from: 1, count: 2, before: 9 };
+    let e = parse("SUM(E1:XFD1)+XFC1+XFD1+$XFD$1+XFD$1+$XFD1+SUM(E:XFD)")?;
+    assert_eq!(print(&adjust(e, "S", "S", &cols)), "SUM(C1:XFD1)+XFC1+XFD1+$XFD$1+XFD$1+$XFD1+SUM(C:XFD)");
+    Ok(())
+}
+
+#[test]
+fn reorder_moves_references_in_source_at_sheet_edge() -> Result<(), Box<dyn std::error::Error>> {
+    let rows = Edit::Reorder { axis: Axis::Rows, from: gridcraft_core::MAX_ROWS - 1, count: 1, before: 0 };
+    let e = parse("A1048576+SUM(1048576:1048576)")?;
+    assert_eq!(print(&adjust(e, "S", "S", &rows)), "A1+SUM(1:1)");
+    let cols = Edit::Reorder { axis: Axis::Cols, from: gridcraft_core::MAX_COLS - 1, count: 1, before: 0 };
+    let e = parse("XFD1+SUM(XFD:XFD)")?;
+    assert_eq!(print(&adjust(e, "S", "S", &cols)), "A1+SUM(A:A)");
+    Ok(())
+}
+
+#[test]
+fn invalid_reorder_still_invalidates_references() -> Result<(), Box<dyn std::error::Error>> {
+    let invalid = Edit::Reorder { axis: Axis::Rows, from: gridcraft_core::MAX_ROWS - 1, count: 2, before: 0 };
+    assert_eq!(print(&adjust(parse("A1048576")?, "S", "S", &invalid)), "#REF!");
+    let invalid = Edit::Reorder { axis: Axis::Cols, from: gridcraft_core::MAX_COLS - 1, count: 2, before: 0 };
+    assert_eq!(print(&adjust(parse("XFD1")?, "S", "S", &invalid)), "#REF!");
+    Ok(())
+}
+
+#[test]
+fn reorder_partial_ranges_match_the_same_shape_away_from_sheet_edges() {
+    for axis in [Axis::Rows, Axis::Cols] {
+        let limit = if axis == Axis::Rows { gridcraft_core::MAX_ROWS } else { gridcraft_core::MAX_COLS };
+        let offset = limit - 10;
+        let (dr, dc) = if axis == Axis::Rows { (offset as i64, 0) } else { (0, offset as i64) };
+        for whole_lines in [false, true] {
+            let reference = |first, last| {
+                let anchor = |line| Anchor {
+                    row: if axis == Axis::Rows { line } else { 0 },
+                    col: if axis == Axis::Cols { line } else { 0 },
+                    row_abs: false,
+                    col_abs: false,
+                };
+                let kind = if whole_lines {
+                    if axis == Axis::Rows { RefKind::Rows(first, false, last, false) } else { RefKind::Cols(first, false, last, false) }
+                } else {
+                    RefKind::Range(anchor(first), anchor(last))
+                };
+                Expr::Ref(Reference { sheet: SheetSel::Current, kind })
+            };
+            for count in [1, 2] {
+                for from in 0..=10 - count {
+                    for before in 0..=10 - count {
+                        for first in 0..10 {
+                            for last in 0..10 {
+                                let middle = adjust(reference(first, last), "S", "S", &Edit::Reorder { axis, from, count, before });
+                                let edge = adjust(
+                                    reference(first + offset, last + offset),
+                                    "S",
+                                    "S",
+                                    &Edit::Reorder { axis, from: from + offset, count, before: before + offset },
+                                );
+                                assert_eq!(
+                                    edge,
+                                    shift_relative(middle, dr, dc),
+                                    "{axis:?} whole={whole_lines} from={from} count={count} before={before} span={first}:{last}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn reorder_reversed_ranges_keep_endpoint_order_and_absolute_flags() -> Result<(), Box<dyn std::error::Error>> {
+    let rows = Edit::Reorder { axis: Axis::Rows, from: 1, count: 2, before: 9 };
+    assert_eq!(print(&adjust(parse("$A$1048576:B5+SUM($1048576:5)")?, "S", "S", &rows)), "$A$1048576:B3+SUM($1048576:3)");
+    let cols = Edit::Reorder { axis: Axis::Cols, from: 1, count: 2, before: 9 };
+    assert_eq!(print(&adjust(parse("$XFD$1:E2+SUM($XFD:E)")?, "S", "S", &cols)), "$XFD$1:C2+SUM($XFD:C)");
+    Ok(())
+}
+
+#[test]
 fn wrappers_stacked_across_levels_are_bounded_as_a_whole() {
     // Each level adds 40 percents inside the parser's per-level bound, so no level is too deep alone.
     let stacked = |levels: usize| {

@@ -42,7 +42,12 @@ pub fn specs() -> Vec<CommandSpec> {
             p,
             Axis::Cols
         )),
-        cmd!("sheet.moveColumns", "Move Columns", [], None, "{cols?: \"B:C\", before: zero-based column index}", has_doc, move_columns),
+        cmd!("sheet.moveColumns", "Move Columns", [], None, "{cols?: \"B:C\", before: zero-based column index}", has_doc, |s, p| move_lines(
+            s,
+            p,
+            Axis::Cols
+        )),
+        cmd!("sheet.moveRows", "Move Rows", [], None, "{rows?: \"2:3\", before: zero-based row index}", has_doc, |s, p| move_lines(s, p, Axis::Rows)),
         cmd!("home.insertCells", "Insert Cells…", ["Home", "Cells", "Insert"], None, "{range?, shift: right|down|row|column}", has_doc, insert_cells),
         cmd!(
             "home.insertCopiedCells",
@@ -271,6 +276,74 @@ fn inherit_line_format(sh: &mut Sheet, axis: Axis, at: u32, count: u32) {
     }
 }
 
+fn line_would_overflow(line: u32, at: u32, count: u32, limit: u32) -> bool {
+    line >= at && line as u64 + count as u64 >= limit as u64
+}
+
+fn range_would_overflow(range: RangeRef, axis: Axis, at: u32, count: u32, limit: u32) -> bool {
+    let end = if axis == Axis::Rows { range.end.row } else { range.end.col };
+    line_would_overflow(end, at, count, limit)
+}
+
+/// Reordering uses a temporary structural insert. Refuse when that insert would push any
+/// worksheet state that the insert helper shifts past the grid edge: the later delete cannot
+/// recover it. This intentionally rejects some moves when unrelated tail metadata lies after
+/// the destination; it keeps the existing insert/move/delete algorithm lossless.
+fn reorder_would_overflow(sh: &Sheet, axis: Axis, at: u32, count: u32, limit: u32) -> bool {
+    let cell_line = |cell: CellRef| if axis == Axis::Rows { cell.row } else { cell.col };
+    let ranges_overflow = |ranges: &[RangeRef]| ranges.iter().any(|r| range_would_overflow(*r, axis, at, count, limit));
+    let line_info_overflow = if axis == Axis::Rows { &sh.rows } else { &sh.cols }.keys().any(|&line| line_would_overflow(line, at, count, limit));
+    let picture_overflow = sh.cell_pictures.keys().any(|&cell| line_would_overflow(cell_line(cell), at, count, limit));
+    let merge_overflow = ranges_overflow(&sh.merges);
+    let cf_overflow = sh.cond_formats.iter().any(|cf| ranges_overflow(&cf.ranges));
+    let edit_range_overflow = sh.edit_ranges.iter().any(|er| ranges_overflow(&er.ranges));
+    let validation_overflow = sh.validations.iter().any(|dv| ranges_overflow(&dv.ranges));
+    let table_overflow = sh.tables.iter().any(|table| range_would_overflow(table.range, axis, at, count, limit));
+    let autofilter_overflow = sh.autofilter.as_ref().is_some_and(|filter| range_would_overflow(filter.range, axis, at, count, limit));
+    let cell_metadata_overflow = sh.comments.keys().chain(sh.hyperlinks.keys()).any(|&cell| line_would_overflow(cell_line(cell), at, count, limit));
+    let anchor_overflow = sh.object_anchors().any(|anchor| {
+        if anchor.mode == AnchorMode::Absolute {
+            return false;
+        }
+        let (far_col, far_row, _, _) = anchor_corner(sh, anchor);
+        [cell_line(anchor.cell), if axis == Axis::Rows { far_row } else { far_col }]
+            .into_iter()
+            .any(|line| line_would_overflow(line, at, count, limit))
+    });
+    let sparkline_overflow = sh.sparklines.iter().any(|sparkline| line_would_overflow(cell_line(sparkline.cell), at, count, limit));
+    let print_area_overflow = sh.print.print_area.is_some_and(|area| range_would_overflow(area, axis, at, count, limit));
+    let pivot_overflow = sh.pivots.iter().any(|pivot| {
+        line_would_overflow(cell_line(pivot.anchor), at, count, limit)
+            || pivot.last_range.is_some_and(|r| range_would_overflow(r, axis, at, count, limit))
+    });
+    let spill_overflow = sh.spill.keys().chain(sh.spill_ranges.keys()).any(|&cell| line_would_overflow(cell_line(cell), at, count, limit))
+        || sh.spill_ranges.values().any(|&r| range_would_overflow(r, axis, at, count, limit));
+    let cell_overflow = sh.used_range().is_some_and(|r| range_would_overflow(r, axis, at, count, limit));
+
+    line_info_overflow
+        || picture_overflow
+        || merge_overflow
+        || cf_overflow
+        || edit_range_overflow
+        || validation_overflow
+        || table_overflow
+        || autofilter_overflow
+        || cell_metadata_overflow
+        || anchor_overflow
+        || sparkline_overflow
+        || print_area_overflow
+        || pivot_overflow
+        || spill_overflow
+        || cell_overflow
+}
+
+fn check_reorder_push_off_sheet(s: &Session, sheet: usize, axis: Axis, at: u32, count: u32, limit: u32) -> Result<()> {
+    if s.doc()?.wb.sheet(sheet).is_some_and(|sh| reorder_would_overflow(sh, axis, at, count, limit)) {
+        return Err(EngineError::Other("To prevent possible loss of data, rows or columns cannot be shifted off of the worksheet.".into()));
+    }
+    Ok(())
+}
+
 fn check_push_off_sheet(s: &Session, sheet: usize, axis: Axis, at: u32, count: u32, limit: u32) -> Result<()> {
     if let Some(u) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
         let last = if axis == Axis::Rows { u.end.row } else { u.end.col };
@@ -378,50 +451,70 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
     Ok(out)
 }
 
-/// Reorders a contiguous block of whole columns without replacing the destination columns.
+/// Reorders a contiguous block of whole rows or columns without replacing the destination lines.
 /// `before` is a boundary in the original sheet: moving B:C before E produces A,D,B,C,E.
-fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
-    let (from, count) = lines(s, p, Axis::Cols)?;
-    let before = u32_param(p, "before").ok_or_else(|| bad("sheet.moveColumns", "missing `before`"))?;
-    let end =
-        from.checked_add(count).filter(|end| *end <= MAX_COLS).ok_or_else(|| bad("sheet.moveColumns", "source columns are outside the worksheet"))?;
-    if before >= MAX_COLS || before.checked_add(count).is_none_or(|end| end > MAX_COLS) {
-        return Err(bad("sheet.moveColumns", "destination columns are outside the worksheet"));
+fn move_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
+    let rows = axis == Axis::Rows;
+    let (key, command, limit) = if rows { ("rows", "sheet.moveRows", MAX_ROWS) } else { ("cols", "sheet.moveColumns", MAX_COLS) };
+    let range = |start, end| if rows { RangeRef::rows(start, end) } else { RangeRef::cols(start, end) };
+    let index = |cell: CellRef| if rows { cell.row } else { cell.col };
+    let (from, count) = lines(s, p, axis)?;
+    let before = u32_param(p, "before").ok_or_else(|| bad(command, "missing `before`"))?;
+    let end = from.checked_add(count).filter(|end| *end <= limit).ok_or_else(|| bad(command, "source lines are outside the worksheet"))?;
+    if before >= limit || before.checked_add(count).is_none_or(|end| end > limit) {
+        return Err(bad(command, "destination lines are outside the worksheet"));
     }
     if (from..=end).contains(&before) {
-        return Ok(json!({"cols": RangeRef::cols(from, end.saturating_sub(1)).a1()}));
+        return Ok(json!({(key): range(from, end.saturating_sub(1)).a1()}));
     }
     let sheet = target_sheet(s, p)?;
-    if let Some(u) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range())
-        && u.end.col >= before
-        && u.end.col as u64 + count as u64 >= MAX_COLS as u64
-    {
-        return Err(EngineError::Other("To prevent possible loss of data, columns cannot be shifted off of the worksheet.".into()));
-    }
+    check_reorder_push_off_sheet(s, sheet, axis, before, count, limit)?;
     // The checks must authorize the sheet this command modifies, not whatever sheet is active:
     // both get the index `target_sheet` resolved (from `sheet`, or a `Sheet!` range or cell).
-    check_lines_protection(s, &json!({"cols": RangeRef::cols(before, before).a1(), "sheet": sheet}), Axis::Cols, before, count, true)?;
-    check_lines_protection(s, &json!({"cols": RangeRef::cols(from, end - 1).a1(), "sheet": sheet}), Axis::Cols, from, count, false)?;
+    check_lines_protection(s, &json!({(key): range(before, before).a1(), "sheet": sheet}), axis, before, count, true)?;
+    check_lines_protection(s, &json!({(key): range(from, end - 1).a1(), "sheet": sheet}), axis, from, count, false)?;
+
+    if let Some(sh) = s.doc()?.wb.sheet(sheet) {
+        for (_, cell) in sh.cells.iter() {
+            if let Some(array) = cell.formula.as_ref().and_then(|f| f.array) {
+                let lo = index(array.start);
+                let hi = index(array.end);
+                if [from, end, before].into_iter().any(|boundary| lo < boundary && boundary <= hi) {
+                    return Err(EngineError::Other("Cannot reorder part of an array formula. Move the entire array together.".into()));
+                }
+            }
+        }
+    }
 
     let moved_from = if before <= from { from + count } else { from };
-    if moved_from.checked_add(count).is_none_or(|end| end > MAX_COLS) {
-        return Err(bad("sheet.moveColumns", "the move is too close to the worksheet boundary"));
+    if moved_from.checked_add(count).is_none_or(|end| end > limit) {
+        return Err(bad(command, "the move is too close to the worksheet boundary"));
     }
     let destination = before;
     let delete_at = moved_from;
     let final_start = if before > from { before - count } else { before };
-    let active_row = s.doc()?.selection.active.row;
-    let source = RangeRef::cols(moved_from, moved_from + count - 1);
+    let active = s.doc()?.selection.active;
+    let relocate = |cell: CellRef| {
+        if rows {
+            CellRef::new(destination + (cell.row - moved_from), cell.col)
+        } else {
+            CellRef::new(cell.row, destination + (cell.col - moved_from))
+        }
+    };
+    let source = range(moved_from, moved_from + count - 1);
     let out = edit(s, |cx| {
         let name = cx.wb.sheet(sheet).map(|sh| sh.name.clone()).unwrap_or_default();
         cx.protection_checked = true;
 
         {
             let sh = cx.sheet_mut(sheet)?;
-            sh.cells.shift_cols(before, count as i64);
-            shift_sheet_features(sh, Axis::Cols, before, count, true);
+            if rows {
+                sh.cells.shift_rows(before, count as i64);
+            } else {
+                sh.cells.shift_cols(before, count as i64);
+            }
+            shift_sheet_features(sh, axis, before, count, true);
         }
-        rewrite(cx, &name, &Edit::Insert { axis: Axis::Cols, at: before, count })?;
 
         let mut touched = Vec::new();
         {
@@ -429,51 +522,50 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
             let pictures: Vec<_> =
                 sh.cell_pictures.iter().filter(|(cell, _)| source.contains(**cell)).map(|(cell, picture)| (*cell, picture.clone())).collect();
             let cells = sh.take_cells(source);
-            let moved_lines: Vec<_> = (0..count).filter_map(|offset| sh.cols.remove(&(moved_from + offset)).map(|info| (offset, info))).collect();
-            let movement = Edit::Move { from: source, to_row: 0, to_col: destination };
+            let infos = if rows { &mut sh.rows } else { &mut sh.cols };
+            let moved_lines: Vec<_> = infos.range(moved_from..moved_from + count).map(|(&line, info)| (line - moved_from, *info)).collect();
+            infos.retain(|line, _| !(moved_from..moved_from + count).contains(line));
+            let movement = Edit::Move { from: source, to_row: if rows { destination } else { 0 }, to_col: if rows { 0 } else { destination } };
             shift_cell_features(sh, &movement);
-            for object in sh
-                .charts
-                .iter_mut()
-                .map(|o| &mut o.anchor)
-                .chain(sh.images.iter_mut().map(|o| &mut o.anchor))
-                .chain(sh.shapes.iter_mut().map(|o| &mut o.anchor))
-            {
-                if object.mode != AnchorMode::Absolute && (moved_from..moved_from + count).contains(&object.cell.col) {
-                    object.cell.col = destination + (object.cell.col - moved_from);
+            for object in sh.object_anchors_mut() {
+                if object.mode != AnchorMode::Absolute && (moved_from..moved_from + count).contains(&index(object.cell)) {
+                    object.cell = relocate(object.cell);
                 }
             }
             for (cell, value) in cells {
-                let dest = CellRef::new(cell.row, destination + (cell.col - moved_from));
+                let dest = relocate(cell);
                 sh.cells.set(dest, value);
                 touched.extend([cell, dest]);
             }
             for (cell, picture) in pictures {
-                let dest = CellRef::new(cell.row, destination + (cell.col - moved_from));
+                let dest = relocate(cell);
                 sh.cell_pictures.insert(dest, picture);
             }
             for (offset, info) in moved_lines {
-                sh.cols.insert(destination + offset, info);
+                (if rows { &mut sh.rows } else { &mut sh.cols }).insert(destination + offset, info);
             }
         }
         for cell in touched {
             cx.touch(sheet, cell);
         }
-        rewrite(cx, &name, &Edit::Move { from: source, to_row: 0, to_col: destination })?;
 
         {
             let sh = cx.sheet_mut(sheet)?;
-            sh.cells.shift_cols(delete_at + count, -(count as i64));
-            shift_sheet_features(sh, Axis::Cols, delete_at, count, false);
+            if rows {
+                sh.cells.shift_rows(delete_at + count, -(count as i64));
+            } else {
+                sh.cells.shift_cols(delete_at + count, -(count as i64));
+            }
+            shift_sheet_features(sh, axis, delete_at, count, false);
         }
-        rewrite(cx, &name, &Edit::Delete { axis: Axis::Cols, at: delete_at, count })?;
+        rewrite(cx, &name, &Edit::Reorder { axis, from, count, before })?;
         *cx.sel = crate::Selection {
-            active: CellRef::new(active_row, final_start),
-            anchor: CellRef::new(active_row, final_start),
-            ranges: vec![RangeRef::cols(final_start, final_start + count - 1)],
+            active: if rows { CellRef::new(final_start, active.col) } else { CellRef::new(active.row, final_start) },
+            anchor: if rows { CellRef::new(final_start, active.col) } else { CellRef::new(active.row, final_start) },
+            ranges: vec![range(final_start, final_start + count - 1)],
         };
         cx.structural = true;
-        Ok(json!({"cols": RangeRef::cols(final_start, final_start + count - 1).a1()}))
+        Ok(json!({(key): range(final_start, final_start + count - 1).a1()}))
     })?;
     cancel_copy_mode(s);
     Ok(out)

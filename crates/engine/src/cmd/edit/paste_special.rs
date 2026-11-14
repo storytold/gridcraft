@@ -556,7 +556,8 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
     use gridcraft_formula::adjust::Edit;
     // Rows and columns inserted or deleted on the target sheet move its legacy array ranges too
     // (a cut moves its arrays itself).
-    let moves_arrays = matches!(e, Edit::Insert { .. } | Edit::Delete { .. } | Edit::InsertCells { .. } | Edit::DeleteCells { .. });
+    let moves_arrays =
+        matches!(e, Edit::Insert { .. } | Edit::Delete { .. } | Edit::Reorder { .. } | Edit::InsertCells { .. } | Edit::DeleteCells { .. });
     for si in 0..wb.sheets.len() {
         let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
         let keys: Vec<(CellRef, std::sync::Arc<Formula>)> =

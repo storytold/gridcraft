@@ -53,7 +53,7 @@ fn drag_cursor(drag: &Drag, rtl: bool) -> Option<CursorIcon> {
         Drag::Select => Some(CursorIcon::Cell),
         Drag::Rows(_) | Drag::Cols(_) | Drag::PointRows(_) | Drag::PointCols(_) => Some(CursorIcon::Default),
         Drag::Fill { .. } => Some(CursorIcon::Crosshair),
-        Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { handle: None, .. } => Some(CursorIcon::Move),
+        Drag::Move { .. } | Drag::MoveCols { .. } | Drag::MoveRows { .. } | Drag::Object { handle: None, .. } => Some(CursorIcon::Move),
         Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
         Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
         Drag::Freeze { cols, .. } => Some(if *cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
@@ -107,6 +107,10 @@ fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, poin
     } else if in_col_header {
         let col = geo.col_at(sh, p.x);
         let selected = sel.ranges.len() == 1 && sel.current().is_full_cols() && sel.current().contains(CellRef::new(0, col));
+        ctx.set_cursor_icon(if selected { CursorIcon::Move } else { CursorIcon::Default });
+    } else if in_row_header {
+        let row = geo.row_at(sh, p.y);
+        let selected = sel.ranges.len() == 1 && sel.current().is_full_rows() && sel.current().contains(CellRef::new(row, 0));
         ctx.set_cursor_icon(if selected { CursorIcon::Move } else { CursorIcon::Default });
     }
 }

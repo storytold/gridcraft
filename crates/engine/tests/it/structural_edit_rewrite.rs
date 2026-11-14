@@ -82,3 +82,60 @@ fn deleting_an_unrelated_sheet_keeps_legacy_arrays() {
     run(&mut s, "home.deleteSheet", json!({"sheet": "Spare"}));
     assert_eq!(formula(&s, "Sheet1", "C1").array, Some(RangeRef::parse("C1:C2").unwrap()));
 }
+
+#[test]
+fn reorder_keeps_unaffected_formula_text_and_shared_storage() {
+    for rows in [true, false] {
+        let mut s = workbook();
+        put_raw(&mut s, "H8", "sum(a1,  Other!b2)");
+        let original = formula(&s, "Sheet1", "H8");
+        run(
+            &mut s,
+            if rows { "sheet.moveRows" } else { "sheet.moveColumns" },
+            if rows { json!({"rows":"2:3", "before":5}) } else { json!({"cols":"B:C", "before":5}) },
+        );
+        let after = formula(&s, "Sheet1", "H8");
+        assert_eq!(after.text, "sum(a1,  Other!b2)");
+        assert!(Arc::ptr_eq(&original, &after), "unaffected formulas must keep their shared allocation");
+    }
+}
+
+#[test]
+fn reorder_moves_array_range_when_its_expression_is_unchanged() {
+    for rows in [true, false] {
+        for cached in [true, false] {
+            let mut s = workbook();
+            let (source, at, destination, new_at) = if rows { ("C5:C6", "C5", "C2:C3", "C2") } else { ("E3:F3", "E3", "B3:C3", "B3") };
+            run(&mut s, "cell.set", json!({"cell":"A1", "input":"5"}));
+            run(&mut s, "selection.set", json!({"range":source}));
+            run(&mut s, "cell.set", json!({"cell":at, "input":"=$A$1+1", "array":true}));
+            // Preserve a noncanonical stored spelling with either a parsed or text-only tree.
+            // The reference is outside the permutation, but the array's own range must move.
+            let wb = Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+            let i = wb.sheet_index("Sheet1").unwrap();
+            let cell = wb.sheet_mut(i).unwrap().cells.get_mut(CellRef::parse(at).unwrap()).unwrap();
+            let f = Arc::make_mut(cell.formula.as_mut().unwrap());
+            f.text = "$a$1 + 1".into();
+            if !cached {
+                f.expr = None;
+            }
+            let original = s.doc().unwrap().wb.clone();
+            let undo = s.doc().unwrap().undo.len();
+            run(
+                &mut s,
+                if rows { "sheet.moveRows" } else { "sheet.moveColumns" },
+                if rows { json!({"rows":"5:6", "before":1}) } else { json!({"cols":"E:F", "before":1}) },
+            );
+            let f = formula(&s, "Sheet1", new_at);
+            assert_eq!(f.text, "$a$1 + 1");
+            assert_eq!(f.array, Some(RangeRef::parse(destination).unwrap()));
+            assert!(!f.dynamic);
+            assert_eq!(s.doc().unwrap().undo.len(), undo + 1);
+            let moved = s.doc().unwrap().wb.clone();
+            run(&mut s, "edit.undo", json!({}));
+            assert_eq!(*s.doc().unwrap().wb, *original);
+            run(&mut s, "edit.redo", json!({}));
+            assert_eq!(*s.doc().unwrap().wb, *moved);
+        }
+    }
+}
