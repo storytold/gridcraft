@@ -32,6 +32,21 @@ fn subtotal_honours_header_false() {
 }
 
 #[test]
+fn subtotal_skips_empty_group_labels_but_counts_them_in_the_grand_total() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Group", "Amount"], [null, 10]]})).unwrap();
+    let result = s.execute("data.subtotal", json!({"range": "A1:B2", "groupBy": "A", "function": "sum", "columns": ["B"], "header": true})).unwrap();
+    assert_eq!(result["groups"], json!(0));
+    let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+    assert_eq!(get(&mut s, "A2")["value"], json!(null));
+    assert_eq!(get(&mut s, "B2")["value"], json!(10.0));
+    assert_eq!(get(&mut s, "A3")["text"], json!("Grand Total"));
+    assert_eq!(get(&mut s, "B3")["formula"], json!("=SUBTOTAL(9,B2)"));
+    assert_eq!(get(&mut s, "B3")["value"], json!(10.0));
+}
+
+#[test]
 fn subtotal_puts_summary_rows_below_their_detail() {
     let mut s = Session::new();
     s.new_workbook();

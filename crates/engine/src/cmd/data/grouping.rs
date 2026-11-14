@@ -248,7 +248,9 @@ pub(super) fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
         let cur = sh.value(CellRef::new(row, group_col)).display();
         let prev = sh.value(CellRef::new(start, group_col)).display();
         if row > r.end.row || cur != prev {
-            groups.push((start, row - 1, prev));
+            if !prev.is_empty() {
+                groups.push((start, row - 1, prev));
+            }
             start = row;
         }
     }
