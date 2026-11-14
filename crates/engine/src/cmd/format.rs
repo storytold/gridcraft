@@ -538,11 +538,13 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {
-    let Some(patch) = p.get("style").map(snake_case_keys) else {
+    let Some(style) = p.get("style") else {
         // Menu invocation without params: the UI opens the dialog.
         s.ui_requests.push(crate::UiRequest::Dialog("formatCells".into(), json!({})));
         return ok();
     };
+    let region = s.doc()?.wb.region;
+    let patch = canonical_num_fmt(snake_case_keys(style), region);
     // Validate by merging into the active style once.
     let base = serde_json::to_value(active_style(s)?).map_err(|e| EngineError::Other(e.to_string()))?;
     let merged = merge_json(base, &patch);
@@ -725,16 +727,34 @@ pub fn format_code_for(name: &str) -> &str {
 }
 
 fn number_format(s: &mut Session, p: &Json) -> Result<Json> {
-    let code = str_param(p, "code")
-        .map(str::to_string)
-        .or_else(|| str_param(p, "format").map(|f| format_code_for(f).to_string()))
-        .ok_or_else(|| bad("home.numberFormat", "missing `format` or `code`"))?;
+    let region = s.doc()?.wb.region;
+    // A `code` is typed with the region's separators (`#.##0,00` in pt-BR) and is stored once in
+    // its canonical en-US spelling. A ribbon `format` name already maps to a canonical code, and
+    // rewriting it here would turn `#,##0.00` into `#,##0,00` in pt-BR.
+    let code = match str_param(p, "code") {
+        Some(c) => gridcraft_numfmt::canonical_code(c, region),
+        None => {
+            str_param(p, "format").map(|f| format_code_for(f).to_string()).ok_or_else(|| bad("home.numberFormat", "missing `format` or `code`"))?
+        }
+    };
     set_fmt(s, p, &code)
 }
 
+/// Applies a number format code that is already canonical: every caller passes a built-in code or
+/// one that [`canonical_num_fmt`] converted. Canonicalizing here as well used to rewrite the
+/// canonical `#,##0.00` into `#,##0,00` in a region that writes a decimal comma.
 fn set_fmt(s: &mut Session, p: &Json, code: &str) -> Result<Json> {
     let nf = NumFmt::new(code);
     apply_style(s, p, |st| st.num_fmt = nf.clone())
+}
+
+/// The style patch with a `num_fmt` typed with the region's separators stored in its canonical
+/// en-US spelling, so `#.##0,00` in `pt-BR` is saved as `#,##0.00`.
+fn canonical_num_fmt(mut patch: Json, region: &gridcraft_core::Region) -> Json {
+    if let Some(Json::String(code)) = patch.get_mut("num_fmt") {
+        *code = gridcraft_numfmt::canonical_code(code, region);
+    }
+    patch
 }
 
 /// Adds or removes one decimal place in the number format (Increase/Decrease Decimal).
