@@ -1949,3 +1949,48 @@ fn save_model_counts_areas_outside_quoted_sheet_names() {
         assert!(e.contains("one range"), "{name}: {e}");
     }
 }
+
+#[test]
+fn precision_as_displayed_does_not_certify_a_committed_constraint_violation() {
+    let cases = [
+        ("max", "=A1*2", "A1 <= 0.5", "0", "simplex"),
+        ("min", "=A1*2", "A1 >= 0.4", "0", "simplex"),
+        ("max", "=A1*3", "B1 <= 1", "0", "simplex"),
+        ("min", "=A1*2", "A1 >= 0.34", "0.0", "simplex"),
+        // Large values: a tolerance relative to the bound would be a whole displayed step.
+        ("min", "=A1*2", "B1 >= 2000000.06", "0.0", "simplex"),
+        ("min", "=A1*2", "A1 >= 1000000.04", "0.0", "simplex"),
+        ("max", "=A1*2", "A1 <= 0.5", "0", "grg"),
+        ("max", "=A1*2", "A1 <= 0.5", "0", "evolutionary"),
+    ];
+    for (goal, obj_formula, constraint, fmt, method) in cases {
+        let mut s = s();
+        set(&mut s, &[("A1", "0"), ("B1", "=A1*2"), ("C1", obj_formula), ("D1", &format!("={constraint}"))]);
+        s.execute("home.numberFormat", json!({"range": "A1", "code": fmt})).unwrap();
+        s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+        let r = s
+            .execute("data.solver", json!({"objective": "C1", "goal": goal, "variables": "A1", "constraints": [constraint], "method": method}))
+            .unwrap();
+        if r["changed"].as_bool() == Some(true) {
+            let check = s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("D1").unwrap());
+            assert_eq!(check, Value::Bool(true), "{method} {goal} {constraint}: {r}");
+            let committed_a1 = n(&s, "A1");
+            let committed_c1 = n(&s, "C1");
+            assert_eq!(r["values"]["A1"].as_f64(), Some(committed_a1), "{method} {goal} {constraint}: {r}");
+            assert_eq!(r["objective"].as_f64(), Some(committed_c1), "{method} {goal} {constraint}: {r}");
+        }
+    }
+    // Controls: 0.0 format allows 0.5, and Precision as Displayed off allows 0.5 under 0 format.
+    for (fmt, precision) in [("0.0", true), ("0", false)] {
+        let mut s = s();
+        set(&mut s, &[("A1", "0"), ("B1", "=A1*2"), ("C1", "=A1<=0.5")]);
+        s.execute("home.numberFormat", json!({"range": "A1", "code": fmt})).unwrap();
+        s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": precision})).unwrap();
+        let r = s
+            .execute("data.solver", json!({"objective": "B1", "goal": "max", "variables": "A1", "constraints": ["A1 <= 0.5"], "method": "simplex"}))
+            .unwrap();
+        assert_eq!(r["status"], "optimal", "{fmt} {precision}: {r}");
+        assert!((n(&s, "A1") - 0.5).abs() < 1e-9, "{fmt} {precision}: {r}");
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("C1").unwrap()), Value::Bool(true));
+    }
+}
