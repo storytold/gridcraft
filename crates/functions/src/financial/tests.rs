@@ -317,3 +317,19 @@ fn securities_read_dates_in_the_1904_system() {
     let odd = vec![d4(2008, 11, 11), d4(2021, 3, 1), d4(2008, 10, 15), d4(2009, 3, 1), n(0.0785), n(0.0625), n(100.0), n(2.0), n(1.0)];
     close_tol(ev4("ODDFPRICE", odd), 113.597717474079, 1e-9);
 }
+
+#[test]
+fn received_errors_at_a_non_positive_denominator() {
+    // #4085: 1 - discount * days / 365 is zero or below here. Dividing days by the year first
+    // rounded it to a tiny positive number and returned about 9.007E18 instead of #NUM!.
+    let rec = |days: i64, disc: f64, basis: f64| ev("RECEIVED", vec![d(2000, 1, 1), d(2000, 1, 1 + days), n(1000.0), n(disc), n(basis)]);
+    is_err(rec(3, 365.0 / 3.0, 3.0), CellError::Num);
+    is_err(rec(48, 365.0 / 48.0, 3.0), CellError::Num);
+    is_err(rec(3, 365.0 / 3.0 * (1.0 + 2e-15), 3.0), CellError::Num);
+    // Exact zero denominator: 360 days, Actual/360, discount 1.
+    is_err(rec(360, 1.0, 2.0), CellError::Num);
+    // Just below the limit stays a positive redemption.
+    let x = number(rec(3, 365.0 / 3.0 * 0.999999, 3.0));
+    assert!(x > 0.0 && x.is_finite(), "{x}");
+    close_tol(Value::Number(x), 1000.0 / 1e-6, 1e-6);
+}
