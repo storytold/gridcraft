@@ -280,7 +280,9 @@ im1!(imsqrt, |z: Cx| {
         x => (im / x).atan() + if im < 0.0 { -std::f64::consts::PI } else { std::f64::consts::PI },
     };
     let (half, root) = (theta / 2.0, z.abs().sqrt());
-    Ok(Cx::new(root * (half.cos() + HALF_PI_EXCESS * half.abs().sin()), root * half.sin()))
+    // Use the same deterministic reduction on each host: Windows' CRT sine
+    // rounds sin(pi/4) differently, changing the exact text result of IMSQRT("i").
+    Ok(Cx::new(root * (libm::cos(half) + HALF_PI_EXCESS * libm::sin(half.abs())), root * libm::sin(half)))
 });
 im1!(imsin, |z: Cx| Ok(z.sin()));
 im1!(imcos, |z: Cx| Ok(z.cos()));
@@ -625,6 +627,17 @@ mod tests {
         let Value::Text(csh) = ev("IMCSCH", vec![t("4+3i")]) else { panic!() };
         cx(ev("IMPRODUCT", vec![t(&sh), t(&csh)]), 1.0, 0.0);
         cx(ev("IMSUM", vec![t("1.5e1+2E-1j")]), 15.0, 0.2);
+    }
+
+    #[test]
+    fn imaginary_unit_square_roots_keep_the_same_text_on_each_platform() {
+        for (input, expected) in [
+            ("i", "0.707106781186548+0.707106781186547i"),
+            ("-i", "0.707106781186548-0.707106781186547i"),
+            ("j", "0.707106781186548+0.707106781186547j"),
+        ] {
+            is_text(ev("IMSQRT", vec![t(input)]), expected);
+        }
     }
 
     #[test]
