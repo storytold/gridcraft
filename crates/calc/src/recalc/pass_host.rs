@@ -17,6 +17,10 @@ const MAX_ITERATION_WORK: usize = 10_000_000;
 /// A block's results by last row: its sum and count, or `None` when it can't be summed from constants.
 type BlockSums = std::collections::BTreeMap<u32, Option<(f64, u64)>>;
 
+/// Maximum cells in a single range array kept in [`PassHost::range_cache`], and total cells cached
+/// across all ranges before the cache is evicted to bound pass memory.
+const MAX_SINGLE_CACHE_CELLS: usize = 524_288;
+const MAX_RANGE_CACHE_CELLS: usize = 1_500_000;
 pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
     exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
@@ -30,6 +34,11 @@ pub(super) struct PassHost<'a> {
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
+    /// Evaluated range arrays (`(sheet, range)` → `Arc<Array>`) once every cell in the range has
+    /// finished evaluating; cleared if dynamic-array spills change.
+    range_cache: HashMap<(usize, RangeRef), std::sync::Arc<Array>>,
+    range_cache_cells: usize,
+    range_cache_spills: usize,
     rng: &'a mut u64,
     now: f64,
     cycle: bool,
@@ -98,6 +107,9 @@ impl<'a> PassHost<'a> {
             spills: HashMap::default(),
             spill_index: SpillIndex::default(),
             used: HashMap::default(),
+            range_cache: HashMap::default(),
+            range_cache_cells: 0,
+            range_cache_spills: 0,
             rng,
             now,
             cycle: false,
@@ -227,6 +239,12 @@ fn stored_spill_in<'s>(sheet: &'s gridcraft_model::Sheet, range: RangeRef, f: &m
 }
 
 impl PassHost<'_> {
+    fn clear_range_cache(&mut self) {
+        self.range_cache.clear();
+        self.range_cache_cells = 0;
+        self.range_cache_spills = self.spills.len();
+        self.used.clear();
+    }
     /// Calculates `k` (and the formulas it reads) with bounded stack: when [`Self::compute`] would
     /// go deeper than [`MAX_NESTED`], it suspends what is in progress, the formula it needed is
     /// calculated from here, then the suspended ones again (reading the results kept so far).
@@ -497,6 +515,7 @@ impl PassHost<'_> {
                 self.spills.remove(&a);
                 self.spill_index.remove(a);
             }
+            self.clear_range_cache();
             for k in &again {
                 self.calculate(*k);
             }
@@ -674,6 +693,44 @@ impl Host for PassHost<'_> {
         }
         out
     }
+    /// Evaluates `range` into a shared [`Array`], caching ranges up to [`MAX_SINGLE_CACHE_CELLS`]
+    /// while no cell inside `range` is in progress or waiting and dynamic-array spills are unchanged.
+    fn range_array(&mut self, sheet: usize, range: RangeRef) -> Option<std::sync::Arc<Array>> {
+        if self.spills.len() != self.range_cache_spills {
+            self.clear_range_cache();
+        }
+        if !self.iterate
+            && let Some(arr) = self.range_cache.get(&(sheet, range))
+        {
+            let arr = std::sync::Arc::clone(arr);
+            if arr.has_lookup_index() && self.range_cache_cells.saturating_add(arr.data.len()) > MAX_RANGE_CACHE_CELLS {
+                self.range_cache.clear();
+                self.range_cache_cells = 0;
+            }
+            return Some(arr);
+        }
+        let (h, w) = (range.height() as usize, range.width() as usize);
+        let cells = h.saturating_mul(w);
+        let data = self.range_values(sheet, range);
+        let arr = std::sync::Arc::new(Array::new(h, w, data)?);
+        if !self.iterate
+            && cells <= MAX_SINGLE_CACHE_CELLS
+            && self.suspend.is_none()
+            && !self.in_progress.iter().any(|&(s, c)| s == sheet && range.contains(c))
+            && !self.waiting.iter().any(|&(s, c)| s == sheet && range.contains(c))
+        {
+            if self.spills.len() != self.range_cache_spills {
+                self.clear_range_cache();
+            }
+            if self.range_cache_cells.saturating_add(cells) > MAX_RANGE_CACHE_CELLS {
+                self.range_cache.clear();
+                self.range_cache_cells = 0;
+            }
+            self.range_cache_cells = self.range_cache_cells.saturating_add(cells);
+            self.range_cache.insert((sheet, range), std::sync::Arc::clone(&arr));
+        }
+        Some(arr)
+    }
     fn visit_range(&mut self, sheet: usize, range: RangeRef, f: &mut dyn FnMut(&Value) -> bool) -> bool {
         let wb = self.wb;
         let Some(sh) = wb.sheet(sheet) else { return false };
@@ -755,7 +812,22 @@ impl Host for PassHost<'_> {
     }
     fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
         let wb = self.wb;
-        *self.used.entry(sheet).or_insert_with(|| wb.sheet(sheet).and_then(|s| s.used_range()))
+        let base = *self.used.entry(sheet).or_insert_with(|| wb.sheet(sheet).and_then(|s| s.used_range()));
+        if self.spills.is_empty() {
+            return base;
+        }
+        let mut u = base;
+        for (&(s, anchor), arr) in &self.spills {
+            if s == sheet && arr.rows >= 1 && arr.cols >= 1 {
+                let end = CellRef::new(
+                    anchor.row.saturating_add((arr.rows as u32).saturating_sub(1)),
+                    anchor.col.saturating_add((arr.cols as u32).saturating_sub(1)),
+                );
+                let r = RangeRef::new(anchor, end);
+                u = Some(u.map_or(r, |prev| prev.union(&r)));
+            }
+        }
+        u
     }
     fn now_serial(&self) -> f64 {
         self.now

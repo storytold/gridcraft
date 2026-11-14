@@ -2960,6 +2960,137 @@ fn formulas_read_a_dirty_python_cell_after_it_is_laid_out() {
     assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (5.0, 100.0, 111.0));
 }
 
+#[test]
+fn full_column_match_and_sumifs_scale() {
+    use gridcraft_model::{Cell, Formula, Sheet};
+    let mut wb = Workbook::new();
+    wb.sheets.clear();
+    let mut data = Sheet::new("Data");
+    let mut summary = Sheet::new("Summary");
+    let mut report = Sheet::new("Report");
+    let fcell = |f: String| Cell { value: Value::Empty, formula: Some(Formula::new(&f).into()), style: Default::default(), py: None };
+    let vcell = |v: Value| Cell { value: v, formula: None, style: Default::default(), py: None };
+    for r in 12u32..2_500 {
+        let row1 = r + 1;
+        let asset_idx = (r - 12) / 31;
+        let asset_name = Value::from(format!("Item-{asset_idx:04}"));
+        data.set_cell(CellRef::new(r, 0), vcell(asset_name));
+        data.set_cell(CellRef::new(r, 6), vcell(Value::Number(1.25)));
+        data.set_cell(CellRef::new(r, 7), vcell(Value::Number(45.0)));
+
+        report.set_cell(CellRef::new(r, 0), fcell(format!("Data!A{row1}")));
+        report.set_cell(CellRef::new(r, 5), fcell(format!("IF(ROW(A{row1})=MATCH(A{row1},A:A,0),TRUE,FALSE)")));
+        report.set_cell(CellRef::new(r, 6), fcell(format!("IFERROR(AVERAGE(H{row1}/Summary!$E$5,I{row1}/Summary!$E$6,J{row1}/Summary!$E$7),\"\")")));
+        report.set_cell(CellRef::new(r, 7), fcell(format!("IF(F{row1},SUMIFS(K:K,N:N,A{row1}&\"_\"),\"NA\")")));
+        report.set_cell(CellRef::new(r, 8), fcell(format!("IF(F{row1},SUMIFS(L:L,N:N,A{row1}&\"_\"),\"NA\")")));
+        report.set_cell(CellRef::new(r, 9), fcell(format!("IF(F{row1},SUMIFS(M:M,N:N,A{row1}&\"_\"),\"NA\")")));
+        report.set_cell(CellRef::new(r, 10), fcell(format!("Data!G{row1}")));
+        report.set_cell(CellRef::new(r, 11), fcell(format!("Data!H{row1}")));
+        report.set_cell(CellRef::new(r, 12), fcell(format!("IF(L{row1}>0,1,0)")));
+        report.set_cell(CellRef::new(r, 13), fcell(format!("A{row1}&\"_\"")));
+    }
+    summary.set_cell(CellRef::new(4, 4), fcell("MAX(Report!H:H)".into()));
+    summary.set_cell(CellRef::new(5, 4), fcell("MAX(Report!I:I)".into()));
+    summary.set_cell(CellRef::new(6, 4), fcell("MAX(Report!J:J)".into()));
+    wb.sheets.push(std::sync::Arc::new(data));
+    wb.sheets.push(std::sync::Arc::new(summary));
+    wb.sheets.push(std::sync::Arc::new(report));
+
+    let mut calc = Calc::new();
+    calc.recalc_all(&mut wb);
+
+    let rep = wb.sheet(2).unwrap_or_else(|| panic!("Report"));
+    assert_eq!(rep.value(CellRef::new(12, 5)), Value::Bool(true));
+    assert_eq!(rep.value(CellRef::new(13, 5)), Value::Bool(false));
+    assert_eq!(rep.value(CellRef::new(12, 7)), Value::Number(31.0 * 1.25));
+    assert_eq!(rep.value(CellRef::new(12, 8)), Value::Number(31.0 * 45.0));
+    assert_eq!(rep.value(CellRef::new(12, 9)), Value::Number(31.0));
+    assert_eq!(rep.value(CellRef::new(13, 7)), Value::from("NA"));
+}
+
+#[test]
+fn wide_table_vlookup_text_and_numeric_keys_and_unused_columns() {
+    use gridcraft_model::{Cell, Formula, Sheet};
+    let mut wb = Workbook::new();
+    wb.sheets.clear();
+    let mut data = Sheet::new("Data");
+    let mut report = Sheet::new("Report");
+    let fcell = |f: String| Cell { value: Value::Empty, formula: Some(Formula::new(&f).into()), style: Default::default(), py: None };
+    let vcell = |v: Value| Cell { value: v, formula: None, style: Default::default(), py: None };
+    for r in 0u32..4_000 {
+        let row1 = r + 1;
+        // Column F (col 5): text key; Column G (col 6): value; Column H (col 7): numeric key; Column I (col 8): value.
+        data.set_cell(CellRef::new(r, 5), vcell(Value::from(format!("Key-{r:04}"))));
+        data.set_cell(CellRef::new(r, 6), vcell(Value::Number(f64::from(r) * 2.0)));
+        data.set_cell(CellRef::new(r, 7), vcell(Value::Number(f64::from(r) + 10_000.0)));
+        data.set_cell(CellRef::new(r, 8), vcell(Value::Number(f64::from(r) * 3.0)));
+        // Column CV (col 99): formula that reads Report!B{row1} (would be a circular reference if VLOOKUP read unused columns).
+        data.set_cell(CellRef::new(r, 99), fcell(format!("Report!B{row1}+1")));
+
+        report.set_cell(CellRef::new(r, 0), vcell(Value::from(format!("Key-{r:04}"))));
+        report.set_cell(CellRef::new(r, 1), fcell(format!("VLOOKUP(A{row1},Data!F:CV,2,0)")));
+        report.set_cell(CellRef::new(r, 2), vcell(Value::Number(f64::from(r) + 10_000.0)));
+        report.set_cell(CellRef::new(r, 3), fcell(format!("VLOOKUP(C{row1},Data!H:CV,2,0)")));
+    }
+    wb.sheets.push(std::sync::Arc::new(data));
+    wb.sheets.push(std::sync::Arc::new(report));
+
+    let mut calc = Calc::new();
+    calc.recalc_all(&mut wb);
+
+    let rep = wb.sheet(1).unwrap_or_else(|| panic!("Report"));
+    assert_eq!(rep.value(CellRef::new(0, 1)), Value::Number(0.0));
+    assert_eq!(rep.value(CellRef::new(3_999, 1)), Value::Number(3_999.0 * 2.0));
+    assert_eq!(rep.value(CellRef::new(0, 3)), Value::Number(0.0));
+    assert_eq!(rep.value(CellRef::new(3_999, 3)), Value::Number(3_999.0 * 3.0));
+}
+
+#[test]
+fn aggregate_skip_errors_over_large_bounded_range_expression_trims_to_used_range() {
+    let mut t = T::new();
+    for (r, (k, v)) in [("K1", 10.0), ("K2", 20.0), ("K1", 35.0), ("K2", 50.0)].into_iter().enumerate() {
+        let row1 = r + 2;
+        t.set(&format!("A{row1}"), k);
+        t.set(&format!("B{row1}"), &v.to_string());
+    }
+    t.set("C2", "=IFERROR(AGGREGATE(15,6,B3:$B$100000/(A3:$A$100000=A2),1),\"\")");
+    t.set("C3", "=IFERROR(AGGREGATE(15,6,B4:$B$100000/(A4:$A$100000=A3),1),\"\")");
+    t.set("C4", "=IFERROR(AGGREGATE(15,6,B5:$B$100000/(A5:$A$100000=A4),1),\"\")");
+    assert_eq!(t.get("C2"), Value::Number(35.0));
+    assert_eq!(t.get("C3"), Value::Number(50.0));
+    assert_eq!(t.get("C4"), Value::from(""));
+}
+
+#[test]
+fn aggregate_skip_errors_preserves_nested_countif_and_empty_matching_ranges() {
+    let mut t = T::new();
+    t.set("A1", "10");
+    t.set("A2", "");
+    t.set("B3", "7");
+    t.set("C1", "=AGGREGATE(9,6,COUNTIF(A1:A100000,\"\"))");
+    t.set("C2", "=AGGREGATE(15,6,B3:$B$20000/(A3:$A$20000=A2),1)");
+    assert_eq!(t.get("C1"), Value::Number(99_999.0));
+    assert_eq!(t.get("C2"), Value::Number(0.0));
+}
+
+#[test]
+fn aggregate_filtered_div_sees_current_pass_spill_extent() {
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(5)");
+    t.set("B1", "=SEQUENCE(5,1,10,10)");
+    t.set("C1", "=AGGREGATE(15,6,B1:$B$100000/(A1:$A$100000=4),1)");
+    assert_eq!(t.get("C1"), Value::Number(40.0));
+}
+
+#[test]
+fn vlookup_array_fallback_evaluates_table_expression_once() {
+    let mut t = T::new();
+    // With calc.rng seeded to 1, the first xorshift64* draw is < 0.5 and the second is >= 0.5.
+    // Evaluating the table argument twice would pick the second branch instead of the first.
+    t.set("A1", "=VLOOKUP(1,IF(RAND()<0.5,{1,10},{1,20}),2,0)");
+    assert_eq!(t.get("A1"), Value::Number(10.0));
+}
+
 /// A computed criterion whose formula runs a database function over the same criteria counts as
 /// not met inside itself: before, each record's check ran the function again for every record, at
 /// every level, so the work grew exponentially with the nesting allowed.

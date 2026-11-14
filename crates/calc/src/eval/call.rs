@@ -70,6 +70,8 @@ impl<'h> Evaluator<'h> {
             "INDIRECT" => self.indirect(args),
             "INDEX" => self.index(args),
             "XLOOKUP" => self.xlookup(args),
+            "VLOOKUP" | "HLOOKUP" => self.vh_lookup(name == "VLOOKUP", args),
+            "LOOKUP" => self.lookup_call(args),
             "CELL" => self.cell_info(args),
             "TRIMRANGE" => self.trimrange(args),
             "SUBTOTAL" | "AGGREGATE" => self.subtotal(name, args),
@@ -288,6 +290,10 @@ impl<'h> Evaluator<'h> {
     }
 
     pub(super) fn builtin(&mut self, name: &str, args: &[Expr]) -> Ev {
+        self.builtin_with_pre(name, args, Vec::new())
+    }
+
+    pub(super) fn builtin_with_pre(&mut self, name: &str, args: &[Expr], mut pre: Vec<(usize, Ev)>) -> Ev {
         let Some(spec) = gridcraft_functions::lookup(name) else {
             // A defined name holding a LAMBDA, or a LET-bound lambda.
             return match self.name(name) {
@@ -315,7 +321,10 @@ impl<'h> Evaluator<'h> {
             _ => None,
         };
         for (i, a) in args.iter().enumerate() {
-            let mut ev = self.eval(a);
+            let mut ev = match pre.iter().position(|(idx, _)| *idx == i) {
+                Some(p) => pre.swap_remove(p).1,
+                None => self.eval(a),
+            };
             if lambda_at == Some(i)
                 && let Ev::L(l) = &ev
             {
