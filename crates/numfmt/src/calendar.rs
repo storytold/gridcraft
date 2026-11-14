@@ -1,6 +1,7 @@
 //! Calendars a format section can show dates in: the `B1` (Gregorian) and `B2` (Hijri) prefixes.
 
-use gridcraft_core::date::{DateTime, MONTHS, WEEKDAYS, days_from_civil, days_in_month};
+use gridcraft_core::Region;
+use gridcraft_core::date::{DateTime, days_from_civil, days_in_month};
 
 /// The calendar a section's year, month and day parts count in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -49,26 +50,27 @@ pub(crate) struct CalendarDate {
 impl Calendar {
     /// The date of a day in this calendar, `None` when it has none: under `B2`, the 1900 system's
     /// fictitious 29 February 1900 (serial 60, which Excel shows as `#VALUE!`) and days before
-    /// 1 Muharram 1 AH.
-    pub(crate) fn date(self, dt: &DateTime) -> Option<CalendarDate> {
+    /// 1 Muharram 1 AH. Gregorian names come from `region`, and `with_day` picks the genitive
+    /// month name (Russian `1 января`) when the section also shows the day. Hijri names are Arabic.
+    pub(crate) fn date(self, dt: &DateTime, region: &Region, with_day: bool) -> Option<CalendarDate> {
         match self {
             Calendar::Hijri => hijri_date(dt),
-            Calendar::Gregorian => Some(gregorian_date(dt)),
+            Calendar::Gregorian => Some(gregorian_date(dt, region, with_day)),
         }
     }
 }
 
-fn gregorian_date(dt: &DateTime) -> CalendarDate {
-    let month_name = MONTHS.get((dt.month as usize).wrapping_sub(1)).copied().unwrap_or("");
-    let day_name = WEEKDAYS.get(dt.weekday as usize).copied().unwrap_or("");
+fn gregorian_date(dt: &DateTime, region: &Region, with_day: bool) -> CalendarDate {
+    let month = (dt.month as usize).wrapping_sub(1);
+    let weekday = dt.weekday as usize;
     CalendarDate {
         year: dt.year.into(),
         month: dt.month,
         day: dt.day,
-        month_name,
-        month_short: month_name.get(..3).unwrap_or(month_name),
-        day_name,
-        day_short: day_name.get(..3).unwrap_or(day_name),
+        month_name: region.month_name(dt.month, with_day),
+        month_short: region.months_abbr.get(month).copied().unwrap_or(""),
+        day_name: region.weekdays.get(weekday).copied().unwrap_or(""),
+        day_short: region.weekdays_abbr.get(weekday).copied().unwrap_or(""),
     }
 }
 
@@ -193,7 +195,7 @@ mod tests {
                 continue;
             }
             let dt = datetime_from_serial(DateSystem::D1900, serial as f64).unwrap();
-            let h = Calendar::Hijri.date(&dt).unwrap();
+            let h = Calendar::Hijri.date(&dt, &gridcraft_core::region::EN_US, false).unwrap();
             assert!((1..=month_len(h.year, i64::from(h.month))).contains(&i64::from(h.day)), "serial {serial}");
             let days = days_before_month(h.year, i64::from(h.month)) + i64::from(h.day) - 1;
             assert_eq!(days, days_from_civil(dt.year, dt.month, dt.day) - epoch, "serial {serial}");
