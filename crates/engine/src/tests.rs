@@ -1231,6 +1231,25 @@ fn sort_and_filter() {
     assert_eq!(r["hiddenRows"], 1);
 }
 
+#[test]
+fn sorting_filtered_table_reapplies_filter_to_sorted_rows() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["ID", "Group", "Amount"], ["R01", "Keep", 30], ["R02", "Hide", 10], ["R03", "Keep", 20], ["R04", "Hide", 40], ["R05", "Keep", 5]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "E2", "input": "=SUBTOTAL(109,C2:C6)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F2", "input": "=SUBTOTAL(9,C2:C6)"})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:C6", "header": true, "name": "Orders"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["Keep"]})).unwrap();
+
+    s.execute("data.sort", json!({"range": "A1:C6", "header": true, "keys": [{"column": "C", "order": "asc"}]})).unwrap();
+
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let hidden: Vec<u32> = sh.rows.iter().filter(|(_, row)| row.hidden).map(|(row, _)| *row).collect();
+    assert_eq!(hidden, vec![2, 5]);
+    assert_eq!(v(&s, "E2"), Value::Number(55.0));
+    assert_eq!(v(&s, "F2"), Value::Number(55.0));
+}
+
 /// Delete and the Clear commands on a filtered selection clear only the rows showing, as in
 /// Excel (#1419); rows hidden by hand are cleared with the rest.
 #[test]
