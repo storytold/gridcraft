@@ -104,10 +104,9 @@ past the parser's limit, and a wrapper inside the text. **Saving writes the real
 
 | Format | Excel | GridCraft read | GridCraft write | Notes |
 |---|---|---|---|---|
-| `.csv` UTF-8 / Windows / Mac / MS-DOS | R/W | yes (UTF-8 and UTF-16 BOMs, UTF-8, likely Windows-1256 Arabic detection, otherwise Windows-1252 fallback; delimiter detection; per-column day/month date-order detection for `/` and `-` dates) | yes (UTF-8 without BOM, CRLF; a file opened as CSV is saved with the separator it was read with, so a `;` file stays `;`; otherwise `,`) | Excel writes the **displayed** values, and so do we; `file.exportCsv {values: true}` writes raw values (full precision, ISO 8601 dates) for automation. No encoding choice on save. Re-import of a single-column export splits text (#127) A used range that would write more than 512 MiB (two far-apart cells span the whole rectangle) is refused with an error instead of being expanded (#528). |
-| `.txt` tab-delimited, Unicode text | R/W | yes (`.txt`, `.tsv`, `.tab`; likely Windows-1256 Arabic detection for invalid UTF-8; per-column day/month date-order detection for `/` and `-` dates) | yes | Text Import Wizard options partly via Text to Columns |
-| `.csv` UTF-8 / Windows / Mac / MS-DOS | R/W | yes (UTF-8 and UTF-16 BOMs, UTF-8, likely Windows-1256 Arabic detection, otherwise Windows-1252 fallback; delimiter detection; per-column day/month date-order detection for `/` and `-` dates) | yes (UTF-8 without BOM, CRLF) | Writes the **displayed** values like Excel (number formats applied, formula results, never column-width `#####`); `file.exportCsv {values: true}` writes raw values instead. No encoding choice on save. Re-import of a single-column export splits text (#127) A used range that would write more than 512 MiB (two far-apart cells span the whole rectangle) is refused with an error instead of being expanded (#528). |
+| `.csv` UTF-8 / Windows / Mac / MS-DOS | R/W | yes (UTF-8 and UTF-16 BOMs, UTF-8, likely Windows-1256 Arabic detection, otherwise Windows-1252 fallback; delimiter detection; per-column day/month date-order detection for `/` and `-` dates) | yes (UTF-8, CRLF; comma or semicolon CSV, see [CSV names](#csv-names-what-the-file-holds)) | Writes the **displayed** values like Excel (number formats applied, formula results, never column-width `#####`); `file.exportCsv {values: true}` writes raw values (full precision, ISO 8601 dates) for automation. No encoding choice on save. Re-import of a single-column export splits text (#127) A used range that would write more than 512 MiB (two far-apart cells span the whole rectangle) is refused with an error instead of being expanded (#528). |
 | `.txt` tab-delimited, Unicode text | R/W | yes (`.txt`, `.tsv`, `.tab`; likely Windows-1256 Arabic detection for invalid UTF-8; per-column day/month date-order detection for `/` and `-` dates) | yes (displayed values) | Text Import Wizard options partly via Text to Columns |
+
 | `.prn` formatted text (space-delimited) | R/W | no | no | |
 | `.slk` SYLK | R/W | **yes, partial** (#1481) | no (Save As `.xlsx`) | Values (numbers, text, booleans, errors), formulas converted from R1C1 to A1 as Excel does (relative and absolute references, ranges, whole rows and columns, shared formulas) with their cached results, number formats (`P`/`F;P`), column widths (`F;W`); the sheet is named after the file. Not read: fonts and cell styles, row heights, names, comments. Non-UTF-8 files are read as Latin-1 | engine `io/tests.rs` (`sylk_*`) |
 | `.dif` Data Interchange Format | R/W | no | no | Small, legacy |
@@ -117,6 +116,33 @@ past the parser's limit, and a wrapper inside the text. **Saving writes the real
 | `.mht` / `.mhtml` single-file web page | R/W (Windows) | no | no | |
 | `.json` | via Power Query | GridCraft's own workbook JSON (debug) and JSON import | GridCraft JSON | Not Power Query's JSON shaping; notes and hyperlinks break export (#126) |
 | `.xml` with XML maps | Developer ▸ Import/Export | no | no | |
+
+### CSV names: what the file holds
+
+GridCraft names its CSV types after what the file holds. Excel does not, and the difference only
+shows outside English-language regions:
+
+- Excel's «Comma delimited» means *the Windows list separator*, which is `,` only where the
+  decimal mark is `.`. With the Italian interface and the it-IT region (observed in Excel 365,
+  2026-10-24), «CSV UTF-8 (delimitato da virgole)» writes **semicolons** and decimal commas
+  (UTF-8 with BOM), and «CSV (delimitato dal separatore di elenco)» writes the same in ANSI
+  (Windows-1252). German, French and most European regions behave the same way. Users of an
+  English Excel never see this.
+- GridCraft keeps the names honest instead of copying that: **CSV UTF-8 (Comma delimited)**
+  writes commas and decimal points; **CSV UTF-8 (Semicolon delimited)** writes semicolons and
+  decimal commas (`1.234,5`; dates and times are left as shown), which is what Excel reads on a
+  double-click in those regions. Both are UTF-8 with a byte order mark, so Excel shows accented
+  letters correctly; there is no ANSI variant.
+- The decision came from an Italian user who found Excel's "comma-delimited file full of
+  semicolons" incoherent: GridCraft aims to be compatible with Excel's files, not with its
+  inconsistencies.
+- Scripts and agents choose explicitly: `file.exportCsv {path, delimiter: ";", decimal: ",",
+  bom: true}` (also `file.saveBytes`). Without these parameters the export is unchanged: the
+  separator a file was opened with (else `,`), a decimal point and no BOM.
+- Opening such a file reads it back as written: in a semicolon file a field with one decimal
+  comma (`1,5`, `-1.234,50`, `12,5%`) is a number, and semicolons on every line win over commas
+  that all sit between digits (`1,5;2,25`), so a sheet of numbers keeps its columns. Fields
+  without a comma, and every field of a comma or tab file, read as before.
 
 ## Export and print
 
@@ -186,6 +212,8 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-10-31 | minor | CSV and text open detects each column's date order: a value that reads only day first (`31/05/2026`) makes the column day first, a value that reads only month first (`12/31/2026`) makes it month first, an all-ambiguous column keeps month first with a warning, and a column with both kinds stays text with a warning (#2765) |
 | 2026-10-31 | minor | XLSX open reads Google Sheets' `IFERROR(__xludf.DUMMYFUNCTION("…"),cached)` export wrapper as the formula inside when GridCraft calculates every function in it (plain, shared and array formulas, whole or nested; Google-only functions and unparseable, over-long or over-deep inner text keep the wrapper and the cached value) and keeps the cached value; saving writes the real formula with Excel's `_xlfn.` prefixes (#2871) |
 | 2026-10-26 | minor | Alignment readingOrder 0/1/2 survives cell, named-style and differential-style round-trips; Format Cells exposes reading direction and CF priority preserves unspecified inheritance |
+| 2026-10-27 | minor | CSV import reads GridCraft's semicolon CSV back: decimal-comma numbers in a semicolon file are numbers, and delimiter sniffing picks the semicolon when every comma sits between digits |
+| 2026-10-24 | minor | CSV export: **CSV UTF-8 (Semicolon delimited)** next to **CSV UTF-8 (Comma delimited)** in File › Export and Save As, both with a UTF-8 BOM so Excel reads accents; the semicolon one writes decimal commas. The comma one now writes commas even for a workbook opened from a `;` file. `file.exportCsv` / `file.saveBytes` take `delimiter`, `decimal` and `bom` (unchanged output without them). Why the names differ from Excel's: [CSV names](#csv-names-what-the-file-holds) |
 | 2026-10-21 | minor | HTML (Save as Web Page) writes pictures (`data:` URI `<img>`) and charts (inline SVG from the chart crate's drawing primitives, text included) at their anchors; the table uses the sheet's column widths and row heights when the sheet has either, and output for sheets without pictures or charts is unchanged |
 | 2026-10-20 | trivial | XLSX shared strings: Japanese phonetic runs (ふりがな, `<rPh sb="…" eb="…">` with `<phoneticPr>`) are read into the workbook and written back next to the string with the same text, so an open + save no longer deletes them; bad offsets and readings are dropped with a warning, a `<phoneticPr>` without runs is kept on its own, and when duplicate `<si>` items share a text but not a reading only the first reading is written (reported on open) (`phonetic_tests.rs`) |
 | 2026-10-20 | minor | A workbook theme's major/minor per-script typefaces (`<a:font script="Arab" typeface="…"/>`, also Hebr, Jpan and the rest) are read and written back in file order after `<a:cs>`; they were dropped before. A hostile file is held to 64 entries of 256 characters |
