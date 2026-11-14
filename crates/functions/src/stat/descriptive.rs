@@ -402,10 +402,12 @@ pub(super) fn percentrank_impl(a: &[Arg], exc: bool) -> R<Value> {
     let n = s.len() as f64;
     let rank_of = |v: f64| -> f64 {
         let less = s.iter().filter(|&&y| y < v).count() as f64;
-        if exc {
-            (less + 1.0) / (n + 1.0)
-        } else if n <= 1.0 {
+        // One number ranks 1 in both forms, as native Excel's PERCENTRANK.EXC({1},1) is 1, not the
+        // 1/2 the exclusive formula gives (#4013).
+        if n <= 1.0 {
             1.0
+        } else if exc {
+            (less + 1.0) / (n + 1.0)
         } else {
             less / (n - 1.0)
         }
