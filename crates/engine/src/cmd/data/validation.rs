@@ -249,26 +249,35 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
         &entered
     };
     let eval = |f: &str| gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at));
-    let num = |f: &str| eval(f).to_number().ok();
     let ok = match dv.kind {
         // The list is the one the dropdown showed before the entry, as in Excel: a source that takes
         // in the cell itself (`=$A1:$A2` on A2:A3 is A2:A3 at A3) doesn't list the value being typed.
         ValidationKind::List => list_items(original, sheet, at, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
-        ValidationKind::Custom => eval(&dv.f1).to_bool().unwrap_or(false),
-        ValidationKind::TextLength => {
-            let n = input.chars().count() as f64;
-            compare_op(dv.op, n, num(&dv.f1), dv.f2.as_deref().and_then(num))
-        }
-        _ => match v.as_f64() {
-            Some(n) => {
-                if dv.kind == ValidationKind::Whole && n.fract() != 0.0 {
-                    false
-                } else {
-                    compare_op(dv.op, n, num(&dv.f1), dv.f2.as_deref().and_then(num))
-                }
+        ValidationKind::Custom => {
+            if dv.allow_blank && custom_refers_to_blank(wb, sheet, at, &formula_at(&dv.f1, first, at)) {
+                return None;
             }
-            None => false,
-        },
+            eval(&dv.f1).to_bool().unwrap_or(false)
+        }
+        _ => {
+            // Only `between` and `notBetween` read the maximum.
+            let two = matches!(dv.op, CfOperator::Between | CfOperator::NotBetween);
+            let lo = eval(&dv.f1);
+            let hi = dv.f2.as_deref().filter(|_| two).map(eval);
+            // With Ignore blank, a minimum or maximum that is a blank cell lets any value in, as in
+            // Excel (`Validation.IgnoreBlank`); read as 0, `<= $A$1` refused everything above 0.
+            // A formula that computes from the blank cell (`=$A$1+1`) gives a number, not a blank.
+            if dv.allow_blank && (lo.is_empty() || hi.as_ref().is_some_and(Value::is_empty)) {
+                return None;
+            }
+            let n = if dv.kind == ValidationKind::TextLength { Some(input.chars().count() as f64) } else { v.as_f64() };
+            match n {
+                Some(n) if !(dv.kind == ValidationKind::Whole && n.fract() != 0.0) => {
+                    compare_op(dv.op, n, lo.to_number().ok(), hi.and_then(|v| v.to_number().ok()))
+                }
+                _ => false,
+            }
+        }
     };
     if ok {
         return None;
@@ -279,6 +288,38 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
         dv.error_message.clone()
     };
     Some((dv.clone(), msg))
+}
+
+/// Whether a custom rule's formula `f` (as seen from `at`) refers to a blank cell, which with
+/// Ignore blank lets any value in, as in Excel (`=B1<=$A$1` with A1 empty).
+///
+/// A single cell, a name or a structured reference counts when it gives a blank. Cells inside a
+/// range don't: `=COUNTIF($D$1:$D$5,D1)=1` keeps refusing a repeat in a mostly empty column, and
+/// neither does an end of a range the parser keeps as two parts (`$D$1:INDEX($D:$D,ROW())`).
+/// `wb` holds the value being entered, so the checked cell itself is never blank here.
+fn custom_refers_to_blank(wb: &Workbook, sheet: usize, at: CellRef, f: &str) -> bool {
+    use gridcraft_formula::{BinOp, Expr, RefKind};
+    let Ok(e) = gridcraft_formula::parse(f.trim_start_matches('=')) else { return false };
+    // `walk` visits a parent before its children, so the ends of a range are known in time.
+    let mut range_ends: Vec<*const Expr> = Vec::new();
+    let mut blank = false;
+    e.walk(&mut |node| {
+        if blank {
+            return;
+        }
+        if let Expr::Binary(BinOp::Range, a, b) = node {
+            range_ends.extend([&**a as *const Expr, &**b as *const Expr]);
+        }
+        let single = match node {
+            Expr::Ref(r) => matches!(r.kind, RefKind::Cell(_)),
+            Expr::Name(_) | Expr::Struct(_) => true,
+            _ => false,
+        };
+        if single && !range_ends.contains(&(node as *const Expr)) {
+            blank = gridcraft_calc::recalc::evaluate_expr(wb, sheet, at, node).is_empty();
+        }
+    });
+    blank
 }
 
 /// A formula written for `first`, as seen from `at` (relative references shifted).
