@@ -18,11 +18,12 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod print;
+mod user_name;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gridcraft_engine::Session;
+use gridcraft_engine::{DEFAULT_USER_NAME, Session};
 use gridcraft_ui_egui::doc_windows::DocWindows;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
@@ -125,6 +126,49 @@ fn load_prefs(app: &mut SheetApp) {
         && let Ok(p) = serde_json::from_slice(&b)
     {
         app.session.prefs = p;
+    }
+}
+
+/// The longest user name kept, in characters — the same cap PR #3550's `options.userName` puts on
+/// a name typed into File › Options. It is why a cap is needed at all: the name goes into the
+/// workbook properties and next to every note, comment and revision, and the system's GECOS field
+/// is free text someone may have filled with anything; an unbounded one would sit in the file and
+/// in every comment box forever. Only the kept characters are copied, however long `name` is.
+const MAX_USER_NAME_CHARS: usize = 200;
+
+/// A user name as the preferences keep it, before it is saved: control characters (tabs, line
+/// breaks) become spaces, the ends are trimmed and at most [`MAX_USER_NAME_CHARS`] characters are
+/// kept; `None` when nothing but spaces is left. This is the shape PR #3550's `clean_user_name`
+/// will give a name typed into File › Options; the engine gets its own with that command, and
+/// until it lands the system's name is cleaned here so both ways keep a name the same.
+fn clean_user_name(name: &str) -> Option<String> {
+    let name = name.trim_matches(|c: char| c.is_whitespace() || c.is_control());
+    let kept: String = name.chars().take(MAX_USER_NAME_CHARS).map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let kept = kept.trim_end();
+    (!kept.is_empty()).then(|| kept.to_string())
+}
+
+/// The system account's name ([`user_name`], #1449) while the user name is still unset: on the
+/// first start, or with preferences saved before there was a name to keep (they hold
+/// [`DEFAULT_USER_NAME`]). A name kept with the preferences always wins, and the system is asked
+/// only until one is saved: `save_prefs` writes the name from then on. A name of only spaces
+/// counts as unset (File › Options will not keep one), but an empty name is the person's own
+/// choice to sign with nothing, and stays. The name goes through [`clean_user_name`], as one
+/// typed in Options will be. A run without preferences never asks the system, so what it saves or
+/// shows stays the same on every machine; that decision arrives as `prefs_on` (the caller's
+/// [`prefs_enabled`]) rather than being read from the environment here, so the tests cover both
+/// kinds of run.
+fn use_system_user_name(app: &mut SheetApp, prefs_on: bool, system: impl FnOnce() -> Option<String>) {
+    let kept = &app.session.prefs.user_name;
+    let unset = kept == DEFAULT_USER_NAME || (!kept.is_empty() && kept.trim().is_empty());
+    if !prefs_on || !unset {
+        return;
+    }
+    if let Some(name) = system().as_deref().and_then(clean_user_name) {
+        // The name itself stays out of the log: `gridcraft.log` is kept and rotated on the machine
+        // of whoever runs it, and would carry a personal name long after the preference changed.
+        log::debug!("user name: this start takes the account's name");
+        app.session.prefs.user_name = name;
     }
 }
 
@@ -329,6 +373,7 @@ fn main() -> eframe::Result<()> {
     app.start_update_check();
     let control_port = control_port;
     load_prefs(&mut app);
+    use_system_user_name(&mut app, prefs_enabled(), user_name::system);
     // Stamp the startup workbook's author from the persisted user name.
     if app.session.documents().is_empty() {
         app.session.new_workbook();
@@ -464,5 +509,88 @@ mod packaging_tests {
         for ext in &mac {
             assert!(FileKind::from_path(&format!("book.{ext}")).is_some(), "GridCraft doesn't open .{ext}");
         }
+    }
+}
+
+#[cfg(test)]
+mod user_name_tests {
+    use super::*;
+
+    fn app() -> SheetApp {
+        SheetApp::new(Session::new(), Services::default())
+    }
+
+    #[test]
+    fn the_system_user_name_replaces_only_the_default() {
+        let mut a = app();
+        use_system_user_name(&mut a, true, || Some("  Ann\tLee \n".into()));
+        assert_eq!(a.session.prefs.user_name, "Ann Lee", "cleaned as a name typed in Options will be");
+
+        // A chosen name, saved or taken this run, never asks the system again.
+        let mut asked = false;
+        use_system_user_name(&mut a, true, || {
+            asked = true;
+            Some("Grace Hopper".into())
+        });
+        assert!(!asked);
+        assert_eq!(a.session.prefs.user_name, "Ann Lee");
+        let mut b = app();
+        b.session.prefs = serde_json::from_str(r#"{"userName": "Grace Hopper"}"#).unwrap();
+        use_system_user_name(&mut b, true, || Some("Ada Lovelace".into()));
+        assert_eq!(b.session.prefs.user_name, "Grace Hopper", "a saved name wins");
+    }
+
+    #[test]
+    fn preferences_holding_the_default_name_take_the_system_one() {
+        // Saved before #1449, when every run saved the default; or a name of only spaces, which
+        // File › Options never keeps; or a prefs.json without the name at all (serde default).
+        for saved in [r#"{"userName": "GridCraft User"}"#, r#"{"userName": "  "}"#, r#"{}"#] {
+            let mut a = app();
+            a.session.prefs = serde_json::from_str(saved).unwrap();
+            use_system_user_name(&mut a, true, || Some("Ada Lovelace".into()));
+            assert_eq!(a.session.prefs.user_name, "Ada Lovelace", "{saved}");
+        }
+    }
+
+    #[test]
+    fn a_name_cleared_in_options_stays_cleared() {
+        // An empty name in prefs.json is the person's own choice, not a missing name (#1449).
+        let mut a = app();
+        a.session.prefs = serde_json::from_str(r#"{"userName": ""}"#).unwrap();
+        use_system_user_name(&mut a, true, || Some("Ada Lovelace".into()));
+        assert_eq!(a.session.prefs.user_name, "", "the cleared name stays cleared");
+    }
+
+    #[test]
+    fn a_run_without_preferences_never_asks_the_system() {
+        // Agents' and test runs (`GRIDCRAFT_NO_PREFS`, which `prefs_enabled` reads) keep the
+        // default, so what they save or show stays the same on every machine.
+        let mut asked = false;
+        let mut a = app();
+        use_system_user_name(&mut a, false, || {
+            asked = true;
+            Some("Ada Lovelace".into())
+        });
+        assert!(!asked, "no lookup at all");
+        assert_eq!(a.session.prefs.user_name, DEFAULT_USER_NAME);
+    }
+
+    #[test]
+    fn no_usable_system_name_keeps_the_default() {
+        for system in [None, Some(String::new()), Some(" \t\n".into()), Some("\u{0}\u{1b}".into())] {
+            let mut a = app();
+            use_system_user_name(&mut a, true, || system.clone());
+            assert_eq!(a.session.prefs.user_name, DEFAULT_USER_NAME, "{system:?}");
+        }
+    }
+
+    #[test]
+    fn a_long_system_name_is_cut_like_a_typed_one_will_be() {
+        // Characters, not bytes, as PR #3550's `clean_user_name` counts them.
+        let mut a = app();
+        use_system_user_name(&mut a, true, || Some("é".repeat(500)));
+        let taken = a.session.prefs.user_name;
+        assert_eq!(taken.chars().count(), MAX_USER_NAME_CHARS);
+        assert_eq!(taken, "é".repeat(MAX_USER_NAME_CHARS));
     }
 }

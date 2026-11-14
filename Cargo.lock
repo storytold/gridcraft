@@ -2147,7 +2147,9 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "pollster 1.0.1",
  "rfd",
+ "rustix 1.1.5",
  "serde_json",
+ "windows",
  "winit",
  "winresource",
 ]

@@ -406,6 +406,13 @@ impl DocState {
     }
 }
 
+/// The user name an unnamed session signs with: new workbooks' author, and the author of notes
+/// and comments without one. The desktop app replaces it on a first start with the operating
+/// system account's name (#1449, `apps/gridcraft/src/user_name.rs`) and compares against it to
+/// tell "still the default" from a name the person chose; an empty [`Prefs::user_name`] is that
+/// person's own choice to sign with nothing, not this.
+pub const DEFAULT_USER_NAME: &str = "GridCraft User";
+
 /// Engine-side preferences.
 #[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -454,7 +461,7 @@ impl Default for Prefs {
         Prefs {
             enter_direction: "down".into(),
             autocomplete: true,
-            user_name: "GridCraft User".into(),
+            user_name: DEFAULT_USER_NAME.into(),
             default_font: gridcraft_model::DEFAULT_FONT.into(),
             default_font_size: gridcraft_model::DEFAULT_FONT_SIZE,
             sheets_in_new_workbook: 1,
