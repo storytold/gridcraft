@@ -97,6 +97,7 @@ past the parser's limit, and a wrapper inside the text. **Saving writes the real
 | `.xlam` / `.xla` add-ins | R/W | no | no | VBA; out of scope | — |
 | `.xml` XML Spreadsheet 2003 | R/W | no | no | Simple to support | — |
 | `.ods` OpenDocument Spreadsheet | R/W | **values only** (#100) | no | Sheets, values, dates, merges, repeated cells, cached formula results; no formulas, formatting, charts; encrypted ODS refused | `ods_tests.rs` |
+| `.numbers` Apple Numbers | R | **values only** (#1667) | no (Save As `.xlsx`) | Each table becomes a worksheet; numbers, currency, text, rich text as plain text, booleans, dates, times, durations, cached formula results; no formulas, formatting, merges, charts, images; see [numbers-import.md](numbers-import.md). Unverified on a wide corpus | `numbers_tests.rs` |
 | Password-encrypted workbooks (Agile/Standard encryption) | R | **yes** (#11): asks for the password on open; Agile (AES-128/192/256, SHA-1/256/384/512) and Standard (AES, SHA-1) | no (opens with no save path; Save As writes it without the password) | Clean-room from [MS-OFFCRYPTO] on the CFB reader. RC4, Extensible and certificate-only encryption refused with a message. Data-integrity HMAC not checked | `crypto/tests.rs`, `encrypted_tests.rs` |
 | `.xlw` Excel 4.0 workbook, `.wk*`, `.dbf` | open only (some) | no | no | Rare | — |
 
