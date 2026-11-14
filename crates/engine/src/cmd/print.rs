@@ -99,12 +99,13 @@ const MAX_CHART_PRIMS: usize = 4_000_000;
 #[cfg(test)]
 use layout::bands;
 pub(crate) use layout::split_bands;
-pub use layout::{PrintOptions, SheetLayout, layout_sheet, layouts, paper_size, print_range};
+pub use layout::{PrintOptions, PrintScaling, SheetLayout, layout_sheet, layouts, paper_size, print_range};
 use layout::{known_paper, seg_size, segments};
 use objects::draw_objects;
 #[cfg(test)]
 use text::{center_across_width, wrap_lines};
 
+/// Print, PDF export and page setup expose one pagination and scaling contract.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -112,7 +113,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export as PDF",
             ["File", "Export"],
             None,
-            "{path?, sheets?: active|all, range?: \"A1:F40\" (active sheet), fitToPage?: bool} → {pages, bytes, path} or {pages, bytes, base64} when no path. Honours each sheet's Page Setup.",
+            "{path?, sheets?: active|all, range?: \"A1:F40\" (active sheet), scaling?: pageSetup|none|sheet|columns|rows, fitToPage?: bool (legacy, exclusive with scaling)} → {pages, bytes, path} or {pages, bytes, base64} when no path. Honours each sheet's Page Setup.",
             has_doc,
             export_pdf
         ),
@@ -121,7 +122,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Print…",
             ["File"],
             Some("Cmd+P"),
-            "{path?, sheets?: active|all, range?, fitToPage?: bool} → {pages, bytes, base64} — the PDF the UI hands to the system print dialog",
+            "{path?, sheets?: active|all, range?, scaling?: pageSetup|none|sheet|columns|rows, fitToPage?: bool (legacy, exclusive with scaling)} → {pages, bytes, base64} — the PDF the UI hands to the system print dialog",
             has_doc,
             print
         ),
@@ -130,7 +131,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Print Preview",
             ["File"],
             None,
-            "{page? (1-based), sheets?: active|all, range?, fitToPage?} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, pageOrder, width, height}]} in print order",
+            "{page? (1-based), sheets?: active|all, range?, scaling?: pageSetup|none|sheet|columns|rows, fitToPage?: bool (legacy, exclusive with scaling)} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, pageOrder, width, height}]} in print order",
             has_doc,
             print_preview
         ),

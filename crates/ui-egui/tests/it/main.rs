@@ -89,6 +89,7 @@ mod pivot_pane;
 mod pivot_show_details;
 mod pivot_show_details_menu;
 mod popup_dismissal;
+mod print_scaling;
 mod protect_password;
 mod protected_cell;
 mod python_cell_edit;
