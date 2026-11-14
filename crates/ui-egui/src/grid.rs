@@ -17,8 +17,6 @@ use crate::theme::{self, Tokens};
 
 /// A painted pane: its row span, column span and screen rectangle.
 pub(crate) type PaneQuad = ((u32, u32), (u32, u32), Rect);
-/// Cached Page Break Preview ranges, keyed by (doc uid, revision, sheet).
-type PagesCache = ((u64, u64, usize), Vec<(RangeRef, u32)>);
 /// Cached Show Details cells, keyed by (doc uid, revision, sheet, pivot).
 type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>);
 
@@ -248,6 +246,8 @@ pub struct GridState {
     /// active sheet's rules, kept the same way: they are read from that sheet's cells alone.
     pub(crate) cf: Option<(std::sync::Weak<Sheet>, CfCache)>,
     pub drag: Drag,
+    /// Captured print-boundary gesture; commits once on release.
+    pub page_break_drag: Option<crate::page_breaks::BoundaryDrag>,
     /// A header-boundary resize drag: the workbook as it was when the drag began. The drag's own
     /// undo entries are the ones from the first entry that snapshots it; earlier edits with the
     /// same label are not the drag's to merge or cancel.
@@ -295,7 +295,7 @@ pub struct GridState {
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
-    pub pages: Option<PagesCache>,
+    pub pages: Option<crate::page_breaks::PageCache>,
     /// The PivotTable Fields pane's `pivot.fields` answer, cached per (doc uid, revision, pivot):
     /// it scans the whole source list, far too slow to repeat every frame (#2113).
     pub pivot_fields: Option<((u64, u64, String), serde_json::Value)>,
