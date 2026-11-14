@@ -21,6 +21,19 @@ pub fn encode(data: &[u8]) -> String {
     out
 }
 
+/// The 6-bit value of a base64 character (inverse of [`ALPHABET`]).
+fn value(c: u8) -> Option<u32> {
+    let v = match c {
+        b'A'..=b'Z' => c - b'A',
+        b'a'..=b'z' => c - b'a' + 26,
+        b'0'..=b'9' => c - b'0' + 52,
+        b'+' => 62,
+        b'/' => 63,
+        _ => return None,
+    };
+    Some(u32::from(v))
+}
+
 /// Decodes base64, whitespace and padding ignored; `None` for any other character.
 pub fn decode(s: &str) -> Option<Vec<u8>> {
     decode_limited(s, usize::MAX)
@@ -31,7 +44,7 @@ pub fn decode_limited(s: &str, limit: usize) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity((s.len() / 4 * 3).min(limit).min(1 << 20));
     let (mut buf, mut bits) = (0u32, 0u32);
     for c in s.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=') {
-        let v = ALPHABET.iter().position(|a| *a == c)? as u32;
+        let v = value(c)?;
         buf = (buf << 6) | v;
         bits += 6;
         if bits >= 8 {
@@ -101,6 +114,10 @@ mod tests {
         assert_eq!(super::decode_limited("AAAAAAAA", 3), None);
         assert_eq!(super::decode("AA!A"), None);
         assert_eq!(super::decode(" QU Jj\n").as_deref(), Some(&b"ABc"[..]));
+        // The lookup is the alphabet's inverse, and nothing else decodes.
+        for c in 0..=u8::MAX {
+            assert_eq!(super::value(c), super::ALPHABET.iter().position(|a| *a == c).map(|i| i as u32), "{c}");
+        }
     }
 
     #[test]

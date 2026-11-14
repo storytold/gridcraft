@@ -219,7 +219,8 @@ pub struct Workbook {
     pub props: DocProps,
     /// Workbook structure protection.
     pub protected_structure: bool,
-    /// Password of the structure protection (XLSX `workbookProtection`), never the password.
+    /// Hash of the structure protection's password, never the password. XLSX
+    /// `workbookProtection` writes its Excel form ([`crate::PasswordHash::excel`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structure_password: Option<crate::PasswordHash>,
     /// Custom fill lists (Options › Custom Lists) beyond the built-in ones.

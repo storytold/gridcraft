@@ -5657,6 +5657,9 @@ fn passwords_set_in_gridcraft_survive_xlsx_saving() {
     let mut s = s();
     s.execute("review.protectSheet", json!({"password": "pa55"})).unwrap();
     s.execute("review.protectWorkbook", json!({"on": true, "password": "b00k"})).unwrap();
+    // The workbook password, like the sheet's, also keeps OpenDocument's SHA-256 digest.
+    let book = s.doc().unwrap().wb.structure_password.clone().unwrap();
+    assert_eq!(book.odf_key(), gridcraft_model::PasswordHash::new_sha256_digest("b00k").odf_key());
     let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
     let mut t = super::tests::s();
     t.execute("file.open", json!({"name": "book.xlsx", "base64": saved["base64"]})).unwrap();

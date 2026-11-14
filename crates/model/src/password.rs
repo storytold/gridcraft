@@ -1,10 +1,10 @@
 //! Excel-compatible password hashes for protection (ECMA-376 Part 1 §18.2.29 and §18.3.1.66
 //! attribute sets): the legacy 16-bit hash (`password="CC1A"`) and the iterated, salted hash
 //! (`algorithmName`, `hashValue`, `saltValue`, `spinCount`); and the unsalted SHA-256 digest
-//! OpenDocument stores (`table:protection-key`). A password set in GridCraft keeps both an
-//! Excel form and the SHA-256 one, so it survives saving in either format. Protection is a convenience, not
-//! security, but verification really checks the password: an unsupported variant is refused,
-//! never accepted.
+//! OpenDocument stores (`table:protection-key`). A sheet or workbook password set in GridCraft
+//! keeps both an Excel form and the SHA-256 one, so it survives saving in either format (edit
+//! ranges keep only the Excel form). Protection is a convenience, not security, but verification
+//! really checks the password: an unsupported variant is refused, never accepted.
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
