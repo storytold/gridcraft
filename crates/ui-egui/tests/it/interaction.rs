@@ -710,12 +710,13 @@ fn spelling_suggestion_selection_belongs_to_the_current_issue() {
             {"cell": "A1", "word": "teh", "suggestions": ["the"]},
             {"cell": "B1", "word": "th", "suggestions": ["the", "thy"]}
         ]}));
-        h.run_steps(2);
+        // Suggestion and action rows resize the centered dialog; let its position settle before clicking.
+        h.run_steps(4);
         h.get_by_label("the").click();
-        h.run_steps(2);
-        assert_eq!(h.state().dialog.as_ref().unwrap().values["pick"], json!("the"));
+        h.run_steps(4);
+        assert_eq!(h.state().dialog.as_ref().unwrap().values["pick"], json!("the"), "{action}: first suggestion");
         h.get_by_role_and_label(egui::accesskit::Role::Button, action).click();
-        h.run_steps(2);
+        h.run_steps(4);
         let dialog = h.state().dialog.as_ref().unwrap();
         assert_eq!(dialog.list_index, 1, "{action}");
         assert!(dialog.values.get("pick").and_then(|v| v.as_str()).unwrap_or("").is_empty(), "{action} clears the prior suggestion");
@@ -723,10 +724,15 @@ fn spelling_suggestion_selection_belongs_to_the_current_issue() {
         assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "Change All").is_none(), "{action}");
         // Even an overlapping suggestion must be chosen again for this word.
         h.get_by_label("the").click();
-        h.run_steps(2);
+        h.run_steps(4);
+        assert_eq!(h.state().dialog.as_ref().unwrap().values["pick"], json!("the"), "{action}: second suggestion");
         h.get_by_role_and_label(egui::accesskit::Role::Button, "Change").click();
         h.run_steps(2);
-        assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 1)), Value::text("the"));
+        assert_eq!(
+            h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 1)),
+            Value::text("the"),
+            "{action}: the explicitly selected suggestion replaces the second word"
+        );
     }
 }
 
