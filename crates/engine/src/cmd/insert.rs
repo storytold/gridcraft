@@ -1166,13 +1166,14 @@ fn validate_cell_picture(data: &[u8]) -> Result<&'static str> {
 
 fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
     let kind = match str_param(p, "kind").unwrap_or("rectangle") {
+        "rectangle" => ShapeKind::Rectangle,
         "roundedRectangle" => ShapeKind::RoundedRectangle,
         "ellipse" | "oval" => ShapeKind::Ellipse,
         "triangle" => ShapeKind::Triangle,
         "line" => ShapeKind::Line,
         "arrow" => ShapeKind::Arrow,
         "textBox" => ShapeKind::TextBox,
-        _ => ShapeKind::Rectangle,
+        kind => return Err(bad("insert.shape", format!("unknown shape kind `{kind}`"))),
     };
     let d = s.doc()?;
     let id = d.wb.next_object_id();
@@ -1852,6 +1853,25 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_shape_kinds_are_refused_without_inserting_a_rectangle() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let before = s.active().unwrap().wb.clone();
+        let history = s.execute("history.list", json!({})).unwrap();
+        for kind in ["triange", "unsupported"] {
+            let error = s.execute("insert.shape", json!({"kind": kind})).unwrap_err();
+            assert!(error.to_string().contains(kind), "{error}");
+            assert_eq!(s.active().unwrap().wb, before);
+            assert_eq!(s.execute("history.list", json!({})).unwrap(), history);
+        }
+        // Omitted kind still creates a rectangle, and the existing oval alias stays supported.
+        s.execute("insert.shape", json!({})).unwrap();
+        s.execute("insert.shape", json!({"kind": "oval"})).unwrap();
+        let sheet = s.active().unwrap().wb.active().unwrap();
+        assert_eq!(sheet.shapes.iter().map(|shape| shape.kind).collect::<Vec<_>>(), [ShapeKind::Rectangle, ShapeKind::Ellipse]);
+    }
 
     #[test]
     fn chart_from_whole_columns_uses_the_rows_in_use() {
