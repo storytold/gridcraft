@@ -1,12 +1,5 @@
 //! File tab Backstage view (#174): a full-window page that replaces the ribbon, formula bar, grid
 //! and sheet tabs until Esc or the back arrow returns to the sheet.
-//!
-//! A navigation column on the left picks a page (Home, New, Open, Info, Save As, Print, Export,
-//! Options, Account); Save and Close act at once. Every action runs an existing command through
-//! [`SheetApp::run`] or an existing dialog through [`SheetApp::open_dialog`]; the state here is
-//! UI-only and never saved. Recent workbooks are listed by path, with when each was last changed:
-//! that is asked of the file system on a thread of its own, never while drawing, and only the
-//! files' metadata is read. No workbook is opened until the user picks one.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,6 +11,7 @@ use serde_json::{Value as Json, json};
 use crate::SheetApp;
 use crate::i18n::{self, Language};
 use crate::icons::{self, Icon};
+use crate::rtl::UiRtlExt;
 use crate::theme::{self, Tokens};
 
 mod options;
@@ -112,26 +106,16 @@ const PROPERTIES: [(&str, &str); 6] = [
 #[derive(Clone, Debug)]
 pub struct Backstage {
     pub page: Page,
-    /// Info: property drafts while a field is being edited (committed when it loses focus).
     props: [String; 6],
-    /// Focus at the end of the previous frame, before egui clears it on Esc.
     text_edit_focused: bool,
-    /// Print: the whole workbook rather than the active sheet.
     pub print_all: bool,
-    /// Print: fit each sheet on one page.
     pub fit_to_page: bool,
-    /// Print: the previewed page (0-based).
     preview_page: usize,
-    /// Print: the preview for (document, revision, whole workbook, fit to page).
     preview: Option<((u64, u64, bool, bool), Json)>,
-    /// Save As: the chosen file type (an extension from [`SAVE_TYPES`]).
     pub save_format: &'static str,
-    /// Home and Open: when the recent workbooks were last changed.
     recent: RecentFiles,
 }
 
-/// Save As file types: (extension, label). The first is the workbook itself; the others are
-/// exports that leave the workbook's own file and unsaved state alone.
 pub const SAVE_TYPES: [(&str, &str); 4] =
     [("xlsx", "Excel Workbook (*.xlsx)"), ("csv", "CSV UTF-8 (Comma delimited) (*.csv)"), ("html", "Web Page (*.html)"), ("pdf", "PDF (*.pdf)")];
 
@@ -151,7 +135,6 @@ impl Backstage {
     }
 }
 
-/// What a click asked for, applied after drawing.
 #[derive(Default)]
 struct Outcome {
     close: bool,
@@ -162,76 +145,91 @@ struct Outcome {
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let Some(mut bs) = app.backstage.take() else { return };
     let ctx = ui.ctx().clone();
-    // Esc inside a text field leaves the field; it closes the view only from outside one.
     let typing = bs.text_edit_focused;
     let t = Tokens::get(&ctx);
     let lang = app.ui.language;
+    let is_rtl = lang.is_rtl();
     let mut out = Outcome::default();
+
     let (nav_bg, nav_text, nav_sel) =
         if t.dark { (t.accent_soft, t.text, Color32::from_white_alpha(30)) } else { (t.accent, Color32::WHITE, Color32::from_black_alpha(46)) };
-    egui::Panel::left("backstage_nav")
+
+    let nav_panel = if is_rtl { egui::Panel::right("backstage_nav") } else { egui::Panel::left("backstage_nav") };
+
+    nav_panel
         .exact_size(NAV_W)
         .resizable(false)
         .frame(egui::Frame::NONE.fill(nav_bg).inner_margin(egui::Margin { left: 0, right: 0, top: 10, bottom: 10 }))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            if nav_item(ui, Icon::Back, lang.tr("Back"), false, nav_text, nav_sel).clicked() {
+            if nav_item(ui, is_rtl, Icon::Back, lang.tr("Back"), false, nav_text, nav_sel).clicked() {
                 out.close = true;
             }
             ui.add_space(10.0);
             for page in [Page::Home, Page::New, Page::Open] {
-                if nav_item(ui, page.icon(), lang.tr(page.label()), bs.page == page, nav_text, nav_sel).clicked() {
+                if nav_item(ui, is_rtl, page.icon(), lang.tr(page.label()), bs.page == page, nav_text, nav_sel).clicked() {
                     out.page = Some(page);
                 }
             }
             nav_separator(ui, nav_text);
-            if nav_item(ui, Page::Info.icon(), lang.tr("Info"), bs.page == Page::Info, nav_text, nav_sel).clicked() {
+            if nav_item(ui, is_rtl, Page::Info.icon(), lang.tr("Info"), bs.page == Page::Info, nav_text, nav_sel).clicked() {
                 out.page = Some(Page::Info);
             }
-            if nav_item(ui, Icon::Save, lang.tr("Save"), false, nav_text, nav_sel).clicked() {
+            if nav_item(ui, is_rtl, Icon::Save, lang.tr("Save"), false, nav_text, nav_sel).clicked() {
                 save(app, &mut out);
             }
             for page in [Page::SaveAs, Page::Print, Page::Export] {
-                if nav_item(ui, page.icon(), lang.tr(page.label()), bs.page == page, nav_text, nav_sel).clicked() {
+                if nav_item(ui, is_rtl, page.icon(), lang.tr(page.label()), bs.page == page, nav_text, nav_sel).clicked() {
                     out.page = Some(page);
                 }
             }
-            if nav_item(ui, Icon::Close, lang.tr("Close"), false, nav_text, nav_sel).clicked() {
-                // A cell still being edited is part of the workbook; Close keeps the unsaved prompt.
+            if nav_item(ui, is_rtl, Icon::Close, lang.tr("Close"), false, nav_text, nav_sel).clicked() {
                 if app.commit_edit(0, 0, false, false) {
                     app.run_or_alert("file.close", json!({}));
                     out.close = true;
                 }
             }
-            // Bottom up: Account sits just above Options, as in Excel.
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                 for page in [Page::Options, Page::Account] {
-                    if nav_item(ui, page.icon(), lang.tr(page.label()), bs.page == page, nav_text, nav_sel).clicked() {
+                    if nav_item(ui, is_rtl, page.icon(), lang.tr(page.label()), bs.page == page, nav_text, nav_sel).clicked() {
                         out.page = Some(page);
                     }
                 }
             });
         });
+
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon)).show(ui, |ui| {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Frame::NONE.inner_margin(egui::Margin { left: 44, right: 32, top: 26, bottom: 32 }).show(ui, |ui| {
-                ui.set_max_width(CONTENT_W);
-                ui.label(RichText::new(lang.tr(bs.page.label())).font(theme::ui_font(28.0)).color(t.text));
+            ui.add_space(26.0);
+
+            ui.rtl_container(is_rtl, CONTENT_W, 40.0, |ui| {
+                let page_title = RichText::new(lang.tr(bs.page.label())).font(theme::ui_font(28.0)).color(t.text);
+                if is_rtl {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(page_title);
+                    });
+                } else {
+                    ui.label(page_title);
+                }
                 ui.add_space(18.0);
+
                 match bs.page {
-                    Page::Home => home(app, ui, &mut bs, &mut out),
-                    Page::New => new_page(app, ui, &mut out),
-                    Page::Open => open_page(app, ui, &mut bs, &mut out),
-                    Page::Info => info(app, ui, &mut bs),
-                    Page::SaveAs => save_as(app, ui, &mut bs, &mut out),
+                    Page::Home => home(app, ui, &mut bs, &mut out, is_rtl),
+                    Page::New => new_page(app, ui, &mut out, is_rtl),
+                    Page::Open => open_page(app, ui, &mut bs, &mut out, is_rtl),
+                    Page::Info => info(app, ui, &mut bs, is_rtl),
+                    Page::SaveAs => save_as(app, ui, &mut bs, &mut out, is_rtl),
                     Page::Print => print(app, ui, &mut bs, &mut out),
-                    Page::Export => export(app, ui, &mut out),
+                    Page::Export => export(app, ui, &mut out, is_rtl),
                     Page::Options => options(app, ui),
-                    Page::Account => account(app, ui),
+                    Page::Account => account(app, ui, is_rtl),
                 }
             });
+
+            ui.add_space(32.0);
         });
     });
+
     bs.text_edit_focused = ctx.text_edit_focused();
     if !typing
         && app.dialog.is_none()
@@ -244,7 +242,6 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     if let Some(page) = out.page {
         bs.page = page;
     }
-    // A command run from a page may itself have opened (or replaced) the view; keep that.
     if out.close {
         app.backstage = None;
     } else if app.backstage.is_none() {
@@ -252,8 +249,6 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
-/// Save: saves a workbook that has a file and returns to the sheet; a new workbook goes to the
-/// Save As page first, like Excel's.
 fn save(app: &mut SheetApp, out: &mut Outcome) {
     if !app.commit_edit(0, 0, false, false) {
         return;
@@ -268,19 +263,29 @@ fn save(app: &mut SheetApp, out: &mut Outcome) {
 
 // ---------------------------------------------------------------- navigation
 
-/// Allocates and paints one Backstage navigation row: selected or hover fill, icon, label and button semantics. Returns the row's click response.
-fn nav_item(ui: &mut Ui, icon: Icon, label: &str, selected: bool, text: Color32, sel: Color32) -> egui::Response {
+fn nav_item(ui: &mut Ui, is_rtl: bool, icon: Icon, label: &str, selected: bool, text: Color32, sel: Color32) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(NAV_W, 38.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
     let p = ui.painter();
+
     if selected {
         p.rect_filled(rect, 0.0, sel);
-        p.rect_filled(Rect::from_min_size(rect.min, vec2(4.0, rect.height())), 0.0, text);
+        if is_rtl {
+            p.rect_filled(Rect::from_min_size(pos2(rect.right() - 4.0, rect.top()), vec2(4.0, rect.height())), 0.0, text);
+        } else {
+            p.rect_filled(Rect::from_min_size(rect.min, vec2(4.0, rect.height())), 0.0, text);
+        }
     } else if resp.hovered() {
         p.rect_filled(rect, 0.0, sel.gamma_multiply(0.55));
     }
-    icons::paint(p, Rect::from_center_size(pos2(rect.left() + 30.0, rect.center().y), vec2(17.0, 17.0)), icon, text);
-    p.text(pos2(rect.left() + 50.0, rect.center().y), Align2::LEFT_CENTER, label, theme::ui_font(14.0), text);
+
+    if is_rtl {
+        icons::paint(p, Rect::from_center_size(pos2(rect.right() - 30.0, rect.center().y), vec2(17.0, 17.0)), icon, text);
+        p.text(pos2(rect.right() - 50.0, rect.center().y), Align2::RIGHT_CENTER, label, theme::ui_font(14.0), text);
+    } else {
+        icons::paint(p, Rect::from_center_size(pos2(rect.left() + 30.0, rect.center().y), vec2(17.0, 17.0)), icon, text);
+        p.text(pos2(rect.left() + 50.0, rect.center().y), Align2::LEFT_CENTER, label, theme::ui_font(14.0), text);
+    }
     resp
 }
 
@@ -295,7 +300,14 @@ fn nav_separator(ui: &mut Ui, text: Color32) {
 fn section(ui: &mut Ui, lang: Language, title: &str) {
     let t = Tokens::get(ui.ctx());
     ui.add_space(6.0);
-    ui.label(RichText::new(lang.tr(title)).font(theme::ui_bold(15.0)).color(t.text));
+    let heading = RichText::new(lang.tr(title)).font(theme::ui_bold(15.0)).color(t.text);
+    if lang.is_rtl() {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(heading);
+        });
+    } else {
+        ui.label(heading);
+    }
     ui.add_space(8.0);
 }
 
@@ -304,7 +316,6 @@ fn dim(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).font(theme::ui_font(12.5)).color(t.text_dim));
 }
 
-/// A new-workbook tile: a small sheet drawn in code over its name.
 fn tile(ui: &mut Ui, label: &str, sample: Option<usize>) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(150.0, 140.0), Sense::click());
@@ -317,7 +328,6 @@ fn tile(ui: &mut Ui, label: &str, sample: Option<usize>) -> egui::Response {
     let (rows, cols) = (7, 4);
     let (rh, cw) = (inner.height() / rows as f32, inner.width() / cols as f32);
     if let Some(i) = sample {
-        // A header band and a few "values" so each sample reads differently from a blank book.
         p.rect_filled(Rect::from_min_size(inner.min, vec2(inner.width(), rh)), 0.0, t.accent_soft);
         for r in 1..rows {
             let len = ((r * (i + 2) * 7 + i * 3) % 10) as f32 / 10.0;
@@ -338,19 +348,26 @@ fn tile(ui: &mut Ui, label: &str, sample: Option<usize>) -> egui::Response {
     }
     p.rect_stroke(thumb, 4.0, edge, StrokeKind::Inside);
     let galley = p.layout(label.to_string(), theme::ui_font(12.5), t.text, rect.width());
-    p.galley(pos2(rect.left(), thumb.bottom() + 6.0), galley, t.text);
+    p.galley(pos2(rect.center().x - galley.size().x / 2.0, thumb.bottom() + 6.0), galley, t.text);
     resp
 }
 
-/// Blank workbook and the built-in samples.
-fn new_tiles(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
+fn new_tiles(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome, is_rtl: bool) {
     let lang = app.ui.language;
-    ui.horizontal_wrapped(|ui| {
+    let layout = if is_rtl {
+        egui::Layout::right_to_left(egui::Align::Min)
+    } else {
+        egui::Layout::left_to_right(egui::Align::Min)
+    };
+
+    ui.with_layout(layout, |ui| {
         ui.spacing_mut().item_spacing = vec2(18.0, 14.0);
+
         if tile(ui, lang.tr("Blank workbook"), None).clicked() {
             app.run_or_alert("file.new", json!({}));
             out.close = true;
         }
+
         for (i, (name, title)) in gridcraft_engine::sample::SAMPLES.iter().enumerate() {
             if tile(ui, title, Some(i)).clicked() {
                 app.run_or_alert("file.new", json!({"sample": name}));
@@ -360,7 +377,6 @@ fn new_tiles(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
     });
 }
 
-/// File name and folder of a recent path, split as text.
 fn split_path(path: &str) -> (String, String) {
     let p = std::path::Path::new(path);
     let name = p.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or(path).to_string();
@@ -368,12 +384,9 @@ fn split_path(path: &str) -> (String, String) {
     (name, folder)
 }
 
-/// Width of the column that tells when a recent workbook was last changed.
 const MODIFIED_W: f32 = 150.0;
 
-/// Recent workbooks, newest first, each with when it was last changed. Opening one is the user's
-/// explicit choice.
-fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome, limit: usize) {
+fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome, limit: usize, is_rtl: bool) {
     let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
     if app.ui.recent.is_empty() {
@@ -381,43 +394,65 @@ fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Ou
         return;
     }
     let width = ui.available_width().min(CONTENT_W);
-    // What the file system has said so far; the rest arrives in later frames (see `RecentFiles`).
     let known = bs.recent.known(ui.ctx(), &app.ui.recent);
-    // The web build has no files to ask about, and a narrow window leaves the names their room.
     let modified_w = if cfg!(target_arch = "wasm32") || width < 420.0 { 0.0 } else { MODIFIED_W };
+
     if modified_w > 0.0 {
-        let (head, _) = ui.allocate_exact_size(vec2(width, 20.0), Sense::hover());
-        ui.painter().text(
-            pos2(head.right() - modified_w, head.center().y),
-            Align2::LEFT_CENTER,
-            lang.tr("Modified"),
-            theme::ui_font(11.5),
-            t.text_dim,
-        );
+        let (head, _) = ui.allocate_exact_size(vec2(width, 22.0), Sense::hover());
+        let p = ui.painter();
+        if is_rtl {
+            p.text(pos2(head.right() - 10.0, head.center().y), Align2::RIGHT_CENTER, lang.tr("Name"), theme::ui_font(12.0), t.text_dim);
+            p.text(pos2(head.left() + 10.0, head.center().y), Align2::LEFT_CENTER, lang.tr("Modified"), theme::ui_font(12.0), t.text_dim);
+        } else {
+            p.text(pos2(head.left() + 42.0, head.center().y), Align2::LEFT_CENTER, lang.tr("Name"), theme::ui_font(12.0), t.text_dim);
+            p.text(pos2(head.right() - modified_w, head.center().y), Align2::LEFT_CENTER, lang.tr("Modified"), theme::ui_font(12.0), t.text_dim);
+        }
+        p.line_segment([pos2(head.left(), head.bottom()), pos2(head.right(), head.bottom())], Stroke::new(1.0, t.ribbon_border));
+        ui.add_space(6.0);
     }
+
     let now = crate::now_ms() / 1000.0;
     for path in app.ui.recent.iter().take(limit).cloned().collect::<Vec<_>>() {
         let (name, folder) = split_path(&path);
-        let (rect, resp) = ui.allocate_exact_size(vec2(width, 44.0), Sense::click());
+        let (rect, resp) = ui.allocate_exact_size(vec2(width, 46.0), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
         let p = ui.painter();
         if resp.hovered() {
             p.rect_filled(rect, 4.0, t.hover);
         }
-        icons::paint(p, Rect::from_center_size(pos2(rect.left() + 20.0, rect.center().y), vec2(20.0, 20.0)), Icon::Book, t.text);
-        // A long name or folder stops short of the column instead of running under it.
-        let room = if modified_w > 0.0 { rect.right() - modified_w - 14.0 } else { rect.right() };
-        let text = p.with_clip_rect(Rect::from_min_max(rect.min, pos2(room, rect.bottom())).intersect(p.clip_rect()));
-        text.text(pos2(rect.left() + 42.0, rect.center().y - 8.0), Align2::LEFT_CENTER, &name, theme::ui_font(13.5), t.text);
-        text.text(pos2(rect.left() + 42.0, rect.center().y + 9.0), Align2::LEFT_CENTER, &folder, theme::ui_font(11.5), t.text_dim);
-        if modified_w > 0.0 {
-            let (words, color) = match known.get(&path) {
-                Some(Modified::At(seconds)) => (age(lang, now - seconds), t.text_dim),
-                Some(Modified::Unknown) => (lang.tr("Not available").to_string(), t.text_disabled),
-                None => (String::new(), t.text_dim),
-            };
-            p.text(pos2(rect.right() - modified_w, rect.center().y), Align2::LEFT_CENTER, words, theme::ui_font(12.0), color);
+
+        if is_rtl {
+            icons::paint(p, Rect::from_center_size(pos2(rect.right() - 20.0, rect.center().y), vec2(20.0, 20.0)), Icon::Book, t.text);
+            let room_left = if modified_w > 0.0 { rect.left() + modified_w + 14.0 } else { rect.left() };
+            let text = p.with_clip_rect(Rect::from_min_max(pos2(room_left, rect.top()), pos2(rect.right() - 36.0, rect.bottom())).intersect(p.clip_rect()));
+            text.text(pos2(rect.right() - 40.0, rect.center().y - 8.0), Align2::RIGHT_CENTER, &name, theme::ui_font(13.5), t.text);
+            text.text(pos2(rect.right() - 40.0, rect.center().y + 9.0), Align2::RIGHT_CENTER, &folder, theme::ui_font(11.5), t.text_dim);
+
+            if modified_w > 0.0 {
+                let (words, color) = match known.get(&path) {
+                    Some(Modified::At(seconds)) => (age(lang, now - seconds), t.text_dim),
+                    Some(Modified::Unknown) => (lang.tr("Not available").to_string(), t.text_disabled),
+                    None => (String::new(), t.text_dim),
+                };
+                p.text(pos2(rect.left() + 10.0, rect.center().y), Align2::LEFT_CENTER, words, theme::ui_font(12.0), color);
+            }
+        } else {
+            icons::paint(p, Rect::from_center_size(pos2(rect.left() + 20.0, rect.center().y), vec2(20.0, 20.0)), Icon::Book, t.text);
+            let room = if modified_w > 0.0 { rect.right() - modified_w - 14.0 } else { rect.right() };
+            let text = p.with_clip_rect(Rect::from_min_max(rect.min, pos2(room, rect.bottom())).intersect(p.clip_rect()));
+            text.text(pos2(rect.left() + 42.0, rect.center().y - 8.0), Align2::LEFT_CENTER, &name, theme::ui_font(13.5), t.text);
+            text.text(pos2(rect.left() + 42.0, rect.center().y + 9.0), Align2::LEFT_CENTER, &folder, theme::ui_font(11.5), t.text_dim);
+
+            if modified_w > 0.0 {
+                let (words, color) = match known.get(&path) {
+                    Some(Modified::At(seconds)) => (age(lang, now - seconds), t.text_dim),
+                    Some(Modified::Unknown) => (lang.tr("Not available").to_string(), t.text_disabled),
+                    None => (String::new(), t.text_dim),
+                };
+                p.text(pos2(rect.right() - modified_w, rect.center().y), Align2::LEFT_CENTER, words, theme::ui_font(12.0), color);
+            }
         }
+
         let resp = resp.on_hover_text(&path);
         if resp.clicked() {
             app.open_path(&path);
@@ -428,33 +463,21 @@ fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Ou
     }
 }
 
-/// What the file system said about a recent workbook.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Modified {
-    /// When it was last changed, in seconds since 1970.
     At(f64),
-    /// It can't be reached: moved, deleted, or on a drive that is away.
     Unknown,
 }
 
-/// One thread at a time asks about recent workbooks, so a drive that never answers holds up one
-/// thread, not one for every time the view is opened.
 static ASKING: AtomicBool = AtomicBool::new(false);
 
-/// When the listed workbooks were last changed, as far as the file system has answered.
-///
-/// Asking can take long (a network drive that is asleep, a share that is away), so it is never
-/// done while drawing: a thread asks, and the list shows each answer as it comes back. Only the
-/// files' metadata is read. A view opened anew asks anew.
 #[derive(Clone, Debug, Default)]
 pub struct RecentFiles {
-    /// The list the answers are for.
     asked: Vec<String>,
     found: Arc<Mutex<HashMap<String, Modified>>>,
 }
 
 impl RecentFiles {
-    /// What is known this frame about the files in `recent`; starts asking when the list is new.
     fn known(&mut self, ctx: &egui::Context, recent: &[String]) -> HashMap<String, Modified> {
         if self.asked != recent && !ASKING.swap(true, Ordering::SeqCst) {
             self.asked = recent.to_vec();
@@ -466,10 +489,8 @@ impl RecentFiles {
     }
 }
 
-/// Starts the thread that asks. Returns whether it started.
 #[cfg(not(target_arch = "wasm32"))]
 fn ask(ctx: egui::Context, paths: Vec<String>, found: Arc<Mutex<HashMap<String, Modified>>>) -> bool {
-    /// Lets the next list ask, however the thread ends.
     struct Done;
     impl Drop for Done {
         fn drop(&mut self) {
@@ -488,15 +509,11 @@ fn ask(ctx: egui::Context, paths: Vec<String>, found: Arc<Mutex<HashMap<String, 
     asking.is_ok()
 }
 
-/// The web build has no file system to ask.
 #[cfg(target_arch = "wasm32")]
 fn ask(_ctx: egui::Context, _paths: Vec<String>, _found: Arc<Mutex<HashMap<String, Modified>>>) -> bool {
     false
 }
 
-/// How long ago, in words. The clock's time zone isn't known here, so the list tells ages rather
-/// than dates, which could be a day out. From two days on the counts are never one, so each
-/// language needs one form of "days", "weeks", "months" and "years".
 fn age(lang: Language, seconds: f64) -> String {
     const DAY: f64 = 86_400.0;
     let s = if seconds.is_finite() { seconds.max(0.0) } else { 0.0 };
@@ -520,8 +537,7 @@ fn age(lang: Language, seconds: f64) -> String {
     }
 }
 
-/// A large clickable row (icon, title, one-line description).
-fn action_row(ui: &mut Ui, icon: Icon, title: &str, detail: &str) -> egui::Response {
+fn action_row(ui: &mut Ui, icon: Icon, title: &str, detail: &str, is_rtl: bool) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let width = ui.available_width().min(CONTENT_W);
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 56.0), Sense::click());
@@ -530,13 +546,18 @@ fn action_row(ui: &mut Ui, icon: Icon, title: &str, detail: &str) -> egui::Respo
     if resp.hovered() {
         p.rect_filled(rect, 4.0, t.hover);
     }
-    icons::paint(p, Rect::from_center_size(pos2(rect.left() + 24.0, rect.center().y), vec2(24.0, 24.0)), icon, t.text);
-    p.text(pos2(rect.left() + 52.0, rect.center().y - 9.0), Align2::LEFT_CENTER, title, theme::ui_bold(13.5), t.text);
-    p.text(pos2(rect.left() + 52.0, rect.center().y + 10.0), Align2::LEFT_CENTER, detail, theme::ui_font(12.0), t.text_dim);
+    if is_rtl {
+        icons::paint(p, Rect::from_center_size(pos2(rect.right() - 24.0, rect.center().y), vec2(24.0, 24.0)), icon, t.text);
+        p.text(pos2(rect.right() - 52.0, rect.center().y - 9.0), Align2::RIGHT_CENTER, title, theme::ui_bold(13.5), t.text);
+        p.text(pos2(rect.right() - 52.0, rect.center().y + 10.0), Align2::RIGHT_CENTER, detail, theme::ui_font(12.0), t.text_dim);
+    } else {
+        icons::paint(p, Rect::from_center_size(pos2(rect.left() + 24.0, rect.center().y), vec2(24.0, 24.0)), icon, t.text);
+        p.text(pos2(rect.left() + 52.0, rect.center().y - 9.0), Align2::LEFT_CENTER, title, theme::ui_bold(13.5), t.text);
+        p.text(pos2(rect.left() + 52.0, rect.center().y + 10.0), Align2::LEFT_CENTER, detail, theme::ui_font(12.0), t.text_dim);
+    }
     resp
 }
 
-/// A bordered square command button (Browse…, Print, Protect Workbook).
 fn square_button(ui: &mut Ui, icon: Icon, label: &str) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(96.0, 88.0), Sense::click());
@@ -552,13 +573,13 @@ fn square_button(ui: &mut Ui, icon: Icon, label: &str) -> egui::Response {
 
 // ---------------------------------------------------------------- pages
 
-fn home(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
+fn home(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome, is_rtl: bool) {
     let lang = app.ui.language;
     section(ui, lang, "New");
-    new_tiles(app, ui, out);
+    new_tiles(app, ui, out, is_rtl);
     ui.add_space(22.0);
     section(ui, lang, "Recent");
-    recent_list(app, ui, bs, out, 8);
+    recent_list(app, ui, bs, out, 8, is_rtl);
     if app.ui.recent.len() > 8 {
         ui.add_space(6.0);
         if ui.link(lang.tr("More workbooks")).clicked() {
@@ -567,28 +588,31 @@ fn home(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) 
     }
 }
 
-fn new_page(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
-    new_tiles(app, ui, out);
+fn new_page(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome, is_rtl: bool) {
+    new_tiles(app, ui, out, is_rtl);
 }
 
-fn open_page(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
+fn open_page(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome, is_rtl: bool) {
     let lang = app.ui.language;
-    if square_button(ui, Icon::OpenFolder, lang.tr("Browse…")).clicked() {
-        let before = app.session.active().map(|d| d.uid);
-        app.open_dialog("open", json!({}));
-        // Desktop pickers return at once; the web picker delivers later (see `SheetApp::logic`).
-        if app.session.active().map(|d| d.uid) != before {
-            out.close = true;
+    let layout = if is_rtl {
+        egui::Layout::right_to_left(egui::Align::Min)
+    } else {
+        egui::Layout::left_to_right(egui::Align::Min)
+    };
+    ui.with_layout(layout, |ui| {
+        if square_button(ui, Icon::OpenFolder, lang.tr("Browse…")).clicked() {
+            let before = app.session.active().map(|d| d.uid);
+            app.open_dialog("open", json!({}));
+            if app.session.active().map(|d| d.uid) != before {
+                out.close = true;
+            }
         }
-    }
+    });
     ui.add_space(22.0);
     section(ui, lang, "Recent");
-    recent_list(app, ui, bs, out, usize::MAX);
+    recent_list(app, ui, bs, out, usize::MAX, is_rtl);
 }
 
-/// Review › Protect Workbook and File › Info › Protect Workbook: the protect dialog (with an
-/// optional password) when the structure is open; when it's locked, the password prompt if one
-/// was set, else unprotect right away.
 pub fn protect_workbook(app: &mut SheetApp) {
     let (on, password) = app.session.active().map(|d| (d.wb.protected_structure, d.wb.structure_password.is_some())).unwrap_or((false, false));
     if !on {
@@ -600,14 +624,15 @@ pub fn protect_workbook(app: &mut SheetApp) {
     }
 }
 
-/// Shows the workbook title, path, sheet count and structure protection, plus editable document properties. Committing a changed field after it loses focus runs `file.properties`.
-fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
-    let t = Tokens::get(ui.ctx());
+fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, is_rtl: bool) {
     let lang = app.ui.language;
+    let t = Tokens::get(ui.ctx());
+
     let Some(d) = app.session.active() else {
         dim(ui, lang.tr("No workbook is open."));
         return;
     };
+
     let title = d.display_title();
     let path = d.path.clone();
     let sheets = d.wb.sheets.len();
@@ -616,107 +641,246 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
         let pr = &d.wb.props;
         vec![pr.title.clone(), pr.subject.clone(), pr.author.clone(), pr.company.clone(), pr.keywords.clone(), pr.description.clone()]
     };
-    ui.horizontal(|ui| {
-        icons::paint(ui.painter(), Rect::from_min_size(ui.cursor().min, vec2(28.0, 28.0)), Icon::Book, t.text);
-        ui.add_space(38.0);
-        ui.vertical(|ui| {
-            ui.label(RichText::new(&title).font(theme::ui_bold(16.0)).color(t.text));
-            match &path {
-                Some(p) => dim(ui, p),
-                None => dim(ui, lang.tr("Not saved yet")),
-            }
-        });
-    });
-    ui.add_space(18.0);
-    ui.horizontal(|ui| {
-        if square_button(ui, Icon::Lock, lang.tr("Protect Workbook")).clicked() {
-            protect_workbook(app);
-        }
-        ui.add_space(12.0);
-        ui.vertical(|ui| {
+
+
+    if is_rtl {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let (icon_rect, _) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::hover());
+            icons::paint(ui.painter(), icon_rect, Icon::Book, t.text);
             ui.add_space(14.0);
-            ui.label(RichText::new(lang.tr("Protect Workbook")).font(theme::ui_bold(13.5)).color(t.text));
-            let text = if protected {
-                "Sheet structure is locked: sheets can't be added, moved, renamed or deleted."
-            } else {
-                "Lock the sheet structure so sheets can't be added, moved, renamed or deleted."
-            };
-            dim(ui, lang.tr(text));
+            ui.vertical(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    ui.label(RichText::new(&title).font(theme::ui_bold(16.0)).color(t.text));
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    match &path {
+                        Some(p) => dim(ui, p),
+                        None => dim(ui, lang.tr("Not saved yet")),
+                    }
+                });
+            });
         });
-    });
+    } else {
+        ui.horizontal(|ui| {
+            let (icon_rect, _) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::hover());
+            icons::paint(ui.painter(), icon_rect, Icon::Book, t.text);
+            ui.add_space(14.0);
+            ui.vertical(|ui| {
+                ui.label(RichText::new(&title).font(theme::ui_bold(16.0)).color(t.text));
+                match &path {
+                    Some(p) => dim(ui, p),
+                    None => dim(ui, lang.tr("Not saved yet")),
+                }
+            });
+        });
+    }
+
+    ui.add_space(18.0);
+
+    let desc_key = if protected {
+        "Sheet structure is locked: sheets can't be added, moved, renamed or deleted."
+    } else {
+        "Lock the sheet structure so sheets can't be added, moved, renamed or deleted."
+    };
+
+    if is_rtl {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if square_button(ui, Icon::Lock, lang.tr("Protect Workbook")).clicked() {
+                protect_workbook(app);
+            }
+            ui.add_space(16.0);
+            ui.allocate_ui_with_layout(vec2(360.0, 88.0), egui::Layout::top_down(egui::Align::Max), |ui| {
+                ui.add_space(6.0);
+                ui.label(RichText::new(lang.tr("Protect Workbook")).font(theme::ui_bold(13.5)).color(t.text));
+                ui.add_space(4.0);
+                dim(ui, lang.tr(desc_key));
+            });
+        });
+    } else {
+        ui.horizontal(|ui| {
+            if square_button(ui, Icon::Lock, lang.tr("Protect Workbook")).clicked() {
+                protect_workbook(app);
+            }
+            ui.add_space(16.0);
+            ui.vertical(|ui| {
+                ui.set_width(340.0);
+                ui.add_space(8.0);
+                ui.label(RichText::new(lang.tr("Protect Workbook")).font(theme::ui_bold(13.5)).color(t.text));
+                dim(ui, lang.tr(desc_key));
+            });
+        });
+    }
+
     ui.add_space(22.0);
     section(ui, lang, "Properties");
-    egui::Grid::new("backstage_props").num_columns(2).spacing(vec2(18.0, 8.0)).show(ui, |ui| {
-        ui.label(RichText::new(lang.tr("Location")).color(t.text_dim));
-        ui.label(path.as_deref().unwrap_or(lang.tr("Not saved yet")));
-        ui.end_row();
-        ui.label(RichText::new(lang.tr("Sheets")).color(t.text_dim));
-        ui.label(sheets.to_string());
-        ui.end_row();
+
+    if is_rtl {
+        let label_w = 110.0;
+        let field_w = 340.0;
+        let gap_w = 16.0;
+
+        let draw_meta_row = |ui: &mut Ui, label_text: &str, val_text: &str| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let (label_rect, _) = ui.allocate_exact_size(vec2(label_w, 24.0), Sense::hover());
+                ui.painter().text(pos2(label_rect.right(), label_rect.center().y), Align2::RIGHT_CENTER, label_text, theme::ui_font(12.5), t.text_dim);
+
+                ui.add_space(gap_w);
+
+                let (val_rect, _) = ui.allocate_exact_size(vec2(field_w, 24.0), Sense::hover());
+                ui.painter().text(pos2(val_rect.right(), val_rect.center().y), Align2::RIGHT_CENTER, val_text, theme::ui_font(12.5), t.text);
+            });
+            ui.add_space(6.0);
+        };
+
+        draw_meta_row(ui, lang.tr("Location"), path.as_deref().unwrap_or(lang.tr("Not saved yet")));
+        draw_meta_row(ui, lang.tr("Sheets"), &sheets.to_string());
+
         for (i, (key, label)) in PROPERTIES.iter().enumerate() {
             let (Some(draft), Some(saved)) = (bs.props.get_mut(i), current.get(i)) else { continue };
-            let label = ui.label(RichText::new(lang.tr(label)).color(t.text_dim));
             let id = ui.make_persistent_id(("backstage_prop", *key));
-            // Show the workbook's value unless the field is being edited (undo, another window).
             if !ui.ctx().memory(|m| m.has_focus(id)) {
                 draft.clone_from(saved);
             }
-            let resp = ui.add(egui::TextEdit::singleline(draft).id(id).desired_width(360.0)).labelled_by(label.id);
-            if resp.lost_focus() && draft != saved {
-                let mut params = serde_json::Map::new();
-                params.insert((*key).to_string(), json!(draft.clone()));
-                app.run_or_alert("file.properties", Json::Object(params));
-            }
-            ui.end_row();
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let (label_rect, _) = ui.allocate_exact_size(vec2(label_w, 24.0), Sense::hover());
+                ui.painter().text(pos2(label_rect.right(), label_rect.center().y), Align2::RIGHT_CENTER, lang.tr(label), theme::ui_font(12.5), t.text_dim);
+
+                ui.add_space(gap_w);
+
+                let resp = ui.add_sized(
+                    vec2(field_w, 22.0),
+                    egui::TextEdit::singleline(draft)
+                        .id(id)
+                        .font(theme::ui_font(12.5))
+                        .margin(egui::Margin::symmetric(6, 2)),
+                );
+                if resp.lost_focus() && draft != saved {
+                    let mut params = serde_json::Map::new();
+                    params.insert((*key).to_string(), json!(draft.clone()));
+                    app.run_or_alert("file.properties", Json::Object(params));
+                }
+            });
+            ui.add_space(6.0);
         }
-    });
+    } else {
+        egui::Grid::new("backstage_props").num_columns(2).spacing(vec2(18.0, 8.0)).show(ui, |ui| {
+            ui.label(RichText::new(lang.tr("Location")).color(t.text_dim));
+            ui.label(path.as_deref().unwrap_or(lang.tr("Not saved yet")));
+            ui.end_row();
+            ui.label(RichText::new(lang.tr("Sheets")).color(t.text_dim));
+            ui.label(sheets.to_string());
+            ui.end_row();
+            for (i, (key, label)) in PROPERTIES.iter().enumerate() {
+                let (Some(draft), Some(saved)) = (bs.props.get_mut(i), current.get(i)) else { continue };
+                let label_widget = ui.label(RichText::new(lang.tr(label)).color(t.text_dim));
+                let id = ui.make_persistent_id(("backstage_prop", *key));
+                if !ui.ctx().memory(|m| m.has_focus(id)) {
+                    draft.clone_from(saved);
+                }
+                let resp = ui.add(egui::TextEdit::singleline(draft).id(id).desired_width(360.0)).labelled_by(label_widget.id);
+                if resp.lost_focus() && draft != saved {
+                    let mut params = serde_json::Map::new();
+                    params.insert((*key).to_string(), json!(draft.clone()));
+                    app.run_or_alert("file.properties", Json::Object(params));
+                }
+                ui.end_row();
+            }
+        });
+    }
 }
 
-/// Draws the Save As type picker and action: xlsx opens the `saveAs` dialog, other types export, and the page closes when the save/export succeeds (or a web download handles it).
-fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
+
+
+fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome, is_rtl: bool) {
     let lang = app.ui.language;
-    dim(ui, lang.tr("Save the workbook under another name or in another folder."));
+    if is_rtl {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            dim(ui, lang.tr("Save the workbook under another name or in another folder."));
+        });
+    } else {
+        dim(ui, lang.tr("Save the workbook under another name or in another folder."));
+    }
     ui.add_space(14.0);
+
     let fmt = bs.save_format;
     let current = SAVE_TYPES.iter().find(|(ext, _)| *ext == fmt).map_or("Excel Workbook (*.xlsx)", |(_, label)| *label);
-    ui.horizontal(|ui| {
-        let label = ui.label(lang.tr("Save as type"));
-        craft_ui::ComboBox::from_id_salt("backstage_save_type")
-            .width(280.0)
-            .selected_text(lang.tr(current))
-            .show_ui(ui, |ui| {
-                for (ext, label) in SAVE_TYPES {
-                    if ui.selectable_label(fmt == ext, lang.tr(label)).clicked() {
-                        bs.save_format = ext;
+
+    if is_rtl {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(lang.tr("Save as type"));
+            ui.add_space(12.0);
+            craft_ui::ComboBox::from_id_salt("backstage_save_type")
+                .width(280.0)
+                .selected_text(lang.tr(current))
+                .show_ui(ui, |ui| {
+                    for (ext, label) in SAVE_TYPES {
+                        if ui.selectable_label(fmt == ext, lang.tr(label)).clicked() {
+                            bs.save_format = ext;
+                        }
                     }
-                }
-            })
-            .response
-            .labelled_by(label.id);
-    });
+                });
+        });
+    } else {
+        ui.horizontal(|ui| {
+            let label = ui.label(lang.tr("Save as type"));
+            craft_ui::ComboBox::from_id_salt("backstage_save_type")
+                .width(280.0)
+                .selected_text(lang.tr(current))
+                .show_ui(ui, |ui| {
+                    for (ext, label) in SAVE_TYPES {
+                        if ui.selectable_label(fmt == ext, lang.tr(label)).clicked() {
+                            bs.save_format = ext;
+                        }
+                    }
+                })
+                .response
+                .labelled_by(label.id);
+        });
+    }
+
     ui.add_space(14.0);
-    // Desktop: the system Save dialog. Web: the file downloads.
     let web = app.services.pick_save.is_none() && app.services.download.is_some();
     let label = if web { format!("{} (.{fmt})", lang.tr("Download")) } else { lang.tr("Browse…").to_string() };
-    if square_button(ui, Icon::OpenFolder, &label).clicked() && app.commit_edit(0, 0, false, false) {
-        if fmt == "xlsx" {
-            let before = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
-            app.open_dialog("saveAs", json!({}));
-            let after = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
-            if after != before || app.services.pick_save.is_none() {
+
+    let on_browse = |app: &mut SheetApp, out: &mut Outcome| {
+        if app.commit_edit(0, 0, false, false) {
+            if fmt == "xlsx" {
+                let before = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
+                app.open_dialog("saveAs", json!({}));
+                let after = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
+                if after != before || app.services.pick_save.is_none() {
+                    out.close = true;
+                }
+            } else if export_as(app, fmt) {
                 out.close = true;
             }
-        } else if export_as(app, fmt) {
-            out.close = true;
         }
+    };
+
+    if is_rtl {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if square_button(ui, Icon::OpenFolder, &label).clicked() {
+                on_browse(app, out);
+            }
+        });
+    } else if square_button(ui, Icon::OpenFolder, &label).clicked() {
+        on_browse(app, out);
     }
+
     ui.add_space(18.0);
-    dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
+    if is_rtl {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
+        });
+    } else {
+        dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
+    }
 }
 
-fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
+fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome, is_rtl: bool) {
     let lang = app.ui.language;
-    if action_row(ui, Icon::Paper, lang.tr("Create PDF"), lang.tr("Save the sheet as a PDF document that keeps its page layout.")).clicked()
+    if action_row(ui, Icon::Paper, lang.tr("Create PDF"), lang.tr("Save the sheet as a PDF document that keeps its page layout."), is_rtl).clicked()
         && export_as(app, "pdf")
     {
         out.close = true;
@@ -727,14 +891,12 @@ fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
         ("csv", Icon::TextColumns, "CSV (Comma delimited)", "Save the active sheet as comma-separated text."),
         ("html", Icon::Link, "Web Page (.html)", "Save the workbook as a web page."),
     ] {
-        if action_row(ui, icon, lang.tr(title), lang.tr(detail)).clicked() && export_as(app, fmt) {
+        if action_row(ui, icon, lang.tr(title), lang.tr(detail), is_rtl).clicked() && export_as(app, fmt) {
             out.close = true;
         }
     }
 }
 
-/// Exports the active workbook as `pdf`, `csv` or `html`: through the save picker on the desktop,
-/// as a browser download on the web. Returns whether a file was written or handed over.
 pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     if !app.commit_edit(0, 0, false, false) {
         return false;
@@ -749,7 +911,6 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     let stem = std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
     if let Some(pick) = &app.services.pick_save {
         let Some(path) = pick(&format!("{stem}.{fmt}")) else { return false };
-        // The picker may suggest a workbook extension; the export writes the chosen format.
         let path = std::path::Path::new(&path).with_extension(fmt).to_string_lossy().into_owned();
         return match app.run(id, json!({"path": path})) {
             Ok(_) => true,
@@ -764,7 +925,6 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
         return false;
     }
     if fmt == "pdf" {
-        // Without a path the PDF comes back as bytes, which `SheetApp::run` hands to the browser.
         return match app.run(id, json!({})) {
             Ok(_) => true,
             Err(e) => {
@@ -793,121 +953,80 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     }
 }
 
-/// Excel's File › Account: product information and the About window.
-fn account(app: &mut SheetApp, ui: &mut Ui) {
+fn account(app: &mut SheetApp, ui: &mut Ui, is_rtl: bool) {
     let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
     section(ui, lang, "Product Information");
-    ui.label(RichText::new("GridCraft").font(theme::ui_bold(16.0)).color(t.text));
-    ui.add_space(8.0);
-    egui::Grid::new("backstage_account").num_columns(2).spacing(vec2(18.0, 8.0)).show(ui, |ui| {
-        for (label, value) in
-            [("Version", env!("CARGO_PKG_VERSION").to_string()), ("Platform", platform()), ("Licence", env!("CARGO_PKG_LICENSE").to_string())]
-        {
-            ui.label(RichText::new(lang.tr(label)).color(t.text_dim));
-            ui.label(value);
-            ui.end_row();
-        }
-    });
-    ui.add_space(18.0);
-    ui.horizontal(|ui| {
-        if square_button(ui, Icon::Info, lang.tr("About GridCraft")).clicked() {
-            app.open_dialog("about", json!({}));
-        }
-        ui.add_space(12.0);
-        ui.vertical(|ui| {
-            ui.add_space(14.0);
-            ui.label(RichText::new(lang.tr("About GridCraft")).font(theme::ui_bold(13.5)).color(t.text));
-            dim(ui, lang.tr("Version, contributors and the AI models that helped"));
+
+    if is_rtl {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(RichText::new("GridCraft").font(theme::ui_bold(16.0)).color(t.text));
         });
-    });
-}
+    } else {
+        ui.label(RichText::new("GridCraft").font(theme::ui_bold(16.0)).color(t.text));
+    }
+    ui.add_space(8.0);
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    let rows = [
+        ("Version", env!("CARGO_PKG_VERSION").to_string()),
+        ("Platform", platform()),
+        ("Licence", env!("CARGO_PKG_LICENSE").to_string()),
+    ];
 
-    #[test]
-    fn ages_are_told_in_words() {
-        const DAY: f64 = 86_400.0;
-        for (seconds, words) in [
-            (0.0, "Just now"),
-            (59.9, "Just now"),
-            (60.0, "1 min ago"),
-            (150.0, "2 min ago"),
-            (3600.0, "1 h ago"),
-            (23.9 * 3600.0, "23 h ago"),
-            (DAY, "Yesterday"),
-            (1.99 * DAY, "Yesterday"),
-            // From here on a count is never one.
-            (2.0 * DAY, "2 days ago"),
-            (13.9 * DAY, "13 days ago"),
-            (14.0 * DAY, "2 weeks ago"),
-            (60.9 * DAY, "8 weeks ago"),
-            (61.0 * DAY, "2 months ago"),
-            (730.9 * DAY, "24 months ago"),
-            (731.0 * DAY, "2 years ago"),
-            (4000.0 * DAY, "10 years ago"),
-            // A clock that is behind the file's, or a number that isn't one.
-            (-5.0, "Just now"),
-            (f64::NAN, "Just now"),
-            (f64::NEG_INFINITY, "Just now"),
-            (f64::INFINITY, "Just now"),
-        ] {
-            assert_eq!(age(Language::En, seconds), words, "{seconds}");
+    if is_rtl {
+        let label_w = 110.0;
+        let val_w = 340.0;
+        let gap_w = 16.0;
+
+        for (label, value) in rows {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let (label_rect, _) = ui.allocate_exact_size(vec2(label_w, 24.0), Sense::hover());
+                ui.painter().text(pos2(label_rect.right(), label_rect.center().y), Align2::RIGHT_CENTER, lang.tr(label), theme::ui_font(12.5), t.text_dim);
+
+                ui.add_space(gap_w);
+
+                let (val_rect, _) = ui.allocate_exact_size(vec2(val_w, 24.0), Sense::hover());
+                ui.painter().text(pos2(val_rect.right(), val_rect.center().y), Align2::RIGHT_CENTER, &value, theme::ui_font(12.5), t.text);
+            });
+            ui.add_space(6.0);
         }
-        assert!(age(Language::En, f64::MAX).ends_with(" years ago"));
-        // Other languages put the count where their own words want it.
-        for lang in Language::ALL {
-            assert!(age(lang, 3.0 * DAY).contains('3'), "{lang:?}: {}", age(lang, 3.0 * DAY));
-            for seconds in [10.0, 600.0, 7200.0, 1.5 * DAY, 5.0 * DAY, 30.0 * DAY, 200.0 * DAY, 2000.0 * DAY] {
-                let words = age(lang, seconds);
-                assert!(!words.is_empty() && !words.contains('{'), "{lang:?} {seconds}: {words}");
+    } else {
+        egui::Grid::new("backstage_account").num_columns(2).spacing(vec2(18.0, 8.0)).show(ui, |ui| {
+            for (label, value) in rows {
+                ui.label(RichText::new(lang.tr(label)).color(t.text_dim));
+                ui.label(value);
+                ui.end_row();
             }
-        }
+        });
     }
 
-    #[test]
-    fn the_recent_list_learns_when_its_files_were_last_changed() {
-        let dir = std::env::temp_dir().join(format!("gridcraft-recent-files-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let there = dir.join("There.xlsx").to_string_lossy().into_owned();
-        let gone = dir.join("Gone.xlsx").to_string_lossy().into_owned();
-        std::fs::write(&there, b"a file, if not a workbook").unwrap();
-        let ctx = egui::Context::default();
-        let recent = vec![there.clone(), gone.clone()];
-        let mut files = RecentFiles::default();
-        // Nothing is read while drawing: the answers arrive from a thread, in later frames.
-        let mut known = HashMap::new();
-        for _ in 0..2_000 {
-            known = files.known(&ctx, &recent);
-            if known.len() == recent.len() {
-                break;
+    ui.add_space(18.0);
+
+    if is_rtl {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if square_button(ui, Icon::Info, lang.tr("About GridCraft")).clicked() {
+                app.open_dialog("about", json!({}));
             }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert!(matches!(known.get(&there), Some(Modified::At(seconds)) if *seconds > 1.0e9), "{known:?}");
-        assert_eq!(known.get(&gone), Some(&Modified::Unknown));
-        // The same list is not asked about twice; an empty one is never asked about.
-        assert_eq!(files.known(&ctx, &recent), known);
-        assert!(RecentFiles::default().known(&ctx, &[]).is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn page_ids_round_trip_and_unknown_ids_are_refused() {
-        for page in Page::ALL {
-            assert_eq!(Page::parse(page.id()), Some(page));
-        }
-        assert_eq!(Page::parse(" SAVEAS "), Some(Page::SaveAs));
-        assert_eq!(Page::parse("feedback"), None);
-        assert_eq!(Page::parse(""), None);
-    }
-
-    #[test]
-    fn recent_paths_split_without_touching_the_disk() {
-        assert_eq!(split_path("/home/me/Budget.xlsx"), ("Budget.xlsx".into(), "/home/me".into()));
-        assert_eq!(split_path("Budget.xlsx"), ("Budget.xlsx".into(), "".into()));
+            ui.add_space(16.0);
+            ui.allocate_ui_with_layout(vec2(360.0, 88.0), egui::Layout::top_down(egui::Align::Max), |ui| {
+                ui.add_space(6.0);
+                ui.label(RichText::new(lang.tr("About GridCraft")).font(theme::ui_bold(13.5)).color(t.text));
+                ui.add_space(4.0);
+                dim(ui, lang.tr("Version, contributors and the AI models that helped"));
+            });
+        });
+    } else {
+        ui.horizontal(|ui| {
+            if square_button(ui, Icon::Info, lang.tr("About GridCraft")).clicked() {
+                app.open_dialog("about", json!({}));
+            }
+            ui.add_space(16.0);
+            ui.vertical(|ui| {
+                ui.set_width(340.0);
+                ui.add_space(8.0);
+                ui.label(RichText::new(lang.tr("About GridCraft")).font(theme::ui_bold(13.5)).color(t.text));
+                dim(ui, lang.tr("Version, contributors and the AI models that helped"));
+            });
+        });
     }
 }

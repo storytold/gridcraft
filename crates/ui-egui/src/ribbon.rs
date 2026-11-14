@@ -59,18 +59,37 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         .exact_size(h)
         .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 10, right: 10, top: 0, bottom: 6 }))
         .show(ui, |ui| {
-            // Tabs row.
+            let is_rtl = app.ui.language.is_rtl();
+
+            // ==========================================
+            // שורת הלשוניות (Tabs row)
+            // ==========================================
             let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
-                ui.horizontal(|ui| {
+                let tab_layout = if is_rtl {
+                    egui::Layout::right_to_left(egui::Align::Center)
+                } else {
+                    egui::Layout::left_to_right(egui::Align::Center)
+                };
+
+                ui.with_layout(tab_layout, |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     ui.add_space(8.0);
-                    if app.chrome.file_tab {
+
+                    // ב-RTL כפתור File מצויר ראשון כדי שיתייצב בצד ימין
+                    if is_rtl && app.chrome.file_tab {
                         file_menu(app, ui);
                     }
+
                     let mut tabs: Vec<&str> = TABS.to_vec();
                     let ctx_tabs = contextual_tabs(app);
                     tabs.extend(ctx_tabs.iter());
+
+                    // ב-LTR כפתור File מצויר כרגיל בצד שמאל לפני הלשוניות
+                    if !is_rtl && app.chrome.file_tab {
+                        file_menu(app, ui);
+                    }
+
                     for tab in tabs {
                         let active = app.ui.ribbon_tab == tab;
                         let contextual = ctx_tabs.contains(&tab);
@@ -112,12 +131,14 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     }
                 });
             });
+
             if collapsed {
                 return;
             }
-            // Ribbon card. The row above it can be wider than a narrow window, so the card is kept
-            // within the window (with the margin it has on the left), or its right scroll arrow
-            // would be drawn off screen.
+
+            // ==========================================
+            // כרטיסיית הריבון והכפתורים (Ribbon card)
+            // ==========================================
             let left = ui.cursor().min.x;
             let screen = ui.ctx().content_rect();
             let fits = (screen.right() - left - (left - screen.left()).max(0.0)).max(0.0);
@@ -126,15 +147,11 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
-                // One scroll state per tab: a tab opened after scrolling another starts at its
-                // left edge, and a tab keeps its own offset while others are used.
                 let tab = app.ui.ribbon_tab.clone();
                 let mut area = egui::ScrollArea::horizontal()
                     .id_salt(("ribbon_scroll", tab.as_str()))
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
-                // egui 0.37 keeps `ScrollArea`'s offset private; `scroll_offset` is the supported
-                // way to move it. An arrow click records the requested offset for the next frame.
-                // Expire it if this tab stops rendering, rather than replaying it much later.
+
                 if let Some((frame, x)) = ui.ctx().data_mut(|d| d.remove_temp::<(u64, f32)>(RibbonOverflow::scroll_target_id(tab.as_str())))
                     && ui.ctx().cumulative_frame_nr().saturating_sub(frame) <= 1
                 {
@@ -143,6 +160,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 let scroll = area.show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+
                         match app.ui.ribbon_tab.as_str() {
                             "Home" => home(app, ui),
                             "Insert" => insert(app, ui),
@@ -169,41 +187,31 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
 /// arrows and for tests.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RibbonOverflow {
-    /// Width of all the tab's groups.
     pub content: f32,
-    /// Width of the card's content area.
     pub visible: f32,
-    /// How far the groups are scrolled.
     pub offset: f32,
-    /// Height of the tallest group (a column of small buttons) and of the content area.
     pub content_height: f32,
     pub visible_height: f32,
 }
 
 impl RibbonOverflow {
-    /// Returns the stable id for the ribbon overflow state.
     fn id() -> egui::Id {
         egui::Id::unique("ribbon_overflow")
     }
 
-    /// Where an arrow click asks the next frame's `ScrollArea` to scroll to.
     fn scroll_target_id(tab: &str) -> egui::Id {
         egui::Id::unique(("ribbon_scroll_target", tab))
     }
 
-    /// Last frame's overflow.
     pub fn get(ctx: &egui::Context) -> RibbonOverflow {
         ctx.data(|d| d.get_temp(Self::id())).unwrap_or_default()
     }
 
-    /// Whether the groups are wider than the card.
     pub fn overflows(&self) -> bool {
         self.content > self.visible + 0.5
     }
 }
 
-/// When the tab's groups are wider than the card, arrows at its edges scroll them (horizontal wheel or
-/// trackpad input over the card still does too).
 fn scroll_arrows(ui: &mut Ui, t: &Tokens, tab: &str, scroll: egui::scroll_area::ScrollAreaOutput<()>) {
     let inner = scroll.inner_rect;
     let max = (scroll.content_size.x - inner.width()).max(0.0);
@@ -246,8 +254,6 @@ fn scroll_arrows(ui: &mut Ui, t: &Tokens, tab: &str, scroll: egui::scroll_area::
     }
 }
 
-/// The File tab opens the Backstage view (New, Open, Info, Save As, Print, Export, Options…), like
-/// Excel's; the ribbon's tab and collapsed state are left as they were for when it closes.
 fn file_menu(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let label = egui::RichText::new(app.ui.language.tr("File")).font(theme::ui_font(13.5)).color(t.accent);
@@ -262,7 +268,6 @@ fn file_menu(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
-/// System / Light / Dark, as in the View tab's Display theme box (`view.theme`).
 fn theme_choices(app: &mut SheetApp, ui: &mut Ui) {
     let lang = app.ui.language;
     let mode = app.ui.theme_mode();
@@ -296,9 +301,6 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
 
 #[cfg(test)]
 mod tooltip_tests {
-    /// A ribbon tooltip names its control only; `widgets::tooltip_shortcut` adds the shortcut of
-    /// the platform it runs on. A Command-key glyph written into the text would show on Windows
-    /// and Linux, where the shortcut is a Ctrl or Alt one (AutoSum is Alt+=).
     #[test]
     fn tooltips_leave_the_shortcut_to_the_platform_lookup() {
         let sources = [

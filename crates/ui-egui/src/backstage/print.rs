@@ -6,6 +6,8 @@ use super::{
 pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
     let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
+    let is_rtl = lang.is_rtl();
+
     let Some((uid, revision)) = app.session.active().map(|d| (d.uid, d.revision)) else {
         dim(ui, lang.tr("No workbook is open."));
         return;
@@ -20,16 +22,18 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
         bs.preview = Some((key, preview));
     }
     let pages: Vec<Json> = bs.preview.as_ref().and_then(|(_, p)| p.get("pageList")).and_then(Json::as_array).cloned().unwrap_or_default();
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+
+    let draw_settings = |app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome| {
+        let settings_layout = if is_rtl { egui::Layout::top_down(egui::Align::Max) } else { egui::Layout::top_down(egui::Align::Min) };
+        ui.allocate_ui_with_layout(vec2(250.0, 520.0), settings_layout, |ui| {
             ui.set_width(250.0);
             if let Some(discover) = &app.services.printers {
                 crate::printing::show(&mut app.printing, ui, discover, |label| lang.tr(label).to_owned());
             }
             let can_print = app.services.print_native.is_none() || app.printing.ready();
-            if ui.add_enabled_ui(can_print, |ui| square_button(ui, Icon::Print, lang.tr("Print"))).inner.clicked()
-                && app.commit_edit(0, 0, false, false)
-            {
+
+            let btn_resp = ui.add_enabled_ui(can_print, |ui| square_button(ui, Icon::Print, lang.tr("Print"))).inner;
+            if btn_resp.clicked() && app.commit_edit(0, 0, false, false) {
                 app.print_now(params.clone());
                 out.close = app.services.print_native.is_none();
             }
@@ -57,7 +61,9 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
                 app.open_dialog("pageSetup", json!({}));
             }
         });
-        ui.add_space(24.0);
+    };
+
+    let draw_preview = |app: &SheetApp, ui: &mut Ui, bs: &mut Backstage| {
         ui.vertical(|ui| {
             if pages.is_empty() {
                 dim(ui, lang.tr("Nothing to print."));
@@ -66,10 +72,9 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
             let last = pages.len().saturating_sub(1);
             bs.preview_page = bs.preview_page.min(last);
             let Some(page) = pages.get(bs.preview_page) else { return };
-            // Paper proportions from the preview (points); hostile sizes fall back to Letter.
             let w = page.get("width").and_then(Json::as_f64).filter(|w| w.is_finite() && *w > 1.0).unwrap_or(612.0) as f32;
             let h = page.get("height").and_then(Json::as_f64).filter(|h| h.is_finite() && *h > 1.0).unwrap_or(792.0) as f32;
-            let scale = (520.0 / h).min(440.0 / w);
+            let scale = (520.0 / h).min(380.0 / w);
             let (rect, _) = ui.allocate_exact_size(vec2(w * scale, h * scale), Sense::hover());
             let p = ui.painter();
             p.rect_filled(rect.translate(vec2(2.0, 3.0)), 2.0, t.shadow);
@@ -97,6 +102,12 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
                 }
             });
         });
+    };
+
+    ui.horizontal_top(|ui| {
+        draw_settings(app, ui, bs, out);
+        ui.add_space(32.0);
+        draw_preview(app, ui, bs);
     });
 }
 
@@ -110,7 +121,6 @@ const PREVIEW_COLS: u32 = 60;
 fn paint_page(p: &egui::Painter, rect: Rect, paper_w: f32, page: &Json, wb: &gridcraft_engine::model::Workbook, t: &Tokens) {
     let Some(range) = page.get("range").and_then(Json::as_str).and_then(gridcraft_engine::core::RangeRef::parse) else { return };
     let Some(sh) = page.get("sheet").and_then(Json::as_str).and_then(|n| wb.sheet_index(n)).and_then(|i| wb.sheets.get(i)) else { return };
-    // Preview pixels per point, and per sheet pixel (sheet geometry is 96 dpi: 0.75 pt per pixel).
     let per_pt = rect.width() / paper_w;
     let print_scale =
         page.get("scale").and_then(Json::as_f64).filter(|s| s.is_finite() && *s > 0.0).map_or(1.0, |s| (s / 100.0) as f32).clamp(0.1, 4.0);
@@ -149,7 +159,6 @@ fn paint_page(p: &egui::Painter, rect: Rect, paper_w: f32, page: &Json, wb: &gri
             let text = gridcraft_engine::display::cell_text(wb, sh, cell);
             if !text.is_empty() {
                 let numeric = sh.value(cell).as_f64().is_some();
-                // Text runs on over empty neighbours, as on the sheet; numbers stay in their cell.
                 let mut span = w;
                 if !numeric {
                     let mut next = col.saturating_add(1);
