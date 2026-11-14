@@ -491,7 +491,104 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     // Keys the editor handles itself (before the TextEdit sees them), only where it has focus.
     let focused = ui.ctx().memory(|m| m.focused());
     let has_focus = focused == Some(id) || (mine && (ed.request_focus || focused.is_none()));
-    let EditorKeyOutcome { action, arrow, cancel, to_python } = editor_shortcuts(app, ui, id, &mut ed, mine, has_focus);
+    let mut action: Option<(i64, i64, bool, bool)> = None;
+    let mut cancel = false;
+    if has_focus && mine {
+        let (enter, tab, esc, alt_enter, cmd_enter, ctrl_shift_enter, shift) = ui.input_mut(|i| {
+            let m = i.modifiers;
+            let alt_enter =
+                i.consume_key(egui::Modifiers::ALT, Key::Enter) || i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::ALT, Key::Enter);
+            let ctrl_shift_enter = i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::Enter);
+            let cmd_enter = i.consume_key(egui::Modifiers::COMMAND, Key::Enter);
+            let enter = i.consume_key(egui::Modifiers::NONE, Key::Enter) || i.consume_key(egui::Modifiers::SHIFT, Key::Enter);
+            let tab = i.consume_key(egui::Modifiers::NONE, Key::Tab) || i.consume_key(egui::Modifiers::SHIFT, Key::Tab);
+            let esc = i.consume_key(egui::Modifiers::NONE, Key::Escape);
+            // Backspace takes back the AutoComplete proposal (Excel's selected rest), not a typed character.
+            if ed.completion.is_some() && i.consume_key(egui::Modifiers::NONE, Key::Backspace) {
+                ed.completion = None;
+            }
+            (enter, tab, esc, alt_enter, cmd_enter, ctrl_shift_enter, m.shift)
+        });
+        if alt_enter {
+            let b = ed.text.char_indices().nth(ed.caret).map(|(i, _)| i).unwrap_or(ed.text.len());
+            ed.text.insert(b, '\n');
+            ed.caret += 1;
+            ed.caret_to_end = false;
+            ed.sync_caret = true;
+        }
+        if !ed.autocomplete.is_empty() && tab {
+            ed.accept_autocomplete();
+        } else if enter {
+            action = Some((if shift { -1 } else { 1 }, 0, false, false));
+        } else if tab {
+            action = Some((0, if shift { -1 } else { 1 }, false, false));
+        }
+        if cmd_enter {
+            action = Some((0, 0, false, true));
+        }
+        if ctrl_shift_enter {
+            action = Some((0, 0, true, false));
+        }
+        if esc {
+            if !ed.autocomplete.is_empty() {
+                ed.autocomplete.clear();
+            } else if ed.completion.is_some() {
+                ed.completion = None;
+            } else {
+                cancel = true;
+            }
+        }
+        // Arrow keys: autocomplete navigation, point mode, or (Enter mode) commit and move.
+        let arrows = ui.input(|i| {
+            (
+                i.key_pressed(Key::ArrowUp),
+                i.key_pressed(Key::ArrowDown),
+                i.key_pressed(Key::ArrowLeft),
+                i.key_pressed(Key::ArrowRight),
+                i.modifiers.shift,
+                i.modifiers.command || i.modifiers.ctrl,
+            )
+        });
+        let (up, down, left, right, ashift, ajump) = arrows;
+        if (up || down) && !ed.autocomplete.is_empty() {
+            ui.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
+            });
+            let n = ed.autocomplete.len();
+            ed.ac_index = if down { (ed.ac_index + 1) % n } else { (ed.ac_index + n - 1) % n };
+        } else if ed.enter_mode && (up || down || left || right) {
+            let (dr, dc) = if up {
+                (-1, 0)
+            } else if down {
+                (1, 0)
+            } else if left {
+                (0, -1)
+            } else {
+                (0, 1)
+            };
+            // Left/Right follow the screen on a right-to-left sheet.
+            let rtl = app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.right_to_left);
+            let dc = if rtl { -dc } else { dc };
+            if ed.can_point() {
+                ui.input_mut(|i| {
+                    for k in [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight] {
+                        i.consume_key(egui::Modifiers::NONE, k);
+                        i.consume_key(egui::Modifiers::SHIFT, k);
+                        i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, k);
+                        i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, k);
+                    }
+                });
+                crate::grid::point_move(app, &mut ed, dr, dc, ashift, ajump);
+            } else {
+                action = Some((dr, dc, false, false));
+            }
+        }
+        // F4 cycles $ anchors of the reference before the caret.
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F4)) {
+            cycle_anchor(&mut ed);
+        }
+    }
     // The text widget.
     let refs = formula_refs(&ed.text);
     let t = Tokens::get(ui.ctx());
