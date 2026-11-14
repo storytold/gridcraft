@@ -1,7 +1,15 @@
 use super::{Json, Notice, NoticeKind, OpenWindow, SheetApp, clean_error, json};
+use crate::wants_text_import;
 
 impl SheetApp {
     pub fn open_path(&mut self, path: &str) {
+        // A text file asks how it splits first, as Excel's Text Import Wizard does (#2553); one
+        // already open is switched to, as `file.open` does, so there is nothing to ask.
+        let open = self.session.documents().iter().any(|d| d.path.as_deref() == Some(path));
+        if wants_text_import(path) && !open {
+            self.open_dialog("textImport", json!({"path": path}));
+            return;
+        }
         match self.run("file.open", json!({"path": path})) {
             Ok(r) => self.after_open(Some(path), &r),
             // A password-protected workbook: ask for the password; the dialog opens it.
@@ -75,16 +83,22 @@ impl SheetApp {
             .collect()
     }
 
-    /// Opens files that arrived asynchronously (web file picker, dropped files).
+    /// Opens files that arrived asynchronously (web file picker, dropped files), in order. They wait
+    /// in the inbox while a dialog is open, so a file that asks first (Text Import, a password)
+    /// holds the ones after it, and text files picked together are asked about in turn (#2553).
     pub(super) fn poll_async_opens(&mut self) {
-        let arrived: Vec<(String, Vec<u8>)> = self
-            .services
-            .inbox
-            .as_ref()
-            .map(|i| std::mem::take(&mut *i.lock().unwrap_or_else(std::sync::PoisonError::into_inner)))
-            .unwrap_or_default();
-        for (name, bytes) in arrived {
+        while self.dialog.is_none() {
+            let next = self.services.inbox.as_ref().and_then(|i| {
+                let mut inbox = i.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                (!inbox.is_empty()).then(|| inbox.remove(0))
+            });
+            let Some((name, bytes)) = next else { return };
             let b64 = gridcraft_engine::io::base64_encode(&bytes);
+            if wants_text_import(&name) {
+                self.backstage = None;
+                self.open_dialog("textImport", json!({"name": name, "base64": b64}));
+                continue;
+            }
             match self.run("file.open", json!({"name": &name, "base64": &b64})) {
                 // A file picked from File › Open (web) arrives here: show it, not the Backstage.
                 Ok(r) => {

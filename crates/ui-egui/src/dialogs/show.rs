@@ -11,6 +11,7 @@ use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
 use super::ref_edit::{RefLabel, SHEET_DELETED, end_pick, home_sheet_deleted, place_window, ref_edit, window_shown};
 use super::spelling::spelling;
+use super::text_import::{text_import, text_import_params};
 use super::zoom::zoom;
 use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
 use gridcraft_engine::model::PageOrder;
@@ -19,6 +20,9 @@ use gridcraft_engine::model::PageOrder;
 /// The parameters OK sends to the dialog's command: its field values, reshaped per dialog.
 /// Unchanged hyperlink display text is omitted so its number or formula stays intact.
 pub(crate) fn build_params(d: &Dialog) -> Json {
+    if d.name == "textImport" {
+        return text_import_params(&d.values);
+    }
     let mut v = Json::Object(d.values.clone());
     match d.name.as_str() {
         "insertLink" => {
@@ -151,7 +155,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "about" => 820.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "equation" => 520.0,
         "macros" => 480.0,
-        "recommendedCharts" => 600.0,
+        "recommendedCharts" | "textImport" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
         "assignAction" => 440.0,
@@ -195,6 +199,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "pasteName" => paste_name(app, ui, &mut d, &mut confirm, &mut open),
                 "manageRules" => manage_rules(app, ui),
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
+                "textImport" => text_import(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm, &mut open),
@@ -436,7 +441,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 open = false;
                 if d.name == "solver" {
                     app.open_dialog("solverResults", r);
-                } else if d.name == "openPassword" {
+                } else if d.name == "openPassword" || d.name == "textImport" {
                     let path = d.values.get("path").and_then(Json::as_str).map(str::to_string);
                     app.after_open(path.as_deref(), &r);
                 }
