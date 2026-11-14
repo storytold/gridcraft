@@ -322,6 +322,9 @@ pub struct SheetApp {
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,
+    /// The copies of unsaved workbooks an earlier run left have been offered (File › Open opens
+    /// on them once, at startup).
+    pub recovery_offered: bool,
     /// Linux/BSD: the window has no system frame; the title bar draws minimize, maximize and
     /// close, and the window resizes from its edges (`ribbon::window_frame`).
     pub window_controls: bool,

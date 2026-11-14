@@ -22,6 +22,7 @@ pub mod pivot;
 pub mod pivot_calc;
 pub mod recent;
 pub mod record;
+pub mod recovery;
 pub mod sample;
 pub mod selection;
 pub mod tables;
@@ -224,6 +225,9 @@ pub struct DocState {
     /// The references `edit.goTo` with `record: true` went to in this document, newest first,
     /// without names, each area written with its sheet (`Sheet1!B14:C22,Sheet1!F19:G30`).
     pub go_to_recent: Vec<String>,
+    /// Opened from a password-protected file: it gets no recovery copy ([`recovery`]), which
+    /// would sit on disk without the password.
+    pub from_encrypted: bool,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -360,10 +364,15 @@ impl DocState {
             touched: None,
             edits: None,
             go_to_recent: vec![],
+            from_encrypted: false,
         }
     }
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved)
+    }
+    /// A new workbook nobody has touched: no file, no changes, no history, empty sheets.
+    pub fn is_untouched_blank(&self) -> bool {
+        self.path.is_none() && !self.is_dirty() && self.undo.is_empty() && self.wb.sheets.iter().all(|sh| sh.cells.is_empty())
     }
     pub fn sheet_index(&self) -> usize {
         self.wb.active_sheet()
@@ -490,6 +499,10 @@ pub type TextWidth = Arc<dyn Fn(&str, &model::Font, bool) -> f32 + Send + Sync>;
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
+    /// Recovery copies of unsaved workbooks, when the desktop app turned them on
+    /// ([`Session::enable_recovery`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    recovery: Option<recovery::desktop::Recovery>,
     /// Index in `docs` of the active window's workbook.
     active: usize,
     /// Windows on the open workbooks ([`windows`]); every workbook has at least one.
@@ -569,6 +582,11 @@ impl Session {
     }
     pub fn documents(&self) -> &[DocState] {
         &self.docs
+    }
+    /// The only open workbook is an untouched blank Book1, which opening a file replaces (as
+    /// Excel does) and which nothing is lost by covering.
+    pub fn only_untouched_blank(&self) -> bool {
+        self.docs.len() == 1 && self.active().is_some_and(DocState::is_untouched_blank)
     }
     pub fn active_index(&self) -> usize {
         self.active
