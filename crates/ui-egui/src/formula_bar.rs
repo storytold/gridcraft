@@ -496,7 +496,22 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let refs = formula_refs(&ed.text);
     let t = Tokens::get(ui.ctx());
     let on_sheet = id == egui::Id::unique("gridcraft.cell_editor");
-    let cell_text_color = if on_sheet { t.cell_text } else { t.text };
+    let formula_editing = ed.text.starts_with('=');
+    let (cell_text_color, cell_underline, cell_strike) = if on_sheet && !formula_editing {
+        app.session
+            .active()
+            .and_then(|d| {
+                let sh = d.wb.active()?;
+                let st = d.wb.styles.get(sh.style_id(d.selection.active));
+                let col = st.font.color.resolve(&d.wb.theme).map(theme::color32).unwrap_or(t.cell_text);
+                let ul = if st.font.underline != gridcraft_engine::model::Underline::None { egui::Stroke::new(1.0, col) } else { egui::Stroke::NONE };
+                let strike = if st.font.strike { egui::Stroke::new(1.0, col) } else { egui::Stroke::NONE };
+                Some((col, ul, strike))
+            })
+            .unwrap_or((t.cell_text, egui::Stroke::NONE, egui::Stroke::NONE))
+    } else {
+        (if on_sheet { t.cell_text } else { t.text }, egui::Stroke::NONE, egui::Stroke::NONE)
+    };
     let font2 = font.clone();
     let reading_order = cell_reading_order(app, ed.sheet, ed.cell);
     let mut layouter = move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
@@ -506,6 +521,9 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             keep_trailing_whitespace: true,
             ..Default::default()
         };
+        let mut base_fmt = egui::TextFormat::simple(font2.clone(), cell_text_color);
+        base_fmt.underline = cell_underline;
+        base_fmt.strikethrough = cell_strike;
         let mut pos = 0usize;
         let mut spans: Vec<(usize, usize, usize)> = refs.iter().filter(|r| r.1 <= s.len()).map(|r| (r.0, r.1, r.4)).collect();
         spans.sort();
@@ -513,11 +531,11 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             if a < pos || !s.is_char_boundary(a) || !s.is_char_boundary(b) {
                 continue;
             }
-            job.append(s.get(pos..a).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), cell_text_color));
+            job.append(s.get(pos..a).unwrap_or(""), 0.0, base_fmt.clone());
             job.append(s.get(a..b).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), t.ref_color(idx, on_sheet)));
             pos = b;
         }
-        job.append(s.get(pos..).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), cell_text_color));
+        job.append(s.get(pos..).unwrap_or(""), 0.0, base_fmt);
         job.wrap.max_width = if multiline { wrap_width } else { f32::INFINITY };
         ui.fonts_mut(|f| f.layout_job(job))
     };
@@ -819,6 +837,21 @@ fn editor_other_shortcuts(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, e
     }
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::U)) {
         app.run_or_alert("view.expandFormulaBar", json!({}));
+    }
+    for (mods, key, cmd_id) in [
+        (egui::Modifiers::COMMAND, Key::B, "home.bold"),
+        (egui::Modifiers::CTRL, Key::B, "home.bold"),
+        (egui::Modifiers::COMMAND, Key::I, "home.italic"),
+        (egui::Modifiers::CTRL, Key::I, "home.italic"),
+        (egui::Modifiers::COMMAND, Key::U, "home.underline"),
+        (egui::Modifiers::CTRL, Key::U, "home.underline"),
+        (egui::Modifiers::CTRL, Key::Num5, "home.strikethrough"),
+    ] {
+        if ui.input_mut(|i| i.consume_key(mods, key)) {
+            app.run_or_alert(cmd_id, json!({}));
+            ed.request_focus = true;
+            ed.keep_selection = true;
+        }
     }
 }
 

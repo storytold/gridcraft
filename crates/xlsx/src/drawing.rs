@@ -194,6 +194,14 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                         }
                     } else if uri.contains("chartex") || uri.contains("chartEx") {
                         cx.warn(format!("a histogram, waterfall, treemap… chart without its chart part was skipped ({part}, object {n})"));
+                    } else if uri.contains("slicer") || gd.child("slicer").is_some() {
+                        let sname = gd
+                            .child("slicer")
+                            .and_then(|s| s.attr("name"))
+                            .or_else(|| obj.path(&["nvGraphicFramePr", "cNvPr"]).and_then(|c| c.attr("name")))
+                            .unwrap_or("")
+                            .to_string();
+                        cx.sheet_slicer_frames.push((sname, anchor));
                     } else {
                         cx.warn(format!("an embedded object (SmartArt, OLE…) was skipped ({part}, object {n})"));
                     }

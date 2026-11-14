@@ -213,6 +213,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
     let mut cf_kept_cells = 0u64;
     let mut column_assignments_left = MAX_COLUMN_ASSIGNMENTS;
     cx.cf_ext_ids.clear();
+    read_sheet_slicer_defs(cx, &rels)?;
     for e in &root.children {
         match e.name.as_str() {
             "sheetPr" => {
@@ -329,6 +330,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
                         if let Some(x) = cx.optional_xml(&target)?
                             && let Some(mut t) = read_table(cx, &x)
                         {
+                            record_file_table(cx, &x, &t);
                             t.id = cx.next_object_id();
                             sheet.tables.push(t);
                         }
@@ -869,6 +871,37 @@ fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
             }
         }
     }
+}
+
+/// Reads worksheet-level `slicer` parts and stores their `(cache, caption, columnCount)` definitions on `cx`.
+fn read_sheet_slicer_defs(cx: &mut Ctx<'_>, rels: &[crate::package::Rel]) -> Result<(), IoError> {
+    cx.sheet_slicer_defs.clear();
+    cx.sheet_slicer_frames.clear();
+    for rel in rels.iter().filter(|r| r.kind.eq_ignore_ascii_case("slicer")) {
+        if let Some(x) = cx.optional_xml(&rel.target)? {
+            for s in x.kids("slicer") {
+                if let Some(sname) = s.attr("name").filter(|n| !n.is_empty()) {
+                    let cache = s.attr("cache").unwrap_or("").to_string();
+                    let caption = xml::decode_xstring(s.attr("caption").unwrap_or(""));
+                    let cols = s.attr_u32("columnCount").unwrap_or(1).max(1);
+                    cx.sheet_slicer_defs.insert(sname.to_string(), (cache, caption, cols));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Records a table's numeric `id`, name, and `tableColumn` id-to-name map on `cx` for `x15:tableSlicerCache` resolution.
+fn record_file_table(cx: &mut Ctx<'_>, x: &El, t: &gridcraft_model::Table) {
+    if t.id == 0 {
+        return;
+    }
+    let col_map: HashMap<u32, String> = x
+        .child("tableColumns")
+        .map(|tc| tc.kids("tableColumn").filter_map(|c| Some((c.attr_u32("id")?, xml::decode_xstring(c.attr("name").unwrap_or(""))))).collect())
+        .unwrap_or_default();
+    cx.file_tables.insert(t.id, (t.name.clone(), col_map));
 }
 
 #[cfg(test)]
