@@ -2295,7 +2295,8 @@ fn output_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) 
     ui.label(egui::RichText::new("Agents and other programs that run the macro get an error instead of the question.").small().color(t.text_dim));
     if !ed.draft.permissions.is_empty() {
         ui.add_space(6.0);
-        ui.label(format!("May use files through: {}", ed.draft.permissions.join(", ")));
+        let note = crate::i18n::current(ui.ctx()).tr("May use files through: {commands}").replace("{commands}", &ed.draft.permissions.join(", "));
+        ui.label(note);
     }
 }
 

@@ -443,6 +443,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Do you want to save the changes you made to {title}?" => "Do you want to save the changes you made to {title}?",
         "Save a copy as .{format}" => "Save a copy as .{format}",
         "Select a chart first." => "Спочатку виділіть діаграму.",
+        "May use files through: {commands}" => "Може використовувати файли через: {commands}",
         "Text Box" => "Напис",
         "Select Data" => "Select Data",
         "Row Height" => "Row Height",

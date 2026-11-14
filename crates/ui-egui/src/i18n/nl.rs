@@ -523,6 +523,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Statistic" => "Statistisch",
         "Switch Row/Column" => "Rij/kolom omwisselen",
         "Table Styles" => "Tabelstijlen",
+        "May use files through: {commands}" => "Mag bestanden gebruiken via: {commands}",
         "Text Box" => "Tekstvak",
         "Text to Columns" => "Tekst naar kolommen",
         "Top Align" => "Boven uitlijnen",

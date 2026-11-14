@@ -504,6 +504,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Next sheet" => "Nächstes Blatt",
         "All sheets" => "Alle Blätter",
         "New sheet (⇧F11)" => "Neues Blatt (⇧F11)",
+        "May use files through: {commands}" => "Darf Dateien verwenden über: {commands}",
         "Text Box" => "Textfeld",
         "Macros" => "Makros",
         "Record Macro" => "Makro aufzeichnen",

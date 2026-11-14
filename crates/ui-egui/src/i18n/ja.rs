@@ -465,6 +465,7 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Do you want to save the changes you made to {title}?", "{title} への変更を保存しますか?"),
     ("Save a copy as .{format}", ".{format} としてコピーを保存"),
     ("Select a chart first.", "先にグラフを選択してください。"),
+    ("May use files through: {commands}", "次のコマンドでファイルを使用できます: {commands}"),
     ("Text Box", "テキスト ボックス"),
     ("Select Data", "データの選択"),
     ("Row Height", "行の高さ"),

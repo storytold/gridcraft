@@ -550,6 +550,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Statistic" => "Statistické grafy",
         "Switch Row/Column" => "Prohodit řádky/sloupce",
         "Table Styles" => "Styly tabulky",
+        "May use files through: {commands}" => "Soubory lze používat přes: {commands}",
         "Text Box" => "Textové pole",
         "Text to Columns" => "Text do sloupců",
         "Top Align" => "Zarovnat nahoru",

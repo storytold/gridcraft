@@ -539,6 +539,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Statistic" => "Στατιστική",
         "Switch Row/Column" => "Εναλλαγή γραμμής/στήλης",
         "Table Styles" => "Στυλ πίνακα",
+        "May use files through: {commands}" => "Μπορεί να χρησιμοποιεί αρχεία μέσω: {commands}",
         "Text Box" => "Πλαίσιο κειμένου",
         "Text to Columns" => "Κείμενο σε στήλες",
         "Top Align" => "Στοίχιση επάνω",
