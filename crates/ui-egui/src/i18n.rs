@@ -235,7 +235,8 @@ impl Language {
 
     /// Errors with a variable part, translated through a fixed key with a `{placeholder}` (the
     /// convention of "Print failed: {error}"): the formula error prefix, "unexpected `x`",
-    /// "unexpected character `x`" and "…, found `x`". `None` when no key is translated.
+    /// "unexpected character `x`", "unexpected `x` in structured reference" and "…, found `x`".
+    /// `None` when no key is translated.
     fn tr_error_pattern(self, message: &str) -> Option<String> {
         let keyed = |key: &str, placeholder: &str, value: &str| self.translated(key).map(|text| text.replace(placeholder, value));
         if let Some(detail) = message.strip_prefix("There's a problem with this formula: ") {
@@ -243,6 +244,9 @@ impl Language {
         }
         if let Some(token) = message.strip_prefix("unexpected character ") {
             return keyed("unexpected character {token}", "{token}", token);
+        }
+        if let Some(token) = message.strip_prefix("unexpected ").and_then(|rest| rest.strip_suffix(" in structured reference")) {
+            return keyed("unexpected {token} in structured reference", "{token}", token);
         }
         if let Some(token) = message.strip_prefix("unexpected ").filter(|t| t.len() > 1 && t.starts_with('`') && t.ends_with('`')) {
             return keyed("unexpected {token}", "{token}", token);
