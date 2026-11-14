@@ -136,7 +136,8 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
                         (None, Some(_)) => Ordering::Greater,
                         // Values not in the list follow the listed ones in the usual order, as in Excel.
                         // A descending key is left as it was: they tie, so the next key decides.
-                        (None, None) if k.desc => Ordering::Equal,
+                        // A blank has no place in the list either, but still goes last.
+                        (None, None) if k.desc => va.is_empty().cmp(&vb.is_empty()),
                         (None, None) => plain(),
                     }
                 } else {
