@@ -381,6 +381,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Resize formula bar" => "Größe der Bearbeitungsleiste ändern",
         "Enable AutoComplete for cell values" => "AutoVervollständigen für Zellwerte aktivieren",
         "Save .xlsx workbooks automatically after every change" => ".xlsx-Arbeitsmappen nach jeder Änderung automatisch speichern",
+        "Display server" => "Anzeigeserver",
+        "Wayland sizes the window for scaled (HiDPI) displays; X11 (XWayland) keeps file drag-and-drop." => {
+            "Wayland passt das Fenster an skalierte Bildschirme (HiDPI) an; X11 (XWayland) behält das Ziehen und Ablegen von Dateien."
+        }
+        "A choice that isn't available falls back to the other. Applies the next time GridCraft starts." => {
+            "Ist die Auswahl nicht verfügbar, wird der andere Server verwendet. Gilt ab dem nächsten Start von GridCraft."
+        }
         "Workbook calculation" => "Arbeitsmappenberechnung",
         "Enable iterative calculation" => "Iterative Berechnung aktivieren",
         "Maximum Iterations:" => "Maximale Iterationszahl:",

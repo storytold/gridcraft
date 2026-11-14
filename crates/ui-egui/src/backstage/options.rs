@@ -34,7 +34,7 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     }
     if cfg!(all(unix, not(target_os = "macos"))) {
         ui.add_space(18.0);
-        section(ui, lang, "Linux display server");
+        section(ui, lang, "Display server");
         display_server_picker(app, ui, lang);
     }
     let Some((calc, view)) = app.session.active().map(|d| (d.wb.calc.clone(), d.wb.view)) else { return };
@@ -99,8 +99,9 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
     });
 }
 
-/// Linux display server: Automatic, Wayland or X11 (XWayland). The desktop app reads it before
-/// the window opens, so a change applies at the next launch.
+/// Display server (Linux and the BSDs): Automatic, Wayland or X11 (XWayland). The desktop app reads
+/// it before the window opens, so a change applies at the next launch. The dim lines say why to
+/// pick one and that a choice that isn't available falls back to the other.
 fn display_server_picker(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
     use crate::DisplayServer;
     let name = |d: DisplayServer| if d == DisplayServer::Auto { lang.tr(d.label()) } else { d.label() };
@@ -119,7 +120,8 @@ fn display_server_picker(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             .response
             .labelled_by(label.id);
     });
-    dim(ui, lang.tr("Applies the next time GridCraft starts."));
+    dim(ui, lang.tr("Wayland sizes the window for scaled (HiDPI) displays; X11 (XWayland) keeps file drag-and-drop."));
+    dim(ui, lang.tr("A choice that isn't available falls back to the other. Applies the next time GridCraft starts."));
 }
 
 /// The calculation mode, and iterative calculation, of the active workbook.

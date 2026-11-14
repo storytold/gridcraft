@@ -257,7 +257,7 @@ impl SheetApp {
                 }
             }
             "options.displayServer" => {
-                // File › Options › Linux display server: `value` `auto`, `wayland` or `x11`; no
+                // File › Options › Display server: `value` `auto`, `wayland` or `x11`; no
                 // value reads it. The desktop app reads it at the next launch.
                 if let Some(v) = p.get("value") {
                     match v.as_str().and_then(crate::DisplayServer::from_code) {

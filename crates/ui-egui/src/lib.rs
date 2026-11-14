@@ -142,7 +142,7 @@ pub struct UiState {
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
     #[serde(deserialize_with = "lenient_interface_scale")]
     pub interface_scale: u16,
-    /// File ▸ Options ▸ Linux display server (`options.displayServer`): read by the desktop app
+    /// File ▸ Options ▸ Display server (`options.displayServer`): read by the desktop app
     /// before the window opens, so a change applies at the next launch. An unknown or malformed
     /// saved value reads as Automatic.
     #[serde(deserialize_with = "lenient_display_server")]
