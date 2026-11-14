@@ -42,6 +42,7 @@ pub mod i18n;
 pub mod icons;
 pub mod keymap;
 pub mod keytips;
+pub mod line_break;
 pub mod macro_editor;
 pub mod macro_ui;
 pub mod objects;

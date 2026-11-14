@@ -329,6 +329,8 @@ pub fn contrast(a: Color32, b: Color32) -> f32 {
 
 /// Installs light and dark token visuals in both theme slots, keeps the 2-3 px widget and 8-10 px window/menu corner radii from 0.36, and sets spacing, text styles and the active theme.
 pub fn apply(ctx: &egui::Context, dark: bool) {
+    // Text wraps where Excel wraps it (see `ExcelLineBreaker`). Setting the one in use is a no-op.
+    ctx.set_line_breaker(line_breaker());
     // Install both palettes before System can switch between the style slots.
     for theme in [egui::Theme::Light, egui::Theme::Dark] {
         let dark = theme == egui::Theme::Dark;
@@ -514,3 +516,9 @@ mod contrast_tests {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
+
+/// The one line breaker the app installs, shared so re-applying the theme changes nothing.
+fn line_breaker() -> std::sync::Arc<dyn egui::epaint::text::LineBreaker> {
+    static BREAKER: std::sync::OnceLock<std::sync::Arc<dyn egui::epaint::text::LineBreaker>> = std::sync::OnceLock::new();
+    BREAKER.get_or_init(|| std::sync::Arc::new(crate::line_break::ExcelLineBreaker)).clone()
+}
