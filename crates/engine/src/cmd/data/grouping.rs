@@ -223,7 +223,8 @@ pub(super) fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
         "max" => 4,
         "min" => 5,
         "product" => 6,
-        _ => 9,
+        "sum" => 9,
+        other => return Err(bad("data.subtotal", format!("unknown `function`: {other}"))),
     };
     let cols: Vec<u32> = p
         .get("columns")
