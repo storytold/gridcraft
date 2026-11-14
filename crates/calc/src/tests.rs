@@ -1970,6 +1970,43 @@ fn offset_extreme_arguments_return_ref() {
     }
 }
 
+#[test]
+fn integer_powers_use_repeated_squaring() {
+    // power-squaring.00001: pow() gives -0.006220264508449702, 3.6e-12 away.
+    let mut t = T::new();
+    t.set("A1", "-5.183701543715069e-06");
+    t.set("B1", "=((1+A1)^12-1)*100");
+    t.set("B2", "=(POWER(1+A1,12)-1)*100");
+    assert_eq!(t.get("B1"), Value::Number(-0.006220264508471907));
+    assert_eq!(t.get("B2"), Value::Number(-0.006220264508471907));
+}
+
+#[test]
+fn fractional_powers_follow_excel_forms() {
+    let mut t = T::new();
+    // A negative base has a value only for an odd root (excel-probe.00144, 00152); an even root is #NUM!.
+    t.set("A1", "-8");
+    t.set("A2", "0.3333333333333333");
+    t.set("A3", "-32");
+    t.set("A4", "0.2");
+    t.set("B1", "=A1^A2");
+    t.set("B2", "=A3^A4");
+    t.set("B3", "=A1^0.5");
+    t.set("B4", "=A1^0.25");
+    assert_eq!(t.get("B1"), Value::Number(-1.9999999999999998));
+    assert_eq!(t.get("B2"), Value::Number(-2.0));
+    assert_eq!(t.get("B3"), Value::Error(CellError::Num));
+    assert_eq!(t.get("B4"), Value::Error(CellError::Num));
+    // A positive base: x^-0.5 is 1/sqrt(x) (excel-probe-4.00012).
+    t.set("B5", "=3^-0.5");
+    assert_eq!(t.get("B5"), Value::Number(0.5773502691896258));
+    // 0^0 and 0^-1 keep their errors.
+    t.set("B6", "=0^0");
+    t.set("B7", "=0^-1");
+    assert_eq!(t.get("B6"), Value::Error(CellError::Num));
+    assert_eq!(t.get("B7"), Value::Error(CellError::Div0));
+}
+
 /// `@` intersects a reference with the formula's row (a column range) or column (a row range);
 /// a 2D range both (circular when it includes the formula's cell); a range the formula does not
 /// line up with gives #VALUE!. An array gives its top-left value. Legacy formulas read from files use it where Excel intersects implicitly.

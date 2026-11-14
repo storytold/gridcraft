@@ -70,6 +70,13 @@ fn pmt_edge_cases_follow_excel() {
 }
 
 #[test]
+fn fv_and_pv_powers_use_repeated_squaring() {
+    // Observed on Windows Excel 16.0.20430; pow() would give 4113.435153940674 and 0.00024310581365115218.
+    assert_eq!(ev("FV", vec![n(0.07), n(123.0), n(0.0), n(-1.0)]), Value::Number(4113.435153940649));
+    assert_eq!(ev("PV", vec![n(0.07), n(123.0), n(0.0), n(-1.0)]), Value::Number(0.00024310581365115367));
+}
+
+#[test]
 fn cash_flows() {
     close_tol(ev("NPV", vec![n(0.1), n(-10000.0), n(3000.0), n(4200.0), n(6800.0)]), 1188.443412, 1e-9);
     close_tol(ev("NPV", vec![n(0.08), rf(col(&[8000.0, 9200.0, 10000.0, 12000.0, 14500.0]))]), 41922.06155, 1e-9);
