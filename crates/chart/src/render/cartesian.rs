@@ -287,6 +287,11 @@ fn column_slots(fams: &[Fam], sec: &[bool]) -> (Vec<usize>, f32) {
     (slot_of, slot_keys.len().max(1) as f32)
 }
 
+/// The labels' own formats, built only when labels are drawn.
+fn point_fmts(s: &crate::SeriesData, labels_on: bool) -> Vec<Fmt> {
+    if labels_on { s.point_formats.iter().map(|f| Fmt::new(f)).collect() } else { Vec::new() }
+}
+
 pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizontal: bool) {
     let ncat = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).min(MAX_CATS);
     if ncat == 0 {
@@ -348,6 +353,9 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
             }
             let sc = scale_of(i);
             let fmt = Fmt::new(&s.number_format);
+            let point_fmts = point_fmts(s, labels_on);
+            // A data label takes its own cell's format; the axis keeps the first cell's.
+            let fmt_of = |j: usize| point_fmts.get(j).unwrap_or(&fmt);
             let row = match spans.get(i) {
                 Some(r) => r,
                 None => continue,
@@ -366,7 +374,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                             && sp.is_some()
                             && let Some(v) = s.values.get(j).copied().flatten()
                         {
-                            area_labels.push((c, vpos(t, &sc) - 5.0, fmt.format(v, None)));
+                            area_labels.push((c, vpos(t, &sc) - 5.0, fmt_of(j).format(v, None)));
                         }
                     }
                     if top.len() == 1 {
@@ -394,7 +402,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                         let len = (pb - pt).abs();
                         sink.bar(ctx, cull, c, lo, len);
                         if labels_on && let Some(v) = s.values.get(j).copied().flatten() {
-                            let t = fmt.format(v, None);
+                            let t = fmt_of(j).format(v, None);
                             let stacked = fam != Fam::Col;
                             let mid = (pb + pt) / 2.0;
                             if horizontal {
@@ -430,7 +438,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                     if labels_on {
                         for (j, p) in pts.iter().enumerate() {
                             if let (Some(p), Some(v)) = (p, s.values.get(j).copied().flatten()) {
-                                ctx.text(p[0], p[1] - 5.0, &fmt.format(v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+                                ctx.text(p[0], p[1] - 5.0, &fmt_of(j).format(v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
                             }
                         }
                     }
