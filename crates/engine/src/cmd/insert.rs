@@ -1368,10 +1368,10 @@ fn open_link(s: &mut Session, p: &Json) -> Result<Json> {
         None => {
             let sheet = target_sheet(s, p)?;
             let at = cell_param_on(s, p, "cell", sheet)?.unwrap_or(s.doc()?.selection.active);
-            let Some(h) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.hyperlinks.get(&at)) else {
+            let Some(h) = crate::links::cell_link(&s.doc()?.wb, sheet, at) else {
                 return Err(EngineError::Other("There's no hyperlink in this cell.".into()));
             };
-            h.target.clone()
+            h.target
         }
     };
     match crate::links::classify(&target) {

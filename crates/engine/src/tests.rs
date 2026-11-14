@@ -6718,3 +6718,18 @@ fn history_charges_the_storage_of_empty_comment_replies() {
     // 500 replies of no text are still 500 elements.
     assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
 }
+
+#[test]
+fn hyperlink_function_makes_a_cell_link() {
+    let mut s = s();
+    s.link_policy = crate::links::LinkPolicy::Allow;
+    s.execute("cell.set", json!({"cell": "A1", "input": "https://example.com/x"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=HYPERLINK(A1,\"Go\")"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C3", "input": "=HYPERLINK(\"google.com\")"})).unwrap();
+    s.take_ui_requests();
+    s.execute("link.open", json!({"cell": "B2"})).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("https://example.com/x".into())]);
+    s.execute("link.open", json!({"cell": "C3"})).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("https://google.com".into())]);
+    assert!(s.execute("link.open", json!({"cell": "A1"})).is_err());
+}
