@@ -168,6 +168,19 @@ fn filters_and_report_filter_rows() {
     assert!(s.execute("pivot.filter", json!({"field": "Product", "selected": []})).is_err());
 }
 
+/// A selection of the most labels allowed (100,000) is looked up once per record, not scanned: the
+/// report still filters case-insensitively.
+#[test]
+fn a_huge_filter_selection_is_matched_through_a_set() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Product"], "values": ["Sales"], "filters": ["Region"]})).unwrap();
+    let mut selected: Vec<String> = (0..99_999).map(|i| format!("Region {i}")).collect();
+    selected.push("EAST".into());
+    s.execute("pivot.filter", json!({"field": "Region", "selected": selected})).unwrap();
+    let gt = find_row(&s, "Grand Total").unwrap();
+    assert_eq!(val(&s, &CellRef::new(gt, 1).a1()), Value::Number(415.0));
+}
+
 #[test]
 fn show_values_as() {
     let mut s = sales();
@@ -194,6 +207,41 @@ fn show_values_as() {
     assert!(s.execute("pivot.valueSettings", json!({"index": 0, "name": "Sales"})).is_err());
     s.execute("pivot.valueSettings", json!({"index": 0, "name": "Biggest sale"})).unwrap();
     assert_eq!(text(&s, "B3"), "Biggest sale");
+}
+
+/// Running Total over nested rows adds up each child's value across the top-level items, in the
+/// order they appear: the same value as summing the plain values of the earlier items' rows.
+#[test]
+fn running_total_over_nested_rows_adds_up_across_the_top_level_items() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region", "Product"], "values": ["Sales"]})).unwrap();
+    let r = pt(&s).last_range.unwrap();
+    let rows: Vec<u32> = (r.start.row + 1..r.end.row).collect();
+    let read = |s: &Session| -> Vec<(String, f64)> {
+        rows.iter().map(|row| (text(s, &CellRef::new(*row, 0).a1()), val(s, &CellRef::new(*row, 1).a1()).as_f64().unwrap_or(0.0))).collect()
+    };
+    let before = read(&s);
+    s.execute("pivot.valueSettings", json!({"index": 0, "showAs": "runningTotal"})).unwrap();
+    let after = read(&s);
+    // Region rows carry the report's top-level items (not indented); the others are products.
+    let indent = |s: &Session, row: u32| {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        d.wb.styles.get(sh.style_id(CellRef::new(row, 0))).align.indent
+    };
+    let (mut regions, mut products) = (0.0, std::collections::HashMap::<String, f64>::new());
+    for (i, row) in rows.iter().enumerate() {
+        let name = &before[i].0;
+        let total = if indent(&s, *row) == 0 {
+            regions += before[i].1;
+            regions
+        } else {
+            let t = products.entry(name.clone()).or_insert(0.0);
+            *t += before[i].1;
+            *t
+        };
+        assert!((after[i].1 - total).abs() < 1e-9, "row {name}: {} vs {total}", after[i].1);
+    }
 }
 
 #[test]
