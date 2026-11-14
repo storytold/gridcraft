@@ -238,6 +238,11 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 - XLSX reader builds the whole workbook in memory; no streaming (#175).
 - Unmodelled XLSX parts are not carried through a save.
 
+The native [renderer benchmark](renderer-benchmarks.md) uses public grid APIs and an xtask
+build/run source guard. Its Latin default needs no external font; optional Thai/mixed fixtures
+are hash/glyph verified. Measurements and diagnostic images are developer artifacts under
+ignored output directories, with no runtime instrumentation or renderer feature dependency.
+
 ## Revision history
 
 | Date | Change | Summary |
@@ -248,6 +253,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | 2026-11-01 | minor | Equations: the `math` crate (L1), the layout cache and code editor marks |
 | 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
 | 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
+| 2026-10-31 | minor | Add independent public-renderer benchmark and build/run source identity checks |
 | 2026-10-31 | minor | System and embedded CJK fallback faces share the Latin baseline without changing other script, symbol or emoji alignment |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
 | 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
