@@ -28,6 +28,8 @@ use print::print;
 
 /// Width of the navigation column.
 const NAV_W: f32 = 196.0;
+/// Tallest the Open Recent submenu grows before it scrolls.
+const RECENT_MENU_H: f32 = 190.0;
 /// Width of the content column (pages are left-aligned like a document, not stretched).
 const CONTENT_W: f32 = 760.0;
 
@@ -128,6 +130,8 @@ pub struct Backstage {
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
     recent: RecentFiles,
+    /// The nav column's Open Recent submenu is unfolded.
+    recent_menu: bool,
 }
 
 /// Save As file types: (extension, label). The first is the workbook itself; the others are
@@ -147,6 +151,7 @@ impl Backstage {
             preview: None,
             save_format: "xlsx",
             recent: RecentFiles::default(),
+            recent_menu: false,
         }
     }
 }
@@ -184,6 +189,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     out.page = Some(page);
                 }
             }
+            open_recent_menu(app, ui, &mut bs, &mut out, nav_text, nav_sel);
             nav_separator(ui, nav_text);
             if nav_item(ui, Page::Info.icon(), lang.tr("Info"), bs.page == Page::Info, nav_text, nav_sel).clicked() {
                 out.page = Some(Page::Info);
@@ -282,6 +288,37 @@ fn nav_item(ui: &mut Ui, icon: Icon, label: &str, selected: bool, text: Color32,
     icons::paint(p, Rect::from_center_size(pos2(rect.left() + 30.0, rect.center().y), vec2(17.0, 17.0)), icon, text);
     p.text(pos2(rect.left() + 50.0, rect.center().y), Align2::LEFT_CENTER, label, theme::ui_font(14.0), text);
     resp
+}
+
+/// "Open Recent" under Open: unfolds the newest recent workbooks (the folder is the tooltip).
+/// Disabled while there are none; picking one opens it and closes the Backstage.
+fn open_recent_menu(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome, text: Color32, sel: Color32) {
+    let lang = app.ui.language;
+    let any = !app.ui.recent.is_empty();
+    let color = if any { text } else { text.gamma_multiply(0.5) };
+    let resp = ui.add_enabled_ui(any, |ui| nav_item(ui, Icon::Book, lang.tr("Open Recent"), false, color, sel)).inner;
+    let arrow = if bs.recent_menu && any { "\u{25BE}" } else { "\u{25B8}" };
+    ui.painter().text(pos2(resp.rect.right() - 16.0, resp.rect.center().y), Align2::CENTER_CENTER, arrow, theme::ui_font(12.0), color);
+    if resp.clicked() {
+        bs.recent_menu = !bs.recent_menu;
+    }
+    if !(bs.recent_menu && any) {
+        return;
+    }
+    let mut picked = None;
+    egui::ScrollArea::vertical().id_salt("backstage_recent_menu").max_height(RECENT_MENU_H).auto_shrink([false, true]).show(ui, |ui| {
+        for path in app.ui.recent.iter().take(20) {
+            let (name, _) = split_path(path);
+            if nav_item(ui, Icon::Book, &name, false, text, sel).on_hover_text(path).clicked() {
+                picked = Some(path.clone());
+            }
+        }
+    });
+    if let Some(path) = picked
+        && app.open_path(&path)
+    {
+        out.close = true;
+    }
 }
 
 fn nav_separator(ui: &mut Ui, text: Color32) {
@@ -419,11 +456,8 @@ fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Ou
             p.text(pos2(rect.right() - modified_w, rect.center().y), Align2::LEFT_CENTER, words, theme::ui_font(12.0), color);
         }
         let resp = resp.on_hover_text(&path);
-        if resp.clicked() {
-            app.open_path(&path);
-            if app.session.active().and_then(|d| d.path.as_deref()) == Some(path.as_str()) {
-                out.close = true;
-            }
+        if resp.clicked() && app.open_path(&path) {
+            out.close = true;
         }
     }
 }
