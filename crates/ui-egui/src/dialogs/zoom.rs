@@ -17,15 +17,15 @@ pub(super) fn zoom(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: 
     let cur = d.values.get("preset").and_then(Json::as_str).unwrap_or("custom").to_string();
     ui.label(egui::RichText::new(lang.tr("Magnification")).strong());
     for (val, text) in ZOOM_PRESETS {
-        if ui.radio(cur == val, text).clicked() {
+        if crate::rtl::radio(ui, cur == val, text).clicked() {
             d.set_value("preset", json!(val));
         }
     }
-    if ui.radio(cur == "fit", lang.tr("Fit selection")).clicked() {
+    if crate::rtl::radio(ui, cur == "fit", lang.tr("Fit selection")).clicked() {
         d.set_value("preset", json!("fit"));
     }
     ui.horizontal(|ui| {
-        if ui.radio(cur == "custom", format!("{}:", lang.tr("Custom"))).clicked() {
+        if crate::rtl::radio(ui, cur == "custom", format!("{}:", lang.tr("Custom"))).clicked() {
             d.set_value("preset", json!("custom"));
         }
         // Whole percentages, as Excel shows them; the engine clamps to 10..400 as well.

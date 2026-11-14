@@ -25,6 +25,7 @@ const ACCOUNTING_SYMBOLS: &[(&str, &str)] = &[
 
 /// Draws the Home tab: clipboard/paste menu, font, alignment, number, style, cell and editing commands with keytips.
 pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
     let t = Tokens::get(ui.ctx());
     let st = active_style(app);
     // Clipboard
@@ -56,7 +57,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
         data.insert_temp(anchor_id, anchored);
         anchored
     });
-    let mut paste_popup = egui::Popup::context_menu(&paste);
+    let mut paste_popup = crate::rtl::context_menu_popup(&paste);
     if anchored {
         paste_popup = paste_popup.anchor(&paste);
     }
@@ -79,7 +80,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         let __k = icon_button(ui, Icon::Cut, t.text, "Cut", vec2(26.0, 23.0));
         control_keytip(app, ui, &__k, "edit.cut");
         if __k.clicked() {
@@ -106,7 +107,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui);
     // Font
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         ui.horizontal(|ui| {
             font_combo(app, ui, &st);
             size_combo(app, ui, &st);
@@ -137,7 +138,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             if u {
                 act(app, "home.underline", json!({}));
             }
-            egui::Popup::menu(&ua).show(|ui| {
+            crate::rtl::menu(&ua).show(|ui| {
                 menu_items(
                     app,
                     ui,
@@ -162,7 +163,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             // or Esc changes the prefix, which closes it again (`ribbon_keys`).
             let prefix = app.keytips.prefix().unwrap_or_default().to_owned();
             let keyed = keytip_table::opens_menu(&prefix, "home.borders");
-            egui::Popup::menu(&ba).open_memory(popup_command(keyed, ba.clicked())).show(|ui| {
+            crate::rtl::menu(&ba).open_memory(popup_command(keyed, ba.clicked())).show(|ui| {
                 for (label, preset) in [
                     ("Bottom Border", "bottom"),
                     ("Top Border", "top"),
@@ -189,7 +190,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                     }
                 }
                 ui.separator();
-                let more = ui.button("More Borders…");
+                let more = ui.button(lang.tr("More Borders…"));
                 if let Some(sequence) = keytip_table::item_letter(&prefix, "dialog:formatCells") {
                     keytip(app, ui, sequence, egui::pos2(more.rect.right() - 10.0, more.rect.center().y));
                 }
@@ -205,7 +206,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                 act(app, "home.fillColor", json!({"color": fill}));
             }
             let forced = invoke(app, "home.fillColor");
-            egui::Popup::menu(&fa)
+            crate::rtl::menu(&fa)
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .open_memory(popup_command(forced, fa.clicked()))
                 .show(|ui| {
@@ -225,7 +226,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                 act(app, "home.fontColor", json!({"color": fc}));
             }
             let forced = invoke(app, "home.fontColor");
-            egui::Popup::menu(&ca)
+            crate::rtl::menu(&ca)
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .open_memory(popup_command(forced, ca.clicked()))
                 .show(|ui| {
@@ -241,7 +242,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui);
     // Alignment
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         ui.horizontal(|ui| {
             for (icon, v, id, tip) in [
                 (Icon::AlignTop, VAlign::Top, "home.alignTop", "Top Align"),
@@ -257,7 +258,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             let o = small_button(ui, Icon::Orientation, "", "Orientation", true);
             control_keytip(app, ui, &o, "home.orientation");
             let forced_o = invoke(app, "home.orientation");
-            egui::Popup::menu(&o).open_memory(popup_command(forced_o, o.clicked())).show(|ui| {
+            crate::rtl::menu(&o).open_memory(popup_command(forced_o, o.clicked())).show(|ui| {
                 menu_items(
                     app,
                     ui,
@@ -278,7 +279,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             if wrap.clicked() {
                 act(app, "home.wrapText", json!({}));
             }
-            ui.label(egui::RichText::new(app.ui.language.tr("Wrap Text")).font(theme::ui_font(12.5)));
+            ui.label(egui::RichText::new(lang.tr("Wrap Text")).font(theme::ui_font(12.5)));
         });
         ui.horizontal(|ui| {
             for (icon, h, id, tip) in [
@@ -309,7 +310,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             if m.clicked() {
                 act(app, "home.mergeCenter", json!({}));
             }
-            egui::Popup::menu(&ma).show(|ui| {
+            crate::rtl::menu(&ma).show(|ui| {
                 menu_items(
                     app,
                     ui,
@@ -325,7 +326,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui);
     // Number
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         number_combo(app, ui, &st);
         ui.horizontal(|ui| {
             let (c, ca) = split_button(ui, Icon::Currency, None, "Accounting Number Format");
@@ -333,7 +334,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             if c {
                 act(app, "home.accounting", json!({}));
             }
-            egui::Popup::menu(&ca).show(|ui| {
+            crate::rtl::menu(&ca).show(|ui| {
                 let mut items: Vec<_> = ACCOUNTING_SYMBOLS.iter().map(|(label, code)| (*label, "home.numberFormat", json!({"code": code}))).collect();
                 items.push(("-", "", json!(null)));
                 items.push(("More Accounting Formats…", "dialog:formatCells", json!({"tab": "Number"})));
@@ -365,16 +366,16 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     // Styles
     let cf = big_button(ui, Icon::CondFormat, "Conditional\nFormatting", "Conditional Formatting", true);
     anchor_keytip(app, ui, &cf, &["home.conditionalFormat", "home.manageRules", "home.clearRules"]);
-    egui::Popup::menu(&cf).show(|ui| cf_menu(app, ui));
+    crate::rtl::menu(&cf).show(|ui| cf_menu(app, ui));
     let ft = big_button(ui, Icon::FormatTable, "Format\nas Table", "Format as Table", true);
     anchor_keytip(app, ui, &ft, &["table.style"]);
-    egui::Popup::menu(&ft).show(|ui| table_gallery(app, ui, "home.formatAsTable"));
+    crate::rtl::menu(&ft).show(|ui| table_gallery(app, ui, "home.formatAsTable"));
     let cs = big_button(ui, Icon::CellStyles, "Cell\nStyles", "Cell Styles", true);
     anchor_keytip(app, ui, &cs, &["home.newCellStyle"]);
-    egui::Popup::menu(&cs).show(|ui| cell_style_gallery(app, ui));
+    crate::rtl::menu(&cs).show(|ui| cell_style_gallery(app, ui));
     sep(ui);
     // Cells
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         let ins = small_button(ui, Icon::Insert, "Insert", "Insert", true);
         for sequence in keytip_table::group_extension(
             app.keytips.prefix().unwrap_or_default(),
@@ -382,7 +383,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
         ) {
             keytip(app, ui, sequence, ins.rect.center_bottom());
         }
-        egui::Popup::menu(&ins).show(|ui| {
+        crate::rtl::menu(&ins).show(|ui| {
             menu_items(
                 app,
                 ui,
@@ -401,7 +402,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
         ) {
             keytip(app, ui, sequence, del.rect.center_bottom());
         }
-        egui::Popup::menu(&del).show(|ui| {
+        crate::rtl::menu(&del).show(|ui| {
             menu_items(
                 app,
                 ui,
@@ -438,7 +439,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             keytip(app, ui, sequence, fmt.rect.center_bottom());
         }
         let format_keys = matches!(app.keytips.prefix(), Some("HO" | "OC"));
-        let mut format_popup = egui::Popup::menu(&fmt);
+        let mut format_popup = crate::rtl::menu(&fmt);
         if format_keys {
             format_popup = format_popup.open_memory(egui::SetOpenCommand::Bool(true));
         }
@@ -473,14 +474,14 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui);
     // Editing
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         ui.horizontal(|ui| {
             let (s, sa) = split_button(ui, Icon::Sum, None, "AutoSum");
             control_keytip(app, ui, &sa, "formulas.autoSum");
             if s {
                 act(app, "formulas.autoSum", json!({}));
             }
-            egui::Popup::menu(&sa).show(|ui| crate::function_library::auto_sum_menu(app, ui));
+            crate::rtl::menu(&sa).show(|ui| crate::function_library::auto_sum_menu(app, ui));
         });
         let fill = small_button(ui, Icon::FillDown, "", "Fill", true);
         for sequence in keytip_table::group_extension(
@@ -489,7 +490,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
         ) {
             keytip(app, ui, sequence, fill.rect.center_bottom());
         }
-        egui::Popup::menu(&fill).show(|ui| {
+        crate::rtl::menu(&fill).show(|ui| {
             menu_items(
                 app,
                 ui,
@@ -510,7 +511,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
         ) {
             keytip(app, ui, sequence, clear.rect.center_bottom());
         }
-        egui::Popup::menu(&clear).show(|ui| {
+        crate::rtl::menu(&clear).show(|ui| {
             menu_items(
                 app,
                 ui,
@@ -531,7 +532,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     ) {
         keytip(app, ui, sequence, sf.rect.center_bottom());
     }
-    egui::Popup::menu(&sf).show(|ui| {
+    crate::rtl::menu(&sf).show(|ui| {
         menu_items(
             app,
             ui,
@@ -553,7 +554,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     ) {
         keytip(app, ui, sequence, fs.rect.center_bottom());
     }
-    egui::Popup::menu(&fs).show(|ui| {
+    crate::rtl::menu(&fs).show(|ui| {
         menu_items(
             app,
             ui,
@@ -701,23 +702,24 @@ fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
 }
 
 fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
-    ui.menu_button("Highlight Cells Rules", |ui| {
+    let lang = app.ui.language;
+    ui.menu_button(lang.tr("Highlight Cells Rules"), |ui| {
         for (label, op) in [("Greater Than…", "greater"), ("Less Than…", "less"), ("Between…", "between"), ("Equal To…", "equal")] {
-            if ui.button(label).clicked() {
+            if ui.button(lang.tr(label)).clicked() {
                 app.open_dialog("cfQuick", json!({"type": "cellIs", "operator": op, "title": label}));
             }
         }
-        if ui.button("Text that Contains…").clicked() {
+        if ui.button(lang.tr("Text that Contains…")).clicked() {
             app.open_dialog("cfQuick", json!({"type": "containsText", "title": "Text that Contains"}));
         }
-        if ui.button("A Date Occurring…").clicked() {
+        if ui.button(lang.tr("A Date Occurring…")).clicked() {
             app.open_dialog("cfQuick", json!({"type": "timePeriod", "title": "A Date Occurring"}));
         }
-        if ui.button("Duplicate Values…").clicked() {
+        if ui.button(lang.tr("Duplicate Values…")).clicked() {
             act(app, "home.conditionalFormat", json!({"rule": {"type": "duplicate"}}));
         }
     });
-    ui.menu_button("Top/Bottom Rules", |ui| {
+    ui.menu_button(lang.tr("Top/Bottom Rules"), |ui| {
         menu_items(
             app,
             ui,
@@ -731,16 +733,16 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    ui.menu_button("Data Bars", |ui| {
+    ui.menu_button(lang.tr("Data Bars"), |ui| {
         for (label, c) in
             [("Blue", "#638EC6"), ("Green", "#63BE7B"), ("Red", "#F8696B"), ("Orange", "#FFB628"), ("Light Blue", "#008AEF"), ("Purple", "#D6007B")]
         {
-            if ui.button(label).clicked() {
+            if ui.button(lang.tr(label)).clicked() {
                 act(app, "home.conditionalFormat", json!({"rule": {"type": "dataBar", "color": c}}));
             }
         }
     });
-    ui.menu_button("Color Scales", |ui| {
+    ui.menu_button(lang.tr("Color Scales"), |ui| {
         for (label, cols) in [
             ("Green - Yellow - Red", vec!["#63BE7B", "#FFEB84", "#F8696B"]),
             ("Red - Yellow - Green", vec!["#F8696B", "#FFEB84", "#63BE7B"]),
@@ -749,12 +751,12 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ("White - Green", vec!["#FCFCFF", "#63BE7B"]),
             ("White - Red", vec!["#FCFCFF", "#F8696B"]),
         ] {
-            if ui.button(label).clicked() {
+            if ui.button(lang.tr(label)).clicked() {
                 act(app, "home.conditionalFormat", json!({"rule": {"type": "colorScale", "colors": cols}}));
             }
         }
     });
-    ui.menu_button("Icon Sets", |ui| {
+    ui.menu_button(lang.tr("Icon Sets"), |ui| {
         for (label, set) in [
             ("3 Arrows", "3Arrows"),
             ("3 Traffic Lights", "3TrafficLights1"),
@@ -763,16 +765,16 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ("5 Arrows", "5Arrows"),
             ("5 Quarters", "5Quarters"),
         ] {
-            if ui.button(label).clicked() {
+            if ui.button(lang.tr(label)).clicked() {
                 act(app, "home.conditionalFormat", json!({"rule": {"type": "iconSet", "set": set}}));
             }
         }
     });
     ui.separator();
-    if ui.button("New Rule…").clicked() {
+    if ui.button(lang.tr("New Rule…")).clicked() {
         app.open_dialog("cfQuick", json!({"type": "expression", "title": "New Formatting Rule"}));
     }
-    ui.menu_button("Clear Rules", |ui| {
+    ui.menu_button(lang.tr("Clear Rules"), |ui| {
         menu_items(
             app,
             ui,
@@ -782,7 +784,7 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    if ui.button("Manage Rules…").clicked() {
+    if ui.button(lang.tr("Manage Rules…")).clicked() {
         app.open_dialog("manageRules", json!({}));
     }
 }

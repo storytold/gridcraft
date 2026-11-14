@@ -711,8 +711,13 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
             Drag::ResizeCol { col, start, orig, to } => {
                 let w = nan_safe_size(orig + (p.x - start) / geo.z);
-                app.toast =
-                    Some((format!("Width: {:.2} ({} pixels)", gridcraft_engine::cmd::format::points_to_chars(w as f64), w.round()), crate::now_ms()));
+                app.toast = Some((
+                    crate::i18n::current(&input.context).tr_with(
+                        "Width: {width} ({pixels} pixels)",
+                        &[("width", &format!("{:.2}", gridcraft_engine::cmd::format::points_to_chars(w as f64))), ("pixels", &w.round().to_string())],
+                    ),
+                    crate::now_ms(),
+                ));
                 // Preview on the dragged column only; the release applies it to the selection. A
                 // rejected size leaves the last shown preview (and `to`) as it was.
                 let ok = app.session.run("home.columnWidth", json!({"cols": RangeRef::cols(col, col).a1(), "width": w.round()})).is_ok();
@@ -721,7 +726,13 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
             Drag::ResizeRow { row, start, orig, to } => {
                 let h = nan_safe_size(orig + (p.y - start) / geo.z);
-                app.toast = Some((format!("Height: {:.2} ({} pixels)", h * 0.75, h.round()), crate::now_ms()));
+                app.toast = Some((
+                    crate::i18n::current(&input.context).tr_with(
+                        "Height: {height} ({pixels} pixels)",
+                        &[("height", &format!("{:.2}", h * 0.75)), ("pixels", &h.round().to_string())],
+                    ),
+                    crate::now_ms(),
+                ));
                 let ok = app.session.run("home.rowHeight", json!({"rows": format!("{}:{}", row + 1, row + 1), "height": h.round()})).is_ok();
                 coalesce_resize_undo(app);
                 app.grid.drag = Drag::ResizeRow { row, start, orig, to: if ok { Some(h) } else { to } };

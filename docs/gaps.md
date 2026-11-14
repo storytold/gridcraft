@@ -54,17 +54,13 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
 ### 5. Text in non-Latin scripts doesn't render or export (L)
-- **Missing:** cross-platform script coverage, Devanagari/Thai shaping verification, non-Latin PDF and Arabic UI layout.
-- **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32); #142
-  (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora). Arabic shared shaping/bidi,
-  editing and cell Context/LTR/RTL now have focused regressions and full gates. Arabic font
-  delivery and PDF output are separate PRs; other script shaping still needs verification.
-- **Missing:** CJK font fallback, complex shaping (Arabic, Devanagari, Thai), bidi, non-Latin PDF.
+- **Missing:** CJK font fallback, Devanagari and Thai shaping verification, non-Latin PDF.
 - **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32), and for
-  Arabic (system, fontconfig and craft-fonts faces); a UI font with Arabic of its own (DejaVu Sans
-  in the Flatpak) still draws interface Arabic ahead of fontconfig's choice (#229); #142
-  (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora); no shaping for Arabic or
-  Devanagari; PDF writer uses 14 standard fonts only.
+  Arabic (system, fontconfig and craft-fonts faces); Arabic has shared shaping and bidi, editing and
+  per-cell Context/LTR/RTL reading direction, and the Arabic interface (`ar`) is laid out right to
+  left and mirrored; a UI font with Arabic of its own (DejaVu Sans in the Flatpak) still draws
+  interface Arabic ahead of fontconfig's choice (#229); #142 (Chinese text) awaits confirmation; #54
+  (symbols as boxes on Fedora); Devanagari has no shaping; PDF writer uses 14 standard fonts only.
 - **Impact:** blocks most of the world's users even with an English UI.
 - **Estimate:** 12–20 h. [localization-parity.md](localization-parity.md)
 
