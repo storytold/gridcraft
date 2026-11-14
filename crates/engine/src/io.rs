@@ -1040,61 +1040,105 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
+/// Creates an exclusively owned temporary sibling and restores the destination's group and permissions.
+#[cfg(not(target_arch = "wasm32"))]
+fn create_save_temp(path: &std::path::Path, prior: Option<&std::fs::Metadata>) -> std::io::Result<tempfile::NamedTempFile> {
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".gridcraft-save-").suffix(".sctmp");
+    #[cfg(unix)]
+    if prior.is_some() {
+        use std::os::unix::fs::PermissionsExt;
+        // The temporary file has the writer's group until fchown succeeds; prevent
+        // that group from opening the file before its original group is restored.
+        builder.permissions(std::fs::Permissions::from_mode(0o600));
+    }
+    let temp = builder.tempfile_in(parent)?;
+    if let Some(metadata) = prior {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let file = temp.as_file();
+            let _ = std::os::unix::fs::fchown(file, None, Some(metadata.gid()));
+            let group_kept = file.metadata()?.gid() == metadata.gid();
+            // If the original group cannot be restored, never grant its access
+            // bits to the temporary file's different group.
+            file.set_permissions(std::fs::Permissions::from_mode(restored_mode(metadata.mode(), group_kept)))?;
+        }
+        #[cfg(not(unix))]
+        let _ = temp.as_file().set_permissions(metadata.permissions());
+    }
+    Ok(temp)
+}
+
+/// Reads existing attributes before a Windows save, retrying temporary access conflicts.
+#[cfg(windows)]
+fn save_metadata(path: &str) -> Result<Option<std::fs::Metadata>> {
+    let mut delays = [10, 25, 50, 100].into_iter();
+    loop {
+        match std::fs::metadata(path) {
+            Ok(metadata) => return Ok(Some(metadata)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if matches!(error.raw_os_error(), Some(5 | 32 | 33)) => {
+                let Some(delay_ms) = delays.next() else {
+                    return Err(EngineError::Other(format!("{path}: could not read existing file attributes: {error}")));
+                };
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            }
+            Err(error) => return Err(EngineError::Other(format!("{path}: could not read existing file attributes: {error}"))),
+        }
+    }
+}
+
+/// Writes a complete file through an owned temporary sibling before replacing the destination.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     script_sandbox_check(path)?;
-    // Write to a temporary file, then rename: a crash never leaves a half-written workbook.
-    // The temporary file is created exclusively, so an existing file or symlink at that
-    // path (planted by another local user) makes the save fail instead of truncating the
-    // link's target; and it inherits the destination's access restrictions, so saving a
-    // private workbook doesn't widen who can read it.
-    let tmp = format!("{path}.sctmp");
-    let prior_meta = std::fs::metadata(path).ok();
-    let prior = prior_meta.as_ref().map(std::fs::Metadata::permissions);
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    // Over an existing file the replacement starts owner-only, whatever the umask: its group is
-    // still the saving user's primary one until it is changed below, and a member of that group
-    // must not be able to open it (and keep the descriptor) before then.
-    #[cfg(unix)]
-    if prior.is_some() {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
+    // An exclusively created, unique sibling prevents stale files from blocking later
+    // saves. RAII removes only our own temporary file if writing or replacement fails;
+    // an open failure never removes somebody else's path. A crash may leave this unique
+    // file behind, but cannot leave a partially written destination workbook.
+    #[cfg(windows)]
+    let metadata = save_metadata(path)?;
+    #[cfg(not(windows))]
+    let metadata = std::fs::metadata(path).ok();
+    #[cfg(windows)]
+    let prior = metadata.as_ref().map(std::fs::Metadata::permissions);
+    let mut temp = create_save_temp(std::path::Path::new(path), metadata.as_ref()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    temp.write_all(bytes).and_then(|()| temp.flush()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    #[cfg(windows)]
+    {
+        // Antivirus and indexing software can briefly hold the destination without
+        // sharing delete access. Retain ownership of the temp across bounded retries.
+        let mut temp = temp;
+        let mut delays = [10, 25, 50, 100].into_iter();
+        let saved = loop {
+            match temp.persist(path) {
+                Ok(file) => break file,
+                // Windows may report access denied as well as sharing/lock
+                // violations while a destination is temporarily held open.
+                Err(e) if matches!(e.error.raw_os_error(), Some(5 | 32 | 33)) => {
+                    let Some(delay_ms) = delays.next() else {
+                        return Err(EngineError::Other(format!("{path}: {}", e.error)));
+                    };
+                    temp = e.file;
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                }
+                Err(e) => return Err(EngineError::Other(format!("{path}: {}", e.error))),
+            }
+        };
+        if let Some(permissions) = prior {
+            // tempfile clears Windows attributes during persist. Restore through
+            // the saved handle so a concurrent replacement is not modified.
+            saved
+                .set_permissions(permissions)
+                .map_err(|e| EngineError::Other(format!("{path}: saved, but could not restore file attributes: {e}")))?;
+        }
+        Ok(())
     }
-    let mut f = opts.open(&tmp).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        EngineError::Other(format!("{path}: {e}"))
-    })?;
-    // The replacement belongs to the saving user's primary group: restore the old file's group and
-    // then its mode. When the group can't be restored its access is dropped rather than handed to a
-    // different group; failing to read that back is a failed save.
-    #[cfg(unix)]
-    if let Some(m) = &prior_meta {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        let _ = std::os::unix::fs::fchown(&f, None, Some(m.gid()));
-        let group_kept = f.metadata().map(|now| now.gid() == m.gid()).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
-            EngineError::Other(format!("{path}: {e}"))
-        })?;
-        // Best effort: a file system that can't change modes keeps the owner-only one. Without the
-        // group, the old owner and other bits are kept and the group, setuid and setgid bits dropped.
-        let _ = f.set_permissions(std::fs::Permissions::from_mode(restored_mode(m.mode(), group_kept)));
-    }
-    #[cfg(not(unix))]
-    if let Some(p) = &prior {
-        let _ = f.set_permissions(p.clone());
-    }
-    f.write_all(bytes).and_then(|()| f.flush()).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        EngineError::Other(format!("{path}: {e}"))
-    })?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        // A write or rename that fails (full disk, the workbook locked by another app) leaves
-        // no temporary file beside the user's workbook.
-        let _ = std::fs::remove_file(&tmp);
-        EngineError::Other(format!("{path}: {e}"))
-    })
+    #[cfg(not(windows))]
+    temp.persist(path).map(|_| ()).map_err(|e| EngineError::Other(format!("{path}: {}", e.error)))
 }
 
 /// The mode a saved file gets from the file it replaces (`old`): all of it when its group was

@@ -18,34 +18,218 @@ fn copied(wb: &Workbook, range: &str) -> String {
     range_html(wb, 0, r, &crate::display::range_text(wb, 0, r)).unwrap()
 }
 
+/// A stale legacy symlink and its target remain untouched when a workbook is saved.
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+#[test]
+fn save_preserves_a_preexisting_legacy_temp_symlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let victim = dir.path().join("victim.txt");
+    std::fs::write(&victim, b"original").unwrap();
+    let dest = dir.path().join("book.xlsx");
+    let temp = dir.path().join("book.xlsx.sctmp");
+    std::os::unix::fs::symlink(&victim, &temp).unwrap();
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(std::fs::read(&victim).unwrap(), b"original");
+    assert!(std::fs::symlink_metadata(&temp).unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+}
+
+/// Repeated saves leave a pre-existing legacy temporary file untouched.
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(unix)]
 #[test]
-fn save_fails_upfront_when_the_temp_name_is_taken() {
-    // Another local user who can write the directory must not be able to point the
-    // save's predictable temporary name at their own file: creation is exclusive.
-    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-temp-name-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let victim = dir.join("victim.txt");
-    std::fs::write(&victim, b"original").unwrap();
-    let dest = dir.join("book.xlsx");
-    std::os::unix::fs::symlink(&victim, dir.join("book.xlsx.sctmp")).unwrap();
-    let err = write_file(dest.to_str().unwrap(), b"new").unwrap_err();
-    assert_eq!(std::fs::read(&victim).unwrap(), b"original");
-    assert!(!dir.join("book.xlsx").exists(), "{err}");
-    let _ = std::fs::remove_dir_all(&dir);
+fn save_preserves_a_preexisting_legacy_temp_file_and_can_save_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let temp = dir.path().join("book.xlsx.sctmp");
+    std::fs::write(&temp, b"original").unwrap();
+    let dest = dir.path().join("book.xlsx");
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(std::fs::read(&temp).unwrap(), b"original");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+    write_file(dest.to_str().unwrap(), b"newer").unwrap();
+    assert_eq!(std::fs::read(&temp).unwrap(), b"original");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"newer");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2, "successful saves leave no new temp files");
 }
 
+/// An abandoned unique temp is preserved and a failed replacement removes only its own temp.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn save_ignores_an_abandoned_unique_temp_and_cleans_failed_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("book.xlsx");
+    let abandoned = create_save_temp(&dest, None).unwrap();
+    assert_eq!(abandoned.path().parent(), Some(dir.path()));
+    let (mut file, abandoned_path) = abandoned.keep().unwrap();
+    use std::io::Write;
+    file.write_all(b"abandoned").unwrap();
+    drop(file);
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(std::fs::read(&abandoned_path).unwrap(), b"abandoned");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+    let blocked = dir.path().join("directory.xlsx");
+    std::fs::create_dir(&blocked).unwrap();
+    std::fs::write(blocked.join("marker"), b"original").unwrap();
+    assert!(write_file(blocked.to_str().unwrap(), b"new").is_err());
+    assert_eq!(std::fs::read(blocked.join("marker")).unwrap(), b"original");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3, "failed persist cleans only its owned temp");
+}
+
+/// Concurrent saves leave one complete result and no temporary files.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn concurrent_saves_leave_one_complete_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("book.xlsx");
+    let path = dest.to_str().unwrap().to_owned();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let handles: Vec<_> = (*b"ab")
+        .into_iter()
+        .map(|byte| {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let bytes = vec![byte; 256 * 1024];
+                barrier.wait();
+                write_file(&path, &bytes)
+            })
+        })
+        .collect();
+    barrier.wait();
+    for handle in handles {
+        handle.join().unwrap().unwrap();
+    }
+    let bytes = std::fs::read(dest).unwrap();
+    assert_eq!(bytes.len(), 256 * 1024);
+    assert!(bytes.iter().all(|byte| *byte == b'a') || bytes.iter().all(|byte| *byte == b'b'));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+/// A denied directory write leaves the destination unchanged.
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+#[test]
+fn save_to_read_only_directory_fails_without_changing_existing_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("book.xlsx");
+    std::fs::write(&dest, b"original").unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+    // Privileged test runners can bypass directory permissions; do not claim to
+    // exercise the denied-write path when the runner can create files there.
+    let probe = dir.path().join("permission-probe");
+    let bypasses_permissions = std::fs::write(&probe, b"probe").is_ok();
+    let result = if bypasses_permissions { None } else { Some(write_file(dest.to_str().unwrap(), b"new")) };
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    if let Some(result) = result {
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"original");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+}
+
+/// Windows attribute that opts a file out of content indexing.
+#[cfg(windows)]
+const FILE_ATTRIBUTE_NOT_CONTENT_INDEXED: u32 = 0x2000;
+
+/// Creates a writable Windows file that opts out of content indexing.
+#[cfg(windows)]
+fn create_unindexed_file(path: &std::path::Path) {
+    use std::os::windows::fs::MetadataExt;
+    std::fs::write(path, b"original").unwrap();
+    let status = std::process::Command::new("attrib.exe").arg("+I").arg(path).status().unwrap();
+    assert!(status.success(), "failed to set content-indexing opt-out: {status}");
+    assert_ne!(std::fs::metadata(path).unwrap().file_attributes() & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, 0);
+}
+
+/// A successful replacement retains the original file's content-indexing opt-out.
+#[cfg(windows)]
+#[test]
+fn save_preserves_windows_content_index_opt_out() {
+    use std::os::windows::fs::MetadataExt;
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("book.xlsx");
+    create_unindexed_file(&dest);
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+    assert_ne!(std::fs::metadata(&dest).unwrap().file_attributes() & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, 0);
+}
+
+/// Replacing a hidden Windows file retains its hidden attribute without adding an indexing opt-out.
+#[cfg(windows)]
+#[test]
+fn save_preserves_windows_hidden_attribute() {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("book.xlsx");
+    std::fs::write(&dest, b"original").unwrap();
+    let status = std::process::Command::new("attrib.exe").arg("+H").arg(&dest).status().unwrap();
+    assert!(status.success(), "failed to set hidden attribute: {status}");
+    let prior = std::fs::metadata(&dest).unwrap().file_attributes();
+    assert_ne!(prior & FILE_ATTRIBUTE_HIDDEN, 0);
+    assert_eq!(prior & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, 0);
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+    let after = std::fs::metadata(&dest).unwrap().file_attributes();
+    assert_ne!(after & FILE_ATTRIBUTE_HIDDEN, 0);
+    assert_eq!(after & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, 0);
+}
+
+/// A temporarily locked destination can be replaced without losing its indexing opt-out.
+#[cfg(windows)]
+#[test]
+fn save_retries_a_temporarily_locked_destination() {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("book.xlsx");
+    create_unindexed_file(&dest);
+    let lock = std::fs::OpenOptions::new().read(true).share_mode(0).open(&dest).unwrap();
+    let path = dest.to_str().unwrap().to_owned();
+    let writer = std::thread::spawn(move || write_file(&path, b"new"));
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    drop(lock);
+    writer.join().unwrap().unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+    assert_ne!(std::fs::metadata(&dest).unwrap().file_attributes() & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, 0);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+/// An isolated restrictive umask does not remove bits from the destination mode.
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
+#[test]
+fn save_preserves_mode_despite_restrictive_umask() {
+    use std::os::unix::fs::PermissionsExt;
+    const CHILD: &str = "GRIDCRAFT_SAVE_UMASK_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // Isolate the process-wide umask so parallel tests cannot observe it.
+        let status = std::process::Command::new("sh")
+            .args(["-c", "umask 077; exec \"$@\"", "sh"])
+            .arg(std::env::current_exe().unwrap())
+            .args(["--exact", "io::tests::save_preserves_mode_despite_restrictive_umask"])
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "umask regression subprocess failed: {status}");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("shared.xlsx");
+    std::fs::write(&dest, b"original").unwrap();
+    std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o664)).unwrap();
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+    assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777, 0o664);
+}
+
+/// Existing Unix restrictions are retained and new files are created conservatively.
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(unix)]
 #[test]
 fn save_keeps_the_destination_access_restrictions() {
     use std::os::unix::fs::PermissionsExt;
-    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-permissions-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let dest = dir.join("private.xlsx");
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("private.xlsx");
     std::fs::write(&dest, b"v1").unwrap();
     std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600)).unwrap();
     write_file(dest.to_str().unwrap(), b"v2").unwrap();
@@ -58,13 +242,64 @@ fn save_keeps_the_destination_access_restrictions() {
         write_file(dest.to_str().unwrap(), b"v3").unwrap();
         assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777, old);
     }
-    assert!(!dir.join("private.xlsx.sctmp").exists());
+    assert!(!dir.path().join("private.xlsx.sctmp").exists());
     // And a brand-new file is created with the restrictive, not permissive, default.
-    let fresh = dir.join("new.xlsx");
+    let fresh = dir.path().join("new.xlsx");
     write_file(fresh.to_str().unwrap(), b"v").unwrap();
     let mode = std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
     assert!(mode & 0o022 == 0, "mode {mode:o}");
-    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A replacement keeps a different original group when the process can assign that group.
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+#[test]
+fn save_restores_a_different_destination_group() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("shared.xlsx");
+    std::fs::write(&dest, b"original").unwrap();
+    let file = std::fs::File::open(&dest).unwrap();
+    let original_gid = file.metadata().unwrap().gid();
+    let groups = std::process::Command::new("id").arg("-G").output().unwrap();
+    assert!(groups.status.success());
+    let other_gid = String::from_utf8_lossy(&groups.stdout).split_whitespace().filter_map(|s| s.parse::<u32>().ok()).find(|gid| *gid != original_gid);
+    let Some(other_gid) = other_gid else {
+        eprintln!("skipped: no alternative group is available");
+        return;
+    };
+    if std::os::unix::fs::fchown(&file, None, Some(other_gid)).is_err() {
+        eprintln!("skipped: this runner cannot assign the alternative group");
+        return;
+    }
+    drop(file);
+    std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o640)).unwrap();
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    let saved = std::fs::metadata(&dest).unwrap();
+    assert_eq!(saved.gid(), other_gid);
+    assert_eq!(saved.mode() & 0o777, 0o640);
+    assert_eq!(std::fs::read(dest).unwrap(), b"new");
+}
+
+/// If an original group cannot be assigned, the new file never grants its group access bits.
+#[cfg(target_os = "linux")]
+#[test]
+fn save_temp_drops_group_access_when_original_group_cannot_be_restored() {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(prior) = std::fs::metadata("/etc/passwd") else {
+        eprintln!("skipped: no usable reference file");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let probe = tempfile::tempfile_in(dir.path()).unwrap();
+    if probe.metadata().unwrap().gid() == prior.gid() || std::os::unix::fs::fchown(&probe, None, Some(prior.gid())).is_ok() {
+        eprintln!("skipped: this runner cannot demonstrate a denied group change");
+        return;
+    }
+    let temp = create_save_temp(&dir.path().join("book.xlsx"), Some(&prior)).unwrap();
+    let actual = temp.as_file().metadata().unwrap();
+    assert_ne!(actual.gid(), prior.gid());
+    assert_eq!(actual.mode() & 0o7777, restored_mode(prior.mode(), false));
+    assert_eq!(actual.mode() & 0o070, 0);
 }
 
 /// Without the old group, a saved file keeps the old owner and other bits and nothing for a group.
@@ -78,15 +313,13 @@ fn restored_mode_drops_the_group_and_special_bits_when_the_group_is_lost() {
     assert_eq!(super::restored_mode(0o104_755, false), 0o705, "setuid is dropped");
 }
 
+/// The native reader refuses directories and missing paths.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn open_refuses_directories_and_unknowable_lengths() {
-    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-open-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    assert!(read_file(dir.to_str().unwrap()).is_err(), "a directory is not a regular file");
-    assert!(read_file(dir.join("missing").to_str().unwrap()).is_err());
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = tempfile::tempdir().unwrap();
+    assert!(read_file(dir.path().to_str().unwrap()).is_err(), "a directory is not a regular file");
+    assert!(read_file(dir.path().join("missing").to_str().unwrap()).is_err());
 }
 
 #[test]
@@ -325,23 +558,20 @@ fn csv_and_text_open_read_day_first_dates_and_report_a_guessed_order() {
 }
 
 /// A save that can't be put in place (here a folder already has the workbook's name, as
-/// with a file another app holds locked) fails without leaving `<name>.sctmp` behind.
+/// with a file another app holds locked) fails without leaving any unique temporary file behind.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn failed_save_leaves_no_temporary_file() {
-    let dir = std::env::temp_dir().join(format!("gridcraft-write-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let blocked = dir.join("Book1.xlsx");
+    let dir = tempfile::tempdir().unwrap();
+    let blocked = dir.path().join("Book1.xlsx");
     std::fs::create_dir(&blocked).unwrap();
     assert!(write_file(blocked.to_str().unwrap(), b"workbook").is_err());
-    assert!(!dir.join("Book1.xlsx.sctmp").exists(), "the temporary file is removed");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1, "the temporary file is removed");
     // An ordinary save still works and leaves only the workbook.
-    let ok = dir.join("Book2.xlsx");
+    let ok = dir.path().join("Book2.xlsx");
     write_file(ok.to_str().unwrap(), b"workbook").unwrap();
     assert_eq!(std::fs::read(&ok).unwrap(), b"workbook");
-    assert!(!dir.join("Book2.xlsx.sctmp").exists());
-    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
 }
 
 /// While a script runs (#2178), file reads and writes are refused whatever command or
@@ -349,12 +579,10 @@ fn failed_save_leaves_no_temporary_file() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn script_sandbox_refuses_file_access_until_dropped() {
-    let dir = std::env::temp_dir().join(format!("gridcraft-sandbox-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let existing = dir.join("in.csv");
+    let dir = tempfile::tempdir().unwrap();
+    let existing = dir.path().join("in.csv");
     std::fs::write(&existing, b"a,b\n").unwrap();
-    let (existing, out) = (existing.to_string_lossy().to_string(), dir.join("out.xlsx").to_string_lossy().to_string());
+    let (existing, out) = (existing.to_string_lossy().to_string(), dir.path().join("out.xlsx").to_string_lossy().to_string());
     {
         let _outer = ScriptSandbox::enter();
         {
@@ -367,7 +595,6 @@ fn script_sandbox_refuses_file_access_until_dropped() {
     }
     assert_eq!(read_file(&existing).unwrap(), b"a,b\n");
     write_file(&out, b"ok").unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The guard's drop lowers the counter of the thread it runs on, so it must not move between threads:
