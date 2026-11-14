@@ -19,6 +19,7 @@ mod cf_rules_manager;
 mod chart_data_table;
 mod chart_resize;
 mod chart_source_layering;
+mod chart_text_font;
 mod clipboard;
 mod comments_pane;
 mod commit_after_pointing;

@@ -16,15 +16,25 @@ fn rgba(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
 }
 
+/// The font of a chart's text: the workbook theme's minor (body) font, which Excel gives every
+/// chart text that sets no font of its own (title, axes, legend, data labels).
+fn chart_font(wb: &Workbook) -> &str {
+    &wb.theme.minor_font
+}
+
+fn text_font(font: &str, size: f32, bold: bool) -> FontId {
+    FontId::new(size, theme::cell_family(font, bold, false))
+}
+
 struct EguiMeasure<'a> {
     painter: &'a Painter,
     z: f32,
+    font: &'a str,
 }
 
 impl gridcraft_chart::Measure for EguiMeasure<'_> {
     fn text_width(&self, text: &str, size: f32, bold: bool) -> f32 {
-        let font = if bold { theme::ui_bold(size * self.z) } else { theme::ui_font(size * self.z) };
-        self.painter.layout_no_wrap(text.to_string(), font, Color32::BLACK).size().x / self.z.max(0.01)
+        self.painter.layout_no_wrap(text.to_string(), text_font(self.font, size * self.z, bold), Color32::BLACK).size().x / self.z.max(0.01)
     }
 }
 
@@ -38,13 +48,14 @@ pub fn paint_chart(p: &Painter, rect: Rect, wb: &Workbook, sheet: usize, chart: 
     }
     let origin = rect.center() - vec2(w * z, h * z) / 2.0;
     let data = gridcraft_chart::resolve(wb, sheet, chart);
-    let m = EguiMeasure { painter: p, z };
+    let font = chart_font(wb);
+    let m = EguiMeasure { painter: p, z, font };
     let prims = gridcraft_chart::render(chart, &data, w, h, &m);
-    paint_prims(&p.with_clip_rect(rect.intersect(p.clip_rect())), origin, &prims, z);
+    paint_prims(&p.with_clip_rect(rect.intersect(p.clip_rect())), origin, &prims, z, font);
 }
 
-/// Paints chart primitives at `origin`, scaled by `z`.
-pub fn paint_prims(p: &Painter, origin: Pos2, prims: &[Prim], z: f32) {
+/// Paints chart primitives at `origin`, scaled by `z`, their text in `font`.
+pub fn paint_prims(p: &Painter, origin: Pos2, prims: &[Prim], z: f32, font: &str) {
     let pt = |x: f32, y: f32| pos2(origin.x + x * z, origin.y + y * z);
     for prim in prims {
         match prim {
@@ -121,8 +132,7 @@ pub fn paint_prims(p: &Painter, origin: Pos2, prims: &[Prim], z: f32) {
                 }
             }
             Prim::Text { x, y, text, size, color, bold, align, valign, rotation } => {
-                let font: FontId = if *bold { theme::ui_bold(size * z) } else { theme::ui_font(size * z) };
-                let galley = p.layout_no_wrap(text.clone(), font, rgba(*color));
+                let galley = p.layout_no_wrap(text.clone(), text_font(font, size * z, *bold), rgba(*color));
                 let sz = galley.size();
                 let ax = match align {
                     HAlign::Left => 0.0,
@@ -253,7 +263,7 @@ fn render_chart(p: &Painter, z: f32, wb: &Workbook, si: usize, ch: &gridcraft_en
     #[cfg(test)]
     tests::RENDERS.with(|c| c.set(c.get() + 1));
     let data = gridcraft_chart::resolve(wb, si, ch);
-    let m = EguiMeasure { painter: p, z };
+    let m = EguiMeasure { painter: p, z, font: chart_font(wb) };
     gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m)
 }
 
@@ -410,7 +420,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Wor
         p.rect_filled(r.translate(vec2(0.0, 1.5)), 2.0, Color32::from_black_alpha(18));
         p.rect_filled(r, 0.0, Tokens::get(p.ctx()).grid_bg);
         let prims = chart_prims(app, p, geo.z, wb, si, ci, ch);
-        paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
+        paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z, chart_font(wb));
         done(start, r);
     }
     paint_slicers(p, geo, wb, si, sh);
@@ -639,7 +649,7 @@ pub(crate) mod tests {
         // Fonts are ready from the second pass on.
         for _ in 0..2 {
             let mut out = ctx.run_ui(Default::default(), |ui| {
-                let m = EguiMeasure { painter: ui.painter(), z: 1.0 };
+                let m = EguiMeasure { painter: ui.painter(), z: 1.0, font: gridcraft_engine::model::DEFAULT_FONT };
                 let (short, long) = (m.text_width("iii…", 11.0, false), m.text_width("iiii\n…", 11.0, false));
                 checked = long < short;
             });
