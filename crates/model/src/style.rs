@@ -198,8 +198,9 @@ pub struct Font {
     #[serde(default = "default_minor")]
     pub minor: bool,
     /// Outlined (hollow) letters: an XLSX `<outline/>`. Kept and saved; GridCraft does not
-    /// draw it yet (the letters render solid).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    /// draw it yet (the letters render solid). Always serialized, like the other flags, so a
+    /// whole style sent back through `home.formatCells` (the Format Cells dialog) clears it.
+    #[serde(default)]
     pub outline: bool,
 }
 
@@ -507,8 +508,8 @@ mod tests {
         assert!(!t.get(StyleId(999)).font.bold);
     }
 
-    /// Two fonts differing only in outlined letters are different styles; JSON leaves the
-    /// flag out when off, and JSON saved before it existed reads as not outlined.
+    /// Two fonts differing only in outlined letters are different styles; JSON states the flag
+    /// even when off, and JSON saved before it existed reads as not outlined.
     #[test]
     fn outline_makes_a_distinct_style() -> Result<(), Box<dyn std::error::Error>> {
         let mut t = StyleTable::default();
@@ -516,8 +517,9 @@ mod tests {
         assert_ne!(outlined, StyleId::DEFAULT);
         assert_ne!(Font { outline: true, ..Font::default() }, Font::default());
         assert_eq!(t.derive(outlined, |s| s.font.outline = false), StyleId::DEFAULT);
-        let json = serde_json::to_value(Font::default())?;
-        assert!(json.get("outline").is_none());
+        let mut json = serde_json::to_value(Font::default())?;
+        assert_eq!(json.get("outline"), Some(&serde_json::Value::Bool(false)));
+        assert!(json.as_object_mut().ok_or("none")?.remove("outline").is_some());
         assert_eq!(serde_json::from_value::<Font>(json)?, Font::default());
         let on = serde_json::to_value(Font { outline: true, ..Font::default() })?;
         assert_eq!(on.get("outline"), Some(&serde_json::Value::Bool(true)));

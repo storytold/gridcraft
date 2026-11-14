@@ -197,6 +197,7 @@ fn read_font(c: &mut Cursor<'_, '_>) -> Option<(Font, u16)> {
     }
     f.italic = flags & 0x0002 != 0;
     f.strike = flags & 0x0008 != 0;
+    f.outline = flags & 0x0010 != 0;
     // Weights run 100-1000; Excel writes 400 for normal and 700 for bold.
     f.bold = weight >= 600;
     f.vert = match script {

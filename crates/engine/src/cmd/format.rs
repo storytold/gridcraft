@@ -879,7 +879,22 @@ mod tests {
         s.execute("home.formatCells", json!({"range": "A1", "style": {"font": {"outline": true}}})).unwrap();
         assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["font"]["outline"], true);
         s.execute("home.formatCells", json!({"range": "A1", "style": {"font": {"outline": false}}})).unwrap();
-        assert!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["font"].get("outline").is_none());
+        assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["font"]["outline"], false);
+    }
+
+    /// The Format Cells dialog sends the active cell's whole style to every selected cell, so a
+    /// non-outlined active cell must clear outline on the others, as it does bold.
+    #[test]
+    fn format_cells_whole_style_clears_outline_on_the_selection() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell": "A1", "input": "plain"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1", "input": "hollow"})).unwrap();
+        s.execute("home.formatCells", json!({"range": "B1", "style": {"font": {"outline": true, "bold": true}}})).unwrap();
+        let style = s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"].clone();
+        s.execute("home.formatCells", json!({"range": "A1:B1", "style": style})).unwrap();
+        let font = s.execute("cell.get", json!({"cell": "B1"})).unwrap()["style"]["font"].clone();
+        assert_eq!((font["bold"].clone(), font["outline"].clone()), (json!(false), json!(false)));
     }
 
     #[test]
