@@ -132,16 +132,11 @@ pub(super) fn display_text(
     (f.text, f.color.map(numfmt_color), f.numeric, f.fill)
 }
 
+/// Wrapped text keeps the same margins as one line, so the two sit alike in a row. Not clamped to
+/// the top: text taller than the row overflows upward (Bottom) or both ways (Center), and the cell's
+/// clip rect trims it, so Middle and Bottom stay distinct from Top.
 pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
-    let y_top = rect.top() + 1.5 * z;
-    // Not clamped to `y_top`: text taller than the row overflows upward (Bottom) or both ways
-    // (Center), and the cell's clip rect trims it, so Middle and Bottom stay distinct from Top.
-    let y_bottom = rect.bottom() - gh - 0.5 * z;
-    match valign {
-        VAlign::Top => y_top,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,
-        VAlign::Bottom => y_bottom,
-    }
+    cell_text_y(valign, rect, gh, z)
 }
 
 /// Bounds of the primary font's line boxes, excluding extra row height added only for fallbacks.
@@ -164,9 +159,17 @@ pub(crate) fn galley_baseline_bounds(galley: &egui::Galley) -> (f32, f32) {
     first.zip(last).unwrap_or((0.0, galley.size().y))
 }
 
+/// The line box as Excel places it, measured with Calibri: a pixel in from the row's edge, top or
+/// bottom. In a row too short for it the two simply overlap, so each keeps its side and the cell clips
+/// the rest. The caller adds the font's line gap (`fonts::line_gap`), which Excel has above the text.
 pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
-    let y_top = wrapped_cell_text_y(VAlign::Top, rect, gh, z);
-    wrapped_cell_text_y(valign, rect, gh, z).max(y_top)
+    let y_top = rect.top() + 1.0 * z;
+    let y_bottom = rect.bottom() - gh - 1.0 * z;
+    match valign {
+        VAlign::Top => y_top,
+        VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,
+        VAlign::Bottom => y_bottom,
+    }
 }
 
 /// Where to put a `TextShape` holding a galley of `size` turned by `angle` (egui radians, so

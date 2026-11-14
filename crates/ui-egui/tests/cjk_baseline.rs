@@ -110,11 +110,14 @@ fn mixed_script_wrapping_keeps_fixed_row_clips_alignment_and_editor_height() {
             assert_eq!(shape.galley.rows.len(), 2);
             assert!(clip.top() >= rect.top() && clip.bottom() <= rect.bottom(), "fixed-height cells clip their own text");
             let (text_top, text_bottom) = primary_text_bounds(&shape.galley);
-            let expected_top = match col {
-                0 => rect.top() + 1.5 * geo.z,
-                1 => rect.center().y - (text_bottom - text_top) / 2.0 + 0.5 * geo.z,
-                _ => rect.bottom() - (text_bottom - text_top) - 0.5 * geo.z,
-            };
+            // A pixel in from the row's edge, then down by the font's line gap, as in Excel.
+            let gap = gridcraft_ui_egui::fonts::line_gap(&shape.galley.job.sections[0].format.font_id);
+            let expected_top = gap
+                + match col {
+                    0 => rect.top() + geo.z,
+                    1 => rect.center().y - (text_bottom - text_top) / 2.0,
+                    _ => rect.bottom() - (text_bottom - text_top) - geo.z,
+                };
             assert!((shape.pos.y + text_top - expected_top).abs() < 1.0, "vertical alignment stays effective at {zoom}%");
         }
         app.begin_edit(None, false);

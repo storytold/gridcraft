@@ -180,6 +180,17 @@ fn filter_menu_uses_the_table_whose_header_was_clicked() {
     assert_eq!(filter_table_range(&sh, 1, 4), None);
 }
 
+/// The box sits a pixel in from either edge, and a row too short for it doesn't pull Bottom up to
+/// Top: in Excel the digits stay on their own side and the cell clips them.
+#[test]
+fn cell_text_keeps_its_side_of_a_short_row() {
+    let (gh, z) = (20.0, 1.0);
+    let rect = Rect::from_min_max(pos2(0.0, 100.0), pos2(100.0, 115.0));
+    assert_eq!(cell_text_y(VAlign::Top, rect, gh, z), 101.0);
+    assert_eq!(cell_text_y(VAlign::Bottom, rect, gh, z), 94.0);
+    assert_eq!(cell_text_y(VAlign::Center, rect, gh, z), 97.5);
+}
+
 /// The `("Label", "id")` keys written in `src`, without separators.
 fn menu_labels(src: &str) -> Vec<&str> {
     src.split("(\"").skip(1).filter_map(|rest| rest.split_once("\", \"").map(|(label, _)| label)).filter(|label| *label != "-").collect()
@@ -223,6 +234,24 @@ fn german_context_menus_have_no_two_items_alike() {
     // Only German changed: the header menu's Insert reads as the plain Insert everywhere else.
     for language in Language::ALL.into_iter().filter(|l| *l != Language::De) {
         assert_eq!(language.tr("Header Menu|Insert"), language.tr("Insert"), "{}", language.code());
+    }
+}
+
+/// From a report on #3435: Middle is the line box's midpoint at any zoom and row height, for one line
+/// and for wrapped text alike.
+#[test]
+fn middle_alignment_uses_the_cell_midpoint() {
+    for z in [0.8, 1.92, 3.2] {
+        for height in [8.0, 20.0, 40.0] {
+            let rect = Rect::from_min_size(pos2(17.3, 42.5), vec2(100.0 * z, height * z));
+            for gh in [12.25 * z, 31.5 * z] {
+                for align in [VAlign::Center, VAlign::Justify, VAlign::Distributed] {
+                    let y = cell_text_y(align, rect, gh, z);
+                    assert!((y + gh / 2.0 - rect.center().y).abs() < 0.001);
+                    assert!((y - wrapped_cell_text_y(align, rect, gh, z)).abs() < 0.001);
+                }
+            }
+        }
     }
 }
 
@@ -330,9 +359,9 @@ fn wrapped_cell_text_y_keeps_vertical_alignment_when_text_is_taller_than_the_row
     let y_center = wrapped_cell_text_y(VAlign::Center, rect, gh, z);
     let y_bottom = wrapped_cell_text_y(VAlign::Bottom, rect, gh, z);
     // Taller text overflows upward for Bottom and both ways for Center (the cell clips it).
-    assert!((y_top - 1.5 * z).abs() < 0.01, "Top leaves space inside the cell, got {y_top}");
-    assert!((y_center + gh / 2.0 - (rect.center().y + 0.5 * z)).abs() < 0.01, "Center follows the shared insets, got {y_center}");
-    assert!((y_bottom + gh - (rect.bottom() - 0.5 * z)).abs() < 0.01, "Bottom keeps the single-line inset, got {y_bottom}");
+    assert!((y_top - 1.0 * z).abs() < 0.01, "Top leaves a pixel inside the cell, got {y_top}");
+    assert!((y_center + gh / 2.0 - rect.center().y).abs() < 0.01, "Center follows the shared insets, got {y_center}");
+    assert!((y_bottom + gh - (rect.bottom() - 1.0 * z)).abs() < 0.01, "Bottom keeps the single-line inset, got {y_bottom}");
 }
 
 /// The screen box of a galley of `size` drawn at `pos` turned by `angle` about `pos`, as egui

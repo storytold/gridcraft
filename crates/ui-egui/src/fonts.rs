@@ -365,6 +365,8 @@ pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face
         }
         chain.extend(base.iter().cloned());
         let role = role_key(family, bold, italic);
+        let first = chain.first().and_then(|key| fonts.font_data.get(key));
+        record_line_gap(&role, first.map_or(0.0, |fd| crate::theme::line_gap_share(fd)));
         fonts.families.insert(egui::FontFamily::Name(role.clone().into()), chain);
         bound.push(role);
     }
@@ -382,6 +384,25 @@ fn bound() -> &'static std::sync::RwLock<HashSet<String>> {
 /// Record the role families a freshly built [`egui::FontDefinitions`] bound.
 pub fn set_bound(keys: impl IntoIterator<Item = String>) {
     *bound().write().unwrap_or_else(std::sync::PoisonError::into_inner) = keys.into_iter().collect();
+}
+
+fn line_gaps() -> &'static std::sync::RwLock<std::collections::HashMap<String, f32>> {
+    static GAPS: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, f32>>> = std::sync::OnceLock::new();
+    GAPS.get_or_init(Default::default)
+}
+
+/// Notes a cell font's line gap, as a share of its size.
+pub(crate) fn record_line_gap(role: &str, share: f32) {
+    line_gaps().write().unwrap_or_else(std::sync::PoisonError::into_inner).insert(role.to_string(), share);
+}
+
+/// How far down a cell's text goes for its font's line gap, which Excel draws above the text and egui
+/// below. Measured against Excel with Calibri, whose gap is 22% of its size. Applied where cells are
+/// drawn rather than on the font: a cell's fallback glyphs must stay on its line, and interface text
+/// that falls back to a cell font must not move.
+pub fn line_gap(font: &egui::FontId) -> f32 {
+    let egui::FontFamily::Name(role) = &font.family else { return 0.0 };
+    line_gaps().read().unwrap_or_else(std::sync::PoisonError::into_inner).get(role.as_ref()).copied().unwrap_or(0.0) * font.size
 }
 
 /// Is this exact role family bound to font data?

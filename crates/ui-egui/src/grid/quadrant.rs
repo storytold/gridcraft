@@ -302,6 +302,12 @@ fn paint_checkbox(p: &egui::Painter, rect: Rect, z: f32, on: bool) {
     }
 }
 
+/// How far upright text goes down for its font's line gap (`fonts::line_gap`). Rotated text finds
+/// its own place, and its underline and strikethrough go by the `y` it is drawn at.
+fn upright_line_gap(rotated: bool, font: &egui::FontId) -> f32 {
+    if rotated { 0.0 } else { crate::fonts::line_gap(font) }
+}
+
 fn text_overflows_cell(numeric: bool, value: &Value, rotation: i16, width: f32, rect_width: f32, pad: f32) -> bool {
     !numeric && !matches!(value, Value::Number(_)) && rotation.abs() != 90 && width > rect_width - 2.0 * pad
 }
@@ -395,7 +401,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
             _ => text_left + pad + indent - galley.rect.left(),
         };
         let (text_top, text_bottom) = galley_baseline_bounds(&galley);
-        let y = wrapped_cell_text_y(st.align.v, *rect, text_bottom - text_top, z) - text_top;
+        let y = wrapped_cell_text_y(st.align.v, *rect, text_bottom - text_top, z) - text_top + crate::fonts::line_gap(&font);
         let text_clip = wrapped_text_clip(p, *rect, &galley, y, st.align.v);
         p.with_clip_rect(text_clip).galley(pos2(x, y), galley, color);
         return;
@@ -501,7 +507,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     };
     let (text_top, text_bottom) = galley_baseline_bounds(&galley);
     let text_height = text_bottom - text_top;
-    let y = cell_text_y(st.align.v, *rect, text_height, z) - text_top;
+    let y = cell_text_y(st.align.v, *rect, text_height, z) - text_top + upright_line_gap(rotated, &font);
     let cp = p.with_clip_rect(clip.intersect(p.clip_rect()));
     if rotated {
         let angle = -(st.align.rotation as f32).to_radians();
