@@ -15,11 +15,13 @@ pub(crate) struct Runtime {
     startup: bool,
     /// Help ▸ Check for Updates… was chosen; the next `tick` starts it.
     manual: bool,
+    /// An update card covered this UI pass, including the pass that dismisses it.
+    prompt_shown: bool,
 }
 
 impl Default for Runtime {
     fn default() -> Self {
-        Self { updater: Updater::new(&crate::UPDATE_APP, VERSION), startup: false, manual: false }
+        Self { updater: Updater::new(&crate::UPDATE_APP, VERSION), startup: false, manual: false, prompt_shown: false }
     }
 }
 
@@ -54,9 +56,16 @@ fn result_window_shows(status: &Status, prompt_open: bool) -> bool {
     !prompt_open && !matches!(status, Status::Idle)
 }
 
+/// Whether an update card owns this pass, even if it was just dismissed.
+pub(crate) fn prompt_shown(app: &SheetApp) -> bool {
+    app.updates_rt.prompt_shown
+}
+
 pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
     // The close for a ready update waits until no workbook holds unsaved work.
     let clean = !app.session.documents().iter().any(|d| d.is_dirty());
+    app.updates_rt.prompt_shown =
+        app.updates_rt.updater.prompt_open() || result_window_shows(app.updates_rt.updater.status(), app.updates_rt.updater.prompt_open());
     match app.updates_rt.updater.show_if(ctx, clean) {
         Action::OpenUrl(url) => {
             if let Some(open) = &app.services.open_url {
@@ -68,7 +77,9 @@ pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
         Action::None => {}
     }
     let rt = &mut app.updates_rt;
+    rt.prompt_shown |= rt.updater.prompt_open();
     if result_window_shows(rt.updater.status(), rt.updater.prompt_open()) {
+        rt.prompt_shown = true;
         match craft_update::CheckResultDialog::new(&crate::UPDATE_APP, VERSION).show(ctx, rt.updater.status()) {
             CheckResultResponse::Close => rt.updater.dismiss_status(),
             CheckResultResponse::CheckAgain => rt.updater.check_now(ctx),
@@ -80,25 +91,4 @@ pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn result_window_shows_every_status_but_idle() {
-        let shown = [
-            Status::Checking,
-            Status::UpToDate,
-            Status::Failed("no network".into()),
-            Status::Installing,
-            Status::Ready,
-            Status::Managed,
-            Status::Updated("0.2.0".into()),
-            Status::InstallFailed("disk full".into()),
-        ];
-        for status in &shown {
-            assert!(result_window_shows(status, false), "{status:?}");
-            assert!(!result_window_shows(status, true), "{status:?} over the prompt");
-        }
-        assert!(!result_window_shows(&Status::Idle, false));
-    }
-}
+mod tests;

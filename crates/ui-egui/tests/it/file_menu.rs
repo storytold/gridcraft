@@ -368,6 +368,679 @@ fn quitting_with_one_of_two_workbooks_unsaved_asks_once() {
     assert!(h.state().dialog.is_none());
 }
 
+#[test]
+fn save_changes_shortcuts_save_before_closing() {
+    for language in [Language::En, Language::Fr] {
+        let dir = std::env::temp_dir().join(format!("gridcraft-close-y-{}-{}", std::process::id(), language.code()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Book.xlsx");
+        let mut h = harness(Services::default());
+        h.state_mut().run("app.language.set", serde_json::json!({"language": language.code()})).unwrap();
+        h.run_steps(2);
+        assert_eq!(gridcraft_ui_egui::i18n::current(&h.ctx), language);
+        h.state_mut().run("file.save", serde_json::json!({"path": path.to_string_lossy()})).unwrap();
+        h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+        request_window_close(&mut h);
+        assert_eq!(h.state().dialog.as_ref().unwrap().values.get("quit"), Some(&serde_json::json!(true)));
+        if let Ok(prefix) = std::env::var("GRIDCRAFT_SAVE_LANGUAGE_SNAPSHOT") {
+            h.render().unwrap().save(format!("{prefix}-{}.png", language.code())).unwrap();
+        }
+        // Even without widget focus, the answer's text must not start a cell draft.
+        h.ctx.memory_mut(|m| {
+            if let Some(focused) = m.focused() {
+                m.surrender_focus(focused);
+            }
+        });
+        assert!(h.state().editor.is_none());
+        h.input_mut().events.extend([
+            egui::Event::Key { key: egui::Key::Y, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE },
+            egui::Event::Text("y".into()),
+            egui::Event::Key { key: egui::Key::Y, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE },
+        ]);
+        let sent = step_commands(&mut h);
+        assert!(sent.contains(&egui::ViewportCommand::Close), "Y saves and continues quitting: {sent:?}");
+        assert!(h.state().dialog.is_none());
+        let (wb, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(42.0));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn save_changes_shortcuts_cancel_or_discard_only_the_requested_workbook() {
+    for language in [Language::En, Language::Fr] {
+        let mut h = harness(Services::default());
+        h.state_mut().run("app.language.set", serde_json::json!({"language": language.code()})).unwrap();
+        h.run_steps(2);
+        assert_eq!(gridcraft_ui_egui::i18n::current(&h.ctx), language);
+        h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+        h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+        h.state_mut().run("cell.set", serde_json::json!({"cell": "B2", "input": "7"})).unwrap();
+        let kept = h.state().session.doc().unwrap().uid;
+        // File Close asks about this workbook without starting an application quit.
+        h.state_mut().run_or_alert("file.close", serde_json::json!({}));
+        h.run_steps(3);
+        h.key_press(egui::Key::Escape);
+        let sent = step_commands(&mut h);
+        assert!(!sent.contains(&egui::ViewportCommand::Close));
+        assert!(h.state().dialog.is_none());
+        assert_eq!(h.state().session.documents().len(), 2);
+        assert_eq!(h.state().session.doc().unwrap().uid, kept);
+        h.state_mut().run_or_alert("file.close", serde_json::json!({}));
+        h.run_steps(3);
+        h.key_press(egui::Key::N);
+        let sent = step_commands(&mut h);
+        assert!(!sent.contains(&egui::ViewportCommand::Close));
+        assert_eq!(h.state().session.documents().len(), 1);
+        assert_ne!(h.state().session.doc().unwrap().uid, kept);
+        assert!(h.state().dialog.is_none());
+    }
+}
+
+#[test]
+fn save_changes_ignores_answer_keys_from_the_frame_that_opens_it() {
+    let mut failures = Vec::new();
+    for (backstage, key, release_in_opening_frame) in [
+        (true, egui::Key::N, false),
+        (true, egui::Key::N, true),
+        (true, egui::Key::Y, false),
+        (true, egui::Key::Y, true),
+        (false, egui::Key::N, false),
+        (false, egui::Key::N, true),
+        (false, egui::Key::Y, false),
+        (false, egui::Key::Y, true),
+    ] {
+        let case = format!("backstage={backstage} key={key:?} quick={release_in_opening_frame}");
+        let dir = std::env::temp_dir().join(format!("gridcraft-opening-{}-{backstage}-{key:?}-{release_in_opening_frame}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Book.xlsx");
+        let mut h = harness(Services::default());
+        h.state_mut().run("file.save", serde_json::json!({"path": path})).unwrap();
+        h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+        let doc = h.state().session.doc().unwrap();
+        let (uid, before, revision, undo) = (doc.uid, doc.wb.clone(), doc.revision, doc.undo.len());
+        let close_pos = if backstage {
+            h.get_by_label("File").click();
+            h.run_steps(3);
+            let pos = h.get_by_role_and_label(egui::accesskit::Role::Button, "Close").rect().center();
+            h.input_mut().events.extend([
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+            ]);
+            h.run_steps(1);
+            Some(pos)
+        } else {
+            None
+        };
+        // One real input batch contains the answer press and the action opening the
+        // question. The key was not pressed in response to that question.
+        h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+        if release_in_opening_frame {
+            h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+        }
+        if let Some(pos) = close_pos {
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+        } else {
+            h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+        }
+        let mut sent = step_commands(&mut h);
+        if !release_in_opening_frame {
+            h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+            sent.extend(step_commands(&mut h));
+        }
+        let preserved = h
+            .state()
+            .session
+            .doc()
+            .is_ok_and(|d| d.uid == uid && d.is_dirty() && Arc::ptr_eq(&before, &d.wb) && d.revision == revision && d.undo.len() == undo);
+        let (on_disk, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+        let not_saved = on_disk.active().unwrap().value(CellRef::new(0, 0)) == Value::Empty;
+        let asking = h.state().dialog.as_ref().map(|d| d.name()) == Some("saveChanges");
+        let not_closed = !sent.contains(&egui::ViewportCommand::Close);
+        if !preserved || !not_saved || !asking || !not_closed {
+            failures.push(format!("{case}: preserved={preserved}, not_saved={not_saved}, asking={asking}, not_closed={not_closed}"));
+        } else {
+            if backstage
+                && key == egui::Key::N
+                && !release_in_opening_frame
+                && let Ok(snapshot) = std::env::var("GRIDCRAFT_SAVE_OPENING_SNAPSHOT")
+            {
+                h.render().unwrap().save(snapshot).unwrap();
+            }
+            h.key_press(key);
+            let sent = step_commands(&mut h);
+            assert!(h.state().dialog.is_none(), "a fresh answer works: {case}");
+            if backstage {
+                assert_ne!(h.state().session.doc().unwrap().uid, uid, "fresh answer closes only the requested workbook: {case}");
+            } else {
+                assert!(sent.contains(&egui::ViewportCommand::Close), "fresh answer continues quitting: {case}");
+            }
+            let (on_disk, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+            let expected = if key == egui::Key::Y { Value::Number(42.0) } else { Value::Empty };
+            assert_eq!(on_disk.active().unwrap().value(CellRef::new(0, 0)), expected, "only fresh Y saves: {case}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    assert!(failures.is_empty(), "opening-frame input answered a new question: {failures:?}");
+}
+
+#[test]
+fn save_changes_escape_cancels_in_the_opening_frame() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    let uid = h.state().session.doc().unwrap().uid;
+    h.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let sent = request_window_close(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close));
+    assert!(h.state().dialog.is_none(), "Escape still cancels immediately");
+    assert_eq!(h.state().session.doc().unwrap().uid, uid);
+    assert!(h.state().session.doc().unwrap().is_dirty());
+}
+
+#[test]
+fn save_changes_drops_held_python_keys_and_preserves_the_covered_draft() {
+    for outcome in ["replay", "cancel", "discard"] {
+        check_python_draft_question(outcome);
+    }
+}
+
+/// A real Python field with pending ordered input, plus the clean workbook/window to close.
+fn python_draft_with_held_keys() -> (egui_kittest::Harness<'static, SheetApp>, u64, u64) {
+    use egui::{Event, Key, Modifiers};
+
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    let dirty_window = h.state().session.active_window().unwrap();
+    h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    let clean = h.state().session.doc().unwrap().uid;
+    let clean_window = h.state().session.active_window().unwrap();
+    h.state_mut().enter_window(dirty_window);
+    h.state_mut().run("selection.set", serde_json::json!({"cell": "B1"})).unwrap();
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers { alt: true, ctrl: true, shift: true, command: true, ..Modifiers::NONE }, Key::P);
+    h.run_steps(3);
+    let editor = h.state().editor.as_ref().unwrap();
+    assert!(editor.python);
+    assert!(editor.from_formula_bar);
+    assert_eq!(editor.cell, CellRef::new(0, 1));
+    h.input_mut().events.extend([
+        Event::Text("draft".into()),
+        Event::Key { key: Key::End, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+        Event::Key { key: Key::End, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+        Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+        Event::Key { key: Key::Tab, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+        Event::Key { key: Key::N, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+        Event::Text("n".into()),
+        Event::Key { key: Key::N, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+    ]);
+    h.step();
+    assert_eq!(h.state().editor.as_ref().unwrap().text, "draft", "the later events are held for the next pass");
+    (h, clean, clean_window)
+}
+
+fn check_python_draft_question(outcome: &str) {
+    use egui::{Event, Key, Modifiers, ViewportCommand};
+
+    let (mut h, clean, clean_window) = python_draft_with_held_keys();
+    let dirty = h.state().session.doc().unwrap().uid;
+    let dirty_window = h.state().session.active_window().unwrap();
+    if outcome == "replay" {
+        h.step();
+        assert_eq!(h.state().editor.as_ref().unwrap().text, "draft    n", "without a question the held events reach the same Python field");
+        return;
+    }
+    let before = h.state().session.doc().unwrap();
+    let (workbook, revision, undo) = (before.wb.clone(), before.revision, before.undo.len());
+    h.state_mut().enter_window(clean_window);
+    h.input_mut().events.extend([
+        Event::Key { key: Key::N, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+        Event::Text("n".into()),
+        Event::Key { key: Key::N, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+    ]);
+    let sent = request_window_close(&mut h);
+    assert!(sent.contains(&ViewportCommand::CancelClose));
+    assert!(!sent.contains(&ViewportCommand::Close));
+    assert_eq!(h.state().session.active_window(), Some(dirty_window));
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    assert_eq!(h.state().session.documents().len(), 2);
+    let doc = h.state().session.doc().unwrap();
+    assert_eq!(doc.uid, dirty);
+    assert!(doc.is_dirty() && Arc::ptr_eq(&workbook, &doc.wb));
+    assert_eq!((doc.revision, doc.undo.len()), (revision, undo));
+    assert_eq!(doc.wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(42.0));
+    assert!(doc.wb.active().unwrap().cell(CellRef::new(0, 1)).is_none_or(|c| c.py.is_none()));
+    assert!(h.state().editor.as_ref().is_some_and(|e| e.python && e.text == "draft"));
+    if outcome == "cancel" {
+        if let Ok(path) = std::env::var("GRIDCRAFT_SAVE_PYTHON_SNAPSHOT") {
+            h.render().unwrap().save(path).unwrap();
+        }
+        h.key_press(Key::Escape);
+        assert!(!step_commands(&mut h).contains(&ViewportCommand::Close));
+        assert!(h.state().dialog.is_none());
+        assert_eq!(h.state().session.documents().len(), 2);
+        assert_eq!(h.state().session.doc().unwrap().uid, dirty);
+        assert!(Arc::ptr_eq(&workbook, &h.state().session.doc().unwrap().wb));
+        assert_eq!(h.state().editor.as_ref().unwrap().text, "draft");
+        h.input_mut().events.push(Event::Text("!".into()));
+        h.run_steps(3);
+        assert_eq!(h.state().editor.as_ref().unwrap().text, "draft!", "fresh text still edits after Cancel");
+    } else {
+        h.key_press(Key::N);
+        assert!(step_commands(&mut h).contains(&ViewportCommand::Close), "a fresh N deliberately discards the requested workbook");
+        assert!(h.state().dialog.is_none());
+        assert_eq!(h.state().session.documents().len(), 1);
+        assert_eq!(h.state().session.doc().unwrap().uid, clean);
+        assert!(h.state().editor.is_none());
+    }
+}
+
+#[test]
+fn save_changes_shortcuts_ignore_modified_answers_and_held_n() {
+    let mut h = harness(Services::default());
+    for _ in 0..3 {
+        h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+        h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    }
+    request_window_close(&mut h);
+    let count = h.state().session.documents().len();
+    for modifiers in [egui::Modifiers::CTRL, egui::Modifiers::COMMAND, egui::Modifiers::ALT, egui::Modifiers::SHIFT, egui::Modifiers::MAC_CMD] {
+        for key in [egui::Key::Y, egui::Key::N] {
+            h.key_press_modifiers(modifiers, key);
+            step_commands(&mut h);
+            assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+            assert_eq!(h.state().session.documents().len(), count);
+            assert!(h.state().session.doc().unwrap().is_dirty());
+        }
+    }
+    // Don't discard until release: a quit can move its next question to a different native
+    // viewport, whose independent input state would treat a held N as a fresh press.
+    h.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::N,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    step_commands(&mut h);
+    assert_eq!(h.state().session.documents().len(), count);
+    let current = h.state().session.doc().unwrap().uid;
+    for _ in 0..3 {
+        h.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::N,
+            physical_key: None,
+            pressed: true,
+            repeat: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let sent = step_commands(&mut h);
+        assert!(!sent.contains(&egui::ViewportCommand::Close));
+        assert_eq!(h.state().session.documents().len(), count);
+        assert_eq!(h.state().session.doc().unwrap().uid, current);
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    }
+    h.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::N,
+        physical_key: None,
+        pressed: false,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    step_commands(&mut h);
+    assert_eq!(h.state().session.documents().len(), count - 1, "releasing N answers exactly one question");
+    h.key_press(egui::Key::N);
+    step_commands(&mut h);
+    assert_eq!(h.state().session.documents().len(), count - 2, "a fresh press can answer the next question");
+}
+
+#[test]
+fn save_changes_does_not_answer_through_a_macro_question_or_message() {
+    for message in [false, true] {
+        for key in [egui::Key::N, egui::Key::Y, egui::Key::Escape] {
+            let mut h = harness(Services::default());
+            h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+            if !message {
+                h.state_mut().ui.ribbon_tab = "Automate".into();
+                h.state_mut().run("macro.save", serde_json::json!({"macro": {"name": "Tidy", "steps": []}})).unwrap();
+                h.state_mut().open_dialog("macros", serde_json::json!({"name": "Tidy"}));
+                h.run_steps(2);
+                h.get_by_label("Delete").click();
+                h.run_steps(2);
+                assert!(h.state().macros.question.is_some(), "Delete opens the real macro question");
+            }
+            let doc = h.state().session.doc().unwrap().uid;
+            request_window_close(&mut h);
+            assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+            if message {
+                h.state_mut().message = Some(("GridCraft".into(), "The workbook needs attention.".into()));
+                h.run_steps(2);
+            }
+            h.key_press(key);
+            let sent = step_commands(&mut h);
+            assert!(!sent.contains(&egui::ViewportCommand::Close), "message={message}, key={key:?}");
+            assert!(h.state().session.documents().iter().any(|d| d.uid == doc && d.is_dirty()));
+            assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+            assert_eq!(h.state().message.is_some() || h.state().macros.question.is_some(), key != egui::Key::Escape);
+            if key != egui::Key::Escape {
+                h.key_press(egui::Key::Escape);
+                step_commands(&mut h);
+            }
+            assert!(h.state().message.is_none() && h.state().macros.question.is_none());
+            assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+            h.key_press(egui::Key::N);
+            assert!(step_commands(&mut h).contains(&egui::ViewportCommand::Close), "a fresh N works after the covering modal closes");
+            assert!(h.state().session.documents().iter().all(|d| d.uid != doc));
+        }
+    }
+}
+
+#[test]
+fn save_changes_forgets_armed_and_pending_answers_when_a_message_covers_it() {
+    for pending in [false, true] {
+        let mut h = harness(Services::default());
+        h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+        let doc = h.state().session.doc().unwrap().uid;
+        request_window_close(&mut h);
+        h.key_down(egui::Key::N);
+        h.run_steps(1);
+        if pending {
+            h.key_press(egui::Key::Y);
+            h.run_steps(2);
+        }
+        h.state_mut().message = Some(("GridCraft".into(), "The workbook needs attention.".into()));
+        h.run_steps(2);
+        h.key_up(egui::Key::N);
+        step_commands(&mut h);
+        assert!(h.state().session.documents().iter().any(|d| d.uid == doc && d.is_dirty()));
+        h.key_press(egui::Key::Escape);
+        step_commands(&mut h);
+        assert!(h.state().message.is_none());
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+        h.key_press(egui::Key::N);
+        assert!(step_commands(&mut h).contains(&egui::ViewportCommand::Close));
+        assert!(h.state().session.documents().iter().all(|d| d.uid != doc));
+    }
+}
+
+#[test]
+fn save_changes_shortcuts_ignore_releases_from_focus_loss() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-answer-focus-loss-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for key in [egui::Key::N, egui::Key::Y] {
+        for regain_focus in [false, true] {
+            let mut h = harness(Services::default());
+            let path = dir.join(format!("{key:?}-{regain_focus}.xlsx"));
+            h.state_mut().run("file.save", serde_json::json!({"path": path})).unwrap();
+            h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+            let uid = h.state().session.doc().unwrap().uid;
+            request_window_close(&mut h);
+            h.key_down(key);
+            h.run_steps(1);
+            // Windows synthesizes releases before reporting focus loss. Focus may also
+            // return before the next frame; neither batch represents a physical answer.
+            h.input_mut().focused = regain_focus;
+            h.input_mut().events.extend([
+                egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE },
+                egui::Event::WindowFocused(false),
+            ]);
+            if regain_focus {
+                h.input_mut().events.push(egui::Event::WindowFocused(true));
+            }
+            let sent = step_commands(&mut h);
+            assert!(!sent.contains(&egui::ViewportCommand::Close), "{key:?} must not answer on focus loss");
+            assert_eq!(h.state().session.doc().unwrap().uid, uid);
+            assert!(h.state().session.doc().unwrap().is_dirty());
+            assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+            h.input_mut().focused = true;
+            h.input_mut().events.push(egui::Event::WindowFocused(true));
+            h.run_steps(1);
+            h.key_press(key);
+            let sent = step_commands(&mut h);
+            assert!(sent.contains(&egui::ViewportCommand::Close), "a fresh {key:?} gesture after focus returns still works");
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn save_changes_cancel_overrides_a_mixed_answer_without_waiting_for_the_held_key() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-mixed-cancel-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx");
+    let mut h = harness(Services::default());
+    h.state_mut().run("file.save", serde_json::json!({"path": path})).unwrap();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    let uid = h.state().session.doc().unwrap().uid;
+    request_window_close(&mut h);
+    h.key_down(egui::Key::N);
+    h.run_steps(1);
+    h.key_press(egui::Key::Y);
+    h.run_steps(2);
+    assert_eq!(h.state().session.doc().unwrap().uid, uid, "Save must wait for held N to end");
+    h.key_press(egui::Key::Escape);
+    let sent = step_commands(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close));
+    assert!(h.state().dialog.is_none(), "Esc cancels immediately, even with N held");
+    h.key_up(egui::Key::N);
+    step_commands(&mut h);
+    assert_eq!(h.state().session.doc().unwrap().uid, uid);
+    assert!(h.state().session.doc().unwrap().is_dirty());
+    let (on_disk, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(on_disk.active().unwrap().value(CellRef::new(0, 0)), Value::Empty, "the cancelled pending Save must never run");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn save_changes_font_gate_cancels_focused_gestures_before_the_ui_resumes() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let mut failures = Vec::new();
+    for pending in [false, true] {
+        for answer in [egui::Key::Y, egui::Key::N] {
+            let dir = std::env::temp_dir().join(format!("gridcraft-font-gate-{}-{pending}-{answer:?}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("Book.xlsx");
+            let pause = Arc::new(AtomicBool::new(false));
+            let capture = pause.clone();
+            let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+                move |ui, app: &mut SheetApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    // Skip this pass through the real font gate while retaining focus.
+                    if capture.swap(false, Ordering::Relaxed) {
+                        app.fonts_ready = false;
+                    }
+                    app.ui(ui);
+                },
+                crate::common::prepare(SheetApp::new(crate::support::blank_session(), Services::default())),
+            );
+            h.run_steps(4);
+            h.state_mut().run("file.save", serde_json::json!({"path": path})).unwrap();
+            h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+            let doc = h.state().session.doc().unwrap();
+            let (uid, before, revision, undo) = (doc.uid, doc.wb.clone(), doc.revision, doc.undo.len());
+            request_window_close(&mut h);
+            h.input_mut().focused = true;
+            let held = if pending { if answer == egui::Key::Y { egui::Key::N } else { egui::Key::Y } } else { answer };
+            h.key_down(held);
+            h.run_steps(1);
+            if pending {
+                h.key_press(answer);
+                h.run_steps(2);
+                assert_eq!(h.state().session.doc().unwrap().uid, uid, "the chosen answer waits for the other key");
+                h.key_up(held);
+            }
+            pause.store(true, Ordering::Relaxed);
+            h.step();
+            if !pending {
+                h.key_up(held);
+            }
+            h.run_steps(3);
+            let preserved = h
+                .state()
+                .session
+                .doc()
+                .is_ok_and(|d| d.uid == uid && d.is_dirty() && Arc::ptr_eq(&before, &d.wb) && d.revision == revision && d.undo.len() == undo);
+            let (on_disk, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+            let not_saved = on_disk.active().unwrap().value(CellRef::new(0, 0)) == Value::Empty;
+            let asking = h.state().dialog.as_ref().map(|d| d.name()) == Some("saveChanges");
+            if !preserved || !not_saved || !asking {
+                failures.push(format!("pending={pending} answer={answer:?}: preserved={preserved}, not_saved={not_saved}, asking={asking}"));
+            } else {
+                h.key_press(answer);
+                let sent = step_commands(&mut h);
+                assert!(sent.contains(&egui::ViewportCommand::Close), "a fresh {answer:?} works after the font gate, pending={pending}");
+            }
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+    assert!(failures.is_empty(), "font-gated passes replayed stale answers: {failures:?}");
+}
+
+#[test]
+fn save_changes_focus_loss_cancels_a_pending_answer_even_when_the_ui_cannot_paint() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let pause = Arc::new(AtomicBool::new(false));
+    let capture = pause.clone();
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        move |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            // A font rebind can prevent this input pass from drawing any widgets.
+            if capture.swap(false, Ordering::Relaxed) {
+                app.fonts_ready = false;
+            }
+            app.ui(ui);
+        },
+        crate::common::prepare(SheetApp::new(crate::support::blank_session(), Services::default())),
+    );
+    h.run_steps(4);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    let uid = h.state().session.doc().unwrap().uid;
+    request_window_close(&mut h);
+    h.key_down(egui::Key::Y);
+    h.run_steps(1);
+    h.key_press(egui::Key::N);
+    h.run_steps(2);
+    pause.store(true, Ordering::Relaxed);
+    h.input_mut().focused = false;
+    h.input_mut().events.push(egui::Event::WindowFocused(false));
+    h.step();
+    h.input_mut().focused = true;
+    h.input_mut().events.push(egui::Event::WindowFocused(true));
+    h.run_steps(3);
+    assert_eq!(h.state().session.doc().unwrap().uid, uid, "a skipped UI pass must not replay the pending discard");
+    assert!(h.state().session.doc().unwrap().is_dirty());
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    h.key_press(egui::Key::N);
+    let sent = step_commands(&mut h);
+    assert!(sent.contains(&egui::ViewportCommand::Close), "a fresh answer still works after the missed release");
+}
+
+#[test]
+fn save_changes_escape_has_priority_over_a_release_in_the_same_input_batch() {
+    for escape_first in [false, true] {
+        let mut h = harness(Services::default());
+        h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+        let uid = h.state().session.doc().unwrap().uid;
+        request_window_close(&mut h);
+        h.key_down(egui::Key::N);
+        h.run_steps(1);
+        let release = egui::Event::Key { key: egui::Key::N, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE };
+        let escape = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        // RawInput is one actual egui batch; kittest key helpers run separate frames.
+        h.input_mut().events.extend(if escape_first { [escape, release] } else { [release, escape] });
+        let sent = step_commands(&mut h);
+        assert!(!sent.contains(&egui::ViewportCommand::Close));
+        assert_eq!(h.state().session.doc().unwrap().uid, uid, "Esc must win in either event order");
+        assert!(h.state().session.doc().unwrap().is_dirty());
+        assert!(h.state().dialog.is_none());
+    }
+}
+
+#[test]
+fn save_changes_escape_has_priority_over_a_button_in_the_same_input_batch() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    let uid = h.state().session.doc().unwrap().uid;
+    request_window_close(&mut h);
+    let pos = h.get_by_role_and_label(egui::accesskit::Role::Button, "Don't Save").rect().center();
+    h.input_mut().events.extend([
+        egui::Event::PointerMoved(pos),
+        egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+    ]);
+    h.run_steps(1);
+    h.input_mut().events.extend([
+        egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+        egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE },
+    ]);
+    let sent = step_commands(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close));
+    assert_eq!(h.state().session.doc().unwrap().uid, uid);
+    assert!(h.state().session.doc().unwrap().is_dirty());
+    assert!(h.state().dialog.is_none());
+}
+
+#[test]
+fn save_changes_shortcuts_keep_unsaved_work_after_picker_cancel_or_save_failure() {
+    for fail in [false, true] {
+        let dir = std::env::temp_dir().join(format!("gridcraft-close-y-failure-{}.xlsx", std::process::id()));
+        // A directory is an invalid file destination on every supported platform.
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.clone();
+        let picked = Arc::new(Mutex::new(0));
+        let capture = picked.clone();
+        let mut h = harness(Services {
+            pick_save: Some(Box::new(move |_| {
+                *capture.lock().unwrap() += 1;
+                fail.then(|| target.to_string_lossy().into_owned())
+            })),
+            ..Default::default()
+        });
+        h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+        let uid = h.state().session.doc().unwrap().uid;
+        request_window_close(&mut h);
+        h.key_press(egui::Key::Y);
+        let sent = step_commands(&mut h);
+        assert_eq!(*picked.lock().unwrap(), 1, "Y attempts Save As");
+        assert!(!sent.contains(&egui::ViewportCommand::Close));
+        assert_eq!(h.state().session.doc().unwrap().uid, uid);
+        assert!(h.state().session.doc().unwrap().is_dirty());
+        assert_eq!(a1(&h, 0), Value::Number(42.0));
+        assert_eq!(h.state().message.is_some(), fail);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn save_changes_shortcuts_do_not_answer_other_dialogs_or_steal_cell_text() {
+    let mut h = harness(Services::default());
+    h.input_mut().events.push(egui::Event::Text("yn".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().editor.as_ref().map(|ed| ed.text.as_str()), Some("yn"));
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    h.state_mut().open_dialog("about", serde_json::json!({}));
+    h.run_steps(3);
+    for key in [egui::Key::Y, egui::Key::N] {
+        h.key_press(key);
+        h.run_steps(3);
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("about"));
+        assert_eq!(h.state().session.documents().len(), 1);
+    }
+}
+
 /// Book1 has a cell being typed when File › New runs (the macOS menu runs the command directly).
 fn typing_in_book1_then_new(h: &mut egui_kittest::Harness<'static, SheetApp>) -> u64 {
     h.input_mut().events.push(egui::Event::Text("hello".into()));
