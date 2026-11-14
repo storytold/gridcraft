@@ -134,7 +134,7 @@ fn base_tool_definitions() -> Vec<Value> {
             "Execute command",
             "Run ANY GridCraft command by id with JSON params — every ribbon/menu action is a command. Find ids and parameter \
              docs with list_commands. Examples: {\"command\":\"cell.set\",\"params\":{\"cell\":\"B2\",\"input\":\"=SUM(A1:A9)\"}}; \
-             {\"command\":\"home.bold\",\"params\":{\"range\":\"A1:C1\"}}; {\"command\":\"sheet.insert\"}; \
+             {\"command\":\"home.bold\",\"params\":{\"range\":\"A1:C1\"}}; {\"command\":\"home.insertSheet\"}; \
              {\"command\":\"data.removeDuplicates\",\"params\":{\"range\":\"A1:C20\"}}. Most commands act on the current selection \
              when `range` is omitted. Programmatic calls never open dialogs: missing required params give an error.",
             obj(
@@ -224,7 +224,7 @@ fn base_tool_definitions() -> Vec<Value> {
             "evaluate_formula",
             "Evaluate formula",
             "Evaluate a formula against the active sheet WITHOUT changing any cell, e.g. \"=SUM(B2:B10)/COUNT(B2:B10)\" or \
-             \"=VLOOKUP(\\\"x\\\",A:B,2,FALSE)\". `cell` sets the formula's position for relative references and ROW()/COLUMN(). \
+             \"=VLOOKUP(\"x\",A:B,2,FALSE)\". `cell` sets the formula's position for relative references and ROW()/COLUMN(). \
              Use English function names and `,` between arguments; a formula that couldn't be entered in a cell is an error saying why.",
             obj(
                 json!({"formula": string("Formula text, with or without the leading ="), "cell": string("Evaluate as if in this cell (default: active cell)")}),
