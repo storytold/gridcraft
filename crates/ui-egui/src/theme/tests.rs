@@ -18,7 +18,10 @@ fn fallback_faces_are_appended_to_every_family() {
             // The optional craft-fonts faces follow the system fallbacks at the very end.
             let end = chain.iter().rposition(|k| !k.starts_with("craft-")).map_or(0, |i| i + 1);
             assert!(end >= fb_keys.len(), "{role} chain too short for its fallback");
-            assert_eq!(&chain[end - fb_keys.len()..end], fb_keys.as_slice(), "{role} must end its non-craft chain with the fallback faces");
+            // Non-first faces carry a baseline-alignment variant key (`face@first`); strip it
+            // before comparing with the fallback keys.
+            let bases: Vec<&str> = chain[end - fb_keys.len()..end].iter().map(|k| k.split_once('@').map_or(k.as_str(), |(b, _)| b)).collect();
+            assert_eq!(bases, fb_keys.iter().map(String::as_str).collect::<Vec<_>>(), "{role} must end its non-craft chain with the fallback faces");
         }
     }
 }
@@ -35,7 +38,14 @@ fn craft_fonts_are_the_last_fallback_in_every_family() {
     }
     for (family, chain) in &fonts.families {
         let first = chain.iter().position(|k| k.starts_with("craft-")).unwrap_or(chain.len());
-        assert_eq!(&chain[first..], expected.as_slice(), "{family:?} must end with exactly the permitted craft faces in manifest order");
+        // Non-first faces carry a baseline-alignment variant key (`face@first`); strip it
+        // before comparing with the manifest keys.
+        let bases: Vec<&str> = chain[first..].iter().map(|k| k.split_once('@').map_or(k.as_str(), |(b, _)| b)).collect();
+        assert_eq!(
+            bases,
+            expected.iter().map(String::as_str).collect::<Vec<_>>(),
+            "{family:?} must end with exactly the permitted craft faces in manifest order"
+        );
     }
 }
 
@@ -108,12 +118,58 @@ fn interface_families_fall_back_to_the_cell_font() {
         return; // no system cell font on this machine
     }
     let fb: Vec<String> = fallback_faces(HanOrder::Chinese).into_iter().map(|(k, _)| k.to_string()).collect();
+    // Non-first faces carry a baseline-alignment variant key (`face@first`); match on the base key.
+    let is_cell = |k: &str| k == cell || k.split_once('@').is_some_and(|(b, _)| b == cell);
+    let is_fb = |k: &str| fb.iter().any(|f| k == f || k.split_once('@').is_some_and(|(b, _)| b == f));
     for family in [FontFamily::Proportional, FontFamily::Name(UI.into()), FontFamily::Name(UI_BOLD.into()), FontFamily::Name(MONO.into())] {
         let chain = fonts.families.get(&family).cloned().unwrap_or_default();
-        let at = chain.iter().position(|k| *k == cell);
+        let at = chain.iter().position(|k| is_cell(k));
         assert!(at.is_some(), "{family:?} lacks the cell face: {chain:?}");
-        let first_fb = chain.iter().position(|k| fb.contains(k)).unwrap_or(chain.len());
+        let first_fb = chain.iter().position(|k| is_fb(k)).unwrap_or(chain.len());
         assert!(at.unwrap_or(usize::MAX) < first_fb, "{family:?}: cell face must precede the script faces");
+    }
+}
+
+#[test]
+fn a_taller_ascent_sits_lower_and_gets_a_negative_shift() {
+    // Liberation Sans (hhea 1854/-434/67 at 2048 upm) against Noto Sans CJK (1160/-320/0 at
+    // 1000 upm): the CJK face draws ~0.09 em low, so mixed text like “中文aa123” rides the
+    // Latin high until the face is shifted up by the gap.
+    let latin = (1854.0 / 2048.0, (1854.0 + 434.0 + 67.0) / 2048.0);
+    let cjk = (1160.0 / 1000.0, (1160.0 + 320.0 + 0.0) / 1000.0);
+    let gap = font_setup::baseline_gap_em(latin, cjk);
+    assert!(gap > 0.05 && gap < 0.15, "CJK should draw visibly low, got {gap}");
+    assert!((font_setup::baseline_gap_em(cjk, latin) + gap).abs() < 1e-6, "the reverse pairing is the opposite gap");
+    assert_eq!(font_setup::baseline_gap_em(latin, latin), 0.0, "a face aligns with itself");
+}
+
+#[test]
+fn following_faces_carry_a_baseline_shift_matching_their_metrics() {
+    let fonts = font_definitions_for_language(Language::Zh);
+    let chain = fonts.families.get(&FontFamily::Name(CELL.into())).cloned().unwrap_or_default();
+    if chain.len() < 2 {
+        return; // minimal machine: the chain is one face (or empty)
+    }
+    let p = fonts.font_data.get(&chain[0]).and_then(|fd| font_setup::face_em_metrics(fd)).expect("chain head has metrics");
+    for key in &chain[1..] {
+        let Some((base, _)) = key.split_once('@') else {
+            continue; // owned data is left unshifted (installed fonts)
+        };
+        let fd = fonts.font_data.get(base).unwrap_or_else(|| panic!("{base} behind {key} has data"));
+        let f = font_setup::face_em_metrics(fd).unwrap_or_else(|| panic!("{base} has metrics"));
+        let vfd = fonts.font_data.get(key).unwrap_or_else(|| panic!("{key} has data"));
+        let gap = font_setup::baseline_gap_em(p, f);
+        if gap.abs() < 0.005 {
+            continue;
+        }
+        // epaint applies the shift as `font_size · tweak.scale · y_offset_factor`, so the drawn
+        // shift matches the gap through the face's own scale.
+        assert!(
+            (vfd.tweak.y_offset_factor * fd.tweak.scale + gap).abs() < 1e-4,
+            "{key}: shift {} · scale {} ≠ −gap {gap}",
+            vfd.tweak.y_offset_factor,
+            fd.tweak.scale
+        );
     }
 }
 
@@ -256,7 +312,7 @@ fn with_installed_latin_font() -> std::io::Result<FontDefinitions> {
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("Ubuntu-Light.ttf");
     std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT)?;
-    let face = crate::fonts::Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into()], path, index: 0, weight: 300.0, italic: false };
+    let face = crate::fonts::Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into()], zh: String::new(), path, index: 0, weight: 300.0, italic: false };
     let fonts = font_definitions_impl(Language::En, vec![("Ubuntu".into(), vec![face])], true);
     std::fs::remove_dir_all(&dir)?;
     Ok(fonts)
@@ -291,7 +347,9 @@ fn installed_latin_fonts_keep_system_script_fallbacks() {
     for (family, chain) in installed_latin_chains(&fonts) {
         let chain = chain.expect("bound fixture family");
         for key in &loaded {
-            assert!(chain.iter().any(|k| k == key), "{family:?} lost the {key} fallback");
+            // Non-first faces carry a baseline-alignment variant key (`face@first`); match on the
+            // base key.
+            assert!(chain.iter().any(|k| k.split_once('@').map_or(k.as_str(), |(b, _)| b) == *key), "{family:?} lost the {key} fallback");
         }
         if fonts.font_data.contains_key("sys-arabic") {
             assert!(chain_covers(&fonts, chain, 'ع'), "{family:?} has no glyph for ع");

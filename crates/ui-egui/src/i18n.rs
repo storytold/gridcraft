@@ -28,6 +28,8 @@ mod tr;
 mod uk;
 mod vi;
 mod zh;
+mod zh_errors;
+mod zh_functions;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -194,11 +196,17 @@ impl Language {
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
     /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
     pub fn tr(self, text: &str) -> &str {
-        self.translated(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+        self.raw(text).unwrap_or_else(|| {
+            #[cfg(not(target_arch = "wasm32"))]
+            record_untranslated(self, text);
+            text.rsplit_once('|').map_or(text, |(_, label)| label)
+        })
     }
 
-    /// The catalog's own translation of `text`, or `None` when it falls back to English.
-    fn translated(self, text: &str) -> Option<&'static str> {
+    /// The catalog translation of `text`, or `None`. `tr` adds the untranslated-label trace on
+    /// top; callers holding runtime data (an error message with a file name in it) use `raw`
+    /// directly so the trace stays a report of interface labels only.
+    fn raw(self, text: &str) -> Option<&'static str> {
         match self {
             Self::En => None,
             Self::Es => es::translate(text),
@@ -222,11 +230,62 @@ impl Language {
         }
     }
 
+    /// A sentence built with data (`Saved macro “Budget” (3 steps)`). The table entry spells the
+    /// same `{slot}` names, so word order and measure words follow the language; a language
+    /// without the entry gets the English with the same slots filled.
+    pub fn tr_fill(self, english: &str, slots: &[(&str, &str)]) -> String {
+        let template = self.tr(english);
+        // Each placeholder is read from the original template: a value may itself look like a
+        // placeholder (a macro can be named `{book}`), so a search-and-replace loop would rewrite
+        // data inserted earlier.
+        let mut out = String::with_capacity(template.len() + slots.iter().map(|(_, v)| v.len()).sum::<usize>());
+        let mut rest = template;
+        while let Some(open) = rest.find('{') {
+            out.push_str(&rest[..open]);
+            let after = &rest[open + 1..];
+            match after.find('}') {
+                Some(close) => {
+                    let name = &after[..close];
+                    match slots.iter().find(|(n, _)| *n == name).map(|(_, v)| *v) {
+                        Some(value) => out.push_str(value),
+                        // Not one of this sentence's slots: keep the braces as written.
+                        None => out.push_str(&rest[open..open + close + 2]),
+                    }
+                    rest = &after[close + 1..];
+                }
+                None => {
+                    out.push_str(&rest[open..]);
+                    rest = "";
+                    break;
+                }
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// The display form of a comment or note author. A stored author is user data and shows as
+    /// written — a name may carry a `|`, which `tr` reads as a context separator — so only the
+    /// engine's built-in default name is translated, and it reads in the interface language.
+    pub fn author_name(self, author: &str) -> String {
+        if author == "GridCraft User" { self.tr(author).to_owned() } else { author.to_owned() }
+    }
+
     pub(crate) fn tr_error(self, message: &str) -> String {
         let message = if message.starts_with("command `") { crate::clean_error(message) } else { message.to_owned() };
 
-        let translated = self.tr(&message);
+        // Runtime data (a file name, a cell reference) must not enter the untranslated-label
+        // trace, so the complete message is looked up without tracing; only the template match
+        // below fills the slots, and it translates captured values from the catalog without
+        // tracing them either.
         let fallback = message.rsplit_once('|').map_or(message.as_str(), |(_, label)| label);
+        let translated = self.raw(&message).unwrap_or(fallback);
+
+        if translated == fallback
+            && let Some(filled) = self.error_template(&message)
+        {
+            return filled;
+        }
 
         if translated == fallback { message } else { translated.to_owned() }
     }
@@ -247,9 +306,79 @@ impl Language {
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            Self::Zh => Some((zh_functions::DESCRIPTIONS, zh_functions::ARGUMENTS)),
             _ => None,
         }
     }
+
+    /// A message the engine built with data in it (`We can't open 'book.xlsx': …`), matched
+    /// against the templates of this language: the fixed text must line up and the data is
+    /// carried over, translated too when it is an interface phrase of its own.
+    fn error_template(self, message: &str) -> Option<String> {
+        let table = match self {
+            Self::Zh => zh_errors::TEMPLATES,
+            _ => return None,
+        };
+        table.iter().find_map(|(english, localized)| {
+            let values = fill_template(english, message)?;
+            // A captured value is user data (a file or sheet name may carry a `|`, which `tr`
+            // reads as a context separator): translate it only when it is a known interface
+            // phrase, and look it up without tracing — this is not an interface label.
+            let values: Vec<String> =
+                values.iter().map(|value| if value.contains('|') { value.clone() } else { self.raw(value).unwrap_or(value).to_string() }).collect();
+            splice_template(localized, &values)
+        })
+    }
+}
+
+/// The literal parts of a template, with a slot between each pair: `a{x}b` → `["a", "b"]`.
+fn template_parts(template: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        parts.push(&rest[..open]);
+        match rest[open..].find('}') {
+            Some(close) => rest = &rest[open + close + 1..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    parts.push(rest);
+    parts
+}
+
+/// The values a `template`'s slots hold in `text`, or `None` when the fixed text doesn't line up.
+fn fill_template(template: &str, text: &str) -> Option<Vec<String>> {
+    let parts = template_parts(template);
+    let mut rest = text.strip_prefix(*parts.first()?)?;
+    let mut values = Vec::new();
+    for part in &parts[1..] {
+        // A template that ends in a slot has an empty last literal: its value runs to the end.
+        let at = if part.is_empty() { rest.len() } else { rest.find(part)? };
+        values.push(rest[..at].to_string());
+        rest = &rest[at + part.len()..];
+    }
+    // The last literal must also end the text: a template that only matches a prefix would eat
+    // the rest of the sentence.
+    rest.is_empty().then_some(values)
+}
+
+/// `template` with its slots filled by `values`.
+fn splice_template(template: &str, values: &[String]) -> Option<String> {
+    let parts = template_parts(template);
+    if parts.len() != values.len() + 1 {
+        return None;
+    }
+    let mut out = String::with_capacity(template.len() + values.iter().map(String::len).sum::<usize>());
+    for (i, part) in parts.iter().enumerate() {
+        out.push_str(part);
+        if let Some(value) = values.get(i) {
+            out.push_str(value);
+        }
+    }
+    Some(out)
 }
 
 /// English text and its translation, sorted by the English.
@@ -260,6 +389,28 @@ fn lookup(table: HelpTable, english: &str) -> Option<&'static str> {
     let i = table.binary_search_by(|(key, _)| (*key).cmp(english)).ok()?;
     table.get(i).map(|(_, translated)| *translated)
 }
+
+/// Collects labels that `tr` fell back to English for, so a localization pass can be checked
+/// against the real interface instead of against a grep. Off unless `GRIDCRAFT_I18N_TRACE` names
+/// a file; the snapshot example writes them out (`--language zh`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn untranslated() -> std::collections::BTreeSet<String> {
+    SEEN.lock().map(|seen| seen.clone()).unwrap_or_default()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn record_untranslated(language: Language, text: &str) {
+    static TRACING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if language == Language::En || !*TRACING.get_or_init(|| std::env::var_os("GRIDCRAFT_I18N_TRACE").is_some()) {
+        return;
+    }
+    if let Ok(mut seen) = SEEN.lock() {
+        seen.insert(text.to_string());
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+static SEEN: std::sync::Mutex<std::collections::BTreeSet<String>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
 
 /// Deserializes a saved language leniently: an unknown or malformed value (a language removed in a
 /// later version, a hand-edited `ui.json`) reads as English instead of failing the whole `UiState`,
@@ -331,13 +482,25 @@ mod tests {
     fn every_catalog_has_distinct_diagram_and_decorative_text() {
         for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
             let code = language.code();
-            let diagram = language.translated("Diagram");
+            let diagram = language.raw("Diagram");
             assert!(diagram.is_some(), "{code}: Diagram");
-            assert!(language.translated("Decorative Text").is_some(), "{code}: Decorative Text");
+            assert!(language.raw("Decorative Text").is_some(), "{code}: Decorative Text");
             for chart in ["Chart", "Charts"] {
-                if let Some(chart_text) = language.translated(chart) {
+                if let Some(chart_text) = language.raw(chart) {
                     assert_ne!(diagram, Some(chart_text), "{code}: Diagram equals {chart}");
                 }
+            }
+        }
+    }
+
+    /// The command palette translates every engine command's label and menu path (see
+    /// `command_search`), so a Chinese interface must not fall back to English there.
+    #[test]
+    fn every_engine_command_label_and_menu_part_has_a_chinese_translation() {
+        for spec in gridcraft_engine::cmd::command_specs() {
+            assert!(zh::translate(spec.label).is_some(), "command {} label {:?} has no zh entry", spec.id, spec.label);
+            for part in spec.menu {
+                assert!(zh::translate(part).is_some(), "command {} menu part {:?} has no zh entry", spec.id, part);
             }
         }
     }
@@ -345,9 +508,9 @@ mod tests {
     /// Ukrainian Chart uses the shared craft-i18n term, which is not the Diagram word.
     #[test]
     fn ukrainian_chart_uses_the_shared_term() {
-        assert_eq!(Language::Uk.translated("Chart"), Some("Діаграма"));
-        assert_eq!(Language::Uk.translated("Insert Chart"), Some("Вставити діаграму"));
-        assert_eq!(Language::Uk.translated("Diagram"), Some("Схема"));
+        assert_eq!(Language::Uk.raw("Chart"), Some("Діаграма"));
+        assert_eq!(Language::Uk.raw("Insert Chart"), Some("Вставити діаграму"));
+        assert_eq!(Language::Uk.raw("Diagram"), Some("Схема"));
     }
 
     /// Help tables are sorted and unique: lookups binary-search them.
@@ -544,5 +707,62 @@ mod tests {
         let keys: Vec<String> = order[1..].iter().map(|l| name_sort_key(l.name())).collect();
         assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
         assert_eq!(name_sort_key("Čeština"), "cestina");
+    }
+    /// Every command label (what its ribbon button, menu item and tooltip read) and every ribbon or
+    /// menu path segment has a Chinese translation, so no tooltip, menu or command search result
+    /// falls back to English. Tooltips and open menus are never painted in an offscreen snapshot,
+    /// so the render trace cannot see them; this test can.
+    #[test]
+    fn every_command_label_reads_in_chinese() {
+        fn label_of(key: &str) -> &str {
+            key.rsplit_once('|').map_or(key, |(_, label)| label)
+        }
+        let mut missing: Vec<&str> = vec![];
+        // Labels that read the same in every language: zoom levels, units, function names.
+        const NEUTRAL: &[&str] = &["100%"];
+        for spec in gridcraft_engine::command_specs() {
+            if !NEUTRAL.contains(&spec.label) && Language::Zh.tr(spec.label) == label_of(spec.label) {
+                missing.push(spec.label);
+            }
+            for segment in spec.menu {
+                if !NEUTRAL.contains(segment) && Language::Zh.tr(segment) == *segment {
+                    missing.push(segment);
+                }
+            }
+        }
+        missing.sort_unstable();
+        missing.dedup();
+        assert!(missing.is_empty(), "Simplified Chinese missing {} labels: {missing:#?}", missing.len());
+    }
+
+    /// A message the engine built with data in it is matched by its fixed text, and the data
+    /// (a file name, a range, a count) comes across.
+    #[test]
+    fn error_templates_carry_the_data_across() {
+        let zh = Language::Zh;
+        assert_eq!(zh.tr_error("We can't open 'book.xlsx': permission denied"), "无法打开“book.xlsx”：permission denied");
+        assert_eq!(zh.tr_error("Too many variable cells (at most 64)."), "可变单元格过多（最多 64 个）。");
+        // A value that is itself an interface phrase is translated inside the sentence too.
+        assert_eq!(
+            zh.tr_error("Sorting isn't allowed on this protected sheet (Review › Unprotect Sheet)."),
+            "受保护的工作表不允许排序操作（审阅 › 撤销工作表保护）。"
+        );
+        // A sentence the templates don't describe stays whole rather than half-matching.
+        assert_eq!(zh.tr_error("Printer Office: permission denied"), "Printer Office: permission denied");
+        // A sentence with no data takes the plain table.
+        assert_eq!(zh.tr_error("no such sheet"), "没有该工作表");
+        assert_eq!(Language::En.tr_error("no such sheet"), "no such sheet");
+    }
+
+    #[test]
+    fn template_slots_split_and_fill() {
+        assert_eq!(template_parts("a{x}b"), vec!["a", "b"]);
+        assert_eq!(template_parts("no slots"), vec!["no slots"]);
+        assert_eq!(template_parts("a{x}b{y}"), vec!["a", "b", ""]);
+        assert_eq!(fill_template("a{x}b", "a1b"), Some(vec!["1".to_string()]));
+        assert_eq!(fill_template("a{x}b", "a1b tail"), None, "the last literal must end the text");
+        assert_eq!(fill_template("a{x}b", "zb"), None);
+        assert_eq!(splice_template("X{v}Y", &["1".to_string()]), Some("X1Y".to_string()));
+        assert_eq!(splice_template("X{v}Y{w}", &["1".to_string()]), None);
     }
 }

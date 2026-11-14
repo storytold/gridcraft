@@ -175,6 +175,61 @@ fn font_file(path: &str, index: u32) -> Option<Blob> {
     Some(blob)
 }
 
+/// (ascent, row height) of one face as egui renders it, in em units: the font's own metrics read
+/// the way epaint reads them, times the face's `FontTweak::scale` (a bundled icon or emoji face
+/// draws at a scale below 1, and epaint scales its effective metrics with it).
+pub(crate) fn face_em_metrics(fd: &FontData) -> Option<(f32, f32)> {
+    use skrifa::MetadataProvider as _;
+    let font = skrifa::FontRef::from_index(fd.bytes(), fd.index).ok()?;
+    let m = font.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+    let upm = f32::from(m.units_per_em);
+    if upm <= 0.0 {
+        return None;
+    }
+    Some((m.ascent / upm * fd.tweak.scale, (m.ascent - m.descent + m.leading) / upm * fd.tweak.scale))
+}
+
+/// How much lower than the chain's first face a face draws, in em units: epaint places a glyph
+/// `face_ascent + ½·(first_row_height − face_row_height)` below the row top, which centres faces
+/// against the first face instead of aligning their baselines.
+pub(crate) fn baseline_gap_em(p: (f32, f32), f: (f32, f32)) -> f32 {
+    (f.0 - p.0) + 0.5 * (p.1 - f.1)
+}
+
+/// Baseline-aligns every face that follows the first in a family chain.
+///
+/// epaint centres each face's row against the chain's first face instead of aligning baselines, so
+/// a face with a tall ascent draws low: Noto Sans CJK (ascent 1.16 em) next to Liberation Sans
+/// (0.91 em) sinks by about 0.09 em, and in “中文aa123” the digits and letters ride visibly high.
+/// `FontTweak::y_offset_factor` shifts a face's drawn glyphs by `tweak.scale` × a fraction of the
+/// font size without touching layout, and the gap is size-proportional, so one factor per (face,
+/// chain) pair fixes every font size. A face whose data is owned (an installed font, shared by
+/// nothing) is left alone rather than copied for every chain it appears in.
+fn align_following_faces_to_chain_baseline(fonts: &mut FontDefinitions) {
+    for chain in fonts.families.values_mut() {
+        let Some(first) = chain.first().cloned() else { continue };
+        let Some(p) = fonts.font_data.get(&first).and_then(|fd| face_em_metrics(fd)) else { continue };
+        for key in chain.iter_mut().skip(1) {
+            let Some(fd) = fonts.font_data.get(key.as_str()) else { continue };
+            let Some(f) = face_em_metrics(fd) else { continue };
+            let gap = baseline_gap_em(p, f);
+            if gap.abs() < 0.005 {
+                continue;
+            }
+            let variant = format!("{key}@{first}");
+            if !fonts.font_data.contains_key(&variant) {
+                let mut vfd = fd.as_ref().clone();
+                // epaint applies the shift as `font_size · tweak.scale · y_offset_factor`, and
+                // the gap above is in the face's effective (scaled) em: divide it out so the
+                // drawn shift matches the gap whatever scale the face carries.
+                vfd.tweak.y_offset_factor = if fd.tweak.scale > 0.0 { -gap / fd.tweak.scale } else { -gap };
+                fonts.font_data.insert(variant.clone(), Arc::new(vfd));
+            }
+            *key = variant;
+        }
+    }
+}
+
 /// Last line of defence before [`FontDefinitions`] reach egui: drops every face epaint could not
 /// parse (and its key from every family), so a bad font costs a fallback, never a crash.
 pub(crate) fn drop_unparseable_fonts(fonts: &mut FontDefinitions) {
@@ -537,6 +592,7 @@ pub(super) fn font_definitions_impl(
     // Chinese comes from the native-only OFL LXGW face when embedded; a system Han face still
     // leads, and the barred Noto CJK collection never enters.
     append_craft_faces(&mut fonts);
+    align_following_faces_to_chain_baseline(&mut fonts);
     drop_unparseable_fonts(&mut fonts);
     // Only families egui still has data for count as bound (a dropped face can empty a chain).
     bound.retain(|f| fonts.families.get(&FontFamily::Name(f.as_str().into())).is_some_and(|c| !c.is_empty()));
