@@ -91,15 +91,29 @@ fn subtract_ranges(r: RangeRef, cuts: &[RangeRef]) -> Vec<RangeRef> {
 /// When the rule's top-left cell goes, its relative formulas are rewritten for the new top-left
 /// cell, so the cells left keep checking the same cells.
 pub(in super::super) fn remove_validation_cells(validations: &mut Vec<Validation>, cuts: &[RangeRef]) {
-    for dv in validations.iter_mut() {
+    let mut remaining = Vec::with_capacity(validations.len());
+    for mut dv in validations.drain(..) {
         let before = RangeRef::top_left(&dv.ranges);
         dv.ranges = dv.ranges.iter().flat_map(|r| subtract_ranges(*r, cuts)).collect();
-        if let (Some(from), Some(to)) = (before, RangeRef::top_left(&dv.ranges)) {
-            dv.f1 = move_rule_formula(&dv.f1, from, to);
-            dv.f2 = dv.f2.take().map(|f| move_rule_formula(&f, from, to));
+        let Some(from) = before else { continue };
+        if dv.ranges.is_empty() {
+            continue;
+        }
+        if RangeRef::top_left(&dv.ranges) == Some(from) {
+            remaining.push(dv);
+            continue;
+        }
+        let mut ranges = std::mem::take(&mut dv.ranges);
+        ranges.sort_by_key(|range| (range.start.row, range.start.col, range.end.row, range.end.col));
+        for range in ranges {
+            let mut split = dv.clone();
+            split.ranges.push(range);
+            split.f1 = move_rule_formula(&dv.f1, from, range.start);
+            split.f2 = dv.f2.as_deref().map(|f| move_rule_formula(f, from, range.start));
+            remaining.push(split);
         }
     }
-    validations.retain(|d| !d.ranges.is_empty());
+    *validations = remaining;
 }
 
 pub(super) fn validation(s: &mut Session, p: &Json) -> Result<Json> {
@@ -184,8 +198,17 @@ pub(super) fn validation(s: &mut Session, p: &Json) -> Result<Json> {
 /// than a reference or a name to evaluate.
 fn is_literal_list(f: &str) -> bool {
     f.starts_with('"')
-        || (!f.contains('!')
-            && gridcraft_formula::parse(f).map(|e| !matches!(e, gridcraft_formula::Expr::Ref(_) | gridcraft_formula::Expr::Name(_))).unwrap_or(true))
+        || gridcraft_formula::parse(f)
+            .map(|e| {
+                matches!(
+                    e,
+                    gridcraft_formula::Expr::Number(_)
+                        | gridcraft_formula::Expr::Text(_)
+                        | gridcraft_formula::Expr::Bool(_)
+                        | gridcraft_formula::Expr::Error(_)
+                )
+            })
+            .unwrap_or(true)
 }
 
 /// A list rule's source as a file stores it. A literal list typed without quotes, as in Excel's
