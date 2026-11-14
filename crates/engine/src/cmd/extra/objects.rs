@@ -105,7 +105,7 @@ pub(super) fn selection_pane(s: &mut Session, _: &Json) -> Result<Json> {
     }
     // Slicers paint above the other objects.
     for c in &sh.slicers {
-        let name = if c.caption.is_empty() { &c.column } else { &c.caption };
+        let name = if c.caption.is_empty() { c.field() } else { &c.caption };
         v.push(json!({"kind": "slicer", "id": c.id, "name": name, "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
     }
     // Form controls paint above everything else.

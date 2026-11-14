@@ -949,9 +949,16 @@ mod tests {
                 format: ShapeFormat::default(),
                 math: EquationCache::default(),
             }),
-            ObjKind::Slicer => {
-                s.slicers.push(Slicer { id, table: String::new(), column: String::new(), caption: String::new(), anchor, selected: None, columns: 1 })
-            }
+            ObjKind::Slicer => s.slicers.push(Slicer {
+                id,
+                source: crate::SlicerSource::Table { table: String::new(), column: String::new(), selected: None },
+                caption: String::new(),
+                anchor,
+                columns: 1,
+                name: String::new(),
+                style: String::new(),
+                row_height: None,
+            }),
             ObjKind::Control => s.controls.push(FormControl { id, anchor, ..Default::default() }),
         }
     }
