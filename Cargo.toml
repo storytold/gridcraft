@@ -107,19 +107,20 @@ codegen-units = 16
 debug = 0
 
 # Keep the complete egui family and native event bridge on reviewed fork commits.
+# This egui pin fixes RTL ligature continuation carets (GridCraft #3717).
 [patch.crates-io]
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+ecolor = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+emath = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+epaint = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+epaint_default_fonts = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui-winit = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui-wgpu = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui_glow = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui_extras = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui_kittest = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui_system_font_provider = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+eframe = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui_demo_lib = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
+egui_inspection = { git = "https://github.com/JonathanLee2020/egui.git", rev = "6e51aa5b25dee91c15bd4bc329cb4d4012d4e311" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }

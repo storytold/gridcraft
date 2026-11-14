@@ -1,7 +1,7 @@
 use super::active_row::paint_active_row;
 use super::cell_paint::{
-    Look, MergedArea, cell_text_y, center_across_end, col32, display_text, galley_baseline_bounds, look, merged_edges, paint_border, paint_cf_icon,
-    painted_halign, rotated_text_pos, shrink_font, wrapped_cell_text_y,
+    Look, MergedArea, cell_text_y, center_across_end, col32, display_text, empty_for_overflow, galley_baseline_bounds, look, merged_edges,
+    paint_border, paint_cf_icon, painted_halign, rotated_text_pos, shrink_font, wrapped_cell_text_y,
 };
 use super::geo::Geo;
 use super::tables::{filter_button_rect, paint_filter_button};
@@ -182,6 +182,7 @@ fn paint_backgrounds(q: &mut QuadrantPaint<'_>, cells: &[CellRef], merges: &[Ran
     let wb = q.workbook;
     let si = q.sheet_index;
     let sh = q.sheet;
+    let t = q.tokens;
     let cf = &mut *q.cf;
     let (r0, _) = q.rows;
     let c0 = q.cols.0;
@@ -194,11 +195,11 @@ fn paint_backgrounds(q: &mut QuadrantPaint<'_>, cells: &[CellRef], merges: &[Ran
             Some(m) => (geo.range_rect(sh, m), m.start),
             None => (geo.cell_rect(sh, c), c),
         };
-        let (lk, cfl) = look(wb, si, sh, anchor, cf);
+        let (lk, cfl) = look(wb, si, sh, anchor, cf, t);
         if let Some(f) = lk.fill {
             p.rect_filled(rect.expand(0.0), 0.0, f);
         } else if in_merge(c).is_some() {
-            p.rect_filled(rect.shrink(0.5), 0.0, Color32::WHITE);
+            p.rect_filled(rect.shrink(0.5), 0.0, t.grid_bg);
         }
         looks.push((anchor, rect, lk, cfl));
     }
@@ -210,20 +211,22 @@ fn outside_text_cells(q: &mut QuadrantPaint<'_>, merges: &[RangeRef]) -> Vec<(Ce
     let wb = q.workbook;
     let si = q.sheet_index;
     let sh = q.sheet;
+    let t = q.tokens;
     let cf = &mut *q.cf;
     let (r0, r1) = q.rows;
     let (c0, c1) = q.cols;
     let in_merge = |c: CellRef| merges.iter().find(|m| m.contains(c)).copied();
-    let empty_ok = |c: CellRef| sh.value_ref(c).is_none_or(Value::is_empty) && in_merge(c).is_none();
     // Text cells just outside the quadrant whose text may overflow into it: the nearest non-empty
     // cell left of `c0` and right of `c1` in each row (within the same frozen / scrolled pane).
     let mut outside: Vec<(CellRef, Rect, Look, Option<CfLook>)> = Vec::new();
     for r in geo.shown_rows(r0, r1) {
-        let left = (c0.saturating_sub(20)..c0).rev().map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
-        let right = (c1.saturating_add(1)..=c1.saturating_add(20).min(MAX_COLS - 1)).map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
+        let left = (c0.saturating_sub(20)..c0).rev().map(|col| CellRef::new(r, col)).find(|&n| !empty_for_overflow(wb, si, sh, n, merges, cf, t));
+        let right = (c1.saturating_add(1)..=c1.saturating_add(20).min(MAX_COLS - 1))
+            .map(|col| CellRef::new(r, col))
+            .find(|&n| !empty_for_overflow(wb, si, sh, n, merges, cf, t));
         for n in [left, right].into_iter().flatten() {
             if geo.same_col_pane(n.col, c0) && sh.col_width(n.col) > 0.0 && in_merge(n).is_none() {
-                let (lk, cfl) = look(wb, si, sh, n, cf);
+                let (lk, cfl) = look(wb, si, sh, n, cf, t);
                 outside.push((n, geo.cell_rect(sh, n), lk, cfl));
             }
         }
@@ -314,7 +317,7 @@ fn should_expand_text(filter_space: f32, overflows: bool, across_end: u32, col: 
 ///
 /// Handles text layout, wrapping, alignment, overflow into neighbouring cells,
 /// and clipping, while preserving cell decoration and merged-cell constraints.
-fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLook>), merges: &[RangeRef]) {
+fn paint_cell(q: &mut QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLook>), merges: &[RangeRef]) {
     let (cell, rect, lk, cfl) = painted;
     let c = *cell;
     let p = q.painter;
@@ -326,12 +329,10 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let z = geo.z;
     let (c0, c1) = q.cols;
     let in_merge = |cell| merges.iter().find(|m| m.contains(cell)).copied();
-    // Text overflows only into empty cells of its own pane: the frozen and scrolled columns move
-    // apart when scrolling (#2544).
-    let empty_ok = |cell: CellRef| geo.same_col_pane(cell.col, c.col) && sh.value_ref(cell).is_none_or(Value::is_empty) && in_merge(cell).is_none();
     if paint_cell_decorations(q, c, *rect, lk, cfl.as_ref()) {
         return;
     }
+    let cf = &mut *q.cf;
     let v = sh.value(c);
     let mut text_left = rect.left();
     if let Some(l) = cfl
@@ -449,11 +450,14 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let across_end = if halign == HAlign::CenterAcross && !rotated && in_merge(c).is_none() {
         center_across_end(c.col, c1 + 20, |col| {
             let n = CellRef::new(c.row, col);
-            empty_ok(n) && wb.styles.get(sh.style_id(n)).align.h == HAlign::CenterAcross
+            geo.same_col_pane(col, c.col)
+                && empty_for_overflow(wb, si, sh, n, merges, cf, t)
+                && wb.styles.get(sh.style_id(n)).align.h == HAlign::CenterAcross
         })
     } else {
         c.col
     };
+    // Overflow stays within its frozen/scrolled pane while respecting resolved fill blockers.
     // Overflow into empty neighbours for text (not upright text, whose width is its line height).
     let mut clip = *rect;
     let overflows = text_overflows_cell(numeric, &v, st.align.rotation, w, rect.width(), pad);
@@ -465,14 +469,24 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         }
         if matches!(halign, HAlign::Left | HAlign::Center | HAlign::Justify) {
             let mut cc = c.col + 1;
-            while right - rect.left() < w + 2.0 * pad && cc < MAX_COLS && empty_ok(CellRef::new(c.row, cc)) && cc <= c1 + 20 {
+            while right - rect.left() < w + 2.0 * pad
+                && cc < MAX_COLS
+                && geo.same_col_pane(cc, c.col)
+                && empty_for_overflow(wb, si, sh, CellRef::new(c.row, cc), merges, cf, t)
+                && cc <= c1 + 20
+            {
                 right = geo.x_end(sh, cc);
                 cc += 1;
             }
         }
         if matches!(halign, HAlign::Right | HAlign::Center) {
             let mut cc = c.col;
-            while rect.right() - left < w + 2.0 * pad && cc > 0 && empty_ok(CellRef::new(c.row, cc - 1)) && cc + 20 > c0 {
+            while rect.right() - left < w + 2.0 * pad
+                && cc > 0
+                && geo.same_col_pane(cc - 1, c.col)
+                && empty_for_overflow(wb, si, sh, CellRef::new(c.row, cc - 1), merges, cf, t)
+                && cc + 20 > c0
+            {
                 cc -= 1;
                 left = geo.x(sh, cc);
             }
@@ -560,8 +574,8 @@ fn paint_borders(q: &mut QuadrantPaint<'_>, looks: &[(CellRef, Rect, Look, Optio
     let wb = q.workbook;
     let si = q.sheet_index;
     let sh = q.sheet;
-    let cf = &mut *q.cf;
     let t = q.tokens;
+    let cf = &mut *q.cf;
     let z = geo.z;
     let (r0, r1) = q.rows;
     let (c0, c1) = q.cols;
@@ -585,14 +599,14 @@ fn paint_borders(q: &mut QuadrantPaint<'_>, looks: &[(CellRef, Rect, Look, Optio
             if line.is_none() {
                 continue;
             }
-            let col = col32(line.color, wb, Color32::BLACK);
+            let col = col32(line.color, wb, t.cell_text);
             paint_border(p, pts, line.style, col);
         }
         if !b.diag_down.is_none() {
-            paint_border(p, [rect.left_top(), rect.right_bottom()], b.diag_down.style, col32(b.diag_down.color, wb, Color32::BLACK));
+            paint_border(p, [rect.left_top(), rect.right_bottom()], b.diag_down.style, col32(b.diag_down.color, wb, t.cell_text));
         }
         if !b.diag_up.is_none() {
-            paint_border(p, [rect.left_bottom(), rect.right_top()], b.diag_up.style, col32(b.diag_up.color, wb, Color32::BLACK));
+            paint_border(p, [rect.left_bottom(), rect.right_top()], b.diag_up.style, col32(b.diag_up.color, wb, t.cell_text));
         }
         // Comment / note indicator.
         if let Some(cm) = sh.comments.get(c) {
