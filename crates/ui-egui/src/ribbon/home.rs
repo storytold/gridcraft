@@ -340,9 +340,10 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
         ui.horizontal(|ui| {
             let symbol = accounting_button_symbol(&app.ui.accounting_format);
             let (c, ca) = split_button_symbol(ui, symbol, "Accounting Number Format");
-            control_keytip(app, ui, &ca, "home.accounting");
+            // Alt+H, A, N applies the format, as the button face does: the badge goes there.
+            control_keytip(app, ui, &c, "home.accounting");
             let forced = invoke(app, "home.accounting");
-            if c || forced {
+            if c.clicked() || forced {
                 act(app, "ui.accountingFormat", json!({"code": app.ui.accounting_format.clone()}));
             }
             egui::Popup::menu(&ca).show(|ui| {

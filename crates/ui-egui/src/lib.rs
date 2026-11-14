@@ -173,6 +173,11 @@ impl UiState {
     /// (Table Design) cannot come back with nothing selected to justify it.
     pub fn at_startup(mut self) -> Self {
         self.ribbon_tab = "Home".into();
+        // A format from an older or edited ui.json that the Accounting menu doesn't list would make
+        // the button and Alt+H, A, N fail on every use: go back to the default.
+        if !crate::ribbon::is_accounting_format_code(&self.accounting_format) {
+            self.accounting_format = Self::default().accounting_format;
+        }
         self
     }
 

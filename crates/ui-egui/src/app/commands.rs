@@ -23,9 +23,10 @@ impl SheetApp {
             if !crate::ribbon::is_accounting_format_code(&code) {
                 return Err("unknown accounting format".into());
             }
-            let result = self.run_command("home.numberFormat", params)?;
+            // The choice is the user's preference even when the selection can't take it (a
+            // protected sheet, no workbook): keep it, then report the formatting error.
             self.ui.accounting_format = code;
-            return Ok(result);
+            return self.run_command("home.numberFormat", params);
         }
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
