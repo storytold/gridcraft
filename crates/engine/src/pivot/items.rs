@@ -1,4 +1,6 @@
-use super::{CellError, HashMap, MONTHS, Ordering, PivotDateGroup, PivotField, PivotFunc, PivotSort, Source, Value, Workbook, datetime_from_serial};
+use gridcraft_model::pivot_source::ItemFormat;
+
+use super::{CellError, HashMap, Ordering, PivotDateGroup, PivotField, PivotFunc, PivotSort, Source, Value, Workbook};
 
 // ---------------------------------------------------------------- items
 
@@ -25,7 +27,7 @@ fn cmp_items(a: &Item, b: &Item) -> Ordering {
 }
 
 /// (identity key, item) for a source value under a field's date grouping.
-fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: usize) -> (String, Item) {
+fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &ItemFormat, first: usize) -> (String, Item) {
     let it = |value: Value, label: String, class: u8, num: f64, formatted: bool| Item {
         text: label.to_lowercase(),
         value,
@@ -35,39 +37,27 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: 
         first,
         formatted,
     };
+    // The label is the model's, which file writers list items by too. It takes the source record's
+    // value (already its cell's first element) and reads an array's first element the same way as
+    // the match below.
+    let label = gridcraft_model::pivot_source::item_label(v, group, fmt, wb.date_system);
+    let v = &v.scalar();
     match v {
-        Value::Empty => ("b".into(), it(Value::text("(blank)"), "(blank)".into(), 4, 0.0, false)),
-        Value::Number(n) => {
-            if group != PivotDateGroup::None
-                && let Some(dt) = datetime_from_serial(wb.date_system, *n)
-            {
-                let mon = MONTHS.get(dt.month.saturating_sub(1) as usize).copied().unwrap_or("Jan");
-                let (label, key) = match group {
-                    PivotDateGroup::Years => (dt.year.to_string(), dt.year as f64),
-                    PivotDateGroup::Quarters => {
-                        let q = (dt.month.saturating_sub(1)) / 3 + 1;
-                        (format!("Qtr{q}"), q as f64)
-                    }
-                    PivotDateGroup::Months => (mon.to_string(), dt.month as f64),
-                    _ => (format!("{}-{mon}", dt.day), (dt.month * 100 + dt.day) as f64),
-                };
-                return (format!("g{key}"), it(Value::text(label.as_str()), label, 0, key, false));
-            }
-            let label = crate::display::format(v, fmt, wb).text;
-            (format!("n{}", n.to_bits()), it(v.clone(), label, 0, *n, true))
-        }
-        Value::Text(t) => (format!("t{}", t.to_lowercase()), it(v.clone(), t.to_string(), 1, 0.0, false)),
-        Value::Bool(b) => {
-            let l = if *b { "TRUE" } else { "FALSE" };
-            (format!("l{l}"), it(Value::Bool(*b), l.into(), 2, *b as u8 as f64, false))
-        }
-        Value::Error(e) => (format!("e{}", e.as_str()), it(v.clone(), e.as_str().into(), 3, 0.0, false)),
-        Value::Array(_) => make_item(wb, &v.scalar(), group, fmt, first),
+        Value::Empty => ("b".into(), it(Value::text("(blank)"), label, 4, 0.0, false)),
+        Value::Number(n) => match gridcraft_model::pivot_source::date_group_item(wb.date_system, *n, group) {
+            Some((_, key)) => (format!("g{key}"), it(Value::text(label.as_str()), label, 0, key, false)),
+            None => (format!("n{}", n.to_bits()), it(v.clone(), label, 0, *n, true)),
+        },
+        Value::Text(t) => (format!("t{}", t.to_lowercase()), it(v.clone(), label, 1, 0.0, false)),
+        Value::Bool(b) => (format!("l{label}"), it(Value::Bool(*b), label, 2, *b as u8 as f64, false)),
+        Value::Error(e) => (format!("e{}", e.as_str()), it(v.clone(), label, 3, 0.0, false)),
+        // An array in an array: no value an item can hold.
+        Value::Array(_) => ("b".into(), it(Value::text("(blank)"), label, 4, 0.0, false)),
     }
 }
 
 impl FieldItems {
-    pub(super) fn intern(&mut self, wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: usize) -> u32 {
+    pub(super) fn intern(&mut self, wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &ItemFormat, first: usize) -> u32 {
         let (key, item) = make_item(wb, v, group, fmt, first);
         if let Some(i) = self.index.get(&key) {
             return *i;
@@ -87,16 +77,21 @@ impl FieldItems {
 
 /// The label of a source value under a date grouping (for filters and field lists).
 pub fn item_label(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str) -> String {
-    make_item(wb, v, group, fmt, 0).1.label
+    make_item(wb, v, group, &item_format(fmt), 0).1.label
+}
+
+/// A source column's item format, parsed once for all its records (through the format cache).
+pub(super) fn item_format(code: &str) -> ItemFormat {
+    crate::display::parsed(code).into()
 }
 
 /// Distinct item labels of a source column, sorted like the field list shows them.
 pub fn distinct_labels(wb: &Workbook, src: &Source, col: usize, group: PivotDateGroup, limit: usize) -> Vec<String> {
     let mut fi = FieldItems::default();
-    let fmt = src.formats.get(col).map(String::as_str).unwrap_or("General");
+    let fmt = item_format(src.formats.get(col).map(String::as_str).unwrap_or("General"));
     for (i, r) in src.rows.iter().enumerate() {
         if let Some(v) = r.get(col) {
-            fi.intern(wb, v, group, fmt, i);
+            fi.intern(wb, v, group, &fmt, i);
         }
         if fi.items.len() > 100_000 {
             break;
@@ -265,5 +260,28 @@ pub(super) fn collect_siblings(nodes: &[Node], prefix: &mut Vec<u32>, out: &mut 
         prefix.push(n.item);
         collect_siblings(&n.children, prefix, out);
         prefix.pop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use gridcraft_core::Array;
+
+    use super::*;
+
+    #[test]
+    fn array_items_agree_in_value_key_and_label() {
+        let wb = Workbook::new();
+        let one = |v: Value| Value::Array(Arc::new(Array::scalar(v)));
+        // An array is its first element.
+        let (key, item) = make_item(&wb, &one(Value::Number(5.0)), PivotDateGroup::None, &item_format("General"), 0);
+        assert_eq!(key, format!("n{}", 5f64.to_bits()));
+        assert_eq!((item.label.as_str(), &item.value), ("5", &Value::Number(5.0)));
+        // An array inside that is no value an item can hold: blank throughout.
+        let (key, item) = make_item(&wb, &one(one(Value::Number(5.0))), PivotDateGroup::None, &item_format("General"), 0);
+        assert_eq!(key, "b");
+        assert_eq!((item.label.as_str(), &item.value), ("(blank)", &Value::text("(blank)")));
     }
 }

@@ -8,9 +8,8 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
-use gridcraft_core::date::datetime_from_serial;
 pub use gridcraft_core::quote_sheet;
-use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, split_sheet};
+use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{
     BorderLine, BorderStyle, Cell, Chart, Color, Fill, HAlign, NumFmt, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs,
     PivotSort, PivotTable, PivotValue, Series, Style, StyleId, Workbook,
@@ -42,8 +41,6 @@ pub const MAX_AXIS_FIELDS: usize = 32;
 /// Most fields in the Values area.
 pub const MAX_VALUE_FIELDS: usize = 256;
 
-const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
 // ---------------------------------------------------------------- source
 
 /// The source list: header names, per-column number formats and the records.
@@ -74,50 +71,8 @@ pub fn range_text(sheet_name: &str, r: RangeRef) -> String {
 
 /// Resolves source text (range, table name or defined name) to (sheet, range including header).
 pub fn resolve_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<(usize, RangeRef), String> {
-    resolve_inner(wb, text, default_sheet, 0)
+    gridcraft_model::pivot_source::resolve(wb, text, default_sheet)
 }
-
-fn resolve_inner(wb: &Workbook, text: &str, default_sheet: usize, depth: u32) -> Result<(usize, RangeRef), String> {
-    const INVALID: &str = "The reference isn't valid.";
-    let t = text.trim().trim_start_matches('=').trim();
-    if t.is_empty() || depth > 4 {
-        return Err(INVALID.into());
-    }
-    if let Some((si, ti)) = wb.table(t)
-        && let Some(tb) = wb.sheet(si).and_then(|s| s.tables.get(ti))
-    {
-        if !tb.header_row {
-            return Err("The table needs a header row to be used as a PivotTable source.".into());
-        }
-        let end_row = tb.range.end.row.saturating_sub(tb.totals_row as u32).max(tb.range.start.row);
-        return Ok((si, RangeRef::new(tb.range.start, CellRef::new(end_row, tb.range.end.col))));
-    }
-    let (sheet, body) = split_sheet(t);
-    if let Some(r) = RangeRef::parse(body) {
-        let si = match sheet {
-            Some(n) => wb.sheet_index(&n).ok_or_else(|| INVALID.to_string())?,
-            None => default_sheet,
-        };
-        let sh = wb.sheet(si).ok_or_else(|| INVALID.to_string())?;
-        let r = if r.is_full_cols() || r.is_full_rows() {
-            let used = sh.used_range().ok_or_else(|| INVALID.to_string())?;
-            r.intersection(&used).ok_or_else(|| INVALID.to_string())?
-        } else {
-            r
-        };
-        return Ok((si, r));
-    }
-    if sheet.is_none()
-        && let Some(n) = wb.name(t, default_sheet)
-    {
-        let f = n.formula.clone();
-        return resolve_inner(wb, &f, default_sheet, depth + 1);
-    }
-    Err(INVALID.into())
-}
-
-const FIELD_NAME_ERR: &str =
-    "The PivotTable field name is not valid. To create a PivotTable, you must use data that is organized as a list with labeled columns.";
 
 /// Reads the source list.
 pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<Source, String> {
@@ -126,34 +81,8 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
     if r.count() > MAX_SOURCE_CELLS {
         return Err("The source range is too large for a PivotTable.".into());
     }
-    let mut headers: Vec<String> = Vec::new();
-    // Names taken so far (lower-case), and the next suffix to try for each repeated header, so
-    // that thousands of equal headers don't take cubic time.
-    let mut taken: HashSet<String> = HashSet::new();
-    let mut next_suffix: HashMap<String, usize> = HashMap::new();
-    let mut formats = Vec::new();
-    for c in r.start.col..=r.end.col {
-        let h = crate::display::cell_text(wb, sh, CellRef::new(r.start.row, c)).trim().to_string();
-        if h.is_empty() {
-            return Err(FIELD_NAME_ERR.into());
-        }
-        let key = h.to_ascii_lowercase();
-        let mut n = h.clone();
-        let mut k = next_suffix.get(&key).copied().unwrap_or(2);
-        while taken.contains(&n.to_ascii_lowercase()) {
-            n = format!("{h}{k}");
-            k += 1;
-        }
-        next_suffix.insert(key, k);
-        taken.insert(n.to_ascii_lowercase());
-        headers.push(n);
-        let fmt = if r.end.row > r.start.row {
-            wb.styles.get(sh.style_id(CellRef::new(r.start.row + 1, c))).num_fmt.as_str().to_string()
-        } else {
-            "General".into()
-        };
-        formats.push(fmt);
-    }
+    let headers = gridcraft_model::pivot_source::headers(wb, si, r)?;
+    let formats: Vec<String> = (r.start.col..=r.end.col).map(|c| gridcraft_model::pivot_source::column_format(wb, si, r, c)).collect();
     let w = headers.len();
     let mut rows = Vec::new();
     let mut numeric = vec![true; w];

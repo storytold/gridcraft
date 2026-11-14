@@ -1094,3 +1094,86 @@ fn legacy_count_numbers_caption_follows_the_function() {
         assert_eq!(text(&s, "E3"), after, "{legacy}");
     }
 }
+
+/// The grand total of the report on the active sheet (column `col` of the Grand Total row).
+fn grand_total(s: &Session, col: u32) -> Value {
+    let gt = find_row(s, "Grand Total").unwrap();
+    val(s, &CellRef::new(gt, col).a1())
+}
+
+#[test]
+fn table_source_leaves_out_its_totals_row() {
+    let mut s = sales();
+    s.execute("insert.table", json!({"range": "A1:E13", "name": "SalesTable"})).unwrap();
+    s.execute("table.totalRow", json!({"table": "SalesTable", "on": true})).unwrap();
+    s.execute("insert.pivotTable", json!({"source": "SalesTable", "rows": ["Region"], "values": ["Sales"]})).unwrap();
+    // Three regions, no "Total" item, and the totals row's sum is not counted again.
+    assert_eq!(find_row(&s, "Total"), None);
+    assert_eq!(grand_total(&s, 1), Value::Number(TOTAL));
+    assert_eq!(pt(&s).last_range.unwrap().height(), 5);
+}
+
+#[test]
+fn sheet_scoped_and_chained_names_resolve() {
+    let mut s = sales();
+    s.execute("formulas.defineName", json!({"name": "Data", "refersTo": "=Sheet1!$A$1:$E$13", "scope": "Sheet1"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Alias", "refersTo": "=Data"})).unwrap();
+    for (source, at) in [("Data", "H1"), ("Alias", "H20")] {
+        s.execute("insert.pivotTable", json!({"source": source, "destination": format!("Sheet1!{at}"), "rows": ["Region"], "values": ["Sales"]}))
+            .unwrap();
+        assert_eq!(pt(&s).source, source);
+        let r = pt(&s).last_range.unwrap();
+        assert_eq!(val(&s, &CellRef::new(r.end.row, r.start.col + 1).a1()), Value::Number(TOTAL), "{source}");
+    }
+}
+
+#[test]
+fn repeated_and_padded_headers_keep_their_fields() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([[" Region ", "Sales", "sales"], ["East", 1, 10], ["West", 2, 20], ["East", 3, 30]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    let r =
+        s.execute("insert.pivotTable", json!({"source": "Sheet1!A1:C4", "rows": ["Region"], "values": ["sales2"], "filters": ["Sales"]})).unwrap();
+    assert_eq!(r["fields"], json!(["Region", "Sales", "sales2"]));
+    // The page field on the first `Sales` stays above the report and filters by its own column.
+    assert_eq!(text(&s, "A1"), "Sales");
+    s.execute("pivot.filter", json!({"field": "Sales", "selected": ["1", "3"]})).unwrap();
+    assert_eq!(text(&s, "B1"), "(Multiple Items)");
+    assert_eq!(grand_total(&s, 1), Value::Number(40.0));
+}
+
+#[test]
+fn formatted_page_items_are_chosen_by_their_labels() {
+    let mut s = sales();
+    s.execute("home.numberFormat", json!({"range": "E2:E13", "code": "$#,##0.00"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Units"], "filters": ["Sales"]})).unwrap();
+    s.execute("pivot.filter", json!({"field": "Sales", "selected": ["$120.00"]})).unwrap();
+    assert_eq!(text(&s, "B1"), "$120.00");
+    // East Pears (8) and West Apples (12).
+    assert_eq!(grand_total(&s, 1), Value::Number(20.0));
+    s.execute("pivot.filter", json!({"field": "Sales", "selected": ["$120.00", "$60.00"]})).unwrap();
+    assert_eq!(text(&s, "B1"), "(Multiple Items)");
+    assert_eq!(grand_total(&s, 1), Value::Number(30.0));
+}
+
+#[test]
+fn headers_read_values_while_formulas_show() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=\"Reg\"&\"ion\""})).unwrap();
+    s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    let r = s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    assert_eq!(r["fields"][0], "Region");
+}
+
+#[test]
+fn accounting_items_keep_their_labels_without_the_fill() {
+    let mut s = sales();
+    s.execute("home.numberFormat", json!({"range": "E2:E13", "code": "_($* #,##0_);_($* (#,##0);_($* \"-\"_);_(@_)"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Units"], "filters": ["Sales"]})).unwrap();
+    // The page item is labelled without a space where the fill is, and a selection stored by
+    // that label (as files and earlier versions hold it) still matches.
+    s.execute("pivot.filter", json!({"field": "Sales", "selected": [" $120 "]})).unwrap();
+    assert_eq!(text(&s, "B1"), " $120 ");
+    assert_eq!(grand_total(&s, 1), Value::Number(20.0));
+}

@@ -2266,6 +2266,7 @@ dependencies = [
  "gridcraft-core",
  "gridcraft-formula",
  "gridcraft-math",
+ "gridcraft-numfmt",
  "serde",
  "serde_json",
  "sha2 0.11.1",
