@@ -22,8 +22,7 @@ and reference unions, and backslashes between array columns (`{1\2;3\4}`). For e
 decimal points and comma array columns; it does not silently translate Spanish aliases.
 
 The cell editor, formula bar, Show Formulas, autocomplete, the Formula ribbon, Insert Function, and argument hints
-use the selected formula language. Common Spanish function help is translated; functions
-without a Spanish entry retain their English names/help. General interface labels and errors
+use the selected formula language. Spanish function descriptions and 282 argument names are translated; argument names without a Spanish entry retain their English spelling. General interface labels and errors
 fall back to English where Spanish translations are not provided. An edit captures its language
 when it starts so switching the preference cannot reinterpret unfinished input.
 
