@@ -228,6 +228,35 @@ fn moves_and_renames() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Sheet names fold across scripts (`лист1` = `Лист1`), as `Workbook::sheet_index` resolves them.
+/// A structural edit and a rename must reach such a reference, and a delete must not leave it
+/// behind as a stale name that only turns into `#REF!` on recalculation.
+#[test]
+fn sheet_references_follow_case_folded_names() -> Result<(), Box<dyn std::error::Error>> {
+    let ins = Edit::Insert { axis: Axis::Rows, at: 0, count: 1 };
+    assert_eq!(print(&adjust(parse("лист1!A1+Лист1!B2")?, "Sheet1", "Лист1", &ins)), "лист1!A2+Лист1!B3");
+    assert_eq!(print(&rename_sheet(parse("лист1!A1+Лист1!B2")?, "Лист1", "Данные")), "Данные!A1+Данные!B2");
+    assert_eq!(print(&rename_sheet(parse("ЛИСТ1!MyName")?, "Лист1", "Данные")), "Данные!MyName");
+    let order: Vec<String> = ["Sheet1", "Лист1", "Spare"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(print(&crate::adjust::delete_sheet(parse("SUM(лист1!A1)")?, "Лист1", &order)), "SUM(#REF!)");
+    Ok(())
+}
+
+#[test]
+fn edits_preserve_case_variant_sheet_identities() -> Result<(), Box<dyn std::error::Error>> {
+    use crate::adjust::{adjust_in, delete_sheet, rename_sheet_in};
+    let order = ["лист1", "ЛИСТ1", "Last"].map(String::from);
+    let source = "лист1!A1+ЛИСТ1!A1+ЛиСт1!Tax+ЛИСТ1!Tax";
+    assert_eq!(print(&rename_sheet_in(parse(source)?, "лист1", "New", &order)), "New!A1+ЛИСТ1!A1+New!Tax+ЛИСТ1!Tax");
+    assert_eq!(print(&delete_sheet(parse(source)?, "лист1", &order)), "#REF!+ЛИСТ1!A1+#REF!+ЛИСТ1!Tax");
+    let span = "SUM(лист1:Last!A1)";
+    assert_eq!(print(&delete_sheet(parse(span)?, "Last", &order)), "SUM(лист1:ЛИСТ1!A1)");
+    assert_eq!(print(&rename_sheet_in(parse(span)?, "ЛИСТ1", "New", &order)), span);
+    let rows = Edit::Insert { axis: Axis::Rows, at: 0, count: 1 };
+    assert_eq!(print(&adjust_in(parse("A1+лист1!A1+ЛИСТ1!A1")?, "ЛИСТ1", "лист1", &rows, &order)), "A1+лист1!A2+ЛИСТ1!A1");
+    Ok(())
+}
+
 #[test]
 fn rename_sheet_updates_qualified_names() -> Result<(), Box<dyn std::error::Error>> {
     let e = parse("Data!MyName+MyName+Other!MyName")?;
@@ -238,6 +267,10 @@ fn rename_sheet_updates_qualified_names() -> Result<(), Box<dyn std::error::Erro
     let e = rename_sheet(parse("Data!MyName")?, "Data", "It's");
     assert_eq!(e, Expr::Name("It's!MyName".into()));
     assert_eq!(print(&rename_sheet(e, "It's", "Totals")), "Totals!MyName");
+    // `same_name` folds names whose byte lengths differ: U+212A KELVIN SIGN is `k`, so the sheet name
+    // in `K!MyName` is not `old.len()` bytes and the split is at the `!`, not at the old name's length.
+    const KELVIN: &str = "\u{212A}";
+    assert_eq!(print(&rename_sheet(parse("K!MyName")?, KELVIN, "Данные")), "Данные!MyName");
     Ok(())
 }
 

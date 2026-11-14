@@ -104,6 +104,7 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     s.doc()?.wb.check_sheet_name(&name, Some(i)).map_err(EngineError::Other)?;
     edit(s, |cx| {
         let old = cx.wb.sheet(i).map(|s| s.name.clone()).unwrap_or_default();
+        let order: Vec<_> = cx.wb.sheets.iter().map(|sheet| sheet.name.clone()).collect();
         cx.sheet_mut(i)?.name = name.clone();
         for si in 0..cx.wb.sheets.len() {
             let keys: Vec<(CellRef, Arc<gridcraft_model::Formula>)> =
@@ -111,7 +112,7 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             let Some(sh) = cx.wb.sheet_mut(si) else { continue };
             for (c, f) in keys {
                 // Compares trees, so unchanged formulas are not printed; they keep their text.
-                let changed = f.with_expr(|e| Some(gridcraft_formula::adjust::rename_sheet(e.clone(), &old, &name)).filter(|ne| ne != e));
+                let changed = f.with_expr(|e| Some(gridcraft_formula::adjust::rename_sheet_in(e.clone(), &old, &name, &order)).filter(|ne| ne != e));
                 if let Some(Some(ne)) = changed
                     && let Some(cell) = sh.cells.get_mut(c)
                 {
@@ -121,19 +122,19 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             for ch in sh.charts.iter_mut() {
                 // A PivotChart follows its PivotTable's sheet.
                 if let Some((sheet, pivot)) = ch.pivot.as_deref().and_then(crate::pivot::parse_chart_link)
-                    && sheet.eq_ignore_ascii_case(&old)
+                    && gridcraft_formula::adjust::sheet_position(&order, &sheet) == Some(i)
                 {
                     ch.pivot = Some(crate::pivot::chart_link(&name, &pivot));
                 }
             }
         }
-        crate::cmd::edit::rewrite_cell_links(&mut cx.wb, |_, e| gridcraft_formula::adjust::rename_sheet(e, &old, &name));
+        crate::cmd::edit::rewrite_cell_links(&mut cx.wb, |_, e| gridcraft_formula::adjust::rename_sheet_in(e, &old, &name, &order));
         for n in cx.wb.names.iter_mut() {
             if let Ok(e) = gridcraft_formula::parse_name(&n.formula) {
-                n.formula = gridcraft_formula::print(&gridcraft_formula::adjust::rename_sheet(e, &old, &name));
+                n.formula = gridcraft_formula::print(&gridcraft_formula::adjust::rename_sheet_in(e, &old, &name, &order));
             }
         }
-        crate::cmd::edit::rewrite_python_refs(&mut cx.wb, &|_, e| gridcraft_formula::adjust::rename_sheet(e, &old, &name))?;
+        crate::cmd::edit::rewrite_python_refs(&mut cx.wb, &|_, e| gridcraft_formula::adjust::rename_sheet_in(e, &old, &name, &order))?;
         cx.structural = true;
         Ok(Json::Null)
     })
@@ -154,6 +155,7 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             // The copy is a sheet of its own, not the one it was copied from.
             sh.uid = gridcraft_model::SheetUid::fresh();
             let base = sh.name.clone();
+            let order: Vec<_> = cx.wb.sheets.iter().map(|sheet| sheet.name.clone()).collect();
             // `Name (2)`: the name is shortened so the suffix fits in Excel's 31 characters.
             let name = (2..)
                 .map(|k| {
@@ -165,7 +167,7 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 .unwrap_or(base.clone());
             sh.name = name;
             sh.tables.clear(); // table names must be unique
-            sh.preserved = None; // kept file content (form controls, OLE objects…) stays with the original
+            sh.preserved = None; // kept file content (form controls, OLE objectsвЂ¦) stays with the original
             // Object ids are unique across the workbook (selection and the `{kind, id}` commands
             // rely on it), so the copied objects get fresh ones (free ones, even when a file used
             // the largest id).
@@ -190,7 +192,7 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 .filter(|nm| nm.scope == Some(i))
                 .map(|nm| {
                     let formula = gridcraft_formula::parse_name(&nm.formula)
-                        .map(|e| gridcraft_formula::print(&gridcraft_formula::adjust::rename_sheet(e, &base, &sh.name)))
+                        .map(|e| gridcraft_formula::print(&gridcraft_formula::adjust::rename_sheet_in(e, &base, &sh.name, &order)))
                         .unwrap_or_else(|_| nm.formula.clone());
                     gridcraft_model::DefinedName { scope: Some(at), formula, ..nm.clone() }
                 })

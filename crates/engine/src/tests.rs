@@ -1,5 +1,5 @@
 use gridcraft_core::{CellRef, Value};
-use serde_json::json;
+use serde_json::{Value as Json, json};
 
 use crate::Session;
 
@@ -2538,6 +2538,21 @@ fn sheets() {
     assert_eq!(v(&s, "A1"), Value::Number(10.0));
     s.execute("sheet.rename", json!({"sheet": "Data", "name": "My Data"})).unwrap();
     assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["formula"], "='My Data'!A1*2");
+}
+
+#[test]
+fn rename_and_delete_keep_references_to_the_other_case_variant() {
+    let mut session = s();
+    // An imported book can contain spellings the new-sheet dialog would decline.
+    let wb = std::sync::Arc::make_mut(&mut session.doc_mut().unwrap().wb);
+    for name in ["лист1", "ЛИСТ1"] {
+        wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new(name)));
+    }
+    session.execute("cell.set", json!({"cell":"A1", "input":"=лист1!B1+ЛИСТ1!B1"})).unwrap();
+    session.execute("sheet.rename", json!({"sheet":1, "name":"Data"})).unwrap();
+    assert_eq!(session.execute("cell.get", json!({"cell":"A1"})).unwrap()["formula"], "=Data!B1+ЛИСТ1!B1");
+    session.execute("home.deleteSheet", json!({"sheet":1})).unwrap();
+    assert_eq!(session.execute("cell.get", json!({"cell":"A1"})).unwrap()["formula"], "=#REF!+ЛИСТ1!B1");
 }
 
 #[test]
@@ -5364,6 +5379,31 @@ v11	keep	11
     assert_eq!(v(&s, "A2"), Value::from("Z"));
 }
 
+/// Ctrl+Enter validates the destinations `range.fill` writes, and only those: a Stop rule on a row
+/// an applied filter hides must not reject a fill that never reaches it, as in Excel.
+#[test]
+fn a_stop_rule_on_a_filtered_out_row_does_not_reject_the_literal_fill() {
+    let mut s = s();
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=11 {
+        rows.push(json!([format!("v{i}"), if [3, 5, 7, 9].contains(&i) { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    assert_eq!(s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap()["hiddenRows"], 4);
+    let check = |s: &Session| {
+        let d = s.doc().unwrap();
+        crate::cmd::data::check_literal_fill_validation(&d.wb, 0, &[gridcraft_core::RangeRef::parse("A2:A11").unwrap()], "Z")
+    };
+    // A Stop rule that rejects "Z" on a hidden row: the fill skips that row, so it passes.
+    s.execute("data.validation", json!({"range": "A3", "type": "custom", "formula1": "=FALSE"})).unwrap();
+    assert!(check(&s).is_none(), "a hidden row's Stop rule decided a fill that never writes it");
+    // The same rule on the first visible destination still rejects it.
+    s.execute("data.validation", json!({"range": "A2", "type": "custom", "formula1": "=FALSE"})).unwrap();
+    assert!(check(&s).is_some(), "a Stop rule on a written destination must still reject the fill");
+}
+
 /// A table of ten rows (A1:B11) with a link on every value cell, four of its rows hidden by a
 /// filter (3, 5, 7, 9), and a spare corner at E1 to copy from.
 fn filtered_rows_with_links() -> Session {
@@ -6691,6 +6731,104 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
         assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "destination": dest})).is_err(), "destination {dest:?}");
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
+}
+
+/// Name Manager's identities distinguish a sheet literally named Workbook; null deletion stays legacy-wide.
+#[test]
+fn name_scope_identities_round_trip_and_null_deletion_keeps_its_contract() {
+    let mut s = s();
+    for name in ["Workbook", "Other"] {
+        s.execute("home.insertSheet", json!({"name":name})).unwrap();
+    }
+    let identities = [Json::Null, json!({"sheet":"Workbook"}), json!({"sheet":"Other"})];
+    for scope in &identities {
+        s.execute("formulas.defineName", json!({"name":"Rate", "refersTo":"=1", "scope":scope})).unwrap();
+    }
+    let result = s.execute("formulas.nameManager", json!({})).unwrap();
+    let rows = result.as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    for identity in &identities {
+        let row = rows.iter().find(|row| &row["scopeIdentity"] == identity).unwrap();
+        assert_eq!(row["name"], "Rate");
+        assert_eq!(row["scope"], identity.get("sheet").and_then(Json::as_str).unwrap_or("Workbook"));
+    }
+    s.execute("formulas.deleteName", json!({"name":"Rate", "scope":{"sheet":"Workbook"}})).unwrap();
+    let result = s.execute("formulas.nameManager", json!({})).unwrap();
+    let rows = result.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|row| row["scopeIdentity"].is_null()));
+    assert!(rows.iter().any(|row| row["scopeIdentity"] == json!({"sheet":"Other"})));
+    s.execute("formulas.deleteName", json!({"name":"Rate", "scope":"Workbook"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.names.len(), 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.names.len(), 2);
+    s.execute("formulas.deleteName", json!({"name":"Rate", "scope":null})).unwrap();
+    assert!(s.doc().unwrap().wb.names.is_empty());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.names.len(), 2);
+}
+
+/// A text draft that is already a value is filled as text: `literal: true` stores `=1+2` and
+/// `007` as typed and keeps each destination's format, while the same input parsed does not.
+#[test]
+fn a_literal_fill_stores_typed_text_without_parsing_it() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:B2", "values": [["x", 1], [2, 3]]})).unwrap();
+    s.execute("home.bold", json!({"range": "A1:B1"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B2"})).unwrap();
+
+    s.execute("range.fill", json!({"input": "=1+2", "literal": true})).unwrap();
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    for at in ["A1", "B1", "A2", "B2"] {
+        let cell = sh.cell(CellRef::parse(at).unwrap()).unwrap();
+        assert_eq!(cell.value, Value::text("=1+2"), "{at} is text");
+        assert!(cell.formula.is_none(), "{at} has no formula");
+    }
+    assert!(d.wb.styles.get(sh.style_id(CellRef::parse("A1").unwrap())).font.bold, "the fill keeps the destination's format");
+    assert!(!d.wb.styles.get(sh.style_id(CellRef::parse("A2").unwrap())).font.bold);
+
+    // The same input without `literal` is parsed: the formula's value, not the text.
+    s.execute("range.fill", json!({"input": "=1+2"})).unwrap();
+    assert_eq!(v(&s, "A2"), Value::Number(3.0));
+    assert!(s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A2").unwrap()).unwrap().formula.is_some());
+
+    // A single cell takes the same flag, and a literal parameter that is not a bool is refused.
+    s.execute("cell.set", json!({"cell": "C1", "input": "007", "literal": true})).unwrap();
+    assert_eq!(v(&s, "C1"), Value::text("007"));
+    assert!(s.execute("cell.set", json!({"cell": "C1", "input": "007", "literal": "yes"})).is_err());
+}
+
+/// A multiline literal keeps its breaks and is wrapped, as typing it into the cell does.
+#[test]
+fn a_multiline_literal_is_wrapped_and_kept_whole() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "B2", "input": "one\ntwo", "literal": true})).unwrap();
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    let cell = sh.cell(CellRef::parse("B2").unwrap()).unwrap();
+    assert_eq!(cell.value, Value::text("one\ntwo"));
+    assert!(d.wb.styles.get(sh.style_id(CellRef::parse("B2").unwrap())).align.wrap);
+}
+
+/// Repeating a multiline literal fill reuses the one wrapping style it derived: the destinations
+/// are cached by their own style, and the style table does not grow with the fills or the cells.
+#[test]
+fn repeated_multiline_literal_fills_derive_the_wrapping_style_once() {
+    let mut s = s();
+    let before = s.doc().unwrap().wb.styles.len();
+    for _ in 0..3 {
+        s.execute("range.fill", json!({"range": "A1:C2", "input": "one\ntwo", "literal": true})).unwrap();
+    }
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    let wrapping = sh.style_id(CellRef::parse("A1").unwrap());
+    assert!(d.wb.styles.get(wrapping).align.wrap, "the fill wraps the text");
+    assert_eq!(d.wb.styles.len(), before + 1, "three fills of six cells derive one wrapping style, not one per cell");
+    for at in ["C1", "A2", "C2"] {
+        assert_eq!(sh.style_id(CellRef::parse(at).unwrap()), wrapping, "{at} shares the derived style");
+        assert_eq!(sh.cell(CellRef::parse(at).unwrap()).map(|c| c.value.clone()), Some(Value::text("one\ntwo")));
+    }
 }
 
 #[test]

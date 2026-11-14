@@ -223,48 +223,165 @@ pub fn list_items(wb: &Workbook, sheet: usize, at: CellRef, dv: &Validation) -> 
 
 /// Checks typed input against the validation of a cell. `Ok(None)` = valid.
 pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
+    check_entry(wb, sheet, at, input, false, &mut None, None)
+}
+
+/// Checks a text entry using the same literal value that the cell command will store.
+pub fn check_literal_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
+    check_entry(wb, sheet, at, input, true, &mut None, None)
+}
+
+/// Checks a literal fill against the original sheet, reusing one scratch workbook for formulas.
+/// The rows an applied filter hides are not written by `range.fill`, so their rules are not
+/// checked: a Stop rule on a hidden row must not reject a fill that never reaches it.
+pub fn check_literal_fill_validation(wb: &Workbook, sheet: usize, ranges: &[RangeRef], input: &str) -> Option<(Validation, String)> {
+    let sh = wb.sheet(sheet)?;
+    if ranges.iter().any(|range| range.count() > 2_000_000) || sh.validations.is_empty() {
+        return None;
+    }
+    let sh = wb.sheet(sheet)?;
+    let applies = sh
+        .validations
+        .iter()
+        .any(|dv| dv.kind != ValidationKind::Any && dv.show_error && dv.ranges.iter().any(|rule| ranges.iter().any(|range| rule.intersects(range))));
+    if !applies {
+        return None;
+    }
+    let mut scratch = None;
+    let mut warning = None;
+    let mut dependent = Vec::new();
+    for range in ranges {
+        let filtered = crate::cmd::edit::filtered_rows(sh, *range);
+        for at in range.iter().filter(|at| !filtered.contains(&at.row)) {
+            let Some(dv) = sh.validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(at))) else { continue };
+            if dv.kind == ValidationKind::Any || !dv.show_error {
+                continue;
+            }
+            let numeric_bound = |f: &str| f.trim().trim_start_matches('=').parse::<f64>().is_ok();
+            let depends = match dv.kind {
+                ValidationKind::Custom => !matches!(dv.f1.trim().trim_start_matches('=').to_ascii_uppercase().as_str(), "TRUE" | "FALSE"),
+                ValidationKind::TextLength => !numeric_bound(&dv.f1) || dv.f2.as_deref().is_some_and(|f| !numeric_bound(f)),
+                _ => false,
+            };
+            if dv.kind == ValidationKind::Custom && dv.f1.trim().strip_prefix('=').unwrap_or(dv.f1.trim()).trim().eq_ignore_ascii_case("TRUE") {
+                continue;
+            }
+            if depends {
+                dependent.push(at);
+            } else if let Some(issue) = check_entry(wb, sheet, at, input, true, &mut scratch, None) {
+                if issue.0.error_style == ErrorStyle::Stop {
+                    return Some(issue);
+                }
+                warning = Some(issue);
+            }
+        }
+    }
+    if dependent.is_empty() {
+        return warning;
+    }
+    let mut entered = wb.clone();
+    let mut changed = Vec::new();
+    for range in ranges {
+        let filtered = crate::cmd::edit::filtered_rows(sh, *range);
+        for at in range.iter().filter(|at| !filtered.contains(&at.row)) {
+            entered.sheet_mut(sheet)?.cells.set(at, Cell { value: Value::text(input), style: sh.style_id(at), ..Default::default() });
+            changed.push((sheet, at));
+        }
+    }
+    let mut calc = gridcraft_calc::Calc::new();
+    calc.rebuild(&entered);
+    calc.cells_changed(&mut entered, &changed);
+    for at in dependent {
+        if let Some(issue) = check_entry(wb, sheet, at, input, true, &mut scratch, Some(&entered)) {
+            if issue.0.error_style == ErrorStyle::Stop {
+                return Some(issue);
+            }
+            warning = Some(issue);
+        }
+    }
+    warning
+}
+
+/// Applies the cell's validation rule to parsed input or explicit text.
+fn check_entry(
+    wb: &Workbook,
+    sheet: usize,
+    at: CellRef,
+    input: &str,
+    literal: bool,
+    scratch: &mut Option<(Workbook, gridcraft_calc::Calc)>,
+    completed: Option<&Workbook>,
+) -> Option<(Validation, String)> {
     let sh = wb.sheet(sheet)?;
     let dv = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(at)))?;
     if dv.kind == ValidationKind::Any || !dv.show_error {
         return None;
     }
-    if input.is_empty() && dv.allow_blank {
+    if !literal && input.is_empty() && dv.allow_blank {
         return None;
     }
-    let v = gridcraft_core::parse::parse_input(input, wb.date_system).value;
+    let v = if literal { Value::text(input) } else { gridcraft_core::parse::parse_input(input, wb.date_system).value };
     // The formulas are written for the top-left cell of all the areas and see the value being entered,
     // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).
     let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
-    let original = wb;
-    let entered;
-    let wb = if sh.value(at) == v {
-        wb
-    } else {
-        let mut w = wb.clone();
-        if let Some(sh) = w.sheet_mut(sheet) {
-            let style = sh.style_id(at);
-            sh.cells.set(at, Cell { value: v.clone(), style, ..Default::default() });
+    let mut eval = |f: &str| {
+        let constant = f.trim().strip_prefix('=').unwrap_or(f.trim()).trim();
+        if constant.eq_ignore_ascii_case("TRUE") {
+            return Value::Bool(true);
         }
-        entered = w;
-        &entered
+        if constant.eq_ignore_ascii_case("FALSE") {
+            return Value::Bool(false);
+        }
+        if let Ok(number) = constant.parse::<f64>()
+            && number.is_finite()
+        {
+            return Value::Number(number);
+        }
+        let formula = formula_at(f, first, at);
+        if let Some(completed) = completed {
+            return gridcraft_calc::evaluate(completed, sheet, at, &formula);
+        }
+        let replaces_code = sh.cell(at).is_some_and(|cell| cell.formula.is_some() || cell.py.is_some());
+        if sh.value(at) == v && !replaces_code {
+            return gridcraft_calc::evaluate(wb, sheet, at, &formula);
+        }
+        let (entered, calc) = scratch.get_or_insert_with(|| {
+            let entered = wb.clone();
+            let mut calc = gridcraft_calc::Calc::new();
+            calc.rebuild(&entered);
+            (entered, calc)
+        });
+        if let Some(target) = entered.sheet_mut(sheet) {
+            target.cells.set(at, Cell { value: v.clone(), style: sh.style_id(at), ..Default::default() });
+        }
+        calc.cells_changed(entered, &[(sheet, at)]);
+        let result = gridcraft_calc::evaluate(entered, sheet, at, &formula);
+        if let Some(target) = entered.sheet_mut(sheet) {
+            if let Some(original) = sh.cell(at) {
+                target.cells.set(at, original.clone());
+            } else {
+                target.cells.remove(at);
+            }
+        }
+        calc.cells_changed(entered, &[(sheet, at)]);
+        result
     };
-    let eval = |f: &str| gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at));
-    let num = |f: &str| eval(f).to_number().ok();
+    let mut num = |f: &str| eval(f).to_number().ok();
     let ok = match dv.kind {
         // The list is the one the dropdown showed before the entry, as in Excel: a source that takes
         // in the cell itself (`=$A1:$A2` on A2:A3 is A2:A3 at A3) doesn't list the value being typed.
-        ValidationKind::List => list_items(original, sheet, at, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
+        ValidationKind::List => list_items(wb, sheet, at, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
         ValidationKind::Custom => eval(&dv.f1).to_bool().unwrap_or(false),
         ValidationKind::TextLength => {
             let n = input.chars().count() as f64;
-            compare_op(dv.op, n, num(&dv.f1), dv.f2.as_deref().and_then(num))
+            compare_op(dv.op, n, num(&dv.f1), dv.f2.as_deref().and_then(&mut num))
         }
         _ => match v.as_f64() {
             Some(n) => {
                 if dv.kind == ValidationKind::Whole && n.fract() != 0.0 {
                     false
                 } else {
-                    compare_op(dv.op, n, num(&dv.f1), dv.f2.as_deref().and_then(num))
+                    compare_op(dv.op, n, num(&dv.f1), dv.f2.as_deref().and_then(&mut num))
                 }
             }
             None => false,
