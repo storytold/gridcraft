@@ -1,4 +1,5 @@
 use super::{Json, SheetApp, json};
+use crate::widgets::tr;
 
 /// The list scrolls inside the dialog: a sheet read from a file can carry thousands of rules, and
 /// a list laid out in full made the window as tall as all of them (issue #3321).
@@ -9,7 +10,7 @@ pub(super) fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
     // serialised every rule and journaled a step 60 times a second.
     let count = app.session.active().and_then(|d| d.wb.active()).map_or(0, |sh| sh.cond_formats.len());
     if count == 0 {
-        ui.label("There are no conditional formatting rules on this sheet.");
+        ui.label(tr(ui, "There are no conditional formatting rules on this sheet."));
         return;
     }
     let mut action: Option<Json> = None;
@@ -28,7 +29,7 @@ pub(super) fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
                 if ui.small_button("▼").clicked() {
                     action = Some(json!({"moveDown": i}));
                 }
-                if ui.small_button("Delete").clicked() {
+                if ui.small_button(tr(ui, "Delete")).clicked() {
                     action = Some(json!({"delete": i}));
                 }
             });
