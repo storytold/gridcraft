@@ -666,13 +666,17 @@ fn add_months_clamped(sys: gridcraft_core::DateSystem, serial: f64, months: i64)
     serial_from_ymd(sys, year, month, (d.day as i64).min(last as i64)).map(|day| day + serial - serial.floor())
 }
 
+/// `x` rounded to 15 significant digits through its exact decimal expansion, so a number that
+/// already has 15 or fewer digits comes back unchanged at any size. A number near the largest
+/// double whose rounding would pass it keeps its value.
 fn round15(x: f64) -> f64 {
     if x == 0.0 || !x.is_finite() {
         return x;
     }
-    let mag = x.abs().log10().floor() as i32;
-    let p = 10f64.powi(14 - mag);
-    if !p.is_finite() || p == 0.0 { x } else { (x * p).round() / p }
+    match format!("{x:.14e}").parse::<f64>() {
+        Ok(r) if r.is_finite() => r,
+        _ => x,
+    }
 }
 
 /// `1st Period` → `2nd Period`: an English ordinal ending is rewritten to suit the new number.

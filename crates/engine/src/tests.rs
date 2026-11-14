@@ -1113,6 +1113,11 @@ fn linear_and_growth_trend_continue_the_fitted_line_or_curve() {
     s.execute("range.setValues", json!({"range": "X1", "values": [[tiny], [tiny], [tiny]]})).unwrap();
     fill(&mut s, "X1:X3", "X1:X4", "linearTrend").unwrap();
     assert_eq!(v(&s, "X4"), Value::Number(tiny));
+    // Huge numbers three times repeat exactly: the largest double, and one with 14 digits.
+    let (big, big14) = (f64::MAX, 1.7976931348623e308);
+    s.execute("range.setValues", json!({"range": "Y1", "values": [[big, big14], [big, big14], [big, big14]]})).unwrap();
+    fill(&mut s, "Y1:Z3", "Y1:Z4", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &["Y4", "Z4"]), n(&[big, big14]));
     s.execute("cell.set", json!({"cell": "N1", "input": "1/15/2026"})).unwrap();
     s.execute("cell.set", json!({"cell": "N2", "input": "2/15/2026"})).unwrap();
     fill(&mut s, "N1:N2", "N1:N3", "linearTrend").unwrap();
