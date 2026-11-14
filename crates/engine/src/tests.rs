@@ -6665,6 +6665,27 @@ fn protected_sheet_refuses_layout_commands_its_permissions_do_not_allow() {
 }
 
 #[test]
+fn insert_link_obeys_the_insert_hyperlinks_permission() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Jump"})).unwrap();
+    s.execute("cell.set", json!({"cell": "G1", "input": "999"})).unwrap();
+    s.execute("home.lockCell", json!({"range": "B1", "on": false})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let link = json!({"cell": "A1", "target": "#Sheet1!G1"});
+    // Locked cell with unchanged text, and an unlocked cell: both refused.
+    for params in [link.clone(), json!({"cell": "B1", "target": "#Sheet1!G1", "text": "x"}), json!({"cell": "A1", "remove": true})] {
+        let err = s.execute("insert.link", params).unwrap_err().to_string();
+        assert!(err.contains("Inserting hyperlinks"), "{err}");
+    }
+    assert!(s.doc().unwrap().wb.active().unwrap().hyperlinks.is_empty());
+    // Ticking Insert hyperlinks allows it (on the unlocked cell; the locked cell's own guard stays).
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("review.protectSheet", json!({"insertHyperlinks": true})).unwrap();
+    s.execute("insert.link", json!({"cell": "B1", "target": "#Sheet1!G1"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().hyperlinks.len(), 1);
+}
+
+#[test]
 fn an_edit_range_limited_to_windows_users_stays_locked() {
     use gridcraft_model::EditRange;
     let mut s = s();

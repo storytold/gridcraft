@@ -279,6 +279,7 @@ fn sample() -> Workbook {
     s.protection = Some(SheetProtection {
         format_cells: true,
         sort: true,
+        insert_hyperlinks: true,
         select_locked: true,
         select_unlocked: true,
         password: Some(gridcraft_model::PasswordHash::new_sha512("sheet pw", b"fedcba9876543210")),

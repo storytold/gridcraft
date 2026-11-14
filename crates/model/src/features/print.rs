@@ -212,6 +212,10 @@ pub struct SheetProtection {
     pub delete_rows: bool,
     pub sort: bool,
     pub autofilter: bool,
+    /// Insert hyperlinks (XLSX `insertHyperlinks`). Workbooks saved before this existed read as
+    /// not allowed, as Excel's default for a protected sheet.
+    #[serde(default)]
+    pub insert_hyperlinks: bool,
 }
 
 /// Review › Allow Edit Ranges: cells that stay editable on a protected sheet, with or without a

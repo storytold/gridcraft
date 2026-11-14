@@ -477,6 +477,7 @@ fn write_sheet_rules(s: &mut String, sheet: &Sheet, rels: &mut Rels, out: &mut O
             ("deleteRows", p.delete_rows),
             ("sort", p.sort),
             ("autoFilter", p.autofilter),
+            ("insertHyperlinks", p.insert_hyperlinks),
         ] {
             if allowed {
                 let _ = write!(s, " {attr}=\"0\"");
