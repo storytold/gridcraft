@@ -444,6 +444,18 @@ mod tests {
     }
 
     #[test]
+    fn hungarian_function_help_covers_the_catalog() {
+        let mut missing: Vec<&str> = crate::function_library::all()
+            .iter()
+            .map(|function| function.description.as_str())
+            .filter(|description| Language::Hu.function_description(description).is_none())
+            .collect();
+        missing.sort_unstable();
+        missing.dedup();
+        assert!(missing.is_empty(), "Missing Hungarian function descriptions: {missing:#?}");
+    }
+
+    #[test]
     fn translations_never_show_the_context_prefix() {
         // `tr` returns a found translation as it is, so a catalog that keeps `context|` in its
         // value shows it on screen (File › Options read "Options|Général" in French).

@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-13 · **Last updated:** 2026-11-14 · **Change:** minor (Hungarian UI localization: 1,590 catalog entries and selected interface areas, including Insert dropdowns and translated icon-picker tooltips; Insert Function's recently used category and common function descriptions are localized; earlier: CJK fallback text shares the Latin baseline; earlier: form controls: buttons, sliders and spin buttons; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-13 · **Last updated:** 2026-11-14 · **Change:** minor (Hungarian UI localization: 1,590 catalog entries and selected interface areas, including Insert dropdowns and translated icon-picker tooltips; Insert Function's recently used category and all 479 function descriptions are localized; earlier: CJK fallback text shares the Latin baseline; earlier: form controls: buttons, sliders and spin buttons; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -93,8 +93,9 @@ The ribbon is translated in part into Japanese, Simplified Chinese, Korean, Braz
 Russian, German and Hungarian. The first six languages have 266–268 ribbon labels each (~12% of
 ~2,200 strings; merged 10-10 in #31, #104, #82, German added 10-11). Hungarian has 1,590 catalog
 entries (~72%), including selected ribbon, dialog, macro, control, analysis, chart, status-bar and
-dynamic UI text; the interface is not fully localized. The interface follows the system language,
-and CJK, Thai and Hebrew text falls back to system fonts (#38). Japanese (10-17) and Brazilian
+dynamic UI text, plus all 479 worksheet function descriptions; the interface is not fully
+localized. The interface follows the system language, and CJK, Thai and Hebrew text falls back to
+system fonts (#38). Japanese (10-17) and Brazilian
 Portuguese also translate dialog titles and labels, message boxes, Backstage/File-view items,
 template names and native menus: 943 strings each, ~43%. The remaining dialogs, menus and messages
 are English; formulas and number formats are en-US only. Localized German formulas and numbers are
@@ -112,7 +113,7 @@ in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
 | Indonesian | id | none | 0% |
 | Japanese | ja | menus, File view, dialogs, messages | ~43% |
 | German | de | menus only | ~12% |
-| Hungarian | hu | selected dialogs, macro, control, analysis, chart, ribbon and dynamic UI | ~71% |
+| Hungarian | hu | selected dialogs, macro, control, analysis, chart, ribbon and dynamic UI; 479 function descriptions | ~71% |
 | Korean | ko | menus only | ~12% |
 | Vietnamese | vi | none | 0% |
 
