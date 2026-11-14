@@ -1,6 +1,7 @@
 use super::draw::{Block, PdfMeasure, Xf, draw_prims, rgb_of};
 use super::text::wrap_lines;
-use super::{Anchor, Font, Page, RangeRef, Rect, ShapeKind, Sheet, Value, Workbook};
+use super::text_unicode::{draw_shaped_text, needs_unicode_text, shaped_width, wrap_shaped};
+use super::{Anchor, Font, FontCatalog, Page, RangeRef, Rect, ShapeKind, Sheet, Value, Workbook};
 
 /// Cell pictures fit the current cell (or merged-cell) rectangle without changing aspect ratio.
 pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32, f32), k: f32) {
@@ -69,7 +70,15 @@ fn decode_image(data: &[u8], max_w: u32, max_h: u32) -> Option<(Vec<u8>, u32, u3
 /// Draws charts, pictures, shapes and sparklines overlapping the body block of a page.
 /// `pics` memoizes decoded pictures for the whole render (one page at a time draws each
 /// picture again, but the decode happens once).
-pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block, pics: &mut super::PicCache) {
+pub(super) fn draw_objects(
+    pg: &mut Page,
+    catalog: &FontCatalog,
+    wb: &Workbook,
+    si: usize,
+    sh: &Sheet,
+    b: &Block,
+    pics: &mut super::PicCache,
+) -> Result<(), String> {
     let block = b.range();
     let (sx0, sy0) = (sh.col_left(block.start.col), sh.row_top(block.start.row));
     let (sx1, sy1) = (sh.col_left(block.end.col.saturating_add(1)), sh.row_top(block.end.row.saturating_add(1)));
@@ -79,7 +88,7 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
     let place = |r: (f64, f64, f64, f64)| (bx + ((r.0 - sx0) as f32) * b.k, by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k);
     pg.save();
     pg.clip_rect(bx, by, bw, bh);
-    draw_sparklines(pg, wb, si, sh, b, block);
+    draw_sparklines(pg, catalog, wb, si, sh, b, block)?;
     for (imi, im) in sh.images.iter().enumerate() {
         let r = anchor_rect(sh, &im.anchor);
         if !visible(r) {
@@ -123,7 +132,7 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
             }
             continue;
         }
-        draw_shape(pg, wb, shp, b, (x, y, w, h));
+        draw_shape(pg, catalog, wb, shp, b, (x, y, w, h))?;
     }
     for (chi, ch) in sh.charts.iter().enumerate() {
         let r = anchor_rect(sh, &ch.anchor);
@@ -134,16 +143,17 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         // As for pictures, each page gets its own copy of the drawing commands.
         let prims = pics.chart((si, chi), || {
             let data = gridcraft_chart::resolve(wb, si, ch);
-            gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure)
+            gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure { catalog })
         });
         if let Some(prims) = prims {
-            draw_prims(pg, prims, Xf { ox: x, oy: y, k: b.k });
+            draw_prims(pg, catalog, prims, Xf { ox: x, oy: y, k: b.k })?;
         }
     }
     pg.restore();
+    Ok(())
 }
 
-fn draw_sparklines(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block, block: RangeRef) {
+fn draw_sparklines(pg: &mut Page, catalog: &FontCatalog, wb: &Workbook, si: usize, sh: &Sheet, b: &Block, block: RangeRef) -> Result<(), String> {
     for sp in &sh.sparklines {
         if !block.contains(sp.cell) {
             continue;
@@ -156,11 +166,19 @@ fn draw_sparklines(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Bloc
         let (x, y, w, h) = b.rect(RangeRef::cell(sp.cell));
         let (wpx, hpx) = (w / b.k, h / b.k);
         let prims = gridcraft_chart::render_sparkline(sp.kind, &vals, [color[0], color[1], color[2], 255], sp.markers, wpx, hpx);
-        draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
+        draw_prims(pg, catalog, &prims, Xf { ox: x, oy: y, k: b.k })?;
     }
+    Ok(())
 }
 
-fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Block, (x, y, w, h): (f32, f32, f32, f32)) {
+fn draw_shape(
+    pg: &mut Page,
+    catalog: &FontCatalog,
+    wb: &Workbook,
+    shp: &gridcraft_model::Shape,
+    b: &Block,
+    (x, y, w, h): (f32, f32, f32, f32),
+) -> Result<(), String> {
     let fill = rgb_of(shp.fill, wb);
     let line = rgb_of(shp.line, wb).filter(|_| !shp.format.no_line).map(|c| (c, (0.75 * b.k).max(0.25)));
     match shp.kind {
@@ -189,17 +207,23 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
         }
     }
     if shp.text.is_empty() {
-        return;
+        return Ok(());
     }
     use gridcraft_model::{ShapeTextAlign, ShapeTextAnchor};
     let fm = &shp.format;
     let text_box = shp.kind == ShapeKind::TextBox;
     let size = fm.font_size.unwrap_or(11.0).clamp(1.0, 4000.0) * b.scale;
-    let font = Font::styled(Font::family_for(fm.font.as_deref().unwrap_or("")), fm.bold, fm.italic);
+    let family = fm.font.as_deref().unwrap_or("");
+    let font = Font::styled(Font::family_for(family), fm.bold, fm.italic);
     let color = fm.text_color.and_then(|c| rgb_of(c, wb)).unwrap_or([0, 0, 0]);
     let align = fm.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
     let anchor = fm.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
-    let lines = wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size));
+    let unicode = needs_unicode_text(&shp.text);
+    let lines = if unicode {
+        wrap_shaped(&shp.text, catalog, family, fm.bold, fm.italic, size, (w - 4.0 * b.k).max(size))?
+    } else {
+        wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size))
+    };
     let block_h = lines.len().min(500) as f32 * size * 1.2;
     let mut yy = match anchor {
         ShapeTextAnchor::Top => y + 2.0 * b.k,
@@ -207,7 +231,7 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
         ShapeTextAnchor::Bottom => y + h - 2.0 * b.k - block_h,
     } + size * 0.8;
     for l in lines.iter().take(500) {
-        let lw = gridcraft_pdf::text_width(font, size, l);
+        let lw = if unicode { shaped_width(catalog, family, fm.bold, fm.italic, l, size)? } else { gridcraft_pdf::text_width(font, size, l) };
         let lx = match align {
             ShapeTextAlign::Left => x + 2.0 * b.k,
             ShapeTextAlign::Center => x + (w - lw) / 2.0,
@@ -216,7 +240,11 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
         // WordArt's drop shadow: the line again, offset, in the shadow colour (under the text).
         if let Some(sc) = fm.text_shadow.and_then(|c| rgb_of(c, wb)) {
             let off = (size * 0.06).max(0.5);
-            pg.text(lx + off, yy + off, size, font, sc, l);
+            if unicode {
+                draw_shaped_text(pg, catalog, lx + off, yy + off, size, family, fm.bold, fm.italic, sc, l, 0.0)?;
+            } else {
+                pg.text(lx + off, yy + off, size, font, sc, l);
+            }
         }
         // WordArt's text outline, as on screen: the line in the outline colour, offset in eight
         // directions by half the outline width, under the filled text.
@@ -225,10 +253,19 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
         {
             let d = (ow * b.scale / 2.0).clamp(0.25, 20.0);
             for (dx, dy) in [(-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (-1.0, 0.0), (1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0)] {
-                pg.text(lx + dx * d, yy + dy * d, size, font, oc, l);
+                if unicode {
+                    draw_shaped_text(pg, catalog, lx + dx * d, yy + dy * d, size, family, fm.bold, fm.italic, oc, l, 0.0)?;
+                } else {
+                    pg.text(lx + dx * d, yy + dy * d, size, font, oc, l);
+                }
             }
         }
-        pg.text(lx, yy, size, font, color, l);
+        if unicode {
+            draw_shaped_text(pg, catalog, lx, yy, size, family, fm.bold, fm.italic, color, l, 0.0)?;
+        } else {
+            pg.text(lx, yy, size, font, color, l);
+        }
         yy += size * 1.2;
     }
+    Ok(())
 }

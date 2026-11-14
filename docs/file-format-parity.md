@@ -155,7 +155,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | Encrypted workbooks: save with password (#11) | 4–6 |
 | XLSB and ODS: formulas and formatting on import; then write | 10–15 |
 | CSV/text: encoding choice, `.prn`, `.dif`, XML Spreadsheet 2003 | 4–7 |
-| PDF: embed subsetted system fonts so every script exports | (counted in [localization](localization-parity.md) script work) |
+| PDF: broaden script coverage beyond Thai, using pinned or explicitly supplied embeddable fonts | (counted in [localization](localization-parity.md) script work) |
 
 ## Revision history
 
@@ -164,6 +164,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-11-12 | minor | `.xls` files open with their data validation (drop-down lists, input messages, error alerts and the rules), read by craft-xls and mapped as the `.xlsx` reader maps the same rules. A rule Excel would refuse, or one past 65,536 in a workbook, is skipped with a warning (#3634, from #3636) |
 | 2026-11-12 | minor | .xls import reads the file with craft-xls (storytold/craft-libs), the reader that moved there from this repository; GridCraft keeps the mapping onto its model. The workbook now opens on the sheet it was saved on (WINDOW1 `itabCur`), falling back to the first visible sheet as before (from #3551), and cells saved as RString records (text with formatting runs) are read as text instead of skipped |
 | 2026-11-10 | minor | `.xls` import: every formula except a Ctrl+Shift+Enter array is read as a legacy one with Excel's implicit `@` (a title row `=Other!A1:G1` shows its first cell instead of `#SPILL!`), one-cell Ctrl+Shift+Enter arrays stay arrays, and `@` of a 2-D range meets the formula's row and column (#410, PR #1367) |
+| 2026-11-06 | minor | PDF Unicode export uses HarfRust shaping and deterministic font selection from the pinned craft-fonts bundle or explicit `pdfFonts`; embedding checks OS/2 fsType, and host system fonts are never scanned |
 | 2026-11-02 | minor | XLSX: buttons, scroll bars and spin buttons read and written (control properties parts, `<controls>`, VML `x:ClientData`); other form controls stay with pass-through; a button's command, fixed input or output cell travels in a hidden defined name and comes back only while the file still assigns the button's macro (or none, for a command) |
 | 2026-11-03 | minor | SYLK (`.slk`) import: values, R1C1 formulas as A1 (shared formulas too) with cached results, number formats and column widths; import only (#1481) |
 | 2026-11-03 | minor | Opening a web page (HTML) reads its first table as a sheet, whatever the file is called: a web app's "Export to Excel" saved as `.xls` no longer opens as lines of markup. Values read as in a CSV (or as text with `csvAsText`), `<th>` cells are bold and centred, `<x:Name>` names the sheet, and a page not named `.htm`/`.html` opens with a warning (#3166) |
