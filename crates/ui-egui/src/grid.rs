@@ -325,6 +325,10 @@ pub struct GridState {
     pub place_start: Option<Pos2>,
     /// The horizontal scrollbar's track in the sheet tab bar (hit-testing for tests).
     pub hscroll: Option<Rect>,
+    /// The horizontal scrollbar's track between its arrows (hit-testing for tests).
+    pub hscroll_track: Option<Rect>,
+    /// The vertical scrollbar's track, between its arrows (hit-testing for tests).
+    pub vscroll: Option<Rect>,
     /// The handle between the sheet tabs and the horizontal scrollbar (hit-testing for tests).
     pub tab_split: Option<Rect>,
     /// The share of the tab bar each workbook's tabs (and New sheet) take after the handle was
