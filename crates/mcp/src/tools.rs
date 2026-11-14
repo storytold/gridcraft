@@ -454,7 +454,7 @@ fn schema_matches(schema: &Value, v: &Value) -> bool {
 }
 
 /// Validates `args` against the tool's schema: unknown tool, missing required properties,
-/// top-level type mismatches and values matching none of a `oneOf` are JSON-RPC "invalid params" errors.
+/// top-level type or numeric-bound mismatches and values matching none of a `oneOf` are JSON-RPC "invalid params" errors.
 pub(crate) fn check_arguments(name: &str, args: &Value) -> Result<(), String> {
     let defs = tool_definitions();
     let def = defs.iter().find(|d| d["name"] == name).ok_or_else(|| format!("unknown tool `{name}`"))?;
@@ -477,6 +477,16 @@ pub(crate) fn check_arguments(name: &str, args: &Value) -> Result<(), String> {
         };
         if !ok {
             return Err(format!("{name}: argument `{k}` must be of type {}", p["type"]));
+        }
+        if let Some(min) = p["minimum"].as_f64()
+            && v.as_f64().is_some_and(|n| n < min)
+        {
+            return Err(format!("{name}: `{k}` must be at least {min}"));
+        }
+        if let Some(max) = p["maximum"].as_f64()
+            && v.as_f64().is_some_and(|n| n > max)
+        {
+            return Err(format!("{name}: `{k}` must be at most {max}"));
         }
         if let Some(allowed) = p["enum"].as_array()
             && !allowed.contains(v)
