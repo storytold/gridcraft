@@ -14,6 +14,8 @@ fn format_chart_pane_controls_the_engine_data_table() {
     h.state_mut().selected_object = Some(ObjRef::new(ObjKind::Chart, id));
     h.state_mut().grid.pane = Some("formatChart".into());
     h.run_steps(2);
+    h.get_by_role_and_label(Role::Button, "Size & Properties").click();
+    h.run_steps(2);
     h.get_by_role_and_label(Role::DisclosureTriangle, "Data Table").click();
     h.run_steps(2);
     let table = |h: &crate::common::Harness| h.state().session.active().unwrap().wb.active().unwrap().charts[0].data_table.clone();

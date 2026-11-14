@@ -18,6 +18,11 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
+#[cfg(test)]
+mod chart_font_tests;
+#[cfg(test)]
+mod chart_template_tests;
+mod chart_tools;
 mod chartcache;
 pub mod chartview;
 pub mod code_editor;
@@ -123,6 +128,10 @@ pub struct UiState {
     /// change. A preference like the rest of this struct — it stays on across restarts (#1901).
     pub autosave: bool,
     pub recent: Vec<String>,
+    /// User chart templates are stored with desktop preferences and may be applied to charts of
+    /// the same kind. They are local to this GridCraft installation, not embedded in XLSX.
+    #[serde(default, deserialize_with = "lenient_chart_templates")]
+    pub chart_templates: Vec<ChartTemplate>,
     /// One-shot keytip request for a ribbon control: set when a keytip action resolves to
     /// [`keytips::Action::Control`], consumed (and cleared) by the control's render site.
     #[serde(skip)]
@@ -142,6 +151,28 @@ pub struct UiState {
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
     #[serde(deserialize_with = "lenient_interface_scale")]
     pub interface_scale: u16,
+}
+
+/// A reusable chart appearance saved in this installation's UI preferences.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartTemplate {
+    pub name: String,
+    pub kind: gridcraft_engine::model::ChartKind,
+    pub style: u32,
+    pub legend: gridcraft_engine::model::LegendPos,
+    pub data_labels: bool,
+    pub gridlines: bool,
+    pub format: gridcraft_engine::model::ChartFormat,
+    #[serde(default)]
+    pub use_for_new: bool,
+}
+
+/// Keeps a malformed local chart template from making every saved UI preference unreadable.
+/// Invalid entries are ignored individually; a malformed collection becomes an empty list.
+fn lenient_chart_templates<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<ChartTemplate>, D::Error> {
+    let value = Json::deserialize(d)?;
+    Ok(value.as_array().into_iter().flatten().filter_map(|template| serde_json::from_value(template.clone()).ok()).collect())
 }
 
 pub const INTERFACE_SCALE_MIN: u16 = 75;
@@ -173,6 +204,7 @@ impl Default for UiState {
             highlight_active_row: false,
             autosave: false,
             recent: vec![],
+            chart_templates: vec![],
             keytip_invoke: None,
             keytip_invoke_next: None,
             language: i18n::Language::En,
@@ -303,6 +335,8 @@ pub struct SheetApp {
     pub(crate) capture_geometry_from_raw: bool,
     /// The floating object selected on the sheet (chart, picture, shape, equation or slicer).
     pub selected_object: Option<gridcraft_engine::model::ObjRef>,
+    chart_context: Option<egui::Context>,
+    chart_clipboard: Option<chart_tools::ChartClipboard>,
     /// Rendered charts kept between frames ([`chartcache`]).
     pub(crate) chart_cache: std::sync::Mutex<chartcache::ChartCache>,
     /// The system clipboard's text when GridCraft last copied without publishing to it (a
