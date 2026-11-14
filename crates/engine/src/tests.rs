@@ -1154,6 +1154,164 @@ fn fill_days_weekdays_months_and_years_step_a_date_by_that_unit() {
 }
 
 #[test]
+fn linear_and_growth_trend_continue_the_fitted_line_or_curve() {
+    let mut s = s();
+    let nums = |s: &Session, cells: &[&str]| cells.iter().map(|c| v(s, c)).collect::<Vec<_>>();
+    let n = |xs: &[f64]| xs.iter().map(|x| Value::Number(*x)).collect::<Vec<_>>();
+    let fill =
+        |s: &mut Session, src: &str, target: &str, mode: &str| s.execute("edit.autoFill", json!({"source": src, "target": target, "mode": mode}));
+    // The examples on Excel's "Project values in a series" page: 1, 2 and 1, 3 for both trends, 2, 3
+    // for Growth Trend and 100, 95 for Linear Trend. 2, 3 gives 4, 5, 6 by Linear Trend.
+    for (col, start, linear, growth) in [
+        ("A", [1.0, 2.0], [3.0, 4.0, 5.0], [4.0, 8.0, 16.0]),
+        ("B", [1.0, 3.0], [5.0, 7.0, 9.0], [9.0, 27.0, 81.0]),
+        ("C", [2.0, 3.0], [4.0, 5.0, 6.0], [4.5, 6.75, 10.125]),
+    ] {
+        s.execute("range.setValues", json!({"range": format!("{col}1"), "values": [[start[0]], [start[1]]]})).unwrap();
+        let (src, target) = (format!("{col}1:{col}2"), format!("{col}1:{col}5"));
+        let cells: Vec<String> = (3..=5).map(|r| format!("{col}{r}")).collect();
+        let cells: Vec<&str> = cells.iter().map(String::as_str).collect();
+        fill(&mut s, &src, &target, "linearTrend").unwrap();
+        assert_eq!(nums(&s, &cells), n(&linear), "Linear Trend from {start:?}");
+        fill(&mut s, &src, &target, "growthTrend").unwrap();
+        assert_eq!(nums(&s, &cells), n(&growth), "Growth Trend from {start:?}");
+    }
+    s.execute("range.setValues", json!({"range": "F1", "values": [[100], [95]]})).unwrap();
+    fill(&mut s, "F1:F2", "F1:F4", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &["F3", "F4"]), n(&[90.0, 85.0]));
+    // Three numbers: the targets follow the best fit and the source keeps its values. 1, 3, 4 fit
+    // y = 1.5x + 7/6; 1, 2, 8 fit y = 0.8909·2.8284^x.
+    s.execute("range.setValues", json!({"range": "D1", "values": [[1, 1], [3, 2], [4, 8]]})).unwrap();
+    fill(&mut s, "D1:D3", "D1:D5", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &["D1", "D2", "D3", "D4", "D5"]), n(&[1.0, 3.0, 4.0, 5.66666666666667, 7.16666666666667]));
+    fill(&mut s, "E1:E3", "E1:E4", "growthTrend").unwrap();
+    assert_eq!(nums(&s, &["E1", "E2", "E3", "E4"]), n(&[1.0, 2.0, 8.0, 20.158736798318]));
+    // Upward and leftward the trend continues backward: 1, 2 gives 0 and -1, or 0.5 and 0.25.
+    s.execute("range.setValues", json!({"range": "G3", "values": [[1], [2]]})).unwrap();
+    fill(&mut s, "G3:G4", "G1:G4", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &["G2", "G1"]), n(&[0.0, -1.0]));
+    s.execute("range.setValues", json!({"range": "J1", "values": [[1, 2]]})).unwrap();
+    fill(&mut s, "J1:K1", "H1:K1", "growthTrend").unwrap();
+    assert_eq!(nums(&s, &["I1", "H1"]), n(&[0.5, 0.25]));
+    // Negative numbers grow away from zero: -2, -4 gives -8.
+    s.execute("range.setValues", json!({"range": "L1", "values": [[-2], [-4]]})).unwrap();
+    fill(&mut s, "L1:L2", "L1:L3", "growthTrend").unwrap();
+    assert_eq!(v(&s, "L3"), Value::Number(-8.0));
+    // A tiny start with a huge factor still reaches 1e300 without overflowing on the way.
+    s.execute("range.setValues", json!({"range": "S1", "values": [[1e-200], [1e-100]]})).unwrap();
+    fill(&mut s, "S1:S2", "S1:S6", "growthTrend").unwrap();
+    let Value::Number(s6) = v(&s, "S6") else { panic!("S6 is {:?}", v(&s, "S6")) };
+    assert!((s6 / 1e300 - 1.0).abs() < 1e-9, "S6 = {s6}");
+    // Numbers near the largest double continue their line without a sum overflowing: two equal
+    // numbers repeat, and 1e308 four times then 0 fit a step of -2e307 and continue at 2e307.
+    s.execute("range.setValues", json!({"range": "T1", "values": [[1e308, 1e308], [1e308, 1e308], [0, 1e308], [0, 1e308], [0, 0]]})).unwrap();
+    fill(&mut s, "T1:T2", "T1:T3", "linearTrend").unwrap();
+    fill(&mut s, "U1:U5", "U1:U6", "linearTrend").unwrap();
+    for (cell, want) in [("T3", 1e308), ("U6", 2e307)] {
+        let Value::Number(got) = v(&s, cell) else { panic!("{cell} is {:?}", v(&s, cell)) };
+        assert!((got / want - 1.0).abs() < 1e-9, "{cell} = {got}");
+    }
+    // A lone number repeats, and dates a month apart step by their days, not by months.
+    s.execute("cell.set", json!({"cell": "M1", "input": "7"})).unwrap();
+    fill(&mut s, "M1", "M1:M2", "linearTrend").unwrap();
+    assert_eq!(v(&s, "M2"), Value::Number(7.0));
+    // It repeats unchanged, with every digit and at any size, by either trend.
+    s.execute("range.setValues", json!({"range": "V1", "values": [[1e308, 0.12345678901234567]]})).unwrap();
+    fill(&mut s, "V1", "V1:V3", "growthTrend").unwrap();
+    fill(&mut s, "W1", "W1:W3", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &["V2", "V3", "W2", "W3"]), n(&[1e308, 1e308, 0.12345678901234567, 0.12345678901234567]));
+    // The smallest double three times repeats rather than averaging to zero.
+    let tiny = f64::from_bits(1);
+    s.execute("range.setValues", json!({"range": "X1", "values": [[tiny], [tiny], [tiny]]})).unwrap();
+    fill(&mut s, "X1:X3", "X1:X4", "linearTrend").unwrap();
+    assert_eq!(v(&s, "X4"), Value::Number(tiny));
+    s.execute("cell.set", json!({"cell": "N1", "input": "1/15/2026"})).unwrap();
+    s.execute("cell.set", json!({"cell": "N2", "input": "2/15/2026"})).unwrap();
+    fill(&mut s, "N1:N2", "N1:N3", "linearTrend").unwrap();
+    assert_eq!(v(&s, "N3"), Value::Number(46099.0), "2/15/2026 plus 31 days");
+    // Text or an empty cell in the source, and zero or mixed signs for Growth Trend, are refused
+    // and fill nothing.
+    s.execute("range.setValues", json!({"range": "O1", "values": [[1, 1, 0], ["x", -2, 2]]})).unwrap();
+    assert!(fill(&mut s, "O1:O2", "O1:O3", "linearTrend").is_err());
+    assert!(fill(&mut s, "P1:P2", "P1:P3", "growthTrend").is_err());
+    assert!(fill(&mut s, "Q1:Q2", "Q1:Q3", "growthTrend").is_err());
+    assert!(fill(&mut s, "R1:R2", "R1:R3", "linearTrend").is_err());
+    assert_eq!(nums(&s, &["O3", "P3", "Q3", "R3"]), [Value::Empty, Value::Empty, Value::Empty, Value::Empty]);
+    fill(&mut s, "P1:P2", "P1:P3", "linearTrend").unwrap();
+    assert_eq!(v(&s, "P3"), Value::Number(-5.0));
+}
+
+#[test]
+fn trend_fills_are_offered_for_numbers_only() {
+    let mut s = s();
+    let offered = |s: &Session, src: &str, target: &str, growth: bool| {
+        let r = |a: &str| gridcraft_core::RangeRef::parse(a).unwrap();
+        crate::fill::trend_applies(&s.doc().unwrap().wb, 0, r(src), r(target), growth)
+    };
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, -1, 1], [2, -3, "x"]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=A1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D2", "input": "5"})).unwrap();
+    assert!(offered(&s, "A1:A2", "A1:A5", false) && offered(&s, "A1:A2", "A1:A5", true));
+    // Down A1:B2, each column keeps one sign; across it, row 1 holds 1 and -1.
+    assert!(offered(&s, "A1:B2", "A1:B5", true));
+    assert!(offered(&s, "A1:B2", "A1:E2", false) && !offered(&s, "A1:B2", "A1:E2", true));
+    let r = |a: &str| gridcraft_core::RangeRef::parse(a).unwrap();
+    assert_eq!(crate::fill::trends_that_apply(&s.doc().unwrap().wb, 0, r("A1:B2"), r("A1:E2")), (true, false));
+    assert_eq!(crate::fill::trends_that_apply(&s.doc().unwrap().wb, 0, r("A1:B2"), r("A1:B5")), (true, true));
+    assert!(!offered(&s, "C1:C2", "C1:C4", false), "text");
+    assert!(!offered(&s, "D1:D2", "D1:D4", false), "a formula");
+    assert!(!offered(&s, "E1:E2", "E1:E4", false), "empty cells");
+    // A fill `edit.autoFill` refuses is not offered: five columns down to the last row is more than
+    // MAX_FILL_CELLS cells, and a target that doesn't hold the source in a corner.
+    s.execute("range.setValues", json!({"range": "F1", "values": [[1, 2, 3, 4, 5], [2, 4, 6, 8, 10]]})).unwrap();
+    assert!(offered(&s, "F1:J2", "F1:J1000", false) && offered(&s, "F1:J2", "F1:J1000", true));
+    assert!(!offered(&s, "F1:J2", "F1:J1048576", false) && !offered(&s, "F1:J2", "F1:J1048576", true), "too large");
+    assert!(!offered(&s, "F1:J2", "F2:J5", false), "source outside the target");
+}
+
+#[test]
+fn trend_fills_fit_each_lane_of_a_two_dimensional_source() {
+    let mut s = s();
+    let nums = |s: &Session, cells: &[&str]| cells.iter().map(|c| v(s, c)).collect::<Vec<_>>();
+    let n = |xs: &[f64]| xs.iter().map(|x| Value::Number(*x)).collect::<Vec<_>>();
+    let fill =
+        |s: &mut Session, src: &str, target: &str, mode: &str| s.execute("edit.autoFill", json!({"source": src, "target": target, "mode": mode}));
+    // Down: column A holds 1, 2 and column B 10, 20, and one command fits each column on its own.
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 10], [2, 20]]})).unwrap();
+    let down = ["A3", "A4", "A5", "B3", "B4", "B5"];
+    fill(&mut s, "A1:B2", "A1:B5", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &down), n(&[3.0, 4.0, 5.0, 30.0, 40.0, 50.0]));
+    fill(&mut s, "A1:B2", "A1:B5", "growthTrend").unwrap();
+    assert_eq!(nums(&s, &down), n(&[4.0, 8.0, 16.0, 40.0, 80.0, 160.0]));
+    // Across: row 1 holds 1, 10 and row 2 holds 2, 20, and each row is fitted on its own.
+    s.execute("range.setValues", json!({"range": "H1", "values": [[1, 10], [2, 20]]})).unwrap();
+    let across = ["J1", "K1", "L1", "J2", "K2", "L2"];
+    fill(&mut s, "H1:I2", "H1:L2", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &across), n(&[19.0, 28.0, 37.0, 38.0, 56.0, 74.0]));
+    fill(&mut s, "H1:I2", "H1:L2", "growthTrend").unwrap();
+    assert_eq!(nums(&s, &across), n(&[100.0, 1000.0, 10000.0, 200.0, 2000.0, 20000.0]));
+    // The sources keep their values.
+    assert_eq!(nums(&s, &["A1", "A2", "B1", "B2", "H1", "I1", "H2", "I2"]), n(&[1.0, 2.0, 10.0, 20.0, 1.0, 10.0, 2.0, 20.0]));
+}
+
+#[test]
+fn a_trend_fill_undoes_as_one_step() {
+    let mut s = s();
+    let nums = |s: &Session, cells: &[&str]| cells.iter().map(|c| v(s, c)).collect::<Vec<_>>();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 10], [2, 20]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "A4", "input": "99"})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "A1:B2", "target": "A1:B5", "mode": "linearTrend"})).unwrap();
+    assert_eq!(v(&s, "A4"), Value::Number(4.0));
+    s.execute("edit.undo", json!({})).unwrap();
+    // The targets are back as they were (empty, and 99 in A4), and the source is unchanged.
+    assert_eq!(
+        nums(&s, &["A3", "A4", "A5", "B3", "B4", "B5"]),
+        [Value::Empty, Value::Number(99.0), Value::Empty, Value::Empty, Value::Empty, Value::Empty]
+    );
+    assert_eq!(nums(&s, &["A1", "A2", "B1", "B2"]), [Value::Number(1.0), Value::Number(2.0), Value::Number(10.0), Value::Number(20.0)]);
+}
+
+#[test]
 fn only_a_number_in_a_date_format_offers_the_date_fills() {
     let mut s = s();
     let dates = |s: &Session, a: &str| crate::fill::starts_with_date(&s.doc().unwrap().wb, 0, gridcraft_core::RangeRef::parse(a).unwrap());
