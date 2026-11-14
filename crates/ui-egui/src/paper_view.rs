@@ -169,6 +169,7 @@ pub(crate) fn paint_pages(input: PagePaintInput<'_>, cf: &mut CfCache) -> Vec<gr
             workbook: wb,
             sheet_index: si,
             sheet: sh,
+            active: sel.active,
             rows,
             cols,
             cf,
@@ -182,6 +183,21 @@ pub(crate) fn paint_pages(input: PagePaintInput<'_>, cf: &mut CfCache) -> Vec<gr
             if let Some(band) = active_row.and_then(|row| grid::active_row_band(geo, sh, row, rows, cols)) {
                 pc.rect_filled(band, 0.0, t.active_row);
             }
+            // The fade covers the Focus Cell bands, so they go on again above it.
+            let quadrant = grid::QuadrantPaint {
+                painter: &pc,
+                geo,
+                workbook: wb,
+                sheet_index: si,
+                sheet: sh,
+                active: sel.active,
+                active_row,
+                rows,
+                cols,
+                cf,
+                tokens: t,
+            };
+            grid::paint_focus_bands(&quadrant, None);
             let size = (14.0 * geo.z / DISPLAY_SCALE).clamp(8.0, 22.0);
             pc.text(clip.center(), Align2::CENTER_CENTER, tr(app, "Click to add data"), theme::ui_font(size), Color32::from_gray(150));
         }

@@ -33,7 +33,8 @@ impl Color {
     pub fn from_hex(s: &str) -> Option<Color> {
         let h = s.trim().trim_start_matches('#');
         let h = if h.len() == 8 { h.get(2..)? } else { h };
-        if h.len() != 6 {
+        // Hex digits only: `from_str_radix` also takes a leading sign ("+12345").
+        if h.len() != 6 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
             return None;
         }
         u32::from_str_radix(h, 16).ok().map(Color::Rgb)
