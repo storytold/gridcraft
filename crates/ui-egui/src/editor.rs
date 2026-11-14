@@ -87,6 +87,9 @@ pub struct ListSearch {
     pub reveal: bool,
     /// The list's source was longer than its read budget: `items` holds only its beginning.
     pub truncated: bool,
+    /// Width of the longest of the first matches as the popup measured it, so it is laid out once
+    /// per search rather than every frame. `None` until measured, and again when the matches change.
+    pub text_width: Option<f32>,
 }
 
 impl ListSearch {
@@ -170,6 +173,7 @@ impl EditState {
         let typed = if self.is_formula() || self.text.trim().is_empty() { None } else { Some(self.text.as_str()) };
         let Some(list) = self.list.as_mut() else { return };
         list.matches.clear();
+        list.text_width = None;
         list.index = 0;
         list.top = 0;
         list.reveal = true;

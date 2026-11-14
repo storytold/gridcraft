@@ -217,6 +217,7 @@ fn typing_over_the_open_dropdown_replaces_it_with_the_searched_list() {
 
     text(&mut h, "United St");
     assert!(h.state().grid.list_picker.is_none(), "typing closes the full list");
+    assert!(h.state().grid.list_picker_items.is_none(), "and drops the entries it read");
     assert!(!shown(&h, "Paris - France"), "only the searched list shows");
     assert_eq!(h.query_all_by_label("Boston - United States of America").count(), 1, "one list, not two");
     key(&mut h, Key::Enter, Modifiers::NONE);
@@ -327,4 +328,70 @@ fn the_dropdown_arrow_reads_a_huge_list_once_and_draws_only_its_visible_rows() {
     key(&mut h, Key::Escape, Modifiers::NONE);
     assert!(h.state().grid.list_picker.is_none());
     assert!(h.state().grid.list_picker_items.is_none(), "closing drops the list");
+}
+
+#[test]
+fn the_highlighted_row_stays_inside_the_popup() {
+    // 50,000 entries match "item": the list is cut at the match cap, so the note sits right under
+    // the rows. A highlighted row drawn below the note's top is outside the popup's visible rows
+    // (rows used to be laid out 18 px apart while drawn 24 px tall).
+    let mut session = Session::new();
+    session.new_workbook();
+    let rows: Vec<Vec<String>> = (0..50_000).map(|i| vec![format!("Item {i:05}")]).collect();
+    session.execute("range.setValues", json!({"range": "H1", "values": rows})).unwrap();
+    session.execute("data.validation", json!({"range": "B2", "type": "list", "formula1": "=$H$1:$H$50000"})).unwrap();
+    session.execute("selection.set", json!({"cell": "B2"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        SheetApp::new(session, Default::default()),
+    );
+    h.run_steps(4);
+    text(&mut h, "item");
+    let inside = |h: &Harness, item: &str| {
+        let row = h.get_by_label(item).rect();
+        let note = h.get_by_label("More entries not shown").rect();
+        assert!(row.bottom() <= note.top() + 0.5, "{item} at {row:?} runs under the note at {note:?}");
+    };
+    let visible = gridcraft_ui_egui::editor::ListSearch::VISIBLE;
+    for _ in 1..visible {
+        key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    }
+    // The last row that fits without scrolling.
+    inside(&h, &format!("Item {:05}", visible - 1));
+    assert!(shown(&h, "Item 00000"), "the list did not need to scroll yet");
+    // Up from the first entry wraps to the last kept match: the end of the list is reachable.
+    for _ in 1..visible {
+        key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    }
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    let last = format!("Item {:05}", gridcraft_engine::cmd::data::LIST_MATCH_CAP - 1);
+    inside(&h, &last);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(value(&h, "B2"), last);
+}
+
+#[test]
+fn the_searched_list_opens_above_a_cell_near_the_bottom_of_the_window() {
+    let mut h = harness_with(json!({"range": "B2:B200", "type": "list", "formula1": "=$H$1:$H$6"}));
+    // The last row of column B that is wholly in view.
+    let (cell, top) = {
+        let app = h.state();
+        let sh = app.session.active().unwrap().wb.active().unwrap();
+        let rect = app.grid.rect.unwrap();
+        let geo = grid::Geo::new(sh, rect, app.view().scroll);
+        let row = (1..200).take_while(|&r| geo.cell_rect(sh, CellRef::new(r, 1)).bottom() <= rect.bottom()).last().unwrap();
+        let cell = CellRef::new(row, 1);
+        (cell, geo.cell_rect(sh, cell).top())
+    };
+    h.state_mut().session.execute("selection.set", json!({"cell": cell.a1()})).unwrap();
+    h.run_steps(2);
+    text(&mut h, "united");
+    let row = h.get_by_label("Boston - United States of America").rect();
+    assert!(row.bottom() <= top + 0.5, "the list at {row:?} is above the cell (top {top})");
+    assert!(row.top() >= 0.0);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(value(&h, &cell.a1()), "Dubai - United Arab Emirates");
 }

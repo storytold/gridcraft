@@ -84,8 +84,10 @@ impl SheetApp {
         } else if replace && self.ui.autocomplete && !ed.is_formula() {
             ed.completion = editor::column_completion(sh, at, &ed.text);
         }
-        // Typing over an open dropdown list hands over to the searched list the edit shows.
+        // Typing over an open dropdown list hands over to the searched list the edit shows; the
+        // entries it read (and the workbook version they pin) go with it.
         self.grid.list_picker = None;
+        self.grid.list_picker_items = None;
         self.editor = Some(ed);
         self.session.mode = if replace { gridcraft_engine::Mode::Enter } else { gridcraft_engine::Mode::Edit };
     }

@@ -110,6 +110,16 @@ const LIST_PICKER_ROW_H: f32 = 18.0;
 /// Popup frame around the rows: 2 px inner margin and the window stroke on each side, rounded up.
 const LIST_PICKER_CHROME: f32 = 8.0;
 
+/// Shown under a validation list that was cut short (source budget or match cap).
+const LIST_MORE_NOTE: &str = "More entries not shown";
+
+/// Height of one row of a validation list popup: its button's real height (text plus padding), at
+/// least `LIST_PICKER_ROW_H`. `show_rows` needs the height the rows are drawn at: with a smaller
+/// one the popup shows fewer rows than it scrolls by and the last entries can't be reached.
+fn list_row_height(ui: &egui::Ui) -> f32 {
+    LIST_PICKER_ROW_H.max(ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y)
+}
+
 /// The searched list of a list validation under the cell being typed into (from the cell or the
 /// formula bar): the matches of the typed text, the highlighted one is what Enter commits.
 pub(super) fn list_search(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet) {
@@ -126,19 +136,44 @@ pub(super) fn list_search(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: 
         return;
     }
     let Some(list) = ed.list.as_mut() else { return };
-    let row_h = 18.0;
-    let font = egui::TextStyle::Button.resolve(ui.style());
-    // Wide enough for the longest of the first matches, within reason.
-    let longest = list
-        .matches
-        .iter()
-        .take(200)
-        .filter_map(|&i| list.items.get(i))
-        .map(|t| ui.painter().layout_no_wrap(t.clone(), font.clone(), Color32::BLACK).size().x)
-        .fold(0.0_f32, f32::max);
+    // Rows are as tall as their buttons really are, so `show_rows` places them where they are
+    // drawn: the popup shows `ListSearch::VISIBLE` of them and the highlighted one stays in view.
+    let row_h = list_row_height(ui);
+    // Wide enough for the longest of the first matches, within reason. Measured once per search:
+    // `update_list` clears it when the matches change.
+    let longest = match list.text_width {
+        Some(w) => w,
+        None => {
+            let font = egui::TextStyle::Button.resolve(ui.style());
+            let w = list
+                .matches
+                .iter()
+                .take(200)
+                .filter_map(|&i| list.items.get(i))
+                .map(|t| ui.painter().layout_no_wrap(t.clone(), font.clone(), Color32::BLACK).size().x)
+                .fold(0.0_f32, f32::max);
+            list.text_width = Some(w);
+            w
+        }
+    };
     let width = r.width().max(100.0).max((longest + 16.0).min(480.0));
-    let (at, pivot) = (geo.mirror_pos(r.left_bottom()), if geo.rtl { Align2::RIGHT_TOP } else { Align2::LEFT_TOP });
+    // Not every entry was searched (a huge source) or shown (past the match cap).
+    let more = list.truncated || list.matches.len() >= gridcraft_engine::cmd::data::LIST_MATCH_CAP;
+    let height = row_h * list.matches.len().clamp(1, crate::editor::ListSearch::VISIBLE) as f32;
+    let note = if more { row_h } else { 0.0 };
+    // Below the cell, or above it when the rows would run past the bottom of the window (as the
+    // dropdown arrow's list does).
+    let screen = ui.ctx().content_rect();
+    let outer = height + note + LIST_PICKER_CHROME;
+    let above = r.bottom() + outer > screen.bottom() && r.top() - outer >= screen.top();
+    let (at, pivot) = match (above, geo.rtl) {
+        (false, false) => (geo.mirror_pos(r.left_bottom()), Align2::LEFT_TOP),
+        (false, true) => (geo.mirror_pos(r.left_bottom()), Align2::RIGHT_TOP),
+        (true, false) => (geo.mirror_pos(r.left_top()), Align2::LEFT_BOTTOM),
+        (true, true) => (geo.mirror_pos(r.left_top()), Align2::RIGHT_BOTTOM),
+    };
     let reveal = std::mem::take(&mut list.reveal).then_some(list.top as f32 * row_h);
+    let lang = crate::i18n::current(ui.ctx());
     let mut pick = None;
     let mut top = None;
     egui::Area::new(egui::Id::unique("dv_search")).fixed_pos(at).pivot(pivot).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
@@ -146,7 +181,7 @@ pub(super) fn list_search(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: 
             ui.set_min_width(width);
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
             ui.spacing_mut().item_spacing.y = 0.0;
-            let mut area = egui::ScrollArea::vertical().max_height(row_h * crate::editor::ListSearch::VISIBLE as f32).auto_shrink([false, true]);
+            let mut area = egui::ScrollArea::vertical().max_height(height).auto_shrink([false, true]);
             if let Some(y) = reveal {
                 area = area.vertical_scroll_offset(y);
             }
@@ -159,10 +194,9 @@ pub(super) fn list_search(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: 
                 }
             });
             top = Some((out.state.clamped_offset().y / row_h).floor().max(0.0) as usize);
-            // Not every entry was searched (a huge source) or shown (past the match cap).
-            if list.truncated || list.matches.len() >= gridcraft_engine::cmd::data::LIST_MATCH_CAP {
+            if more {
                 ui.add_space(2.0);
-                ui.weak("More entries not shown");
+                ui.weak(lang.tr(LIST_MORE_NOTE));
             }
         });
     });
@@ -188,6 +222,7 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
     // An edit shows its own searched list; two lists would stack.
     if app.editor.is_some() {
         app.grid.list_picker = None;
+        app.grid.list_picker_items = None;
         return;
     }
     let Some(d) = app.session.active() else { return };
@@ -214,9 +249,8 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
     let r = geo.cell_rect(sh, c);
     // Fit the popup to its rows (up to LIST_PICKER_MAX_ROWS); without a minimum the scroll area collapses to its 64 px default.
     let gap = ui.spacing().item_spacing.y;
-    // A row is as tall as its button really is (text plus padding), so `show_rows` places the rows
-    // where they are drawn and the popup shows LIST_PICKER_MAX_ROWS of them.
-    let row_h = LIST_PICKER_ROW_H.max(ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y);
+    // A row is as tall as its button really is, so the popup shows LIST_PICKER_MAX_ROWS of them.
+    let row_h = list_row_height(ui);
     let height = list_picker_height(items.len(), row_h, gap);
     let note = if truncated { row_h + gap } else { 0.0 };
     // Open below the cell, or above it when the rows would run past the bottom of the window (as Excel does).
@@ -229,6 +263,7 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
         (true, false) => (geo.mirror_pos(r.left_top()), Align2::LEFT_BOTTOM),
         (true, true) => (geo.mirror_pos(r.left_top()), Align2::RIGHT_BOTTOM),
     };
+    let lang = crate::i18n::current(ui.ctx());
     let mut close = false;
     let response = egui::Area::new(egui::Id::unique("dv_list")).fixed_pos(at).pivot(pivot).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).inner_margin(2.0).show(ui, |ui| {
@@ -243,7 +278,7 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                 }
             });
             if truncated {
-                ui.weak("More entries not shown");
+                ui.weak(lang.tr(LIST_MORE_NOTE));
             }
         });
     });
