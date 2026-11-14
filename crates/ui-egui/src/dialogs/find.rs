@@ -146,7 +146,11 @@ pub(super) fn go_to(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confi
     let mut r = d.values.get("reference").and_then(Json::as_str).unwrap_or("").to_string();
     ui.horizontal(|ui| {
         let label = ui.label(lang.tr("Reference:"));
-        ui.text_edit_singleline(&mut r).labelled_by(label.id).request_focus();
+        let response = ui.text_edit_singleline(&mut r).labelled_by(label.id);
+        if !d.focus_initialized {
+            response.request_focus();
+            d.focus_initialized = true;
+        }
     });
     d.values.insert("reference".into(), json!(r.clone()));
     if ui.button("Special…").clicked() {
