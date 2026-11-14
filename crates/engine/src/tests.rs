@@ -5630,6 +5630,36 @@ fn tiled_paste_clears_destination_cells_under_blank_source_cells() {
     assert_eq!(v(&s, "C4"), Value::Empty);
 }
 
+/// #3934: a row copied into a taller, narrower selection repeats down every selected row at the
+/// copy's width, as in Excel; a column copied into a wider, shorter one repeats across.
+#[test]
+fn paste_into_a_narrower_selection_repeats_the_copy_down_its_rows() {
+    for dest in ["A3:A6", "A3:B6"] {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+        s.execute("edit.copy", json!({"range": "A1:B1"})).unwrap();
+        s.execute("selection.set", json!({"range": dest})).unwrap();
+        let r = s.execute("edit.paste", json!({})).unwrap();
+        assert_eq!(r["pasted"], json!("A3:B6"), "{dest}");
+        for row in 3..=6 {
+            assert_eq!(v(&s, &format!("A{row}")), Value::Number(1.0), "{dest} row {row}");
+            assert_eq!(v(&s, &format!("B{row}")), Value::Number(2.0), "{dest} row {row}");
+        }
+        assert_eq!(v(&s, "A2"), Value::Empty);
+        assert_eq!(v(&s, "A7"), Value::Empty);
+    }
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2]]})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A2"})).unwrap();
+    s.execute("selection.set", json!({"range": "C1:F1"})).unwrap();
+    let r = s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(r["pasted"], json!("C1:F2"));
+    for col in ["C", "D", "E", "F"] {
+        assert_eq!(v(&s, &format!("{col}1")), Value::Number(1.0), "{col}1");
+        assert_eq!(v(&s, &format!("{col}2")), Value::Number(2.0), "{col}2");
+    }
+}
+
 /// Excel refuses a paste that would run off the sheet rather than pasting part of it: whole
 /// columns below row 1, whole rows right of column A, a whole column transposed, or a block at
 /// the last row or column.
