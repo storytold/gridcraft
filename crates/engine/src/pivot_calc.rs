@@ -153,6 +153,11 @@ pub fn compile(formula: &str, field: &dyn Fn(&str) -> Option<String>) -> Result<
             Expr::Name(n) if n.starts_with(PREFIX) => {}
             Expr::Name(n) => problem = Some(format!("There's no field named '{n}'.")),
             Expr::Ref(_) | Expr::Struct(_) => problem = Some("A calculated field can't refer to cells or tables; use field names.".into()),
+            // Evaluated once per group and per report, with only the first value kept: Excel does not
+            // allow functions that need arrays in a calculated field, and these build one from scalars.
+            Expr::Call(f, _) if matches!(f.as_str(), "SEQUENCE" | "RANDARRAY" | "MAKEARRAY" | "EXPAND" | "MUNIT") => {
+                problem = Some(format!("A calculated field can't use {f}: it builds an array."))
+            }
             _ => {}
         }
     });
@@ -330,6 +335,16 @@ mod tests {
         assert!(compile("=Sales*(", &fields).is_err());
         assert!(compile("=", &fields).is_err());
         assert!(compile(&format!("={}", "1+".repeat(MAX_FORMULA_LEN)), &fields).is_err());
+    }
+
+    #[test]
+    fn a_calculated_field_cannot_build_arrays_from_scalars() {
+        for f in
+            ["=SEQUENCE(5000,1000)", "=SUM(RANDARRAY(1000,1000))", "=MAKEARRAY(9,9,LAMBDA(r,c,r*c))+Sales", "=expand(Sales,1000,1000)", "=MUNIT(500)"]
+        {
+            assert!(compile(f, &fields).unwrap_err().contains("builds an array"), "{f}");
+        }
+        assert!(compile("=SUM({1,2,3})*Sales", &fields).is_ok(), "an array constant is bounded by the formula's own length");
     }
 
     #[test]

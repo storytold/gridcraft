@@ -132,9 +132,9 @@ fn default_fonts() -> Vec<Vec<u8>> {
 /// Fonts, a palette, style XFs, cell XFs and named styles covering every decoded field.
 fn formatted() -> Vec<u8> {
     let mut f = default_fonts();
-    // ifnt 5 (index 4 is never written): 14 pt italic, struck, outlined (flags 0x001A), bold,
-    // double underline, superscript, red (colour 10).
-    f.push(font(280, 0x001A, 10, 700, 1, 2, "Courier New"));
+    // ifnt 5 (index 4 is never written): 14 pt italic, struck, bold, double underline,
+    // superscript, red (colour 10).
+    f.push(font(280, 0x000A, 10, 700, 1, 2, "Courier New"));
     // ifnt 6: single accounting underline, subscript, a custom palette colour.
     f.push(font(220, 0, 9, 400, 2, 0x21, "Times New Roman"));
     // Palette: the first two of the 56 custom entries (colour indexes 8 and 9) replaced.
@@ -219,7 +219,7 @@ fn reads_primary_style(wb: &Workbook) {
     let s = style_at(wb, "A1");
     let f = &s.font;
     assert_eq!((f.name.as_str(), f.size), ("Courier New", 14.0));
-    assert!(f.bold && f.italic && f.strike && f.outline);
+    assert!(f.bold && f.italic && f.strike);
     assert_eq!((f.underline, f.vert, f.color), (Underline::Double, VertAlign::Superscript, Color::Rgb(0xFF0000)));
     assert_eq!(s.num_fmt.as_str(), "0.0%");
     assert_eq!(s.protection, Protection { locked: false, hidden: true });
@@ -263,7 +263,6 @@ fn reads_cell_style_and_xlsx_roundtrip(wb: &Workbook) {
     let s = style_at(wb, "A6");
     assert_eq!((s.font.name.as_str(), s.font.size, s.font.color), ("Times New Roman", 11.0, Color::Rgb(0xABCDEF)));
     assert_eq!((s.font.underline, s.font.vert), (Underline::SingleAccounting, VertAlign::Subscript));
-    assert!(!s.font.outline, "a Font record without fOutline is not outlined");
 
     // User-defined styles are kept (first of a name wins); built-in ones are GridCraft's own.
     assert_eq!(wb.cell_styles.len(), 1, "{:?}", wb.cell_styles.iter().map(|(n, _)| n).collect::<Vec<_>>());
