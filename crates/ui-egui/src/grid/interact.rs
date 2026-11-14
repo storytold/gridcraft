@@ -195,7 +195,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         }
         app.grid.drag = Drag::None;
         app.grid.drag_select = false;
-        resp.request_focus();
+        super::keyboard::focus_grid(&resp.ctx);
         return;
     }
 
@@ -312,7 +312,7 @@ fn handle_header_autofit(app: &mut SheetApp, input: &InteractionInput<'_>) -> bo
         app.grid.drag = Drag::None;
         app.grid.drag_select = false;
         app.run_or_alert(command, params);
-        resp.request_focus();
+        super::keyboard::focus_grid(&resp.ctx);
         return true;
     }
     false
@@ -625,7 +625,7 @@ fn handle_context_menu_and_keyboard(app: &mut SheetApp, input: &InteractionInput
     }
 
     if primary_clicked || resp.drag_started() {
-        resp.request_focus();
+        super::keyboard::focus_grid(&ctx);
     }
     keyboard(app, &ctx, resp, geo, sh);
 }
