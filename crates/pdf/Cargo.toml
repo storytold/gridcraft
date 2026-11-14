@@ -9,4 +9,7 @@ readme = "README.md"
 [lints]
 workspace = true
 
+[features]
+test-support = []
+
 [dependencies]

@@ -84,6 +84,40 @@ methods `-32601`.
 ← {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"{\n  \"range\": \"B4\", ... \"values\": [[1600.0]]\n}"}],"isError":false}}
 ```
 
+## PDF export with custom fonts
+
+Use `execute_command` with `file.exportPdf` (or `file.print`) and per-request family mappings to
+preserve multiple workbook fonts in one PDF:
+
+```json
+{"name":"execute_command","arguments":{"command":"file.exportPdf","params":{"path":"/path/to/report.pdf","fontFamilies":{"Body Sans":{"regular":"/path/to/Body-Regular.ttf","bold":"/path/to/Body-Bold.ttf"},"Heading Sans":{"regular":"/path/to/Heading-Regular.ttf","italic":"/path/to/Heading-Italic.ttf"}}}}}
+```
+
+Keys match the family names stored in the workbook, case-insensitively after trimming. Each family
+requires `regular` and can supply `bold`, `italic` and `boldItalic`; omitted styles use that family's
+regular face. Mapped families retain independent faces and text widths. Unmapped families use the
+existing PDF fonts, or the optional global `fonts` object (same four fields) if supplied.
+
+Paths belong to the host running the engine, including a desktop reached through `mcp --connect`.
+Omit `path` to receive PDF bytes as base64. Fonts apply only to that export. Invalid or unsupported
+fonts and missing glyphs are tool errors; no dialog opens and no output is written. See
+[CLI PDF fonts](cli.md#pdf-fonts) for limits, examples and shaping restrictions.
+
+MCP font paths may name any regular file readable by the engine process, including absolute paths
+outside the current working directory. Relative paths resolve in that process's working directory;
+`mcp --connect` uses the desktop process's filesystem and working directory. MCP does not implement
+client workspace roots or a directory sandbox. Treat access to this server as access to its local
+file commands, including `file.open`, rather than as access limited to a workbook folder. Run it
+with OS filesystem restrictions when connecting an agent that must only see selected directories.
+Restricting font paths alone would not restrict the other file commands.
+
+Accepted fonts are embedded whole, so PDF recipients receive the entire source font, including
+its metadata and any additional tables. Each face is limited to 64 MiB and the total explicit font
+input to 256 MiB per export, with at most 32 named families. Restricted-licence and bitmap-only
+outline embedding (`OS/2.fsType`) are rejected before output; the caller must also hold the rights
+to distribute any accepted font. Macro-initiated font reads additionally require the existing
+[macro file-access permission and approval](macros.md).
+
 ## Embedding
 
 `gridcraft-mcp` is a library: `Server::new(Box::new(Headless::new()))` or

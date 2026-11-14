@@ -226,7 +226,7 @@ pub(crate) fn draw_pdf(pg: &mut gridcraft_pdf::Page, list: &MathList, rect: (f32
                         if large {
                             // Centred on the glyph's box, like the screen.
                             let mid = oy + (g.y - (g.height - g.depth) / 2.0) * s;
-                            let tw = gridcraft_pdf::text_width(font, size, &text);
+                            let tw = pg.text_width(font, size, &text);
                             pg.text(gx + (g.width * s - tw) / 2.0, mid + 0.25 * size, size, font, color, &text);
                         } else {
                             pg.text(gx, base, size, font, color, &text);
@@ -237,7 +237,7 @@ pub(crate) fn draw_pdf(pg: &mut gridcraft_pdf::Page, list: &MathList, rect: (f32
                         let (bw, bh) = ((g.width.max(0.3)) * s, (g.height + g.depth) * s);
                         pg.rect_stroke(gx, base - g.height * s, bw, bh, (0.05 * s).clamp(0.2, 1.0), color);
                         let qs = (bh * 0.6).min(bw * 1.2).max(1.0);
-                        let qw = gridcraft_pdf::text_width(gridcraft_pdf::Font::Helvetica, qs, "?");
+                        let qw = pg.text_width(gridcraft_pdf::Font::Helvetica, qs, "?");
                         pg.text(gx + (bw - qw) / 2.0, base - g.height * s + (bh + qs * 0.7) / 2.0, qs, gridcraft_pdf::Font::Helvetica, color, "?");
                     }
                 }

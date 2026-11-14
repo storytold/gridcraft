@@ -6,6 +6,43 @@ use serde_json::json;
 use super::s;
 use crate::Session;
 
+#[test]
+fn pdf_equation_centres_large_glyphs_and_placeholders_with_custom_font_metrics() {
+    use gridcraft_math::{Face, Glyph, Item, MathList};
+    use gridcraft_pdf::{PdfDoc, TextFonts, UnicodeFont};
+    use std::sync::Arc;
+
+    let face = Arc::new(UnicodeFont::parse(gridcraft_pdf::test_support::tiny_ttf(&['α', '?'], 900, 0)).unwrap());
+    for (ch, style, expected_x) in [('α', Face::Large(1), 5.0), ('😀', Face::Roman, 23.0)] {
+        let list = MathList {
+            items: vec![Item::Glyph(Glyph {
+                x: 0.0,
+                y: 1.0,
+                size: 1.0,
+                ch,
+                alt: None,
+                face: style,
+                width: 1.0,
+                height: 1.0,
+                depth: 0.0,
+                color: None,
+            })],
+            width: 1.0,
+            height: 1.0,
+            depth: 0.0,
+        };
+        let mut doc = PdfDoc::with_text_fonts(TextFonts::custom(face.clone(), None, None, None));
+        let page = doc.add_page(200.0, 200.0);
+        crate::cmd::equation::draw_pdf(page, &list, (0.0, 0.0, 100.0, 100.0), 0.0, [0, 0, 0]);
+        let bytes = doc.finish();
+        let pdf = String::from_utf8_lossy(&bytes);
+        let matrix = pdf.lines().find(|line| line.ends_with(" Tm")).unwrap();
+        let x: f32 = matrix.split_whitespace().nth(4).unwrap().parse().unwrap();
+        assert!((x - expected_x).abs() < 0.01, "{ch}: expected x={expected_x}, got {x}");
+        assert!(pdf.contains("/U1 "), "the equation uses the export's font");
+    }
+}
+
 fn equation(s: &Session, id: u32) -> Shape {
     s.doc().unwrap().wb.active().unwrap().shapes.iter().find(|x| x.id == id).cloned().unwrap()
 }
