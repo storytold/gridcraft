@@ -1,6 +1,7 @@
 use super::{
-    CellRef, Ctx, DateSystem, El, HashMap, IoError, MAX_FIELDS, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout,
-    PivotShowAs, PivotSort, PivotTable, PivotValue, RangeRef, abs_range, func_caption, func_from, number_to_text, quote_sheet, same,
+    CellRef, Ctx, DateSystem, EXT_GC_DATA_FIELD, El, HashMap, IoError, MAX_FIELDS, PivotCalcField, PivotDateGroup, PivotField, PivotFilter,
+    PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, RangeRef, abs_range, func_caption, func_from, number_to_text,
+    quote_sheet, same,
 };
 
 // ================================================================ reading
@@ -335,12 +336,15 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                     PivotFunc::Sum
                 }),
             };
-            let ext = d
-                .child("extLst")
-                .into_iter()
-                .flat_map(|l| l.kids("ext"))
-                .filter_map(|e| e.child("dataField"))
-                .find_map(|e| e.attr("pivotShowAs").map(str::to_string));
+            let exts = || d.child("extLst").into_iter().flat_map(|l| l.kids("ext"));
+            // GridCraft's marker for a Distinct Count written as Count; ignored when the subtotal
+            // was changed to something else since.
+            let distinct = exts()
+                .filter(|e| e.attr("uri") == Some(EXT_GC_DATA_FIELD))
+                .filter_map(|e| e.child("summary"))
+                .any(|e| e.attr("func") == Some("distinctCount"));
+            let func = if distinct && func == PivotFunc::Count { PivotFunc::DistinctCount } else { func };
+            let ext = exts().filter_map(|e| e.child("dataField")).find_map(|e| e.attr("pivotShowAs").map(str::to_string));
             let show_as = match (ext.as_deref(), d.attr("showDataAs")) {
                 (Some("rankDescending"), _) => PivotShowAs::Rank,
                 (Some(other), _) => {

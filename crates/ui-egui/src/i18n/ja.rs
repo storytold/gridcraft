@@ -699,6 +699,10 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Description (optional):", "説明 (省略可能):"),
     ("Fits inside the selected cell and moves with its content.", "選択したセル内に収まり、内容と一緒に移動します。"),
     ("Choose a PNG or JPEG no larger than 16 MB.", "16 MB 以下の PNG または JPEG を選択してください。"),
+    (
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count.",
+        "このブックには、値フィールドが「重複を除いた個数」のピボットテーブルがあります。.xlsx ファイルでは通常の個数と GridCraft だけが読み取るマーカーとして保存されるため、Excel で更新すると通常の個数に戻ります。",
+    ),
     ("About", "バージョン情報"),
     ("Contributors", "貢献者"),
     ("Models", "モデル"),

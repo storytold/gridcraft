@@ -128,10 +128,14 @@ fn aggregate_record(
     }
     for row_depth in 0..=row_path.len() {
         for col_depth in 0..=col_path.len() {
-            let accs = data
-                .aggs
-                .entry((row_path[..row_depth].to_vec(), col_path[..col_depth].to_vec()))
-                .or_insert_with(|| vec![Acc::default(); input.vals.len() + input.extra.len()]);
+            let accs = data.aggs.entry((row_path[..row_depth].to_vec(), col_path[..col_depth].to_vec())).or_insert_with(|| {
+                input
+                    .vals
+                    .iter()
+                    .map(|(_, v)| Acc::for_func(v.func))
+                    .chain(std::iter::repeat_n(Acc::default(), input.extra.len()))
+                    .collect::<Vec<_>>()
+            });
             for (acc, (source, _)) in accs.iter_mut().zip(input.vals) {
                 if let ValSrc::Col(column) = source {
                     acc.add(rec.get(*column).unwrap_or(&Value::Empty));
@@ -686,7 +690,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             }
             PivotShowAs::Rank => v.number_format.clone(),
             _ => v.number_format.clone().or_else(|| match v.func {
-                PivotFunc::Count | PivotFunc::CountNumbers => None,
+                PivotFunc::Count | PivotFunc::CountNumbers | PivotFunc::DistinctCount => None,
                 _ => {
                     let f = match vs {
                         ValSrc::Col(c) => fmt_of(*c),

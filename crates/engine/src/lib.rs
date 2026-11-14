@@ -224,6 +224,9 @@ pub struct DocState {
     /// The references `edit.goTo` with `record: true` went to in this document, newest first,
     /// without names, each area written with its sheet (`Sheet1!B14:C22,Sheet1!F19:G30`).
     pub go_to_recent: Vec<String>,
+    /// The Distinct Count PivotTable value fields (sheet, pivot, value) an .xlsx save has already
+    /// told the user about (#3336), so only a field not yet disclosed raises the notice again.
+    pub distinct_disclosed: Vec<(usize, usize, usize)>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -347,6 +350,7 @@ impl DocState {
             touched: None,
             edits: None,
             go_to_recent: vec![],
+            distinct_disclosed: vec![],
         }
     }
     pub fn is_dirty(&self) -> bool {
