@@ -118,14 +118,40 @@ fn quoted(src: &str, chars: &[(usize, char)], i: usize, start: usize, out: &mut 
     Ok(j + 1)
 }
 
-fn error_literal(src: &str, chars: &[(usize, char)], i: usize, start: usize, out: &mut Vec<Token>) -> Result<usize, LexError> {
+fn error_literal(
+    src: &str,
+    chars: &[(usize, char)],
+    locale: crate::FormulaLocale,
+    i: usize,
+    start: usize,
+    out: &mut Vec<Token>,
+) -> Result<usize, LexError> {
     let rest = src.get(start..).unwrap_or("");
-    let error = CellError::ALL
-        .iter()
-        .copied()
-        .find(|error| rest.get(..error.as_str().len()).is_some_and(|text| text.eq_ignore_ascii_case(error.as_str())))
-        .ok_or_else(|| LexError { msg: "unknown error literal".into(), pos: start })?;
-    let end = i + error.as_str().chars().count();
+    let mut found = None;
+    for e in CellError::ALL.iter().chain([CellError::Circ].iter()) {
+        let canonical = e.as_str();
+        let localized = locale.error_name(*e);
+        if rest.len() >= canonical.len() && rest.get(..canonical.len()).is_some_and(|p| p.eq_ignore_ascii_case(canonical)) {
+            found = Some((*e, canonical.chars().count()));
+            break;
+        }
+        let char_len = localized.chars().count();
+        let byte_len: usize = rest.chars().take(char_len).map(char::len_utf8).sum();
+        if rest.chars().take(char_len).count() == char_len
+            && rest.get(..byte_len).is_some_and(|p| {
+                if locale == crate::FormulaLocale::Tr {
+                    crate::input::tr::turkish_eq_ignore_case(localized, p)
+                } else {
+                    p.eq_ignore_ascii_case(localized)
+                }
+            })
+        {
+            found = Some((*e, char_len));
+            break;
+        }
+    }
+    let (error, char_len) = found.ok_or_else(|| LexError { msg: "unknown error literal".into(), pos: start })?;
+    let end = i + char_len;
     emit(src, chars, out, Tok::Error(error), start, end);
     Ok(end)
 }
@@ -214,7 +240,8 @@ fn number(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, i: u
 fn word(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, array_depth: usize, i: usize, start: usize, out: &mut Vec<Token>) -> usize {
     let ch = |index| char_at(chars, index);
     let mut j = i;
-    while ch(j).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
+    while ch(j).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && (c == locale.array_column_separator() || c == locale.array_row_separator())))
+    {
         j += 1;
     }
     let value: String = chars.get(i..j).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();
@@ -223,7 +250,9 @@ fn word(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, array_
         j + 1
     } else if ch(j) == Some(':') && sheet_range_end(chars, locale, array_depth, &value, j, out) {
         let mut end = j + 1;
-        while ch(end).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
+        while ch(end)
+            .is_some_and(|c| is_word_char(c) && !(array_depth > 0 && (c == locale.array_column_separator() || c == locale.array_row_separator())))
+        {
             end += 1;
         }
         let last: String = chars.get(j + 1..end).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();
@@ -250,7 +279,9 @@ fn word(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, array_
 fn sheet_range_end(chars: &[(usize, char)], locale: crate::FormulaLocale, array_depth: usize, value: &str, colon: usize, out: &[Token]) -> bool {
     let ch = |index| char_at(chars, index);
     let mut end = colon + 1;
-    while ch(end).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
+    while ch(end)
+        .is_some_and(|c| is_word_char(c) && !(array_depth > 0 && (c == locale.array_column_separator() || c == locale.array_row_separator())))
+    {
         end += 1;
     }
     let repeats_sheet = is_range_end(value)
@@ -293,7 +324,7 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 i += 1;
             }
             '#' => {
-                i = error_literal(src, &chars, i, start, &mut out)?;
+                i = error_literal(src, &chars, locale, i, start, &mut out)?;
             }
             '[' => {
                 i = structured_ref(src, &chars, i, start, &mut out)?;
@@ -333,7 +364,7 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 push(&mut out, Tok::Comma, i + 1);
                 i += 1;
             }
-            ';' => {
+            c if (array_depth > 0 && c == locale.array_row_separator()) || (array_depth == 0 && c == ';') => {
                 push(&mut out, Tok::Semicolon, i + 1);
                 i += 1;
             }
