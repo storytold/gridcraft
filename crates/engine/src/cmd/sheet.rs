@@ -576,6 +576,14 @@ fn insert_copied_cells(s: &mut Session, p: &Json) -> Result<Json> {
     if cut && !rows && !cols {
         return Err(EngineError::Other("Insert Cut Cells works on whole rows or columns; cut whole rows or columns, or use Paste.".into()));
     }
+    // A cut works on the live workbook, where tab edits since the cut may have moved its sheet.
+    let original = clip.clone();
+    let mut clip = clip;
+    if cut {
+        let Some(live) = clip.live_sheet(&d.wb) else { return Err(EngineError::Other("The cut cells' sheet no longer exists.".into())) };
+        clip.sheet = live;
+        clip.wb = d.wb.clone();
+    }
     // A moved block can't be inserted inside itself.
     if cut && clip.sheet == sheet {
         let inside = if rows { at.row > sel.start.row && at.row <= sel.end.row } else { at.col > sel.start.col && at.col <= sel.end.col };
@@ -606,7 +614,7 @@ fn insert_copied_cells(s: &mut Session, p: &Json) -> Result<Json> {
             d.wb = before.0;
             d.selection = before.1;
             d.calc.rebuild(&d.wb);
-            s.clipboard = Some(clip);
+            s.clipboard = Some(original);
             Err(e)
         }
     }

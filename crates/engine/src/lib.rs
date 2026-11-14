@@ -148,6 +148,16 @@ pub struct Clipboard {
     pub trust: Trust,
 }
 
+impl Clipboard {
+    /// Where the copied sheet sits in `wb` now. `sheet` is its index when copied, and moving,
+    /// inserting or deleting tabs changes that, so a paste into the source workbook finds the
+    /// sheet by identity (#3867). `None` when the sheet is gone or `wb` is another workbook.
+    pub fn live_sheet(&self, wb: &Workbook) -> Option<usize> {
+        let uid = self.wb.sheet(self.sheet)?.uid.get();
+        wb.sheets.iter().position(|sh| sh.uid.get() == uid)
+    }
+}
+
 /// Whether a document's active content (macros) may run without asking the person first. There
 /// is no default: whoever makes a document says where it came from ([`DocState::new`]), so a new
 /// way of building one from bytes can't come out trusted by omission.
