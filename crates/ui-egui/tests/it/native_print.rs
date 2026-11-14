@@ -97,6 +97,15 @@ fn invalid_print_settings_are_rejected_without_partial_changes() {
         json!({"grayscale":"yes"}),
         json!({"refresh":"yes"}),
         json!({"copies":3,"duplex":"invalid"}),
+        json!({"from":0}),
+        json!({"from":-1}),
+        json!({"from":2.5}),
+        json!({"from":"2"}),
+        json!({"to":"x"}),
+        json!({"to":true}),
+        json!({"to":u64::MAX}),
+        json!({"from":2,"to":0}),
+        json!({"pages":2}),
         json!([]),
     ] {
         assert!(app.run("ui.printSettings", params.clone()).is_err(), "{params}");
@@ -128,4 +137,228 @@ fn repeated_fast_jobs_each_surface_an_identical_receipt() {
         app.poll_printing(&egui::Context::default());
         assert!(app.toast.is_none());
     }
+}
+
+/// A workbook of 5 pages (A1:A50, a page break every 10 rows) whose footer numbers its pages.
+fn five_pages() -> Session {
+    let mut session = Session::new();
+    session.new_workbook();
+    let rows: Vec<Vec<serde_json::Value>> = (1..=50).map(|r| vec![json!(format!("R{r}"))]).collect();
+    session.run("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    session.run("pageLayout.pageSetup", json!({"rowBreaks": [11, 21, 31, 41], "footer": "&CPage &P of &N"})).unwrap();
+    session
+}
+
+/// Replaces the text of the field labelled `label` with `text` (empty clears it), as typed.
+fn type_into(h: &mut egui_kittest::Harness<'_, SheetApp>, label: &str, text: &str) {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let rect = h.get_by_role_and_label(Role::TextInput, label).rect();
+    h.input_mut().events.push(egui::Event::PointerMoved(rect.center()));
+    h.run_steps(1);
+    h.get_by_role_and_label(Role::TextInput, label).click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    if text.is_empty() {
+        h.key_press(egui::Key::Backspace);
+    } else {
+        h.input_mut().events.push(egui::Event::Text(text.into()));
+    }
+    h.run_steps(3);
+}
+
+/// The footers a PDF prints, in page order.
+fn footers(pdf: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(pdf).lines().filter_map(|l| l.strip_prefix("(Page ")?.strip_suffix(") Tj")).map(|f| format!("Page {f}")).collect()
+}
+
+#[test]
+/// `ui.printSettings` holds the Print view's page range: `from` and `to` are set, read back and
+/// cleared with `null`, and `ui.printSubmit` prints that range unless the call names its own.
+fn print_settings_hold_the_page_range_that_print_submit_prints() {
+    let mut app = SheetApp::new(five_pages(), Services::default());
+    app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
+    let jobs = Rc::new(RefCell::new(Vec::new()));
+    let observed = jobs.clone();
+    app.services.print_native = Some(Box::new(move |bytes, _| {
+        observed.borrow_mut().push(bytes);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender.send(Ok("queued".into())).unwrap();
+        receiver
+    }));
+    let unknown = app.run("ui.printSettings", json!({"pages": 2})).unwrap_err();
+    assert!(unknown.contains("from, to"), "the error lists the settings it takes: {unknown}");
+    let set = app.run("ui.printSettings", json!({"printer": "Queue", "from": 2, "to": 3})).unwrap();
+    assert_eq!((&set["from"], &set["to"]), (&json!(2), &json!(3)));
+    assert_eq!(app.run("ui.printSettings", json!({})).unwrap()["from"], 2, "the range stays until changed");
+    let submit = |app: &mut SheetApp, params: serde_json::Value| {
+        app.run("ui.printSubmit", params).unwrap();
+        app.printing.poll(&egui::Context::default());
+        app.poll_printing(&egui::Context::default());
+        footers(&jobs.borrow_mut().pop().unwrap())
+    };
+    assert_eq!(submit(&mut app, json!({})), ["Page 2 of 5", "Page 3 of 5"]);
+    // A call that names a range prints it instead: `from` alone runs to the last page.
+    assert_eq!(submit(&mut app, json!({"from": 4})), ["Page 4 of 5", "Page 5 of 5"]);
+    assert_eq!(submit(&mut app, json!({"from": null})).len(), 5, "an explicit null prints every page");
+    // `null` clears one bound, then the other.
+    let set = app.run("ui.printSettings", json!({"to": null})).unwrap();
+    assert_eq!((&set["from"], &set["to"]), (&json!(2), &json!(null)));
+    assert_eq!(submit(&mut app, json!({})), ["Page 2 of 5", "Page 3 of 5", "Page 4 of 5", "Page 5 of 5"]);
+    app.run("ui.printSettings", json!({"from": null})).unwrap();
+    assert_eq!(app.print_pages, gridcraft_ui_egui::printing::PageRange::default());
+    assert_eq!(submit(&mut app, json!({})).len(), 5);
+    // A range after the last page is refused when printing, with nothing sent to the printer.
+    app.run("ui.printSettings", json!({"from": 6})).unwrap();
+    let e = app.run("ui.printSubmit", json!({})).unwrap_err();
+    assert!(e.contains("nothing to print"), "{e}");
+    assert!(jobs.borrow().is_empty());
+}
+
+#[test]
+/// Each window keeps its own page range: a range set in one window's Print view doesn't print
+/// from another window, and comes back when its window is active again.
+fn each_window_keeps_its_own_page_range() {
+    use gridcraft_ui_egui::printing::PageRange;
+    let mut app = SheetApp::new(five_pages(), Services::default());
+    // The first frame makes the window's interface state its own.
+    app.follow_active_window();
+    let first = app.session.active_window().unwrap();
+    app.run("ui.printSettings", json!({"from": 4})).unwrap();
+    app.run("view.newWindow", json!({})).unwrap();
+    let second = app.session.active_window().unwrap();
+    assert_ne!(first, second);
+    assert_eq!(app.print_pages, PageRange::default(), "a new window prints every page");
+    app.run("ui.printSettings", json!({"from": 2, "to": 3})).unwrap();
+    app.run("window.activate", json!({"window": first})).unwrap();
+    assert_eq!(app.print_pages, PageRange { from: Some(4), to: None });
+    assert_eq!(app.run("ui.printSettings", json!({})).unwrap()["from"], 4);
+    app.run("window.activate", json!({"window": second})).unwrap();
+    assert_eq!(app.print_pages, PageRange { from: Some(2), to: Some(3) });
+}
+
+#[test]
+/// `ui.printSettings` and `ui.printSubmit` sent to another window through the control channel
+/// read, change and print that window's page range, and leave the active window's alone.
+fn print_calls_for_another_window_use_its_page_range() {
+    use gridcraft_ui_egui::control::{Outcome, handle};
+    use gridcraft_ui_egui::printing::PageRange;
+    let mut app = SheetApp::new(five_pages(), Services::default());
+    app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
+    let jobs = Rc::new(RefCell::new(Vec::new()));
+    let observed = jobs.clone();
+    app.services.print_native = Some(Box::new(move |bytes, _| {
+        observed.borrow_mut().push(bytes);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender.send(Ok("queued".into())).unwrap();
+        receiver
+    }));
+    app.follow_active_window();
+    let first = app.session.active_window().unwrap();
+    app.run("ui.printSettings", json!({"printer": "Queue", "from": 4})).unwrap();
+    app.run("view.newWindow", json!({})).unwrap();
+    let second = app.session.active_window().unwrap();
+    let ctx = egui::Context::default();
+    let call = |app: &mut SheetApp, command: &str, params: serde_json::Value| match handle(
+        app,
+        &ctx,
+        "engine.execute",
+        &json!({"command": command, "params": params, "window": first}),
+    ) {
+        Outcome::Done(v) => v,
+        Outcome::Screenshot { .. } => panic!("{command} took a screenshot"),
+    };
+    let read = call(&mut app, "ui.printSettings", json!({}));
+    assert_eq!(read["result"]["from"], 4, "{read}");
+    let set = call(&mut app, "ui.printSettings", json!({"to": 4}));
+    assert_eq!((&set["result"]["from"], &set["result"]["to"]), (&json!(4), &json!(4)), "{set}");
+    assert_eq!(app.session.active_window(), Some(second), "the active window stays active");
+    assert_eq!(app.print_pages, PageRange::default(), "the active window's range is untouched");
+    let printed = call(&mut app, "ui.printSubmit", json!({}));
+    assert_eq!(printed["ok"], true, "{printed}");
+    app.printing.poll(&ctx);
+    app.poll_printing(&ctx);
+    assert_eq!(footers(&jobs.borrow_mut().pop().unwrap()), ["Page 4 of 5"]);
+    app.run("window.activate", json!({"window": first})).unwrap();
+    assert_eq!(app.print_pages, PageRange { from: Some(4), to: Some(4) });
+}
+
+#[test]
+/// File › Print's Pages … to … fields set the page range, the preview shows the pages that will
+/// print under their own numbers, and the fields follow `ui.printSettings`. In German too.
+fn the_print_views_page_fields_set_the_range_and_the_preview_follows() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = crate::common::prepare(SheetApp::new(five_pages(), Services::default()));
+    app.run("ui.backstage", json!({"page": "print"})).unwrap();
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    assert!(h.query_by_label("Page 1 of 5").is_some());
+    type_into(&mut h, "Pages", "2");
+    type_into(&mut h, "to", "3x");
+    let range = h.state().print_pages;
+    assert_eq!((range.from, range.to), (Some(2), Some(3)), "digits only");
+    assert!(h.query_by_label("Page 2 of 5").is_some(), "the preview starts at the range's first page, under its own number");
+    h.get_by_label("▶").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Page 3 of 5").is_some());
+    assert!(h.get_by_label("▶").accesskit_node().is_disabled(), "page 3 is the last page that prints");
+    assert!(h.get_all_by_role_and_label(Role::Button, "Print").all(|b| !b.accesskit_node().is_disabled()));
+    // An emptied field has no bound; a range after the last page has nothing to print, and Print is off.
+    type_into(&mut h, "to", "");
+    assert_eq!(h.state().print_pages.to, None);
+    type_into(&mut h, "Pages", "9");
+    assert!(h.query_by_label("Nothing to print.").is_some());
+    // The square Print button, not the navigation entry of the same name.
+    assert!(h.get_all_by_role_and_label(Role::Button, "Print").any(|b| b.accesskit_node().is_disabled()));
+    // The fields show what `ui.printSettings` sets once they are left (Tab moves on to "to").
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    h.state_mut().run("ui.printSettings", json!({"from": 4, "to": null})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Pages").value().as_deref(), Some("4"));
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "to").value().as_deref(), Some(""));
+    assert!(h.query_by_label("Page 4 of 5").is_some());
+    // German labels.
+    h.state_mut().run("app.language.set", json!({"language": "de"})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Seiten").value().as_deref(), Some("4"));
+    assert!(h.query_by_role_and_label(Role::TextInput, "bis").is_some());
+    assert!(h.query_by_label("Seite 4 von 5").is_some());
+}
+
+#[test]
+/// Export › Create PDF exports the page range typed under it.
+fn create_pdf_exports_the_page_range_under_it() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let dir = std::env::temp_dir().join(format!("gridcraft-export-range-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("Range.pdf");
+    let path = target.to_string_lossy().into_owned();
+    let services = Services { pick_save: Some(Box::new(move |_| Some(path.clone()))), ..Default::default() };
+    let mut app = crate::common::prepare(SheetApp::new(five_pages(), services));
+    app.run("ui.backstage", json!({"page": "export"})).unwrap();
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    type_into(&mut h, "Pages", "4");
+    h.get_by_role_and_label(Role::Button, "Create PDF").click();
+    h.run_steps(3);
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    assert_eq!(footers(&std::fs::read(&target).unwrap()), ["Page 4 of 5", "Page 5 of 5"]);
+    assert_eq!(h.state().print_pages, gridcraft_ui_egui::printing::PageRange::default(), "File › Print keeps its own range");
+    let _ = std::fs::remove_dir_all(&dir);
 }

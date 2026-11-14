@@ -28,13 +28,43 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, discover: &Discover, translate
     }
 }
 
+/// File › Print's page range (Pages … to …): 1-based page numbers counted over the whole print
+/// job. `None` prints from the first page or to the last.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PageRange {
+    pub from: Option<u32>,
+    pub to: Option<u32>,
+}
+
+impl PageRange {
+    /// Adds the range to print-command params as `from` and `to`, unless they name a range of
+    /// their own (either bound, `null` included).
+    pub fn apply(&self, params: &mut serde_json::Value) {
+        let Some(map) = params.as_object_mut() else { return };
+        if map.contains_key("from") || map.contains_key("to") {
+            return;
+        }
+        for (key, page) in [("from", self.from), ("to", self.to)] {
+            if let Some(page) = page {
+                map.insert(key.into(), page.into());
+            }
+        }
+    }
+}
+
 /// Read print settings/status, or validate an explicit update before changing anything.
 /// `refresh: true` starts discovery only; this command never submits a job or opens a dialog.
-pub fn settings(state: &mut State, params: &serde_json::Value, discover: Option<&Discover>) -> Result<serde_json::Value, String> {
+/// `from` and `to` set the Print view's page range (`null` clears a bound).
+pub fn settings(
+    state: &mut State,
+    pages: &mut PageRange,
+    params: &serde_json::Value,
+    discover: Option<&Discover>,
+) -> Result<serde_json::Value, String> {
     use serde_json::{Value, json};
     let object = params.as_object().ok_or("print settings must be an object")?;
-    if object.keys().any(|key| !["printer", "copies", "duplex", "grayscale", "refresh"].contains(&key.as_str())) {
-        return Err("unknown print setting; use printer, copies, duplex, grayscale or refresh".into());
+    if object.keys().any(|key| !["printer", "copies", "duplex", "grayscale", "from", "to", "refresh"].contains(&key.as_str())) {
+        return Err("unknown print setting; use printer, copies, duplex, grayscale, from, to or refresh".into());
     }
     if state.busy() && !object.is_empty() {
         return Err("wait for the active print submission before changing settings".into());
@@ -64,6 +94,21 @@ pub fn settings(state: &mut State, params: &serde_json::Value, discover: Option<
     if let Some(value) = object.get("grayscale") {
         next.grayscale = value.as_bool().ok_or("grayscale must be a boolean")?;
     }
+    let mut range = *pages;
+    for (key, bound) in [("from", &mut range.from), ("to", &mut range.to)] {
+        if let Some(value) = object.get(key) {
+            *bound = match value {
+                Value::Null => None,
+                _ => Some(
+                    value
+                        .as_u64()
+                        .and_then(|page| u32::try_from(page).ok())
+                        .filter(|page| *page >= 1)
+                        .ok_or_else(|| format!("{key} must be a page number from 1, or null for no limit"))?,
+                ),
+            };
+        }
+    }
     let refresh = object.get("refresh").map(|value| value.as_bool().ok_or("refresh must be a boolean")).transpose()?.unwrap_or(false);
     if refresh {
         let discover = discover.ok_or("native printer discovery is unavailable here")?;
@@ -72,6 +117,7 @@ pub fn settings(state: &mut State, params: &serde_json::Value, discover: Option<
         }
     }
     state.settings = next;
+    *pages = range;
     let (status, detail) = match state.message.as_ref() {
         None => ("idle", ""),
         Some(Feedback::FindingPrinters) => ("findingPrinters", ""),
@@ -85,7 +131,7 @@ pub fn settings(state: &mut State, params: &serde_json::Value, discover: Option<
     Ok(json!({
         "printer": state.settings.printer, "copies": state.settings.copies,
         "duplex": match state.settings.duplex { None => "printerDefault", Some(Duplex::Off) => "off", Some(Duplex::LongEdge) => "longEdge", Some(Duplex::ShortEdge) => "shortEdge" },
-        "grayscale": state.settings.grayscale,
+        "grayscale": state.settings.grayscale, "from": pages.from, "to": pages.to,
         "printers": state.printers.iter().map(|printer| json!({"name": printer.name, "default": printer.default})).collect::<Vec<Value>>(),
         "busy": state.busy(), "discovering": state.discovering(), "ready": state.ready(), "status": status, "detail": detail,
     }))
