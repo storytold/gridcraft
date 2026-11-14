@@ -1245,6 +1245,20 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "The selection when the button is pressed" => "A seleção no momento em que o botão é pressionado",
         "Undo what the macro did before stopping" => "Desfazer o que a macro fez antes de parar",
         "Use a letter from A to Z for the shortcut." => "Use uma letra de A a Z para o atalho.",
+        "Click to copy" => "Clique para copiar",
+        "Insert Function…" => "Inserir Função…",
+        "No functions match." => "Nenhuma função corresponde.",
+        "Or select a category:" => "Ou selecione uma categoria:",
+        "Paste List" => "Colar Lista",
+        "Paste name" => "Colar nome",
+        "Paste Names…" => "Colar Nomes…",
+        "Reading direction" => "Direção da leitura",
+        "Sort On" => "Classificar Por",
+        "Split tabs" => "Dividir guias",
+        "Auto Fill Options" => "Opções de AutoPreenchimento",
+        "Locking cells or hiding formulas has no effect until you protect the worksheet (Review › Protect Sheet)." => {
+            "Bloquear células ou ocultar fórmulas não tem efeito até você proteger a planilha (Revisão › Proteger Planilha)."
+        }
         _ => return None,
     })
 }
