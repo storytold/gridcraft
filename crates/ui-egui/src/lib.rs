@@ -38,6 +38,7 @@ pub mod formula_bar;
 mod formula_locale;
 pub mod function_library;
 pub mod grid;
+pub mod hotkeys;
 pub mod i18n;
 pub mod icons;
 pub mod keymap;
@@ -64,7 +65,7 @@ pub mod wordart;
 
 pub use window_ui::WindowUi;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use gridcraft_engine::core::{CellRef, RangeRef};
 use gridcraft_engine::{Session, UiRequest};
@@ -142,6 +143,12 @@ pub struct UiState {
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
     #[serde(deserialize_with = "lenient_interface_scale")]
     pub interface_scale: u16,
+    /// User shortcuts for application commands (command id → a chord such as `Cmd+Q`).
+    /// Missing a command keeps its built-in shortcut. This is an application preference, written
+    /// as `commandHotkeys` in `ui.json` (and the web app's `gridcraft.ui` entry), never into the
+    /// workbook. A malformed value is ignored so the rest of these preferences still load.
+    #[serde(deserialize_with = "hotkeys::lenient", skip_serializing_if = "BTreeMap::is_empty")]
+    pub command_hotkeys: BTreeMap<String, String>,
 }
 
 pub const INTERFACE_SCALE_MIN: u16 = 75;
@@ -177,6 +184,7 @@ impl Default for UiState {
             keytip_invoke_next: None,
             language: i18n::Language::En,
             interface_scale: 100,
+            command_hotkeys: BTreeMap::new(),
         }
     }
 }

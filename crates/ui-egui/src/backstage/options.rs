@@ -8,6 +8,10 @@ use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, ve
 /// settings are saved with the workbook.
 pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     let lang = app.ui.language;
+    if super::hotkeys::open(ui, lang) {
+        super::hotkeys::page(app, ui);
+        return;
+    }
     section(ui, lang, "Options|General");
     general_options(app, ui, lang);
     ui.add_space(6.0);

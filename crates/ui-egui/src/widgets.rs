@@ -47,7 +47,10 @@ pub fn tooltip_shortcut(tip: &str, mac: bool) -> Option<&'static str> {
 fn tip_text(ui: &Ui, tip: &str) -> String {
     // A name shared with a two-line ribbon label (Czech "Automatický\nsoučet") reads as one line.
     let name = tr(ui, tip).replace('\n', " ");
-    let text = match tooltip_shortcut(tip, ui.ctx().os() == egui::os::OperatingSystem::Mac) {
+    let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+    // A user binding replaces the built-in hint. Commands without one keep the platform table.
+    let keys = crate::hotkeys::published_tip(ui, tip).or_else(|| tooltip_shortcut(tip, mac).map(str::to_string));
+    let text = match keys {
         Some(keys) => format!("{name} ({keys})"),
         None => name,
     };

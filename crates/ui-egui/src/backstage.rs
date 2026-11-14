@@ -20,6 +20,7 @@ use crate::i18n::{self, Language};
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
 
+mod hotkeys;
 mod options;
 mod print;
 
