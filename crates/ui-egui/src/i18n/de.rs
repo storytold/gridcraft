@@ -508,6 +508,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "All sheets" => "Alle Blätter",
         "New sheet (⇧F11)" => "Neues Blatt (⇧F11)",
         "Text Box" => "Textfeld",
+        "This file contains Excel macros. GridCraft keeps them when you save as .xlsm and does not run them." => {
+            "Diese Datei enthält Excel-Makros. GridCraft behält sie beim Speichern als .xlsm und führt sie nicht aus."
+        }
+        "Nothing here can be run in GridCraft." => "Hier kann GridCraft nichts starten.",
+        "The Excel macros stay in the file. GridCraft does not run them. Excel still can." => {
+            "Die Excel-Makros bleiben in der Datei. GridCraft führt sie nicht aus. In Excel sind sie weiter startbar."
+        }
         "Macros" => "Makros",
         "Record Macro" => "Makro aufzeichnen",
         "Stop Recording" => "Aufzeichnung beenden",

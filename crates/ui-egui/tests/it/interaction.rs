@@ -1432,7 +1432,9 @@ fn opening_a_macro_workbook_shows_a_notice() {
     // The UI-side handler turns that open result into the notice (open_path does this in the app).
     h.state_mut().show_open_warnings(&res);
     let n = h.state().notice.clone().expect("a notice was shown");
-    assert!(n.text.contains("VBA"), "{}", n.text);
+    assert!(n.text.contains("Excel macros"), "{}", n.text);
+    assert!(n.text.contains(".xlsm") && n.text.contains("does not run them"), "{}", n.text);
+    assert!(!n.text.to_lowercase().contains("no scripts or macros"), "{}", n.text);
     assert_eq!(n.kind, gridcraft_ui_egui::NoticeKind::Warning);
     assert_eq!(n.action.as_ref().map(|a| a.1.as_str()), Some("macros"), "action opens the Macros dialog");
 
