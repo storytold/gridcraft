@@ -1949,3 +1949,32 @@ fn save_model_counts_areas_outside_quoted_sheet_names() {
         assert!(e.contains("one range"), "{name}: {e}");
     }
 }
+
+/// #3856: under Manual calculation a kept solution brings the objective and its dependents (on
+/// another sheet too) up to date, and the mode stays Manual. `keep: false` changes nothing.
+#[test]
+fn a_kept_solution_recalculates_its_dependents_under_manual_calculation() {
+    let manual = |s: &Session| s.doc().unwrap().wb.calc.mode == gridcraft_model::CalcMode::Manual;
+    for (goal, start, bound, want) in [("max", "2", "A1 <= 10", [10.0, 20.0, 21.0]), ("min", "8", "A1 >= 2", [2.0, 4.0, 5.0])] {
+        let mut s = s();
+        set(&mut s, &[("A1", start), ("B1", "=A1*2"), ("C1", "=B1+1")]);
+        s.execute("home.insertSheet", json!({"name": "Tracker"})).unwrap();
+        set(&mut s, &[("A1", "=Sheet1!B1+1")]);
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+        let r = s
+            .execute("data.solver", json!({"objective": "B1", "goal": goal, "variables": "A1", "constraints": [bound], "method": "simplex"}))
+            .unwrap();
+        assert_eq!(r["objective"].as_f64(), Some(want[1]), "{goal}: {r}");
+        assert_eq!([n(&s, "A1"), n(&s, "B1"), n(&s, "C1")], want, "{goal}: the sheet shows the solution");
+        let tracker = s.doc().unwrap().wb.sheet(1).unwrap().value(CellRef::parse("A1").unwrap()).as_f64();
+        assert_eq!(tracker, Some(want[2]), "{goal}: a dependent on another sheet");
+        assert!(manual(&s), "{goal}: still Manual");
+    }
+    // Not kept: the original values stay, formulas included.
+    let mut s = s();
+    set(&mut s, &[("A1", "2"), ("B1", "=A1*2"), ("C1", "=B1+1")]);
+    s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+    s.execute("data.solver", json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 10"], "method": "simplex", "keep": false})).unwrap();
+    assert_eq!([n(&s, "A1"), n(&s, "B1"), n(&s, "C1")], [2.0, 4.0, 5.0]);
+}

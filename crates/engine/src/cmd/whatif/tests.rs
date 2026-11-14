@@ -341,3 +341,21 @@ fn scenario_summary_counts_result_rows_in_its_cell_limit() {
     let err = s.execute("data.scenarioSummary", json!({"resultCells": "C1:C255"})).unwrap_err().to_string();
     assert!(err.contains("too many cells"), "{err}");
 }
+
+/// #3856, for Goal Seek: under Manual calculation the set cell and its dependents show the value
+/// found, and the mode stays Manual.
+#[test]
+fn goal_seek_recalculates_its_dependents_under_manual_calculation() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=A1*2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "=B1+1"})).unwrap();
+    s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+    let r = s.execute("data.goalSeek", json!({"set": "B1", "to": 30, "changing": "A1"})).unwrap();
+    let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+    assert!(near(r["result"].as_f64().unwrap(), 30.0), "the result read back from the sheet: {r}");
+    for (cell, want) in [("A1", 15.0), ("B1", 30.0), ("C1", 31.0)] {
+        assert!(near(n(&s, cell), want), "{cell}: {}", n(&s, cell));
+    }
+    assert_eq!(s.doc().unwrap().wb.calc.mode, gridcraft_model::CalcMode::Manual);
+}
