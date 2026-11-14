@@ -3,7 +3,7 @@
 use gridcraft_calc::evaluate;
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, category_levels, number_to_text};
 use gridcraft_model::{Chart, ChartKind, Theme, Workbook, style::apply_tint};
-use gridcraft_numfmt::{NumberFormat, format_value};
+use gridcraft_numfmt::{NumberFormat, format_value_in};
 
 use crate::{ChartData, Rgba, SeriesData, TrendlineData};
 
@@ -341,7 +341,7 @@ fn category_label(wb: &Workbook, src: Option<(&gridcraft_model::Sheet, RangeRef)
         if let Some(c) = at {
             let code = &wb.styles.get(s.style_id(c)).num_fmt.0;
             if !code.eq_ignore_ascii_case("general") {
-                return clip_label(&format_value(v, &NumberFormat::parse_cached(code), wb.date_system).text, room);
+                return clip_label(&format_value_in(v, &NumberFormat::parse_cached(code), wb.date_system, wb.region).text, room);
             }
         }
     }

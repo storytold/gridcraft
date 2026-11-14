@@ -1094,3 +1094,16 @@ fn legacy_count_numbers_caption_follows_the_function() {
         assert_eq!(text(&s, "E3"), after, "{legacy}");
     }
 }
+
+#[test]
+fn date_grouping_labels_follow_the_workbook_region() {
+    let mut s = sales();
+    s.set_region(gridcraft_core::region::find("pt-BR").unwrap());
+    s.execute("insert.pivotTable", json!({"rows": ["Date"], "values": ["Sales"]})).unwrap();
+    s.execute("pivot.group", json!({"field": "Date", "by": "quarters"})).unwrap();
+    assert_eq!(text(&s, "A4"), "Trim1");
+    assert_eq!(text(&s, "A7"), "Trim4");
+    s.execute("pivot.group", json!({"field": "Date", "by": "months"})).unwrap();
+    assert_eq!(text(&s, "A4"), "jan");
+    assert_eq!(text(&s, "A15"), "dez");
+}
