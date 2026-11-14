@@ -3,6 +3,7 @@ use super::{
     AutoFilter, CellRef, EngineError, FilterCriterion, Json, Ordering, RangeRef, Result, Session, Sheet, Value, Workbook, bad, bool_param, col_param,
     current_region, data_target, edit, json,
 };
+use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------- filter
 
@@ -180,19 +181,18 @@ pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
     }
 }
 
-/// Hides rows of the autofilter range that fail any criterion.
-pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
-    let Some(sh) = wb.sheet(sheet) else { return };
-    let Some(af) = sh.autofilter.clone() else { return };
-    // An imported range can name rows past the grid; none of those exist to hide.
-    let r = RangeRef::new(af.range.start, CellRef::new(af.range.end.row.min(gridcraft_core::MAX_ROWS - 1), af.range.end.col));
-    let mut hide = Vec::new();
+/// Statistics use the original range within the grid, regardless of the other active criteria.
+fn filter_stats(sh: &Sheet, af: &AutoFilter) -> HashMap<usize, (Option<f64>, f64)> {
+    let r = af.range;
     // Precompute per-criterion top10 threshold and average once, not per row.
-    let mut col_stats: std::collections::HashMap<usize, (Option<f64>, f64)> = std::collections::HashMap::new();
+    let mut col_stats = HashMap::new();
     for (i, (off, c)) in af.criteria.iter().enumerate() {
         if matches!(c, FilterCriterion::Top10 { .. } | FilterCriterion::AboveAverage(_)) {
-            let col = r.start.col + off;
-            let mut nums: Vec<f64> = (r.start.row + 1..=r.end.row).filter_map(|row| sh.value(CellRef::new(row, col)).as_f64()).collect();
+            let Some(col) = r.start.col.checked_add(*off) else { continue };
+            // Keep main's imported-range bound after extracting statistics from apply_filter.
+            let mut nums: Vec<f64> = (r.start.row.saturating_add(1)..=r.end.row.min(gridcraft_core::MAX_ROWS - 1))
+                .filter_map(|row| sh.value(CellRef::new(row, col)).as_f64())
+                .collect();
             let avg = if nums.is_empty() { 0.0 } else { nums.iter().sum::<f64>() / nums.len() as f64 };
             let thr = match c {
                 FilterCriterion::Top10 { bottom, percent, count } => {
@@ -206,59 +206,97 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
             col_stats.insert(i, (thr, avg));
         }
     }
-    for row in r.start.row + 1..=r.end.row {
-        let mut visible = true;
-        for (i, (off, crit)) in af.criteria.iter().enumerate() {
-            let c = CellRef::new(row, r.start.col + off);
-            let v = sh.value(c);
-            let text = crate::display::cell_text(wb, sh, c);
-            let ok = match crit {
-                FilterCriterion::Values { values, blanks } => {
-                    if filter_blank(&v) {
-                        *blanks
-                    } else {
-                        values.iter().any(|x| x.eq_ignore_ascii_case(&text) || x.eq_ignore_ascii_case(&v.display()))
-                    }
-                }
-                FilterCriterion::Custom { a, b, and } => {
-                    let x = custom_ok(&v, &text, &a.0, &a.1);
-                    match b {
-                        Some(b) => {
-                            let y = custom_ok(&v, &text, &b.0, &b.1);
-                            if *and { x && y } else { x || y }
-                        }
-                        None => x,
-                    }
-                }
-                FilterCriterion::Top10 { bottom, .. } => match (v.as_f64(), col_stats.get(&i)) {
-                    (Some(n), Some((thr, _))) => {
-                        let thr = thr.unwrap_or(n);
-                        if *bottom { n <= thr } else { n >= thr }
-                    }
-                    _ => false,
-                },
-                FilterCriterion::AboveAverage(above) => match (v.as_f64(), col_stats.get(&i)) {
-                    (Some(n), Some((_, avg))) => {
-                        if *above {
-                            n > *avg
-                        } else {
-                            n < *avg
-                        }
-                    }
-                    _ => false,
-                },
-                FilterCriterion::FillColor(col) => wb.styles.get(sh.style_id(c)).fill.fg == *col,
-                FilterCriterion::FontColor(col) => wb.styles.get(sh.style_id(c)).font.color == *col,
-                // Icons are not evaluated here: the row keeps its current visibility.
-                FilterCriterion::Icon { .. } => !sh.is_row_hidden(row),
-            };
-            if !ok {
-                visible = false;
-                break;
-            }
-        }
-        hide.push((row, !visible));
+    col_stats
+}
+
+/// Shared row and checkbox matching, with thresholds and Values lookups prepared once per query.
+struct FilterMatcher<'a> {
+    wb: &'a Workbook,
+    sh: &'a Sheet,
+    af: &'a AutoFilter,
+    stats: HashMap<usize, (Option<f64>, f64)>,
+    values: HashMap<usize, HashSet<String>>,
+}
+
+impl<'a> FilterMatcher<'a> {
+    fn new(wb: &'a Workbook, sh: &'a Sheet, af: &'a AutoFilter) -> Self {
+        let values = af
+            .criteria
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (_, crit))| match crit {
+                FilterCriterion::Values { values, .. } => Some((i, values.iter().map(|v| v.to_ascii_lowercase()).collect())),
+                _ => None,
+            })
+            .collect();
+        Self { wb, sh, af, stats: filter_stats(sh, af), values }
     }
+
+    fn row_matches(&self, row: u32, excluded_offset: Option<u32>) -> bool {
+        self.af.criteria.iter().enumerate().all(|(i, (off, crit))| Some(*off) == excluded_offset || self.criterion_matches(row, i, *off, crit))
+    }
+
+    fn criterion_matches(&self, row: u32, i: usize, off: u32, crit: &FilterCriterion) -> bool {
+        let Some(col) = self.af.range.start.col.checked_add(off) else { return true };
+        let c = CellRef::new(row, col);
+        let v = self.sh.value(c);
+        let text = crate::display::cell_text(self.wb, self.sh, c);
+        match crit {
+            FilterCriterion::Values { blanks, .. } => {
+                if filter_blank(&v) {
+                    *blanks
+                } else {
+                    self.values
+                        .get(&i)
+                        .is_some_and(|values| values.contains(&text.to_ascii_lowercase()) || values.contains(&v.display().to_ascii_lowercase()))
+                }
+            }
+            FilterCriterion::Custom { a, b, and } => {
+                let x = custom_ok(&v, &text, &a.0, &a.1);
+                match b {
+                    Some(b) => {
+                        let y = custom_ok(&v, &text, &b.0, &b.1);
+                        if *and { x && y } else { x || y }
+                    }
+                    None => x,
+                }
+            }
+            FilterCriterion::Top10 { bottom, .. } => match (v.as_f64(), self.stats.get(&i)) {
+                (Some(n), Some((thr, _))) => {
+                    let thr = thr.unwrap_or(n);
+                    if *bottom { n <= thr } else { n >= thr }
+                }
+                _ => false,
+            },
+            FilterCriterion::AboveAverage(above) => match (v.as_f64(), self.stats.get(&i)) {
+                (Some(n), Some((_, avg))) => {
+                    if *above {
+                        n > *avg
+                    } else {
+                        n < *avg
+                    }
+                }
+                _ => false,
+            },
+            FilterCriterion::FillColor(col) => self.wb.styles.get(self.sh.style_id(c)).fill.fg == *col,
+            FilterCriterion::FontColor(col) => self.wb.styles.get(self.sh.style_id(c)).font.color == *col,
+            // Icon criteria are retained from files but cannot be evaluated yet.
+            FilterCriterion::Icon { .. } => true,
+        }
+    }
+}
+
+/// Hides rows of the autofilter range that fail any criterion.
+pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
+    let Some(sh) = wb.sheet(sheet) else { return };
+    let Some(af) = sh.autofilter.clone() else { return };
+    // An imported range can name rows past the grid; none of those exist to hide.
+    let r = RangeRef::new(af.range.start, CellRef::new(af.range.end.row.min(gridcraft_core::MAX_ROWS - 1), af.range.end.col));
+    let matcher = FilterMatcher::new(wb, sh, &af);
+    // Reapplying a retained icon filter preserves visibility until icons can be evaluated.
+    let has_icon = af.criteria.iter().any(|(_, c)| matches!(c, FilterCriterion::Icon { .. }));
+    let hide: Vec<_> =
+        (r.start.row + 1..=r.end.row).map(|row| (row, !matcher.row_matches(row, None) || (has_icon && sh.is_row_hidden(row)))).collect();
     let Some(shm) = wb.sheet_mut(sheet) else { return };
     for (row, h) in hide {
         if h {
@@ -293,30 +331,52 @@ pub(super) fn reapply(s: &mut Session, _: &Json) -> Result<Json> {
     })
 }
 
-/// Distinct display values of a filter column (for the dropdown list).
+/// Distinct display values from rows matching the other columns' criteria.
+/// The current criterion only determines checkboxes, so its unchecked alternatives stay available.
 pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool)> {
+    column_filter_values(wb, sheet, col, true)
+}
+
+/// Applies edited eligible choices to the whole column's checkbox state, retaining choices hidden by other filters.
+pub fn filter_selection(wb: &Workbook, sheet: usize, col: u32, choices: &[(String, bool)]) -> Vec<(String, bool)> {
+    let mut edited = std::collections::BTreeMap::new();
+    for (value, on) in choices {
+        *edited.entry(value.to_ascii_lowercase()).or_insert(false) |= *on;
+    }
+    let mut selection = column_filter_values(wb, sheet, col, false);
+    for (value, on) in &mut selection {
+        if let Some(checked) = edited.get(&value.to_ascii_lowercase()) {
+            *on = *checked;
+        }
+    }
+    selection
+}
+
+fn column_filter_values(wb: &Workbook, sheet: usize, col: u32, eligible_only: bool) -> Vec<(String, bool)> {
     let Some(sh) = wb.sheet(sheet) else { return vec![] };
     let Some(af) = &sh.autofilter else { return vec![] };
-    let off = col.saturating_sub(af.range.start.col);
-    let selected: Option<&FilterCriterion> = af.criteria.iter().find(|(o, _)| *o == off).map(|(_, c)| c);
+    if col < af.range.start.col || col > af.range.end.col {
+        return vec![];
+    }
+    let off = col - af.range.start.col;
+    let selected = af.criteria.iter().enumerate().find(|(_, (o, _))| *o == off);
+    let matcher = FilterMatcher::new(wb, sh, af);
     let mut seen = std::collections::BTreeMap::new();
-    for row in af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000) {
+    // Imported end rows cannot add choices beyond the grid either.
+    for row in
+        af.range.start.row.saturating_add(1)..=af.range.end.row.min(af.range.start.row.saturating_add(1_000_000)).min(gridcraft_core::MAX_ROWS - 1)
+    {
+        if eligible_only && !matcher.row_matches(row, Some(off)) {
+            continue;
+        }
         let c = CellRef::new(row, col);
         let v = sh.value(c);
         let blank = filter_blank(&v);
         let t = if blank { "(Blanks)".to_string() } else { crate::display::cell_text(wb, sh, c) };
-        let on = match selected {
-            Some(FilterCriterion::Values { values, blanks }) => {
-                if blank {
-                    *blanks
-                } else {
-                    values.iter().any(|x| x.eq_ignore_ascii_case(&t))
-                }
-            }
-            _ => true,
-        };
+        let on = selected.is_none_or(|(i, (off, crit))| matcher.criterion_matches(row, i, *off, crit));
         let key = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
-        seen.entry((key, t)).or_insert(on);
+        // One choice can represent rows with different colors; keep any matching row checked.
+        *seen.entry((key, t)).or_insert(false) |= on;
     }
     let mut values: Vec<_> = seen.into_iter().collect();
     values.sort_by(|((a, ta), _), ((b, tb), _)| {
