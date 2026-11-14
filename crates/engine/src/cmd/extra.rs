@@ -21,7 +21,9 @@ mod scripts;
 mod window;
 
 pub(crate) use cells::is_checkbox_cell;
-use cells::{background, checkbox, draw_border, new_cell_style, recently_used, theme_colors, theme_fonts, toggle_checkbox, use_in_formula};
+use cells::{
+    background, checkbox, draw_border, merge_styles, new_cell_style, recently_used, theme_colors, theme_fonts, toggle_checkbox, use_in_formula,
+};
 use chart::{add_element, change_colors, format_series, move_chart, quick_layout, select_data};
 use data::{from_csv, from_table_range, queries, table_resize};
 use objects::{align, arrange, rotate, selection_pane, shape_fill, shape_outline};
@@ -308,6 +310,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{name, fromCell?: \"A1\" (default: active cell)}",
             has_doc,
             new_cell_style
+        ),
+        cmd!(
+            "home.mergeStyles",
+            "Merge Styles…",
+            ["Home", "Styles"],
+            None,
+            "{from: name or id of another open workbook, sameNames?: replace|keep (default replace)} → {from, added, replaced, kept}",
+            has_doc,
+            merge_styles
         ),
         cmd!(query "home.addIns", "Add-ins", ["Home", "Add-ins"], None, "{} → GridCraft extends through MCP and scripts instead of add-ins", always, |_, _| Ok(json!({"addIns": [], "hint": "Use gridcraft-cli mcp or Automate › scripts"}))),
         cmd!(query "formulas.recentlyUsed", "Recently Used", ["Formulas", "Function Library"], None, "{} → the functions most recently entered in formulas, newest first", has_doc, recently_used),

@@ -1,10 +1,10 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (preserve centered emoji and symbol fallback placement; earlier: preserve leading and trailing blank cell lines; earlier: align wrapped and unwrapped cells; earlier: CJK title baseline regression and mixed-script rendering validation; earlier: form controls: buttons, sliders and spin buttons on the sheet; earlier: Highlight the active cell's row, a global preference in File › Options › General; earlier: a linked cell's menu edits, opens or removes the link; earlier: Display options for this workbook: sheet tabs and scroll bars; earlier: dragging over row or column headers in point mode extends the reference; earlier: a picture on the system clipboard pastes as a floating picture at the active cell with Cmd/Ctrl+V or Paste (#699); earlier: frozen columns keep their text, gridlines and merged borders whole while the sheet scrolls (#2544); earlier: every Paste Special option has its access key; earlier: the Draw tab's live stroke preview uses the pen's colour and thickness; earlier: copy quotes only cells with a tab or line break, as Excel does; earlier: Ctrl+. Next Corner of Selection; earlier: dragging the selection's border onto data asks before replacing it; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis use them, the arrow keys select while a dialog is collapsed and F4 cycles a reference's anchors; earlier: Python cells: Python mode in the formula bar; earlier: Insert › Equation and the equation editor; earlier: every floating object selects, resizes from eight handles and deletes with the keyboard; earlier: Formulas › Error Checking › Trace Error; trace arrows stay through a zoom (#3097); earlier: Page Setup sets the page order, Down, then over or Over, then down, which printing, the print preview, Page Break Preview and Page Layout view follow; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-13 · **Change:** minor (Home › Cell Styles: the workbook's custom styles, New Cell Style… and Merge Styles…; ribbon catalog count 283 / 297; earlier: preserve centered emoji and symbol fallback placement; earlier: preserve leading and trailing blank cell lines; earlier: align wrapped and unwrapped cells; earlier: CJK title baseline regression and mixed-script rendering validation; earlier: form controls: buttons, sliders and spin buttons on the sheet; earlier: Highlight the active cell's row, a global preference in File › Options › General; earlier: a linked cell's menu edits, opens or removes the link; earlier: Display options for this workbook: sheet tabs and scroll bars; earlier: dragging over row or column headers in point mode extends the reference; earlier: a picture on the system clipboard pastes as a floating picture at the active cell with Cmd/Ctrl+V or Paste (#699); earlier: frozen columns keep their text, gridlines and merged borders whole while the sheet scrolls (#2544); earlier: every Paste Special option has its access key; earlier: the Draw tab's live stroke preview uses the pen's colour and thickness; earlier: copy quotes only cells with a tab or line break, as Excel does; earlier: Ctrl+. Next Corner of Selection; earlier: dragging the selection's border onto data asks before replacing it; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis use them, the arrow keys select while a dialog is collapsed and F4 cycles a reference's anchors; earlier: Python cells: Python mode in the formula bar; earlier: Insert › Equation and the equation editor; earlier: every floating object selects, resizes from eight handles and deletes with the keyboard; earlier: Formulas › Error Checking › Trace Error; trace arrows stay through a zoom (#3097); earlier: Page Setup sets the page order, Down, then over or Over, then down, which printing, the print preview, Page Break Preview and Page Layout view follow; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
-separately in [parity-checklist.md](parity-checklist.md) (281 / 296).
+separately in [parity-checklist.md](parity-checklist.md) (283 / 297).
 
 Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes),
 `crates/engine/src/cmd` (shortcuts in command specs), the owner's black-box notes
@@ -226,6 +226,17 @@ Data Analysis (input, variable, X and Y, bin and output ranges) use reference bo
 dialogs that take ranges (Forecast Sheet, Allow Edit Ranges, Define Name, Sparklines, Advanced
 Filter) still take typed references.
 
+Home › Cell Styles lists the workbook's own styles under Custom, above the built-in ones, and ends
+with New Cell Style… (a name for a style made from the active cell's formats) and Merge Styles….
+Merge Styles lists the other open workbooks; OK copies the chosen one's cell styles into the
+active workbook as one undo step, or none when nothing changes (`home.mergeStyles`). Where both
+have a style of the same name and the two differ, it asks first: Yes takes the chosen workbook's,
+No keeps this workbook's and merges the rest, Cancel goes back to the list. With Yes, built-in
+styles take the chosen workbook's version, changed or not, as in Excel; with No, this workbook's
+stay. Not like Excel: cells formatted with a style keep their look after the merge, because a
+GridCraft cell doesn't remember its style, and the Normal style is not merged. With no other
+workbook open, the dialog says so.
+
 ## Accessibility
 
 AccessKit is enabled, but the grid, ribbon and dialogs are not exposed as an accessible tree with
@@ -267,6 +278,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | Home › Cell Styles: the gallery lists the workbook's custom styles under Custom and draws each style as the workbook defines it; New Cell Style… and Merge Styles… at its end (`home.mergeStyles`: another open workbook's styles, with a question about styles of the same name); ribbon catalog count 282 / 296 → 283 / 297 |
 | 2026-11-05 | minor | Reconcile upstream form-control coverage with the CJK baseline and cell-alignment updates |
 | 2026-11-04 | minor | Keep centered emoji and symbol fallback placement when a row starts with a fallback or contains only fallbacks; use primary or baseline-aligned glyphs to anchor cell alignment |
 | 2026-11-04 | minor | Preserve leading and trailing blank lines in wrapped cells when calculating vertical alignment; regression covers single, multiple and all-empty lines |

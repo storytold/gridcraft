@@ -1,4 +1,4 @@
-use super::controls::act;
+use super::controls::{act, menu_items};
 use super::{Align2, Cat, Rect, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, json, pos2, theme, vec2};
 
 /// A gallery of table styles drawn as mini tables.
@@ -59,10 +59,35 @@ pub(super) fn paint_table_swatch(ui: &Ui, r: Rect, wb: &gridcraft_engine::model:
     p.rect_stroke(r, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
 }
 
+/// Home › Cell Styles: the workbook's custom styles (Custom) above the built-in ones, each drawn
+/// as the workbook defines it, then New Cell Style… and Merge Styles….
 pub(super) fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
-    let t = Tokens::get(ui.ctx());
     ui.set_width(520.0);
     let Some(wb) = app.session.active().map(|d| d.wb.clone()) else { return };
+    let lang = app.ui.language;
+    // The first of several styles with one name is the one the workbook uses.
+    let mut seen = std::collections::HashSet::new();
+    let custom: Vec<&str> = wb
+        .cell_styles
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .filter(|name| gridcraft_engine::cmd::format::builtin_style_name(name).is_none() && seen.insert(name.to_ascii_lowercase()))
+        .collect();
+    if !custom.is_empty() {
+        ui.label(egui::RichText::new(lang.tr("Custom")).strong());
+        // A file can hold thousands of styles: only the rows in view are laid out.
+        let rows = custom.len().div_ceil(6);
+        egui::ScrollArea::vertical().id_salt("csg-custom").max_height(4.0 * 28.0).show_rows(ui, 24.0, rows, |ui, shown| {
+            for row in shown {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    for name in custom.iter().skip(row * 6).take(6) {
+                        style_swatch(app, ui, &wb, name);
+                    }
+                });
+            }
+        });
+    }
     let groups: &[(&str, &[&str])] = &[
         ("Good, Bad and Neutral", &["Normal", "Bad", "Good", "Neutral"]),
         ("Data and Model", &["Calculation", "Check Cell", "Explanatory Text", "Input", "Linked Cell", "Note", "Output", "Warning Text"]),
@@ -99,47 +124,56 @@ pub(super) fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
         ("Number Format", &["Comma", "Comma [0]", "Currency", "Currency [0]", "Percent"]),
     ];
     for (g, names) in groups {
-        ui.label(egui::RichText::new(*g).strong());
+        ui.label(egui::RichText::new(lang.tr(g)).strong());
         egui::Grid::new(("csg", *g)).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
             for (i, n) in names.iter().enumerate() {
-                let st = gridcraft_engine::cmd::format::builtin_cell_style(n, &wb.theme).unwrap_or_default();
-                let (r, resp) = ui.allocate_exact_size(vec2(82.0, 24.0), Sense::click());
-                let fill = st
-                    .fill
-                    .fg
-                    .resolve(&wb.theme)
-                    .filter(|_| st.fill.pattern != gridcraft_engine::model::PatternType::None)
-                    .map(theme::color32)
-                    .unwrap_or(t.grid_bg);
-                ui.painter().rect_filled(r, 0.0, fill);
-                ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
-                if !st.borders.bottom.is_none() {
-                    let c = st.borders.bottom.color.resolve(&wb.theme).map(theme::color32).unwrap_or(t.cell_text);
-                    ui.painter().line_segment(
-                        [r.left_bottom() + vec2(0.0, -1.5), r.right_bottom() + vec2(0.0, -1.5)],
-                        Stroke::new(st.borders.bottom.style.width(), c),
-                    );
-                }
-                let col = st.font.color.resolve(&wb.theme).map(theme::color32).unwrap_or(t.cell_text);
-                let fam = theme::cell_family(&st.font.name, st.font.bold, st.font.italic);
-                ui.painter().text(
-                    r.left_center() + vec2(4.0, 0.0),
-                    Align2::LEFT_CENTER,
-                    *n,
-                    egui::FontId::new((st.font.size).clamp(10.0, 15.0), fam),
-                    col,
-                );
-                if resp.hovered() {
-                    ui.painter().rect_stroke(r.expand(1.5), 2.0, Stroke::new(2.0, Tokens::get(ui.ctx()).cat(Cat::Orange)), StrokeKind::Outside);
-                }
-                if resp.clicked() {
-                    act(app, "home.cellStyle", json!({"name": n}));
-                    ui.close();
-                }
+                style_swatch(app, ui, &wb, n);
                 if (i + 1) % 6 == 0 {
                     ui.end_row();
                 }
             }
         });
+    }
+    ui.separator();
+    menu_items(app, ui, &[("New Cell Style…", "dialog:newCellStyle", json!({})), ("Merge Styles…", "dialog:mergeStyles", json!({}))]);
+}
+
+/// One style of the Cell Styles gallery, drawn with its fill, bottom border and font; a click
+/// applies it to the selection.
+fn style_swatch(app: &mut SheetApp, ui: &mut Ui, wb: &gridcraft_engine::model::Workbook, name: &str) {
+    let t = Tokens::get(ui.ctx());
+    let st = gridcraft_engine::cmd::format::named_cell_style(wb, name).unwrap_or_default();
+    let (r, resp) = ui.allocate_exact_size(vec2(82.0, 24.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
+    let fill = st
+        .fill
+        .fg
+        .resolve(&wb.theme)
+        .filter(|_| st.fill.pattern != gridcraft_engine::model::PatternType::None)
+        .map(theme::color32)
+        .unwrap_or(t.grid_bg);
+    ui.painter().rect_filled(r, 0.0, fill);
+    ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
+    if !st.borders.bottom.is_none() {
+        let c = st.borders.bottom.color.resolve(&wb.theme).map(theme::color32).unwrap_or(t.cell_text);
+        ui.painter()
+            .line_segment([r.left_bottom() + vec2(0.0, -1.5), r.right_bottom() + vec2(0.0, -1.5)], Stroke::new(st.borders.bottom.style.width(), c));
+    }
+    let col = st.font.color.resolve(&wb.theme).map(theme::color32).unwrap_or(t.cell_text);
+    let fam = theme::cell_family(&st.font.name, st.font.bold, st.font.italic);
+    // A long custom name is cut at the swatch's edge.
+    ui.painter().with_clip_rect(r.shrink(1.0)).text(
+        r.left_center() + vec2(4.0, 0.0),
+        Align2::LEFT_CENTER,
+        name,
+        egui::FontId::new((st.font.size).clamp(10.0, 15.0), fam),
+        col,
+    );
+    if resp.hovered() {
+        ui.painter().rect_stroke(r.expand(1.5), 2.0, Stroke::new(2.0, t.cat(Cat::Orange)), StrokeKind::Outside);
+    }
+    if resp.on_hover_text(name).clicked() {
+        act(app, "home.cellStyle", json!({"name": name}));
+        ui.close();
     }
 }

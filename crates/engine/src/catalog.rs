@@ -63,6 +63,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("home.formatAsTable", "Home", "Styles", "Format as Table"),
     ("home.cellStyle", "Home", "Styles", "Cell Styles"),
     ("home.newCellStyle", "Home", "Styles", "New Cell Style"),
+    ("home.mergeStyles", "Home", "Styles", "Merge Styles"),
     ("home.insertCells", "Home", "Cells", "Insert Cells"),
     ("home.insertRows", "Home", "Cells", "Insert Sheet Rows"),
     ("home.insertColumns", "Home", "Cells", "Insert Sheet Columns"),
