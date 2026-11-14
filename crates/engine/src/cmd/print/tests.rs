@@ -939,6 +939,89 @@ fn equations_print_with_the_symbol_font() {
     assert!(contains(&pdf, "(?) Tj"));
 }
 
+/// Printing the workbook leaves out sheets marked not to print, unless every sheet is.
+#[test]
+fn workbook_printing_skips_excluded_sheets() {
+    use gridcraft_core::Value;
+    let mut wb = gridcraft_model::Workbook::new();
+    wb.sheets.clear();
+    for name in ["One", "Two"] {
+        let mut sh = gridcraft_model::Sheet::new(name);
+        sh.set_value(CellRef::new(0, 0), Value::Text(name.into()));
+        wb.sheets.push(std::sync::Arc::new(sh));
+    }
+    let all = super::layout::PrintOptions { all_sheets: true, ..Default::default() };
+    let printed = |wb: &gridcraft_model::Workbook| super::layout::layouts(wb, &all).iter().map(|l| l.sheet).collect::<Vec<_>>();
+    assert_eq!(printed(&wb), vec![0, 1]);
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).print.excluded = true;
+    assert_eq!(printed(&wb), vec![1]);
+    // Printing the active sheet alone still prints it.
+    let active = super::layout::PrintOptions::default();
+    assert_eq!(super::layout::layouts(&wb, &active).iter().map(|l| l.sheet).collect::<Vec<_>>(), vec![0]);
+    std::sync::Arc::make_mut(&mut wb.sheets[1]).print.excluded = true;
+    assert_eq!(printed(&wb), vec![0, 1]);
+}
+
+/// Page Setup's `excluded` marks the sheet; whole-workbook PDF export then skips it.
+#[test]
+fn page_setup_excluded_leaves_the_sheet_out_of_workbook_export() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "one"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "two"})).unwrap();
+    let (_, both) = pdf_of(&mut s, json!({"sheets": "all"}));
+    assert_eq!(both, 2);
+    assert!(s.execute("pageLayout.pageSetup", json!({})).unwrap().get("excluded").is_none());
+    let r = s.execute("pageLayout.pageSetup", json!({"sheet": "Two", "excluded": true})).unwrap();
+    assert_eq!(r["excluded"], true);
+    let (pdf, one) = pdf_of(&mut s, json!({"sheets": "all"}));
+    assert_eq!(one, 1);
+    assert!(contains(&pdf, "(one) Tj") && !contains(&pdf, "(two) Tj"));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(pdf_of(&mut s, json!({"sheets": "all"})).1, 2);
+}
+
+/// Workbook printing never falls back to an excluded sheet when every other sheet is empty, and a
+/// range given for an excluded active sheet still prints.
+#[test]
+fn excluded_active_sheet_is_not_the_empty_fallback_but_prints_an_explicit_range() {
+    use gridcraft_core::Value;
+    let mut wb = gridcraft_model::Workbook::new();
+    wb.sheets.clear();
+    let mut one = gridcraft_model::Sheet::new("One");
+    one.set_value(CellRef::new(0, 0), Value::Text("One".into()));
+    one.print.excluded = true;
+    wb.sheets.push(std::sync::Arc::new(one));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Two")));
+    assert_eq!(wb.active_sheet(), 0);
+    let sheets_of = |opts: &super::layout::PrintOptions| super::layout::layouts(&wb, opts).iter().map(|l| l.sheet).collect::<Vec<_>>();
+    // One is excluded, Two is blank: Two's blank page, not One.
+    let all = super::layout::PrintOptions { all_sheets: true, ..Default::default() };
+    assert_eq!(sheets_of(&all), vec![1]);
+    // An explicit range for the (excluded) active sheet prints it.
+    let ranged = super::layout::PrintOptions { all_sheets: true, range: gridcraft_core::RangeRef::parse("A1:B2"), ..Default::default() };
+    let lays = super::layout::layouts(&wb, &ranged);
+    assert_eq!(lays.iter().map(|l| (l.sheet, l.area)).collect::<Vec<_>>(), vec![(0, gridcraft_core::RangeRef::parse("A1:B2").unwrap())]);
+}
+
+/// When every visible sheet is excluded they all print, with or without a range for the active one.
+#[test]
+fn every_sheet_excluded_prints_them_all_also_with_a_range() {
+    use gridcraft_core::Value;
+    let mut wb = gridcraft_model::Workbook::new();
+    wb.sheets.clear();
+    for name in ["One", "Two"] {
+        let mut sh = gridcraft_model::Sheet::new(name);
+        sh.set_value(CellRef::new(0, 0), Value::Text(name.into()));
+        sh.print.excluded = true;
+        wb.sheets.push(std::sync::Arc::new(sh));
+    }
+    let sheets_of = |opts: &super::layout::PrintOptions| super::layout::layouts(&wb, opts).iter().map(|l| l.sheet).collect::<Vec<_>>();
+    assert_eq!(sheets_of(&super::layout::PrintOptions { all_sheets: true, ..Default::default() }), vec![0, 1]);
+    let ranged = super::layout::PrintOptions { all_sheets: true, range: gridcraft_core::RangeRef::parse("A1:B2"), ..Default::default() };
+    assert_eq!(sheets_of(&ranged), vec![0, 1]);
+}
+
 #[test]
 fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
     use gridcraft_chart::Prim;

@@ -139,7 +139,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Page Setup…",
             ["Page Layout", "Page Setup"],
             None,
-            "{sheet?, orientation?: portrait|landscape, paper?: Letter|Legal|A4|A3|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3 (B4/B5/B6 are the JIS sizes), margins?: {left,right,top,bottom,header,footer} (inches; also accepted as top-level keys), scale?: 10..400, fitWidth?, fitHeight? (pages; 0 = automatic), fitToPage?: bool, centerH?, centerV?, gridlines?, headings?, header?: \"&L&A&RPage &P of &N\", footer?, printArea?: \"A1:F50\" (\"\" clears), titleRows?: \"1:2\", titleCols?: \"A:A\", rowBreaks?: [46, 91], colBreaks?: [\"K\"], pageOrder?: downThenOver|overThenDown} → the sheet's print settings",
+            "{sheet?, orientation?: portrait|landscape, paper?: Letter|Legal|A4|A3|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3 (B4/B5/B6 are the JIS sizes), margins?: {left,right,top,bottom,header,footer} (inches; also accepted as top-level keys), scale?: 10..400, fitWidth?, fitHeight? (pages; 0 = automatic), fitToPage?: bool, centerH?, centerV?, gridlines?, headings?, header?: \"&L&A&RPage &P of &N\", footer?, printArea?: \"A1:F50\" (\"\" clears), titleRows?: \"1:2\", titleCols?: \"A:A\", rowBreaks?: [46, 91], colBreaks?: [\"K\"], pageOrder?: downThenOver|overThenDown, excluded?: bool (left out when the whole workbook prints, unless every visible sheet is)} → the sheet's print settings",
             has_doc,
             page_setup
         ),
@@ -399,7 +399,7 @@ fn page_setup(s: &mut Session, p: &Json) -> Result<Json> {
     let fit_page = bool_param(p, "fitToPage");
     let header = str_param(p, "header").map(|t| t.chars().take(255).collect::<String>());
     let footer = str_param(p, "footer").map(|t| t.chars().take(255).collect::<String>());
-    let flags = [("centerH", 0usize), ("centerV", 1), ("gridlines", 2), ("headings", 3)].map(|(k, i)| (i, bool_param(p, k)));
+    let flags = [("centerH", 0usize), ("centerV", 1), ("gridlines", 2), ("headings", 3), ("excluded", 4)].map(|(k, i)| (i, bool_param(p, k)));
     edit(s, |cx| {
         let pr = &mut cx.sheet_mut(si)?.print;
         if let Some(o) = orientation {
@@ -432,7 +432,8 @@ fn page_setup(s: &mut Session, p: &Json) -> Result<Json> {
                     0 => pr.center_h = v,
                     1 => pr.center_v = v,
                     2 => pr.gridlines = v,
-                    _ => pr.headings = v,
+                    3 => pr.headings = v,
+                    _ => pr.excluded = v,
                 }
             }
         }
