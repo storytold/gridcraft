@@ -236,8 +236,8 @@ fn dxf_font_and_parts_stated_at_their_defaults_survive_save() {
     assert_eq!(written, Some(format!(r#" count="4">{dxfs}"#).as_str()));
 }
 
-/// A differential format whose only font part is outlined letters keeps it on save, turned on
-/// or stated off (a conditional format turning the outline off), like strike.
+/// Differential fonts that turn outlined letters on, or state them off (alone, or after strike),
+/// keep it on save, like strike.
 #[test]
 fn dxf_outline_font_survives_save() {
     let dxfs = concat!(

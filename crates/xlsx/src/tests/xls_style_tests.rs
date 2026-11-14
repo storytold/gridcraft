@@ -132,9 +132,8 @@ fn default_fonts() -> Vec<Vec<u8>> {
 /// Fonts, a palette, style XFs, cell XFs and named styles covering every decoded field.
 fn formatted() -> Vec<u8> {
     let mut f = default_fonts();
-    // ifnt 5 (index 4 is never written): 14 pt italic, struck, bold, double underline,
-    // superscript, red (colour 10).
-    // 0x001A: italic, strike and outline.
+    // ifnt 5 (index 4 is never written): 14 pt italic, struck, outlined (flags 0x001A), bold,
+    // double underline, superscript, red (colour 10).
     f.push(font(280, 0x001A, 10, 700, 1, 2, "Courier New"));
     // ifnt 6: single accounting underline, subscript, a custom palette colour.
     f.push(font(220, 0, 9, 400, 2, 0x21, "Times New Roman"));
