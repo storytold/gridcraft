@@ -351,6 +351,22 @@ Check this</t></r></text></comment></commentList></comments>"#;
     assert_eq!(s.sparklines[0].kind, gridcraft_model::SparklineKind::Column);
 }
 
+/// A one-row AutoFilter ref (as OpenSpout and other writers emit) names only the header row;
+/// the filter covers the contiguous data below, as `data.filter` on a header row does.
+#[test]
+fn header_only_autofilter_grows_over_data() {
+    let body = r#"<sheetData>
+        <row r="1"><c r="A1" t="inlineStr"><is><t>Name</t></is></c><c r="B1" t="inlineStr"><is><t>Amount</t></is></c></row>
+        <row r="2"><c r="A2" t="inlineStr"><is><t>a</t></is></c><c r="B2"><v>1</v></c></row>
+        <row r="3"><c r="A3" t="inlineStr"><is><t>b</t></is></c><c r="B3"><v>2</v></c></row>
+        <row r="5"><c r="A5" t="inlineStr"><is><t>stray</t></is></c></row>
+    </sheetData>
+    <autoFilter ref="A1:B1"/>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.autofilter.as_ref().unwrap().range.a1(), "A1:B3");
+}
+
 /// The sheet's hyperlinks as written: cell, relationship target (external only), location.
 fn written_links(bytes: &[u8]) -> Vec<(String, Option<String>, Option<String>)> {
     let mut pkg = crate::package::Package::open(bytes).unwrap();

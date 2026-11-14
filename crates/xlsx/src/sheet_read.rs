@@ -340,6 +340,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
             _ => {}
         }
     }
+    grow_header_autofilter(&mut sheet);
     let read_controls = read_form_controls(cx, &root, &rels, &mut sheet);
     // Comments are related to the sheet without an element in it.
     for rel in rels.iter().filter(|r| r.kind == "comments") {
@@ -363,6 +364,20 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
         }
     }
     Ok((sheet, read_controls))
+}
+
+/// A one-row AutoFilter ref names only the header row (writers like OpenSpout emit no more):
+/// it filters the contiguous data below, the way `data.filter` treats a selected header row.
+fn grow_header_autofilter(sheet: &mut Sheet) {
+    let Some(af) = sheet.autofilter.as_mut() else { return };
+    if af.range.start.row != af.range.end.row {
+        return;
+    }
+    let mut r = af.range;
+    while r.end.row + 1 < MAX_ROWS && sheet.cells.row(r.end.row + 1, r.start.col, r.end.col).any(|(_, c)| c.has_content()) {
+        r.end.row += 1;
+    }
+    af.range = r;
 }
 
 /// Buttons, scroll bars and spin buttons: the `<controls>` list (also inside
