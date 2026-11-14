@@ -70,6 +70,19 @@ fn shift_ref(r: Reference, dr: i64, dc: i64) -> Option<Reference> {
     Some(Reference { sheet: r.sheet, kind })
 }
 
+/// [`shift_relative`] for a row or column that moves within the sheet `host` (sorting): only the
+/// references into `host` follow the move, as in Excel. A reference to another worksheet, or a 3-D
+/// span, stays with the record it belongs to.
+pub fn shift_relative_within(e: Expr, host: &str, dr: i64, dc: i64) -> Expr {
+    e.map(&mut |x| match x {
+        Expr::Ref(r) if on_target(&r, host, host) => match shift_ref(r, dr, dc) {
+            Some(r) => Expr::Ref(r),
+            None => Expr::Error(CellError::Ref),
+        },
+        other => other,
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Axis {
     Rows,

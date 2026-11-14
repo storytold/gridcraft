@@ -168,7 +168,14 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
                     && let Some(f) = &c.formula
                     && let Some(e) = f.expr()
                 {
-                    let shifted = gridcraft_formula::adjust::shift_relative(e, dst.row as i64 - src.row as i64, dst.col as i64 - src.col as i64);
+                    // Only references into this sheet follow the row; one to another sheet keeps
+                    // pointing at the same cell, as in Excel (#3781).
+                    let shifted = gridcraft_formula::adjust::shift_relative_within(
+                        e,
+                        &sh.name,
+                        dst.row as i64 - src.row as i64,
+                        dst.col as i64 - src.col as i64,
+                    );
                     c.formula = Some(Arc::new(Formula::from_expr(shifted)));
                 }
                 if let Some(picture) = sh.cell_pictures.get(&src) {
