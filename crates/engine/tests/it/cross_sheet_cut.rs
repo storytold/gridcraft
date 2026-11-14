@@ -129,6 +129,39 @@ fn moved_formulas_keep_external_source_refs_and_move_internal_refs_once() {
 }
 
 #[test]
+fn partial_cross_sheet_cut_narrows_a_moved_formula_range() {
+    let mut s = workbook();
+    run(&mut s, "range.setValues", json!({"range": "A1", "values": [[10, 20]]}));
+    set(&mut s, "C1", "=SUM(A1:B1)");
+    run(&mut s, "home.insertSheet", json!({"name": "Destination"}));
+    cut_to(&mut s, "Sheet1", "B1:C1", "Destination", "D4");
+
+    assert_eq!(formula(&s, "Destination", "E4"), "SUM(D4:D4)");
+    assert_eq!(value(&s, "Destination", "E4"), Value::Number(20.0));
+    set(&mut s, "D4", "25");
+    assert_eq!(value(&s, "Destination", "E4"), Value::Number(25.0));
+}
+
+#[test]
+fn partial_cross_sheet_cut_narrows_ranges_that_extend_past_either_cut_edge() {
+    let mut left_overlap = workbook();
+    run(&mut left_overlap, "range.setValues", json!({"range": "A1", "values": [[1, 2, 3, 4]]}));
+    set(&mut left_overlap, "D1", "=SUM(A1:C1)");
+    run(&mut left_overlap, "home.insertSheet", json!({"name": "Destination"}));
+    cut_to(&mut left_overlap, "Sheet1", "B1:D1", "Destination", "E4");
+    assert_eq!(formula(&left_overlap, "Destination", "G4"), "SUM(E4:F4)");
+    assert_eq!(value(&left_overlap, "Destination", "G4"), Value::Number(5.0));
+
+    let mut right_overlap = workbook();
+    run(&mut right_overlap, "range.setValues", json!({"range": "A1", "values": [[1, 2, 3, 4, 5]]}));
+    set(&mut right_overlap, "B1", "=SUM(C1:E1)");
+    run(&mut right_overlap, "home.insertSheet", json!({"name": "Destination"}));
+    cut_to(&mut right_overlap, "Sheet1", "B1:D1", "Destination", "E4");
+    assert_eq!(formula(&right_overlap, "Destination", "E4"), "SUM(F4:G4)");
+    assert_eq!(value(&right_overlap, "Destination", "E4"), Value::Number(7.0));
+}
+
+#[test]
 fn same_sheet_overlapping_cut_still_updates_references_once() {
     let mut s = workbook();
     run(&mut s, "range.setValues", json!({"range": "A1", "values": [[10], [20]]}));

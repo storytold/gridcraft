@@ -374,6 +374,47 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                 gridcraft_formula::adjust::Edit::MoveToSheet { from: src, to_sheet: dest_name.clone(), to_row: at.row, to_col: at.col }
             };
             rewrite_all_formulas(&mut cx.wb, &src_sheet_name, &e)?;
+            if dest_sheet != clip.sheet {
+                let formulas: Vec<_> = moved_formulas
+                    .keys()
+                    .filter_map(|sc| {
+                        let dest = at.offset(sc.row as i64 - src.start.row as i64, sc.col as i64 - src.start.col as i64)?;
+                        let formula = cx.wb.sheet(dest_sheet)?.cell(dest)?.formula.clone()?;
+                        Some((*sc, dest, formula))
+                    })
+                    .collect();
+                for (sc, dest, formula) in formulas {
+                    let Some(expr) = formula.expr() else { continue };
+                    let dr = dest.row as i64 - sc.row as i64;
+                    let dc = dest.col as i64 - sc.col as i64;
+                    let expr = expr.map(&mut |x| match x {
+                        gridcraft_formula::Expr::Ref(mut r) if r.sheet == gridcraft_formula::SheetSel::Named(src_sheet_name.clone()) => {
+                            let (a, b) = match &r.kind {
+                                gridcraft_formula::RefKind::Range(a, b) => (*a, *b),
+                                _ => return gridcraft_formula::Expr::Ref(r),
+                            };
+                            let range = r.range();
+                            let Some(part) = range.intersection(&src) else { return gridcraft_formula::Expr::Ref(r) };
+                            if src.contains_range(&range) {
+                                return gridcraft_formula::Expr::Ref(r);
+                            }
+                            let Some(start) = part.start.offset(dr, dc) else { return gridcraft_formula::Expr::Ref(r) };
+                            let Some(end) = part.end.offset(dr, dc) else { return gridcraft_formula::Expr::Ref(r) };
+                            r.sheet = gridcraft_formula::SheetSel::Current;
+                            r.kind = gridcraft_formula::RefKind::Range(
+                                gridcraft_formula::Anchor { row: start.row, col: start.col, row_abs: a.row_abs, col_abs: a.col_abs },
+                                gridcraft_formula::Anchor { row: end.row, col: end.col, row_abs: b.row_abs, col_abs: b.col_abs },
+                            );
+                            gridcraft_formula::Expr::Ref(r)
+                        }
+                        other => other,
+                    });
+                    if let Some(cell) = cx.sheet_mut(dest_sheet)?.cells.get_mut(dest) {
+                        cell.formula =
+                            Some(std::sync::Arc::new(Formula { dynamic: formula.dynamic, array: formula.array, ..Formula::from_expr(expr) }));
+                    }
+                }
+            }
             cx.structural = true;
         }
         let end = at.offset_clamped((tiles_r * h) as i64 - 1, (tiles_c * w) as i64 - 1);
