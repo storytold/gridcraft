@@ -1,15 +1,14 @@
 //! A tiny, self-contained PDF 1.7 writer for GridCraft's print and PDF export.
-//!
-//! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
+//! - The 14 standard fonts (no embedding) with `WinAnsiEncoding`, plus approximate width tables
 //!   ([`text_width`]) so callers can measure, align and wrap text. Characters outside
 //!   WinAnsiEncoding (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
 //!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`. Symbol uses its own
 //!   built-in encoding ([`symbol_code`]), for Greek letters and mathematical operators.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
-//! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
+//! - RGBA images as RGB image `XObjects` with a soft mask for alpha (run-length encoded).
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
 //!
-//! Streams are written uncompressed (images use the trivial RunLengthDecode filter) so the crate
+//! Streams are written uncompressed (images use the trivial `RunLengthDecode` filter) so the crate
 //! needs no dependencies.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
@@ -148,9 +147,9 @@ impl Font {
     /// Picks a standard family for a font name: serif faces map to Times, monospaced ones to
     /// Courier, everything else to Helvetica.
     pub fn family_for(name: &str) -> Family {
-        let n = name.to_ascii_lowercase();
         const SERIF: [&str; 10] = ["times", "cambria", "georgia", "garamond", "serif", "book", "palatino", "baskerville", "tinos", "caladea"];
         const MONO: [&str; 8] = ["courier", "consolas", "mono", "menlo", "lucida console", "cousine", "code", "typewriter"];
+        let n = name.to_ascii_lowercase();
         if MONO.iter().any(|m| n.contains(m)) {
             Family::Mono
         } else if SERIF.iter().any(|s| n.contains(s)) && !n.contains("sans") {
@@ -203,17 +202,18 @@ impl Font {
 }
 
 /// Width of `text` in points when set in `font` at `size` points.
+#[expect(clippy::cast_precision_loss, reason = "The public API returns f32; accumulated u64 units may exceed its exact integer range")]
 pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
     // u64: a u32 sum overflows for ~8 million characters.
     let units: u64 = text.chars().map(|c| u64::from(font.char_width(c))).sum();
     units as f32 * size / 1000.0
 }
 
-/// Unicode → WinAnsiEncoding (CP1252) byte; unmappable characters become `?`.
+/// Unicode → `WinAnsiEncoding` (CP1252) byte; unmappable characters become `?`.
 pub fn win_ansi(c: char) -> u8 {
     let u = c as u32;
     if (0x20..0x7F).contains(&u) || (0xA0..=0xFF).contains(&u) {
-        return u as u8;
+        return u8::try_from(u).unwrap_or(b'?');
     }
     match c {
         '€' => 0x80,
@@ -252,12 +252,12 @@ pub fn win_ansi(c: char) -> u8 {
 const CID_FONT: usize = Font::ALL.len();
 /// Number of font resources a page can use.
 const FONT_SLOTS: usize = CID_FONT + 1;
-/// Base font of the CID font used for characters WinAnsiEncoding lacks.
+/// Base font of the CID font used for characters `WinAnsiEncoding` lacks.
 const CID_BASE_FONT: &str = "STSong-Light";
 /// Default glyph width of the CID font (full-width), in 1/1000 em.
 const CID_WIDTH: u16 = 1000;
 
-/// True when `c` has no WinAnsiEncoding byte and is drawn with the CID font.
+/// True when `c` has no `WinAnsiEncoding` byte and is drawn with the CID font.
 fn needs_cid(c: char) -> bool {
     !c.is_control() && c != '?' && win_ansi(c) == b'?'
 }
@@ -273,7 +273,7 @@ fn pdf_utf16_string(text: &str) -> String {
     s
 }
 
-/// A PDF literal string `( … )` for `text` in WinAnsiEncoding.
+/// A PDF literal string `( … )` for `text` in `WinAnsiEncoding`.
 fn pdf_string(text: &str) -> String {
     pdf_string_in(text, false)
 }
@@ -314,6 +314,7 @@ fn pdf_uri_string(uri: &str) -> String {
 }
 
 /// A number for a content stream: finite, short.
+#[expect(clippy::float_cmp, clippy::cast_possible_truncation, reason = "Integral detection is exact by design; the clamp bounds the f32-to-i64 cast")]
 fn n(v: f32) -> String {
     let v = if v.is_finite() { v.clamp(-1.0e7, 1.0e7) } else { 0.0 };
     let r = (v * 1000.0).round() / 1000.0;
@@ -571,28 +572,28 @@ impl Page {
         }
     }
     /// Intersects the clip with a rectangle (until the next [`Page::restore`]).
-    pub fn clip_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        let s = format!("{} {} {} {} re W n", n(x), n(self.y(y + h)), n(w.max(0.0)), n(h.max(0.0)));
+    pub fn clip_rect(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        let s = format!("{} {} {} {} re W n", n(x), n(self.y(y + height)), n(width.max(0.0)), n(height.max(0.0)));
         self.op(&s);
     }
 
-    pub fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Rgb) {
-        if !(extent(w) && extent(h) && finite(&[x, y])) || self.full() {
+    pub fn fill_rect(&mut self, x: f32, y: f32, width: f32, height: f32, color: Rgb) {
+        if !(extent(width) && extent(height) && finite(&[x, y])) || self.full() {
             return;
         }
         let mut s = String::new();
         self.set_fill(&mut s, color);
-        let _ = write!(s, "{} {} {} {} re f", n(x), n(self.y(y + h)), n(w), n(h));
+        let _ = write!(s, "{} {} {} {} re f", n(x), n(self.y(y + height)), n(width), n(height));
         self.op(&s);
     }
 
-    pub fn rect_stroke(&mut self, x: f32, y: f32, w: f32, h: f32, width: f32, color: Rgb) {
-        if !finite(&[x, y, w, h]) || self.full() {
+    pub fn rect_stroke(&mut self, x: f32, y: f32, rect_width: f32, rect_height: f32, width: f32, color: Rgb) {
+        if !finite(&[x, y, rect_width, rect_height]) || self.full() {
             return;
         }
         let mut s = String::new();
         self.set_stroke(&mut s, color, width, "", JOIN_MITER);
-        let _ = write!(s, "{} {} {} {} re S", n(x), n(self.y(y + h)), n(w), n(h));
+        let _ = write!(s, "{} {} {} {} re S", n(x), n(self.y(y + rect_height)), n(rect_width), n(rect_height));
         self.op(&s);
     }
 
@@ -655,10 +656,10 @@ impl Page {
 
     /// A circle approximated by four cubic Béziers.
     pub fn circle(&mut self, cx: f32, cy: f32, r: f32, fill: Option<Rgb>, stroke: Option<(Rgb, f32)>) {
+        const K: f32 = 0.552_284_8;
         if !extent(r) || !finite(&[cx, cy]) || (fill.is_none() && stroke.is_none()) || self.full() {
             return;
         }
-        const K: f32 = 0.552_284_8;
         let k = r * K;
         let y = self.y(cy);
         let mut s = String::new();
@@ -771,7 +772,7 @@ impl Page {
     pub fn image_rgba(&mut self, destination: Rect, rgba: &[u8], pixel_size: [u32; 2]) {
         let Rect { x, y, width: w, height: h } = destination;
         let [pw, ph] = pixel_size;
-        let px = pw as u64 * ph as u64;
+        let px = u64::from(pw) * u64::from(ph);
         if pw == 0 || ph == 0 || px > MAX_IMAGE_PIXELS || (rgba.len() as u64) < px * 4 || !(extent(w) && extent(h) && finite(&[x, y])) {
             return;
         }
@@ -779,7 +780,9 @@ impl Page {
         if self.saved.len() >= MAX_SAVE_DEPTH {
             return;
         }
-        let px = px as usize;
+        let Ok(px) = usize::try_from(px) else {
+            return;
+        };
         let mut rgb = Vec::with_capacity(px * 3);
         // The alpha plane is only allocated once a non-opaque pixel shows up.
         let mut alpha: Option<Vec<u8>> = None;
@@ -837,6 +840,7 @@ pub struct PdfDoc {
 }
 
 /// PackBits-style run-length encoding (PDF `RunLengthDecode`).
+#[expect(clippy::cast_possible_truncation, reason = "PackBits repeat and literal lengths are bounded to 1..=128")]
 fn run_length(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len() / 2 + 16);
     let mut i = 0;
