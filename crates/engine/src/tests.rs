@@ -3653,6 +3653,28 @@ fn ink_strokes_and_ink_to_shape() {
 }
 
 #[test]
+fn resizing_an_ink_stroke_scales_its_points() {
+    // Dragging a corner handle sends `object.move` with the new size: the stroke must follow (#3289).
+    let mut s = s();
+    s.execute("draw.stroke", json!({"points": [[100.0, 100.0], [140.0, 120.0], [180.0, 100.0]]})).unwrap();
+    let id = s.doc().unwrap().wb.active().unwrap().shapes[0].id;
+    s.execute("object.move", json!({"kind": "shape", "id": id, "width": 160.0, "height": 10.0})).unwrap();
+    let sh = &s.doc().unwrap().wb.active().unwrap().shapes[0];
+    assert_eq!((sh.anchor.width, sh.anchor.height), (160.0, 10.0));
+    assert_eq!(crate::cmd::draw::ink_points(sh), vec![[0.0, 0.0], [80.0, 10.0], [160.0, 0.0]]);
+    // Undo puts the stroke back exactly.
+    s.execute("edit.undo", json!({})).unwrap();
+    let sh = &s.doc().unwrap().wb.active().unwrap().shapes[0];
+    assert_eq!(crate::cmd::draw::ink_points(sh), vec![[0.0, 0.0], [40.0, 20.0], [80.0, 0.0]]);
+    // A zero height keeps a 1-point stroke, so a later resize can bring the shape back.
+    s.execute("object.move", json!({"kind": "shape", "id": id, "height": 0.0})).unwrap();
+    s.execute("object.move", json!({"kind": "shape", "id": id, "height": 20.0})).unwrap();
+    let sh = &s.doc().unwrap().wb.active().unwrap().shapes[0];
+    assert_eq!(sh.anchor.height, 20.0);
+    assert_eq!(crate::cmd::draw::ink_points(sh), vec![[0.0, 0.0], [40.0, 20.0], [80.0, 0.0]]);
+}
+
+#[test]
 fn xlsb_import_keeps_cached_values_and_reports_limits() {
     let bytes = xlsb_fixture();
     assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Xlsb);
