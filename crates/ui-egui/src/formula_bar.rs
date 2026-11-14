@@ -663,6 +663,10 @@ fn editor_shortcuts(
     if !has_focus || !mine || app.message.is_some() || app.dialog.is_some() {
         return outcome;
     }
+    // The editor owns Tab and the arrows (its `event_filter`), but egui applies a widget's filter
+    // only from its second focused frame on: a Tab or an arrow in the frame the editor got focus
+    // would also move egui's focus to the next widget, where it stays and every later key is lost.
+    ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     // Ctrl+Alt+Shift+P turns the edit into Python code.
     outcome.to_python = ui.input_mut(take_python_shortcut);
     let (action, cancel, py_trigger) = editor_confirm_keys(ui, ed);
