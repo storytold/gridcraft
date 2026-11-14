@@ -130,8 +130,10 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
             ui.set_min_width(200.0);
             let insert_copied = insert_copied_item(app);
             // On a cell with a link Excel offers to edit, open or remove it (#2120).
-            let link =
-                app.session.active().and_then(|d| d.wb.active().and_then(|sh| sh.hyperlinks.get(&d.selection.active)).map(|l| l.target.clone()));
+            let link = app
+                .session
+                .active()
+                .and_then(|d| d.wb.active().and_then(|sh| sh.hyperlinks.get(&d.selection.active)).map(|l| (l.target.clone(), l.external)));
             let mut items: Vec<(&str, &str)> = vec![
                 ("Cut", "edit.cut"),
                 ("Copy", "edit.copy"),
@@ -190,8 +192,8 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                         "ui:defineName" => app.open_dialog("defineName", json!({})),
                         "ui:insertLink" => app.open_dialog("insertLink", json!({})),
                         "ui:openLink" => {
-                            if let Some(target) = &link {
-                                super::interact::follow_link(app, target);
+                            if let Some((target, external)) = &link {
+                                super::interact::follow_link(app, target, *external);
                             }
                         }
                         "ui:pickList" => app.open_dialog("pickList", json!({})),

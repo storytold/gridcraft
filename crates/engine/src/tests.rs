@@ -4977,18 +4977,18 @@ fn a_decrypted_workbook_never_overwrites_its_encrypted_original() {
 }
 
 #[test]
-fn link_open_refuses_every_scheme_but_http_https_and_mailto() {
+fn link_open_refuses_every_scheme_but_http_https_mailto_and_local_files() {
     let mut s = s();
-    s.execute("insert.link", json!({"cell": "A1", "target": "file:///etc/passwd"})).unwrap();
+    s.execute("insert.link", json!({"cell": "A1", "target": "file://host/etc/passwd"})).unwrap();
     s.take_ui_requests();
-    for url in ["file:///etc/passwd", "smb://h/s", "\\\\h\\s", "JAVASCRIPT:1"] {
+    for url in ["file://host/etc/passwd", "smb://h/s", "\\\\h\\s", "JAVASCRIPT:1"] {
         assert!(s.execute("link.open", json!({"url": url})).is_err(), "{url}");
     }
     assert!(s.execute("link.open", json!({"cell": "A1"})).is_err());
     assert!(s.take_ui_requests().is_empty());
     // A host's `Allow` policy opens web and e-mail addresses directly, and nothing else.
     s.link_policy = crate::links::LinkPolicy::Allow;
-    for url in ["file:///etc/passwd", "smb://h/s", "\\\\h\\s", "JAVASCRIPT:1"] {
+    for url in ["file://host/etc/passwd", "smb://h/s", "\\\\h\\s", "JAVASCRIPT:1"] {
         assert!(s.execute("link.open", json!({"url": url})).is_err(), "{url}");
     }
     assert!(s.take_ui_requests().is_empty());
@@ -5029,12 +5029,145 @@ fn programmatic_link_open_never_opens_an_external_address_without_confirmation()
     // The host's confirmed path opens the allowed address, and still refuses every other scheme.
     assert_eq!(s.open_confirmed_link(" https://example.org/a ").unwrap(), json!({"opened": "https://example.org/a"}));
     assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("https://example.org/a".into())]);
-    for url in ["file:///etc/passwd", "\\\\h\\s", "javascript:1", "x-custom://a", "\u{1}https://a.example"] {
+    for url in ["file://host/etc/passwd", "\\\\h\\s", "javascript:1", "x-custom://a", "\u{1}https://a.example"] {
         assert!(s.open_confirmed_link(url).is_err(), "{url:?}");
     }
     assert!(s.take_ui_requests().is_empty());
     s.open_confirmed_link("Sheet1!C3").unwrap();
     assert_eq!(s.doc().unwrap().selection.active, CellRef::new(2, 2));
+}
+
+#[test]
+fn a_formula_link_to_a_defined_name_or_table_goes_there_instead_of_opening_a_file() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "Price", "refersTo": "=Sheet1!$D$7"})).unwrap();
+    s.execute("insert.table", json!({"range": "F1:G3", "name": "Sales"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=HYPERLINK(\"Price\",\"p\")"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=HYPERLINK(\"Sales\",\"t\")"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A3", "input": "=HYPERLINK(\"Missing.txt\",\"f\")"})).unwrap();
+    s.take_ui_requests();
+    s.execute("link.open", json!({"cell": "A1"})).unwrap();
+    assert_eq!(s.doc().unwrap().selection.active.a1(), "D7");
+    s.execute("link.open", json!({"cell": "A2"})).unwrap();
+    assert_eq!(s.doc().unwrap().selection.active.a1(), "F2");
+    assert!(s.take_ui_requests().is_empty(), "nothing was handed to the system");
+    // A bare file name is still a file (here an unsaved workbook: no folder to take it from).
+    assert!(s.execute("link.open", json!({"cell": "A3"})).is_err());
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn link_open_opens_existing_local_files_and_folders_but_not_programs() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-locallink-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(dir.join("reports")).unwrap();
+    std::fs::write(dir.join("reports").join("q1.txt"), "x").unwrap();
+    std::fs::write(dir.join("setup.exe"), "x").unwrap();
+    let file = dir.join("reports").join("q1.txt");
+    // The host gets the resolved path (a temp dir may sit under a symlink, as on macOS), without a Windows `\\?\` drive prefix.
+    let expected = |p: &std::path::Path| {
+        let real = std::fs::canonicalize(p).unwrap().to_string_lossy().into_owned();
+        real.strip_prefix("\\\\?\\").filter(|rest| rest.as_bytes().get(1) == Some(&b':')).map_or_else(|| real.clone(), str::to_owned)
+    };
+    let mut s = s();
+    // A hyperlink to a file, a `file:` address and a =HYPERLINK() formula all open it (#2596).
+    s.execute("cell.set", json!({"cell": "A1", "input": "q1"})).unwrap();
+    s.execute("insert.link", json!({"cell": "A1", "target": file.to_str().unwrap()})).unwrap();
+    s.execute(
+        "cell.set",
+        json!({"cell": "A2", "input": format!("=HYPERLINK(\"{}\",\"folder\")", dir.join("reports").to_str().unwrap().replace('"', "\"\""))}),
+    )
+    .unwrap();
+    s.execute("cell.set", json!({"cell": "A3", "input": format!("=HYPERLINK(\"{}\")", "setup.exe")})).unwrap();
+    s.take_ui_requests();
+    // A programmatic `link.open` opens no file by default (#2181); the user's confirmed path does.
+    for p in [json!({"cell": "A1"}), json!({"cell": "A2"}), json!({"url": file.to_str().unwrap()})] {
+        let e = s.execute("link.open", p.clone()).unwrap_err().to_string();
+        assert!(e.contains(crate::links::NEEDS_CONFIRMATION), "{p}: {e}");
+    }
+    assert!(s.take_ui_requests().is_empty());
+    s.open_confirmed_link(file.to_str().unwrap()).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(expected(&file))]);
+    // A host that vets its callers lets `link.open` open them directly.
+    s.link_policy = crate::links::LinkPolicy::Allow;
+    s.execute("link.open", json!({"cell": "A1"})).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(expected(&file))]);
+    s.execute("link.open", json!({"cell": "A2"})).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(expected(&dir.join("reports")))]);
+    let url = format!("file://{}", file.to_str().unwrap());
+    if cfg!(unix) {
+        s.execute("link.open", json!({"url": url})).unwrap();
+        assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(expected(&file))]);
+    }
+    // A `#` in a file name (`%23` in a `file:` address) stays in the name: the path the dialog
+    // confirmed is opened as it is, not cut at the `#` like link text.
+    let hashed = dir.join("reports").join("q1#draft.txt");
+    std::fs::write(&hashed, "x").unwrap();
+    if cfg!(unix) {
+        let url = format!("file://{}", dir.join("reports").join("q1%23draft.txt").to_str().unwrap());
+        s.execute("link.open", json!({"url": url})).unwrap();
+        assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(expected(&hashed))]);
+    }
+    s.open_confirmed_link(hashed.to_str().unwrap()).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(expected(&hashed))]);
+    assert!(s.open_confirmed_link(dir.join("reports").join("q1#missing.txt").to_str().unwrap()).is_err());
+    assert!(s.open_confirmed_link(dir.join("setup.exe").to_str().unwrap()).is_err());
+    assert!(s.take_ui_requests().is_empty());
+    // Programs, missing files and network shares are still refused.
+    assert!(s.execute("link.open", json!({"cell": "A3"})).is_err());
+    assert!(s.execute("link.open", json!({"url": dir.join("setup.exe").to_str().unwrap()})).is_err());
+    assert!(s.execute("link.open", json!({"url": dir.join("missing.txt").to_str().unwrap()})).is_err());
+    assert!(s.execute("link.open", json!({"url": "file://host/share/a.txt"})).is_err());
+    assert!(s.take_ui_requests().is_empty());
+    // A relative link is taken from the saved workbook's folder.
+    let book = dir.join("Book.xlsx");
+    s.execute("cell.set", json!({"cell": "B1", "input": "rel"})).unwrap();
+    s.execute("insert.link", json!({"cell": "B1", "target": "reports/q1.txt"})).unwrap();
+    assert!(s.execute("link.open", json!({"cell": "B1"})).is_err(), "unsaved: no folder to take it from");
+    s.execute("file.saveAs", json!({"path": book.to_str().unwrap()})).unwrap();
+    s.take_ui_requests();
+    s.execute("link.open", json!({"cell": "B1"})).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(expected(&dir.join("reports/q1.txt")))]);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn folder_share_urls_reach_the_host_whole_after_an_xlsx_round_trip() {
+    // OneDrive folder links carry `!`, `:`, `&`, `=`, `%` and a fragment; every part must survive
+    // import, save and `link.open`, or the browser lands on the drive root (#2085).
+    let urls = [
+        "https://1drv.ms/f/s!AbCdEf_123-xyz?e=Q1w2E3",
+        "https://onedrive.live.com/:f:/g/personal/0123456789ABCDEF/EaBcDeFgHiJk?resid=0123456789ABCDEF%21123&ithint=folder&e=a%2Bb&redeem=aHR0cHM6Ly9leGFtcGxl",
+        "https://contoso-my.sharepoint.com/:f:/g/personal/ann_contoso_com/Ep0Q?e=x#frag=1&b=2",
+    ];
+    let mut s = s();
+    for (i, url) in urls.iter().enumerate() {
+        s.execute("insert.link", json!({"cell": format!("A{}", i + 1), "target": url})).unwrap();
+    }
+    let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-shareurls-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let path = dir.join("Links.xlsx");
+    std::fs::write(&path, bytes).unwrap();
+    let mut s = Session::new();
+    s.execute("file.open", json!({"path": path})).unwrap();
+    s.take_ui_requests();
+    for (i, url) in urls.iter().enumerate() {
+        let cell = format!("A{}", i + 1);
+        assert_eq!(
+            s.doc().unwrap().wb.sheet(0).unwrap().hyperlinks.get(&CellRef::parse(&cell).unwrap()).map(|h| h.target.as_str()),
+            Some(*url),
+            "{cell}"
+        );
+        // The user's confirmed click is what opens it (#2181); the URL reaches the host whole.
+        s.open_confirmed_link(url).unwrap();
+        assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl((*url).into())], "{cell}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
