@@ -1681,7 +1681,7 @@ fn japanese_paper_sizes_round_trip() {
 
 /// The paper names every spelling folds onto keep their file id: `11x17` is Tabloid (3), and
 /// ISO B5 is id 34 (ECMA-376's 176×250 mm "B5 envelope"), read back as `B5 (ISO)`. An empty
-/// paper (the file stated none) writes no `paperSize`, so the reader's own paper applies.
+/// paper (none stated) writes no `paperSize`, so the reader's own paper applies.
 #[test]
 fn paper_names_keep_their_xlsx_id_and_an_unstated_paper_writes_none() {
     for (paper, id, back_as) in [("11x17", 3, "Tabloid"), ("US Legal", 5, "Legal"), ("B5 (ISO)", 34, "B5 (ISO)"), ("Envelope B5", 34, "B5 (ISO)")] {

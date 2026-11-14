@@ -77,6 +77,10 @@ pub fn size_pt(name: &str) -> Option<(f32, f32)> {
 /// The paper of a page `width` × `height` points, within 2 mm on each side: the nearest one as it
 /// stands, else the nearest one turned. Some papers are less than 4 mm apart (Letter and Japanese
 /// Envelope Kaku #3), so the nearest wins, not the first in the table.
+///
+/// The name is the paper as the page stands: a 17×11 in page is `Ledger`. A caller that also
+/// records a landscape orientation should pass the size upright (narrow side first), since
+/// print layout turns the named paper once more for landscape.
 pub fn for_size(width: f32, height: f32) -> Option<&'static str> {
     const TOLERANCE: f32 = 5.67; // 2 mm
     let nearest = |w: f32, h: f32| {

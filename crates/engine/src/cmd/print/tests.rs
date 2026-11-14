@@ -631,7 +631,7 @@ fn page_setup_paper_sizes_reach_the_pdf_page() {
     assert!(s.execute("pageLayout.pageSetup", json!({"paper": "Napkin"})).is_err());
 }
 
-/// An empty paper name means the file stated none; it prints on Letter.
+/// An empty paper name means no paper is stated; it prints on Letter.
 #[test]
 fn an_unstated_paper_prints_on_letter() {
     let mut wb = gridcraft_model::Workbook::new();

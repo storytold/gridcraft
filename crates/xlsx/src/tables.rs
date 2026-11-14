@@ -323,6 +323,20 @@ pub const EMU_PER_PX: f64 = 9525.0;
 mod tests {
     use super::*;
 
+    /// Every paper in the shared table saves with an XLSX id, so it reopens as itself. ECMA-376
+    /// has no upright ISO B6 id (35 is the B6 envelope stated wide), so `B6 (ISO)` alone has none.
+    #[test]
+    fn every_shared_paper_has_an_xlsx_id() {
+        for (name, _, _) in gridcraft_model::paper::PAPERS {
+            let id = paper_id(name);
+            if name == "B6 (ISO)" {
+                assert_eq!(id, None);
+            } else {
+                assert_eq!(id.and_then(paper_name), Some(name), "{name}");
+            }
+        }
+    }
+
     #[test]
     fn widths() {
         assert_eq!(col_width_to_px(9.140625), 64.0);
