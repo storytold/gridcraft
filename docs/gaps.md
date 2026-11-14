@@ -142,10 +142,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   Margins are dragged on the rulers (#792). Remaining: pictures in headers/footers, Different First Page / Odd & Even pages. Desktop now submits directly through craft-print with printer choice, copies, duplex and grayscale; browser printing stays available. Print ranges and driver tray/options UI remain. **Estimate:** 5–10 h.
 
 ### 15. Remaining functions and an oracle suite (F)
-- 18 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 16–26 h.
-- 20 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 17–29 h.
-- 21 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 18–30 h.
-- 18 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 18–30 h.
+- 10 missing, 8 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 18–30 h.
   [function-parity.md](function-parity.md)
 
 ### 16. Collaboration and review (F)
@@ -198,6 +195,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |
 | 2026-11-01 | minor | §13: the Analysis ToolPak has all 19 of Excel's tools (two-factor Anova with and without replication, z-Test, Fourier Analysis, Random Number Generation, Sampling); its chart output remains. The stale "`data.solver`, `data.analysisToolPak` missing" and "no Forecast Start" sentences removed |
 | 2026-11-01 | minor | §4: chart data tables implemented for column, bar, line, area and compatible combo charts, with legend keys and border settings, live source values, XLSX round-trip and print/PDF; other chart gaps remain. |
+| 2026-11-01 | minor | §15: FILTERXML added; WEBSERVICE has its host hook (8 stubs left: the 7 CUBE functions and WEBSERVICE until the app ships a fetcher); the work-list entry is one current line (10 missing by name, 8 stubs) |
 | 2026-10-31 | minor | §13: Solver Options (Max Evaluations, Integer Optimality and the Evolutionary options), saved with the model |
 | 2026-10-31 | minor | §13: Solver Load/Save Model (`data.solverSaveModel`, `data.solverLoadModel`) and Reset All (`data.solverReset`), with buttons in the Solver Parameters dialog |
 | 2026-10-26 | minor | Arabic shared bidi display/editing and persisted cell reading direction; other script and PDF work remain separate |

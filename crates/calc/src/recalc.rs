@@ -48,6 +48,10 @@ pub struct Calc {
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
+    /// Answers WEBSERVICE; without one it is `#VALUE!`.
+    web: Option<std::sync::Arc<dyn gridcraft_functions::WebFetcher>>,
+    /// [`Calc::recalc_all`] has run.
+    full_pass: bool,
     /// The cells whose value is `#SPILL!`, kept so that finding the formulas an emptied cell or a
     /// freed spill area may unblock doesn't walk every formula or window of cells. Filled in
     /// `rebuild`, kept up to date by `cells_changed` and by the write-back of a run; an entry is
@@ -101,6 +105,8 @@ impl Default for Calc {
             fixed_now: None,
             circular: vec![],
             last_recalc_cells: 0,
+            web: None,
+            full_pass: false,
             spill_errors: SpillErrors::default(),
         }
     }
@@ -180,6 +186,18 @@ impl Calc {
             return n;
         }
         now_serial()
+    }
+
+    /// Installs (or with `None` removes) what answers WEBSERVICE. Cells already calculated keep
+    /// their values until they next recalculate.
+    pub fn set_web_fetcher(&mut self, fetcher: Option<std::sync::Arc<dyn gridcraft_functions::WebFetcher>>) {
+        self.web = fetcher;
+    }
+
+    /// Whether [`Calc::recalc_all`] has run: false for a `Calc` that only [`Calc::rebuild`] built
+    /// the graph for, whose workbook still holds the values its file saved.
+    pub fn has_calculated_all(&self) -> bool {
+        self.full_pass
     }
 
     /// Rebuilds the graph from scratch.
@@ -268,6 +286,7 @@ impl Calc {
 
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
+        self.full_pass = true;
         self.rebuild(wb);
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
@@ -413,9 +432,24 @@ impl Calc {
         }
     }
 
+    /// Recalculates `cells`, whose formulas and graph entries are as they were, and the formulas
+    /// that depend on them. Unlike [`Calc::cells_changed`] it leaves out the dynamic formulas
+    /// (INDIRECT, OFFSET, volatile ones) that every edit recalculates, so nothing unrelated moves.
+    /// In manual calculation only the cells themselves are evaluated.
+    pub fn recalc_cells(&mut self, wb: &mut Workbook, cells: &[Key]) {
+        let own: Vec<Key> = cells.iter().copied().filter(|k| self.graph.nodes.contains_key(k)).collect();
+        let dirty = if wb.calc.mode == CalcMode::Manual { own } else { self.closure(wb, &own, &[], false) };
+        self.run(wb, dirty, false);
+    }
+
     /// The formulas to recalculate after `seeds` and every cell of `areas` changed: the seeds
     /// that are formulas, and everything that reads them, directly or through other formulas.
     fn dirty_closure(&self, wb: &Workbook, seeds: &[Key], areas: &[(usize, RangeRef)]) -> Vec<Key> {
+        self.closure(wb, seeds, areas, true)
+    }
+
+    /// [`Calc::dirty_closure`], and with `dynamic`, every dynamic formula and what reads it too.
+    fn closure(&self, wb: &Workbook, seeds: &[Key], areas: &[(usize, RangeRef)], dynamic: bool) -> Vec<Key> {
         let mut seen: HashSet<Key> = HashSet::default();
         let mut queue: VecDeque<Key> = VecDeque::new();
         // Each range-index entry is listed once in the whole walk: many changed cells under one
@@ -451,9 +485,11 @@ impl Calc {
                 }
             }
         }
-        for k in &self.graph.dynamic {
-            if seen.insert(*k) {
-                queue.push_back(*k);
+        if dynamic {
+            for k in &self.graph.dynamic {
+                if seen.insert(*k) {
+                    queue.push_back(*k);
+                }
             }
         }
         while let Some(k) = queue.pop_front() {
@@ -493,6 +529,7 @@ impl Calc {
             let tp = prof_now();
             let (results, spills, cycles) = {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
+                host.web = self.web.clone();
                 host.iterate = wb.calc.iterative;
                 for k in &dirty {
                     host.calculate(*k);

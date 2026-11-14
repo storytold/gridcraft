@@ -77,6 +77,8 @@ pub(super) struct PassHost<'a> {
     stack_top: usize,
     /// Whether an evaluation ran past the stack budget since the innermost formula started.
     out_of_stack: bool,
+    /// Answers WEBSERVICE; `None` leaves it `#VALUE!`.
+    pub(super) web: Option<std::sync::Arc<dyn gridcraft_functions::WebFetcher>>,
     /// Sum and count of blocks that hold only constants, for `range_sum`. Keyed by sheet, first
     /// cell and last column; each value maps a last row to the block's result (`None`: the block
     /// has a formula, a Python cell, an error value or a spilled value, so every longer one has too).
@@ -121,6 +123,7 @@ impl<'a> PassHost<'a> {
             precision: wb.calc.precision_as_displayed.then(crate::DisplayedPrecision::new),
             stack_top: 0,
             out_of_stack: false,
+            web: None,
             sums: HashMap::default(),
             python: HashMap::default(),
         }
@@ -759,6 +762,9 @@ impl Host for PassHost<'_> {
     }
     fn now_serial(&self) -> f64 {
         self.now
+    }
+    fn web_get(&mut self, url: &str) -> Option<String> {
+        self.web.as_ref()?.get(url)
     }
     fn random(&mut self) -> f64 {
         // xorshift64*
