@@ -4,15 +4,54 @@ use super::{
     Stroke, Style, Underline, VAlign, Value, Workbook, pos2, theme, vec2,
 };
 
-/// Resolved look of a cell for painting.
+/// Resolved look of a cell for painting. `fill` and `text_color` are display colours: on the dark
+/// sheet they have been through the colour rule (`docs/dark-sheet.md`).
 pub(super) struct Look {
     pub(super) style: Style,
     pub(super) fill: Option<Color32>,
     pub(super) text_color: Color32,
+    /// The authored colour behind the cell's text and borders (its fill, or white): what the
+    /// contrast guard measures the authored pairs against.
+    pub(super) paper: Color32,
+    /// The colour painted behind them (`fill`, or the sheet): what the guarded ink must read on.
+    pub(super) behind: Color32,
+    /// Painted on the dark sheet.
+    pub(super) dark: bool,
 }
 
+impl Look {
+    /// Display colour of a text colour drawn in this cell (a number format's `[Red]`, say).
+    pub(super) fn text_ink(&self, c: Color32) -> Color32 {
+        painted_ink(c, self.paper, self.behind, theme::INK_TEXT_MIN, self.dark)
+    }
+
+    /// Display colour of a border line of this cell.
+    pub(super) fn line_ink(&self, c: Color32) -> Color32 {
+        painted_ink(c, self.paper, self.behind, theme::INK_LINE_MIN, self.dark)
+    }
+}
+
+/// A workbook colour resolved against the theme, or `default` when it does not resolve.
 pub(super) fn col32(c: Color, wb: &Workbook, default: Color32) -> Color32 {
     c.resolve(&wb.theme).map(theme::color32).unwrap_or(default)
+}
+
+/// A workbook fill colour as painted: as authored, or mapped by the dark-sheet rule.
+pub(super) fn painted_fill(c: Color32, dark: bool) -> Color32 {
+    if dark { theme::ink(c) } else { c }
+}
+
+/// A workbook colour drawn over the authored `paper` (text, a border), as painted: as authored,
+/// or mapped and held legible by the contrast guard against `behind`, the colour painted under it,
+/// on the dark sheet.
+pub(super) fn painted_ink(c: Color32, paper: Color32, behind: Color32, min_ratio: f32, dark: bool) -> Color32 {
+    if dark { theme::ink_guarded_on(c, paper, behind, min_ratio) } else { c }
+}
+
+/// A pattern fill drawn as one colour: a quarter foreground, three quarters background.
+fn pattern_blend(fg: Color32, bg: Color32) -> Color32 {
+    let mix = |f: u8, b: u8| ((u16::from(f) + u16::from(b) * 3) / 4) as u8;
+    Color32::from_rgb(mix(fg.r(), bg.r()), mix(fg.g(), bg.g()), mix(fg.b(), bg.b()))
 }
 
 pub(super) fn numfmt_color(c: gridcraft_engine::numfmt::FormatColor) -> Color32 {
@@ -28,7 +67,9 @@ pub(super) fn center_across_end(start: u32, limit: u32, continues: impl Fn(u32) 
     end
 }
 
-pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (Look, Option<CfLook>) {
+/// The look of cell `c`: its style with table and conditional formats applied, and its colours
+/// for painting on the light sheet or, with `dark`, on the dark sheet.
+pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache, dark: bool) -> (Look, Option<CfLook>) {
     let mut style = wb.styles.get(sh.style_id(c)).clone();
     if let Some(t) = sh.table_at(c) {
         style = gridcraft_engine::tables::table_cell_style(wb, si, t, c);
@@ -73,27 +114,30 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
             }
         }
     }
+    // (authored, painted) fill.
     let mut fill = match style.fill.pattern {
         PatternType::None => None,
-        PatternType::Solid => style.fill.fg.resolve(&wb.theme).map(theme::color32),
+        PatternType::Solid => style.fill.fg.resolve(&wb.theme).map(theme::color32).map(|f| (f, painted_fill(f, dark))),
         _ => {
-            // Patterns: approximate with a blend of foreground and background.
-            let fg = style.fill.fg.resolve(&wb.theme).unwrap_or([0, 0, 0]);
-            let bg = style.fill.bg.resolve(&wb.theme).unwrap_or([255, 255, 255]);
-            Some(Color32::from_rgb(
-                ((fg[0] as u16 + bg[0] as u16 * 3) / 4) as u8,
-                ((fg[1] as u16 + bg[1] as u16 * 3) / 4) as u8,
-                ((fg[2] as u16 + bg[2] as u16 * 3) / 4) as u8,
-            ))
+            // Patterns: approximate with a blend of foreground and background, each mapped.
+            let fg = style.fill.fg.resolve(&wb.theme).map_or(Color32::BLACK, theme::color32);
+            let bg = style.fill.bg.resolve(&wb.theme).map_or(Color32::WHITE, theme::color32);
+            Some((pattern_blend(fg, bg), pattern_blend(painted_fill(fg, dark), painted_fill(bg, dark))))
         }
     };
     if let Some(l) = &cfl
         && let Some(rgb) = l.scale_fill
     {
-        fill = Some(theme::color32(rgb));
+        let f = theme::color32(rgb);
+        fill = Some((f, painted_fill(f, dark)));
     }
-    let text_color = col32(style.font.color, wb, Color32::BLACK);
-    (Look { style, fill, text_color }, cfl)
+    let paper = fill.map_or(Color32::WHITE, |(authored, _)| authored);
+    // A pattern's painted blend is not ink() of its authored blend: guard against what is drawn.
+    let behind = fill.map_or(painted_fill(Color32::WHITE, dark), |(_, painted)| painted);
+    // Automatic, Text 1 / Background 1, hyperlinks, cell and table styles: all resolved to a colour
+    // first, then the one rule.
+    let text_color = painted_ink(col32(style.font.color, wb, Color32::BLACK), paper, behind, theme::INK_TEXT_MIN, dark);
+    (Look { style, fill: fill.map(|(_, painted)| painted), text_color, paper, behind, dark }, cfl)
 }
 
 /// Text for a value with General narrowing to the available width.
@@ -211,8 +255,9 @@ pub(super) fn merged_edges(wb: &Workbook, si: usize, sh: &Sheet, geo: &Geo, area
             continue;
         }
         let (x0, x1) = (geo.x(sh, col), geo.x_end(sh, col));
-        let top = look(wb, si, sh, CellRef::new(m.start.row, col), cf).0.style.borders.top;
-        let bottom = look(wb, si, sh, CellRef::new(m.end.row, col), cf).0.style.borders.bottom;
+        // Only the border styles are used here; their colours are mapped by the caller.
+        let top = look(wb, si, sh, CellRef::new(m.start.row, col), cf, false).0.style.borders.top;
+        let bottom = look(wb, si, sh, CellRef::new(m.end.row, col), cf, false).0.style.borders.bottom;
         out.push((top, [pos2(x0, rect.top()), pos2(x1, rect.top())]));
         out.push((bottom, [pos2(x0, rect.bottom()), pos2(x1, rect.bottom())]));
     }
@@ -222,8 +267,8 @@ pub(super) fn merged_edges(wb: &Workbook, si: usize, sh: &Sheet, geo: &Geo, area
             continue;
         }
         let (y0, y1) = (geo.y(sh, row), geo.y_end(sh, row));
-        let left = look(wb, si, sh, CellRef::new(row, m.start.col), cf).0.style.borders.left;
-        let right = look(wb, si, sh, CellRef::new(row, m.end.col), cf).0.style.borders.right;
+        let left = look(wb, si, sh, CellRef::new(row, m.start.col), cf, false).0.style.borders.left;
+        let right = look(wb, si, sh, CellRef::new(row, m.end.col), cf, false).0.style.borders.right;
         out.push((left, [pos2(rect.left(), y0), pos2(rect.left(), y1)]));
         out.push((right, [pos2(rect.right(), y0), pos2(rect.right(), y1)]));
     }

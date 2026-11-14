@@ -23,13 +23,15 @@ const MIN_TEXTURE_SIDE: u32 = 64;
 const MAX_CACHE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_CACHE_ITEMS: usize = 4096;
 
-/// A picture: its workbook, its object id there, and its size in bytes (object ids are per
-/// workbook, so two open workbooks can both have a picture 1).
+/// A picture: its workbook, its object id there, its size in bytes (object ids are per
+/// workbook, so two open workbooks can both have a picture 1), and whether it is drawn dark
+/// (the dark-pictures setting): the dark texture is an entry of its own.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct Key {
     doc: u64,
     id: u32,
     len: usize,
+    dark: bool,
 }
 
 #[derive(Default)]
@@ -80,7 +82,12 @@ impl Cache {
         if let Some(old) = self.entries.remove(&key) {
             self.bytes = self.bytes.saturating_sub(old.bytes);
         }
-        let decoded = decode(data, side);
+        let decoded = decode(data, side).map(|(mut image, complete)| {
+            if key.dark {
+                crate::theme::ink_image(&mut image);
+            }
+            (image, complete)
+        });
         let bytes = decoded.as_ref().map_or(0, |(image, _)| image.pixels.len().saturating_mul(4));
         while self.entries.len() >= MAX_CACHE_ITEMS || self.bytes.saturating_add(bytes) > MAX_CACHE_BYTES {
             let oldest = self.entries.iter().filter(|(_, e)| e.used.saturating_add(1) < frame).min_by_key(|(_, e)| e.used).map(|(key, _)| *key);
@@ -159,7 +166,7 @@ pub(crate) fn forget_closed(ctx: &egui::Context, open: &[u64]) {
 pub(crate) fn texture(ctx: &egui::Context, doc: u64, image: &Image, rect: egui::Rect) -> Option<TextureHandle> {
     let px = (rect.width().max(rect.height()) * ctx.pixels_per_point()).ceil();
     let want = if px.is_finite() && px > 0.0 { px.min(u32::MAX as f32) as u32 } else { 1 };
-    let key = Key { doc, id: image.id, len: image.data.len() };
+    let key = Key { doc, id: image.id, len: image.data.len(), dark: crate::theme::dark_pictures(ctx) };
     cache(ctx).lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(ctx, key, &image.data, want)
 }
 
@@ -174,8 +181,9 @@ mod tests {
         bytes.into_inner()
     }
 
+    /// The cache key of a light picture with this document, id and data.
     fn key(doc: u64, id: u32, data: &[u8]) -> Key {
-        Key { doc, id, len: data.len() }
+        Key { doc, id, len: data.len(), dark: false }
     }
 
     /// Runs one frame, so the frame number moves on as it does when the app paints.
@@ -184,6 +192,7 @@ mod tests {
         out.textures_delta.clear(); // nothing consumes the uploads in a headless test
     }
 
+    /// A picture is decoded at about the size it is drawn, not at its full source size.
     #[test]
     fn pictures_are_decoded_at_about_the_size_drawn() {
         let ctx = egui::Context::default();
@@ -206,6 +215,27 @@ mod tests {
         let tiny = png(40, 20, [0, 0, 0, 255]);
         assert_eq!(cache.texture(&ctx, key(1, 2, &tiny), &tiny, 4000).unwrap().size(), [40, 20]);
         assert_eq!(cache.entries.get(&key(1, 2, &tiny)).map(|e| e.side), Some(u32::MAX), "the whole picture: never decoded again");
+    }
+
+    #[test]
+    fn the_dark_texture_is_an_entry_of_its_own_beside_the_light_one() {
+        let ctx = egui::Context::default();
+        let mut cache = Cache::default();
+        let data = png(64, 32, [255, 255, 255, 128]);
+        let light = key(1, 1, &data);
+        let dark = Key { dark: true, ..light };
+        let light_tex = cache.texture(&ctx, light, &data, 64).unwrap().id();
+        let dark_tex = cache.texture(&ctx, dark, &data, 64).unwrap().id();
+        assert_ne!(dark_tex, light_tex, "the dark-pictures setting decodes a texture of its own");
+        assert_eq!(cache.entries.len(), 2, "both kept, so switching back and forth decodes nothing");
+        assert_eq!(cache.bytes, 2 * 64 * 32 * 4, "both counted against the budget");
+        frame(&ctx);
+        assert_eq!(cache.texture(&ctx, light, &data, 64).unwrap().id(), light_tex);
+        assert_eq!(cache.texture(&ctx, dark, &data, 64).unwrap().id(), dark_tex);
+        // A closed workbook gives both back.
+        cache.forget_closed(&[2]);
+        assert!(cache.entries.is_empty());
+        assert_eq!(cache.bytes, 0);
     }
 
     #[test]

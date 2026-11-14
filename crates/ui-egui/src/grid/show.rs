@@ -419,6 +419,8 @@ struct PanesInput<'a> {
     tokens: &'a Tokens,
 }
 
+/// Paints the frozen and scrolled panes (cells, borders, selection), each clipped to its own
+/// quadrant, and returns the quadrants painted.
 fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
     let PanesInput { app, painter, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel, outline, tokens: t } = input;
     // Quadrants: (rows, cols, clip).
@@ -459,10 +461,10 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
     }
     // Freeze lines.
     if geo.fr > 0 {
-        painter.line_segment([pos2(geo.cells.left(), split.y), pos2(geo.cells.right(), split.y)], Stroke::new(1.0, Color32::from_gray(150)));
+        painter.line_segment([pos2(geo.cells.left(), split.y), pos2(geo.cells.right(), split.y)], Stroke::new(1.0, t.sheet_freeze_line));
     }
     if geo.fc > 0 {
-        painter.line_segment([pos2(split.x, geo.cells.top()), pos2(split.x, geo.cells.bottom())], Stroke::new(1.0, Color32::from_gray(150)));
+        painter.line_segment([pos2(split.x, geo.cells.top()), pos2(split.x, geo.cells.bottom())], Stroke::new(1.0, t.sheet_freeze_line));
     }
     quads
 }
@@ -812,6 +814,8 @@ pub(crate) fn paint_overlays(input: OverlayInput<'_>) {
     let _ = (wb, si);
 }
 
+/// Paints the page outlines and page numbers of Page Break Preview, recomputing the pages only
+/// when the workbook or the active sheet changed.
 fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
     let Some(d) = app.session.active() else { return };
     let key = (d.uid, d.revision, d.wb.active_sheet());
@@ -841,7 +845,8 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
         printed = printed.union(r);
     }
     let pr = geo.range_rect(sh, printed);
-    let grey = Color32::from_black_alpha(70);
+    let t = Tokens::get(p.ctx());
+    let grey = t.sheet_page_outside;
     let c = p.clip_rect();
     for r in [
         Rect::from_min_max(c.min, pos2(c.right(), pr.top())),
@@ -853,7 +858,7 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
             p.rect_filled(r, 0.0, grey);
         }
     }
-    let blue = Color32::from_rgb(0x2E, 0x6F, 0xD8);
+    let blue = t.sheet_page_break;
     for (r, n) in pages {
         let rr = geo.range_rect(sh, *r);
         if !rr.intersects(c) {
@@ -870,7 +875,7 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
             Align2::CENTER_CENTER,
             format!("Page {n}"),
             theme::ui_bold((rr.height().min(rr.width()) / 6.0).clamp(14.0, 72.0)),
-            Color32::from_black_alpha(45),
+            t.sheet_page_watermark,
         );
     }
     p.rect_stroke(pr, 0.0, Stroke::new(3.0, blue), StrokeKind::Outside);

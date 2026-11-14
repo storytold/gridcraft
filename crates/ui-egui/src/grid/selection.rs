@@ -3,7 +3,7 @@ use super::geo::Geo;
 use super::interact::{hidden_col_edge, hidden_row_edge};
 #[cfg(test)]
 use super::show::hidden_around;
-use super::{CellRef, Color32, Painter, RangeRef, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, json, pos2, vec2};
+use super::{CellRef, Painter, RangeRef, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, json, pos2, vec2};
 
 /// Where the active cell is on screen: the whole merged cell when it is part of one.
 fn active_rect(geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::Selection) -> Rect {
@@ -90,6 +90,8 @@ pub(crate) struct SelectionPaintInput<'a> {
     pub(crate) cols: (u32, u32),
 }
 
+/// Paints the selection of one pane: the fill of every area except the active cell, the active
+/// cell's frame, the outline (a formula's reference outlines while editing one) and the fill handle.
 pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
     let SelectionPaintInput { painter: p, geo, sheet: sh, selection: sel, outline, tokens: t, app, rows, cols } = input;
     // Fill all areas except the active cell.
@@ -133,7 +135,7 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
     // Fill handle (bottom-right of the current area).
     if app.editor.is_none() && range_in_pane(RangeRef::cell(sel.current().end), rows, cols) {
         let h = Rect::from_center_size(outline.right_bottom(), vec2(6.0, 6.0));
-        p.rect_filled(h.expand(1.0), 0.0, Color32::WHITE);
+        p.rect_filled(h.expand(1.0), 0.0, t.sheet_handle_halo);
         p.rect_filled(h, 0.0, t.sel_border);
     }
     // Fill-handle drag preview.
@@ -143,7 +145,7 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
         let rr = geo.range_rect(sh, *tr);
         p.extend(egui::Shape::dashed_line(
             &[rr.left_top(), rr.right_top(), rr.right_bottom(), rr.left_bottom(), rr.left_top()],
-            Stroke::new(1.5, Color32::from_gray(90)),
+            Stroke::new(1.5, t.sheet_drag_outline),
             4.0,
             3.0,
         ));
@@ -153,7 +155,7 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
         let moved = RangeRef::new(*to, to.offset_clamped(r.height() as i64 - 1, r.width() as i64 - 1));
         if range_in_pane(moved, rows, cols) {
             let rr = geo.range_rect(sh, moved);
-            p.rect_stroke(rr, 0.0, Stroke::new(2.0, Color32::from_gray(110)), StrokeKind::Middle);
+            p.rect_stroke(rr, 0.0, Stroke::new(2.0, t.sheet_move_outline), StrokeKind::Middle);
         }
     }
     if let crate::grid::Drag::MoveCols { before: Some(before), .. } = &app.grid.drag {

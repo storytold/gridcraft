@@ -64,7 +64,8 @@ pub fn apply_tint(rgb: [u8; 3], tint: f64) -> [u8; 3] {
     hsl_to_rgb(h, s, l.clamp(0.0, 1.0))
 }
 
-fn rgb_to_hsl([r, g, b]: [u8; 3]) -> (f64, f64, f64) {
+/// RGB to HSL, each component 0 to 1 (hue as a fraction of the circle).
+pub fn rgb_to_hsl([r, g, b]: [u8; 3]) -> (f64, f64, f64) {
     let (r, g, b) = (r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0);
     let max = r.max(g).max(b);
     let min = r.min(g).min(b);
@@ -84,7 +85,8 @@ fn rgb_to_hsl([r, g, b]: [u8; 3]) -> (f64, f64, f64) {
     (h / 6.0, s, l)
 }
 
-fn hsl_to_rgb(h: f64, s: f64, l: f64) -> [u8; 3] {
+/// HSL (each 0 to 1) back to RGB; the inverse of [`rgb_to_hsl`].
+pub fn hsl_to_rgb(h: f64, s: f64, l: f64) -> [u8; 3] {
     if s == 0.0 {
         let v = (l * 255.0).round() as u8;
         return [v, v, v];

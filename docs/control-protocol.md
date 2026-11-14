@@ -124,6 +124,14 @@ System follows live OS appearance changes and falls back to Light when the platf
 The saved choice remains System; new users still start in Light. The legacy
 `view.darkMode` command and `ui.set {dark}` select a fixed Light or Dark theme.
 
+Three opt-in settings show the workbook itself light-on-dark, separately from the display theme
+(which never turns them on): `{command: "view.darkSheet", params: {on: true}}` for the cells,
+`view.darkCharts` for charts and `view.darkPictures` for floating and in-cell pictures. Each takes
+`{on?: bool}` (without it, it toggles; `value` is accepted as an alias) and returns `{on}`. They
+are off by default, screen only (Print Preview, saving, printing and PDFs keep the authored
+colours), never mark the workbook as changed, and are kept with the other UI preferences. Design:
+`docs/dark-sheet.md`.
+
 `{command: "view.animations", params: {on: false}}` turns motion in the UI off (the selection
 outline then jumps to a new selection instead of gliding there); without `on` it toggles. It is
 the View ▸ Animations checkbox, saved with the other UI preferences and on by default.

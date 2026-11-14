@@ -1,7 +1,7 @@
 //! Renders the whole GridCraft window offscreen (wgpu, no window) to a PNG.
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
-//!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
+//!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--dark-sheet] [--dark-charts] [--dark-pictures] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
 //!  [--pane name] [--object id] [--dialog 'name={json}'] [--refedit key=A1:B2] [--hf-edit header|footer] out.png`
 //!
 //! `--refedit key=range` collapses the open dialog to its reference box `key`, then selects
@@ -11,6 +11,9 @@ use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
 
+/// Renders the app offscreen and writes a PNG: reads the options (sample or input workbook, size,
+/// scale, ribbon tab, theme and dark display settings, dialogs, commands), runs the commands, then
+/// paints and saves the frame.
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut sample = None;
@@ -20,6 +23,9 @@ fn main() {
     let mut cmds: Vec<String> = vec![];
     let mut tab = None;
     let mut dark = false;
+    let mut dark_sheet = false;
+    let mut dark_charts = false;
+    let mut dark_pictures = false;
     let mut pane: Option<String> = None;
     let mut chart: Option<u32> = None;
     let mut dialog: Option<String> = None;
@@ -59,6 +65,9 @@ fn main() {
                 tab = args.get(i).cloned();
             }
             "--dark" => dark = true,
+            "--dark-sheet" => dark_sheet = true,
+            "--dark-charts" => dark_charts = true,
+            "--dark-pictures" => dark_pictures = true,
             "--pane" => {
                 i += 1;
                 pane = args.get(i).cloned();
@@ -115,6 +124,9 @@ fn main() {
             {
                 let mut app = SheetApp::new(session, Default::default());
                 app.ui.dark = dark;
+                app.ui.dark_sheet = dark_sheet;
+                app.ui.dark_charts = dark_charts;
+                app.ui.dark_pictures = dark_pictures;
                 if let Some(code) = &language
                     && let Some(l) = gridcraft_ui_egui::i18n::Language::parse(code)
                 {

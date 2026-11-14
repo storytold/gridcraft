@@ -57,6 +57,8 @@ fn chart_icon(t: &str) -> Icon {
     }
 }
 
+/// The Insert Chart dialog: Recommended Charts and All Charts tabs, the chart previews (drawn
+/// dark when Dark charts is on) and OK / Cancel.
 pub(super) fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     ui.horizontal(|ui| {
         for tab in ["Recommended Charts", "All Charts"] {
@@ -96,7 +98,8 @@ pub(super) fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut 
             let label = choices.get(d.list_index).map(|c| c.2.clone()).unwrap_or_default();
             ui.strong(label);
             let (rect, _) = ui.allocate_exact_size(vec2(360.0, 216.0), Sense::hover());
-            ui.painter().rect_filled(rect, 2.0, Color32::WHITE);
+            let backdrop = if crate::theme::dark_charts(ui.ctx()) { crate::theme::ink(Color32::WHITE) } else { Color32::WHITE };
+            ui.painter().rect_filled(rect, 2.0, backdrop);
             ui.painter().rect_stroke(rect, 2.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
             let params = json!({"type": d.values.get("type").cloned().unwrap_or(Json::Null), "subtype": d.values.get("subtype").cloned().unwrap_or(Json::Null)});
             if let Some(doc) = app.session.active()

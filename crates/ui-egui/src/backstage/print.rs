@@ -4,7 +4,8 @@ use super::{
 
 /// Builds the print scope and fit-to-page parameters, caches `file.printPreview` per document revision/options, and draws page thumbnails with navigation plus the print settings and Print action.
 pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
-    let t = Tokens::get(ui.ctx());
+    // Print Preview keeps a white sheet whatever the dark-sheet setting says.
+    let t = Tokens::get(ui.ctx()).with_dark_sheet(false);
     let lang = app.ui.language;
     let Some((uid, revision)) = app.session.active().map(|d| (d.uid, d.revision)) else {
         dim(ui, lang.tr("No workbook is open."));

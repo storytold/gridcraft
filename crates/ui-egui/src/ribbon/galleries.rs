@@ -1,5 +1,5 @@
 use super::controls::act;
-use super::{Align2, Cat, Rect, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, json, pos2, theme, vec2};
+use super::{Align2, Cat, Color32, Rect, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, json, pos2, theme, vec2};
 
 /// A gallery of table styles drawn as mini tables.
 pub(super) fn table_gallery(app: &mut SheetApp, ui: &mut Ui, cmd: &str) {
@@ -27,11 +27,14 @@ pub(super) fn table_gallery(app: &mut SheetApp, ui: &mut Ui, cmd: &str) {
     }
 }
 
+/// Paints a small preview of a table style: the authored colours, mapped and guarded for the
+/// dark sheet like the cells they preview.
 pub(super) fn paint_table_swatch(ui: &Ui, r: Rect, wb: &gridcraft_engine::model::Workbook, style: &str) {
     let lk = gridcraft_engine::tables::look(style);
+    let t = Tokens::get(ui.ctx());
+    // Authored colours; painted through `t.on_sheet` (fills) and `t.on_sheet_over` (text, lines).
     let res = |c: Option<gridcraft_engine::model::Color>| c.and_then(|c| c.resolve(&wb.theme)).map(theme::color32);
     let p = ui.painter();
-    let t = Tokens::get(ui.ctx());
     p.rect_filled(r, 0.0, t.grid_bg);
     let rows = 5;
     let rh = r.height() / rows as f32;
@@ -45,20 +48,30 @@ pub(super) fn paint_table_swatch(ui: &Ui, r: Rect, wb: &gridcraft_engine::model:
             res(lk.body_fill)
         };
         if let Some(f) = fill {
-            p.rect_filled(rr, 0.0, f);
+            p.rect_filled(rr, 0.0, t.on_sheet(f));
         }
         if let Some(l) = res(lk.line) {
-            p.line_segment([rr.left_bottom(), rr.right_bottom()], Stroke::new(1.0, l));
+            p.line_segment(
+                [rr.left_bottom(), rr.right_bottom()],
+                Stroke::new(1.0, t.on_sheet_over(l, fill.unwrap_or(Color32::WHITE), theme::INK_LINE_MIN)),
+            );
         }
         for k in 0..3 {
             let x = rr.left() + 4.0 + k as f32 * (r.width() - 8.0) / 3.0;
-            let col = if i == 0 { res(Some(lk.header_font)).unwrap_or(t.cell_text) } else { t.sheet_control_border };
+            let col = if i == 0 {
+                let c = res(Some(lk.header_font)).unwrap_or(Color32::BLACK);
+                t.on_sheet_over(c, fill.unwrap_or(Color32::WHITE), theme::INK_TEXT_MIN)
+            } else {
+                t.sheet_control_border
+            };
             p.line_segment([pos2(x, rr.center().y), pos2(x + 10.0, rr.center().y)], Stroke::new(1.0, col));
         }
     }
     p.rect_stroke(r, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
 }
 
+/// The Cell Styles gallery: each built-in style as a button showing its fill, font and border,
+/// drawn as it will look on the current sheet; a click applies it to the selection.
 pub(super) fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.set_width(520.0);
@@ -104,23 +117,23 @@ pub(super) fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
             for (i, n) in names.iter().enumerate() {
                 let st = gridcraft_engine::cmd::format::builtin_cell_style(n, &wb.theme).unwrap_or_default();
                 let (r, resp) = ui.allocate_exact_size(vec2(82.0, 24.0), Sense::click());
-                let fill = st
-                    .fill
-                    .fg
-                    .resolve(&wb.theme)
-                    .filter(|_| st.fill.pattern != gridcraft_engine::model::PatternType::None)
-                    .map(theme::color32)
-                    .unwrap_or(t.grid_bg);
+                // The authored fill (white where there is none) is what the text and border were
+                // chosen against; the painted fill is mapped on the dark sheet.
+                let authored =
+                    st.fill.fg.resolve(&wb.theme).filter(|_| st.fill.pattern != gridcraft_engine::model::PatternType::None).map(theme::color32);
+                let fill = authored.map_or(t.grid_bg, |c| t.on_sheet(c));
+                let paper = authored.unwrap_or(Color32::WHITE);
+                let ink = |c: Option<Color32>, min| t.on_sheet_over(c.unwrap_or(Color32::BLACK), paper, min);
                 ui.painter().rect_filled(r, 0.0, fill);
                 ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
                 if !st.borders.bottom.is_none() {
-                    let c = st.borders.bottom.color.resolve(&wb.theme).map(theme::color32).unwrap_or(t.cell_text);
+                    let c = ink(st.borders.bottom.color.resolve(&wb.theme).map(theme::color32), theme::INK_LINE_MIN);
                     ui.painter().line_segment(
                         [r.left_bottom() + vec2(0.0, -1.5), r.right_bottom() + vec2(0.0, -1.5)],
                         Stroke::new(st.borders.bottom.style.width(), c),
                     );
                 }
-                let col = st.font.color.resolve(&wb.theme).map(theme::color32).unwrap_or(t.cell_text);
+                let col = ink(st.font.color.resolve(&wb.theme).map(theme::color32), theme::INK_TEXT_MIN);
                 let fam = theme::cell_family(&st.font.name, st.font.bold, st.font.italic);
                 ui.painter().text(
                     r.left_center() + vec2(4.0, 0.0),

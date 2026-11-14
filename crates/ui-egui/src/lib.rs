@@ -105,6 +105,18 @@ pub struct UiState {
     /// Tint the active cell's whole row (File ▸ Options ▸ General), on every sheet and workbook, so
     /// the eye keeps its place across a wide table. A preference: nothing goes into the file.
     pub highlight_active_row: bool,
+    /// Dark sheet (the View tab, File ▸ Options ▸ General): the cells are shown light-on-dark, their
+    /// colours mapped by the dark-sheet colour rule. Separate from Display theme and off by default;
+    /// screen only, nothing goes into the file.
+    pub dark_sheet: bool,
+    /// Dark charts (the View tab, File ▸ Options ▸ General): charts are drawn with their
+    /// colours inverted, on a light or a dark sheet. Screen only; printing, PDFs and exports keep
+    /// the chart as authored. Off by default.
+    pub dark_charts: bool,
+    /// Dark pictures (the View tab, File ▸ Options ▸ General): floating and in-cell pictures
+    /// are drawn with their colours inverted by the dark-sheet colour rule. Screen only; the file,
+    /// printing, PDFs and exports keep the picture as it is. Off by default.
+    pub dark_pictures: bool,
     /// AutoSave (the title-bar switch): save saved-to-file .xlsx workbooks shortly after every
     /// change. A preference like the rest of this struct — it stays on across restarts (#1901).
     pub autosave: bool,
@@ -145,6 +157,7 @@ fn lenient_interface_scale<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u16
 }
 
 impl Default for UiState {
+    /// The first-run interface: light theme, Home tab, every dark display setting off.
     fn default() -> Self {
         UiState {
             dark: false,
@@ -157,6 +170,9 @@ impl Default for UiState {
             animations: true,
             autocomplete: true,
             highlight_active_row: false,
+            dark_sheet: false,
+            dark_charts: false,
+            dark_pictures: false,
             autosave: false,
             recent: vec![],
             keytip_invoke: None,
