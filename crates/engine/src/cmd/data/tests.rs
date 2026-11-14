@@ -40,8 +40,8 @@ fn subtotal_puts_summary_rows_below_their_detail() {
     s.execute("data.subtotal", json!({"range": "A1:B4", "groupBy": "A", "columns": ["B"]})).unwrap();
     let sh = s.doc().unwrap().wb.active().unwrap().clone();
     assert!(sh.summary_below, "the totals sit below their groups");
-    // East's detail is rows 2–3 and its total row 4: collapsing level 1 keeps the total showing.
-    s.execute("data.showLevels", json!({"rows": 1})).unwrap();
+    // East's detail is rows 2–3 and its total row 4: showing level 2 keeps the total showing.
+    s.execute("data.showLevels", json!({"rows": 2})).unwrap();
     let hidden = |s: &Session, row: u32| s.doc().unwrap().wb.active().unwrap().is_row_hidden(row);
     assert!(hidden(&s, 1) && hidden(&s, 2), "East's detail rows are hidden");
     assert!(!hidden(&s, 3), "East Total stays visible");

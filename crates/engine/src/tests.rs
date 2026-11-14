@@ -1759,12 +1759,30 @@ fn subtotal_with_a_sheet_prefix_works_on_the_named_sheet() {
     assert_eq!(col(prices, 0), ["Item", "a", "a", "a Total", "b", "b Total", "Grand Total"].map(Value::from));
     assert_eq!(col(prices, 1)[1..], [1.0, 2.0, 3.0, 4.0, 4.0, 7.0].map(Value::from));
     assert!(wb.styles.get(prices.style_id(CellRef::new(3, 0))).font.bold);
-    assert_eq!(prices.rows.get(&1).map(|l| l.outline), Some(1));
+    assert_eq!(prices.rows.get(&1).map(|l| l.outline), Some(2));
     let sheet1 = wb.sheet(wb.sheet_index("Sheet1").unwrap()).unwrap();
     assert_eq!(col(sheet1, 0)[..4], ["Name", "x", "x", "y"].map(Value::from));
     assert!(sheet1.value(CellRef::new(4, 0)).is_empty());
     assert!(sheet1.rows.values().all(|l| l.outline == 0));
     assert!(s.execute("data.group", json!({"sheet": "Prices"})).is_err());
+}
+
+/// #3945: Excel groups every data and subtotal row under the grand total, so the details are at
+/// level 2, the subtotals at level 1, and showing level 1 leaves only the grand total.
+#[test]
+fn subtotal_groups_everything_under_the_grand_total() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Group", "Amount"], ["A", 10], ["A", 20], ["B", 30]]})).unwrap();
+    s.execute("data.subtotal", json!({"range": "A1:B4", "groupBy": "A", "columns": ["B"], "function": "sum"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let levels: Vec<u8> = (0..7).map(|r| sh.rows.get(&r).map_or(0, |l| l.outline)).collect();
+    assert_eq!(levels, [0, 2, 2, 1, 2, 1, 0]);
+    let shown = |s: &Session| -> Vec<u32> { (0..7).filter(|&r| !s.doc().unwrap().wb.active().unwrap().is_row_hidden(r)).map(|r| r + 1).collect() };
+    s.execute("data.showLevels", json!({"rows": 1})).unwrap();
+    assert_eq!(shown(&s), [1, 7]);
+    s.execute("data.showLevels", json!({"rows": 2})).unwrap();
+    assert_eq!(shown(&s), [1, 4, 6, 7]);
+    assert_eq!(v(&s, "B7"), Value::Number(60.0));
 }
 
 #[test]
