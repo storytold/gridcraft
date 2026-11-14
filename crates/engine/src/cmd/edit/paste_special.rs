@@ -1,8 +1,15 @@
-use super::clipboard::What;
+use super::clipboard::{CLIP_WALK_CAP, What};
 use super::{
     Cell, CellRef, EngineError, Formula, Json, RangeRef, Result, Session, StyleId, Value, bad, bool_param, cell_param_on, edit, json, str_param,
     target_sheet,
 };
+
+pub(super) fn check_clip_size(cell_count: u64) -> Result<()> {
+    if cell_count > CLIP_WALK_CAP {
+        return Err(EngineError::Other("The copied area is too large to paste.".into()));
+    }
+    Ok(())
+}
 
 #[allow(clippy::cognitive_complexity)] // The command applies the selected paste mode in one atomic edit.
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
@@ -35,6 +42,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     // visited sparsely below, so this costs what the columns hold, not 1,048,576 rows.
     let whole = clip.areas.is_empty() && (clip.selected.is_full_cols() || clip.selected.is_full_rows()) && clip.selected.contains_range(&clip.range);
     let src = if whole { clip.selected } else { clip.range };
+    check_clip_size(src.count())?;
     let (h, w) = if transpose { (src.width(), src.height()) } else { (src.height(), src.width()) };
     // Tile the copy over a larger destination that is a multiple of its size.
     let tile = sel.height() % h == 0
