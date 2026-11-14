@@ -317,7 +317,11 @@ pub(super) fn threaded_xml(sheet: &Sheet, ids: &BTreeMap<CellRef, Vec<String>>, 
 /// [`crate::sheet_read::read_password`]).
 pub(crate) fn password_attrs(h: &gridcraft_model::PasswordHash, prefix: &str) -> String {
     let name = |base: &str| crate::sheet_read::password_attr(prefix, base);
+    // A SHA-256 digest alone (OpenDocument's form) has no Excel form: the protection is kept
+    // without its password. A password set in GridCraft writes its Excel form.
+    let Some(h) = h.excel() else { return String::new() };
     match h {
+        gridcraft_model::PasswordHash::Sha256Digest(_) | gridcraft_model::PasswordHash::Both { .. } => String::new(),
         gridcraft_model::PasswordHash::Legacy(h) => format!(" {}=\"{h:04X}\"", name("password")),
         gridcraft_model::PasswordHash::Iterated { algorithm, hash, salt, spin_count } => format!(
             " {}=\"{}\" {}=\"{}\" {}=\"{}\" {}=\"{spin_count}\"",

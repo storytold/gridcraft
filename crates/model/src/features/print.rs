@@ -193,8 +193,8 @@ impl Default for PrintSettings {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SheetProtection {
-    /// Hash of the password (Excel-compatible, written to XLSX `sheetProtection`; never the
-    /// password itself).
+    /// Hash of the password, never the password itself. XLSX `sheetProtection` writes its Excel
+    /// form ([`crate::PasswordHash::excel`]); a digest alone has none and is not written there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<crate::PasswordHash>,
     /// The internal hash older GridCraft JSON workbooks stored ([`password_hash`]); still

@@ -6683,6 +6683,45 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
 }
 
+/// A password set in GridCraft is kept in every form a file stores; XLSX writes its Excel form,
+/// so a sheet or workbook password survives saving and reopening and still unprotects.
+#[test]
+fn passwords_set_in_gridcraft_survive_xlsx_saving() {
+    let mut s = s();
+    s.execute("review.protectSheet", json!({"password": "pa55"})).unwrap();
+    s.execute("review.protectWorkbook", json!({"on": true, "password": "b00k"})).unwrap();
+    // The workbook password, like the sheet's, also keeps OpenDocument's SHA-256 digest.
+    let book = s.doc().unwrap().wb.structure_password.clone().unwrap();
+    assert_eq!(book.odf_key(), gridcraft_model::PasswordHash::new_sha256_digest("b00k").odf_key());
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let mut t = super::tests::s();
+    t.execute("file.open", json!({"name": "book.xlsx", "base64": saved["base64"]})).unwrap();
+    assert!(t.execute("review.unprotectSheet", json!({})).is_err());
+    assert!(t.execute("review.unprotectSheet", json!({"password": "nope"})).is_err());
+    t.execute("review.unprotectSheet", json!({"password": "pa55"})).unwrap();
+    assert!(t.execute("review.protectWorkbook", json!({"on": false, "password": "nope"})).is_err());
+    t.execute("review.protectWorkbook", json!({"on": false, "password": "b00k"})).unwrap();
+    assert!(!t.doc().unwrap().wb.protected_structure);
+}
+
+/// A password held only as a SHA-256 digest (as OpenDocument stores it) unprotects with the
+/// password; XLSX has no form for it, so saving keeps the protection without the password.
+#[test]
+fn sha256_digest_passwords_unprotect_and_save_to_xlsx_without_the_password() {
+    let mut s = s();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let digest = gridcraft_model::PasswordHash::new_sha256_digest("pa55");
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().protection.as_mut().unwrap().password = Some(digest);
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    assert!(s.execute("review.unprotectSheet", json!({"password": "nope"})).is_err());
+    s.execute("review.unprotectSheet", json!({"password": "pa55"})).unwrap();
+    let mut t = super::tests::s();
+    t.execute("file.open", json!({"name": "book.xlsx", "base64": saved["base64"]})).unwrap();
+    let prot = t.doc().unwrap().wb.sheets[0].protection.clone().unwrap();
+    assert_eq!(prot.password, None);
+    t.execute("review.unprotectSheet", json!({})).unwrap();
+}
+
 #[test]
 fn circle_invalid_says_when_its_scan_allowance_ended_early() {
     let mut s = s();
