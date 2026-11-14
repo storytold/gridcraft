@@ -135,6 +135,8 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
         style: 2,
         hole_size: 75,
         first_slice_angle: 0,
+        gap_width: None,
+        overlap: None,
         x_title: axis_title("0"),
         y_title: axis_title("1"),
         source: None,
