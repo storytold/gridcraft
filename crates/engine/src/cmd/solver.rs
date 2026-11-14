@@ -158,7 +158,9 @@ fn optimise(ev: &mut Evaluator, m: &Model, goal: Goal, x0: &[f64], bounds: Bound
                         Outcome::Solved(x, val, converged) => Outcome::Solved(x, val + obj_offset, converged),
                         other => other,
                     };
-                    if any_int { branch_and_bound(lo, hi, integer, MAX_NODES_LP, gap, &mut relax).0 } else { relax(lo, hi) }
+                    // The constant and the root-fixed variables' terms, which no branch changes.
+                    let fixed = obj_offset + c.iter().zip(lo.iter().zip(hi)).filter(|(_, (l, h))| l == h).map(|(c, (l, _))| c * l).sum::<f64>();
+                    if any_int { branch_and_bound(lo, hi, integer, MAX_NODES_LP, gap, fixed, &mut relax).0 } else { relax(lo, hi) }
                 }
             },
             Method::Grg => {
@@ -168,7 +170,7 @@ fn optimise(ev: &mut Evaluator, m: &Model, goal: Goal, x0: &[f64], bounds: Bound
                         project(&mut start, l, h);
                         nlp(ev, &start, l, h, goal)
                     };
-                    branch_and_bound(lo, hi, integer, MAX_NODES_NLP, gap, &mut relax).0
+                    branch_and_bound(lo, hi, integer, MAX_NODES_NLP, gap, 0.0, &mut relax).0
                 } else {
                     nlp(ev, x0, lo, hi, goal)
                 }

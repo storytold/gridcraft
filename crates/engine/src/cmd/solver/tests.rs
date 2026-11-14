@@ -2010,3 +2010,30 @@ fn simplex_integer_branch_and_bound_ignores_cancelled_fixed_variable_offset() {
     assert!((r["objective"].as_f64().unwrap() + 6.0).abs() < 1e-9, "{r}");
     assert!((n(&s, "A1") - 2.0).abs() < 1e-9 && n(&s, "A2").abs() < 1e-9 && (n(&s, "A3") - 1.0).abs() < 1e-9, "{r}");
 }
+
+#[test]
+fn simplex_integer_branch_and_bound_keeps_tight_tolerance_with_large_objective_constant() {
+    for goal in ["max", "min"] {
+        let sign = if goal == "max" { "+" } else { "-" };
+        let mut s = s();
+        let f = format!("={sign}3*A1{sign}2*A2+1000000000000");
+        set(&mut s, &[("A1", "0"), ("A2", "0"), ("B1", f.as_str()), ("B2", "=A1+A2")]);
+        let r = s
+            .execute(
+                "data.solver",
+                json!({
+                    "objective": "B1",
+                    "goal": goal,
+                    "variables": "A1:A2",
+                    "constraints": ["B2 <= 2.5", "A1 int", "A2 bin"],
+                    "method": "simplex",
+                    "integerOptimality": 0,
+                }),
+            )
+            .unwrap();
+        assert_eq!(r["status"], "optimal", "{goal}: {r}");
+        let want = if goal == "max" { 1_000_000_000_006.0 } else { 999_999_999_994.0 };
+        assert!((r["objective"].as_f64().unwrap() - want).abs() < 1e-3, "{goal}: {r}");
+        assert!((n(&s, "A1") - 2.0).abs() < 1e-9 && n(&s, "A2").abs() < 1e-9, "{goal}: {r}");
+    }
+}
