@@ -699,6 +699,38 @@ fn select_data_dialog_sets_the_category_axis_labels() {
 }
 
 #[test]
+fn spelling_suggestion_selection_belongs_to_the_current_issue() {
+    for action in ["Ignore Once", "Add to Dictionary", "Change", "Change All"] {
+        let mut s = blank();
+        s.execute("range.setValues", json!({"range": "A1:B1", "values": [["teh", "th"]]})).unwrap();
+        let mut h = harness(s);
+        h.state_mut().open_dialog("spelling", json!({}));
+        // Exercise the UI independently of the host's optional system dictionary.
+        h.state_mut().dialog.as_mut().unwrap().result = Some(json!({"issues": [
+            {"cell": "A1", "word": "teh", "suggestions": ["the"]},
+            {"cell": "B1", "word": "th", "suggestions": ["the", "thy"]}
+        ]}));
+        h.run_steps(2);
+        h.get_by_label("the").click();
+        h.run_steps(2);
+        assert_eq!(h.state().dialog.as_ref().unwrap().values["pick"], json!("the"));
+        h.get_by_role_and_label(egui::accesskit::Role::Button, action).click();
+        h.run_steps(2);
+        let dialog = h.state().dialog.as_ref().unwrap();
+        assert_eq!(dialog.list_index, 1, "{action}");
+        assert!(dialog.values.get("pick").and_then(|v| v.as_str()).unwrap_or("").is_empty(), "{action} clears the prior suggestion");
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "Change").is_none(), "{action}");
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "Change All").is_none(), "{action}");
+        // Even an overlapping suggestion must be chosen again for this word.
+        h.get_by_label("the").click();
+        h.run_steps(2);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Change").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 1)), Value::text("the"));
+    }
+}
+
+#[test]
 /// Each listed dialog opens, passes accessibility and closes.
 fn dialogs_open_and_close() {
     let mut h = harness(blank());
