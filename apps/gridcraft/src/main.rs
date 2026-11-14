@@ -18,6 +18,7 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod print;
+mod start_failure;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -421,7 +422,8 @@ fn main() -> eframe::Result<()> {
             }),
         )
     };
-    let result = run(options);
+    #[cfg_attr(not(target_os = "windows"), expect(unused_mut, reason = "only Windows retries"))]
+    let mut result = run(options);
     // A graphics error before the app existed: start once more with the other backend (eframe
     // reuses its event loop for the second run). Errors after that, or from winit, are returned.
     #[cfg(target_os = "windows")]
@@ -433,7 +435,11 @@ fn main() -> eframe::Result<()> {
         pending.set(Some(app));
         let mut options = retry_options;
         graphics::configure_backends(&mut options, backends);
-        return run(options);
+        result = run(options);
+    }
+    // Say why instead of exiting silently (`start_failure`).
+    if let Err(e) = &result {
+        start_failure::report(e);
     }
     result
 }
