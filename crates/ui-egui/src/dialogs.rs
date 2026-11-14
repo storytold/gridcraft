@@ -1079,8 +1079,18 @@ impl Dialog {
                 d
             }
             "spelling" => {
-                let mut d = Dialog::custom("spelling", "Spelling", json!({}));
-                d.result = Some(app.session.run("review.spelling", json!({})).unwrap_or_else(|e| json!({"error": e})));
+                // The proofing dictionary follows the interface language when a word list exists
+                // for it: a Portuguese interface checks Portuguese text. Every other interface
+                // language falls back to English rather than failing for a list that is not
+                // installed.
+                let language = match app.ui.language {
+                    crate::i18n::Language::PtBr => "pt",
+                    _ => "en",
+                };
+                let mut d = Dialog::custom("spelling", "Spelling", json!({"language": language}));
+                d.result = Some(
+                    app.session.run("review.spelling", json!({"language": language})).unwrap_or_else(|e| json!({"error": e, "language": language})),
+                );
                 d
             }
             "chartTitle" => Dialog::form(
@@ -1245,5 +1255,41 @@ mod tests {
         let d = Dialog::open(&mut app, "dataValidation", json!({})).unwrap();
         assert_eq!(d.values["type"], "list");
         assert!(d.values.get("formula1").is_none());
+    }
+
+    /// The spelling dialog checks text in the interface language when a word list exists for it,
+    /// and falls back to English for interface languages that have none. The engine echoes the tag
+    /// it checked, whether it found a list or reported one missing.
+    #[test]
+    fn spelling_dialog_checks_the_interface_language() {
+        let cases = [
+            (crate::i18n::Language::En, "en"),
+            (crate::i18n::Language::PtBr, "pt"),
+            (crate::i18n::Language::Es, "en"),
+            (crate::i18n::Language::De, "en"),
+        ];
+        for (language, expected) in cases {
+            let mut session = gridcraft_engine::Session::default();
+            session.new_workbook();
+            session.execute("cell.set", json!({"cell": "A1", "input": "trabalho relatório"})).unwrap();
+            let mut app = SheetApp::new(session, Default::default());
+            app.ui.language = language;
+            let d = Dialog::open(&mut app, "spelling", json!({})).unwrap();
+            let result = d.result.expect("the dialog runs the check when it opens");
+            // A host with no dictionaries at all still reports one missing, but never the
+            // interface language's own: that failure is what this test guards.
+            if let Some(error) = result["error"].as_str() {
+                assert!(!error.contains(&format!("`{}`", language.code())), "{language:?} asked for a list it has no path for: {error}");
+            }
+            assert_eq!(result["language"], expected, "{result}");
+        }
+        for (language, expected) in cases {
+            let mut session = gridcraft_engine::Session::default();
+            session.new_workbook();
+            let mut app = SheetApp::new(session, Default::default());
+            app.ui.language = language;
+            let d = Dialog::open(&mut app, "spelling", json!({})).unwrap();
+            assert_eq!(d.values.get("language"), Some(&json!(expected)), "{language:?} hands {expected} to the check");
+        }
     }
 }
